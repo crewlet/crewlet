@@ -105,7 +105,7 @@ func (f *fleet) newHost(node string, cfg Config) *Host {
 func (f *fleet) present(node string, ttl time.Duration, profile placement.NodeProfile) {
 	f.t.Helper()
 	profile.ID = node
-	lease, err := f.store.TryAcquire(f.ctx, coord.NodeResource(node), coord.AcquireOptions{
+	lease, _, err := f.store.TryAcquire(f.ctx, coord.NodeResource(node), coord.AcquireOptions{
 		Owner: node + ":1", TTL: ttl, Preferred: node, Protocol: coord.ProtocolVersion,
 		Ungated: true, Meta: profile.Meta(),
 	})
@@ -122,7 +122,7 @@ func (f *fleet) peerTakes(handle, owner string, epochHeldBy string, epoch int64)
 	if _, err := f.store.Release(f.ctx, coord.SeatResource(handle), epochHeldBy, epoch); err != nil {
 		f.t.Fatalf("peerTakes release: %v", err)
 	}
-	lease, err := f.store.TryAcquire(f.ctx, coord.SeatResource(handle), coord.AcquireOptions{
+	lease, _, err := f.store.TryAcquire(f.ctx, coord.SeatResource(handle), coord.AcquireOptions{
 		Owner: owner, TTL: time.Minute, Protocol: coord.ProtocolVersion,
 	})
 	if err != nil || lease == nil {
@@ -164,7 +164,7 @@ func numberedSeats(n int) func() []placement.Seat {
 // — so this is how a test stages "these seats were last served here".
 func (f *fleet) seedHint(handle, node string) {
 	f.t.Helper()
-	lease, err := f.store.TryAcquire(f.ctx, coord.SeatResource(handle), coord.AcquireOptions{
+	lease, _, err := f.store.TryAcquire(f.ctx, coord.SeatResource(handle), coord.AcquireOptions{
 		Owner: node + ":previous", TTL: time.Millisecond, Preferred: node,
 		Protocol: coord.ProtocolVersion,
 	})

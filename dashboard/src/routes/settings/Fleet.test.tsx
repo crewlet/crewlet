@@ -13,10 +13,10 @@
  * is where page and rail agree: `ObjectHeader` takes this list on both.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { Fleet, HeldSince, NodePeek, nodeFacts } from "./Fleet.tsx";
+import { BrokerCell, Fleet, HeldSince, NodePeek, nodeFacts } from "./Fleet.tsx";
 import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { PAGE_ACTIONS_SLOT } from "~/app/frame/PageActions.tsx";
@@ -32,6 +32,36 @@ function node(over: Partial<FleetNode> = {}): FleetNode {
 function fact(n: FleetNode, label: string) {
   return nodeFacts({ node: n, target: 3 }).find((f) => f.label === label);
 }
+
+describe("the broker column", () => {
+  afterEach(cleanup);
+
+  // WHAT EACH NODE'S BROKER IS, off the engine's own row: `unknown` is a value
+  // the engine sends for a presence that does not say, and it is the one kind
+  // marked, because a capacity seal counts it as a member. An engine older
+  // than the field sends nothing, which is no value rather than an empty tag.
+  test("each kind is a tag, and unknown is the one marked", () => {
+    for (const kind of ["member", "leaf", "client"]) {
+      const { container } = render(<BrokerCell broker={kind} />);
+      const tag = within(container).getByText(kind);
+      expect(tag.closest(".crewlet-tag")!.className).toContain("crewlet-tag--neutral");
+      cleanup();
+    }
+    const { container } = render(<BrokerCell broker="unknown" />);
+    expect(within(container).getByText("unknown").closest(".crewlet-tag")!.className).toContain(
+      "crewlet-tag--warning",
+    );
+    cleanup();
+    render(<BrokerCell />);
+    expect(screen.queryByText("unknown")).toBeNull();
+    expect(screen.getByText("This engine predates the broker kind")).toBeTruthy();
+  });
+
+  test("the peek names the broker, since the column gives way under it", () => {
+    // A COLUMN HIDDEN IN FAVOUR OF THE PEEK HAS TO BE IN IT.
+    expect(fact(node({ broker: "leaf" }), "Broker")).toBeTruthy();
+  });
+});
 
 describe("nodeFacts", () => {
   test("a node that is still replaying says how far it has come", () => {
@@ -334,6 +364,7 @@ describe("the Nodes table", () => {
       node({
         id: "harness-0",
         roles: ["ingress", "seats", "workers"],
+        broker: "member",
         seats: 7,
         in_flight: 0,
         posture: "serve",
@@ -388,7 +419,7 @@ describe("the Nodes table", () => {
       nodesGrid(view.container).style.gridTemplateColumns.match(
         /minmax\([^)]*\)|fit-content\([^)]*\)|\S+/g,
       ) ?? [];
-    expect(tracks).toHaveLength(8);
+    expect(tracks).toHaveLength(9);
     // The node: flexible, floored at its content, so an id never wraps or cuts.
     expect(tracks[0]).toBe("minmax(max-content, 1fr)");
     // Roles: the chips' own width, so a chip is never a pill without its word.
@@ -420,6 +451,7 @@ describe("the Nodes table", () => {
     const NATURAL: Record<string, number> = {
       Node: 165,
       Roles: 181,
+      Broker: 72,
       Seats: 60,
       "In flight": 79,
       Posture: 77,
@@ -479,10 +511,10 @@ describe("the Nodes table", () => {
     test("beside a peek it gives way whole columns, and never cuts one to a letter", async () => {
       const at = await drawn(486);
       expect(at.heads).toEqual(["Node", "Seats", "In flight", "Posture", "Config"]);
-      expect(at.hidden).toContain("Hidden to fit: Lease, Up since and Roles");
+      expect(at.hidden).toContain("Hidden to fit: Lease, Broker, Up since and Roles");
     });
 
-    test("at a 1280 window it keeps the roles on their line and gives up the lease alone", async () => {
+    test("at a 1280 window it keeps the roles on their line and gives up the lease and the broker", async () => {
       const at = await drawn(746);
       expect(at.heads).toEqual([
         "Node",
@@ -493,7 +525,7 @@ describe("the Nodes table", () => {
         "Config",
         "Up since",
       ]);
-      expect(at.hidden).toContain("Hidden to fit: Lease");
+      expect(at.hidden).toContain("Hidden to fit: Lease and Broker");
     });
 
     test("at a 1440 window it draws every column", async () => {
@@ -509,7 +541,7 @@ describe("the Nodes table", () => {
     test("every column it can give way is one the node's peek carries", async () => {
       const at = await drawn(160);
       const hidden = at.hidden.replace(/^.*Hidden to fit:\s*/, "").split(/,\s*|\s+and\s+/);
-      expect(hidden.sort()).toEqual(["In flight", "Lease", "Roles", "Up since"]);
+      expect(hidden.sort()).toEqual(["Broker", "In flight", "Lease", "Roles", "Up since"]);
       cleanup();
       mount(<NodePeek id="harness-0" />);
       expect(await screen.findByText("Its own lease")).toBeDefined();
@@ -518,6 +550,7 @@ describe("the Nodes table", () => {
         "Up since": "Up since",
         "In flight": "In flight",
         Roles: "Roles",
+        Broker: "Broker",
       };
       for (const column of hidden) {
         expect(screen.getAllByText(IN_THE_PEEK[column]!).length, column).toBeGreaterThan(0);

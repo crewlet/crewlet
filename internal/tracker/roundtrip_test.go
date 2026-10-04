@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -30,7 +31,8 @@ import (
 type roundTrip struct {
 	t        *testing.T
 	broker   *js.Queue
-	db       *store.DB
+	node     *store.DB
+	db       store.PartitionHandle
 	log      *js.DomainLog
 	writer   *tracker.Writer
 	applier  *tracker.Applier
@@ -57,6 +59,10 @@ type roundTrip struct {
 	// nodeID is which node this harness is, for the second writer a case
 	// builds over the same store ([roundTrip.lossyWriter]).
 	nodeID string
+
+	// holding is whether this node serves the log's partition, which a case
+	// about a node leaving it moves.
+	holding *statelogtest.Holding
 }
 
 func newRoundTrip(t *testing.T) *roundTrip {
@@ -92,7 +98,7 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 			t.Errorf("stop the broker: %v", err)
 		}
 	})
-	spec := tracker.Domain{}.Stream()
+	spec := statelog.EstateStream(tracker.Domain{})
 	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES, and it is not a
 	// property under test: the shipped default is sized for five years of a
 	// real company's growth, and an embedded broker in a temporary
@@ -108,37 +114,34 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
+		if err := dbNode.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
 		}
 	})
-	return newRoundTripOn(t, q, log, db, "node-a")
+	return newRoundTripOn(t, q, log, dbNode, db, "node-a")
 }
 
 // newRoundTripOn is the harness's node over a broker, a log and a store it is
 // handed: the one [newRoundTripWithoutProject] opens, or a second node's
 // joining the same log — a node that adopted a snapshot, say — under its own
 // id.
-func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
-	nodeID string) *roundTrip {
+func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB,
+	db store.PartitionHandle, nodeID string) *roundTrip {
 
 	t.Helper()
-	rows, err := tracker.NewRows(db)
+	rows, err := tracker.NewRows(db.Reader(), statelog.EstateStream(tracker.Domain{}))
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
 	// THE HARNESS EXISTS BEFORE THE WRITER, because the writer's authored
 	// clock reads a field on it that a case may move.
-	r := &roundTrip{t: t, broker: q, db: db, log: log, at: wednesday,
-		claims: memory.New(), nodeID: nodeID}
+	r := &roundTrip{t: t, broker: q, node: node, db: db, log: log, at: wednesday,
+		claims: memory.New(), nodeID: nodeID,
+		holding: statelogtest.NewHolding(statelog.EstatePartition)}
 
-	fence := tracker.NewFence(db, nodeID)
+	fence := tracker.NewFence(db.Reader(), nodeID)
 	// The published trim floor is zero on a fleet that has never trimmed,
 	// which is the state every new company is in — and the state in which
 	// an absent anchor really does mean an empty subject. The log's own
@@ -165,7 +168,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
 	r.metrics = recorder
 	// THE LOG'S GATE RESERVE, reading its usage from the stream as the
 	// engine's does, so every write here is admitted as a production one is.
-	reserve, err := statelog.NewReserve(tracker.Domain{}.Stream().Name,
+	reserve, err := statelog.NewReserve(statelog.EstateStream(tracker.Domain{}).Name,
 		func(ctx context.Context) (statelog.Usage, error) {
 			stats, err := log.Stats(ctx)
 			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
@@ -175,10 +178,11 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
 	}
 	r.reserve = reserve
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: tracker.Domain{}, Log: log, Rows: rows, Fence: fence,
-		Gates: tracker.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: nodeID,
+		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Layout: statelog.EstateLayout(tracker.Domain{}.Name()), LogID: statelog.EstateLog(tracker.Domain{}), Log: log, Records: log, Rows: rows, Fence: fence,
+		Gates: tracker.NewGates(db.Reader()), Waiter: waiter, Voids: waiter, Identity: waiter, NodeID: nodeID,
 		Metrics:       recorder,
 		Admission:     reserve,
+		Holding:       r.holding,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})
@@ -186,7 +190,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
 		t.Fatalf("build the publisher: %v", err)
 	}
 	writer, err := tracker.NewWriter(tracker.WriterDeps{
-		Publisher: publisher, DB: db, NodeID: nodeID,
+		Publisher: publisher, DB: db.Reader(), NodeID: nodeID,
 		// A REAL CLAIM BACKEND, because the WALKING sequences refuse
 		// without one and a harness that could not run them left the
 		// cross-project move — and everything it reads, including the
@@ -204,12 +208,12 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
 	// applier itself rather than running a framework loop: what it is
 	// about is one record's journey from writer to row, and the barrier
 	// belongs to the cases that have a quorum to commit against.
-	logReader, err := statelogtest.LocalReader(tracker.Domain{}, db.Replicated(),
-		statelog.Position{Stream: tracker.Domain{}.Stream().Name, Generation: 1})
+	logReader, err := statelogtest.LocalReader(tracker.Domain{}, db,
+		statelog.Position{Stream: statelog.EstateStream(tracker.Domain{}).Name, Generation: 1})
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)
 	}
-	reader, err := tracker.NewReader(db, logReader)
+	reader, err := tracker.NewReader(db.Reader(), logReader)
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}
@@ -224,7 +228,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
 // node, and a harness that left the pin free would pass it anyway.
 func holdTheAppliersPin(t *testing.T, r *roundTrip) {
 	t.Helper()
-	w, err := r.db.Replicated().Writer(t.Context())
+	w, err := r.db.Writer(t.Context())
 	if err != nil {
 		t.Fatalf("pin the applier's writer: %v", err)
 	}
@@ -321,12 +325,12 @@ func (r *roundTrip) apply(from, last uint64) {
 				Writer: env.Writer,
 			},
 			Position: statelog.Position{
-				Stream: tracker.Domain{}.Stream().Name, Generation: env.Gen, Seq: seq,
+				Stream: statelog.EstateStream(tracker.Domain{}).Name, Generation: env.Gen, Seq: seq,
 			},
 			Payload:  payload,
 			StoredAt: storedAt,
 		}
-		if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+		if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
 			reason, gated, err := r.applier.Gated(r.t.Context(), tx, record)
 			if err != nil {
 				return err
@@ -352,7 +356,7 @@ func (r *roundTrip) apply(from, last uint64) {
 				INSERT INTO tracker_ops (op_id, subject, position, applied_at)
 				VALUES (?,?,?,?) ON CONFLICT (op_id) DO NOTHING`,
 				env.OpID,
-				tracker.Domain{}.Stream().SubjectPrefix+"."+env.Subject.String(),
+				statelog.EstateStream(tracker.Domain{}).SubjectPrefix+"."+env.Subject.String(),
 				record.Position.Packed(), store.EncodeTime(storedAt)); err != nil {
 				return err
 			}
@@ -362,7 +366,7 @@ func (r *roundTrip) apply(from, last uint64) {
 				ON CONFLICT (stream, subject) DO UPDATE SET
 					anchor = MAX(anchor, excluded.anchor)`,
 				record.Position.Stream,
-				tracker.Domain{}.Stream().SubjectPrefix+"."+env.Subject.String(),
+				statelog.EstateStream(tracker.Domain{}).SubjectPrefix+"."+env.Subject.String(),
 				record.Position.Packed()); err != nil {
 				return err
 			}
@@ -446,6 +450,9 @@ func (r *roundTrip) ask(kv map[string]any) tracker.Answer {
 	}
 	return answer
 }
+
+// Voided voids nothing: this harness applies by hand and never re-anchors.
+func (w *testWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
 
 // testWaiter is this node's own applier as the publisher sees it.
 type testWaiter struct {
@@ -602,7 +609,7 @@ func TestATaskWrittenIsATaskRead(t *testing.T) {
 func TestASnapshotCarriesTheCheckpointItsRowsAreAt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	rows, err := tracker.NewRows(r.db)
+	rows, err := tracker.NewRows(r.db.Reader(), statelog.EstateStream(tracker.Domain{}))
 	if err != nil {
 		t.Fatalf("NewRows: %v", err)
 	}
@@ -621,7 +628,7 @@ func TestASnapshotCarriesTheCheckpointItsRowsAreAt(t *testing.T) {
 		return snap.Checkpoint
 	}
 	at := func(seq uint64) statelog.Position {
-		return statelog.Position{Stream: tracker.Domain{}.Stream().Name, Seq: seq}
+		return statelog.Position{Stream: statelog.EstateStream(tracker.Domain{}).Name, Seq: seq}
 	}
 
 	if got, want := checkpoint(), at(r.consumed); got != want {
@@ -700,7 +707,7 @@ func TestARankMoveArbitratesOnTheOrder(t *testing.T) {
 	// expectation matching its subject's last message rather than a
 	// record published on another.
 	var version, scoped int64
-	if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(),
 			`SELECT version FROM tracker_rank_orders WHERE project_key = 'ENG'`).
 			Scan(&version); err != nil {
@@ -720,6 +727,87 @@ func TestARankMoveArbitratesOnTheOrder(t *testing.T) {
 			"position %d — stamping its `version` instead would make its next "+
 			"write form an expectation the broker refuses for ever",
 			scoped, moved.Position.Packed())
+	}
+}
+
+// A RANK MOVE SURVIVES THE MOVED TASK'S NEXT EDIT.
+//
+// A task's own record is merged from its stored DOCUMENT, and the move wrote
+// the rank column alone: the document kept the rank the task was created at,
+// the next edit to the card wrote that back, and every drag was undone by
+// whatever next touched the card — a title fixed, a status moved. A detail
+// read, which decodes the document, showed the old rank all along.
+func TestARankMoveSurvivesTheMovedTasksNextEdit(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"t-1", "t-2"} {
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, newTask(id), nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	created := oneTask(t, r, "t-2").Rank
+	moved, err := tracker.KeyBetween(oneTask(t, r, "t-1").Rank, created)
+	if err != nil || moved == created {
+		t.Fatalf("a key between the two cards: %q, %v", moved, err)
+	}
+	if _, err := r.writer.MoveTasks(t.Context(), "op-move", "ENG",
+		[]tracker.Placement{{Task: "t-2", Rank: moved}}); err != nil {
+		t.Fatalf("MoveTasks: %v", err)
+	}
+	r.drain()
+	if held := oneTask(t, r, "t-2"); held.Rank != moved {
+		t.Errorf("the moved task's document says rank %q, want %q", held.Rank, moved)
+	}
+
+	title := "edited after the move"
+	if _, err := r.writer.UpdateTask(t.Context(), "op-edit", "t-2", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	r.drain()
+	if got := r.strings(`SELECT rank FROM tracker_tasks WHERE id = 't-2'`); len(got) != 1 ||
+		got[0] != string(moved) {
+		t.Errorf("the moved task's rank is %v after its next edit, want %q — the "+
+			"edit put back the rank the move replaced", got, moved)
+	}
+	if held := oneTask(t, r, "t-2"); held.Rank != moved || held.Title != title {
+		t.Errorf("after the edit the document says rank %q and title %q, want %q "+
+			"and %q", held.Rank, held.Title, moved, title)
+	}
+}
+
+// A PLACEMENT FOR A TASK IN ANOTHER PROJECT IS NOT WRITTEN.
+//
+// A placement is a position in ONE project's order, and that project is the
+// container the record's scope names — so a task filed elsewhere has no
+// position in it, and writing one would be a write outside what the record
+// declared, which a record deferred on that task's project would not have held
+// back.
+func TestAPlacementForATaskInAnotherProjectIsNotWritten(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.CreateTask(t.Context(), "op-t-1", newTask("t-1"), nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	seedProject(t, r, tracker.Project{Key: "OPS", Name: "Operations"})
+	before := oneTask(t, r, "t-1").Rank
+	elsewhere, err := tracker.KeyBetween(before, "")
+	if err != nil || elsewhere == before {
+		t.Fatalf("a key other than the task's own: %q, %v", elsewhere, err)
+	}
+	if _, err := r.writer.MoveTasks(t.Context(), "op-move", "OPS",
+		[]tracker.Placement{{Task: "t-1", Rank: elsewhere}}); err != nil {
+		t.Fatalf("MoveTasks: %v", err)
+	}
+	r.drain()
+	if got := r.strings(`SELECT rank FROM tracker_tasks WHERE id = 't-1'`); len(got) != 1 ||
+		got[0] != string(before) {
+		t.Errorf("a task in ENG took rank %v from OPS's order, want its own %q", got, before)
+	}
+	if held := oneTask(t, r, "t-1"); held.Rank != before {
+		t.Errorf("a task in ENG's document took rank %q from OPS's order", held.Rank)
 	}
 }
 

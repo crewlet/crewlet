@@ -1,0 +1,535 @@
+package estate
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"reflect"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
+)
+
+// SubjectPrefix prefixes every serving node's subject.
+const SubjectPrefix = "crewlet.estate"
+
+// Subject is the one subject a serving node answers on.
+//
+// THE NODE ID IS ESCAPED as a subject token, because a node id may carry a dot
+// (`node.id` admits one), and a raw dot would split it into two tokens — a
+// subject some other node's escaped id could collide with.
+func Subject(nodeID string) string {
+	return SubjectPrefix + "." + coord.DocumentKey(nodeID)
+}
+
+// Actor is who a write is attributed to, as it crosses the wire.
+//
+// The tracker's rule is that a writer acts as exactly one party, derived from
+// an identity the caller cannot choose per call. On a stateless node that
+// identity is the seat its tool surface bound; the serving node derives its
+// writer from what arrives here and from nothing else, so the history row
+// names the same author either node would have written.
+type Actor struct {
+	Handle     string             `json:"handle"`
+	Kind       tracker.AuthorKind `json:"kind"`
+	Provenance tracker.Provenance `json:"provenance"`
+
+	// Records asks the serving node to answer which work items the write
+	// committed to ([reply.Written]), because the asker's provenance holds
+	// a turn's [tracker.WriteLog] — a set in the asking process that no
+	// wire carries. Set by the router itself wherever that log is present.
+	Records bool `json:"records,omitempty"`
+}
+
+// opClass is what a failover may do with an operation that went unanswered.
+//
+// EVERY CLASS MOVES ON FROM A NODE THAT RAN NOTHING — one that answered it does
+// not serve the partition, has no backend for it, is not serving yet or is
+// behind the caller's floor, and a write refused by the write authority's gate
+// 3 (`not_holder`, `holding_unknown`), which appends nothing. What differs is
+// what may be repeated once a node MAY have run it.
+type opClass int
+
+const (
+	// opRead runs on any serving holder of its partition and changes
+	// nothing: an unanswered one is asked of the next.
+	opRead opClass = iota
+
+	// opIdempotentWrite carries an operation id the caller minted once, and
+	// the ledger answers a repeat with the first copy's result — so an
+	// unanswered one is asked of the next serving holder under the same id.
+	// So is one a holder answered `unvouched` ([statelog.Result.Unvouched]):
+	// that holder's ledger cannot say whether the operation landed, and
+	// another holder's may, so the answer is not final until every holder
+	// has been asked.
+	opIdempotentWrite
+
+	// opOnceWrite has no id a caller holds, so a repeat is a second write.
+	// An unanswered one is reported as [ErrOutcomeUnknown] and never asked
+	// again.
+	opOnceWrite
+
+	// opGatherRead addresses SEVERAL partitions and is answered per
+	// partition as [opRead] is — each by any serving holder of it — with
+	// one rule of its own: a partition is never asked again of a holder
+	// that already failed it in this gather. See gather.go.
+	//
+	// A slice asked at `linearizable` is the BARRIER half of a gather: its
+	// holder appends a barrier on the partition's log of the operation's
+	// own domain, applies through it, and answers at or after it — the cut
+	// it established. It fails over exactly as any slice does, so it is the
+	// same class asked at a level ([request.Level]), not a class of its
+	// own: a class is what a failover may do, and nothing differs.
+	opGatherRead
+)
+
+// request is one operation, as the asking node sends it.
+type request struct {
+	Op    string          `json:"op"`
+	Args  json.RawMessage `json:"args,omitempty"`
+	Actor *Actor          `json:"actor,omitempty"`
+
+	// Partitions are the partitions this request addresses AT THIS NODE —
+	// the one a single-partition operation resolved to, by the asker's
+	// layout. Empty for an operation that addresses none ([opSpec.partitions]
+	// nil), and on a request from a build that predates partitions, which
+	// the serving node resolves by its own layout instead.
+	Partitions []string `json:"partitions,omitempty"`
+
+	// MapEpoch is the estate map's epoch the asker routed by, 0 where there
+	// is no map (layout 0). It is what a `not_holder` is weighed against on
+	// the asking side, and the serving node names it in its refusal.
+	MapEpoch uint64 `json:"map_epoch,omitempty"`
+
+	// Floors are the positions the serving node must have applied before it
+	// runs the operation — the asking node's session, on the logs of the
+	// partition asked for. See the package doc.
+	Floors []statelog.Position `json:"floors,omitempty"`
+
+	// Deadline is the asker's, so the serving node stops working on an
+	// answer nobody is waiting for.
+	Deadline time.Time `json:"deadline,omitzero"`
+
+	// From is the asking node, for the serving node's log.
+	From string `json:"from,omitempty"`
+
+	// AcceptLagging is the asker's LAST RESORT: every holder whose copy does
+	// not lag its logs has run nothing, so this one runs the operation
+	// although its copy does ([unservedLagging]) — held to the floors above
+	// and to the read's own level, which are what make its answer sound. An
+	// older build ignores it and refuses again, which is the answer it gave
+	// before.
+	AcceptLagging bool `json:"accept_lagging,omitempty"`
+
+	// Slices asks a gather operation for each of Partitions' own answer
+	// ([reply.Parts]) rather than the operation's whole one — the asker
+	// holds every partition's and merges them. A gather whose arguments
+	// address ONE partition is a single-partition read and never sets it,
+	// which is also what an older build's asker sends: the serving node
+	// answers such a request whole, from the arguments exactly as given —
+	// a paged list's cursor is that partition's own — as before gathers.
+	Slices bool `json:"slices,omitempty"`
+
+	// Level is the level each partition of a gather slice is read at
+	// ([statelog.GatherLevel]), set where the operation reads a log at a
+	// level and empty where it does not.
+	Level statelog.ReadLevel `json:"level,omitempty"`
+
+	// Cursors are a paged gather's per-partition cursors, by partition id,
+	// sent with [request.Slices]: each partition resumes from its own,
+	// which only it can read, and one absent here is read from its start.
+	Cursors map[string]string `json:"cursors,omitempty"`
+}
+
+// unservedReason is why a node answered without running an operation.
+type unservedReason string
+
+const (
+	// unservedNoBackend: this node runs no native backend for the op's
+	// half — the company is on a vendor for it, or the runtime is not up.
+	unservedNoBackend unservedReason = "no_backend"
+
+	// unservedNotEstablished: this node's copy admits no seat yet — the
+	// strict gate admission's ping asks ([Backend.Admits]).
+	unservedNotEstablished unservedReason = "not_established"
+
+	// unservedLagging: this node's copy lags its logs ([Backend.Answers]
+	// false) — not drained since its appliers started, or past the snapshot
+	// slack of their ends. A worse holder rather than none: the asker comes
+	// back to it with [request.AcceptLagging] when no holder whose copy does
+	// not lag runs the operation.
+	unservedLagging unservedReason = "lagging"
+
+	// unservedBehind: this node could not reach the caller's floor within
+	// the read budget.
+	unservedBehind unservedReason = "behind"
+
+	// unservedNotHolder: this node does not serve the partition asked for —
+	// it never held it, has begun to leave it, has not finished joining it,
+	// or has stopped serving it on a fault. The reply carries the node's own
+	// map epoch ([reply.Epoch]), which is what tells the asker whether ITS
+	// view or the server's is the stale one.
+	unservedNotHolder unservedReason = "not_holder"
+
+	// unservedHoldingUnknown: this node cannot tell whether it serves the
+	// partition — the answer gate 3 reads could not be read. Not
+	// `not_holder`: it carries no epoch, since the asker's map is not what
+	// is in question, and the asker moves on without reading its map again.
+	unservedHoldingUnknown unservedReason = "holding_unknown"
+
+	// unservedOverflow: a gather slice this node ANSWERED and could not
+	// fit in the reply beside the rest of the batch — the reply has a
+	// ceiling ([queue.MaxPayloadBytes]) and a batch of partitions can
+	// outgrow it. Not a failure of this node, so the asker asks it again
+	// for the partitions that overflowed — in a reply that DECIDED another
+	// partition ([partReply.decisive]). A slice that can never fit is
+	// answered as an error naming its size instead, and where no decision
+	// fits beside the batch's notes the first is answered as its error
+	// regardless ([fitParts]): so a reply in which the holder decided
+	// anything carries a decided partition, and the batch asked of it again
+	// is smaller. Only ever a slice the holder answered: one it did not
+	// finish is [unservedUnfinished] however little room the reply has.
+	unservedOverflow unservedReason = "overflow"
+
+	// unservedUnfinished: a gather slice this node had not finished when
+	// the batch had to be answered — a margin before the asker's deadline
+	// ([batchMargin]), with every slice it HAD finished. It names no
+	// cause, because neither end knows one: the read may have started late,
+	// behind other queries on this node's [CPUs] — the batch's own or
+	// another request's — which asking again recovers; or it may run long
+	// however small its batch, which asking again cannot. So the asker asks
+	// for it again only beside a partition this reply decided
+	// ([partReply.decisive]), and a reply that decided none moves it on as
+	// unreachable ([Router.askBatch]).
+	unservedUnfinished unservedReason = "unfinished"
+)
+
+// reply is what a serving node answers.
+type reply struct {
+	// Node is who answered.
+	Node string `json:"node"`
+
+	// Unserved is set when the node did NOT run the operation, and says
+	// why. Nothing was executed, so every class may move on.
+	Unserved unservedReason `json:"unserved,omitempty"`
+	Detail   string         `json:"detail,omitempty"`
+
+	// Epoch is the SERVER's estate-map epoch, set with a `not_holder`: newer
+	// than the asker's view says the asker is routing by an old map, and
+	// not newer says the server is the one behind (a joiner not yet
+	// serving) or on its way out.
+	Epoch uint64 `json:"epoch,omitempty"`
+
+	// Result is the operation's answer, and Err its failure. At most one.
+	Result json.RawMessage `json:"result,omitempty"`
+	Err    *wireError      `json:"error,omitempty"`
+
+	// Obsolete names the streams whose floor this node could never reach —
+	// a position on a generation the log has since abandoned — so the
+	// asker drops them rather than carrying a floor nobody can satisfy.
+	Obsolete []string `json:"obsolete,omitempty"`
+
+	// At is where each of the partition's logs was when a read whose
+	// answer reports its coverage began ([statelog.Coverage.At]) — a lower
+	// bound on what the answer holds. Empty for every other operation, and
+	// from an older build, whose answer then states no cut.
+	At []statelog.Position `json:"at,omitempty"`
+
+	// Parts is a gather's answer per partition, one per partition the
+	// request named, when it asked for [request.Slices].
+	Parts []partReply `json:"parts,omitempty"`
+
+	// Written is every work item the operation's writes COMMITTED to on
+	// this node, for a request whose actor asked ([Actor.Records]) — what a
+	// writer in the asking process would have reported into the turn's
+	// [tracker.WriteLog] itself. Reported whatever the answer, an error
+	// included, since a walking gesture's earlier steps committed whether
+	// or not a later one failed.
+	Written []types.WorkItem `json:"written,omitempty"`
+}
+
+// partReply is one partition's answer within a gather batch: what [reply]
+// says about a whole request, said about one of its partitions.
+type partReply struct {
+	Partition string `json:"partition"`
+
+	// Unserved is set when this node did not run the read for this
+	// partition — the same reasons a whole request is refused for, and
+	// [unservedOverflow] — and says why. Epoch is this node's map epoch,
+	// set with `not_holder`.
+	Unserved unservedReason `json:"unserved,omitempty"`
+	Epoch    uint64         `json:"epoch,omitempty"`
+	Detail   string         `json:"detail,omitempty"`
+
+	// Result is the partition's answer and Err its failure. At most one.
+	Result json.RawMessage `json:"result,omitempty"`
+	Err    *wireError      `json:"error,omitempty"`
+
+	// At is where each of the partition's logs was when its read began —
+	// or the barriers it was read after, at `linearizable`. Empty for a
+	// read that is not of a log's rows.
+	At []statelog.Position `json:"at,omitempty"`
+}
+
+// decisive reports whether p ends its holder's part in a gather for its
+// partition whatever else the reply says: a result, an error, or a refusal
+// that sends the partition to its next holder. Everything but the two answers
+// that ask for the partition AGAIN of the same holder — [unservedOverflow] and
+// [unservedUnfinished] — which the asker honours only beside a decisive part,
+// because a reply deciding nothing is one the same batch would get again.
+//
+// ONE PREDICATE FOR BOTH ENDS: the holder fits its reply so that one part in
+// it is decisive ([fitParts]) and the asker asks again only beside one
+// ([Router.askBatch]). Counting an unfinished partition's note as the
+// progress — what each end once did in its own words — sent a batch with an
+// oversized slice to the same holder once an attempt until its caller
+// stopped waiting, or for ever.
+func (p partReply) decisive() bool {
+	return p.Unserved != unservedOverflow && p.Unserved != unservedUnfinished
+}
+
+// opSpec is one operation's declaration: what it is called, how a failover
+// treats it, which partitions it addresses, and its server half.
+type opSpec struct {
+	name   string
+	class  opClass
+	args   reflect.Type
+	result reflect.Type
+
+	// partitions resolves a request's arguments, decoded, to the partitions
+	// it addresses under a layout — one for a single-partition operation,
+	// every one a gather reads for a gather — or is nil for an operation
+	// that addresses none (the node's own event log), which any data node
+	// answers. A floor's stream is derived from the partition's log of the
+	// operation's domain, so an operation names no stream of its own.
+	partitions func(ctx context.Context, l statelog.Layout, r Resolver,
+		raw json.RawMessage) ([]statelog.PartitionID, error)
+
+	// domain is the domain whose log the operation depends on in each
+	// partition it addresses: the only log its floors are on
+	// ([opSpec.floorStreams], [address]).
+	domain string
+
+	// actor says whether the operation acts AS somebody, which a request
+	// then has to name.
+	actor bool
+
+	// ungated operations run on a node whose copy is not serving yet: they
+	// touch only what the node keeps for itself, or ask the gate
+	// themselves.
+	ungated bool
+
+	// floorless operations carry no session floor, because what they read
+	// is not the log's rows at a position — see [opWorkSearch].
+	floorless bool
+
+	// oneAppend operations are ONE APPEND on one log, decided and resolved
+	// inside the write authority's own budgets — so one attempt at one is
+	// [AppendAttempt] whatever deadline its caller has ([Router.budgetFor]),
+	// and a holder silent for that long is passed for the next under the
+	// same operation id rather than waited on until the caller gives up.
+	oneAppend bool
+
+	// named operations' requests always NAME their partition: no build from
+	// before partitions sends one, so the serving node never resolves its
+	// arguments in the request's stead, and a request naming none is
+	// malformed rather than an older asker's.
+	named bool
+
+	// covered operations' answers report what they covered
+	// ([statelog.Coverage]): the partitions they addressed and the cut each
+	// was read at, which the serving node measures before it runs the read
+	// ([reply.At]). Every gather is; a single-partition read whose answer
+	// a gather will one day assemble is declared so ([op.covered]).
+	covered bool
+
+	// serve runs a single-partition operation on p — the zero partition
+	// for one that addresses none. Nil for a gather, which [opSpec.whole]
+	// answers instead.
+	serve func(ctx context.Context, b Backend, p statelog.PartitionID, actor *Actor,
+		raw json.RawMessage) (any, error)
+
+	// part is a gather's per-partition answer type; slice is its server
+	// half for one partition of several — that partition's answer before
+	// any merge, with the positions its logs were at ([partReply.At]) —
+	// and whole is its answer when it addresses ONE partition, which is a
+	// single-partition read: the slice and the merge of that one slice.
+	// All three nil for every other operation.
+	part  reflect.Type
+	slice func(ctx context.Context, b Backend, s sliceAsk, raw json.RawMessage) (
+		any, []statelog.Position, error)
+	whole func(ctx context.Context, b Backend, s sliceAsk, raw json.RawMessage) (
+		any, []statelog.Position, error)
+}
+
+// sliceAsk is what one partition's slice of a gather is asked under.
+type sliceAsk struct {
+	partition statelog.PartitionID
+	layout    statelog.Layout
+
+	// level is the gather's per-partition level, empty for an operation
+	// that reads no log at one; floors are the asker's on the partition's
+	// logs, already waited for.
+	level  statelog.ReadLevel
+	floors []statelog.Position
+
+	// cursor is this partition's own cursor in a paged gather.
+	cursor string
+
+	// cpus is the request's share of this node's [CPUs] ([CPUs.share]):
+	// the place the slice's QUERY takes, after its waits, shared with the
+	// request's other slices. Nil for a whole read, whose one query takes
+	// none.
+	cpus *cpuShare
+}
+
+// op is a typed handle on one registered operation: its declaration, and its
+// two halves in the caller's own types, which the router calls in-process
+// where this node serves the partition — no encoding, and an error keeps its
+// own identity rather than the wire's rebuilt one.
+type op[A, R any] struct {
+	spec  *opSpec
+	serve func(ctx context.Context, b Backend, actor *Actor, args A) (R, error)
+	addr  address[A]
+
+	// cover sets what the answer covered on it, for an operation declared
+	// [op.covered]; nil otherwise.
+	cover func(*R, statelog.Coverage)
+
+	// repeatable reports a ONCE-WRITE whose arguments name the caller's own
+	// idempotency key, and so may be asked again under it — see
+	// [op.repeatableWhen]. Nil for every other operation.
+	repeatable func(A) bool
+}
+
+// partitionsFunc resolves an operation's arguments to the partitions it
+// addresses under a layout. It may READ through the resolver first — a bare
+// id resolving to the partition that holds it — and says so by calling it.
+type partitionsFunc[A any] func(ctx context.Context, l statelog.Layout, r Resolver,
+	args A) ([]statelog.PartitionID, error)
+
+// registry is every operation this build serves, keyed by name.
+//
+// ONE TABLE FOR BOTH HALVES. The client asks an operation through the same
+// value the server dispatches on, so an operation the client can send is by
+// construction one the server knows — and the wire gate walks this table,
+// so a new operation's types are checked the moment it is declared.
+var registry = map[string]*opSpec{}
+
+// define declares an operation. Package-level, at init: a duplicate name is a
+// build that cannot serve, so it panics rather than silently shadowing. The
+// zero address is an operation that addresses no partition
+// ([opSpec.partitions]).
+func define[A, R any](name string, class opClass, at address[A], actor bool,
+	serve func(ctx context.Context, b Backend, actor *Actor, args A) (R, error),
+) op[A, R] {
+	if _, dup := registry[name]; dup {
+		panic(fmt.Sprintf("estate: operation %q declared twice", name))
+	}
+	spec := &opSpec{
+		name: name, class: class, actor: actor, domain: at.domain,
+		args: reflect.TypeFor[A](), result: reflect.TypeFor[R](),
+	}
+	partitions := at.partitions
+	if partitions == nil {
+		// EVERY OPERATION ADDRESSES THE PARTITIONS IT TOUCHES: the router
+		// picks a holder by them and the server checks that it holds
+		// them, and an operation that addressed none would be answered by
+		// whichever node the asker reached first, held to nothing.
+		panic(fmt.Sprintf("estate: operation %q addresses no partition", name))
+	}
+	decode := func(raw json.RawMessage) (A, error) {
+		var args A
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return args, fmt.Errorf("estate: %s: decode the arguments: %w", name, err)
+			}
+		}
+		return args, nil
+	}
+	spec.partitions = func(ctx context.Context, l statelog.Layout, r Resolver,
+		raw json.RawMessage) ([]statelog.PartitionID, error) {
+		args, err := decode(raw)
+		if err != nil {
+			return nil, err
+		}
+		return partitions(ctx, l, r, args)
+	}
+	checked := func(ctx context.Context, b Backend, who *Actor, args A) (R, error) {
+		if spec.actor && (who == nil || who.Handle == "") {
+			var zero R
+			return zero, fmt.Errorf("estate: %s acts as somebody and the request "+
+				"names nobody — a write whose author was not stated is not an "+
+				"audit trail", name)
+		}
+		return serve(ctx, b, who, args)
+	}
+	spec.serve = func(ctx context.Context, b Backend, _ statelog.PartitionID, who *Actor,
+		raw json.RawMessage) (any, error) {
+		args, err := decode(raw)
+		if err != nil {
+			return nil, err
+		}
+		return checked(ctx, b, who, args)
+	}
+	registry[name] = spec
+	return op[A, R]{spec: spec, serve: checked, addr: at}
+}
+
+// ungated declares that the establishment gate does not hold this operation
+// back — see [opSpec.ungated].
+func (o op[A, R]) ungated() op[A, R] {
+	o.spec.ungated = true
+	return o
+}
+
+// floorless declares that this operation carries no session floor — see
+// [opSpec.floorless].
+func (o op[A, R]) floorless() op[A, R] {
+	o.spec.floorless = true
+	return o
+}
+
+// appends declares that this operation is one append on one log — see
+// [opSpec.oneAppend].
+func (o op[A, R]) appends() op[A, R] {
+	o.spec.oneAppend = true
+	return o
+}
+
+// named declares that every request for this operation names its partition —
+// see [opSpec.named].
+func (o op[A, R]) named() op[A, R] {
+	o.spec.named = true
+	return o
+}
+
+// repeatableWhen declares a once-write that is IDEMPOTENT for the calls whose
+// arguments say so: a page write that carries the caller's own key
+// ([pages.CallKey]) derives its operation id — and a create its page's id —
+// from that key rather than minting one per call, so a repeat under it is the
+// same operation and the ledger answers it with the first copy's outcome. Such
+// a call fails over as an [opIdempotentWrite] does; one without a key is still
+// never repeated ([opOnceWrite]). A property of the ASKING side, since the
+// class is what the asker may do with an unanswered request, and the server
+// runs the operation the same way either way.
+func (o op[A, R]) repeatableWhen(keyed func(A) bool) op[A, R] {
+	if o.spec.class != opOnceWrite {
+		panic(fmt.Sprintf("estate: %s is not a once-write, so nothing about its "+
+			"arguments can make it repeatable", o.spec.name))
+	}
+	o.repeatable = keyed
+	return o
+}
+
+// covered declares that this operation's answer reports what it covered, and
+// how: cover sets the coverage on the answer the router hands its caller —
+// see [opSpec.covered].
+func (o op[A, R]) covered(cover func(*R, statelog.Coverage)) op[A, R] {
+	o.spec.covered = true
+	o.cover = cover
+	return o
+}

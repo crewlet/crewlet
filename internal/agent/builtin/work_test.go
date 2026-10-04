@@ -67,8 +67,12 @@ type fakeTracker struct {
 
 	// searched is every text the ranked search was asked for, and ranked
 	// what it answers with.
-	searched  []string
-	ranked    []tracker.Ranked
+	searched []string
+	ranked   []tracker.Ranked
+
+	// coverage is what every gathered answer the fake gives says it
+	// covered — a partition missing from it is work nobody read.
+	coverage  statelog.Coverage
 	searchErr error
 	// searchModes is every mode a search asked for, and partialSearch
 	// makes the fake answer over part of the corpus.
@@ -357,6 +361,7 @@ func (f *fakeTracker) Search(_ context.Context,
 	if f.partialSearch {
 		answer.Coverage = knowledge.Coverage{BucketsMissing: 21}
 	}
+	answer.Partitions = f.coverage
 	if q.Limit <= 0 || q.Limit > len(f.ranked) {
 		answer.Hits = f.ranked
 		return answer, nil
@@ -752,9 +757,11 @@ func TestAWriteAnswersWithThePositionItLandedAt(t *testing.T) {
 func TestTheTrackerToolsRefuseOutsideATurn(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
+	files := newFakeFiles()
 	reg := workRegistry(t, builtin.WorkDeps{
 		Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves, Search: trk,
 		ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return trk },
+		Files:         files, FileWriter: files.as, Objects: newFakeObjects(),
 	})
 	for _, name := range builtin.WorkTools() {
 		entry, ok := reg.Lookup(name)
@@ -1300,6 +1307,9 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 			Placer:          func(builtin.Actor) builtin.WorkPlacer { return nil },
 			ProjectWriter:   func(builtin.Actor) builtin.ProjectWriter { return trk },
 			Inbox:           trk,
+			Files:           newFakeFiles(),
+			FileWriter:      func(builtin.Actor) builtin.FileWriter { return newFakeFiles() },
+			Objects:         newFakeObjects(),
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
@@ -1437,6 +1447,7 @@ func (f *fakeTracker) Inbox(_ context.Context, q tracker.InboxQuery,
 
 	f.inboxQuery = q
 	return tracker.InboxAnswer{
+		Coverage:       f.coverage,
 		Handle:         q.Who.Handle,
 		PrimaryReasons: tracker.DefaultPrimaryReasons,
 		Notices: []tracker.InboxNotice{{

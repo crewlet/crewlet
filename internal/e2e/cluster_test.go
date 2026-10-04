@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -308,7 +311,11 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 		return fail(fmt.Errorf("%w: company config: %w", errNotRetryable, err))
 	}
 
-	port, peers, advertise := relays.Member(i)
+	port, routes, advertise := relays.Member(i)
+	peers, err := otherMembers(routes, port)
+	if err != nil {
+		return fail(fmt.Errorf("%w: member %d's routes: %w", errNotRetryable, i, err))
+	}
 	// PROBED IMMEDIATELY BEFORE THE ENGINE BINDS IT, which is the guard
 	// [jetstreamtest.Cluster.start] has and this path did not.
 	//
@@ -340,6 +347,8 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	boot.Stream.Cluster.Name = jetstreamtest.RelayClusterName
 	boot.Stream.Cluster.Port = port
+	// THE OTHER MEMBERS, which is what Tier A says the field holds and what
+	// its member count is taken from — see [otherMembers].
 	boot.Stream.Cluster.Peers = peers
 	// LOOPBACK, because the relays dial 127.0.0.1: a member listening on
 	// every interface would be reachable on a port a partition does not
@@ -353,11 +362,37 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	// one replica a publish is durable on the member that took it, and a
 	// case asserting a peer sees it would be asserting timing.
 	boot.Stream.Replicas = n
+	// ONE LEASE STORE FOR THE FLEET, which is what makes it a fleet rather
+	// than n nodes that happen to share a log. The default, `local`, keeps
+	// every lease in this process — Tier A refuses it on a clustered stream
+	// for exactly that reason — and under it each member claimed every seat
+	// and every duty for itself and saw no peer's presence at all — every
+	// fleet singleton ran once per member, and every membership read counted
+	// one node.
+	//
+	// It went unnoticed because nothing between this struct and the broker
+	// held it to Tier A: the loader validates a FILE, and this bootstrap is
+	// built in code. engine.New validates what it is given now, so this
+	// harness can only stand up a fleet an operator could run — which is
+	// also why [fleetSize] is three.
+	boot.Coordination.Type = config.CoordinationEmbeddedKV
+	// A TOKEN, because a write over HTTP is attributed to the operator it
+	// names and a member with none refuses every one — the file uploads
+	// cross the fleet through the API.
+	boot.API.Auth.Tokens = []config.APIToken{{ID: e2eOperatorID, Token: e2eOperatorToken}}
 
 	e, err := engine.New(ctx, engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
 	})
 	if err != nil {
+		// A CONFIG THE ENGINE REFUSED is refused identically on every
+		// attempt — the same file parses the same way — so a fresh mesh
+		// would spend the whole start budget re-asking a question already
+		// answered, and then report it as a cluster that never came up.
+		var fault *config.Fault
+		if errors.As(err, &fault) {
+			return fail(fmt.Errorf("%w: engine.New: %w", errNotRetryable, err))
+		}
 		return fail(fmt.Errorf("engine.New: %w", err))
 	}
 	// ON WithoutCancel, like every teardown here: the attempt's context is
@@ -394,6 +429,32 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	}, stops, nil
 }
 
+// otherMembers is a mesh's route list without this member's own route.
+//
+// `stream.cluster.peers` is "the route URLs of the OTHER members", and Tier A
+// counts a fleet as those plus this node — which is where its two-member
+// refusal is decided. The direct mesh hands every member the same list, its
+// own route included (NATS ignores a route to itself, so the broker runs the
+// same either way), and handed through unfiltered that list counted a fleet
+// of two as three: the two-member harness passed the very rule that exists to
+// refuse it, on every case but the partitioned one, whose relay mesh lists
+// only the others. Filtered here, so the count Tier A makes is the fleet this
+// harness actually stands up.
+func otherMembers(routes []string, own int) ([]string, error) {
+	var out []string
+	for _, route := range routes {
+		u, err := url.Parse(route)
+		if err != nil {
+			return nil, fmt.Errorf("route %q: %w", route, err)
+		}
+		if u.Hostname() == clusterHost && u.Port() == strconv.Itoa(own) {
+			continue
+		}
+		out = append(out, route)
+	}
+	return out, nil
+}
+
 // hydrated waits for every member's replication loops to catch up.
 //
 // A CLUSTER, NOT A NODE: a case that waited on one member and then read
@@ -403,7 +464,7 @@ func (c *cluster) hydrated(t *testing.T) {
 	t.Helper()
 	for i, n := range c.nodes {
 		waitFor(t, fmt.Sprintf("member %d's native backends to hydrate", i),
-			n.engine.NativeHydrated)
+			hydrated(t, n.engine))
 	}
 }
 
@@ -427,20 +488,36 @@ func noParallel(t *testing.T) {
 
 // fleetSize is how many members a cluster case stands up.
 //
-// TWO, and the number is a cost decision rather than a coverage one. What a
-// case here needs is a FLEET — two processes, two stores, two brokers, and
-// agreement that has to cross between them — and two members gives all of it:
-// a write one node makes reaches the other's rows through the log, and two
-// nodes minting from one counter contend at the broker exactly as three would.
+// THREE, because that is the smallest fleet Tier A will run. Two embedded
+// members on the embedded KV are refused by name (`stream.cluster.peers`, in
+// [config.Bootstrap.Validate]): two have no coordination quorum without each
+// other, so the fleet stops serving the moment either restarts, and a rolling
+// upgrade restarts them one at a time. That rule is right for production, and
+// engine.New now holds every bootstrap to it — so a harness of two was a
+// harness running a fleet no operator could, which is what this had been twice
+// over: first on local coordination, where every member leased every seat to
+// itself, and then on the KV at a size Tier A refuses.
 //
-// What three would add is a MAJORITY, which is the only thing that makes
-// "survive losing one" meaningful — and that is [jetstreamtest]'s own suite's
-// subject, on bare brokers, where it costs three servers and not three
-// engines. Here three members is three embedded brokers with better than
-// twenty raft groups each, plus three pairs of SQLite databases, and measured
-// on this repository's own CI shape they starve each other: each case passes
-// alone and all of them time out under `go test ./...`.
-const fleetSize = 2
+// IT WAS TWO FOR COST, measured when this package shared a runner with the
+// rest of the tree: three embedded brokers with better than twenty raft groups
+// each starved each other, each case passing alone and every one timing out
+// under `go test ./...`. That contention is gone rather than paid for here —
+// this is a solo package ([solo.Run], in logsink_test.go), run at -p 1 with no
+// other package beside it, and no two of its cluster cases ever run at once
+// ([noParallel]). What the third member costs now, measured on a four-core
+// machine under -race, the ten cluster cases run alone and in sequence: 494 s
+// at three members in each of two runs against 476 s at two, about 4% — the
+// fixed cost of a case is standing a fleet up and tearing it down, and the
+// extra member stands up beside the others rather than after them. A third
+// run took 584 s, all of the difference one cluster start that timed out and
+// was retried, which is what [clusterStartAttempts] is for. (The search case
+// got cheaper, 60 s to 34–50 s, because it now writes the handful of pages
+// that cover the table rather than two dozen.)
+//
+// WHAT IT BUYS beyond being runnable is a MAJORITY: the partition case cuts one
+// member off while the other two keep their quorum, so the scatter has to tell
+// an absent peer from a present one rather than from nobody at all.
+const fleetSize = 3
 
 // clusterSettle is how long a fleet assertion waits for a record one member
 // published to reach another's rows.
@@ -569,7 +646,7 @@ func TestEveryNodeMintsIntoOneKeySpace(t *testing.T) {
 		seen[got.key] = true
 	}
 	if len(seen) != len(c.nodes) && !t.Failed() {
-		t.Errorf("three concurrent creates produced %d keys: %v", len(seen), seen)
+		t.Errorf("%d concurrent creates produced %d keys: %v", len(c.nodes), len(seen), seen)
 	}
 }
 
@@ -707,6 +784,38 @@ func TestAFleetTakesAndOffersSnapshots(t *testing.T) {
 		})
 }
 
+// indexedShards is the pages one member's lexical index holds, by id, with the
+// bucket each was filed in.
+//
+// The index is the NODE's own estate, which no typed store exposes a listing
+// of, so this reads its table directly — the same shape [digestTable] takes
+// for the replicated rows.
+func indexedShards(t *testing.T, n *node) map[string]int {
+	t.Helper()
+	out := map[string]int{}
+	if err := n.engine.Backends().Store.Read(t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(t.Context(),
+			`SELECT source_id, search_shard FROM kb_docs WHERE source = ?`,
+			string(search.SourcePage))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var id string
+			var shard int
+			if err := rows.Scan(&id, &shard); err != nil {
+				return err
+			}
+			out[id] = shard
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("read %s's lexical index: %v", n.id, err)
+	}
+	return out
+}
+
 // dir is member i's snapshot directory.
 func (c *cluster) dir(t *testing.T, i int) string {
 	t.Helper()
@@ -764,15 +873,15 @@ func (c *cluster) nodeIDs() []string {
 //
 // [internal/search]'s cases drive the fan-out over fixtures: they prove the
 // merge, the coverage arithmetic and the wire format. What none of them proves
-// is that two REAL engines — each with its own broker, its own store, its own
+// is that REAL engines — each with its own broker, its own store, its own
 // index and its own registration — answer each other's slice requests. This is
-// the only place the subject, the answerer, the assignment table and two
+// the only place the subject, the answerer, the assignment table and
 // independently built indexes are all live at once, and it is exactly the arm
 // a single-node suite passes vacuously.
 //
 // # Why the assertion is on the COVERAGE and not only on the hits
 //
-// Both members hold the whole corpus, so neither NEEDS the other to answer. A
+// Every member holds the whole corpus, so none NEEDS another to answer. A
 // fan-out that silently fell back to the local scan would return the same
 // documents in the same order — what separates the two is which buckets each
 // answer came from, which is what this reads.
@@ -789,24 +898,48 @@ func TestTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T) {
 	c := startCluster(t, fleetSize)
 	c.hydrated(t)
 
-	// ENOUGH PAGES THAT EVERY MEMBER'S RANGE HOLDS SOME, and no more.
-	// Each page is a real write through a quorum cluster and then an index
-	// sweep, measured at a few seconds apiece here, so the count is chosen
-	// against the probability it is there for: with 24 documents hashed
-	// into 64 buckets, the chance that either contiguous half of the range
-	// holds none of them is 2 x 2^-24 — about one run in four million.
+	table := search.Divide(c.nodeIDs())
+	if len(table) != fleetSize {
+		t.Fatalf("a fleet of %d divided into %d assignments", fleetSize, len(table))
+	}
+
+	// PAGES UNTIL EVERY MEMBER'S RANGE HOLDS ONE, and no more. A page's
+	// bucket is a hash of the id its write mints, so a fixed count is a
+	// probability rather than a coverage: the 24 pages this wrote left one
+	// of two halves empty about once in four million runs, and would leave
+	// one of three ranges empty about once in five thousand — a flake nobody
+	// could reproduce. Each page is a real write through a quorum cluster,
+	// so writing until the table is covered is also the cheaper shape: a
+	// handful of pages rather than two dozen. The bound is one page per
+	// bucket, past which a range still empty is a hash or a table that does
+	// not partition the buckets, and fails naming itself rather than looping.
 	writer := c.nodes[0].engine.PagesStore()
 	var last statelog.Position
-	for i := range 24 {
-		written, err := writer.Create(t.Context(), pageOperator(), pages.NewPage{
+	covered := map[string]int{}
+	shards := map[string]int{}
+	written := 0
+	for ; len(covered) < len(table); written++ {
+		if written == search.SearchShards {
+			t.Fatalf("%d pages reached the ranges of %d of %d members (%v) — "+
+				"the table does not partition the buckets the pages hash to",
+				written, len(covered), len(table), covered)
+		}
+		page, err := writer.Create(t.Context(), pageOperator(), pages.NewPage{
 			Container: "ENG",
-			Title:     fmt.Sprintf("Runbook %02d", i),
+			Title:     fmt.Sprintf("Runbook %02d", written),
 			Body:      "when a deploy hangs on rollback, drain the node before retrying",
 		})
 		if err != nil {
-			t.Fatalf("create page %d: %v", i, err)
+			t.Fatalf("create page %d: %v", written, err)
 		}
-		last = written.Outcome.Position
+		last = page.Outcome.Position
+		shard := search.ShardOf(string(search.SourcePage), page.Page.ID)
+		shards[page.Page.ID] = shard
+		for _, a := range table {
+			if a.Shards.Contains(shard) {
+				covered[a.Node]++
+			}
+		}
 	}
 	for i, n := range c.nodes {
 		if err := n.engine.WaitCommitted(t.Context(), last); err != nil {
@@ -816,14 +949,35 @@ func TestTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T) {
 		if searcher == nil {
 			t.Fatalf("member %d runs no native searcher", i)
 		}
-		waitFor(t, fmt.Sprintf("member %d's index to catch up", i), func() bool {
+		waitFor(t, fmt.Sprintf("member %d's first index build", i), func() bool {
 			return !searcher.Building(t.Context())
 		})
-	}
-
-	table := search.Divide(c.nodeIDs())
-	if len(table) != fleetSize {
-		t.Fatalf("a fleet of %d divided into %d assignments", fleetSize, len(table))
+		// AND EVERY PAGE WRITTEN IN IT, which Building does not say: it
+		// answers whether the FIRST build finished ([search.Indexer.Ready]),
+		// and an index a page behind is ordinary staleness to a searcher.
+		// Here it would be a peer answering nothing for a range whose page
+		// it has not indexed yet — and the page that completes the coverage
+		// above is the LAST one written, so the range it lands in is the one
+		// most likely to hold nothing else. Read off the index's own rows,
+		// with the bucket each was filed in, so the coverage the loop above
+		// computed is checked against the bucket the index actually used.
+		var indexed map[string]int
+		waitFor(t, fmt.Sprintf("member %d's index to hold all %d pages", i, written),
+			func() bool {
+				indexed = indexedShards(t, n)
+				for id := range shards {
+					if _, ok := indexed[id]; !ok {
+						return false
+					}
+				}
+				return true
+			}, func() string { return fmt.Sprintf("indexed %v, written %v", indexed, shards) })
+		for id, shard := range shards {
+			if indexed[id] != shard {
+				t.Fatalf("member %d filed page %s in bucket %d and the coverage "+
+					"was computed for bucket %d", i, id, indexed[id], shard)
+			}
+		}
 	}
 
 	// EVERY MEMBER ASKS, because a coordinator is whichever node the
@@ -863,8 +1017,9 @@ func TestTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T) {
 			}
 			if len(slice.Lexical) == 0 {
 				t.Errorf("member %d's peer %s returned nothing for buckets "+
-					"[%d,%d) over a corpus of 24 pages that all match",
-					i, slice.Node, slice.Shards.From, slice.Shards.To)
+					"[%d,%d), which hold %d of the %d pages written, all of "+
+					"which match", i, slice.Node, slice.Shards.From,
+					slice.Shards.To, covered[slice.Node], written)
 			}
 		}
 
@@ -1017,7 +1172,7 @@ func TestAFleetAgreesAboutOneCompany(t *testing.T) {
 	}
 
 	// (4) AND THE MEMBERS ARE TWINS, ROW FOR ROW — LAST, because it can
-	// only mean anything once both members have applied everything above.
+	// only mean anything once every member has applied everything above.
 	// The board listing was one query's answer; this is every REPLICATED
 	// table of every registered domain, compared as a digest.
 	//
@@ -1091,7 +1246,7 @@ func replicatedDigest(t *testing.T, n *node) map[string]string {
 func digestTable(t *testing.T, n *node, table string) string {
 	t.Helper()
 	var rendered []string
-	if err := n.engine.Backends().Store.Replicated().Read(t.Context(),
+	if err := storetest.EstateOf(n.engine.Backends().Store).Read(t.Context(),
 		func(tx *sql.Tx) error {
 			rows, err := tx.QueryContext(t.Context(), `SELECT * FROM `+table)
 			if err != nil {
@@ -1151,8 +1306,8 @@ func digestRows(rendered []string) string {
 // completely different failures, and only one of them can hang a search.
 //
 // So this is the network half, and the only case in this package that takes
-// [startPartitionableCluster]. Two claims, in the one order that can prove
-// either:
+// [startPartitionableCluster]. Three claims, in the one order that can prove
+// them:
 //
 //  1. THE SCATTER RETURNS RATHER THAN WAITING OUT THE CALLER. A search whose
 //     coordinator blocks on an absent member is worse than a partial answer —
@@ -1160,13 +1315,17 @@ func digestRows(rendered []string) string {
 //     which is precisely what holding the whole corpus on each member is meant
 //     to prevent.
 //  2. THE SILENCE IS THE PARTITION. The same scatter is run BEFORE the cut and
-//     must come back full, or an empty answer afterwards would prove only that
+//     must come back full, or a missing answer afterwards would prove only that
 //     nobody was ever listening.
+//  3. AND ONLY THE PARTITION. The member the cut did not touch answers through
+//     it, so what falls silent is the one member that is unreachable and not
+//     the asker's whole view of the fleet — which from the answer alone would
+//     read as the same partial result, with every peer named absent.
 //
 // The scatter rides core NATS request/reply — no stream, no consumer, no ack,
 // per [queue]'s `Ask`/`Serve` — so cutting a member's routes is exactly what
-// makes it unreachable, and quorum, which a two-member cluster loses here, is
-// not what this measures.
+// makes it unreachable. The other two keep their quorum across the cut, but
+// quorum is not what this measures.
 func TestAPartitionedMemberIsSilentRatherThanSlow(t *testing.T) {
 	noParallel(t)
 	c := startPartitionableCluster(t, fleetSize)
@@ -1207,6 +1366,7 @@ func TestAPartitionedMemberIsSilentRatherThanSlow(t *testing.T) {
 	})
 
 	c.relays.Partition(t, 1)
+	cutOff := c.nodes[1].id
 
 	// A BUDGET WELL UNDER clusterSettle, because what is being measured is
 	// that the wait ENDS at the caller's deadline rather than at the
@@ -1215,9 +1375,20 @@ func TestAPartitionedMemberIsSilentRatherThanSlow(t *testing.T) {
 	// search open for far longer than its caller allowed.
 	const cut = 2 * time.Second
 	got, took := scatter(cut)
-	if len(got) != 0 {
-		t.Errorf("a partitioned member answered %d slices — the cut route did "+
-			"not stop the request, so this case measures nothing", len(got))
+	answered := map[string]bool{}
+	for _, slice := range got {
+		answered[slice.Node] = true
+	}
+	if answered[cutOff] {
+		t.Errorf("the partitioned member %s answered — the cut route did not "+
+			"stop the request, so this case measures nothing", cutOff)
+	}
+	for _, peer := range peers {
+		if peer.Node != cutOff && !answered[peer.Node] {
+			t.Errorf("%s, which the cut did not touch, did not answer either "+
+				"(answers from %v) — the partition silenced more than the "+
+				"member it cut", peer.Node, slices.Sorted(maps.Keys(answered)))
+		}
 	}
 	if took > cut+cut/2 {
 		t.Errorf("the scatter took %s against a %s budget — a coordinator that "+

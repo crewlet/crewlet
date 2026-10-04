@@ -49,17 +49,20 @@ const (
 	// company EVERY barrier is a partial batch.
 	ApplyLinger = 250 * time.Millisecond
 
-	// FetchMessages and FetchBytes bound one pull from the broker.
+	// FetchMessages and FetchBytes bound one pull from the broker, and one
+	// pull carries BOTH: the count is the request's `batch` and the bytes
+	// its `max_bytes`, and the broker enforces each.
 	//
 	// BYTES ARE THE REAL BOUND and the message count is the secondary one:
 	// a log whose records vary from a barrier's hundred-odd bytes to a
 	// bulk write's megabytes cannot be sized by count, and a count-only
 	// bound on a catch-up replay fetches whatever the largest records
-	// happen to be. The vendored client fixes a byte-bounded fetch's
-	// message count at a million, so the two cannot both be asked of one
-	// call.
+	// happen to be. The client library cannot send the two together — its
+	// byte-bounded fetch fixes the count at a million, and allocated 32 MiB
+	// on every idle pull doing it — so the jetstream Fetcher makes the
+	// broker's own request itself.
 	//
-	// # The count is enforced by the CONSUMER, never by the caller
+	// # The count is never the caller's to apply afterwards
 	//
 	// It used to be applied by the loop to what came back: take the first
 	// FetchMessages of a byte-bounded batch and drop the rest. The rest had
@@ -72,11 +75,11 @@ const (
 	// were pending, a backlog of 257 records wedged the applier for the
 	// life of the process.
 	//
-	// So the count is the broker-side consumer's MaxAckPending — the
-	// number of records it may hand this node before one is acknowledged —
-	// and a [Fetcher] returns EVERYTHING a pull delivered. A record the
-	// broker handed over and the loop did not take is a hole for an ack
-	// window, on every pull.
+	// So the count is the pull's own, the broker-side consumer's
+	// MaxAckPending holds the same number IN FLIGHT across pulls, and a
+	// [Fetcher] returns EVERYTHING a pull delivered — to the fetch that
+	// asked, or to the next one. A record the broker handed over and the
+	// loop never took is a hole for an ack window, on every pull.
 	//
 	// FOUR THOUSAND, which is [ApplyTxRowBudget]: the loop estimates a row
 	// per record when it decides whether another pull could fit, so a
@@ -84,6 +87,19 @@ const (
 	// flight is one whose every pull the loop can commit whole. Larger
 	// buys nothing, because the run closes at the budget; smaller commits
 	// more often than the budget asks.
+	//
+	// 28 MiB OF BYTES, and the floor under it is not a preference: a pull
+	// whose byte bound is smaller than the next record is REFUSED by the
+	// broker with nothing delivered, every time, so the applier would stop
+	// at that record for ever. The largest record a log can hold is
+	// [queue.MaxPayloadBytes] (8 MiB) plus the subject, the acknowledgement
+	// subject and the headers the broker counts against the bound, and 28
+	// MiB is three and a half of them — a pull that can always make
+	// progress, and at most 28 MiB in memory per domain between a pull and
+	// its commit: 56 in the one case two requests deliver at once, a server
+	// still serving one the client had stopped counting (the jetstream
+	// Fetcher's standing pull holds what both delivered rather than losing
+	// either). TestAPullCanAlwaysHoldTheLargestRecord holds the floor.
 	FetchMessages = ApplyTxRowBudget
 	FetchBytes    = 29_360_128
 
@@ -99,37 +115,37 @@ const (
 	// slow one, and asking it more often than that adds load to the
 	// thing that is failing. Against [ApplyRetryBudget] the ceiling
 	// leaves a fault at least six attempts before it is reported, so a
-	// single failed call never sheds a seat.
+	// single failed call never takes a copy out of service.
 	ApplyRetryBeat    = ApplyLinger
 	ApplyRetryCeiling = 5 * time.Second
 
 	// FetchWait is how long a pull waits when the stream is idle.
 	//
-	// # It is a CEILING ON READ LATENCY, not just on polling
+	// # It WAS a ceiling on read latency, and is not any more
 	//
-	// The vendored client's batch closes when it is FULL or when this
-	// expires — one record arriving does not end it — so a fetch of
-	// [FetchMessages] on a quiet log costs the whole wait however fast the
-	// record got there. Measured on a three-member cluster: the append
-	// acknowledges in about 500 microseconds and the fetch that collects
-	// it still takes the full wait, every time.
+	// A pull request does not end when one record reaches it, and a fetch
+	// that read its request until it ended held a record appended into it
+	// for the rest of this wait — so this was the dominant term in how long
+	// a reader waited for a record it was waiting on, and at five seconds,
+	// longer than [ReadBudget], every `linearizable` read on an idle company
+	// refused `behind`. The broker's consumer now hands a fetch its records
+	// as soon as their burst is complete (internal/queue/jetstream's
+	// standing pull), so an idle fetch returns at the first record however
+	// long it was prepared to wait.
 	//
-	// That makes this the dominant term in how long a reader waits for a
-	// record it is waiting on, and at five seconds it was longer than
-	// [ReadBudget] — so every `linearizable` read on an idle company
-	// refused `behind`, having appended a barrier the applier would not
-	// collect for another three seconds.
+	// What the value still bounds is a request LOST WITHOUT AN ANSWER — a
+	// connection that dropped it, a server that never ends it. The client
+	// stops counting a request at this wait plus the queue's grace (one
+	// second) and sends another, so a record appended meanwhile waits that
+	// long at most: 1.5 s here, inside ReadBudget's two, which is why the
+	// wait stays at a quarter of it rather than growing now that it no
+	// longer costs latency. The other side of the trade is the idle rate:
+	// two requests a second per domain, a subject publish to a broker in
+	// this same process on the default topology.
 	//
-	// 500ms is chosen against ReadBudget rather than against polling cost:
-	// a reader must be able to wait out one full fetch and still be served
-	// inside its budget, which puts the ceiling at a quarter of it. An
-	// idle applier now issues two pull requests a second per domain — to a
-	// broker in this same process on the default topology, where a pull
-	// request is a subject publish and not a network round trip at all.
-	//
-	// NOT SOLVED BY CANCELLING A PARKED FETCH, which was tried: messages
-	// the server has already dispatched toward a pull request it never
-	// hears back about are pending-ack for `domainConsumerAckWait`, which
-	// is thirty seconds — six times the delay being removed.
+	// A delivery the client has stopped waiting for is not lost either way:
+	// every request of a consumer is answered on one standing inbox, so it
+	// lands in the handle's buffer rather than waiting out the thirty-second
+	// ack window, which is what cancelling a parked fetch used to cost.
 	FetchWait = 500 * time.Millisecond
 )

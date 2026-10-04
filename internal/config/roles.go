@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -146,7 +148,12 @@ type RolePlacement struct {
 	// Node pins to one node id, matched exactly. A seat pinned to a single
 	// node is unserved whenever that node is down — deliberate, and
 	// reported rather than quietly widened.
-	Node string `yaml:"node,omitempty" json:"node,omitempty" desc:"Exact node id to pin this seat to."`
+	//
+	// Its js pattern is node.id's, character for character, so the published
+	// schema refuses exactly the pins [RolePlacement.validate] refuses: a pin
+	// no node id can equal. TestNodeIDPatternIsOneRule holds both tags to
+	// nodeIDPattern.
+	Node string `yaml:"node,omitempty" json:"node,omitempty" js:"pattern=^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" desc:"Exact node id to pin this seat to."`
 
 	// Labels are pairs a node must carry, ALL of them, matched exactly.
 	Labels map[string]string `yaml:"labels,omitempty" json:"labels,omitempty" desc:"Node labels that must all match."`
@@ -165,6 +172,68 @@ func (p *RolePlacement) Seat() placement.SeatPlacement {
 		labels = nil
 	}
 	return placement.SeatPlacement{Node: p.Node, Labels: labels}
+}
+
+// validate refuses a selector no node could ever satisfy.
+//
+// EVERY PART IS MATCHED EXACTLY against what a node advertises, and what a
+// node advertises has already passed Tier A: its id holds to [nodeIDPattern],
+// its label keys to [placement.CheckLabelKey], and every label value has been
+// trimmed of the whitespace around it. A selector outside those shapes is not
+// a narrow placement but an impossible one — the seat is served by nobody,
+// and the only symptom is a seats_unplaceable line on a running fleet, long
+// after the document that caused it validated clean. So the grammars are the
+// SAME ONES, reached rather than restated, because a copy that drifted would
+// reopen exactly that gap.
+//
+// Refused rather than trimmed: Tier B keeps what its author wrote, and
+// "zone" and "zone " look identical in a file, so a silent trim would hide
+// the one difference the reader cannot see.
+func (p *RolePlacement) validate(path Path) error {
+	var probs problems
+	if p.Node != "" && !nodeIDPattern.MatchString(p.Node) {
+		hint := ""
+		if envref.Has(p.Node) {
+			// Tier B resolves a ${VAR} only where a provider or transport
+			// is built; a pin is compared as written, so a reference here
+			// would be the literal node id "${…}".
+			hint = ". A ${VAR} is not resolved here: write the node id itself"
+		}
+		probs.add(at(path, "node"), ErrUnknownValue,
+			"%q is not a node id — one starts alphanumeric and holds only "+
+				"letters, digits, '.', '_' or '-' (max 64 chars), and every "+
+				"node's own id is held to that, so this pin could never be "+
+				"satisfied%s", p.Node, hint)
+	}
+
+	labels := at(path, "labels")
+	// Sorted, so a document with several bad keys reports them in the
+	// same order on every run rather than in map order.
+	for _, key := range slices.Sorted(maps.Keys(p.Labels)) {
+		where := entry(labels, key)
+		switch err := placement.CheckLabelKey(key); {
+		case key == "":
+			// An empty map key renders as a path ending in a bare dot, so
+			// the refusal is placed on the map itself — as node.labels'
+			// is.
+			where = labels
+			probs.add(labels, ErrMissing,
+				"label keys must not be empty: no node can carry one under "+
+					"node.labels, so this seat could never be placed")
+		case err != nil:
+			probs.add(where, ErrUnknownValue,
+				"%v — this seat is placed only on a node carrying the key "+
+					"under node.labels, and no node can carry one outside "+
+					"that grammar", err)
+		}
+		if value := p.Labels[key]; strings.TrimSpace(value) != value {
+			probs.add(where, ErrUnknownValue,
+				"the value %q has whitespace around it, and every node's "+
+					"label values are trimmed of theirs, so no node could "+
+					"ever match it: write %q", value, strings.TrimSpace(value))
+		}
+	}
+	return probs.err()
 }
 
 // RoleSandbox is the authored per-seat code-runtime gate.
@@ -452,6 +521,10 @@ type RoleSlack struct {
 // declaring the block at all means declaring both.
 func (s *RoleSlack) validate(path Path) error {
 	var p problems
+	// The transport reads the token with [envref.Resolve]; the signing
+	// secret is expanded wherever its references sit, so only the token
+	// is held to one whole reference.
+	pointerOrLiteral(&p, at(path, "bot_token"), s.BotToken)
 	if strings.TrimSpace(s.BotToken) == "" {
 		p.add(at(path, "bot_token"), ErrMissing,
 			"required: without it this seat receives messages it cannot "+
@@ -483,7 +556,14 @@ type RoleMattermost struct {
 	// Username defaults to the seat handle with the provisioning prefix
 	// applied. Set it only when the account already exists under another
 	// name.
-	Username string `yaml:"username,omitempty" json:"username,omitempty" js:"pattern=^[a-z0-9][a-z0-9._-]*$" desc:"Bot username; defaults to the seat handle."`
+	//
+	// A literal username, or a POINTER: one whole ${VAR}, which the
+	// transport resolves where it is built ([envref.Resolve]) and never a
+	// reference inside other text, which it would send as written. Its js
+	// `pointer` directive is what lets the published schema admit that
+	// whole reference beside the pattern, and [RoleMattermost.validate]
+	// refuses exactly what the schema does.
+	Username string `yaml:"username,omitempty" json:"username,omitempty" js:"pattern=^[a-z0-9][a-z0-9._-]*$;pointer" desc:"Bot username, or one whole ${VAR} naming it; defaults to the seat handle."`
 
 	// Channel is a PROVISIONING input, not a posting default: the reconcile
 	// adds this bot to it, on top of the company-wide
@@ -493,18 +573,63 @@ type RoleMattermost struct {
 	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Channel this seat's bot is added to at provisioning, on top of provisioning.channels."`
 }
 
+// validate checks a seat's Mattermost bot.
+//
+// BOTH FIELDS ARE READ BY THE TRANSPORT WITH [envref.Resolve], which resolves
+// a value only when the whole of it is one reference — see
+// [pointerOrLiteral]. The username is also held to the server's own grammar
+// when it is written out, and to [wholeReference] when it is not, which is
+// the rule the schema's `pointer` branch states: a username holds no
+// whitespace, so neither may the reference that names one.
 func (m *RoleMattermost) validate(path Path) error {
-	if m.Username == "" || envref.Has(m.Username) {
-		// A reference resolves later; rejecting the unresolved form would
-		// forbid configuring the username from the environment.
-		return nil
-	}
-	if !mattermostUsername.MatchString(m.Username) {
-		return fault(at(path, "username"), ErrUnknownValue,
+	var p problems
+	pointerOrLiteral(&p, at(path, "bot_token"), m.BotToken)
+	username := at(path, "username")
+	switch {
+	case m.Username == "", wholeReference(m.Username):
+		// Unset, or a pointer: what it resolves to is decided on the node
+		// that builds the transport, and refusing the unresolved form
+		// would forbid naming the bot from the environment.
+	case pointerOrLiteral(&p, username, m.Username):
+	case !mattermostUsername.MatchString(m.Username):
+		hint := ""
+		if envref.Has(m.Username) {
+			// Only a whole reference with space around it reaches here.
+			hint = fmt.Sprintf(" — and so does the ${VAR} that names one: write %q",
+				strings.TrimSpace(m.Username))
+		}
+		p.add(username, ErrUnknownValue,
 			"%q: Mattermost usernames are lowercase and contain only letters, "+
-				"digits, '.', '-' and '_', starting with a letter or digit", m.Username)
+				"digits, '.', '-' and '_', starting with a letter or digit%s", m.Username, hint)
 	}
-	return nil
+	return p.err()
+}
+
+// pointerOrLiteral refuses a ${VAR} written INSIDE other text in a field its
+// consumer reads with [envref.Resolve], reporting whether it did.
+//
+// Those consumers — the Slack and Mattermost transports — resolve a value only
+// when the WHOLE of it is one reference, and take anything else as the literal
+// it looks like: `bot-${SUFFIX}` would reach the server as written, braces and
+// all, as a username nobody holds or a token that authenticates nobody. It is
+// narrower than the rest of Tier B, whose pointers are expanded wherever they
+// sit ([Resolver.Expand]), and deliberately so — a credential a provisioner
+// mints has to be the whole of one variable ([envref.Whole]) — which is why the
+// refusal is stated here, where the author is still looking at the field,
+// rather than discovered as an authentication failure on a running node.
+func pointerOrLiteral(p *problems, path Path, value string) bool {
+	if !envref.Has(value) {
+		return false
+	}
+	if _, whole := envref.Whole(value); whole {
+		return false
+	}
+	p.add(path, ErrShape,
+		"%q has a ${VAR} inside other text, and this field is resolved only when "+
+			"the whole value is one reference: anything else is sent to the server "+
+			"as written, braces and all. Write the whole value as one ${VAR}, or "+
+			"write it out", value)
+	return true
 }
 
 func (r *Role) validate(path Path) error {
@@ -521,6 +646,9 @@ func (r *Role) validate(path Path) error {
 	}
 	if r.Sandbox != nil {
 		p.wrap(r.Sandbox.validate(at(path, "sandbox")))
+	}
+	if r.Placement != nil {
+		p.wrap(r.Placement.validate(at(path, "placement")))
 	}
 	// The seat's own rules (a name, its kind, its handle's shape, the
 	// human-versus-agent fields, its schedules' shape) belong to the org

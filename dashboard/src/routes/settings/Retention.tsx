@@ -31,7 +31,8 @@
  *   - `n/a` rather than `0` for a term a domain does not have.
  *   - `evicted` carrying its `effective_at` while the fence window is open,
  *     because an operator who cannot see that the exclusion is PENDING runs
- *     the gesture twice.
+ *     the gesture twice — and `left` for a node whose tombstone is its own
+ *     release, which nobody evicted.
  *   - the snapshot block's OWN blocked reason: a stalled snapshot tier and a
  *     stalled trim are different problems with different remedies, and the
  *     first is silent until a node tries to join.
@@ -65,6 +66,7 @@ import { useNow } from "~/lib/clock.ts";
 import { apiToken } from "~/protocol/authToken.ts";
 import type {
   RetentionDomain,
+  RetentionEviction,
   RetentionMaintenance,
   RetentionNode,
   RetentionNodeDomain,
@@ -261,25 +263,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
                   <KeyCell value={n.node_id} path={["settings", "nodes", n.node_id]} />
                   {n.node_id === thisNode && <Tag variant="brand">this one</Tag>}
                   {n.counted && !n.live && <Tag variant="warning">counted · not live</Tag>}
-                  {/* THE FENCE WINDOW IS THE POINT. An eviction is not
-                      immediate — the node stays counted until effective_at so
-                      a live one is certain to have noticed — and an operator
-                      who cannot see that runs the gesture twice. */}
-                  {n.evicted && !n.evicted.effective && (
-                    <Tag
-                      variant="warning"
-                      title={`evicted by ${n.evicted.by}; takes effect ${fmtDateTime(
-                        n.evicted.effective_at,
-                      )}`}
-                    >
-                      evicted in {fmtDuration(Date.parse(n.evicted.effective_at) - now)}
-                    </Tag>
-                  )}
-                  {n.evicted?.effective && (
-                    <Tag variant="danger" title={`evicted by ${n.evicted.by}`}>
-                      evicted
-                    </Tag>
-                  )}
+                  {n.evicted && <Tombstone evicted={n.evicted} now={now} />}
                 </span>
               ),
             },
@@ -379,21 +363,29 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
         <Card.Header
           icon={<PackageGlyph size="sm" />}
           count={data?.snapshots?.length}
-          subtitle={`${donorsCounted(data?.snapshots ?? [])} of ${SNAPSHOT_DONORS_REQUIRED} donors — the trim's sixth term`}
+          subtitle={donorsSubtitle(data?.snapshots ?? [])}
         >
           Snapshots
         </Card.Header>
         <DataGrid<RetentionSnapshot>
           name="snapshots"
           rows={data?.snapshots ?? []}
-          rowKey={(s) => s.node_id}
+          rowKey={snapshotKey}
           defaultSort="node"
           columns={[
             {
               key: "node",
               header: "Node",
-              sortValue: (s) => s.node_id,
-              cell: (s) => <KeyCell value={s.node_id} path={["settings", "nodes", s.node_id]} />,
+              // THE PARTITION BESIDE THE NODE, on a divided layout's rows: a
+              // node donates each partition it holds separately, and two rows
+              // naming only the node read as one artefact listed twice.
+              sortValue: snapshotKey,
+              cell: (s) => (
+                <span className="row wrap gap-1 baseline">
+                  <KeyCell value={s.node_id} path={["settings", "nodes", s.node_id]} />
+                  {s.partition && <Tag appearance="outline">{s.partition}</Tag>}
+                </span>
+              ),
             },
             {
               key: "at",
@@ -482,6 +474,32 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
         />
       )}
     </>
+  );
+}
+
+/**
+ * A node's tombstone on its row: evicted, or LEFT.
+ *
+ * THE FENCE WINDOW IS THE POINT. A tombstone is not immediate — the node stays
+ * counted until `effective_at` so a live one is certain to have noticed — and
+ * an operator who cannot see that runs the gesture twice. And a RELEASE is the
+ * node's own word as it left the logs' partitions: rendered as "evicted by"
+ * the node itself, it sends an operator looking for a gesture nobody made.
+ */
+export function Tombstone({ evicted, now }: { evicted: RetentionEviction; now: number }) {
+  const left = evicted.kind === "release";
+  const who = left ? "released its logs itself as it left" : `evicted by ${evicted.by}`;
+  if (!evicted.effective) {
+    return (
+      <Tag variant="warning" title={`${who}; takes effect ${fmtDateTime(evicted.effective_at)}`}>
+        {left ? "left" : "evicted"} in {fmtDuration(Date.parse(evicted.effective_at) - now)}
+      </Tag>
+    );
+  }
+  return (
+    <Tag variant={left ? "neutral" : "danger"} title={who}>
+      {left ? "left" : "evicted"}
+    </Tag>
   );
 }
 
@@ -695,9 +713,41 @@ function firstDomain(n: RetentionNode) {
   return domains.length ? domains[0] : undefined;
 }
 
-/** donorsCounted is how many nodes hold a snapshot at all. */
-function donorsCounted(snapshots: RetentionSnapshot[]): number {
-  return snapshots.filter((s) => s.at && s.domains).length;
+/**
+ * snapshotKey is one artefact row's identity: its node, and the partition it
+ * copies on a divided layout — where one node has a row per partition it holds,
+ * so the node alone names two rows at once.
+ */
+export function snapshotKey(s: RetentionSnapshot): string {
+  return s.partition ? `${s.node_id} ${s.partition}` : s.node_id;
+}
+
+/**
+ * donorsCounted is how many nodes hold an artefact of the partition FEWEST
+ * nodes hold one of — the whole estate's under layout 0, whose rows name no
+ * partition — because the trim's sixth term is per log, and a partition's logs
+ * wait on that partition's donors alone: two donors of one partition and none
+ * of another is a fleet whose second partition cannot be rejoined.
+ *
+ * On a divided layout a node that reports no partition has a row of its own and
+ * donates none, so it is no partition's donor rather than a partition nobody
+ * holds.
+ */
+export function donorsCounted(snapshots: RetentionSnapshot[]): number {
+  const divided = snapshots.some((s) => s.partition);
+  const per = new Map<string, number>();
+  for (const s of snapshots) {
+    if (divided && !s.partition) continue;
+    const key = s.partition ?? "";
+    per.set(key, (per.get(key) ?? 0) + (s.at && s.domains ? 1 : 0));
+  }
+  return per.size ? Math.min(...per.values()) : 0;
+}
+
+/** donorsSubtitle says how many donors the trim's sixth term has. */
+function donorsSubtitle(snapshots: RetentionSnapshot[]): string {
+  const where = snapshots.some((s) => s.partition) ? " on the partition with fewest" : "";
+  return `${donorsCounted(snapshots)} of ${SNAPSHOT_DONORS_REQUIRED} donors${where} — the trim's sixth term`;
 }
 
 /**

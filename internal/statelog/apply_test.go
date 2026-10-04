@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // ---- the applier's fakes -------------------------------------------- //
@@ -33,23 +34,37 @@ type probeApplier struct {
 	rows     int
 	gate     statelog.Reason
 	gated    map[uint64]bool
+	asked    map[uint64]int
 	failAt   uint64
 	rowsPer  int
 	slowFrom uint64
 	slowFor  time.Duration
 	now      func() time.Time
+
+	// lockedAt is a sequence whose FIRST apply fails the way a write that
+	// lost the file's lock does, which the store answers by running the
+	// transaction's whole body again; zero fails nothing.
+	lockedAt uint64
 }
 
 func newProbeApplier() *probeApplier {
-	return &probeApplier{gated: map[uint64]bool{}, rowsPer: 1}
+	return &probeApplier{gated: map[uint64]bool{}, asked: map[uint64]int{}, rowsPer: 1}
 }
 
 func (a *probeApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, opts statelog.ApplyOptions) (int, error) {
 	a.mu.Lock()
 	fail, per, slowFrom, slowFor := a.failAt, a.rowsPer, a.slowFrom, a.slowFor
+	locked := a.lockedAt != 0 && rec.Position.Seq == a.lockedAt
+	if locked {
+		a.lockedAt = 0
+	}
 	a.mu.Unlock()
 	if fail != 0 && rec.Position.Seq == fail {
 		return 0, fmt.Errorf("the probe applier refuses sequence %d", fail)
+	}
+	if locked {
+		return 0, fmt.Errorf("the probe applier at sequence %d: database is locked",
+			rec.Position.Seq)
 	}
 	if slowFrom != 0 && rec.Position.Seq >= slowFrom && a.now != nil {
 		// The clock is injected, so "slow" is deterministic rather than
@@ -74,6 +89,7 @@ func (a *probeApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Recor
 func (a *probeApplier) Gated(_ context.Context, _ *sql.Tx, rec statelog.Record) (statelog.Reason, bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.asked[rec.Position.Seq]++
 	return a.gate, a.gated[rec.Position.Seq], nil
 }
 
@@ -293,6 +309,7 @@ func (f *probeFetch) ackedAll() map[uint64]int {
 type applyHarness struct {
 	t       *testing.T
 	db      *store.DB
+	estate  store.PartitionHandle
 	runner  *statelog.Runner
 	applier *probeApplier
 	fetch   *probeFetch
@@ -302,12 +319,7 @@ type applyHarness struct {
 func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := store.Open(t.Context(), filepath.Join(dir, "node.db"), store.Options{
-		PinnedWriters: 1,
-	})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	db, estate := storetest.OpenEstate(t, filepath.Join(dir, "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
@@ -318,7 +330,7 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 	// its own migration; the framework's migration deliberately creates
 	// only its own three, so a second domain adds a file rather than
 	// editing one that has already shipped.
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), probeDDL)
 		return err
 	}); err != nil {
@@ -332,19 +344,19 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 		t.Fatalf("recorder: %v", err)
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain:     domain,
+		Domain: domain, Spec: specOf(domain), Layout: layoutOf(domain), LogID: logOf(domain),
 		Applier:    applier,
 		Fetch:      fetch,
 		Log:        fetch,
 		Node:       db,
-		DB:         db.Replicated(),
+		DB:         estate,
 		Checkpoint: statelog.Position{Generation: 1},
 		Metrics:    recorder,
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
-	return &applyHarness{t: t, db: db, runner: runner, applier: applier,
+	return &applyHarness{t: t, db: db, estate: estate, runner: runner, applier: applier,
 		fetch: fetch, metrics: recorder}
 }
 
@@ -371,8 +383,8 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 	h.metrics = recorder
 	// AT THE CHECKPOINT THE ROWS HOLD, as the engine builds a restarting
 	// node's runner — generation 1 on a node that never committed.
-	checkpoint, found, err := statelog.CheckpointOf(h.t.Context(), h.db.Replicated(),
-		domain.Stream().Name)
+	checkpoint, found, err := statelog.CheckpointOf(h.t.Context(), h.estate,
+		specOf(domain).Name)
 	if err != nil {
 		h.t.Fatalf("read the checkpoint: %v", err)
 	}
@@ -380,12 +392,12 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 		checkpoint.At.Generation = 1
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain:             domain,
+		Domain: domain, Spec: specOf(domain), Layout: layoutOf(domain), LogID: logOf(domain),
 		Applier:            h.applier,
 		Fetch:              h.fetch,
 		Log:                h.fetch,
 		Node:               h.db,
-		DB:                 h.db.Replicated(),
+		DB:                 h.estate,
 		Checkpoint:         checkpoint.At,
 		CheckpointStoredAt: checkpoint.StoredAt,
 		StreamCreatedAt:    created,
@@ -400,7 +412,7 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 // ledgerHolds reports whether this node's operation ledger holds opID.
 func (h *applyHarness) ledgerHolds(opID string) (bool, error) {
 	var count int64
-	err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	err := h.estate.Read(h.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(h.t.Context(),
 			`SELECT COUNT(*) FROM probe_ops WHERE op_id = ?`, opID).Scan(&count)
 	})
@@ -412,7 +424,7 @@ func (h *applyHarness) ledgerHolds(opID string) (bool, error) {
 func (h *applyHarness) retainedCount() int64 {
 	h.t.Helper()
 	var count int64
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(h.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(h.t.Context(),
 			`SELECT COUNT(*) FROM probe_log_deferred`).Scan(&count)
 	}); err != nil {
@@ -569,7 +581,7 @@ func TestTheCheckpointCommitsWithTheRowsItCovers(t *testing.T) {
 	// the checkpoint. Reading them in one transaction is the assertion:
 	// the contract is that they are simultaneous, not that they exist.
 	var rows, ops, anchors, cursor int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM probe_rows`).Scan(&rows); err != nil {
 			return err
 		}
@@ -617,7 +629,7 @@ func TestARecordThisBuildCannotDecodeIsRetainedAtItsPosition(t *testing.T) {
 	var deferredPos, scopeRows int64
 	var version int64
 	var payload []byte
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(),
 			`SELECT position, version, payload FROM probe_log_deferred`).
 			Scan(&deferredPos, &version, &payload); err != nil {
@@ -690,7 +702,7 @@ func TestARecordOverAStaleScopeIsRetainedRatherThanApplied(t *testing.T) {
 			seen)
 	}
 	var deferred int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT COUNT(*) FROM probe_log_deferred`).Scan(&deferred)
 	}); err != nil {
@@ -721,7 +733,7 @@ func TestAGatedRecordWritesNoRowsAndStillMovesTheAnchor(t *testing.T) {
 
 	var rows, ops int64
 	var anchor int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM probe_rows`).Scan(&rows); err != nil {
 			return err
 		}
@@ -769,7 +781,7 @@ func TestAnAnchorIsWrittenOnlyForAnArbitratedKind(t *testing.T) {
 
 	var anchors int64
 	var subject string
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(),
 			`SELECT COUNT(*) FROM statelog_anchor`).Scan(&anchors); err != nil {
 			return err
@@ -820,7 +832,7 @@ func TestARecordThatInstallsAGateStopsRatherThanDefers(t *testing.T) {
 			"record it stopped on", got)
 	}
 	var deferred int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT COUNT(*) FROM probe_log_deferred`).Scan(&deferred)
 	}); err != nil {
@@ -867,7 +879,7 @@ func TestARedeliveredRecordIsAppliedOnceAndAcknowledged(t *testing.T) {
 			"be applied twice", len(seen))
 	}
 	var rows int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM probe_rows`).Scan(&rows)
 	}); err != nil {
 		t.Fatalf("count the rows: %v", err)
@@ -902,7 +914,7 @@ func TestACompactedDomainStepsOverHolesAndSupersedesItsDeferrals(t *testing.T) {
 	}
 
 	var count, position, orphans int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(),
 			`SELECT COUNT(*) FROM probe_log_deferred`).Scan(&count); err != nil {
 			return err
@@ -947,8 +959,8 @@ func TestACompactedDomainStepsOverHolesAndSupersedesItsDeferrals(t *testing.T) {
 // compactedDomain is the other replay protocol.
 type compactedDomain struct{ probeDomain }
 
-func (compactedDomain) Stream() statelog.StreamSpec {
-	s := probeDomain{}.Stream()
+func (compactedDomain) StreamShape() statelog.StreamShape {
+	s := probeDomain{}.StreamShape()
 	s.Replay = statelog.ReplayCompacted
 	s.MaxPerSubject = 1
 	s.MaxAge = time.Hour
@@ -1168,7 +1180,7 @@ func TestAFailedApplyLeavesNothingBehind(t *testing.T) {
 			"0 — the record before the failure was in the same transaction", got)
 	}
 	var rows, anchors int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM probe_rows`).Scan(&rows); err != nil {
 			return err
 		}
@@ -1247,7 +1259,7 @@ func TestABrokerBlipDoesNotEndTheApplier(t *testing.T) {
 
 // THE PAUSE DOUBLES TO THE CEILING and never past it, and the ceiling leaves a
 // fault several attempts before it is reported — so one failed call never
-// sheds a seat.
+// takes a copy out of service.
 func TestTheRetryPauseIsBoundedAndTheBudgetOutlastsSeveralOfIt(t *testing.T) {
 	t.Parallel()
 	if statelog.ApplyRetryBeat != statelog.ApplyLinger {
@@ -1388,7 +1400,7 @@ func TestTheOperationSweepDrainsABacklogWiderThanOneBatch(t *testing.T) {
 	// Written directly: applying enough records to cross the batch is a
 	// minute of broker round trips to test one loop.
 	rows := statelog.OpsPurgeBatch + 7
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		for i := range rows {
 			if _, err := tx.ExecContext(t.Context(), `
 				INSERT INTO probe_ops (op_id, subject, position, applied_at)
@@ -1411,7 +1423,7 @@ func TestTheOperationSweepDrainsABacklogWiderThanOneBatch(t *testing.T) {
 			swept, rows)
 	}
 	var left int
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT COUNT(*) FROM probe_ops`).Scan(&left)
 	}); err != nil {
@@ -1456,6 +1468,51 @@ func TestApplyTxAbortsAreCounted(t *testing.T) {
 	if got := h.counter(metrics.StatelogApplyRecords); got == 0 {
 		t.Error("the applier recorded no records at all, so this recorder is " +
 			"not connected and the assertion above proves nothing")
+	}
+}
+
+// A RECORD A GATE DROPPED IS COUNTED ONCE, WHEN ITS DROP COMMITS — however
+// many times the store runs the transaction that drops it.
+//
+// The store runs a transaction's body again when an attempt fails transiently,
+// and the gate is asked again with it. Reported where the gate is asked, one
+// dropped record was counted and logged once per attempt, on the counter the
+// records_gated alarm reads: the alarm said two records were lost where one
+// was.
+func TestAGatedRecordIsCountedOnceHoweverOftenItsTransactionRuns(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.applier.gate, h.applier.gated[1] = statelog.ReasonEvicted, true
+	// THE SAME TRANSACTION, which fails at the record after the dropped one
+	// and is run again from its start.
+	h.applier.lockedAt = 2
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	if err := h.run(2); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// THE CONTROL: the body did run twice over the dropped record. Without
+	// it, a batch that happened to split between the two records passes the
+	// assertion below having re-run nothing.
+	h.applier.mu.Lock()
+	asked := h.applier.asked[1]
+	h.applier.mu.Unlock()
+	if asked != 2 {
+		t.Fatalf("the gate was asked about the record at 1 %d time(s), want 2 — "+
+			"the transaction that dropped it was not run again, so this proves "+
+			"nothing", asked)
+	}
+	if got := h.counter(metrics.StatelogApplyTxAborts); got != 1 {
+		t.Fatalf("the applier counted %d aborted transaction(s), want the one the "+
+			"lock timeout at 2 cost", got)
+	}
+	if n := gatedUnder(h, statelog.ReasonEvicted); n != 1 {
+		t.Errorf("one record dropped by the eviction gate was counted %d time(s) "+
+			"under %q — once per attempt at the transaction rather than once for "+
+			"the drop it committed", n, statelog.ReasonEvicted)
+	}
+	if n := appliedAs(h, "gated"); n != 1 {
+		t.Errorf("the batch counted %d record(s) consumed as gated, want 1", n)
 	}
 }
 
@@ -1561,11 +1618,20 @@ func TestAPartialRunCommitsWhenTheBrokerHandsOverNothing(t *testing.T) {
 			"broker will not deliver until the run commits waits for ever",
 			got, 4*statelog.ApplyLinger)
 	}
-	if h.fetch.ackCount(1) != 1 || h.fetch.ackCount(2) != 1 {
+	// THE ACKNOWLEDGEMENTS FOLLOW THE COMMIT, never precede it — the
+	// checkpoint is the authority and an acknowledgement the weaker number
+	// — so the run's position moves first and they land a moment after:
+	// read at the instant the checkpoint moved, they were sometimes not
+	// there yet. So they are waited for, and then counted exactly.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && (h.fetch.ackCount(1) == 0 || h.fetch.ackCount(2) == 0) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if one, two := h.fetch.ackCount(1), h.fetch.ackCount(2); one != 1 || two != 1 {
 		cancel()
 		<-errs
 		t.Fatalf("the committed records were acknowledged %d and %d time(s), "+
-			"want once each", h.fetch.ackCount(1), h.fetch.ackCount(2))
+			"want once each", one, two)
 	}
 
 	// Acknowledged, the broker releases the third and the loop takes it.
@@ -1642,7 +1708,7 @@ func TestARetainedRecordIsAppliedByTheBuildThatCanReadIt(t *testing.T) {
 	}
 	var ops, orphans int64
 	var anchor int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(),
 			`SELECT COUNT(*) FROM probe_ops WHERE op_id IN ('op-2', 'op-3')`).
 			Scan(&ops); err != nil {
@@ -1968,7 +2034,7 @@ func TestACheckpointPastTheEndIsTheRunnersVerdictWhileTheEndStaysBelow(t *testin
 	if established, _ := h.runner.ObserveEnd(h.runner.Committed(), 2); !established {
 		t.Fatal("the verdict was not re-established for the adoption case")
 	}
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`UPDATE statelog_cursor SET seq = 1, stored_at = ? WHERE stream = ?`,
 			store.EncodeTime(probeStoredAt(1)), probeStream)
@@ -2116,8 +2182,8 @@ func TestALateRedeliveryDoesNotRegressTheCheckpoint(t *testing.T) {
 		t.Errorf("the loop reports itself committed through %d, want 2 — the "+
 			"run applied 2 and closed with a redelivery of 1", got)
 	}
-	at, _, found, err := statelog.CursorFor(h.t.Context(), h.db.Replicated(),
-		probeDomain{}.Stream().Name)
+	at, _, found, err := statelog.CursorFor(h.t.Context(), h.estate,
+		specOf(probeDomain{}).Name)
 	if err != nil {
 		t.Fatalf("read the checkpoint: %v", err)
 	}
@@ -2198,9 +2264,9 @@ func (f *flakyEstate) pinAttempts() int {
 func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
-	flaky := &flakyEstate{inner: h.db.Replicated(), refusals: 3}
+	flaky := &flakyEstate{inner: h.estate, refusals: 3}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain:     probeDomain{},
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Layout: layoutOf(probeDomain{}), LogID: logOf(probeDomain{}),
 		Applier:    h.applier,
 		Fetch:      h.fetch,
 		Log:        h.fetch,
@@ -2340,7 +2406,7 @@ func waitForDrain(t *testing.T, h *applyHarness, want bool, what string) {
 func TestTheOperationSweepRecordsWhatItForgot(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
-	rows, err := statelog.NewRows(h.db, probeDomain{}, nil)
+	rows, err := statelog.NewRows(h.estate.Reader(), probeDomain{}, specOf(probeDomain{}), nil)
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
@@ -2354,7 +2420,7 @@ func TestTheOperationSweepRecordsWhatItForgot(t *testing.T) {
 	}
 	seed := func(appliedAt time.Time) {
 		t.Helper()
-		if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(t.Context(), `
 				INSERT INTO probe_ops (op_id, subject, position, applied_at)
 				VALUES (?, 'probe.o1', 1, ?)`,
@@ -2395,5 +2461,82 @@ func TestTheOperationSweepRecordsWhatItForgot(t *testing.T) {
 	}
 	if before, _ := swept(); !before.Equal(cutoff) {
 		t.Fatalf("the sweep record moved back to %s from %s", before, cutoff)
+	}
+}
+
+// A LOG'S BARRIERS ARE COUNTED WHERE THEY ARE APPLIED, ONCE EACH, UNDER THE LOG,
+// AT THE HOUR THEY WERE COMMITTED.
+//
+// The census a log is held against is its linearizable reads, and a barrier
+// record is what each one costs it. Every node applies every record, so the
+// applier's count is the whole fleet's — which is the number `census_drift`
+// needs and a node's own appends are not. Keyed by the stream, because a
+// domain with a log per partition has a rate per partition; counted from the
+// batch that committed, so a record redelivered below the checkpoint is not a
+// second read; and filed in the rolling window at the hour the BROKER stored
+// it, so a node replaying days of backlog — back from an outage, or past a
+// snapshot a day old — does not read days of reads as the last one. The
+// cumulative series counts every barrier applied, as an exporter diffs it.
+func TestALogsBarriersAreCountedWhereTheyAreApplied(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	barrier := func(seq uint64) statelog.Envelope {
+		return statelog.Envelope{
+			V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
+			Subject: statelog.Subject{Kind: statelog.BarrierKind}, Gen: 1,
+			Scope:  statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+			Writer: fmt.Sprintf("node-%d", seq),
+		}
+	}
+	// SEQUENCES 1–4 ARE THREE DAYS OLD — a backlog this node replays on its
+	// return — and 5–8 are the last minutes'. Barriers at 2, 4, 6 and 8.
+	now := time.Now().UTC()
+	stored := func(seq uint64) time.Time {
+		if seq <= 4 {
+			return now.Add(-72*time.Hour + time.Duration(seq)*time.Second)
+		}
+		return now.Add(-10*time.Minute + time.Duration(seq)*time.Second)
+	}
+	for seq := uint64(1); seq <= 8; seq++ {
+		if seq%2 == 0 {
+			h.fetch.offerStored(seq, stored(seq), barrier(seq))
+			continue
+		}
+		h.fetch.offerStored(seq, stored(seq), env(seq, "edit", fmt.Sprintf("o%d", seq),
+			fmt.Sprintf("op-%d", seq), 1))
+	}
+	if err := h.run(8); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// A REDELIVERY of a barrier the checkpoint already holds.
+	h.fetch.offerStored(6, stored(6), barrier(6))
+	h.fetch.offerStored(9, stored(9), env(9, "edit", "o9", "op-9", 1))
+	if err := h.run(9); err != nil {
+		t.Fatalf("run the redelivery: %v", err)
+	}
+
+	var applied uint64
+	for _, snapshot := range h.metrics.Read() {
+		if snapshot.Name == metrics.StatelogBarriersApplied {
+			applied += snapshot.Total
+		}
+	}
+	if applied != 4 {
+		t.Errorf("the applier applied 4 barriers and the cumulative series "+
+			"counts %d", applied)
+	}
+	var counted uint64
+	for _, snapshot := range h.metrics.ReadWindow() {
+		if snapshot.Name != metrics.StatelogBarriersApplied {
+			continue
+		}
+		if got, want := snapshot.Attrs["stream"], specOf(probeDomain{}).Name; got != want {
+			t.Errorf("barriers were counted under the stream %q, and the log is %q", got, want)
+		}
+		counted += snapshot.Total
+	}
+	if counted != 2 {
+		t.Fatalf("the log took 2 barriers in the last day and the window counts "+
+			"%d: a replayed backlog's barriers were filed as today's reads", counted)
 	}
 }

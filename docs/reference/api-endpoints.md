@@ -2,7 +2,7 @@
 
 The Crewlet API is served by any node with the `ingress` role (`api.port > 0`
 in the Tier A config). By default a node has every role, so it runs alongside
-the agents in one process; a node with `-roles ingress` serves only these
+the agents in one process; a node with `-roles data,ingress` serves only these
 routes and reaches the rest of the fleet over the event stream. The routes
 below are identical either way.
 
@@ -92,10 +92,13 @@ node means nothing was done.
 | `GET` | `/tokens/series` | The same spend **with a time axis** — one bucket per company day or ISO week, split into bands (see [below](#get-tokensseries)) |
 | `GET` | `/agents/activity` | Every seat's turns over a window of company days — counts, the first-pass rate over reviewed turns, turn-duration quantiles and a day-by-day series (see [`seat_activity`](#queries)) |
 | `GET` | `/schedules` | Configured role/unit schedules + next-run + recent dispatch ledger |
-| `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, and per-node config epoch. **Always needs a token** — it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
+| `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, per-node config epoch, and where the company's files are placed. **Always needs a token** — it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
 | `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable run record in the [coordination store](../concepts/coordination.md) (see [below](#get-sandbox-runs)) |
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against — per calendar window — and which scopes are being refused (see [below](#get-budgets)) |
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
+| `GET` | `/fleet/broker` | The fleet broker's membership: every live node's broker kind as its presence advertises it, the JetStream metadata group as a member reports it, and every disagreement between the two — a member gone for good first among them. **Always needs a token** (see [The broker's membership](#the-brokers-membership)) |
+| `POST` | `/fleet/broker/remove/{node}` | Remove a member from the metadata group through a live member's system account. `?confirm=` repeats the node id; refused while the node holds a live presence lease as a member unless `?force=true`. **Operator-only** |
+| `POST` | `/fleet/broker/remove-peer/{peer}` | The same removal, naming the voter by the raft peer id `GET /fleet/broker` shows — for a voter whose name no member has heard. `?confirm=` repeats the peer id. **Operator-only** |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/access` | Who can reach the company through this engine and as whom: the API token LABELS the guard accepts (never a value), the person each one acts as, every human seat with its contacts and the state of its binding, and the auth posture. **Always needs a token** (see [below](#get-access)) |
 | `GET` | `/credential-pool` | Every `providers.llm` entry, each key it rotates through by variable name, and which of them a vendor is refusing and until when — this node's pools beside the fleet's cooldown ledger (never a value). **Always needs a token** (see [below](#get-credential-pool)) |
@@ -118,6 +121,10 @@ node means nothing was done.
 | `GET` | `/work/catalogue` | The company's **vocabulary**: the task types a create may name and the workspace's custom-field declarations. `?archived=true` also lists what was retired. The types are the EFFECTIVE set — the six this build ships plus whatever the company declared, a declaration replacing a builtin of the same slug |
 | `GET` | `/work/projects` | Every **project** work is filed into, with its `task_counts` — `{todo, active, done, closed}`, one per status group, read from maintained columns and never aggregated per poll; there is no `open`, which folded the waiting work into the started work, so a caller wanting every unfinished item adds `todo` and `active` — its `target_date` (the day, `YYYY-MM-DD` on the company's clock, the lead means it to be finished; omitted when none is set), its `last_change` (when the project's work last changed and who changed it, ABSENT for a project nothing has been filed into), its chart-owned unit and its lead. `?q=` narrows by a word in the key, the name or the purpose and `?unit=` to the projects one unit owns — **named by the unit's `id` or by its name, in any case**, since a stored unit carries whichever was current when the row was written. `?archived=` SELECTS a set rather than widening one — `false` (the default) for the live projects, `only` for the retired ones alone, `true` for both — so "what did we retire" is a query rather than a caller's own filter over a wider answer. `?sort=` orders the whole selected set before the page is taken: one of `key`, `name`, `unit`, `todo`, `active`, `done`, `closed`, `last_change`, `target`, each optionally with a leading `-` for descending, defaulting to `key`, with the key breaking every tie; a project with no `last_change` or no `target_date` sorts last in both directions. An `archived` or `sort` value that is neither is a **400** naming the parameter and what it accepts. `?limit=` caps at 200, which is also the default. The answer carries a `census` — `{active, archived}`, the same question under the same `q` and `unit` MINUS its archival term — so a caller that selected one set can still tell an empty set from an empty company; `total` is the census of the mode that was asked for. A set read, so it carries `complete` and its `incomplete` beside the read level |
 | `GET` | `/work/projects/{key}` | One project in **full**: the six statuses with their labels, groups and descriptions; the effective types; the custom fields grouped by which type they apply to, required first, with the workspace ids this project **shadows** named; its tags; its default assignee, lead and owning unit. `?for_type=` narrows the fields to one type plus the ones that apply to every type. Unknown key answers 404 naming the nearest three; a `for_type` the company does not file answers 400 `bad_params`, not 404 — the project is there and the argument is what to change |
+| `GET` | `/work/files` | One project's **files**, in path order: `?project=` (required), `?folder=` to narrow to the paths under one folder, `?removed=true` to include removed files, `?limit=` (default 200, max 1000) and `?after=`, the `next` the previous page answered. An unknown project is `404 no_project`, never an empty page (see [below](#project-files)) |
+| `GET` | `/work/files/{project}/{path...}` | One file's **bytes**, streamed, with its version as the `ETag`. `503 content_unavailable` where the file is listed and no copy of its content could be read (see [below](#project-files)) |
+| `PUT` | `/work/files/{project}/{path...}` | Write a file: the request body is its content, `Content-Type` its type, `If-Match` the version it replaces and `?op_id=` how an `unknown` answer is retried. **Always needs an operator token** — the write is attributed to the person (see [below](#project-files)) |
+| `DELETE` | `/work/files/{project}/{path...}` | Remove a file. Same credential, `If-Match` and `?op_id=` as the write |
 | `GET` | `/work/activity` | The **activity feed** — one durable row per applied commit, quiet ones included, at any age with no live/archive boundary to cross. Ordered by the COMPOSED LOG POSITION rather than by any clock, so `?since=` and `?cursor=` are both positions written `<stream>@<generation>:<sequence>` — which is what lets a cursor span a reanchor with no gap and no repeat. `?task=` (by key, id or a FORMER key), `?container=`, `?kinds=`, `?actor=`, `?assignee=`, `?notified=`, `?from=`/`?to=` (RFC3339, bounding the AUTHORED instants), `?limit=` ≤200. `?q=` is an escaped `LIKE` over the excerpt and is REFUSED unless it names a task, or a project **and** a `since` inside 90 days. Each record carries `fields` — what MOVED, as `{"<field>": {"from": …, "to": …}}` — for every kind and not only the ones about a task: a project reconcile names the purpose, unit or epoch that changed, a view save the query parameters, a priorities write the order before and after, and a dependency the item it now waits on. A task's own row draws on twenty-eight names: `title`, `status`, `assignee`, `priority`, `project`, `type`, `tags`, `due`, `due_all_day`, `start`, `estimate`, `points`, `reporter`, `watchers`, `muted`, `collaborators`, `parent`, `routing_unit`, `archived`, `removed_with`, `waiting_on`, `linked`, `duplicates`, `page`, `blocking`, `checklists`, `fields` and `body`. Values are the STORED form (a status slug, a whole RFC3339 instant, an item's id) rather than a rendering, because every node writes the row identically and a rendering would depend on the reader's zone and the company's live vocabulary; a collection is cut at a whole member and ends with `+N more`. The two largest are MARKED rather than carried: `body` is `<N> bytes` on each side (empty where there was none) and never the prose, and `checklists` is `<list>: <done> of <total> done` per named list, plus `(<n> promoted)` where an item became a sub-item. `fields` names each custom value by its SLUG — resolved against the project's catalogue by the node applying the change, which is why a NOTIFICATION carries every other delta and not this one — with a choice as its option's slug, a multi-valued field's members joined with `/`, and a count of any whose field the project no longer declares The ANSWER also carries `keys`, an id-to-item-key map naming the tasks those deltas point at — `waiting_on`, `linked` and `duplicates` but never `page`, which names a knowledge-base page; the `blocking` mirror; a person's `priorities` queue; and the two scalars that name a task, `parent` and `removed_with` — resolved on the answering node: a delta records another task by its ID, because a key belongs to that task's own row and a history row is written once and never repaired. An id this node holds no row for is absent rather than empty, and a renderer falls back to the id |
 | `GET` | `/work/my-work` | Everything one person is expected to look at, in seven bounded lists: `priorities` in the stored order, `assigned`, `asked_of_me` (each with the literal call that answers it, whether it is `open`, and the `decision` it carries when it asks somebody to choose — see [Asking for a decision](../guides/work-tracker.md#asking-for-a-decision)), `checklist_items` (which live on other people's tasks and no assignee filter reaches), `collaborating`, `watching_recent` and `unblocked_recent`. `?handle=` is whose, and it **defaults to the caller's own seat** — see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for). Naming somebody else's handle is operator-only |
 | `GET` | `/work/inbox` | One person's **inbox**: the notices a change wrote to them, each naming the ONE [reason](../guides/work-tracker.md) of eighteen it found them under, whether it **asks** something or merely informs, whether it arrived only because nobody better was found, and their own read and snooze marks — plus the person behind an operator's token (`actor_seat`), the comment and turn the change came from, and the `ask` it is about, read as it stands now. Same scope rule as `/work/my-work`. `?unread=`, `?primary_only=`, `?snoozed=` — `exclude` (the default: a snooze means *not now*), `include` or `only`, anything else refused naming the three — `?reasons=` (comma-separated, refused naming the eighteen); every one of them narrows the SCAN, so a page is full whenever the scope holds 50 notices and `next_cursor` is never a cursor past an empty page, `?limit=` ≤50, `?cursor=`, and `?since=` — a LOG POSITION written `<stream>@<generation>:<sequence>`, which is what `seen_through` reports back, never a bare sequence: the comparison is on the packed `(generation << 40) | seq`, so a sequence with no generation re-delivers everything after a reanchor |
@@ -1455,11 +1462,13 @@ listener binds. The seed makes three bounded reads, side by side, and each read 
 - the newest 8 000 phase records inside the 24-hour spend window;
 - the newest three turns of every agent seat, for the seat's `last_turn` and for a turn it left parked.
 
-Each read goes to **every live node**, through the same scatter the history
-queries use (see [Reading the fleet's history](#reading-the-fleets-history-coverage)).
-Each node's store holds only what that node published, so a seed that read
-this node's store alone showed a restarted node only its own share of the
-company. Without any seed, every one of these surfaces started at this
+Each read goes to **every live data node**, through the same scatter the
+history queries use (see [Reading the fleet's history](#reading-the-fleets-history-coverage)).
+Each data node's store holds only what that node published — plus what any
+node holding no data handed it, see
+[Deployment → The event store](../guides/deployment.md#the-event-store) — so a
+seed that read this node's store alone showed a restarted node only its own
+share of the company. Without any seed, every one of these surfaces started at this
 process's boot: a restart, a deploy or a node joining a fleet showed an
 operator a company that had apparently done nothing, beside a store that
 said otherwise. The projection records which nodes answered, as a `coverage`,
@@ -1989,7 +1998,7 @@ Server → client kinds:
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The whole [health envelope](#the-health-envelope), exactly what `GET /health` answers. There is no query for it. |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
-| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error, retry_after_seconds?, detail? }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, or a coordination store it could not reach — so a client says "ask again in a moment" rather than reporting a fault. It is the one code that carries **`retry_after_seconds`**: how long to wait, from the same helper as its REST twin's `503` `Retry-After` header, so the two transports never disagree — the refusal's own derived hint where it has one (how far behind this node is, over how fast it is draining), rounded and never below a second, and the health tick's five seconds otherwise. The dashboard asks again after exactly that wait and keeps no wait of its own, so this hint — and the `Retry-After` on a REST refusal — is the only retry clock it has. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. It is the one code that carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. Every other code's text stays in the node's log, since a failure's own text can carry a path. |
+| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error, retry_after_seconds?, detail? }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, a coordination store it could not reach, or no copy of the estate to answer from (the tracker and the knowledge base are read through the [estate router](../concepts/scaling.md#how-a-request-reaches-the-estate), so a copy out of service or a data node restarting is a holder to ask again rather than a fault) — so a client says "ask again in a moment" rather than reporting a fault. It is the one code that carries **`retry_after_seconds`**: how long to wait, from the same helper as its REST twin's `503` `Retry-After` header, so the two transports never disagree — the refusal's own derived hint where it has one (how far behind this node is, over how fast it is draining), rounded and never below a second, and the health tick's five seconds otherwise. The dashboard asks again after exactly that wait and keeps no wait of its own, so this hint — and the `Retry-After` on a REST refusal — is the only retry clock it has. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. It is the one code that carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. Every other code's text stays in the node's log, since a failure's own text can carry a path. |
 | `pong`     | Reply to a client `ping`. | `null` |
 
 #### Client frames
@@ -2024,6 +2033,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `seat_activity` | `{seat?, days?, previous?}` | `GET /agents/activity`. Every seat's TURNS over the `days` (1 to 90, default 7) company days ending today, summed across every node from the replicated usage domain — so the answer is the same on whichever node is asked and still counts a node that has left. `{since, until, days, previous_since?, previous_until?, seats, quantile_resolution}`; each seat is `{handle, role, agent_id, in_chart, turns, failed, reviewed, first_pass, first_pass_pct?, sent_back, p50_ms?, p90_ms?, tokens, per_day, last_turn_at?, previous?}`. `first_pass_pct` is `first_pass` over REVIEWED turns (0–100) and is ABSENT when none was reviewed — a 0% for a seat nobody reviewed would be a verdict nobody gave. `sent_back` counts reviews that sent work back. `p50_ms` and `p90_ms` are read from the merged turn-duration histogram and are within `quantile_resolution` (0.06) of the true value; absent when no turn ended. `per_day` is every day of the window, oldest first, a quiet day included as zeros. `previous` (with `previous=true`) is the seat's `{turns, failed, reviewed, first_pass, sent_back, tokens, per_day}` over the same number of days before, `per_day` being every one of those days, oldest first — so a profile draws the fortnight its week-on-week figure is made over from this one answer. Every AGENT seat of the current chart has a row, a quiet one with zeros ("took no turns" is a measurement); a seat that has left the chart appears with `in_chart: false` while its days are in the window; a human seat has none. `seat=` narrows to one handle, and a handle with no rows answers one row of zeros rather than none; a human seat's handle is refused (`bad_params`, naming the person), because the engine runs no turns for a person and a zero row would say one took none. Ordered by handle |
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
+| `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Operator-only** |
 | `access` | `{}` | `GET /access`: the token labels, the people and the posture the Settings › People & access screen draws. **Operator-only**. See [below](#get-access) |
 | `credential_pool` | `{}` | `GET /credential-pool`: every model's keys and their cooldowns, the Settings › Models & keys screen. **Operator-only**. See [below](#get-credential-pool) |
 | `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Settings › Backups & retention screen. **Operator-only**. See [below](#get-backups) |
@@ -2056,6 +2066,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `work_person` | `{handle}` | `GET /work/people/{handle}`. Scoped like `work_my_work`: absent is the caller's own seat, somebody else's needs an operator credential. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person — the PERSON, a bound token's seat rather than the token's id, which nobody the stamp is shown to can resolve — which is how a lead's authority is made visible beside the `prioritised` wake the write sends them — a wake that names the task now at the top of the list, because a notification here is task-shaped and "your list changed" names nothing to act on. `max_snooze_ahead` is how far ahead a snooze may be set, in SECONDS — the engine's bound, so a screen offers only the presets `mark_inbox` will accept |
 | `work_views` | `{container, viewer, counts}` | `GET /work/views`. `container` is the strip's own — `workspace`, `project:ENG`, `unit:engineering`, `person:ana` — and it is REQUIRED, because a strip belongs to exactly one. `viewer` is whose personal views appear and whose pins come first, and it takes the [personal scope rule](#whose-record-a-personal-question-answers-for): your own seat, or an operator credential for anybody else's. Absent is the shared strip — no pins and no personal views but the shared ones — which is what a screen asks for before it knows who is looking, and it needs no credential. Every row carries `builtin`, which is what tells the six nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names — this channel's, not the `list_work_items` TOOL's, which renames four of them for a model — so a caller either hands them straight back or, simpler, passes the view's `id` as `view=` and lets the engine expand it. `counts=true` adds `count` to every row PINNED for `viewer` — the `total_hint` `work_items{view, container}` answers for it, run as that viewer on the company's clock, with `count_capped` when it stopped at 10,000 — or `count_refused` naming why a view that no longer compiles could not be counted. At most 32 counts, in the strip's one read; it needs a `viewer`, since only a viewer has pins, and is refused `bad_params` without one |
 | `work_saved_views` | `{viewer, counts}` | `GET /work/views/saved`. Every SAVED view — never a builtin — that `viewer` can see across every container: the shared ones, and `viewer`'s own personal ones, pinned-for-them first and then by container (the workspace, projects, units, people) and the strip's own rank. Each row is `work_views`' row shape, so `container` says where it lives and `params` is its saved query. A sibling of `work_views` rather than a `container=` it takes, because a strip is ONE container's tabs and this is one PERSON's views — the inventory of what somebody saved and the pins a sidebar draws — which the workspace strip could not answer: a view saved on a project board appeared in neither. `viewer` takes the same [personal scope rule](#whose-record-a-personal-question-answers-for), and `counts=true` the same rule as `work_views`: every pinned row's `count` is its view run IN ITS OWN CONTAINER, which is what opening it runs |
+| `work_files` | `{project, folder, removed, limit, after}` | `GET /work/files`. Answers `{project, files, next}` plus the coverage half. Each file carries its `path`, `content_type`, `size`, `hash` (the SHA-256 of its whole content), `version`, who created and last wrote it and when, and — only with `removed` — who removed it and when. `next` is absent on the last page. The listing is rows only: the bytes are read through the byte route, never through the socket |
 | `pages` | `{container, parent, roots, status, label, watcher, title, skills, onboarding, limit, after}` | `GET /pages`. `skills` is three-stated: only the tool-skill pages, everything but them, or everything. `roots=true` is the TOP of a container — the pages with no parent — and is refused beside `parent`, because an empty `parent` already means "under any parent" and the two ask opposite questions. The answer carries `total` (every page the filter matches, counted in the same transaction as the rows) and, while there is more, `after` — pass it back as `after` for the next window; a cursor this listing did not mint is `bad_params`. Each page carries `children`: how many pages sit directly under it that the SAME listing would show (its `status` and `skills` narrowing applied to them), absent when none — what a tree draws its expander off. With `skills=true` on a node that reads the replicated `usage` domain the answer also carries `skill_loaded_by`: page id → the `page` answer's `skill_loaded_by` list for that page, answered for the whole window in ONE read rather than one per row |
 | `page` | `{id}` | `GET /pages/{id}` — id or `CONTAINER/Title`. `children` is the first 50 by title and `children_total` all of them. `skill` says the page is a TOOL SKILL (admitted to the skills registry) and `onboarding` that it is an onboarding page. On a tool-skill page, `skill_loaded_by` is every seat it reached as a skill over the last 30 company days, most recent first — `{handle, last_at, count, loaded, offered}`, where `loaded` counts the seat asking for the body (`load_tool_skill`) and `offered` a phase's catalogue putting its summary in front of the seat; absent on a node that does not read the `usage` domain, and `[]` when nobody was. `linked_from` is who LINKS here, from this node's index: `pages` (`{id, container, title}`, published pages whose body carries this page's address) and `tasks` (`{id, key, title, status, via}`, where `via` is `linked_page` for a page relation and `description` for an address in the description), each capped at 50 with `pages_total` / `tasks_total` beside it. A link is a page id in either address the engine reads — `/pages/<id>` or the dashboard's `#/knowledge/pages/<id>` — outside code; a title is not an address, since a rename moves it. Absent on a node with no index. A node that HAS an index and cannot answer sends `linked_from_status` instead of an empty list: `building` while its index is on its first lap over pages and tasks (a fresh or joined node's first minutes — an empty list then would claim nothing links here before every body was read), `unavailable` when the read failed; the page itself is served either way |
 | `page_reads` | `{page, days}` | Who READ a page: one row per (seat, way of reading) over `days` company days (1–30, default 30, anything else `bad_params`) from the replicated `usage` domain, so every node's reads are counted — a departed node's included — and every node answers alike. `via` is `get_page`, `search`, `prefetch` or `skill_loaded`; a skill's catalogue OFFER is deliberately not a read (it would make every skill "read by every agent today") and is what `page`'s `skill_loaded_by` counts. Each row carries `count`, `last_at`, and the newest read's `last_turn_id`, `last_work_key`, `last_query` and, where the run was charged to a task in the engine's tracker, `last_work_item{id, key, title, ordinal}` — "turn 2 on ENG-412". At most 100 rows, newest first, with `readers_total`; `distinct_seats_today` is the seats that read it since the company's midnight, and `elided` how many (page, way) entries the per-seat-day cap dropped across the window, COMPANY-WIDE rather than for this page — some may have been this page's and none may have been, so a non-zero value says the list MAY be short (0: it is certainly complete). `since`, `until` and `days` name the window. Registered only where this node reads the `usage` domain |
@@ -2119,6 +2130,28 @@ listing's `position` included; a position in a *parameter* is the token
 rows that should have gone may still be present, and the totals were computed
 over the incomplete set. That is a different fact from staleness, and a client
 that renders `read_level` and swallows `complete` looks confidently right.
+
+**A list from the estate also says whether the estate answered.**
+`work_items`, `work_my_work`, `work_inbox`, `work_projects`, `work_activity`,
+`work_search`, `pages` and `knowledge` (their REST twins included) carry
+`coverage`, one object of the same shape on every one of them. The estate is
+one partition, `estate.000`, held whole by every data node, so a read
+addresses exactly that one:
+
+| Field | What it holds |
+|---|---|
+| `addressed` | How many partitions the read addressed — always `1`, `answered` and `missing` together |
+| `answered` | The partition that answered, by id (`estate.000`); absent when it did not |
+| `missing` | The partition, when it did not answer, as `{partition, reason, detail}`: `reason` is `unserved` (no data node serves it), `unreachable` (data nodes are named and none answered), `behind` (a data node could not reach the caller's own writes in time), `not_holder` (every data node asked had stopped serving it) or `error` (the read ran there and failed), and `detail` is who was asked and what each said. A reason this build does not know is still a missing partition. Absent when nothing is missing |
+| `at` | Where each log was when the read began, by stream, as position objects — a lower bound on what the answer holds. Absent for a search, which reads an index each node builds behind its own rows |
+
+A read nothing answered is an error rather than a list — except `knowledge`,
+which is best effort and answers no hits with the partition named missing,
+rendered as *1 of 1 partitions did not answer; this list may be incomplete* —
+never as an empty list, which would say the company has nothing in it.
+`coverage` is **absent** where the reader states none — the Jira and Confluence
+backends, and a reader handed rows directly — rather than a coverage claiming
+the read addressed nothing.
 
 ### Whose record a personal question answers for
 
@@ -3064,6 +3097,90 @@ answers `400` saying which statuses exist — rather than matching nothing. A
 listing that answered empty for a typo would send somebody looking for items
 that were never missing.
 
+### Project files
+
+A project holds **files** beside its work: a report a seat wrote, a spreadsheet
+an operator uploaded, the output of a run somebody wants to keep. Each is a row
+in the tracker — a path, a type, a size, a version and who wrote it — and its
+content lives in the [object store](../concepts/object-store.md), split into
+chunks placed across the fleet rather than copied onto every node. See
+[A project's files](../guides/work-tracker.md#a-projects-files) for what a seat
+does with them.
+
+The listing is an ordinary read (`GET /work/files`, the `work_files` query).
+What the three byte routes add is what a question cannot carry: a download
+**streams** the content back and an upload streams it in, neither holding the
+file in memory.
+
+```bash
+# upload, replacing version 3 and nothing newer
+curl -X PUT -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  -H "Content-Type: text/csv" -H 'If-Match: "3"' \
+  --data-binary @q3.csv "http://localhost:8080/work/files/ENG/reports/q3.csv"
+
+# download
+curl -OJ -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  "http://localhost:8080/work/files/ENG/reports/q3.csv"
+```
+
+```json
+{
+  "project": "ENG", "path": "reports/q3.csv", "size": 48213,
+  "hash": "9f2c…", "content_type": "text/csv",
+  "outcome": "applied", "op_id": "…", "position": "…", "version": 4
+}
+```
+
+**The content goes first.** An upload writes every chunk before it records the
+file, so a file that is listed is a file whose content the fleet holds. A write
+cut off halfway leaves chunks nothing names, which the collector removes a day
+later; it never leaves a row pointing at content that is not there.
+
+**A write names the version it replaces.** `If-Match` carries the `ETag` the
+download answered. Absent, the write creates the path or overwrites whatever is
+there; present, a file that moved since is `412 version_moved` and nothing is
+written. Unlike a work item, a file has no per-field merge — two people editing
+one spreadsheet would lose one of them.
+
+**A write is attributed to the operator on the request.** A token with no
+operator identity is refused `403 operator_required`: an upload names the
+person who made it in the file's history, never the process that relayed it.
+
+**The answer is three-valued.** `outcome` is `applied`, `pending` or
+`unknown`, as every tracker write's is (see
+[Read Consistency](../guides/consistency.md)), and `position` and `version` are
+present only where the write is known to have landed. An `unknown` is retried
+by sending the same request again with the `op_id` it answered.
+
+**Each mebibyte has 30 seconds to cross**, in either direction: an upload's
+next mebibyte to arrive once the last one is stored, a download's next to be
+taken by the client once it has been fetched — a floor of about 35 KB/s, far
+under any real link. A whole-body deadline cannot bound a stream of up to a
+gibibyte without capping real uploads, and none at all let a client trickle one
+a byte at a time, or open a download and never read it, holding the handler and
+its connection for as long as it liked. An upload that stops arriving answers
+`400 unreadable_body` and records nothing; a download the client stops taking
+is cut, which the client sees as a body shorter than its `Content-Length`.
+
+**A download is served as an attachment**, with the file's own type and the
+same `default-src 'none'` policy every non-dashboard response carries, so a file
+somebody uploaded as HTML downloads rather than running on the dashboard's
+origin.
+
+| Status | `error` | When |
+|---|---|---|
+| `400` | `bad_path` | The path is empty, longer than 1024 bytes, not UTF-8, ends in `/`, has an empty folder or a `.` or `..` in it, or carries a control character or a backslash. A leading `/` is dropped rather than refused |
+| `400` | `bad_if_match` | `If-Match` is not a version |
+| `400` | `unreadable_body` | The upload's body stopped arriving: the connection closed, or a mebibyte of it took more than 30 seconds (see below) |
+| `403` | `operator_required` | A write whose credential names no operator |
+| `404` | `no_project` / `no_file` | No such project, or no file at that path |
+| `412` | `version_moved` | `If-Match` names a version the file has moved past |
+| `413` | `too_large` | The content is over 1 GiB |
+| `503` | `unavailable` / `content_unavailable` | The tracker or the object store could not be reached, or no copy of the content could be read |
+
+The byte routes are mounted only where the tracker is native **and** the node
+runs the object store. A company on Jira has no project files to serve.
+
 ### `GET /work/retention` — what the log is holding
 
 **Operator-only, reads included**, on the same rule `/config` and `/secrets`
@@ -3163,6 +3280,10 @@ fleet has no nodes" cannot happen, and "coordination could not be listed"
 happens during exactly the outage somebody is running this in. Without the flag
 a renderer prints the impossible one.
 
+A node row's **`evicted`** is its tombstone once every log holds one, dated
+from the latest, and its **`kind`** says which gate that latest one is:
+`eviction`, an operator's.
+
 **`evictions_unreadable`** is `true` on the tracker's or the pages log's row
 when the answering node could not read that log's evictions as it assembled
 the report — a failed store read, or its replicated estate closed for a
@@ -3196,8 +3317,8 @@ letting it write again are not reads, whatever a laptop deployment allows.
 | Route | What it does |
 |---|---|
 | `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
-| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log — the tracker's and the pages log; the vector log counts no node and gets none. **Refused `409 eviction_refused`**, with nothing written to either log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail`, `hint`, `op_id` and `actions` — `["wait", "force"]`: stop the node and let its lease lapse, or force it. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** — a judgement nobody could make is not one that came back clear — with a `hint` and `actions` `["retry_same_op", "force"]`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. |
-| `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to either log, when in the tracker's or the pages log the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence — its last published position is more than one below that bound — or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`, and `actions` `["wait"]`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published` — false for a node that has never published a position and is judged as holding nothing. A position that could not be compared at all — the register or the floor unreadable, or this node behind a reanchor the fleet has made — is `500 gate_failed`, and refuses too. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
+| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log — the tracker's and the pages log; the vector log counts no node and gets none. **Refused `409 eviction_refused`**, with nothing written to either log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail`, `hint`, `op_id` and `actions` — `["wait", "force"]`: stop the node and let its lease lapse, or force it. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** — a judgement nobody could make is not one that came back clear — with a `hint` and `actions` `["retry_same_op", "force"]`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. A node in a [capacity window](../guides/retention.md#changing-a-logs-ceiling) answers **`409 not_publishing`**, before anything is judged, with `detail`, `hint` and `actions` `["wait"]`: a gate record is an append, and the window's mode appends nothing; readmission answers the same. |
+| `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to either log, when in the tracker's or the pages log the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence — its last published position is more than one below that bound — or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`, and `actions` `["wait"]`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published` — false for a node that has never published a position and is judged as holding nothing. A judgement that could not be made at all refuses too, with nothing written, as **`503 readmission_unjudged`**: the register, a floor or the live data nodes unreadable, this node behind a reanchor the fleet has made, or — each log being asked where it is written — no data node serving the estate to give a log's bound. The body carries `detail`, `hint`, `actions` and, where one log could not be judged, that `log`; `actions` is `["wait"]` where no data node serves the estate, whose `hint` says what it waits on — a data node returning — and `["retry_same_op", "other_node"]` for anything else. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
 
 `confirm` echoes the node id, and a mismatch is `400`. A node id no node could
 run under — the [`node.id`](../concepts/configuration.md#nodeid) rule, since the
@@ -3207,9 +3328,11 @@ judged or written. A request carrying no operator identity is
 the gesture and `crewlet retention status` prints it beside the eviction.
 
 **The gesture is judged once, before any log is written**, and then its record
-goes to each identity-claiming log in turn. The trim counts nodes per log, so a
-record on one log lifts that log's pin and no other. A `200` answers **per
-log**:
+goes to every identity-claiming log it concerns at once. The trim counts nodes
+per log, so a record on one log lifts that log's pin and no other. Each is
+written by a data node that serves the estate — this one where its own copy
+serves, another where it does not ([the retention guide](../guides/retention.md#eviction)).
+A `200` answers **per log**:
 
 ```json
 {
@@ -3241,13 +3364,25 @@ written**, and `reason` names why in the vocabulary every write refusal uses
 (`log_full`, `evicted`, …). A log that answered holds its record whatever the
 other did.
 
-An `unknown` entry may also carry **`"unvouched": true`**: this node's
+An entry carries **`writer`** where a node other than this one wrote it: a log
+this node cannot write right now — its copy does not serve the estate — is
+sent to a data node that does, which writes the record under the same `op_id`
+on this node's behalf — so one request reaches every log. Its `outcome`,
+`error` and `hint` are that node's, and `writer` is absent where this node
+wrote the log itself. Each such node is given fifteen seconds before the next
+data node is asked; where none wrote the record, the entry's `error` says no
+node that serves the estate did, and offers `retry_same_op`.
+
+An `unknown` entry may also carry **`"unvouched": true`**: the writing node's
 operation ledger may have lost the row the operation needs — it was minted
 before the node adopted a peer's snapshot, or before the ledger's own sweep
 reached it — so the node published nothing and cannot tell whether the record
 landed, and the same request through it answers the same way every time. Such
 an entry offers `other_node` rather than `retry_same_op`: send the same request,
-with the same `op_id`, through a node whose ledger reaches back that far.
+with the same `op_id`, through a node whose ledger reaches back that far. With
+a `writer`, every data node that answered was asked already and none could
+tell, and another node would ask the same data nodes: it offers
+`retry_same_op`, which asks them all again.
 
 A log the gesture did not finish also carries **`actions`** — what to do, in
 order — and **`hint`**, the sentence saying why. Both are absent on a log that
@@ -3263,13 +3398,13 @@ a fresh one is equally safe.
 
 | Action | What the operator does | Where the gate answers it |
 |---|---|---|
-| `retry_same_op` | Send the same request again with the answer's `op_id` | An `unknown` outcome (unless it is `unvouched`), a lost race, a failure before the write answered, and a refusal that clears on its own (`behind`, `deferred`, `floor_unknown`, `below_floor`); `503 eviction_unjudged` |
+| `retry_same_op` | Send the same request again with the answer's `op_id` | An `unknown` outcome (unless it is `unvouched` by this node itself), a lost race, a failure before the write answered, a log no node that serves the estate wrote, and a refusal that clears on its own (`behind`, `deferred`, `floor_unknown`, `below_floor`, `not_holder`, `holding_unknown` — the last two an estate this node stopped serving, or could not tell it serves, as it wrote, which the same request sends to a node that serves it); a gate refusal — `evicted`, `overtaken`, `abandoned` — of **another node's copy** of the operation, which this node's append was collapsed onto (`hint` names that node): the reason is that node's standing, not this one's, so this node finishes it once the log's duplicate window (two minutes from when the copy landed) has passed; `503 eviction_unjudged`; and `503 readmission_unjudged` for anything the judgement could not read but an estate nobody serves (beside `other_node`) |
 | `new_gesture` | Start a new gesture, without `op_id` | `superseded` — the operation's record landed and a later gate record on the same node has undone it since (an eviction retried after a readmission) — and `op_reused`, an operation id that already names a record on another object |
 | `force` | Send the eviction again with `force=true` | `409 eviction_refused`, `503 eviction_unjudged` |
-| `other_node` | Send it, with the same `op_id`, through another node the fleet still counts | `evicted` (this node is evicted itself), an `unvouched` unknown (this node's ledger cannot say whether the record landed), and beside `retry_same_op` on `deferred` and `below_floor` |
+| `other_node` | Send it, with the same `op_id`, through another node the fleet still counts | Of this node's own standing or its own record: `evicted` (this node is evicted itself), `overtaken` and `abandoned` (this node wrote the record from rows a reanchor left behind — send it through a node on the log's current generation), an `unvouched` unknown this node gave (its ledger cannot say whether the record landed), and beside `retry_same_op` on `deferred`, `below_floor` and a `503 readmission_unjudged` that is not an estate nobody serves. With a `writer`, each of these is that node's standing rather than this one's, and `hint` names it. An `overtaken` or `abandoned` refusal, and an `evicted` one that names a `position`, is a record that landed and applies nowhere: it holds the `op_id` on that log for the log's duplicate window (two minutes) from when it landed, and the same `op_id` sent sooner — through any node — is answered the same way again, so `hint` says to wait that out first |
 | `reanchor` | [Re-anchor the log](../guides/retention.md#re-anchoring-a-recreated-or-restored-log) first, then send the same request with the same `op_id` | `wrong_stream` |
 | `set_capacity` | [Raise the log's ceiling](../guides/retention.md#changing-a-logs-ceiling), then send the same request with the same `op_id` | `log_full` — a gate record is admitted into the log's [gate reserve](../guides/retention.md#the-gate-reserve), so this is a log full to its broker ceiling past even that |
-| `wait` | Wait for what `hint` names to clear on its own, then run it again | `409 eviction_refused` (the lease to lapse), `409 readmission_refused` (the node to catch up) |
+| `wait` | Wait for what `hint` names to clear on its own, then run it again — what that is depends on the refusal, so a client reads the answer's `error` beside the action | `409 eviction_refused` (the lease to lapse), `409 readmission_refused` (the node to catch up), `503 readmission_unjudged` (a data node to serve the estate again), `409 not_publishing` (the fleet to leave its capacity window) |
 | `restore` | Restore the store and the stream from one backup | `skew` |
 
 A log with a `hint` and **no** `actions` is one no gesture clears — a record
@@ -3318,10 +3453,13 @@ cleaned, because a retry has to send back the id it holds, byte for byte; every
 id an answer carries already fits.
 
 **The gesture does not stop when its caller does.** The judgement runs under
-the request, so a request abandoned before it wrote nothing; once the first
-record is about to be written the node finishes the gesture under its own
-one-minute budget, so a dropped connection or a client timeout never leaves a
-node evicted on one log and counted on the other. A caller that sends its own
+the request, within half a minute, so a request abandoned before it wrote
+nothing; once the first record is about to be written the node finishes the
+gesture under its own budget — a minute for the logs — so a dropped connection
+or a client timeout never leaves a node evicted on one log and counted on the
+other. A node answers one gesture within **ninety seconds** at most — the
+judgement and the logs together — so a client waiting two minutes, as both of
+the engine's own do, always reads the node's own answer. A caller that sends its own
 `op_id` — `crewlet retention evict` and the dashboard both do — can ask again
 with it and read every log's answer; one that let the route mint it has lost
 the id with the answer that never arrived.
@@ -3377,7 +3515,9 @@ hold — written after the restore, and named by the `GET` as `discards` — are
 applied on no node; without it that reanchor is refused `409
 reanchor_refused`, and with it the answer carries the newest one as
 `discarded`. The two flags are separate because neither answers the other's
-question.
+question. A node in a [capacity window](../guides/retention.md#changing-a-logs-ceiling)
+refuses every reanchor `409 reanchor_refused`, naming its mode: the reanchor
+appends a generation record, and the window's mode appends nothing.
 
 ## Agent Memory
 
@@ -3747,7 +3887,7 @@ start and **omits** the field rather than rendering one.
 {
   "nodes": [
     {
-      "id": "core-1", "roles": ["ingress", "seats", "workers"], "labels": {},
+      "id": "core-1", "roles": ["ingress", "seats", "workers"], "broker": "member", "labels": {},
       "owner": "core-1:8f2a", "protocol": 4, "seats": 4, "expires_in": 41.2,
       "config_epoch": 7, "config_status": "ok", "config_error": ""
     }
@@ -3759,9 +3899,172 @@ start and **omits** the field rather than rendering one.
   "duties": [{"duty": "maintenance", "node": "core-1", "expires_in": 41.2}],
   "unplaceable": [{"handle": "gpu-eng", "placement": "labels=gpu=true"}],
   "unmanned_roles": [],
-  "this_node": "core-1"
+  "this_node": "core-1",
+  "objects": {
+    "state": "reported",
+    "backend": "s3:https://s3.example.com/files/acme/",
+    "node": "data-a",
+    "collect": {
+      "at": "2026-09-01T12:00:00Z",
+      "completed": true,
+      "listed": 1840,
+      "aged": 1702,
+      "deleted": 12,
+      "referenced": 1690,
+      "refreshed": 0
+    },
+    "audit": {
+      "at": "2026-09-01T09:00:00Z",
+      "completed": true,
+      "referenced": 1828,
+      "missing": 0
+    }
+  }
 }
 ```
+
+**`objects` is where the company's files are kept, and what the
+[object store's](../concepts/object-store.md) collector last found** — read
+from the coordination store like the rest of this answer, so every node reports
+the same record whichever node ran the passes. It is absent on a node that
+reads no record.
+
+`state` names three things apart rather than drawing any of them as an empty
+report: `unavailable` (the coordination store did not answer), `not_yet` (no
+collector has finished a pass — a new fleet, or no data node running the duty)
+and `reported`. Only a report carries the other fields. The example is the
+engine's own rendering: a test holds its `objects` block to what the renderer
+writes.
+
+| Field | What it is |
+|---|---|
+| `backend` | The store every node agreed on at boot: `nats` (the data nodes' replicated bucket) or `s3:<endpoint>/<bucket>/<prefix>` |
+| `node` | The data node holding the collector's duty when it ran the passes below |
+| `collect` | The last **collection**: when it ended (`at`), whether it listed the whole store and judged every chunk past the day's grace (`completed`), and its counts — `listed`, `aged` (past the grace, so judged), `deleted` (no row named them), `referenced` (a row still did), `refreshed` (written again while it judged them, and kept). `skipped` says why it deleted nothing — an estate this node could not fully read; `error` what stopped it. Absent before the first one ends |
+| `audit` | The last **audit**, which asks the store about every chunk a row names: `referenced`, `missing` (the whole count), `missing_chunks` (the first hundred, to restore first; absent when none) and `completed` — false over an estate that was not complete, when `missing` is a floor. A non-zero `missing` raises [`objects_missing`](alarms.md). Absent before the first one ends |
+
+A collection runs hourly and an audit daily, on one data node at a time; a pass
+that fails is tried again ten minutes later.
+
+Each node row carries `broker`: how the node's broker takes part in the
+fleet's — `member` (embedded, a voter in the JetStream cluster), `leaf`
+(embedded, joining the members through `stream.leaf.urls`, holding nothing),
+`client` (`stream.type: nats`) — or `unknown` for a node running a build older
+than the field. It is derived from the node's own `stream` block, never from
+its roles; [`GET /fleet/broker`](#the-brokers-membership) holds it against what
+the broker itself counts.
+
+### The broker's membership
+
+```
+GET  /fleet/broker
+POST /fleet/broker/remove/{node}?confirm={node}[&force=true]
+POST /fleet/broker/remove-peer/{peer}?confirm={peer}[&force=true]
+```
+
+Two records say who the fleet broker's members are, and they can disagree.
+Every node advertises its broker kind on its presence lease; the broker's
+**metadata group** — the raft group that places every stream and consumer —
+counts its voters for itself. A member that is gone for good is the
+disagreement that matters: its presence lapses with its process, while the
+metadata group goes on counting it in every election and every create until it
+is removed, so a three-member fleet that loses two for good has no quorum left
+to create anything with.
+
+**`GET /fleet/broker`** answers both and where they disagree. Any node answers
+it: only a member holds the metadata group, so a node that is not one asks
+every live member at once, and `group_from` names the member whose view `group`
+is. A fleet on an external cluster answers `external: true` and lists no group —
+that cluster's membership is its operator's. A group no member could report
+within five seconds is absent with `group_error` saying why, never an empty one.
+
+The group counts each voter by its raft **peer id**, which nats-server derives
+from the server's name — the node id. A member learns another's name only from
+that server itself, so a voter whose survivors have restarted since it died is
+listed with no `name` at all, by its `peer` alone; each node row carries the
+`peer` it is counted by, and the two records are held against each other by
+peer id, so such a voter is still recognised as the live node it is where one
+is.
+
+```json
+{
+  "node": "node-a", "kind": "member", "external": false,
+  "nodes": [
+    {"node": "node-a", "peer": "ePFsSWs4", "kind": "member", "roles": ["data", "ingress", "seats", "workers"]},
+    {"node": "old-1", "peer": "mTNLbbt3", "kind": "unknown", "roles": ["data", "ingress", "seats", "workers"]},
+    {"node": "sat-eu-1", "peer": "zYqdsRpE", "kind": "leaf", "roles": ["seats"]}
+  ],
+  "group": {"cluster": "acme", "leader": "node-a", "peers": [
+    {"name": "", "peer": "X57jblDH", "current": false, "offline": true, "active": 7200000000000},
+    {"name": "node-a", "peer": "ePFsSWs4", "self": true, "leader": true, "current": true, "active": 0},
+    {"name": "node-c", "peer": "9iReXzcw", "current": false, "offline": true, "active": 5400000000000}
+  ]},
+  "group_from": "node-a",
+  "findings": [
+    {"kind": "dead_member", "node": "", "peer": "X57jblDH", "detail": "the metadata group counts it as a voter, no live node is it, and the member that answered has not heard its name since it started"},
+    {"kind": "dead_member", "node": "node-c", "peer": "9iReXzcw", "detail": "the metadata group counts it as a voter and no live node is it"},
+    {"kind": "unknown_kind", "node": "old-1", "detail": "its presence does not say what its broker is"}
+  ]
+}
+```
+
+`active` is nanoseconds since the answering member last heard from the peer.
+The finding kinds:
+
+| `kind` | Means |
+|---|---|
+| `dead_member` | A voter no live node is — its process is gone, or its node came back as a leaf or a client. It is counted in every election until it returns or is removed |
+| `not_in_group` | A live node advertising a member that the group does not count: still joining, or removed while it ran, in which case it rejoins as a voter at its next restart |
+| `unknown_kind` | A live node whose presence does not say what its broker is — a build older than the field. It is counted as a member wherever that is the safe reading, a [capacity seal](../guides/retention.md#who-has-to-acknowledge) included |
+
+It is the `fleet_broker` question, so the [socket's query channel](#ws-wsstream)
+answers it too. A lease table that could not be reached answers `503
+unavailable` with a `Retry-After` rather than a fleet with no nodes.
+
+**`POST /fleet/broker/remove/{node}`** removes a member from the metadata group,
+by the peer id its node id hashes to — so it reaches a member whose name no
+survivor remembers, as long as you know which node it was. nats-server answers
+that request only on the broker's **system account**, which a member reaches
+inside its own process and nothing else can — so the node that receives the
+request asks a live member, never the one being removed, and that member's
+system account carries it. The answer comes once the group has committed the
+change, and names the voter, the member that carried it and the group as it
+reads afterwards:
+
+```json
+{"node": "node-c", "peer": "9iReXzcw", "by": "node-a", "group": {"cluster": "acme", "leader": "node-a", "peers": [...]}}
+```
+
+**`POST /fleet/broker/remove-peer/{peer}`** is the same removal naming the voter
+by the `peer` the listing shows — the form for a voter listed with no name,
+which has no node id to give. Its answer's `node` is empty unless a live node is
+that voter.
+
+A removal is **refused while the voter's node holds a live presence lease as a
+member**, or without saying what its broker is: the node is running, and a
+running member removed from the group rejoins it as a voter at its next restart.
+`force=true` removes it anyway — for a member wedged in a way that still renews
+its lease. A node alive as a **leaf** or a **client** under the voter's name is
+removed without force: the member it was is gone for good, and its broker never
+rejoins. The whole gesture is bounded by one wait — the carrying member's own
+commit budget and one round trip; a member that does not answer within it ends
+the gesture as `outcome_unknown` rather than another member proposing it again.
+`crewlet fleet broker remove` is a client of both routes. **Operator-only**, and
+refused during a [drain](#during-a-drain). Every refusal carries `detail` and
+`hint`:
+
+| Status | `error` | When |
+|---|---|---|
+| `400` | `confirm_required` | `?confirm=` does not repeat the node id or the peer id |
+| `400` | `voter_invalid` | The name is not a node id (or, on `remove-peer`, not a peer id) |
+| `404` | `not_a_member` | The metadata group counts no voter by that peer id — a typo, or a removal already made |
+| `409` | `member_live` | The voter's node holds a live presence lease as a member (or does not say); stop it first, or `force=true` |
+| `409` | `membership_changing` | Another membership change is still being committed; ask again once it has |
+| `409` | `external_broker` | The fleet's broker is an external cluster, whose membership is its operator's |
+| `503` | `no_leader` | Nobody answered as the group's leader for the whole wait. The request is asked again every second, so an election alone does not end here: the group has lost its quorum and can change nothing about itself. A removal whose answer was lost may still have been committed — read the group first |
+| `503` | `no_member` | No live member could carry the removal — including when the only live member is the one being removed, which never carries its own |
+| `504` | `outcome_unknown` | The member carrying it did not answer; it may have committed the removal first — read the group before asking again |
+| `500` | `broker_remove_failed` | Anything else; read the group before asking again |
 
 ### `GET /sandbox-runs`
 
@@ -3942,8 +4245,9 @@ of 100 000.
 
 ### `POST /backup`
 
-Copies this node's durable state — its store file, and every JetStream stream
-and coordination bucket — into `?dir=`, a directory **on the engine's host**.
+Copies this node's durable state — both of its store files, every JetStream
+stream and coordination bucket, and every chunk of the company's files that
+the store copy names — into `?dir=`, a directory **on the engine's host**.
 
 ```bash
 curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
@@ -3956,10 +4260,15 @@ curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   "finished_at": "2026-08-30T18:00:01.412Z",
   "node_id": "node-0",
   "engine_version": "v0.1.0",
-  "store": {
-    "file": "store.db", "source": "/data/company.db",
-    "bytes": 258048, "migrations": ["0001_events.sql", "…"]
-  },
+  "stores": [
+    {"estate": "node", "file": "store.db", "source": "/data/company.db",
+     "bytes": 258048, "sha256": "…", "migrations": ["0001_events.sql", "…"]},
+    {"estate": "partition", "partition": "estate.000", "file": "store-replicated.db",
+     "source": "/data/crewlet-replicated.db", "bytes": 131072, "sha256": "…",
+     "migrations": ["0001_tracker.sql", "…"]}
+  ],
+  "objects": {"dir": "objects", "chunks": 40, "bytes": 41943040, "reused": 36,
+              "reused_from": "/var/backups/crewlet/2026-08-29T18-00/objects"},
   "streams": [
     {"name": "CREWLET_AGENT", "file": "streams/CREWLET_AGENT.snapshot",
      "bytes": 1087, "messages": 5, "config": {…}, "state": {…}}
@@ -3986,7 +4295,7 @@ being copied. The work is safe to be cut off, since the store copy is renamed
 into place only after it verifies and the manifest is written last, so a
 client that gives up leaves an unfinished directory rather than a false one.
 
-Three refusals, each pointing somewhere different:
+Four refusals, each pointing somewhere different:
 
 - **401 without a token.** `allow_anonymous_read` is on by default and opens
   the read surface; this writes every credential the company holds to a path
@@ -3998,6 +4307,17 @@ Three refusals, each pointing somewhere different:
   rather than only logged, unlike every other route here, because it is the
   caller's own command to fix. A disk that fails or fills while the directory
   is prepared is the node's failure, not the path's, and answers `500`.
+- **503 `objects_unreachable`** — the store copy names chunks of the
+  company's files that the S3 bucket did not answer for. Nothing is wrong with
+  this node or the command: check that it reaches the bucket and take the
+  backup again. A backup without those chunks is refused rather than written,
+  because they may well be intact there. A chunk the bucket *answered* it does
+  not hold is different — it is lost whatever the backup does — and is listed
+  in the manifest's `objects.lost` rather than refused, so one lost file never
+  stops every later backup and, with them, the trim (see
+  [Backup](../guides/backup.md)). On the default `nats` backend the chunks are
+  in a stream the backup snapshots with every other (`objects.stream` names
+  it, and no chunk is copied on its own), so this refusal does not arise.
 - **A copy without the stream estate.** A node that dialled an external NATS
   cluster has no connection to snapshot the streams over, so its manifest
   carries the store copies alone and `crewlet backup` says where the rest
@@ -4640,7 +4960,7 @@ The body is read **whole even when the request will be refused**, and bounded at
 ## Running
 
 ```bash
-crewlet run -config crewlet.yaml -roles ingress -api-host 0.0.0.0 -api-port 8000
+crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port 8000
 ```
 
 The API is served inside the engine's own process, over the engine's own store, broker and coordination plane. Its reads answer from that node's store and projection. Its writes are few and each is named above: the operator surface (`/operator/mcp`, `/operator/act`) writes the tracker and knowledge base through the tools a seat holds, `/config`, `/secrets` and `/setup` write the company's configuration and credentials, `/backup` and the `/work/retention` gestures act on the node and the log, and the webhook edge publishes inbound deliveries onto `crewlet.notifications.inbound`. It runs no agent itself — a seat's turn is the engine's.

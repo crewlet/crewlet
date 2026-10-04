@@ -58,7 +58,7 @@ func ScrubFile(ctx context.Context, path string, tables []string) ([]string, err
 				ErrScrubTable, name)
 		}
 	}
-	pool, err := openPrepared(ctx, path, Options{})
+	pool, err := openPrepared(ctx, path, Options{}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("store: scrub: open %s: %w", path, err)
 	}
@@ -116,7 +116,7 @@ func EmptyTables(ctx context.Context, path string, tables []string) ([]string, e
 			return nil, fmt.Errorf("%w: %q", ErrScrubTable, name)
 		}
 	}
-	pool, err := openPrepared(ctx, path, Options{})
+	pool, err := openPrepared(ctx, path, Options{}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("store: verify scrub: open %s: %w", path, err)
 	}

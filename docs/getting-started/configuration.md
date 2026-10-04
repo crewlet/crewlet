@@ -479,7 +479,14 @@ stream:
                                     #   defaults) keeps every item and every
                                     #   page there, so the engine refuses to
                                     #   boot it on an in-memory stream rather
-                                    #   than lose them at the first restart
+                                    #   than lose them at the first restart.
+                                    #   And a MEMBER OF A FLEET's broker —
+                                    #   embedded, no leaf urls, and naming a
+                                    #   cluster, peers or a leaf listener —
+                                    #   needs it WHATEVER its roles and its
+                                    #   company: it holds the fleet's streams
+                                    #   for every node that reaches it. A
+                                    #   leaf is refused one
   # store_max_bytes: 68719476736    # how much of that directory's volume the
                                     #   EMBEDDED broker may hold — the ONE number
                                     #   every stream ceiling on it is compared
@@ -516,13 +523,26 @@ stream:
   # url: "nats://nats.internal:4222"  # required for `nats`, REFUSED for
                                     #   embedded — an embedded server has no
                                     #   address, so a url there is read by
-                                    #   nobody
+                                    #   nobody. The server it reaches must
+                                    #   accept messages of 8 MiB
+                                    #   (`max_payload: 8MB`, every server in
+                                    #   that cluster): an event may be that
+                                    #   large and every file chunk is a
+                                    #   mebibyte and its framing, so a server
+                                    #   at nats-server's 1 MiB default is
+                                    #   refused at connect, naming it
   # replicas: 3                     # 1 solo (the default); 3 across an EMBEDDED
                                     #   cluster, where it is what makes a publish
-                                    #   quorum-durable before it returns. It is
-                                    #   checked against `cluster.peers`, so >1
-                                    #   without them is refused — this node has
-                                    #   nothing to replicate to
+                                    #   quorum-durable before it returns. At most
+                                    #   5, JetStream's own ceiling, and on an
+                                    #   embedded cluster at most its members —
+                                    #   this node and `cluster.peers` — so >1
+                                    #   without peers is refused: this node has
+                                    #   nothing to replicate to. It is the
+                                    #   BROKER's copies of its streams and
+                                    #   buckets — the company's files among
+                                    #   them under the default `nats` object
+                                    #   store (`store.objects`)
   # cluster:                        # an EMBEDDED server joining its peers, which
   #   name: crewlet                 #   is the fleet topology: every node embeds
                                     #   one member of one cluster. REQUIRED once
@@ -538,7 +558,14 @@ stream:
   #   port: 6222                    #   `node.id` is
   #   peers:                        #   the member name, so it must survive a
   #     - "nats://node-1:6222"      #   restart — a name minted at boot orphans
-  #     - "nats://node-2:6222"      #   this member's replicas every time
+  #     - "nats://node-2:6222"      #   this member's replicas every time.
+                                    #   `peers` lists the OTHER members, each
+                                    #   scheme://host:port: an entry that is
+                                    #   recognisably this node's own route
+                                    #   (host+port, or advertise) or a repeat
+                                    #   is not counted as a member, with a
+                                    #   warning, and one that is not dialable
+                                    #   is refused
   #   host: 10.0.0.11               #   the interface the route port binds.
                                     #   Unset binds EVERY interface, and a route
                                     #   port is unauthenticated cluster access —
@@ -555,6 +582,39 @@ stream:
                                     #   behind a NAT is unreachable or somebody
                                     #   else's. A bare host keeps this member's
                                     #   own route port
+  # leaf:                           # the LEAF LINK, and a node is on exactly
+                                    #   one side of it. WHICH SIDE is its
+                                    #   BROKER KIND, derived from this block and
+                                    #   nothing else: `urls` makes it a leaf,
+                                    #   and any other embedded broker is a
+                                    #   member. `node.roles` is a separate
+                                    #   question: what the node's DISK keeps.
+  #   urls:                         #   A LEAF dials the members' leaf
+  #     - "nats-leaf://node-1:7422" #   listeners here — any one that answers
+  #     - "nats-leaf://node-2:7422" #   will do — and its embedded broker runs
+                                    #   NO JetStream: no replica, no vote, no
+                                    #   stream store (`store_dir`, `cluster` and
+                                    #   a leaf `port` are refused beside it).
+                                    #   Every stream and bucket its clients use
+                                    #   is a member's, reached across this link.
+                                    #   A node without `data` must be a leaf
+                                    #   and a node with it must not: every data
+                                    #   node holds the whole estate as a member
+  #   port: 7422                    #   A MEMBER's listener, where leaves join.
+                                    #   A member that opens one is in a fleet
+                                    #   even with no peers, so it must persist
+                                    #   (`store_dir`, as above: the leaves that
+                                    #   join it keep nothing, so it keeps
+                                    #   everything they do) and needs
+                                    #   `coordination.type: embedded-kv`
+  #   host: 10.0.0.11               #   the interface the listener binds. Like
+                                    #   the route port it accepts any connection
+                                    #   that reaches it: the fleet is one trust
+                                    #   domain on a network its operator
+                                    #   controls, so bind it there
+  #   advertise: "node-1.internal:7422"
+                                    #   what leaves should dial for this member,
+                                    #   when it differs from what it binds
   # sync: always                    # what an acknowledged publish has actually
                                     #   reached. `always` (the default, at every
                                     #   replica count) fsyncs every write before
@@ -633,22 +693,36 @@ stream:
                                     #   `store_max_bytes` wherever you set one,
                                     #   and Tier A refuses a limit smaller than
                                     #   the ceilings declared inside it
-  # tracker_vectors_max_bytes: 17179869184
-                                    #   the vector changelog's ceiling (default
-                                    #   16 GiB). SIZED FOR THE PEAK: the stream
-                                    #   keeps one message per source, so a
-                                    #   week's minting is ~91 MB — but changing
-                                    #   the embedding model rewrites EVERY source
-                                    #   in a few hours, and for the following
-                                    #   week all of them are in the window. A
-                                    #   ceiling sized from the steady state would
-                                    #   refuse the one operation it exists to
-                                    #   survive
+  # tracker_vectors_max_bytes: 68719476736
+                                    #   the vector changelog's ceiling
+                                    #   (1 GiB..2 TiB). SIZED FOR THE PEAK: the
+                                    #   stream keeps one message per source, so
+                                    #   a week's minting is ~91 MB — but
+                                    #   changing the embedding model rewrites
+                                    #   EVERY source in a few hours, and for the
+                                    #   following week all of them are in the
+                                    #   window: the whole corpus, ~17 MB per
+                                    #   agent seat per YEAR OF HISTORY. UNSET
+                                    #   DERIVES what the mutation log derives
+                                    #   from the volume (a quarter of its free
+                                    #   space, 4..64 GiB), whatever
+                                    #   tracker_log_max_bytes is set to: that
+                                    #   field bounds a trailing window of
+                                    #   records, and this log's peak is the
+                                    #   company's whole history. At 64 GiB it
+                                    #   holds a model change twice over for
+                                    #   ~2 000 seat-years (400 seats in their
+                                    #   fifth year); past that, set ~34 MB per
+                                    #   agent seat per year of history. A
+                                    #   ceiling sized from the steady state
+                                    #   would refuse the one operation it exists
+                                    #   to survive
   # pages_log_max_bytes: 4294967296 #   the knowledge base's log, the ordered
                                     #   stream every native page write goes
                                     #   through (1..256 GiB). UNSET DERIVES a
-                                    #   quarter of the mutation log's derived
-                                    #   value, so 1..16 GiB: a knowledge base is
+                                    #   quarter of the mutation log's ceiling,
+                                    #   set or derived (so 1..16 GiB from a
+                                    #   volume alone): a knowledge base is
                                     #   a few thousand pages against a tracker's
                                     #   hundreds of thousands of items, so its
                                     #   log grows at about a quarter of the rate
@@ -743,21 +817,40 @@ store:
                                     #   separate volume is the production shape
   # replicated_path: "./crewlet-data/crewlet-replicated.db"
                                     #   the REPLICATED estate — everything a
-                                    #   state log's applier writes. Empty puts it
+                                    #   state log's applier writes, the file of
+                                    #   the estate's one partition, `estate.000`,
+                                    #   held whole by every data node. Empty puts it
                                     #   beside `path`, which is what makes "back
                                     #   up the data directory" true. It is a
-                                    #   second FILE rather than more tables
+                                    #   separate FILE rather than more tables
                                     #   because a snapshot for a joining node is
-                                    #   a copy of this one alone; separate it
-                                    #   only to put it on a different disk, and
-                                    #   never onto the same file as `path`
-  # max_open_conns: 0               #   connection-pool bound; 0 takes the
-                                    #   store's own default, which is four
-                                    #   readers plus one pinned connection per
-                                    #   state-log domain. Raise it if the
-                                    #   `pool_starved` alarm fires — see
-                                    #   reference/alarms.md — which means reads
-                                    #   are queuing before they start
+                                    #   a copy of the estate's file alone;
+                                    #   separate it only to put it on a
+                                    #   different disk, and never onto the same
+                                    #   file as `path`
+  # scratch: false                  #   DELETE this node's store at every boot,
+                                    #   under the store's own lock, and open it
+                                    #   with no replicated estate at all.
+                                    #   REQUIRED on a node without the `data`
+                                    #   role and REFUSED on one with it, so the
+                                    #   deletion is never a surprise either way.
+                                    #   Explicit rather than derived from the
+                                    #   roles because it is the one setting here
+                                    #   that deletes something. The offline
+                                    #   `migrate`, `config`, `secrets` and
+                                    #   `search eval` commands refuse a scratch
+                                    #   store: what they wrote would be gone at
+                                    #   the next boot
+  # max_open_conns: 0               #   connection-pool bound for this node's
+                                    #   own database, and the read concurrency
+                                    #   the replicated estate's file takes a
+                                    #   share of: it keeps at least two readers,
+                                    #   plus one pinned connection per state
+                                    #   log it carries. 0 takes the store's own default
+                                    #   of four. Raise it if the `pool_starved`
+                                    #   alarm fires — see reference/alarms.md —
+                                    #   which means reads are queuing before
+                                    #   they start
   # busy_timeout_seconds: 0         #   how long a WRITE waits for the
                                     #   database's write lock before giving up
                                     #   and retrying once; 0 takes the store's
@@ -768,6 +861,45 @@ store:
                                     #   lock. Raise it on a node doing bulk
                                     #   applies, where `store_tx_retry` in the
                                     #   log names it; see guides/replication.md
+  # objects:                        # where the company's FILES are kept — see
+                                    #   concepts/object-store.md. EVERY node
+                                    #   carries the same block, a node without
+                                    #   `data` included: an upload or a download
+                                    #   goes to the store from the node serving
+                                    #   it. The first node to boot records the
+                                    #   store in the coordination store, and a
+                                    #   node configured with another refuses to
+                                    #   boot, naming both
+  #   backend: nats                 #   nats (the default, and what an absent
+                                    #   block means): a JetStream object store
+                                    #   bucket, `crewlet_files`, on the fleet's
+                                    #   own broker, kept at `stream.replicas`
+                                    #   copies on its members like every stream
+                                    #   and backed up with them. s3: an
+                                    #   S3-compatible bucket, named below
+  #   s3:                           #   REFUSED unless backend is s3
+  #     endpoint: ""                #   the S3 API's base URL; empty is Amazon
+                                    #   S3's own for the region. R2, MinIO,
+                                    #   Ceph's gateway and GCS's interoperability
+                                    #   endpoint each name theirs here
+  #     region: eu-west-1           #   REQUIRED — every request is signed for
+                                    #   a region, even where the provider
+                                    #   ignores it (R2: auto, MinIO: us-east-1)
+  #     bucket: acme-files          #   REQUIRED. Checked at boot: a node that
+                                    #   cannot reach it, or whose credentials it
+                                    #   refuses, does not start
+  #     prefix: ""                  #   prepended to every key (`<prefix><hash>`),
+                                    #   so one bucket can hold more than one
+                                    #   company; e.g. `acme/`
+  #     path_style: false           #   address the bucket in the path rather
+                                    #   than the host name; MinIO and most
+                                    #   self-hosted gateways need it
+  #     access_key_id: ${S3_ACCESS_KEY_ID}         # both as ${VAR} references,
+  #     secret_access_key: ${S3_SECRET_ACCESS_KEY} #   or NEITHER, which takes
+                                    #   the SDK's own chain: the environment, a
+                                    #   shared profile, a web identity or the
+                                    #   instance's role. A private CA is read
+                                    #   from AWS_CA_BUNDLE
 
 coordination:
   type: local                       # one node holding its own seat leases;
@@ -849,7 +981,8 @@ on what cannot run and still prints what its operator should read. A warning is
 a configuration that is valid and carries a consequence worth knowing before it
 is applied — a declined fsync's window, a trim that will never advance until
 somebody acknowledges a backup, an embedded stream with nowhere to persist, a
-unit keyed on a name somebody will rename.
+`stream.cluster.peers` entry left out of the member count because it is this
+node's own route or a repeat, a unit keyed on a name somebody will rename.
 
 `api.host` and `api.port` are what this node **binds**, which is rarely where it
 **answers**: a fleet behind a load balancer binds `0.0.0.0:8000` and is reached
@@ -985,17 +1118,22 @@ units:
 | `llm_auxiliary` | string | no | Cheap/fast model used by reflection workers (PersistDecider, episode summariser) |
 | `llm_judge` | string | no | Cheap/fast model used by the [round-cap extension judge](../concepts/turn-engine.md#round-cap-extension-judge); falls back to `llm` |
 | `token_budget` | dict | no | This seat's own token ceilings per calendar window — `day`, `week`, `month`, each optional — on top of the company's. See [Token budgets](#token-budgets) |
+| `learning_enabled` | bool | no | Overrides the company's [learning](../concepts/agent-learning.md) setting for this seat alone. Unset inherits it; `false` skips reflection for this seat's turns while still writing its episodes, which are cheap and useful to a person regardless |
 | `handle` | string | no | Custom identity slug (default: auto-derived) |
 | `email` | string | no | Agent email address |
-| `manages` | list[string] | no | Names of roles this agent manages |
+| `unit` | string | no | **Root-level seats only.** The name of the unit this seat belongs to; the seat is moved into that unit's members before anything else reads the org chart, exactly as if it had been written under the unit. It is what `PUT /config/roles/{handle}` writes, so an API-created seat can land in a team without rewriting the unit's block; a hand-written file normally nests the seat under its unit instead. A name that matches no unit leaves the seat at the root and is reported by `crewlet validate` as a dangling reference. On a seat already nested in a unit it moves nothing, and one naming a *different* unit is refused |
+| `manages` | list[string] | no | Names of the seats **or units** this seat manages; a unit expands to every seat in it and in its descendants |
 | `responsibilities` | list[string] | no | Role responsibilities |
 | `behavioral_guidelines` | list[string] | no | Behavioral rules |
 | `mcp_env` | dict | no | Per-agent MCP server credentials, keyed by server name — env vars for `stdio` servers, HTTP headers for `http` servers (e.g. `atlassian.JIRA_USERNAME` / `atlassian.JIRA_API_TOKEN`, `confluence.CONFLUENCE_USERNAME` / `confluence.CONFLUENCE_API_TOKEN`, `slack.SLACK_MCP_XOXB_TOKEN`, `mattermost.MATTERMOST_TOKEN`, `github.Authorization: "Bearer …"`). The per-agent tool-credential surface only — scope a server via its own filter (`JIRA_PROJECTS_FILTER` / `CONFLUENCE_SPACES_FILTER`) if needed. The unit's project / space identity is `project` and `space` (below), not here |
+| `integrations.github` | dict | no | This seat's own [GitHub App](../integrations/github.md#one-github-app-per-agent) — one per agent, because an app has exactly one bot identity. A person writes two fields: `tier` (`read_only`, the default, `review` or `full_access`; a hyphen is accepted for the underscore) and `repos` (the repositories it works in as `owner/name`; empty means every repository the installation covers). `app_id`, `app_slug`, `installation_id`, `private_key` and `webhook_secret` are **written by the engine** when the app is created and installed, the last two as `${VAR}`s pointing at the [secret store](../concepts/secret-store.md) — see [What lands where](../integrations/github.md#what-lands-where) |
 | `integrations.slack` | dict | no | This seat's own Slack app: `bot_token`, `signing_secret`, optional `channel`. **Both credentials are required together** — without the token the seat receives messages it cannot answer, without the secret its route answers 503 while the app's settings page reports a healthy request URL. `crewlet slack provision` mints both into the `${VAR}`s these fields point at |
 | `integrations.mattermost` | dict | no | Per-agent Mattermost **transport** identity (`bot_token`, optional `username`, optional `channel`). One credential, three readers: the same token is named as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess, and the inbound websocket for this seat authenticates with it too |
 | `project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Project` / `org.Role.Project`). The team's tracker project as identity: an item that names nobody in the org chart routes to the unit lead, it is the project the team files work under, and on the engine's own tracker it is what an item filed with no `unit` belongs to — whoever filed it (see [the work tracker](../guides/work-tracker.md#which-team-an-item-belongs-to)). **Vendor-neutral** — it names a native project or a Jira one, whichever [`tracker.backend`](#tracker) the company runs, so switching backends does not rewrite the org chart. **Not** an MCP credential, and it does **not** scope knowledge reads. Keys are an upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`), which is the shape every backend accepts |
 | `space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Space` / `org.Role.Space`). The team's knowledge container as identity: a page change that names nobody routes to the unit lead, and it is where the team writes. Vendor-neutral and shaped like `project`, above. It does **not** scope reads — read scope is the org-wide `knowledge.scope` only. The reserved containers (`knowledge.skills_container`, default `TS`, and `knowledge.root_space`, default `HOME`) are refused here |
 | `workers` | list[string] | no | Which [worker templates](#worker-templates) this seat may delegate to. **Empty means every one** — a company that publishes three workers wants its seats using them, and requiring each seat to opt in turns a shared library into per-seat copy-paste. A name no template defines is refused at load |
+| `sandbox` | dict | no | The seat's [code sandbox](../concepts/code-sandbox.md#per-role-gate--rolesandbox) gate. **Absent means the seat is never offered the sandbox tool.** `enabled: true` offers it; `run_in` picks where its code work runs (`direct`, `container`, `e2b`, or `self` — inside its own agent-mode executor run; empty inherits `providers.sandbox.default_run_in`); `coding_agent` (`claude-code` or `opencode`) overrides the provider default; `pause_ttl_seconds` (unset inherits the provider's, `0` never holds a paused box) and `max_turns` (unset inherits, `0` uncapped, negative refused) tune its runs; `env` is the environment injected into them and where external-service tokens are declared; `mcp.servers` names which of the seat's MCP servers the coding agent gets; `setup` is per-seat provisioning applied after `providers.sandbox.setup`. A block with any of `run_in`, `env`, `mcp` or `setup` but `enabled` unset is refused, since none of it would be read |
+| `placement` | dict | no | Which nodes may run this seat; absent means any node that runs seats (see [Placement](../guides/fleet.md#placement)). `node` pins it to one node id and `labels` names pairs a node must **all** carry under [`node.labels`](../concepts/configuration.md#nodelabels); give both and both must hold. Everything is compared exactly against what a node advertises, so each part takes the shape a node's own is held to. A **label key** follows the node-label grammar: not empty, at most 63 bytes, and no whitespace or unprintable character anywhere (`zone`, `topology.example.com/rack`). A **label value** may hold spaces inside it or be empty, but none around it, since a node's values are trimmed. **`node`** is a node id: it starts with a letter or digit and holds only letters, digits, `.`, `_` or `-`, at most 64 characters — and it is compared as written, so a `${VAR}` is not resolved here. A selector outside these shapes could never match a node, so it is refused at validation, naming the field, rather than left for the running fleet to report as `seats_unplaceable` |
 | `schedules` | list | no | Role-scoped recurring tasks — see [Schedules](#schedules) |
 
 ### Worker templates
@@ -1266,7 +1404,10 @@ the company still starts.
 
 ## Environment Variable References
 
-All string values in YAML support `${ENV_VAR}` syntax, keeping secrets out of config files. Variables are resolved at startup from the [secret store](../concepts/secret-store.md) first (an encrypted table the provisioning CLIs can write into directly; inert until you store something), then `os.environ`. An unanswered reference resolves to the empty string.
+String values support `${ENV_VAR}` syntax, keeping secrets out of config files. An unanswered reference resolves to the empty string. The two tiers resolve references differently, and it decides where one works:
+
+- **Tier B (the company)** keeps every reference verbatim — in the store, in a backup, on `GET /config` — and resolves it where the provider, transport or integration that uses it is constructed: from the [secret store](../concepts/secret-store.md) first (an encrypted table the provisioning CLIs can write into directly; inert until you store something), then the environment. It validates what is **written**, not what a reference resolves to, so a field with a closed set of values or a pattern — an enum, a seat handle, a unit id — takes a reference only where that field's own entry says so. Three fields are resolved only when the **whole** value is one reference — a seat's Slack `bot_token`, its Mattermost `bot_token` and its Mattermost `username` — because their transports take anything else as the literal it looks like: write one `${VAR}`, or the value itself, and never a reference inside other text (`bot-${SUFFIX}`), which validation refuses rather than letting it reach the server braces and all. A Mattermost `username` written as a whole reference is the one patterned field that takes one.
+- **Tier A (`crewlet.yaml`)** resolves from the **environment only** — it holds the keys to the secret store, so it can never read a value out of it — and does so at startup, **before** the file is decoded. What a reference becomes depends on the field it lands in. In a **text** field it is substituted whole or embedded (`edge-${ZONE}`) and the result is that text, character for character — so it works in any text field, one with a pattern or a closed set included (`node.id: "${HOSTNAME}"`, `logging.level: "${LOG_LEVEL}"`), which is then judged on the value it resolved to. One nothing answers leaves the text empty, which a text field reads exactly as unset — its default where it has one (`stream.type` and `coordination.type` fall back to `embedded` and `local`), and a refusal where a value is required — with one exception: `logging.file.path`, where empty is the setting "write no file", so a path whose variable nothing answered stops the boot rather than silently running with no durable log. In a **number** or **boolean** field — a port, a replica count, anything `*_seconds`, `*_bytes` or `*_hours`, a count, a switch — a reference must be the **whole** value, and what it resolves to is read exactly as the same characters written there would be, trimmed of the space around it as every Tier A string is: `api.port: "${API_PORT}"` with `API_PORT=8080` is `api.port: 8080`, with `API_PORT` read from a file ending in a newline too, and `stream.debug: "${DEBUG}"` with `DEBUG=true` is `stream.debug: true` (a switch also takes `yes`, `no`, `on` and `off`, as it does written out). Two shapes are refused there by name rather than guessed at: a reference with other text around it (`"80${N}"`), and one that resolves to nothing, since a number that quietly fell back to its default because a variable was missing would run with a value nobody chose. `crewlet schema bootstrap` encodes exactly that.
 
 Only the braced identifier form is substituted — `${NAME}` where `NAME` matches `[A-Za-z_][A-Za-z0-9_]*`. Bare `$NAME` and shell parameter expansions (`${1:-x}`, `${line#host=}`) pass through untouched, so config-authored script content — a sandbox setup step's helper script, say — survives intact.
 

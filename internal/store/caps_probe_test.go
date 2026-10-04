@@ -15,7 +15,7 @@ import (
 // is a refused statement at the moment a batch is largest.
 func TestMaxVariablesIsMeasuredNotAssumed(t *testing.T) {
 	t.Parallel()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "vars.db"), Options{})
+	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "vars.db"), Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestMaxVariablesIsMeasuredNotAssumed(t *testing.T) {
 // THE PAGE CACHE IS READ BACK, because asking for it is not getting it.
 func TestThePageCacheIsAppliedOrReported(t *testing.T) {
 	t.Parallel()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "cache.db"), Options{})
+	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "cache.db"), Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

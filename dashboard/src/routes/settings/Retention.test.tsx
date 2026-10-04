@@ -17,13 +17,21 @@ import {
   BlockedBanner,
   DomainBlock,
   DomainSize,
+  donorsCounted,
   gateAction,
   MaintenanceBanner,
   NodePositions,
   ServedLevelBanner,
+  snapshotKey,
   Terms,
+  Tombstone,
 } from "./Retention.tsx";
-import type { RetentionDomain, RetentionNode, RetentionTerm } from "~/protocol/index.ts";
+import type {
+  RetentionDomain,
+  RetentionNode,
+  RetentionSnapshot,
+  RetentionTerm,
+} from "~/protocol/index.ts";
 
 afterEach(cleanup);
 
@@ -294,7 +302,12 @@ test("a node with an unfinished gesture offers to finish it rather than start af
   // THE CONTROL: nothing held is the ordinary gesture for the node's state.
   expect(gateAction(node(), {})).toEqual({ evict: true, label: "Evict…" });
   expect(
-    gateAction(node({ evicted: { by: "o", at: "", effective_at: "", effective: true } }), {}),
+    gateAction(
+      node({
+        evicted: { kind: "eviction", by: "o", at: "", effective_at: "", effective: true },
+      }),
+      {},
+    ),
   ).toEqual({ evict: false, label: "Readmit…" });
 });
 
@@ -367,6 +380,33 @@ test("a refused domain names its refusal, the finding and the sentence", () => {
   expect(screen.getByText("log_truncated")).toBeTruthy();
 });
 
+// A RELEASE IS A NODE THAT LEFT, NOT ONE SOMEBODY EVICTED. Both tombstones
+// gate alike and the trim stops counting both alike, but a release is the
+// node's own word as it left the logs' partitions — "evicted by" the node
+// itself sends an operator looking for a gesture nobody made.
+test("a node that released its logs reads as left, and an evicted one as evicted", () => {
+  const at = "2031-04-01T12:00:00Z";
+  const { rerender } = render(
+    <Tombstone
+      evicted={{ kind: "release", by: "node-a", at, effective_at: at, effective: true }}
+      now={Date.parse(at)}
+    />,
+  );
+  expect(screen.getByText("left")).toBeTruthy();
+  expect(screen.getByTitle(/released its logs itself/)).toBeTruthy();
+  expect(screen.queryByText("evicted")).toBeNull();
+  expect(screen.queryByTitle(/evicted by/)).toBeNull();
+
+  rerender(
+    <Tombstone
+      evicted={{ kind: "eviction", by: "ops", at, effective_at: at, effective: true }}
+      now={Date.parse(at)}
+    />,
+  );
+  expect(screen.getByText("evicted")).toBeTruthy();
+  expect(screen.getByTitle("evicted by ops")).toBeTruthy();
+});
+
 // A POSITION FROM ANOTHER GENERATION IS LABELLED, NOT SUBTRACTED, and a
 // diverged node is marked — nothing else on its line shows it.
 test("a node on a generation the log left is labelled rather than caught up", () => {
@@ -390,4 +430,32 @@ test("a node on a generation the log left is labelled rather than caught up", ()
   expect(screen.getByText("log diverged")).toBeTruthy();
   expect(screen.queryByText("lag —")).toBeNull();
   expect(screen.queryByText(/behind/)).toBeNull();
+});
+
+// A DIVIDED LAYOUT'S DONORS ARE COUNTED PER PARTITION. A snapshot is a copy of
+// one partition's file and the trim's sixth term is per log, so two donors of
+// one partition and none of another is a fleet that cannot rejoin the second
+// — which a count of every row read as two donors, satisfied. Each row is also
+// its own row: one node's two partitions are two artefacts, not one twice.
+test("a divided layout's donors are those of the partition fewest nodes hold", () => {
+  const at = "2026-09-30T12:00:00Z";
+  const held = (node_id: string, partition?: string): RetentionSnapshot => ({
+    node_id,
+    ...(partition ? { partition } : {}),
+    at,
+    domains: { [partition ? `tracker@${partition}` : "tracker"]: 4 },
+  });
+  const divided = [
+    held("node-a", "tracker.000"),
+    held("node-b", "tracker.000"),
+    held("node-a", "tracker.001"),
+    { node_id: "node-b", partition: "tracker.001", skip: "lagging" },
+    // A NODE REPORTING NO PARTITION donates none, and is no partition.
+    { node_id: "node-c" },
+  ];
+  expect(donorsCounted(divided)).toBe(1);
+  expect(new Set(divided.map(snapshotKey)).size).toBe(divided.length);
+
+  // THE CONTROL: layout 0's rows name no partition, and count as one.
+  expect(donorsCounted([held("node-a"), held("node-b"), { node_id: "node-c" }])).toBe(2);
 });

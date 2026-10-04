@@ -15,6 +15,7 @@ import (
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -159,7 +160,7 @@ func TestTheDutyLeavesAMoveWhoseWalkHoldsItsClaim(t *testing.T) {
 		r.drain()
 	}
 	stopMoveOf(t, r, "n-root", "n-kid-b")
-	lease, err := r.claims.TryAcquire(t.Context(), tracker.MoveClaim("m-root"),
+	lease, _, err := r.claims.TryAcquire(t.Context(), tracker.MoveClaim("m-root"),
 		coord.AcquireOptions{Owner: "node-b", TTL: tracker.ClaimTTL})
 	if err != nil || lease == nil {
 		t.Fatalf("hold the running walk's claim: (%v, %v)", lease, err)
@@ -477,25 +478,21 @@ func TestAnOlderBuildRetainsAMoveMark(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode a barrier: %v", err)
 	}
-	if _, _, err := r.log.Append(t.Context(), tracker.Domain{}.Stream().SubjectPrefix+
+	if _, _, err := r.log.Append(t.Context(), statelog.EstateStream(tracker.Domain{}).SubjectPrefix+
 		"."+tracker.BarrierSubject().String(), "", nil, barrier); err != nil {
 		t.Fatalf("append a barrier: %v", err)
 	}
 	end := r.logEnd(t)
 
-	older, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "older.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open the older node's store: %v", err)
-	}
-	t.Cleanup(func() { _ = older.Close() })
+	olderNode, older := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "older.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = olderNode.Close() })
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain:  beforeMoveMark{markAt: moveMarkVersion(t)},
+		Domain: beforeMoveMark{markAt: moveMarkVersion(t)}, Spec: statelog.EstateStream(tracker.Domain{}), Layout: statelog.EstateLayout(tracker.Domain{}.Name()), LogID: statelog.EstateLog(tracker.Domain{}),
 		Applier: tracker.NewApplier("node-older"),
 		Fetch:   &trackerLogFetch{log: r.log, next: 1},
 		Log:     r.log,
-		Node:    older,
-		DB:      older.Replicated(),
+		Node:    olderNode,
+		DB:      older,
 	})
 	if err != nil {
 		t.Fatalf("build the older node's applier: %v", err)
@@ -519,7 +516,7 @@ func TestAnOlderBuildRetainsAMoveMark(t *testing.T) {
 	value := func(query string) string {
 		t.Helper()
 		var v string
-		if err := older.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		if err := older.Read(t.Context(), func(tx *sql.Tx) error {
 			return tx.QueryRowContext(t.Context(), query).Scan(&v)
 		}); err != nil {
 			t.Fatalf("%s: %v", query, err)

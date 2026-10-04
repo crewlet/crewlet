@@ -22,7 +22,7 @@ const migration0033 = "0033_a_turn_names_its_work_item.sql"
 func TestNode0033AppliesOverAPopulated0032Database(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool, err := openPrepared(ctx, filepath.Join(t.TempDir(), "node.db"), Options{})
+	pool, err := openPrepared(ctx, filepath.Join(t.TempDir(), "node.db"), Options{}, nil)
 	if err != nil {
 		t.Fatalf("openPrepared: %v", err)
 	}

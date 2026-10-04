@@ -28,11 +28,17 @@ func TestAGateRetryStandsOnlyWhileItsRecordIsInForce(t *testing.T) {
 	}
 	packed := func(seq uint64) uint64 { return uint64(at(seq).Packed()) }
 	evicted := func(from uint64) statelog.EvictionRow {
-		return statelog.EvictionRow{NodeID: node, From: packed(from)}
+		return statelog.EvictionRow{NodeID: node, From: packed(from),
+			Kind: statelog.EvictionKindEviction}
+	}
+	released := func(from uint64) statelog.EvictionRow {
+		return statelog.EvictionRow{NodeID: node, From: packed(from),
+			Kind: statelog.EvictionKindRelease}
 	}
 	back := func(from, readmitted uint64) statelog.EvictionRow {
 		return statelog.EvictionRow{NodeID: node, From: packed(from),
-			Readmitted: packed(readmitted), Back: readmitted > from}
+			Readmitted: packed(readmitted), Back: readmitted > from,
+			Kind: statelog.EvictionKindEviction}
 	}
 
 	for _, tc := range []struct {
@@ -44,6 +50,9 @@ func TestAGateRetryStandsOnlyWhileItsRecordIsInForce(t *testing.T) {
 
 		wantReason statelog.Reason
 		wantErr    string
+
+		// wantDetail, when set, is what the refusal must name.
+		wantDetail string
 	}{
 		{name: "an eviction whose record is the one in force stands",
 			landed: 7, row: evicted(7), found: true},
@@ -52,7 +61,20 @@ func TestAGateRetryStandsOnlyWhileItsRecordIsInForce(t *testing.T) {
 			wantReason: statelog.ReasonSuperseded},
 		{name: "an eviction a later eviction replaced is superseded",
 			landed: 7, row: evicted(12), found: true,
-			wantReason: statelog.ReasonSuperseded},
+			wantReason: statelog.ReasonSuperseded, wantDetail: "a later eviction"},
+		// NAMED AS THE RELEASE IT IS: the node left the log itself, and an
+		// operator told "a later eviction" goes looking for a gesture
+		// nobody made.
+		{name: "an eviction the node's own later release replaced is superseded by the release",
+			landed: 7, row: released(12), found: true,
+			wantReason: statelog.ReasonSuperseded, wantDetail: "a later release"},
+		{name: "a readmission the node's own later release undid is superseded by the release",
+			readmit: true, landed: 9, row: released(14), found: true,
+			wantReason: statelog.ReasonSuperseded, wantDetail: "a later release"},
+		{name: "a row naming a gate this build does not know is not judged at all",
+			landed: 7, row: statelog.EvictionRow{NodeID: node, From: packed(7),
+				Kind: "from_a_newer_build"}, found: true,
+			wantErr: "does not know"},
 		{name: "an eviction whose own row is missing is not judged at all",
 			landed: 7, wantErr: "no eviction row"},
 		{name: "an eviction row older than the record is not judged at all",
@@ -96,6 +118,10 @@ func TestAGateRetryStandsOnlyWhileItsRecordIsInForce(t *testing.T) {
 					t.Errorf("the refusal names %s, want where the operation "+
 						"landed, %s", refusal.Position, at(tc.landed))
 				}
+				if !strings.Contains(refusal.Detail, tc.wantDetail) {
+					t.Errorf("the refusal says %q, want it to name %q",
+						refusal.Detail, tc.wantDetail)
+				}
 			case err != nil:
 				t.Fatalf("GateStanding: %v", err)
 			}
@@ -117,7 +143,7 @@ func TestAHeldOperationIsJudgedInsideTheSnapshot(t *testing.T) {
 	h := newApplyHarness(t, probeDomain{})
 	const opID = "op-2.evict.probe:node-away"
 	subject := statelog.Subject{Kind: "eviction", ID: "node-away"}
-	ledger(t, h.db, opID, probePrefix+"."+subject.String(),
+	ledger(t, h.estate, opID, probePrefix+"."+subject.String(),
 		statelog.Position{Stream: probeStream, Generation: 1, Seq: 4})
 	unread := errors.New("the node's row could not be read")
 
@@ -142,7 +168,7 @@ func TestAHeldOperationIsJudgedInsideTheSnapshot(t *testing.T) {
 			judge:  func(*sql.Tx, statelog.OpEntry) error { return nil }},
 	} {
 		t.Run(name, func(t *testing.T) {
-			rows, err := statelog.NewRows(h.db, tc.domain, nil)
+			rows, err := statelog.NewRows(h.estate.Reader(), tc.domain, specOf(tc.domain), nil)
 			if err != nil {
 				t.Fatalf("NewRows: %v", err)
 			}
@@ -175,9 +201,9 @@ type missingLedger struct{ probeDomain }
 func (missingLedger) OpsTable() string { return "probe_ops_absent" }
 
 // ledger writes one operation row, as this node's applier would have.
-func ledger(t *testing.T, db *store.DB, opID, subject string, at statelog.Position) {
+func ledger(t *testing.T, db store.PartitionHandle, opID, subject string, at statelog.Position) {
 	t.Helper()
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO probe_ops (op_id, subject, position, applied_at)
 			VALUES (?, ?, ?, ?)`, opID, subject, at.Packed(),

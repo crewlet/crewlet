@@ -34,7 +34,7 @@ type flowClock struct {
 func (c *flowClock) at(when time.Time) {
 	c.r.t.Helper()
 	c.r.drain()
-	if err := c.r.db.Replicated().Tx(c.r.t.Context(), func(tx *sql.Tx) error {
+	if err := c.r.db.Tx(c.r.t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(c.r.t.Context(),
 			`UPDATE tracker_history SET effective_at = ? WHERE log_seq > ?`,
 			store.EncodeTime(when), c.seen); err != nil {

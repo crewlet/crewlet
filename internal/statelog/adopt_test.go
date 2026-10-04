@@ -18,18 +18,23 @@ import (
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // joinHarness is a donor holding a real replicated estate and a joiner about
 // to replace its own with it.
 type joinHarness struct {
-	t        *testing.T
-	nc       *nats.Conn
-	donorDB  *store.DB
-	joiner   *store.DB
-	joinPath string
-	manifest statelog.Manifest
-	snapPath string
+	t       *testing.T
+	nc      *nats.Conn
+	donorDB *store.DB
+	joiner  *store.DB
+	// joinEstate is the joiner's partition, as the runtime would hand it:
+	// resolved through the joiner's node handle on every call, so it reads
+	// whatever file the adoption left open.
+	joinEstate store.PartitionHandle
+	joinPath   string
+	manifest   statelog.Manifest
+	snapPath   string
 
 	held     atomic.Int64
 	released atomic.Int64
@@ -94,7 +99,7 @@ func newJoinHarness(t *testing.T) *joinHarness {
 // travelled did — and anything written into its estate before the snapshot.
 type joinDonor struct {
 	domain statelog.Domain
-	seed   func(t *testing.T, db *store.DB)
+	seed   func(t *testing.T, estate store.PartitionHandle)
 }
 
 // scrubbingProbe is the probe domain as a build from before the ledger
@@ -122,16 +127,13 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 
 	// The DONOR, with a snapshot of its own replicated estate.
 	donorDir := t.TempDir()
-	donorDB, err := store.Open(t.Context(), filepath.Join(donorDir, "node.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open the donor's store: %v", err)
-	}
+	donorDB, donorEstate := storetest.OpenEstate(t, filepath.Join(donorDir, "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
 		if err := donorDB.Close(); err != nil {
 			t.Errorf("close the donor's store: %v", err)
 		}
 	})
-	if err := donorDB.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := donorEstate.Tx(t.Context(), func(tx *sql.Tx) error {
 		// A statement BATCH takes no arguments on this driver, so the
 		// schema and the parameterised row go separately.
 		if _, err := tx.ExecContext(t.Context(), probeDDL+`
@@ -149,15 +151,17 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 		t.Fatalf("seed the donor: %v", err)
 	}
 	if from.seed != nil {
-		from.seed(t, donorDB)
+		from.seed(t, donorEstate)
 	}
 
 	h := &joinHarness{t: t, nc: q.Conn(), broker: q}
 	snapDir := filepath.Join(donorDir, "snapshots")
 	lag := uint64(0)
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
+		Layout:    statelog.EstateLayout(from.domain.Name()),
+		Partition: statelog.EstatePartition,
 		Domains: []statelog.Registered{{
-			Domain: from.domain,
+			Domain: from.domain, Log: logOf(from.domain), Spec: specOf(from.domain),
 			Health: func() statelog.Health {
 				return statelog.Health{
 					Position: statelog.Position{Stream: probeStream, Generation: 1, Seq: 4_200},
@@ -166,11 +170,11 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 				}
 			},
 		}},
-		DB:            donorDB,
+		File:          donorEstate,
 		Dir:           snapDir,
 		NodeID:        "donor",
 		EngineVersion: "v0.0.0-test",
-		Counted:       func(context.Context) (int, error) { return 3, nil },
+		Recipients:    func(context.Context) (int, error) { return 2, nil },
 		Interval:      24 * time.Hour,
 	})
 	if err != nil {
@@ -188,9 +192,10 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 	h.donorDB = donorDB
 
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: "donor",
-		Dial:   func(context.Context) (*nats.Conn, error) { return q.Conn(), nil },
-		Newest: func() (statelog.Manifest, bool) {
+		NodeID: "donor", Layout: statelog.EstateLayout(from.domain.Name()),
+		Keeps: statelog.KeepsOnly(statelog.EstatePartition).Keeps,
+		Dial:  func(context.Context) (*nats.Conn, error) { return q.Conn(), nil },
+		Newest: func(statelog.PartitionID) (statelog.Manifest, bool) {
 			h.answered.CompareAndSwap(0, time.Now().UnixNano())
 			return h.manifest, true
 		},
@@ -207,12 +212,9 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 
 	// The JOINER, whose own replicated estate is about to be replaced.
 	joinDir := t.TempDir()
-	joiner, err := store.Open(t.Context(), filepath.Join(joinDir, "node.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open the joiner's store: %v", err)
-	}
-	h.joiner = joiner
-	h.joinPath = joiner.ReplicatedPath()
+	joiner, joinEstate := storetest.OpenEstate(t, filepath.Join(joinDir, "node.db"), store.Options{}, 1)
+	h.joiner, h.joinEstate = joiner, joinEstate
+	h.joinPath = storetest.Partition(t, joinEstate).Path()
 	t.Cleanup(func() { _ = h.joiner.Close() })
 	return h
 }
@@ -221,12 +223,13 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 	t.Helper()
 	h.answered.Store(0)
 	a, err := statelog.NewAdopter(statelog.AdoptDeps{
-		Domains:  map[string]statelog.Registered{"probe": {Domain: probeDomain{}}},
+		Domains:  map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{})}},
 		LivePath: h.joinPath,
 		NodeID:   "joiner",
 		Conn:     h.nc,
 		Need: func(context.Context) (statelog.OfferRequest, error) {
 			return statelog.OfferRequest{
+				Partition:   statelog.EstatePartition.String(),
 				Need:        map[string]uint64{"probe": 4_000},
 				Generations: map[string]uint32{"probe": 1},
 			}, nil
@@ -240,7 +243,7 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 			if h.onClose != nil {
 				h.onClose()
 			}
-			if err := h.joiner.Close(); err != nil {
+			if err := h.joiner.ClosePartition(h.joinEstate.Name()); err != nil {
 				return err
 			}
 			return h.closeErr
@@ -252,13 +255,8 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 			if h.reopenErr != nil {
 				return h.reopenErr
 			}
-			db, err := store.Open(ctx, filepath.Join(filepath.Dir(h.joinPath), "node.db"),
-				store.Options{})
-			if err != nil {
-				return err
-			}
-			h.joiner = db
-			return nil
+			_, err := h.joiner.OpenPartition(ctx, storetest.LayoutZero(1))
+			return err
 		},
 		Record: func(ctx context.Context, began time.Time, donor string,
 			m statelog.Manifest, phase statelog.AdoptionPhase) error {
@@ -344,7 +342,7 @@ func TestANodeBelowTheFloorAdoptsAVerifiedArtefact(t *testing.T) {
 	// THE ROWS ARRIVED and the checkpoint with them, which is the whole
 	// point: the position inside the file is what describes the file.
 	var rows, seq int64
-	if err := h.joiner.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.joinEstate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(),
 			`SELECT COUNT(*) FROM probe_rows`).Scan(&rows); err != nil {
 			return err
@@ -531,7 +529,7 @@ func TestAnInterruptedInstallReopensTheLiveDatabase(t *testing.T) {
 			"was already %v — the failure it undoes is that very cancellation, "+
 			"so it fails too and the node is left with no estate", h.reopenCtxErr)
 	}
-	if err := h.joiner.Replicated().SQL().PingContext(t.Context()); err != nil {
+	if err := storetest.Partition(t, h.joinEstate).SQL().PingContext(t.Context()); err != nil {
 		t.Fatalf("the live database is not usable after the rollback: %v", err)
 	}
 }
@@ -725,14 +723,10 @@ func TestADonorThatScrubbedItsLedgerLeavesTheArtefactAWatermark(t *testing.T) {
 		if _, err := h.adopter(t).Join(t.Context()); !errors.Is(err, statelog.ErrEstateNotRestored) {
 			t.Fatalf("Join = %v, want the installed artefact not opening", err)
 		}
-		later, err := store.Open(t.Context(), filepath.Join(filepath.Dir(h.joinPath), "node.db"),
-			store.Options{})
-		if err != nil {
-			t.Fatalf("open the node's store again: %v", err)
+		if _, err := h.joiner.OpenPartition(t.Context(), storetest.LayoutZero(1)); err != nil {
+			t.Fatalf("open the node's partition again: %v", err)
 		}
-		t.Cleanup(func() { _ = later.Close() })
-		h.joiner = later
-		at, _, _, err := statelog.CursorFor(t.Context(), later.Replicated(), probeStream)
+		at, _, _, err := statelog.CursorFor(t.Context(), h.joinEstate, probeStream)
 		if err != nil {
 			t.Fatalf("read the reopened estate's checkpoint: %v", err)
 		}
@@ -764,8 +758,8 @@ func TestADonorsWatermarkTravelsWithItsLedger(t *testing.T) {
 	swept := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	h := newJoinHarnessFrom(t, joinDonor{
 		domain: probeDomain{},
-		seed: func(t *testing.T, db *store.DB) {
-			if err := statelog.RecordLedgerLoss(t.Context(), db.Replicated(),
+		seed: func(t *testing.T, estate store.PartitionHandle) {
+			if err := statelog.RecordLedgerLoss(t.Context(), estate,
 				probeDomain{}, swept); err != nil {
 				t.Fatalf("record the donor's sweep: %v", err)
 			}
@@ -784,7 +778,7 @@ func TestADonorsWatermarkTravelsWithItsLedger(t *testing.T) {
 func (h *joinHarness) joinerOps(t *testing.T) int64 {
 	t.Helper()
 	var ops int64
-	if err := h.joiner.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.joinEstate.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM probe_ops`).Scan(&ops)
 	}); err != nil {
 		t.Fatalf("read the operation ledger: %v", err)
@@ -796,7 +790,7 @@ func (h *joinHarness) joinerOps(t *testing.T) int64 {
 // publisher asks it through.
 func (h *joinHarness) joinerLostBefore(t *testing.T) (time.Time, bool) {
 	t.Helper()
-	rows, err := statelog.NewRows(h.joiner, probeDomain{}, nil)
+	rows, err := statelog.NewRows(h.joinEstate.Reader(), probeDomain{}, specOf(probeDomain{}), nil)
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
@@ -812,9 +806,10 @@ func (h *joinHarness) joinerLostBefore(t *testing.T) (time.Time, bool) {
 func (h *joinHarness) addDonor(t *testing.T, nodeID string) {
 	t.Helper()
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: nodeID,
+		NodeID: nodeID, Layout: statelog.EstateLayout(probeDomain{}.Name()),
+		Keeps:  statelog.KeepsOnly(statelog.EstatePartition).Keeps,
 		Dial:   func(context.Context) (*nats.Conn, error) { return h.broker.DialOwned() },
-		Newest: func() (statelog.Manifest, bool) { return h.manifest, true },
+		Newest: func(statelog.PartitionID) (statelog.Manifest, bool) { return h.manifest, true },
 		Path:   func(statelog.Manifest) string { return h.snapPath },
 	})
 	if err != nil {
@@ -828,7 +823,7 @@ func (h *joinHarness) addDonor(t *testing.T, nodeID string) {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		offers, err := statelog.CollectOffers(t.Context(), h.nc,
-			statelog.OfferRequest{NodeID: "probe"}, 200*time.Millisecond)
+			statelog.OfferRequest{NodeID: "probe", Partition: statelog.EstatePartition.String()}, 200*time.Millisecond)
 		if err != nil {
 			t.Fatalf("CollectOffers: %v", err)
 		}
@@ -949,7 +944,7 @@ func TestAnEarlierAttemptsDebrisIsClearedBeforeTheFetch(t *testing.T) {
 	// A -WAL THAT HOLDS PAGES, copied while its database is still open:
 	// a clean close would fold it in and remove it, and a crash is what
 	// does not.
-	earlier, err := store.OpenEstate(t.Context(), store.EstateReplicated, part, store.Options{})
+	earlier, err := store.OpenEstate(t.Context(), store.EstatePartition, part, store.Options{})
 	if err != nil {
 		t.Fatalf("open a database at the part path: %v", err)
 	}

@@ -312,7 +312,7 @@ func TestReadThroughNeverMovesBackwards(t *testing.T) {
 		t.Fatalf("an older read-through moved the position back to %+v", got)
 	}
 
-	stream := tracker.Domain{}.Stream().Name
+	stream := statelog.EstateStream(tracker.Domain{}).Name
 	mark("op-next-generation", &statelog.Position{Stream: stream, Generation: 1, Seq: 1})
 	got := r.person("ana").SeenThrough
 	if got.Generation != 1 || got.Seq != 1 {
@@ -474,7 +474,7 @@ func TestAnOlderAppliersPersonRowIsRederivedPacked(t *testing.T) {
 		t.Fatalf("ana's marks: %v", err)
 	}
 	cy := r.writer.As("cy", tracker.AuthorHuman, tracker.Provenance{})
-	stream := tracker.Domain{}.Stream().Name
+	stream := statelog.EstateStream(tracker.Domain{}).Name
 	if _, err := cy.MarkInbox(t.Context(), "op-cy", "cy", tracker.InboxGesture{
 		ReadThrough: &statelog.Position{Stream: stream, Generation: 1, Seq: 7}}); err != nil {
 		t.Fatalf("cy's read-through into generation 1: %v", err)
@@ -488,7 +488,7 @@ func TestAnOlderAppliersPersonRowIsRederivedPacked(t *testing.T) {
 	rederive := func() int {
 		t.Helper()
 		var rows int
-		if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 			var err error
 			rows, err = r.applier.Rederive(t.Context(), tx, statelog.ApplyOptions{})
 			return err
@@ -502,7 +502,7 @@ func TestAnOlderAppliersPersonRowIsRederivedPacked(t *testing.T) {
 	}
 
 	// THE PREDECESSOR'S ROWS: the bare sequence, and a caller's zero.
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(),
 			`UPDATE tracker_persons SET seen_through = 7 WHERE handle = 'cy'`); err != nil {
 			return err
@@ -837,8 +837,8 @@ func TestAPersonsListsAreBounded(t *testing.T) {
 func TestABareSequenceRowReadsAsGenerationZero(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	stream := tracker.Domain{}.Stream().Name
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	stream := statelog.EstateStream(tracker.Domain{}).Name
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `INSERT INTO tracker_persons
 			(handle, seen_through, seen_through_stream, version)
 			VALUES ('old', 42, ?, 1)`, stream)

@@ -48,8 +48,11 @@ type ledgerWriter interface {
 //
 // Monotone: an earlier instant than the one already recorded changes nothing,
 // because a loss once recorded is never un-lost.
+//
+// PER DOMAIN, not per log: the ledger and its watermark are keyed by the
+// ledger's own table in a file, whichever of the domain's logs wrote a row.
 func RecordLedgerLoss(ctx context.Context, db ledgerWriter, d Domain, before time.Time) error {
-	t, err := newTables(d)
+	t, err := domainTables(d)
 	if err != nil {
 		return err
 	}

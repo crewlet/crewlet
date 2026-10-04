@@ -1,6 +1,7 @@
 package jetstream
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ func TestTheEmbeddedServerCarriesWhatTheContractPromises(t *testing.T) {
 
 	t.Run("the payload ceiling is the contract's, not the broker's default", func(t *testing.T) {
 		t.Parallel()
-		opts, _, err := embeddedOptions(Config{StoreDir: t.TempDir()})
+		opts, _, err := embeddedOptions(Config{StoreDir: t.TempDir()}, systemUser{})
 		if err != nil {
 			t.Fatalf("embeddedOptions: %v", err)
 		}
@@ -63,7 +64,7 @@ func TestTheEmbeddedServerCarriesWhatTheContractPromises(t *testing.T) {
 			t.Parallel()
 			cfg := tc.cfg
 			cfg.StoreDir = t.TempDir()
-			opts, _, err := embeddedOptions(cfg)
+			opts, _, err := embeddedOptions(cfg, systemUser{})
 			if err != nil {
 				t.Fatalf("embeddedOptions: %v", err)
 			}
@@ -102,5 +103,76 @@ func TestTheClientIsToldTheCeiling(t *testing.T) {
 
 	if got := nc.MaxPayload(); got != int64(queue.MaxPayloadBytes) {
 		t.Errorf("the client sees a ceiling of %d, want %d", got, queue.MaxPayloadBytes)
+	}
+}
+
+// ONLY A CLUSTERED MEMBER DECLARES A SYSTEM USER, and it declares a public key
+// and nothing that authenticates as it.
+//
+// A solo member has no metadata group to change and keeps the posture it always
+// had; a leaf runs no JetStream. A clustered member declares the system account
+// under its default name — the metadata group's own state is stored under that
+// name — with one nkey user and no password user of its own: the server warns
+// on every start that declares a plaintext password, and the no-auth user that
+// binds every anonymous client to the global account is the server's to add.
+func TestOnlyAClusteredMemberDeclaresASystemUser(t *testing.T) {
+	t.Parallel()
+	system, err := newSystemUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, cfg := range map[string]Config{
+		"a solo member": {StoreDir: t.TempDir()},
+		"a leaf":        {ServerName: "leaf", LeafURLs: []string{"nats-leaf://127.0.0.1:7422"}},
+	} {
+		opts, scratch, err := embeddedOptions(cfg, system)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		removeScratch(scratch)
+		if len(opts.Nkeys) != 0 || len(opts.Users) != 0 || len(opts.Accounts) != 0 ||
+			opts.SystemAccount != "" {
+			t.Errorf("%s declares nkeys %v, users %v, accounts %v, system account %q", name,
+				opts.Nkeys, opts.Users, opts.Accounts, opts.SystemAccount)
+		}
+	}
+	member := Config{ServerName: "a", ClusterName: "c", StoreDir: t.TempDir()}
+	opts, _, err := embeddedOptions(member, system)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.SystemAccount != "$SYS" || len(opts.Nkeys) != 1 || opts.Nkeys[0].Account == nil ||
+		opts.Nkeys[0].Account.Name != "$SYS" || opts.Nkeys[0].Nkey != system.public {
+		t.Fatalf("a clustered member declares system account %q and nkeys %+v, want its "+
+			"one public key on $SYS", opts.SystemAccount, opts.Nkeys)
+	}
+	if len(opts.Users) != 0 || opts.NoAuthUser != "" {
+		t.Errorf("a clustered member declares password users %+v and no-auth user %q: a "+
+			"plaintext password is warned about on every start, and the no-auth user "+
+			"is the server's to add", opts.Users, opts.NoAuthUser)
+	}
+	other, err := newSystemUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.public == system.public {
+		t.Error("two starts minted one key: each start mints its own")
+	}
+}
+
+// A BROKER WITH NO METADATA GROUP SAYS SO — a solo member and a leaf alike —
+// rather than answering a group of one or removing nothing successfully.
+func TestABrokerWithNoMetadataGroupSaysSo(t *testing.T) {
+	t.Parallel()
+	srv, err := StartServer(t.Context(), Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Shutdown)
+	if _, err := srv.MetaGroup(); !errors.Is(err, ErrNoMetaGroup) {
+		t.Errorf("a solo member's metadata group read answered %v", err)
+	}
+	if err := srv.RemovePeer(t.Context(), "node-b"); !errors.Is(err, ErrNoMetaGroup) {
+		t.Errorf("a solo member's removal answered %v", err)
 	}
 }

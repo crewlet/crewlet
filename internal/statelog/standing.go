@@ -42,13 +42,23 @@ import (
 // domain with no eviction gate has no subject to read, and a node's standing
 // there is nothing at all.
 type EvictionProbe interface {
-	// EvictionSubject is the subject a node's evictions and readmissions
-	// are published on, in the domain's own naming.
+	// EvictionSubject is the subject a node's evictions, releases and
+	// readmissions are published on, in the domain's own naming.
 	EvictionSubject(node string) Subject
 
 	// Evicts decodes one record from that subject, reporting true for an
-	// eviction and false for a readmission.
+	// eviction or a release — either puts the node's later records out of
+	// the log — and false for a readmission.
 	Evicts(payload []byte) (bool, error)
+
+	// Releases reports whether a record is a node's RELEASE of the log
+	// ([EvictionKindRelease]), answered from the envelope alone for
+	// [Domain.NodeGate]'s reason: it is the half every build reads. A
+	// release is a node gate and installs an apply gate, as an eviction
+	// does; what this tells apart is that a release is the node's OWN
+	// statement, which the write authority holds to naming the node that
+	// publishes it ([Publisher.stamped]).
+	Releases(env Envelope) bool
 }
 
 // StandingLog is a log as a standing read needs it: the per-subject probe and a
@@ -58,20 +68,21 @@ type StandingLog interface {
 	LogReader
 }
 
-// EvictedOnLog reports node's standing on domain d's log as the last record on
-// its eviction subject states it: evicted true for an eviction and false for a
-// readmission, and found false when the subject holds nothing or d keeps no
-// eviction gate.
-func EvictedOnLog(ctx context.Context, d Domain, log StandingLog, node string) (evicted, found bool, err error) {
+// EvictedOnLog reports node's standing on one of domain d's logs — the one
+// spec names, which log reads — as the last record on its eviction subject
+// states it: evicted true for an eviction and false for a readmission, and
+// found false when the subject holds nothing or d keeps no eviction gate.
+func EvictedOnLog(ctx context.Context, d Domain, spec StreamSpec, log StandingLog,
+	node string) (evicted, found bool, err error) {
 	probe, gated := d.(EvictionProbe)
 	if !gated {
 		return false, false, nil
 	}
-	subject := d.Stream().SubjectPrefix + "." + probe.EvictionSubject(node).String()
+	subject := wireSubject(spec.SubjectPrefix, probe.EvictionSubject(node))
 	seq, held, err := log.LastSeq(ctx, subject)
 	if err != nil {
 		return false, false, fmt.Errorf("statelog: read %s's eviction subject on %s: %w",
-			node, d.Stream().Name, err)
+			node, spec.Name, err)
 	}
 	if !held {
 		return false, false, nil
@@ -80,7 +91,7 @@ func EvictedOnLog(ctx context.Context, d Domain, log StandingLog, node string) (
 	switch {
 	case err != nil:
 		return false, false, fmt.Errorf("statelog: read %s's standing at sequence %d "+
-			"of %s: %w", node, seq, d.Stream().Name, err)
+			"of %s: %w", node, seq, spec.Name, err)
 	case !ok:
 		// TRIMMED BETWEEN THE TWO READS: what the trim removed, the rows
 		// hold, which is the caller's fallback for found=false.
@@ -88,12 +99,12 @@ func EvictedOnLog(ctx context.Context, d Domain, log StandingLog, node string) (
 	case got != subject:
 		return false, false, fmt.Errorf("statelog: the broker named sequence %d of %s "+
 			"as the last on %s and holds a record of %s there", seq,
-			d.Stream().Name, subject, got)
+			spec.Name, subject, got)
 	}
 	evicts, err := probe.Evicts(payload)
 	if err != nil {
 		return false, false, fmt.Errorf("statelog: decode %s's standing at sequence "+
-			"%d of %s: %w", node, seq, d.Stream().Name, err)
+			"%d of %s: %w", node, seq, spec.Name, err)
 	}
 	return evicts, true, nil
 }
@@ -115,20 +126,19 @@ func EvictedOnLog(ctx context.Context, d Domain, log StandingLog, node string) (
 //
 // A domain that keeps no generation record answers an empty map: there is
 // nothing on its log to find.
-func GenerationOpeners(ctx context.Context, d Domain, enc GenerationEncoder,
+func GenerationOpeners(ctx context.Context, d Domain, spec StreamSpec, enc GenerationEncoder,
 	log StandingLog, above, through uint32) (map[uint32]string, error) {
 
 	out := map[uint32]string{}
-	prefix := d.Stream().SubjectPrefix + "."
 	for gen := above + 1; gen > above && gen <= MaxGeneration; gen++ {
 		subject, keeps := enc.GenerationSubject(gen)
 		if !keeps {
 			return out, nil
 		}
-		seq, held, err := log.LastSeq(ctx, prefix+subject.String())
+		seq, held, err := log.LastSeq(ctx, wireSubject(spec.SubjectPrefix, subject))
 		if err != nil {
 			return nil, fmt.Errorf("statelog: read %s's generation %d subject: %w",
-				d.Stream().Name, gen, err)
+				spec.Name, gen, err)
 		}
 		if !held {
 			if gen >= through {
@@ -140,14 +150,14 @@ func GenerationOpeners(ctx context.Context, d Domain, enc GenerationEncoder,
 		switch {
 		case err != nil:
 			return nil, fmt.Errorf("statelog: read %s's generation %d record at "+
-				"sequence %d: %w", d.Stream().Name, gen, seq, err)
+				"sequence %d: %w", spec.Name, gen, seq, err)
 		case !ok:
 			continue
 		}
 		env, err := d.Envelope(payload)
 		if err != nil {
 			return nil, fmt.Errorf("statelog: decode %s's generation %d record at "+
-				"sequence %d: %w", d.Stream().Name, gen, seq, err)
+				"sequence %d: %w", spec.Name, gen, seq, err)
 		}
 		out[gen] = env.Writer
 	}
@@ -172,17 +182,17 @@ func GenerationOpeners(ctx context.Context, d Domain, enc GenerationEncoder,
 // are both bounded one below this node's own record ([ReanchorInputs.Opened]).
 // Another node's record there is not this node's to bound anything by: the
 // transition reads it back and refuses ([Reanchor]).
-func OwnGeneration(ctx context.Context, d Domain, enc GenerationEncoder,
+func OwnGeneration(ctx context.Context, d Domain, spec StreamSpec, enc GenerationEncoder,
 	log StandingLog, gen uint32, nodeID string) (uint64, bool, error) {
 
 	subject, keeps := enc.GenerationSubject(gen)
 	if !keeps {
 		return 0, false, nil
 	}
-	seq, held, err := log.LastSeq(ctx, d.Stream().SubjectPrefix+"."+subject.String())
+	seq, held, err := log.LastSeq(ctx, wireSubject(spec.SubjectPrefix, subject))
 	if err != nil {
 		return 0, false, fmt.Errorf("statelog: read %s's generation %d subject: %w",
-			d.Stream().Name, gen, err)
+			spec.Name, gen, err)
 	}
 	if !held {
 		return 0, false, nil
@@ -191,14 +201,14 @@ func OwnGeneration(ctx context.Context, d Domain, enc GenerationEncoder,
 	switch {
 	case err != nil:
 		return 0, false, fmt.Errorf("statelog: read %s's generation %d record at "+
-			"sequence %d: %w", d.Stream().Name, gen, seq, err)
+			"sequence %d: %w", spec.Name, gen, seq, err)
 	case !ok:
 		return 0, false, nil
 	}
 	env, err := d.Envelope(payload)
 	if err != nil {
 		return 0, false, fmt.Errorf("statelog: decode %s's generation %d record at "+
-			"sequence %d: %w", d.Stream().Name, gen, seq, err)
+			"sequence %d: %w", spec.Name, gen, seq, err)
 	}
 	return seq, env.Writer == nodeID, nil
 }

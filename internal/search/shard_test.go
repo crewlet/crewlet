@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A SEARCH SCANS ONLY ITS ASSIGNED BUCKETS, which is the whole point of the
@@ -17,7 +18,7 @@ import (
 func TestASearchScansOnlyItsAssignedBuckets(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
 
 	// One document per bucket, each carrying the same word, so a search
 	// over an assignment returns exactly the documents in it.
@@ -167,7 +168,7 @@ func TestSearchShardsAreEvenAndStable(t *testing.T) {
 func TestOneReplicaScansEverythingExactlyAsToday(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
 	for i := range 40 {
 		page(t, db, fmt.Sprintf("p.%02d", i), "ENG", fmt.Sprintf("Doc %02d", i),
 			"the migration plan is here", 1)
@@ -210,7 +211,7 @@ func TestOneReplicaScansEverythingExactlyAsToday(t *testing.T) {
 func TestBothEstatesAgreeOnADocumentsBucket(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
 	const id = "p.agree"
 	page(t, db, id, "ENG", "Agreement", "the migration plan is here", 1)
 	indexAll(t, x)
@@ -246,9 +247,9 @@ func TestTheCandidatePoolIsNarrowedByTheAssignment(t *testing.T) {
 	scan := func(a search.Assignment) []search.SemanticHit {
 		t.Helper()
 		var hits []search.SemanticHit
-		if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 			var err error
-			hits, err = search.Semantic(t.Context(), tx, search.SemanticQuery{
+			hits, _, err = search.Semantic(t.Context(), tx, search.SemanticQuery{
 				Vector: query, Model: model, Dim: dim,
 				Limit: 500, Candidates: 500, Shards: a,
 			})
@@ -313,7 +314,7 @@ func TestTheCandidatePoolIsNarrowedByTheAssignment(t *testing.T) {
 func TestTheVectorsTwoRowsCarryOneBucket(t *testing.T) {
 	t.Parallel()
 	db, _, _ := seedVectors(t, 20)
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(),
 			`SELECT v.source, v.source_id, v.search_shard, b.search_shard
 			   FROM kb_vectors v JOIN kb_vectors_bin b
@@ -358,7 +359,7 @@ func TestTheVectorsTwoRowsCarryOneBucket(t *testing.T) {
 func TestALexicalQueryIsNotADegradedOne(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
 	page(t, db, "p.1", "ENG", "Doc", "the migration plan is here", 1)
 	indexAll(t, x)
 	scanner := search.NodeScanner{Index: x}
@@ -414,7 +415,7 @@ func TestALexicalQueryIsNotADegradedOne(t *testing.T) {
 func TestTheLexicalStatisticsAreGlobalWhateverWasScanned(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
 
 	// A CORPUS WITH A LOPSIDED TERM: "retention" is in almost every
 	// document, "migration" in a handful. Split by bucket, a slice's own

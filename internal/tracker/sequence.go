@@ -97,7 +97,7 @@ const (
 // third while a cross-project move fails closed over it. Collapsed to two
 // values, one of those two behaviours would have to be wrong.
 type Claims interface {
-	TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, error)
+	TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error)
 	Renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (bool, error)
 	Release(ctx context.Context, resource, owner string, epoch int64) (bool, error)
 	Get(ctx context.Context, resource string) (*coord.Lease, error)
@@ -388,11 +388,11 @@ func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 func (w *Writer) unvouchedCreate(ctx context.Context, opID string, task Task,
 	minted statelog.Result) (WriteResult, error) {
 
-	if w.db == nil {
+	if w.db.IsZero() {
 		return WriteResult{Result: minted}, nil
 	}
 	var held bool
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		_, held, err = readTask(ctx, tx, task.ID)
 		return err
@@ -546,7 +546,7 @@ func (w *Writer) landedTask(ctx context.Context, result statelog.Result,
 	id string) (WriteResult, error) {
 
 	out := WriteResult{Result: result}
-	if w.db == nil {
+	if w.db.IsZero() {
 		out.Warnings = append(out.Warnings, fmt.Sprintf("task %s was filed by an "+
 			"earlier copy of this operation, and this writer has no store to "+
 			"read its key from", id))
@@ -554,7 +554,7 @@ func (w *Writer) landedTask(ctx context.Context, result statelog.Result,
 	}
 	var task Task
 	var held bool
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		task, held, err = readTask(ctx, tx, id)
 		return err
@@ -1201,7 +1201,8 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 		// THE MINT WAS ANSWERED, NOT DECIDED, so its snapshot never ran
 		// and the parent's project is read here: it is what the parent
 		// step's scope names.
-		if parentProject, err = w.taskProject(ctx, parentID); err != nil {
+		if parentProject, err = w.taskProject(ctx, parentID,
+			"nothing can be promoted out of it"); err != nil {
 			return created, err
 		}
 	}
@@ -1231,8 +1232,7 @@ func promotableParent(ctx context.Context, tx *sql.Tx, parentID,
 	case err != nil:
 		return "", err
 	case !held:
-		return "", fmt.Errorf("tracker: parent task %s is not on this node: %w",
-			parentID, statelog.ErrUnavailable)
+		return "", missingTask(ctx, tx, parentID, "nothing can be promoted out of it")
 	case current.Removed != nil:
 		return "", invalid("task %s was removed by %s at %s; "+
 			"restore it before promoting anything out of it",
@@ -1247,21 +1247,21 @@ func promotableParent(ctx context.Context, tx *sql.Tx, parentID,
 
 // taskProject is the project a task is in, read outside any decision — for a
 // sequence's later step, whose scope names the container and whose own decide
-// re-reads everything it acts on.
-func (w *Writer) taskProject(ctx context.Context, id string) (string, error) {
-	if w.db == nil {
+// re-reads everything it acts on. refused completes the final refusal of a
+// purged task ([missingTask]): what the step cannot do to it.
+func (w *Writer) taskProject(ctx context.Context, id, refused string) (string, error) {
+	if w.db.IsZero() {
 		return "", fmt.Errorf("tracker: this writer has no store to read task "+
 			"%s's project from", id)
 	}
 	var project string
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		task, held, err := readTask(ctx, tx, id)
 		switch {
 		case err != nil:
 			return err
 		case !held:
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				id, statelog.ErrUnavailable)
+			return missingTask(ctx, tx, id, refused)
 		}
 		project = task.Project
 		return nil
@@ -1326,7 +1326,7 @@ func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 			"nodes rewriting one subtree", resource)
 	}
 	owner := w.claimOwner()
-	lease, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
+	lease, refused, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
 		Owner: owner, TTL: ClaimTTL,
 	})
 	switch {
@@ -1336,10 +1336,20 @@ func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 		// produce a subtree keyed into two projects, which no duty can
 		// tell from an abandoned walk.
 		return nil, fmt.Errorf("tracker: take %s: %w", resource, err)
-	case lease == nil:
+	case lease == nil && refused == coord.RefusedHeld:
 		return nil, fmt.Errorf("tracker: %s is held by another walk, on this "+
 			"node or a peer, so this walk is already running: %w", resource,
 			statelog.ErrUnavailable)
+	case lease == nil:
+		// NOT "another walk": the mixed-version gate refuses every claim
+		// this build makes while a node of an older one is live, and a
+		// walk is refused with them — it fails closed for the reason
+		// above. Told it was already running, a caller waited for a walk
+		// nobody had started, for the whole rolling upgrade.
+		return nil, fmt.Errorf("tracker: %s was refused (%s): a node of an "+
+			"older build is live in this fleet and this build takes no claim "+
+			"beside it, so the walk waits for the rolling upgrade to finish: %w",
+			resource, refused, statelog.ErrUnavailable)
 	}
 	h := &held{
 		claims: w.claims, resource: resource, owner: owner,
@@ -1510,19 +1520,18 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		carried []Tag
 		arrived bool
 	)
-	if w.db == nil {
+	if w.db.IsZero() {
 		return WriteResult{}, fmt.Errorf("tracker: this writer has no store, " +
 			"so it cannot read the subtree a cross-project move re-keys")
 	}
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		current, held, err := readTask(ctx, tx, taskID)
 		switch {
 		case err != nil:
 			return err
 		case !held:
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				taskID, statelog.ErrUnavailable)
+			return missingTask(ctx, tx, taskID, "it cannot be moved")
 		case current.Parent != nil && *current.Parent != "":
 			return invalid("task %s has a parent, and only a ROOT "+
 				"task moves between projects — moving a subtask alone would "+
@@ -1715,7 +1724,7 @@ func (w *Writer) finishMove(ctx context.Context, opID string, root Task,
 // down is a move that is done, and one in the trash is frozen until somebody
 // restores it.
 func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool, error) {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return false, fmt.Errorf("tracker: this writer has no store, so it " +
 			"cannot read the subtree an abandoned move left behind")
 	}
@@ -1724,14 +1733,13 @@ func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool
 		subtree []Task
 		marked  bool
 	)
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		current, held, err := readTask(ctx, tx, id)
 		switch {
 		case err != nil:
 			return err
 		case !held:
-			return fmt.Errorf("tracker: task %s is marked mid-move and not on "+
-				"this node: %w", id, statelog.ErrUnavailable)
+			return missingTask(ctx, tx, id, "there is no move of it left to finish")
 		case !current.Moving || current.Removed != nil:
 			return nil
 		}
@@ -1948,7 +1956,7 @@ func (w *Writer) claimAlias(ctx context.Context, opID, key, taskID string,
 // tagsOf reads a project's tag set outside any decision.
 func (w *Writer) tagsOf(ctx context.Context, project string) (TagSet, error) {
 	var set TagSet
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		stored, held, err := readTagSet(ctx, tx, project)
 		if err != nil {
 			return err
@@ -1999,19 +2007,18 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 	defer claim.release(ctx)
 
 	var task Task
-	if w.db == nil {
+	if w.db.IsZero() {
 		return WriteResult{}, fmt.Errorf("tracker: this writer has no store, " +
 			"so it cannot read the children a merge re-parents")
 	}
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		current, held, err := readTask(ctx, tx, duplicate)
 		switch {
 		case err != nil:
 			return err
 		case !held:
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				duplicate, statelog.ErrUnavailable)
+			return missingTask(ctx, tx, duplicate, "it cannot be merged")
 		case current.Removed != nil:
 			return invalid("task %s was removed by %s at %s; "+
 				"restore it before merging it", duplicate,
@@ -2023,8 +2030,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		case err != nil:
 			return err
 		case !held:
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				into, statelog.ErrUnavailable)
+			return missingTask(ctx, tx, into, "nothing can be merged into it")
 		case !reparent || survivor.Project == current.Project:
 			return nil
 		}
@@ -2116,7 +2122,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 // is not selected stays under the duplicate, where the trash's frozen children
 // stay too.
 func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string) (int, error) {
-	project, err := w.taskProject(ctx, into)
+	project, err := w.taskProject(ctx, into, "nothing can be merged into it")
 	if err != nil {
 		return 0, err
 	}
@@ -2124,7 +2130,7 @@ func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string)
 	var after string
 	for {
 		var batch []Task
-		if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 			var err error
 			batch, err = readChildBatch(ctx, tx, duplicate, project, after, WalkBatch)
 			return err
@@ -2282,7 +2288,9 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 // THREE ANSWERS AND THREE BEHAVIOURS, which is why [Claims] is not a bool: a
 // held lease runs, a peer's lease refuses with the holder's remaining time as
 // the caller's hint, and a coordination store that cannot be reached ADMITS —
-// see the sequence's own doc for why those last two must differ.
+// see the sequence's own doc for why those last two must differ. A claim the
+// mixed-version gate refused admits too: it is a refusal that names no peer,
+// and the admission bounds a rate rather than guarding a correctness.
 func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 	if w.claims == nil {
 		return func() {}, nil
@@ -2309,7 +2317,7 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 	// rather than being refused, and whichever finished first released the
 	// other's.
 	owner := w.claimOwner()
-	lease, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
+	lease, refused, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
 		Owner: owner, TTL: ttl,
 	})
 	switch {
@@ -2318,6 +2326,14 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 		// bulks in flight and merely slow, and refusing here on an
 		// unknown is a seat told a colleague is editing when nobody is.
 		//nolint:nilerr // Deliberate fail-open: see the paragraph above.
+		return func() {}, nil
+	case lease == nil && refused != coord.RefusedHeld:
+		// FAIL OPEN, for the unknown's reason: the mixed-version gate
+		// refused the claim, which says an older build is live and
+		// nothing about a colleague editing. Refused as a bulk in
+		// flight, every seat's bulk edit was told to retry "in about a
+		// second" — the hint read the remaining time off a holder there
+		// was none of — for as long as the rolling upgrade took.
 		return func() {}, nil
 	case lease == nil:
 		remaining := time.Duration(0)

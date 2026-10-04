@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
@@ -55,7 +56,7 @@ func TestAnApplyReplacesTheObjectsRows(t *testing.T) {
 		seatRecord("node-a", day, "seat-1", "m-both"), 2)); err != nil {
 		t.Fatalf("apply the afternoon: %v", err)
 	}
-	rows, err := usage.Spend(t.Context(), db.Replicated(), usage.SpendQuery{From: day, To: day})
+	rows, err := usage.Spend(t.Context(), storetest.EstateOf(db), usage.SpendQuery{From: day, To: day})
 	if err != nil {
 		t.Fatalf("read the spend: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestAnOlderRecordDoesNotOverwriteANewerOne(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rows, err := usage.Spend(t.Context(), db.Replicated(), usage.SpendQuery{From: day, To: day})
+	rows, err := usage.Spend(t.Context(), storetest.EstateOf(db), usage.SpendQuery{From: day, To: day})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +150,7 @@ func TestTheHorizonLeavesWithTheRecordThatMakesItOld(t *testing.T) {
 		seatRecord("node-b", today.Label, "seat-2", "m"), 3)); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := usage.Spend(t.Context(), db.Replicated(), usage.SpendQuery{From: gone, To: today.Label})
+	rows, err := usage.Spend(t.Context(), storetest.EstateOf(db), usage.SpendQuery{From: gone, To: today.Label})
 	if err != nil {
 		t.Fatal(err)
 	}

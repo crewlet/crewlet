@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`
-- **Enforced-by:** `internal/store.TestOnlyTheApplierWritesTheReplicatedEstate`
+- **Enforced-by:** `internal/store.TestOnlyTheApplierWritesThePartitions`
 - **Measured:** three domains on the framework — the tracker, the knowledge base, the embeddings — and one apply transaction that commits the rows, the record's operation id and the checkpoint together
 - **Cost-when-tried:** the shape this must not copy is still in the tree's history. `internal/projection` committed its batch and *then* wrote its cursor, reasoning that a crash between the two replays the batch for free. That is true while the source can always redeliver, and false for a log that gets trimmed.
 - **Tag-status:** unreleased

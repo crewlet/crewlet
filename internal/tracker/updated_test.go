@@ -17,7 +17,7 @@ import (
 // the newest `effective_at` among the task's history rows.
 func (r *roundTrip) updatedOf(id string) (column, document, newest int64) {
 	r.t.Helper()
-	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
 		var raw []byte
 		if err := tx.QueryRowContext(r.t.Context(),
 			`SELECT updated_at, document FROM tracker_tasks WHERE id = ?`, id).
@@ -101,7 +101,7 @@ func TestTheLastChangedBackfillEqualsAReplay(t *testing.T) {
 
 	rederive := func() int {
 		var repaired int
-		if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 			n, err := r.applier.Rederive(t.Context(), tx, statelog.ApplyOptions{})
 			repaired = n
 			return err
@@ -116,7 +116,7 @@ func TestTheLastChangedBackfillEqualsAReplay(t *testing.T) {
 
 	// THE PREDECESSOR'S ROWS: the stamp as a build without it left it — the
 	// create's, on the column and in the document alike.
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`UPDATE tracker_tasks SET updated_at = 1,
 			        document = json_set(document, '$.updated_at', '2001-01-01T00:00:00Z')`)

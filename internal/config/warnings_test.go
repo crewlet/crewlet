@@ -24,12 +24,42 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 				b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
 				b.Stream.Replicas = 3
 				b.Stream.Sync = "30s"
+				b.Stream.StoreDir = "/var/lib/crewlet/stream"
 				b.Stream.Cluster = config.StreamCluster{
 					Name: "crewlet", Port: 6222,
 					Peers: []string{"nats://node-b.internal:6222", "nats://node-c.internal:6222"},
 				}
 			},
 			"stream.sync", "30s behind the disk",
+		},
+		// A PEER ENTRY THAT IS NOT ANOTHER MEMBER is left out of every
+		// count of the cluster, and the operator is told which one and why
+		// — the count they wrote is not the count the rules used.
+		"this node's own route in its peer list is not counted": {
+			func(b *config.Bootstrap) {
+				b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
+				b.Stream.Replicas = 3
+				b.Stream.StoreDir = "/var/lib/crewlet/stream"
+				b.Stream.Cluster = config.StreamCluster{
+					Name: "crewlet", Port: 6222, Host: "10.0.0.11",
+					Peers: []string{"nats://10.0.0.11:6222", "nats://node-b.internal:6222",
+						"nats://node-c.internal:6222"},
+				}
+			},
+			"stream.cluster.peers[0]", "this node's own route (it matches cluster.host and cluster.port)",
+		},
+		"a member listed twice is counted once": {
+			func(b *config.Bootstrap) {
+				b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
+				b.Stream.Replicas = 3
+				b.Stream.StoreDir = "/var/lib/crewlet/stream"
+				b.Stream.Cluster = config.StreamCluster{
+					Name: "crewlet", Port: 6222,
+					Peers: []string{"nats://node-b.internal:6222", "nats://node-c.internal:6222",
+						"nats://node-c.internal:6222"},
+				}
+			},
+			"stream.cluster.peers[2]", "repeats peers[1]",
 		},
 		"an operator floor never trims until it is told": {
 			func(b *config.Bootstrap) {
@@ -120,6 +150,32 @@ func TestAFullyStatedDeploymentWarnsAboutNothing(t *testing.T) {
 	}
 	if got := b.Warnings(); len(got) != 0 {
 		t.Errorf("a fully stated deployment warned: %v", got)
+	}
+}
+
+// AND A PEER LIST OF THE OTHER MEMBERS SAYS NOTHING ABOUT ITS PEERS — with
+// this node's own listener and advertised address both stated, so the quiet
+// is the comparison finding no match rather than having nothing to compare.
+func TestAPeerListOfOtherMembersWarnsAboutNothing(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.Stream.StoreDir = "/var/lib/crewlet/stream"
+	b.Retention.BackupOwner = "platform-oncall"
+	b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
+	b.Stream.Replicas = 3
+	// DECLARED, as a fleet node's roles are: a member of a fleet that left
+	// them to the every-role default is warned about that, which is not
+	// what this case is about.
+	b.Node.Roles = []string{"data", "ingress", "seats", "workers"}
+	b.Stream.Cluster = config.StreamCluster{
+		Name: "crewlet", Port: 6222, Host: "10.0.0.11", Advertise: "node-a.internal",
+		Peers: []string{"nats://node-b.internal:6222", "nats://node-c.internal:6222"},
+	}
+	if err := b.Validate(); err != nil {
+		t.Fatalf("the fixture does not validate: %v", err)
+	}
+	if got := b.Warnings(); len(got) != 0 {
+		t.Errorf("a peer list of the other members warned: %v", got)
 	}
 }
 
@@ -297,14 +353,18 @@ func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
 		tracker    config.TrackerBackend
 		knowledge  config.KnowledgeBackend
 		accept     bool
+		leaf       bool
 	}{
-		"both native on an in-memory stream":      {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, false},
-		"a native tracker on an in-memory stream": {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNone, false},
-		"native pages on an in-memory stream":     {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false},
-		"a blank store directory is none":         {"  ", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false},
-		"native with a store directory":           {"/var/lib/crewlet/stream", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, true},
-		"native on an external cluster":           {"", config.StreamNATS, config.TrackerNative, config.KnowledgeNative, true},
-		"vendors for both on the same stream":     {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, true},
+		// A LEAF KEEPS NO STREAM: every log it reaches is a member's, and
+		// the member holds the store directory.
+		"native on a leaf with no store directory": {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, true, true},
+		"both native on an in-memory stream":       {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, false, false},
+		"a native tracker on an in-memory stream":  {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNone, false, false},
+		"native pages on an in-memory stream":      {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false, false},
+		"a blank store directory is none":          {"  ", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false, false},
+		"native with a store directory":            {"/var/lib/crewlet/stream", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, true, false},
+		"native on an external cluster":            {"", config.StreamNATS, config.TrackerNative, config.KnowledgeNative, true, false},
+		"vendors for both on the same stream":      {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, true, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.DefaultBootstrap()
@@ -312,6 +372,9 @@ func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
 			b.Stream.StoreDir = tc.storeDir
 			if tc.streamType == config.StreamNATS {
 				b.Stream.URL = "nats://broker.example.com:4222"
+			}
+			if tc.leaf {
+				b.Stream.Leaf.URLs = []string{"nats-leaf://data-a.example.com:7422"}
 			}
 			c := config.DefaultCompany()
 			c.Name = "Acme"

@@ -41,9 +41,10 @@ func TestTheDashboardKeepsTheGesturesOwnIDWhereTheEngineDoes(t *testing.T) {
 // THE DIALOG WAITS PAST THE NODE'S OWN BOUND ON A GESTURE.
 //
 // The node finishes a gesture under its own budget whatever the connection
-// does, and a dialog that gave up first — the default thirty seconds did, on a
-// one-minute budget — reported "did not answer" about a gesture the node went
-// on to finish.
+// does, and a dialog that gave up first — the default thirty seconds did —
+// reported "did not answer" about a gesture the node went on to finish. The
+// bound is the node's whole answer: its judgement, the logs and the estate
+// map's part.
 func TestTheDashboardWaitsPastTheGateBudget(t *testing.T) {
 	t.Parallel()
 	raw, err := clientsource.Scalar(clientsource.Tree(t), "GATE_REQUEST_TIMEOUT_MS")
@@ -56,9 +57,9 @@ func TestTheDashboardWaitsPastTheGateBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GATE_REQUEST_TIMEOUT_MS = %q is not a number: %v", raw, err)
 	}
-	if wait := time.Duration(ms) * time.Millisecond; wait <= engine.GateBudget {
-		t.Errorf("the dashboard waits %s for a gesture the node bounds at %s — it "+
-			"gives up on a gesture the node goes on to finish", wait, engine.GateBudget)
+	if wait := time.Duration(ms) * time.Millisecond; wait <= engine.GateAnswerBudget {
+		t.Errorf("the dashboard waits %s for a gesture the node answers within %s — it "+
+			"gives up on a gesture the node goes on to finish", wait, engine.GateAnswerBudget)
 	}
 }
 

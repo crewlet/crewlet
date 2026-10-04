@@ -123,9 +123,14 @@ func (idx *bufferIndex) find(line int, match func(placed) bool) (position, bool)
 
 // yaml.v3's own phrasings: a key the struct does not define, a value of the
 // wrong type, and the line prefix both carry.
+//
+// ONE FAILURE IS NOT ONE LINE OF TEXT: a wrong-type message quotes the value
+// it refused, and a value holding a line break puts one inside the message.
+// So the detail is read with `.` matching a newline — read up to the first
+// one, the failure matched nothing and was reported with no path and no line.
 var (
 	unknownFieldRE    = regexp.MustCompile(`^line (\d+): field (\S+) not found in type (\S+)$`)
-	positionedLineRE  = regexp.MustCompile(`^line (\d+): (.*)$`)
+	positionedLineRE  = regexp.MustCompile(`(?s)^line (\d+): (.*)$`)
 	cannotUnmarshalRE = regexp.MustCompile(`^cannot unmarshal (!!\w+)`)
 	syntaxLineRE      = regexp.MustCompile(`^yaml: line (\d+):`)
 )

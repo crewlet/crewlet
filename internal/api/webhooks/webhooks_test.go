@@ -130,9 +130,9 @@ type edge struct {
 // the calls were made in the order the test expected.
 func newEdge(t *testing.T, opts ...func(*webhooks.Options)) *edge {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "w.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "w.db"), store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 

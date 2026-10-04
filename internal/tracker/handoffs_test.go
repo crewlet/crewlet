@@ -80,7 +80,7 @@ func TestAssigneeHistoryCarriesReassignmentsAfter(t *testing.T) {
 	// THE BACKFILL EQUALS THE REPLAY: a node upgrading onto rows its
 	// predecessor wrote without the column re-derives exactly what the apply
 	// maintained.
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(),
 			`UPDATE tracker_history SET reassignments = NULL`); err != nil {
 			return err

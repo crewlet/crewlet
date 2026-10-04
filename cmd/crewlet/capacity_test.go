@@ -399,7 +399,11 @@ func TestVerifyRestoreExitsNonZeroPastItsCadence(t *testing.T) {
 	if err := verifyRestore(root, 30*24*time.Hour, taken.Add(72*time.Hour), &out); err != nil {
 		t.Fatalf("a three-day-old artefact was refused: %v", err)
 	}
-	for _, want := range []string{"CREWLET_TRACKER_LOG", "generation 2", "sequence 918280001"} {
+	// THE PARTITION BY NAME, as `crewlet backup` names it: a node's
+	// partitions are all one estate, and a manifest carrying one copy per
+	// partition is read row by row.
+	for _, want := range []string{"CREWLET_TRACKER_LOG", "generation 2", "sequence 918280001",
+		"STORE partition estate.000"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report never mentions %q:\n%s", want, out.String())
 		}
@@ -466,7 +470,7 @@ func writeArtefact(t *testing.T, dir string, at time.Time) {
 		"taken_at": at, "finished_at": at.Add(2 * time.Minute),
 		"node_id": "node-0", "engine_version": "dev",
 		"stores": []map[string]any{{
-			"estate": "replicated", "bytes": 10415140864,
+			"estate": "partition", "partition": "estate.000", "bytes": 10415140864,
 			"migrations": []string{"0001_the_state_log_lands.sql"},
 		}},
 		"domains": map[string]any{

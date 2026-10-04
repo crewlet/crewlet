@@ -73,27 +73,31 @@ func Stamped(t *testing.T, new Factory) error {
 			"decide through", name)
 	}
 	db := openEstate(t, c)
-	stream := c.Domain.Stream().Name
+	stream := c.spec().Name
 	at := statelog.Position{Stream: stream, Generation: SuiteGeneration}
 	if err := seedCheckpoint(t.Context(), db, at); err != nil {
 		t.Fatalf("place %s's checkpoint at generation %d: %v", name, SuiteGeneration, err)
 	}
-	rows, err := c.Rows(db)
+	rows, err := c.Rows(db.Reader(), c.spec())
 	if err != nil {
 		t.Fatalf("build %s's read seam: %v", name, err)
 	}
 	log := &recordingLog{last: map[string]uint64{}}
 	deps := statelog.Deps{
-		Domain: c.Domain, Log: log, Rows: rows,
+		Domain: c.Domain, Spec: c.spec(), Layout: c.layout(), LogID: c.log(),
+		// SERVING ITS LOG'S PARTITION, which is what a node deciding a
+		// write through the domain's own path is.
+		Holding: statelog.ServesOnly(c.log().Partition),
+		Log:     log, Records: log, Rows: rows,
 		Fence: openFence{}, Gates: openGates{},
-		Waiter: suiteWaiter{at: at}, Identity: suiteWaiter{at: at},
+		Waiter: suiteWaiter{at: at}, Voids: suiteWaiter{at: at}, Identity: suiteWaiter{at: at},
 		NodeID:     SuiteWriter,
 		Generation: func() uint32 { return SuiteGeneration },
 	}
 	// A RESERVE OVER A LOG WITH NO CEILING where the domain keeps one: what
 	// is under test is what the decision writes, not the log's room.
 	if statelog.KeepsGateReserve(c.Domain) {
-		reserve, reserveErr := statelog.NewReserve(c.Domain.Stream().Name,
+		reserve, reserveErr := statelog.NewReserve(c.spec().Name,
 			func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, nil })
 		if reserveErr != nil {
 			t.Fatalf("build a reserve over %s: %v", name, reserveErr)
@@ -104,7 +108,7 @@ func Stamped(t *testing.T, new Factory) error {
 	if err != nil {
 		t.Fatalf("build a publisher over %s: %v", name, err)
 	}
-	if err := c.Write(t.Context(), pub, db); err != nil {
+	if err := c.Write(t.Context(), pub, db.Reader()); err != nil {
 		return fmt.Errorf("%s's own write path failed through the framework's "+
 			"publisher — a refusal naming the writer or the generation means "+
 			"its decision does not put the stamp it is handed on its "+
@@ -134,8 +138,8 @@ func Stamped(t *testing.T, new Factory) error {
 
 // seedCheckpoint places a fresh estate's checkpoint for one stream, which is
 // the row a snapshot reads the generation it stamps from.
-func seedCheckpoint(ctx context.Context, db *store.DB, at statelog.Position) error {
-	return db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+func seedCheckpoint(ctx context.Context, db store.PartitionHandle, at statelog.Position) error {
+	return db.Tx(ctx, func(tx *sql.Tx) error {
 		now := store.EncodeTime(time.Unix(1_700_000_000, 0).UTC())
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO statelog_cursor
@@ -182,6 +186,17 @@ func (l *recordingLog) LastSeq(_ context.Context, subject string) (uint64, bool,
 	return seq, ok, nil
 }
 
+// At is the record appended at seq, which a resolution reads to learn whose a
+// record it did not append itself is.
+func (l *recordingLog) At(_ context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if seq == 0 || seq > uint64(len(l.records)) {
+		return "", nil, time.Time{}, false, nil
+	}
+	return "", l.records[seq-1], time.Time{}, true, nil
+}
+
 func (l *recordingLog) appended() [][]byte {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -215,6 +230,9 @@ func (w suiteWaiter) Committed() statelog.Position                         { ret
 func (suiteWaiter) WaitCommitted(context.Context, statelog.Position) error { return nil }
 func (suiteWaiter) StreamIdentity() error                                  { return nil }
 func (suiteWaiter) Truncated() error                                       { return nil }
+
+// Voided voids nothing: no reanchor places a rule on the suite's log.
+func (suiteWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
 
 func (suiteWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Position) error {
 	return errNoApplier

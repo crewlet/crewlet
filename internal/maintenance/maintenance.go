@@ -143,10 +143,11 @@ type Job struct {
 	// Name is what the log calls it — normally the table.
 	Name string
 
-	// Horizon is how far back this job keeps rows. Zero means the job
-	// carries its own (the event log's retention is a property of the
-	// log), and such a job is exempt from the interval check below.
-	Horizon time.Duration
+	// Horizon is how far back this job keeps rows, asked afresh at every
+	// sweep. Nil means the job carries its own (the event log's retention
+	// is a property of the log): it is handed the sweep's instant as its
+	// cutoff and is exempt from the interval check below.
+	Horizon Horizon
 
 	// Run does the work for the tick, reporting rows touched.
 	//
@@ -158,8 +159,9 @@ type Job struct {
 	// It takes BOTH times because the two kinds of job need different
 	// ones: a range delete needs the cutoff, while closing an abandoned
 	// channel needs the cutoff to select it AND now to stamp it closed.
-	// The worker derives cutoff from Horizon, so a horizon [New] raises
-	// takes effect without a job rebuilding anything.
+	// The worker derives cutoff from Horizon on every sweep, so a horizon
+	// the company moves — or one the worker raises to its tick — takes
+	// effect without a job rebuilding anything.
 	Run func(ctx context.Context, now, cutoff time.Time) (int64, error)
 
 	// Scope says whether this job's rows are the fleet's or this node's
@@ -184,12 +186,34 @@ type Job struct {
 	Gate func(ctx context.Context) (bool, error)
 }
 
+// Horizon answers how far back a job keeps rows. The worker asks it at EVERY
+// sweep, never once.
+//
+// A FUNCTION RATHER THAN A DURATION, because two of the horizons are the
+// COMPANY's — the conversation ledger's
+// `turn_engine.conversation_session.retention_days` and the inbox's
+// `tracker.native.inbox_retention_days` — and every apply replaces the company
+// under a running engine. Read once when the sweep was built, they held it to
+// the revision the node booted on: a revision shortening either was honoured
+// by everything else at once and by the sweep only after a restart, so rows the
+// company had asked to forget were kept for as long as the node stayed up, and
+// a lengthened horizon deleted rows the company had just asked to keep. The
+// other horizons are this build's own and never move; they take [Fixed].
+//
+// An answer of zero or less is REFUSED for that sweep rather than used: the
+// cutoff it makes is now, which deletes every row the table holds. A horizon
+// with a floor applies it inside the function — see [LedgerJobs].
+type Horizon func() time.Duration
+
+// Fixed is a horizon that never moves: a retention this build decides.
+func Fixed(d time.Duration) Horizon { return func() time.Duration { return d } }
+
 // Purge builds a range-delete job over a retention horizon.
 //
 // scope is a PARAMETER rather than a field the caller may forget, for the
 // reason [Scope] gives: the placement question has one right answer per table
 // and no safe default, so the constructor asks it rather than assuming it.
-func Purge(table string, scope Scope, horizon time.Duration, fn func(ctx context.Context, cutoff time.Time) (int64, error)) Job {
+func Purge(table string, scope Scope, horizon Horizon, fn func(ctx context.Context, cutoff time.Time) (int64, error)) Job {
 	return Job{Name: table, Scope: scope, Horizon: horizon,
 		Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
 			return fn(ctx, cutoff)
@@ -201,7 +225,7 @@ func Purge(table string, scope Scope, horizon time.Duration, fn func(ctx context
 // Two width conventions exist across the stores, and normalising here beats
 // either changing a store's signature to suit its sweeper or making every
 // caller remember which is which.
-func PurgeN(table string, scope Scope, horizon time.Duration, fn func(ctx context.Context, cutoff time.Time) (int, error)) Job {
+func PurgeN(table string, scope Scope, horizon Horizon, fn func(ctx context.Context, cutoff time.Time) (int, error)) Job {
 	return Purge(table, scope, horizon, func(ctx context.Context, cutoff time.Time) (int64, error) {
 		n, err := fn(ctx, cutoff)
 		return int64(n), err
@@ -236,17 +260,24 @@ type Worker struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	// raised is, per job, the horizon last reported as raised to the
+	// tick, so a company whose horizon sits below the tick is told once
+	// per value it asks for rather than on every sweep. Guarded by
+	// raisedMu: a sweep and a test's direct Tick may overlap.
+	raisedMu sync.Mutex
+	raised   map[string]time.Duration
 }
 
-// New builds a worker, enforcing the interval-below-every-horizon invariant
-// and refusing a job that did not say whose rows it sweeps.
+// New builds a worker, refusing a job that did not say whose rows it sweeps.
 //
-// A horizon at or below the tick is RAISED to the tick and logged, rather
-// than refused. The one horizon an operator sets is the conversation
-// ledger's, and failing a company's boot over a retention that is merely
-// shorter than the sweep would be a hard stop for a soft problem — while
-// silently accepting it would mean a table swept on a schedule that cannot
-// honour its own horizon.
+// The interval-below-every-horizon invariant is enforced per SWEEP rather
+// than here, because a horizon is asked for at every sweep ([Horizon]): a
+// horizon below the tick is RAISED to the tick and logged, rather than
+// refused. Two horizons are the company's, and failing a sweep over a
+// retention that is merely shorter than the tick would be a hard stop for a
+// soft problem — while silently accepting it would mean a table swept on a
+// schedule that cannot honour its own horizon.
 //
 // A MALFORMED JOB IS REFUSED RATHER THAN DROPPED, and that is the opposite
 // of what this did. It used to skip a job with no Run or no Name and carry
@@ -264,6 +295,7 @@ func New(opts Options) (*Worker, error) {
 		interval:  opts.Interval,
 		claimDuty: opts.ClaimDuty,
 		now:       opts.Now,
+		raised:    map[string]time.Duration{},
 	}
 	if w.interval <= 0 {
 		w.interval = Interval
@@ -290,11 +322,6 @@ func New(opts Options) (*Worker, error) {
 				"and grows for ever on every peer", j.Name, string(j.Scope)))
 			continue
 		}
-		if j.Horizon > 0 && j.Horizon < w.interval {
-			log.Warn("maintenance_horizon_raised_to_the_tick",
-				"job", j.Name, "asked", j.Horizon.String(), "using", w.interval.String())
-			j.Horizon = w.interval
-		}
 		w.jobs = append(w.jobs, j)
 	}
 	if len(bad) > 0 {
@@ -311,6 +338,35 @@ func (w *Worker) Jobs() []string {
 		out = append(out, j.Name)
 	}
 	return out
+}
+
+// horizon is how far back a job keeps rows on THIS sweep: its own answer,
+// asked now, raised to the tick when it asks for less.
+//
+// A horizon that answers zero or less is refused for the sweep — the cutoff
+// it makes is the sweep's own instant, which deletes every row the table
+// holds, and no retention anybody configured means that.
+func (w *Worker) horizon(ctx context.Context, j Job) (time.Duration, error) {
+	if j.Horizon == nil {
+		return 0, nil
+	}
+	asked := j.Horizon()
+	if asked <= 0 {
+		return 0, fmt.Errorf("%s: its horizon answered %v, which would delete every "+
+			"row it holds; the job was skipped this sweep", j.Name, asked)
+	}
+	if asked >= w.interval {
+		return asked, nil
+	}
+	w.raisedMu.Lock()
+	told := w.raised[j.Name] == asked
+	w.raised[j.Name] = asked
+	w.raisedMu.Unlock()
+	if !told {
+		log.WarnContext(ctx, "maintenance_horizon_raised_to_the_tick",
+			"job", j.Name, "asked", asked.String(), "using", w.interval.String())
+	}
+	return w.interval, nil
 }
 
 // Start runs the sweep loop until Stop or the context ends.
@@ -431,7 +487,12 @@ func (w *Worker) Tick(ctx context.Context) (map[string]int64, error) {
 				continue
 			}
 		}
-		n, err := j.Run(ctx, now, now.Add(-j.Horizon))
+		horizon, err := w.horizon(ctx, j)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		n, err := j.Run(ctx, now, now.Add(-horizon))
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", j.Name, err))
 		}

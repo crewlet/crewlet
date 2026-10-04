@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -38,11 +39,7 @@ const (
 // modeTestStore opens both estates of one node.
 func modeTestStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
@@ -50,7 +47,7 @@ func modeTestStore(t *testing.T) *store.DB {
 // modeTestTask writes one applied work item.
 func modeTestTask(t *testing.T, db *store.DB, id, title, body string) {
 	t.Helper()
-	if _, err := db.Replicated().SQL().ExecContext(t.Context(), `
+	if _, err := storetest.Partition(t, storetest.EstateOf(db)).SQL().ExecContext(t.Context(), `
 		INSERT INTO tracker_tasks (id, key, project_key, root_id, type, title,
 		                           status, status_group, rank, document,
 		                           version, created_at, updated_at)
@@ -85,7 +82,7 @@ func modeTestVector(t *testing.T, db *store.DB, seq uint64, id string, v []float
 	if err != nil {
 		t.Fatalf("encode vector %s: %v", id, err)
 	}
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := search.NewApplier().Apply(t.Context(), tx, statelog.Record{
 			Position: statelog.Position{Stream: "S", Generation: 1, Seq: seq},
 			Payload:  payload,
@@ -109,7 +106,7 @@ func modeTestEmbed(t *testing.T, fake *embeddings.Fake, text string) []float32 {
 // modeTestSearcher is the production chain over db and index, with vectors
 // as the node's query-vector cache (nil is a node with no provider).
 func modeTestSearcher(db *store.DB, index *search.Indexer, vectors *search.QueryVectors) *tracker.Searcher {
-	return tracker.NewSearcher(db, itemRanker{
+	return tracker.NewSearcher(storetest.EstateOf(db).Reader(), itemRanker{
 		index: index,
 		fan: &search.FanOut{
 			Self:    "n1",
@@ -164,7 +161,7 @@ func TestWorkSearchHonoursTheModeThroughTheFanOut(t *testing.T) {
 		"outbound calls to the processor should degrade gracefully")
 	modeTestVector(t, db, 1, "t.words", modeTestEmbed(t, fake, "sailing regatta schedule"))
 	modeTestVector(t, db, 2, "t.meaning", modeTestEmbed(t, fake, modeTestQuery))
-	index := search.NewIndexerOver(db, []search.LexicalSource{search.TaskSource{}})
+	index := search.NewIndexerOver(db, storetest.EstateOf(db).Reader(), []search.LexicalSource{search.TaskSource{}})
 	modeTestSettle(t, index)
 
 	var provider embeddings.Embedder = fake
@@ -220,7 +217,7 @@ func TestASemanticWorkSearchWithNoProviderSaysSoEvenWhileBuilding(t *testing.T) 
 	modeTestTask(t, db, "t.words", "Flaky checkout",
 		"the payment client retries with no backoff and hammers the gateway")
 	// NEVER SWEPT: the index has not finished its first lap.
-	index := search.NewIndexerOver(db, []search.LexicalSource{search.TaskSource{}})
+	index := search.NewIndexerOver(db, storetest.EstateOf(db).Reader(), []search.LexicalSource{search.TaskSource{}})
 	if index.Ready() {
 		t.Fatal("an index that was never swept reports itself ready")
 	}
@@ -273,11 +270,11 @@ func TestAWorkSearchHitCarriesItsOwnPriority(t *testing.T) {
 	t.Parallel()
 	db := modeTestStore(t)
 	modeTestTask(t, db, "t.urgent", "Gateway backoff", "retries hammer the gateway")
-	if _, err := db.Replicated().SQL().ExecContext(t.Context(),
+	if _, err := storetest.Partition(t, storetest.EstateOf(db)).SQL().ExecContext(t.Context(),
 		`UPDATE tracker_tasks SET priority = 'high' WHERE id = 't.urgent'`); err != nil {
 		t.Fatalf("set priority: %v", err)
 	}
-	index := search.NewIndexerOver(db, []search.LexicalSource{search.TaskSource{}})
+	index := search.NewIndexerOver(db, storetest.EstateOf(db).Reader(), []search.LexicalSource{search.TaskSource{}})
 	modeTestSettle(t, index)
 	answer, err := modeTestSearcher(db, index, nil).Search(t.Context(), tracker.SearchQuery{
 		Text: modeTestQuery, Mode: knowledge.ModeKeyword,

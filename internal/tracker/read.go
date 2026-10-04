@@ -245,6 +245,12 @@ type Answer struct {
 
 	Complete   bool        `json:"complete"`
 	Incomplete *Incomplete `json:"incomplete,omitempty"`
+	// Coverage is which partitions this answer was read from and which it
+	// could not reach, with the cut each was read at — filled by the estate
+	// router that answered the caller, never by this reader, which reads
+	// one partition's rows and knows nothing of the others. A non-empty
+	// Missing is rendered as its Notice, never as the shorter list alone.
+	Coverage statelog.Coverage `json:"coverage,omitzero"`
 
 	// Around is where [Query.Around]'s task sits in this answer's drawing
 	// order, and NIL when the caller asked and the task is not in it — or
@@ -290,7 +296,7 @@ const (
 // asking for `session` got whatever this node happened to hold, and
 // `max_lag_seconds` bounded nothing at all.
 type Reader struct {
-	db  *store.DB
+	db  store.PartitionReader
 	log *statelog.Reader
 }
 
@@ -300,8 +306,8 @@ type Reader struct {
 // a build where every level silently degrades to whatever the local rows say,
 // which is the state this type is being moved out of — and a degradation that
 // is invisible in the answer is worse than a refusal.
-func NewReader(db *store.DB, log *statelog.Reader) (*Reader, error) {
-	if db == nil {
+func NewReader(db store.PartitionReader, log *statelog.Reader) (*Reader, error) {
+	if db.IsZero() {
 		return nil, fmt.Errorf("tracker: a reader needs a store")
 	}
 	if log == nil {
@@ -1916,10 +1922,12 @@ func anyOf[T ~string](values []T) []any {
 	return out
 }
 
-// trackerStream is the domain's stream name, read from the declaration rather
-// than written again — one spelling, so the framework and every reader compare
-// against the same one.
-var trackerStream = Domain{}.Stream().Name
+// trackerStream is the name of the one log this domain's rows are keyed to —
+// its layout-0 log, read from the layout's grammar rather than written again —
+// one spelling, so the framework and every reader compare against the same
+// one. The tracker keys no object to a partition ([Domain.PartitionOf]), so the
+// log its rows answer for is that one.
+var trackerStream = statelog.EstateStream(Domain{}).Name
 
 // placeholders is a bound-parameter list of n slots.
 //

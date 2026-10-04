@@ -95,7 +95,16 @@ func (e *Engine) RecheckGitHub() {
 //
 // It also tells the OPERATOR one thing: that an epoch with no model is now
 // current. See nomodels.go.
-func (e *Engine) installEpoch(c *Company) {
+func (e *Engine) installEpoch(c *Company, activatedAt time.Time) {
+	if c != nil {
+		// STAMPED BEFORE IT IS PUBLISHED, so no reader ever sees this
+		// epoch without the instant its configuration took effect — the
+		// one fact about it every node agrees on. See [Company.ActivatedAt].
+		if !activatedAt.IsZero() {
+			activatedAt = activatedAt.UTC()
+		}
+		c.ActivatedAt = activatedAt
+	}
 	if c != nil && !e.indexes(c) {
 		e.refreshParties(c)
 	}
@@ -366,14 +375,15 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	applied = append(applied, "integrations")
 
 	previous := e.Company()
-	e.installEpoch(next)
+	e.installEpoch(next, activatedAt)
 	applied = append(applied, "epoch")
 
-	// THE SWEEP, rebuilt for a node's FIRST company — after the epoch is
-	// current, because it reads the conversation and inbox horizons off
-	// it, and only then: its job list is the one thing built once at boot
-	// that a first company changes. See [Engine.rebuildMaintenance].
-	if previous == nil || startedNative {
+	// THE SWEEP, rebuilt when this apply started the native runtime — its
+	// job list is the one thing built once at boot that the runtime's
+	// arrival changes. NOT for the horizons: every job asks the current
+	// epoch for its horizon at every sweep, so a revision that moves one
+	// needs no rebuild. See [Engine.rebuildMaintenance].
+	if startedNative {
 		e.rebuildMaintenance(ctx)
 		applied = append(applied, "maintenance")
 	}

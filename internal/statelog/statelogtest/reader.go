@@ -21,7 +21,9 @@ import (
 // take.
 //
 // So this supplies the two seams a local read needs and nothing else: a waiter
-// already at the position, and a health that serves. It has NO read index, so
+// already at the position, and a health that serves — over the domain's
+// layout-0 log ([statelog.EstateStream]), which is the one its rows are keyed
+// to in a domain's own tests. It has NO read index, so
 // a `linearizable` read through it refuses rather than silently degrading —
 // which is the honest answer for a harness with no quorum to commit against,
 // and it is what stops this helper being mistaken for a way to test the
@@ -58,6 +60,8 @@ func LocalReaderBehind(domain statelog.Domain, db DB, at statelog.Position,
 
 	return statelog.NewReader(statelog.ReaderDeps{
 		Domain: domain,
+		Spec:   statelog.EstateStream(domain),
+		Mode:   statelog.ModeNormal,
 		DB:     db,
 		Waiter: localWaiter{at: at},
 		Health: func() statelog.Health {
@@ -111,6 +115,8 @@ func (w localWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Po
 func LocalReaderOver(domain statelog.Domain, db DB, waiter statelog.Waiter) (*statelog.Reader, error) {
 	return statelog.NewReader(statelog.ReaderDeps{
 		Domain: domain,
+		Spec:   statelog.EstateStream(domain),
+		Mode:   statelog.ModeNormal,
 		DB:     db,
 		Waiter: waiter,
 		Health: func() statelog.Health {

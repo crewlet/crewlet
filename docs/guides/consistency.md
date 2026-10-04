@@ -68,7 +68,7 @@ happened to omit the key. There are four:
 
 | Surface | Default | May the caller choose? |
 |---|---|---|
-| A seat's own tools, inside a turn | `linearizable` | No |
+| A seat's own tools, inside a turn | `linearizable`, floored at its node's own writes and at the change that woke the turn ([below](#read-your-trigger-is-a-floor-not-the-mechanism)) | No |
 | The operator MCP, about tracker content | `linearizable` | No |
 | The dashboard and the REST read path | `stale` | Yes — `linearizable`, `stale`, `consistent_prefix`, or `session` beside a `min_position` |
 | Any answer **about replication** — the retention report, Settings › Backups & retention's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
@@ -179,7 +179,7 @@ an isolated former leader answers with a last sequence it believes and the
 majority has moved past. An append cannot be served that way, because there is
 nothing to commit against.
 
-## The twelve refusals
+## The thirteen refusals
 
 A read that cannot be served at the level asked for is **refused with a code**
 rather than downgraded. Each code names a different thing to do.
@@ -197,6 +197,7 @@ rather than downgraded. Each code names a different thing to do.
 | `below_floor` | Records this node never applied are gone from the log. | Its rows are missing state no replay can supply. The node adopts a peer's snapshot on its own; ask another node meanwhile. See [Retention](retention.md#the-join-runbook). |
 | `floor_unknown` | The published trim floor could not be read. | An unreadable floor blocks: guessing here keeps a node serving over a hole it cannot see. Check coordination. |
 | `evicted` | This node has been removed from the fleet. | Nothing it holds is authoritative. Readmit it, or route elsewhere. |
+| `maintenance` | This node runs in a [capacity window](retention.md#changing-a-logs-ceiling) (`-mode maintenance` or `-mode seal`), which publishes nothing — and a `linearizable` read proves the log's end by appending a barrier to it. | Ask again once the fleet is back in normal mode. Every other level appends nothing and is still answered. Every node of a fleet in a window is in one, so no other node answers it either. |
 | `wrong_stream` | The position this read was asked to reach is on another stream — including a `min_position` naming another domain's log, which is refused at every level rather than quietly dropped. Or this node's own log is not the one its rows are keyed to: its checkpoint is past the log's end — what a broker restored from an older copy looks like, since it keeps the stream's creation instant — or the log holds, at that checkpoint, another record than the one it consumed there, which is the same restore written past this node's rows, or the stream was deleted and rebuilt — found at boot against the checkpoint, or under a running node by the position heartbeat and by any write at an expectation of zero, from the broker's own creation instant — or a peer re-anchored the log past this node's generation, so it continues from that peer's rows rather than this node's. Every one of these findings refuses the node's **writes** with the same word. | A caller bug, a cursor from before a reanchor, a recreated stream or a restored broker; see [Retention](retention.md#re-anchoring-a-recreated-or-restored-log). A peer's reanchor clears on its own, once this node has [adopted](retention.md#a-node-a-peer-re-anchored-past) a snapshot from the new generation. |
 
 Four of them are worth coming back to **this** node for — `behind`,
@@ -238,15 +239,39 @@ level does not touch them:
 
 ## Read-your-trigger is a floor, not the mechanism
 
-An agent woken by a change sees that change. That is guaranteed, and it is
-guaranteed by the *wake* carrying the record's own position — the turn waits
-for its own applier to reach it — rather than by the level the turn's tools
-then read at.
+An agent woken by a change to the engine's own tracker or knowledge base sees
+that change. That is guaranteed by the *wake* carrying the record's own
+position — `trigger_position`, where on its log the change was committed (see
+[the event system](../concepts/event-system.md)) — and not by the level the
+turn's tools then read at:
 
-So a seat's `linearizable` reads are not what makes it see its own trigger; the
-floor was already established before the turn opened. What they buy is the
-other half: that an answer the turn *decides* on is not one from before the
-read arrived.
+1. Before the turn's first read, the node hands that position to its
+   **read-your-writes floors**: one table per node, the same one every write
+   the node makes raises.
+2. Every tracker or knowledge-base read the turn makes carries the floor on its
+   own domain's log to whichever node answers it — a tracker read the tracker
+   log's, a page read the knowledge base's — this node's own copy included.
+3. That holder waits up to two seconds to have applied it, or answers `behind`
+   and the next holder is asked.
+
+The floor travels with the request rather than being waited for before the
+turn opens, because the node running the turn may hold no data at all and have
+no applier of its own to wait on. A floor on one domain's log never holds up a
+read of the other: a tracker read does not depend on the knowledge base's rows.
+
+**What the floor does not reach.** The ranked searches — `search_knowledge`,
+`search_work_items` and the turn-start knowledge block — read an index each
+node builds behind its own rows, so no log position describes them and they
+carry no floor: a seat woken by a page created a moment ago may not find it by
+search yet, and finds it by listing or by its id. A vendor's wake — a Slack
+message, a Jira issue — carries no position at all, because what changed is in
+another company's system.
+
+So a seat's `linearizable` reads are not what makes it see its own trigger.
+What they buy is the other half: that an answer the turn *decides* on is not
+one from before the read arrived. The operator's reads are `linearizable` too
+and are not settable: the person asking is deciding something about their own
+company, and operators are few.
 
 ## See also
 

@@ -10,6 +10,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -56,9 +57,21 @@ func broker(t *testing.T) *nats.Conn {
 	return conn
 }
 
+// jsOn is a JetStream client over conn in the API this test's broker speaks:
+// it is started raw, with no domain, so a client addresses the account's own
+// JetStream.
+func jsOn(t *testing.T, conn *nats.Conn) jetstream.JetStream {
+	t.Helper()
+	js, err := jsapi.Account().Client(conn)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	return js
+}
+
 func syncerOn(t *testing.T, db *store.DB, conn *nats.Conn) *Syncer {
 	t.Helper()
-	s, err := New(db, conn, func(string) string { return seat.AgentID })
+	s, err := New(db, jsOn(t, conn), func(string) string { return seat.AgentID })
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -201,7 +214,7 @@ func TestHydrationTakesOnlyTheSeatItAsksFor(t *testing.T) {
 	}
 	// Publish both seats. The peer's syncer resolves its own agent id.
 	syncerOn(t, db, conn).Publish(ctx, seat.Handle)
-	peer, err := New(db, conn, func(string) string { return "other-agent-id" })
+	peer, err := New(db, jsOn(t, conn), func(string) string { return "other-agent-id" })
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -329,7 +342,7 @@ func TestABrokerThatCannotCountPendingFailsTheHydration(t *testing.T) {
 
 	// A new node, with a JetStream whose Info call fails.
 	newOwner := openStore(t)
-	syncer, err := New(newOwner, conn, func(string) string { return seat.AgentID })
+	syncer, err := New(newOwner, jsOn(t, conn), func(string) string { return seat.AgentID })
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

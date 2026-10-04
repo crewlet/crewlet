@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/usage"
 )
@@ -66,7 +67,7 @@ func newSpendFixture(t *testing.T) *spendFixture {
 func (f *spendFixture) sources() queries.Sources {
 	return queries.Sources{
 		State:   livestate.New(),
-		Usage:   f.db.Replicated(),
+		Usage:   storetest.EstateOf(f.db),
 		Company: func() *config.Company { return f.company },
 		Now:     func() time.Time { return spendNow },
 	}
@@ -102,10 +103,10 @@ func (f *spendFixture) day(node, day, handle string, turns, failed int64, cells 
 		f.t.Fatalf("envelope: %v", err)
 	}
 	rec := statelog.Record{Envelope: env, Payload: body, Position: statelog.Position{
-		Stream: usage.Domain{}.Stream().Name, Generation: 1, Seq: f.seq}}
-	if err := f.db.Replicated().Tx(f.t.Context(), func(tx *sql.Tx) error {
+		Stream: statelog.EstateStream(usage.Domain{}).Name, Generation: 1, Seq: f.seq}}
+	if err := storetest.EstateOf(f.db).Tx(f.t.Context(), func(tx *sql.Tx) error {
 		_, err := usage.NewApplier().Apply(f.t.Context(), tx, rec, statelog.ApplyOptions{
-			MaxVariables: f.db.Replicated().Caps().MaxVariables})
+			MaxVariables: storetest.EstateOf(f.db).Caps().MaxVariables})
 		return err
 	}); err != nil {
 		f.t.Fatalf("apply %s %s %s: %v", node, day, handle, err)

@@ -184,7 +184,12 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		// company's midnight and UTC's a board's "today" was a different
 		// day from the one a seat's own `list_work_items` resolved.
 	}, now, s.zone())
-	if err != nil {
+	switch {
+	case transient(err):
+		// NOT A REFUSAL OF THE REQUEST: the expansion is read through
+		// the estate router, and no copy could answer it yet.
+		return nil, err
+	case err != nil:
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
 	// THIS SURFACE'S OWN DEFAULT, applied where an absent level resolves.
@@ -231,6 +236,13 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		// showing only the position renders a deferral as lag.
 		"applied_through": answer.AppliedThrough,
 		"complete":        answer.Complete,
+	}
+	if answer.Coverage.Addressed > 0 {
+		// WHAT THE BOARD DID NOT REACH, beside its rows: a partition that
+		// did not answer is work this page never listed, and the same
+		// object every gathered answer carries says which. Absent where
+		// the reader states none, as on every answer type that carries one.
+		out["coverage"] = answer.Coverage
 	}
 	if answer.LogLag != nil {
 		// ABSENT RATHER THAN ZERO when the broker could not be reached.
@@ -714,6 +726,10 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 		"read_level": list.Level, "complete": list.Complete,
 		"position": list.Position, "log_lag": list.LogLag,
 	}
+	if list.Coverage.Addressed > 0 {
+		// WHAT THE LISTING DID NOT REACH — see [Sources.workItems].
+		out["coverage"] = list.Coverage
+	}
 	if list.After != "" {
 		out["after"] = list.After
 	}
@@ -976,7 +992,7 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 	// because a position is unambiguous and a timestamp is not.
 	if since := strings.TrimSpace(p.String("since")); since != "" {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		if at, err := tracker.ParseLogPosition(since); err == nil {
+		if at, err := statelog.ParsePosition(since); err == nil {
 			q.Since = at
 		} else {
 			when, err := time.Parse(time.RFC3339, since)
@@ -1005,7 +1021,7 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 		switch {
 		case errors.Is(err, tracker.ErrNoTask):
 			return nil, ErrNotFound
-		case errors.Is(err, statelog.ErrUnavailable):
+		case errors.Is(err, statelog.ErrUnavailable), transient(err):
 			return nil, err
 		}
 		// A GATE REFUSAL IS A BAD REQUEST, not a failure: the caller

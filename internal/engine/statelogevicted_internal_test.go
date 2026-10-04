@@ -59,7 +59,7 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 	s := e.native.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	name := running.domain.Name()
-	spec := running.domain.Stream()
+	spec := running.spec
 	mustApply(t, "a write before the peer's move", func() (tracker.WriteResult, error) {
 		return e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-before")
 	})

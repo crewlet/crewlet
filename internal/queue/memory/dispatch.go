@@ -369,7 +369,14 @@ func (b *Broker) invoke(
 	// this package counts redeliveries already spent.
 	perMessage := headroomLocked(sub, evs, client.maxRedeliveries)
 	b.mu.Unlock()
-	ctx = queue.WithHeadroom(ctx, perMessage)
+	// THE HANDLER IS DETACHED FROM THE CONTEXT THAT DROVE THE DRAIN, which
+	// is a PUBLISHER's — inline dispatch is a property of this twin, and the
+	// publisher is routinely another node. Its values ride along, its
+	// cancellation does not: on a real broker nothing carries a stopping
+	// publisher to a consumer, and dispatched under it every redelivery
+	// after the cancellation ran on a dead context and failed at its first
+	// call until the message was dead-lettered.
+	ctx = queue.WithHeadroom(context.WithoutCancel(ctx), perMessage)
 
 	res := runHandler(ctx, call)
 

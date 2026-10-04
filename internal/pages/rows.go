@@ -13,9 +13,10 @@ import (
 // The publisher's three seams: what it reads, what refuses a write it must not
 // make, and what tells a dropped record from a lost race.
 
-// NewRows builds the publisher's read seam.
-func NewRows(db *store.DB) (statelog.Rows, error) {
-	return statelog.NewRows(db, Domain{}, pageGuards)
+// NewRows builds the publisher's read seam over the log spec names — the one
+// the publisher writes, whose checkpoint and anchors the seam reads.
+func NewRows(db store.PartitionReader, spec statelog.StreamSpec) (statelog.Rows, error) {
+	return statelog.NewRows(db, Domain{}, spec, pageGuards)
 }
 
 // pageGuards answers the two object-level facts a first write needs.
@@ -69,7 +70,7 @@ func pageGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 	return false, false, nil
 }
 
-// ReadScope is the closure a READ is about.
+// ReadScope is the closure a SET read is about.
 //
 // It is the same alphabet a record's own scope resolves into, which is what
 // makes the coverage probe one comparison rather than a translation between two
@@ -77,13 +78,11 @@ func pageGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 // touches everything, but because a read that cannot say what it is about is
 // one every deferred record concerns, and the honest answer to "is this
 // complete" is then "no".
-func ReadScope(container, pageID string) statelog.ScopeSet {
-	switch {
-	case pageID != "":
-		return statelog.ScopeSet{Paths: []string{
-			ScopeTerm{Kind: TermObject, Container: container, ID: pageID}.Path(),
-		}}
-	case container != "":
+//
+// A POINT read is not formed here: one page is filed under the space its rows
+// say, which the reference does not — see [pageReadScope].
+func ReadScope(container string) statelog.ScopeSet {
+	if container != "" {
 		return statelog.ScopeSet{Paths: []string{
 			ScopeTerm{Kind: TermContainer, ID: container}.Path(),
 		}}
@@ -98,7 +97,7 @@ func ReadScope(container, pageID string) statelog.ScopeSet {
 // already has, and ClearForZero pays a coordination round trip because being
 // wrong there is a lost update rather than a duplicate.
 type Fence struct {
-	db     *store.DB
+	db     store.PartitionReader
 	nodeID string
 
 	// Floor is the fleet's published trim floor at a generation and Ends
@@ -120,7 +119,7 @@ type Fence struct {
 }
 
 // NewFence builds it.
-func NewFence(db *store.DB, nodeID string) *Fence {
+func NewFence(db store.PartitionReader, nodeID string) *Fence {
 	return &Fence{db: db, nodeID: nodeID}
 }
 
@@ -130,20 +129,26 @@ func NewFence(db *store.DB, nodeID string) *Fence {
 // precondition of an eviction being permitted at all, so the source that is
 // still fresh in exactly that failure is this node's own replicated table.
 func (f *Fence) Evicted(ctx context.Context) (bool, error) {
-	if f == nil || f.db == nil || f.nodeID == "" {
+	if f == nil || f.db.IsZero() || f.nodeID == "" {
 		return false, nil
 	}
 	var from, readmitted sql.NullInt64
-	// THROUGH THE HANDLE, NOT ITS POOL. `DB.SQL()` answers a NIL pool on a
-	// replicated estate that is not open — a legitimate, documented state
-	// of that peer, since an adoption closes it between its rename and its
-	// reopen — and a statement issued on it panics inside database/sql.
-	// [store.DB.Read] answers [store.ErrNoEstate], which the refusal below
-	// already handles as the honest "unreadable is not not-evicted".
-	err := f.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	// THROUGH THE HANDLE, NOT A POOL. A partition that is not open — a
+	// legitimate, documented state, since an adoption closes it between its
+	// rename and its reopen — has no pool, and a statement issued on a
+	// closed one panics inside database/sql. [store.PartitionReader.Read]
+	// answers [store.ErrNoEstate], which the refusal below already handles
+	// as the honest "unreadable is not not-evicted".
+	//
+	// AN EVICTION AND NOTHING ELSE: a release is the node's own statement as
+	// it leaves the log's partition, and what stops such a node writing here
+	// is that it no longer serves the partition ([statelog.Holding]) — refused
+	// as that, not as a removal from the fleet this node never suffered.
+	err := f.db.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 		SELECT from_position, readmitted_position
-		FROM pages_evictions WHERE node_id = ?`, f.nodeID).Scan(&from, &readmitted)
+		FROM pages_evictions WHERE node_id = ? AND kind = ?`,
+			f.nodeID, string(statelog.EvictionKindEviction)).Scan(&from, &readmitted)
 	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -185,10 +190,10 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 // THE SAME TWO GATES [Applier.Gated] INSTALLS, read from the publisher's side.
 // The two must agree: a resolution that looked for a gate the applier never
 // installs would read every unapplied record as "somebody else won".
-type Gates struct{ db *store.DB }
+type Gates struct{ db store.PartitionReader }
 
 // NewGates builds it.
-func NewGates(db *store.DB) *Gates { return &Gates{db: db} }
+func NewGates(db store.PartitionReader) *Gates { return &Gates{db: db} }
 
 // GatedAt reports whether a record at p applies nowhere, and the gate that
 // answers for it, by the rule [statelog.Gates] states — which the tracker's
@@ -196,21 +201,21 @@ func NewGates(db *store.DB) *Gates { return &Gates{db: db} }
 func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	writer, opID string, p statelog.Position) (statelog.Reason, bool, error) {
 
-	if g == nil || g.db == nil {
+	if g == nil || g.db.IsZero() {
 		return "", false, nil
 	}
 	var reason statelog.Reason
 	var gated bool
-	// ONE TRANSACTION FOR BOTH GATES, on ONE load of the replicated peer,
-	// and through the HANDLE rather than its pool — see [Fence.Evicted] for
-	// why a nil pool is reachable here. The tracker's reader has the same
-	// shape, for the same reason.
+	// ONE TRANSACTION FOR BOTH GATES, on ONE resolution of the partition,
+	// and through the HANDLE rather than a pool — see [Fence.Evicted] for
+	// why a closed pool is reachable here. The tracker's reader has the
+	// same shape, for the same reason.
 	//
-	// This used to say so and then make two calls, each its own
-	// `Replicated().Read` — so the two halves of one answer were read at
-	// two instants, and possibly from two FILES: every `Replicated()`
-	// reloads the peer pointer, and an adoption swaps that pointer (close,
-	// rename the donated file into place, reopen) while readers run. The
+	// This used to say so and then make two calls, each its own read — so
+	// the two halves of one answer were read at two instants, and possibly
+	// from two FILES: every call resolves the partition afresh, and an
+	// adoption replaces its file (close, rename the donated file into
+	// place, reopen) while readers run. The
 	// applier also commits between any two reads, and the deletion gate is
 	// position-independent, so a purge of this page committing between
 	// the two calls made the first half describe the estate before it and
@@ -222,7 +227,7 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	// enforced. One snapshot is one state the applier committed, so the
 	// answer is right whenever the rule is right for a single state, which
 	// is the only thing [Applier.Gated]'s own reasoning establishes.
-	err := g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := g.db.Read(ctx, func(tx *sql.Tx) error {
 		// THE DELETION GATE FIRST, by the rule [statelog.Gates] states: the
 		// marker holds the page for every writer for ever, where an
 		// eviction is one writer's and a readmission ends it, so `deleted`
@@ -230,16 +235,19 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 		// dropped either way, so the order decides only which one is
 		// REPORTED — and [Applier.Gated]'s opposite order decides only
 		// which one a drop is COUNTED under.
-		if ObjectKind(subj.Kind) == KindPage {
+		//
+		// AND OVER THE SAME SUBJECTS, by asking the one function the
+		// applier asks ([gatedPage]).
+		if pageID, ok := gatedPage(subj); ok {
 			var author sql.NullString
 			err := tx.QueryRowContext(ctx,
 				`SELECT purge_record_id FROM pages_deletions WHERE page_id = ?`,
-				subj.ID).Scan(&author)
+				pageID).Scan(&author)
 			switch {
 			case errors.Is(err, sql.ErrNoRows):
 			case err != nil:
 				return fmt.Errorf("pages: read the deletion gate for page "+
-					"%s: %w", subj.ID, err)
+					"%s: %w", pageID, err)
 			case author.Valid && author.String == opID:
 				// THE RECORD THAT WROTE THE MARKER IS NOT GATED BY IT,
 				// by its own id. Without the exception a purge whose
@@ -258,15 +266,20 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 			return nil
 		}
 		var from, readmitted sql.NullInt64
+		var kind string
 		err := tx.QueryRowContext(ctx, `
-			SELECT from_position, readmitted_position
-			FROM pages_evictions WHERE node_id = ?`, writer).Scan(&from, &readmitted)
+			SELECT from_position, readmitted_position, kind
+			FROM pages_evictions WHERE node_id = ?`, writer).Scan(&from, &readmitted, &kind)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return nil
 		case err != nil:
 			return fmt.Errorf("pages: read the eviction gate for node %s: %w",
 				writer, err)
+		}
+		gate, err := gateKind(kind)
+		if err != nil {
+			return err
 		}
 		// THE APPLIER'S WINDOW, spelled as [Applier.Gated] spells it: the
 		// two must agree, and the same two comparisons are what makes that
@@ -275,7 +288,9 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 		evicted := from.Valid && at > from.Int64
 		back := readmitted.Valid && at >= readmitted.Int64
 		if evicted && !back {
-			reason, gated = statelog.ReasonEvicted, true
+			// UNDER THE GATE THAT HOLDS THE RECORD: an eviction or the
+			// writer's own release, dropped alike and told apart.
+			reason, gated = gate.Reason(), true
 		}
 		return nil
 	})

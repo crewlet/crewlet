@@ -38,13 +38,13 @@ func TestATurnsCommentRepostedAfterAnAdoptionIsNotPostedTwice(t *testing.T) {
 	}
 	r.drain()
 
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `DELETE FROM pages_ops`)
 		return err
 	}); err != nil {
 		t.Fatalf("scrub the ledger: %v", err)
 	}
-	if err := statelog.RecordLedgerLoss(t.Context(), r.db.Replicated(),
+	if err := statelog.RecordLedgerLoss(t.Context(), r.db,
 		pages.Domain{}, time.Now()); err != nil {
 		t.Fatalf("record the join's watermark: %v", err)
 	}

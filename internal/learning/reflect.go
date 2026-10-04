@@ -16,13 +16,6 @@ import (
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
-// ReflectGroup is the dispatcher's consumer group.
-//
-// Its own group, shared with nothing: reflection is the one subsystem an
-// operator turns off on its own, and a group shared with another consumer
-// would take that consumer's traffic down with it.
-const ReflectGroup = "reflect-engine"
-
 // ReflectTool is the in-flight builtin an agent calls to write its own memory.
 //
 // The dispatcher reads it as "the LLM already handled persistence this turn".
@@ -42,9 +35,6 @@ const ReflectTool = "reflect_and_persist"
 // node reflecting the same turn writes a second diary row, which is the
 // bounded duplication the engine promises rather than exactly-once.
 const ReflectSeen = 1024
-
-// turnCompletedTopic is the subject completed turns arrive on.
-var turnCompletedTopic = topics.Event(types.TurnCompleted{}.EventType())
 
 // Turn is one completed turn, with the seat's role already resolved.
 //
@@ -219,11 +209,6 @@ type Worker interface {
 	Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 }
 
-// Subscriber is the half of the queue the dispatcher attaches through.
-type Subscriber interface {
-	Subscribe(ctx context.Context, topic, group string, h queue.Handler) error
-}
-
 // Reflector dispatches learning workers over completed turns.
 //
 // ONE PER PROCESS, not one per config epoch, even though its org and its
@@ -234,7 +219,18 @@ type Subscriber interface {
 // apply would empty that ring, so a redelivery landing either side of a
 // config change would be classified twice, which is the one failure the ring
 // exists to prevent. So an apply calls [Reflector.Reconfigure] and the
-// subscription, and the ring, stay put.
+// ring stays put.
+//
+// # Where it runs: on the seat's holder, never a fleet-wide group
+//
+// Reflection writes the seat's memory into the store of the node that runs
+// it, and only the node HOLDING the seat carries that memory on to the next
+// holder (memsync). So the node that ran a turn puts it on the seat's own
+// reflection subject ([types.ReflectionDue] on [topics.AgentReflect]), which
+// the engine attaches [Reflector.Handle] to while it holds the seat. It ran
+// off one fleet-wide group once, and on a fleet of N nodes all but one in N
+// of a seat's reflections ran where nothing of the seat was held — what they
+// wrote was never carried and never read.
 type Reflector struct {
 	pub queue.Publisher
 
@@ -339,15 +335,6 @@ func validateWorkers(workers []Worker) error {
 	return nil
 }
 
-// Start attaches the dispatcher to the completed-turn subject.
-func (r *Reflector) Start(ctx context.Context, sub Subscriber) error {
-	if err := sub.Subscribe(ctx, turnCompletedTopic, ReflectGroup, r.Handle); err != nil {
-		return fmt.Errorf("learning: subscribe %s: %w", turnCompletedTopic, err)
-	}
-	log.InfoContext(ctx, "reflect_engine_started", "workers", r.names())
-	return nil
-}
-
 func (r *Reflector) names() []string {
 	workers := r.epoch().workers
 	out := make([]string, 0, len(workers))
@@ -357,7 +344,9 @@ func (r *Reflector) names() []string {
 	return out
 }
 
-// Handle is the queue handler for one completed turn.
+// Handle is the queue handler for one turn due its reflection: the
+// [types.ReflectionDue] wake the node that ran the turn put on the seat's own
+// reflection subject.
 //
 // It ALWAYS acks, whatever happened. Reflection is work about a turn that is
 // already over: a nak would redeliver the turn to spend another round of
@@ -380,7 +369,7 @@ func (r *Reflector) Handle(ctx context.Context, ev *events.Event) queue.Result {
 			log.ErrorContext(ctx, "reflection_panicked", "error", rec, "stack", string(debug.Stack()))
 		}
 	}()
-	tc, ok := events.DataAs[*types.TurnCompleted](ev)
+	due, ok := events.DataAs[*types.ReflectionDue](ev)
 	if !ok {
 		// The subject carries one type, so this is a build that does not
 		// know it (a rolling upgrade) or a mis-routed publish. Acked
@@ -388,7 +377,7 @@ func (r *Reflector) Handle(ctx context.Context, ev *events.Event) queue.Result {
 		log.DebugContext(ctx, "reflection_skipped_unreadable_event", "type", eventTypeOf(ev))
 		return queue.Ack()
 	}
-	r.Reflect(ctx, *tc, events.TraceContext{
+	r.Reflect(ctx, due.Turn, events.TraceContext{
 		TraceID: ev.TraceID, SpanID: ev.SpanID, ParentSpanID: ev.ParentSpanID,
 	})
 	return queue.Ack()

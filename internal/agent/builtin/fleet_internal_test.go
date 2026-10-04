@@ -22,7 +22,7 @@ func featureFleet(t *testing.T) (*coordtest.Faulty, Fleet) {
 	store := coordtest.NewFaulty(memory.New())
 	claim := func(resource, owner string, meta map[string]any) {
 		t.Helper()
-		lease, err := store.TryAcquire(ctx, resource, coord.AcquireOptions{
+		lease, _, err := store.TryAcquire(ctx, resource, coord.AcquireOptions{
 			Owner: owner, TTL: time.Hour, Ungated: true, Meta: meta,
 		})
 		if err != nil || lease == nil {
@@ -89,7 +89,7 @@ func TestAHolderThatHasNotSaidIsUnavailable(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store, fleet := featureFleet(t)
-	if _, err := store.TryAcquire(ctx, coord.SeatResource("cto"), coord.AcquireOptions{
+	if _, _, err := store.TryAcquire(ctx, coord.SeatResource("cto"), coord.AcquireOptions{
 		Owner: "n3:draining", TTL: time.Hour,
 	}); err != nil {
 		t.Fatalf("claim: %v", err)

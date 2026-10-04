@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // Problem is one validation failure, located in the document and classified:
@@ -629,6 +630,74 @@ func (b *Bootstrap) Warnings() []Warning {
 				"broker's memory allowance. Name a `store_dir`, or drop the limit"))
 	}
 
+	// A PEER ENTRY THAT IS NOT ANOTHER MEMBER is not counted as one by any
+	// rule that counts members ([StreamCluster.members]) — and that is a
+	// decision the operator should see, because it is the difference between
+	// the count they wrote and the count the quorum and replica rules used.
+	// An alias of this host this file cannot recognise is the case the
+	// warning cannot catch, so it says so.
+	if b.Stream.Type != StreamNATS {
+		for _, d := range b.Stream.Cluster.members().Discounted {
+			where := idx(field("stream.cluster.peers"), d.Index)
+			if d.Self {
+				out = append(out, advisory(where, fmt.Sprintf(
+					"%q is this node's own route (it matches %s), so it is not "+
+						"counted as a member: stream.cluster.peers names the OTHER "+
+						"members, and the quorum and replica rules count this node "+
+						"once. Remove it. Another name for this host that this file "+
+						"cannot recognise — a DNS alias, `localhost` — would be "+
+						"counted as a member it is not", d.Raw, d.Matches)))
+				continue
+			}
+			out = append(out, advisory(where, fmt.Sprintf(
+				"%q repeats peers[%d], and one member listed twice is counted "+
+					"once. Remove it", d.Raw, d.RepeatOf)))
+		}
+	}
+
+	// TOO MANY VOTERS. No stream keeps more than [MaxStreamReplicas] copies,
+	// so a member past the fifth holds no copy anybody can ask for and adds
+	// only a voter to the metadata group — one more member every election
+	// and every stream or consumer created waits on. The fleet's broker is a
+	// fixed few members; a fleet that grows past them adds leaves.
+	//
+	// A WARNING RATHER THAN A REFUSAL: the fleet works, it only pays for
+	// consensus nothing is bought with. And under the single-file layout a
+	// node that holds data is a member, so a fleet of more than five data
+	// nodes has no other shape yet — the warning says so rather than
+	// recommending one this build refuses.
+	if kind := b.BrokerKind(); kind == placement.BrokerMember {
+		if others := len(b.Stream.Cluster.members().Others); others > MaxStreamReplicas-1 {
+			out = append(out, advisory(field("stream.cluster.peers"), fmt.Sprintf(
+				"names %d other members, so this fleet's broker has %d, and no stream "+
+					"keeps more than %d copies: every member past the %dth is a voter "+
+					"in the metadata group — one more member every election and every "+
+					"stream or consumer created waits on — holding no copy anybody "+
+					"asked for. Beyond %d a fleet adds LEAVES, not members (a node that "+
+					"holds data is always a member)",
+				others, others+1, MaxStreamReplicas, MaxStreamReplicas,
+				MaxStreamReplicas)))
+		}
+	}
+
+	// UNDECLARED ROLES IN A FLEET. Omitting node.roles is every role, which
+	// is the right default for the one process a company starts as and
+	// rarely what each node of a fleet should do: it keeps a copy of the
+	// company's state on this disk (`data`) and claims agents here (`seats`)
+	// whether or not the operator meant this node to. A fleet is a leaf, or
+	// a member with peers — a solo member is the single-process deployment
+	// the default exists for.
+	if b.Node.Roles == nil {
+		if b.declaresFleet() {
+			out = append(out, advisory(field("node.roles"), fmt.Sprintf(
+				"is not declared, so this fleet node runs every role — %s — "+
+					"including %q, which keeps a copy of the company's state on "+
+					"this disk, and %q, which runs agents here. Name the roles "+
+					"this node is for", strings.Join(nodeRoleNames, ", "),
+				placement.RoleData, placement.RoleSeats)))
+		}
+	}
+
 	// A BROKER TOLD TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG says
 	// nothing at all. `stream.debug` unlocks nats-server's own Debugf
 	// population, but those are still DEBUG records and every destination
@@ -644,6 +713,16 @@ func (b *Bootstrap) Warnings() []Warning {
 				"`-debug` to `crewlet run`"))
 	}
 	return out
+}
+
+// declaresFleet reports whether this document says its node is one of several:
+// a leaf, or a member with peers. A solo member is the single-process
+// deployment, and a client of an external cluster says nothing either way —
+// the cluster's other clients are in no file this one can see.
+func (b *Bootstrap) declaresFleet() bool {
+	kind := b.BrokerKind()
+	return kind == placement.BrokerLeaf ||
+		(kind == placement.BrokerMember && len(b.Stream.Cluster.members().Others) > 0)
 }
 
 // logsAtDebug reports whether ANY destination this document INSTALLS would
@@ -724,7 +803,13 @@ func CheckTiers(boot *Bootstrap, company *Company) error {
 	// deployment it describes. A company whose tracker and knowledge base are
 	// both a vendor's starts no log at all and is unaffected, which is why
 	// the rule needs both documents.
-	if company.RunsStateLog() && boot.Stream.Type != StreamNATS &&
+	//
+	// A MEMBER ONLY: a leaf keeps no stream of its own — every log it
+	// reaches lives on the members it joined, which hold the store
+	// directory — so it has nothing to lose to a restart and a store
+	// directory is refused on it outright ([StreamLeaf.validate]); and a
+	// client's streams are its external cluster's.
+	if company.RunsStateLog() && boot.BrokerKind() == placement.BrokerMember &&
 		strings.TrimSpace(boot.Stream.StoreDir) == "" {
 		p.add(field("stream.store_dir"), ErrMissing,
 			"this company runs the engine's own backends (tracker.backend: %s, "+

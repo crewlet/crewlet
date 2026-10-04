@@ -3,11 +3,13 @@ package store_test
 import (
 	"database/sql"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A HANDLE THAT IS NOT OPEN ANSWERS. It does not take the process with it.
@@ -15,11 +17,12 @@ import (
 // # The contract, and why it needed a gate
 //
 // [store.ErrNoEstate]'s own doc states it: "IT IS A STATE, NOT A BUG IN THE
-// CALLER. DB.Replicated answers nil while an adoption holds the peer closed
-// between its rename and its reopen, and again after DB.Close — both
-// documented and deliberate — so a goroutine that was already in flight when
-// one of those happened reaches here legitimately. What it must NOT reach is a
-// nil dereference: a maintenance tick racing a shutdown panicked the engine."
+// CALLER. DB.PartitionDB answers it while an adoption holds a partition closed
+// between its rename and its reopen, for a partition this node does not hold,
+// and after DB.Close — all documented and deliberate — so a goroutine that was
+// already in flight when one of those happened reaches here legitimately. What
+// it must NOT reach is a nil dereference: a maintenance tick racing a shutdown
+// panicked the engine."
 //
 // It reached one anyway, a second time, and the stack is worth keeping because
 // every layer above it was already correct:
@@ -114,9 +117,14 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 				t.Errorf("Path() = %q, want no file", got)
 			}
 		},
-		"ReplicatedPath": func(t *testing.T) {
-			if got := d.ReplicatedPath(); got != "" {
-				t.Errorf("ReplicatedPath() = %q, want no file", got)
+		"PartitionPath": func(t *testing.T) {
+			if got := d.PartitionPath(storetest.LayoutZero(1)); got != "" {
+				t.Errorf("PartitionPath() = %q, want no file", got)
+			}
+		},
+		"File": func(t *testing.T) {
+			if got := d.File(); got != (store.PartitionFile{}) {
+				t.Errorf("File() = %+v, want no partition", got)
 			}
 		},
 		"EmbeddingDim": func(t *testing.T) {
@@ -125,10 +133,27 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 			}
 		},
 		"Caps": func(t *testing.T) { _ = d.Caps() },
-		"Replicated": func(t *testing.T) {
-			if peer := d.Replicated(); peer != nil {
-				t.Error("a closed handle answered a peer")
+		"PartitionDB": func(t *testing.T) {
+			part, err := d.PartitionDB("estate.000")
+			wantErrNoEstate(t, err)
+			if part != nil {
+				t.Error("a closed handle answered a partition")
 			}
+		},
+		"OpenPartitions": func(t *testing.T) {
+			if got := d.OpenPartitions(); got != nil {
+				t.Errorf("OpenPartitions() = %v, want none", got)
+			}
+		},
+		"PartitionHandle": func(t *testing.T) {
+			h := d.PartitionHandle("estate.000")
+			if !h.IsZero() {
+				t.Error("a closed handle built a partition handle that names a node")
+			}
+			wantErrNoEstate(t, h.Read(ctx, func(*sql.Tx) error {
+				t.Error("the body ran through a partition of a handle that is not open")
+				return nil
+			}))
 		},
 		"SQL": func(t *testing.T) {
 			if pool := d.SQL(); pool != nil {
@@ -138,12 +163,17 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 		},
 
 		// ---- the lifecycle: idempotent, because a close may lose a race ---
-		"Close":           func(t *testing.T) { _ = d.Close() },
-		"CloseReplicated": func(t *testing.T) { _ = d.CloseReplicated() },
-		"ReopenReplicated": func(t *testing.T) {
-			if err := d.ReopenReplicated(ctx); err == nil {
-				t.Error("a handle that is not open reported a successful reopen")
+		"Close": func(t *testing.T) { _ = d.Close() },
+		"OpenPartition": func(t *testing.T) {
+			part, err := d.OpenPartition(ctx, storetest.LayoutZero(1))
+			wantErrNoEstate(t, err)
+			if part != nil {
+				t.Error("a handle that is not open opened a partition")
 			}
+		},
+		"ClosePartition": func(t *testing.T) { wantErrNoEstate(t, d.ClosePartition("estate.000")) },
+		"DropPartition": func(t *testing.T) {
+			wantErrNoEstate(t, d.DropPartition(ctx, storetest.LayoutZero(1)))
 		},
 		"LearnEmbeddingDim": func(t *testing.T) { d.LearnEmbeddingDim(768) },
 
@@ -151,7 +181,7 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 		//
 		// Their own methods reach `x.db.sql` directly and would panic on a nil
 		// db — and that is not a gap here, because every one of them is built
-		// from the NODE estate and only the REPLICATED peer is ever nil.
+		// from the NODE's own file, and only a partition is ever not open.
 		// `engine/backends.go` takes `db.Events()`, `engine/reconcile.go` and
 		// `configapi` take `opts.Store.Configs()`, `maintenance/jobs.go` takes
 		// both: the node handle, which is open for as long as the process is.
@@ -159,10 +189,10 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 		// for one without dying, since the accessor costs nothing and the
 		// refusal belongs at the statement.
 		//
-		// The path that IS nil is `DB.Replicated()`, and it is reached as
-		// `Replicated().Read(...)` at ten sites across internal/search,
-		// internal/tracker and internal/engine — every one of them a segfault
-		// before the guard above, not merely the one the retention tick hit.
+		// What is not open is a PARTITION, and it is reached through a
+		// [store.PartitionHandle] — whose own roster is the next test — at
+		// every site across internal/search, internal/tracker and
+		// internal/engine that once took a nil peer and segfaulted.
 		"Configs":       func(t *testing.T) { _ = d.Configs() },
 		"Events":        func(t *testing.T) { _ = d.Events() },
 		"SecretValues":  func(t *testing.T) { _ = d.SecretValues(nil) },
@@ -186,7 +216,7 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 		t.Errorf("*store.DB exports %v with nothing here saying what they "+
 			"answer on a handle that is not open. Every one of them can be "+
 			"reached by a goroutine already in flight when an adoption or a "+
-			"Close nils the peer — see store.ErrNoEstate — so classify it: "+
+			"Close ends a handle — see store.ErrNoEstate — so classify it: "+
 			"ErrNoEstate if it can report one, a meaningful zero if it "+
 			"cannot.", missing)
 	}
@@ -219,5 +249,99 @@ func wantErrNoEstate(t *testing.T, err error) {
 	if !errors.Is(err, store.ErrNoEstate) {
 		t.Errorf("err = %v, want store.ErrNoEstate — a caller cannot tell a "+
 			"closing estate from a real fault without it", err)
+	}
+}
+
+// A PARTITION HANDLE THAT NAMES NOTHING OPEN ANSWERS, EVERY METHOD OF IT.
+//
+// The handle is what a holder keeps, and it outlives every file it resolves to:
+// the zero value a holder given no estate keeps, a partition the node never
+// held, one an adoption holds closed, and every partition of a node that has
+// closed. Each must answer [store.ErrNoEstate] or a meaningful zero, and
+// neither of its two types may grow a method this roster has not classified,
+// for [TestAHandleThatIsNotOpenAnswersRatherThanPanics]' reason.
+func TestAPartitionHandleThatNamesNothingOpenAnswers(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	closed, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
+	if err := closed.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	notHeld, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = notHeld.Close() })
+
+	for name, h := range map[string]store.PartitionHandle{
+		"the zero handle":                 {},
+		"a partition the node never held": notHeld.PartitionHandle("tracker.007"),
+		"a partition of a closed node":    storetest.EstateOf(closed),
+	} {
+		answers := map[string]func(t *testing.T){
+			"Read": func(t *testing.T) {
+				wantErrNoEstate(t, h.Read(ctx, func(*sql.Tx) error {
+					t.Error("the body ran against a partition that is not open")
+					return nil
+				}))
+			},
+			"Tx": func(t *testing.T) {
+				wantErrNoEstate(t, h.Tx(ctx, func(*sql.Tx) error {
+					t.Error("the body ran against a partition that is not open")
+					return nil
+				}))
+			},
+			"Writer": func(t *testing.T) {
+				w, err := h.Writer(ctx)
+				wantErrNoEstate(t, err)
+				if w != nil {
+					t.Error("a writer was pinned on a partition that is not open")
+				}
+			},
+			"DB": func(t *testing.T) {
+				db, err := h.DB()
+				wantErrNoEstate(t, err)
+				if db != nil {
+					t.Error("a partition that is not open answered a file")
+				}
+			},
+			"Caps": func(t *testing.T) {
+				if got := h.Caps(); !reflect.DeepEqual(got, store.Capabilities{}) {
+					t.Errorf("Caps() = %+v, want the zero probe", got)
+				}
+			},
+			"Name":   func(t *testing.T) { _ = h.Name() },
+			"IsZero": func(t *testing.T) { _ = h.IsZero() },
+			"Reader": func(t *testing.T) {
+				r := h.Reader()
+				if r.IsZero() != h.IsZero() || r.Name() != h.Name() {
+					t.Errorf("the reader of %q is %q, zero %v", h.Name(), r.Name(), r.IsZero())
+				}
+				wantErrNoEstate(t, r.Read(ctx, func(*sql.Tx) error {
+					t.Error("the body ran against a partition that is not open")
+					return nil
+				}))
+			},
+		}
+		for _, typ := range []reflect.Type{
+			reflect.TypeFor[store.PartitionHandle](), reflect.TypeFor[store.PartitionReader](),
+		} {
+			for i := range typ.NumMethod() {
+				if _, held := answers[typ.Method(i).Name]; !held {
+					t.Errorf("%s exports %s with nothing here saying what it answers "+
+						"for a partition that is not open", typ.Name(), typ.Method(i).Name)
+				}
+			}
+		}
+		for method, check := range answers {
+			t.Run(name+"/"+method, func(t *testing.T) {
+				defer func() {
+					if p := recover(); p != nil {
+						t.Fatalf("%s panicked for %s: %v", method, name, p)
+					}
+				}()
+				check(t)
+			})
+		}
+	}
+	if !(store.PartitionHandle{}).IsZero() {
+		t.Error("the zero handle does not say it names no partition")
 	}
 }

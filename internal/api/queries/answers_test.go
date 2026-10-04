@@ -20,16 +20,20 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 func openStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "q.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "q.db"), store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.OpenPartition(t.Context(), storetest.LayoutZero(1)); err != nil {
+		t.Fatalf("open layout 0's partition beside the node: %v", err)
+	}
 	return db
 }
 
@@ -165,10 +169,10 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		// company days, a source of its own rather than the fleet's turn
 		// detail; `seat_activity` is every seat's turns over those same
 		// days, summed across nodes.
-		{"the usage domain alone", queries.Sources{Usage: db.Replicated()},
+		{"the usage domain alone", queries.Sources{Usage: storetest.EstateOf(db)},
 			[]string{"page_reads", "seat_activity", "token_series", "viewer"}},
 		{"all of them", queries.Sources{
-			State: state, Events: fleetOf(db.Events()), Usage: db.Replicated(),
+			State: state, Events: fleetOf(db.Events()), Usage: storetest.EstateOf(db),
 		}, []string{"agent", "event", "event_series", "events", "page_reads",
 			"phases", "seat_activity", "token_series", "tokens", "trace", "turn", "turns", "viewer"}},
 	} {

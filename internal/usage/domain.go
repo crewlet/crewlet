@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -78,12 +77,9 @@ const (
 	LogDuplicates = 2 * time.Minute
 )
 
-// Stream is the usage domain's compacted changelog.
-func (Domain) Stream() statelog.StreamSpec {
-	return statelog.StreamSpec{
-		Name:          topics.UsageLogStream,
-		Subjects:      []string{topics.UsageLogWildcard},
-		SubjectPrefix: topics.UsageLogPrefix,
+// StreamShape is what every one of the usage domain's compacted changelogs is.
+func (Domain) StreamShape() statelog.StreamShape {
+	return statelog.StreamShape{
 		MaxBytes:      LogMaxBytes,
 		MaxPerSubject: 1,
 		// THE STREAM FORGETS A DAY WHEN THE ROWS DO. A message older than
@@ -97,6 +93,34 @@ func (Domain) Stream() statelog.StreamSpec {
 		// belongs to, so there is no race and no expectation to form.
 		ArbitratedKinds: nil,
 	}
+}
+
+// PartitionOf is the partition a usage record belongs to: the one partition
+// that carries the usage domain's log ([statelog.Layout.OnlyPartition]).
+//
+// NOTHING HERE IS KEYED TO A PARTITION. A node-day is a census row a spend
+// window reads across every seat at once, so a layout that divided it would
+// turn every spend answer into a gather for a table a few hundred megabytes at
+// its largest. The engine's partitioned layout puts the whole domain in the
+// company space's one partition; a layout that divides it places nothing —
+// every record answers the zero partition, which no log carries, rather than
+// being guessed onto a log. A barrier is answered as the framework's, for the
+// vectors' reason.
+func (Domain) PartitionOf(l statelog.Layout, env statelog.Envelope) (statelog.PartitionID, bool) {
+	if env.Kind == statelog.BarrierKind {
+		return statelog.PartitionID{}, false
+	}
+	return l.OnlyPartition(Domain{}.Name()), true
+}
+
+// ScopePartition is the partition a scope path lies in — where
+// [Domain.PartitionOf] places its record — or none for the domain's own root,
+// which names every node-day on whichever log the record is written to.
+func (Domain) ScopePartition(l statelog.Layout, path string) (statelog.PartitionID, bool) {
+	if path == ScopeRoot {
+		return statelog.PartitionID{}, false
+	}
+	return l.OnlyPartition(Domain{}.Name()), true
 }
 
 // RecordVersion is the record shape this build reads.
@@ -185,8 +209,10 @@ func (Domain) FeedGroup() string { return "" }
 // The guards answer FALSE for both, and that is this domain's answer rather
 // than an omission: an object is created by its first record and there is no
 // deletion marker, since a day leaves by the horizon rather than by a record.
-func NewRows(db *store.DB) (statelog.Rows, error) {
-	return statelog.NewRows(db, Domain{},
+//
+// spec is the log the publisher writes, whose checkpoint the seam reads.
+func NewRows(db store.PartitionReader, spec statelog.StreamSpec) (statelog.Rows, error) {
+	return statelog.NewRows(db, Domain{}, spec,
 		func(context.Context, *sql.Tx, statelog.Subject) (bool, bool, error) {
 			return false, false, nil
 		})

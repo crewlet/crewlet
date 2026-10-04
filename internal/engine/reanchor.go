@@ -111,16 +111,19 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 		return statelog.ReanchorPlan{}, err
 	}
 	s := e.native.Load().log
+	if err = s.appends("a reanchor"); err != nil {
+		return statelog.ReanchorPlan{}, err
+	}
 	record, err := generationEncoder(running.domain)
 	if err != nil {
 		return statelog.ReanchorPlan{}, err
 	}
-	name := running.domain.Name()
+	name := running.key
 
-	// ONE RECOVERY AT A TIME, with a runtime adoption: that replaces the
-	// replicated file whole, and this writes a checkpoint in it.
-	s.recovering.Lock()
-	defer s.recovering.Unlock()
+	// ONE RECOVERY AT A TIME ON THIS LOG'S PARTITION, with a runtime
+	// adoption: that replaces the partition's file whole, and this writes a
+	// checkpoint in it.
+	defer s.recovering.lock(running.id.Partition)()
 
 	wasRunning := s.haltApplier(name)
 	completed := false
@@ -143,12 +146,13 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 	}
 	plan, err := statelog.Reanchor(ctx, statelog.ReanchorDeps{
 		Domain:   running.domain,
+		Spec:     running.spec,
 		Stream:   reanchorStream{log: running.log},
 		Record:   record,
 		Consumer: running.consumer,
 		Runner:   running.runner,
 		Evicted:  running.evicted,
-		DB:       replicatedEstate{node: s.db},
+		DB:       s.estate(running.id.Partition),
 		By:       req.By,
 		NodeID:   e.native.Load().nodeID,
 		// THE BRING-UP BUDGET OF THIS BROKER, for the steps after the
@@ -265,9 +269,9 @@ func (r reanchorStream) CreatedAt(ctx context.Context) (time.Time, error) {
 // position row opened a generation no row names. The second value is the
 // peers that have already re-anchored, by name, for the refusal.
 func (e *Engine) reanchorInputs(ctx context.Context,
-	running *runningDomain) (statelog.ReanchorInputs, []string, error) {
+	running *runningLog) (statelog.ReanchorInputs, []string, error) {
 
-	stream := running.domain.Stream().Name
+	stream := running.spec.Name
 	stats, err := running.log.Stats(ctx)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: %s could not be read, "+
@@ -278,7 +282,8 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	// THE CHECKPOINT ROW, not the runner's memory of it: the generation the
 	// transition derives from and the instant the rows are keyed to are the
 	// durable ones, and the loop that would move them is halted.
-	checkpoint, _, err := statelog.CheckpointOf(ctx, e.backends.Store.Replicated(), stream)
+	checkpoint, _, err := statelog.CheckpointOf(ctx,
+		e.backends.Store.PartitionHandle(running.id.Partition.String()).Reader(), stream)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, err
 	}
@@ -314,17 +319,17 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 		// node's own: every node re-anchors its own copy of such a log.
 		return in, nil, nil
 	}
-	domain := running.domain.Name()
+	domain := running.key
 	self := n.nodeID
 
 	// UNREADABLE IS NOT "no peers". A register nobody could list is exactly
 	// the outage during which re-anchoring is most tempting and least
 	// justified, so RegisterReadable stays false and the permission refuses
 	// on it — which is why the read's error goes no further than this.
-	rows, readErr := e.backends.Fleet.Positions(ctx)
+	rows, readErr := n.log.positions(ctx)
 	// A FLOOR IS ONLY EVER A SOURCE OF AN ABANDONED GENERATION here, and one
 	// that cannot be read leaves that number to the log's own records.
-	floors, _ := e.backends.Fleet.Floors(ctx)
+	floors, _ := n.log.floors(ctx)
 	through := in.Generation
 	var candidates []string
 	if readErr == nil {
@@ -346,7 +351,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, err
 	}
-	openers, err := statelog.GenerationOpeners(ctx, running.domain, enc, running.log,
+	openers, err := statelog.GenerationOpeners(ctx, running.domain, running.spec, enc, running.log,
 		in.Generation, through)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: which generations of %s "+
@@ -359,7 +364,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 			candidates = append(candidates, writer)
 		}
 	}
-	evicted, err := n.log.evictedOn(ctx, running.domain, running.log, candidates)
+	evicted, err := n.log.evictedOn(ctx, running.domain, running.id.Partition, running.spec, running.log, candidates)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: whether the peers ahead "+
 			"of this node on %s are evicted could not be read, and an evicted "+
@@ -448,7 +453,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 // it known which subject an earlier attempt of this node's would have written.
 // An unreadable log refuses, because whether the reanchor loses writes is the
 // question.
-func (e *Engine) restoredTail(ctx context.Context, running *runningDomain, n *native,
+func (e *Engine) restoredTail(ctx context.Context, running *runningLog, n *native,
 	enc statelog.GenerationEncoder, in *statelog.ReanchorInputs) error {
 
 	// ONLY THE RESTORED CASE has a tail to fill — and a case that cannot be
@@ -456,9 +461,9 @@ func (e *Engine) restoredTail(ctx context.Context, running *runningDomain, n *na
 	if which, _, _ := in.Case(); which != statelog.ReanchorRestored {
 		return nil
 	}
-	stream := running.domain.Stream().Name
+	stream := running.spec.Name
 	next := max(in.Generation, in.Abandoned) + 1
-	opened, own, err := statelog.OwnGeneration(ctx, running.domain, enc, running.log,
+	opened, own, err := statelog.OwnGeneration(ctx, running.domain, running.spec, enc, running.log,
 		next, n.nodeID)
 	if err != nil {
 		return fmt.Errorf("%w: whether an earlier reanchor of %s on this node already "+
@@ -469,8 +474,8 @@ func (e *Engine) restoredTail(ctx context.Context, running *runningDomain, n *na
 	if own {
 		in.Opened, bound = opened, opened-1
 	}
-	in.Unheld, err = statelog.UnheldTail(ctx, running.domain,
-		replicatedEstate{node: n.log.db}, running.log, in.Generation, in.FirstSeq, bound)
+	in.Unheld, err = statelog.UnheldTail(ctx, running.domain, running.spec,
+		n.log.estate(running.id.Partition).Reader(), running.log, in.Generation, in.FirstSeq, bound)
 	if err != nil {
 		return fmt.Errorf("%w: whether %s holds records written after the restore "+
 			"that this node's rows do not could not be read, and a restored reanchor "+
@@ -504,16 +509,16 @@ var ErrUnknownStream = errors.New("engine: not a domain log this node runs")
 
 // runningStream is the running domain whose log is stream, or
 // [ErrUnknownStream] naming the streams there are.
-func (e *Engine) runningStream(stream string) (*runningDomain, error) {
+func (e *Engine) runningStream(stream string) (*runningLog, error) {
 	n := e.native.Load()
 	if n == nil || n.log == nil {
 		return nil, fmt.Errorf("%w: this node runs no state log, so %q is not "+
 			"one of its logs", ErrUnknownStream, stream)
 	}
-	running := n.log.Domain(n.log.domainOf(stream))
+	running := n.log.logOf(stream)
 	if running == nil {
 		return nil, fmt.Errorf("%w: %q — the streams this build runs are %v",
-			ErrUnknownStream, stream, maintenanceStreams())
+			ErrUnknownStream, stream, maintenanceStreams(n.log.layout))
 	}
 	return running, nil
 }

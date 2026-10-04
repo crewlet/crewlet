@@ -223,8 +223,7 @@ func decidePlace(ctx context.Context, tx *sql.Tx, place Place, ifMatch uint64) (
 	case err != nil:
 		return nil, err
 	case !held:
-		return nil, fmt.Errorf("tracker: task %s is not on this node: %w",
-			place.Task, statelog.ErrUnavailable)
+		return nil, missingTask(ctx, tx, place.Task, "it cannot be placed")
 	case current.Removed != nil:
 		return nil, invalid("task %s was removed by %s at %s; "+
 			"restore it first", place.Task, current.Removed.By,

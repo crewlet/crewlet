@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE FLEET SINGLETONS, and the one gate they all pass through.
@@ -50,6 +52,66 @@ func (e *Engine) workerDuty(name string, ttl time.Duration) schedule.DutyFunc {
 	e.duties.add(name)
 	return schedule.ClaimNamedDuty(e.backends.Coord, name,
 		e.node.Owner(), e.node.ID(), ttl)
+}
+
+// partitionDutyName is the name of duty's singleton for partition p: the duty's
+// own name for layout 0's one partition, and `<duty>@<partition>` for every
+// other — `retention@tracker.007`.
+//
+// # One singleton per partition, and why layout 0's keeps its name
+//
+// A duty that works a partition's logs — the trim, the embedding of a
+// partition's sources, the tracker's repairs — is the partition's to run, not
+// the company's: its inputs are the partition's rows, which only the nodes
+// holding it have, and a node offline on one partition must not stop the work
+// on every other. So each partition has its own singleton, and the fleet's
+// duty leases grow with the partitions a layout has rather than with its nodes.
+//
+// LAYOUT 0's IS THE NAME THE DUTY HAS ALWAYS HAD — `worker:retention`, not
+// `worker:retention@estate.000` — for the reason a layout-0 log is keyed by its
+// domain alone ([statelog.LogID.String]): a node on this build and a node on
+// the build before it in one fleet must contend for ONE lease, or both would
+// run the duty at once for the length of a rolling upgrade.
+func partitionDutyName(duty string, p statelog.PartitionID) string {
+	if p == statelog.EstatePartition {
+		return duty
+	}
+	return duty + "@" + p.String()
+}
+
+// partitionDuty is [Engine.workerDuty] for duty's singleton of partition p,
+// claimable ONLY WHILE THIS NODE SERVES p (holding, §F14).
+//
+// # Why a claim asks whether this node serves the partition
+//
+// The work is decided from the partition's rows and published to its logs, so
+// only a node that holds a current copy and may write the logs can do it: a
+// node that does not hold p has no rows to read, a joiner's rows are not yet
+// the partition's, and a leaver has stopped deciding writes there. Asked at
+// every claim, because a node's serving set changes while it runs; a node that
+// stops serving p stops renewing, and the duty moves to another server within
+// its TTL. Holding it cannot tell is an error, which the loops log and skip —
+// never a claim.
+func (e *Engine) partitionDuty(duty string, ttl time.Duration, p statelog.PartitionID,
+	holding statelog.Holding) schedule.DutyFunc {
+
+	claim := e.workerDuty(partitionDutyName(duty, p), ttl)
+	return func(ctx context.Context) (bool, error) {
+		serving, err := holding.Serving(p)
+		switch {
+		case err != nil:
+			return false, fmt.Errorf("engine: the %s duty of %s: whether this node "+
+				"serves the partition is unknown: %w", duty, p, err)
+		case !serving:
+			return false, nil
+		case claim == nil:
+			// THE SINGLE-NODE CASE, which [Engine.workerDuty] answers
+			// with no claim at all: there is nobody to be a singleton
+			// among.
+			return true, nil
+		}
+		return claim(ctx)
+	}
 }
 
 // workerHold is [Engine.workerDuty] for a lease that is GIVEN BACK.

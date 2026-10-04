@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
@@ -28,7 +29,7 @@ func TestAnEpochIsIndexedBeforeItIsPublished(t *testing.T) {
 	// current and nothing indexed, which is what boot starts from.
 	e.epoch.current.Store(nil)
 
-	e.installEpoch(company)
+	e.installEpoch(company, time.Time{})
 
 	reg := e.Registry()
 	if reg == nil {
@@ -65,7 +66,7 @@ func TestPublishingKeepsTheIndexBuiltForThatEpoch(t *testing.T) {
 	if err := built.Register(jira.Backend, "agent-ceo", "ceo"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	e.installEpoch(company)
+	e.installEpoch(company, time.Time{})
 	if e.Registry() != built {
 		t.Fatal("publishing rebuilt the registry the apply had already indexed, dropping " +
 			"the seat identities its vendor wiring registered in between")
@@ -78,7 +79,7 @@ func TestPublishingKeepsTheIndexBuiltForThatEpoch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("company: %v", err)
 	}
-	e.installEpoch(next)
+	e.installEpoch(next, time.Time{})
 	if e.Registry() == built || !e.indexes(next) {
 		t.Fatal("a new epoch was published over the previous epoch's registry")
 	}

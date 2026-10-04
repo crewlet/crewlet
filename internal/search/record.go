@@ -42,7 +42,19 @@ import (
 //
 // A record above it is RETAINED at its position rather than skipped, so a
 // newer peer's shape survives a rolling upgrade in both directions.
-const RecordVersion = 1
+//
+// # What each version added
+//
+//   - 1: the documents' own records — an embed and a forget of a page or a
+//     task.
+//   - 2: the semantic index's records ([IndexSource]: [OpCentroids],
+//     [OpReassign], [OpMeasure]), ADR-0028.
+//
+// A record is WRITTEN at the lowest version that expresses it, never simply at
+// this constant — see [versionedFields] — and it is the highest version that
+// table names, which the framework's conformance suite holds it to, so a kind
+// added at a higher version cannot be written at one no build yet reads.
+const RecordVersion = 2
 
 // Source is where an embedded document came from.
 //
@@ -85,11 +97,90 @@ const (
 	OpForget Op = "forget"
 )
 
+const (
+	// OpCentroids installs the partition's semantic index — or retires it —
+	// on the subject [IndexCentroids]. See [IndexRecord].
+	OpCentroids Op = "centroids"
+
+	// OpReassign re-files one batch of the rollout of the index installed
+	// at [ReassignRecord.Index].
+	OpReassign Op = "reassign"
+
+	// OpMeasure records a later measurement of the installed index, and the
+	// probe count it chose. See [MeasureRecord].
+	OpMeasure Op = "measure"
+)
+
 // Ops is every operation this build writes.
-var Ops = []Op{OpEmbed, OpForget}
+var Ops = []Op{OpEmbed, OpForget, OpCentroids, OpReassign, OpMeasure}
 
 // Valid reports whether an operation off the wire is one this build knows.
 func (o Op) Valid() bool { return slices.Contains(Ops, o) }
+
+// versionedFields is the vector domain's field table: the record version each
+// operation and each subject kind after the base format was introduced at — the
+// version a record carrying it is written at, and the lowest a reader must read
+// to apply it ([statelog.RecordFields]).
+//
+// # Why the framework's table rather than one of this package's own
+//
+// It was one of this package's own once — a map of op and source to version,
+// consulted by a function beside it — while the tracker and the knowledge base
+// stamped through [statelog.RecordFields]: two spellings of one rule, and the
+// framework's conformance suite could hold only one of them. The suite
+// certifies that a build reads exactly the highest version its table names
+// and that every record carrying a row is stamped at that row's version, and
+// a domain with a private table passed it by declaring none.
+//
+// # A ROW FOR EVERY OPERATION AND KIND ABOVE THE BASE FORMAT
+//
+// A record carries an operation AND a subject kind, and either can be new, so
+// each has a row that names its VALUE ([statelog.VersionedField.Equals]): a
+// row naming only the key would stamp every record the domain writes. The base
+// format's own — an embed and a forget of a page or a task — need none, and a
+// test holds the table to every member of [Ops], [Sources] and [IndexSource]
+// so a kind added without its row is a failure rather than a record written at
+// a version the builds before it read, refused by each as a writer fault and
+// retried on every redelivery, where the rolling upgrade's contract is that
+// they defer it.
+//
+// # Why the LOWEST version that expresses it, never [RecordVersion]
+//
+// A document's embed is the same shape it always was, and stamping it 2 would
+// make every version-1 peer of a rolling upgrade defer every vector this build
+// computes — a whole corpus unsearchable by meaning on the old nodes for the
+// length of the upgrade, for a shape they read perfectly well.
+var versionedFields = statelog.RecordFields{
+	// THE SEMANTIC INDEX'S RECORDS, at version 2 (ADR-0028): three
+	// operations on one subject kind, each named by value. A build reading 1
+	// has no applier for any of them and retains them until it upgrades.
+	{Name: "Op=centroids", Since: 2, Op: string(OpCentroids),
+		Path: []string{"op"}, Equals: string(OpCentroids)},
+	{Name: "Op=reassign", Since: 2, Op: string(OpReassign),
+		Path: []string{"op"}, Equals: string(OpReassign)},
+	{Name: "Op=measure", Since: 2, Op: string(OpMeasure),
+		Path: []string{"op"}, Equals: string(OpMeasure)},
+	{Name: "Subject.Source=index", Since: 2,
+		Path: []string{"subject", "source"}, Equals: string(IndexSource)},
+}
+
+// VersionedFields is the table, for the conformance suite.
+func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
+
+// minimumVersion is the lowest version r may be stamped at under
+// [versionedFields]: one where it carries nothing the base format lacked.
+func (r VectorRecord) minimumVersion() (int, error) {
+	body, err := json.Marshal(r)
+	if err != nil {
+		return 0, err
+	}
+	return versionedFields.Minimum(string(r.Op), body)
+}
+
+// indexOp reports an operation about the index rather than about a document.
+func (o Op) indexOp() bool {
+	return o == OpCentroids || o == OpReassign || o == OpMeasure
+}
 
 // Subject is the object a vector record is about: one source document.
 //
@@ -101,17 +192,54 @@ type Subject struct {
 	ID     string `json:"id"`
 }
 
-// Validate refuses a subject that cannot address a row.
+// Validate refuses a subject that cannot address a row THIS BUILD writes.
+//
+// The SECOND PASS's check, never the envelope's: a kind is a fact about which
+// build wrote the record, and the envelope is the half every build must read —
+// see [Subject.wellFormed].
 func (s Subject) Validate() error {
-	if !s.Source.Valid() {
+	if err := s.wellFormed(); err != nil {
+		return err
+	}
+	if !s.Source.Valid() && s.Source != IndexSource {
 		return fmt.Errorf("search: %q is not a source this build embeds", s.Source)
 	}
-	if strings.TrimSpace(s.ID) == "" || strings.ContainsAny(s.ID, " \t\n*>") {
+	return nil
+}
+
+// wellFormed refuses a subject that cannot be a subject on the wire at all, and
+// nothing else.
+//
+// # Why the envelope asks only this
+//
+// The envelope is the half EVERY build reads, for ever ([statelog.Domain]'s
+// deferral contract), and a failure to read it STOPS the applier rather than
+// deferring the record — there is no position, kind or scope to file a record
+// under without one. Asking the envelope whether the kind is one THIS build
+// knows turned every kind a newer build adds into a stop on every older node
+// of a rolling upgrade, which is the opposite of what [Source] promises: a
+// newer build's source is a record this build DEFERS. So the envelope checks
+// only what makes a subject a subject — a kind and an id that are tokens, not
+// empty and not a wildcard — and the version-gated second pass ([Decode])
+// refuses a kind this build does not write at a version it does read.
+func (s Subject) wellFormed() error {
+	if !isToken(string(s.Source)) {
+		return fmt.Errorf("search: %q is not a subject kind — it is a subject "+
+			"token on the wire, so it can be neither empty nor a wildcard",
+			s.Source)
+	}
+	if !isToken(s.ID) {
 		return fmt.Errorf("search: %q is not a source id — it is a subject "+
 			"token on the wire, so it can be neither empty nor a wildcard",
 			s.ID)
 	}
 	return nil
+}
+
+// isToken reports whether s can be written into a subject: not empty, and
+// neither whitespace nor a wildcard anywhere in it.
+func isToken(s string) bool {
+	return strings.TrimSpace(s) != "" && !strings.ContainsAny(s, " \t\n*>")
 }
 
 // String renders a subject for a log line and for the wire.
@@ -225,6 +353,16 @@ type VectorRecord struct {
 	// all of them.
 	Embedding []byte `json:"embedding,omitempty"`
 
+	// Index is what an [OpCentroids] record carries, with Model and Dim
+	// above naming the embedding space the index was trained in.
+	Index *IndexRecord `json:"index,omitempty"`
+
+	// Reassign is what an [OpReassign] record carries.
+	Reassign *ReassignRecord `json:"reassign,omitempty"`
+
+	// Measure is what an [OpMeasure] record carries.
+	Measure *MeasureRecord `json:"measure,omitempty"`
+
 	// Extra carries fields a newer build wrote, so a record round-trips
 	// losslessly through a node that cannot interpret them.
 	Extra map[string]json.RawMessage `json:"-"`
@@ -239,6 +377,7 @@ type VectorRecord struct {
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
 	"container", "model", "dim", "source_rev", "text_sha", "embedding",
+	"index", "reassign", "measure",
 }
 
 // DecodeEnvelope is the FIRST pass, and it never fails on version.
@@ -253,7 +392,9 @@ func DecodeEnvelope(payload []byte) (RecordEnvelope, error) {
 			"version %d — every record states its version, and one that does "+
 			"not cannot be told apart from a newer build's", env.V)
 	}
-	if err := env.Subject.Validate(); err != nil {
+	// WELL-FORMED, NOT KNOWN: see [Subject.wellFormed] for why a kind this
+	// build has never heard of is an envelope rather than a stop.
+	if err := env.Subject.wellFormed(); err != nil {
 		return RecordEnvelope{}, err
 	}
 	if env.Scope.Empty() {
@@ -291,10 +432,22 @@ func Decode(payload []byte) (VectorRecord, error) {
 			Got: env.V, Want: RecordVersion, Subject: env.Subject,
 		}
 	}
+	// A KIND THIS BUILD DOES NOT WRITE, AT A VERSION IT READS, is a writer
+	// fault rather than a newer build: a build that adds a kind writes it at
+	// the version its row in [versionedFields] gives it, above every build
+	// that cannot read it, which is the branch above.
+	if err := env.Subject.Validate(); err != nil {
+		return VectorRecord{RecordEnvelope: env}, fmt.Errorf("search: the "+
+			"record at version %d names a subject this build reads that version "+
+			"of and does not write: %w", env.V, err)
+	}
 	var rec VectorRecord
 	if err := json.Unmarshal(payload, &rec); err != nil {
 		return VectorRecord{RecordEnvelope: env}, fmt.Errorf("search: decode "+
 			"the vector record on %s: %w", env.Subject, err)
+	}
+	if err := rec.validate(); err != nil {
+		return VectorRecord{RecordEnvelope: env}, err
 	}
 	var extra map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &extra); err == nil {
@@ -311,7 +464,11 @@ func Decode(payload []byte) (VectorRecord, error) {
 // Encode writes a record.
 func (r VectorRecord) Encode() ([]byte, error) {
 	if r.V == 0 {
-		r.V = RecordVersion
+		v, err := r.minimumVersion()
+		if err != nil {
+			return nil, err
+		}
+		r.V = v
 	}
 	if err := r.Subject.Validate(); err != nil {
 		return nil, err
@@ -320,20 +477,14 @@ func (r VectorRecord) Encode() ([]byte, error) {
 		return nil, fmt.Errorf("search: op %q is not one this build writes", r.Op)
 	}
 	if r.Scope.Empty() {
-		r.Scope = statelog.ScopeSet{Paths: []string{ScopePath(r.Container, r.Subject)}}
+		r.Scope = statelog.ScopeSet{Paths: []string{r.scopePath()}}
 	}
-	if r.Op == OpEmbed {
-		if len(r.Embedding) == 0 || r.Model == "" || r.Dim <= 0 {
-			return nil, fmt.Errorf("search: an embed record for %s carries no "+
-				"vector, model or width — all three are the candidate pool's "+
-				"own predicate, and a row missing any of them can never be "+
-				"scanned or excluded", r.Subject)
-		}
-		if want := 4 * r.Dim; len(r.Embedding) != want {
-			return nil, fmt.Errorf("search: the embed record for %s says %d "+
-				"dimensions and carries %d bytes, not %d — vector_distance_cos "+
-				"over mismatched lengths is undefined and fails the whole "+
-				"statement", r.Subject, r.Dim, len(r.Embedding), want)
+	if r.V <= RecordVersion {
+		// A RECORD AT A VERSION THIS BUILD READS IS HELD TO WHAT THIS
+		// BUILD WOULD APPLY; one above it is a newer build's, relayed or
+		// fabricated by a test, and this build has no rule for it.
+		if err := r.validate(); err != nil {
+			return nil, err
 		}
 	}
 	body, err := json.Marshal(r)
@@ -356,4 +507,73 @@ func (r VectorRecord) Encode() ([]byte, error) {
 		}
 	}
 	return json.Marshal(merged)
+}
+
+// validate refuses a record this build would not apply, by its operation.
+//
+// ONE RULE FOR BOTH DIRECTIONS: [VectorRecord.Encode] refuses to write what
+// [Decode] would refuse to read, so a record this build publishes is one every
+// peer of its own version applies.
+func (r VectorRecord) validate() error {
+	want, err := r.minimumVersion()
+	if err != nil {
+		return err
+	}
+	if r.V < want {
+		return fmt.Errorf("search: the %s record on %s is version %d, and that "+
+			"operation on that kind was introduced at version %d — a peer "+
+			"reading %d would apply a record it does not know rather than "+
+			"defer it", r.Op, r.Subject, r.V, want, r.V)
+	}
+	if r.Op.indexOp() != (r.Subject.Source == IndexSource) {
+		return fmt.Errorf("search: op %s on subject %s — a document's op on the "+
+			"index's subject, or the reverse, files a row under the wrong key",
+			r.Op, r.Subject)
+	}
+	switch r.Op {
+	case OpEmbed:
+		if len(r.Embedding) == 0 || r.Model == "" || r.Dim <= 0 {
+			return fmt.Errorf("search: an embed record for %s carries no "+
+				"vector, model or width — all three are the candidate pool's "+
+				"own predicate, and a row missing any of them can never be "+
+				"scanned or excluded", r.Subject)
+		}
+		if want := 4 * r.Dim; len(r.Embedding) != want {
+			return fmt.Errorf("search: the embed record for %s says %d "+
+				"dimensions and carries %d bytes, not %d — vector_distance_cos "+
+				"over mismatched lengths is undefined and fails the whole "+
+				"statement", r.Subject, r.Dim, len(r.Embedding), want)
+		}
+	case OpCentroids:
+		if r.Subject != IndexCentroids {
+			return fmt.Errorf("search: a centroids record on %s — the index has "+
+				"one subject, %s, so the compaction keeps exactly the current one",
+				r.Subject, IndexCentroids)
+		}
+		if r.Index == nil {
+			return fmt.Errorf("search: a centroids record carries no index")
+		}
+		return r.Index.validate(r.Model, r.Dim)
+	case OpReassign:
+		if r.Reassign == nil {
+			return fmt.Errorf("search: a reassign record on %s carries no batch",
+				r.Subject)
+		}
+		return r.Reassign.validate(r.Subject)
+	case OpMeasure:
+		if r.Measure == nil {
+			return fmt.Errorf("search: a measure record on %s carries no "+
+				"measurement", r.Subject)
+		}
+		return r.Measure.validate(r.Subject)
+	}
+	return nil
+}
+
+// scopePath is the one path a record's apply touches, by its kind.
+func (r VectorRecord) scopePath() string {
+	if r.Subject.Source == IndexSource {
+		return IndexScopePath(r.Subject)
+	}
+	return ScopePath(r.Container, r.Subject)
 }

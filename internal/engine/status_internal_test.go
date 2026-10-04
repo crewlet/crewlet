@@ -292,7 +292,9 @@ func indicatingWith(t *testing.T, mode notify.StatusMode, prov llm.Provider) (*E
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
 
-	e := &Engine{backends: &Backends{Queue: q}}
+	// A COORDINATION STORE, as every engine `crewlet run` builds has one —
+	// see [starting] for what a turn needs it for.
+	e := &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}}
 	e.epoch.current.Store(&Company{
 		Org:    organization,
 		Models: models,
@@ -350,7 +352,7 @@ func TestAChatTriggeredTurnRaisesTheIndicatorAndClearsIt(t *testing.T) {
 	})
 
 	if _, err := e.runTurn(t.Context(), Request{
-		Handle: "swe", WorkKey: "wk-1",
+		Handle: "swe", WorkKey: "wk-1", WorkSince: time.Now().UTC(),
 		Events: []*events.Event{chatTrigger("D0ANA")},
 	}); err != nil {
 		t.Fatalf("runTurn: %v", err)
@@ -443,7 +445,7 @@ func TestTheIndicatorFollowsTheTurnsPhases(t *testing.T) {
 	})
 
 	res, err := e.runTurn(t.Context(), Request{
-		Handle: "swe", WorkKey: "wk-phases",
+		Handle: "swe", WorkKey: "wk-phases", WorkSince: time.Now().UTC(),
 		Events: []*events.Event{chatTrigger("D0ANA")},
 	})
 	if err != nil {
@@ -481,7 +483,7 @@ func TestANonChatTriggerRaisesNoIndicator(t *testing.T) {
 		Schedule: "standup",
 	}, events.TraceContext{})
 	if _, err := e.runTurn(t.Context(), Request{
-		Handle: "swe", WorkKey: "wk-2", Depth: 3,
+		Handle: "swe", WorkKey: "wk-2", Depth: 3, WorkSince: time.Now().UTC(),
 		Events: []*events.Event{tick},
 	}); err != nil {
 		t.Fatalf("runTurn: %v", err)
@@ -502,7 +504,7 @@ func TestAnUnaddressedChatTriggerRaisesNoIndicator(t *testing.T) {
 	n.Metadata["channel"], n.Metadata["channel_type"] = "C0ENG", "channel"
 
 	if _, err := e.runTurn(t.Context(), Request{
-		Handle: "swe", WorkKey: "wk-3", Depth: 3,
+		Handle: "swe", WorkKey: "wk-3", Depth: 3, WorkSince: time.Now().UTC(),
 		Events: []*events.Event{passive},
 	}); err != nil {
 		t.Fatalf("runTurn: %v", err)
@@ -646,7 +648,7 @@ func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
 			equipForCode(t, e, tc.pending(t, store))
 
 			res, err := e.runTurn(t.Context(), Request{
-				Handle: "swe", WorkKey: "wk-code", RunID: "run-code",
+				Handle: "swe", WorkKey: "wk-code", RunID: "run-code", WorkSince: time.Now().UTC(),
 				Events: []*events.Event{chatTrigger("D0ANA")},
 			})
 			if err != nil {
@@ -967,7 +969,8 @@ func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
 			TurnID: "wk-1", AgentHandle: "swe", Reply: "tool",
 			TaskDescription: "fix the failing test",
 		},
-		Turn:   &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: seat, Org: company.Org},
+		Turn: &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: seat, Org: company.Org,
+			WorkSince: time.Now().UTC()},
 		Answer: "the tests pass now",
 	})
 	if err != nil {
@@ -1043,7 +1046,8 @@ func TestAResumeThatCouldNotStartKeepsItsIndicator(t *testing.T) {
 					TurnID: "wk-1", AgentHandle: "swe", Reply: derail(company),
 					TaskDescription: "fix the failing test",
 				},
-				Turn:   &turnctx.Turn{RunID: "run-wk-1", WorkKey: "wk-1", Seat: seat, Org: company.Org},
+				Turn: &turnctx.Turn{RunID: "run-wk-1", WorkKey: "wk-1", Seat: seat, Org: company.Org,
+					WorkSince: time.Now().UTC()},
 				Answer: "the tests pass now",
 			})
 			if err == nil {
@@ -1121,7 +1125,8 @@ func TestAResumeThatHandsWorkBackToAPersonClearsItsIndicator(t *testing.T) {
 					// Where the coordinator's claim will put it back.
 					ClaimedFrom: sandbox.StatusAwaiting,
 				},
-				Turn:    &turnctx.Turn{RunID: "run-wk-code", WorkKey: "wk-code", Seat: seat, Org: company.Org},
+				Turn: &turnctx.Turn{RunID: "run-wk-code", WorkKey: "wk-code", Seat: seat, Org: company.Org,
+					WorkSince: time.Now().UTC()},
 				Answer:  "use the release branch",
 				Trigger: chatTrigger("D0ANA"),
 			})

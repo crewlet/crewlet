@@ -18,7 +18,7 @@ import (
 // it too — the one that makes a later domain answer it before the trim ever
 // runs against that domain's log.
 type evictionLister interface {
-	Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error)
+	Evictions(ctx context.Context, db store.PartitionReader) ([]statelog.EvictionRow, error)
 }
 
 // runEvictions reports what [Evictions] found.
@@ -52,7 +52,11 @@ func runEvictions(t *testing.T, new Factory) {
 // eviction's own position and the broker's own instant (the gate compares
 // against the first, the fence window is measured from the second), a
 // readmission kept as a row rather than deleted, and a re-eviction that clears
-// it.
+// it — and then the node's own RELEASE of the log, listed as the release it is
+// at its own position, and lifted by a readmission exactly as an eviction is.
+// The kind is the half the trim does not need and every caller does: the two
+// gate alike, and one is the operator's judgement of a machine while the other
+// is a node that left a partition.
 //
 // EXPORTED AND RETURNING THE VERDICT, for [Declaration]'s reason.
 func Evictions(t *testing.T, new Factory) error {
@@ -77,10 +81,14 @@ func Evictions(t *testing.T, new Factory) error {
 	case c.EncodeGate == nil:
 		return fmt.Errorf("%s claims identity and supplies no eviction record, "+
 			"so nothing can show its rows answer for one", name)
+	case c.EncodeRelease == nil:
+		return fmt.Errorf("%s claims identity and supplies no release record, "+
+			"so nothing can show its rows answer for a node that left the "+
+			"log's partition", name)
 	}
 
 	db := openEstate(t, c)
-	w, pinErr := db.Replicated().Writer(t.Context())
+	w, pinErr := db.Writer(t.Context())
 	if pinErr != nil {
 		t.Fatalf("pin a writer: %v", pinErr)
 	}
@@ -89,13 +97,27 @@ func Evictions(t *testing.T, new Factory) error {
 	const node = "suite-node-away"
 	base := time.Unix(1_700_000_000, 0).UTC()
 	var seq uint64
+	var applyGate func(body []byte) (statelog.Position, time.Time)
 	apply := func(readmit bool) (statelog.Position, time.Time) {
 		t.Helper()
-		seq++
 		body, err := c.EncodeGate(node, readmit)
 		if err != nil {
 			t.Fatalf("encode %s's gate record: %v", name, err)
 		}
+		return applyGate(body)
+	}
+	release := func() statelog.Position {
+		t.Helper()
+		body, err := c.EncodeRelease(node)
+		if err != nil {
+			t.Fatalf("encode %s's release record: %v", name, err)
+		}
+		at, _ := applyGate(body)
+		return at
+	}
+	applyGate = func(body []byte) (statelog.Position, time.Time) {
+		t.Helper()
+		seq++
 		env, err := c.Domain.Envelope(body)
 		if err != nil {
 			t.Fatalf("envelope of %s's gate record: %v", name, err)
@@ -104,12 +126,12 @@ func Evictions(t *testing.T, new Factory) error {
 			t.Fatalf("%s's gate record is not declared as installing a gate, "+
 				"so a build that cannot decode it would defer it", name)
 		}
-		at := statelog.Position{Stream: c.Domain.Stream().Name, Generation: 1, Seq: seq}
+		at := statelog.Position{Stream: c.spec().Name, Generation: 1, Seq: seq}
 		stored := base.Add(time.Duration(seq) * time.Minute)
 		rec := statelog.Record{Envelope: env, Position: at, Payload: body, StoredAt: stored}
 		opts := statelog.ApplyOptions{
 			Now: stored, StoredAt: stored,
-			ArbitratedKinds: c.Domain.Stream().ArbitratedKinds,
+			ArbitratedKinds: c.spec().ArbitratedKinds,
 			MaxVariables:    db.Caps().MaxVariables,
 		}
 		if err := w.Tx(t.Context(), func(tx *sql.Tx) error {
@@ -120,7 +142,7 @@ func Evictions(t *testing.T, new Factory) error {
 		return at, stored
 	}
 	standing := func() (statelog.EvictionRow, error) {
-		rows, err := lister.Evictions(t.Context(), db)
+		rows, err := lister.Evictions(t.Context(), db.Reader())
 		if err != nil {
 			return statelog.EvictionRow{}, fmt.Errorf("%s could not list its "+
 				"evictions: %w", name, err)
@@ -150,6 +172,10 @@ func Evictions(t *testing.T, new Factory) error {
 		return fmt.Errorf("%s lists %s's eviction above %d, want its own "+
 			"position %d — the gate drops records by comparing against exactly "+
 			"this", name, node, row.From, evicted.Packed())
+	case row.Kind != statelog.EvictionKindEviction:
+		return fmt.Errorf("%s lists %s's eviction as a %q — an operator's "+
+			"eviction is reported as one, and the node's own fence refuses "+
+			"only that", name, node, row.Kind)
 	case !row.At.Equal(at):
 		return fmt.Errorf("%s lists %s's eviction at %s, want the broker's "+
 			"own instant %s — the fence window is measured from it, and a "+
@@ -177,6 +203,36 @@ func Evictions(t *testing.T, new Factory) error {
 		return fmt.Errorf("%s lists %s after a second eviction as %+v, want "+
 			"evicted again above %d — a re-eviction clears the readmission",
 			name, node, row, again.Packed())
+	}
+
+	// THE NODE'S OWN RELEASE, once the operator has taken it back: the gate
+	// an eviction installs, recorded as the node's.
+	apply(true)
+	left := release()
+	if row, err = standing(); err != nil {
+		return err
+	}
+	switch {
+	case row.Back || row.From != uint64(left.Packed()):
+		return fmt.Errorf("%s lists %s after its release as %+v, want it out "+
+			"above its release's own position %d — the gate drops what the "+
+			"node wrote after it left by comparing against exactly this",
+			name, node, row, left.Packed())
+	case row.Kind != statelog.EvictionKindRelease:
+		return fmt.Errorf("%s lists %s's release as a %q — a node that left a "+
+			"partition is not one the fleet evicted, and a write the release "+
+			"dropped is refused %q rather than %q", name, node, row.Kind,
+			statelog.ReasonReleased, statelog.ReasonEvicted)
+	}
+	back, _ := apply(true)
+	if row, err = standing(); err != nil {
+		return err
+	}
+	if !row.Back || row.Readmitted != uint64(back.Packed()) || row.From != uint64(left.Packed()) {
+		return fmt.Errorf("%s lists %s after the readmission that follows its "+
+			"release as %+v, want its row kept, the release at %d and the "+
+			"readmission at %d — a readmission lifts a release as it lifts an "+
+			"eviction", name, node, row, left.Packed(), back.Packed())
 	}
 	return nil
 }

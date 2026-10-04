@@ -1,7 +1,5 @@
 package topics
 
-import "strings"
-
 // The native tracker's own log, and why its grammar lives here.
 //
 // The tracker's mutations are a state log: one ordered stream per domain,
@@ -39,7 +37,7 @@ const (
 	TrackerVectorsWildcard = TrackerVectorsPrefix + ".>"
 )
 
-// The FOURTEEN object kinds are NOT constants here, and that is deliberate.
+// The object kinds are NOT constants here, and that is deliberate.
 //
 // A kind is one bare word — "task", "project", "turn" — and the guard that
 // makes this package worth having derives its markers from these constants:
@@ -49,39 +47,15 @@ const (
 // package that switches on them; what lives here is the GRAMMAR they are
 // composed into, which is the half two processes have to agree about.
 
-// TrackerLogSubject builds the subject for one object.
-//
-// An EMPTY id is legal and means a kind with exactly one object, which the
-// barrier is. An empty KIND is not: it would publish to the prefix itself, a
-// real subject inside the wildcard that the applier's switch has no case for,
-// so it answers the empty string and callers must treat that as "not
-// publishable" rather than as a subject.
+// TrackerLogSubject builds the subject for one object on layout 0's mutation
+// log: [LogSubject] under [TrackerLogPrefix], and refused wherever that is.
 func TrackerLogSubject(kind, id string) string {
-	if kind == "" {
-		return ""
-	}
-	if id == "" {
-		return TrackerLogPrefix + "." + kind
-	}
-	return TrackerLogPrefix + "." + kind + "." + id
+	return LogSubject(TrackerLogPrefix, kind, id)
 }
 
-// TrackerLogPath recovers the kind and the id from a subject on the mutation
-// log, reporting whether the subject was one.
-//
-// The exact inverse of [TrackerLogSubject]: true only for a subject that
-// function could have produced. The ID keeps its dots — an alias claim's is
-// "<OLDKEY>.<n>" — so only the FIRST segment is the kind, and splitting on
-// every dot would recover a kind of "alias" and an id of "ENG" from a subject
-// naming ENG-4's second claim.
+// TrackerLogPath recovers the kind and the id from a subject on layout 0's
+// mutation log, reporting whether the subject was one: [LogPath] under
+// [TrackerLogPrefix], the exact inverse of [TrackerLogSubject].
 func TrackerLogPath(subject string) (kind, id string, ok bool) {
-	rest, found := strings.CutPrefix(subject, TrackerLogPrefix+".")
-	if !found || rest == "" {
-		return "", "", false
-	}
-	kind, id, found = strings.Cut(rest, ".")
-	if kind == "" || (found && id == "") {
-		return "", "", false
-	}
-	return kind, id, true
+	return LogPath(TrackerLogPrefix, subject)
 }

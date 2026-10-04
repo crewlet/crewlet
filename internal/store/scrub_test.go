@@ -135,7 +135,7 @@ func TestAScrubRefusesANameItWouldHaveToQuote(t *testing.T) {
 // seed creates a database file with the given schema and rows.
 func seed(t *testing.T, path, ddl string) {
 	t.Helper()
-	db, err := store.Open(t.Context(), path, store.Options{})
+	db, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("open %s: %v", path, err)
 	}
@@ -153,7 +153,7 @@ func seed(t *testing.T, path, ddl string) {
 // count reads one table's row count through a fresh open of the file alone.
 func count(t *testing.T, path, table string) int64 {
 	t.Helper()
-	db, err := store.Open(t.Context(), path, store.Options{})
+	db, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("open %s: %v", path, err)
 	}

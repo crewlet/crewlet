@@ -103,14 +103,7 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s has no %s", tc.def, tc.field)
 		}
-		raw, ok := field["enum"].([]any)
-		if !ok {
-			t.Fatalf("%s.%s carries no enum", tc.def, tc.field)
-		}
-		got := make([]string, len(raw))
-		for i, v := range raw {
-			got[i], _ = v.(string)
-		}
+		got := closedSet(t, field)
 		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
 			t.Fatalf("%s.%s enum = %v, validators accept %v", tc.def, tc.field, got, tc.want)
 		}
@@ -147,18 +140,94 @@ func TestBootstrapSchemaEnumsMatchTheValidators(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s has no %s", tc.def, tc.field)
 		}
-		raw, ok := field["enum"].([]any)
-		if !ok {
-			t.Fatalf("%s.%s carries no enum", tc.def, tc.field)
-		}
-		got := make([]string, len(raw))
-		for i, v := range raw {
-			got[i], _ = v.(string)
-		}
+		got := closedSet(t, field)
 		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
 			t.Fatalf("%s.%s enum = %v, validators accept %v", tc.def, tc.field, got, tc.want)
 		}
 	}
+}
+
+// ONE NODE-ID RULE, in three places that cannot import each other: the
+// validator's nodeIDPattern, node.id's js tag and role.placement.node's. A
+// pin is compared with a node's id exactly, so the two tags are the same rule
+// by construction — and a js tag is a second spelling of the regexp, which
+// drifts the day one of them changes. Drift one way puts a red underline on a
+// pin the engine accepts; the other way lets an editor pass a pin no node can
+// ever satisfy, which the engine then refuses on apply.
+func TestNodeIDPatternIsOneRule(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		tier       Tier
+		def, field string
+	}{
+		{TierBootstrap, "Node", "id"},
+		{TierCompany, "RolePlacement", "node"},
+	} {
+		defs, _ := schemaDoc(t, tc.tier)["$defs"].(map[string]any)
+		def, ok := defs[tc.def].(map[string]any)
+		if !ok {
+			t.Fatalf("the %s schema's $defs has no %s", tc.tier, tc.def)
+		}
+		props, _ := def["properties"].(map[string]any)
+		field, ok := props[tc.field].(map[string]any)
+		if !ok {
+			t.Fatalf("%s has no %s", tc.def, tc.field)
+		}
+		if got, want := ownPattern(t, field), nodeIDPattern.String(); got != want {
+			t.Fatalf("%s.%s pattern = %v, the validator's nodeIDPattern is %q",
+				tc.def, tc.field, got, want)
+		}
+	}
+}
+
+// closedSet reads a text field's closed set back out of its fragment: the
+// STRING members of its enum, wherever the fragment puts it, less the empty
+// string that spells "unset".
+//
+// Only the strings, because the enum also carries what YAML resolves a value
+// to (`false` beside "false") and null. Those are forms of the set, not
+// members of it, and TestEveryPositionAdmitsWhatTheDecoderReads is what holds
+// them to the decoder.
+func closedSet(t *testing.T, field map[string]any) []string {
+	t.Helper()
+	for _, candidate := range append([]any{field}, anyOf(field)...) {
+		branch, _ := candidate.(map[string]any)
+		raw, ok := branch["enum"].([]any)
+		if !ok {
+			continue
+		}
+		var out []string
+		for _, v := range raw {
+			if s, ok := v.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	t.Fatalf("the fragment carries no enum: %v", field)
+	return nil
+}
+
+// ownPattern reads a text field's OWN pattern back out of its fragment — the
+// one its js tag states, not the reference grammar a Tier A leaf also admits.
+func ownPattern(t *testing.T, field map[string]any) string {
+	t.Helper()
+	if p, ok := field["pattern"].(string); ok {
+		return p
+	}
+	for _, candidate := range anyOf(field) {
+		branch, _ := candidate.(map[string]any)
+		if p, ok := branch["pattern"].(string); ok && p != referencePattern {
+			return p
+		}
+	}
+	t.Fatalf("the fragment carries no pattern of its own: %v", field)
+	return ""
+}
+
+func anyOf(field map[string]any) []any {
+	branches, _ := field["anyOf"].([]any)
+	return branches
 }
 
 // parityCase is one document run through both layers.
@@ -179,6 +248,12 @@ type parityCase struct {
 	// the schema's silence is the point — a case that drifts into being
 	// schema-rejected stops covering the rule it names.
 	validatorOnly bool
+	// env is what a Tier A document's ${VAR}s resolve to, and nothing else
+	// is consulted: a case reading the machine's own environment would
+	// prove something different on every machine — `${HOSTNAME}` is a valid
+	// node id on one host and not on the next. Tier B resolves nothing at
+	// load, so a Tier B case carrying one is a mistake the test refuses.
+	env map[string]string
 }
 
 // THE INVARIANT: everything the schema rejects, the validator also rejects.
@@ -197,8 +272,11 @@ func TestSchemaNeverRejectsWhatTheValidatorAccepts(t *testing.T) {
 	for _, tc := range parityCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			if tc.tier == TierCompany && tc.env != nil {
+				t.Fatal("Tier B stores a ${VAR} verbatim and resolves nothing at load: an env on this case is never read")
+			}
 			schemaErr := compiled[tc.tier].Validate(asJSON(t, tc.yaml))
-			validatorErr := validateTier(tc.tier, tc.yaml)
+			validatorErr := validateTier(tc.tier, tc.yaml, tc.env)
 
 			if schemaErr != nil && validatorErr == nil {
 				t.Fatalf("the schema rejects a config the engine accepts — an "+
@@ -387,7 +465,8 @@ units:
 		{
 			name: "a three-node fleet",
 			tier: TierBootstrap,
-			yaml: "coordination:\n  type: embedded-kv\nstream:\n  replicas: 3\n  cluster:\n    name: acme\n    peers: [nats://b:6222, nats://c:6222]\n",
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  replicas: 3\n  store_dir: /var/lib/crewlet/stream\n" +
+				"  cluster:\n    name: acme\n    peers: [nats://b:6222, nats://c:6222]\n",
 		},
 		// A LITERAL signing secret, not a ${VAR}. The full company above
 		// carries the reference form, which validate() deliberately does not
@@ -400,9 +479,292 @@ units:
 				"    signing_secret: \"whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM=\"\n",
 		},
 
+		{
+			name: "a company's files in an S3 bucket", tier: TierBootstrap,
+			yaml: "store:\n  objects:\n    backend: s3\n    s3:\n      bucket: files\n" +
+				"      region: auto\n      endpoint: https://example.com\n      prefix: acme/\n",
+		},
+		{
+			name: "a five-member fleet at the broker's ceiling", tier: TierBootstrap,
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  replicas: 5\n  store_dir: /var/lib/crewlet/stream\n  cluster:\n" +
+				"    name: acme\n    peers: [nats://b:6222, nats://c:6222, nats://d:6222, nats://e:6222]\n",
+		},
+
+		// A PIN IS A NODE ID, and both layers hold it to node.id's own
+		// rule: a pin outside it names a node that cannot exist.
+		{
+			name: "a seat pinned to a node", tier: TierCompany,
+			yaml: "name: Acme\nroles:\n  - {name: Builder, placement: {node: builder-1.eu_west}}\n",
+		},
+
+		// TIER A RESOLVES BEFORE IT DECODES, so a reference is judged by what
+		// it resolves to. Every closed set and pattern Tier A states is here
+		// once, resolving to a value the engine takes — the id the deployment
+		// guide tells an operator to write first among them.
+		{
+			name: "a node id from the environment", tier: TierBootstrap,
+			yaml: "node:\n  id: \"${HOSTNAME}\"\n",
+			env:  map[string]string{"HOSTNAME": "builder-1"},
+		},
+		// Embedded, not whole: the resolver expands a reference anywhere in
+		// a value, so a schema admitting only a whole one underlined this.
+		{
+			name: "a node id built around a reference", tier: TierBootstrap,
+			yaml: "node:\n  id: \"edge-${ZONE}\"\n",
+			env:  map[string]string{"ZONE": "eu"},
+		},
+		{
+			name: "a log block from the environment", tier: TierBootstrap,
+			yaml: "logging:\n  level: \"${LOG_LEVEL}\"\n  format: \"${LOG_FORMAT}\"\n" +
+				"  file:\n    path: /tmp/crewlet.log\n    level: \"${FILE_LEVEL}\"\n    format: \"${FILE_FORMAT}\"\n",
+			env: map[string]string{"LOG_LEVEL": "debug", "LOG_FORMAT": "json", "FILE_LEVEL": "warn", "FILE_FORMAT": "text"},
+		},
+		{
+			name: "a backup floor from the environment", tier: TierBootstrap,
+			yaml: "stream:\n  tracker_retention:\n    backup_floor: \"${BACKUP_FLOOR}\"\n",
+			env:  map[string]string{"BACKUP_FLOOR": "operator"},
+		},
+		{
+			name: "a keyring from the environment", tier: TierBootstrap,
+			yaml: "secrets:\n  active_key_id: \"${KEY_ID}\"\n  keys:\n    - {id: \"${KEY_ID}\", material: \"${KEY}\"}\n",
+			env:  map[string]string{"KEY_ID": "k1", "KEY": "YS1maXh0dXJlLWtleS1vZi10aGlydHktdHdvLWJ5dGU="},
+		},
+		// A REFERENCE READ AS "NOT EMBEDDED-KV" made the fleet rule fire:
+		// the rule refuses a fleet on local coordination, and it took any
+		// type it could not see to be local.
+		{
+			name: "a fleet whose coordination is the environment's", tier: TierBootstrap,
+			yaml: "coordination:\n  type: \"${COORDINATION}\"\nstream:\n  store_dir: /var/lib/crewlet/stream\n  cluster:\n    name: acme\n" +
+				"    peers: [nats://b:6222, nats://c:6222]\n",
+			env: map[string]string{"COORDINATION": "embedded-kv"},
+		},
+		// And the same rule's stream half demanded a LITERAL embedded.
+		{
+			name: "an empty stream type on one node", tier: TierBootstrap,
+			yaml: "stream:\n  type: \"\"\n",
+		},
+		{
+			name: "a stream type from the environment on one node", tier: TierBootstrap,
+			yaml: "stream:\n  type: \"${STREAM_TYPE}\"\n",
+			env:  map[string]string{"STREAM_TYPE": "embedded"},
+		},
+		{
+			name: "an external stream named by the environment", tier: TierBootstrap,
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  type: \"${STREAM_TYPE}\"\n  url: \"${NATS_URL}\"\n",
+			env:  map[string]string{"STREAM_TYPE": "nats", "NATS_URL": "nats://nats.example.com:4222"},
+		},
+		// A NUMBER OR A SWITCH TAKES A WHOLE REFERENCE, whose value is read
+		// as the same characters written there would be: `8080` is a port,
+		// `true` and `yes` are both a switch. Each used to be refused — a
+		// substituted value was a string, which no number field decodes and
+		// a bool field decodes only for the YAML 1.1 words.
+		{
+			name: "a flag from the environment", tier: TierBootstrap,
+			yaml: "stream:\n  debug: \"${STREAM_DEBUG}\"\n",
+			env:  map[string]string{"STREAM_DEBUG": "yes"},
+		},
+		{
+			name: "a flag from the environment that says true", tier: TierBootstrap,
+			yaml: "stream:\n  debug: \"${STREAM_DEBUG}\"\n",
+			env:  map[string]string{"STREAM_DEBUG": "true"},
+		},
+		{
+			name: "a port from the environment", tier: TierBootstrap,
+			yaml: "api:\n  port: \"${API_PORT}\"\n",
+			env:  map[string]string{"API_PORT": "8080"},
+		},
+		{
+			name: "a lease TTL from the environment", tier: TierBootstrap,
+			yaml: "coordination:\n  lease_ttl_seconds: \"${LEASE_TTL}\"\n",
+			env:  map[string]string{"LEASE_TTL": "30"},
+		},
+
+		// COPIES LIVE ON MEMBERS THIS FILE DOES NOT NAME on an external
+		// stream and on a leaf, and the validator counts neither — a rule
+		// demanding peers of them refused every external fleet that kept
+		// more than one copy, and demanded a list the validator refuses
+		// under an external stream.
+		{
+			name: "an external fleet keeping three copies", tier: TierBootstrap,
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  type: nats\n" +
+				"  url: nats://nats.example.com:4222\n  replicas: 3\n",
+		},
+		{
+			name: "a leaf keeping the fleet's three copies", tier: TierBootstrap,
+			yaml: "coordination:\n  type: embedded-kv\nnode:\n  roles: [seats]\nstore:\n  scratch: true\n" +
+				"stream:\n  replicas: 3\n  leaf:\n    urls: [nats://member.example.com:7422]\n",
+		},
+
+		// AN EMPTY VALUE IS UNSET, written either way, at every level — and
+		// a rule built from `properties` alone matches a null block, which
+		// is why each condition states the object it looks inside.
+		{name: "a bootstrap that is YAML null", tier: TierBootstrap, yaml: "~\n"},
+		{
+			name: "an empty stream block on a solo fleet member", tier: TierBootstrap,
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  cluster:\n",
+		},
+		{
+			name: "empty log settings", tier: TierBootstrap,
+			yaml: "logging:\n  level: \"\"\n  format:\n",
+		},
+		{
+			name: "empty company settings", tier: TierCompany,
+			yaml: "name: Acme\nmission:\nroles:\n  - {name: CEO, handle: \"\", llm: ~}\n",
+		},
+
+		// TEXT IS TEXT, whatever YAML resolved it as: the decoder hands a
+		// string field the characters, so each of these is a string to the
+		// engine and a boolean or a number to an editor. The first is the
+		// spelling the GitHub guide itself uses.
+		{
+			name: "the documented org_webhook spelling", tier: TierCompany,
+			yaml: "name: Acme\nintegrations:\n  github: {enabled: true, webhook_secret: s, provisioning: {org: acme, org_webhook: false}}\n",
+		},
+		{
+			name: "a group webhook written as a boolean", tier: TierCompany,
+			yaml: "name: Acme\nintegrations:\n  gitlab: {enabled: true, url: https://gitlab.example.com, " +
+				"signing_secret: \"${GITLAB_SIGNING_SECRET}\", provisioning: {group: acme, group_webhook: true}}\n",
+		},
+		{name: "a company name YAML reads as a number", tier: TierCompany, yaml: "name: 2024\n"},
+		{
+			name: "node facts YAML reads as other types", tier: TierBootstrap,
+			yaml: "node:\n  id: 7\n  labels: {gpu: true, rack: 12}\n",
+		},
+
+		// A BOOLEAN READS YAML 1.1's WORDS too — the decoder keeps them.
+		{name: "a flag written as a word", tier: TierBootstrap, yaml: "stream:\n  debug: off\n"},
+		{name: "a toggle written as a word", tier: TierCompany, yaml: "name: Acme\nlearning:\n  enabled: yes\n"},
+
 		// Mistakes an editor should catch inline.
 		{name: "unknown top-level key", tier: TierCompany, yaml: "name: Acme\nmisson: typo\n", editorCatches: true},
+		{
+			name: "a pin no node id can equal", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nroles:\n  - {name: Builder, placement: {node: \"builder 1\"}}\n",
+		},
+		// Tier B keeps a ${VAR} verbatim and a pin is compared as written,
+		// so a reference here is the literal node id "${…}".
+		{
+			name: "a pin written as a reference", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nroles:\n  - {name: Builder, placement: {node: \"${BUILDER_NODE}\"}}\n",
+		},
+		{
+			name: "a misspelt objects key", tier: TierBootstrap, editorCatches: true,
+			yaml: "store:\n  objects:\n    backnd: s3\n",
+		},
+		{
+			name: "more stream copies than JetStream keeps", tier: TierBootstrap, editorCatches: true,
+			yaml: "stream:\n  replicas: 6\n",
+		},
+		// A BUCKET WITH NO REGION — a field the s3 backend needs and
+		// every other backend refuses, which is a cross-field rule the
+		// schema is not asked to carry.
+		{
+			name: "an s3 backend with no region", tier: TierBootstrap, validatorOnly: true,
+			yaml: "store:\n  objects:\n    backend: s3\n    s3:\n      bucket: files\n",
+		},
+		// MORE COPIES THAN THE CLUSTER NAMES MEMBERS — a cross-field
+		// bound the schema is not asked to carry.
+		// THIS NODE'S OWN ROUTE IN ITS PEERS is not another member, and
+		// recognising it takes a comparison with cluster.host and
+		// cluster.port that a JSON Schema cannot make: two entries read as
+		// three members to the schema and as two to the engine.
+		{
+			name: "a two-node fleet that lists itself", tier: TierBootstrap, validatorOnly: true,
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  cluster:\n    name: acme\n" +
+				"    port: 6222\n    host: 10.0.0.11\n    peers: [nats://10.0.0.11:6222, nats://b:6222]\n",
+		},
+		// A PEER NO SERVER CAN DIAL — the schema says a string.
+		{
+			name: "a peer with no port", tier: TierBootstrap, validatorOnly: true,
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  cluster:\n    name: acme\n" +
+				"    peers: [nats://b, nats://c:6222]\n",
+		},
+		{
+			name: "four stream copies on three members", tier: TierBootstrap, validatorOnly: true,
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  replicas: 4\n  cluster:\n" +
+				"    name: acme\n    peers: [nats://b:6222, nats://c:6222]\n",
+		},
 		{name: "missing company name", tier: TierCompany, yaml: "mission: ship\n", editorCatches: true},
+		// AN EMPTY TYPE IS THE DEFAULT ONE to the loader, and so to the
+		// fleet rules here: an empty coordination type is local, and an
+		// empty stream type is embedded and names no members for copies.
+		{
+			name: "a fleet on an empty coordination type", tier: TierBootstrap, editorCatches: true,
+			yaml: "coordination:\n  type: \"\"\nstream:\n  cluster:\n    name: acme\n    peers: [nats://b:6222, nats://c:6222]\n",
+		},
+		{
+			name: "copies on an empty stream type with no peers", tier: TierBootstrap, editorCatches: true,
+			yaml: "stream:\n  type: \"\"\n  replicas: 3\n",
+		},
+		// BUT ONLY A WHOLE ONE. A number or a switch composed out of text
+		// would have a type decided by how two strings concatenate, so the
+		// resolver refuses a reference with anything around it there — and
+		// the schema says so while the author types.
+		{
+			name: "a port built around a reference", tier: TierBootstrap, editorCatches: true,
+			yaml: "api:\n  port: \"80${PORT_TAIL}\"\n",
+			env:  map[string]string{"PORT_TAIL": "80"},
+		},
+		{
+			name: "a flag built around a reference", tier: TierBootstrap, editorCatches: true,
+			yaml: "stream:\n  debug: \"y${FLAG_TAIL}\"\n",
+			env:  map[string]string{"FLAG_TAIL": "es"},
+		},
+		// A FRACTION IN A WHOLE-NUMBER FIELD was truncated by the decoder —
+		// 8080.9 ran as 8080. It is refused at load now, so `integer` in the
+		// schema is exactly what the engine reads.
+		{
+			name: "a fractional port", tier: TierBootstrap, editorCatches: true,
+			yaml: "api:\n  port: 8080.9\n",
+		},
+		// Tier B keeps a reference VERBATIM, so in a closed set or a
+		// pattern it is the literal text "${…}", which neither admits.
+		{
+			name: "a closed set written as a reference", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nintegrations:\n  slack: {typing_status: \"${TYPING_STATUS}\"}\n",
+		},
+		{
+			name: "a handle written as a reference", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nroles:\n  - {name: CEO, handle: \"${CEO_HANDLE}\"}\n",
+		},
+		{
+			name: "a unit id written as a reference", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nunits:\n  - {name: Core, id: \"${UNIT_ID}\"}\n",
+		},
+		// A POINTER FIELD is the one Tier B exception: its consumer resolves
+		// one WHOLE reference, so the schema admits exactly that beside the
+		// field's own rule — and nothing looser, because a reference inside
+		// other text is sent to the server as written.
+		{
+			name: "a Mattermost username named by a reference", tier: TierCompany,
+			yaml: "name: Acme\nroles:\n  - {name: CTO, integrations: {mattermost: " +
+				"{bot_token: \"${MM_CTO}\", username: \"${MM_CTO_USERNAME}\"}}}\n",
+		},
+		{
+			name: "a Mattermost username with a reference inside it", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nroles:\n  - {name: CTO, integrations: {mattermost: " +
+				"{bot_token: \"${MM_CTO}\", username: \"bot-${MM_SUFFIX}\"}}}\n",
+		},
+		{
+			name: "space around a Mattermost username's reference", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nroles:\n  - {name: CTO, integrations: {mattermost: " +
+				"{bot_token: \"${MM_CTO}\", username: \" ${MM_CTO_USERNAME}\"}}}\n",
+		},
+		// A token has no pattern for the schema to hang the rule on, so the
+		// same refusal on a bot token is the validator's alone.
+		{
+			name: "a Mattermost bot token with a reference inside it", tier: TierCompany, validatorOnly: true,
+			yaml: "name: Acme\nroles:\n  - {name: CTO, integrations: {mattermost: {bot_token: \"tok-${MM_CTO}\"}}}\n",
+		},
+		{
+			name: "a Slack bot token with a reference inside it", tier: TierCompany, validatorOnly: true,
+			yaml: "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: " +
+				"{bot_token: \"xoxb-${SLACK_CEO}\", signing_secret: \"${S}\"}}}\n",
+		},
+		// The company's root is the one position a null is refused at: an
+		// empty company document is refused by name.
+		{name: "a company that is YAML null", tier: TierCompany, yaml: "~\n", editorCatches: true},
+
 		{
 			name: "unknown provider type", tier: TierCompany, editorCatches: true,
 			yaml: "name: Acme\nproviders:\n  llm:\n    default: {type: openai-compatable, model: m, base_url: https://x}\n",
@@ -542,6 +904,15 @@ units:
 			name: "replicas with nobody to replicate to", tier: TierBootstrap, editorCatches: true,
 			yaml: "coordination:\n  type: embedded-kv\nstream:\n  replicas: 3\n",
 		},
+		// A PEER LIST NAMING ONLY THIS NODE. The schema's two-node rule
+		// counts ENTRIES, since it cannot compare one with this node's
+		// address — so the validator must refuse this one too, or the
+		// schema flags a file the engine runs.
+		{
+			name: "a peer list naming only this node", tier: TierBootstrap, editorCatches: true,
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  cluster:\n    name: acme\n" +
+				"    port: 6222\n    host: 10.0.0.11\n    peers: [nats://10.0.0.11:6222]\n",
+		},
 		{
 			name: "an external stream with no url", tier: TierBootstrap, editorCatches: true,
 			yaml: "coordination:\n  type: embedded-kv\nstream:\n  type: nats\n",
@@ -565,6 +936,37 @@ units:
 			// is what an operator reaches for first. The schema sees a
 			// string and has nothing to say.
 			yaml: "name: Acme\nintegrations:\n  gitlab: {enabled: true, url: https://gitlab.example.com, signing_secret: plain-shared-secret}\n",
+		},
+		// WHAT A REFERENCE RESOLVES TO is the node's business, so the schema
+		// admits one wherever some value would do and the validator judges
+		// the value it got.
+		{
+			name: "a log level from the environment that is not one", tier: TierBootstrap, validatorOnly: true,
+			yaml: "logging:\n  level: \"${LOG_LEVEL}\"\n",
+			env:  map[string]string{"LOG_LEVEL": "verbose"},
+		},
+		{
+			name: "a node id from the environment that is not one", tier: TierBootstrap, validatorOnly: true,
+			yaml: "node:\n  id: \"${HOSTNAME}\"\n",
+			env:  map[string]string{"HOSTNAME": "builder 1"},
+		},
+		// And what a number's reference resolves to is the node's business
+		// too: a fraction, a word, or nothing at all is refused at load, and
+		// the schema, seeing only `${API_PORT}`, cannot tell.
+		{
+			name: "a port from the environment that is not a whole number", tier: TierBootstrap, validatorOnly: true,
+			yaml: "api:\n  port: \"${API_PORT}\"\n",
+			env:  map[string]string{"API_PORT": "8080.5"},
+		},
+		{
+			name: "a port from the environment that is not a number", tier: TierBootstrap, validatorOnly: true,
+			yaml: "api:\n  port: \"${API_PORT}\"\n",
+			env:  map[string]string{"API_PORT": "http"},
+		},
+		{
+			name: "a port from the environment that is empty", tier: TierBootstrap, validatorOnly: true,
+			yaml: "api:\n  port: \"${API_PORT}\"\n",
+			env:  map[string]string{"API_PORT": ""},
 		},
 		{name: "a stdio server with no command", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nmcp_servers:\n  - {name: calc}\n"},
 		{name: "duplicate handles", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nroles:\n  - {name: \"Agent CEO\"}\n  - {name: \"agent ceo\"}\n"},
@@ -637,9 +1039,13 @@ func asJSON(t *testing.T, doc string) any {
 	return value
 }
 
-func validateTier(tier Tier, doc string) error {
+// validateTier runs a document through the engine's own load path for its
+// tier. Tier A resolves through env alone — the environment-only shape
+// [EnvOnly] gives the real load, with the process environment replaced by
+// the case's own, so a verdict cannot depend on the machine.
+func validateTier(tier Tier, doc string, env map[string]string) error {
 	if tier == TierBootstrap {
-		_, err := ParseBootstrap([]byte(doc), EnvOnly())
+		_, err := ParseBootstrap([]byte(doc), NewResolver(MapSource(env)))
 		return err
 	}
 	_, err := ParseCompany([]byte(doc))

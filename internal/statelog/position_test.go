@@ -166,3 +166,35 @@ func TestAPositionRendersTheKeysTheDashboardReads(t *testing.T) {
 		t.Fatalf("round-tripped to %+v, want %+v", back, at)
 	}
 }
+
+// A POSITION'S TOKEN READS BACK AS THE POSITION IT NAMES, and nothing else
+// does. A cursor, a `since`, a `min_position` and a wake's trigger all travel
+// as the token, and a reader that accepted a bare sequence, or rounded a
+// generation it could not hold, would hand a node a position in a number space
+// it does not belong to — read as behind, or as impossibly far ahead.
+func TestAPositionTokenReadsBackAsThePositionItNames(t *testing.T) {
+	t.Parallel()
+	for _, at := range []statelog.Position{
+		{Stream: "CREWLET_TRACKER_LOG", Generation: 0, Seq: 1},
+		{Stream: "CREWLET_TRACKER_LOG", Generation: 7, Seq: 4_000_000},
+		{Stream: "CREWLET_L1_TRACKER_TRACKER_007", Generation: statelog.MaxGeneration,
+			Seq: statelog.MaxSeq},
+	} {
+		got, err := statelog.ParsePosition(at.String())
+		if err != nil || got != at {
+			t.Errorf("ParsePosition(%q) = (%v, %v), want %v", at.String(), got, err, at)
+		}
+	}
+	for _, bad := range []string{
+		"", "42", "@1:2", "CREWLET_TRACKER_LOG@1", "CREWLET_TRACKER_LOG@x:2",
+		"CREWLET_TRACKER_LOG@1:y", "CREWLET_TRACKER_LOG@-1:2",
+		// One generation past what the packed form can carry.
+		"CREWLET_TRACKER_LOG@8388608:1",
+		// One sequence past one generation's whole space.
+		"CREWLET_TRACKER_LOG@0:1099511627776",
+	} {
+		if got, err := statelog.ParsePosition(bad); err == nil {
+			t.Errorf("ParsePosition(%q) = %v, want a refusal", bad, got)
+		}
+	}
+}

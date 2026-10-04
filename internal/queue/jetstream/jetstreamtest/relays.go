@@ -195,8 +195,16 @@ func (r *Relays) Member(i int) (port int, peers []string, advertise string) {
 	if r.direct {
 		// EVERY MEMBER'S REAL PORT, this one's included. NATS ignores a
 		// route to itself, and listing them uniformly means a member's
-		// peer list does not depend on its own index — which is what a
-		// deployment writes, and what a `peers:` block in Tier A holds.
+		// peer list does not depend on its own index.
+		//
+		// A HARNESS CONVENIENCE, NOT THE SHAPE TIER A ASKS FOR:
+		// `stream.cluster.peers` names the OTHER members, because the
+		// config counts them to decide whether a fleet has a quorum and
+		// how many copies it can keep. A Tier A entry recognisably this
+		// node's own route is discounted from that count with a warning,
+		// and one that is not recognisable — an alias of this host — is
+		// counted as a member it is not. This list reaches the embedded
+		// broker directly and is counted by nothing.
 		for _, p := range r.ports {
 			peers = append(peers, routeURL(p))
 		}

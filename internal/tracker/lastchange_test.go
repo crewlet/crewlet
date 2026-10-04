@@ -383,7 +383,7 @@ func onlyRow(t *testing.T, r *roundTrip, key string) tracker.ProjectRow {
 func projectActor(t *testing.T, h *applyHarness) string {
 	t.Helper()
 	var actor string
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Read(h.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(h.t.Context(),
 			`SELECT last_change_actor FROM tracker_projects WHERE key = 'ENG'`).
 			Scan(&actor)
@@ -422,7 +422,7 @@ func seedApplyProject(t *testing.T, h *applyHarness) {
 // does.
 func writeReplicated(t *testing.T, r *roundTrip, statement string) {
 	t.Helper()
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), statement)
 		return err
 	}); err != nil {
@@ -436,7 +436,7 @@ func writeReplicated(t *testing.T, r *roundTrip, statement string) {
 // operator's database runs rather than a copy of it that can drift.
 func backfillStatements(t *testing.T, name string) []string {
 	t.Helper()
-	body, err := store.SchemaFile(store.EstateReplicated, name)
+	body, err := store.SchemaFile(store.EstatePartition, name)
 	if err != nil {
 		t.Fatalf("read the migration: %v", err)
 	}

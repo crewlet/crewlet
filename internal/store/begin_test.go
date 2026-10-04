@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"strings"
@@ -40,12 +41,21 @@ func TestTheImmediateBeginIsWhatSurvivesAForeignCommit(t *testing.T) {
 	db := openBeginStore(t)
 	ctx := t.Context()
 
-	// THE CONTROL. sql.TxOptions{ReadOnly: true} selects the deferred
-	// begin — the driver's own — and under it the hazard is live. If this
-	// stops failing, the case below is no longer evidence of anything and
-	// this test says so rather than going quietly green.
-	deferred, err := db.SQL().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	// THE CONTROL. The driver's own begin — a plain, DEFERRED "BEGIN" — and
+	// under it the hazard is live. If this stops failing, the case below is
+	// no longer evidence of anything and this test says so rather than
+	// going quietly green.
+	//
+	// ISSUED BY HAND on one connection, because this package no longer has
+	// a transaction that takes the deferred begin AND lets a write through:
+	// its read transaction refuses writes (see beginModeConn.queryOnlyFor),
+	// and a read-then-write is exactly what the control has to attempt.
+	deferred, err := db.SQL().Conn(ctx)
 	if err != nil {
+		t.Fatalf("draw a connection: %v", err)
+	}
+	defer func() { _ = deferred.Close() }()
+	if _, err := deferred.ExecContext(ctx, `BEGIN`); err != nil {
 		t.Fatalf("deferred begin: %v", err)
 	}
 	var n int
@@ -60,10 +70,10 @@ func TestTheImmediateBeginIsWhatSurvivesAForeignCommit(t *testing.T) {
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "snapshot is stale") {
 		t.Errorf("control: a read-then-write under the DEFERRED begin returned %v, "+
 			"want the driver's stale-snapshot abort. Either the driver changed or "+
-			"the mode is no longer being selected — the case below proves nothing "+
-			"until this does", err)
+			"the begin is no longer the deferred one — the case below proves "+
+			"nothing until this does", err)
 	}
-	_ = deferred.Rollback()
+	_, _ = deferred.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
 
 	// AND THE MODE THIS PACKAGE ACTUALLY USES. Nil options is the write
 	// mode, so the lock is held from BEGIN and the foreign commit cannot
@@ -209,7 +219,7 @@ func TestAContendedWriteRunsItsBodyOnce(t *testing.T) {
 // by a commit to a table it never names.
 func openBeginStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "begin.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "begin.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -224,4 +234,107 @@ func openBeginStore(t *testing.T) *store.DB {
 		}
 	}
 	return db
+}
+
+// A READ TRANSACTION REFUSES A WRITE, and the connection it ran on writes
+// again afterwards.
+//
+// [store.PartitionReader] is handed to every reader of a partition on the
+// strength of being unable to write, and a partition written anywhere but its
+// applier diverges from every peer that holds it — silently, since the rows
+// look right on the node that wrote them. A type with no Tx method keeps a
+// caller from asking for a write transaction; it does not keep a statement
+// inside a read's own transaction from writing, and one did: an INSERT through
+// a reader's Read committed. So the engine refuses it — and the refusal must
+// not outlive the read, because pools hand the same connections to reads,
+// writes, migrations and copies alike. ONE CONNECTION, so every step below is
+// on the connection the read left behind.
+func TestAReadTransactionRefusesAWrite(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	node, err := store.OpenNode(ctx, filepath.Join(t.TempDir(), "node.db"),
+		store.Options{MaxOpenConns: 1})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = node.Close() })
+	if _, err := node.SQL().ExecContext(ctx, `CREATE TABLE mine (v TEXT)`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	count := func(db interface {
+		Read(context.Context, func(*sql.Tx) error) error
+	}, table string) int {
+		t.Helper()
+		var n int
+		if err := db.Read(ctx, func(tx *sql.Tx) error {
+			return tx.QueryRow(`SELECT count(*) FROM ` + table).Scan(&n)
+		}); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		return n
+	}
+
+	// THE NODE'S OWN READ.
+	if err := node.Read(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO mine (v) VALUES ('from a read')`)
+		return err
+	}); err == nil {
+		t.Error("a write inside the node's read transaction was not refused")
+	}
+	if n := count(node, "mine"); n != 0 {
+		t.Errorf("a write inside a read transaction left %d row(s)", n)
+	}
+	// AND THE CONNECTION IT LEFT WRITES — in a transaction, and outside one.
+	if err := node.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO mine (v) VALUES ('from a write')`)
+		return err
+	}); err != nil {
+		t.Errorf("a write transaction on the connection a read used was refused: %v", err)
+	}
+	if _, err := node.SQL().ExecContext(ctx, `INSERT INTO mine (v) VALUES ('bare')`); err != nil {
+		t.Errorf("a statement outside a transaction, after a read, was refused: %v", err)
+	}
+	_ = count(node, "mine")
+	if _, err := node.Backup(ctx, filepath.Join(t.TempDir(), "copy.db")); err != nil {
+		t.Errorf("a copy taken after a read was refused: %v", err)
+	}
+	// Every other way a statement reaches the connection outside a
+	// transaction: a query that writes, and a statement prepared first.
+	_ = count(node, "mine")
+	var v string
+	if err := node.SQL().QueryRowContext(ctx,
+		`INSERT INTO mine (v) VALUES ('queried') RETURNING v`).Scan(&v); err != nil {
+		t.Errorf("a query that writes, after a read, was refused: %v", err)
+	}
+	_ = count(node, "mine")
+	stmt, err := node.SQL().PrepareContext(ctx, `INSERT INTO mine (v) VALUES ('prepared')`)
+	if err != nil {
+		t.Fatalf("prepare after a read: %v", err)
+	}
+	defer func() { _ = stmt.Close() }()
+	if _, err := stmt.ExecContext(ctx); err != nil {
+		t.Errorf("a prepared write, after a read, was refused: %v", err)
+	}
+
+	// AND A PARTITION'S READER, which is the handle the rule is written on.
+	file := store.PartitionFile{Layout: 1, Name: "tracker.000", Logs: 1}
+	if _, err := node.OpenPartition(ctx, file); err != nil {
+		t.Fatalf("open %s: %v", file.Name, err)
+	}
+	h := node.PartitionHandle(file.Name)
+	if err := h.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`CREATE TABLE rows (v TEXT)`)
+		return err
+	}); err != nil {
+		t.Fatalf("create in the partition: %v", err)
+	}
+	if err := h.Reader().Read(ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO rows (v) VALUES ('from a reader')`)
+		return err
+	}); err == nil {
+		t.Error("a write through a partition's reader was not refused")
+	}
+	if n := count(h.Reader(), "rows"); n != 0 {
+		t.Errorf("a write through a partition's reader left %d row(s)", n)
+	}
 }

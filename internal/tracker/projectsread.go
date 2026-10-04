@@ -194,6 +194,12 @@ type ProjectListing struct {
 	LogLag         *uint64            `json:"log_lag,omitempty"`
 	Complete       bool               `json:"complete"`
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
+	// Coverage is which partitions this answer was read from and which it
+	// could not reach, with the cut each was read at — filled by the estate
+	// router that answered the caller, never by this reader, which reads
+	// one partition's rows and knows nothing of the others. A non-empty
+	// Missing is rendered as its Notice, never as the shorter list alone.
+	Coverage statelog.Coverage `json:"coverage,omitzero"`
 }
 
 // MaxProjectsPerAnswer is how many projects one listing carries.
@@ -358,7 +364,11 @@ type ProjectQuery struct {
 	// Units resolves the chart-owned unit — both for rendering each row
 	// and for the filter above. Nil renders every row unresolved and
 	// matches the filter literally — see [Units].
-	Units Units
+	//
+	// NOT SERIALISED: an interface a JSON encoder writes as `{}` and
+	// cannot decode back. A surface that sends this across a wire has the
+	// far side attach ITS OWN chart — see internal/estate.
+	Units Units `json:"-"`
 
 	Level       statelog.ReadLevel
 	Session     statelog.Position
@@ -777,7 +787,11 @@ type ProjectDetailQuery struct {
 	ForType string
 
 	// Units resolves the chart-owned unit — see [Units].
-	Units Units
+	//
+	// NOT SERIALISED: an interface a JSON encoder writes as `{}` and
+	// cannot decode back. A surface that sends this across a wire has the
+	// far side attach ITS OWN chart — see internal/estate.
+	Units Units `json:"-"`
 
 	Level       statelog.ReadLevel
 	Session     statelog.Position

@@ -86,7 +86,8 @@ func (s *Searcher) CanSearch(seat *org.Role, o *org.Organization) bool {
 	return allowed
 }
 
-// Search implements [knowledge.Searcher].
+// Search implements [knowledge.Searcher]. One corpus, somebody else's, so the
+// answer states no coverage: there is no partition of it to be missing.
 //
 // BEST EFFORT: it never reports an error. Every failure path is an empty
 // result and the prefetch degrades to an empty block — a turn must not die

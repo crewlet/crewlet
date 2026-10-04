@@ -12,10 +12,12 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -82,7 +84,8 @@ func TestTheFloorIsThePublishedFloorRatherThanTheTicksConclusion(t *testing.T) {
 // replaying: its reads are told to come back, it admits no seats until it has
 // caught up, and nothing sends it to adopt a snapshot of records it can read.
 // Only once the purge lands is its next record gone, and only then is it below
-// the log, refused as `below_floor`, shed, and sent to adopt.
+// the log, refused as `below_floor`, taken out of serving its partition (its
+// seats stay, and read it from another holder), and sent to adopt.
 func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
@@ -107,7 +110,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	// THIS NODE'S OWN TRIM DUTY PUBLISHES THE SAME FIELD, and it ticks
 	// immediately at boot: its first conclusion is `blocked_by
 	// backup_floor` at zero, which lands on top of the floor published
@@ -181,7 +184,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 		t.Fatalf("a node replaying up to the floor refuses reads as %q, want %q — "+
 			"the records are on the log and it clears on its own", got, statelog.RefuseBehind)
 	}
-	if e.NativeHydrated() {
+	if e.NativeHydrated(t.Context()) {
 		t.Fatal("the node admits seats while below the published floor")
 	}
 	// AND IT KEEPS THE SEATS IT HOLDS. Being behind is admission's concern
@@ -220,11 +223,27 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 		t.Fatalf("a node below the log refuses reads as %q, want %q", got,
 			statelog.RefuseBelowFloor)
 	}
-	if e.NativeHydrated() {
+	if e.NativeHydrated(t.Context()) {
 		t.Fatal("the node admits seats while below the log")
 	}
-	if ok, _ := e.SeatsServiceable(); ok {
-		t.Fatal("the node keeps its seats while below the log")
+	// A COPY WITH A HOLE IN IT STOPS SERVING ITS PARTITION, and the node
+	// keeps its seats: every call they make goes to a holder whose copy is
+	// sound — on this node alone there is none, so it is refused naming the
+	// partition — and moving them would hand them to a peer asking the same
+	// holders.
+	waitUntil(t, 5*time.Second, "the copy below the log to stop serving its partition",
+		func() bool {
+			_, serves, _ := e.local.For(t.Context(), statelog.EstatePartition)
+			return !serves
+		})
+	if ok, reason := e.SeatsServiceable(); !ok {
+		t.Fatalf("the node shed its seats over a copy below the log (%s) — a "+
+			"wrong copy stops serving its partition, and the seats stay", reason)
+	}
+	var unserved *estate.ErrPartitionUnserved
+	if _, err := e.router.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); !errors.As(err, &unserved) {
+		t.Fatalf("a read of the only copy, below the log, answered %v — want it "+
+			"refused naming the partition nobody serves", err)
 	}
 	s.publishPositions(t.Context())
 	if !rejoinRequested() {
@@ -288,14 +307,14 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	// The trim is the other thing that purges this log; stopped, every
 	// purge below is this test's own.
 	e.stopRetention()
 
 	s := e.native.Load().log
 	name := tracker.Domain{}.Name()
-	spec := tracker.Domain{}.Stream()
+	spec := estateSpec(tracker.Domain{})
 	running := s.Domain(name)
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
@@ -452,7 +471,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 	artefactAt := func(seq uint64) statelog.Manifest {
 		m := statelog.Manifest{Domains: map[string]statelog.DomainPosition{}}
 		for _, domain := range registeredDomains() {
-			m.Domains[domain.Name()] = statelog.DomainPosition{Stream: domain.Stream().Name}
+			m.Domains[domain.Name()] = statelog.DomainPosition{Stream: estateSpec(domain).Name}
 		}
 		m.Domains[name] = statelog.DomainPosition{Stream: spec.Name, Seq: seq}
 		return m
@@ -590,7 +609,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 			t.Fatalf("publish %s's position: %v", away, err)
 		}
 	}
-	floor := func(r *runningDomain, f uint64) {
+	floor := func(r *runningLog, f uint64) {
 		t.Helper()
 		if err := back.Fleet.PutFloor(t.Context(), coord.TrimFloor{
 			Domain: r.domain.Name(), Generation: r.runner.Committed().Generation,
@@ -603,7 +622,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	end := func() [2]uint64 {
 		t.Helper()
 		var out [2]uint64
-		for i, r := range []*runningDomain{running, wiki} {
+		for i, r := range []*runningLog{running, wiki} {
 			_, last, err := r.log.Bounds(t.Context())
 			if err != nil {
 				t.Fatalf("read %s's end: %v", r.domain.Name(), err)
@@ -668,7 +687,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 		}
 	}
 	for _, lister := range []evictionLister{tracker.Domain{}, pages.Domain{}} {
-		rows, err := lister.Evictions(t.Context(), back.Store)
+		rows, err := lister.Evictions(t.Context(), storetest.EstateOf(back.Store).Reader())
 		if err != nil {
 			t.Fatalf("read the evictions: %v", err)
 		}
@@ -679,7 +698,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 }
 
 // logFirstOf is a domain log's own first surviving sequence.
-func logFirstOf(t *testing.T, r *runningDomain) uint64 {
+func logFirstOf(t *testing.T, r *runningLog) uint64 {
 	t.Helper()
 	first, _, err := r.log.Bounds(t.Context())
 	if err != nil {

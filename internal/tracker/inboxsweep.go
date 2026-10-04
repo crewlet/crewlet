@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -44,14 +45,35 @@ import (
 // "the history it points at is untouched".
 
 // InboxJobs is the sweep for a person's inbox rows.
-func InboxJobs(db *store.DB, retention time.Duration) []maintenance.Job {
-	if db == nil {
+//
+// retention is ASKED AT EVERY SWEEP, because the horizon is the company's
+// `tracker.native.inbox_retention_days` and an apply moves it under a running
+// node — see [maintenance.Horizon] for what reading it once cost.
+//
+// EVERY TRACKER PARTITION FILE THE NODE HOLDS, asked at every sweep: each holds
+// the inbox rows of its own projects, and the partitions a node holds change
+// while it runs, so partitions answers them afresh rather than the sweep fixing
+// one set when it was built — which swept no partition joined since. A nil
+// partitions is a node with no tracker to sweep, which contributes no job
+// rather than one that fails every tick; a file that fails is reported and the
+// rest are still swept.
+func InboxJobs(partitions func() []store.PartitionHandle, retention maintenance.Horizon) []maintenance.Job {
+	if partitions == nil {
 		return nil
 	}
 	return []maintenance.Job{{
 		Name: "tracker_notifications", Scope: maintenance.NodeLocal, Horizon: retention,
 		Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
-			return purgeInbox(ctx, db, cutoff)
+			var swept int64
+			var errs []error
+			for _, db := range partitions() {
+				n, err := purgeInbox(ctx, db, cutoff)
+				swept += n
+				if err != nil {
+					errs = append(errs, fmt.Errorf("the partition %s: %w", db.Name(), err))
+				}
+			}
+			return swept, errors.Join(errs...)
 		},
 	}}
 }
@@ -72,9 +94,9 @@ func InboxJobs(db *store.DB, retention time.Duration) []maintenance.Job {
 // running node. A pooled write transaction takes the same write lock through
 // the same queue (see internal/store's writequeue.go), which is all this
 // needs.
-func purgeInbox(ctx context.Context, db *store.DB, cutoff time.Time) (int64, error) {
+func purgeInbox(ctx context.Context, db store.PartitionHandle, cutoff time.Time) (int64, error) {
 	var swept int64
-	err := db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+	err := db.Tx(ctx, func(tx *sql.Tx) error {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx,
 			`DELETE FROM tracker_notifications WHERE created_at < ?`,

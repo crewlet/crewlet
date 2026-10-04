@@ -25,12 +25,12 @@ func newReadHarness(t *testing.T) *readHarness {
 	// read the rows directly would be testing a path nothing takes — and
 	// it is how `read_level` came to be a word in the answer rather than a
 	// property of it.
-	log, err := statelogtest.LocalReader(tracker.Domain{}, h.db.Replicated(),
-		statelog.Position{Stream: tracker.Domain{}.Stream().Name, Generation: 1, Seq: h.seq})
+	log, err := statelogtest.LocalReader(tracker.Domain{}, h.db,
+		statelog.Position{Stream: statelog.EstateStream(tracker.Domain{}).Name, Generation: 1, Seq: h.seq})
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)
 	}
-	reader, err := tracker.NewReader(h.db, log)
+	reader, err := tracker.NewReader(h.db.Reader(), log)
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}
@@ -333,6 +333,37 @@ func TestAScopelessReadIsAboutTheWholeDomain(t *testing.T) {
 		t.Fatal("the domain's scope does not cover a project's, so a deferred " +
 			"record about the whole domain would not be reported to a project " +
 			"read")
+	}
+}
+
+// THE EVERYTHING LEVEL IS ABOUT EVERY PROJECT.
+//
+// It reads the tasks of every project, so a record deferred in any one of them
+// is about it. Its closure used to be the workspace CONTAINER — where objects
+// with no project live — which covers no task at all, so a board holding an
+// undecodable record in one project reported itself complete.
+func TestTheEverythingLevelIsAboutEveryProject(t *testing.T) {
+	t.Parallel()
+	everything := tracker.ReadScope(tracker.Query{
+		Scope: tracker.Scope{Workspace: true},
+	})
+	for _, project := range []string{"ENG", "OPS", tracker.WorkspaceContainer} {
+		task := statelog.ScopeSet{Paths: []string{tracker.ScopeTerm{
+			Kind: tracker.TermObject, Container: project, ID: "a-task",
+		}.Path()}}
+		if !everything.Intersects(task) {
+			t.Errorf("the Everything level's scope %v does not cover a task in "+
+				"%s", everything.Paths, project)
+		}
+	}
+	// AND NOTHING BESIDE THE CONTAINERS: a record about one person is not
+	// about every board, or one undecodable profile edit would flag them all.
+	person := statelog.ScopeSet{Paths: []string{tracker.ScopeTerm{
+		Kind: tracker.TermFamily, ID: string(tracker.KindPerson),
+	}.Path()}}
+	if everything.Intersects(person) {
+		t.Errorf("the Everything level's scope %v covers the people family",
+			everything.Paths)
 	}
 }
 

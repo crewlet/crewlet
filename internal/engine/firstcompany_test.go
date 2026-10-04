@@ -75,7 +75,7 @@ func TestAFirstCompanyBringsUpTheNativeBackendsWithoutARestart(t *testing.T) {
 
 	// A WORKING TRACKER: work filed into the chart's project lands.
 	deadline := time.Now().Add(20 * time.Second)
-	for !e.NativeHydrated() {
+	for !e.NativeHydrated(t.Context()) {
 		if time.Now().After(deadline) {
 			t.Fatal("the node never admitted seats on its new runtime")
 		}

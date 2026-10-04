@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
@@ -59,7 +60,7 @@ func TestARunningNodePublishesItsOwnDay(t *testing.T) {
 	// phase existed, so the one that finds it is the next.
 	deadline := time.Now().Add(usage.FlushInterval*3/2 + 10*time.Second)
 	for {
-		rows, err := usage.Spend(t.Context(), db.Replicated(), usage.SpendQuery{From: day, To: day})
+		rows, err := usage.Spend(t.Context(), storetest.EstateOf(db), usage.SpendQuery{From: day, To: day})
 		if err != nil {
 			t.Fatalf("read the spend: %v", err)
 		}

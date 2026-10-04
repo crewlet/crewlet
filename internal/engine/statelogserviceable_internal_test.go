@@ -58,7 +58,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	if !ok {
 		t.Fatalf("the stream is %T, not the JetStream backend", back.Queue)
 	}
-	spec := tracker.Domain{}.Stream()
+	spec := estateSpec(tracker.Domain{})
 	log, err := q.DomainLog(t.Context(), spec.Name)
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
@@ -68,7 +68,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	// AND FOR THE APPLIER'S OWN DRAIN, which is a separate instant from a
 	// lag of zero: the loop learns the log is empty on the fetch AFTER it
 	// commits the last record, up to [statelog.FetchWait] later. Halting
@@ -120,7 +120,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	// claims, because a seat attaching here would act on rows that are
 	// behind; serviceability keeps what is held, because rows that are
 	// behind catch up and dropping the work would be pure loss.
-	if e.NativeHydrated() {
+	if e.NativeHydrated(t.Context()) {
 		t.Error("the node admits new seats with a record unapplied, so a seat " +
 			"attaches to a copy that is behind and answers \"there is no such " +
 			"item\" about work it was just handed")
@@ -129,6 +129,36 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 		t.Fatalf("the node gave up every seat it holds over %s being one record "+
 			"behind — on a company doing nothing but filing work items that is "+
 			"the whole seat roster moving on every write", domain)
+	}
+
+	// AND THE COPY STILL ANSWERS REQUESTS, which is where this decision
+	// lives now: a copy's fault stops it SERVING its partition rather than
+	// shedding its seats, so the regression above would come back as the
+	// request gate reading a record in flight as a copy that is wrong or
+	// lags. One record is inside the snapshot slack of a copy that has
+	// drained, so it answers while it admits no seat — the two gates asked
+	// of the same instant, disagreeing the same way. Judged otherwise, every
+	// request another node sent it would go to whichever peer happened to be
+	// level, and a single node's own seats would wait for the lagging pass.
+	p := statelog.EstatePartition
+	if v := s.partitionVerdict(t.Context(), p); v.fault != "" || !v.answers {
+		t.Fatalf("a copy one record behind is judged %+v, want sound and answering", v)
+	}
+	e.local.mu.Lock()
+	delete(e.local.verdicts, p) // judged afresh, at this instant
+	e.local.mu.Unlock()
+	served, serves, err := e.local.For(t.Context(), p)
+	switch {
+	case err != nil || !serves:
+		t.Fatalf("a copy one record behind is not served: (%v, %v)", serves, err)
+	case served.Answers == nil || !served.Answers(t.Context()):
+		t.Fatal("a copy one record behind answers no request")
+	case served.Admits == nil || served.Admits(t.Context()):
+		t.Fatal("a copy one record behind admits a seat, which the gate above refused")
+	}
+	if _, err := e.router.Work().Tasks(t.Context(), tracker.Query{Level: statelog.ReadStale},
+		time.Now()); err != nil {
+		t.Fatalf("a single node one record behind refused its own seat's read: %v", err)
 	}
 
 	// AND THE FLEET VIEW STILL SAYS SO. The shed is what must not happen;

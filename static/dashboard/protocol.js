@@ -1,3 +1,19 @@
+//#region src/contract/wire.ts
+/**
+* How long a query waits for its answer ONCE SENT.
+*
+* The clock starts when the frame goes out, not when the query is made, so time
+* spent waiting for a socket is not counted against the server. Ten seconds is
+* far beyond the slowest query's normal latency and still short enough that a
+* screen shows an error rather than an eternal skeleton.
+*
+* AND LONGER THAN THE ENGINE'S OWN READ OF THE BROKER GROUP
+* (`engine.BrokerReadWait`), held there by `internal/api`'s
+* `TestTheDashboardWaitsPastAReadOfTheGroup`: the `fleet_broker` query asks a
+* member for the metadata group and may spend that long on it, and a screen
+* that gave up first would report a slow answer as a failed one.
+*/
+var QUERY_TIMEOUT_MS = 1e4;
 var ALL_DATA_SLICES = [
 	"agents",
 	"events",
@@ -386,15 +402,6 @@ var MAX_BACKOFF_MS = 3e4;
 var PING_MS = 25e3;
 /** Degraded-mode poll — only ever runs while the socket is down. */
 var FALLBACK_MS = 5e3;
-/**
-* How long a query waits for its answer ONCE SENT.
-*
-* The clock starts when the frame goes out, not when the query is made, so time
-* spent waiting for a socket is not counted against the server. Ten seconds is
-* far beyond the slowest query's normal latency and still short enough that a
-* screen shows an error rather than an eternal skeleton.
-*/
-var QUERY_TIMEOUT_MS = 1e4;
 /**
 * Every {@link QueryErrorCode}, as a value a rejection's message can be tested
 * against.
@@ -859,10 +866,11 @@ var RestError = class extends Error {
 	*
 	* WHAT A WRITE'S CALLER NEEDS BEFORE IT READS A REFUSAL AS ONE. A refusal
 	* the engine wrote means nothing was done; this means nobody here knows. A
-	* reverse proxy's default read timeout is a minute, which is exactly what
-	* the engine allows a node gate past its judgement, so a slow eviction
-	* reached the browser as a 504 — and read as a refusal, its operation id
-	* was dropped with it.
+	* reverse proxy's default read timeout is a minute, shorter than the minute
+	* and a quarter the engine allows a node gate past its judgement (a minute
+	* for the logs, a quarter of one for the estate map's part), so a slow
+	* eviction reached the browser as a 504 — and read as a refusal, its
+	* operation id was dropped with it.
 	*/
 	get unanswered() {
 		return this.status === 0 || this.code === "" || this.code === "unreadable_body";
@@ -916,9 +924,9 @@ function offline(err) {
 * It is the DEFAULT, not the only deadline: a call whose path is genuinely
 * longer passes [RequestOptions.timeoutMs] rather than removing the deadline.
 * Two do. A backup copies the whole store before it answers. And the node
-* gate is allowed a minute from its first record to its last answer, so
-* thirty seconds gave up on a gesture the node went on to finish, holding
-* nothing to finish it with.
+* gate takes up to a minute and a half to answer a gesture (half a minute to
+* judge it, a minute to write every log), so thirty seconds gave up on a
+* gesture the node went on to finish, holding nothing to finish it with.
 */
 var REQUEST_TIMEOUT_MS = 3e4;
 /** A deadline as a person would say it: seconds under two minutes, else
@@ -1040,6 +1048,60 @@ async function request(method, path, options = {}) {
 async function bodyOf(method, path, options) {
 	return (await request(method, path, options)).body;
 }
+/**
+* How long a download may take, from its request to its last byte.
+*
+* FIFTEEN MINUTES, not [REQUEST_TIMEOUT_MS]: a project's largest file is a
+* gibibyte, and that is fourteen minutes at ten megabits a second. A deadline
+* sized for a JSON answer would abandon every large download part way.
+*/
+var DOWNLOAD_TIMEOUT_MS = 9e5;
+/**
+* A file's bytes, fetched with the operator's token.
+*
+* NOT A LINK. A plain `<a href>` carries no bearer token, so on an engine that
+* guards its reads it would download the refusal instead of the file — the
+* bytes are fetched here, where the token is, and handed to the caller as a
+* blob. A refusal is read as the engine's JSON, like every other.
+*/
+async function blob(path, signal) {
+	const token = apiToken();
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+	const forward = () => controller.abort(signal?.reason);
+	signal?.addEventListener("abort", forward, { once: true });
+	try {
+		let response;
+		try {
+			response = await fetch(location.origin + path, {
+				method: "GET",
+				cache: "no-store",
+				headers: token ? { Authorization: "Bearer " + token } : {},
+				signal: controller.signal
+			});
+		} catch (err) {
+			if (signal?.aborted) throw signal.reason;
+			throw offline(err);
+		}
+		if (!response.ok) {
+			let body = {};
+			try {
+				body = await response.json();
+			} catch {
+				body = { error: "unreadable_body" };
+			}
+			throw new RestError(response.status, body);
+		}
+		try {
+			return await response.blob();
+		} catch (err) {
+			throw offline(err);
+		}
+	} finally {
+		clearTimeout(timer);
+		signal?.removeEventListener("abort", forward);
+	}
+}
 var rest = {
 	/**
 	* The whole answer: status, entity-tag and body. For a caller that sends a
@@ -1077,7 +1139,9 @@ var rest = {
 	del: (path, body, headers) => bodyOf("DELETE", path, {
 		body,
 		headers
-	})
+	}),
+	/** A file's bytes — see [blob]. */
+	blob
 };
 //#endregion
 //#region src/contract/gate.ts
@@ -1176,6 +1240,56 @@ function layoutOpID(unixMs, tail, name) {
 function newGateOpID(verb, node, now = Date.now(), random = (bytes) => crypto.getRandomValues(bytes)) {
 	return layoutOpID(now, random(/* @__PURE__ */ new Uint8Array(10)), `${verb}-${node}`);
 }
+//#endregion
+//#region src/contract/fleet.ts
+/**
+* The fleet's broker and object store, as the engine bounds them: the kinds
+* a node's broker can be and the disagreements named between the two records
+* of its membership, how long a removal may take, and the states of the object
+* store's report.
+*
+* Each is a COPY of something the engine owns, because this is a separate
+* build that cannot import a Go identifier — held to the engine's in both
+* directions by `internal/api`'s `broker_client_test.go` and
+* `objects_test.go`. What is done with them is behaviour, and lives in
+* `protocol/broker.ts` and the Settings screens.
+*/
+/**
+* How a node's broker takes part in the fleet's — `placement.BrokerKind`, as
+* `String()` renders it.
+*
+* `unknown` IS A VALUE, not an absence: a node running a build older than the
+* field says nothing, and the engine renders that as `unknown` so the cell is
+* never empty — an empty cell reads as nothing to look at, and this one is
+* counted as a member wherever that is the safe reading.
+*/
+var BROKER_KINDS = [
+	"member",
+	"leaf",
+	"client",
+	"unknown"
+];
+/**
+* The disagreements between the two records of the broker's membership —
+* `engine.BrokerFindingKinds`.
+*/
+var BROKER_FINDING_KINDS = [
+	"dead_member",
+	"not_in_group",
+	"unknown_kind"
+];
+/**
+* How long a removal's request may take before the dialog gives up on it.
+*
+* THREE MINUTES AND FIVE SECONDS, the command line's own wait and for its
+* reason: the node bounds the whole removal by one deadline
+* (`engine.BrokerRemoveWait`, two minutes and five seconds) — the carrying
+* member's own commit budget and one round trip for its answer — and a minute
+* more covers the node listing the fleet and reaching the member. A dialog
+* that gave up first would report a removal the group went on to commit as
+* failed.
+*/
+var BROKER_REMOVE_TIMEOUT_MS = 185e3;
 //#endregion
 //#region src/contract/actions.ts
 /**
@@ -1803,4 +1917,4 @@ function refusalOf(tool, requestId, err, floors) {
 	};
 }
 //#endregion
-export { LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SessionFloors, Store, act, api, apiToken, clearToken, domainOf, isAbort, keepsOperation, layoutOpID, newGateOpID, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, retryAfterSeconds, storeToken };
+export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SessionFloors, Store, act, api, apiToken, clearToken, domainOf, isAbort, keepsOperation, layoutOpID, newGateOpID, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, retryAfterSeconds, storeToken };

@@ -202,22 +202,30 @@ func TestARetryOfAWriteThatLandedIsAnsweredWithIt(t *testing.T) {
 // arrives.
 func (r *roundTrip) lossyWriter(t *testing.T) (*tracker.Writer, *lossyLog) {
 	t.Helper()
-	rows, err := tracker.NewRows(r.db)
+	lost := &lossyLog{Appender: r.log}
+	return r.writerOver(t, lost), lost
+}
+
+// writerOver is a second writer over this harness's own log, estate and
+// holding, as this node, whose appends go through appender — a case's hand on
+// the broker between a write's decision and its landing.
+func (r *roundTrip) writerOver(t *testing.T, appender statelog.Appender) *tracker.Writer {
+	t.Helper()
+	rows, err := tracker.NewRows(r.db.Reader(), statelog.EstateStream(tracker.Domain{}))
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
-	fence := tracker.NewFence(r.db, r.nodeID)
+	fence := tracker.NewFence(r.db.Reader(), r.nodeID)
 	fence.Floor = func(context.Context, uint32) (uint64, error) { return 0, nil }
 	fence.Ends = func(ctx context.Context) (statelog.LogEnds, error) {
 		first, last, err := r.log.Bounds(ctx)
 		return statelog.LogEnds{First: first, Last: last}, err
 	}
 	fence.Committed = r.waiter.Committed
-	lost := &lossyLog{Appender: r.log}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: tracker.Domain{}, Log: lost, Rows: rows, Fence: fence,
-		Gates: tracker.NewGates(r.db), Waiter: r.waiter, Identity: r.waiter,
-		NodeID: r.nodeID, Admission: r.reserve,
+		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Layout: statelog.EstateLayout(tracker.Domain{}.Name()), LogID: statelog.EstateLog(tracker.Domain{}), Log: appender, Records: r.log, Rows: rows, Fence: fence,
+		Gates: tracker.NewGates(r.db.Reader()), Waiter: r.waiter, Voids: r.waiter, Identity: r.waiter,
+		NodeID: r.nodeID, Admission: r.reserve, Holding: r.holding,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})
@@ -225,14 +233,14 @@ func (r *roundTrip) lossyWriter(t *testing.T) (*tracker.Writer, *lossyLog) {
 		t.Fatalf("build the publisher: %v", err)
 	}
 	writer, err := tracker.NewWriter(tracker.WriterDeps{
-		Publisher: publisher, DB: r.db, NodeID: r.nodeID, Claims: memory.New(),
+		Publisher: publisher, DB: r.db.Reader(), NodeID: r.nodeID, Claims: memory.New(),
 		Actor: "ana", ActorKind: tracker.AuthorHuman,
 		Now: func() time.Time { return r.at },
 	})
 	if err != nil {
 		t.Fatalf("build the writer: %v", err)
 	}
-	return writer, lost
+	return writer
 }
 
 // AN OPERATION ID CARRIED TO ANOTHER TASK IS REFUSED, NOT ANSWERED WITH THE

@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/backoff"
@@ -77,9 +76,10 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	clustered bool, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
 
 	// A BREADCRUMB, because without one this is the silent step. A boot
-	// opens eighteen of these in a row and logs nothing between them, so a
-	// node that hung here emitted nothing at all until its budget expired —
-	// and the log could not say which bucket it was on.
+	// opens every bucket of both coordination stores in a row and logs
+	// nothing between them, so a node that hung here emitted nothing at all
+	// until its budget expired — and the log could not say which bucket it
+	// was on.
 	//
 	// IT SPANS THE LOOKUP AND THE CREATE, AND SAYS SO — and it stops where
 	// the create ends rather than where this function does.
@@ -360,7 +360,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why FIFTEEN buckets and not one
+// # Why NINETEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -396,6 +396,12 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	fires      the scheduler's catchup ceiling, days: a claim that expired
 //	           inside the window a tick can still evaluate lets that fire
 //	           run a second time
+//	rebases    the operation ledger's retention, a month: a rebase is
+//	           inherited only while it lies within the state log's mint
+//	           horizon of the attempt reading it, a day short of that, so
+//	           the bucket forgets a record exactly when no attempt could
+//	           still inherit it — and one forgotten sooner sends a retry to
+//	           mint anew and write again what the attempt before it wrote
 //	runs       none at all, a sharper version of the channels case: a run
 //	           parked on a person's answer waits DAYS, and its record is
 //	           the only thing that knows a billed box exists
@@ -414,6 +420,17 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           age would forget a mailbox that still exists and leave it
 //	           retaining mail for a seat nobody runs, with nothing left to
 //	           retire it
+//	objects    none at all: the record names which backend the company's
+//	           files are in, and one that expired would let the next node
+//	           to boot record a different one — the files split between two
+//	           stores with nothing failing
+//	chunkLocks a minute, the lock's own lifetime: a chunk lock is a key,
+//	           and the bucket's age is what lets go of one whose holder died
+//	custody    a day past the event log's own retention, thirty-two days:
+//	           the record names which data node keeps a stateless node's
+//	           batch, and a node that wrote one and never learned whether it
+//	           kept it asks later — so the record has to outlive every row
+//	           it can be asked about, and nothing longer
 //	positions  none at all, and this is the one where an age would be
 //	           worst: a node's position is what the trim reads to decide
 //	           what every other node may delete, and a key that expired
@@ -444,10 +461,14 @@ const (
 	channelSuffix      = "_channels"
 	followsSuffix      = "_follows"
 	firesSuffix        = "_fires"
+	rebasesSuffix      = "_rebases"
 	runsSuffix         = "_sandbox_runs"
 	secretsSuffix      = "_secrets"
 	integrationsSuffix = "_integrations"
 	mailboxesSuffix    = "_mailboxes"
+	objectsSuffix      = "_objects"
+	custodySuffix      = "_custody"
+	chunkLocksSuffix   = "_chunk_locks"
 	activationKey      = "activation"
 	// payloadKey holds the CURRENT revision's sealed body, in the same
 	// bucket as the pointer and for the same reason: neither may expire,
@@ -493,6 +514,10 @@ type FleetConfig struct {
 	// the record, so the age is a true last-activity stamp.
 	FollowRetention time.Duration
 
+	// RebaseRetention is how long a unit of work's recorded rebase is kept
+	// — see [coord.RebaseRetention], which is what every deployment passes.
+	RebaseRetention time.Duration
+
 	// CooldownMax is the longest credential cooldown, and therefore the
 	// bucket's age: a cooldown is stored as its own end instant, so the
 	// bucket only has to outlive the longest one anybody sets.
@@ -506,6 +531,14 @@ type FleetConfig struct {
 
 	// StatusFreshness is how long a node's apply status counts as current.
 	StatusFreshness time.Duration
+
+	// CustodyRetention is how long the record of which data node keeps a
+	// stateless node's batch is kept — see [coord.CustodyRetention].
+	CustodyRetention time.Duration
+
+	// ChunkLockTTL is how long a chunk lock outlives a holder that never
+	// let it go — see [coord.ChunkLockTTL].
+	ChunkLockTTL time.Duration
 
 	// Replicas is the JetStream replica count for every bucket.
 	Replicas int
@@ -541,9 +574,12 @@ func (c *FleetConfig) normalize() error {
 		{"RateWindow", c.RateWindow}, {"ClaimTTL", c.ClaimTTL},
 		{"LedgerRetention", c.LedgerRetention}, {"FireRetention", c.FireRetention},
 		{"FollowRetention", c.FollowRetention},
+		{"RebaseRetention", c.RebaseRetention},
 		{"CooldownMax", c.CooldownMax},
 		{"BudgetRetention", c.BudgetRetention},
 		{"StatusFreshness", c.StatusFreshness},
+		{"CustodyRetention", c.CustodyRetention},
+		{"ChunkLockTTL", c.ChunkLockTTL},
 	}
 	for _, field := range required {
 		switch {
@@ -577,9 +613,13 @@ type FleetStore struct {
 	follows      jetstream.KeyValue
 	secrets      jetstream.KeyValue
 	fires        jetstream.KeyValue
+	rebases      jetstream.KeyValue
 	runs         jetstream.KeyValue
 	integrations jetstream.KeyValue
 	mailboxes    jetstream.KeyValue
+	objects      jetstream.KeyValue
+	custody      jetstream.KeyValue
+	chunkLocks   jetstream.KeyValue
 
 	// positions is the register every ageless key class the fleet still
 	// composes shares: a node's log positions, a trim hold, a backup point,
@@ -592,15 +632,23 @@ type FleetStore struct {
 	// projector; only their key grammar outlived them, in coord/keys.go.
 	positions jetstream.KeyValue
 
-	// js is the JetStream context, held so a feed can create the durable
-	// consumer a bucket's own KeyValue handle cannot: a watch is
-	// ephemeral by construction, and a feed's position has to be the
-	// FLEET's rather than this process's.
+	// js is the JetStream context, held for what a bucket's own KeyValue
+	// handle cannot do: read the stream's key index every listing is
+	// certified against and a key as its stream LEADER holds it (walk.go),
+	// and purge a marker through its own revision (markers.go).
 	js jetstream.JetStream
 
-	// bucketPrefix names the buckets, so a feed can address the stream
-	// behind one by its conventional name.
+	// bucketPrefix names the buckets, so one an earlier build kept and this
+	// one no longer opens can be addressed by its conventional name
+	// ([FleetStore.RetireLifetimeCounters]).
 	bucketPrefix string
+
+	// ageless is every bucket above the broker never ages — the ones whose
+	// removal markers stay until [FleetStore.SweepMarkers] removes them.
+	// DERIVED from the retention each bucket is opened with rather than
+	// listed, so a bucket added without an age is swept without anybody
+	// remembering to say so.
+	ageless []jetstream.KeyValue
 
 	rateWindow time.Duration
 	freshness  time.Duration
@@ -621,7 +669,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, fifteen buckets in a row, and a boot that nobody meant to allow ten
+// bucket, nineteen buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -630,16 +678,14 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // sizing argument, and a sizing argument over the wrong number of buckets is
 // worse than none — see TestEveryBucketHasALifetimeClass, which holds every
 // "N buckets" in this file against the open table below.
-func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore, error) {
-	if nc == nil {
-		return nil, errors.New("coord/kv: a NATS connection is required")
+func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*FleetStore, error) {
+	if js == nil {
+		return nil, errors.New("coord/kv: a JetStream client is required — built " +
+			"over the stream's own connection, in the API its broker speaks " +
+			"(see internal/jsapi)")
 	}
 	if err := cfg.normalize(); err != nil {
 		return nil, err
-	}
-	js, err := jetstream.New(nc)
-	if err != nil {
-		return nil, fmt.Errorf("coord/kv: jetstream context: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx,
@@ -695,6 +741,9 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		{&store.fires, firesSuffix,
 			"Crewlet scheduled-fire claims; the bucket TTL outlasts the catchup ceiling",
 			cfg.FireRetention},
+		{&store.rebases, rebasesSuffix,
+			"Crewlet operation-id rebases; the bucket TTL outlasts the horizon a rebase is inherited within",
+			cfg.RebaseRetention},
 		{&store.runs, runsSuffix,
 			"Crewlet detached sandbox runs; NO TTL — a parked run's box outlives any clock", 0},
 		{&store.secrets, secretsSuffix,
@@ -703,6 +752,14 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0},
 		{&store.mailboxes, mailboxesSuffix,
 			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0},
+		{&store.objects, objectsSuffix,
+			"Crewlet object store backend; NO TTL — an expired record lets a node record another backend", 0},
+		{&store.custody, custodySuffix,
+			"Crewlet stateless-node event custody; the bucket TTL outlasts the event log's retention",
+			cfg.CustodyRetention},
+		{&store.chunkLocks, chunkLocksSuffix,
+			"Crewlet object store chunk locks; the bucket TTL is the lock's lifetime",
+			cfg.ChunkLockTTL},
 		{&store.positions, positionsSuffix,
 			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},
 	} {
@@ -711,6 +768,9 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			return nil, err
 		}
 		*bucket.into = got
+		if bucket.ttl == 0 {
+			store.ageless = append(store.ageless, got)
+		}
 	}
 
 	log.DebugContext(ctx, "coord_kv_fleet_open", "prefix", cfg.BucketPrefix,
@@ -727,7 +787,23 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 func (f *FleetStore) each(ctx context.Context, kv jetstream.KeyValue,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntry(ctx, kv, visit)
+	return eachEntry(ctx, f.js, kv, visit)
+}
+
+// get reads one key as its stream LEADER holds it — see [getLatest], the one
+// single-key read this package makes, and kv.go for why it is never the
+// bucket handle's own direct get.
+func (f *FleetStore) get(ctx context.Context, kv jetstream.KeyValue,
+	key string) (jetstream.KeyValueEntry, error) {
+
+	return getLatest(ctx, f.js, kv, key)
+}
+
+// create writes a key that must not hold a live value — see [createKey], the
+// one create this package makes, and markers.go for why it is not the bucket
+// handle's own.
+func (f *FleetStore) create(ctx context.Context, kv jetstream.KeyValue, key string, value []byte) (uint64, error) {
+	return createKey(ctx, f.js, kv, key, value)
 }
 
 // eachUnder is [each] narrowed to the keys matching one filter, with `what`
@@ -736,7 +812,7 @@ func (f *FleetStore) each(ctx context.Context, kv jetstream.KeyValue,
 func (f *FleetStore) eachUnder(ctx context.Context, kv jetstream.KeyValue, keys, what string,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntryUnder(ctx, kv, keys, what, visit)
+	return eachEntryUnder(ctx, f.js, kv, keys, what, visit)
 }
 
 // ---- the rate valve ---------------------------------------------------- //
@@ -770,12 +846,12 @@ func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window
 	key := encodeKey(bucket + "|" + strconv.FormatInt(now.Truncate(window).UnixNano(), 10))
 
 	for range fleetCASRetries {
-		entry, err := f.rate.Get(ctx, key)
+		entry, err := f.get(ctx, f.rate, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			// Create, not Put: the first caller in a window must be
 			// distinguishable from a caller racing it, or two nodes both
 			// write "1" and the window counts one.
-			_, created := f.rate.Create(ctx, key, mustEncodeRate(1))
+			_, created := f.create(ctx, f.rate, key, mustEncodeRate(1))
 			switch {
 			case created == nil:
 				return true, nil
@@ -833,7 +909,7 @@ func (f *FleetStore) Claim(ctx context.Context, key string, ttl time.Duration, n
 	// FIRST caller wins and every other gets ErrKeyExists. Expiry is the
 	// bucket's, which means the server decides when a claim lapses and no
 	// node compares its own clock to a peer's deadline.
-	if _, err := f.claims.Create(ctx, encoded, []byte(now.UTC().Format(time.RFC3339Nano))); err != nil {
+	if _, err := f.create(ctx, f.claims, encoded, []byte(now.UTC().Format(time.RFC3339Nano))); err != nil {
 		if errors.Is(err, jetstream.ErrKeyExists) {
 			return false, nil
 		}
@@ -847,9 +923,10 @@ func (f *FleetStore) Release(ctx context.Context, key string) error {
 	if key == "" {
 		return nil
 	}
-	// Purge, not Delete: Delete leaves a tombstone that Create still
-	// refuses, so a released claim could never be re-claimed and a
-	// deliberate replay would be swallowed for the bucket's whole age.
+	// Purge rather than Delete, though on a bucket keeping one revision
+	// per key both leave exactly one marker: the marker ages out with the
+	// bucket, and createKey writes over it, so a released claim is
+	// re-claimable at once and a deliberate replay is never swallowed.
 	if err := f.claims.Purge(ctx, encodeKey(key)); err != nil &&
 		!errors.Is(err, jetstream.ErrKeyNotFound) {
 		return unavailable("release the delivery claim", err)
@@ -872,7 +949,7 @@ func (f *FleetStore) Worked(ctx context.Context, scope string, keys []string) (m
 		if key == "" {
 			continue
 		}
-		_, err := f.ledger.Get(ctx, ledgerKey(scope, key))
+		_, err := f.get(ctx, f.ledger, ledgerKey(scope, key))
 		switch {
 		case err == nil:
 			out[key] = true
@@ -900,7 +977,7 @@ func (f *FleetStore) Record(ctx context.Context, scope, key, detail string, at t
 	}
 	// FIRST WRITER WINS, and losing is not a failure: two nodes completing
 	// one trigger is the case the ledger exists to collapse.
-	if _, err := f.ledger.Create(ctx, ledgerKey(scope, key), raw); err != nil &&
+	if _, err := f.create(ctx, f.ledger, ledgerKey(scope, key), raw); err != nil &&
 		!errors.Is(err, jetstream.ErrKeyExists) {
 		return unavailable("record the completion", err)
 	}
@@ -920,9 +997,9 @@ func (f *FleetStore) Cool(ctx context.Context, key string, until time.Time) erro
 	value := []byte(until.UTC().Format(time.RFC3339Nano))
 
 	for range fleetCASRetries {
-		entry, err := f.cooldowns.Get(ctx, encoded)
+		entry, err := f.get(ctx, f.cooldowns, encoded)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			_, created := f.cooldowns.Create(ctx, encoded, value)
+			_, created := f.create(ctx, f.cooldowns, encoded, value)
 			switch {
 			case created == nil:
 				return nil
@@ -1338,7 +1415,7 @@ func (f *FleetStore) casTally(ctx context.Context, scope, verb string,
 			found    bool
 			revision uint64
 		)
-		entry, err := f.budgets.Get(ctx, key)
+		entry, err := f.get(ctx, f.budgets, key)
 		switch {
 		case errors.Is(err, jetstream.ErrKeyNotFound):
 		case err != nil:
@@ -1360,7 +1437,7 @@ func (f *FleetStore) casTally(ctx context.Context, scope, verb string,
 		if found {
 			_, err = f.budgets.Update(ctx, key, raw, revision)
 		} else {
-			_, err = f.budgets.Create(ctx, key, raw)
+			_, err = f.create(ctx, f.budgets, key, raw)
 		}
 		switch {
 		case err == nil:
@@ -1403,7 +1480,7 @@ func counterRetryDelay(attempt int) time.Duration {
 // be judged on by the charge that wrote next. A scope never charged is the
 // zero Tally rolled, every window unspent.
 func (f *FleetStore) tally(ctx context.Context, scope string, windows coord.Windows) (coord.Tally, error) {
-	entry, err := f.budgets.Get(ctx, encodeKey(scope))
+	entry, err := f.get(ctx, f.budgets, encodeKey(scope))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return coord.Tally{}.Roll(windows), nil
 	}
@@ -1425,7 +1502,7 @@ func (f *FleetStore) Used(ctx context.Context, scope string, windows coord.Windo
 	if err := windows.Validate(); err != nil {
 		return coord.Usage{}, fmt.Errorf("coord/kv: %w", err)
 	}
-	entry, err := f.budgets.Get(ctx, encodeKey(scope))
+	entry, err := f.get(ctx, f.budgets, encodeKey(scope))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return coord.Unspent(scope, windows), nil
 	}
@@ -1630,7 +1707,7 @@ func (f *FleetStore) expectedSeq(ctx context.Context, req coord.ActivationReques
 // pointer reads the activation pointer: its record, the KV sequence to
 // compare-and-set against, and whether there is one at all.
 func (f *FleetStore) pointer(ctx context.Context) (activationRecord, uint64, bool, error) {
-	entry, err := f.config.Get(ctx, activationKey)
+	entry, err := f.get(ctx, f.config, activationKey)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return activationRecord{}, 0, false, nil
 	}
@@ -1663,9 +1740,9 @@ func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest,
 		if err != nil {
 			return 0, time.Time{}, err
 		}
-		revision, err := f.config.Create(ctx, activationKey, raw)
+		revision, err := f.create(ctx, f.config, activationKey, raw)
 		if err != nil {
-			if errors.Is(err, jetstream.ErrKeyExists) || isWrongLastSequence(err) {
+			if errors.Is(err, jetstream.ErrKeyExists) {
 				return 0, time.Time{}, fmt.Errorf("%w: an activation was published "+
 					"while this write was being prepared", coord.ErrActivationRaced)
 			}
@@ -1726,7 +1803,7 @@ func (f *FleetStore) assert(ctx context.Context, req coord.ActivationRequest) (u
 		if held {
 			revision, err = f.config.Update(ctx, activationKey, raw, seq)
 		} else {
-			revision, err = f.config.Create(ctx, activationKey, raw)
+			revision, err = f.create(ctx, f.config, activationKey, raw)
 		}
 		switch {
 		case err == nil:
@@ -1776,7 +1853,7 @@ func (f *FleetStore) Payload(ctx context.Context, revisionID string) ([]byte, bo
 	if revisionID == "" {
 		return nil, false, errors.New("coord/kv: a payload read needs a revision id")
 	}
-	entry, err := f.config.Get(ctx, payloadKey)
+	entry, err := f.get(ctx, f.config, payloadKey)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return nil, false, nil
 	}
@@ -1799,7 +1876,7 @@ func (f *FleetStore) Payload(ctx context.Context, revisionID string) ([]byte, bo
 
 // Target reads the pointer.
 func (f *FleetStore) Target(ctx context.Context) (coord.Activation, bool, error) {
-	entry, err := f.config.Get(ctx, activationKey)
+	entry, err := f.get(ctx, f.config, activationKey)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return coord.Activation{}, false, nil
 	}
@@ -1907,7 +1984,7 @@ func (f *FleetStore) Secret(ctx context.Context, name string) (coord.SecretRecor
 	if name == "" {
 		return coord.SecretRecord{}, false, errors.New("coord/kv: a secret needs a name")
 	}
-	entry, err := f.secrets.Get(ctx, encodeKey(name))
+	entry, err := f.get(ctx, f.secrets, encodeKey(name))
 	switch {
 	case errors.Is(err, jetstream.ErrKeyNotFound):
 		return coord.SecretRecord{}, false, nil
@@ -1979,15 +2056,16 @@ func (f *FleetStore) PutSecret(ctx context.Context, rec coord.SecretRecord) erro
 
 // DeleteSecret removes a value, reporting whether it was there.
 //
-// PURGED rather than deleted, like every other record here that must not come
-// back: a KV delete leaves a tombstone the history keeps, and for a credential
-// the history is the thing you least want kept.
+// PURGED, the standing rule for a bucket no clock ages (markers.go, "Every
+// removal is a purge"), and here its reason is sharpest: a purge removes every
+// revision the bucket holds, whatever history it was created with, and for a
+// credential the history is the thing you least want kept.
 func (f *FleetStore) DeleteSecret(ctx context.Context, name string) (bool, error) {
 	if name == "" {
 		return false, errors.New("coord/kv: a secret needs a name")
 	}
 	key := encodeKey(name)
-	if _, err := f.secrets.Get(ctx, key); errors.Is(err, jetstream.ErrKeyNotFound) {
+	if _, err := f.get(ctx, f.secrets, key); errors.Is(err, jetstream.ErrKeyNotFound) {
 		return false, nil
 	} else if err != nil {
 		return false, unavailable("read the secret before deleting it", err)
@@ -2072,7 +2150,7 @@ func (f *FleetStore) OpenChannel(ctx context.Context, ch coord.Channel) error {
 	if err != nil {
 		return err
 	}
-	_, err = f.channels.Create(ctx, encodeKey(ch.ID), raw)
+	_, err = f.create(ctx, f.channels, encodeKey(ch.ID), raw)
 	switch {
 	case err == nil, errors.Is(err, jetstream.ErrKeyExists):
 		return nil
@@ -2083,7 +2161,7 @@ func (f *FleetStore) OpenChannel(ctx context.Context, ch coord.Channel) error {
 
 // Channel reads one record.
 func (f *FleetStore) Channel(ctx context.Context, id string) (coord.Channel, bool, error) {
-	entry, err := f.channels.Get(ctx, encodeKey(id))
+	entry, err := f.get(ctx, f.channels, encodeKey(id))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return coord.Channel{}, false, nil
 	}
@@ -2126,7 +2204,7 @@ func (f *FleetStore) CountChannelMessage(ctx context.Context, id string, at time
 func (f *FleetStore) mutateChannel(ctx context.Context, what, id string, apply func(coord.Channel) coord.Channel) (coord.Channel, bool, error) {
 	key := encodeKey(id)
 	for range fleetCASRetries {
-		entry, err := f.channels.Get(ctx, key)
+		entry, err := f.get(ctx, f.channels, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			return coord.Channel{}, false, nil
 		}
@@ -2197,9 +2275,9 @@ func (f *FleetStore) listChannels(ctx context.Context, keep func(coord.Channel) 
 
 // PurgeChannels deletes channels closed before the cutoff.
 //
-// Purge rather than Delete, so the key's history goes with it: a Delete
-// leaves a tombstone revision, and a bucket with no TTL keeps every one of
-// them for the life of the deployment.
+// PURGED, the standing rule for a bucket no clock ages — see markers.go, "Every
+// removal is a purge", and [FleetStore.SweepMarkers] for what removes the
+// marker it leaves.
 func (f *FleetStore) PurgeChannels(ctx context.Context, cutoff time.Time) (int64, error) {
 	// DECIDED FIRST, PURGED AFTER — the sweep must not write to the bucket
 	// its own listing is still being delivered from. Each candidate carries
@@ -2258,7 +2336,7 @@ func (f *FleetStore) ClaimFire(ctx context.Context, key string, at time.Time) (b
 	if err != nil {
 		return false, fmt.Errorf("coord/kv: encode the fire claim: %w", err)
 	}
-	_, err = f.fires.Create(ctx, encodeKey(key), raw)
+	_, err = f.create(ctx, f.fires, encodeKey(key), raw)
 	switch {
 	case err == nil:
 		return true, nil
@@ -2280,11 +2358,139 @@ type fireRecord struct {
 	At time.Time `json:"at"`
 }
 
+// ---- the custody claims ----------------------------------------------- //
+
+// custodyRecord is one batch's keeper on the wire. The instant is diagnostic,
+// and nothing branches on it.
+type custodyRecord struct {
+	Node string    `json:"node"`
+	At   time.Time `json:"at"`
+}
+
+// ClaimCustody records node as the keeper of batch unless one is recorded,
+// answering the keeper.
+//
+// A refused create is read back FROM THE LEADER ([FleetStore.get]): the key
+// exists, and a replica behind the create would answer that it does not, so a
+// caller would be told nobody keeps a batch somebody does — and keep a second
+// copy. A key that has gone between the refusal and the read — aged out, which
+// needs a month — is created again rather than answered, a bounded number of
+// times.
+func (f *FleetStore) ClaimCustody(ctx context.Context, batch, node string) (string, error) {
+	if batch == "" || node == "" {
+		return "", errors.New("coord/kv: a custody claim needs a batch and a node")
+	}
+	raw, err := json.Marshal(custodyRecord{Node: node, At: time.Now().UTC()})
+	if err != nil {
+		return "", fmt.Errorf("coord/kv: encode the custody claim: %w", err)
+	}
+	key := encodeKey(batch)
+	for range fleetCASRetries {
+		_, err = f.create(ctx, f.custody, key, raw)
+		switch {
+		case err == nil:
+			return node, nil
+		case !errors.Is(err, jetstream.ErrKeyExists):
+			return "", unavailable("claim custody of batch "+batch, err)
+		}
+		entry, err := f.get(ctx, f.custody, key)
+		switch {
+		case errors.Is(err, jetstream.ErrKeyNotFound):
+			continue
+		case err != nil:
+			return "", unavailable("read the keeper of batch "+batch, err)
+		}
+		// RAISED, never answered as a keeper: a record that cannot be read,
+		// or names nobody, cannot decide whose copy goes, and guessing
+		// either way loses the batch or keeps it twice.
+		var held custodyRecord
+		if err := json.Unmarshal(entry.Value(), &held); err != nil {
+			return "", fmt.Errorf("coord/kv: the keeper of batch %s is unreadable: %w", batch, err)
+		}
+		if held.Node == "" {
+			return "", fmt.Errorf("coord/kv: the keeper of batch %s names no node", batch)
+		}
+		return held.Node, nil
+	}
+	return "", contended("ClaimCustody", batch)
+}
+
+// ---- the rebases -------------------------------------------------------- //
+
+// rebaseRecord is one recorded rebase on the wire.
+type rebaseRecord struct {
+	At time.Time `json:"at"`
+}
+
+// Rebase reads the instant recorded for a seed and the revision it was read
+// at, (zero, 0) where nothing is recorded.
+//
+// FROM THE LEADER, like every single-key read here ([FleetStore.get]): a
+// replica behind the quorum answers "not found" for a record a peer's attempt
+// wrote a moment ago, and "not found" is the answer that sends this attempt to
+// mint anew.
+func (f *FleetStore) Rebase(ctx context.Context, seed string) (time.Time, uint64, error) {
+	if seed == "" {
+		return time.Time{}, 0, errors.New("coord/kv: a rebase needs a seed")
+	}
+	entry, err := f.get(ctx, f.rebases, encodeKey(seed))
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return time.Time{}, 0, nil
+	}
+	if err != nil {
+		return time.Time{}, 0, unavailable("read the rebase", err)
+	}
+	var rec rebaseRecord
+	if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+		// A record nobody can read is not "nothing recorded": answered as
+		// absent, the caller would mint anew over an instant an earlier
+		// attempt wrote under.
+		return time.Time{}, 0, fmt.Errorf("coord/kv: the rebase recorded for %q "+
+			"does not decode: %w", seed, err)
+	}
+	return rec.At.UTC(), entry.Revision(), nil
+}
+
+// RecordRebase writes a seed's instant, conditional on the revision read: 0
+// creates it only where nothing is recorded.
+func (f *FleetStore) RecordRebase(ctx context.Context, seed string, at time.Time, version uint64) (bool, error) {
+	if seed == "" {
+		return false, errors.New("coord/kv: a rebase needs a seed")
+	}
+	value, err := json.Marshal(rebaseRecord{At: at.UTC()})
+	if err != nil {
+		return false, fmt.Errorf("coord/kv: encode the rebase: %w", err)
+	}
+	if version == 0 {
+		_, err = f.create(ctx, f.rebases, encodeKey(seed), value)
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, jetstream.ErrKeyExists):
+			return false, nil
+		default:
+			return false, unavailable("record the rebase", err)
+		}
+	}
+	_, err = f.rebases.Update(ctx, encodeKey(seed), value, version)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, jetstream.ErrKeyRevisionMismatch), errors.Is(err, jetstream.ErrKeyNotFound):
+		// A LOST RACE, not a fault: another attempt moved it since this
+		// one read it, or the bucket aged it out — and either way the
+		// caller reads again and decides from what is there now.
+		return false, nil
+	default:
+		return false, unavailable("record the rebase", err)
+	}
+}
+
 // ---- the detached sandbox runs ----------------------------------------- //
 
 // SandboxRun reads one run's record.
 func (f *FleetStore) SandboxRun(ctx context.Context, turnID string) (coord.Record, bool, error) {
-	entry, err := f.runs.Get(ctx, encodeKey(turnID))
+	entry, err := f.get(ctx, f.runs, encodeKey(turnID))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return coord.Record{}, false, nil
 	}
@@ -2324,7 +2530,7 @@ func (f *FleetStore) CreateSandboxRun(ctx context.Context, turnID string, value 
 	if turnID == "" {
 		return false, errors.New("coord/kv: a sandbox run needs a turn id")
 	}
-	_, err := f.runs.Create(ctx, encodeKey(turnID), value)
+	_, err := f.create(ctx, f.runs, encodeKey(turnID), value)
 	switch {
 	case err == nil:
 		return true, nil
@@ -2360,9 +2566,9 @@ func (f *FleetStore) UpdateSandboxRun(ctx context.Context, turnID string, value 
 
 // DeleteSandboxRun removes a record at a version.
 //
-// Purge rather than Delete, so the key's history goes with it: a Delete leaves
-// a tombstone revision, and a bucket with no TTL keeps every one of them for
-// the life of the deployment.
+// PURGED, the standing rule for a bucket no clock ages — see markers.go, "Every
+// removal is a purge", and [FleetStore.SweepMarkers] for what removes the
+// marker it leaves.
 func (f *FleetStore) DeleteSandboxRun(ctx context.Context, turnID string, version uint64) (bool, error) {
 	if version == 0 {
 		// The client drops a LastRevision of 0 and purges unconditionally,
@@ -2419,10 +2625,9 @@ func (f *FleetStore) PutIntegrationStatus(ctx context.Context, kind string, valu
 
 // DeleteIntegrationStatus drops a surface's status.
 //
-// Purge rather than Delete, matching the sandbox runs above: a Delete leaves a
-// tombstone revision, and a bucket with no TTL keeps every one of them for the
-// life of the deployment. A surface an operator adds and removes a few times
-// while wiring a company would otherwise accumulate history nothing reads.
+// PURGED, the standing rule for a bucket no clock ages — see markers.go, "Every
+// removal is a purge", and [FleetStore.SweepMarkers] for what removes the
+// marker it leaves.
 func (f *FleetStore) DeleteIntegrationStatus(ctx context.Context, kind string) error {
 	err := f.integrations.Purge(ctx, encodeKey(kind))
 	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {

@@ -2,10 +2,12 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -129,7 +131,9 @@ type OpsLedger interface {
 	PurgeOps(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
-// StatelogJobs sweeps each registered domain's operation ledger.
+// StatelogJobs sweeps each registered domain's operation ledgers: one job per
+// domain, named `<domain>_ops`, over every log of that domain this node runs AT
+// THE SWEEP — ledgers answers them.
 //
 // [NodeLocal], and that is what this job is FOR. Every `<domain>_ops` migration
 // says the table is swept and ships `<domain>_ops_swept_idx` for the range
@@ -144,23 +148,38 @@ type OpsLedger interface {
 // — which looks exactly like a sweep that is working, to the operator who
 // checks the node it ran on. For a long time this was the ONLY job that said
 // so, while six others needed to; see [Scope].
-func StatelogJobs(ledgers map[string]OpsLedger, retention time.Duration) []Job {
-	names := make([]string, 0, len(ledgers))
-	for name := range ledgers {
-		names = append(names, name)
-	}
+//
+// # Every partition file the node holds, asked at every sweep
+//
+// A domain has a log in each partition of its space, each with its own ledger
+// in its own file, and the logs a node runs change while it runs — it joins a
+// partition and leaves another. So the job is per DOMAIN and asks for the
+// domain's ledgers every time it runs: a job per log fixed when the sweep was
+// built never swept a partition joined after it, and swept a stopped runner's
+// ledger for ever. A ledger that fails is reported and the rest are still
+// swept — they are independent files.
+func StatelogJobs(domains []string, ledgers func(domain string) []OpsLedger, retention Horizon) []Job {
 	// SORTED, so the log's job order is the same on every node and every
-	// tick. A map's iteration order would make one node's sweep line look
-	// like a different sweep from its peer's.
-	slices.Sort(names)
+	// tick. A caller's order would make one node's sweep line look like a
+	// different sweep from its peer's.
+	names := slices.Sorted(slices.Values(domains))
+	names = slices.Compact(names)
 
 	jobs := make([]Job, 0, len(names))
 	for _, name := range names {
-		ledger := ledgers[name]
 		jobs = append(jobs, Job{
 			Name: name + "_ops", Scope: NodeLocal, Horizon: retention,
 			Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
-				return ledger.PurgeOps(ctx, cutoff)
+				var swept int64
+				var errs []error
+				for _, ledger := range ledgers(name) {
+					n, err := ledger.PurgeOps(ctx, cutoff)
+					swept += n
+					if err != nil {
+						errs = append(errs, err)
+					}
+				}
+				return swept, errors.Join(errs...)
 			},
 		})
 	}
@@ -243,7 +262,7 @@ func CounterpartyJobs(c CounterpartyStore) []Job {
 	if c == nil {
 		return nil
 	}
-	return []Job{Purge("counterparty_profiles", NodeLocal, CounterpartyRetention, c.Purge)}
+	return []Job{Purge("counterparty_profiles", NodeLocal, Fixed(CounterpartyRetention), c.Purge)}
 }
 
 // Channels is the half of the agent-to-agent surface this sweep drives.
@@ -273,11 +292,12 @@ type Channels interface {
 // a channel closed by this tick is a week away from being deleted, which is
 // the week an operator has to read it.
 //
-// The ONE shared record still swept here, and the exception the coordination
-// store's retention rule makes room for. Every other bucket expires on its own
-// age, which is why the four records above left this file — but a bucket's age
-// cannot tell an OPEN channel from a closed one, so a TTL would reap the
-// authorization record of an ask still waiting for its answer. Both halves are
+// A shared record swept here, and the first exception the coordination store's
+// retention rule made room for — the mailboxes and the removal markers
+// ([MarkerJobs]) are the others. Most buckets expire on their own age, which is
+// why the four records above left this file — but a bucket's age cannot tell
+// an OPEN channel from a closed one, so a TTL would reap the authorization
+// record of an ask still waiting for its answer. Both halves are
 // therefore decisions, taken under the same singleton duty as every local
 // sweep. See coord.Channels and internal/store/schema/0012.
 func ChannelJobs(c Channels) []Job {
@@ -290,14 +310,44 @@ func ChannelJobs(c Channels) []Job {
 			// not: the service reads its own clock for the close instant,
 			// so a channel's closed_at and the event's duration come from
 			// one reading rather than two.
-			Name: "a2a_channels_idle", Scope: Fleet, Horizon: ChannelIdleTimeout,
+			Name: "a2a_channels_idle", Scope: Fleet, Horizon: Fixed(ChannelIdleTimeout),
 			Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
 				closed, err := c.SweepIdle(ctx, cutoff)
 				return int64(closed), err
 			},
 		},
-		Purge("a2a_channels", Fleet, ChannelRetention, c.Purge),
+		Purge("a2a_channels", Fleet, Fixed(ChannelRetention), c.Purge),
 	}
+}
+
+// Markers is the coordination store's marker sweep. Declared here, by the
+// consumer, like every other seam in this tree; coord.Fleet is the
+// implementation.
+type Markers interface {
+	// SweepMarkers removes the removal markers written before cutoff from
+	// every record family no clock ages, reporting how many went.
+	SweepMarkers(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+// MarkerJobs is the sweep for the coordination store's removal MARKERS: the
+// delete or purge record a KV removal leaves behind in a bucket the broker
+// never ages, which every listing that meets one pays a leader read for.
+//
+// The third shared record swept here, beside the channels and the mailboxes,
+// and for their reason: no bucket age can express it. The buckets that keep
+// these markers are exactly the ones whose records no clock may reap — an open
+// ask, a parked run, a credential — so removing the markers is a decision this
+// duty takes rather than something a broker does on its own.
+//
+// [Fleet]: the buckets are the company's, one copy agreed by every node, so one
+// node sweeping them per tick is the whole job and N would be N times the
+// purges for one bucket's worth of benefit. Its horizon is
+// [coord.MarkerRetention], which is where the value is argued.
+func MarkerJobs(m Markers) []Job {
+	if m == nil {
+		return nil
+	}
+	return []Job{Purge("coordination_markers", Fleet, Fixed(coord.MarkerRetention), m.SweepMarkers)}
 }
 
 // ScheduleJobs is the sweep for the scheduled-run ledger.
@@ -310,7 +360,7 @@ func ScheduleJobs(l schedule.Ledger) []Job {
 	if l == nil {
 		return nil
 	}
-	return []Job{PurgeN("scheduled_runs", NodeLocal, ScheduledRunRetention, l.Purge)}
+	return []Job{PurgeN("scheduled_runs", NodeLocal, Fixed(ScheduledRunRetention), l.Purge)}
 }
 
 // LedgerJobs is the sweep for the turn ledgers.
@@ -324,17 +374,24 @@ func ScheduleJobs(l schedule.Ledger) []Job {
 // the node that ran the turn, so each node holds its own and no peer's sweep
 // reaches it.
 //
-// conversationRetention is the operator-facing horizon. Zero or less takes
-// [ConversationRetention] — the engine's config validation refuses a
-// retention below one day, so this floor is for a caller that built its
-// stores directly, and it exists because the alternative reading of zero is
-// "delete every conversation on the next tick".
-func LedgerJobs(s ledgerstore.Conversations, conversationRetention time.Duration) []Job {
-	if conversationRetention <= 0 {
-		conversationRetention = ConversationRetention
-	}
+// conversationRetention is the operator-facing horizon, asked at every sweep
+// because an apply can move it (see [Horizon]). An answer of zero or less —
+// or no function at all — takes [ConversationRetention]: the engine's config
+// validation refuses a retention below one day, so this floor is for a node
+// with no company yet and a caller that built its stores directly, and it
+// exists because the alternative reading of zero is "delete every
+// conversation on the next tick".
+func LedgerJobs(s ledgerstore.Conversations, conversationRetention Horizon) []Job {
 	if s == nil {
 		return nil
 	}
-	return []Job{Purge("conversation_sessions", NodeLocal, conversationRetention, s.Purge)}
+	horizon := func() time.Duration {
+		if conversationRetention != nil {
+			if d := conversationRetention(); d > 0 {
+				return d
+			}
+		}
+		return ConversationRetention
+	}
+	return []Job{Purge("conversation_sessions", NodeLocal, horizon, s.Purge)}
 }

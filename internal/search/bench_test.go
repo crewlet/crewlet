@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // ONE BENCHMARK, TWO AXES — corpus size and CONCURRENCY.
@@ -44,9 +45,16 @@ import (
 // EIGHT CONCURRENT READERS COST 2.4x THE IDLE p95, on four cores, which is the
 // whole reason the concurrency axis exists: a supported-corpus figure derived
 // from the one-reader coefficient is a figure for a node nobody runs. At the
-// 1.0 s interactive target the same two coefficients give ≈ 390 000 sources
+// 1.0 s interactive target the same two coefficients gave ≈ 390 000 sources
 // idle and ≈ 160 000 under eight readers — and the honest number is whichever
 // of those describes the deployment.
+//
+// Those two figures are SUPERSEDED as the published ones, and the table above
+// is kept as what this benchmark measured rather than edited to agree:
+// BenchmarkSemanticIVFUnderLoad's scan arm re-measured the same statement on
+// the topical fixture at 2.90 and 7.34 µs a source (≈ 345 000 and ≈ 136 000),
+// and it is the one that also measures the index beside it on the same corpus
+// and the same queries — so that is where the published capacity comes from.
 //
 // # What it reports beyond ns/op
 //
@@ -131,11 +139,7 @@ const benchDim = 3072
 
 func newScanCorpus(b *testing.B, n int) *scanCorpus {
 	b.Helper()
-	db, err := store.Open(b.Context(),
-		filepath.Join(b.TempDir(), "node.db"), store.Options{PinnedWriters: 1})
-	if err != nil {
-		b.Fatalf("open: %v", err)
-	}
+	db, _ := storetest.OpenEstate(b, filepath.Join(b.TempDir(), "node.db"), store.Options{}, 1)
 	b.Cleanup(func() { _ = db.Close() })
 
 	c := &scanCorpus{db: db, dim: benchDim, model: "bench-embed", n: n}
@@ -145,7 +149,7 @@ func newScanCorpus(b *testing.B, n int) *scanCorpus {
 	// is a measurement of the write path rather than a corpus.
 	const chunk = 2_000
 	for start := 0; start < n; start += chunk {
-		if err := db.Replicated().Tx(b.Context(), func(tx *sql.Tx) error {
+		if err := storetest.EstateOf(db).Tx(b.Context(), func(tx *sql.Tx) error {
 			for i := start; i < min(start+chunk, n); i++ {
 				subject := search.Subject{
 					Source: search.SourcePage, ID: fmt.Sprintf("p%07d", i),
@@ -199,8 +203,8 @@ func (c *scanCorpus) run(b *testing.B, readers int) {
 	one := func(ctx context.Context) {
 		query := queries[next.Add(1)%uint64(len(queries))]
 		started := time.Now()
-		if err := c.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-			_, err := search.Semantic(ctx, tx, search.SemanticQuery{
+		if err := storetest.EstateOf(c.db).Read(ctx, func(tx *sql.Tx) error {
+			_, _, err := search.Semantic(ctx, tx, search.SemanticQuery{
 				Vector: query, Model: c.model, Dim: c.dim,
 			})
 			return err
@@ -245,4 +249,492 @@ func (c *scanCorpus) run(b *testing.B, readers int) {
 	b.ReportMetric(float64(p95.Milliseconds()), "p95-ms")
 	b.ReportMetric(float64(p95.Nanoseconds())/float64(c.n)/1000, "p95-us/row")
 	b.ReportMetric(float64(len(samples)), "samples")
+}
+
+// THE SAME TWO AXES FOR THE INDEX — corpus size and concurrency — and the scan
+// beside it on the SAME corpus and queries, so the ratio between them is a
+// measurement rather than two numbers from two runs.
+//
+// # Why the topical fixture, and what that choice claims
+//
+// An inverted file is only worth having where the corpus has structure a
+// partition can find, and the isotropic fixture has none: its training
+// declines to install an index at all (TestIVFRecallMeetsTheFloorCurve). So
+// the corpus here is the fixture family's topical member, at the shipped
+// width, written through the applier and indexed exactly as the embedding duty
+// indexes it — trained, measured against the exact scan, installed at the
+// probe count the training chose, rolled out. Every cell reports the share of
+// lists it probed and the recall it actually delivered against the exact f32
+// scan on its own queries, so a latency is never quoted without the recall it
+// was bought at.
+//
+// The figures this benchmark produced are in the package doc of semantic.go
+// and in ADR-0028; the per-source coefficient is what [SemanticScanBudget]'s
+// supported-corpus projection is derived from.
+func BenchmarkSemanticIVFUnderLoad(b *testing.B) {
+	for _, n := range []int{10_000, 40_000} {
+		corpus := newIndexedCorpus(b, n)
+		for _, scan := range []bool{true, false} {
+			method := "ivf"
+			if scan {
+				method = "scan"
+			}
+			for _, readers := range []int{1, 2, 4, 8} {
+				b.Run(fmt.Sprintf("n=%d/%s/readers=%d", n, method, readers), func(b *testing.B) {
+					corpus.run(b, readers, scan)
+				})
+			}
+		}
+	}
+}
+
+// BenchmarkIVFRecallAtScale is the LARGER ARMS of TestIVFRecallMeetsTheFloorCurve,
+// for the reason BenchmarkBinaryRecallAtScale is a benchmark: training at a
+// hundred and twenty thousand sources under the race detector is minutes on
+// every contributor's run. It still ASSERTS the floor in every shape, on
+// queries the training never chose its probe count on, and reports the probe
+// share the training chose — the number the index's whole cost model rests on
+// — and how long the k-means took, which is the term of a training tick that
+// grows with the list count ([search.IVFMaxLists]).
+func BenchmarkIVFRecallAtScale(b *testing.B) {
+	for _, n := range []int{120_000, 500_000} {
+		for name, build := range map[string]func(int, uint64) *search.Fixture{
+			"isotropic": search.NewFixture, "topical": search.NewTopicalFixture,
+		} {
+			b.Run(fmt.Sprintf("n=%d/%s", n, name), func(b *testing.B) {
+				f := build(n, 1)
+				c := gateCorpus(f)
+				for b.Loop() {
+					lists := search.IVFLists(n)
+					started := time.Now()
+					index, err := search.TrainIVF(b.Context(), c.Codes, lists,
+						search.IVFSeed("bench", 0), nil)
+					if err != nil {
+						b.Fatal(err)
+					}
+					trained := time.Since(started)
+					byList := search.GroupByList(filedIn(b, index, c.Codes), lists)
+					choice, err := search.ChooseProbes(b.Context(), c, byList, index,
+						gateTrials(f, c, 5000, search.EvalQueries))
+					if err != nil {
+						b.Fatal(err)
+					}
+					results := map[search.ShapeFilter]*shapeTally{}
+					for _, trial := range gateTrials(f, c, 2000, 10) {
+						pool, lists := searchAsRun(c, byList, index, trial, choice.Probes)
+						key := search.ShapeFilter{Shape: trial.Filter.Shape,
+							Source: trial.Filter.Source}
+						if results[key] == nil {
+							results[key] = &shapeTally{}
+						}
+						results[key].add(pool, trial)
+						if lists == 0 {
+							results[key].scanned++
+						}
+					}
+					all := results[search.ShapeFilter{Shape: search.ShapeAll}]
+					b.ReportMetric(all.recall(), "recall")
+					b.ReportMetric(float64(all.head), "head-misses")
+					b.ReportMetric(float64(choice.Probes)/float64(lists), "probe-share")
+					b.ReportMetric(trained.Seconds(), "train-s")
+					for key, tally := range results {
+						if choice.Passed() && (tally.recall() < tally.floor() || tally.head != 0) {
+							b.Fatalf("an index probing %d of %d lists recalls %.4f "+
+								"with %d head miss(es) in the %s%s shape against a "+
+								"%.4f floor", choice.Probes, lists, tally.recall(),
+								tally.head, key.Shape, sourceSuffix(key.Source),
+								tally.floor())
+						}
+						b.Logf("%s%s: recall %.4f (floor %.4f), %d head misses, "+
+							"%d of %d scanned", key.Shape, sourceSuffix(key.Source),
+							tally.recall(), tally.floor(), tally.head, tally.scanned,
+							tally.trials)
+					}
+				}
+			})
+		}
+	}
+}
+
+// indexedCorpus is one store holding the topical fixture at the shipped width,
+// with its index installed as the duty installs it.
+type indexedCorpus struct {
+	db      *store.DB
+	model   string
+	n       int
+	queries [][]byte
+	// wants are each query's exact top ReturnDepth, as keys.
+	wants [][]string
+	lists int
+	// probes is the training's own choice, and installed whether the duty
+	// would have installed it (the benchmark installs it either way, so the
+	// probe's cost is measured even where the training declines it).
+	probes    int
+	installed bool
+}
+
+// seedCorpus writes n documents of the topical fixture into a fresh store
+// through the applier: pages, filed in the ENG container.
+func seedCorpus(b *testing.B, n int, model string) (*store.DB, *search.Fixture) {
+	b.Helper()
+	db, _ := storetest.OpenEstate(b, filepath.Join(b.TempDir(), "node.db"), store.Options{}, 1)
+	b.Cleanup(func() { _ = db.Close() })
+	f := search.NewTopicalFixture(n, 1)
+	applier := search.NewApplier()
+	const chunk = 2_000
+	for start := 0; start < n; start += chunk {
+		if err := storetest.EstateOf(db).Tx(b.Context(), func(tx *sql.Tx) error {
+			for i := start; i < min(start+chunk, n); i++ {
+				rec := embedRecord(search.SourcePage, fmt.Sprintf("p%07d", i),
+					model, pack(f.Vector(i)))
+				payload, err := rec.Encode()
+				if err != nil {
+					return err
+				}
+				if _, err := applier.Apply(b.Context(), tx, statelog.Record{
+					Position: statelog.Position{Stream: "S", Generation: 1, Seq: uint64(i) + 1},
+					Payload:  payload,
+				}, statelog.ApplyOptions{}); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			b.Fatalf("seed: %v", err)
+		}
+	}
+	return db, f
+}
+
+func newIndexedCorpus(b *testing.B, n int) *indexedCorpus {
+	b.Helper()
+	c := &indexedCorpus{model: "bench-embed", n: n}
+	var f *search.Fixture
+	c.db, f = seedCorpus(b, n, c.model)
+
+	// THE DUTY'S OWN TRAINING, on the store's own rows and held-out
+	// documents, then installed and rolled out through the applier.
+	index := trainedIndex(b, c.db, c.model, search.FixtureWidth)
+	c.lists, c.probes = index.Index.Lists, index.Index.Probes
+	c.installed = index.Index.Measurement.Passed() &&
+		c.probes*search.IVFProbeCeiling <= c.lists
+	seq := uint64(n) + 1
+	applyRecordAt(b, c.db, index, seq)
+	generation := statelog.Position{Stream: "S", Generation: 1, Seq: seq}.Packed()
+	for batch := range index.Index.Rollout {
+		seq++
+		applyRecordAt(b, c.db, reassignRecord(generation, batch,
+			len(index.Index.Rollout)), seq)
+	}
+
+	// THE QUERIES AND THEIR EXACT ANSWERS, so every cell reports the recall
+	// its latency bought.
+	var docs []search.SampledDoc
+	var shapes [][]search.ShapeQuery
+	for q := range 64 {
+		vector := pack(f.QueryVector(uint64(3000 + q)))
+		c.queries = append(c.queries, vector)
+		docs = append(docs, search.SampledDoc{Vector: vector})
+		shapes = append(shapes, []search.ShapeQuery{{Shape: search.ShapeAll}})
+	}
+	if err := storetest.EstateOf(c.db).Read(b.Context(), func(tx *sql.Tx) error {
+		tops, err := search.ExactTops(b.Context(), tx, docs, shapes, c.model,
+			search.FixtureWidth, search.ReturnDepth)
+		for _, top := range tops {
+			c.wants = append(c.wants, top[0].Keys)
+		}
+		return err
+	}); err != nil {
+		b.Fatal(err)
+	}
+	return c
+}
+
+func applyRecordAt(b *testing.B, db *store.DB, rec search.VectorRecord, seq uint64) {
+	b.Helper()
+	payload, err := rec.Encode()
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := storetest.EstateOf(db).Tx(b.Context(), func(tx *sql.Tx) error {
+		_, err := search.NewApplier().Apply(b.Context(), tx, statelog.Record{
+			Position: statelog.Position{Stream: "S", Generation: 1, Seq: seq},
+			Payload:  payload,
+		}, statelog.ApplyOptions{})
+		return err
+	}); err != nil {
+		b.Fatal(err)
+	}
+}
+
+// run measures one cell: readers concurrent searches through the index or the
+// full scan, reporting the p95, the per-source coefficient, the probe share and
+// the recall delivered.
+func (c *indexedCorpus) run(b *testing.B, readers int, scan bool) {
+	b.Helper()
+	var mu sync.Mutex
+	var samples []time.Duration
+	var recall float64
+	var measured int
+	var next atomic.Uint64
+
+	one := func(ctx context.Context) {
+		i := next.Add(1) % uint64(len(c.queries))
+		started := time.Now()
+		var hits []search.SemanticHit
+		if err := storetest.EstateOf(c.db).Read(ctx, func(tx *sql.Tx) error {
+			var err error
+			hits, _, err = search.Semantic(ctx, tx, search.SemanticQuery{
+				Vector: c.queries[i], Model: c.model, Dim: search.FixtureWidth,
+				FullScan: scan,
+			})
+			return err
+		}); err != nil {
+			b.Error(err)
+			return
+		}
+		elapsed := time.Since(started)
+		got := map[string]bool{}
+		for _, h := range hits {
+			got[search.Key(h.Source, h.ID)] = true
+		}
+		found := 0
+		for _, key := range c.wants[i] {
+			if got[key] {
+				found++
+			}
+		}
+		mu.Lock()
+		samples = append(samples, elapsed)
+		if len(c.wants[i]) > 0 {
+			recall += float64(found) / float64(len(c.wants[i]))
+			measured++
+		}
+		mu.Unlock()
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		if readers == 1 {
+			one(b.Context())
+			continue
+		}
+		var wg sync.WaitGroup
+		for range readers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				one(b.Context())
+			}()
+		}
+		wg.Wait()
+	}
+	b.StopTimer()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(samples) == 0 {
+		return
+	}
+	slices.Sort(samples)
+	p95 := samples[min(int(float64(len(samples))*0.95), len(samples)-1)]
+	b.ReportMetric(float64(p95.Microseconds())/1000, "p95-ms")
+	b.ReportMetric(float64(p95.Nanoseconds())/float64(c.n)/1000, "p95-us/source")
+	b.ReportMetric(float64(len(samples)), "samples")
+	if measured > 0 {
+		b.ReportMetric(recall/float64(measured), "recall")
+	}
+	if !scan {
+		b.ReportMetric(float64(c.probes)/float64(c.lists), "probe-share")
+		b.ReportMetric(map[bool]float64{true: 1, false: 0}[c.installed], "installed")
+	}
+}
+
+// BenchmarkIndexHeadRead is what every embed apply and every search pays to
+// learn which index is installed, at the widest index this build trains
+// ([search.IVFMaxLists] lists at the shipped width).
+//
+// Two reads of one store: the head as it is stored — narrow, the centroids in
+// a table of their own — and the same head WITH the centroids, which is what
+// a head row carrying the blob cost on every read, because a row is read
+// whole whatever columns are selected. The difference, times the embeds a
+// node applies catching up, is why the blob is not in the head (migration
+// 0033).
+func BenchmarkIndexHeadRead(b *testing.B) {
+	db, _ := storetest.OpenEstate(b, filepath.Join(b.TempDir(), "node.db"), store.Options{}, 1)
+	b.Cleanup(func() { _ = db.Close() })
+	record := indexRecordOver("bench-embed", search.FixtureWidth)
+	lists := search.IVFMaxLists
+	record.Index.Lists, record.Index.Probes = lists, lists/2
+	record.Index.Centroids = make([]byte, 8*search.CodeWords(search.FixtureWidth)*lists)
+	rng := rand.New(rand.NewPCG(1, 1))
+	for i := range record.Index.Centroids {
+		record.Index.Centroids[i] = byte(rng.Uint32())
+	}
+	applyRecordAt(b, db, record, 1)
+	for _, c := range []struct {
+		name string
+		read func(*sql.Tx) error
+	}{
+		{"head", func(tx *sql.Tx) error {
+			_, _, err := search.ReadIndex(b.Context(), tx)
+			return err
+		}},
+		{"head-with-centroids", func(tx *sql.Tx) error {
+			if _, _, err := search.ReadIndex(b.Context(), tx); err != nil {
+				return err
+			}
+			var blob []byte
+			return tx.QueryRowContext(b.Context(),
+				`SELECT centroids FROM kb_ivf_centroids WHERE id = 1`).Scan(&blob)
+		}},
+	} {
+		// INSIDE ONE TRANSACTION, as an apply batch reads it: the cost is
+		// the read, not a transaction's begin and end.
+		b.Run(c.name, func(b *testing.B) {
+			if err := storetest.EstateOf(db).Read(b.Context(), func(tx *sql.Tx) error {
+				for b.Loop() {
+					if err := c.read(tx); err != nil {
+						return err
+					}
+				}
+				return nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+		})
+	}
+}
+
+// BenchmarkIndexTraining is the embedding duty's TRAINING TICK as the duty runs
+// it, on a real store, phase by phase: the reading (every code in key order,
+// the sampled documents, and the one exact pass that is their ground truth in
+// every shape), the k-means, filing every code, and choosing the probe count.
+//
+// # What it is for
+//
+// A training is as long as its two halves, and the tick bounds each its own
+// way ([search.Budget]): the READING — every code, the sampled documents, the
+// exact pass — streams rows and shows the tick's budget its progress every
+// [search.ProgressStride] of them, and the ARITHMETIC — the k-means, the
+// filing, the probe choice — cannot wedge and runs exempt. So the two are
+// reported apart: reading-us/source is what the reading and the gap between
+// two of its reports are projected from, and arithmetic-s is what the node's
+// cores spend on the rest. The k-means grows with the LIST COUNT rather than
+// the corpus and is measured at scale in memory by BenchmarkIVFTrainingShare
+// and BenchmarkIVFRecallAtScale's train-s. The projections are in the engine's
+// embedTickBudget and beside [search.IVFMaxLists].
+//
+// # The reading is timed ONCE, whole
+//
+// reading-us/source is [search.ReadTrainingSet] exactly as the duty calls it,
+// and that already runs the sample and the exact pass after the codes. Its
+// parts are measured by running the sample and the exact pass AGAIN, alone,
+// after it — exact-us/source and sample-us/source — and the codes are what is
+// left (codes-us/source). An earlier version added the re-run to the whole and
+// reported the exact pass twice, which put the one-core reading at twice what
+// it is. The re-run is the only way to see the parts without instrumenting the
+// read, and it runs on a warm cache the whole reading has also had by then.
+//
+// # Idle, and searched
+//
+// A node holding the duty is also answering searches, whose first stage is the
+// same kind of CPU-bound scan, so each size runs twice: on an otherwise idle
+// node, and with two searchers scanning the corpus's codes for the whole
+// training ([search.SearchWhile], the load BenchmarkIVFTrainingShare runs
+// beside the k-means). The searched arm at -cpu 1 is the slowest node a
+// training runs on: ONE core, shared. Pin the process to one CPU as well
+// (`taskset -c 0`), because the store's engine is a native library whose calls
+// run on threads GOMAXPROCS does not count — at -cpu 1 alone the reading still
+// has the other cores.
+func BenchmarkIndexTraining(b *testing.B) {
+	for _, n := range []int{20_000, 40_000} {
+		for _, searched := range []bool{false, true} {
+			arm := "idle"
+			if searched {
+				arm = "searched"
+			}
+			b.Run(fmt.Sprintf("n=%d/%s", n, arm), func(b *testing.B) {
+				const model = "bench-embed"
+				db, f := seedCorpus(b, n, model)
+				scanned := search.NewCodes(len(f.Codes[0]), f.Len())
+				for _, code := range f.Codes {
+					scanned.Append(code)
+				}
+				for b.Loop() {
+					stop := make(chan struct{})
+					latencies := func() []time.Duration { return nil }
+					if searched {
+						latencies = search.SearchWhile(scanned, stop)
+					}
+					started := time.Now()
+					reading := readingOf(b, db, model, search.FixtureWidth)
+					whole := time.Since(started)
+
+					docs := make([]search.SampledDoc, 0, search.EvalQueries)
+					var shapes [][]search.ShapeQuery
+					var sample time.Duration
+					if err := storetest.EstateOf(db).Read(b.Context(), func(tx *sql.Tx) error {
+						var err error
+						started = time.Now()
+						docs, err = search.SampleDocuments(b.Context(), tx, model,
+							search.FixtureWidth, search.EvalQueries)
+						if err != nil {
+							return err
+						}
+						sample = time.Since(started)
+						for _, doc := range docs {
+							shapes = append(shapes, search.ShapesFor(doc, search.Sources))
+						}
+						started = time.Now()
+						_, err = search.ExactTops(b.Context(), tx, docs, shapes, model,
+							search.FixtureWidth, search.ReturnDepth)
+						return err
+					}); err != nil {
+						b.Fatal(err)
+					}
+					exact := time.Since(started)
+
+					codes := reading.Corpus.Codes
+					lists := search.IVFLists(n)
+					started = time.Now()
+					index, err := search.TrainIVF(b.Context(), codes, lists,
+						search.IVFSeed("S", 0), reading.HeldOut)
+					if err != nil {
+						b.Fatal(err)
+					}
+					kmeans := time.Since(started)
+					started = time.Now()
+					byList := search.GroupByList(filedIn(b, index, codes), lists)
+					filing := time.Since(started)
+					started = time.Now()
+					if _, err := search.ChooseProbes(b.Context(), &reading.Corpus, byList,
+						index, reading.Trials); err != nil {
+						b.Fatal(err)
+					}
+					choose := time.Since(started)
+					close(stop)
+					perSource := func(d time.Duration) float64 {
+						return float64(d.Microseconds()) / float64(n)
+					}
+					// THE STREAMING HALF — once, whole — and its parts, and
+					// the exempt half.
+					codesRead := max(whole-sample-exact, 0)
+					arithmetic := kmeans + filing + choose
+					b.ReportMetric(whole.Seconds(), "reading-s")
+					b.ReportMetric(perSource(whole), "reading-us/source")
+					b.ReportMetric(perSource(codesRead), "codes-us/source")
+					b.ReportMetric(perSource(exact), "exact-us/source")
+					b.ReportMetric(perSource(sample), "sample-us/source")
+					b.ReportMetric(kmeans.Seconds(), "kmeans-s")
+					b.ReportMetric(perSource(filing), "filing-us/source")
+					b.ReportMetric(choose.Seconds(), "choose-s")
+					b.ReportMetric(arithmetic.Seconds(), "arithmetic-s")
+					if searched {
+						b.ReportMetric(search.P95ms(latencies()), "scan-p95-ms")
+					}
+				}
+			})
+		}
+	}
 }

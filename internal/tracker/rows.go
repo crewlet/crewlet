@@ -19,9 +19,10 @@ import (
 // would be a second chance to get it wrong, in the package least likely to be
 // the one somebody re-reads.
 //
-// What is genuinely this domain's is the pair of GUARDS below.
-func NewRows(db *store.DB) (statelog.Rows, error) {
-	return statelog.NewRows(db, Domain{}, taskGuards)
+// What is genuinely this domain's is the pair of GUARDS below. spec is the log
+// the publisher writes, whose checkpoint and anchors the seam reads.
+func NewRows(db store.PartitionReader, spec statelog.StreamSpec) (statelog.Rows, error) {
+	return statelog.NewRows(db, Domain{}, spec, taskGuards)
 }
 
 // taskGuards answers the two object-level facts a first write needs.
@@ -32,8 +33,9 @@ func NewRows(db *store.DB) (statelog.Rows, error) {
 // and is what makes the removal irreversible.
 //
 // Only a task has either. Every other object in this domain is created by its
-// first record and removed by nothing, so answering false for both is the
-// correct answer rather than an omission.
+// first record and removed by nothing — or, a file, removed by a stamp that the
+// next put at its path lifts, since its address is meant to be used again —
+// so answering false for both is the correct answer rather than an omission.
 func taskGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 	deleted, guard bool, err error) {
 
@@ -69,9 +71,17 @@ func ReadScope(q Query) statelog.ScopeSet {
 			Kind: TermContainer, ID: q.Scope.Project,
 		}.Path())
 	case q.Scope.Workspace:
-		paths = append(paths, ScopeTerm{
-			Kind: TermContainer, ID: WorkspaceContainer,
-		}.Path())
+		// THE EVERYTHING LEVEL IS EVERY CONTAINER, not the workspace
+		// container. [WorkspaceContainer] is where an object with no
+		// project lives, and the Everything board reads the tasks of
+		// every project — so a closure naming only it probed a container
+		// no task is filed in, and a board holding a deferred record in
+		// any project reported itself complete. The container level
+		// itself is the tightest term that covers every project and
+		// nothing else the tracker files: the families (the catalogue,
+		// the people) sit beside it, and a board that names a field
+		// adds the catalogue below.
+		paths = append(paths, join(pathDomain, pathContainer))
 	default:
 		paths = append(paths, pathDomain)
 	}

@@ -154,7 +154,7 @@ type Config struct {
 	//
 	// It runs on the sweep path and must not block: read a flag, do not
 	// query a store.
-	Ready func() bool
+	Ready func(ctx context.Context) bool
 
 	// Serviceable reports whether this node may KEEP the seats it holds,
 	// and names what stopped it when the answer is no.
@@ -165,17 +165,16 @@ type Config struct {
 	// Ready is about work this node has not taken yet: a copy that is
 	// merely BEHIND catches up, so withholding claims is the whole remedy
 	// and dropping work in hand would be pure loss. This one is about work
-	// already in hand, and it fires only where that work would be WRONG —
-	// an applier halted at a record it cannot decode, an eviction whose
-	// peers are dropping everything this node writes, rows below the log's
-	// first surviving record with a hole nothing will fill. A seat left
-	// running on any of those answers its own tools out of a copy the fleet
-	// has abandoned.
+	// already in hand, and it fires only where this node cannot serve that
+	// work at all — in the engine, a node that can no longer say where the
+	// estate its seats read and write is served. A copy of the estate that
+	// is WRONG is not such a case: the node stops serving that partition
+	// and its seats read it from another holder, which is the same answer a
+	// peer would give them.
 	//
 	// VOLUNTARY, not fenced: the lease is still held and still renewed, so
 	// the in-flight turn finishes and the seat leaves when it goes idle.
-	// The node has bad ROWS, not a lost lease, and abandoning a turn
-	// mid-flight would cost more than the stale answer it is racing.
+	// Abandoning a turn mid-flight would cost more than finishing it.
 	//
 	// Nil keeps every seat, which is the single-node case and the case
 	// before a state log exists. It runs on the sweep path and, like
@@ -208,7 +207,7 @@ type Host struct {
 	owner   string
 	nodeID  string
 	seats   func() []placement.Seat
-	ready   func() bool
+	ready   func(ctx context.Context) bool
 	// serviceable is Config.Serviceable — whether held seats may stay.
 	serviceable func() (bool, string)
 	profile     placement.NodeProfile
@@ -832,6 +831,15 @@ func (h *Host) finishRelease(ctx context.Context, handle string, entry *heldSeat
 		// Nothing here is worth failing a drain.
 		log.WarnContext(ctx, "seat_release_unavailable", "seat", handle, "error", err)
 		return false
+	}
+	if released {
+		// THE COUNT THIS NODE ADVERTISES, corrected now rather than at the
+		// next heartbeat: a peer with room decides from the fleet's counts
+		// whether anything is free ([Host.fleetHoldsEverySeat]), and while
+		// this node's row still counted the seat it gave back, every peer
+		// read the fleet as full and the seat sat unclaimed. A no-op while
+		// draining, which drops presence instead.
+		h.renewNodePresence(ctx)
 	}
 	return released
 }

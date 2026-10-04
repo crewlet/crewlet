@@ -104,7 +104,7 @@ var readCases = []testCase{
 		} {
 			name := coord.SeatResource(handle)
 			owner := fmt.Sprintf("owner-%02d:1", i)
-			lease, err := h.b.TryAcquire(h.ctx, name, coord.AcquireOptions{
+			lease, _, err := h.b.TryAcquire(h.ctx, name, coord.AcquireOptions{
 				Owner: owner, TTL: LongTTL,
 			})
 			if err != nil {
@@ -154,6 +154,12 @@ var readCases = []testCase{
 		h.claim(coord.NodeResource("node-a"), coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
 		})
+		// A caller's own class names the SAME node as its presence — so
+		// a listing that matched on the node id rather than on the class
+		// would count one node twice in each.
+		h.claim(callerClass.Resource("node-a"), coord.AcquireOptions{
+			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
+		})
 
 		// Each class sees its own and NOTHING else. On the native backend
 		// the broker is what narrows this — a class is the leading subject
@@ -162,6 +168,7 @@ var readCases = []testCase{
 		h.requireResources("live seats", h.listLive(coord.ClassSeat), "seat:ceo")
 		h.requireResources("live workers", h.listLive(coord.ClassWorker), "worker:scheduler")
 		h.requireResources("live nodes", h.listLive(coord.ClassNode), "node:node-a")
+		h.requireResources("live claims", h.listLive(callerClass), "claim:node-a")
 	}},
 
 	{"a_class_that_cannot_address_a_key_is_refused", func(h *harness) {

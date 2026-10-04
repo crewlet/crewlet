@@ -26,6 +26,69 @@
 // yields no id, no kind and no subject to file it under. A rolling upgrade
 // puts exactly that record on the wire.
 //
+// # What a purge writes beside its own task
+//
+// A record's scope is the COMPLETE set of objects its apply may write, stated
+// by the writer (see [ScopeSet]), and a purge is the record that writes the
+// most objects that are not its subject. Every one of them is a CROSS-OBJECT
+// effect, listed here so a layout that splits tasks across partitions can route
+// each one rather than rediscover it. What each effect writes is a DOCUMENT
+// change as well as a row change from [rewriteVersion] on,
+// and a task reached by several of them is rewritten once with all of them:
+//
+//   - its DEPENDENTS: their `waiting_on` relation to it is taken out of their
+//     documents, and their dependency edges naming it deleted;
+//   - the BLOCKERS it waits on: it is taken out of the mirror their documents
+//     keep of who waits on them, and out of their mirror rows;
+//   - every task with any other RELATION to it: the relation is taken out of
+//     that task's document and rows;
+//   - every task whose body REFERENCES it: the reference row is deleted (the
+//     key it named resolves to nothing afterwards, so no later record of that
+//     task writes it back — the one effect with no document half);
+//   - its SUBTREE: each direct child is re-parented onto the purged task's own
+//     parent, document and pointer, and every descendant's ancestry is
+//     rebuilt.
+//
+// A purge below [rewriteVersion] writes the rows alone, and leaves the blockers'
+// mirror rows standing, as every build before it did ([purgeDeletes]).
+//
+// Within one estate the writer names all of them ([purgeReach]) and the decide
+// refuses a purge whose scope comes up short of the rows it decides on.
+//
+// # What the partitioned layout has to carry for it
+//
+// Under the partitioned layout a scope may not cross partitions, so the first
+// four effects on a task in ANOTHER partition have to be facts the purge's
+// partition hands to that one, decided there under its own scope — while the
+// subtree stays inside the purge's own partition, because that layout refuses a
+// parent in another project. (Today it is not refused, which is why a
+// descendant in another project is named at its own project's path here.)
+//
+// THE PROPAGATION FEED THAT LAYOUT PLANS FOR DEPENDENCIES DOES NOT CARRY THEM.
+// Its blocker-state fact rewrites the target's dependency ROWS naming a
+// blocker, and nothing in it touches a document; so a dependent in another
+// partition would get the purged blocker's edge back from its own document on
+// its next record, and a blocker or a related task there would go on naming
+// the purged task in its document and its rows. What the layout needs is a
+// fact of its own — the purged task's id, decided in the target partition by
+// taking it out of every document there that names it (the relations, the
+// dependents mirror) and out of the rows those documents derive. The same fact
+// has to clear the REFERENCES there too: a reference across partitions is
+// stored by the key it names rather than by the task's id, so the purged
+// task's partition cannot delete it, and left behind it is a link to a key
+// that resolves to nothing — the dangling link a reader cannot tell from a
+// typo, which within one partition the purge already removes.
+//
+// WHAT NO SCOPE CAN NAME is a task that comes to name the purged one AFTER the
+// purge was decided and before it lands — a relation, a dependency or a child
+// written on that task's own subject, which does not contend with the purge's.
+// The apply rewrites such a task too, since it reads the rows at its own
+// position, and a node that deferred the record which made it name the purged
+// task does not hold the purge back for it. The window is one decide-to-append
+// round trip on each side, and it is the one every widened scope in this
+// package shares ([Writer.scopeForDependents] has it for a dependent arriving
+// the same way); only a write that contended with the purge's own subject
+// could close it.
 // # Every new field is version-gated, and every new derived column re-derived
 //
 // The version a record carries is the LOWEST one that reads it — the highest
@@ -72,6 +135,8 @@
 package tracker
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
@@ -88,7 +153,7 @@ import (
 // make the writer's own deferral probe miss the record it is meant to see.
 type ObjectKind string
 
-// The thirteen kinds.
+// The kinds.
 //
 // EXPORTED AND ENUMERATED because four readers that cannot see each other all
 // compare against them: the publisher builds the subject, the wake feed's
@@ -137,12 +202,19 @@ const (
 	// exactly one wins.
 	KindGeneration ObjectKind = "generation"
 
-	// KindEviction is a node's eviction or its readmission.
+	// KindEviction is a node's eviction, its RELEASE of the log as it
+	// leaves the log's partition ([OpRelease]), or the readmission that
+	// lifts either — three records under one kind, told apart by the op.
 	//
-	// ONE OF THE TWO KINDS THAT INSTALL A GATE, which is why its version
-	// is pinned at 1 for ever: a node that deferred an eviction would
-	// leave its own gate table empty and go on applying every record the
-	// evicted node appends, and there is no inverse that repairs it.
+	// ONE OF THE TWO KINDS THAT INSTALL A GATE, which is why its payload's
+	// SHAPE version is pinned at [GateRecordVersion] for ever: a node that
+	// deferred one would leave its own gate table empty and go on applying
+	// every record the node it names appends, and there is no inverse that
+	// repairs it. What does move is the RECORD version, and only for a
+	// change to what the gate's apply does: the release is written at
+	// [releaseVersion], so a build from before it halts there rather than
+	// record it as an eviction. It keeps this kind so that build still
+	// knows it for a gate.
 	KindEviction ObjectKind = "eviction"
 
 	// KindRankOrder is a project's manual order.
@@ -160,13 +232,29 @@ const (
 	// left out: a kind that writes nothing must not be able to slip
 	// through the completeness walk by writing nothing.
 	KindBarrier ObjectKind = "barrier"
+
+	// KindFile is one file in a project: where it lives, what it is and
+	// which chunks of the object store make it up. The bytes are NOT here —
+	// see internal/objstore and ADR-0026 — and neither is anything that
+	// would need them: the record carries the manifest, and the manifest is
+	// what keeps the chunks alive.
+	//
+	// ITS SUBJECT IS ITS ADDRESS — the project and a token of the path —
+	// rather than a uuid, which is what makes a path one file: two writers
+	// putting the same path contend on one subject and exactly one wins,
+	// with no claim table and no second append. A move is a put at the new
+	// address and a removal at the old one, and costs no bytes, because the
+	// chunks are named by their content.
+	KindFile ObjectKind = "file"
 )
 
-// ObjectKinds are the thirteen, in the order they are documented.
+// ObjectKinds are every kind this build writes, in the order they are
+// documented.
 var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindCounter, KindTags,
 	KindCatalogue, KindView, KindPerson, KindAlias,
 	KindTurn, KindGeneration, KindEviction, KindRankOrder, KindBarrier,
+	KindFile,
 }
 
 // KindSprint and KindGoal are RETIRED, and they are constants for the reason
@@ -225,7 +313,7 @@ func (k ObjectKind) Retired() bool { return slices.Contains(RetiredKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// ELEVEN OF THIRTEEN DO. A turn is ADDITIVE — it records spend that happened
+// EVERY KIND BUT TWO DOES. A turn is ADDITIVE — it records spend that happened
 // and races nobody — and a barrier is arbitrated by nothing at all: every
 // barrier shares one subject, so an expectation there would serialise the
 // whole company's linearizable reads behind one another and write an anchor
@@ -320,10 +408,13 @@ func EvictionSubject(nodeID string) Subject {
 	return Subject{Kind: KindEviction, ID: nodeID}
 }
 
-// TurnSubject names one turn's spend by the turn's id. The one ADDITIVE kind:
-// it carries no expectation and bumps no object's version, so writers here
-// never contend — see [ObjectKind.Arbitrated].
-func TurnSubject(id string) Subject { return Subject{Kind: KindTurn, ID: id} }
+// TurnSubject names a turn's spend by the TASK it was spent on — never by the
+// turn's own id, which the payload carries — because that is what puts it
+// under the task's deletion marker ([markedTask]): a turn is a record about
+// its task. The one ADDITIVE kind: it carries no expectation and bumps no
+// object's version, so writers here never contend — see
+// [ObjectKind.Arbitrated].
+func TurnSubject(task string) Subject { return Subject{Kind: KindTurn, ID: task} }
 
 // AliasSubject names a cross-project move's create-only claim on a former key.
 //
@@ -346,6 +437,34 @@ func GenerationSubject(gen uint32) Subject {
 
 // BarrierSubject is the read index's one subject.
 func BarrierSubject() Subject { return Subject{Kind: KindBarrier} }
+
+// FileSubject names one file by its address: the project it is in and the
+// path it has there, which is what two writers of one path contend on.
+//
+// THE PATH IS A TOKEN, for the reason a page title is one: a subject is a
+// broker path and may carry no space, `*` or `>`, and a scope id may carry no
+// `/`, while a file path routinely carries all of them. The record carries
+// the path itself, the applier recomputes the token from it, and a record
+// whose path and subject disagree is refused rather than applied. The path is
+// NORMALISED first ([NormalizeFilePath]), so one file has one token however a
+// caller spelled it.
+func FileSubject(project, path string) Subject {
+	return Subject{Kind: KindFile, ID: ProjectKey(project) + "." + FileToken(path)}
+}
+
+// FileToken is the address a path is arbitrated on: the first sixteen bytes of
+// SHA-256 over the normalised path, in lower-case hex. internal/pages'
+// TitleToken made the same trade for a title, and prices the collision.
+func FileToken(path string) string {
+	sum := sha256.Sum256([]byte(path))
+	return hex.EncodeToString(sum[:16])
+}
+
+// SplitFileID takes a file subject's id apart: the project and the token.
+func SplitFileID(id string) (project, token string, ok bool) {
+	project, token, ok = strings.Cut(id, ".")
+	return project, token, ok && project != "" && token != ""
+}
 
 // String renders the subject's own path — what the framework appends to the
 // domain's subject prefix, and what a scope term names.
@@ -465,7 +584,7 @@ func (k ObjectKind) Routable() bool {
 // edit filed as `patch`, a purge as `purge` rather than `purged`, and neither
 // is a [ChangeKind] any filter can name.
 //
-// The five document kinds and the task are exactly the kinds [Applier.apply]
+// The document kinds, the file and the task are exactly the kinds [Applier.apply]
 // routes to a path that writes one. Everything else — a barrier, a turn, an
 // eviction, a generation, an alias, a rank order, a counter — is machinery
 // with no audience and no entry in anybody's account of what happened, so a
@@ -477,7 +596,7 @@ func (k ObjectKind) Routable() bool {
 func (k ObjectKind) RecordsHistory() bool {
 	switch k {
 	case KindTask, KindProject, KindTags, KindCatalogue,
-		KindView, KindPerson:
+		KindView, KindPerson, KindFile:
 		return true
 	}
 	return false
@@ -485,7 +604,7 @@ func (k ObjectKind) RecordsHistory() bool {
 
 // RequiresAProject reports a kind that cannot live at the top of the company.
 func (k ObjectKind) RequiresAProject() bool {
-	return k == KindTask || k == KindTurn
+	return k == KindTask || k == KindTurn || k == KindFile
 }
 
 // GatedByPurge reports a kind whose subject id is a TASK id, so a purge of

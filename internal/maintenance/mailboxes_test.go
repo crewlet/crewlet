@@ -247,18 +247,30 @@ func (h *mailboxHarness) build(tune func(*maintenance.MailboxOptions)) *maintena
 
 // seat is what a node does for a seat in the revision it applied: register
 // the mailbox, create the inbox, and (as the seat's owner) subscribe the
-// control topic. One letter is then sent, so the mailbox holds something.
+// control and reflection topics. One letter is then sent, so the mailbox holds
+// something.
 func (h *mailboxHarness) seat(handle string) {
 	h.t.Helper()
 	if err := h.m.Register(h.t.Context(), handle); err != nil {
 		h.t.Fatalf("Register(%s): %v", handle, err)
 	}
 	h.ensure(handle)
-	if _, err := h.queue.EnsureSubscription(h.t.Context(),
-		topics.AgentControl(handle), topics.AgentControlGroup(handle)); err != nil {
-		h.t.Fatalf("control subscription for %s: %v", handle, err)
-	}
+	h.owned(handle)
 	h.send(handle, "hello "+handle)
+}
+
+// owned subscribes what only the seat's holder attaches: its sandbox control
+// topic and its reflection topic.
+func (h *mailboxHarness) owned(handle string) {
+	h.t.Helper()
+	for _, sub := range [][2]string{
+		{topics.AgentControl(handle), topics.AgentControlGroup(handle)},
+		{topics.AgentReflect(handle), topics.AgentReflectGroup(handle)},
+	} {
+		if _, err := h.queue.EnsureSubscription(h.t.Context(), sub[0], sub[1]); err != nil {
+			h.t.Fatalf("subscription %s/%s: %v", sub[0], sub[1], err)
+		}
+	}
 }
 
 func (h *mailboxHarness) ensure(handle string) {
@@ -305,6 +317,10 @@ func (h *mailboxHarness) inboxExists(handle string) bool {
 
 func (h *mailboxHarness) controlExists(handle string) bool {
 	return h.exists(topics.AgentControl(handle), topics.AgentControlGroup(handle))
+}
+
+func (h *mailboxHarness) reflectExists(handle string) bool {
+	return h.exists(topics.AgentReflect(handle), topics.AgentReflectGroup(handle))
 }
 
 func (h *mailboxHarness) record(handle string) (coord.MailboxRecord, bool) {
@@ -363,8 +379,8 @@ func TestARemovedSeatsMailboxSurvivesTheGracePeriod(t *testing.T) {
 		if got := h.held("swe"); got != 1 {
 			t.Fatalf("at %s the removed seat's mailbox holds %d letters, want 1", at.Sub(base), got)
 		}
-		if !h.controlExists("swe") {
-			t.Fatalf("at %s the removed seat's control subscription is gone", at.Sub(base))
+		if !h.controlExists("swe") || !h.reflectExists("swe") {
+			t.Fatalf("at %s the removed seat's control or reflection subscription is gone", at.Sub(base))
 		}
 		rec, found := h.record("swe")
 		if !found || !rec.AbsentSince.Equal(base) || rec.Retiring() {
@@ -393,7 +409,7 @@ func TestARemovedSeatsMailboxIsRetiredAfterTheGracePeriod(t *testing.T) {
 	if n := h.mustTick(base.Add(grace + time.Minute)); n != 1 {
 		t.Fatalf("the sweep after the grace period retired %d mailboxes, want 1", n)
 	}
-	if h.inboxExists("swe") || h.controlExists("swe") {
+	if h.inboxExists("swe") || h.controlExists("swe") || h.reflectExists("swe") {
 		t.Fatal("the removed seat's subscriptions survived its retirement, so its mail is retained for ever")
 	}
 	if _, found := h.record("swe"); found {
@@ -516,9 +532,9 @@ func TestTwoSweepsRetireAMailboxOnce(t *testing.T) {
 	if got := retired.Load(); got != 1 {
 		t.Fatalf("two overlapping sweeps retired the mailbox %d times, want once", got)
 	}
-	// The inbox and the control subscription, once each.
-	if got := h.queue.deletes.Load(); got != 2 {
-		t.Fatalf("%d subscription deletes, want 2: the losing sweep acted anyway", got)
+	// The inbox, the control and the reflection subscription, once each.
+	if got := h.queue.deletes.Load(); got != 3 {
+		t.Fatalf("%d subscription deletes, want 3: the losing sweep acted anyway", got)
 	}
 	if h.inboxExists("swe") {
 		t.Fatal("neither sweep retired the mailbox")
@@ -597,7 +613,7 @@ func TestNothingIsRetiredWhileTheActiveRevisionCannotBeRead(t *testing.T) {
 func TestAMailboxAHolderStillConsumesIsKept(t *testing.T) {
 	h := newMailboxHarness(t, nil)
 	h.removed()
-	lease, err := h.leases.TryAcquire(t.Context(), coord.SeatResource("swe"),
+	lease, _, err := h.leases.TryAcquire(t.Context(), coord.SeatResource("swe"),
 		coord.AcquireOptions{Owner: "lagging-node", TTL: time.Hour})
 	if err != nil || lease == nil {
 		t.Fatalf("TryAcquire = (%v, %v)", lease, err)
@@ -641,7 +657,7 @@ func TestNoNodeCanClaimASeatWhileItsMailboxIsRetired(t *testing.T) {
 
 	claim := func() *coord.Lease {
 		t.Helper()
-		lease, err := h.leases.TryAcquire(t.Context(), coord.SeatResource("swe"),
+		lease, _, err := h.leases.TryAcquire(t.Context(), coord.SeatResource("swe"),
 			coord.AcquireOptions{Owner: "returning-node", TTL: time.Minute})
 		if err != nil {
 			t.Fatalf("TryAcquire: %v", err)
@@ -701,7 +717,7 @@ type slowSeatLeases struct {
 	delay    time.Duration
 }
 
-func (l *slowSeatLeases) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, error) {
+func (l *slowSeatLeases) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
 	if resource == l.resource {
 		time.Sleep(l.delay)
 	}
@@ -1039,7 +1055,7 @@ func TestAFailedRetirementIsRetriedOnTheNextTick(t *testing.T) {
 func TestARetirementEndsTheSeatsCodingRunsBeforeItsSubscriptions(t *testing.T) {
 	h := newMailboxHarness(t, nil)
 	h.runs.observe = func(handle string) runRetirement {
-		lease, err := h.leases.TryAcquire(t.Context(), coord.SeatResource(handle),
+		lease, _, err := h.leases.TryAcquire(t.Context(), coord.SeatResource(handle),
 			coord.AcquireOptions{Owner: "returning-node", TTL: time.Minute})
 		if err != nil {
 			t.Errorf("TryAcquire: %v", err)
@@ -1088,7 +1104,7 @@ func TestARetirementThatCannotEndTheSeatsRunsIsRetried(t *testing.T) {
 	if got := h.queue.deletes.Load(); got != 0 {
 		t.Fatalf("%d subscriptions were deleted although the seat's runs were not ended", got)
 	}
-	if !h.inboxExists("swe") || !h.controlExists("swe") {
+	if !h.inboxExists("swe") || !h.controlExists("swe") || !h.reflectExists("swe") {
 		t.Fatal("the seat's subscriptions are gone although its runs were not ended")
 	}
 	if rec, _ := h.record("swe"); rec.Retiring() || !rec.AbsentSince.Equal(base) {
@@ -1115,17 +1131,17 @@ func TestASeatInTheRosterWithoutARecordIsRegistered(t *testing.T) {
 }
 
 // unregistered creates a seat's mailbox the way a node whose registration
-// failed did, or a build that predates the registry: the subscriptions and a
-// letter, and no record.
-func (h *mailboxHarness) unregistered(handle string, withInbox bool) {
+// failed did, or a build that predates the registry: the subscriptions named
+// and a letter if one is the inbox, and no record.
+func (h *mailboxHarness) unregistered(handle string, subs ...[2]string) {
 	h.t.Helper()
-	if withInbox {
-		h.ensure(handle)
-		h.send(handle, "hello "+handle)
-	}
-	if _, err := h.queue.EnsureSubscription(h.t.Context(),
-		topics.AgentControl(handle), topics.AgentControlGroup(handle)); err != nil {
-		h.t.Fatalf("control subscription for %s: %v", handle, err)
+	for _, sub := range subs {
+		if _, err := h.queue.EnsureSubscription(h.t.Context(), sub[0], sub[1]); err != nil {
+			h.t.Fatalf("subscription %s/%s: %v", sub[0], sub[1], err)
+		}
+		if sub[0] == topics.AgentInbox(handle) {
+			h.send(handle, "hello "+handle)
+		}
 	}
 }
 
@@ -1133,20 +1149,25 @@ func (h *mailboxHarness) unregistered(handle string, withInbox bool) {
 // company. Nothing but the broker knows it is there, so without the listing it
 // retains its mail for the life of the deployment. Found, stamped absent on the
 // tick that finds it, kept through the grace period and then retired like any
-// other. A control subscription left on its own (an inbox a failed retirement
-// already deleted) is found the same way.
+// other. A control or reflection subscription left on its own (an inbox a
+// failed retirement already deleted) is found the same way.
 func TestAMailboxTheRegistryMissedIsFoundAndRetired(t *testing.T) {
+	inbox := [2]string{topics.AgentInbox("ghost"), topics.AgentInboxGroup("ghost")}
+	control := [2]string{topics.AgentControl("ghost"), topics.AgentControlGroup("ghost")}
+	reflect := [2]string{topics.AgentReflect("ghost"), topics.AgentReflectGroup("ghost")}
 	for _, tc := range []struct {
 		name      string
+		subs      [][2]string
 		withInbox bool
 	}{
-		{"an inbox and its control subscription", true},
-		{"a control subscription on its own", false},
+		{"an inbox and its owner's subscriptions", [][2]string{inbox, control, reflect}, true},
+		{"a control subscription on its own", [][2]string{control}, false},
+		{"a reflection subscription on its own", [][2]string{reflect}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newMailboxHarness(t, nil)
 			h.seat("ceo")
-			h.unregistered("ghost", tc.withInbox)
+			h.unregistered("ghost", tc.subs...)
 			h.roster.set("ceo")
 
 			if n := h.mustTick(base); n != 0 {
@@ -1167,7 +1188,7 @@ func TestAMailboxTheRegistryMissedIsFoundAndRetired(t *testing.T) {
 			if n := h.mustTick(base.Add(grace + time.Minute)); n != 1 {
 				t.Fatalf("the sweep after the grace retired %d mailboxes, want the found one", n)
 			}
-			if h.inboxExists("ghost") || h.controlExists("ghost") {
+			if h.inboxExists("ghost") || h.controlExists("ghost") || h.reflectExists("ghost") {
 				t.Fatal("the found mailbox's subscriptions survived its retirement")
 			}
 			if _, found := h.record("ghost"); found {
@@ -1271,7 +1292,7 @@ func (f *failFirstCreate) CreateMailbox(ctx context.Context, rec coord.MailboxRe
 func TestAnUnlistableBrokerStillRetiresRegisteredMailboxes(t *testing.T) {
 	h := newMailboxHarness(t, nil)
 	h.removed()
-	h.unregistered("ghost", true)
+	h.unregistered("ghost", [2]string{topics.AgentInbox("ghost"), topics.AgentInboxGroup("ghost")})
 	unlistable := errors.New("the broker could not list its consumers")
 	h.queue.failListings(unlistable)
 

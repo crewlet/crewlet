@@ -82,6 +82,59 @@ func TestANodeWithNoPositionYetIsCountedAtZero(t *testing.T) {
 	}
 }
 
+// A NODE WHOSE ROW SAYS IT RELEASED THE LOG IS COUNTED NOWHERE ON IT.
+//
+// Its release is on the log and applied, so everything it could still publish
+// there is gated and the position it names will never move. Counted at that
+// position it would pin the log until its row forgot the log; counted at zero
+// as the holder the map still names it, until the map let it go, it would block
+// the trim outright — and neither is a node the log keeps a tail for. A holder
+// with no row at all is still the joiner it always was.
+func TestANodeThatReleasedTheLogIsCountedNowhereOnIt(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	counted := statelog.CountedSet(now,
+		[]statelog.NodePosition{
+			{NodeID: "server", Generation: 1, Seq: 9_000},
+			{NodeID: "leaver", Generation: 1, Seq: 12, Released: true},
+		},
+		[]statelog.Presence{{NodeID: "server"}, {NodeID: "leaver", Leaving: true}, {NodeID: "joiner"}}, nil)
+	var names []string
+	for _, n := range counted {
+		names = append(names, n.NodeID)
+		if n.NodeID == "leaver" {
+			t.Errorf("the node that released the log is counted at %d", n.Seq)
+		}
+	}
+	if !slices.Equal(names, []string{"joiner", "server"}) {
+		t.Errorf("counted %v, want the joiner and the server", names)
+	}
+}
+
+// A RELEASED ROW TAKES OUT ONLY A LEAVER: a node the map lists as joining the
+// partition again — placed back before its row forgot the log — is counted at
+// ZERO, whatever position its released row names. The row is about its last
+// tenure, and the joiner is exactly the node whose tail must not be trimmed.
+func TestAReleasedRowDoesNotHideAJoiner(t *testing.T) {
+	t.Parallel()
+	counted := statelog.CountedSet(time.Now(),
+		[]statelog.NodePosition{
+			{NodeID: "server", Generation: 1, Seq: 9_000},
+			{NodeID: "back", Generation: 1, Seq: 12, Released: true},
+		},
+		[]statelog.Presence{{NodeID: "server"}, {NodeID: "back"}}, nil)
+	var back *statelog.NodePosition
+	for i := range counted {
+		if counted[i].NodeID == "back" {
+			back = &counted[i]
+		}
+	}
+	if back == nil || back.Seq != 0 {
+		t.Errorf("a joiner whose row still says it released the log is counted as %+v, "+
+			"want it at zero", back)
+	}
+}
+
 // A LIVE LEASE REFUSES AN EVICTION.
 //
 // A node renewing its presence lease is reaching the fleet and almost always
@@ -252,5 +305,38 @@ func TestAReadmissionIsRefusedBelowTheFloor(t *testing.T) {
 
 	if err := statelog.PermitReadmission("", []coord.NodePositions{peer}, bounds); err == nil {
 		t.Fatal("a readmission naming no node was permitted")
+	}
+}
+
+// WHO READS WHAT IS ASKED OF THE TRIM'S OWN COUNTED SET.
+//
+// A writer about to publish a kind an older build cannot even defer waits for
+// every node that applies the log — so the set it asks is exactly the one the
+// trim counts. A joiner holding a lease and no row yet is about to replay and
+// reads as zero, a node whose row predates the advertisement reads as zero,
+// and an operator's eviction, once its fence window has passed, releases the
+// writer exactly as it releases the trim.
+func TestTheReadersAreTheTrimsCountedSet(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	reported := []statelog.NodePosition{
+		{NodeID: "new", Generation: 1, Seq: 9_000, RecordVersion: 2},
+		{NodeID: "old", Generation: 1, Seq: 8_000},
+		{NodeID: "gone", Generation: 1, Seq: 10, RecordVersion: 1},
+	}
+	readers := statelog.Readers(statelog.CountedSet(now, reported,
+		[]statelog.Presence{{NodeID: "joiner"}, {NodeID: "new"}},
+		[]statelog.Tombstone{{NodeID: "gone",
+			At: now.Add(-statelog.EvictionFenceWindow - time.Second)}}))
+
+	want := map[string]int{"new": 2, "old": 0, "joiner": 0}
+	if len(readers) != len(want) {
+		t.Fatalf("readers %v, want %v", readers, want)
+	}
+	for node, version := range want {
+		if got, counted := readers[node]; !counted || got != version {
+			t.Errorf("%s reads as %d (counted %v), want %d — readers %v",
+				node, got, counted, version, readers)
+		}
 	}
 }

@@ -61,7 +61,7 @@ type Store struct {
 	// see rows before they form a record. It is never the write path's own
 	// snapshot — that is the framework's, taken per append — and nothing
 	// read here is paired with an expectation.
-	db *store.DB
+	db store.PartitionReader
 
 	now      func() time.Time
 	newID    func() string
@@ -73,7 +73,7 @@ type Options struct {
 	// Publisher is the domain's write authority, and DB the replicated
 	// estate its decisions read.
 	Publisher *statelog.Publisher
-	DB        *store.DB
+	DB        store.PartitionReader
 
 	// Now is the clock the AUTHORED instants are stamped from. Nil takes
 	// the wall clock in UTC. An argument rather than a package call, so a
@@ -89,7 +89,7 @@ func NewStore(opts Options) (*Store, error) {
 			"write here is a record on the pages log, and a store with no " +
 			"publisher could validate a page and then write it nowhere")
 	}
-	if opts.DB == nil {
+	if opts.DB.IsZero() {
 		return nil, errors.New("pages: a store is required: a write decides " +
 			"from this node's own applied rows, inside the snapshot the " +
 			"expectation is formed in")
@@ -138,6 +138,106 @@ func newTimeOrderedID() string { return statelog.NewOpID(time.Now(), "") }
 func (s *Store) publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
 	result, err := s.publisher.Publish(ctx, req)
 	return result, refusal(err, req.Subject.ID)
+}
+
+// onPage publishes one write about one page, stating the page's CONTAINER in
+// the request's scope.
+//
+// # Why the container has to be read before the decide
+//
+// The request's scope is what the framework probes for a deferred record
+// before the decision and waits on after the append ([statelog.Request]), and
+// it is stated before the decide runs. A page's subject is its uuid, and the
+// container is a fact about its ROW — one a rename record states and its apply
+// writes — so the subject alone resolves to the path of a page in no container
+// at all. Every page
+// write said exactly that, while the record it decided carried the real
+// container: a record deferred on the page's space, or on the page itself
+// under its space, was never matched, so a write decided over rows that were
+// behind for that space and reported them applied — the containment probe the
+// scope grammar exists for, silently answering "nothing is deferred". So the
+// container is read first and the decide checks it still holds, the shape the
+// tracker takes with a task's project and [Store.Rename] with a page's title.
+//
+// A PAGE THIS NODE DOES NOT HOLD is published with the subject alone: the
+// decide refuses it as not found, which no scope makes wrong, and the one
+// thing that must still answer — a retried operation the ledger already holds
+// — is answered before any scope is probed. A page that arrives between the
+// read and the decide is a move like any other.
+//
+// request builds the request for a container; its decide must refuse a head
+// in any other container with [errPageMoved], via [inContainer].
+func (s *Store) onPage(ctx context.Context, pageID string,
+	request func(container string) statelog.Request) (statelog.Result, error) {
+
+	return followMoves(
+		func() (string, error) { return s.containerOf(ctx, pageID) },
+		func(container string) (statelog.Result, error) {
+			return s.publish(ctx, request(container))
+		})
+}
+
+// followMoves is [Store.onPage]'s loop over values: read the container,
+// publish scoped to it, and read again when the decide found the page moved —
+// at most [pageMoveAttempts] times, answering the last move after that.
+func followMoves(read func() (string, error),
+	publish func(container string) (statelog.Result, error)) (statelog.Result, error) {
+
+	var (
+		result statelog.Result
+		err    error
+	)
+	for range pageMoveAttempts {
+		var container string
+		if container, err = read(); err != nil {
+			return statelog.Result{}, err
+		}
+		result, err = publish(container)
+		if !errors.Is(err, errPageMoved) {
+			return result, err
+		}
+	}
+	return result, err
+}
+
+// pageMoveAttempts is how many times [Store.onPage] reads a page's container
+// again after it moved between the read and the decide.
+//
+// THREE: a move is a rename somebody chose to make, so two inside the window
+// between one read and one snapshot is already a coincidence, and a third is
+// a page being moved faster than anybody can write to it.
+const pageMoveAttempts = 3
+
+// errPageMoved is a page that left the container its request's scope named
+// between the read that named it and the decide.
+var errPageMoved = errors.New("pages: the page moved to another space under this write")
+
+// containerOf is the container pageID is in, read outside any decision, or
+// empty when this node holds no such page.
+func (s *Store) containerOf(ctx context.Context, pageID string) (string, error) {
+	var container string
+	err := s.db.Read(ctx, func(tx *sql.Tx) error {
+		err := tx.QueryRowContext(ctx,
+			`SELECT container FROM pages_heads WHERE id = ?`, pageID).Scan(&container)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("pages: read the space page %s is in: %w", pageID, err)
+	}
+	return container, nil
+}
+
+// inContainer refuses a head that is not in the container its request's scope
+// named — see [Store.onPage].
+func inContainer(head Page, container string) error {
+	if head.Container == container {
+		return nil
+	}
+	return fmt.Errorf("%w: page %s is in %q, and this write was scoped to %q",
+		errPageMoved, head.ID, head.Container, container)
 }
 
 // refusal is that translation, as a function over values.
@@ -252,6 +352,14 @@ var (
 
 	// ErrConflict reports a write that lost its race too many times.
 	ErrConflict = errors.New("pages: the page kept changing under this write")
+
+	// ErrParent reports a parent a page cannot be filed under: a page that
+	// does not exist or was purged, one in the trash, one in another
+	// container, or the page itself or one beneath it. Every such refusal
+	// also answers [ErrInvalid], because it IS a refusal of one field — a
+	// caller handling field refusals handles it — and this sentinel is what
+	// tells "choose another parent" from every other field's remedy.
+	ErrParent = errors.New("pages: not a parent this page can have")
 )
 
 // Actor is who is making a write, on [tracker.Writer]'s terms — except that it

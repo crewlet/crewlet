@@ -458,7 +458,7 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 
 	var errs []error
 	for _, r := range routed {
-		if err := s.deliver(ctx, prompts, reg, ev, r); err != nil {
+		if err := s.deliver(ctx, prompts, reg, ev, w.Trigger, r); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -473,7 +473,8 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 }
 
 // deliver resolves one recipient and wakes them, or records why not.
-func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, ev *events.Event, r Routed) error {
+func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, ev *events.Event,
+	trigger string, r Routed) error {
 	party, ok := s.resolve(reg, r)
 	if !ok {
 		log.WarnContext(ctx, "notification_undeliverable", "source", r.Source,
@@ -569,6 +570,9 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	if conversation != "" {
 		meta[ConversationField] = conversation
 	}
+	if trigger != "" {
+		meta[TriggerField] = trigger
+	}
 
 	// The SAME trace the webhook edge started, so a delivery and the turn
 	// it wakes are one story rather than two unrelated ones.
@@ -599,6 +603,15 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	// metadata one is what a prompt renders from, this one is what the broker
 	// groups on and what the ledger keys off.
 	Stamp(wake, partition, conversation)
+	// AND WHERE THE CHANGE THAT WOKE THE SEAT WAS COMMITTED, on the same bag
+	// for the same reason: the turn reads it off the envelope, never out of
+	// a typed payload a build may not decode.
+	if trigger != "" {
+		if wake.Payload == nil {
+			wake.Payload = map[string]any{}
+		}
+		wake.Payload[TriggerField] = trigger
+	}
 	if err := s.queue.Publish(ctx, topics.AgentInbox(party.Handle), wake); err != nil {
 		return fmt.Errorf("notify: wake %s: %w", party.Handle, err)
 	}

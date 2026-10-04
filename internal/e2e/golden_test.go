@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sourcetree"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -830,7 +831,7 @@ func captureAct(t *testing.T, n *node) []byte {
 		t.Fatalf("the founder's %s came to %q, want applied or pending: %s",
 			exchange.Tool, answer.Outcome, raw)
 	}
-	if _, err := tracker.ParseLogPosition(answer.Position); err != nil {
+	if _, err := statelog.ParsePosition(answer.Position); err != nil {
 		t.Fatalf("the act answer's position is not one a read accepts back: %v", err)
 	}
 
@@ -911,7 +912,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		held := n.engine.Node().Host().Held()
 		return slices.Contains(held, "ceo") && slices.Contains(held, "cfo")
 	})
-	waitFor(t, "the native backends to hydrate", n.engine.NativeHydrated)
+	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
 	conn := n.dial(t)
 	frames := &capture{}
 	ctx, cancel := context.WithCancel(t.Context())

@@ -1,12 +1,27 @@
 // Package search is the arithmetic behind the engine's semantic half: the
 // 1-bit quantization its first retrieval stage scans, the Hamming distance
-// that orders it, the two-stage composition itself, and the rank fusion that
-// joins it to the lexical half.
+// that orders it, the inverted file that makes the first stage an INDEX
+// (ADR-0028, ivf.go), the two-stage composition itself, and the rank fusion
+// that joins it to the lexical half.
+//
+// # The first stage is an index, and the index is replicated state
+//
+// A partition's sign codes are filed in lists by k-means in Hamming space, and
+// a search reads the lists nearest its own code instead of every row — the
+// exact rerank above it unchanged. The index is trained by the embedding duty,
+// MEASURED against the exact scan before it is installed, and published on the
+// vector log as a record every holder applies, so every holder of a partition
+// holds the same centroids and files every row in the same list. How many
+// lists a search reads is that measurement's answer, never a constant, and a
+// partition whose corpus has no structure a partition can find gets no index
+// at all: the full scan stays its first stage. See ADR-0028 for the decision
+// and ivf.go, ivfrecord.go, apply_ivf.go and ivfduty.go for each half.
 //
 // # Pure functions over values, and why that is the whole point
 //
 // Everything in THIS FILE and its siblings on the arithmetic — [Quantize],
-// [Hamming], [TwoStage], [Fuse] — takes values and returns values. No
+// [Hamming], [TwoStage], [Fuse], [TrainIVF], [ChooseProbes] — takes values
+// and returns values. No
 // database, no store, no query. The SQL that scans `kb_vectors_bin` lives in
 // this package too (the estate boundary is why: the vectors are replicated
 // and the lexical index is this node's own, so no read joins them), but in

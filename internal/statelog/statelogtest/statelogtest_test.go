@@ -44,9 +44,9 @@ func TestTheCompactedControlPasses(t *testing.T) {
 
 // rowsOver is the framework's own read seam over one control domain, which is
 // what a real domain's constructor returns too.
-func rowsOver(d statelog.Domain) func(*store.DB) (statelog.Rows, error) {
-	return func(db *store.DB) (statelog.Rows, error) {
-		return statelog.NewRows(db, d, nil)
+func rowsOver(d statelog.Domain) func(store.PartitionReader, statelog.StreamSpec) (statelog.Rows, error) {
+	return func(db store.PartitionReader, spec statelog.StreamSpec) (statelog.Rows, error) {
+		return statelog.NewRows(db, d, spec, nil)
 	}
 }
 
@@ -54,9 +54,9 @@ func rowsOver(d statelog.Domain) func(*store.DB) (statelog.Rows, error) {
 // publisher, stamped with what stampOf makes of the stamp it is handed — the
 // identity for a domain that does its job, anything else for one that lies.
 func controlWrite(stampOf func(statelog.Stamp) statelog.Stamp) func(context.Context,
-	*statelog.Publisher, *store.DB) error {
+	*statelog.Publisher, store.PartitionReader) error {
 
-	return func(ctx context.Context, pub *statelog.Publisher, _ *store.DB) error {
+	return func(ctx context.Context, pub *statelog.Publisher, _ store.PartitionReader) error {
 		const opID = "control-write"
 		subject := statelog.Subject{Kind: "widget", ID: "w-1"}
 		scope := statelog.ScopeSet{Paths: []string{"widget/w-1"}}
@@ -76,16 +76,33 @@ func controlWrite(stampOf func(statelog.Stamp) statelog.Stamp) func(context.Cont
 	}
 }
 
+// controlLayout is the partitioned layout the control is certified under, and
+// controlLog its log there — so the suite runs the framework on a log whose
+// names the partition grammar gives, which no production domain's layout-0
+// log exercises.
+func controlLayout() statelog.Layout {
+	return statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
+		{Space: statelog.SpaceTracker, Partitions: 1, Domains: []string{"control"}},
+	}}
+}
+
+var controlLog = statelog.LogID{
+	Domain: "control", Partition: statelog.PartitionID{Space: statelog.SpaceTracker},
+}
+
 func control() statelogtest.Candidate {
 	return statelogtest.Candidate{
-		Domain:     controlDomain{},
-		Applier:    controlApplier{},
-		Kinds:      []string{"widget"},
-		Rows:       rowsOver(controlDomain{}),
-		Write:      controlWrite(func(s statelog.Stamp) statelog.Stamp { return s }),
-		EncodeGate: encodeControlGate,
-		Migrate: func(ctx context.Context, db *store.DB) error {
-			return db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+		Domain:        controlDomain{},
+		Layout:        controlLayout(),
+		Log:           controlLog,
+		Applier:       controlApplier{},
+		Kinds:         []string{"widget"},
+		Rows:          rowsOver(controlDomain{}),
+		Write:         controlWrite(func(s statelog.Stamp) statelog.Stamp { return s }),
+		EncodeGate:    encodeControlGate,
+		EncodeRelease: encodeControlRelease,
+		Migrate: func(ctx context.Context, db store.PartitionHandle) error {
+			return db.Tx(ctx, func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(ctx, controlDDL)
 				return err
 			})
@@ -193,13 +210,18 @@ CREATE TABLE control_evictions (
     at                  INTEGER NOT NULL,
     by                  TEXT    NOT NULL DEFAULT '',
     from_position       INTEGER NOT NULL,
-    readmitted_position INTEGER
+    readmitted_position INTEGER,
+    kind                TEXT    NOT NULL DEFAULT 'eviction'
 );
 `
 
 // controlGateKind is the control domain's eviction record, and controlGate its
-// shape: the envelope every build reads, plus the node and the direction.
-const controlGateKind = "eviction"
+// shape: the envelope every build reads, plus the node and the direction. A
+// release is the same kind under controlReleaseOp, written by the node itself.
+const (
+	controlGateKind  = "eviction"
+	controlReleaseOp = "release"
+)
 
 type controlGate struct {
 	statelog.Envelope
@@ -215,7 +237,7 @@ func encodeControlGate(node string, readmit bool) ([]byte, error) {
 	}
 	return json.Marshal(controlGate{
 		Envelope: statelog.Envelope{
-			V: 1, Kind: controlGateKind,
+			V: 1, Kind: controlGateKind, Op: "evict",
 			Subject: statelog.Subject{Kind: controlGateKind, ID: node},
 			OpID:    op, Gen: 1, Writer: "control",
 			Scope: statelog.ScopeSet{Paths: []string{controlGateKind}},
@@ -224,20 +246,49 @@ func encodeControlGate(node string, readmit bool) ([]byte, error) {
 	})
 }
 
+// encodeControlRelease is the control domain's release: a node's own statement,
+// written by it, that it has left the log's partition.
+func encodeControlRelease(node string) ([]byte, error) {
+	return json.Marshal(controlGate{
+		Envelope: statelog.Envelope{
+			V: 1, Kind: controlGateKind, Op: controlReleaseOp,
+			Subject: statelog.Subject{Kind: controlGateKind, ID: node},
+			OpID:    "gate-release-" + node, Gen: 1, Writer: node,
+			Scope: statelog.ScopeSet{Paths: []string{controlGateKind}},
+		},
+		Node: node,
+	})
+}
+
 type controlBase struct{}
 
 func (controlBase) Name() string { return "control" }
 
-func (controlBase) Stream() statelog.StreamSpec {
-	return statelog.StreamSpec{
-		Name:            "CREWLET_CONTROL_LOG",
-		Subjects:        []string{"crewlet.control.log.>"},
-		SubjectPrefix:   "crewlet.control.log",
+func (controlBase) StreamShape() statelog.StreamShape {
+	return statelog.StreamShape{
 		ArbitratedKinds: []string{"widget"},
 		MaxBytes:        16 << 20,
 		Duplicates:      2 * time.Minute,
 		Replay:          statelog.ReplayStrict,
 	}
+}
+
+// PartitionOf places a widget in the one partition that carries the control's
+// log, and the framework's records — the barrier and the node gate — nowhere.
+func (controlBase) PartitionOf(l statelog.Layout, env statelog.Envelope) (statelog.PartitionID, bool) {
+	if env.Kind != "widget" {
+		return statelog.PartitionID{}, false
+	}
+	return l.OnlyPartition("control"), true
+}
+
+// ScopePartition places a `widget/<id>` path where PartitionOf places its
+// widget, and the gate's own term — which names the log — nowhere.
+func (controlBase) ScopePartition(l statelog.Layout, path string) (statelog.PartitionID, bool) {
+	if !strings.HasPrefix(path, "widget/") {
+		return statelog.PartitionID{}, false
+	}
+	return l.OnlyPartition("control"), true
 }
 
 // RecordVersion is 2 because the control's field table reaches 2 — the one
@@ -290,12 +341,30 @@ func (controlDomain) Tables() map[string]statelog.TableClass {
 	return tables
 }
 
+// EvictionSubject, Evicts and Releases read the control's node gates off its
+// log, as every identity-claiming domain must be able to.
+func (controlDomain) EvictionSubject(node string) statelog.Subject {
+	return statelog.Subject{Kind: controlGateKind, ID: node}
+}
+
+func (controlDomain) Evicts(payload []byte) (bool, error) {
+	var gate controlGate
+	if err := json.Unmarshal(payload, &gate); err != nil {
+		return false, err
+	}
+	return !gate.Readmit, nil
+}
+
+func (controlDomain) Releases(env statelog.Envelope) bool {
+	return env.Kind == controlGateKind && env.Op == controlReleaseOp
+}
+
 // Evictions answers from this log's own rows, as a real domain does.
-func (controlDomain) Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error) {
+func (controlDomain) Evictions(ctx context.Context, db store.PartitionReader) ([]statelog.EvictionRow, error) {
 	var out []statelog.EvictionRow
-	err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
-			SELECT node_id, at, by, from_position, readmitted_position
+			SELECT node_id, at, by, from_position, readmitted_position, kind
 			FROM control_evictions ORDER BY node_id`)
 		if err != nil {
 			return err
@@ -306,10 +375,12 @@ func (controlDomain) Evictions(ctx context.Context, db *store.DB) ([]statelog.Ev
 				e          statelog.EvictionRow
 				at, from   int64
 				readmitted sql.NullInt64
+				kind       string
 			)
-			if err := rows.Scan(&e.NodeID, &at, &e.By, &from, &readmitted); err != nil {
+			if err := rows.Scan(&e.NodeID, &at, &e.By, &from, &readmitted, &kind); err != nil {
 				return err
 			}
+			e.Kind = statelog.EvictionKind(kind)
 			e.At, e.From = store.DecodeTime(at), uint64(from)
 			e.Readmitted = uint64(readmitted.Int64)
 			e.Back = readmitted.Valid && readmitted.Int64 > from
@@ -325,8 +396,8 @@ func (controlDomain) Evictions(ctx context.Context, db *store.DB) ([]statelog.Ev
 // than a fault.
 type compactedControl struct{ controlBase }
 
-func (c compactedControl) Stream() statelog.StreamSpec {
-	s := c.controlBase.Stream()
+func (c compactedControl) StreamShape() statelog.StreamShape {
+	s := c.controlBase.StreamShape()
 	s.Replay = statelog.ReplayCompacted
 	s.MaxPerSubject = 1
 	s.MaxAge = time.Hour
@@ -396,15 +467,20 @@ func applyControlGate(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 			UPDATE control_evictions SET readmitted_position = ?
 			WHERE node_id = ? AND from_position < ?`, at, gate.Node, at)
 	default:
+		kind := statelog.EvictionKindEviction
+		if rec.Op == controlReleaseOp {
+			kind = statelog.EvictionKindRelease
+		}
 		res, err = tx.ExecContext(ctx, `
 			INSERT INTO control_evictions
-				(node_id, at, by, from_position, readmitted_position)
-			VALUES (?, ?, ?, ?, NULL)
+				(node_id, at, by, from_position, readmitted_position, kind)
+			VALUES (?, ?, ?, ?, NULL, ?)
 			ON CONFLICT (node_id) DO UPDATE SET
 				at = excluded.at, by = excluded.by,
-				from_position = excluded.from_position, readmitted_position = NULL
+				from_position = excluded.from_position, readmitted_position = NULL,
+				kind = excluded.kind
 			WHERE excluded.from_position > control_evictions.from_position`,
-			gate.Node, store.EncodeTime(rec.StoredAt), "control", at)
+			gate.Node, store.EncodeTime(rec.StoredAt), "control", at, string(kind))
 	}
 	if err != nil {
 		return 0, fmt.Errorf("control: apply the gate at %s: %w", rec.Position, err)
@@ -554,6 +630,12 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 		"an identity-claiming candidate with no eviction record": func(c *statelogtest.Candidate) {
 			c.EncodeGate = nil
 		},
+		"an identity-claiming candidate with no release record": func(c *statelogtest.Candidate) {
+			c.EncodeRelease = nil
+		},
+		"an applier that records a release as an eviction": func(c *statelogtest.Candidate) {
+			c.Applier = releaseAsEviction{}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -583,6 +665,63 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 			t.Fatal("the suite passed an applier that writes a new row per delivery")
 		}
 	})
+}
+
+// A KIND A ROW INTRODUCES IS STAMPED AT THAT ROW'S VERSION, and the suite holds
+// a domain to it in both directions: its ordinary record of that kind carries
+// the kind's own row and nothing else, so the version it is owed is the row's
+// rather than one — demanding one would demand that builds with no applier for
+// the kind apply it — and a record of it stamped one is the fault the row
+// exists to prevent.
+func TestTheSuiteHoldsAKindARowIntroducedToThatRowsVersion(t *testing.T) {
+	t.Parallel()
+	fields := append(statelog.RecordFields{}, controlFields...)
+	fields = append(fields, statelog.VersionedField{
+		Name: "Kind=gadget", Since: 2, Path: []string{"Kind"}, Equals: "gadget",
+	})
+	byTable := func(rec controlRecord) (int, error) {
+		body, err := json.Marshal(rec)
+		if err != nil {
+			return 0, err
+		}
+		return fields.Minimum(rec.Op, body)
+	}
+	withGadgets := func(stamp stamper) statelogtest.Candidate {
+		c := control()
+		c.Kinds = []string{"widget", "gadget"}
+		c.Fields = fields
+		c.Encode = func(kind, id, opID string, version int) ([]byte, error) {
+			return encodeControl(controlRecord{Envelope: controlEnvelope(kind, id, opID, version)}, stamp)
+		}
+		c.Carrying = func(field statelog.VersionedField) ([]byte, error) {
+			rec := controlRecord{Envelope: controlEnvelope("widget", "carrying", "suite-carrying", 0)}
+			switch field.Name {
+			case "widget.Colour":
+				rec.Colour = "violet"
+			case "Kind=gadget":
+				rec.Envelope = controlEnvelope("gadget", "carrying", "suite-carrying", 0)
+			default:
+				return nil, fmt.Errorf("the control has no field %s", field.Name)
+			}
+			return encodeControl(rec, stamp)
+		}
+		return c
+	}
+
+	if errs := statelogtest.Stamping(withGadgets(byTable)); len(errs) != 0 {
+		t.Errorf("a domain stamping a gadget at the version its row gives it was "+
+			"refused: %v", errs)
+	}
+	errs := statelogtest.Stamping(withGadgets(func(controlRecord) (int, error) { return 1, nil }))
+	var found bool
+	for _, err := range errs {
+		if strings.Contains(err.Error(), "the only versioned field it carries is its kind's own") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a gadget stamped at version one passed the base-record case: %v", errs)
+	}
 }
 
 // A DOMAIN THAT STAMPS THE WRONG VERSION IS CAUGHT, in both directions and
@@ -712,8 +851,8 @@ func (readsAhead) RecordVersion() int { return 3 }
 
 type brokenStream struct{ controlDomain }
 
-func (b brokenStream) Stream() statelog.StreamSpec {
-	s := b.controlDomain.Stream()
+func (b brokenStream) StreamShape() statelog.StreamShape {
+	s := b.controlDomain.StreamShape()
 	s.MaxPerSubject = 1 // a strict log that keeps one message per subject
 	return s
 }
@@ -757,7 +896,7 @@ type unlisted struct{ controlBase }
 // log's behalf and finding nothing.
 type blindLister struct{ controlDomain }
 
-func (blindLister) Evictions(context.Context, *store.DB) ([]statelog.EvictionRow, error) {
+func (blindLister) Evictions(context.Context, store.PartitionReader) ([]statelog.EvictionRow, error) {
 	return nil, nil
 }
 
@@ -774,10 +913,23 @@ func (d deletingApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Rec
 	return d.controlApplier.Apply(ctx, tx, rec, opts)
 }
 
+// releaseAsEviction applies a node's release as though an operator had evicted
+// it — the gate right, the row naming the wrong one.
+type releaseAsEviction struct{ controlApplier }
+
+func (d releaseAsEviction) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
+	opts statelog.ApplyOptions) (int, error) {
+
+	if rec.Kind == controlGateKind && rec.Op == controlReleaseOp {
+		rec.Op = "evict"
+	}
+	return d.controlApplier.Apply(ctx, tx, rec, opts)
+}
+
 // listingCompacted claims no identity and answers for evictions anyway.
 type listingCompacted struct{ compactedControl }
 
-func (listingCompacted) Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error) {
+func (listingCompacted) Evictions(ctx context.Context, db store.PartitionReader) ([]statelog.EvictionRow, error) {
 	return controlDomain{}.Evictions(ctx, db)
 }
 
@@ -814,6 +966,22 @@ func TestTheSuiteCatchesADomainThatMisnamesItsNodeGate(t *testing.T) {
 			mutate: func(c *statelogtest.Candidate) { c.EncodeGate = nil },
 			names:  "supplies no eviction record",
 		},
+		"an identity-claiming candidate with no release record": {
+			mutate: func(c *statelogtest.Candidate) { c.EncodeRelease = nil },
+			names:  "supplies no release record",
+		},
+		"a domain whose release is no release": {
+			mutate: func(c *statelogtest.Candidate) { c.Domain = releaseNotARelease{} },
+			names:  "does not call a node's release of its log a release",
+		},
+		"a domain that calls its eviction a release": {
+			mutate: func(c *statelogtest.Candidate) { c.Domain = evictionARelease{} },
+			names:  "calls its eviction of a node a release",
+		},
+		"an identity-claiming domain that reads no node gate off its log": {
+			mutate: func(c *statelogtest.Candidate) { c.Domain = unprobed{controlBase{}} },
+			names:  "cannot read its node gates off its log",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -829,6 +997,25 @@ func TestTheSuiteCatchesADomainThatMisnamesItsNodeGate(t *testing.T) {
 		})
 	}
 }
+
+// releaseNotARelease calls nothing a release, so the publisher could not hold
+// its release to naming the node that publishes it.
+type releaseNotARelease struct{ controlDomain }
+
+func (releaseNotARelease) Releases(statelog.Envelope) bool { return false }
+
+// evictionARelease calls every node gate a release, an operator's eviction of
+// another node among them.
+type evictionARelease struct{ controlDomain }
+
+func (evictionARelease) Releases(env statelog.Envelope) bool { return env.Kind == controlGateKind }
+
+// unprobed claims identity, gates its evictions, and cannot read them off its
+// log — the base with the control's gate answers and none of its probe.
+type unprobed struct{ controlBase }
+
+func (unprobed) InstallsGate(env statelog.Envelope) bool { return env.Kind == controlGateKind }
+func (unprobed) NodeGate(env statelog.Envelope) bool     { return env.Kind == controlGateKind }
 
 // evictionNotANodeGate answers no to its own eviction, so the publisher would
 // refuse the gesture that unpins its log.
@@ -848,3 +1035,87 @@ type compactedNodeGate struct{ compactedControl }
 
 func (compactedNodeGate) InstallsGate(statelog.Envelope) bool { return true }
 func (compactedNodeGate) NodeGate(statelog.Envelope) bool     { return true }
+
+// A DOMAIN THAT MISPLACES ITS RECORDS IS CAUGHT.
+//
+// Each arm is a partition function that ships silently until a layout divides
+// the domain: a record answered in another partition is misfiled on its own
+// log; one answered as a framework record is one that could never be told
+// apart on the wrong log; a barrier or a node gate named for a partition reads
+// as misfiled on every other log it is appended to; and a scope path placed
+// elsewhere is a deferral the record's own partition never probes.
+func TestTheSuiteCatchesADomainThatMisplacesItsRecords(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		domain statelog.Domain
+		names  string
+	}{
+		"a widget placed in another partition": {
+			domain: misplaced{controlDomain{}}, names: "places its own widget record in tracker.001",
+		},
+		"a widget answered as a framework record": {
+			domain: unplaced{controlDomain{}}, names: "is a framework record",
+		},
+		"a barrier named for a partition": {
+			domain: placedFramework{controlDomain{}}, names: "places a barrier record",
+		},
+		"a node gate named for a partition": {
+			domain: placedFramework{controlDomain{}}, names: "places a " + controlGateKind + " record",
+		},
+		"a scope path placed in another partition": {
+			domain: scopeElsewhere{controlDomain{}}, names: "places the path",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := control()
+			c.Domain = tc.domain
+			errs := statelogtest.Placement(c)
+			var found bool
+			for _, err := range errs {
+				if strings.Contains(err.Error(), tc.names) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("the suite did not name %q for %s: %v", tc.names, name, errs)
+			}
+		})
+	}
+	// THE CONTROL, placed as it says, draws nothing: a case that objected to
+	// every domain would pass every arm above.
+	if errs := statelogtest.Placement(control()); len(errs) != 0 {
+		t.Errorf("the control is reported misplaced: %v", errs)
+	}
+}
+
+// elsewhere is a partition of the control's space that its layout does not
+// carry — "another partition" from where the control's one log is.
+var elsewhere = statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
+
+type misplaced struct{ controlDomain }
+
+func (misplaced) PartitionOf(l statelog.Layout, env statelog.Envelope) (statelog.PartitionID, bool) {
+	if env.Kind != "widget" {
+		return statelog.PartitionID{}, false
+	}
+	return elsewhere, true
+}
+
+type unplaced struct{ controlDomain }
+
+func (unplaced) PartitionOf(statelog.Layout, statelog.Envelope) (statelog.PartitionID, bool) {
+	return statelog.PartitionID{}, false
+}
+
+type placedFramework struct{ controlDomain }
+
+func (placedFramework) PartitionOf(l statelog.Layout, _ statelog.Envelope) (statelog.PartitionID, bool) {
+	return l.OnlyPartition("control"), true
+}
+
+type scopeElsewhere struct{ controlDomain }
+
+func (scopeElsewhere) ScopePartition(statelog.Layout, string) (statelog.PartitionID, bool) {
+	return elsewhere, true
+}

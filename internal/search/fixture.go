@@ -116,31 +116,68 @@ type Fixture struct {
 	meanWeight float32
 
 	basis *basis
+
+	// gen is how a document's structural coefficients are drawn — the
+	// family member this fixture is, isotropic or topical.
+	gen generator
+
+	// Topics is the topic each document was drawn around, -1 throughout
+	// the isotropic member: what a gate files documents in CONTAINERS by,
+	// because a company files its documents by what they are about, and a
+	// search scoped to one container is a search over one region of the
+	// space rather than over a random sample of it.
+	Topics []int32
 }
 
-// NewFixture generates n documents.
+// NewFixture generates n documents from the ISOTROPIC member of the family:
+// low-rank structure, a shared mean, and no topics at all.
 //
 // SEEDED AND DETERMINISTIC: the same n and the same seed produce the same
 // corpus on every machine, which is what makes a recall floor a gate rather
 // than a coin flip.
 func NewFixture(n int, seed uint64) *Fixture {
 	basis := newBasis()
-	meanWeight := solveMeanWeight(basis.weights)
+	return newFixture(n, seed, basis, generator{weights: basis.weights})
+}
+
+// NewTopicalFixture generates n documents from the TOPICAL member of the
+// family: the same basis, spectrum and fitted mean, with every document drawn
+// around one of [FixtureTopics] topic centres.
+//
+// # Why the family needs a topical member now
+//
+// The isotropic member has no structure a partition could find — it is one
+// continuous cloud — so an inverted file over it is a partition of a cloud
+// along arbitrary boundaries, and meeting the floor takes half the lists. A
+// company's corpus is not that: its documents cluster by project, by wiki
+// space and by what they are about. A gate that measured the index only on the
+// isotropic member would certify an index that is never worth installing; one
+// that measured it only here would certify recall on a corpus friendlier than
+// the worst one it must survive. So [ADR-0028]'s gate runs both, and the
+// training's own measurement is what decides, per partition, which one a
+// company's corpus resembles.
+func NewTopicalFixture(n int, seed uint64) *Fixture {
+	basis := newBasis()
+	return newFixture(n, seed, basis, topicalGenerator(basis.weights))
+}
+
+func newFixture(n int, seed uint64, basis *basis, gen generator) *Fixture {
+	meanWeight := solveMeanWeight(gen)
 
 	rng := rand.New(rand.NewPCG(seed, 0x5EEDC0DE))
 	f := &Fixture{
 		Codes:        make([][]uint64, n),
 		coefficients: make([][]float32, n),
 		norms:        make([]float32, n),
+		Topics:       make([]int32, n),
 		meanWeight:   meanWeight,
 		basis:        basis,
+		gen:          gen,
 	}
 	vector := make([]float32, FixtureWidth)
 	for i := range n {
 		coefficients := make([]float32, len(basis.weights)+1)
-		for k, w := range basis.weights {
-			coefficients[k] = w * float32(rng.NormFloat64())
-		}
+		f.Topics[i] = gen.draw(rng, coefficients)
 		// THE MEAN IS THE SAME DISPLACEMENT IN EVERY DOCUMENT, along an
 		// axis nothing else uses — which is what makes it shared, and
 		// what makes the achieved mean pairwise cosine the number the
@@ -153,6 +190,72 @@ func NewFixture(n int, seed uint64) *Fixture {
 		f.norms[i] = norm(coefficients)
 	}
 	return f
+}
+
+// The topical member's two parameters, CHOSEN rather than fitted, for the
+// reason the spectrum is chosen: to put the gate where it can fail.
+//
+// Swept at 120 000 sources and 1 024 lists: at a within-topic spread of 0.5
+// the index met the floor probing 1.5 % of the rows, a regime so easy no
+// regression in the training could show; at 0.8 the smallest probe count with
+// no head miss is a quarter of the lists, where a worse training has room to
+// fail the floor. Five hundred and twelve topics is the order of a company's
+// projects and wiki spaces times the subjects inside them — enough that a
+// list holds a slice of a topic rather than several whole ones at every gate
+// size.
+const (
+	FixtureTopics      = 512
+	FixtureTopicSpread = 0.8
+)
+
+// generator draws one document's structural coefficients (every coordinate
+// but the mean's).
+type generator struct {
+	weights []float32
+
+	// centres are the topics' own coefficients, nil for the isotropic
+	// member; spread is how far a document sits from its topic's centre, in
+	// units of the spectrum's own weight.
+	centres [][]float32
+	spread  float32
+}
+
+// draw fills out's structural coordinates and returns the topic it drew
+// around, -1 for the isotropic member. The isotropic member draws them
+// exactly as the fixture always did — the same stream, the same order — so
+// every recall figure measured before the family had a second member still
+// describes the first.
+func (g generator) draw(rng *rand.Rand, out []float32) int32 {
+	if g.centres == nil {
+		for k, w := range g.weights {
+			out[k] = w * float32(rng.NormFloat64())
+		}
+		return -1
+	}
+	topic := rng.IntN(len(g.centres))
+	centre := g.centres[topic]
+	for k, w := range g.weights {
+		out[k] = centre[k] + g.spread*w*float32(rng.NormFloat64())
+	}
+	return int32(topic)
+}
+
+// topicalGenerator places [FixtureTopics] centres on the spectrum.
+//
+// SEEDED BY THE BASIS'S OWN SEED, not the caller's, for the basis's reason:
+// the topics are the distribution's structure rather than one corpus's
+// content, so fixtures of two sizes are two samples of one company.
+func topicalGenerator(weights []float32) generator {
+	rng := rand.New(rand.NewPCG(fixtureSeed, 0x70D1C5))
+	centres := make([][]float32, FixtureTopics)
+	for t := range centres {
+		centre := make([]float32, len(weights))
+		for k, w := range weights {
+			centre[k] = w * float32(rng.NormFloat64())
+		}
+		centres[t] = centre
+	}
+	return generator{weights: weights, centres: centres, spread: FixtureTopicSpread}
 }
 
 // basis is the corpus's shared structure: a set of directions with power-law
@@ -252,20 +355,41 @@ func (b *basis) compose(vector []float32, coefficients []float32) {
 // Len is how many documents the fixture holds.
 func (f *Fixture) Len() int { return len(f.Codes) }
 
+// Vector is document i as the full-width vector it was quantized from —
+// recomposed from its coefficients, for the benchmark that writes a fixture
+// into a real store rather than scanning its codes.
+func (f *Fixture) Vector(i int) []float32 {
+	vector := make([]float32, FixtureWidth)
+	f.basis.compose(vector, f.coefficients[i])
+	return vector
+}
+
+// QueryVector is the full-width vector of the query [Fixture.Query] draws for
+// the same seed.
+func (f *Fixture) QueryVector(seed uint64) []float32 {
+	vector := make([]float32, FixtureWidth)
+	f.basis.compose(vector, f.queryCoefficients(seed))
+	return vector
+}
+
+// queryCoefficients is the draw behind a query.
+//
+// A SEPARATE STREAM from the corpus's, so adding a document does not change
+// what the queries are. A shared stream would make every recall figure a
+// function of the corpus size twice over — once through the retrieval and once
+// through the questions.
+func (f *Fixture) queryCoefficients(seed uint64) []float32 {
+	rng := rand.New(rand.NewPCG(seed, 0xC0FFEE))
+	coefficients := make([]float32, len(f.basis.weights)+1)
+	f.gen.draw(rng, coefficients)
+	coefficients[len(f.basis.weights)] = f.meanWeight
+	return coefficients
+}
+
 // Query is a held-out draw from the same distribution: its code, and the
 // coefficients an exact similarity against it is computed from.
 func (f *Fixture) Query(seed uint64) (code []uint64, similarity func(int) float64) {
-	// A SEPARATE STREAM from the corpus's, so adding a document does not
-	// change what the queries are. A shared stream would make every
-	// recall figure a function of the corpus size twice over — once
-	// through the retrieval and once through the questions.
-	rng := rand.New(rand.NewPCG(seed, 0xC0FFEE))
-	coefficients := make([]float32, len(f.basis.weights)+1)
-	for k, w := range f.basis.weights {
-		coefficients[k] = w * float32(rng.NormFloat64())
-	}
-	coefficients[len(f.basis.weights)] = f.meanWeight
-
+	coefficients := f.queryCoefficients(seed)
 	vector := make([]float32, FixtureWidth)
 	f.basis.compose(vector, coefficients)
 	code = Quantize(vector)
@@ -314,15 +438,19 @@ const fixtureSeed = 1
 // A bisection over a probe corpus, which is monotone in the weight and costs
 // one pass over two thousand documents' coefficients — no full-width vectors,
 // so it is a fraction of one percent of generating the corpus itself.
-func solveMeanWeight(weights []float32) float32 {
+func solveMeanWeight(gen generator) float32 {
 	noisePower := 0.0
-	for _, w := range weights {
+	for _, w := range gen.weights {
 		noisePower += float64(w) * float64(w)
 	}
+	// A TOPICAL DOCUMENT CARRIES ITS CENTRE AND ITS SPREAD, so its noise
+	// power is the spectrum's times (1 + spread²) and the bracket widens
+	// with it.
+	noisePower *= 1 + float64(gen.spread)*float64(gen.spread)
 	lo, hi := 0.0, 8*math.Sqrt(noisePower)
 	for range 40 {
 		mid := (lo + hi) / 2
-		if probeMeanCosine(weights, float32(mid)) < FixtureMeanPairCos {
+		if probeMeanCosine(gen, float32(mid)) < FixtureMeanPairCos {
 			lo = mid
 			continue
 		}
@@ -338,17 +466,15 @@ func solveMeanWeight(weights []float32) float32 {
 // not depend on how many documents the caller asked for — a generator whose
 // mean moved with n would make every recall figure a function of the corpus
 // size twice over.
-func probeMeanCosine(weights []float32, meanWeight float32) float64 {
+func probeMeanCosine(gen generator, meanWeight float32) float64 {
 	const probeDocs = 2_000
 	rng := rand.New(rand.NewPCG(0xA11CE, 0x5EEDC0DE))
 	coefficients := make([][]float32, probeDocs)
 	norms := make([]float32, probeDocs)
 	for i := range coefficients {
-		c := make([]float32, len(weights)+1)
-		for k := range weights {
-			c[k] = weights[k] * float32(rng.NormFloat64())
-		}
-		c[len(weights)] = meanWeight
+		c := make([]float32, len(gen.weights)+1)
+		gen.draw(rng, c)
+		c[len(gen.weights)] = meanWeight
 		coefficients[i] = c
 		norms[i] = norm(c)
 	}

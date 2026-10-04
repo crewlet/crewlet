@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -55,7 +56,7 @@ func TestAnUpgradedNodeBootsWithItsEarlierAdoptionInTheWatermark(t *testing.T) {
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
 
-	rows, err := tracker.NewRows(back.Store)
+	rows, err := tracker.NewRows(storetest.EstateOf(back.Store).Reader(), estateSpec(tracker.Domain{}))
 	if err != nil {
 		t.Fatalf("build the tracker's read seam: %v", err)
 	}

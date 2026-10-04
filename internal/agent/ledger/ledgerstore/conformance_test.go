@@ -17,9 +17,9 @@ var base = time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
 
 func db(t *testing.T) *store.DB {
 	t.Helper()
-	d, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "l.db"), store.Options{})
+	d, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "l.db"), store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	return d

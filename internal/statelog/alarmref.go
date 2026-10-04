@@ -34,7 +34,8 @@ func AlarmReference() string {
 // to somebody who has just been paged.
 var alarmMeaning = map[Kind]string{
 	KindApplyLag: "This node is more than a minute behind the log. Being " +
-		"behind does not move its seats; a position that stops moving does.",
+		"behind does not take its copy out of service; a position that stops " +
+		"moving does.",
 	KindReadRefusals: "Reads are being refused for something other than " +
 		"ordinary lag, and have been for longer than a heartbeat.",
 	KindBarrierSlow: "The read barrier — the append every linearizable read " +
@@ -48,7 +49,8 @@ var alarmMeaning = map[Kind]string{
 	KindTrimBlocked: "The trim has a term it cannot satisfy, so the log is " +
 		"growing toward its ceiling.",
 	KindDeferredOld: "This node has been holding records it cannot apply for " +
-		"longer than the deferral grace. Its seats have moved.",
+		"longer than the deferral grace. It no longer serves the partition; its " +
+		"seats read it from the partition's other holders.",
 	KindFloorUnknown: "The trim floor has been unreadable for four " +
 		"heartbeats, so every read on this node refuses.",
 	KindPrefetchSlow: "Turn-start context assembly is over its budget. Every " +
@@ -64,20 +66,31 @@ var alarmMeaning = map[Kind]string{
 		"inside the fleet read budget.",
 	KindRecallBelowFloor: "Less of the corpus has current vectors than " +
 		"semantic recall claims to cover.",
+	KindIVFRecallBelowFloor: "The latest measurement of the partition's " +
+		"semantic index found recall against the exact scan below the floor, " +
+		"in a query shape a search is issued in, even probing every list — " +
+		"which is the full scan's own candidate pool, so the first stage is " +
+		"below the floor on this corpus with or without the index.",
 	KindRecordsGated: "An apply gate dropped a record. A gated record is " +
 		"recoverable by nothing.",
 	KindFeedUnreadable: "A change record no build on this node can read. It " +
 		"redelivers for ever, so every wake behind it is waiting too.",
 	KindMaintenanceOpen: "A maintenance operation has been open for an hour. " +
 		"Maintenance stops every publisher on every node.",
-	KindVolumeLow: "The volume has less free space than the next restore, " +
-		"vacuum or snapshot needs for a second copy.",
+	KindVolumeLow: "A volume holding this node's databases has less free space " +
+		"than the next restore, vacuum or snapshot needs for a second copy — or " +
+		"could not be measured at all. The alarm names the volume.",
 	KindWALLarge: "The write-ahead log has grown past a gibibyte, which means " +
 		"a checkpoint is not happening.",
 	KindPoolStarved: "Callers are queuing for a database connection before " +
 		"their query starts.",
-	KindCensusDrift: "This company is doing more than twice the reads its " +
-		"log was sized for, so every sizing decision under it is stale.",
+	KindCensusDrift: "A log is taking more than twice the linearizable reads " +
+		"its share of the census allows — 125 a day per agent seat, over its " +
+		"domain's logs, plus what the object store's collector reads on its " +
+		"own schedule — so every sizing decision under it is stale.",
+	KindObjectsMissing: "Parts of the company's files are not in the object " +
+		"store: the collector's last audit asked the store for every chunk the " +
+		"estate names, and some were not there. Those files cannot be read in full.",
 }
 
 const alarmHeader = `# Alarms
@@ -102,8 +115,9 @@ below.
 const alarmFooter = `
 An alarm that fires on a healthy node is a defect in this table, not a
 threshold for an operator to tune: each one fires at the number that already
-decides something — the grace that sheds a node, the grace that moves its
-seats, the budget a caller was promised.
+decides something — the grace that takes a copy out of service, the grace
+that stops a node serving a partition it cannot decode, the budget a caller
+was promised.
 
 A seat whose token window is spent is NOT an alarm, because nothing is wrong
 with the node: the ceiling is doing what it was set to do. Its mail is parked

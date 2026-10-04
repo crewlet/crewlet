@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
+	"strconv"
 	"sync/atomic"
 )
 
@@ -65,14 +67,31 @@ import (
 // a transaction this file never sees and every commit fault would silently
 // stop firing — a fault injector that no longer injects reads exactly like a
 // store that no longer fails.
-type beginModeDriver struct{ inner driver.Driver }
+//
+// # And it is where a connection sizes its page cache
+//
+// A connection's `PRAGMA cache_size` is its own, and the size a partition's
+// connections should keep MOVES: the node re-divides its page cache across
+// its partition files whenever it opens or closes one ([divide]). A pragma
+// sent through the pool reaches whichever connection answered, and never the
+// writers an apply loop holds pinned for its life — so each connection
+// brings ITSELF to its handle's target before its next statement, here, where
+// every statement on it passes ([beginModeConn.sizeCache]).
+type beginModeDriver struct {
+	inner driver.Driver
+
+	// cache is the page cache, in KiB, the handle this driver's pool
+	// belongs to wants each connection to keep. Never nil: [openPrepared]
+	// gives a pool no handle owns a target of its own.
+	cache *atomic.Int64
+}
 
 func (d *beginModeDriver) Open(name string) (driver.Conn, error) {
 	conn, err := d.inner.Open(name)
 	if err != nil {
 		return nil, err
 	}
-	return &beginModeConn{Conn: conn}, nil
+	return &beginModeConn{Conn: conn, cache: d.cache}, nil
 }
 
 // beginModeConn exists for BeginTx alone. Everything else is FORWARDED
@@ -96,6 +115,106 @@ type beginModeConn struct {
 	// is cancelled — while the caller is still inside the call that began
 	// it.
 	unfit atomic.Bool
+
+	// cache is the handle's page-cache target, and applied the size this
+	// connection last set, 0 before it has set any. inTx is whether a
+	// transaction is open on it, which a cache resize must never land
+	// inside. The two plain fields need no guard: database/sql serialises
+	// every call on a driver connection behind its own lock, the rollback
+	// its awaitDone goroutine issues included.
+	cache   *atomic.Int64
+	applied int64
+	inTx    bool
+
+	// queryOnly is whether `query_only` is on for this connection now:
+	// on for a read transaction, off for everything else. See
+	// [beginModeConn.queryOnlyFor].
+	queryOnly bool
+}
+
+// queryOnlyFor brings this connection's `query_only` to what its next
+// statement needs — ON for a read transaction's BEGIN, OFF for a write's and
+// for any statement outside a transaction — when the two differ.
+//
+// # Why a read is ENFORCED rather than promised
+//
+// [DB.Read]'s deferred begin takes no lock and lets any statement through, so
+// "a read cannot write" was the caller's discipline and a doc comment, while
+// the partition's read handle ([PartitionReader]) is handed to every reader
+// in the tree ON THE STRENGTH OF being unable to write. Measured: an INSERT
+// through a reader's Read committed. `query_only` is the engine refusing it
+// instead — "Cannot execute write statement in query_only mode", and VACUUM
+// likewise — so a reader that writes fails where it is written rather than
+// diverging a partition from its peers.
+//
+// # Why only on a change, and always outside a transaction
+//
+// A connection carries the pragma from one use to the next, and pools hand
+// the same connections to reads and writes alike, so every statement that is
+// not a read transaction's has to find it OFF — a VACUUM INTO or a migration
+// on a connection a read left ON would be refused. Setting it on each change
+// rather than around every read costs a statement only where a connection
+// moves between the two, which on a reader's connection is rarely. Never
+// inside a transaction: a read's statements run under the ON its BEGIN set,
+// and a write's under the OFF.
+//
+// `= 1` and `= 0`, because Turso REFUSES `ON` and `OFF` for this pragma as a
+// parse error (measured), where SQLite takes both.
+//
+// A FAILED CHANGE RETIRES THE CONNECTION: its mode is then unknown, and one
+// left ON would refuse every write drawn onto it afterwards, while one left
+// OFF would let a read write.
+func (c *beginModeConn) queryOnlyFor(ctx context.Context, on bool) error {
+	if c.inTx || c.queryOnly == on {
+		return nil
+	}
+	ex, ok := c.Conn.(driver.ExecerContext)
+	if !ok {
+		return errNoExecer
+	}
+	value := "0"
+	if on {
+		value = "1"
+	}
+	if _, err := ex.ExecContext(ctx, "PRAGMA query_only = "+value, nil); err != nil {
+		c.unfit.Store(true)
+		return fmt.Errorf("store: set query_only to %s: %w", value, err)
+	}
+	c.queryOnly = on
+	return nil
+}
+
+// sizeCache brings this connection's page cache to its handle's current
+// target, when the two differ.
+//
+// OUTSIDE A TRANSACTION ONLY: every caller runs it before a BEGIN or before a
+// statement that is not part of one, so a resize never lands between a
+// transaction's statements — whatever the engine does with a cache resized
+// mid-transaction, no answer here depends on it.
+//
+// A FAILED RESIZE FAILS THE STATEMENT that asked for it, and leaves the
+// target to be tried again at the next one: a connection silently left at a
+// share it no longer has is how a node holding hundreds of partitions keeps
+// the whole of a cache it divided.
+func (c *beginModeConn) sizeCache(ctx context.Context) error {
+	if c.cache == nil || c.inTx {
+		return nil
+	}
+	want := c.cache.Load()
+	if want <= 0 || want == c.applied {
+		return nil
+	}
+	ex, ok := c.Conn.(driver.ExecerContext)
+	if !ok {
+		return errNoExecer
+	}
+	// NEGATIVE, so the number is KiB whatever page size the file has —
+	// see nodeCacheKiB.
+	if _, err := ex.ExecContext(ctx, "PRAGMA cache_size = "+strconv.FormatInt(-want, 10), nil); err != nil {
+		return fmt.Errorf("store: size the page cache to %d KiB: %w", want, err)
+	}
+	c.applied = want
+	return nil
 }
 
 // RetireSwitch hands out the function that says this connection's
@@ -139,9 +258,9 @@ func (c *beginModeConn) IsValid() bool { return !c.unfit.Load() }
 // passes. Everything else, including the nil options database/sql passes by
 // default, is a WRITE and takes the lock now.
 //
-// NOTHING HERE MAKES THE DRIVER REFUSE A WRITE inside a read-only
-// transaction. The option selects a begin; it is not an enforcement, and
-// [DB.Read]'s doc stays honest about that.
+// AND IT IS AN ENFORCEMENT: a read-only transaction runs with `query_only`
+// on, so the engine refuses any write inside it — see
+// [beginModeConn.queryOnlyFor].
 func (c *beginModeConn) BeginTx(ctx context.Context, opts driver.TxOptions) (tx driver.Tx, err error) {
 	ex, ok := c.Conn.(driver.ExecerContext)
 	if !ok {
@@ -150,6 +269,12 @@ func (c *beginModeConn) BeginTx(ctx context.Context, opts driver.TxOptions) (tx 
 	stmt := "BEGIN IMMEDIATE"
 	if opts.ReadOnly {
 		stmt = "BEGIN"
+	}
+	if err = c.sizeCache(ctx); err != nil {
+		return nil, err
+	}
+	if err = c.queryOnlyFor(ctx, opts.ReadOnly); err != nil {
+		return nil, err
 	}
 	defer func() {
 		if err != nil {
@@ -164,6 +289,7 @@ func (c *beginModeConn) BeginTx(ctx context.Context, opts driver.TxOptions) (tx 
 	if _, err = ex.ExecContext(ctx, stmt, nil); err != nil {
 		return nil, err
 	}
+	c.inTx = true
 	return &beginModeTx{ex: ex, conn: c}, nil
 }
 
@@ -183,6 +309,12 @@ func (c *beginModeConn) ExecContext(ctx context.Context, q string, args []driver
 	if !ok {
 		return nil, driver.ErrSkip
 	}
+	if err := c.sizeCache(ctx); err != nil {
+		return nil, err
+	}
+	if err := c.queryOnlyFor(ctx, false); err != nil {
+		return nil, err
+	}
 	return ex.ExecContext(ctx, q, args)
 }
 
@@ -191,10 +323,22 @@ func (c *beginModeConn) QueryContext(ctx context.Context, q string, args []drive
 	if !ok {
 		return nil, driver.ErrSkip
 	}
+	if err := c.sizeCache(ctx); err != nil {
+		return nil, err
+	}
+	if err := c.queryOnlyFor(ctx, false); err != nil {
+		return nil, err
+	}
 	return qr.QueryContext(ctx, q, args)
 }
 
 func (c *beginModeConn) PrepareContext(ctx context.Context, q string) (driver.Stmt, error) {
+	if err := c.sizeCache(ctx); err != nil {
+		return nil, err
+	}
+	if err := c.queryOnlyFor(ctx, false); err != nil {
+		return nil, err
+	}
 	pc, ok := c.Conn.(driver.ConnPrepareContext)
 	if !ok {
 		return c.Conn.Prepare(q)
@@ -240,6 +384,10 @@ func (t *beginModeTx) end(stmt string) error {
 	}
 	t.done = true
 	_, err := t.ex.ExecContext(context.Background(), stmt, nil)
+	// CLOSED WHATEVER THE ANSWER, as far as a cache resize is concerned: a
+	// connection whose end failed is retired rather than used again (see
+	// below), so no resize will ever run on it either way.
+	t.conn.inTx = false
 	if err != nil {
 		// THE TRANSACTION MAY STILL BE OPEN. A COMMIT the driver
 		// refused leaves one, as SQLite does for a deferred
@@ -259,5 +407,6 @@ var errNoExecer = errors.New(
 	"store: the driver's connection cannot execute statements, so the session " +
 		"pragmas and the immediate-begin mode are both unreachable")
 
-// readTx selects the deferred begin. Only [DB.Read] passes it.
+// readTx selects the deferred begin, with writes refused. Only [DB.Read]
+// passes it.
 var readTx = &sql.TxOptions{ReadOnly: true}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
@@ -26,7 +27,7 @@ func TestScheduleRunsPageEveryNodesFiresNewestFirst(t *testing.T) {
 		{"n2", "pm", base.Add(-2 * time.Hour)},
 		{"n1", "pm", base.Add(-3 * time.Hour)},
 	}
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
 		for i, f := range fires {
 			if _, err := tx.ExecContext(t.Context(), `
 				INSERT INTO usage_schedule_runs
@@ -49,7 +50,7 @@ func TestScheduleRunsPageEveryNodesFiresNewestFirst(t *testing.T) {
 		if pages > 5 {
 			t.Fatal("the scroll does not end")
 		}
-		runs, more, err := usage.ScheduleRuns(t.Context(), db.Replicated(), q)
+		runs, more, err := usage.ScheduleRuns(t.Context(), storetest.EstateOf(db), q)
 		if err != nil {
 			t.Fatalf("ScheduleRuns: %v", err)
 		}
@@ -67,7 +68,7 @@ func TestScheduleRunsPageEveryNodesFiresNewestFirst(t *testing.T) {
 		t.Errorf("the scroll read %s, want %s", got, want)
 	}
 
-	runs, _, err := usage.ScheduleRuns(t.Context(), db.Replicated(),
+	runs, _, err := usage.ScheduleRuns(t.Context(), storetest.EstateOf(db),
 		usage.ScheduleRunsQuery{Target: "cto", Limit: 10})
 	if err != nil || len(runs) != 1 || runs[0].TurnID != "turn-2" {
 		t.Errorf("the fires addressed to cto are %+v (%v), want the one", runs, err)
@@ -81,7 +82,7 @@ func TestScheduleRunsNarrowToOneOutcome(t *testing.T) {
 	db := openStore(t)
 	base := time.Date(2031, 4, 16, 9, 0, 0, 0, time.UTC)
 	outcomes := []string{"fired", "skipped_catchup", "fired", "skipped_paused", "fired"}
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
 		for i, outcome := range outcomes {
 			at := base.Add(-time.Duration(i) * time.Minute)
 			if _, err := tx.ExecContext(t.Context(), `
@@ -104,7 +105,7 @@ func TestScheduleRunsNarrowToOneOutcome(t *testing.T) {
 		if pages > 5 {
 			t.Fatal("the scroll does not end")
 		}
-		runs, more, err := usage.ScheduleRuns(t.Context(), db.Replicated(), q)
+		runs, more, err := usage.ScheduleRuns(t.Context(), storetest.EstateOf(db), q)
 		if err != nil {
 			t.Fatalf("ScheduleRuns: %v", err)
 		}

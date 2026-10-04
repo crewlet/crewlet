@@ -13,9 +13,8 @@ import (
 //
 // [pages.Gates.GatedAt] is one answer made of two reads — the page's deletion
 // marker and the writer's eviction window — and it shipped as two
-// `Replicated().Read` calls under a comment saying it was one. Two calls are
-// two snapshots, and two loads of the replicated peer an adoption swaps while
-// readers run: the applier commits between them, a purge of the page can land
+// `Read` calls under a comment saying it was one. Two calls are two snapshots,
+// and two resolutions of a partition an adoption replaces while readers run: the applier commits between them, a purge of the page can land
 // between them, and the two halves then describe two states of the estate —
 // possibly two files.
 //
@@ -38,34 +37,38 @@ func TestGatedAtReadsBothGatesInOneTransaction(t *testing.T) {
 	}{
 		"the two calls this replaced": {src: `
 func (g *Gates) GatedAt(ctx context.Context) error {
-	if err := g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := g.db.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, "SELECT 1 FROM pages_deletions").Scan()
 	}); err != nil {
 		return err
 	}
-	return g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	return g.db.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, "SELECT 1 FROM pages_evictions").Scan()
 	})
 }`},
 		"a statement that reaches around the transaction": {src: `
 func (g *Gates) GatedAt(ctx context.Context) error {
-	return g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	return g.db.Read(ctx, func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(ctx, "SELECT 1 FROM pages_deletions").Scan(); err != nil {
 			return err
 		}
-		return g.db.Replicated().SQL().QueryRowContext(ctx,
+		part, err := g.db.DB()
+		if err != nil {
+			return err
+		}
+		return part.SQL().QueryRowContext(ctx,
 			"SELECT 1 FROM pages_evictions").Scan()
 	})
 }`},
 		"one transaction that reads one gate": {src: `
 func (g *Gates) GatedAt(ctx context.Context) error {
-	return g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	return g.db.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, "SELECT 1 FROM pages_deletions").Scan()
 	})
 }`},
 		"one transaction that reads both": {clean: true, src: `
 func (g *Gates) GatedAt(ctx context.Context) error {
-	return g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	return g.db.Read(ctx, func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(ctx, "SELECT 1 FROM pages_deletions").Scan(); err != nil {
 			return err
 		}

@@ -2,21 +2,42 @@
 // audit event log, the learning subsystem's memory, and the durable runtime
 // state a turn leaves behind.
 //
-// # Two files, one process
+// # A node file, and a file per partition it holds
 //
-// A node keeps TWO databases, and [Open] brings both up: the NODE estate at
-// the path it is given, and the REPLICATED estate beside it. The boundary is
-// [Estate], and what rests on it is written there — a snapshot is a copy of
-// one file rather than a copy of everything with the other's pages deleted
-// out of it, the identity claim a peer verifies is a checksum with nothing in
-// the way, and an applier's write cadence is its own rather than shared with
-// every audit insert.
+// A node keeps its OWN estate in one file, which [OpenNode] brings up at the
+// path it is given, and the REPLICATED estate — everything a state log's
+// applier derives — in one file PER PARTITION it holds, which the engine
+// opens on the node's handle as the node comes to hold it and closes as it
+// stops ([DB.OpenPartition]; partition.go says why a file each). Layout 0, the
+// estate before it was divided, is one partition, which every data node holds
+// from boot, and its file is the one [ReplicatedPath] has always named beside
+// the node's own.
 //
-// NO TRANSACTION SPANS THE TWO and no read joins across them, which is a rule
-// a static walk enforces rather than a convention: a transaction is one file.
-// That is ADR-0004; what may write the replicated one is ADR-0002, and which
-// estate a new table belongs in at all is ADR-0003. The driver this all rests
-// on, and the release matrix it bounds, is ADR-0007.
+// The boundary is [Estate], and what rests on it is written there — a snapshot
+// is a copy of one file rather than a copy of everything with the rest's pages
+// deleted out of it, the identity claim a peer verifies is a checksum with
+// nothing in the way, and an applier's write cadence is its own rather than
+// shared with every audit insert.
+//
+// NO TRANSACTION SPANS TWO FILES, no read joins across them and nothing
+// ATTACHes one to another, which is a rule a static walk enforces rather than a
+// convention: a transaction is one file. That is ADR-0004; what may write a
+// partition is ADR-0002, and which estate a new table belongs in at all is
+// ADR-0003. The driver this all rests on, and the release matrix it bounds, is
+// ADR-0007.
+//
+// # Two handles on a partition, and who holds which
+//
+// A partition reaches a caller as [PartitionHandle] — which can open a write
+// transaction and pin a [Writer], and which the framework, the appliers and
+// the runtime that hands them out hold — or as [PartitionReader], which can
+// only read and which every other holder is handed: it has no write method,
+// and the engine refuses a write inside its read transaction ([DB.Read]).
+// Both resolve the file per call, so a partition closed under its holder
+// answers [ErrNoEstate] rather than a stale pool. Who may write is then a
+// property of the type a holder was given, and
+// TestOnlyTheApplierWritesThePartitions has only the short list of those that
+// hold the first to read.
 //
 // Everything below is true of each of them separately.
 //
@@ -31,9 +52,9 @@
 // opens the file in the window between the engine's connections finds nothing
 // in its way at all.
 //
-// [Open] therefore takes an advisory OS lock for the life of the handle and
-// answers a second PROCESS with [ErrLocked] — before any driver work, and
-// naming the pid that holds the file. See lock.go for why an OS lock rather
+// [OpenNode] and [DB.OpenPartition] therefore take an advisory OS lock for the
+// life of the handle and answer a second PROCESS with [ErrLocked] — before any
+// driver work, and naming the pid that holds the file. See lock.go for why an OS lock rather
 // than a pid file, and why two handles inside one process share the claim
 // instead. That is what makes the rule above true rather than merely stated:
 // the secret-store CLIs open this database from a second process as their
@@ -102,8 +123,10 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -138,11 +161,15 @@ const (
 	// concurrency only deepen a queue.
 	//
 	// READERS ONLY. Every pinned writer ([DB.Writer]) holds a connection of
-	// its own for its lifetime and counts against the same bound, so the
-	// pool is this plus [Options.PinnedWriters] rather than a constant —
-	// see maxOpenConns. A constant here was outgrown the moment a second
+	// its own for its lifetime and counts against the same bound, so a
+	// partition file's pool is its readers plus [PartitionFile.Logs] rather
+	// than a constant. A constant here was outgrown the moment a second
 	// long-lived writer existed: its pin came out of the readers' four and
 	// nothing said so.
+	//
+	// It is also the read concurrency a node's PARTITION files share: the
+	// dashboard's queries read them too, and a node holding one partition
+	// gives it all four — see [divide].
 	defaultReaderConns = 4
 
 	// Half the dashboard's 10 s query timeout. A busy wait longer than the
@@ -150,9 +177,26 @@ const (
 	// no error to show; half leaves the blocked writer room to finish and
 	// report what happened.
 	defaultBusyTimeout = 5 * time.Second
+
+	// nodeCacheKiB is the page cache each connection on the node's own file
+	// keeps: 32 MiB, and it is for the B-TREE INTERIOR PAGES rather than for
+	// the scans. The hot table here carries twenty-odd indexes and the
+	// postings list is read by term, so what a cache this size buys is that
+	// a lookup's descent does not go to the file; the big sequential reads
+	// are the OS page cache's job, and sizing a per-connection cache for
+	// them would be N copies of it. [partitionCacheKiB] is how a node's
+	// partition files divide the same figure between them.
+	//
+	// Set in KiB (a negative `PRAGMA cache_size`) rather than pages, which
+	// is what makes the number mean the same thing whatever page size the
+	// file was created with. Read back at every open as
+	// [Capabilities.PageCacheKiB], because a driver that ignores it leaves
+	// every connection on its own default and the symptom appears nowhere
+	// near the cause.
+	nodeCacheKiB = 32 << 10
 )
 
-// Options configures Open. The zero value is valid.
+// Options configures [OpenNode]. The zero value is valid.
 type Options struct {
 	// WrapDriver wraps the driver before any connection is opened. It
 	// exists for FAULT INJECTION and nothing else.
@@ -166,40 +210,48 @@ type Options struct {
 	//
 	// It wraps rather than replaces, so what runs underneath is still the
 	// real driver against a real file. Nil in every non-test caller, and
-	// there is no config field for it.
+	// there is no config field for it. A node's partitions are opened
+	// with the same wrapper as the node.
 	WrapDriver func(driver.Driver) driver.Driver
 
-	// MaxOpenConns bounds the connection pool; 0 means the derived bound —
-	// defaultReaderConns plus PinnedWriters. Setting it wins outright, and
-	// a caller that sets it owns the arithmetic PinnedWriters does for
-	// everybody else.
+	// MaxOpenConns bounds the node's own file's pool, and is the read
+	// concurrency its partition files share ([divide]); 0 means
+	// defaultReaderConns for both.
+	//
+	// A partition file's pinned writers are never taken out of it: a pool
+	// is the file's share of these readers PLUS one connection per log it
+	// carries, because a writer that took a reader's connection would leave
+	// a read burst queueing with nothing naming the loss.
 	MaxOpenConns int
 
-	// PinnedWriters is how many connections will be held for the life of
-	// this handle by [DB.Writer], and it is passed by the one caller that
-	// knows the number rather than fixed here.
+	// ReplicatedPath is where LAYOUT 0's one partition lives — the file the
+	// replicated estate has always had. Empty derives it from the node's own
+	// path; see [ReplicatedPath]. A partitioned layout's files are kept
+	// beside it ([DB.PartitionPath]).
 	//
-	// A pinned connection counts against MaxOpenConns like any other, so a
-	// handle with N pins and a fixed pool of four leaves 4−N for every
-	// reader — the dashboard, the probes, the coverage checks — with
-	// nothing naming the loss. The engine registers the writers, so the
-	// engine passes the count; the store owns the arithmetic because the
-	// pool is what is shared.
-	PinnedWriters int
-
-	// ReplicatedPath is where the replicated estate lives. Empty derives
-	// it from the node estate's own path — see [ReplicatedPath].
-	//
-	// Configurable because the two files have different appetites: the
-	// replicated estate is what a snapshot copies and what an adopting
-	// node writes at line rate, so an operator with a fast local disk and
-	// a large network volume has a real reason to separate them. Both are
+	// Configurable because the two estates have different appetites: the
+	// replicated one is what a snapshot copies and what an adopting node
+	// writes at line rate, so an operator with a fast local disk and a
+	// large network volume has a real reason to separate them. Both are
 	// still THIS NODE's, exclusively locked, and neither is shared.
 	ReplicatedPath string
 
 	// BusyTimeout is how long a statement waits for the file lock before
 	// giving up; 0 means defaultBusyTimeout.
 	BusyTimeout time.Duration
+
+	// Scratch makes [OpenNode] DISCARD whatever is at the node estate's
+	// path before opening it: the file and every sidecar, under the store's
+	// own lock, so a database another process holds is refused rather than
+	// deleted underneath it — and so is one another handle in THIS process
+	// has open, because a scratch store is discarded before it is opened,
+	// never under a live handle.
+	//
+	// It is what a node without the `data` role runs: nothing it writes
+	// here has to outlive it, and it holds no partition at all. Set only by
+	// the engine's own open for a running node, never by a tool that opens
+	// the same file to read it.
+	Scratch bool
 
 	// EmbeddingDim is the width of the vectors the active company config's
 	// embedding model produces. It is a RUNTIME property, deliberately: the
@@ -215,27 +267,18 @@ type Options struct {
 	// at 0 — a node with no active revision, holding no rows — which
 	// learns its width from its first apply via [DB.LearnEmbeddingDim].
 	EmbeddingDim int
-}
 
-// forEstate resolves the options one estate is opened with, which today is
-// the pool bound and nothing else.
-//
-// THE PINS ARE THE REPLICATED ESTATE'S: a pinned connection belongs to an
-// applier, and an applier writes there. Sizing both pools for them would
-// leave the node estate with headroom nothing takes, and sizing neither
-// would leave a writer silently holding a reader's connection.
-func (o Options) forEstate(estate Estate) Options {
-	if o.MaxOpenConns <= 0 {
-		o.MaxOpenConns = defaultReaderConns
-		if estate == EstateReplicated {
-			o.MaxOpenConns += o.PinnedWriters
-		}
-	}
-	return o
+	// pins is how many connections [DB.Writer] may hold for the life of
+	// the handle, and cacheKiB the page cache each connection keeps (0 is
+	// nodeCacheKiB). Both are set for a PARTITION's handle from its file
+	// and its share of the node ([DB.OpenPartition]), and are zero on every
+	// other: the node's own file has no apply loop to pin a writer on it.
+	pins     int
+	cacheKiB int64
 }
 
 // poolSize is the pool bound with the default applied. A method rather than a
-// branch at each call site: [Open] and [Pending] both build a pool, and the
+// branch at each call site: [OpenNode] and [Pending] both build a pool, and the
 // second one skipping a bound the first applies is exactly the drift that
 // made Pending a different database connection from the engine's.
 func (o Options) poolSize() int {
@@ -245,7 +288,7 @@ func (o Options) poolSize() int {
 	return o.MaxOpenConns
 }
 
-// busyTimeout is the lock wait with the default applied. See maxOpenConns.
+// busyTimeout is the lock wait with the default applied. See poolSize.
 func (o Options) busyTimeout() time.Duration {
 	if o.BusyTimeout <= 0 {
 		return defaultBusyTimeout
@@ -253,26 +296,61 @@ func (o Options) busyTimeout() time.Duration {
 	return o.BusyTimeout
 }
 
+// pageCache is the page cache each connection keeps, with the default
+// applied.
+func (o Options) pageCache() int64 {
+	if o.cacheKiB <= 0 {
+		return nodeCacheKiB
+	}
+	return o.cacheKiB
+}
+
 // DB is an open handle on the local store: a connection pool, the schema it
 // has applied, and the capability answers probed against the live driver.
+//
+// A NODE's own handle ([OpenNode]) also holds the node's open partitions
+// ([DB.OpenPartition]); a partition's handle, and a copy opened with
+// [OpenEstate], hold nothing but their own file.
 type DB struct {
 	sql    *sql.DB
 	path   string
 	caps   Capabilities
 	estate Estate
 
-	// replicated is the OTHER estate, held by the node handle and nil on
-	// the replicated one. The node handle owns its lifetime: one Open
-	// brings both up and one Close takes both down, because a process
-	// holding one file's lock and not the other's is a state no caller
-	// asked for and none could recover from.
-	//
-	// ATOMIC for the reason [DB.dim] is, and it is the same shape: an
-	// adoption CLOSES the peer, renames the file underneath it and opens
-	// it again, all while this node's own readers are running — so the
-	// pointer is written while it is being read, which a plain field makes
-	// a data race on every join.
-	replicated atomic.Pointer[DB]
+	// parts is the partitions this node holds open, on a node's own handle,
+	// and nil on every other. The node handle owns their lifetimes: its
+	// Close takes every one of them down, because a process holding a
+	// partition's lock with no handle left to release it is a state no
+	// caller asked for and none could recover from.
+	parts *partitionSet
+
+	// file is the partition this handle is the file of, and the zero value
+	// on any other handle.
+	file PartitionFile
+
+	// owner is the node that holds this partition open, on a partition's
+	// handle, and nil on every other. It is how a partition closed through
+	// its OWN handle leaves its node's set — see [DB.Close].
+	owner *DB
+
+	// closed is set by the first Close, and it is what makes a handle
+	// closed UNDER a caller answer [ErrNoEstate] like one that was never
+	// open: a partition's database is taken for one operation, and an
+	// adoption or a leave may close it while that operation runs — the pool
+	// is then closed but not nil, and database/sql's own "database is
+	// closed" would reach a caller whose branch for a partition that is not
+	// open never sees it. It also makes Close idempotent, which the shared
+	// lock depends on: a second release of one handle's claim would drop
+	// ANOTHER handle's share of it, and the file would be unlocked while
+	// that handle still had it open.
+	closed atomic.Bool
+
+	// cache is the page cache, in KiB, each of this handle's connections
+	// brings itself to at its next statement ([beginModeConn.sizeCache]).
+	// ATOMIC because a partition's share is re-divided while its
+	// connections are running statements, whenever the node opens or
+	// closes another.
+	cache atomic.Int64
 
 	// dim is [Options.EmbeddingDim], re-stated by every config apply. ATOMIC
 	// because the applying goroutine writes it while turns are reading it to
@@ -299,12 +377,12 @@ type DB struct {
 	// handle a caller can reach. See writequeue.go.
 	writes *writeQueue
 
-	// opened is the Options this handle was opened with, kept so
-	// [DB.ReplaceReplicated] can bring the peer back up IDENTICALLY. A
-	// second Options assembled at the reopen is a second place to decide
-	// the pool bounds, the pin count and the embedding width — and the
-	// one thing a node must not do after adopting a peer's database is
-	// come back up configured differently from how it went down.
+	// opened is the Options a node's handle was opened with, kept so every
+	// partition it opens afterwards — a join's install reopening one
+	// included — is opened with the SAME wrapper, lock wait and paths. A
+	// second Options assembled at each open is a second place to decide
+	// them, and the one thing a node must not do after adopting a peer's
+	// file is come back up configured differently from how it went down.
 	opened Options
 
 	// pins bounds how many connections [DB.Writer] may hand out, and how
@@ -321,95 +399,83 @@ type DB struct {
 
 var log = logging.Get("store")
 
-// ErrOneFile reports a node configured to keep both estates in one file.
+// ErrOneFile reports a node configured to keep its own estate and a partition
+// in one file.
 //
 // Its own sentinel because it is a CONFIGURATION mistake with an obvious
 // remedy, and because it is the one failure here that would otherwise succeed:
-// nothing crashes, the schema sequences interleave in one database and both
+// nothing crashes, the schema sequences interleave in one database and the
 // appliers write beside the audit log.
-var ErrOneFile = errors.New("store: the node and replicated estates cannot be the same file")
+var ErrOneFile = errors.New("store: the node's own estate and a partition cannot be the same file")
 
 // ErrNoEstate is a read or write issued through a handle that is not open.
 //
-// IT IS A STATE, NOT A BUG IN THE CALLER. [DB.Replicated] answers nil while an
-// adoption holds the peer closed between its rename and its reopen, and again
-// after [DB.Close] — both documented and deliberate — so a goroutine that was
-// already in flight when one of those happened reaches here legitimately. What
-// it must NOT reach is a nil dereference: a maintenance tick racing a shutdown
-// panicked the engine, where every other late read in the same shutdown logged
-// "sql: database is closed" and moved on.
+// IT IS A STATE, NOT A BUG IN THE CALLER. [DB.PartitionDB] answers it while an
+// adoption holds a partition closed between its rename and its reopen, for a
+// partition this node does not hold, and after [DB.Close] — all documented and
+// deliberate — so a goroutine that was already in flight when one of those
+// happened reaches here legitimately. What it must NOT reach is a nil
+// dereference: a maintenance tick racing a shutdown panicked the engine, where
+// every other late read in the same shutdown logged "sql: database is closed"
+// and moved on.
 var ErrNoEstate = errors.New("store: this estate is not open")
 
-// Open opens (creating if absent) a node's TWO databases, applies any pending
-// schema to each, and probes the driver's capabilities.
+// OpenNode opens (creating if absent) a node's OWN database, applies any
+// pending schema to it, and probes the driver's capabilities. The node's
+// partitions are opened on the handle it returns, as the node comes to hold
+// them ([DB.OpenPartition]).
 //
-// path is the NODE estate's file; the replicated estate's is
-// [Options.ReplicatedPath], or derived from path when that is empty. This
-// process takes an EXCLUSIVE lock on each for the life of the handle — see the
-// package doc for why, and lock.go for how. A second crewlet process opening
-// either gets [ErrLocked] rather than a database the two of them corrupt
+// This process takes an EXCLUSIVE lock on the file for the life of the handle
+// — see the package doc for why, and lock.go for how. A second crewlet process
+// opening it gets [ErrLocked] rather than a database the two of them corrupt
 // between them.
-//
-// The returned handle is the node estate. Its peer is [DB.Replicated], whose
-// lifetime it owns: this Open brings both up, and [DB.Close] takes both down.
-func Open(ctx context.Context, path string, opts Options) (*DB, error) {
-	replicatedPath := ReplicatedPath(path, opts.ReplicatedPath)
-	// REFUSED BEFORE EITHER LOCK. Two exclusive claims on one path do not
-	// collide inside this process — the claim is refcounted — so what one
-	// file for both estates actually produces is one database carrying two
-	// migration sequences, with both appliers writing into the audit log's
-	// file. It fails as data rather than as an error.
-	if replicatedPath == path && !strings.HasPrefix(path, ":memory:") && path != "" {
-		return nil, fmt.Errorf("%w: %s", ErrOneFile, path)
+func OpenNode(ctx context.Context, path string, opts Options) (*DB, error) {
+	if opts.Scratch {
+		if err := discard(path); err != nil {
+			return nil, err
+		}
 	}
 	db, err := openEstate(ctx, EstateNode, path, opts, nil)
 	if err != nil {
 		return nil, err
 	}
-	// THE REPLICATED ESTATE SECOND, and its failure closes the first. A
-	// handle on one file and not the other is a node that would apply
-	// records into a database it has no checkpoint table in, and the
-	// caller has no way to ask which half it got.
-	// THE PROBE IS NOT REPEATED — see openEstate's own doc for why it is
-	// handed over rather than copied on afterwards.
-	replicated, err := openEstate(ctx, EstateReplicated, replicatedPath, opts, &db.caps)
-	if err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	db.replicated.Store(replicated)
 	db.opened = opts
+	db.parts = &partitionSet{}
 	return db, nil
 }
 
 // OpenEstate opens ONE estate's file, alone.
 //
-// [Open] opens a NODE: two files, two migration sequences, and the pairing
-// between them. This opens one — which is the shape a COPY of a single estate
-// has, and a snapshot artefact and a backup member are both exactly that.
+// [OpenNode] opens a NODE, whose partitions it goes on to hold. This opens one
+// file of either estate by itself — which is the shape a COPY has, and a
+// snapshot artefact and a backup member are both exactly that.
 //
-// Opening such a copy with [Open] is not an error a caller sees: the migrator
-// applies the OTHER estate's whole sequence to it, creates that estate's
-// tables inside it, records them as applied, and opens a second file beside it
-// for the estate the caller thought it had. The artefact is then no longer a
-// copy of anything, and the only thing that ever notices is a table name the
+// Opening a partition's copy with [OpenNode] is not an error a caller sees:
+// the migrator applies the node estate's whole sequence to it, creates those
+// tables inside it and records them as applied. The artefact is then no longer
+// a copy of anything, and the only thing that ever notices is a table name the
 // two estates happen to share.
 func OpenEstate(ctx context.Context, estate Estate, path string, opts Options) (*DB, error) {
+	if !estate.Valid() {
+		return nil, fmt.Errorf("store: open %s: %q is not an estate; the estates are %v",
+			path, estate, Estates)
+	}
 	// NIL, so this handle probes for itself. It has no sibling to inherit
 	// from, and a zero MaxVariables here is not a missing log line but a
 	// writer silently degraded to one statement per row.
+	opts.pins, opts.cacheKiB = 0, 0
 	return openEstate(ctx, estate, path, opts, nil)
 }
 
-// ReplicatedPath is where the replicated estate lives for a node whose own
-// estate is at nodePath.
+// ReplicatedPath is where LAYOUT 0's one partition lives for a node whose own
+// estate is at nodePath — the file the replicated estate has always had.
 //
-// BESIDE IT, under a name of its own: the two files are one node's, taken
+// BESIDE IT, under a name of its own: the files are one node's, taken
 // together by a backup and lost together with the disk, so putting them in one
 // directory is what makes "back up the data directory" true. An explicit
-// setting wins outright.
+// setting — store.replicated_path — wins outright.
 //
-// An in-memory node estate gets an in-memory peer, which is a DIFFERENT
+// An in-memory node estate gets an in-memory partition, which is a DIFFERENT
 // anonymous database rather than the same one — exactly as two files are two
 // files.
 func ReplicatedPath(nodePath, configured string) string {
@@ -422,34 +488,32 @@ func ReplicatedPath(nodePath, configured string) string {
 	return filepath.Join(filepath.Dir(nodePath), replicatedFileName)
 }
 
-// replicatedFileName is the replicated estate's name beside the node's.
+// replicatedFileName is layout 0's partition file's name beside the node's.
 const replicatedFileName = "crewlet-replicated.db"
 
-// openEstate opens one estate: its lock, its pool, its own migration
-// sequence, and — for the node estate, which goes first — the capability
-// probe both share.
-// openEstate opens one estate's file.
+// openEstate opens one estate's file: its lock, its pool, its own migration
+// sequence, and the capability probe.
 //
 // inherited is the DRIVER-level probe a sibling estate already paid for, or
 // nil to probe this pool. It exists because the probe answers a question about
-// the DRIVER — one compiled-in library, in one process — so a node's second
-// estate would pay a binary search of prepared statements to hear the answer
-// its first one already has.
+// the DRIVER — one compiled-in library, in one process — so a node's
+// partitions would each pay a binary search of prepared statements to hear the
+// answer the node's own file already has, and a node holding hundreds of them
+// would pay it hundreds of times at every boot.
 //
 // IT IS A PARAMETER RATHER THAN AN ASSIGNMENT AFTER THE FACT, and that is the
 // whole of the fix it carries: the caps used to be copied onto the replicated
-// handle by [Open] AFTER openEstate had already written its `store_opened`
-// line, so every node boot logged `estate=replicated max_variables=0
+// handle AFTER openEstate had already written its `store_opened` line, so
+// every node boot logged `estate=replicated max_variables=0
 // vector_functions=false page_cache_kib=0` for a handle that in fact had all
 // three. Harmless while nothing read them — and then [InsertRows] landed,
 // which sizes every applier's statements from MaxVariables and reads 0 as
 // "one row per statement". An operator reading that line would conclude the
 // replicated estate writes the slow shape, and a standalone
-// [OpenEstate](EstateReplicated) handle genuinely DID, because nothing ever
-// assigned its caps at all.
+// [OpenEstate] handle genuinely DID, because nothing ever assigned its caps at
+// all.
 func openEstate(ctx context.Context, estate Estate, path string, opts Options,
 	inherited *Capabilities) (*DB, error) {
-	opts = opts.forEstate(estate)
 	// THE LOCK FIRST, before the native library and before the pool: both
 	// of those touch shared state on the way up, and taking them for a
 	// database this process turns out not to own is work done against a
@@ -467,19 +531,19 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options,
 		}
 	}()
 
-	pool, err := openPrepared(ctx, path, opts)
-	if err != nil {
-		return nil, err
-	}
-
-	db := &DB{sql: pool, path: path, lock: lock, estate: estate,
+	db := &DB{path: path, lock: lock, estate: estate,
 		busy: opts.busyTimeout(), writes: lock.queue()}
-	// THE PINS ARE THE REPLICATED ESTATE'S. A pinned connection is an
-	// applier's, and an applier writes there — so the node estate keeps
-	// its four readers and the pool that grows is the one the writers are
-	// actually on.
-	if estate == EstateReplicated {
-		db.pins.declared = opts.PinnedWriters
+	// THE CACHE TARGET BEFORE THE POOL, because the pool's first connection
+	// is made by the ping inside openPrepared, and it sizes its cache from
+	// this the moment it runs a statement.
+	db.cache.Store(opts.pageCache())
+	// DECLARED, and only a partition's handle declares any: a pinned
+	// connection is an apply loop's, and every apply loop writes a
+	// partition, so the node's own file keeps its readers and nothing
+	// else.
+	db.pins.declared = opts.pins
+	if db.sql, err = openPrepared(ctx, path, opts, &db.cache); err != nil {
+		return nil, err
 	}
 	// Straight to the field, not through [DB.LearnEmbeddingDim]: that one
 	// only ever raises from 0 because it guards a LIVE handle, and this is
@@ -488,7 +552,7 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options,
 	db.dim.Store(int64(opts.EmbeddingDim))
 	applied, err := db.migrate(ctx)
 	if err != nil {
-		_ = pool.Close()
+		_ = db.sql.Close()
 		return nil, err
 	}
 	if inherited != nil {
@@ -497,15 +561,15 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options,
 		// connection's setting and a FILE's geometry — so the sibling's
 		// number describes the sibling's file, not this one.
 		db.caps = *inherited
-		db.caps.PageCacheKiB = probePageCache(ctx, pool)
+		db.caps.PageCacheKiB = probePageCache(ctx, db.sql)
 	} else {
-		db.caps = probe(ctx, pool)
+		db.caps = probe(ctx, db.sql)
 	}
 
 	log.InfoContext(ctx, "store_opened",
 		"estate", string(estate),
 		"path", path,
-		"engine_version", engineVersion(ctx, pool),
+		"engine_version", engineVersion(ctx, db.sql),
 		"migrations_applied", len(applied),
 		"vector_functions", db.caps.VectorFunctions,
 		"vector_index", db.caps.VectorIndex,
@@ -517,6 +581,7 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options,
 		"gated", db.caps.Gated,
 		"max_variables", db.caps.MaxVariables,
 		"page_cache_kib", db.caps.PageCacheKiB,
+		"pool", opts.poolSize(),
 		"pinned_writers", db.pins.declared,
 	)
 	return db, nil
@@ -525,8 +590,8 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options,
 // openPrepared readies the native library and returns a live pool with this
 // package's bounds and session state applied.
 //
-// ONE PATH TO A CONNECTION, and that is the whole reason it exists. [Open] and
-// [Pending] both need a pool, and Pending used to build its own: it resolved
+// ONE PATH TO A CONNECTION, and that is the whole reason it exists. [OpenNode]
+// and [Pending] both need a pool, and Pending used to build its own: it resolved
 // the driver, called openPool and pinged — but never prepared the native
 // library, so the first connection `crewlet migrate` made went straight into
 // the driver's own loader, whose answer to a half-written cache is a PANIC
@@ -536,9 +601,14 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options,
 // a second code path drifting from the first.
 //
 // It does NOT lock. The claim on the file belongs to the caller, because the
-// two callers want opposite things from it: Open holds it for the life of the
+// callers want opposite things from it: an open holds it for the life of the
 // handle, and Pending takes it only across its read.
-func openPrepared(ctx context.Context, path string, opts Options) (*sql.DB, error) {
+//
+// cache is the page-cache target the pool's connections size themselves to,
+// owned by the handle this pool will be ([DB.cache]), or nil for a pool no
+// handle owns.
+func openPrepared(ctx context.Context, path string, opts Options,
+	cache *atomic.Int64) (*sql.DB, error) {
 	// BEFORE THE POOL, because the driver loads its native library on the
 	// first connection and PANICS if the shared cache it loads from is
 	// half-written. Preparing it here turns a process that dies on its
@@ -547,7 +617,13 @@ func openPrepared(ctx context.Context, path string, opts Options) (*sql.DB, erro
 	if err := prepareTursoLibrary(); err != nil {
 		return nil, err
 	}
-	pool, err := openPool(path, opts.busyTimeout(), opts.WrapDriver)
+	if cache == nil {
+		// A POOL NO HANDLE OWNS — a verify, a checkpoint, a pending read
+		// — lives for one operation and caches at the node's figure.
+		cache = &atomic.Int64{}
+		cache.Store(opts.pageCache())
+	}
+	pool, err := openPool(path, opts.busyTimeout(), opts.WrapDriver, cache)
 	if err != nil {
 		return nil, err
 	}
@@ -596,40 +672,55 @@ func engineVersion(ctx context.Context, pool *sql.DB) string {
 // THE LOCK LAST, after the pool: a peer that saw the lock free while this
 // process still had connections open would be the two-writer case the lock
 // exists to prevent, in the one window where it looked safe.
-func (d *DB) Close() error {
-	if d == nil || d.sql == nil {
-		return nil
-	}
-	// THE PEER FIRST, and its error is reported even when this one also
-	// fails: a node that closed half its estates and returned the other
-	// half's error would leave a lock held with nothing naming it.
-	var peer error
-	if peerDB := d.replicated.Swap(nil); peerDB != nil {
-		peer = peerDB.Close()
-	}
-	err := d.sql.Close()
-	d.lock.release()
-	return errors.Join(err, peer)
-}
-
-// Replicated is the handle on the estate a state log's appliers write.
 //
-// Nil on a handle that IS the replicated estate, which is what makes the
-// boundary checkable at a glance: there is no chain of peers, and a caller
-// holding one estate cannot reach back to the other's peer and lose track of
-// which file it is writing.
-func (d *DB) Replicated() *DB {
-	if d == nil {
-		return nil
+// A PARTITION'S HANDLE LEAVES ITS NODE'S SET FIRST, exactly as
+// [DB.ClosePartition] takes it out: a partition is held by its node, and one
+// closed behind the node's back would stay in the set as open — answered to
+// every lookup, answered again to an open of the same file, and never reopened
+// by the runtime, which asks the set what it has lost.
+func (d *DB) Close() error {
+	if d != nil && d.owner != nil {
+		d.owner.forget(d)
 	}
-	return d.replicated.Load()
+	return d.close()
 }
 
-// Estate names which of a node's two databases this handle is on.
+// close is [DB.Close] without the node's bookkeeping, for the node's own paths,
+// which have already taken the handle out of the set under its lock.
+func (d *DB) close() error {
+	if d == nil || d.sql == nil || !d.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+	// THE PARTITIONS FIRST, and every one's error is reported even when
+	// this one also fails: a node that closed some of its files and
+	// returned one error would leave a lock held with nothing naming it.
+	//
+	// The node is marked closed above BEFORE the set's lock is taken here,
+	// which is what [DB.stillOpen] relies on to refuse an open that would
+	// land after the set was emptied.
+	var errs []error
+	if d.parts != nil {
+		d.parts.mu.Lock()
+		open := d.parts.held()
+		d.parts.open.Store(&map[string]*DB{})
+		d.parts.mu.Unlock()
+		for _, name := range slices.Sorted(maps.Keys(open)) {
+			if err := open[name].close(); err != nil {
+				errs = append(errs, fmt.Errorf("store: close the partition %s: %w", name, err))
+			}
+		}
+	}
+	errs = append(errs, d.sql.Close())
+	d.lock.release()
+	return errors.Join(errs...)
+}
+
+// Estate names which kind of file this handle is on: the node's own, or one
+// of its partitions.
 //
 // The empty estate on a handle that is not open, which is the meaningful zero:
-// a caller asking which file it is holding while the peer is closed is asking
-// about no file. See [ErrNoEstate] for why nil is a state rather than a bug.
+// a caller asking which file it is holding while there is none is asking about
+// no file. See [ErrNoEstate] for why nil is a state rather than a bug.
 func (d *DB) Estate() Estate {
 	if d == nil {
 		return ""
@@ -637,7 +728,7 @@ func (d *DB) Estate() Estate {
 	return d.estate
 }
 
-// Caps reports what the live driver can do. Probed once at Open — the answers
+// Caps reports what the live driver can do. Probed once at open — the answers
 // are a property of the compiled-in driver version, so nothing re-measures
 // them per query.
 func (d *DB) Caps() Capabilities {
@@ -654,32 +745,6 @@ func (d *DB) Path() string {
 		return ""
 	}
 	return d.path
-}
-
-// ReplicatedPath is where the replicated estate lives, whichever estate this
-// handle is.
-//
-// A caller measuring what a snapshot will cost is asking about the replicated
-// file — the artefact is a copy of it alone — and it should not have to know
-// whether it is holding the node handle or the replicated one to ask.
-//
-// A CLOSED PEER IS STILL SOMEWHERE. The node handle's peer is nil between an
-// adoption's close and its reopen, and after a join that could not open it
-// again — and that second window is exactly when an operator reading the path
-// needs it, because it names the file they have to go and look at. So the
-// answer is the path the peer is opened AT, which [DB.ReopenReplicated] opens
-// again, never the empty string a handle with no peer used to give.
-func (d *DB) ReplicatedPath() string {
-	if d == nil {
-		return ""
-	}
-	if d.estate == EstateReplicated {
-		return d.path
-	}
-	if peer := d.Replicated(); peer != nil {
-		return peer.path
-	}
-	return ReplicatedPath(d.path, d.opened.ReplicatedPath)
 }
 
 // EmbeddingDim reports the configured vector width, or 0 when no embedding
@@ -719,8 +784,8 @@ func (d *DB) EmbeddingDim() int {
 func (d *DB) LearnEmbeddingDim(width int) {
 	// A HANDLE THAT IS NOT OPEN LEARNS NOTHING, and says so by doing nothing:
 	// this reports no error, so the only honest answer on a closed handle is
-	// the no-op. See [ErrNoEstate] — an apply in flight when an adoption nils
-	// the peer reaches here legitimately.
+	// the no-op. See [ErrNoEstate] — an apply in flight when an adoption
+	// closes its partition reaches here legitimately.
 	if d == nil {
 		return
 	}
@@ -728,13 +793,17 @@ func (d *DB) LearnEmbeddingDim(width int) {
 		return
 	}
 	d.dim.CompareAndSwap(0, int64(width))
-	// BOTH ESTATES LEARN IT. The width describes the vectors a node holds,
-	// and which FILE those rows are in is a question the schema answers
-	// rather than the width — so a handle that knew and a peer that did not
-	// would leave the dimension guard on for one and off for the other,
-	// which is the two-widths state this method exists to prevent.
-	if peer := d.Replicated(); peer != nil {
-		peer.LearnEmbeddingDim(width)
+	// EVERY FILE THE NODE HOLDS LEARNS IT. The width describes the vectors
+	// a node holds, and which FILE those rows are in is a question the
+	// schema answers rather than the width — so a handle that knew and a
+	// partition that did not would leave the dimension guard on for one and
+	// off for the other, which is the two-widths state this method exists
+	// to prevent. A partition opened later is opened at the node's width
+	// ([DB.partitionOptions]).
+	if d.parts != nil {
+		for _, held := range d.parts.held() {
+			held.LearnEmbeddingDim(width)
+		}
 	}
 }
 
@@ -758,7 +827,7 @@ func (d *DB) SQL() *sql.DB {
 // of its own options, and none of them is a pragma. A connector wrapping the
 // driver is the one place that runs on every connection, identically.
 func openPool(path string, busy time.Duration,
-	wrap func(driver.Driver) driver.Driver,
+	wrap func(driver.Driver) driver.Driver, cache *atomic.Int64,
 ) (*sql.DB, error) {
 	// sql.Open is lazy — it validates the driver name and nothing else — so
 	// this costs no I/O and exists only to reach the registered driver
@@ -772,7 +841,7 @@ func openPool(path string, busy time.Duration,
 	// THE BEGIN MODE GOES ON FIRST, so WrapDriver wraps IT rather than the
 	// other way round — see [beginModeDriver] for why a fault injector
 	// installed underneath would silently stop injecting.
-	drv = &beginModeDriver{inner: drv}
+	drv = &beginModeDriver{inner: drv, cache: cache}
 	if wrap != nil {
 		drv = wrap(drv)
 	}
@@ -809,21 +878,13 @@ func openPool(path string, busy time.Duration,
 			// deleting a skill cascades its history rather than
 			// orphaning it; this is what makes the declaration true.
 			"PRAGMA foreign_keys = ON",
-			// 32 MiB per connection, and it is for the B-TREE INTERIOR
-			// PAGES rather than for the scans. The hot table here carries
-			// twenty-odd indexes and the postings list is read by term,
-			// so what a cache this size buys is that a lookup's descent
-			// does not go to the file; the big sequential reads are the
-			// OS page cache's job, and sizing a per-connection cache for
-			// them would be N copies of it.
-			//
-			// Negative means KiB rather than pages, which is what makes
-			// the number mean the same thing whatever page size the file
-			// was created with. Read back at Open as
-			// [Capabilities.PageCacheKiB], because a driver that ignores
-			// this leaves every connection on its own default and the
-			// symptom appears nowhere near the cause.
-			"PRAGMA cache_size = -32768",
+			// NO cache_size HERE, although every connection has one: it
+			// is not a constant. A connection sizes its page cache to its
+			// handle's current target before its first statement and
+			// again whenever the target moves — see
+			// [beginModeConn.sizeCache] — because a partition's share is
+			// re-divided while its connections run. The figure, and what
+			// the cache is for, are [nodeCacheKiB]'s.
 			fmt.Sprintf("PRAGMA busy_timeout = %d", busy.Milliseconds()),
 		},
 	}), nil
@@ -902,7 +963,7 @@ func (d *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	// was and where it could never run: `budget(d.busy)` is an ARGUMENT,
 	// evaluated before the call it guards, so a nil handle dereferenced on the
 	// way in and the guard three frames down never saw it. See [ErrNoEstate].
-	if d == nil || d.sql == nil {
+	if !d.isOpen() {
 		return ErrNoEstate
 	}
 	return retryTransient(ctx, budget(d.busy), func() error { return d.tx(ctx, fn) })
@@ -1153,10 +1214,12 @@ func sleepFor(ctx context.Context, d time.Duration) {
 
 // tx runs one attempt.
 //
-// A NIL HANDLE IS AN ERROR, NOT A CRASH, and it is a state a caller can
-// legitimately be holding: [DB.Replicated] answers nil while an adoption has
-// the peer closed between its rename and its reopen, and again after [DB.Close].
-// Both are documented and deliberate — so the honest answer to a read issued
+// A HANDLE THAT IS NOT OPEN IS AN ERROR, NOT A CRASH, and it is a state a
+// caller can legitimately be holding: [DB.PartitionDB] answers none for a
+// partition that is not open, and a partition's database taken for one
+// operation is closed under its taker when an adoption closes it between its
+// rename and its reopen, or when [DB.Close] or [DB.ClosePartition] runs. Both
+// are documented and deliberate — so the honest answer to a read issued
 // through one is the same shape every other late read already gets ("this
 // estate is not open"), rather than a segfault that takes the process with it.
 // Measured: a maintenance tick racing a shutdown panicked the whole engine.
@@ -1172,7 +1235,7 @@ func (d *DB) tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	// feedback loop [Writer] exists to break, rebuilt one layer up. A
 	// writer waiting here holds a pooled connection instead, which is
 	// exactly what one polling the driver's busy handler already held.
-	conn, err := d.sql.Conn(ctx)
+	conn, err := d.conn(ctx)
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
 	}
@@ -1338,4 +1401,22 @@ func giveBack(conn *sql.Conn, retire func(), fit bool) {
 		retire()
 	}
 	_ = conn.Close()
+}
+
+// isOpen reports a handle a statement may be issued through: one that was
+// opened and has not been closed. See [ErrNoEstate] for why the other answer
+// is a state rather than a fault.
+func (d *DB) isOpen() bool { return d != nil && d.sql != nil && !d.closed.Load() }
+
+// conn draws one connection, and answers [ErrNoEstate] when the draw failed
+// because the handle was closed while the caller was on its way in — the race
+// [DB.closed] exists for, which the guard at the top of every entry point
+// cannot close by itself: the handle can be closed between that check and
+// this draw.
+func (d *DB) conn(ctx context.Context) (*sql.Conn, error) {
+	conn, err := d.sql.Conn(ctx)
+	if err != nil && d.closed.Load() {
+		return nil, fmt.Errorf("%w: %s was closed while this call was in flight", ErrNoEstate, d.path)
+	}
+	return conn, err
 }

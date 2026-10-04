@@ -1,7 +1,10 @@
 package statelog
 
 import (
+	"cmp"
 	"fmt"
+	"iter"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -562,6 +565,13 @@ func (s GenerationState) Valid() bool { return slices.Contains(GenerationStates(
 
 // EvictionReport is a tombstone as the operator surface renders it.
 type EvictionReport struct {
+	// Kind is which gate it is — an operator's `eviction` or the node's own
+	// `release` of the logs it left ([EvictionKind]) — because a surface
+	// says "evicted by" of the first and "left" of the second, and calling a
+	// node that left "evicted by itself" sends an operator after a gesture
+	// nobody made.
+	Kind EvictionKind `json:"kind"`
+
 	By string    `json:"by"`
 	At time.Time `json:"at"`
 
@@ -578,6 +588,11 @@ type EvictionReport struct {
 // SnapshotReport is one node's newest artefact, as the register holds it.
 type SnapshotReport struct {
 	NodeID string `json:"node_id"`
+
+	// Partition is the partition the artefact is a copy of, on a row of a
+	// divided layout — one row per partition the node reports — and empty
+	// on a layout-0 row, whose one partition is the whole estate.
+	Partition string `json:"partition,omitempty"`
 
 	// Domains is the artefact's position per domain. Empty when the node
 	// holds none, in which case Skip says why.
@@ -656,6 +671,16 @@ type DomainInputs struct {
 	// SnapshotSkip is this node's snapshot loop's own reason for taking
 	// none, empty when it is taking them.
 	SnapshotSkip SkipReason
+
+	// Holders is who holds this log's partition — the holder half of its
+	// counted set ([CountedSet]) — and Tombstones this log's own evictions
+	// and releases: with the register's rows naming the log, the three
+	// inputs the trim counts the log's nodes from, which the node block's
+	// counted mark is taken from ([ReportInputs.nodes]). Holders is nil
+	// where they could not be read — the mark then counts the rows alone,
+	// and the log's published floor says its counted set was unknown.
+	Holders    []Presence
+	Tombstones []Tombstone
 }
 
 // ReportInputs is everything the report is assembled from, already read.
@@ -683,7 +708,13 @@ type ReportInputs struct {
 	Register         []coord.NodePositions
 	RegisterReadable bool
 
-	Live       []Presence
+	// Live is every node holding a live presence lease, which the node
+	// block marks live.
+	Live []Presence
+
+	// Tombstones is one per node evicted or released on EVERY identity
+	// log, as of the latest — what the node block renders as evicted. Each
+	// log's own are its [DomainInputs.Tombstones].
 	Tombstones []Tombstone
 
 	Replica ReplicaReport
@@ -927,29 +958,39 @@ func (in ReportInputs) nodes() []NodeReport {
 	}
 
 	// THE COUNTED SET IS NOT RE-DERIVED HERE. It is the same function the
-	// trim itself calls, over the same three inputs, so the screen can
-	// never name a different fleet from the one the gate is waiting for.
-	var flat []NodePosition
-	for id, row := range reported {
-		flat = append(flat, NodePosition{NodeID: id, At: row.At})
-	}
+	// trim itself calls, LOG BY LOG over the same three inputs — the rows
+	// naming the log (a released one as released), its partition's holders
+	// and its own tombstones — and a node is marked counted where some log's
+	// set holds it, so the screen can never name a different fleet from the
+	// one the gate is waiting for. Its holders are the partition's, never
+	// the live nodes: a live node holding nothing is counted on no log, and
+	// marking it counted named a node the trim does not wait for. Folded
+	// into one set over every log's rows, it counted a node whose row had
+	// released every log it named, and one evicted on a log beside another
+	// it never ran.
 	counted := make(map[string]bool)
-	for _, n := range CountedSet(in.At, flat, in.Live, in.Tombstones) {
-		counted[n.NodeID] = true
-	}
-
-	ids := make([]string, 0, len(reported)+len(live)+len(tombs))
-	for id := range reported {
-		ids = append(ids, id)
-	}
-	for id := range live {
-		if _, seen := reported[id]; !seen {
-			ids = append(ids, id)
+	for _, d := range in.Domains {
+		var named []NodePosition
+		for _, row := range in.Register {
+			if at, runs := row.Domains[d.Domain]; runs {
+				named = append(named, NodePosition{NodeID: row.NodeID, At: row.At,
+					Released: at.State == coord.LogReleased})
+			}
+		}
+		for _, n := range CountedSet(in.At, named, d.Holders, d.Tombstones) {
+			counted[n.NodeID] = true
 		}
 	}
-	for id := range tombs {
-		if _, seen := reported[id]; !seen && !live[id] {
-			ids = append(ids, id)
+
+	named := map[string]bool{}
+	ids := make([]string, 0, len(reported)+len(live)+len(counted)+len(tombs))
+	for _, group := range []iter.Seq[string]{maps.Keys(reported), maps.Keys(live),
+		maps.Keys(counted), maps.Keys(tombs)} {
+		for id := range group {
+			if !named[id] {
+				named[id] = true
+				ids = append(ids, id)
+			}
 		}
 	}
 	slices.Sort(ids)
@@ -1011,6 +1052,7 @@ func (in ReportInputs) nodes() []NodeReport {
 		}
 		if t, ok := tombs[id]; ok {
 			row.Evicted = &EvictionReport{
+				Kind:        t.Kind,
 				By:          t.By,
 				At:          t.At.UTC(),
 				EffectiveAt: t.At.Add(EvictionFenceWindow).UTC(),
@@ -1028,37 +1070,65 @@ func (in ReportInputs) nodes() []NodeReport {
 	return out
 }
 
-// snapshots builds the register's view of who can donate.
+// snapshots builds the register's view of who can donate: a row per node under
+// layout 0, whose one artefact is the whole estate's, and a row per node and
+// partition it reports under any other — a snapshot is a copy of ONE
+// partition's file, so a node's artefacts of two partitions are two donations.
 func (in ReportInputs) snapshots() []SnapshotReport {
 	rows := make([]SnapshotReport, 0, len(in.Register))
 	for _, r := range in.Register {
-		row := SnapshotReport{
-			NodeID: r.NodeID,
-			Bytes:  r.SnapshotBytes,
-			Skip:   SkipReason(r.SnapshotSkip),
+		if r.Layout == 0 {
+			rows = append(rows, snapshotRow(r, "", coord.PartitionReport{
+				SnapshotBytes: r.SnapshotBytes, SnapshotSkip: r.SnapshotSkip}))
+			continue
 		}
-		for name, d := range r.Domains {
-			if d.SnapshotSeq == 0 {
-				continue
-			}
-			if row.Domains == nil {
-				row.Domains = make(map[string]uint64, len(r.Domains))
-			}
-			row.Domains[name] = d.SnapshotSeq
-			if d.SnapshotAt.After(row.At) {
-				row.At = d.SnapshotAt.UTC()
-			}
+		// A NODE WITH NO PARTITION TO REPORT still gets a row, for the
+		// reason below: a node nobody hears from is an answer too.
+		if len(r.Partitions) == 0 {
+			rows = append(rows, snapshotRow(r, "", coord.PartitionReport{}))
 		}
-		// A NODE WITH NO ARTEFACT AND NO REASON still gets a row. The
-		// absence is the operator's answer to "why did the join fail",
-		// and dropping the row would render it as a node that was
-		// never asked.
-		rows = append(rows, row)
+		for _, name := range slices.Sorted(maps.Keys(r.Partitions)) {
+			rows = append(rows, snapshotRow(r, name, r.Partitions[name]))
+		}
 	}
 	slices.SortFunc(rows, func(a, b SnapshotReport) int {
-		return strings.Compare(a.NodeID, b.NodeID)
+		return cmp.Or(strings.Compare(a.NodeID, b.NodeID), strings.Compare(a.Partition, b.Partition))
 	})
 	return rows
+}
+
+// snapshotRow is one node's artefact of one partition — partition empty for
+// layout 0's whole estate — as the register row reports it.
+func snapshotRow(r coord.NodePositions, partition string, report coord.PartitionReport) SnapshotReport {
+	row := SnapshotReport{
+		NodeID:    r.NodeID,
+		Partition: partition,
+		Bytes:     report.SnapshotBytes,
+		Skip:      SkipReason(report.SnapshotSkip),
+	}
+	for name, d := range r.Domains {
+		if d.SnapshotSeq == 0 || (partition != "" && !logOfPartition(name, partition)) {
+			continue
+		}
+		if row.Domains == nil {
+			row.Domains = make(map[string]uint64, len(r.Domains))
+		}
+		row.Domains[name] = d.SnapshotSeq
+		if d.SnapshotAt.After(row.At) {
+			row.At = d.SnapshotAt.UTC()
+		}
+	}
+	// A NODE WITH NO ARTEFACT AND NO REASON still gets a row. The absence
+	// is the operator's answer to "why did the join fail", and dropping the
+	// row would render it as a node that was never asked.
+	return row
+}
+
+// logOfPartition reports whether the log keyed key is a log of the named
+// partition — `tracker@tracker.007` of `tracker.007`.
+func logOfPartition(key, partition string) bool {
+	_, of, ok := strings.Cut(key, "@")
+	return ok && of == partition
 }
 
 // alarms evaluates this node's conditions once.

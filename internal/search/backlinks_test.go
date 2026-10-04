@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // Page ids in the uuid shape the link grammar reads.
@@ -32,7 +33,7 @@ func linkedFrom(t *testing.T, x *search.Indexer, id string) search.Backlinks {
 func TestLinkedFromListsThePagesAndTasksThatCarryTheAddress(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db).WithLinks(pages.Links)
+	x := search.NewIndexer(db, storetest.EstateOf(db).Reader()).WithLinks(pages.Links)
 
 	page(t, db, runbookID, "ENG", "Provisioner runbook",
 		"Permalink: "+pages.AddressPrefix+runbookID, 1)
@@ -63,7 +64,7 @@ func TestLinkedFromListsThePagesAndTasksThatCarryTheAddress(t *testing.T) {
 func TestAnIndexStillBuildingRefusesRatherThanAnsweringEmpty(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db).WithLinks(pages.Links)
+	x := search.NewIndexer(db, storetest.EstateOf(db).Reader()).WithLinks(pages.Links)
 
 	page(t, db, runbookID, "ENG", "Provisioner runbook", "The runbook.", 1)
 	page(t, db, oncallID, "ENG", "Scheduler on-call", "See /pages/"+runbookID, 1)
@@ -84,7 +85,7 @@ func TestAnIndexStillBuildingRefusesRatherThanAnsweringEmpty(t *testing.T) {
 func TestABacklinkLeavesWithTheEditOrTheSourceThatCarriedIt(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db).WithLinks(pages.Links)
+	x := search.NewIndexer(db, storetest.EstateOf(db).Reader()).WithLinks(pages.Links)
 
 	page(t, db, runbookID, "ENG", "Provisioner runbook", "The runbook.", 1)
 	page(t, db, oncallID, "ENG", "Scheduler on-call", "See /pages/"+runbookID, 1)
@@ -95,7 +96,7 @@ func TestABacklinkLeavesWithTheEditOrTheSourceThatCarriedIt(t *testing.T) {
 	}
 
 	page(t, db, oncallID, "ENG", "Scheduler on-call", "No longer links anywhere.", 2)
-	if _, err := db.Replicated().SQL().ExecContext(t.Context(),
+	if _, err := storetest.Partition(t, storetest.EstateOf(db)).SQL().ExecContext(t.Context(),
 		`UPDATE pages_heads SET status = 'trashed' WHERE id = ?`, postmortemID); err != nil {
 		t.Fatal(err)
 	}
@@ -118,12 +119,12 @@ func TestARowIndexedBeforeTheBacklinksIsRederived(t *testing.T) {
 	// existing row at.
 	page(t, db, runbookID, "ENG", "Provisioner runbook", "The runbook.", 1)
 	page(t, db, oncallID, "ENG", "Scheduler on-call", "See /pages/"+runbookID, 1)
-	indexAll(t, search.NewIndexer(db))
+	indexAll(t, search.NewIndexer(db, storetest.EstateOf(db).Reader()))
 	if _, err := db.SQL().ExecContext(t.Context(), `UPDATE kb_docs SET derivation = 0`); err != nil {
 		t.Fatal(err)
 	}
 
-	x := search.NewIndexer(db).WithLinks(pages.Links)
+	x := search.NewIndexer(db, storetest.EstateOf(db).Reader()).WithLinks(pages.Links)
 	indexAll(t, x)
 	if got := linkedFrom(t, x, runbookID); got.PagesTotal != 1 {
 		t.Errorf("after an upgrade's first laps: %+v, want the on-call page — the "+
@@ -137,13 +138,13 @@ func TestARowIndexedBeforeTheBacklinksIsRederived(t *testing.T) {
 func TestATaskLinkedByRelationOrByItsDescriptionIsLinkedFrom(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db).WithLinks(pages.Links)
+	x := search.NewIndexer(db, storetest.EstateOf(db).Reader()).WithLinks(pages.Links)
 
 	page(t, db, runbookID, "ENG", "Provisioner runbook", "The runbook.", 1)
 	item(t, db, "ENG-9", "ENG", "Flaky e2e", "No address here.", 1)
 	item(t, db, "ENG-10", "ENG", "Retry PXE boot", "See /pages/"+runbookID, 1)
 	for _, id := range []string{"ENG-9", "ENG-10"} {
-		if _, err := db.Replicated().SQL().ExecContext(t.Context(), `
+		if _, err := storetest.Partition(t, storetest.EstateOf(db)).SQL().ExecContext(t.Context(), `
 			INSERT INTO tracker_relations (task_id, other_id, kind) VALUES (?, ?, 'page')`,
 			id, runbookID); err != nil {
 			t.Fatal(err)

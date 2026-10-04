@@ -212,6 +212,13 @@ type NodePosition struct {
 	SnapshotSeq uint64
 	HasSnapshot bool
 
+	// RecordVersion is the highest record version the node's build reads on
+	// this log, zero when its row does not say — a build older than the
+	// advertisement, or a node counted from its presence before its first
+	// report. The trim reads none of it; a writer publishing a kind older
+	// builds cannot defer reads it across the same counted set ([Readers]).
+	RecordVersion int
+
 	// SnapshotGeneration is the generation that snapshot's sequences
 	// belong to, which is a SEPARATE number from the one above: a node
 	// reports its committed position every ten seconds and takes a
@@ -223,6 +230,14 @@ type NodePosition struct {
 
 	// At is when it last reported.
 	At time.Time
+
+	// Released reports that the node's row names this log as one it has LEFT
+	// (coord.LogReleased): its release is on the log and applied, so every
+	// record it could still publish there is gated and its position will
+	// never move again. [CountedSet] counts it nowhere — not at this
+	// position, and not at zero as the partition's holder it may still be
+	// named until the map lets it go.
+	Released bool
 }
 
 // Hold is one live pin on the log's tail.
@@ -252,8 +267,15 @@ type TrimInputs struct {
 	// reported no position yet.
 	Counted []NodePosition
 
-	// CountedReadable reports whether the register could be listed at all.
+	// CountedReadable reports whether the counted set could be read at all:
+	// the register listed, and who holds the log's partition known.
 	CountedReadable bool
+
+	// CountedUnknown is WHY it could not, which a blocked term names: empty
+	// is the register not listing, which is the cause this term always had,
+	// and a caller whose register listed says what else was unknown — an
+	// estate map too stale to decide from, say.
+	CountedUnknown string
 
 	// Holds are the live pins. One older than the stale bound is ignored,
 	// because a crashed adopter must not pin the log for ever.
@@ -302,8 +324,8 @@ func (in TrimInputs) Terms() []Term {
 // applied is the lowest committed position over the counted set.
 func (in TrimInputs) applied() Term {
 	if !in.CountedReadable {
-		return Term{Name: TermApplied, Detail: "the positions register could not " +
-			"be listed, so which nodes are counted and where they are is unknown"}
+		return Term{Name: TermApplied, Detail: in.countedUnknown(
+			"which nodes are counted and where they are is unknown")}
 	}
 	if len(in.Counted) == 0 {
 		return Term{Name: TermApplied, Detail: "the fleet counts no nodes, which " +
@@ -334,6 +356,16 @@ func (in TrimInputs) applied() Term {
 	return Term{Name: TermApplied, Seq: lowest, Known: true, Detail: fmt.Sprintf(
 		"%s is the furthest behind of %d counted node(s), at %d",
 		who, len(in.Counted), lowest)}
+}
+
+// countedUnknown is a term's detail when the counted set could not be read:
+// why, and what that leaves unknown.
+func (in TrimInputs) countedUnknown(unknown string) string {
+	why := in.CountedUnknown
+	if why == "" {
+		why = "the positions register could not be listed"
+	}
+	return why + ", so " + unknown
 }
 
 // minHold is the lowest live pin.
@@ -398,8 +430,8 @@ func (in TrimInputs) backup() Term {
 // may not pass one past it.
 func (in TrimInputs) snapshotFloor() Term {
 	if !in.CountedReadable {
-		return Term{Name: TermSnapshotFloor, Detail: "the positions register could " +
-			"not be listed, so how many nodes hold a snapshot is unknown"}
+		return Term{Name: TermSnapshotFloor, Detail: in.countedUnknown(
+			"how many nodes hold a snapshot is unknown")}
 	}
 	// A SOLO FLEET IS SATISFIED BY CONSTRUCTION: the snapshot loop does
 	// not run there at all, and a single node's recovery artefact is a

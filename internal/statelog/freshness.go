@@ -75,6 +75,14 @@ func (f Freshness) Query(scope ScopeSet, set bool) Query {
 	}
 }
 
+// Resolved is the framework read this ask resolves to over one object named by
+// reference, whose scope only its rows can answer — see [Query.Resolve].
+func (f Freshness) Resolved(resolve Resolver, set bool) Query {
+	q := f.Query(ScopeSet{}, set)
+	q.Resolve = resolve
+	return q
+}
+
 // Bounded reports whether this ask carries a staleness bound in either unit.
 func (f Freshness) Bounded() bool { return f.MaxLag > 0 || f.MaxLagSeq > 0 }
 

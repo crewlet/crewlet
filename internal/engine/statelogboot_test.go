@@ -111,7 +111,7 @@ func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 	if !ok {
 		t.Fatalf("the stream is %T", backends.Queue)
 	}
-	spec := tracker.Domain{}.Stream()
+	spec := statelog.EstateStream(tracker.Domain{})
 	if err := q.EnsureDomainStream(t.Context(), jetstream.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects,
 		// AT THE FLOOR A BOOT SIZES A LOG TO, not at the ceiling the

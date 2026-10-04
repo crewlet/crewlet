@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -27,6 +28,17 @@ func (stubSearcher) Backend() string                             { return "stub"
 func (stubSearcher) CanSearch(*org.Role, *org.Organization) bool { return false }
 func (stubSearcher) Search(context.Context, knowledge.Query) knowledge.Result {
 	return knowledge.Result{}
+}
+
+// coveredSearcher is a knowledge backend that can search and answers with a
+// fixed coverage of the estate's partitions, for the cases about what a
+// search did not reach.
+type coveredSearcher struct{ coverage statelog.Coverage }
+
+func (coveredSearcher) Backend() string                             { return "native" }
+func (coveredSearcher) CanSearch(*org.Role, *org.Organization) bool { return true }
+func (c coveredSearcher) Search(context.Context, knowledge.Query) knowledge.Result {
+	return knowledge.Result{Outcome: knowledge.Outcome{Partitions: c.coverage}}
 }
 
 // A TURN IS ITS OWN QUESTION, and it is not a slice of the trace.
@@ -391,6 +403,37 @@ func TestAHalfCursorIsRefused(t *testing.T) {
 	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 	if _, err := r.Answer(t.Context(), "phases", map[string]any{"before_id": "x"}, ""); err == nil {
 		t.Fatal("a before_id with no before_time was accepted")
+	}
+}
+
+// A KNOWLEDGE SEARCH THAT DID NOT REACH EVERY PARTITION SAYS SO, beside the
+// hits rather than as a shorter list, under `partitions` — `coverage` is how
+// the buckets were divided across nodes, a different question — and a backend
+// that states no partitions (Confluence: one wiki) sends none, rather than one
+// claiming the search addressed nothing.
+func TestAKnowledgeSearchSaysWhatItDidNotReach(t *testing.T) {
+	t.Parallel()
+	company := func() *config.Company { return &config.Company{Name: "Acme"} }
+	missing := statelog.Coverage{
+		Addressed: 2,
+		Answered:  []string{"pages.000"},
+		Missing:   []statelog.MissingPartition{{Partition: "pages.001", Reason: statelog.MissingBehind}},
+	}
+	got := asMap(t, answer(t, queries.Sources{
+		Knowledge: func() knowledge.Searcher { return coveredSearcher{coverage: missing} },
+		Company:   company,
+	}, "knowledge", map[string]any{"q": "billing"}))
+	cov, _ := got["partitions"].(map[string]any)
+	if gone, _ := cov["missing"].([]any); len(gone) != 1 {
+		t.Errorf("partitions = %#v, want the partition that did not answer", got["partitions"])
+	}
+
+	unstated := asMap(t, answer(t, queries.Sources{
+		Knowledge: func() knowledge.Searcher { return coveredSearcher{} },
+		Company:   company,
+	}, "knowledge", map[string]any{"q": "billing"}))
+	if cov, present := unstated["partitions"]; present {
+		t.Errorf("a search stating no partitions sent %#v", cov)
 	}
 }
 

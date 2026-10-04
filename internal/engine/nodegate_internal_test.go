@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // AN EVICTION STOPS EVERY IDENTITY-CLAIMING LOG COUNTING THE NODE ONCE ITS
@@ -98,24 +99,32 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 		point := coord.BackupPoint{Owner: self, At: at, Verified: true,
 			Streams: map[string]coord.Position{}}
 		for _, running := range identity {
-			stream := running.domain.Stream().Name
+			stream := running.spec.Name
 			point.Streams[stream] = coord.Position{Stream: stream,
 				Generation: running.runner.Committed().Generation,
 				Seq:        targets[running.domain.Name()]}
 		}
 		shared.backups = []coord.BackupPoint{point}
 		for _, running := range identity {
-			if err := r.domain(t.Context(), running.domain.Name(), shared); err != nil {
+			if err := r.domain(t.Context(), running, shared); err != nil {
 				t.Fatalf("the tick on %s: %v", running.domain.Name(), err)
 			}
 		}
 	}
-	counted := func(running *runningDomain, at time.Time) bool {
+	counted := func(running *runningLog, at time.Time) bool {
 		t.Helper()
 		gen := running.runner.Committed().Generation
 		tombs, read := r.tombstones(t.Context(), running, gen)
 		if !read {
 			t.Fatalf("%s's evictions could not be read", running.domain.Name())
+		}
+		for _, tomb := range tombs {
+			// THE GATE IT IS, off the log's own row: the report renders a
+			// release as a node that left, never as one somebody evicted.
+			if tomb.NodeID == away && tomb.Kind != statelog.EvictionKindEviction {
+				t.Fatalf("%s's tombstone for %s reads as a %q, want the eviction "+
+					"it is", running.domain.Name(), away, tomb.Kind)
+			}
 		}
 		set := statelog.CountedSet(at, reportedPositions(positions(), running.domain.Name()),
 			nil, tombs)
@@ -226,7 +235,7 @@ func TestAReadmissionWritesTheInverseCommitToEveryLog(t *testing.T) {
 		if d.Domain != name || d.Outcome != statelog.OutcomeApplied {
 			t.Fatalf("the readmission's answer for %s is %+v, want applied", name, d)
 		}
-		rows, err := running.domain.(evictionLister).Evictions(t.Context(), back.Store)
+		rows, err := running.domain.(evictionLister).Evictions(t.Context(), storetest.EstateOf(back.Store).Reader())
 		if err != nil {
 			t.Fatalf("read %s's evictions: %v", name, err)
 		}
@@ -251,7 +260,7 @@ func TestAnEvictionOfALiveNodeIsRefusedBeforeAnyLogIsWritten(t *testing.T) {
 	gate := e.native.Load().gate
 	identity := identityLogs(t, s)
 	const live = "node-live"
-	if _, err := back.Coord.TryAcquire(t.Context(), coord.NodeResource(live),
+	if _, _, err := back.Coord.TryAcquire(t.Context(), coord.NodeResource(live),
 		coord.AcquireOptions{Owner: live, TTL: time.Minute}); err != nil {
 		t.Fatalf("hold %s's presence lease: %v", live, err)
 	}
@@ -286,11 +295,11 @@ func TestAnEvictionOfALiveNodeIsRefusedBeforeAnyLogIsWritten(t *testing.T) {
 
 // identityLogs is every identity-claiming domain this node runs, in the
 // register's own order.
-func identityLogs(t *testing.T, s *stateLog) []*runningDomain {
+func identityLogs(t *testing.T, s *stateLog) []*runningLog {
 	t.Helper()
-	var out []*runningDomain
-	for _, name := range s.order {
-		if running := s.domains[name]; running.domain.ClaimsIdentity() {
+	var out []*runningLog
+	for _, running := range s.running() {
+		if running.domain.ClaimsIdentity() {
 			out = append(out, running)
 		}
 	}
@@ -337,18 +346,24 @@ func TestTheReportShowsANodeEvictedOnlyOnceEveryLogHoldsIt(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
 	tomb := func(node string, offset time.Duration) statelog.Tombstone {
-		return statelog.Tombstone{NodeID: node, At: at.Add(offset), By: "operator"}
+		return statelog.Tombstone{NodeID: node, At: at.Add(offset), By: "operator",
+			Kind: statelog.EvictionKindEviction}
 	}
+	// THE LATEST IS THE NODE'S, whole: a node that released the one log after
+	// an operator evicted it from the other left last, and says so.
+	released := tomb("both", 30*time.Second)
+	released.By, released.Kind = "both", statelog.EvictionKindRelease
 	got := fleetTombstones([][]statelog.Tombstone{
 		{tomb("both", 0), tomb("tracker-only", 0), tomb("both", 0)},
-		{tomb("both", 30*time.Second), tomb("pages-only", 0)},
+		{released, tomb("pages-only", 0)},
 	})
 	if len(got) != 1 || got[0].NodeID != "both" {
 		t.Fatalf("tombstones = %+v, want only the node every log holds", got)
 	}
-	if !got[0].At.Equal(at.Add(30 * time.Second)) {
-		t.Fatalf("the tombstone is dated %s, want the latest of the logs' %s",
-			got[0].At, at.Add(30*time.Second))
+	if !got[0].At.Equal(at.Add(30*time.Second)) || got[0].Kind != statelog.EvictionKindRelease ||
+		got[0].By != "both" {
+		t.Fatalf("the tombstone is %+v, want the latest of the logs' — the release "+
+			"at %s, by the node itself", got[0], at.Add(30*time.Second))
 	}
 	if got := fleetTombstones(nil); got != nil {
 		t.Fatalf("no log at all produced tombstones %+v", got)

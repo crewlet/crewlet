@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // The three modes, the query's own vector, and what an answer says it did.
@@ -530,7 +531,7 @@ func TestASearchRanksByMeaningOverWhatTheDutyEmbedded(t *testing.T) {
 		t.Fatalf("tick: %v", err)
 	}
 	h.drain()
-	x := search.NewIndexerOver(h.db, []search.LexicalSource{search.TaskSource{}})
+	x := search.NewIndexerOver(h.db, storetest.EstateOf(h.db).Reader(), []search.LexicalSource{search.TaskSource{}})
 	indexAll(t, x)
 
 	fan := &search.FanOut{Self: "n1", Local: search.NodeScanner{Index: x},

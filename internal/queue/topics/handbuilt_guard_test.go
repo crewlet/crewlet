@@ -12,6 +12,7 @@ import (
 	"go/parser"
 	"go/token"
 
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -50,6 +51,17 @@ import (
 // English hyphenation and "agent-only field set on a human seat" is a
 // sentence, not a consumer group.
 //
+// A third kind is a ROOT: the committed head of a partitioned log's name,
+// which a LAYOUT NUMBER continues — crewlet.l1.tracker.007.tracker and
+// CREWLET_L1_TRACKER_007_TRACKER begin with the roots "crewlet.l" and
+// "CREWLET_L" followed by a digit, not by a separator. Neither ordinary rule
+// can see that: a digit is no subject boundary, and a stream name is not a
+// consumer group's shape. So the grammar declares a root as a constant whose
+// NAME ends in Root, and a root is flagged wherever a digit, a formatting
+// verb (`%`) or the end of the literal follows it — which is
+// what tells "crewlet.l1." and "crewlet.l%d." from "crewlet.log", and
+// "CREWLET_L1_" from the environment variable CREWLET_LOG_LEVEL.
+//
 // # Coverage boundary
 //
 // It sees a subject that is WRITTEN as a literal, in a package the glob
@@ -81,26 +93,53 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 	markers := subjectMarkers(t, filepath.Join(root, "internal", "queue", "topics"))
 
 	// A guard asserting an ABSENCE passes identically when the thing is
-	// absent and when the guard has stopped working. These four assertions
-	// are what tell those apart, and the last is the strongest: it runs the
-	// matcher on strings whose verdict is known, so a matcher that has gone
-	// inert fails here rather than certifying a clean tree.
+	// absent and when the guard has stopped working. These assertions are
+	// what tell those apart, and the controls are the strongest: they run
+	// the matcher on strings whose verdict is known, so a matcher that has
+	// gone inert fails here rather than certifying a clean tree.
 	for _, want := range []string{
 		"crewlet.agent", "crewlet.events", "crewlet.notifications",
 		"crewlet.config", "dlq.", ".inbox", ".control", "agent-",
 	} {
-		if !markers[want] {
+		if !markers.plain[want] {
 			t.Errorf("marker %q was not derived from topics.go's constants; the "+
 				"derivation no longer recognises the grammar it is meant to cover", want)
+		}
+	}
+	for _, want := range []string{"crewlet.l", "CREWLET_L"} {
+		if !markers.roots[want] {
+			t.Errorf("root %q was not derived from the package's …Root constants; a "+
+				"partitioned log's name written by hand would no longer be found", want)
 		}
 	}
 	for _, positive := range []string{
 		"crewlet.agent.alice.inbox", "crewlet.agent.", "crewlet.events.>",
 		"crewlet.notifications.inbound", "crewlet.config.>", "dlq.x.y",
 		"agent-", "agent-alice", "agent-alice-control",
+		// The partitioned logs: whole names, a wildcard, the format
+		// strings a hand-built name would come from, and a bare root
+		// as the base of a concatenation.
+		"crewlet.l1.tracker.007.tracker", "crewlet.l12.pages.003.vectors.>",
+		"crewlet.l%d.%s.%03d.%s", "crewlet.l",
+		"CREWLET_L1_TRACKER_007_TRACKER", "CREWLET_L%d_%s_%03d_%s", "CREWLET_L",
 	} {
 		if _, hit := violation(markers, positive); !hit {
 			t.Errorf("control: %q is a hand-built name and the matcher did not flag it", positive)
+		}
+	}
+	// AND WHAT THE BUILDERS THEMSELVES PRODUCE, so a grammar change that
+	// moved a name out from under its root fails here rather than leaving
+	// every hand-written copy of the new shape unseen.
+	for _, space := range []string{"tracker", "pages", "company"} {
+		for _, built := range []string{
+			topics.PartitionLogStream(1, space, 7, "vectors"),
+			topics.PartitionLogPrefix(1, space, 7, "vectors"),
+			topics.PartitionLogWildcard(3, space, 0, "tracker"),
+		} {
+			if _, hit := violation(markers, built); !hit {
+				t.Errorf("control: the builder's own output %q is not flagged when "+
+					"written as a literal", built)
+			}
 		}
 	}
 	for _, negative := range []string{
@@ -116,6 +155,12 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.agent_handle=",
 		"crewlet.agent_handle",
 		"crewlet.events_seen",
+		// Names that begin like a root and are not partitioned logs:
+		// the engine's own environment variables, and a word.
+		"CREWLET_LOG_LEVEL",
+		"CREWLET_LOG_FILE",
+		"crewlet.log",
+		"crewlet.links",
 	} {
 		if marker, hit := violation(markers, negative); hit {
 			t.Errorf("control: %q is not a subject but the matcher flagged it on %q",
@@ -213,7 +258,7 @@ type walkResult struct {
 // A support package is recognised by its own directory name, so a nested
 // package underneath one would read as production. None exists; if one
 // appears, this is where it has to be taught.
-func walkForLiterals(t *testing.T, root string, markers map[string]bool, tests bool) walkResult {
+func walkForLiterals(t *testing.T, root string, markers markerSet, tests bool) walkResult {
 	t.Helper()
 
 	topicsDir := filepath.Join(root, "internal", "queue", "topics")
@@ -294,10 +339,22 @@ func walkForLiterals(t *testing.T, root string, markers map[string]bool, tests b
 // it parsed files and found literals rather than trusting its own reach.
 func isSupportPackage(dir string) bool { return strings.HasSuffix(dir, "test") }
 
+// markerSet is what the guard looks for, by the rule each is matched under:
+// plain markers by [containsSubject] or by shape, roots by [containsRoot].
+type markerSet struct {
+	plain map[string]bool
+	roots map[string]bool
+}
+
 // violation reports whether a string literal names a subject or a consumer
 // group, and on which marker.
-func violation(markers map[string]bool, value string) (string, bool) {
-	for marker := range markers {
+func violation(markers markerSet, value string) (string, bool) {
+	for root := range markers.roots {
+		if containsRoot(value, root) {
+			return root, true
+		}
+	}
+	for marker := range markers.plain {
 		if strings.Contains(marker, ".") {
 			if containsSubject(value, marker) {
 				return marker, true
@@ -355,6 +412,31 @@ func containsSubject(value, marker string) bool {
 	}
 }
 
+// containsRoot reports a root appearing where a partitioned log's name could
+// continue it: before a digit (the layout number), a `%` (a formatting verb
+// standing in for it) or the end of the value (the base of a concatenation).
+//
+// A root has no separator of its own to anchor on — "crewlet.l" is followed
+// by the layout's digits — so it is bounded by what may FOLLOW it instead,
+// and exactly those three are what the grammar can put there. That is what
+// keeps "crewlet.log" and CREWLET_LOG_LEVEL unflagged.
+func containsRoot(value, root string) bool {
+	for at := 0; ; {
+		i := strings.Index(value[at:], root)
+		if i < 0 {
+			return false
+		}
+		end := at + i + len(root)
+		if end == len(value) {
+			return true
+		}
+		if c := value[end]; (c >= '0' && c <= '9') || c == '%' {
+			return true
+		}
+		at = end
+	}
+}
+
 // isWireName reports whether every character could appear in a consumer group
 // the grammar mints: a handle is ^[a-z0-9][a-z0-9-]*$ and the group affixes
 // add nothing else.
@@ -377,18 +459,26 @@ func isWireName(s string) bool {
 //
 // A constant's value is reduced to the prefix it COMMITS to, with any
 // trailing wildcard stripped, so a hand-written wildcard over a domain is
-// caught as readily as a hand-written leaf. See [markersFor].
-func subjectMarkers(t *testing.T, dir string) map[string]bool {
+// caught as readily as a hand-written leaf. See [markersFor]. A constant
+// whose NAME ends in Root is the head of a partitioned log's name and is
+// matched as a root instead — see [containsRoot] and partition.go.
+func subjectMarkers(t *testing.T, dir string) markerSet {
 	t.Helper()
 
 	values := constStrings(t, dir)
 	if len(values) == 0 {
 		t.Fatal("derived no constants from the topics package; the guard has nothing to look for")
 	}
-	markers := map[string]bool{}
-	for _, v := range values {
+	markers := markerSet{plain: map[string]bool{}, roots: map[string]bool{}}
+	for name, v := range values {
+		if strings.HasSuffix(name, "Root") {
+			if v != "" {
+				markers.roots[v] = true
+			}
+			continue
+		}
 		for _, m := range markersFor(v) {
-			markers[m] = true
+			markers.plain[m] = true
 		}
 	}
 	return markers

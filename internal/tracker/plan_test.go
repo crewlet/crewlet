@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // EVERY INDEX SERVES A REGISTERED QUERY, AND EVERY REGISTERED QUERY IS SERVED.
@@ -270,19 +271,15 @@ func nullableAt(i, n int) any {
 // for every query and this test would fail on a schema with no faults. The
 // fixture is small and its shape is what matters: enough distinct values that
 // a seek is cheaper than a scan, and ANALYZE run so the planner knows it.
-func planStore(t *testing.T) *store.DB {
+func planStore(t *testing.T) store.PartitionHandle {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
+		if err := dbNode.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
 		}
 	})
-	w, err := db.Replicated().Writer(t.Context())
+	w, err := db.Writer(t.Context())
 	if err != nil {
 		t.Fatalf("take the writer: %v", err)
 	}
@@ -369,10 +366,10 @@ func planStore(t *testing.T) *store.DB {
 	return db
 }
 
-func explain(t *testing.T, db *store.DB, statement string, args []any) []string {
+func explain(t *testing.T, db store.PartitionHandle, statement string, args []any) []string {
 	t.Helper()
 	var plan []string
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(),
 			"EXPLAIN QUERY PLAN "+statement, args...)
 		if err != nil {
@@ -427,10 +424,10 @@ func scansHeap(plan []string, table string) bool {
 }
 
 // indexesOn is every index the schema declares on these tables.
-func indexesOn(t *testing.T, db *store.DB, tables []string) []string {
+func indexesOn(t *testing.T, db store.PartitionHandle, tables []string) []string {
 	t.Helper()
 	var found []string
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(),
 			`SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'
 			 AND sql IS NOT NULL ORDER BY name`)

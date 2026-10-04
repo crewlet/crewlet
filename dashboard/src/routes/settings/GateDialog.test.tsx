@@ -13,6 +13,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { engineFile } from "~/test/engineFiles.ts";
+import { GATE_REQUEST_TIMEOUT_MS } from "~/contract/gate.ts";
 import type { RetentionGateResult } from "~/protocol/index.ts";
 import { finishable, GateDialog, GateOutcome } from "./GateDialog.tsx";
 import type { GateGesture } from "./GateDialog.tsx";
@@ -120,6 +121,25 @@ test("an unvouched log says this node cannot tell and sends the gesture elsewher
   expect(screen.queryByText(/Finish it under the same operation id: a log/)).toBeNull();
   expect(screen.queryByText(/Finish this gesture sends it again/)).toBeNull();
   expect(screen.queryByText(/may or may not be on the log/)).toBeNull();
+});
+
+// A LOG ANOTHER NODE WROTE NAMES IT: the node asked does not serve that log's
+// partition, so a node that does wrote the record for it — and an unknown that
+// node could not vouch for is that node's, never "this node", which wrote
+// nothing there. Every holder that answered was asked already, so the remedy
+// is the same gesture again rather than another node's dashboard.
+test("a log another node wrote names that node, and its unvouched unknown is its own", () => {
+  render(<GateOutcome result={answer("written_elsewhere")} evict />);
+  expect(screen.getByText(/CREWLET_PAGES_LOG 4410/).textContent).toContain("(written by node-q)");
+  cleanup();
+
+  const result = answer("unvouched_elsewhere");
+  render(<GateOutcome result={result} evict />);
+  expect(screen.getByText(/node node-q cannot tell whether the record is on the log/)).toBeTruthy();
+  expect(screen.queryByText(/this node cannot tell/)).toBeNull();
+  expect(screen.getByText(result.domains[1]!.hint!)).toBeTruthy();
+  expect(screen.queryByText(/Open this dashboard on a node the fleet still counts/)).toBeNull();
+  expect(finishable({ opId: result.op_id, force: false, answer: result })).toBe(true);
 });
 
 // A FULL LOG IS NOT TOLD TO RETRY — the same request is refused the same way
@@ -266,9 +286,42 @@ test("a refused readmission renders its reason and its remedy, and no outcome", 
   expect(screen.queryByText(/is readmitted/)).toBeNull();
 });
 
-// A REQUEST NOBODY ANSWERED KEEPS ITS ID. The engine allows a gesture a minute
-// and finishes it whatever the connection does; the dialog gave up at thirty
-// seconds holding nothing, and the only way on was a second gesture.
+// A READMISSION NOBODY COULD JUDGE renders the engine's sentence for what it
+// waits on — a partition being served again — and never the catch-up advice a
+// refusal below the floor gets: the node's position is not what is wrong.
+test("an unjudged readmission says it waits on a partition, not on the node", async () => {
+  const refusal = golden.refusals["readmission_unjudged"]!;
+  engine(refusal);
+  render(<GateDialog node="node-4" evict={false} onHeld={() => {}} onClose={() => {}} />);
+  confirmAndPress("node-4", "Readmit");
+  await waitFor(() => expect(screen.getByText(String(refusal.body.hint))).toBeTruthy());
+  expect(screen.getByText(/served again, then readmit it again/)).toBeTruthy();
+  expect(screen.queryByText(/Wait for it to catch up/)).toBeNull();
+  expect(screen.queryByText(/is readmitted/)).toBeNull();
+});
+
+// A GESTURE REFUSED IN A CAPACITY WINDOW WAITS ON THE WINDOW. Keyed on the
+// gesture, the dialog told an eviction refused `not_publishing` to wait for a
+// lease to lapse and a readmission to wait for a position to catch up — neither
+// of which is what the fleet's maintenance mode waits on.
+test("a gesture refused in a capacity window says it waits on the window", async () => {
+  for (const evict of [true, false]) {
+    const refusal = golden.refusals["not_publishing"]!;
+    engine(refusal);
+    render(<GateDialog node="node-4" evict={evict} onHeld={() => {}} onClose={() => {}} />);
+    confirmAndPress("node-4", evict ? "Evict" : "Readmit");
+    await waitFor(() => expect(screen.getByText(String(refusal.body.hint))).toBeTruthy());
+    expect(screen.getByText(/back in normal mode/)).toBeTruthy();
+    expect(screen.queryByText(/presence lease to lapse/)).toBeNull();
+    expect(screen.queryByText(/Wait for it to catch up/)).toBeNull();
+    cleanup();
+  }
+});
+
+// A REQUEST NOBODY ANSWERED KEEPS ITS ID. The engine allows a gesture its own
+// answer budget and finishes it whatever the connection does; the dialog gave
+// up at thirty seconds holding nothing, and the only way on was a second
+// gesture.
 test("a gesture that times out keeps its op id and offers to finish it", async () => {
   vi.useFakeTimers();
   const sent: Sent[] = [];
@@ -295,7 +348,7 @@ test("a gesture that times out keeps its op id and offers to finish it", async (
   expect(screen.queryByText(/No answer/)).toBeNull();
 
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(45_000);
+    await vi.advanceTimersByTimeAsync(GATE_REQUEST_TIMEOUT_MS - 31_000 + 1_000);
   });
   expect(screen.getByText(/No answer/)).toBeTruthy();
   const opId = sent[0]!.query.get("op_id")!;
@@ -308,11 +361,11 @@ test("a gesture that times out keeps its op id and offers to finish it", async (
 });
 
 // AN ANSWER THE ENGINE DID NOT WRITE IS NOT A REFUSAL. A reverse proxy's read
-// timeout is a minute by default — the node's own budget for a gesture past its
-// judgement — so a slow eviction reached the browser as a gateway's 504 with an
-// HTML page, and a 200 can be cut off part way through. Read as a refusal, the
-// dialog never held the gesture, offered no Finish, and closing it lost the id
-// of a gesture the node went on to finish.
+// timeout is a minute by default — shorter than the node's own budget for a
+// gesture past its judgement — so a slow eviction reached the browser as a
+// gateway's 504 with an HTML page, and a 200 can be cut off part way through.
+// Read as a refusal, the dialog never held the gesture, offered no Finish, and
+// closing it lost the id of a gesture the node went on to finish.
 test("a gateway's answer or a cut-off one keeps the op id and offers to finish it", async () => {
   for (const reply of [
     () =>

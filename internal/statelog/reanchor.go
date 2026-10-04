@@ -661,9 +661,12 @@ type ReanchorRunner interface {
 
 // ReanchorDeps is everything the transition needs that it does not own.
 type ReanchorDeps struct {
-	// Domain is the ONE domain being re-anchored: the one whose stream the
-	// operator confirmed. Its checkpoint is the only one this writes.
+	// Domain is the domain being re-anchored, and Spec the ONE LOG of it:
+	// the one whose stream the operator confirmed. Its checkpoint is the
+	// only one this writes, and a generation is a coordinate in that one
+	// stream's number space — a domain's other logs keep theirs.
 	Domain Domain
+	Spec   StreamSpec
 
 	// Stream is that domain's live log, Record its own generation record,
 	// Consumer this node's reader of the log, and Runner its applier.
@@ -810,13 +813,16 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 			"id — the generation record is stamped with it for the eviction gate",
 			d.Domain.Name())
 	}
-	spec := d.Domain.Stream()
+	spec := d.Spec
+	if err := spec.Instantiates(d.Domain); err != nil {
+		return ReanchorPlan{}, err
+	}
 	if in.Stream != spec.Name {
 		return ReanchorPlan{}, fmt.Errorf("statelog: a reanchor of %s was handed "+
 			"facts about %q, and every one of them has to be about %s's own "+
 			"stream (%s)", d.Domain.Name(), in.Stream, d.Domain.Name(), spec.Name)
 	}
-	t, err := newTables(d.Domain)
+	t, err := newTables(d.Domain, spec)
 	if err != nil {
 		return ReanchorPlan{}, err
 	}
@@ -902,7 +908,7 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 		plan.Cursor, plan.StaleAfter = opened-1, opened
 		at.Seq = plan.Cursor
 		if in.ClaimsIdentity {
-			unheld, walkErr := UnheldTail(post, d.Domain, d.DB, d.Stream, in.Generation,
+			unheld, walkErr := UnheldTail(post, d.Domain, spec, d.DB, d.Stream, in.Generation,
 				in.FirstSeq, plan.Cursor)
 			if walkErr != nil {
 				return ReanchorPlan{}, fmt.Errorf("statelog: %s's generation %d is "+
@@ -1086,7 +1092,7 @@ func reanchoredDetail(c ReanchorCase) string {
 func appendGeneration(ctx context.Context, d ReanchorDeps, spec StreamSpec, gen uint32,
 	record GenerationRecord) (uint64, error) {
 
-	subject := spec.SubjectPrefix + "." + record.Subject.String()
+	subject := wireSubject(spec.SubjectPrefix, record.Subject)
 	zero := uint64(0)
 	seq, duplicate, err := d.Stream.Append(ctx, subject, record.OpID, &zero, record.Payload)
 	switch f, detail := classify(err); f {
@@ -1145,7 +1151,7 @@ func generationIsOurs(ctx context.Context, d ReanchorDeps, subject string, seq u
 			"sequence %d of %s whose envelope does not decode (%v), so whether "+
 			"this node wrote it cannot be told — and a second opening of one "+
 			"generation is the one thing this must not do", ErrReanchorRefused,
-			d.Domain.Name(), gen, seq, d.Domain.Stream().Name, err)
+			d.Domain.Name(), gen, seq, d.Spec.Name, err)
 	}
 	if env.Writer == d.NodeID {
 		return nil
@@ -1160,7 +1166,7 @@ func generationIsOurs(ctx context.Context, d ReanchorDeps, subject string, seq u
 		"generation number, which nothing on the log could ever reconcile; "+
 		"this node adopts a snapshot from a node in that generation instead",
 		ErrReanchorRefused, d.Domain.Name(), gen, writer, seq,
-		d.Domain.Stream().Name)
+		d.Spec.Name)
 }
 
 // stillConfirmed reads the stream's instant again and refuses unless it is the

@@ -40,7 +40,7 @@ import (
 
 // DutyDeps is what the duty needs that it does not own.
 type DutyDeps struct {
-	DB     *store.DB
+	DB     store.PartitionHandle
 	Writer *Writer
 
 	// Logger is where the duty reports. Nil is the package's own
@@ -144,7 +144,7 @@ func (d *duty) pendingDuplicates(ctx context.Context) (bool, error) {
 
 func (d *duty) anyProject(ctx context.Context, column string) (bool, error) {
 	var found int
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx,
 			`SELECT EXISTS (SELECT 1 FROM tracker_projects WHERE `+column+` = 1)`).
 			Scan(&found)
@@ -237,7 +237,7 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 		losers  []Placement
 		ceiling = map[Rank]Rank{}
 	)
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT t.id, t.rank FROM tracker_tasks t
 			WHERE t.project_key = ? AND t.removed_at IS NULL
@@ -312,7 +312,7 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 // it back into the selection, and the merge is finished then.
 func (d *duty) pendingMerges(ctx context.Context) (bool, error) {
 	var found int
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 			SELECT EXISTS (SELECT 1 FROM tracker_tasks
 			               WHERE merging = 1 AND removed_at IS NULL)`).
@@ -371,7 +371,7 @@ func (d *duty) pendingMerges(ctx context.Context) (bool, error) {
 // long as that one kept failing.
 func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error) {
 	var stuck []string
-	if err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id FROM tracker_tasks
 			WHERE merging = 1 AND removed_at IS NULL ORDER BY id LIMIT ?`,
@@ -499,7 +499,7 @@ func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool,
 // is frozen, and its restore is what brings it back.
 func (d *duty) pendingMoves(ctx context.Context) (bool, error) {
 	var found int
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 			SELECT EXISTS (SELECT 1 FROM tracker_tasks
 			               WHERE moving = 1 AND removed_at IS NULL)`).
@@ -527,7 +527,7 @@ func (d *duty) pendingMoves(ctx context.Context) (bool, error) {
 // in the old project for good.
 func (d *duty) finishMoves(ctx context.Context, now, _ time.Time) (int64, error) {
 	var marked []string
-	if err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id FROM tracker_tasks
 			WHERE moving = 1 AND removed_at IS NULL ORDER BY id LIMIT ?`,
@@ -594,7 +594,7 @@ type abandonedMerge struct {
 
 func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, error) {
 	var walk abandonedMerge
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		current, held, err := readTask(ctx, tx, id)
 		switch {
 		case err != nil:
@@ -619,7 +619,7 @@ func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, e
 // tellUnblocked publishes the late notice for every dependent that became
 // workable and was never told.
 func (d *duty) tellUnblocked(ctx context.Context, now, _ time.Time) (int64, error) {
-	scan, err := ScanUnblocked(ctx, d.deps.DB, d.unblockedThrough, WalkBatch)
+	scan, err := ScanUnblocked(ctx, d.deps.DB.Reader(), d.unblockedThrough, WalkBatch)
 	if err != nil {
 		return 0, err
 	}
@@ -646,7 +646,7 @@ func (d *duty) tellUnblocked(ctx context.Context, now, _ time.Time) (int64, erro
 // projectsWith reads the projects whose own row carries a hand-off flag.
 func (d *duty) projectsWith(ctx context.Context, column string) ([]string, error) {
 	var projects []string
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
 			`SELECT key FROM tracker_projects WHERE `+column+` = 1 ORDER BY key`)
 		if err != nil {
@@ -700,7 +700,7 @@ func (d *duty) projectsWith(ctx context.Context, column string) ([]string, error
 // the process, so a repair asking for one of its own was refused on every
 // tick of a running node.
 func (d *duty) clearProbe(ctx context.Context, project string) error {
-	return d.deps.DB.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+	return d.deps.DB.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			UPDATE tracker_projects SET rank_duplicate_pending = 0
 			WHERE key = ? AND NOT EXISTS (
@@ -737,7 +737,7 @@ func (d *duty) opID(job, subject string, now time.Time) string {
 // is the shape every job in this file is held to.
 func (d *duty) pendingOneSided(ctx context.Context) (bool, error) {
 	var any int
-	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 			SELECT EXISTS (SELECT 1 FROM tracker_relations
 			               WHERE one_sided = 1 AND one_sided_final = 0)`).
@@ -762,7 +762,7 @@ func (d *duty) pendingOneSided(ctx context.Context) (bool, error) {
 // is a dependency somebody has to resolve by hand; one number was read as the
 // first when it could be entirely the second.
 func (d *duty) repairOneSided(ctx context.Context, now, _ time.Time) (int64, error) {
-	edges, err := ScanOneSided(ctx, d.deps.DB, now.Add(-OneSidedRepairAge), WalkBatch)
+	edges, err := ScanOneSided(ctx, d.deps.DB.Reader(), now.Add(-OneSidedRepairAge), WalkBatch)
 	if err != nil {
 		return 0, err
 	}

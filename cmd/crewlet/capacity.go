@@ -611,7 +611,7 @@ func verifyRestore(root string, cadence time.Duration, now time.Time,
 	fmt.Fprintf(w, "ENGINE\t%s\t\n", manifest.EngineVersion)
 	for _, store := range manifest.Stores {
 		fmt.Fprintf(w, "STORE %s\t%s\t%d migration(s)\n",
-			store.Estate, humanBytes(store.Bytes), len(store.Migrations))
+			storeCopyName(store.Estate, store.Partition), humanBytes(store.Bytes), len(store.Migrations))
 	}
 	for stream, at := range manifest.Domains {
 		fmt.Fprintf(w, "DOMAIN\t%s\tgeneration %d sequence %d\n",
@@ -648,6 +648,7 @@ type restoreManifest struct {
 	EngineVersion string    `json:"engine_version"`
 	Stores        []struct {
 		Estate     string   `json:"estate"`
+		Partition  string   `json:"partition"`
 		Bytes      int64    `json:"bytes"`
 		Migrations []string `json:"migrations"`
 	} `json:"stores"`

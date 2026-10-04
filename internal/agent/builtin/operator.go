@@ -134,6 +134,10 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&workInbox{deps: work}, work.Inbox != nil},
 		{&writeProject{deps: work, leads: deps.LeadsProject},
 			work.ProjectWriter != nil},
+		{&listProjectFiles{deps: work}, work.Files != nil},
+		{&readProjectFile{deps: work}, work.Files != nil && work.Objects != nil},
+		{&writeProjectFile{deps: work}, work.FileWriter != nil && work.Objects != nil},
+		{&removeProjectFile{deps: work}, work.FileWriter != nil},
 		{&removeWorkItem{deps: work}, work.TrashWriter != nil && work.Reader != nil},
 		{&restoreWorkItem{deps: work}, work.TrashWriter != nil && work.Reader != nil},
 		// AND THE BOARD DRAG: the order is a person's arrangement, and a

@@ -263,9 +263,9 @@ func TestSelectionBreaksTiesOnTheIndex(t *testing.T) {
 	t.Parallel()
 	// Four identical codes: every distance is the same.
 	codes := [][]uint64{{0b1010}, {0b1010}, {0b1010}, {0b1010}}
-	got := search.Stage1(codes, []uint64{0b1010}, 2)
+	got := search.CandidatePool(codes, []uint64{0b1010}, 2)
 	if !slices.Equal(got, []int{0, 1}) {
-		t.Fatalf("Stage1 over identical codes gave %v, want [0 1]", got)
+		t.Fatalf("CandidatePool over identical codes gave %v, want [0 1]", got)
 	}
 	flat := search.Rerank([]int{3, 1, 2, 0}, func(int) float64 { return 1 }, 2)
 	if !slices.Equal(flat, []int{0, 1}) {

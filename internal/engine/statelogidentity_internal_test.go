@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -42,7 +43,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	stream := tracker.Domain{}.Stream().Name
+	stream := estateSpec(tracker.Domain{}).Name
 
 	// FIRST BOOT: the running domain carries what the broker reports.
 	back, err := OpenBackends(t.Context(), &b, cfg)
@@ -81,7 +82,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	}
 	// Commit a checkpoint under that identity, the way the applier does
 	// with every batch, so the second boot has something to compare.
-	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(back.Store).Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
 				(stream, generation, seq, stream_created_at, updated_at)
@@ -195,7 +196,7 @@ func TestAStreamRebuiltUnderARunningNodeIsNamed(t *testing.T) {
 
 	// THE REBUILD, under a node that never stops: the same name, a new
 	// creation instant, and sequences counting from 1 again.
-	rebuildLog(t, js, tracker.Domain{}.Stream())
+	rebuildLog(t, js, estateSpec(tracker.Domain{}))
 
 	// THE HEARTBEAT IS WHAT SEES IT, on the round trip it already makes.
 	s.publishPositions(t.Context())
@@ -273,7 +274,7 @@ func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 		t.Fatalf("read node-x's record back (held %v): %v", held, err)
 	}
 
-	rebuildLog(t, js, tracker.Domain{}.Stream())
+	rebuildLog(t, js, estateSpec(tracker.Domain{}))
 
 	// THE RETRY AT ZERO, BEFORE ANY HEARTBEAT HAS SEEN THE REBUILD. The
 	// zero fence's own read of the log carries the stream's creation
@@ -361,7 +362,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	stream := tracker.Domain{}.Stream().Name
+	stream := estateSpec(tracker.Domain{}).Name
 
 	// FIRST BOOT: an object with history on the log, and the log's end.
 	back, err := OpenBackends(t.Context(), &b, cfg)
@@ -373,7 +374,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 		back.Close(context.Background())
 		t.Fatalf("New: %v", err)
 	}
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-evict-x", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
 		e.Stop(context.Background())
@@ -388,7 +389,13 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	// boot finds is — by every identity check — the one it started against.
 	// This is a node whose rows are newer than the broker it came back to.
 	ahead := end + 5
-	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	// The runtime closed the partition with the state log; staging a row in
+	// it is opening it again, as the next boot will.
+	if err := openEstateZero(t.Context(), back.Store); err != nil {
+		back.Close(context.Background())
+		t.Fatalf("reopen the partition: %v", err)
+	}
+	if err := storetest.EstateOf(back.Store).Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`UPDATE statelog_cursor SET seq = ? WHERE stream = ?`, ahead, stream)
 		return err
@@ -502,7 +509,7 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 			s, q, appendTo := aProvisionedTrackerLog(t)
 			// Records nobody will apply — the loop never starts here —
 			// so their bytes do not matter, only where the log ends.
-			subject := tracker.Domain{}.Stream().SubjectPrefix + ".probe.x"
+			subject := estateSpec(tracker.Domain{}).SubjectPrefix + ".probe.x"
 			for i := range 2 {
 				if _, _, err := appendTo.Append(t.Context(), subject,
 					fmt.Sprintf("op-%d", i), nil, []byte("{}")); err != nil {
@@ -513,12 +520,12 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 			if err != nil {
 				t.Fatalf("stats: %v", err)
 			}
-			if err := s.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+			if err := storetest.EstateOf(s.db).Tx(t.Context(), func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(t.Context(), `
 					INSERT INTO statelog_cursor
 						(stream, generation, seq, stream_created_at, updated_at)
 					VALUES (?, 0, ?, ?, ?)`,
-					tracker.Domain{}.Stream().Name, stats.LastSeq+tc.past,
+					estateSpec(tracker.Domain{}).Name, stats.LastSeq+tc.past,
 					store.EncodeTime(stats.CreatedAt.UTC()),
 					store.EncodeTime(time.Now().UTC()))
 				return err
@@ -526,7 +533,8 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 				t.Fatalf("stage the checkpoint: %v", err)
 			}
 
-			running, err := s.start(t.Context(), t.Context(), q, tracker.Domain{}, appendTo, nil)
+			running, err := s.start(t.Context(), t.Context(), q, tracker.Domain{},
+				estateLog(tracker.Domain{}), appendTo, nil)
 			if err != nil {
 				t.Fatalf("start: %v", err)
 			}
@@ -556,21 +564,29 @@ func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstre
 		t.Fatalf("open the broker: %v", err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "crewlet.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "crewlet.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("open the store: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	ceilings, err := sizeCeilings(t.Context(), q, config.DefaultBootstrap().Stream,
-		64<<30, "/var/lib/crewlet/stream")
+		64<<30, "/var/lib/crewlet/stream", LayoutZero())
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
 	s := &stateLog{
-		domains: map[string]*runningDomain{}, nodeID: "node-a", db: db,
+		layout: LayoutZero(), mode: statelog.ModeNormal, nodeID: "node-a", db: db,
 		ceilings: ceilings, run: t.Context(),
+		// A DATA NODE'S, which serves layout 0's partition as the runtime's
+		// own start makes it.
+		holding: holdingOf(nil, LayoutZero()),
 	}
-	appendTo, err := s.provision(t.Context(), q, tracker.Domain{})
+	// THE PARTITION FIRST, as the runtime's own start opens it before any
+	// log's checkpoint is read.
+	if _, err := s.openPartitions(t.Context()); err != nil {
+		t.Fatalf("open the partitions: %v", err)
+	}
+	appendTo, err := s.provision(t.Context(), q, tracker.Domain{}, estateLog(tracker.Domain{}))
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}
@@ -617,10 +633,16 @@ func requireRebuiltLogRefusal(t *testing.T, err error) {
 // admit seats, and answers a JetStream handle on that broker.
 func aRunningNode(t *testing.T) (*Engine, natsjs.JetStream) {
 	t.Helper()
+	return aRunningNodeOf(t, nativeCleanupCompany)
+}
+
+// aRunningNodeOf is [aRunningNode] running the given company.
+func aRunningNodeOf(t *testing.T, company string) (*Engine, natsjs.JetStream) {
+	t.Helper()
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	cfg, err := config.ParseCompany([]byte(company))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
@@ -634,7 +656,7 @@ func aRunningNode(t *testing.T) (*Engine, natsjs.JetStream) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	q, ok := back.Queue.(interface{ Conn() *nats.Conn })
 	if !ok {
 		t.Fatalf("the stream is %T, not the JetStream backend — there is no "+
@@ -671,7 +693,7 @@ func rebuildLog(t *testing.T, js natsjs.JetStream, spec statelog.StreamSpec) {
 }
 
 // endOf is a domain log's last sequence.
-func endOf(t *testing.T, running *runningDomain) uint64 {
+func endOf(t *testing.T, running *runningLog) uint64 {
 	t.Helper()
 	end, err := running.log.End(t.Context())
 	if err != nil {

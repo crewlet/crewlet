@@ -240,14 +240,16 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 			case err != nil:
 				return statelog.Decision{}, err
 			case !held:
-				return statelog.Decision{}, fmt.Errorf("tracker: task %s is not "+
-					"on this node: %w", id, statelog.ErrUnavailable)
+				return statelog.Decision{}, missingTask(ctx, tx, id,
+					"there is nothing left to remove")
 			case current.Removed != nil:
 				// ALREADY IN THE TRASH IS NOTHING TO DO, and it is a
 				// SUCCESS rather than a conflict: a re-run of a removal
 				// that half-finished must be able to complete, and the
 				// task is in the state the caller asked for.
 				return statelog.Decision{}, nil
+			case current.Project != project:
+				return statelog.Decision{}, notInProject(id, current.Project, project)
 			}
 			decision, err := w.decide(stamp, subject, OpTombstone, ChangeRemoved, scope,
 				opID, TaskPatch{Removed: &removal}, notify, at)
@@ -287,13 +289,15 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 			case err != nil:
 				return statelog.Decision{}, err
 			case !held:
-				return statelog.Decision{}, fmt.Errorf("tracker: task %s is not "+
-					"on this node: %w", id, statelog.ErrUnavailable)
+				return statelog.Decision{}, missingTask(ctx, tx, id,
+					"nothing can restore it")
 			case current.Removed == nil:
 				// NOT IN THE TRASH IS NOTHING TO DO, on the removal's
 				// own rule: a re-run must be able to finish.
 				*live = true
 				return statelog.Decision{}, nil
+			case current.Project != project:
+				return statelog.Decision{}, notInProject(id, current.Project, project)
 			}
 			*live = false
 			decision, err := w.decide(stamp, subject, OpRestore, ChangeRestored, scope,
@@ -315,12 +319,12 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 // descendant that arrives after this read is left live rather than removed,
 // which is the safe direction and which a re-run fixes.
 func (w *Writer) subtreeOf(ctx context.Context, id string) ([]Task, error) {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return nil, fmt.Errorf("tracker: this writer has no store, so it "+
 			"cannot read task %s's subtree; a subtree removal needs one", id)
 	}
 	var out []Task
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		out, err = readSubtree(ctx, tx, id)
 		return err
@@ -337,11 +341,11 @@ func (w *Writer) subtreeOf(ctx context.Context, id string) ([]Task, error) {
 // is the whole point of the column: a restore brings back exactly what one
 // removal took.
 func (w *Writer) removedWith(ctx context.Context, id string) ([]Task, error) {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return nil, nil
 	}
 	var out []Task
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
 			`SELECT id, project_key FROM tracker_tasks
 			 WHERE removed_with = ? AND removed_at IS NOT NULL

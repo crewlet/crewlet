@@ -137,7 +137,7 @@ func (r *domainRecords) Stop() error { return r.group.Stop() }
 //   - built under another group: the trim waits on a consumer the wakes never
 //     advance — which is where the knowledge base's log stood while the trim
 //     read the tracker's group on it.
-func (e *Engine) feedFor(running *runningDomain) (changefeed.Translator, changefeed.Opener, error) {
+func (e *Engine) feedFor(running *runningLog) (changefeed.Translator, changefeed.Opener, error) {
 	var (
 		translator changefeed.Translator
 		opener     changefeed.Opener
@@ -147,7 +147,7 @@ func (e *Engine) feedFor(running *runningDomain) (changefeed.Translator, changef
 	// committed record rather than the writer's goroutine.
 	records := domainFeed{
 		log:    running.log,
-		stream: running.domain.Stream().Name,
+		stream: running.spec.Name,
 		envel:  running.domain.Envelope,
 	}
 	switch running.domain.Name() {

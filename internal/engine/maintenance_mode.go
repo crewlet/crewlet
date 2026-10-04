@@ -2,11 +2,15 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // WHAT A MAINTENANCE-MODE NODE DOES, AND WHAT IT REFUSES TO DO.
@@ -36,6 +40,49 @@ import (
 // is established from. An acknowledgement from seal mode is EVIDENCE — that
 // mode cannot write configuration, so the process making the claim cannot be
 // the one holding the request it is retiring.
+//
+// # What a maintenance-mode node keeps, and what it withholds
+//
+// It keeps its PRESENCE LEASE. Presence is membership, not work: it says the
+// process is running, and three things read it during a window — the capacity
+// operation's participant set (a broker member that holds no data is found
+// nowhere else), the estate's routing of a stateless node's reads to a data
+// node that still serves them, and the fleet views an operator reads to see who
+// is up and whom the broker still counts. So the seat host runs in every mode,
+// renewing it.
+//
+// It withholds the two things that write the company's records: SEATS, which
+// the seat host never claims here ([Engine.seatsAdmitted]), and this node's own
+// WRITERS, which no surface is handed ([Engine.writeSide]). And everything that
+// would append to a log on its own: the duties and schedulers the constructor's
+// gate never starts, the object store's collector, which pins the estate
+// with a barrier ([Engine.startNativeCollector]), and every barrier a read
+// would append ([statelog.RefuseMaintenance]).
+
+// ErrNotPublishing is an operator gesture that appends a record to a state log
+// — an eviction, a readmission, a reanchor — asked of a node in a mode that
+// publishes nothing. It wraps a sentence naming the mode and the gesture.
+//
+// REFUSED RATHER THAN CARRIED OUT, for the reason a linearizable read is
+// ([statelog.RefuseMaintenance]): each is a record on a log, and the mode
+// exists so the fleet's logs hold still while a capacity window measures them.
+// A gate record is no smaller a publish than a seat's write because an
+// operator asked for it. None of the three is what a window needs, either: a
+// participant that will not acknowledge is excluded from the operation
+// (`crewlet retention maintenance exclude`), not evicted from the logs.
+var ErrNotPublishing = errors.New("engine: this node publishes nothing in its mode")
+
+// appends refuses gesture, naming the mode and the way back, unless this
+// node's mode publishes.
+func (s *stateLog) appends(gesture string) error {
+	if s.mode.Publishes() {
+		return nil
+	}
+	return fmt.Errorf("%w: %s appends a record to the state log, and this node "+
+		"runs in %s mode, which appends nothing while a capacity window "+
+		"measures the logs; run it once the fleet is back in normal mode "+
+		"(`crewlet run` without -mode)", ErrNotPublishing, gesture, s.mode)
+}
 
 // ErrExcluded is a boot refused because a capacity operation is unresolved.
 //
@@ -76,6 +123,15 @@ func (e *ErrExcluded) Error() string {
 // reads it at all, because it was down when the key appeared.
 func (e *Engine) admit(ctx context.Context, streams []string) error {
 	if e.backends == nil || e.backends.Fleet == nil || e.mode != statelog.ModeNormal {
+		return nil
+	}
+	if !e.profile.HoldsData() {
+		// NO STATE-LOG PUBLISHER TO ADMIT: this node's seats write through
+		// a data node, which is admitted in its own right. An admission
+		// here would be a publisher a capacity operation waited on for
+		// ever — and that holds for a node whose broker is a member too,
+		// since what its broker queues is retired by the restart it
+		// ACKNOWLEDGES, not by anything an admission says.
 		return nil
 	}
 	admission := coord.Admission{
@@ -138,8 +194,17 @@ func (e *Engine) withdraw(ctx context.Context) error {
 // carrying its own mode is what lets one record answer both questions: the
 // barrier filters on the mode, and the participant set is read from the same
 // place.
+//
+// # And every node whose restart is evidence
+//
+// A DATA NODE, whose process publishes records, AND A BROKER MEMBER, whose
+// broker holds requests queued against the log whatever this node's roles —
+// the two the participant set counts ([Engine.capacityParticipants]). A member
+// that holds no data and did not acknowledge would be named a participant the
+// seal waits on for ever, since nothing else it could write says it restarted.
 func (e *Engine) acknowledge(ctx context.Context, streams []string) {
-	if e.backends == nil || e.backends.Fleet == nil || e.mode == statelog.ModeNormal {
+	if e.backends == nil || e.backends.Fleet == nil || e.mode == statelog.ModeNormal ||
+		!acknowledges(e.profile) {
 		return
 	}
 	for _, stream := range streams {
@@ -174,6 +239,50 @@ func (e *Engine) acknowledge(ctx context.Context, streams []string) {
 	}
 }
 
+// acknowledges reports whether a node's restart into a maintenance mode is
+// evidence a capacity seal needs: it holds data, or its broker is a member.
+// This node's own kind is always known — it is derived from its stream block —
+// so there is no unknown to resolve here.
+func acknowledges(p placement.NodeProfile) bool {
+	return p.HoldsData() || p.Broker == placement.BrokerMember
+}
+
+// seatsAdmitted is the seat host's claim gate: whether this node may take on a
+// NEW seat now.
+//
+// NEVER IN A MODE THAT DOES NOT PUBLISH. A seat is the first publisher there
+// is — its mailbox attaches, its turns run and its tools write the company's
+// records — and the host that claims seats is started in every mode, because it
+// is also what renews this node's presence. So the claim half is where the mode
+// is enforced: a maintenance-mode node boots holding nothing, and a gate that
+// never opens keeps it that way, while the presence the same host renews goes
+// on saying the process is running.
+//
+// Otherwise it is hydration ([Engine.NativeHydrated]): a node whose copy of the
+// company's records is behind claims nothing new until it has caught up.
+func (e *Engine) seatsAdmitted(ctx context.Context) bool {
+	return e.mode.Publishes() && e.NativeHydrated(ctx)
+}
+
+// writeSide is this node's own tracker writer and knowledge-base store — nil
+// where the runtime runs neither, and nil in a mode that does not publish.
+//
+// ONE GATE FOR EVERY SURFACE THAT WRITES THE COMPANY'S RECORDS through this
+// node: a seat's tools, the operator's MCP, the purge route, the chart's and
+// the containers' applies, and the estate server writing for a stateless node.
+// Each is handed its writer from here, so a maintenance-mode node hands out none
+// — for [New]'s reason for gating its publishers in one place: a check per
+// surface is a list somebody maintains, and the surface it forgets is a publish
+// during the window the mode exists to rule out, into a log whose usage a
+// resize is being decided against.
+func (e *Engine) writeSide() (*tracker.Writer, *pages.Store) {
+	n := e.native.Load()
+	if n == nil || !e.mode.Publishes() {
+		return nil, nil
+	}
+	return n.writer, n.pages
+}
+
 // Mode is what this node started for.
 func (e *Engine) Mode() statelog.MaintenanceMode {
 	if e.mode == "" {
@@ -182,17 +291,20 @@ func (e *Engine) Mode() statelog.MaintenanceMode {
 	return e.mode
 }
 
-// maintenanceStreams is every stream a capacity operation could be open on.
+// maintenanceStreams is every stream a capacity operation could be open on:
+// every log of layout's.
 //
-// EVERY REGISTERED DOMAIN'S, because an operation on any one of them excludes
-// this node from publishing at all: the applier writes into one estate and a
-// seat's tools reach every domain through it, so a node that started because
-// only the vector log was clear would be publishing into the tracker's.
-func maintenanceStreams() []string {
-	domains := registeredDomains()
-	out := make([]string, 0, len(domains))
-	for _, domain := range domains {
-		out = append(out, domain.Stream().Name)
+// EVERY LOG'S, because an operation on any one of them excludes this node from
+// publishing at all: the appliers write into one estate and a seat's tools
+// reach every log through it, so a node that started because only the vector
+// log was clear would be publishing into the tracker's.
+func maintenanceStreams(layout statelog.Layout) []string {
+	logs := layout.AllLogs()
+	out := make([]string, 0, len(logs))
+	for _, id := range logs {
+		if stream, _ := layout.Stream(id); stream != "" {
+			out = append(out, stream)
+		}
 	}
 	return out
 }

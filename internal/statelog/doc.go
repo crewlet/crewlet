@@ -1,7 +1,7 @@
 // Package statelog is the engine's replicated state-log framework: one
-// ordered stream per domain, one deterministic applier, N identical copies in
-// N node databases, with the checkpoint committed in the same transaction as
-// the rows.
+// ordered stream per LOG — a domain's records in one partition of the layout
+// — one deterministic applier each, N identical copies in N node databases,
+// with the checkpoint committed in the same transaction as the rows.
 //
 // This is ADR-0002, and the sentence above is the whole of it: the stream is
 // the write-ahead log and the SQL estate is derived. A write that reaches
@@ -99,6 +99,17 @@
 // row may be an earlier copy's, which a node that was behind decided against
 // other rows than this call did.
 //
+// A copy the broker collapsed an append onto need not be this node's at all:
+// an operation handed to another node — a write refused `released` or
+// `evicted` by one that left, retried through one that serves — lands on the
+// first copy while the window lasts, and when that copy applied nowhere there
+// is no ledger row to answer from. Whether a gate dropped it is a question
+// about the node that WROTE it, so the resolution reads the record off the log
+// and asks the gates about its writer, answering that writer's refusal; asked
+// about itself, the retrying node found no gate and a ledger that vouched, and
+// reported a contract violation. The id stays spent on that log until the
+// window passes, which is what the refusal tells its caller.
+//
 // # An operation id carries the instant it was minted
 //
 // Layer 1 has a hole the other two cannot fill: the ops table can LOSE ROWS.
@@ -141,6 +152,15 @@
 // carries no instant is read as minted before every loss. opid.go states the
 // grammar, the clock it is read off and what that assumes of the fleet.
 //
+// A DERIVED id's instant is the start of the work it belongs to, and that can
+// be further back than any ledger remembers — a trigger dispatched a month
+// late, a turn resumed a month after it parked — where every new write under it
+// would be answered `unknown` on every node for good. [MintAt] is the rule an
+// attempt applies to the instant it inherits, against its own clock, and
+// mint.go says why the line is [MintHorizon] rather than the retention. That an
+// attempt past it rebases, records the instant for the fleet and is judged at
+// its own clock rather than an earlier attempt's is ADR-0029.
+//
 // # A record this build cannot decode is RETAINED, with one exception
 //
 // It is kept at its position, never skipped and never stopped on, and
@@ -151,9 +171,21 @@
 //
 // The exception is a record that INSTALLS AN APPLY GATE — a rule under which
 // a durable record produces no rows on ANY node. That is a STOP: the applier
-// halts, health goes false immediately, and the seats move to a node that can
-// decode it. A deferred gate does not postpone one record's effect on one
+// halts, health goes false immediately, and the node stops serving the
+// partition — its seats read it from a holder that can decode it. A deferred gate does not postpone one record's effect on one
 // node; it silently licenses every record above it.
+//
+// # Retention rests on the ENVELOPE, so a writer can ask who reads what
+//
+// A build retains what it can file: the envelope must decode. A kind whose
+// envelope an older build REFUSES — one that validated a field a newer build
+// widened — is a stop on that build, not a deferral, and no version number on
+// the record changes that. So every node's position heartbeat names, per log,
+// the highest record version its build reads ([NodePosition].RecordVersion),
+// and [Readers] reads it across the trim's own counted set: a writer about to
+// publish such a kind waits until every node that applies the log reads it —
+// a node that says nothing being one that predates the question. The vector
+// log's index records are the first such kind (internal/search, ADR-0028).
 //
 // # A record is stamped with the lowest version that reads it
 //
@@ -253,10 +285,13 @@
 // (iii) An evicted node's records are dropped by the applier's eviction gate
 // whatever it manages to publish, so the conclusion holds even when (i) and
 // (ii) are both defeated — by a frozen clock, or by a coordination read that
-// answered stale. This clause depends on nothing but the log's own order and
-// on the gate record being decodable by the applier that must obey it, which
-// is why a gate is a stop rather than a deferral, and why it is the layer
-// that makes the fence complete rather than merely deep.
+// answered stale. The same gate holds a node that RELEASED the log as it left
+// the log's partition ([EvictionKindRelease]): its own record, published on the
+// log, above which nothing it writes applies anywhere. This clause depends on
+// nothing but the log's own order and on the gate record being decodable by
+// the applier that must obey it, which is why a gate is a stop rather than a
+// deferral, and why it is the layer that makes the fence complete rather than
+// merely deep.
 //
 // Given all three: suppose a commit at sequence S on this object's subject
 // has been trimmed. Then S < F <= C+1, so S <= C, and by (i) it has been
@@ -320,11 +355,12 @@
 // a rebuild is a lost update, it is caught within the call, as (ii) is. A node
 // that knows its log is not the one its rows are keyed to refuses every write,
 // `wrong_stream`, and every read with the same word — until an operator
-// re-anchors THAT log ([Reanchor]), which moves its domain alone into a new
+// re-anchors THAT log ([Reanchor]), which moves that log alone into a new
 // generation on the live stream and re-keys the runner to it, so every number
-// above is in one space again. A generation is per domain for exactly this
+// above is in one space again. A generation is per LOG for exactly this
 // reason: it is a coordinate in one stream's number space, and moving another
-// domain's would key that domain to a stream it never read.
+// log's — another domain's, or the same domain's in another partition — would
+// key it to a stream it never read.
 //
 // The instant is not the only way the premise fails. A broker restored from a
 // copy older than this node's rows keeps its stream, instant and all, and the
@@ -390,14 +426,141 @@
 // ([Request.NodeGate]), and a reanchor then opens the generation after the
 // abandoned one with its records void ([ReanchorAbandoned]).
 //
+// # A domain is declared once; a log is what runs
+//
+// A [Domain] declares what every one of its logs shares — its [StreamShape],
+// its tables, its gates, its partition function — and a [Layout] instantiates
+// it once per partition that carries it ([Layout.StreamSpec]). Every piece of
+// per-stream machinery here is therefore PER LOG: a runner, a publisher, a
+// reader and a read index each take one log's [StreamSpec]; the checkpoint,
+// the generation, the anchors and the stream identity are that log's; and a
+// barrier proves where that one log ends, single-flighted per node per log
+// ([ReadIndex]). Under layout 0 each domain has one log, named and keyed as it
+// always was, so a node running it holds exactly the records a fleet before
+// layouts held.
+//
+// # Who may write a log, and the gates that hold the proof per log
+//
+// The floor theorem above is stated over ONE STREAM, and a partitioned layout
+// keeps that literally true — every log is one stream — but it adds a way to
+// break each clause without breaking any number, so each clause is held per
+// log by a gate of its own. A runner and a publisher are therefore built on
+// their PLACE as well as their stream — the layout and which of its logs this
+// is ([RunnerDeps.LogID], [Deps.LogID]) — and [Layout.Places] holds the three
+// to one fact, since a gate judging by one partition while applying another's
+// stream would drop records that are its own.
+//
+//   - GATE 1, for clause (i): every record's scope lies inside its own
+//     partition. A deferral is filed and probed in one partition's file, so a
+//     path naming another partition's object is a deferral the partition it
+//     names never sees — the write it should have blocked there takes the
+//     retry at zero over it. The publisher asks [Domain.ScopePartition] of every
+//     path in the request's scope, which step 0 probes, and in its record's,
+//     which a holder that cannot decode the record files it under, and refuses
+//     one naming another partition before anything is appended
+//     ([ErrScopeCrossesPartitions], a programming error). An effect in another
+//     partition travels as a write decided there, under a scope of its own.
+//   - GATE 2, for clause (iii): a record belongs to its log's partition. The
+//     applier asks [Domain.PartitionOf] of every record's envelope — before its
+//     version, so one this build cannot read is judged too, and never retained
+//     under a scope only this partition probes — and drops one the domain
+//     places elsewhere on every holder, `wrong_partition`, counted by the
+//     records-gated instrument. Deterministic, because every holder asks the
+//     same function of the same bytes, so no copy diverges; it is the pages
+//     applier's refusal of a record whose address disagrees with its subject,
+//     for partitions. The publisher asks it first and never appends such a
+//     record ([ErrWrongPartition]), so one on a log is another writer's.
+//   - GATE 3, for the premise that every writer is counted: only a node that
+//     SERVES a partition writes its logs ([Holding]). A partition's holders are
+//     counted on its logs from the moment they begin to join, and a node serves
+//     from the moment its join has established every log until its leave stops
+//     deciding — so every writer is a node the trim already waits for. The
+//     publisher asks before a write takes its snapshot, so a node that does not
+//     serve the partition never decides from its rows, and again before the
+//     append, so a write still deciding when its node began to leave is not
+//     appended; it refuses `not_holder` ([ErrNotHolder]), or `holding_unknown`
+//     where the node cannot tell — never a guess. The one record it inverts the
+//     rule for is the node's RELEASE ([Request.Release]), written only once the
+//     node has stopped serving ([ErrReleaseWhileServing]).
+//   - THE RELEASE GATE, clause (iii) for a node that LEAVES a partition. As it
+//     leaves, the node publishes a release on each identity-claiming log of
+//     the partition — its own statement, flagged a node gate, written under
+//     its domain's eviction subject — and every holder records it where an
+//     eviction is recorded ([EvictionRow.Kind]): every record the node
+//     publishes above it, with no readmission since, is dropped on every
+//     holder (`released`), identically by determinism, and the write that
+//     published it is told so rather than applied or lost. It depends on
+//     nothing but the log's order, so it holds when the leaving node's view of
+//     the fleet is stale. A release is only ever the publisher's own — the
+//     publisher refuses one naming another node, which would be an eviction
+//     nobody judged — and the node's own write fence does not read one as an
+//     eviction: it left a partition, and the fleet did not remove it.
+//
+// statelogtest's partitioned family, statelogtest.RunPartitioned, certifies
+// all three and the release gate on real logs of a divided layout.
+//
+// Under layout 0 every record and every path a domain of this build writes is
+// in the one partition, `estate.000`, which every data node serves from boot
+// and which no node joins or leaves while it runs — and a node without `data`
+// serves nothing and runs no publisher. So no gate refuses anything a fleet
+// before layouts wrote, and nothing releases a log: they are the rules the
+// partitioned layout's writes are held to from its first record.
+//
+// # A read across partitions is answered at a CUT
+//
+// The four read levels are per LOG and stay so: a read of one partition is
+// answered at its level exactly as it always was. A read that addresses
+// several — a GATHER — is answered partition by partition, each by a node
+// that serves it, and reports where each log was as a [Cut] and what it could
+// not answer as a [Coverage], whose [Coverage.Notice] is the one sentence
+// every surface renders a missing partition as. What each partition is read at
+// is [GatherLevel]'s: a seat's gather at `session`, floored at its own writes
+// and at the record whose wake started its turn, because `linearizable` there
+// is a barrier on every log per read; an operator's at `linearizable`, whose
+// holder appends one barrier on each of the partition's logs and answers at or
+// after them ([Reader.Barrier], single-flighted per log like every barrier).
+//
+// # Which log a coordination record is about
+//
+// ONE RULE, for every record the fleet shares about a log — a node's row in
+// the positions register, a published trim floor, a trim hold, a backup point,
+// a capacity operation and its lease: a record names its log by something that
+// CARRIES THE LAYOUT. There are two such names, and each record keeps the one
+// it has always had:
+//
+//   - the log's STREAM NAME, which the partition grammar builds from the layout
+//     number ([Layout.Stream]) — what a hold, a backup point, a capacity
+//     operation and a [Cut] are keyed by, since each is a statement about one
+//     stream's number space;
+//   - the log's KEY ([LogID.String]) WITH THE LAYOUT NUMBER BESIDE IT IN THE
+//     SAME RECORD — what the positions register's rows and the published
+//     floors are keyed by, since the key is what an operator reads and a row
+//     describes every log a node runs at once.
+//
+// What is never a record's identity is the key ALONE: layout 1's
+// `tracker@tracker.007` and a repartitioned layout 2's are one string. So a
+// reader takes a key-named record only through the filter that drops every
+// other layout's (coord.PositionsIn, coord.FloorsIn), and a record of another
+// layout reads as absent — which for a floor is what a floor at another
+// generation already reads as, the log's own first sequence covering what it
+// cannot see. Under layout 0 the layout field is omitted, so every record is
+// the one a running fleet already holds, byte for byte, and every key is the
+// domain's own name.
+//
+// An EVICTION or a RELEASE is not a coordination record at all, and needs no
+// such name: it is a record on the very log it gates, applied into that log's
+// rows in its partition's own file, so it is about that log by construction —
+// the same way a checkpoint, an anchor and a generation are.
+//
 // # The alarm table borrows every threshold it fires at
 //
 // It is in this package rather than beside any one subsystem because an alarm
 // is the framework's answer to "is this node doing its job", and everything
 // above it asks the same question. The rule is ADR-0015 and alarms.go is where
 // it is carried out: an alarm never invents a number, it fires at the one some
-// OTHER decision already made — the grace that sheds a node, the grace that
-// moves its seats, the budget a caller was promised — and ONE evaluation feeds
+// OTHER decision already made — the grace that takes a copy out of service,
+// the grace that stops a node serving a partition it cannot decode, the budget
+// a caller was promised — and ONE evaluation feeds
 // every surface, so a gauge, a log line and a screen cannot disagree about
 // whether something is wrong.
 package statelog

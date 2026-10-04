@@ -40,6 +40,7 @@ var dutyTTLs = map[string]struct {
 	"maintenanceDutyTTL":      {maintenanceDutyTTL, true},
 	"retentionDutyTTL":        {retentionDutyTTL, true},
 	"embedDutyTTL":            {embedDutyTTL, true},
+	"collectorDutyTTL":        {collectorDutyTTL, true},
 	"integrationDutyTTL":      {integrationDutyTTL, true},
 	"learningDutyTTL":         {learningDutyTTL, true},
 	"setup.LeaseTTL":          {setup.LeaseTTL, true},
@@ -86,9 +87,9 @@ func TestEveryDutyTTLFitsTheDutyCeiling(t *testing.T) {
 //
 // On the syntax tree rather than by grep, because a claim is a call and a
 // line-oriented scan cannot tell a call from a comment naming it. Two layers:
-// every duty in the engine goes through workerDuty or workerHold, and nothing
-// outside the two duty helpers calls the schedule package's claim functions
-// directly.
+// every duty in the engine goes through workerDuty, workerHold or — for a
+// partition's own singleton — partitionDuty, and nothing outside the two duty
+// helpers calls the schedule package's claim functions directly.
 func TestEveryDutyClaimSiteIsInTheTTLTable(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -127,8 +128,15 @@ func TestEveryDutyClaimSiteIsInTheTTLTable(t *testing.T) {
 							"Engine.workerDuty or Engine.workerHold so its TTL is checked here",
 							fset.Position(call.Pos()), name)
 					}
-				case "workerDuty", "workerHold":
-					if len(call.Args) != 2 {
+				case "workerDuty", "workerHold", "partitionDuty":
+					// A PARTITION'S DUTY is claimed through workerDuty
+					// inside the helper, with the TTL its caller passed:
+					// the caller's expression is the one checked, and the
+					// helper's own forwarding call is not a site.
+					if name != "partitionDuty" && rel == filepath.Join("internal", "engine", "duty.go") {
+						return true
+					}
+					if len(call.Args) < 2 {
 						return true
 					}
 					expr := exprText(fset, call.Args[1])

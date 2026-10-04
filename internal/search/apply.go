@@ -31,7 +31,12 @@ import (
 // second table to decide whether what it is holding is newer than what it has.
 // A redelivery is then a no-op by arithmetic rather than by a ledger, which is
 // exactly what lets this domain keep none.
-type Applier struct{}
+type Applier struct {
+	// index is the decoded copy of the installed index, keyed by its
+	// CONTENT: see [ivfMemo]. Nil is an applier that decodes the index from
+	// its row every time it needs it, which is slower and otherwise the same.
+	index *ivfMemo
+}
 
 // NewApplier builds the vector applier.
 //
@@ -40,7 +45,11 @@ type Applier struct{}
 // node ran it, which is the property the framework's purity rule exists to
 // protect. This domain does not claim identity, so nothing would have caught a
 // node id leaking into a row here — which is precisely why it must not.
-func NewApplier() Applier { return Applier{} }
+//
+// The memo it holds is not state a row can depend on: it is keyed by the
+// digest of the bytes it decoded, so what it answers is a pure function of the
+// row it is asked about.
+func NewApplier() Applier { return Applier{index: &ivfMemo{}} }
 
 // Apply writes this record's rows and reports how many it wrote.
 func (a Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, _ statelog.ApplyOptions) (int, error) {
@@ -61,6 +70,12 @@ func (a Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, _ s
 		return a.embed(ctx, tx, vec, rec.Position)
 	case OpForget:
 		return a.forget(ctx, tx, vec.Subject, rec.Position)
+	case OpCentroids:
+		return a.install(ctx, tx, vec, rec.Position)
+	case OpReassign:
+		return a.reassign(ctx, tx, *vec.Reassign)
+	case OpMeasure:
+		return a.measure(ctx, tx, vec, rec.Position)
 	}
 	// AN UNKNOWN OP AT A KNOWN VERSION IS A WRITER FAULT, not a newer
 	// build: the version gate above already let this record through as one
@@ -113,29 +128,77 @@ func (a Applier) embed(ctx context.Context, tx *sql.Tx, vec VectorRecord, at sta
 		return 0, nil
 	}
 
+	// FILED IN THE INSTALLED INDEX AS IT IS WRITTEN, under the index's own
+	// generation — or under none, when the partition has no index in this
+	// row's embedding space. Filing it here rather than waiting for a
+	// reassign record is what keeps a document written after an index was
+	// installed findable by the probe the moment it is findable at all.
+	head, _, err := readIndexHead(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	generation, list, err := a.fileUnder(ctx, tx, head, vec.Model, vec.Dim, vec.Embedding)
+	if err != nil {
+		return 0, fmt.Errorf("search: file the vector for %s at %s in the "+
+			"index: %w", vec.Subject, at, err)
+	}
+	// AND WHERE THE ROW IT REPLACES WAS FILED, for the per-list counts: a
+	// re-embed may move a document to another list, or out of the index's
+	// space altogether.
+	was, existed, err := filedAt(ctx, tx, vec.Subject.Source, vec.Subject.ID)
+	if err != nil {
+		return 0, err
+	}
+
 	// THE SIGN CODE IS COMPUTED BY THE DATABASE, from the same bytes the
 	// record carried, inside this same transaction. No provider call, no
 	// second stream, no second cursor and no coverage number of its own —
 	// which is the entire reason the first stage costs nothing to maintain.
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO kb_vectors_bin
-			(source, source_id, container, search_shard, model, dim, bits)
-		VALUES (?, ?, ?, ?, ?, ?, vector1bit(?))
+			(source, source_id, container, search_shard, model, dim, bits,
+			 ivf_gen, ivf_list)
+		VALUES (?, ?, ?, ?, ?, ?, vector1bit(?), ?, ?)
 		ON CONFLICT (source, source_id) DO UPDATE SET
 			container    = excluded.container,
 			model        = excluded.model,
 			dim          = excluded.dim,
-			bits         = excluded.bits`,
+			bits         = excluded.bits,
+			ivf_gen      = excluded.ivf_gen,
+			ivf_list     = excluded.ivf_list`,
 		string(vec.Subject.Source), vec.Subject.ID, container,
 		// THE SAME CALL, in the same transaction as the row above. Two
 		// shards for one document is a document the candidate scan finds
 		// in one bucket and the rerank looks for in another.
 		ShardOf(string(vec.Subject.Source), vec.Subject.ID), vec.Model,
-		vec.Dim, vec.Embedding); err != nil {
+		vec.Dim, vec.Embedding, generation, list); err != nil {
 		return 0, fmt.Errorf("search: write the sign code for %s at %s: %w",
 			vec.Subject, at, err)
 	}
+	if err := a.recount(ctx, tx, head, vec.Subject.Source, was, existed,
+		filing{generation: generation, list: list}, true); err != nil {
+		return 0, err
+	}
 	return 2, nil
+}
+
+// recount moves the per-list counts for one row that was filed at was (when
+// existed) and is now filed at now (when present): out of its old list if it
+// was counted there, into its new one if it is counted there. Only rows filed
+// under the INSTALLED generation are counted ([countFiled]).
+func (a Applier) recount(ctx context.Context, tx *sql.Tx, head IndexHead, source Source, was filing, existed bool, now filing, present bool) error {
+	if head.Lists == 0 {
+		return nil
+	}
+	if existed && was.generation == head.Generation {
+		if err := countFiled(ctx, tx, was.list, source, -1); err != nil {
+			return err
+		}
+	}
+	if present && now.generation == head.Generation {
+		return countFiled(ctx, tx, now.list, source, 1)
+	}
+	return nil
 }
 
 // forget removes both rows for a source that is gone.
@@ -158,11 +221,22 @@ func (a Applier) forget(ctx context.Context, tx *sql.Tx, subject Subject, at sta
 	if moved == 0 {
 		return 0, nil
 	}
+	head, _, err := readIndexHead(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	was, existed, err := filedAt(ctx, tx, subject.Source, subject.ID)
+	if err != nil {
+		return 0, err
+	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM kb_vectors_bin WHERE source = ? AND source_id = ?`,
 		string(subject.Source), subject.ID); err != nil {
 		return 0, fmt.Errorf("search: forget the sign code for %s at %s: %w",
 			subject, at, err)
+	}
+	if err := a.recount(ctx, tx, head, subject.Source, was, existed, filing{}, false); err != nil {
+		return 0, err
 	}
 	return 2, nil
 }

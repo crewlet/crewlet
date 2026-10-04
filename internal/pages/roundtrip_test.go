@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE WHOLE PATH: a write reaches the broker, the applier and the reader.
@@ -27,12 +28,20 @@ var wednesday = time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
 
 type roundTrip struct {
 	t       *testing.T
-	db      *store.DB
+	db      store.PartitionHandle
 	log     *js.DomainLog
 	store   *pages.Store
 	applier *pages.Applier
 	reader  *pages.Reader
 	waiter  *testWaiter
+
+	// holding is whether this node serves the log's partition, which a case
+	// about a node leaving it moves.
+	holding *statelogtest.Holding
+
+	// race is the broker this node's writes go through, which a case puts
+	// its hand into between a write's last check and its landing.
+	race *statelogtest.Race
 
 	consumed uint64
 }
@@ -48,7 +57,7 @@ func newRoundTrip(t *testing.T) *roundTrip {
 			t.Errorf("stop the broker: %v", err)
 		}
 	})
-	spec := pages.Domain{}.Stream()
+	spec := statelog.EstateStream(pages.Domain{})
 	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES, and it is not a
 	// property under test: the shipped default is sized for years of a real
 	// company's growth, and an embedded broker in a temporary directory
@@ -67,15 +76,11 @@ func newRoundTrip(t *testing.T) *roundTrip {
 }
 
 // openNodeStore opens one node's own store, closed with the test.
-func openNodeStore(t *testing.T, name string) *store.DB {
+func openNodeStore(t *testing.T, name string) store.PartitionHandle {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), name),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), name), store.Options{}, 1)
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
+		if err := dbNode.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
 		}
 	})
@@ -85,15 +90,15 @@ func openNodeStore(t *testing.T, name string) *store.DB {
 // newRoundTripOn is the harness's node over a log and a store it is handed:
 // the ones [newRoundTrip] opens, or a SECOND node joining the same log under
 // its own id and its own store — the shape a race between two nodes needs.
-func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
+func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.PartitionHandle,
 	nodeID string) *roundTrip {
 
 	t.Helper()
-	rows, err := pages.NewRows(db)
+	rows, err := pages.NewRows(db.Reader(), statelog.EstateStream(pages.Domain{}))
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
-	fence := pages.NewFence(db, nodeID)
+	fence := pages.NewFence(db.Reader(), nodeID)
 	// The published trim floor is zero on a fleet that has never trimmed,
 	// which is the state every new company is in — and the state in which
 	// an absent anchor really does mean an unclaimed address. The log's own
@@ -111,7 +116,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 	fence.Committed = waiter.Committed
 	// THE LOG'S GATE RESERVE, reading its usage from the stream as the
 	// engine's does, so every write here is admitted as a production one is.
-	reserve, err := statelog.NewReserve(pages.Domain{}.Stream().Name,
+	reserve, err := statelog.NewReserve(statelog.EstateStream(pages.Domain{}).Name,
 		func(ctx context.Context) (statelog.Usage, error) {
 			stats, err := log.Stats(ctx)
 			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
@@ -119,10 +124,13 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 	if err != nil {
 		t.Fatalf("build the gate reserve: %v", err)
 	}
+	holding := statelogtest.NewHolding(statelog.EstatePartition)
+	race := statelogtest.NewRace(log)
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: pages.Domain{}, Log: log, Rows: rows, Fence: fence,
-		Gates: pages.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: nodeID,
+		Domain: pages.Domain{}, Spec: statelog.EstateStream(pages.Domain{}), Layout: statelog.EstateLayout(pages.Domain{}.Name()), LogID: statelog.EstateLog(pages.Domain{}), Log: race, Records: log, Rows: rows, Fence: fence,
+		Gates: pages.NewGates(db.Reader()), Waiter: waiter, Voids: waiter, Identity: waiter, NodeID: nodeID,
 		Admission:     reserve,
+		Holding:       holding,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})
@@ -130,7 +138,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 		t.Fatalf("build the publisher: %v", err)
 	}
 	kb, err := pages.NewStore(pages.Options{
-		Publisher: publisher, DB: db,
+		Publisher: publisher, DB: db.Reader(),
 		Now: func() time.Time { return wednesday },
 	})
 	if err != nil {
@@ -140,13 +148,13 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 	// reader its own transaction would exercise the SQL and none of the
 	// contract the rows are served under — which is the shape that let the
 	// level be a label for as long as it was.
-	authority, err := statelogtest.LocalReader(pages.Domain{}, db.Replicated(),
+	authority, err := statelogtest.LocalReader(pages.Domain{}, db,
 		waiter.Committed())
 	if err != nil {
 		t.Fatalf("build the read authority: %v", err)
 	}
 	reader, err := pages.NewReader(pages.ReaderOptions{
-		DB: db, Log: authority, Committed: waiter.Committed,
+		DB: db.Reader(), Log: authority, Committed: waiter.Committed,
 	})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
@@ -154,7 +162,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 	return &roundTrip{
 		t: t, db: db, log: log, store: kb,
 		applier: pages.NewApplier(nodeID, nil, nil),
-		reader:  reader, waiter: waiter,
+		reader:  reader, waiter: waiter, holding: holding, race: race,
 	}
 }
 
@@ -168,7 +176,7 @@ func (r *roundTrip) drain() {
 	if err != nil {
 		r.t.Fatalf("read the log's end: %v", err)
 	}
-	spec := pages.Domain{}.Stream()
+	spec := statelog.EstateStream(pages.Domain{})
 	for seq := r.consumed + 1; seq <= last; seq++ {
 		_, payload, storedAt, ok, err := r.log.At(r.t.Context(), seq)
 		if err != nil {
@@ -196,7 +204,7 @@ func (r *roundTrip) drain() {
 			Payload:  payload,
 			StoredAt: storedAt,
 		}
-		if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+		if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
 			reason, gated, err := r.applier.Gated(r.t.Context(), tx, record)
 			if err != nil {
 				return err
@@ -276,6 +284,9 @@ func (r *roundTrip) get(ref string) pages.Detail {
 	}
 	return detail
 }
+
+// Voided voids nothing: this harness applies by hand and never re-anchors.
+func (w *testWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
 
 // testWaiter is this node's own applier as the publisher sees it.
 type testWaiter struct {

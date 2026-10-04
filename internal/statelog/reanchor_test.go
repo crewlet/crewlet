@@ -20,6 +20,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // reanchorCreated is the live stream's creation instant, WITH a fraction of a
@@ -610,6 +611,7 @@ func (r *reanchorRunner) Reanchored(at statelog.Position, created, storedAt time
 // reanchorFixture is one domain's transition over a real store.
 type reanchorFixture struct {
 	db       *store.DB
+	estate   store.PartitionHandle
 	log      *reanchorLog
 	consumer *reanchorConsumer
 	runner   *reanchorRunner
@@ -618,7 +620,8 @@ type reanchorFixture struct {
 
 func newReanchorFixture(t *testing.T) *reanchorFixture {
 	t.Helper()
-	f := &reanchorFixture{db: reanchorStore(t)}
+	f := &reanchorFixture{}
+	f.db, f.estate = reanchorStore(t)
 	f.log = newReanchorLog(&f.order)
 	f.consumer = &reanchorConsumer{order: &f.order}
 	f.runner = &reanchorRunner{order: &f.order}
@@ -627,36 +630,31 @@ func newReanchorFixture(t *testing.T) *reanchorFixture {
 
 func (f *reanchorFixture) deps(domain statelog.Domain) statelog.ReanchorDeps {
 	return statelog.ReanchorDeps{
-		Domain: domain, Stream: f.log, Record: probeGeneration{keeps: true},
-		Consumer: f.consumer, Runner: f.runner, DB: f.db.Replicated(),
+		Domain: domain, Spec: specOf(domain), Stream: f.log, Record: probeGeneration{keeps: true},
+		Consumer: f.consumer, Runner: f.runner, DB: f.estate,
 		By: "ops-1", NodeID: "node-a",
 	}
 }
 
 // reanchorStore is a node with a replicated estate and no cursor yet.
-func reanchorStore(t *testing.T) *store.DB {
+func reanchorStore(t *testing.T) (*store.DB, store.PartitionHandle) {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{
-		PinnedWriters: 1,
-	})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
 		}
 	})
-	return db
+	return db, estate
 }
 
 // seedCursor writes a domain's committed checkpoint, which is what a node that
 // has been running holds.
-func seedCursor(t *testing.T, db *store.DB, stream string, at statelog.Position,
+func seedCursor(t *testing.T, db store.PartitionHandle, stream string, at statelog.Position,
 	created time.Time) {
 
 	t.Helper()
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
 				(stream, generation, seq, stream_created_at, updated_at)
@@ -673,9 +671,9 @@ func seedCursor(t *testing.T, db *store.DB, stream string, at statelog.Position,
 }
 
 // cursorOf reads a stream's committed checkpoint back, whole.
-func cursorOf(t *testing.T, db *store.DB, stream string) (statelog.Position, time.Time) {
+func cursorOf(t *testing.T, db store.PartitionHandle, stream string) (statelog.Position, time.Time) {
 	t.Helper()
-	at, created, found, err := statelog.CursorFor(t.Context(), db.Replicated(), stream)
+	at, created, found, err := statelog.CursorFor(t.Context(), db, stream)
 	if err != nil {
 		t.Fatalf("read %s's cursor: %v", stream, err)
 	}
@@ -690,17 +688,12 @@ func cursorOf(t *testing.T, db *store.DB, stream string) (statelog.Position, tim
 // moves.
 type secondProbeDomain struct{ probeDomain }
 
-const secondProbeStream = "CREWLET_SECOND_PROBE_LOG"
+const (
+	secondProbeStream = "CREWLET_SECOND_PROBE_LOG"
+	secondProbePrefix = "crewlet.secondprobe.log"
+)
 
 func (secondProbeDomain) Name() string { return "second_probe" }
-
-func (secondProbeDomain) Stream() statelog.StreamSpec {
-	spec := probeDomain{}.Stream()
-	spec.Name = secondProbeStream
-	spec.Subjects = []string{"crewlet.secondprobe.log.>"}
-	spec.SubjectPrefix = "crewlet.secondprobe.log"
-	return spec
-}
 
 // ---- the cases ------------------------------------------------------- //
 
@@ -716,7 +709,7 @@ func (secondProbeDomain) Stream() statelog.StreamSpec {
 func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 	t.Parallel()
 	f := newReanchorFixture(t)
-	if err := f.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := f.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), probeDDL)
 		return err
 	}); err != nil {
@@ -724,9 +717,9 @@ func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 	}
 	secondCreated := time.Date(2023, 10, 2, 8, 30, 0, 250_000_000, time.UTC)
 	secondAt := statelog.Position{Stream: secondProbeStream, Generation: 1, Seq: 5_000}
-	seedCursor(t, f.db, probeStream,
+	seedCursor(t, f.estate, probeStream,
 		statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, keyedCreated)
-	seedCursor(t, f.db, secondProbeStream, secondAt, secondCreated)
+	seedCursor(t, f.estate, secondProbeStream, secondAt, secondCreated)
 
 	in := reanchorInputs()
 	in.FirstSeq = 42
@@ -741,7 +734,7 @@ func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 
 	// THE NAMED DOMAIN: the next generation, one below the live stream's
 	// first surviving sequence, keyed to the live instant.
-	at, created := cursorOf(t, f.db, probeStream)
+	at, created := cursorOf(t, f.estate, probeStream)
 	if want := (statelog.Position{Stream: probeStream, Generation: 2, Seq: 41}); at != want {
 		t.Fatalf("the re-anchored checkpoint is %s, want %s", at, want)
 	}
@@ -751,7 +744,7 @@ func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 	}
 
 	// THE OTHER DOMAIN: its generation, its sequence and its instant, untouched.
-	other, otherCreated := cursorOf(t, f.db, secondProbeStream)
+	other, otherCreated := cursorOf(t, f.estate, secondProbeStream)
 	if other != secondAt {
 		t.Fatalf("the other domain's checkpoint moved to %s, want %s — a reanchor "+
 			"of one stream positioned another in its sequence space", other, secondAt)
@@ -769,8 +762,8 @@ func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 	// instant loads the untouched checkpoint and does not stop.
 	secondFetch := newProbeFetch()
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: secondProbeDomain{}, Applier: newProbeApplier(),
-		Fetch: secondFetch, Log: secondFetch, Node: f.db, DB: f.db.Replicated(),
+		Domain: secondProbeDomain{}, Spec: specOf(secondProbeDomain{}), Layout: layoutOf(secondProbeDomain{}), LogID: logOf(secondProbeDomain{}), Applier: newProbeApplier(),
+		Fetch: secondFetch, Log: secondFetch, Node: f.db, DB: f.estate,
 		Checkpoint:      statelog.Position{Generation: 1},
 		StreamCreatedAt: secondCreated,
 	})
@@ -811,7 +804,7 @@ func TestARestoredLogIsReanchoredAtItsEnd(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
 	f := newReanchorFixture(t)
-	seedCursor(t, f.db, probeStream,
+	seedCursor(t, f.estate, probeStream,
 		statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, reanchorCreated)
 	deps := f.deps(probeDomain{})
 	deps.Logger = slog.New(slog.NewJSONHandler(&buf, nil))
@@ -823,7 +816,7 @@ func TestARestoredLogIsReanchoredAtItsEnd(t *testing.T) {
 	// and one these rows applied, as they did every record the copy kept.
 	f.log.seq = 6_999
 	f.log.put("probe.object.last", "op-last", probeBody(t, 7_000, "op-last"))
-	holdRecord(t, f.db, 7_000, "op-last")
+	holdRecord(t, f.estate, 7_000, "op-last")
 
 	plan, err := statelog.Reanchor(t.Context(), deps, in, confirmed())
 	if err != nil {
@@ -838,7 +831,7 @@ func TestARestoredLogIsReanchoredAtItsEnd(t *testing.T) {
 	// on is the history it now follows, not the one the rows were derived
 	// from.
 	_, _, named, _, _ := f.log.At(t.Context(), want.Seq)
-	cp, _, err := statelog.CheckpointOf(t.Context(), f.db.Replicated(), probeStream)
+	cp, _, err := statelog.CheckpointOf(t.Context(), f.estate, probeStream)
 	if err != nil {
 		t.Fatalf("read the checkpoint: %v", err)
 	}
@@ -850,7 +843,7 @@ func TestARestoredLogIsReanchoredAtItsEnd(t *testing.T) {
 		t.Fatalf("the runner was told its checkpoint names %v, want %s",
 			f.runner.names, named)
 	}
-	if at, created := cursorOf(t, f.db, probeStream); at != want ||
+	if at, created := cursorOf(t, f.estate, probeStream); at != want ||
 		statelog.IdentityOf(created, reanchorCreated, true) != statelog.StreamSame {
 		t.Fatalf("the checkpoint is %s keyed to %s, want %s keyed to the same "+
 			"stream — one below the first record would replay the whole copy", at,
@@ -886,10 +879,10 @@ func TestARestoredLogIsReanchoredAtItsEnd(t *testing.T) {
 func TestTheReanchorsStepsRunInTheOrderItsCrashMatrixAssumes(t *testing.T) {
 	t.Parallel()
 	f := newReanchorFixture(t)
-	seedCursor(t, f.db, probeStream,
+	seedCursor(t, f.estate, probeStream,
 		statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, keyedCreated)
 	generationNow := func() uint32 {
-		at, _ := cursorOf(t, f.db, probeStream)
+		at, _ := cursorOf(t, f.estate, probeStream)
 		return at.Generation
 	}
 	f.consumer.during = func() {
@@ -933,14 +926,14 @@ func TestAReanchorWhoseConsumerCannotMoveCommitsNothing(t *testing.T) {
 	t.Parallel()
 	f := newReanchorFixture(t)
 	before := statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}
-	seedCursor(t, f.db, probeStream, before, keyedCreated)
+	seedCursor(t, f.estate, probeStream, before, keyedCreated)
 	f.consumer.fail = errors.New("the metadata group did not answer")
 
 	_, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}), reanchorInputs(), confirmed())
 	if err == nil || !strings.Contains(err.Error(), "re-running") {
 		t.Fatalf("Reanchor = %v, want a failure saying a re-run repeats it", err)
 	}
-	if at, created := cursorOf(t, f.db, probeStream); at != before ||
+	if at, created := cursorOf(t, f.estate, probeStream); at != before ||
 		statelog.IdentityOf(created, keyedCreated, true) != statelog.StreamSame {
 		t.Fatalf("the checkpoint moved to %s keyed to %s over a consumer that was "+
 			"never moved", at, created)
@@ -957,7 +950,7 @@ func TestAStreamRebuiltAgainDuringAReanchorCommitsNothing(t *testing.T) {
 	t.Parallel()
 	f := newReanchorFixture(t)
 	before := statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}
-	seedCursor(t, f.db, probeStream, before, keyedCreated)
+	seedCursor(t, f.estate, probeStream, before, keyedCreated)
 	again := reanchorCreated.Add(time.Minute)
 	f.log = newReanchorLog(&f.order, again)
 
@@ -968,7 +961,7 @@ func TestAStreamRebuiltAgainDuringAReanchorCommitsNothing(t *testing.T) {
 	if !strings.Contains(err.Error(), statelog.ConfirmationOf(again)) {
 		t.Fatalf("the refusal does not name the instant to confirm now: %v", err)
 	}
-	if at, _ := cursorOf(t, f.db, probeStream); at != before {
+	if at, _ := cursorOf(t, f.estate, probeStream); at != before {
 		t.Fatalf("the checkpoint moved to %s, keyed to a stream the broker no "+
 			"longer serves", at)
 	}
@@ -987,7 +980,7 @@ func TestAStreamRebuiltAgainDuringAReanchorCommitsNothing(t *testing.T) {
 func TestAReanchorInterruptedAfterItsRecordIsFinishedByRerunningIt(t *testing.T) {
 	t.Parallel()
 	f := newReanchorFixture(t)
-	seedCursor(t, f.db, probeStream,
+	seedCursor(t, f.estate, probeStream,
 		statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, keyedCreated)
 	f.consumer.fail = errors.New("the process died here")
 	if _, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}),
@@ -1012,7 +1005,7 @@ func TestAReanchorInterruptedAfterItsRecordIsFinishedByRerunningIt(t *testing.T)
 		t.Fatalf("%d record(s) after %d append(s), want one record from two "+
 			"attempts", f.log.records(), f.log.appends)
 	}
-	if at, _ := cursorOf(t, f.db, probeStream); at.Generation != 2 {
+	if at, _ := cursorOf(t, f.estate, probeStream); at.Generation != 2 {
 		t.Fatalf("the checkpoint is at %s after the re-run", at)
 	}
 
@@ -1020,7 +1013,7 @@ func TestAReanchorInterruptedAfterItsRecordIsFinishedByRerunningIt(t *testing.T)
 	// that did not land fails the attempt rather than committing a
 	// transition whose record nobody can find.
 	g := newReanchorFixture(t)
-	seedCursor(t, g.db, probeStream,
+	seedCursor(t, g.estate, probeStream,
 		statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, keyedCreated)
 	g.log.lose = true
 	if _, err := statelog.Reanchor(t.Context(), g.deps(probeDomain{}),
@@ -1028,11 +1021,11 @@ func TestAReanchorInterruptedAfterItsRecordIsFinishedByRerunningIt(t *testing.T)
 		t.Fatalf("an unanswered append that never landed = %v, want a failure "+
 			"saying nothing landed", err)
 	}
-	if at, _ := cursorOf(t, g.db, probeStream); at.Generation != 1 {
+	if at, _ := cursorOf(t, g.estate, probeStream); at.Generation != 1 {
 		t.Fatalf("the checkpoint moved to %s with no record behind it", at)
 	}
 	h := newReanchorFixture(t)
-	seedCursor(t, h.db, probeStream,
+	seedCursor(t, h.estate, probeStream,
 		statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, keyedCreated)
 	h.log.lose, h.log.loseLanded = true, true
 	if _, err := statelog.Reanchor(t.Context(), h.deps(probeDomain{}),
@@ -1075,7 +1068,7 @@ func TestADomainKeepingNoGenerationRecordStillMoves(t *testing.T) {
 	if f.log.appends != 0 {
 		t.Fatalf("a domain keeping no record appended %d", f.log.appends)
 	}
-	if at, _ := cursorOf(t, f.db, probeStream); at.Generation != gen {
+	if at, _ := cursorOf(t, f.estate, probeStream); at.Generation != gen {
 		t.Fatalf("the checkpoint is at %s, want generation %d", at, gen)
 	}
 }
@@ -1377,9 +1370,9 @@ func reanchorTheRunner(t *testing.T, h *applyHarness, born, rebuilt time.Time) {
 	in.StreamCreatedAt, in.KeyedTo, in.Generation, in.Position, in.Highest =
 		rebuilt, born, old.Generation, old.Seq, old.Seq
 	plan, err := statelog.Reanchor(t.Context(), statelog.ReanchorDeps{
-		Domain: probeDomain{}, Stream: newReanchorLog(&order, rebuilt),
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Stream: newReanchorLog(&order, rebuilt),
 		Record: probeGeneration{keeps: true}, Consumer: &reanchorConsumer{},
-		Runner: h.runner, DB: h.db.Replicated(), NodeID: "node-a",
+		Runner: h.runner, DB: h.estate, NodeID: "node-a",
 	}, in, statelog.ReanchorGuard{Confirm: statelog.ConfirmationOf(rebuilt)})
 	if err != nil {
 		t.Fatalf("Reanchor: %v", err)
@@ -1434,7 +1427,7 @@ func reanchorTheRunner(t *testing.T, h *applyHarness, born, rebuilt time.Time) {
 				"old generation it sorts below every row it should supersede", at, gen)
 		}
 	}
-	if at, created := cursorOf(t, h.db, probeStream); at.Generation != gen || at.Seq != 2 ||
+	if at, created := cursorOf(t, h.estate, probeStream); at.Generation != gen || at.Seq != 2 ||
 		statelog.IdentityOf(created, rebuilt, true) != statelog.StreamSame {
 		t.Fatalf("the committed checkpoint is %s keyed to %s, want generation %d "+
 			"sequence 2 on the adopted stream", at, created, gen)
@@ -1592,8 +1585,8 @@ func TestAPassedGenerationNamesTheRemedyThatExists(t *testing.T) {
 		t.Helper()
 		h := newApplyHarness(t, probeDomain{})
 		runner, err := statelog.NewRunner(statelog.RunnerDeps{
-			Domain: probeDomain{}, Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
-			Node: h.db, DB: h.db.Replicated(), Metrics: h.metrics,
+			Domain: probeDomain{}, Spec: specOf(probeDomain{}), Layout: layoutOf(probeDomain{}), LogID: logOf(probeDomain{}), Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
+			Node: h.db, DB: h.estate, Metrics: h.metrics,
 			Checkpoint: statelog.Position{Generation: 1},
 			NodeID:     self,
 			Evicted: func(_ context.Context, node string) (bool, error) {
@@ -1757,7 +1750,7 @@ func TestAJoinReKeysTheRunnerOnlyToTheFleetsHistory(t *testing.T) {
 	// clear, the runner is keyed to the live stream, and its loop runs on.
 	h = fresh(t)
 	adopted := statelog.Position{Stream: probeStream, Generation: 2, Seq: 1}
-	seedCursor(t, h.db, probeStream, adopted, rebuilt)
+	seedCursor(t, h.estate, probeStream, adopted, rebuilt)
 	if err := h.runner.Rejoined(adopted, rebuilt.Truncate(time.Microsecond), rebuilt); err != nil {
 		t.Fatalf("Rejoined: %v", err)
 	}
@@ -1815,7 +1808,7 @@ func TestARerunJudgesItsVerdictsAgainstTheCheckpointItLoads(t *testing.T) {
 		t.Fatalf("a re-run over rows still in generation 1 = %v, want the passed "+
 			"generation", err)
 	}
-	seedCursor(t, h.db, probeStream, adopted, born)
+	seedCursor(t, h.estate, probeStream, adopted, born)
 	h.fetch.offer(2, func() statelog.Envelope {
 		e := env(2, "edit", "b", "op-2", 1)
 		e.Gen = 2
@@ -1840,7 +1833,7 @@ func TestARerunJudgesItsVerdictsAgainstTheCheckpointItLoads(t *testing.T) {
 		t.Fatalf("a re-run over rows keyed to the lost stream = %v, want the "+
 			"rebuild", err)
 	}
-	seedCursor(t, h.db, probeStream, own, rebuilt)
+	seedCursor(t, h.estate, probeStream, own, rebuilt)
 	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
 	if err := rerun(t, h, 2); err != nil {
 		t.Fatalf("a re-run over rows keyed to the live stream = %v", err)
@@ -1874,7 +1867,7 @@ func TestARecreationVerdictTheLiveInstantContradictsIsNamed(t *testing.T) {
 	// THE DONOR'S FILE: rows keyed to the live stream, which this runner has
 	// never read.
 	at := statelog.Position{Stream: probeStream, Generation: 1, Seq: 4}
-	seedCursor(t, h.db, probeStream, at, live)
+	seedCursor(t, h.estate, probeStream, at, live)
 	if err := runOnce(t, h.runner); !errors.Is(err, statelog.ErrStreamRecreated) {
 		t.Fatalf("the loop over rows keyed to a stream it never read = %v, want "+
 			"the recreation it judges them by", err)
@@ -1956,7 +1949,7 @@ func TestAGenerationAnotherNodeOpenedIsNeverOpenedAgain(t *testing.T) {
 		return rec
 	}
 	subject := func(rec statelog.GenerationRecord) string {
-		return probeDomain{}.Stream().SubjectPrefix + "." + rec.Subject.String()
+		return specOf(probeDomain{}).SubjectPrefix + "." + rec.Subject.String()
 	}
 	// THE MOST PERMISSIVE THE GUARD CAN BE: the register unreadable and the
 	// operator forcing it, so nothing but the read-back stands in the way.
@@ -2007,7 +2000,7 @@ func TestAGenerationAnotherNodeOpenedIsNeverOpenedAgain(t *testing.T) {
 			t.Parallel()
 			f := newReanchorFixture(t)
 			before := statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}
-			seedCursor(t, f.db, probeStream, before, keyedCreated)
+			seedCursor(t, f.estate, probeStream, before, keyedCreated)
 			c.stage(t, f)
 			in, guard := forced()
 			_, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}), in, guard)
@@ -2018,7 +2011,7 @@ func TestAGenerationAnotherNodeOpenedIsNeverOpenedAgain(t *testing.T) {
 			if strings.Contains(c.name, "refused outright") && !strings.Contains(err.Error(), "node-b") {
 				t.Errorf("the refusal does not name the node that opened it: %v", err)
 			}
-			if at, _ := cursorOf(t, f.db, probeStream); at != before {
+			if at, _ := cursorOf(t, f.estate, probeStream); at != before {
 				t.Fatalf("the checkpoint moved to %s over another node's generation", at)
 			}
 			if len(f.consumer.after) != 0 || len(f.runner.at) != 0 {
@@ -2032,7 +2025,7 @@ func TestAGenerationAnotherNodeOpenedIsNeverOpenedAgain(t *testing.T) {
 	// way the broker reports it: the re-run of an interrupted transition.
 	for _, dedupe := range []bool{false, true} {
 		f := newReanchorFixture(t)
-		seedCursor(t, f.db, probeStream,
+		seedCursor(t, f.estate, probeStream,
 			statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, keyedCreated)
 		own := peer(t, "node-a")
 		f.log.put(subject(own), own.OpID, own.Payload)
@@ -2043,7 +2036,7 @@ func TestAGenerationAnotherNodeOpenedIsNeverOpenedAgain(t *testing.T) {
 			t.Fatalf("a re-run finding its own record (duplicate window first: %v) "+
 				"= %v", dedupe, err)
 		}
-		if at, _ := cursorOf(t, f.db, probeStream); at.Generation != plan.Generation {
+		if at, _ := cursorOf(t, f.estate, probeStream); at.Generation != plan.Generation {
 			t.Fatalf("the re-run left the checkpoint at %s", at)
 		}
 	}
@@ -2066,7 +2059,7 @@ func TestAnAbandonedGenerationsRecordsAreVoidWhereItsReanchorIsFollowed(t *testi
 	// holds everything past their checkpoint, and an evicted node that
 	// opened generation 2.
 	f := newReanchorFixture(t)
-	seedCursor(t, f.db, probeStream,
+	seedCursor(t, f.estate, probeStream,
 		statelog.Position{Stream: probeStream, Generation: 1, Seq: 10}, reanchorCreated)
 	in := reanchorInputs()
 	in.KeyedTo = reanchorCreated.Truncate(time.Microsecond)
@@ -2082,7 +2075,7 @@ func TestAnAbandonedGenerationsRecordsAreVoidWhereItsReanchorIsFollowed(t *testi
 			"rows' own checkpoint, 10, abandoning what lies between 1 and 3", plan)
 	}
 	var after, before int64
-	if err := f.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := f.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), `
 			SELECT void_after, void_before FROM statelog_cursor WHERE stream = ?`,
 			probeStream).Scan(&after, &before)
@@ -2096,7 +2089,7 @@ func TestAnAbandonedGenerationsRecordsAreVoidWhereItsReanchorIsFollowed(t *testi
 	// THE APPLIER DROPS THE ABANDONED GENERATION'S RECORDS, over a checkpoint
 	// carrying that range — and only those.
 	h := newApplyHarness(t, probeDomain{})
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
 				(stream, generation, seq, stream_created_at, updated_at,
@@ -2131,7 +2124,7 @@ func TestAnAbandonedGenerationsRecordsAreVoidWhereItsReanchorIsFollowed(t *testi
 			applied, want)
 	}
 	var anchor int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT anchor FROM statelog_anchor WHERE subject = ?`,
 			probePrefix+".object.abandoned").Scan(&anchor)
@@ -2163,7 +2156,7 @@ func TestANodesStandingIsReadOffTheLog(t *testing.T) {
 	}
 	ask := func() (bool, bool) {
 		t.Helper()
-		evicted, found, err := statelog.EvictedOnLog(t.Context(), evictingProbe{}, log, "node-x")
+		evicted, found, err := statelog.EvictedOnLog(t.Context(), evictingProbe{}, specOf(evictingProbe{}), log, "node-x")
 		if err != nil {
 			t.Fatalf("EvictedOnLog: %v", err)
 		}
@@ -2182,7 +2175,7 @@ func TestANodesStandingIsReadOffTheLog(t *testing.T) {
 			"LAST record is its standing", evicted, found)
 	}
 	// A DOMAIN WITH NO GATE has nothing to read.
-	if _, found, err := statelog.EvictedOnLog(t.Context(), probeDomain{}, log, "node-x"); err != nil || found {
+	if _, found, err := statelog.EvictedOnLog(t.Context(), probeDomain{}, specOf(probeDomain{}), log, "node-x"); err != nil || found {
 		t.Fatalf("a domain with no eviction gate answered found=%v, %v", found, err)
 	}
 }
@@ -2201,6 +2194,10 @@ func (evictingProbe) Evicts(payload []byte) (bool, error) {
 	err := json.Unmarshal(payload, &body)
 	return body.Evicts, err
 }
+
+// Releases is false for every record: what this case reads is a node's
+// standing, and an eviction record is as much of one as a release.
+func (evictingProbe) Releases(statelog.Envelope) bool { return false }
 
 // WHO OPENED EACH GENERATION IS READ OFF THE LOG, past what the register knows.
 //
@@ -2225,7 +2222,7 @@ func TestWhoOpenedEachGenerationIsReadOffTheLog(t *testing.T) {
 	open(5, "node-e")
 	read := func(above, through uint32) map[uint32]string {
 		t.Helper()
-		got, err := statelog.GenerationOpeners(t.Context(), probeDomain{},
+		got, err := statelog.GenerationOpeners(t.Context(), probeDomain{}, specOf(probeDomain{}),
 			probeGeneration{keeps: true}, log, above, through)
 		if err != nil {
 			t.Fatalf("GenerationOpeners: %v", err)
@@ -2243,7 +2240,7 @@ func TestWhoOpenedEachGenerationIsReadOffTheLog(t *testing.T) {
 	if got := read(5, 5); len(got) != 0 {
 		t.Fatalf("above 5 = %v, want nothing", got)
 	}
-	if got, err := statelog.GenerationOpeners(t.Context(), probeDomain{},
+	if got, err := statelog.GenerationOpeners(t.Context(), probeDomain{}, specOf(probeDomain{}),
 		probeGeneration{keeps: false}, log, 1, 5); err != nil || len(got) != 0 {
 		t.Fatalf("a domain keeping no generation record = %v, %v, want nothing", got, err)
 	}
@@ -2262,9 +2259,9 @@ func probeBody(t *testing.T, seq uint64, opID string) []byte {
 // holdRecord seeds the fixture's rows with the record the fake log holds at
 // seq, applied under opID at generation 1 — what a node that applied it holds
 // in its operation ledger.
-func holdRecord(t *testing.T, db *store.DB, seq uint64, opID string) {
+func holdRecord(t *testing.T, db store.PartitionHandle, seq uint64, opID string) {
 	t.Helper()
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(), `SELECT 1 FROM probe_ops LIMIT 1`); err != nil {
 			if _, err := tx.ExecContext(t.Context(), probeDDL); err != nil {
 				return err
@@ -2298,14 +2295,14 @@ func TestARestoredReanchorFollowsFromOneBelowItsOwnRecord(t *testing.T) {
 	stage := func(t *testing.T) (*reanchorFixture, statelog.ReanchorInputs) {
 		t.Helper()
 		f := newReanchorFixture(t)
-		seedCursor(t, f.db, probeStream,
+		seedCursor(t, f.estate, probeStream,
 			statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, reanchorCreated)
 		in := reanchorInputs()
 		in.KeyedTo = reanchorCreated.Truncate(time.Microsecond)
 		in.FirstSeq, in.LastSeq = 1, 7_000
 		f.log.seq = 6_999
 		f.log.put("probe.object.last", "op-last", probeBody(t, 7_000, "op-last"))
-		holdRecord(t, f.db, 7_000, "op-last")
+		holdRecord(t, f.estate, 7_000, "op-last")
 		// THE WRITE BETWEEN THE READING AND THE APPEND, by a copy-age node.
 		f.log.put("probe.object.late", "op-late", probeBody(t, 7_001, "op-late"))
 		return f, in
@@ -2320,7 +2317,7 @@ func TestARestoredReanchorFollowsFromOneBelowItsOwnRecord(t *testing.T) {
 			t.Fatalf("Reanchor over a record landed before its own = %v, want a "+
 				"refusal naming it", err)
 		}
-		if at, _ := cursorOf(t, f.db, probeStream); at.Generation != 1 {
+		if at, _ := cursorOf(t, f.estate, probeStream); at.Generation != 1 {
 			t.Fatalf("a refused reanchor moved the checkpoint to %s", at)
 		}
 		if len(f.consumer.after) != 0 {
@@ -2342,7 +2339,7 @@ func TestARestoredReanchorFollowsFromOneBelowItsOwnRecord(t *testing.T) {
 			t.Fatalf("the plan is %+v, want the checkpoint at 7001, one below the "+
 				"generation record, discarding the record there", plan)
 		}
-		if at, _ := cursorOf(t, f.db, probeStream); at.Seq != 7_001 || at.Generation != 2 {
+		if at, _ := cursorOf(t, f.estate, probeStream); at.Seq != 7_001 || at.Generation != 2 {
 			t.Fatalf("the checkpoint is at %s, want generation 2 at 7001", at)
 		}
 		if len(f.consumer.after) != 1 || f.consumer.after[0] != 7_001 {
@@ -2363,11 +2360,11 @@ func TestARestoredReanchorFollowsFromOneBelowItsOwnRecord(t *testing.T) {
 func TestARerunOfAnInterruptedRestoredReanchorFinishesBelowItsOwnRecord(t *testing.T) {
 	t.Parallel()
 	f := newReanchorFixture(t)
-	seedCursor(t, f.db, probeStream,
+	seedCursor(t, f.estate, probeStream,
 		statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, reanchorCreated)
 	f.log.seq = 6_999
 	f.log.put("probe.object.last", "op-last", probeBody(t, 7_000, "op-last"))
-	holdRecord(t, f.db, 7_000, "op-last")
+	holdRecord(t, f.estate, 7_000, "op-last")
 	// THE FIRST ATTEMPT: its record at 7001, and its consumer reset failed.
 	deps := f.deps(probeDomain{})
 	in := reanchorInputs()
@@ -2395,7 +2392,7 @@ func TestARerunOfAnInterruptedRestoredReanchorFinishesBelowItsOwnRecord(t *testi
 		t.Fatalf("the re-run's plan is %+v, want the checkpoint at 7000 discarding "+
 			"nothing — its own record is not a record written after the restore", plan)
 	}
-	if at, _ := cursorOf(t, f.db, probeStream); at.Seq != 7_000 || at.Generation != 2 {
+	if at, _ := cursorOf(t, f.estate, probeStream); at.Seq != 7_000 || at.Generation != 2 {
 		t.Fatalf("the checkpoint is at %s, want generation 2 at 7000", at)
 	}
 }
@@ -2411,7 +2408,7 @@ func TestARerunOfAnInterruptedRestoredReanchorFinishesBelowItsOwnRecord(t *testi
 func TestAReanchorFinishesAfterItsCallerHasGone(t *testing.T) {
 	t.Parallel()
 	f := newReanchorFixture(t)
-	seedCursor(t, f.db, probeStream,
+	seedCursor(t, f.estate, probeStream,
 		statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, keyedCreated)
 	in := reanchorInputs()
 	in.FirstSeq = 42
@@ -2430,7 +2427,7 @@ func TestAReanchorFinishesAfterItsCallerHasGone(t *testing.T) {
 		t.Fatalf("the consumer was rebuilt under a context reporting %v, want a "+
 			"live one", f.consumer.ctxErr)
 	}
-	if at, _ := cursorOf(t, f.db, probeStream); at.Generation != plan.Generation {
+	if at, _ := cursorOf(t, f.estate, probeStream); at.Generation != plan.Generation {
 		t.Fatalf("the checkpoint is at %s, want generation %d committed", at, plan.Generation)
 	}
 }
@@ -2455,14 +2452,14 @@ func TestARestoredReanchorsLowerGenerationsAfterItsRecordAreVoid(t *testing.T) {
 
 	// THE TRANSITION WRITES THE RULE: the restored case, its record at 7001.
 	f := newReanchorFixture(t)
-	seedCursor(t, f.db, probeStream,
+	seedCursor(t, f.estate, probeStream,
 		statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, reanchorCreated)
 	in := reanchorInputs()
 	in.KeyedTo = reanchorCreated.Truncate(time.Microsecond)
 	in.FirstSeq, in.LastSeq = 1, 7_000
 	f.log.seq = 6_999
 	f.log.put("probe.object.last", "op-last", probeBody(t, 7_000, "op-last"))
-	holdRecord(t, f.db, 7_000, "op-last")
+	holdRecord(t, f.estate, 7_000, "op-last")
 	plan, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}), in, confirmed())
 	if err != nil {
 		t.Fatalf("Reanchor: %v", err)
@@ -2471,7 +2468,7 @@ func TestARestoredReanchorsLowerGenerationsAfterItsRecordAreVoid(t *testing.T) {
 		t.Fatalf("the plan voids old-generation records after %d, want 7001 — its generation record", plan.StaleAfter)
 	}
 	var staleAfter int64
-	if err := f.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := f.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT stale_after FROM statelog_cursor WHERE stream = ?`, probeStream).
 			Scan(&staleAfter)
@@ -2484,7 +2481,7 @@ func TestARestoredReanchorsLowerGenerationsAfterItsRecordAreVoid(t *testing.T) {
 
 	// THE APPLIER VOIDS THEM, over a checkpoint carrying the rule.
 	h := newApplyHarness(t, probeDomain{})
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
 				(stream, generation, seq, stream_created_at, updated_at,
@@ -2528,9 +2525,9 @@ func TestARestoredReanchorsLowerGenerationsAfterItsRecordAreVoid(t *testing.T) {
 // row, which every artefact carries whole.
 func TestARestoredCheckpointsRuleTravelsInASnapshot(t *testing.T) {
 	t.Parallel()
-	h := newJoinHarnessFrom(t, joinDonor{domain: probeDomain{}, seed: func(t *testing.T, db *store.DB) {
+	h := newJoinHarnessFrom(t, joinDonor{domain: probeDomain{}, seed: func(t *testing.T, db store.PartitionHandle) {
 		t.Helper()
-		if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(t.Context(), `
 				UPDATE statelog_cursor SET void_after = 0, void_before = 1,
 					stale_after = 4201 WHERE stream = ?`, probeStream)
@@ -2543,7 +2540,7 @@ func TestARestoredCheckpointsRuleTravelsInASnapshot(t *testing.T) {
 		t.Fatalf("Join: %v", err)
 	}
 	var staleAfter int64
-	if err := h.joiner.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.joinEstate.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT stale_after FROM statelog_cursor WHERE stream = ?`, probeStream).
 			Scan(&staleAfter)

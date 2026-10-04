@@ -88,7 +88,11 @@ const ScanBatch = 1_000
 // read joins the two, which is why every comparison here is a batch from each
 // side rather than a JOIN.
 type Indexer struct {
-	db *store.DB
+	// db is this node's own estate, where the index is kept, and estate the
+	// partition whose documents it indexes — read only, because the
+	// documents are an applier's rows and the index is not.
+	db     *store.DB
+	estate store.PartitionReader
 
 	// built is which sources have completed at least one lap since this
 	// process started, which is what [Indexer.Ready] answers.
@@ -150,19 +154,22 @@ func (x *Indexer) WithLinks(links func(body string) []string) *Indexer {
 	return x
 }
 
-// NewIndexer builds an indexer over a node's store, covering every corpus in
+// NewIndexer builds an indexer that keeps its index in a node's own store and
+// reads the documents of one partition, covering every corpus in
 // [DefaultLexicalSources].
-func NewIndexer(db *store.DB) *Indexer { return NewIndexerOver(db, DefaultLexicalSources()) }
+func NewIndexer(db *store.DB, estate store.PartitionReader) *Indexer {
+	return NewIndexerOver(db, estate, DefaultLexicalSources())
+}
 
 // NewIndexerOver builds one over the sources given, which is what a test that
 // is about ONE corpus uses.
-func NewIndexerOver(db *store.DB, sources []LexicalSource) *Indexer {
+func NewIndexerOver(db *store.DB, estate store.PartitionReader, sources []LexicalSource) *Indexer {
 	built := make(map[string]*atomic.Bool, len(sources))
 	for _, source := range sources {
 		built[source.Source()] = &atomic.Bool{}
 	}
 	return &Indexer{
-		db: db, sources: sources,
+		db: db, estate: estate, sources: sources,
 		built:        built,
 		cursor:       map[string]string{},
 		orphanCursor: map[string]string{},
@@ -426,14 +433,15 @@ func (x *Indexer) staleIn(ctx context.Context, source LexicalSource,
 		// the bodies in a second transaction would fetch a version the
 		// scan never saw.
 		//
-		// THROUGH THE HANDLE, NOT ITS POOL. `DB.SQL()` answers a NIL
-		// pool on a replicated estate that is not open — a legitimate,
-		// documented state of that peer — and a statement issued on it
-		// panics inside database/sql. [store.DB.Read] answers
-		// [store.ErrNoEstate] instead, which every caller here already
-		// reads as an empty index pass.
+		// THROUGH THE HANDLE, NOT A POOL. A partition that is not open
+		// — a legitimate, documented state, since an adoption closes it
+		// between its rename and its reopen — has no pool, and a
+		// statement issued on a closed one panics inside database/sql.
+		// [store.PartitionReader.Read] answers [store.ErrNoEstate]
+		// instead, which every caller here already reads as an empty
+		// index pass.
 		var out []Doc
-		if err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		if err := x.estate.Read(ctx, func(tx *sql.Tx) error {
 			scan, err := source.Versions(ctx, tx, x.cursor[name], ScanBatch)
 			if err != nil {
 				return err
@@ -626,10 +634,9 @@ func (x *Indexer) orphansOf(ctx context.Context, source LexicalSource,
 	x.orphanCursor[source.Source()] = candidates[len(candidates)-1]
 
 	live := map[string]bool{}
-	// THROUGH THE HANDLE, for [Indexer.nextBatch]' reason: a nil pool from
-	// a closed replicated estate panics where the handle answers
-	// [store.ErrNoEstate].
-	if err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	// THROUGH THE HANDLE, for [Indexer.nextBatch]' reason: a closed
+	// partition's pool panics where the handle answers [store.ErrNoEstate].
+	if err := x.estate.Read(ctx, func(tx *sql.Tx) error {
 		held, err := source.Live(ctx, tx, candidates)
 		live = held
 		return err
@@ -663,7 +670,7 @@ func (x *Indexer) Pending(ctx context.Context) (int, error) {
 	// seat whose company has pages indexed and items not is one that would
 	// be told its own tracker holds nothing.
 	// THROUGH THE HANDLE, for [Indexer.nextBatch]' reason.
-	if err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := x.estate.Read(ctx, func(tx *sql.Tx) error {
 		for _, source := range x.sources {
 			n, err := source.Count(ctx, tx)
 			if err != nil {

@@ -8,14 +8,16 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // stubSearcher is a knowledge backend with a scripted answer and a record of
 // what it was asked.
 type stubSearcher struct {
-	can     bool
-	hits    []knowledge.Hit
-	queries []knowledge.Query
+	can      bool
+	hits     []knowledge.Hit
+	coverage statelog.Coverage
+	queries  []knowledge.Query
 
 	// outcome is what the search says it did. The zero value is filled
 	// in as a complete hybrid answer, which is what every case that is
@@ -27,10 +29,12 @@ func (s *stubSearcher) CanSearch(*org.Role, *org.Organization) bool { return s.c
 
 func (s *stubSearcher) Search(_ context.Context, q knowledge.Query) knowledge.Result {
 	s.queries = append(s.queries, q)
+	out := knowledge.Result{Hits: s.hits, Outcome: completeOutcome()}
 	if s.outcome != nil {
-		return knowledge.Result{Hits: s.hits, Outcome: *s.outcome}
+		out.Outcome = *s.outcome
 	}
-	return knowledge.Result{Hits: s.hits, Outcome: completeOutcome()}
+	out.Partitions = s.coverage
+	return out
 }
 
 // completeOutcome is a hybrid search that covered everything.
@@ -176,6 +180,34 @@ func TestALongQueryIsBounded(t *testing.T) {
 	}
 	if got := len(backend.queries[0].Text); got != searchQueryMax {
 		t.Errorf("the query reached the backend at %d characters, want %d", got, searchQueryMax)
+	}
+}
+
+// A SEARCH THAT DID NOT REACH PART OF THE KNOWLEDGE BASE SAYS SO, hits or none:
+// "no documents match" about a part nobody searched sends a seat off to write
+// the page that already exists.
+func TestSearchKnowledgeSaysWhatItDidNotReach(t *testing.T) {
+	t.Parallel()
+	short := statelog.Coverage{Addressed: 2, Answered: []string{"pages.000"},
+		Missing: []statelog.MissingPartition{{Partition: "pages.001", Reason: statelog.MissingBehind}}}
+	notice := short.Notice()
+	for name, hits := range map[string][]knowledge.Hit{
+		"with hits":    {{Title: "Staging runbook"}},
+		"with no hits": nil,
+	} {
+		tool := &searchKnowledge{search: &stubSearcher{can: true, hits: hits, coverage: short}}
+		res, err := tool.CallForTurn(context.Background(), searchTurn(),
+			map[string]any{"query": "staging redirect proxy"})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !strings.Contains(res.Output, notice) {
+			t.Errorf("%s: the answer does not say what it did not reach:\n%s", name, res.Output)
+		}
+		if strings.Contains(res.Output, "Try different keywords") {
+			t.Errorf("%s: the answer sends the seat to rephrase a search that did not "+
+				"run everywhere:\n%s", name, res.Output)
+		}
 	}
 }
 

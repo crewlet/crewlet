@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -57,8 +59,8 @@ func TestConfiguredRolesAreTheOnesTaken(t *testing.T) {
 // bootstrap's own accessor, which is the only parse of node.roles there is.
 func profileFor(t *testing.T, roles []string) placement.NodeProfile {
 	t.Helper()
-	node := config.Node{Roles: roles}
-	return node.Profile("n1")
+	boot := config.Bootstrap{Node: config.Node{Roles: roles}}
+	return boot.Profile("n1")
 }
 
 // engineOn wires just enough engine for the park and pause hooks: they reach
@@ -366,6 +368,90 @@ func TestEveryDerivableReplyReachesTheLoop(t *testing.T) {
 	for _, want := range []turn.Reply{turn.NoReply(), turn.ToolReply("slack"), turn.EngineReply()} {
 		if got := turnInputFor(Request{WorkKey: "wk", RunID: "run"}, want).Reply; got != want {
 			t.Errorf("Reply = %q, want %q", got, want)
+		}
+	}
+}
+
+// ONE PROCESS HOLDS EVERY LEASE UNDER ONE OWNER: the incarnation the engine
+// minted, which the capacity barrier and the admission handshake are written
+// in terms of.
+//
+// The seat host was built with a mint of its own, so a single process held its
+// presence, its seats and its fleet duties under one owner and its object-store
+// membership under another — two identities for one process in the
+// coordination store, which is precisely what a second process running under
+// the same node id looks like, and the one thing an operator reading a refused
+// membership is told to look for. Asserted on the leases as the store holds
+// them rather than on the values handed to their constructors, because the
+// store is what a peer reads.
+//
+// The mailbox retirement is the one owner that is deliberately NOT this: it
+// claims a seat as a separate party that must lose to this host (see
+// [Engine.buildMailboxes]), and a node with no retired seats never claims one,
+// so nothing here can see it.
+func TestEveryLeaseThisProcessHoldsIsUnderItsOneIncarnation(t *testing.T) {
+	t.Parallel()
+	boot := config.DefaultBootstrap()
+	boot.Node.ID = "node-7"
+	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	company, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	if err != nil {
+		t.Fatalf("parse the company: %v", err)
+	}
+	e, err := New(t.Context(), Options{Bootstrap: &boot, Company: company})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if e.incarnation == "" || !strings.HasPrefix(e.incarnation, "node-7:") {
+		t.Fatalf("the engine's incarnation is %q, not one minted for node-7", e.incarnation)
+	}
+	if got := e.node.Owner(); got != e.incarnation {
+		t.Errorf("the seat host claims as %q and the engine is %q — one process, "+
+			"two identities", got, e.incarnation)
+	}
+
+	// ONE OF EACH KIND the process holds for itself: the host's presence, a
+	// seat and a fleet duty.
+	leases := e.backends.Coord
+	resources := []string{
+		coord.NodeResource("node-7"),
+		coord.SeatResource("ceo"),
+		coord.WorkerResource(objectCollectorDuty),
+	}
+	eventually(t, "the presence, a seat and a duty", func() bool {
+		for _, resource := range resources {
+			if held(t, leases, resource) == nil {
+				return false
+			}
+		}
+		return true
+	})
+	for _, resource := range resources {
+		if lease := held(t, leases, resource); lease.Owner != e.incarnation {
+			t.Errorf("%s is held by %q, not this process's incarnation %q",
+				resource, lease.Owner, e.incarnation)
+		}
+	}
+	// AND NOTHING ELSE LIVE IS UNDER ANOTHER OWNER: this is the only process
+	// on the store, so a lease of any class under a different owner is a
+	// second identity the list above did not think to name.
+	for _, class := range []coord.Class{coord.ClassNode, coord.ClassSeat,
+		coord.ClassWorker} {
+		live, err := leases.ListLive(t.Context(), class)
+		if err != nil {
+			t.Fatalf("list the %s leases: %v", class, err)
+		}
+		for _, lease := range live {
+			if lease.Owner != e.incarnation {
+				t.Errorf("%s is held by %q, not this process's incarnation %q",
+					lease.Resource, lease.Owner, e.incarnation)
+			}
 		}
 	}
 }

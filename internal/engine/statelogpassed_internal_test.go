@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -39,7 +40,7 @@ func TestANodeAPeerReanchoredPastIsSentToAdopt(t *testing.T) {
 		t.Fatalf("a write: %+v, %v", res, err)
 	}
 	logs := map[string]*jetstream.DomainLog{}
-	for _, name := range s.order {
+	for _, name := range s.held().order {
 		logs[name] = s.Domain(name).log
 	}
 	trackerName, vectorsName := tracker.Domain{}.Name(), search.Domain{}.Name()
@@ -53,12 +54,12 @@ func TestANodeAPeerReanchoredPastIsSentToAdopt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the vectors' log: %v", err)
 	}
-	if err := e.backends.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(e.backends.Store).Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at)
 			VALUES (?, 0, ?, ?, ?)
 			ON CONFLICT (stream) DO NOTHING`,
-			vectors.domain.Stream().Name, int64(vstats.LastSeq),
+			vectors.spec.Name, int64(vstats.LastSeq),
 			store.EncodeTime(vstats.CreatedAt), store.EncodeTime(time.Now().UTC()))
 		return err
 	}); err != nil {
@@ -146,7 +147,7 @@ func TestANodeAPeerReanchoredPastIsSentToAdopt(t *testing.T) {
 func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	s := e.native.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
@@ -159,7 +160,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("jetstream: %v", err)
 	}
-	rebuildLog(t, js, tracker.Domain{}.Stream())
+	rebuildLog(t, js, estateSpec(tracker.Domain{}))
 	stats, err := running.log.Stats(t.Context())
 	if err != nil {
 		t.Fatalf("read the rebuilt log: %v", err)
@@ -172,7 +173,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	peerRecord := appendEviction(t, running, "op-peer", "node-z")
 	next := running.runner.Committed().Generation + 1
 	standUpDonor(t, q, rows, statelog.Position{
-		Stream: running.domain.Stream().Name, Generation: next, Seq: peerRecord - 1,
+		Stream: running.spec.Name, Generation: next, Seq: peerRecord - 1,
 	}, live)
 	if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
 		NodeID: "donor", At: time.Now().UTC(),
@@ -186,7 +187,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 
 	// THE GUARD NAMES THE PEER, and adopting its snapshot is what it means.
 	if _, err := e.Reanchor(t.Context(), ReanchorRequest{
-		Stream: running.domain.Stream().Name, Confirm: statelog.ConfirmationOf(live),
+		Stream: running.spec.Name, Confirm: statelog.ConfirmationOf(live),
 		By: "ops-1",
 	}); !errors.Is(err, statelog.ErrReanchorRefused) {
 		t.Fatalf("a reanchor with a re-anchored peer = %v, want a refusal", err)
@@ -215,7 +216,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	if got := running.runner.StreamCreatedAt(); statelog.IdentityOf(live, got, true) != statelog.StreamSame {
 		t.Fatalf("the runner is keyed to %s, want the rebuilt stream's %s", got, live)
 	}
-	waitUntil(t, 30*time.Second, "the node to admit seats again", e.NativeHydrated)
+	waitUntil(t, 30*time.Second, "the node to admit seats again", hydrated(t, e))
 	res, err := e.native.Load().writer.EvictNode(t.Context(), "op-after", "node-y")
 	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Position.Generation != next {
 		t.Fatalf("a write after the adoption: %+v, %v — want it applied in generation %d",
@@ -236,7 +237,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	s := e.native.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
@@ -258,14 +259,14 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 		Generation: next, Case: statelog.ReanchorRestored, By: "ops-1", Writer: "donor",
 		At: time.Now().UTC(),
 		Inputs: statelog.ReanchorInputs{
-			Stream: running.domain.Stream().Name, StreamCreatedAt: live, KeyedTo: live,
+			Stream: running.spec.Name, StreamCreatedAt: live, KeyedTo: live,
 		},
 	})
 	if err != nil || !keeps {
 		t.Fatalf("encode the peer's generation record: %v", err)
 	}
 	zero := uint64(0)
-	spec := running.domain.Stream()
+	spec := running.spec
 	genSeq, _, err := running.log.Append(t.Context(),
 		spec.SubjectPrefix+"."+record.Subject.String(), record.OpID, &zero, record.Payload)
 	if err != nil {
@@ -311,7 +312,7 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 func copyEstate(t *testing.T, back *Backends) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "crewlet-replicated.db")
-	if _, err := back.Store.Replicated().Backup(t.Context(), path); err != nil {
+	if _, err := storetest.Partition(t, storetest.EstateOf(back.Store)).Backup(t.Context(), path); err != nil {
 		t.Fatalf("copy the replicated estate: %v", err)
 	}
 	return path
@@ -324,7 +325,7 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 	at statelog.Position, created time.Time) {
 
 	t.Helper()
-	copyDB, err := store.OpenEstate(t.Context(), store.EstateReplicated, rows, store.Options{})
+	copyDB, err := store.OpenEstate(t.Context(), store.EstatePartition, rows, store.Options{})
 	if err != nil {
 		t.Fatalf("open the copy: %v", err)
 	}
@@ -349,25 +350,22 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 		t.Fatalf("quiesce the copy: %v", err)
 	}
 	dir := filepath.Dir(rows)
-	donorNode, err := store.Open(t.Context(), filepath.Join(dir, "node.db"),
-		store.Options{ReplicatedPath: rows})
-	if err != nil {
-		t.Fatalf("open the donor's store: %v", err)
-	}
+	donorNode, _ := storetest.OpenEstate(t, filepath.Join(dir, "node.db"), store.Options{ReplicatedPath: rows}, 1)
 	t.Cleanup(func() { _ = donorNode.Close() })
 	lag := uint64(0)
 	var registered []statelog.Registered
 	for _, domain := range registeredDomains() {
 		registered = append(registered, statelog.Registered{
-			Domain: domain,
+			Domain: domain, Log: estateLog(domain), Spec: estateSpec(domain),
 			Health: func() statelog.Health { return statelog.Health{Drained: true, Lag: &lag} },
 		})
 	}
 	snapDir := filepath.Join(dir, "snapshots")
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
-		Domains: registered, DB: donorNode, Dir: snapDir, NodeID: "donor",
+		Layout: LayoutZero(), Partition: statelog.EstatePartition,
+		Domains: registered, File: storetest.EstateOf(donorNode), Dir: snapDir, NodeID: "donor",
 		EngineVersion: "v0.0.0-test",
-		Counted:       func(context.Context) (int, error) { return 2, nil },
+		Recipients:    func(context.Context) (int, error) { return 1, nil },
 		Interval:      24 * time.Hour,
 	})
 	if err != nil {
@@ -378,9 +376,10 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 		t.Fatalf("Take: %v", err)
 	}
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: "donor",
+		NodeID: "donor", Layout: LayoutZero(),
+		Keeps:  statelog.KeepsOnly(statelog.EstatePartition).Keeps,
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
-		Newest: func() (statelog.Manifest, bool) { return manifest, true },
+		Newest: func(statelog.PartitionID) (statelog.Manifest, bool) { return manifest, true },
 		Path:   func(m statelog.Manifest) string { return filepath.Join(snapDir, m.Artifact) },
 	})
 	if err != nil {

@@ -5,6 +5,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
@@ -33,7 +35,7 @@ func (e *Engine) startUsage(ctx context.Context, s *stateLog) {
 	if s == nil || e.backends == nil || e.backends.Store == nil {
 		return
 	}
-	running := s.domains[usage.Domain{}.Name()]
+	running := s.Log(usageLog(s.layout).String())
 	if running == nil || running.publisher == nil {
 		return
 	}
@@ -96,14 +98,27 @@ func (e *Engine) seatHandle(agentID string) (string, bool) {
 	return seat.Handle(), true
 }
 
+// usageLog is the usage domain's one log under a layout: the partition that
+// carries it ([usage.Domain.PartitionOf]), or the zero partition where the
+// layout divides it, which no log carries — so nothing is published or read
+// there rather than a guess.
+func usageLog(l statelog.Layout) statelog.LogID {
+	name := usage.Domain{}.Name()
+	return statelog.LogID{Domain: name, Partition: l.OnlyPartition(name)}
+}
+
 // UsageEstate is the replicated estate as a reader of the usage domain's rows
-// needs it — the spend answers' source (ADR-0020).
+// needs it — the spend answers' source (ADR-0020): the partition carrying the
+// domain's log under this node's layout.
 //
 // RESOLVED ON EVERY READ through the node handle, never captured: an adoption
-// replaces the replicated peer, and a reader holding the handle it booted with
-// would answer every named spend window from a file no longer at that name.
-// The window in which there is no peer answers [store.ErrNoEstate], which the
-// query surface reports as "not available yet".
+// closes the partition and reopens it, and a reader holding the handle it
+// booted with would answer every named spend window from a file no longer at
+// that name. A partition that is not open here answers [store.ErrNoEstate],
+// which the query surface reports as "not available yet".
 func (e *Engine) UsageEstate() usage.Estate {
-	return replicatedEstate{node: e.backends.Store}
+	if e.backends == nil || e.backends.Store == nil {
+		return store.PartitionReader{}
+	}
+	return e.backends.Store.PartitionHandle(usageLog(e.layout()).Partition.String()).Reader()
 }

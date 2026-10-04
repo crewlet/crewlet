@@ -198,7 +198,7 @@ func TestAnAnnouncedChangeThatNamesNobodyIsStillNotified(t *testing.T) {
 func (r *roundTrip) notificationRows(recordID string) int {
 	r.t.Helper()
 	var n int
-	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(r.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(r.t.Context(),
 			`SELECT COUNT(*) FROM tracker_notifications WHERE record_id = ?`,
 			recordID).Scan(&n)

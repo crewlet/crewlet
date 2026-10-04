@@ -56,7 +56,7 @@ func writeSkillsPage(t *testing.T, n *node, title, body string) pages.Written {
 // every one of them to reach the node's registry.
 func publish(t *testing.T, n *node, in ...skills.Skill) []pages.Written {
 	t.Helper()
-	waitFor(t, "the native backends to hydrate", n.engine.NativeHydrated)
+	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
 	out := make([]pages.Written, 0, len(in))
 	for _, s := range in {
 		out = append(out, writeSkillsPage(t, n, s.Title, skillPageText(s)))
@@ -163,7 +163,7 @@ func TestAnOrdinaryPageInTheContainerIsNotASkill(t *testing.T) {
 	n := start(t)
 	waitForSeat(t, n, "ceo")
 
-	waitFor(t, "the native backends to hydrate", n.engine.NativeHydrated)
+	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
 	writeSkillsPage(t, n, "Project home", "# Welcome\n\nRead the runbooks.")
 	publish(t, n, toolSkill("recall-conventions", "query_episodes", true))
 
@@ -216,7 +216,7 @@ func TestOperatorVariablesAreSubstitutedIntoASkill(t *testing.T) {
 // executor would be offered.
 func TestASkillPagePublishedNativelyReachesTheRegistry(t *testing.T) {
 	n := start(t)
-	waitFor(t, "the native backends to hydrate", n.engine.NativeHydrated)
+	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
 
 	const frontmatter = "---\nkey: deploy-conventions\ntitle: Deploying\n" +
 		"summary: how this company deploys\nphases: [execute]\n" +

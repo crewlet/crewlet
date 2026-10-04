@@ -174,7 +174,7 @@ func applyInto(t *testing.T, new Factory, records []suiteRecord) map[string]int 
 	c := new(t)
 	db := openEstate(t, c)
 
-	w, err := db.Replicated().Writer(t.Context())
+	w, err := db.Writer(t.Context())
 	if err != nil {
 		t.Fatalf("pin a writer: %v", err)
 	}
@@ -186,7 +186,7 @@ func applyInto(t *testing.T, new Factory, records []suiteRecord) map[string]int 
 	opts := statelog.ApplyOptions{
 		Now:             time.Unix(1_700_000_000, 0).UTC(),
 		StoredAt:        time.Unix(1_700_000_000, 0).UTC(),
-		ArbitratedKinds: c.Domain.Stream().ArbitratedKinds,
+		ArbitratedKinds: c.spec().ArbitratedKinds,
 
 		// THE PROBED LIMIT, not a fixed one: an applier sizes its
 		// multi-row inserts by this, so a suite that left it zero would
@@ -207,7 +207,7 @@ func applyInto(t *testing.T, new Factory, records []suiteRecord) map[string]int 
 		rec := statelog.Record{
 			Envelope: env,
 			Position: statelog.Position{
-				Stream:     c.Domain.Stream().Name,
+				Stream:     c.spec().Name,
 				Generation: 1,
 				Seq:        uint64(i + 1),
 			},

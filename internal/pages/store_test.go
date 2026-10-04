@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A TITLE IS AN ADDRESS, and the claim is what makes it one.
@@ -324,7 +325,7 @@ func TestEnsuringAContainerIsIdempotent(t *testing.T) {
 		r.drain()
 	}
 	var records int
-	if err := r.db.Replicated().SQL().QueryRowContext(t.Context(),
+	if err := storetest.Partition(t, r.db).SQL().QueryRowContext(t.Context(),
 		`SELECT COUNT(*) FROM pages_containers`).Scan(&records); err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +458,7 @@ func TestAPurgeIsPermanentAndFreesTheAddress(t *testing.T) {
 	}
 	r.drain()
 	var markers int
-	if err := r.db.Replicated().SQL().QueryRowContext(t.Context(),
+	if err := storetest.Partition(t, r.db).SQL().QueryRowContext(t.Context(),
 		`SELECT COUNT(*) FROM pages_deletions`).Scan(&markers); err != nil {
 		t.Fatal(err)
 	}

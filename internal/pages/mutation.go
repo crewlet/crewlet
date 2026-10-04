@@ -185,6 +185,15 @@ type ContainerPayload struct {
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 }
 
+// releaseMutation is a node's release of this log, published under
+// [OpRelease] — the op whose row in [versionedFields] stamps it at
+// [releaseVersion].
+//
+// IT ENCODES EXACTLY AS AN [Eviction] — the embedded struct's fields and
+// nothing of its own — so the applier decodes both into one shape, and the op
+// on the envelope is what says which gate the row records.
+type releaseMutation struct{ Eviction }
+
 // StatusPayload is a trash, a restore or a purge — the three ops that change
 // what a reader sees without changing what a page says.
 //
@@ -196,7 +205,8 @@ type StatusPayload struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// Eviction is a node's eviction from this log, or its readmission.
+// Eviction is a node's eviction from this log, its release of the log
+// ([OpRelease]), or the readmission that lifts either.
 //
 // PINNED AT [GateRecordVersion] FOR EVER. See the constant.
 type Eviction struct {
@@ -253,7 +263,9 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[ContainerPayload](rec)
 	case rec.Subject.Kind == KindContainer && rec.Op == OpPurge:
 		return decodePayload[StatusPayload](rec)
-	case rec.Subject.Kind == KindEviction && rec.Op == OpEviction:
+	case rec.Subject.Kind == KindEviction && (rec.Op == OpEviction || rec.Op == OpRelease):
+		// ONE PAYLOAD FOR BOTH GATES: a release is an eviction's bytes,
+		// and the op is what says which gate the row records.
 		return decodePayload[Eviction](rec)
 	case rec.Subject.Kind == KindGeneration && rec.Op == OpGeneration:
 		return decodePayload[Generation](rec)

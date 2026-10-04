@@ -214,6 +214,9 @@ var ErrInvalidConfig = errors.New("seat: invalid host configuration")
 // role. Every symptom is an absence — nothing fires, nothing is received,
 // nothing errors — which is why they need saying out loud.
 var unmannedHints = map[placement.NodeRole]string{
+	placement.RoleData: "no live node holds the company's durable state, so nothing " +
+		"can read or write the tracker or the knowledge base, and every node " +
+		"without the role is waiting on one that does. Give a node the 'data' role.",
 	placement.RoleIngress: "no live node serves the HTTP API, so no webhook from any " +
 		"integration reaches this company and the dashboard is down. " +
 		"Give a node the 'ingress' role.",
@@ -273,19 +276,18 @@ const (
 	// to end.
 	ReasonPosture ReleaseReason = "posture"
 
-	// ReasonUnserviceable is this node's copy of the company's records
-	// being WRONG rather than behind — a halted applier, an eviction, a
-	// position below the log's first surviving record, or a record it has
-	// been unable to decode past the deferral grace. See
+	// ReasonUnserviceable is this node being unable to serve its seats'
+	// work at all — in the engine, a node that can no longer say where
+	// the estate its seats read and write is served. See
 	// [Config.Serviceable].
 	//
 	// VOLUNTARY, unlike ReasonPosture, and the difference is what is
 	// actually lost. A shedding posture means this node may be running a
 	// company revision the fleet has moved off, so what it is doing right
-	// now is suspect and must stop at once. This means its ROWS are wrong
-	// while its lease is perfectly good — so the turn in flight, which is
-	// already running against those rows, is better finished than
-	// abandoned, and the seat leaves the moment it goes idle.
+	// now is suspect and must stop at once. This means its reach is gone
+	// while its lease is perfectly good — so the turn in flight is better
+	// finished (or failed on its own calls) than abandoned, and the seat
+	// leaves the moment it goes idle.
 	ReasonUnserviceable ReleaseReason = "unserviceable"
 
 	// ReasonUnprepared is a seat this node already holds that could not be
@@ -450,6 +452,12 @@ type SweepResult struct {
 	// node at capacity, a node whose peers hold everything and a node
 	// waiting on its own projection all report an identical empty sweep.
 	Withheld bool
+	// FleetFull says this node had room and tried no claim, because the
+	// live seat-running nodes' own counts say they hold every seat any of
+	// them may run ([Host.fleetHoldsEverySeat]). The ordinary state of a
+	// node whose share did not come out even, and distinct from Withheld:
+	// this node is ready, and there is simply nothing to take.
+	FleetFull bool
 }
 
 // Blocked reports whether the mixed-version gate is what stopped this pass

@@ -46,14 +46,14 @@ func TestTheMeterWaitsForTheLastLifetimeCounterNode(t *testing.T) {
 	leases := coordmem.New()
 	r := meteringReporter(t, leases, now)
 
-	older, err := leases.TryAcquire(ctx, coord.NodeResource("older"), coord.AcquireOptions{
+	older, _, err := leases.TryAcquire(ctx, coord.NodeResource("older"), coord.AcquireOptions{
 		Owner: "older:1", TTL: time.Hour, Ungated: true,
 		Protocol: coord.WindowedCountersProtocol - 1,
 	})
 	if err != nil || older == nil {
 		t.Fatalf("claim the older node's presence = (%v, %v)", older, err)
 	}
-	if _, err := leases.TryAcquire(ctx, coord.NodeResource("newer"), coord.AcquireOptions{
+	if _, _, err := leases.TryAcquire(ctx, coord.NodeResource("newer"), coord.AcquireOptions{
 		Owner: "newer:1", TTL: time.Hour, Ungated: true,
 	}); err != nil {
 		t.Fatalf("claim this node's presence: %v", err)

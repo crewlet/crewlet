@@ -11,8 +11,8 @@ import "testing"
 // case would exercise the record's stated kind and leave this untouched, and
 // the bug it is being fixed for would survive the suite.
 //
-// The bug: it ended at `ChangeKind(op)` — the OPERATION, cast. Four of the
-// nine [OpKind]s are not [ChangeKind]s, and three are NEAR-MISSES of one:
+// The bug: it ended at `ChangeKind(op)` — the OPERATION, cast. Most of the
+// [OpKind]s are not [ChangeKind]s, and three are NEAR-MISSES of one:
 // `tombstone` against `removed`, `restore` against `restored`, `purge` against
 // `purged`. A value one letter from the right one is the worst possible
 // answer here, because it reads correct in a database dump and matches no

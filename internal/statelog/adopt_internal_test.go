@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // AN ABSENT CHECKPOINT ROW VERIFIES AS THE ZERO POSITION, and as nothing else.
@@ -18,11 +19,8 @@ import (
 // file does not keep.
 func TestAnAbsentCheckpointVerifiesOnlyAsTheZeroPosition(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	path := db.ReplicatedPath()
+	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
+	path := storetest.Partition(t, estate).Path()
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -52,12 +50,9 @@ func TestAnAbsentCheckpointVerifiesOnlyAsTheZeroPosition(t *testing.T) {
 // says about it.
 func TestAManifestNamingAnotherStreamInstanceIsRefused(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	applying := time.Unix(1_700_000_000, 0).UTC()
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
 				(stream, generation, seq, stream_created_at, updated_at)
@@ -67,7 +62,7 @@ func TestAManifestNamingAnotherStreamInstanceIsRefused(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed the checkpoint: %v", err)
 	}
-	path := db.ReplicatedPath()
+	path := storetest.Partition(t, estate).Path()
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}

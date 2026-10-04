@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE COPY'S OWN POSITION IS IN THE MANIFEST, read from the file rather than
@@ -67,7 +68,7 @@ func TestTheManifestNamesThePositionInsideTheCopy(t *testing.T) {
 	// question a shipped artefact raises. It was retaken after this
 	// package opened the copy to read its checkpoints.
 	for _, artifact := range manifest.Stores {
-		if artifact.Estate != store.EstateReplicated {
+		if artifact.Estate != store.EstatePartition {
 			continue
 		}
 		digest, err := store.FileDigest(filepath.Join(dir, artifact.File))
@@ -96,7 +97,7 @@ func TestTheBackupPinsTheLogWhileItCopiesAndReleasesIt(t *testing.T) {
 	held := &watchedHolds{HoldRegister: fleet}
 
 	s := build(t, backup.Options{
-		Store: db, NodeID: "node-0", Holds: held, Backups: fleet,
+		Store: db, Partitions: holdsTheEstate, NodeID: "node-0", Holds: held, Backups: fleet,
 		Now: func() time.Time { return clock },
 	})
 	if _, err := s.Take(t.Context(), filepath.Join(t.TempDir(), "b")); err != nil {
@@ -142,7 +143,7 @@ func TestABackupThatCannotPinTheLogIsRefused(t *testing.T) {
 	db := openStore(t)
 	seedCursor(t, db, "CREWLET_TRACKER_LOG", 1, 5)
 	s := build(t, backup.Options{
-		Store: db, NodeID: "node-0", Holds: refusingHolds{}, Backups: memory.NewFleet(),
+		Store: db, Partitions: holdsTheEstate, NodeID: "node-0", Holds: refusingHolds{}, Backups: memory.NewFleet(),
 		Now: func() time.Time { return clock },
 	})
 	dir := filepath.Join(t.TempDir(), "b")
@@ -297,7 +298,7 @@ func trimTo(t *testing.T, nc *nats.Conn, name string, seq uint64) {
 
 func seedCursor(t *testing.T, db *store.DB, stream string, generation uint32, seq uint64) {
 	t.Helper()
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at)
 			VALUES (?, ?, ?, 0, 0)
@@ -381,7 +382,7 @@ func TestAFinishedBackupAnnouncesWhatItCovers(t *testing.T) {
 
 	dir := filepath.Join(t.TempDir(), "b")
 	service := build(t, backup.Options{
-		Store: db, NodeID: "node-0", Holds: fleet, Backups: fleet,
+		Store: db, Partitions: holdsTheEstate, NodeID: "node-0", Holds: fleet, Backups: fleet,
 		Now: func() time.Time { return clock },
 	})
 	manifest, err := service.Take(t.Context(), dir)

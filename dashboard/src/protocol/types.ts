@@ -21,12 +21,14 @@
  *    silence over a store it never reached.
  */
 
+import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
 // THE SHAPES AN ENGINE GATE HOLDS ARE NOT DECLARED HERE. They live in
 // `../contract/`, the one home of every declaration a Go test reads, and this
 // file composes them into the answers and frames it declares. RELATIVE, like
 // every contract import in this directory: it is also built alone as
 // `protocol.js`, where the `~` alias does not exist.
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
+import type { OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { AccessAnswer } from "../contract/access.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
@@ -49,6 +51,7 @@ import type {
 import type { PushKind, SeatActivity, StoppedReason } from "../contract/wire.ts";
 import type { WorkViewShape } from "../contract/work.ts";
 import type {
+  RetentionEvictionKind,
   RetentionGenerationState,
   RetentionIdentityCause,
   RetentionTrimFloorState,
@@ -1364,6 +1367,12 @@ export interface ScheduleRunsAnswer {
 export interface FleetNode {
   id: string;
   roles: string[];
+  /**
+   * How the node's broker takes part in the fleet's — derived from its own
+   * `stream` block, never from its roles. `unknown` for a node running a build
+   * older than the field; absent only from an engine older still.
+   */
+  broker?: BrokerKind | string;
   labels?: Record<string, string> | null;
   /** The lease's fencing token — node id plus a per-process suffix. */
   owner?: string;
@@ -1409,6 +1418,67 @@ export interface FleetNode {
   started_at?: string;
   posture?: string;
 }
+
+/**
+ * The fleet answer's object-store block — `queries.FleetObjects`.
+ *
+ * THE ENGINE'S OWN RENDERING IS THIS SCREEN'S FIXTURE: the card's suite reads
+ * `internal/api/testdata/objects_answer.json`, which the Go renderer writes,
+ * so a field renamed on either side fails a test until the other follows it.
+ */
+
+/** One of [OBJECTS_STATES]. */
+export type ObjectsState = (typeof OBJECTS_STATES)[number];
+
+/** One collection pass: what the store held, and what no row named any more. */
+export interface ObjectCollect {
+  at: string;
+  /** Listed the whole store and judged every chunk old enough to judge. */
+  completed: boolean;
+  listed: number;
+  /** Past the day's grace, and so judged. */
+  aged: number;
+  deleted: number;
+  referenced: number;
+  /** Written again while the pass judged them, and kept. */
+  refreshed: number;
+  /** Why the pass deleted nothing; absent when it ran in full. */
+  skipped?: string;
+  error?: string;
+}
+
+/** One audit: every chunk a row names, asked of the store. */
+export interface ObjectAudit {
+  at: string;
+  /** Asked about every named chunk, over an estate that was complete. */
+  completed: boolean;
+  referenced: number;
+  missing: number;
+  /** The first hundred missing, to restore first; `missing` is the whole count. */
+  missing_chunks?: string[];
+  error?: string;
+}
+
+/** The collector's last report, every field but the passes present. */
+export interface ReportedObjects {
+  state: "reported";
+  /** `nats`, or `s3:<endpoint>/<bucket>/<prefix>` — the store the fleet agreed on. */
+  backend: string;
+  /** The data node that ran the passes. */
+  node: string;
+  /** Absent until a pass of that kind has ended. */
+  collect?: ObjectCollect;
+  audit?: ObjectAudit;
+}
+
+/**
+ * Where the company's files are kept, and what the collector last found.
+ *
+ * THREE STATES NAMED APART rather than folded into an empty report: a store
+ * that would not give the record up, a fleet whose collector has not reported
+ * yet, and a report.
+ */
+export type FleetObjects = { state: Exclude<ObjectsState, "reported"> } | ReportedObjects;
 
 /**
  * The state log's retention document, as `crewlet retention status --json` and
@@ -1604,6 +1674,10 @@ export interface RetentionNodeDomain {
 }
 
 export interface RetentionEviction {
+  /** A release is the node's own word as it left: shown as "left", never as
+   *  "evicted by" the node itself, which sends an operator after a gesture
+   *  nobody made. */
+  kind: RetentionEvictionKind;
   by: string;
   at: string;
   /** When the trim stops counting the node — one fence window after the
@@ -1615,6 +1689,12 @@ export interface RetentionEviction {
 
 export interface RetentionSnapshot {
   node_id: string;
+  /**
+   * The partition the artefact is a copy of, on a divided layout's row — a
+   * node donates each partition it holds separately — and ABSENT under
+   * layout 0, whose one artefact is the whole estate.
+   */
+  partition?: string;
   /** Absent when the node holds none, in which case `skip` says why. */
   domains?: Record<string, number>;
   at?: string;
@@ -1670,12 +1750,22 @@ export interface RetentionGateDomain {
    */
   outcome?: "applied" | "pending" | "unknown";
   /**
-   * Set on an `unknown` THIS node cannot settle: its operation ledger may
-   * have lost the row the operation needs, so it published nothing and
+   * Set on an `unknown` the WRITING node cannot settle: its operation ledger
+   * may have lost the row the operation needs, so it published nothing and
    * answers the same gesture the same way every time. Its remedy is another
-   * node (`other_node`), never Finish here.
+   * node (`other_node`), never Finish here — unless another node wrote it
+   * (`writer`), when every holder that answered was asked already and the
+   * remedy is the same gesture again.
    */
   unvouched?: boolean;
+  /**
+   * The node that wrote this log's record when it is NOT the node answering —
+   * one serving the log's partition, to which the gesture sent the record
+   * because the node asked does not write that log. ABSENT where the node
+   * asked wrote it, and where no node did. The outcome, the error and the
+   * hint are all about the writer.
+   */
+  writer?: string;
   /** Where the record is durable — ABSENT for `unknown`, which has none: a
    *  zero position would read as a record at the log's origin. */
   position?: { stream: string; generation: number; seq: number };
@@ -1724,6 +1814,8 @@ export interface FleetAnswer {
   this_node: string;
   /** The epoch every node is meant to converge on. A number, not an id. */
   target_epoch: number;
+  /** Where the company's files are kept; absent where the node reads no record. */
+  objects?: FleetObjects;
 }
 
 // ---------------------------------------------------------------------------
@@ -2180,6 +2272,38 @@ export interface WorkView {
   /** Why a pinned row asked for a count carries none: the view no longer
    *  compiles against this company (a filtered field was archived, say). */
   count_refused?: string;
+}
+
+/** One file kept in a project, as a listing draws it — everything but its
+ *  chunks, which only a download reads. */
+export interface WorkFile {
+  project: string;
+  path: string;
+  content_type?: string;
+  hash?: string;
+  size: number;
+  /** What `If-Match` takes back, as the download's ETag carries it. */
+  version: number;
+  created_by?: string;
+  created_at: string;
+  updated_by?: string;
+  updated_at: string;
+  /** Set on a removed file, which only a listing asking for them returns. */
+  removed_by?: string;
+  removed_at?: string;
+}
+
+export interface WorkFilesAnswer {
+  project: string;
+  files: WorkFile[];
+  /** The path to pass as `after` for the next page; absent on the last. */
+  next?: string;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
 }
 
 export interface WorkViewsAnswer {
@@ -4244,6 +4368,7 @@ export interface QueryMap {
   token_series: TokenSeries;
   seat_activity: SeatActivityAnswer;
   fleet: FleetAnswer;
+  fleet_broker: FleetBrokerAnswer;
   access: AccessAnswer;
   mcp_servers_status: McpServersStatusAnswer;
   credential_pool: CredentialPoolAnswer;
@@ -4260,6 +4385,7 @@ export interface QueryMap {
   work_comments: WorkCommentsAnswer;
   work_item_turns: WorkItemTurnsAnswer;
   work_views: WorkViewsAnswer;
+  work_files: WorkFilesAnswer;
   /** Every saved view a viewer can see, across every container. */
   work_saved_views: WorkViewsAnswer;
   work_projects: WorkProjectsAnswer;

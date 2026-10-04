@@ -1,11 +1,13 @@
 package search
 
 import (
+	"context"
 	"log/slog"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // AN EMBED DUTY GIVEN NO LOGGER WRITES THROUGH THE SEARCH PACKAGE'S OWN.
@@ -22,9 +24,15 @@ func TestAnEmbedDutyGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) {
 	t.Parallel()
 	valid := EmbedDeps{
 		Publisher: &statelog.Publisher{},
-		Embedder:  widthOnly{},
-		Model:     "probe-model",
-		Corpora:   []Corpus{struct{ Corpus }{}},
+		Estate:    (&store.DB{}).PartitionHandle("estate.000").Reader(),
+		Log:       statelog.EstateStream(Domain{}).Name,
+		Standing: func(context.Context) (LogStanding, error) {
+			return LogStanding{}, nil
+		},
+		Embedder: widthOnly{},
+		Model:    "probe-model",
+		Corpora:  []Corpus{struct{ Corpus }{}},
+		Budget:   noBound{},
 	}
 	duty, err := NewEmbedder(valid)
 	if err != nil {
@@ -51,3 +59,9 @@ func TestAnEmbedDutyGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) {
 type widthOnly struct{ embeddings.BatchEmbedder }
 
 func (widthOnly) Width() int { return 4 }
+
+// noBound is a tick nothing bounds.
+type noBound struct{}
+
+func (noBound) Advanced()      {}
+func (noBound) Exempt() func() { return func() {} }

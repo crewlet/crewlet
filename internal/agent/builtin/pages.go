@@ -98,11 +98,12 @@ type PageDeps struct {
 	// one.
 	Operation func(ctx context.Context) string
 
-	// Await blocks until this node's projection has applied a revision.
-	// See [WorkDeps.Await]: same seam, same reason, and it matters more
-	// here — a page's SavePage takes the version it read, so a turn that
-	// writes and then re-reads through a projection that has not caught
-	// up gets a stale version and its next save is refused.
+	// Await is handed the position every page write landed at, so the next
+	// read sees it. See [WorkDeps.Await]: same seam, same reason, the same
+	// two places the wait happens — and it matters more here: a page's
+	// SavePage takes the version it read, so a turn that writes and then
+	// re-reads from a copy that has not caught up gets a stale version and
+	// its next save is refused.
 	Await func(ctx context.Context, at statelog.Position) error
 }
 
@@ -184,8 +185,8 @@ type pageCaller struct {
 	key  pages.CallKey
 }
 
-// settle waits for a write to reach this node's own applied rows. Best effort;
-// see [WorkDeps.settle].
+// settle hands a page write's position to [PageDeps.Await], so the next read
+// sees it. Best effort; see [WorkDeps.settle].
 //
 // IT TAKES A POSITION rather than a revision, which is what the log answers
 // with and what a bucket revision could never be: a place on a stream that
@@ -197,9 +198,9 @@ func (d PageDeps) settle(ctx context.Context, at statelog.Position) {
 	if err := d.Await(ctx, at); err != nil {
 		log.WarnContext(ctx, "page_write_not_applied_yet",
 			"at", at.String(), "error", err.Error(),
-			"detail", "the write landed on the fleet's log; this node's own "+
-				"copy has not caught up, so a read in this same turn may show "+
-				"the previous version")
+			"detail", "the write landed on the fleet's log; the copy this "+
+				"surface reads has not caught up, so a read in this same turn "+
+				"may show the previous version")
 	}
 }
 
@@ -306,10 +307,11 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if err != nil {
 		return pageReadFailure(ListPagesTool, err), nil
 	}
-	if len(got.Pages) == 0 {
+	if len(got.Pages) == 0 && got.Coverage.Complete() {
 		return tools.Result{Output: "No pages match that filter."}, nil
 	}
 	out := map[string]any{"count": len(got.Pages), "pages": got.Pages}
+	noteUnanswered(out, got.Coverage)
 	// AND HOW MANY THE FILTER MATCHED IN ALL, when that is more than this
 	// answer holds. Without it a listing cut at its limit read as the whole
 	// container, and a model that believes a short list writes the page that
@@ -428,8 +430,10 @@ func (t *writePage) Parameters() map[string]any {
 				"description": "The container key. Defaults to your team's.",
 			},
 			"parent": map[string]any{
-				"type":        "string",
-				"description": "The id of the page this belongs under.",
+				"type": "string",
+				"description": "The id of the page this belongs under — a " +
+					"page in the same container that is not in the trash. " +
+					"Leave it out to file the page at the container's top.",
 			},
 			"labels": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"message": map[string]any{
@@ -548,8 +552,13 @@ func (t *savePage) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Replaces the page. " + pageLinkHelp,
 			},
-			"title":  map[string]any{"type": "string", "description": "Renames it."},
-			"parent": map[string]any{"type": "string", "description": "Moves it under this page."},
+			"title": map[string]any{"type": "string", "description": "Renames it."},
+			"parent": map[string]any{
+				"type": "string",
+				"description": "Moves it under this page: the id of a page in " +
+					"the same container, not in the trash and not beneath " +
+					"this one. An empty string moves it to the container's top.",
+			},
 			"labels": map[string]any{
 				"type": "array", "items": map[string]any{"type": "string"},
 				"description": "Replaces the whole label set.",

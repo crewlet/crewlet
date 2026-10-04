@@ -516,9 +516,9 @@ func (s *countingSummarizer) count() int {
 // loop, which is the seam an operator's deployment actually uses.
 func lifecycle(t *testing.T, o learning.Options) (*learning.Lifecycle, *learning.Episodes, *countingSummarizer) {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "life.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "life.db"), store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	sum := &countingSummarizer{}

@@ -42,6 +42,8 @@ func TestAgentSubjectsAreTheDocumentedJoin(t *testing.T) {
 		{"inbox group", topics.AgentInboxGroup("alice"), "agent-alice"},
 		{"control subject", topics.AgentControl("alice"), "crewlet.agent.alice.control"},
 		{"control group", topics.AgentControlGroup("alice"), "agent-alice-control"},
+		{"reflect subject", topics.AgentReflect("alice"), "crewlet.agent.alice.reflect"},
+		{"reflect group", topics.AgentReflectGroup("alice"), "agent-alice-reflect"},
 		{"hyphenated handles pass through unchanged", topics.AgentInbox("qa-lead"), "crewlet.agent.qa-lead.inbox"},
 		{"no case folding", topics.AgentInboxGroup("qa-lead"), "agent-qa-lead"},
 		{"an event subject", topics.Event("agent_phase_started"), "crewlet.events.agent_phase_started"},
@@ -151,6 +153,8 @@ func TestAnEmptyHandleYieldsNoSubject(t *testing.T) {
 		{"AgentInboxGroup", topics.AgentInboxGroup("")},
 		{"AgentControl", topics.AgentControl("")},
 		{"AgentControlGroup", topics.AgentControlGroup("")},
+		{"AgentReflect", topics.AgentReflect("")},
+		{"AgentReflectGroup", topics.AgentReflectGroup("")},
 		{"Event", topics.Event("")},
 	} {
 		if tc.got != "" {
@@ -225,10 +229,12 @@ func TestHandleFromInboxIsTheInverseOfAgentInbox(t *testing.T) {
 func TestMailboxHandleNamesOnlyAPairTheMailboxGrammarProduces(t *testing.T) {
 	t.Parallel()
 
-	for _, handle := range []string{"alice", "qa-lead", "release", "release-control", "inbox", "control"} {
+	for _, handle := range []string{"alice", "qa-lead", "release", "release-control", "inbox",
+		"control", "reflect", "release-reflect"} {
 		for _, pair := range [][2]string{
 			{topics.AgentInbox(handle), topics.AgentInboxGroup(handle)},
 			{topics.AgentControl(handle), topics.AgentControlGroup(handle)},
+			{topics.AgentReflect(handle), topics.AgentReflectGroup(handle)},
 		} {
 			got, ok := topics.MailboxHandle(pair[0], pair[1])
 			if !ok || got != handle {
@@ -241,6 +247,14 @@ func TestMailboxHandleNamesOnlyAPairTheMailboxGrammarProduces(t *testing.T) {
 		{"an inbox under another group", topics.AgentInbox("alice"), "agent-bob"},
 		{"an inbox under the control group", topics.AgentInbox("alice"), topics.AgentControlGroup("alice")},
 		{"a control subject under the inbox group", topics.AgentControl("alice"), topics.AgentInboxGroup("alice")},
+		{"a reflect subject under the control group", topics.AgentReflect("alice"), topics.AgentControlGroup("alice")},
+		{"a control subject under the reflect group", topics.AgentControl("alice"), topics.AgentReflectGroup("alice")},
+		// The same collision for the reflect suffix: release's reflect
+		// group is release-reflect's inbox group, and on release's INBOX
+		// it is neither seat's mailbox.
+		{"release-reflect's inbox group on release's inbox", topics.AgentInbox("release"),
+			topics.AgentInboxGroup("release-reflect")},
+		{"a reflect subject with a dotted handle", "crewlet.agent.a.b.reflect", "agent-a.b-reflect"},
 		// The collision TestGroupNamesAreNotUniqueOnTheirOwn describes, from
 		// the side that must NOT match: seat release's control group is seat
 		// release-control's inbox group, so that group on release's INBOX

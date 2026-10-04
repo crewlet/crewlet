@@ -24,6 +24,9 @@ subcommand below is served by it.
 | `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream, or a broker restored from an older copy: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end, and one continuing in a generation only an evicted peer held from this node's own checkpoint, that generation's records void. A restored log holding records written after the restore that this node's rows do not hold is refused unless `-discard` accepts that they are applied on no node |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
+| `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: chunks listed and deleted by the last collection, chunks named and **missing** by the last audit, with the missing hashes listed. `-json` prints the fleet view's `objects` block as the node answered it |
+| `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a build older than the field) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it |
+| `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. As the person the token is bound to |
 | `crewlet seats resume <handle>` | Lift the pause; what waited is delivered first, in order |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
@@ -138,8 +141,8 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | `-debug` | Shorthand for `-log-level debug`; wins if both are given. It only ever *raises* — to quieten a file that sets `logging.level: debug`, pass `-log-level info`. It makes the **engine** verbose and not the embedded broker: nats-server's own debug output is `stream.debug` in Tier A, off by default, because it is per internal-client rather than per event and the engine's coordination reads produce a constant stream of it. The broker's warnings and errors reach the log at either setting. |
 | `-api-host HOST` | Bind address, overriding `api.host` |
 | `-api-port PORT` | Bind port, overriding `api.port`. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint, so every integration goes deaf. That is why leaving the flag off is not the same as passing `0`. |
-| `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers — and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
-| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. See [Running a Fleet](../guides/fleet.md). |
+| `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers, no writer on any surface, no barrier (a `linearizable` read is refused `maintenance`), no object collection or audit (each pins the estate with a barrier), and no eviction, readmission or reanchor — while the node keeps its presence lease, and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
+| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `data` (hold the company's durable state), `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all four — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. The flag is applied after the file validates, so what the roles require of the file is checked again here: dropping `data` from a node whose store is not `store.scratch` is refused, naming the setting. See [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data). |
 
 The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival. `-log-file` needs that distinction in both directions — its default *is* the empty string, which is also how an operator says "no file for this run".
 
@@ -489,6 +492,13 @@ crewlet migrate -check                   # report pending work, apply nothing
 | `config` | Tier A YAML (positional, or `-config`; default `./crewlet.yaml`). Name it **once**: a second positional, or a positional alongside `-config`, is refused rather than resolved — the two would have to agree and nothing checks that they do. |
 | `-check` | List pending migrations and exit **1** if there are any; applies nothing. This is what a deploy gate calls, and a gate that reported pending work and exited 0 would stop nothing. |
 
+**A node without `data` has nothing to migrate.** Its store is `store.scratch`
+— created fresh, at the binary's own schema, every time `crewlet run` starts —
+so `migrate` refuses it and says so. The offline `config`, `secrets` and
+`search eval` commands refuse a scratch store for the same reason: what they
+wrote into it would be gone at the next boot. Use the API of a node that holds
+data instead.
+
 Rolling out N nodes at once means N processes opening the same database and
 racing to apply the same files. That race is safe — one transaction per
 file, with the version row written inside it, so a file is either fully
@@ -680,6 +690,122 @@ What it does **not** reach: a node that is offline or evicted keeps its copy
 until it replays, adopts a snapshot, is replaced or is destroyed. There is no
 duration to state, and `crewlet retention status` names which nodes those are.
 
+## `crewlet objects`
+
+```
+crewlet objects status [-json] [<config.yaml>] [-url URL] [-token TOKEN]
+```
+
+Where the company's files are kept, and what the
+[object store's](../concepts/object-store.md) collector last found. It talks to
+a running node, for `backup`'s reason: the collector's report is a record in
+the coordination store, which on the default topology is the engine's own
+embedded broker and binds no socket. `status` reads the fleet view's `objects`
+block ([`GET /fleet`](api-endpoints.md#get-fleet)), which every node answers
+from that one record.
+
+### `crewlet objects status`
+
+It prints the store the fleet's files are in — the fleet's own NATS bucket
+(`OBJ_crewlet_files`) or an S3 bucket with its endpoint, bucket and prefix —
+the node that ran the last passes of the `object-collector` duty, and one line
+for each pass:
+
+- **Last collection** — how many chunks it listed in the store and how many it
+  deleted for being older than a day with no row naming them. A collection that
+  deleted nothing on purpose says why (`deleted nothing: …` — the node's view of
+  the estate was incomplete, so a row it could not read might name any chunk),
+  one that stopped says what stopped it, and one that did not finish says
+  `incomplete`.
+- **Last audit** — how many chunks the company's rows name and how many of them
+  the store does not hold. When any are missing it lists their hashes (the
+  first hundred, and how many more), since each is part of a file nobody can
+  download; restore them from a [backup](../guides/backup.md).
+
+Before the collector has finished a pass — on a new fleet, in the minute or so
+before a data node first claims the duty — it says so. `-json` prints the block exactly as the node answered it,
+for a script. The exit status is non-zero when the node cannot say — its
+coordination store did not answer, the node runs no object store, or it
+answered a state this build does not know — and zero otherwise, missing chunks
+included: a store that lost bytes is an answer, and the
+[`objects_missing`](alarms.md) alarm is what pages for it.
+
+## `crewlet fleet broker`
+
+```
+crewlet fleet broker list [-json] [<config.yaml>] [-url URL] [-token TOKEN]
+crewlet fleet broker remove <node> -confirm <node> [-force] [<config.yaml>] [-url URL] [-token TOKEN]
+crewlet fleet broker remove -peer <peer> -confirm <peer> [-force] [<config.yaml>] [-url URL] [-token TOKEN]
+```
+
+The fleet broker's membership. Two records say who its members are: every node
+advertises its **broker kind** on its presence lease — derived from its
+`stream` block, never from its roles (see
+[Configuration](../concepts/configuration.md#noderoles)) — and the broker's
+**metadata group**, the raft group that places every stream and consumer,
+counts its voters for itself. Both verbs talk to a running node, and the node
+asks a member where it is not one: only a member holds the group, and a removal
+is answered only on its system account, which nothing outside its process can
+reach. They are clients of the routes in the
+[API reference](api-endpoints.md#the-brokers-membership).
+
+### `crewlet fleet broker list`
+
+The question it answers is **does the broker still count a member I have
+lost?** One row per live node — what it advertises, its roles, how the group
+counts it (`leader`, `current`, `offline, last heard 5m ago`, or `-` for a node
+that is no voter) and its **peer id** where it is a voter — then one row per
+voter no live node is, and under the table every disagreement in words.
+
+The group counts each voter by its raft peer id, which is derived from the
+node id. A member hears another's name only from that server, so a voter whose
+survivors have restarted since it died is listed as `(name unknown)` by its
+peer id alone; a voter is matched to its node by peer id, never by the name the
+answering member happens to have heard.
+
+- **DEAD MEMBER** — a voter no live node is, or whose node came back as a leaf
+  or a client. Every election and every create goes on counting it; the line
+  prints the `remove` command for once it is not coming back — by `-peer` for a
+  voter nobody can name, since it has no node id to give.
+- **NOT COUNTED** — a live node advertising a member the group does not count:
+  still joining, or removed while it ran.
+- **UNKNOWN** — a node whose presence does not say what its broker is, which a
+  capacity seal counts as a member.
+
+A group no member could report is said to be unread, never shown as empty. On a
+fleet whose broker is an external cluster it says so and lists nothing: that
+membership is the cluster's own operator's. `-json` prints the node's answer as
+it came.
+
+### `crewlet fleet broker remove`
+
+Stops the metadata group counting a member once the group has committed the
+change — printing which member's system account carried it and the voters that
+remain. Name it by **node id**, which reaches it by the peer id the id hashes
+to whether or not any member still remembers its name, or by **`-peer`** with
+the peer id `list` shows, for a voter nobody can name. **Refused while its node
+holds a live presence lease as a member** (or without saying what its broker
+is): it is still running, and a running member removed from the group rejoins
+it as a voter at its next restart, so stop it first. `-force` removes it anyway,
+for a member wedged in a way that still renews its lease. A node alive under
+the voter's name as a **leaf** or a **client** is removed without `-force`: the
+member it was is gone for good. The member being removed never carries its own
+removal — if it is the only live member, the command says so.
+
+The whole removal is bounded by one wait: the carrying member's commit budget
+and a round trip. A carrying member that does not answer ends it as an outcome
+nobody knows — it may have committed the change first — rather than another
+member proposing it again; `list` reads the group.
+
+Only the group's leader answers a removal, and a member removed because its
+host died was often that leader — so the removal asks again every second while
+the survivors elect another, and a removal made during an election waits it
+out rather than failing. A group that answers nobody for the whole wait (two
+minutes) has lost its quorum and can change nothing about itself, and the
+refusal says so: bring enough members back for a quorum, then ask again. A
+removal the node did not answer may still have been committed; `list` reads
+the group, and asking again for a member already removed is refused as not a
+member.
 ## `crewlet seats`
 
 ```
@@ -834,12 +960,22 @@ The command prints the watermark before and after and the instant the
 eviction takes effect: **the node stays counted for about a minute**, so a live
 one is certain to have read its own tombstone before the trim passes it.
 
+Where the node you ran it on does not serve the estate itself — its copy out
+of service, or behind — it sends that log's record to another data node, which
+writes it under the same operation id, so one command reaches every log; such a
+line names the node that wrote it, whose standing its hint is about:
+
+```
+  tracker: applied at CREWLET_TRACKER_LOG 918100012 (written by node-q)
+```
+
 The gesture is **judged once, before either log is written**. A node that still
 holds a live presence lease is refused with `409 eviction_refused` — it is
 still reaching the fleet and almost certainly running, and an eviction would
-drop everything it writes and move its seats. Stop it and wait for its `LIVE`
-column in `crewlet retention status` to read `no`, or pass `-force` for a node
-wedged in a way that still renews its lease — the refusal prints both. A node
+drop everything it writes and take its copy out of service. Stop it and wait
+for its `LIVE` column in `crewlet retention status` to read `no`, or pass
+`-force` for a node wedged in a way that still renews its lease — the refusal
+prints both. A node
 that cannot read the presence leases at all answers `503 eviction_unjudged`;
 `-force` takes the eviction past that as well, since the leases are all the
 judgement reads, and the refusal says so. A run that already passed `-force`
@@ -890,9 +1026,10 @@ because the dashboard renders the same answer; the line under it is this
 command's rendering of the node's `actions` (see
 [the gate answer](api-endpoints.md#the-three-retention-gestures-that-write)).
 
-The command mints the operation id **before** it asks, and waits
-seventy-five seconds for the answer — past the minute the node allows a
-gesture, which it finishes even if the connection drops. So a gesture that got
+The command mints the operation id **before** it asks, and waits two minutes
+for the answer — past the minute and a half the node takes at most to answer
+one gesture (half a minute to judge it and a minute to write every log), which it finishes even if the
+connection drops. So a gesture that got
 no answer at all still prints the `-op-id` that finishes it — and so does one
 whose answer the node did not write: a reverse proxy's 504 page, any status
 carrying no engine error code, or a 200 cut off part way through, each of
@@ -939,6 +1076,20 @@ generation: one from a generation the log has left prints `left gen N` in place
 of a lag and is refused whatever its `SEQ` reads. The
 position is a heartbeat old, so a node that has only just caught up can be
 refused once more; run the command again.
+
+A readmission that cannot be **judged** is refused as well, with nothing
+written: `503 readmission_unjudged` — for instance when no data node serving
+the estate could give a log's readmission bound, the floor the writing node's
+fence holds the node to.
+
+The node's position is not what is wrong there, so it is not told to catch up.
+Anything else the judgement could not read — the positions register, a
+published floor — is asked again, on this node or through another
+(`-url <that node>`). And either gesture on a node in a
+[capacity window](../guides/retention.md#changing-a-logs-ceiling) is refused `409 not_publishing`
+before anything is judged; its line points at `crewlet retention status`, which
+leads with the window while it is open, since nothing is written to any log
+until the fleet is back in normal mode.
 
 The refusal is the truth about the node rather than the thing keeping your data
 safe. Readmitting a node below the floor used to succeed, and it put back the
@@ -1143,6 +1294,34 @@ patterns — and not the cross-field rules the validator enforces. The
 invariant is one-directional and tested: everything the schema rejects,
 the validator also rejects. An editor that red-underlines a config the
 engine would happily run teaches authors to ignore it.
+
+So it accepts what the decoder reads, not merely what a field's type
+suggests, and a test offers every field of both tiers each such value to
+hold the two to the same verdict:
+
+- **An empty value** — `~` or `""` — anywhere the engine reads it as unset,
+  which is everywhere but the company document's root.
+- **A number or a boolean in a text field**, read as the text it was
+  written as (`name: 2024`, `org_webhook: false`).
+- **YAML 1.1's switch words** in a boolean field — `yes`, `no`, `on`, `off`,
+  `y` and `n`, each in YAML's three casings (`yes`, `Yes`, `YES`) — because
+  the decoder reads them there. A quoted `"true"` is not one of them: it is
+  text, and a boolean field refuses it.
+- **A `${VAR}` reference in Tier A** wherever the engine resolves one into
+  a value the field can take: anywhere in any text field, a patterned or
+  closed-set one included, since the value is judged only once it has
+  resolved; and as the **whole** value of a number or a boolean field, whose
+  resolved text is read as if it were written there. A reference with other
+  text around it in a number or a boolean is refused, by the schema and the
+  engine alike.
+- **A Tier B reference as the literal text it is.** The company keeps a
+  reference verbatim and resolves it only where a provider or transport is
+  built, so a field with a pattern or a closed set — an enum, a handle, a unit
+  id — refuses one as it would any other text that is not a value of it. The
+  exception is a field whose consumer resolves a **whole** reference, which
+  takes exactly one beside its own rule: today that is a Mattermost seat's
+  `username`. See
+  [Environment Variable References](../getting-started/configuration.md#environment-variable-references).
 
 Both documents are checked into [`schema/`](../../schema/); a test
 regenerates and compares them, so a config field added without a schema

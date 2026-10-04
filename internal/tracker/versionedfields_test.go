@@ -32,6 +32,9 @@ func TestAClosedRecordVersionGainsNoField(t *testing.T) {
 		9:  {"TaskCreate.Origin"},
 		10: {"TurnRecord.FailedIn", "TurnRecord.Review", "TurnRecord.Summary", "TurnRecord.Tools"},
 		11: {"TaskPatch.Moving"},
+		12: {"Subject.Kind=file"},
+		13: {"Op=purge", "RankOrder.Placements"},
+		14: {"Op=release"},
 	}
 	got := map[int][]string{}
 	for _, field := range tracker.VersionedFields() {

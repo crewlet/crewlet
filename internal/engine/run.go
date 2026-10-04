@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -32,6 +33,8 @@ import (
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -262,8 +265,10 @@ type Engine struct {
 	// reflector is the learning write side: one dispatcher for the life of
 	// the process, whose org and workers an apply swaps. On the ENGINE
 	// rather than on an epoch because its redelivery ring is process
-	// state — see learning.Reflector.
-	reflector *learning.Reflector
+	// state — see learning.Reflector. ATOMIC because every seat this node
+	// holds hands its reflection wakes to it from the queue's goroutines,
+	// while the first apply on a node that booted with none builds it.
+	reflector atomic.Pointer[learning.Reflector]
 
 	// native is this node's copy of the company's own tracker and
 	// knowledge base: the state log, its index, and the read and write
@@ -287,6 +292,46 @@ type Engine struct {
 	// monotonic nil-to-runtime transition is what lets a caller that reads
 	// it more than once rely on the later reads.
 	native atomic.Pointer[native]
+
+	// remote is the same thing on a node that holds no data: which halves
+	// its seats' tools reach through the router. At most one of the two is
+	// ever set, and on the same terms — see remote.go.
+	remote atomic.Pointer[remoteNative]
+
+	// router is how every seat tool on this node reaches the estate — this
+	// node's own copy where it serves the partition, a holder's otherwise —
+	// built in [New] on EVERY node, before anything publishes; see
+	// router.go. local is what this node serves, nil on a node that holds
+	// no data.
+	router *estate.Router
+	local  *localEstate
+
+	// custody publishes a stateless node's events for a data node to
+	// keep; nil on a node that holds data. keeper is a data node's half,
+	// writing them into its own log; nil on every other node.
+	custody *observe.Custody
+	keeper  *observe.Keeper
+
+	// stopEstate withdraws this data node as a server of the estate, nil
+	// where it serves none. See [Engine.serveEstate].
+	stopEstate queue.Unsubscribe
+
+	// stopFleetBroker withdraws this member's broker-membership subject,
+	// nil where it serves none. See [Engine.serveFleetBroker].
+	stopFleetBroker queue.Unsubscribe
+
+	// dataView watches the fleet's presence leases, and it is what every
+	// per-request question about data nodes is answered from — which one
+	// a stateless node's tool call goes to, and which divide a search.
+	// Nil where there is no coordination and so no fleet. Built in [New],
+	// run from [Engine.startDataView] and stopped by [Engine.teardown];
+	// see remote.go.
+	dataView     *coord.LeaseView
+	stopDataView func()
+
+	// objects is this node's object store and, on a data node, the
+	// collector's duty. See objects.go.
+	objects *objectStore
 
 	// boot is the operator's Tier A configuration this engine was built
 	// from. Immutable; kept because a node that meets its first native
@@ -403,14 +448,13 @@ type Engine struct {
 	// loop this process runs, and rebuilding it on every apply would churn
 	// a duty that has nothing new to sweep.
 	//
-	// REBUILT ONCE MORE on a node's FIRST company, the one time its job
-	// list changes after boot: a node that booted unconfigured built it
-	// with no native runtime and no company, so it swept no operation
-	// ledger, ran none of the tracker's repairs and read the conversation
-	// horizon's floor. The old worker is stopped — its in-flight tick
-	// waited out — before the new one starts, so there is never a second
-	// loop. Atomic because that write happens while the process runs. See
-	// [Engine.rebuildMaintenance].
+	// REBUILT ONCE MORE when an apply starts the native runtime, the one
+	// time its job list changes after boot: a node that booted without one
+	// swept no operation ledger and ran none of the tracker's repairs. Its
+	// horizons need no rebuild — each is asked at every sweep. The old
+	// worker is stopped — its in-flight tick waited out — before the new
+	// one starts, so there is never a second loop. Atomic because that
+	// write happens while the process runs. See [Engine.rebuildMaintenance].
 	maintenance  atomic.Pointer[maintenance.Worker]
 	integrations *integration.Worker
 
@@ -618,6 +662,27 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if opts.Bootstrap == nil {
 		return nil, fmt.Errorf("engine: no bootstrap config")
 	}
+	// TIER A'S OWN RULES, HELD HERE AND NOT ONLY AT THE LOADER. The loader
+	// validates what it parses, which covers a file and nothing else: a
+	// bootstrap built in code, or a loaded one edited afterwards (`crewlet
+	// run`'s flag overrides), reaches this function having passed no rule
+	// at all, and every rule it breaks fails later as something that looks
+	// like a different problem. The e2e fleet harness is the measured case:
+	// it ran its members on `coordination.type: local` over a clustered
+	// stream — a shape [config.Bootstrap.Validate] refuses by name — so each
+	// member claimed every seat and every duty for itself and saw no peer's
+	// presence, and nothing said so until the object store's membership, a
+	// lease, counted every peer absent on every tick. The engine is the one
+	// consumer that RUNS Tier A, so it is the one place that cannot assume
+	// its input was checked.
+	//
+	// It NORMALIZES in place, which is the point rather than a side effect:
+	// what the rules check is what this engine then runs. A bootstrap that is
+	// already normal is written nowhere, so a caller holding the same pointer
+	// sees no write.
+	if err := opts.Bootstrap.Validate(); err != nil {
+		return nil, fmt.Errorf("engine: the bootstrap config (Tier A) is invalid: %w", err)
+	}
 	// THE CROSS-TIER RULES, before anything is opened. Each tier validated
 	// alone on its way in; what neither could see is the other, and the one
 	// rule that needs both (a native tracker or knowledge base whose log
@@ -672,7 +737,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// normal, which is what every caller that does not know about
 	// maintenance gets; the incarnation is minted here rather than at the
 	// lease, because the capacity barrier compares it and a second mint
-	// would be a second identity for one process.
+	// would be a second identity for one process. It is the owner of every
+	// lease this process holds for itself — the seat host's presence, seats
+	// and duties (node.New below) and the object store's membership alike.
 	//
 	// AND THE NODE ID ONCE TOO. It was resolved here and then AGAIN a
 	// hundred lines below, from the same bootstrap through the same
@@ -709,9 +776,28 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		}
 		ownsBackends = true
 	}
+	// THE PARTITIONS THIS NODE HOLDS, opened before anything can read or
+	// copy one — lent backends included, since holding is a fact about the
+	// node rather than about whoever opened its store.
+	if err = holdPartitions(ctx, backends.Store, opts.Bootstrap); err != nil {
+		if ownsBackends {
+			backends.Close(ctx)
+		}
+		return nil, err
+	}
 
 	e := &Engine{
-		boot:     opts.Bootstrap,
+		boot: opts.Bootstrap,
+		// SET HERE, BEFORE ANYTHING READS IT, and once: the admission
+		// handshake below asks it whether this node publishes and whether
+		// its broker is a member, and the node is handed this exact value
+		// — two constructions of it would be two places to disagree about
+		// what this node does. Through the bootstrap's own accessor, which
+		// parses the roles with the validator that already refused an
+		// unknown one at load, derives the broker kind from the stream
+		// block, and is what the fleet view reads a peer's presence row
+		// back through.
+		profile:  opts.Bootstrap.Profile(nodeID),
 		backends: backends, ownsBackends: ownsBackends,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
 		steers:              newSteerDesk(),
@@ -735,6 +821,41 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// A runner per caller would give the loop, the API and a disconnect a
 	// claim map each, which guards nothing.
 	e.setupRunner = sync.OnceValue(e.newSetupRunner)
+
+	// THE VIEW OF THE FLEET'S DATA NODES, built before the router that asks
+	// it on every request. Building it lists nothing: it runs
+	// once the boot's failure path is armed below, and answers unknown
+	// until its first listing — see remote.go.
+	if e.dataView, err = newDataView(opts.Bootstrap, backends.Coord); err != nil {
+		if ownsBackends {
+			backends.Close(ctx)
+		}
+		return nil, err
+	}
+
+	// EVERY NODE ROUTES THE ESTATE: a data node answers what it serves and
+	// asks for the rest, and a node without `data` asks for everything —
+	// see router.go. Built before anything publishes, because a tool is
+	// handed its facades as soon as a seat is.
+	if holdsData(opts.Bootstrap) {
+		e.local = newLocalEstate(e, holdingOf(opts.Bootstrap, LayoutZero()))
+	}
+	if e.router, err = e.newRouter(backends.Queue, nodeID); err != nil {
+		if ownsBackends {
+			backends.Close(ctx)
+		}
+		return nil, err
+	}
+
+	// A NODE WITHOUT `data` HANDS THE DATA NODES THE RECORD OF WHAT IT
+	// DID — before anything publishes, because the custody listener must
+	// be in place before the first turn a restarted node picks up off its
+	// durable inbox.
+	if !holdsData(opts.Bootstrap) {
+		e.custody = observe.NewCustody(backends.Queue)
+		backends.Queue.AddPublishListener(e.custody.Listen())
+		e.custody.Start(ctx)
+	}
 
 	// ONE FAILURE PATH FOR EVERYTHING BELOW, armed before the first thing
 	// that outlives this call and stood down only once the engine is the
@@ -771,6 +892,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 				"admission are stopped, and any backends this engine opened "+
 				"itself are closed")
 	}()
+	// THE FIRST THING THAT OUTLIVES THIS CALL, so the failure path above
+	// is what stops it if the boot goes no further.
+	e.startDataView(ctx)
 
 	// THE SKILL SYNC IS BUILT BEFORE THE NATIVE BACKENDS, whose page
 	// projection nudges it from a post-commit hook: a nudge with nothing to
@@ -815,16 +939,50 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// is not admitting itself to publish, it is offering the evidence the
 	// capacity barrier is established from. See maintenance_mode.go.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := e.admit(ctx, maintenanceStreams()); err != nil {
+	if err := e.admit(ctx, maintenanceStreams(LayoutZero())); err != nil {
 		return nil, err
 	}
-	e.acknowledge(ctx, maintenanceStreams())
+	e.acknowledge(ctx, maintenanceStreams(LayoutZero()))
 
 	// MIGRATED BEFORE THE SNAPSHOT, so a value set on this node while the
 	// engine was stopped is on the fleet before anything resolves it —
 	// and, once it is, so are this node's peers. See [Engine.migrateSecrets].
 	e.migrateSecrets(ctx)
 	e.refreshSecrets(ctx)
+
+	// SERVING BEFORE ANY SEAT, and in every mode: a node restarted into a
+	// maintenance mode still answers reads, and its writers are what
+	// [Engine.estateBackend] withholds.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := e.serveEstate(ctx); err != nil {
+		return nil, err
+	}
+	// AND KEEPING THE STATELESS NODES' EVENTS, in every mode too: what it
+	// writes is this node's own event log, which no mode holds still.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := e.takeCustody(ctx); err != nil {
+		return nil, err
+	}
+	// AND THE BROKER'S MEMBERSHIP, on a member, in every mode: the member
+	// that answers a leaf's read of the metadata group, or carries an
+	// operator's removal of a member that is gone, may be any of them —
+	// and a fleet restarted into a maintenance mode is exactly when an
+	// operator looks at who its broker still counts.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := e.serveFleetBroker(ctx); err != nil {
+		return nil, err
+	}
+	// THE LEASE TTL IN FORCE, before anything claims a lease on the seat
+	// heartbeat: the object store's membership below is the first, and the
+	// node's seats and the mailbox retirement follow.
+	e.leaseTTL = effectiveLeaseTTL(opts.Bootstrap, backends.Coord)
+	// AND THE OBJECT STORE, over the backend the backends opened: every
+	// node reads and writes files through it from boot, whatever mode it
+	// started in.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := e.startObjects(); err != nil {
+		return nil, err
+	}
 
 	// AND THE FOLLOWS, on the same reasoning and in the same window: before
 	// the epoch below builds the chat transports, so nothing is matching an
@@ -898,17 +1056,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			return nil, err
 		}
 	}
-	e.installEpoch(company)
+	e.installEpoch(company, opts.ActivatedAt)
 
-	// SET BEFORE the node, because the node is handed this exact value —
-	// two constructions of it would be two places to disagree about what
-	// this node does.
-	// THROUGH THE BOOTSTRAP'S OWN ACCESSOR, not a second construction of
-	// the same thing: it parses the roles with the validator that already
-	// refused an unknown one at load, and it is what the fleet view reads
-	// a peer's presence row back through.
-	e.profile = opts.Bootstrap.Node.Profile(nodeID)
-	e.leaseTTL = effectiveLeaseTTL(opts.Bootstrap, backends.Coord)
 	// BEFORE the node, which registers every seat's mailbox through it on
 	// its first walk, and AFTER the lease TTL, which a retirement claims a
 	// seat for.
@@ -923,8 +1072,22 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// INCARNATION. A restarted process that reused its owner id would
 		// be indistinguishable from the one that died, and would inherit
 		// leases it never renewed.
+		//
+		// THE ENGINE'S OWN, minted once above — never a mint of its own.
+		// This was `config.NewIncarnation(nodeID)` a second time, so the
+		// coordination store held one process under two owners: its
+		// presence, its seats, every fleet duty and the meter id its token
+		// report is filed under on one, and its object-store membership,
+		// its publish admission and its capacity acknowledgements on the
+		// other. Two owners under one node id is exactly what a second
+		// process running under that id looks like, which is the one thing
+		// a refused membership tells an operator to look for. Every lease
+		// this process holds for ITSELF is under e.incarnation; the one
+		// deliberate exception is the mailbox retirement's, which claims a
+		// seat lease as a separate party and must lose to this host — see
+		// [Engine.buildMailboxes].
 		NodeID: nodeID,
-		Owner:  config.NewIncarnation(nodeID),
+		Owner:  e.incarnation,
 		// Read FRESH through the epoch, never bound to the company this
 		// engine started on: an apply replaces the seat set, and a
 		// method value captured here would keep claiming seats a
@@ -941,7 +1104,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		//
 		// Trivially true on a company running the vendor backends, which
 		// have no projection to wait for.
-		SeatsAdmitted: e.NativeHydrated,
+		//
+		// AND NEVER IN A MAINTENANCE MODE, where this same host still
+		// runs for the presence it renews — see [Engine.seatsAdmitted].
+		SeatsAdmitted: e.seatsAdmitted,
 		// AND THE OTHER DIRECTION. Admission withholds new work from a
 		// node that is merely behind; this gives back work already held
 		// by a node whose rows are wrong. Two gates because the remedies
@@ -985,9 +1151,17 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// broker or no store: there is nowhere to carry memory to, and
 	// prepareSeat then skips the step rather than pretending it happened.
 	//
+	// THE QUEUE'S OWN CLIENT, which every topology has, over the
+	// connection the snapshot join and donor ride for the same reason.
+	// [Backends.Conn] is the embedded broker's SECOND connection and is nil
+	// on purpose when this node dialled an external cluster, so building on
+	// it switched memory replication off on exactly the topology whose
+	// seats move between machines: every seat forgot what it learned each
+	// time placement moved it.
+	//
 	// Unconfigured, no seat has an identity yet and nothing has memory to
 	// carry: [Engine.agentIDOf] answers "" then.
-	if e.memory, err = memsync.New(backends.Store, backends.Conn(), e.agentIDOf); err != nil {
+	if e.memory, err = memsync.New(backends.Store, brokerJetStream(backends.Queue), e.agentIDOf); err != nil {
 		return nil, fmt.Errorf("engine: seat memory: %w", err)
 	}
 	// ARMED HERE, STARTED IN Start. The watchdog stands down permanently
@@ -1016,9 +1190,17 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 
 	// EVERYTHING BELOW THIS LINE PUBLISHES, and a maintenance-mode node
-	// starts none of it: the seat host and its mailboxes, every duty, the
-	// scheduler, the change feeds, the notification spine, the retention
-	// trim and the reflection pass.
+	// starts none of it: every duty, the scheduler, the change feeds, the
+	// notification spine, the retention trim and the reflection pass.
+	//
+	// THE NODE ABOVE IS NOT ONE OF THEM, and [Engine.Start] starts it in
+	// every mode: its seat host renews this node's PRESENCE, which is
+	// membership rather than work — the capacity window's participant set,
+	// the estate's read routing and the fleet views all read it while the
+	// fleet is in a maintenance mode. What would publish through it is
+	// withheld where it is decided rather than here: the host claims no
+	// seat unless the mode publishes ([Engine.seatsAdmitted]), and no
+	// surface is handed this node's writers ([Engine.writeSide]).
 	//
 	// ONE GATE RATHER THAN A CONDITION PER LOOP. Each of these is started
 	// by its own call and a per-call check is a list somebody maintains —
@@ -1032,7 +1214,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			"mode", e.mode, "node", nodeID, "incarnation", e.incarnation,
 			"detail", "the broker and the coordination estate are up and no "+
 				"publisher is: no seats, no duties, no scheduler, no change "+
-				"feed and no write routes")
+				"feed, no object repair or collection and no write routes")
 		// THE ENGINE IS THE CALLER'S FROM HERE, so the guard above stands
 		// down and [Engine.Stop] — the same teardown — is what ends it.
 		// This return is a success like the last one, and a maintenance
@@ -1064,6 +1246,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// here: they are [Engine.Start]'s, after the host runs — see
 	// [Engine.startBudgetReports].
 	e.startNativeDuties(ctx)
+	// AND THE OBJECT STORE'S COLLECTOR, behind the same gate: each pass pins
+	// the estate with a barrier, which a capacity window refuses.
+	e.startNativeCollector(ctx)
 	// Beside the sweep, and a fleet singleton on the same terms: two nodes
 	// reconciling one third-party app at the same moment can each create an identity
 	// for one seat, and no later pass can detect or repair that.
@@ -1457,13 +1642,22 @@ func (e *Engine) teardown(ctx context.Context) {
 	// paid summarisation against a closed database.
 	e.stopLearning()
 	e.stopScheduler()
+	// THE OBJECT STORE'S COLLECTOR with the other duty loops: the loop
+	// claims its duty afresh every turn, so one still running past the
+	// release below takes it straight back and the node exits holding it.
+	// AND BEFORE the native runtime below, whose tracker reader it reads
+	// the references through.
+	e.stopObjectCollector()
 	// AFTER every duty loop above has stopped and waited out its tick, so no
-	// tick of this node runs once a peer can take the duty.
+	// tick of this node runs once a peer can take the duty, and no turn of
+	// this node can claim one again once it is given back.
 	e.releaseDuties(ctx)
 	e.stopCooldownRefresh()
 	// BEFORE the native backends, whose page projection its walk reads, and
 	// before backends.Close, which closes the broker its nudge listens on.
 	e.stopSkillSync(ctx)
+	e.stopServingEstate(ctx)
+	e.stopServingFleetBroker(ctx)
 	// BEFORE backends.Close, for the same reason and with more at stake:
 	// the projectors and the indexer both write, and an apply landing
 	// after the close would fail its transaction mid-batch and leave the
@@ -1491,9 +1685,35 @@ func (e *Engine) teardown(ctx context.Context) {
 	// credentials, and one left behind outlives the engine that vouched
 	// for it.
 	e.stopSharedServers(ctx)
+	// AFTER EVERY SEAT AND LOOP THAT PUBLISHES, so the last events they
+	// published are in the buffer, and BEFORE the broker closes under the
+	// last batch.
+	e.stopCustody(ctx)
+	// BEFORE backends.Close, which closes the store the keeper writes and
+	// the broker it settles against.
+	e.stopKeeper()
+	e.stopWatchingDataNodes()
 	if e.ownsBackends {
 		e.backends.Close(ctx)
 	}
+}
+
+// custodyStopBudget is how long an orderly stop waits for the broker to take
+// the events this node still holds.
+//
+// TEN SECONDS: many publishes to a broker that is up, and short enough that a
+// stop with no member reachable is not held for long — what it could not
+// publish is logged as lost.
+const custodyStopBudget = 10 * time.Second
+
+// stopCustody flushes and ends the event custody. Nil-safe.
+func (e *Engine) stopCustody(ctx context.Context) {
+	if e.custody == nil {
+		return
+	}
+	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), custodyStopBudget)
+	defer cancel()
+	e.custody.Stop(bounded)
 }
 
 // StallLag is how far behind the worst live watched duty is.
@@ -1690,6 +1910,12 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		attribute.Int("crewlet.delegation_depth", req.Depth))
 	defer span.End()
 
+	// WHAT WOKE THIS TURN IS WHAT ITS READS ARE NO OLDER THAN: every
+	// constituent's committing record goes into this node's floors before
+	// the first read, so a list read across partitions — at `session`,
+	// floored at those floors — shows the change the seat was woken for.
+	e.observeTriggers(ctx, req.Events)
+
 	// THE WORKING INDICATOR, up before this turn does anything slow. Here
 	// rather than beside turn.Run because everything between the two is
 	// already work a person is waiting through: the prefetch reads a chat
@@ -1718,7 +1944,14 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// Assembled BEFORE the runner, because the runner needs it: every phase
 	// event carries the turn's identity, and a runner built without it
 	// publishes phases attributed to nobody.
-	tel := e.describeTurn(ctx, company, req)
+	tel, err := e.describeTurn(ctx, company, req)
+	if err != nil {
+		// Nothing started, so nothing ended, exactly as for a runner that
+		// could not be built below: no phase was published, and the
+		// dispatcher hands the delivery back rather than recording a turn
+		// that never ran.
+		return turn.Result{}, err
+	}
 	// THE TURN IS ON THE RECORD BEFORE ANYTHING SLOW, and the prefetch below
 	// is the first slow thing: it reads a chat thread and searches the
 	// knowledge base over the network, and until a phase opened nothing
@@ -2047,5 +2280,36 @@ func (e *Engine) observe(ctx context.Context, ev *events.Event) {
 		log.WarnContext(ctx, "engine_observation_dropped", "event", ev.Type,
 			"error", err.Error(),
 			"detail", "the work itself is unaffected; the feed will not show it")
+	}
+}
+
+// observeTriggers hands this node's read-your-writes floors the position of
+// every record whose wake is among evs ([notify.TriggerOf]) — the position a
+// first-party change feed stamped on it.
+//
+// THE NODE'S FLOORS, not the turn's: they are what every read this node routes
+// carries ([estate.Session]), to whichever holder answers it, this node's own
+// copy included. A floor a turn raises is one every seat on the node then reads
+// past, which is conservative rather than wrong — never a read from before it.
+//
+// A token this build cannot read is logged and skipped: the turn still runs,
+// and reads exactly as one woken by an older build's wake, which carries none.
+func (e *Engine) observeTriggers(ctx context.Context, evs []*events.Event) {
+	if e.router == nil {
+		return
+	}
+	for _, ev := range evs {
+		token := notify.TriggerOf(ev)
+		if token == "" {
+			continue
+		}
+		at, err := statelog.ParsePosition(token)
+		if err != nil {
+			log.WarnContext(ctx, "turn_trigger_unreadable", "event", ev.ID.String(),
+				"trigger", token, "error", err.Error(),
+				"detail", "the turn runs, and its reads are not floored at what woke it")
+			continue
+		}
+		e.router.Observe(at)
 	}
 }

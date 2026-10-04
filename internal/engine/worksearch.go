@@ -22,33 +22,43 @@ type itemRanker struct {
 	index *search.Indexer
 }
 
-// RankItems implements [tracker.Ranker].
+// Candidates implements [tracker.Ranker]: each method the query's mode runs,
+// its top candidates over this node's corpus of work items, the item behind
+// each with the index's excerpt, and what the ranking did.
 //
 // PARTIAL IS NOT REFUSED, for the reason the knowledge search gives: an
 // answer over part of the corpus beats none. It is not swallowed either — the
 // coverage rides in the answer's outcome to whichever surface asked, which is
 // where a person or a seat can act on it. It used to be a log line, which
 // nobody asking could see.
-func (r itemRanker) RankItems(ctx context.Context, q tracker.SearchQuery) (tracker.RankedDocs, error) {
+func (r itemRanker) Candidates(ctx context.Context, q tracker.SearchQuery) (tracker.RankedCandidates, error) {
 	if r.fan == nil || r.index == nil {
-		return tracker.RankedDocs{}, nil
+		return tracker.RankedCandidates{}, nil
 	}
 	answer, err := r.fan.Search(ctx, search.FanQuery{
 		Text:    q.Text,
 		Sources: []string{string(search.SourceTask)},
 		Mode:    q.Mode,
-		Limit:   q.Limit,
+		// NOT THE CALLER'S LIMIT: what this answers is the candidates,
+		// each method's top FuseN whatever the limit, and the fused cut
+		// the fan-out also makes is not read here.
+		Limit: search.FuseN,
 	})
 	if err != nil {
-		return tracker.RankedDocs{}, err
+		return tracker.RankedCandidates{}, err
 	}
-	hits, err := r.index.Hydrate(ctx, answer.Hits, q.Text)
+	out := tracker.RankedCandidates{Candidates: answer.Candidates, Outcome: answer.Outcome()}
+	keys := answer.Candidates.Keys()
+	if len(keys) == 0 {
+		return out, nil
+	}
+	hits, err := r.index.Hydrate(ctx, keys, q.Text)
 	if err != nil {
-		return tracker.RankedDocs{}, err
+		return tracker.RankedCandidates{}, err
 	}
-	out := tracker.RankedDocs{Outcome: answer.Outcome()}
+	out.Docs = make(map[string]tracker.RankedDoc, len(hits))
 	for _, hit := range hits {
-		out.Docs = append(out.Docs, tracker.RankedDoc{ID: hit.ID, Snippet: hit.Snippet})
+		out.Docs[hit.Key] = tracker.RankedDoc{ID: hit.ID, Snippet: hit.Snippet}
 	}
 	return out, nil
 }
@@ -80,9 +90,19 @@ func (e *Engine) WorkSearch() *tracker.Searcher {
 // ONE FUNCTION FOR BOTH CALLERS. It was two — an unexported one here and a
 // one-line exported wrapper around it — which is two places for the typed-nil
 // rule above to be stated and one of them to stop matching.
+//
+// THROUGH THE ROUTER ON EVERY NODE, like every other tool seam: a data node's
+// router answers from its own index, and a node that holds no data asks a node
+// that has one — the same verb over the same fleet-wide index.
 func WorkSearcher(e *Engine) builtin.WorkSearcher {
-	if s := e.WorkSearch(); s != nil {
-		return s
+	if r := e.remote.Load(); r != nil {
+		if !r.tracker {
+			return nil
+		}
+		return e.router.Work()
+	}
+	if s := e.WorkSearch(); s != nil && e.router != nil {
+		return e.router.Work()
 	}
 	return nil
 }

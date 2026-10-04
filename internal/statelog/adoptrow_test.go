@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // AN ADOPTION A BUILD FROM BEFORE THE LEDGER TRAVELLED RECORDED IS CARRIED INTO
@@ -66,10 +67,7 @@ func TestAnAdoptionAnEarlierBuildRecordedIsFoldedIntoTheWatermark(t *testing.T) 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
-			if err != nil {
-				t.Fatalf("open: %v", err)
-			}
+			db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 			t.Cleanup(func() { _ = db.Close() })
 			// Microsecond instants, which is what the store keeps, so a
 			// round trip compares equal.
@@ -87,10 +85,10 @@ func TestAnAdoptionAnEarlierBuildRecordedIsFoldedIntoTheWatermark(t *testing.T) 
 			}
 
 			domains := []statelog.Domain{probeDomain{}}
-			if err := statelog.FoldLegacyAdoptions(t.Context(), db, domains); err != nil {
+			if err := statelog.FoldLegacyAdoptions(t.Context(), db, estate, domains); err != nil {
 				t.Fatalf("FoldLegacyAdoptions: %v", err)
 			}
-			before, lost := lostBefore(t, db)
+			before, lost := lostBefore(t, estate)
 			switch {
 			case c.none && lost:
 				t.Fatalf("the ledger may have lost rows before %s, and no adoption "+
@@ -141,10 +139,10 @@ func writeLegacyAdoption(t *testing.T, db *store.DB, started time.Time, complete
 	}
 }
 
-// lostBefore is the probe ledger's watermark in db's replicated estate.
-func lostBefore(t *testing.T, db *store.DB) (time.Time, bool) {
+// lostBefore is the probe ledger's watermark in a partition.
+func lostBefore(t *testing.T, db store.PartitionHandle) (time.Time, bool) {
 	t.Helper()
-	rows, err := statelog.NewRows(db, probeDomain{}, nil)
+	rows, err := statelog.NewRows(db.Reader(), probeDomain{}, specOf(probeDomain{}), nil)
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}

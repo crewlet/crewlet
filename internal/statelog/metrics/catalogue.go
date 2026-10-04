@@ -138,7 +138,12 @@ func Catalogue() []Instrument {
 			Shows: "Writes refused before or instead of an append, by `reason`, and " +
 				"EVERY value it carries is here, each with its remedy. The node: " +
 				"`evicted` (this node is removed from the fleet — run the write " +
-				"on another), `deferred` (it holds a record it cannot decode — a " +
+				"on another), `not_holder` (it does not serve the log's partition, never " +
+				"having held it or having begun to leave it — a node that serves " +
+				"it writes it), `holding_unknown` (it could not tell whether it " +
+				"serves the partition — clears when it can, and a node that " +
+				"serves it writes meanwhile), `deferred` (it holds a record it " +
+				"cannot decode — a " +
 				"newer build serves it), `behind` (it has not applied a position " +
 				"the write needs — clears on its own), `below_floor` (it is below " +
 				"the log and must adopt a snapshot — another node writes " +
@@ -158,11 +163,21 @@ func Catalogue() []Instrument {
 				"undid it) — both answered by a NEW operation under a fresh " +
 				"id, never by a retry. A record that landed and a gate dropped " +
 				"is counted under the gate that dropped it — `evicted`, " +
+				"`released` (written by a node after it released the log as it " +
+				"left the log's partition — a node that serves the partition " +
+				"takes the write), " +
 				"`deleted`, `retired` (a kind this build no longer applies), " +
-				"`abandoned` (written in a generation a reanchor abandoned) or " +
+				"`abandoned` (written in a generation a reanchor abandoned), " +
 				"`overtaken` (written after a restored reanchor, below its " +
-				"generation) — and is never re-decided, because republishing " +
-				"makes another record nothing applies. Beside the refusals: " +
+				"generation) or `wrong_partition` (its own domain places it in " +
+				"another partition than the log it is on — another writer's, " +
+				"since this one refuses such a record before appending it) — " +
+				"and is never re-decided, because republishing " +
+				"makes another record nothing applies. Such a record holds its " +
+				"operation id for the log's duplicate window, so the same id sent " +
+				"inside it, by any node, is collapsed onto the record and refused " +
+				"the same way: the write is retried under a fresh id, or under the " +
+				"same one once the window has passed. Beside the refusals: " +
 				"`conflict` for a write that lost every round, `exists` for a " +
 				"create whose object already exists, and `error` for a write " +
 				"that failed before it could answer. A refusal is not one of " +
@@ -198,8 +213,8 @@ func Catalogue() []Instrument {
 		{
 			Name: StatelogReadRefusals, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "level", "code"},
-			Shows: "Every refusal code, counted. Twelve codes with different " +
-				"remedies had no counter between them, so an operator had no " +
+			Shows: "Every refusal code, counted. The codes, each with its own " +
+				"remedy, had no counter between them, so an operator had no " +
 				"rejection rate for any of them.",
 		},
 		{
@@ -215,6 +230,21 @@ func Catalogue() []Instrument {
 			Shows: "Barrier records appended. Against reads served it is the " +
 				"single-flight ratio, which says whether coalescing is doing " +
 				"anything at all.",
+		},
+		{
+			Name: StatelogBarriersApplied, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"domain", "stream"},
+			Shows: "Barrier records applied from each log — every node's " +
+				"linearizable reads on it, since every node applies every " +
+				"record. It is the rate `census_drift` holds against the " +
+				"census, per log: a node's own appends are only its share of " +
+				"the fleet's reads, and on a fleet of several serving nodes " +
+				"they describe a company that many times quieter than it is. " +
+				"The alarm's 24-hour window files each barrier at the hour the " +
+				"broker stored it, so a node replaying a backlog does not read " +
+				"days of reads as one; this cumulative series counts them as " +
+				"they are applied, so it jumps by a backlog's barriers when " +
+				"one is replayed.",
 		},
 		{
 			Name: StatelogLingerYields, Kind: KindCounter, Unit: UnitCount,
@@ -259,7 +289,9 @@ func Catalogue() []Instrument {
 			Attributes: []string{"domain", "result"},
 			Shows: "Records consumed, by what happened to them: applied, " +
 				"retained, gated, skipped, or reprocessed by a build that could " +
-				"read what an earlier one retained. A node applying nothing " +
+				"read what an earlier one retained — a retained record a gate " +
+				"drops when it is reprocessed is counted `gated`, as it would " +
+				"have been live, since it wrote no row. A node applying nothing " +
 				"while its position advances is healthy on lag alone.",
 		},
 		{
@@ -298,9 +330,18 @@ func Catalogue() []Instrument {
 		{
 			Name: StatelogRecordsGated, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"gate", "subject_kind"},
-			Shows: "Records an apply gate dropped. A dropped commit is " +
-				"recoverable by nothing, and this is the only place anyone " +
-				"would see that it happened.",
+			Shows: "Records an apply gate dropped, by the gate that dropped " +
+				"each — the domain's own (`evicted`, `released`, `deleted`, " +
+				"`retired`) or " +
+				"the framework's (`abandoned`, `overtaken`, `wrong_partition`). " +
+				"Each node counts a record once, where its own applier drops it, " +
+				"when the transaction that drops it commits — never once per " +
+				"attempt at that transaction. A write refused because its " +
+				"record — or another node's copy it was collapsed onto — was " +
+				"dropped is a refusal, counted under " +
+				"`crewlet.statelog.publish.refusals`, and not a second drop. " +
+				"A dropped commit is recoverable by nothing, and this is the " +
+				"only place anyone would see that it happened.",
 		},
 		{
 			Name: StatelogDrainRowsPerSecond, Kind: KindGauge, Unit: UnitCount,
@@ -328,9 +369,9 @@ func Catalogue() []Instrument {
 			Name: StatelogApplyLagSeconds, Kind: KindGauge, Unit: UnitSeconds,
 			Attributes: []string{"domain"},
 			Shows: "How OLD the oldest unapplied record is. Seconds are what " +
-				"a stall grace, a pending outcome and a seat move all turn " +
-				"on; sequences are not, and a lag of 4 000 says nothing about " +
-				"whether anything is wrong.",
+				"a stall grace, a pending outcome and a copy taken out of " +
+				"service all turn on; sequences are not, and a lag of 4 000 " +
+				"says nothing about whether anything is wrong.",
 		},
 		{
 			Name: StatelogAppliedThrough, Kind: KindGauge, Unit: UnitCount,
@@ -349,7 +390,7 @@ func Catalogue() []Instrument {
 			Name: StatelogDeferredOldestAgeSeconds, Kind: KindGauge, Unit: UnitSeconds,
 			Attributes: []string{"domain"},
 			Shows: "How long the oldest retained record has been retained, " +
-				"which is what decides whether this node's seats move.",
+				"which is what decides whether this node still serves the partition.",
 		},
 		{
 			Name: StatelogWaiters, Kind: KindGauge, Unit: UnitCount,
@@ -471,9 +512,12 @@ func Catalogue() []Instrument {
 		{
 			Name: TrackerSearchConcurrency, Kind: KindGauge, Unit: UnitCount,
 			Attributes: nil,
-			Shows: "Scans in flight, which is the row of the supported-corpus " +
-				"table this node is actually on. The published figure is a " +
-				"single reader on an idle node.",
+			Shows: "Searches in flight, which is the row of the " +
+				"supported-corpus table this node is actually on: inside the " +
+				"one-second budget, about 345 000 sources with one running " +
+				"and about 136 000 with eight through the full scan, and " +
+				"about 545 000 and 183 000 through an index probing half " +
+				"its lists.",
 		},
 		{
 			Name: TrackerSearchAnswers, Kind: KindCounter, Unit: UnitCount,

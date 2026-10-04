@@ -54,7 +54,10 @@ two private brokers, sharing neither a stream nor a coordination bucket, and
 nothing says so out loud. Either cluster the embedded servers — give every
 node the same `stream.cluster.name`, a `stream.cluster.port` to route on,
 and the other members' route URLs in `stream.cluster.peers` — or point them
-all at an external cluster with `stream.type: nats` and `stream.url`. It is
+all at an external cluster with `stream.type: nats` and `stream.url` — one
+whose servers all set `max_payload: 8MB`, since an event may be that large and
+every chunk of a company's files is a mebibyte and its framing; a server at
+nats-server's 1 MiB default is refused at connect, by name. It is
 the same client code either way; embedded versus external is a connection
 choice, not a second backend — and it really is either/or: `stream.cluster`
 configures the embedded server's own membership, so writing one against
@@ -102,6 +105,27 @@ the outage certain rather than unlucky. Tier A refuses a two-member
 config by name, counting the **stream's** members: the KV rides the
 stream's connection, so the coordination quorum *is* the stream cluster's.
 
+**`stream.cluster.peers` lists the *other* members**, because it is what
+that rule — and the one that allows at most one copy per member — counts:
+the members are this node plus the entries in its list. Each entry is a
+route URL with a host and a port (`nats://node-b.internal:6222`); one the
+embedded server could not dial is refused, since it would never be routed
+to. It is common to paste one list of every member into every node's file,
+so an entry that is **recognisably this node's own route** is not counted
+as a member: same host and port as this node's route listener
+(`cluster.host` with `cluster.port`, when the listener is bound to one
+address) or as its `cluster.advertise` address (whose bare host keeps
+`cluster.port`), with the scheme ignored, the host compared without regard
+to case and an IP address compared in its canonical form. An entry that
+repeats one already listed is not counted twice either. `crewlet validate`
+names every entry it discounted, as a warning. What it **cannot** recognise
+is another name for this host — a DNS alias, `localhost` for an advertised
+`10.0.0.11`, or any entry at all when the route listener binds every
+interface and advertises nothing — and such an entry is counted as a member
+it is not, so a two-node fleet written that way passes as three. Leave this
+node out of its own list. A list naming *only* this node names no other
+member and is refused: a member that seeds a cluster lists no peers.
+
 **A distinct, stable id per node.** `node.id` in the Tier A file, or
 `CREWLET_NODE_ID`, which is how an orchestrator injects a pod name
 without templating the config. Two nodes sharing an id miscount the fleet
@@ -116,23 +140,123 @@ come back.
 **The schema, applied first.** [`crewlet migrate`](../reference/cli.md#crewlet-migrate)
 before starting any node.
 
+## The broker: members and leaves
+
+How a node's broker takes part in the fleet's is its **broker kind**, and it
+comes from the node's `stream` block — never from its roles:
+
+| Broker kind | The `stream` block that makes it | What its broker does |
+|---|---|---|
+| `member` | embedded, with no `stream.leaf.urls` | Runs JetStream in the process, holds stream replicas, votes in the metadata group that places every stream and consumer |
+| `leaf` | embedded, with `stream.leaf.urls` | Runs with JetStream off and reaches the members' across a leaf link. Holds nothing, votes in nothing |
+| `client` | `stream.type: nats` | A plain client of an external cluster somebody else runs |
+
+Every node advertises its kind on its presence lease, beside its roles and
+labels, and **Settings › Nodes** and `crewlet fleet broker list` show it. A node
+running a build older than the field shows as `unknown`, and is counted as a
+member wherever that is the safe reading.
+
+**The broker is a fixed few members.** Three survive one member lost; five
+survive two, and five is the recommendation for a fleet whose company runs
+the engine's own tracker at scale. No stream keeps more than five copies
+(`stream.replicas` stops at five, JetStream's own ceiling), so a sixth member
+holds no copy anybody asked for and only adds a voter every election and
+every create waits on — `crewlet validate` warns about a peer list naming more
+than four other members. **Beyond five, a fleet grows by adding leaves, not
+members.**
+
+**A member of a fleet persists.** A member that names a cluster, lists peers or
+opens a leaf listener holds the fleet's streams for every node that reaches
+it — every seat's mailbox, every record the tracker and the knowledge base
+write, every coordination bucket — so Tier A requires `stream.store_dir` on it
+whatever its roles: one kept in memory loses its copy of all of them at its
+next restart.
+
+**Which roles pair with which broker.** A node without `data` joins an
+embedded fleet as a leaf, and a node with `data` is a member (or a client of
+an external cluster). Three pairings are **refused**, and each refusal names
+both ways out: a data node on a leaf, a broker member that holds no data, and
+`ingress` or `workers` on a node without `data`. Every data node holds the
+whole estate as a member of the broker, and a node without data reaches the
+estate through one.
+
+**A capacity seal counts every broker.** Changing a log's byte ceiling
+restarts the fleet into a maintenance mode, and the seal that proves no queued
+request survived is established from every data node and every broker member
+acknowledging, whatever its roles — see
+[who has to acknowledge](retention.md#who-has-to-acknowledge).
+
+### A member that is gone for good
+
+Two records say who the broker's members are, and they can disagree: the
+presence leases, and the metadata group's own list of voters. A member whose
+host died for good loses its presence within a lease TTL, but the metadata
+group goes on counting it in every election and every create until it is
+removed — so a three-member fleet that lost two for good has no quorum left to
+create anything with, and nothing on the presence side says why.
+
+```
+crewlet fleet broker list
+```
+
+puts what each node advertises beside how the group counts it, and names every
+disagreement: a **dead member** (a voter no live node is, or whose node came
+back as a leaf or a client), a node advertising a member the group does not
+count, and a node that does not say. Once a dead member is not coming back:
+
+```
+crewlet fleet broker remove node-c -confirm node-c
+```
+
+The group counts a voter by its raft **peer id**, which is derived from its
+node id, and a member hears another's *name* only from that server itself. So
+once the survivors have restarted since the member died — a rolling upgrade
+does it, and so do the restarts a capacity seal takes — none of them can name
+it: `list` shows it as `(name unknown)` with its peer id. Removing it by the
+node id you know still works, because the removal goes by the id the node id
+hashes to; if you no longer know which node it was, remove it by the peer id
+`list` shows:
+
+```
+crewlet fleet broker remove -peer 9iReXzcw -confirm 9iReXzcw
+```
+
+The node you ask forwards the removal to a live member, never the one being
+removed, because nats-server answers a membership change only on a member's own
+system account — and a member could not see itself dropped. It is refused while
+the voter's node still holds a live presence lease **as a member** — a running
+member removed from the group rejoins it as a voter at its next restart — and
+`-force` overrides that for a member wedged in a way that still renews its
+lease. A node that came back as a **leaf** or a **client** under the voter's
+name is removed without `-force`: its broker never rejoins. The dead member is
+often the one that was the group's **leader**, and only a leader answers a
+membership change — so the removal asks again every second while the
+survivors elect another, and returns once the member carrying it no longer
+counts the dead one. The whole removal is bounded by one wait (two minutes and
+five seconds): nobody answering as leader for all of it is a group without a
+quorum, which cannot change its own membership, so bring enough members back
+first; a carrying member that goes silent ends it as an outcome nobody knows —
+read `list` before asking again. The **Broker members** panel on **Settings › Nodes**
+offers the same removal, by node id or by peer id.
+
 ## Node roles
 
-Every process declares what it is willing to do. The default is all three
+Every process declares what it is willing to do. The default is all four
 — that is the single-node deployment, and no existing config changes.
 
 ```yaml
 # Tier A, per node
 node:
   id: "${CREWLET_NODE_ID}"
-  roles: [ingress, seats, workers]   # the default; omit the key
+  roles: [data, ingress, seats, workers]   # the default; omit the key
 ```
 
 | Role | What it does |
 |---|---|
+| `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, the vectors) and the event log. The company's files are not under it: they are in the [object store](../concepts/object-store.md), which on the default `nats` backend is a stream the broker's members keep. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Serves its own seats' `/mcp/{token}` tool bridge when `CREWLET_MCP_BRIDGE_URL` is set, because a bridged session lives in the process that opened it |
-| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
+| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state-log trim, the embedding duty, the object store's collector, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
 A role is subtracted from **this node, not from the company**. That means
 a fleet can be assembled, node by node, into a shape where a whole job is
@@ -145,6 +269,62 @@ role has nobody doing it, and `fleet_role_manned` when it comes back.
 A node that does not run seats is also excluded from the denominator its
 peers divide seats by. Counting an ingress-only node would shrink every
 other node's share and strand the difference.
+
+### Nodes that hold no data
+
+A node without `data` keeps nothing that has to outlive it. Its store is
+**scratch** — deleted at every boot, and opened with no copy of the replicated
+estate at all — and on an embedded stream its broker joins the fleet as a
+**leaf** of the members': no JetStream, no replica, no vote in any quorum. It
+is the shape for an agent host you want small and disposable, and
+[Running One Agent Somewhere Else](satellite-nodes.md) walks through one.
+
+What it can run is `seats` alone. `ingress` and `workers` read and write a
+node's own copy of the estate directly — the API's retention report, capacity,
+reanchor, eviction and backup surfaces, the scheduler, the trim — so Tier A
+refuses either without `data`, naming the field and why. (The API's tracker and knowledge-base
+routes and the operator's MCP do not: they go through the same router a seat's
+tools do, so a data node whose copy is out of service answers its operator from
+a peer's copy, as it answers its seats.) Its seats use exactly the tools a data
+node's seats do, and each of those tools asks a data node over the broker:
+
+- **Reads and writes** go to a data node — any data node, since every one
+  holds the whole estate — picked by the asking node, and move to the next if it does not answer or ran nothing — except a
+  knowledge-base write, which has no operation id a repeat could be collapsed
+  on and is reported as unknown rather than sent twice. A data node's own seats
+  go through the same router and are answered from its own copy
+  ([how a request reaches the estate](../concepts/scaling.md#how-a-request-reaches-the-estate)).
+- **Its own writes are visible to its next read** on whichever data node
+  answers it: every request carries the furthest position the node has been
+  told landed, and a data node that has not applied that far says so rather
+  than answer from before it. When no data node can serve the call, the tool
+  fails naming the estate nobody served.
+- **Its audit trail is kept by a data node.** What it publishes about its
+  turns is handed to a data node's event log, where `GET /events` on that node
+  shows it.
+- **Its files go straight to the object store.** A seat on it reads and writes
+  a project's files as any seat does, and the bytes travel to and from the one
+  [object store](../concepts/object-store.md) the fleet shares — the broker's
+  bucket across its leaf link, or the S3 bucket directly — so it carries the
+  same `store.objects` block as every other node; none are kept on the
+  stateless node.
+- **It is never counted as a copy.** The trim waits on the positions of data
+  nodes only, and the search fan-out divides its buckets between data nodes only — a stateless node
+  publishes to no state log. A capacity operation asks the data nodes and
+  every broker **member** to acknowledge, whatever their roles; a leaf's broker
+  queues nothing, so a stateless leaf is not asked
+  ([who has to acknowledge](retention.md#who-has-to-acknowledge)).
+
+Seat admission on a stateless node asks a data node whether its copy is level
+with its logs, so a stateless node claims no seat until one is. While no data
+node answers, its seats' tracker and knowledge tools fail saying so, and
+`fleet_role_unmanned` names `data` if no live node holds it.
+
+The members that stateless nodes join open a leaf listener
+(`stream.leaf.port`) and must persist (`stream.store_dir`) — as every member of
+a fleet must — and every node of such a fleet runs `coordination.type:
+embedded-kv`: the leases a stateless node holds are the fleet's, reached over
+the same link.
 
 ### How `workers` is enforced
 
@@ -170,8 +350,8 @@ an operator's pass from the dashboard, a tick of the reconcile loop, a
 disconnect's teardown. That is not company-wide work somebody has to be
 elected for; it is work a node has already been asked to do, at whichever node
 happens to be serving the API. Refusing it on the role does not decline the
-work, it makes the work impossible: on `-roles ingress` — the split that puts
-the dashboard on a node with no worker role — every Connect answered *"another
+work, it makes the work impossible: on `-roles data,ingress` — the split that
+puts the dashboard on a node with no worker role — every Connect answered *"another
 pass for this integration is running"* over a surface where nothing was
 running, and every Disconnect *"being provisioned right now; try again in a
 moment"*, permanently. It now gates on the coordination store alone.
@@ -205,13 +385,15 @@ node: {id: "${CREWLET_NODE_ID}"}          # all roles, on each
 # Ingress split out: two ingress nodes behind a load balancer, three
 # running the seats and the duties. Every node runs the engine, so the
 # ingress nodes hold the stream and a store of their own like the rest.
-node: {id: "${CREWLET_NODE_ID}", roles: [ingress]}
-node: {id: "${CREWLET_NODE_ID}", roles: [seats, workers]}
+node: {id: "${CREWLET_NODE_ID}", roles: [data, ingress]}
+node: {id: "${CREWLET_NODE_ID}", roles: [data, seats, workers]}
 ```
 
 ```yaml
-# A satellite: agents only, no duties, no inbound traffic. Runs seats
-# pinned to it, in a network zone the rest of the fleet is not in.
+# A satellite: agents only, no duties, no inbound traffic, and no data —
+# a scratch store and a leaf of the members' broker (see the satellite
+# guide for the rest of its file). Runs seats pinned to it, in a network
+# zone the rest of the fleet is not in.
 node: {id: sat-eu-1, roles: [seats], labels: {zone: eu}}
 ```
 
@@ -242,6 +424,20 @@ Give both and both must hold — a placement only ever narrows. Labels come
 from `node.labels` in each node's Tier A file and are compared exactly;
 they are advertised on the node's presence lease, so a label change takes
 effect one heartbeat after the restart that made it.
+
+**A selector is held to what a node can advertise.** Everything is matched
+exactly against a node's own Tier A values, so a selector no node could
+ever carry is refused when the company is validated rather than accepted
+and left unserved:
+
+| Part | Rule |
+|---|---|
+| `node` | A node id, under `node.id`'s own rule: starts with a letter or digit, then letters, digits, `.`, `_` or `-`, at most 64 characters. A `${VAR}` is **not** resolved here — Tier B compares the pin as written — so write the node id itself. The published schema carries the same pattern, so an editor flags a malformed pin as you type |
+| label key | 1 to 63 bytes of UTF-8 with no whitespace and no unprintable character. Dots, slashes and non-ASCII letters are fine (`topology.example.com/zone`). The same grammar governs `node.labels` in Tier A, so a key one of them accepts the other accepts too |
+| label value | Any string, compared exactly: interior spaces and the empty string are both values a node can carry. What a selector's value may **not** have is whitespace around it — every node's label values are trimmed of theirs when its Tier A file loads, so `" eu"` could never match; it is refused rather than trimmed, because the difference is the one you cannot see in the file |
+
+A document with several bad keys reports every one of them, in the same
+order on every run, on both sides of the match.
 
 **The share is computed per placement group.** Nine seats pinned to one
 node and one seat free, across three nodes: a single fleet-wide
@@ -308,6 +504,24 @@ and a `Retry-After` rather than accepted, which sends it to a peer; reads
 and the dashboard keep answering. See
 [During a drain](../reference/api-endpoints.md#during-a-drain).
 
+**A data node's drain moves no files.** The company's files are in the
+[object store](../concepts/object-store.md), not on any one node: on `nats`
+the chunks are a stream at `stream.replicas` copies on the broker's members,
+with the same quorum arithmetic as the logs — three members at three replicas
+keep writing files with one down, two members at two replicas cannot write with
+either down — and a member that comes back is caught up by the broker as for
+every stream. On `s3` no node holds a chunk at all. So between one data node
+and the next, wait for what the logs need, and nothing more for the files.
+
+### Removing a data node for good
+
+There is nothing to drain for the files. On `nats` the node is a broker member,
+and taking it away is taking any member away: stop it, then remove it from the
+broker's membership as [A member that is gone for good](#a-member-that-is-gone-for-good)
+describes, and the broker re-places its copies of every stream — the files'
+included — on the members that remain, where there are enough of them. On `s3` it held no chunk. See
+[Taking a data node away](../concepts/object-store.md#taking-a-data-node-away).
+
 **Upgrade one node at a time, and let each one finish.** Seat leases
 carry a protocol version, and a node refuses to claim seats while any
 live lease is held at an older one. The rule is asymmetric on purpose:
@@ -369,6 +583,10 @@ The consequences worth stating plainly:
 - **`seats_unplaceable`** — a seat nobody may run. Fix the selector, or
   start a node that matches.
 - **`seat_claims_blocked_by_older_protocol`** — an unfinished upgrade.
+- **`objects_missing`** — the object store's collector audited the company's
+  files and found chunks a row names that the store does not hold, so those
+  files cannot be downloaded. Check the store's own health and restore the
+  chunks from a backup; `crewlet objects status` lists them.
 - **`history_partial`** — history reads are coming back without a node: it
   did not answer inside the fleet read budget. Every such answer names the
   node in its `coverage`.
@@ -411,8 +629,9 @@ Three things make that work, and all three are per node:
   `snapshots/` beside the store file), no more often than
   `stream.tracker_retention.snapshot_interval` (default 24h). A node declines
   to take one while it is still catching up, while it holds a record it
-  cannot decode, while the disk is short, or while it is the only member —
-  and retries shortly rather than waiting out the interval.
+  cannot decode, while the disk is short, or while the fleet counts no other
+  data node — and retries shortly rather than waiting out the
+  interval.
 - **Every node serves them.** There is no designated donor: a fleet whose
   only donor was down would have nothing to give.
 

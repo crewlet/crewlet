@@ -31,7 +31,7 @@ func TestAFullUsageLogRefusesTheAppendAndAlarms(t *testing.T) {
 			t.Errorf("stop the broker: %v", err)
 		}
 	})
-	spec := usage.Domain{}.Stream()
+	spec := statelog.EstateStream(usage.Domain{})
 	const ceiling = 16 << 10
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: ceiling,

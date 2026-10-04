@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -48,7 +49,7 @@ func TestAnApplierThatStopsIsWrittenOnceAndByTheStateLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	stream := tracker.Domain{}.Stream().Name
+	stream := estateSpec(tracker.Domain{}).Name
 
 	// FIRST BOOT, and a checkpoint committed under the stream it ran on.
 	back, err := OpenBackends(t.Context(), &b, cfg)
@@ -65,7 +66,7 @@ func TestAnApplierThatStopsIsWrittenOnceAndByTheStateLog(t *testing.T) {
 		t.Fatalf("the stream is %T, not the JetStream backend", back.Queue)
 	}
 	created := e.native.Load().log.Domain(tracker.Domain{}.Name()).runner.StreamCreatedAt()
-	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(back.Store).Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
 				(stream, generation, seq, stream_created_at, updated_at)

@@ -145,7 +145,11 @@ coordination:
 # member a distinct, stable one.
 node:
   id: "${CREWLET_NODE_ID}"
-  # roles: [ingress, seats, workers]   # omit for all three
+  # roles: [data, ingress, seats, workers]   # omit for all four; a node
+                                       #   without data keeps nothing durable
+                                       #   and needs store.scratch plus
+                                       #   stream.leaf.urls — see
+                                       #   docs/guides/satellite-nodes.md
   # labels: {zone: eu-west}            # what a role's placement selector matches
   # max_concurrent: 32                 # agent turns THIS PROCESS runs at once.
                                        #   Per node, so a fleet's ceiling is

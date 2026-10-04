@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/url"
 	"regexp"
@@ -392,7 +393,126 @@ func (b *Bootstrap) Validate() error {
 	p.wrap(b.Secrets.validate(field("secrets")))
 	p.wrap(b.Logging.validate(field("logging")))
 	p.wrap(b.validateTopology())
+	p.wrap(b.ValidateRoles())
 	return p.err()
+}
+
+// ValidateRoles refuses the settings a node's roles contradict.
+//
+// EXPORTED FOR THE ONE CALLER THAT CHANGES THE ROLES AFTER [Bootstrap.Validate]
+// HAS RUN: `crewlet run -roles` is applied to a loaded file, and a flag that
+// turned a data node's roles into `seats` would otherwise boot a node that
+// believes itself stateless on a store it has not agreed to lose.
+//
+// # Two questions, asked apart
+//
+// `data` is a promise about the DISK: a node with it keeps the company's
+// durable state, and one without it keeps nothing that has to outlive it — its
+// store is scratch, deleted at every boot, and it holds no estate and no
+// share of the object store. The rules below that turn on `data` are the ones
+// about that disk, and each is refused naming the field to change, because
+// each is otherwise a node that boots and then loses the company's history at
+// its next restart.
+//
+// The BROKER is the other question, and it is not the roles': a node's
+// [Bootstrap.BrokerKind] is what its stream block makes it. The rules about
+// the broker itself — what a leaf may not carry, what a member of a fleet has
+// to persist — are asked of that, whatever the roles (see
+// [Bootstrap.validateTopology] and [StreamLeaf]).
+//
+// # And the pairings that are refused
+//
+// Separating the two questions admits three pairings the estate cannot run on:
+// a data node on a leaf, a broker member that holds no data, and ingress or
+// workers on a node without it. Every data node holds the WHOLE estate and is
+// a member of the broker, and a node without data reaches the estate through
+// one, so each is refused, by [Bootstrap.checkRolesAndBroker], naming why.
+func (b *Bootstrap) ValidateRoles() error {
+	var p problems
+	roles, err := b.Node.RoleSet()
+	if err != nil {
+		//nolint:nilerr // Node.validate reports it, naming the field, and
+		// the -roles flag parsed it before calling; every rule below keys
+		// on the set, so none of them can be judged without one.
+		return nil
+	}
+	if roles.Has(placement.RoleData) {
+		if b.Store.Scratch {
+			p.add(field("store.scratch"), ErrConflict,
+				"this node holds data, and a scratch store is deleted at every "+
+					"boot — the company's tracker, pages and this node's record "+
+					"of its own turns with it. Remove it, or drop %q from "+
+					"node.roles", placement.RoleData)
+		}
+	} else {
+		if !b.Store.Scratch {
+			p.add(field("store.scratch"), ErrMissing,
+				"a node without %q keeps no durable state, so its store is "+
+					"deleted at every boot — set store.scratch: true to say so, "+
+					"since it is the one setting here that deletes something",
+				placement.RoleData)
+		}
+		if b.Store.ReplicatedPath != "" || b.Store.SnapshotDir != "" {
+			p.add(field("store"), ErrConflict,
+				"replicated_path and snapshot_dir are where a node keeps its copy "+
+					"of the replicated estate, and a node without %q holds none",
+				placement.RoleData)
+		}
+	}
+	b.checkRolesAndBroker(&p, roles)
+	return p.err()
+}
+
+// checkRolesAndBroker refuses the three pairings of roles and broker the
+// estate cannot run on.
+//
+// ONE PLACE FOR ALL THREE, because they are one decision rather than three:
+// every data node holds the whole estate as a MEMBER of the broker, and a node
+// without data holds none and asks a data node for everything — so a data node
+// on a leaf, a member holding no data, and a stateless node running the
+// estate's own duties or surfaces are each the same mistake.
+//
+// Each refusal is reported where the operator most likely erred, and names both
+// ways out.
+func (b *Bootstrap) checkRolesAndBroker(p *problems, roles placement.RoleSet) {
+	data := roles.Has(placement.RoleData)
+	switch kind := b.BrokerKind(); {
+	case data && kind == placement.BrokerLeaf:
+		p.add(field("stream.leaf.urls"), ErrConflict,
+			"joins this data node to the fleet's broker as a leaf, and every data "+
+				"node holds the whole estate as a MEMBER of the broker. Remove the "+
+				"leaf urls, or drop %q from node.roles", placement.RoleData)
+	case !data && kind == placement.BrokerMember:
+		p.add(field("stream.leaf.urls"), ErrMissing,
+			"a node without %q runs its embedded broker as a MEMBER here, and a "+
+				"node without %q joins the fleet as a LEAF of the members' — no "+
+				"JetStream, no replica, no vote. Name the members' leaf listeners "+
+				"here, or add %q to node.roles", placement.RoleData,
+			placement.RoleData, placement.RoleData)
+	}
+	if data {
+		return
+	}
+	for _, role := range []placement.NodeRole{placement.RoleWorkers, placement.RoleIngress} {
+		if !roles.Has(role) {
+			continue
+		}
+		p.add(field("node.roles"), ErrConflict,
+			"%q needs %q: %s. Add %q, or drop %q", role, placement.RoleData,
+			needsData[role],
+			placement.RoleData, role)
+	}
+}
+
+// needsData is why each role a node without data cannot run needs `data` — see
+// [Bootstrap.checkRolesAndBroker].
+var needsData = map[placement.NodeRole]string{
+	placement.RoleWorkers: "the company-wide duties — the log trim, the " +
+		"embedding pass, the maintenance sweep, the scheduler — read and " +
+		"write this node's own copy of the replicated estate directly",
+	placement.RoleIngress: "the API's retention report, capacity, reanchor, " +
+		"eviction and backup surfaces read this node's own copy of the " +
+		"replicated estate and act on its own state log",
 }
 
 // validateTopology refuses slot combinations that cannot work.
@@ -414,11 +534,53 @@ func (b *Bootstrap) validateTopology() error {
 	// one-peer external config as a two-node fleet: an error naming a
 	// quorum that is not this file's, whose only remedy was to delete a
 	// line that was already doing nothing.
+	//
+	// And counted as the OTHER members the list names, which is what it is
+	// for: an entry recognisably this node's own route, or a repeat of one
+	// already counted, is not another member ([StreamCluster.members]), and
+	// counting it passed a two-node fleet as three and let replicas 3 onto
+	// two members. [Bootstrap.Warnings] names every entry discounted here.
 	peers := 0
+	var members clusterMembers
 	if b.Stream.Type != StreamNATS {
-		peers = len(b.Stream.Cluster.Peers)
+		members = b.Stream.Cluster.members()
+		peers = len(members.Others)
 	}
-	clustered := peers > 0 || b.Stream.Cluster.Name != "" || b.Stream.Type != StreamEmbedded
+	// A LEAF IS IN A FLEET by definition — it holds nothing of its own, so
+	// the broker it reaches is always somebody else's members. And so is a
+	// member that OPENS a leaf listener, even one with no peers: the nodes
+	// that join it claim seats and hold presence leases, and a lease kept
+	// in this process is one they can never see — each would read the
+	// fleet as having no data node and claim every seat for itself.
+	leaf := b.BrokerKind() == placement.BrokerLeaf
+	servesLeaves := b.BrokerKind() == placement.BrokerMember && b.Stream.Leaf.Port != 0
+	clustered := peers > 0 || b.Stream.Cluster.Name != "" || b.Stream.Type != StreamEmbedded ||
+		leaf || servesLeaves
+
+	// A MEMBER OF A FLEET PERSISTS, whatever its roles. Its broker holds the
+	// fleet's streams — the seats' mailboxes, every record a state log
+	// writes, every coordination bucket — for every node that reaches it, a
+	// leaf that keeps nothing of its own included, and one kept in memory
+	// comes back from its next restart holding none of them: a peer with
+	// its copies has to replace every one, and a member that was the last
+	// copy of anything has lost it. A solo member is not in a fleet and is
+	// the operator's own business (see [Bootstrap.Warnings]); a member with
+	// a named cluster, peers or a leaf listener is.
+	//
+	// THE BROKER'S RULE, NOT THE ROLES': a member without `data` keeps a
+	// scratch node store and a durable stream store, and it is the stream
+	// store that makes it a member.
+	inFleet := len(b.Stream.Cluster.Peers) > 0 || b.Stream.Cluster.Name != "" || servesLeaves
+	if b.BrokerKind() == placement.BrokerMember && inFleet &&
+		strings.TrimSpace(b.Stream.StoreDir) == "" {
+		p.add(field("stream.store_dir"), ErrMissing,
+			"this node's broker is a MEMBER of a fleet's (it names a cluster, "+
+				"peers or a leaf listener), so it holds the fleet's streams — the "+
+				"seats' mailboxes, every record a state log writes and every "+
+				"coordination bucket — for every node that reaches it, and a "+
+				"stream kept in memory loses its copy of all of them at this "+
+				"member's next restart. Name a directory")
+	}
 
 	if b.Coordination.Type == CoordinationLocal && clustered {
 		p.add(field("coordination.type"), ErrConflict,
@@ -437,17 +599,35 @@ func (b *Bootstrap) validateTopology() error {
 	// live: the coordination store rides the stream's own connection on
 	// every topology, so the KV's quorum is the stream cluster's quorum.
 	if b.Coordination.Type == CoordinationEmbeddedKV {
-		if members := peers + 1; members == 2 {
+		if nodes := peers + 1; nodes == 2 {
 			p.add(field("stream.cluster.peers"), ErrConflict,
 				"a two-node fleet has no coordination quorum: run one node "+
-					"or three or more (this config names %d peer, so %d nodes)",
-				peers, members)
+					"or three or more (this config names %d other member, so %d "+
+					"nodes%s)", peers, nodes, members.discountedClause())
 		}
 	}
 
+	// A LIST THAT NAMES ONLY THIS NODE names no other member at all. It is
+	// refused rather than read as a solo seed, which is what it would count
+	// as: a member that seeds a cluster lists no peers, so an operator who
+	// wrote a list meant somebody to be in it — and it is the one shape the
+	// published schema's two-node rule, which counts entries because it
+	// cannot compare them with this node's address, would otherwise flag in
+	// an editor while the engine accepted it.
+	if b.Stream.Type != StreamNATS && len(b.Stream.Cluster.Peers) > 0 && peers == 0 {
+		p.add(field("stream.cluster.peers"), ErrConflict,
+			"names no member but this one: %s. A member that seeds a cluster "+
+				"lists no peers, and one that joins lists the members it joins — "+
+				"remove the list, or name the other members",
+			members.discountedList())
+	}
+
 	// Only an EMBEDDED stream is refused for this. Its members are the
-	// peers named right here, so a replica count above their number is a
-	// statement this file contradicts on its own.
+	// peers named right here, so a replica count above their number — this
+	// node and its peers — is a statement this file contradicts on its own:
+	// JetStream keeps at most one copy per member, so every stream and
+	// bucket this node provisions would be refused at boot, after the
+	// broker had started and before a single seat had.
 	//
 	// An external cluster's membership is not in this file and cannot be:
 	// `stream.url` names an address, and how many servers answer behind it
@@ -457,12 +637,198 @@ func (b *Bootstrap) validateTopology() error {
 	// engine.attachCoordination) — so a deployment that ran three brokers
 	// for availability kept its seat mailboxes and every lease on whichever
 	// single server happened to hold them, and lost them with it.
-	if b.Stream.Type != StreamNATS && b.Stream.Replicas > 1 && peers == 0 {
-		p.add(field("stream.replicas"), ErrConflict,
-			"replicas > 1 needs peers to replicate to; a solo node keeps 1")
+	//
+	// NOR A LEAF: it provisions the fleet's streams on the members it
+	// reaches, so its replica count is the fleet's, and this file names none
+	// of those members.
+	if b.Stream.Type != StreamNATS && !leaf && b.Stream.Replicas > peers+1 {
+		if peers == 0 {
+			p.add(field("stream.replicas"), ErrConflict,
+				"replicas > 1 needs peers to replicate to; a solo node keeps 1")
+		} else {
+			p.add(field("stream.replicas"), ErrConflict,
+				"%d copies need %d members, and this cluster names %d (this node "+
+					"and the other members in stream.cluster.peers%s): a stream "+
+					"keeps at most one copy per member. Lower replicas to %d, or "+
+					"name the other members",
+				b.Stream.Replicas, b.Stream.Replicas, peers+1,
+				members.discountedClause(), peers+1)
+		}
 	}
 	return p.err()
 }
+
+// clusterMembers is what an embedded member's peer list says about the
+// cluster it is in: the entries naming OTHER members, and every entry that
+// does not.
+type clusterMembers struct {
+	// Others are the entries counted as another member, as written, in
+	// list order: each is neither this node's own route nor a repeat.
+	Others []string
+
+	// Discounted are the entries that are not another member, in list
+	// order.
+	Discounted []discountedPeer
+}
+
+// discountedPeer is a peer entry not counted as another member, and why.
+type discountedPeer struct {
+	// Index is the entry's position in stream.cluster.peers, and Raw what
+	// it says.
+	Index int
+	Raw   string
+
+	// Self is set when the entry is this node's own route, and Matches
+	// names the setting it matched ("cluster.host and cluster.port" or
+	// "cluster.advertise"). Otherwise it repeats the entry at RepeatOf.
+	Self     bool
+	Matches  string
+	RepeatOf int
+}
+
+// members is who this peer list names besides this node.
+//
+// An entry is DISCOUNTED when it is recognisably this node's own route — its
+// host and port, with the scheme dropped, the host lower-cased and an IP
+// literal read in canonical form, equal to this member's route listener
+// (cluster.host and cluster.port, when the listener is bound to one address)
+// or to the address it advertises (cluster.advertise, whose bare host keeps
+// cluster.port) — or when it names the same address as an entry before it.
+//
+// RECOGNISABLY, and only that. An entry that reaches this node under another
+// name — a DNS alias of this host, `localhost` for an advertised
+// `10.0.0.11`, the listener of a node bound to every interface — cannot be
+// told apart from another member in this file, and is COUNTED as one. The
+// broker is not misled, since nats-server drops a route to itself however it
+// was named; what is misled is every rule here that counts members, which is
+// why the list's documented shape is the OTHER members and never this one.
+//
+// An entry that is not a route URL at all is counted, as written: it is
+// refused on its own by [Stream.validate], and discounting what cannot be
+// read would change a count the refusal is about to make moot.
+func (c StreamCluster) members() clusterMembers {
+	own := c.ownRoutes()
+	var out clusterMembers
+	seen := map[string]int{}
+	for i, raw := range c.Peers {
+		addr, ok := routeAddress(raw)
+		if !ok {
+			out.Others = append(out.Others, raw)
+			continue
+		}
+		if setting, self := own[addr]; self {
+			out.Discounted = append(out.Discounted, discountedPeer{
+				Index: i, Raw: raw, Self: true, Matches: setting,
+			})
+			continue
+		}
+		if first, repeat := seen[addr]; repeat {
+			out.Discounted = append(out.Discounted, discountedPeer{
+				Index: i, Raw: raw, RepeatOf: first,
+			})
+			continue
+		}
+		seen[addr] = i
+		out.Others = append(out.Others, raw)
+	}
+	return out
+}
+
+// ownRoutes is every address this member's own route is recognisably
+// reached at, keyed by the normalised address and naming the setting that
+// says so.
+//
+// THE LISTENER ONLY WHEN IT IS BOUND TO ONE ADDRESS: an unset host, or an
+// unspecified one, binds every interface, and which of them a peer entry
+// names is not something this file can say. And no port is no listener — a
+// member with cluster.port unset opens none, so nothing can dial it.
+func (c StreamCluster) ownRoutes() map[string]string {
+	own := map[string]string{}
+	if c.Advertise != "" {
+		host, port := c.Advertise, c.Port
+		if h, p, err := net.SplitHostPort(c.Advertise); err == nil {
+			host = h
+			port, _ = strconv.Atoi(p)
+		}
+		if host != "" && port > 0 && port <= 65535 {
+			own[joinRoute(host, port)] = "cluster.advertise"
+		}
+	}
+	if host := strings.Trim(c.Host, "[]"); host != "" && c.Port > 0 {
+		if ip := net.ParseIP(host); ip == nil || !ip.IsUnspecified() {
+			own[joinRoute(host, c.Port)] = "cluster.host and cluster.port"
+		}
+	}
+	return own
+}
+
+// routeAddress is a peer entry as the address a dial reaches — host:port,
+// the scheme dropped, the host lower-cased and an IP literal in canonical
+// form — and false for an entry the embedded server could never dial: one
+// that is not a URL, names no host, or carries no port in 1..65535.
+//
+// A PORT IS REQUIRED because nats-server requires one: it splits each route
+// URL's host and port before it dials, and an entry without a port fails that
+// on every attempt, for ever, while the member it was meant to reach is never
+// routed to.
+func routeAddress(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" || u.Hostname() == "" {
+		return "", false
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return "", false
+	}
+	return joinRoute(u.Hostname(), port), true
+}
+
+// joinRoute is the one normal form both sides of the comparison are put in.
+func joinRoute(host string, port int) string {
+	host = strings.ToLower(strings.Trim(host, "[]"))
+	if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+// discountedClause is the discounted entries as a clause a count's message
+// can end on — ", not counting peers[0], which is this node's own route" —
+// and empty when there are none.
+func (m clusterMembers) discountedClause() string {
+	if len(m.Discounted) == 0 {
+		return ""
+	}
+	return ", not counting " + m.discountedList()
+}
+
+// discountedList names every discounted entry and why.
+func (m clusterMembers) discountedList() string {
+	parts := make([]string, 0, len(m.Discounted))
+	for _, d := range m.Discounted {
+		parts = append(parts, d.describe())
+	}
+	return strings.Join(parts, "; ")
+}
+
+// describe is one discounted entry, named by its place in the list.
+func (d discountedPeer) describe() string {
+	if d.Self {
+		return fmt.Sprintf("peers[%d] %q, which is this node's own route (%s)",
+			d.Index, d.Raw, d.Matches)
+	}
+	return fmt.Sprintf("peers[%d] %q, which repeats peers[%d]", d.Index, d.Raw, d.RepeatOf)
+}
+
+// MaxStreamReplicas is the most copies a stream may keep.
+//
+// FIVE, JetStream's own ceiling — the broker refuses a stream or a KV bucket
+// with more — so a larger number is a boot that fails at its first create
+// rather than a fleet that keeps more copies. Five copies survive two members
+// lost at once with a quorum left; beyond that a fleet adds LEAVES, not
+// members, since a sixth member holds no copy and only adds a voter to the
+// metadata group (see the warning [Bootstrap.Warnings] gives).
+const MaxStreamReplicas = 5
 
 // ---- node ------------------------------------------------------------ //
 
@@ -499,16 +865,23 @@ type Node struct {
 	// and then DefaultNodeID, so nothing has to be set to run one engine.
 	ID string `yaml:"id,omitempty" json:"id,omitempty" js:"pattern=^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" desc:"Stable identity of this process. Empty reads CREWLET_NODE_ID, then defaults to node-0."`
 
-	// Roles is what this process is willing to do: ingress, seats,
+	// Roles is what this process is willing to do: data, ingress, seats,
 	// workers. Omit the key to run every role — the single-process
 	// default, and the shape every company starts as.
+	//
+	// `data` is the one role that is a promise about the DISK rather than
+	// about work: a node without it keeps nothing that has to outlive it,
+	// which is what a small, disposable agent node wants — see
+	// [Bootstrap.ValidateRoles] for everything it then requires. It says
+	// nothing about the broker, which the stream block decides
+	// ([Bootstrap.BrokerKind]).
 	//
 	// Subtracting a role subtracts it from THIS node, never from the
 	// company: a fleet with no workers node runs no scheduler and no
 	// retention sweep, and one with no ingress node never hears a webhook.
 	// Neither is visible in any single node's config, so the engine checks
 	// it against live node presence at runtime.
-	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: ingress, seats, workers. Omit for all three."`
+	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state and needs store.scratch; it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers."`
 
 	// Labels are free-form facts about where this process runs (zone: eu,
 	// gpu: "true"), matched exactly by a seat's role.placement selector.
@@ -538,6 +911,7 @@ type Node struct {
 // It is derived from the placement package rather than restated, so the
 // config layer and the seat host can never disagree about what a role is.
 var nodeRoleNames = []string{
+	string(placement.RoleData),
 	string(placement.RoleIngress),
 	string(placement.RoleSeats),
 	string(placement.RoleWorkers),
@@ -583,9 +957,20 @@ func (n *Node) validate(path Path) error {
 			err, strings.Join(nodeRoleNames, ", "))
 	}
 
-	for key := range n.Labels {
-		if key == "" {
+	// THE KEY GRAMMAR IS THE PLACEMENT VOCABULARY'S, not this file's: the
+	// object store's failure domain names one of these keys, and a key this
+	// accepted and the placement map refused would be a domain nobody can
+	// spread copies across.
+	//
+	// Sorted, so a file with several bad keys reports them in the same order
+	// on every run rather than in map order — as role.placement's selector
+	// does, the other half of the same match.
+	for _, key := range slices.Sorted(maps.Keys(n.Labels)) {
+		switch err := placement.CheckLabelKey(key); {
+		case key == "":
 			p.add(at(path, "labels"), ErrMissing, "label keys must not be empty")
+		case err != nil:
+			p.add(entry(at(path, "labels"), key), ErrUnknownValue, "%v", err)
 		}
 	}
 	return p.err()
@@ -600,16 +985,51 @@ func (n *Node) RoleSet() (placement.RoleSet, error) {
 // Profile is this node as its peers will see it on its presence lease.
 // The id is passed in because it is RESOLVED (config, then environment,
 // then the default) rather than read raw off the field.
-func (n *Node) Profile(id string) placement.NodeProfile {
-	roles, _ := placement.ParseRoles(n.Roles) // validated already
-	labels := make(map[string]string, len(n.Labels))
-	for k, v := range n.Labels {
+//
+// THE BOOTSTRAP'S RATHER THAN THE NODE BLOCK'S, because one of its four facts
+// is not in the node block: the broker kind is the STREAM block's
+// ([Bootstrap.BrokerKind]), and a profile built from the node block alone
+// advertised no broker at all.
+//
+// Its share of the object store is not here either, and deliberately: that is
+// a fact about the node's disk (store.objects) and rides the object store's own
+// lease, never presence — see [placement.NodeProfile].
+func (b *Bootstrap) Profile(id string) placement.NodeProfile {
+	roles, _ := placement.ParseRoles(b.Node.Roles) // validated already
+	labels := make(map[string]string, len(b.Node.Labels))
+	for k, v := range b.Node.Labels {
 		labels[k] = v
 	}
 	if len(labels) == 0 {
 		labels = nil
 	}
-	return placement.NodeProfile{ID: id, Roles: roles, Labels: labels}
+	return placement.NodeProfile{
+		ID: id, Roles: roles, Labels: labels, Broker: b.BrokerKind(),
+	}
+}
+
+// BrokerKind is how this node's broker takes part in the fleet's, derived from
+// the stream block and from nothing else: `type: nats` is a client of a cluster
+// somebody else runs, an embedded broker that joins through `leaf.urls` is a
+// leaf, and every other embedded broker is a member — a solo node's included,
+// since it runs JetStream and holds every replica there is.
+//
+// THE ONE DERIVATION, so the rules that are about the broker, the kind a node
+// advertises on its presence and the broker it actually starts cannot
+// disagree: every rule below that asks "is this node a leaf" asks this.
+//
+// The kind is never set, only derived. A setting could say `member` over a
+// stream block that starts a leaf, and every question asked of the setting
+// would then be answered about a broker the process does not run.
+func (b *Bootstrap) BrokerKind() placement.BrokerKind {
+	switch {
+	case b.Stream.Type == StreamNATS:
+		return placement.BrokerClient
+	case b.Stream.Leaf.Joins():
+		return placement.BrokerLeaf
+	default:
+		return placement.BrokerMember
+	}
 }
 
 // ResolveNodeID answers what this process calls itself.
@@ -710,20 +1130,26 @@ type Store struct {
 	// the production shape.
 	SnapshotDir string `yaml:"snapshot_dir,omitempty" json:"snapshot_dir,omitempty" desc:"Where this node keeps snapshots of the replicated estate; empty is <dir of path>/snapshots."`
 
-	// ReplicatedPath is the second database this node owns: everything a
-	// state log's applier writes. Empty puts it beside Path, which is
-	// what makes "back up the data directory" true.
+	// ReplicatedPath is where the replicated estate lives on this node —
+	// everything a state log's applier writes: the file of layout 0's one
+	// partition, with every later layout's partition files kept in the
+	// same directory beside it. Empty puts it beside Path, which is what
+	// makes "back up the data directory" true.
 	//
-	// Separable because the two files have different appetites — the
+	// Separable because the two estates have different appetites — the
 	// replicated one is what a snapshot copies and what a node joining the
 	// fleet writes at line rate — so an operator with a fast local disk
 	// and a large network volume has a real reason to split them. Both are
 	// still this node's alone, and neither is shared with a peer.
-	ReplicatedPath string `yaml:"replicated_path,omitempty" json:"replicated_path,omitempty" desc:"Second local database, for replicated state; empty puts it beside path."`
+	ReplicatedPath string `yaml:"replicated_path,omitempty" json:"replicated_path,omitempty" desc:"Where the replicated estate's database file lives; empty puts it beside path."`
 
-	// MaxOpenConns bounds the connection pool; 0 takes the store's own
-	// default, which is sized to the dashboard's query concurrency.
-	MaxOpenConns int `yaml:"max_open_conns,omitempty" json:"max_open_conns,omitempty" js:"min=0" desc:"Connection pool bound; 0 takes the store default."`
+	// MaxOpenConns bounds the node's own database's pool, and is the read
+	// concurrency the replicated estate's partition files SHARE between
+	// them: each file keeps at least two readers of it, beside one pinned
+	// writer per state log the partition carries. 0 takes the store's own
+	// default of four, which is sized to the dashboard's query
+	// concurrency.
+	MaxOpenConns int `yaml:"max_open_conns,omitempty" json:"max_open_conns,omitempty" js:"min=0" desc:"Connection pool bound for the node's database, and the read concurrency its partition files share (at least two readers each, beside one writer per log); 0 takes the store default of 4."`
 
 	// BusyTimeoutSeconds is how long a statement waits for the file lock
 	// before giving up; 0 takes the store's own default.
@@ -733,6 +1159,25 @@ type Store struct {
 	// and so is the replacement connection a pinned writer draws after a
 	// transaction that did not end. See internal/store's writequeue.go.
 	BusyTimeoutSeconds float64 `yaml:"busy_timeout_seconds,omitempty" json:"busy_timeout_seconds,omitempty" js:"min=0" desc:"Lock wait before a write gives up, whether it waits in the driver or in the store's own queue, and the anchor for the one retry it then gets; 0 takes the store default."`
+
+	// Scratch declares this node's store DISPOSABLE: the engine deletes
+	// whatever is at `path` every time it boots, under the store's own
+	// lock, before opening it fresh.
+	//
+	// REQUIRED on a node without the `data` role and REFUSED on one with
+	// it, so the deletion is never a surprise in either direction: a node
+	// that holds no durable state writes its seats' memory, its working
+	// rows and its record of its own turns here only for as long as it
+	// runs, and everything that matters travels on the broker; while a
+	// node holding data would lose the company's history to a restart.
+	// Explicit rather than derived from the roles because it is the one
+	// setting here that deletes something, and an operator who removes
+	// `data` from a node that had it must say so twice.
+	Scratch bool `yaml:"scratch,omitempty" json:"scratch,omitempty" desc:"Delete this node's store at every boot. Required on a node without the data role, refused on one with it."`
+
+	// Objects is where the company's files are kept — see [StoreObjects].
+	// Every node carries the same block, data or not.
+	Objects StoreObjects `yaml:"objects,omitempty" json:"objects,omitzero"`
 }
 
 func (s *Store) validate(path Path) error {
@@ -759,6 +1204,7 @@ func (s *Store) validate(path Path) error {
 		p.add(at(path, "busy_timeout_seconds"), ErrOutOfRange,
 			"must be 0 (the store default) or positive, got %v", s.BusyTimeoutSeconds)
 	}
+	p.wrap(s.Objects.validate(at(path, "objects")))
 	return p.err()
 }
 
@@ -807,7 +1253,12 @@ type Stream struct {
 	// see the other. No node is an exception for its roles: every node runs
 	// the engine, and an in-memory server creates every stream it
 	// provisions in memory.
-	StoreDir string `yaml:"store_dir,omitempty" json:"store_dir,omitempty" desc:"Embedded stream persistence directory. Empty = in-memory (nothing survives a restart)."`
+	//
+	// REQUIRED ON A MEMBER OF A FLEET, whatever its roles and whatever the
+	// company: its broker holds the fleet's streams for every node that
+	// reaches it, a leaf that keeps nothing included — see
+	// [Bootstrap.validateTopology]. A leaf has no stream store at all.
+	StoreDir string `yaml:"store_dir,omitempty" json:"store_dir,omitempty" desc:"Embedded stream persistence directory. Empty = in-memory (nothing survives a restart). Required on a member of a fleet (a named cluster, peers or a leaf listener); refused on a leaf."`
 
 	// StoreMaxBytes is how much of that directory's volume this node's
 	// EMBEDDED broker may hold — the ONE number every stream ceiling on it
@@ -846,13 +1297,26 @@ type Stream struct {
 	// account limits are its own operator's to set.
 	StoreMaxBytes int64 `yaml:"store_max_bytes,omitempty" json:"store_max_bytes,omitempty" js:"min=5368709120;max=70368744177664" desc:"How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."`
 
-	// Cluster makes the embedded server join peers, which is the fleet
-	// topology: every node embeds a member of one cluster.
+	// Cluster makes the embedded server a MEMBER of a cluster with its
+	// peers: the fleet's broker is those members, and every other node
+	// reaches it as a leaf or as a client.
 	Cluster StreamCluster `yaml:"cluster,omitempty" json:"cluster,omitzero"`
 
+	// Leaf is how a node that holds no data reaches the fleet's broker,
+	// and where a member lets such nodes in. See [StreamLeaf].
+	Leaf StreamLeaf `yaml:"leaf,omitempty" json:"leaf,omitzero"`
+
 	// Replicas is the stream replica count: 1 solo, 3 in a fleet, where it
-	// is what makes a publish quorum-durable before it returns.
-	Replicas int `yaml:"replicas,omitempty" json:"replicas,omitempty" js:"min=0" desc:"Stream replica count: 1 solo, 3 in a fleet."`
+	// is what makes a publish quorum-durable before it returns. It is the
+	// copies of every stream AND of every coordination bucket, which ride
+	// the same broker.
+	//
+	// AT MOST [MaxStreamReplicas], JetStream's own ceiling, and on an
+	// embedded cluster at most the members it names. It is NOT how many
+	// copies the object store keeps of a file: that is the company's
+	// `objects.replicas`, because a count read off whichever node held the
+	// placement map's duty was a count that changed with the lease.
+	Replicas int `yaml:"replicas,omitempty" json:"replicas,omitempty" js:"min=0;max=5" desc:"Copies of every stream and coordination bucket, 1..5: 1 solo, 3 in a fleet, and on an embedded cluster at most its members. Not the object store's copies; those are objects.replicas in the company."`
 
 	// EventRetentionHours bounds the event stream. 0 takes the queue's own
 	// default. Unbounded is deliberately not expressible: an event table
@@ -960,30 +1424,45 @@ type Stream struct {
 	//
 	// SIZED FOR THE PEAK, NOT THE STEADY STATE, and the two differ by 93×.
 	// The stream keeps one message per source and bounds their age, so a
-	// week's minting is about 91 MB. But changing the embedding model or
-	// its width rewrites EVERY source in a few hours, and for the
-	// following week every source's current message is inside the window:
-	// 8.46 GB at the modelled year-five corpus. The default is twice that.
-	// Sizing this field from the steady state would refuse the one
-	// operation it exists to survive.
-	TrackerVectorsMaxBytes int64 `yaml:"tracker_vectors_max_bytes,omitempty" json:"tracker_vectors_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the vector changelog; default 16 GiB, sized for a model change rather than the steady state."`
+	// week's minting is about 91 MB at the reference company. But changing
+	// the embedding model or its width rewrites EVERY source in a few
+	// hours, and for the following week every source's current message is
+	// inside the window: the whole corpus, 1.69 GB per 100 seats per year
+	// of it — 8.46 GB at the reference company's fifth year. Sizing this
+	// field from the steady state would refuse the one operation it exists
+	// to survive.
+	//
+	// UNSET DERIVES FROM THE VOLUME, as the mutation log does: the same
+	// quarter of the free space the streams live on, clamped to 4 GiB..64
+	// GiB, whatever tracker_log_max_bytes is set to. Never from the
+	// mutation log's ceiling, because the two hold different things: that
+	// ceiling bounds a trailing window of records, and this log's peak is
+	// the company's whole history, which grows every year it trims
+	// healthily. At the 64 GiB clamp it holds a model change twice over for
+	// about 2 000 seat-years of corpus (400 seats in their fifth year); a
+	// larger or older company sets it, at about 34 MB per agent seat per
+	// year of history. The same share of the one budget, scaling and
+	// refusals the mutation log's field describes apply here unchanged.
+	TrackerVectorsMaxBytes int64 `yaml:"tracker_vectors_max_bytes,omitempty" json:"tracker_vectors_max_bytes,omitempty" js:"min=1073741824;max=2199023255552" desc:"Byte ceiling on the vector changelog, sized for a model change rather than the steady state; unset derives what the mutation log derives from the volume, a quarter of its free space clamped to 4 GiB..64 GiB, whatever tracker_log_max_bytes is set to."`
 
 	// PagesLogMaxBytes is the byte ceiling on the knowledge base's log, the
 	// ordered stream every native page write goes through.
 	//
 	// UNSET DERIVES IT beside the mutation log's, at a quarter of that
-	// derived value (1 GiB..16 GiB). The ratio is the corpus rather than a
-	// guess: a knowledge base is a few thousand pages against a tracker's
-	// hundreds of thousands of items and comments, and a page's records
-	// are dominated by saves, so its log grows at about a quarter of the
-	// rate and a blocked trim reaches either ceiling in the same time.
+	// log's ceiling as set or derived (1 GiB..16 GiB from a volume alone,
+	// up to 256 GiB beside a mutation log an operator sized). The ratio is
+	// the corpus rather than a guess: a knowledge base is a few thousand
+	// pages against a tracker's hundreds of thousands of items and
+	// comments, and a page's records are dominated by saves, so its log
+	// grows at about a quarter of the rate and a blocked trim reaches
+	// either ceiling in the same time.
 	//
 	// It shares the state logs' one budget, and what the mutation log's
 	// field says about it holds here unchanged: the value is the one the
 	// stream is CREATED with, a derived value is scaled with the others to
 	// fit the broker and a set one is not, and crossing it refuses the
 	// append rather than shedding history.
-	PagesLogMaxBytes int64 `yaml:"pages_log_max_bytes,omitempty" json:"pages_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's derived value, 1 GiB..16 GiB."`
+	PagesLogMaxBytes int64 `yaml:"pages_log_max_bytes,omitempty" json:"pages_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."`
 
 	// UsageLogMaxBytes is the byte ceiling on the usage log — the compacted
 	// stream every node publishes its own company days to, so that spend,
@@ -1133,8 +1612,16 @@ type StreamCluster struct {
 	Name string `yaml:"name,omitempty" json:"name,omitempty" desc:"Cluster name shared by every member."`
 	// Port is the route port this member listens on.
 	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Route port for cluster traffic."`
-	// Peers are the other members' route URLs.
-	Peers []string `yaml:"peers,omitempty" json:"peers,omitempty" desc:"Route URLs of the other members."`
+	// Peers are the OTHER members' route URLs, each host:port under a
+	// scheme (nats://node-b.internal:6222).
+	//
+	// THE OTHER MEMBERS, because this list is what every rule that counts
+	// the cluster counts: one node or three, and at most one copy per
+	// member. An entry recognisably this node's own route, or a repeat, is
+	// discounted with a warning ([StreamCluster.members]); one that reaches
+	// this node under a name this file cannot recognise is counted as a
+	// member it is not.
+	Peers []string `yaml:"peers,omitempty" json:"peers,omitempty" desc:"Route URLs of the OTHER members, e.g. nats://node-b.internal:6222. An entry that is this node's own route (cluster.host and port, or cluster.advertise) or a repeat is not counted as a member."`
 
 	// Host is the interface the route listener binds. Empty binds every
 	// one of them, which on a host with a public interface publishes
@@ -1155,6 +1642,110 @@ type StreamCluster struct {
 	// keep this member's own route port.
 	Advertise string `yaml:"advertise,omitempty" json:"advertise,omitempty" desc:"host:port peers should dial for this member, when it differs from what it binds."`
 }
+
+// StreamLeaf is the embedded broker's side of a LEAF link: a leaf joins
+// through it, and a member opens it for the leaves.
+//
+// ONE BLOCK, TWO SIDES, and the block decides which: `urls` makes this node's
+// broker a LEAF ([Bootstrap.BrokerKind]) and `port` opens a MEMBER's listener,
+// and a node is exactly one of them. A leaf's broker runs no JetStream, holds
+// no replica and is in no quorum; everything its clients ask of the fleet
+// crosses this link. Which nodes may BE a leaf is the roles' question — only a
+// node without `data` (see [Bootstrap.ValidateRoles]).
+type StreamLeaf struct {
+	// URLs are the leaf listeners of the members this node may join, any
+	// of which will do. Setting them makes this node's broker a leaf.
+	URLs []string `yaml:"urls,omitempty" json:"urls,omitempty" desc:"Leaf listeners of the members this node joins as a LEAF - no JetStream, no replica, no vote - e.g. nats-leaf://member-a.internal:7422. Any one that answers will do. Only a node without the data role may be a leaf, and an embedded node without it must be one."`
+
+	// Port is the leaf listener a MEMBER opens for the fleet's leaves. Zero
+	// opens none.
+	//
+	// It accepts any connection that reaches it, exactly as the route
+	// port does and for the same reason: the fleet is one trust domain on
+	// a network its operator controls. Put both there and nowhere else.
+	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"A member's leaf listener, where the fleet's leaves join. Accepts any connection that reaches it, like the route port. A member with one is in a fleet, so it needs stream.store_dir."`
+
+	// Host is the interface the leaf listener binds, empty for every one
+	// of them — the same exposure [StreamCluster.Host] names.
+	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Interface the leaf listener binds. Empty binds every interface."`
+
+	// Advertise is the address leaves should dial for this member when it
+	// differs from what it binds.
+	Advertise string `yaml:"advertise,omitempty" json:"advertise,omitempty" desc:"host:port leaves should dial for this member, when it differs from what it binds."`
+}
+
+// validate refuses a leaf block that is neither side of a link, or both.
+//
+// This is what either side needs on its own terms, whatever the roles; which
+// roles may take which side is [Bootstrap.ValidateRoles]', and what a member
+// with a listener has to persist is [Bootstrap.validateTopology]'s.
+func (l *StreamLeaf) validate(path Path, s *Stream, external bool) error {
+	var p problems
+	if l.IsZero() {
+		return nil
+	}
+	if external {
+		p.add(path, ErrConflict,
+			"stream.leaf configures the EMBEDDED broker's leaf link, and a node "+
+				"dialling an external %q cluster is already a plain client of it: "+
+				"a node without the data role needs nothing more. Remove it, or "+
+				"set type to %q", StreamNATS, StreamEmbedded)
+		return p.err()
+	}
+	if l.Port < 0 || l.Port > 65535 {
+		p.add(at(path, "port"), ErrOutOfRange, "must be 0..65535, got %d", l.Port)
+	}
+	if l.Joins() {
+		// ONE SIDE OF THE LINK: a leaf dials, and everything a member
+		// listens or persists with is a way of holding something.
+		if l.Port != 0 || l.Host != "" || l.Advertise != "" {
+			p.add(at(path, "port"), ErrConflict,
+				"port, host and advertise are a MEMBER's leaf listener, and "+
+					"urls joins this node as a leaf — a node is one side of "+
+					"the link")
+		}
+		if !s.Cluster.IsZero() {
+			p.add(field("stream.cluster"), ErrConflict,
+				"a leaf is not a cluster member: it runs no JetStream and "+
+					"holds no replica. Remove the cluster block, or the leaf urls")
+		}
+		if s.StoreDir != "" || s.StoreMaxBytes != 0 {
+			p.add(field("stream.store_dir"), ErrConflict,
+				"a leaf runs no JetStream, so it has no stream store to keep")
+		}
+		for i, raw := range l.URLs {
+			u, err := url.Parse(strings.TrimSpace(raw))
+			if err != nil || u.Host == "" || !slices.Contains(leafSchemes, u.Scheme) {
+				p.add(at(path, fmt.Sprintf("urls[%d]", i)), ErrUnknownValue,
+					"%q is not a member's leaf listener: want %s://host:port",
+					raw, leafSchemes[0])
+			}
+		}
+		return p.err()
+	}
+	if l.Port == 0 {
+		p.add(at(path, "port"), ErrMissing,
+			"is required once host or advertise is set: they describe a leaf "+
+				"LISTENER, and without a port this member opens none")
+	}
+	if l.Advertise != "" {
+		if err := validateAdvertise(l.Advertise); err != nil {
+			p.add(at(path, "advertise"), ErrShape, "%v", err)
+		}
+	}
+	return p.err()
+}
+
+// leafSchemes are the URL schemes a leaf link may be dialled with.
+var leafSchemes = []string{"nats-leaf", "nats", "tls"}
+
+// IsZero lets an unset leaf block drop out of a JSON round trip.
+func (l StreamLeaf) IsZero() bool {
+	return len(l.URLs) == 0 && l.Port == 0 && l.Host == "" && l.Advertise == ""
+}
+
+// Joins reports whether this block joins the fleet as a leaf.
+func (l StreamLeaf) Joins() bool { return len(l.URLs) > 0 }
 
 // IsZero lets an unset cluster block drop out of a JSON round trip.
 func (c StreamCluster) IsZero() bool {
@@ -1206,8 +1797,11 @@ func (s *Stream) validate(path Path) error {
 				"cluster logs wherever its operator configured it to. Remove "+
 				"it, or set type to %q", StreamEmbedded)
 	}
-	if s.Replicas < 0 {
-		p.add(at(path, "replicas"), ErrOutOfRange, "must not be negative, got %d", s.Replicas)
+	if s.Replicas < 0 || s.Replicas > MaxStreamReplicas {
+		p.add(at(path, "replicas"), ErrOutOfRange,
+			"must be 0 (one copy) or 1..%d, got %d: JetStream refuses a stream "+
+				"with more replicas than that, so every stream and bucket this "+
+				"node provisions would fail at boot", MaxStreamReplicas, s.Replicas)
 	}
 	if err := s.validateSync(path, external); err != nil {
 		p.wrap(err)
@@ -1270,6 +1864,26 @@ func (s *Stream) validate(path Path) error {
 				"from a NAMED cluster, so this node would start solo and form no "+
 				"cluster at all")
 	}
+	// EVERY PEER IS A ROUTE THE SERVER CAN DIAL. nats-server takes a peer
+	// list as URLs and dials each one's host and port, and nothing it does
+	// with an entry it cannot is loud: one that does not parse is dropped
+	// from the list, and one with no host or no port — `b:6222` without its
+	// scheme parses as a scheme `b` and no host — fails its dial on every
+	// attempt, for ever, at debug. Either way the member it was meant to
+	// reach is never routed to, and the only symptom is a cluster short of
+	// a member. Not asked of an external stream, whose cluster block is
+	// refused whole above.
+	if !external {
+		for i, raw := range s.Cluster.Peers {
+			if _, ok := routeAddress(raw); !ok {
+				p.add(idx(at(path, "cluster.peers"), i), ErrUnknownValue,
+					"%q is not a member's route URL: want nats://host:port — "+
+						"the embedded server dials each entry's host and port, "+
+						"and one it cannot dial is never routed to", raw)
+			}
+		}
+	}
+	p.wrap(s.Leaf.validate(at(path, "leaf"), s, external))
 	bytesInRange(&p, path, "tracker_log_max_bytes", s.TrackerLogMaxBytes,
 		TrackerLogMaxBytesFloor, TrackerLogMaxBytesCeiling)
 	bytesInRange(&p, path, "tracker_vectors_max_bytes", s.TrackerVectorsMaxBytes,
@@ -1841,9 +2455,14 @@ func (s *Stream) validateSync(path Path, external bool) error {
 	// (3) A SAME-HOST CLUSTER IS ONE FAILURE DOMAIN. Peers that resolve to
 	// this host share its power, its kernel and its page cache, so the
 	// majority the window is traded for dies with the member that has it.
-	if sameHostCluster(s.Cluster.Peers) {
+	//
+	// Asked of the OTHER members ([StreamCluster.members]): this node's own
+	// route listed among them is on this host by definition, and read as a
+	// member it hid a cluster whose other members were all local behind
+	// an entry spelled with the host's own address.
+	if sameHostCluster(s.Cluster.members().Others) {
 		p.add(at(path, "sync"), ErrConflict,
-			"every peer in stream.cluster.peers is on this host, so the quorum "+
+			"every other member in stream.cluster.peers is on this host, so the quorum "+
 				"this window trades for shares one power supply and one page "+
 				"cache: %q would be recorded and not honoured", s.Sync)
 	}

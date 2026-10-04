@@ -30,7 +30,7 @@ func TestCommitFaultsReachDifferentBranches(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			db, err := store.Open(t.Context(),
+			db, err := store.OpenNode(t.Context(),
 				filepath.Join(t.TempDir(), "faults.db"),
 				store.Options{WrapDriver: tc.fault.Wrap})
 			if err != nil {
@@ -99,7 +99,7 @@ func TestALostAcknowledgementIsDurableAcrossAReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lost.db")
 	fault := storetest.LoseCommitAck(0)
 
-	db, err := store.Open(t.Context(), path, store.Options{WrapDriver: fault.Wrap})
+	db, err := store.OpenNode(t.Context(), path, store.Options{WrapDriver: fault.Wrap})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestALostAcknowledgementIsDurableAcrossAReopen(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	reopened, err := store.Open(t.Context(), path, store.Options{})
+	reopened, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

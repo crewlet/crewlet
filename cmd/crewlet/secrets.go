@@ -316,6 +316,11 @@ func loadBootstrapForStore(bootstrapPath string) (*config.Bootstrap, error) {
 // openSecretValues opens the store a loaded bootstrap names, under its
 // keyring. The caller has already established that a keyring exists.
 func openSecretValues(ctx context.Context, boot *config.Bootstrap) (*store.SecretValues, func(), error) {
+	if err := refuseScratchStore(boot, "crewlet secrets",
+		"Use the API of a node that holds data: /secrets writes the company's "+
+			"credential store, which every node reads."); err != nil {
+		return nil, nil, err
+	}
 	cipher, err := boot.Secrets.Cipher()
 	if err != nil {
 		return nil, nil, fmt.Errorf("secrets keyring: %w", err)
@@ -324,7 +329,10 @@ func openSecretValues(ctx context.Context, boot *config.Bootstrap) (*store.Secre
 	// secret read must not depend on the company document, and the vector
 	// columns are only sized when a migration actually runs — which a
 	// running node has already done.
-	db, err := store.Open(ctx, boot.Store.Path, store.Options{
+	// THE NODE'S OWN FILE ALONE: revisions and the bootstrap secret store
+	// are the node's own, and this command reads nothing a state log
+	// applies, so it opens no partition.
+	db, err := store.OpenNode(ctx, boot.Store.Path, store.Options{
 		MaxOpenConns: boot.Store.MaxOpenConns,
 		BusyTimeout:  boot.Store.BusyTimeout(),
 	})

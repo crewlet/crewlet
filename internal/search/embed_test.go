@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE ROUND TRIP: the duty embeds, the record reaches a real broker, this
@@ -54,9 +57,9 @@ func TestTheEmbedDutyReachesTheSearch(t *testing.T) {
 		t.Fatalf("embed the query: %v", err)
 	}
 	var hits []search.SemanticHit
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(h.db).Read(t.Context(), func(tx *sql.Tx) error {
 		var err error
-		hits, err = search.Semantic(t.Context(), tx, search.SemanticQuery{
+		hits, _, err = search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: pack(vector), Model: embedModel,
 			Dim: h.embedder.Width(), Limit: 5,
 		})
@@ -119,6 +122,111 @@ func TestARemovedTaskLosesItsVector(t *testing.T) {
 			"is gone, so nothing else will ever select it", got)
 	}
 }
+
+// EVERY VECTOR WITHDRAWN SHOWS THE TICK'S BOUND ITS PROGRESS.
+//
+// A withdrawal costs no provider call, so it is outside the batches a tick
+// reports as it embeds — and there can be a selection's worth of them a
+// corpus, 1 024 after a bulk purge, each a publish. Unreported, that was the
+// longest stretch a live tick went without showing progress: on a slow broker
+// a tick withdrawing steadily was cut off as wedged, which is the
+// slow-but-advancing tick the bound exists NOT to cut off. So each one
+// reports as it is published.
+func TestEveryWithdrawalShowsTheTicksBoundItsProgress(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	const removed = 40
+	bodies := make(map[string]string, removed)
+	for i := range removed {
+		bodies[fmt.Sprintf("t-%02d", i)] = fmt.Sprintf("something to forget, number %d", i)
+	}
+	h.seedTasks(bodies)
+	if _, err := h.duty.Tick(t.Context()); err != nil {
+		t.Fatalf("setup: tick: %v", err)
+	}
+	h.drain()
+	if got := h.vectors(); got != removed {
+		t.Fatalf("setup: %d vector(s) after the first tick, want %d", got, removed)
+	}
+	for id := range bodies {
+		h.removeTask(id)
+	}
+
+	budget := &countedBudget{}
+	duty, err := search.NewEmbedder(search.EmbedDeps{
+		Publisher: h.publisher, Estate: storetest.EstateOf(h.db).Reader(),
+		Log:      statelog.EstateStream(search.Domain{}).Name,
+		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
+		Embedder: h.embedder, Model: embedModel,
+		Corpora: []search.Corpus{search.TaskCorpus{DB: storetest.EstateOf(h.db).Reader()}},
+		Now:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		Budget:  budget,
+	})
+	if err != nil {
+		t.Fatalf("build the duty: %v", err)
+	}
+	published, err := duty.Tick(t.Context())
+	if err != nil || published != removed {
+		t.Fatalf("setup: the tick published %d record(s), want the %d withdrawals: %v",
+			published, removed, err)
+	}
+	if got := budget.advanced.Load(); got < removed {
+		t.Fatalf("a tick that withdrew %d vectors and embedded nothing reported progress "+
+			"%d time(s), want once a withdrawal", removed, got)
+	}
+}
+
+// EVERY VECTOR PUBLISHED SHOWS THE TICK'S BOUND ITS PROGRESS, and so does every
+// provider call answered — apart, never as one stretch.
+//
+// A batch is up to 128 publishes after its call, and counted as one stretch
+// with the call they were the longest a live tick went without showing
+// progress: a broker slow enough to take the bound's length over them cut off
+// a tick that was publishing steadily, which the engine's own test of the
+// bound met on a loaded machine as 108 published of 300 and the tick reported
+// wedged.
+func TestEveryEmbeddedVectorShowsTheTicksBoundItsProgress(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	const extra = 5 // a second, short batch
+	seed := map[string]string{}
+	for i := range search.EmbedBatch + extra {
+		seed[fmt.Sprintf("t-%04d", i)] = fmt.Sprintf("document number %d", i)
+	}
+	h.seedTasks(seed)
+
+	budget := &countedBudget{}
+	duty, err := search.NewEmbedder(search.EmbedDeps{
+		Publisher: h.publisher, Estate: storetest.EstateOf(h.db).Reader(),
+		Log:      statelog.EstateStream(search.Domain{}).Name,
+		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
+		Embedder: h.embedder, Model: embedModel,
+		Corpora: []search.Corpus{search.TaskCorpus{DB: storetest.EstateOf(h.db).Reader()}},
+		Now:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		Budget:  budget,
+	})
+	if err != nil {
+		t.Fatalf("build the duty: %v", err)
+	}
+	published, err := duty.Tick(t.Context())
+	if err != nil || published != search.EmbedBatch+extra {
+		t.Fatalf("the tick published %d record(s) (%v), want %d", published, err,
+			search.EmbedBatch+extra)
+	}
+	const calls = 2
+	if got := budget.advanced.Load(); got < int64(published+calls) {
+		t.Fatalf("a tick that made %d provider calls and published %d vectors "+
+			"reported progress %d time(s), want once a call and once a publish",
+			calls, published, got)
+	}
+}
+
+// countedBudget counts the reports of progress a tick makes, and grants every
+// exemption.
+type countedBudget struct{ advanced atomic.Int64 }
+
+func (b *countedBudget) Advanced()      { b.advanced.Add(1) }
+func (b *countedBudget) Exempt() func() { return func() {} }
 
 // A PROVIDER FAILURE COSTS THE BATCH AND NOT THE CORPUS.
 //
@@ -278,6 +386,23 @@ func TestAnUnreadableCorpusDoesNotStopTheOnesAfterIt(t *testing.T) {
 	}
 }
 
+// A DUTY WITH NO BUDGET IS A REFUSED WIRING: its caller bounds every tick, and
+// one that did not say which bound would measure a training by its length
+// rather than its progress — which on a one-core node cut off every training
+// at the largest partition.
+func TestTheDutyRefusesAWiringWithNoBudget(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	_, err := search.NewEmbedder(search.EmbedDeps{
+		Publisher: h.publisher, Estate: storetest.EstateOf(h.db).Reader(), Log: statelog.EstateStream(search.Domain{}).Name,
+		Standing: h.standing(nil), Embedder: h.embedder, Model: embedModel,
+		Corpora: []search.Corpus{search.TaskCorpus{DB: storetest.EstateOf(h.db).Reader()}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "EmbedDeps.Budget") {
+		t.Fatalf("a duty with no budget built as %v, want a refusal naming EmbedDeps.Budget", err)
+	}
+}
+
 // MORE CORPORA THAN THERE ARE CALLS IS A REFUSED WIRING.
 //
 // Below one call apiece there is no share left to guarantee: every tick starts
@@ -292,8 +417,11 @@ func TestTheDutyRefusesMoreCorporaThanATickCanServe(t *testing.T) {
 		corpora[i] = &scriptedCorpus{source: search.SourceTask, backlog: -1}
 	}
 	_, err := search.NewEmbedder(search.EmbedDeps{
-		Publisher: h.publisher, Embedder: h.embedder, Model: embedModel,
-		Corpora: corpora,
+		Publisher: h.publisher, Estate: storetest.EstateOf(h.db).Reader(), Log: statelog.EstateStream(search.Domain{}).Name,
+		Standing: h.standing(nil),
+		Embedder: h.embedder, Model: embedModel, Corpora: corpora,
+		// EVERY OTHER FIELD WIRED, so the refusal is the corpora's.
+		Budget: unbounded{},
 	})
 	if err == nil {
 		t.Fatalf("a duty with %d corpora and %d calls a tick was accepted — "+
@@ -409,7 +537,7 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 			t.Errorf("stop the broker: %v", err)
 		}
 	})
-	spec := search.Domain{}.Stream()
+	spec := statelog.EstateStream(search.Domain{})
 	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES: the shipped
 	// default is sized for the declared supported corpus, and an embedded
 	// broker in a temporary directory refuses to reserve it.
@@ -424,24 +552,21 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 
 	h := &embedHarness{
 		t: t, db: db, log: log, applier: search.NewApplier(),
 		embedder: &scriptedEmbedder{Fake: embeddings.NewFake(64), poisonID: -1},
 	}
-	rows, err := search.NewRows(db)
+	rows, err := search.NewRows(storetest.EstateOf(db).Reader(), statelog.EstateStream(search.Domain{}))
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: search.Domain{}, Log: log, Rows: rows,
-		Fence: search.NewFence(), Gates: search.NewGates(), Waiter: &embedWaiter{},
+		Domain: search.Domain{}, Spec: statelog.EstateStream(search.Domain{}), Layout: statelog.EstateLayout(search.Domain{}.Name()), LogID: statelog.EstateLog(search.Domain{}), Log: log, Records: log, Rows: rows,
+		Holding: statelog.ServesOnly(statelog.EstatePartition),
+		Fence:   search.NewFence(), Gates: search.NewGates(), Waiter: &embedWaiter{}, Voids: embedWaiter{},
 		NodeID: "node-a", Generation: func() uint32 { return 0 }, Identity: &embedWaiter{},
 		ResolveBudget: 2 * time.Second,
 	})
@@ -449,7 +574,7 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 		t.Fatalf("build the publisher: %v", err)
 	}
 	h.publisher = publisher
-	h.duty = h.dutyOver(search.TaskCorpus{DB: db})
+	h.duty = h.dutyOver(search.TaskCorpus{DB: storetest.EstateOf(db).Reader()})
 	return h
 }
 
@@ -459,14 +584,29 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 func (h *embedHarness) dutyOver(corpora ...search.Corpus) *search.Embedder {
 	h.t.Helper()
 	duty, err := search.NewEmbedder(search.EmbedDeps{
-		Publisher: h.publisher, Embedder: h.embedder, Model: embedModel,
-		Corpora: corpora,
-		Now:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		Publisher: h.publisher, Estate: storetest.EstateOf(h.db).Reader(), Log: statelog.EstateStream(search.Domain{}).Name,
+		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
+		Embedder: h.embedder, Model: embedModel, Corpora: corpora,
+		Now:    func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		Budget: unbounded{},
 	})
 	if err != nil {
 		h.t.Fatalf("build the duty: %v", err)
 	}
 	return duty
+}
+
+// standing is the log's standing as this harness's one node holds it: current
+// when [embedHarness.drain] has applied every record the log holds, and the
+// fleet the readers a test dictates.
+func (h *embedHarness) standing(readers map[string]int) func(context.Context) (search.LogStanding, error) {
+	return func(ctx context.Context) (search.LogStanding, error) {
+		last, err := h.log.End(ctx)
+		if err != nil {
+			return search.LogStanding{}, err
+		}
+		return search.LogStanding{Current: h.consumed >= last, Readers: readers}, nil
+	}
 }
 
 // seedTasks writes tracker rows DIRECTLY, because this suite is about the
@@ -478,7 +618,12 @@ func (h *embedHarness) seedTasks(bodies map[string]string) {
 	for id := range bodies {
 		ids = append(ids, id)
 	}
-	if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+	// IN ID ORDER, because each task's version and update instant are
+	// minted in this loop and the duty embeds in update order: seeded in a
+	// map's order, which documents a tick embedded — and so which corpus an
+	// index was trained on — changed from run to run.
+	slices.Sort(ids)
+	if err := storetest.EstateOf(h.db).Tx(h.t.Context(), func(tx *sql.Tx) error {
 		for _, id := range ids {
 			h.version++
 			document := fmt.Sprintf(`{"body":%q}`, bodies[id])
@@ -513,7 +658,7 @@ func (h *embedHarness) seedTasks(bodies map[string]string) {
 
 func (h *embedHarness) removeTask(id string) {
 	h.t.Helper()
-	if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(h.db).Tx(h.t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(h.t.Context(),
 			`UPDATE tracker_tasks SET removed_at = 1 WHERE id = ?`, id)
 		return err
@@ -545,11 +690,11 @@ func (h *embedHarness) drain() {
 		record := statelog.Record{
 			Envelope: env,
 			Position: statelog.Position{
-				Stream: search.Domain{}.Stream().Name, Generation: env.Gen, Seq: seq,
+				Stream: statelog.EstateStream(search.Domain{}).Name, Generation: env.Gen, Seq: seq,
 			},
 			Payload: payload, StoredAt: storedAt,
 		}
-		if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+		if err := storetest.EstateOf(h.db).Tx(h.t.Context(), func(tx *sql.Tx) error {
 			_, err := h.applier.Apply(h.t.Context(), tx, record,
 				statelog.ApplyOptions{StoredAt: storedAt})
 			return err
@@ -563,7 +708,7 @@ func (h *embedHarness) drain() {
 func (h *embedHarness) vectors() int {
 	h.t.Helper()
 	var n int
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(h.db).Read(h.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(h.t.Context(),
 			`SELECT COUNT(*) FROM kb_vectors`).Scan(&n)
 	}); err != nil {
@@ -707,6 +852,9 @@ type embedWaiter struct{}
 
 func (embedWaiter) Committed() statelog.Position { return statelog.Position{} }
 
+// Voided voids nothing: no reanchor places a rule on this harness's log.
+func (embedWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
+
 // StreamIdentity is always the live stream: this harness never rebuilds its
 // log.
 func (embedWaiter) StreamIdentity() error { return nil }
@@ -717,3 +865,11 @@ func (embedWaiter) WaitCommitted(context.Context, statelog.Position) error {
 func (embedWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Position) error {
 	return nil
 }
+
+// unbounded is a tick nothing bounds: every report of progress is taken and
+// every exemption granted and none kept, for the tests whose ticks the
+// engine's bound is not the subject of.
+type unbounded struct{}
+
+func (unbounded) Advanced()      {}
+func (unbounded) Exempt() func() { return func() {} }

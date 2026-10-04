@@ -64,11 +64,6 @@ const (
 	// here because the cross-field rule below is stated in terms of it.
 	SnapshotsKept = 1
 
-	// DefaultTrackerVectorsMaxBytes is the vector changelog's ceiling:
-	// twice the modelled year-five peak of a model change republishing
-	// every source at once.
-	DefaultTrackerVectorsMaxBytes int64 = 16 << 30
-
 	// TrackerLogMaxBytesFloor and TrackerLogMaxBytesCeiling bound the
 	// mutation log's ceiling.
 	TrackerLogMaxBytesFloor   int64 = 1 << 30
@@ -76,8 +71,20 @@ const (
 
 	// TrackerVectorsMaxBytesFloor and TrackerVectorsMaxBytesCeiling bound
 	// the vector changelog's.
+	//
+	// THE CEILING IS TWO TEBIBYTES because the changelog's peak is a
+	// DESIGNED operation rather than a failure: a model change puts every
+	// source's message inside the window at once, 1.69 GB per 100 seats per
+	// year of corpus (8.46 GB at the reference company's fifth year). At
+	// the largest company this engine is sized for — 10 000 seats, in its
+	// fifth year — that is 846 GB, and twice it is 1.69 TB, which the old
+	// 256 GiB bound refused: a model change there overflowed any value an
+	// operator was allowed to write from about year one and a half. Two
+	// tebibytes is the next power of two above it, a typo guard at that
+	// scale, and far above the most an unset value derives
+	// ([Stream.VectorsMaxBytes]).
 	TrackerVectorsMaxBytesFloor   int64 = 1 << 30
-	TrackerVectorsMaxBytesCeiling int64 = 256 << 30
+	TrackerVectorsMaxBytesCeiling int64 = 2 << 40
 
 	// PagesLogMaxBytesFloor and PagesLogMaxBytesCeiling bound the
 	// knowledge base's log. The floor is every log's, and the ceiling is a
@@ -98,7 +105,7 @@ const (
 	UsageLogMaxBytesCeiling int64 = 64 << 30
 
 	// DerivedPagesLogDivisor is how much smaller an unset PagesLogMaxBytes
-	// is than the mutation log's derived ceiling.
+	// is than the mutation log's ceiling.
 	//
 	// FOUR, and the ratio is the corpus rather than a guess: the reference
 	// company files 100 000 tasks and 300 000 comments a year against a
@@ -131,10 +138,11 @@ const (
 	// last. It was four while there were three domains; beside the usage
 	// log's gibibyte, four would leave the unreserved streams nothing.
 	//
-	// THE CEILING IS A TYPO GUARD rather than a policy: 64 TiB is two
-	// orders of magnitude above the largest estate the domain ceilings can
-	// describe (1 TiB of mutation log, 256 GiB of vectors), so anything
-	// past it is a unit mistake rather than a deployment.
+	// THE CEILING IS A TYPO GUARD rather than a policy: 64 TiB is more than
+	// an order of magnitude above the largest estate the domain ceilings can
+	// describe (1 TiB of mutation log, 2 TiB of vectors, 256 GiB of
+	// knowledge base), so anything past it is a unit mistake rather than a
+	// deployment.
 	StoreMaxBytesFloor   int64 = 5 << 30
 	StoreMaxBytesCeiling int64 = 64 << 40
 )
@@ -295,40 +303,73 @@ func (s Stream) LogMaxBytes(free int64) (int64, bool) {
 // PagesMaxBytes is the knowledge base's log ceiling, and whether it was
 // derived.
 //
-// DERIVED FROM THE MUTATION LOG'S DERIVED VALUE rather than from the disk
-// directly, so the two stay in the ratio their corpora grow at on every volume:
-// 1 GiB beside the tracker's 4 GiB floor, 16 GiB beside its 64 GiB clamp.
+// DERIVED FROM THE MUTATION LOG'S CEILING — the one an operator wrote, or the
+// one the volume derives — rather than from the disk directly, so the two stay
+// in the ratio their records grow at: 1 GiB beside the mutation log's 4 GiB
+// derived floor, 16 GiB beside its 64 GiB clamp, 256 GiB beside the largest
+// value an operator may write. The ratio holds at every horizon because both
+// logs hold the same kind of thing — a trailing window of records, as long as
+// a blocked trim lasts — so a blocked trim fills both in the same time. It used
+// to take the DERIVED value alone, which kept the ratio on every volume and on
+// no configured deployment: an operator who sized the mutation log for their
+// company left the knowledge base's log sized for their disk.
+//
+// Held inside the bounds Tier A accepts for the field, so a node never derives
+// a ceiling its own validation would refuse to be told: a quarter of the
+// smallest mutation log an operator may write is under a gibibyte.
 func (s Stream) PagesMaxBytes(free int64) (int64, bool) {
 	if s.PagesLogMaxBytes > 0 {
 		return s.PagesLogMaxBytes, false
 	}
-	return DerivedLogMaxBytes(free) / DerivedPagesLogDivisor, true
+	tracker, _ := s.LogMaxBytes(free)
+	return min(max(tracker/DerivedPagesLogDivisor, PagesLogMaxBytesFloor),
+		PagesLogMaxBytesCeiling), true
 }
 
 // VectorsMaxBytes is the vector changelog's ceiling, and whether it was
 // derived.
 //
-// # Why an UNSET value is capped by the disk and a SET one is not
+// # Sized for the PEAK, and the peak is the whole corpus
 //
-// The default is sized for the PEAK rather than the steady state, and the two
-// differ by 93x: the stream keeps one message per source and bounds their age,
-// so a week's minting is small — but changing the embedding model rewrites
-// every source in a few hours, and for the following week every source's
-// current message is inside the window. Sizing the default from the steady
-// state would refuse the one operation it exists to survive.
+// The peak and the steady state differ by 93x: the stream keeps one message per
+// source and bounds their age, so a week's minting is small — but changing the
+// embedding model rewrites every source in a few hours, and for the following
+// week every source's current message is inside the window: the whole corpus,
+// about 17 MB per agent seat per year of the company's history (8.46 GB for the
+// reference company's 100 seats in its fifth year). Sizing an unset value from
+// the steady state would refuse the one operation it exists to survive.
 //
-// That default is a number nobody chose for THIS disk, though, and a broker
-// refuses a reservation it cannot back — so an unset value is capped by the
-// same share of free space the mutation log derives from, and the node boots.
-// An operator who WROTE a number gets it: they named a ceiling for a disk they
+// # From the VOLUME, as the mutation log is, and never from the mutation log
+//
+// The two hold different things. The mutation log's ceiling bounds a TRAILING
+// WINDOW — the records of however long a blocked trim lasts — while the
+// changelog's peak is everything the company has written since it began. So
+// no ratio relates them: the corpus over a mutation-log ceiling is 0.21 times
+// the company's age over that ceiling's horizon, which grows every year a
+// company trims healthily. Half the mutation log's ceiling was tried on that
+// ratio, and on the volumes most deployments have it was half what it
+// replaced: the reference company on 64 GiB free had its fifth-year model
+// change refused partway, and an operator who set a small mutation log for a
+// fleet that trims shrank the changelog with it.
+//
+// What the two logs share is the volume, so an unset changelog asks for the
+// same quarter of its free space the mutation log derives ([DerivedLogMaxBytes]),
+// whatever the mutation log is set to: on every volume at least what the fixed
+// 16 GiB default capped by that same share asked for, and more wherever the
+// volume can back more. At the 64 GiB clamp it holds a model change twice over
+// for about 2 000 seat-years of corpus — 400 seats in their fifth year. A
+// larger or older company sets the field, at about 34 MB per agent seat per
+// year of history (twice the corpus), and the headroom alarm says when one has
+// outgrown it.
+//
+// An operator who WROTE a number gets it: they named a ceiling for a broker they
 // can see, and silently lowering it would be the engine deciding a limit an
 // emergency grant had just raised.
 func (s Stream) VectorsMaxBytes(free int64) (int64, bool) {
 	if s.TrackerVectorsMaxBytes > 0 {
 		return s.TrackerVectorsMaxBytes, false
 	}
-	capped := min(DefaultTrackerVectorsMaxBytes, DerivedLogMaxBytes(free))
-	return max(capped, TrackerVectorsMaxBytesFloor), capped != DefaultTrackerVectorsMaxBytes
+	return DerivedLogMaxBytes(free), true
 }
 
 // UsageMaxBytes is the usage log's ceiling, and whether the operator set it.

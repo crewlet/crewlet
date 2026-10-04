@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 )
 
 // The fakes below are the framework's own seams and nothing else. A real
@@ -31,15 +33,57 @@ type probeDomain struct{}
 
 func (probeDomain) Name() string { return "probe" }
 
-func (probeDomain) Stream() statelog.StreamSpec {
-	return statelog.StreamSpec{
-		Name:            probeStream,
-		Subjects:        []string{probePrefix + ".>"},
-		SubjectPrefix:   probePrefix,
+func (probeDomain) StreamShape() statelog.StreamShape {
+	return statelog.StreamShape{
 		MaxBytes:        16 << 20,
 		Duplicates:      2 * time.Minute,
 		Replay:          statelog.ReplayStrict,
 		ArbitratedKinds: []string{"object"},
+	}
+}
+
+// PartitionOf and ScopePartition place every record and path of a fake in the
+// one partition that carries its log. No case here runs a layout, so what
+// they are asked for is only ever that answer.
+func (d probeDomain) PartitionOf(l statelog.Layout, _ statelog.Envelope) (statelog.PartitionID, bool) {
+	return l.OnlyPartition(d.Name()), true
+}
+
+func (d probeDomain) ScopePartition(l statelog.Layout, _ string) (statelog.PartitionID, bool) {
+	return l.OnlyPartition(d.Name()), true
+}
+
+// logOf is a fake domain's one log, in layout 0's estate — keyed, as every
+// such log is, by the domain's name alone.
+func logOf(d statelog.Domain) statelog.LogID {
+	return statelog.EstateLog(d)
+}
+
+// layoutOf is the layout that log sits in: layout 0 carrying the one fake
+// domain. The grammar names no fake's log there, so a runner or a publisher
+// built on it takes the hand-named stream [specOf] gives rather than holding it
+// to a name ([statelog.Layout.Places]) — the partitioned names are certified by
+// statelogtest's control, whose logs the grammar does name.
+func layoutOf(d statelog.Domain) statelog.Layout {
+	return statelog.EstateLayout(d.Name())
+}
+
+// specOf is a fake domain's one log's stream: its shape under the name the cases here
+// were written against. Named by hand rather than by a layout, because what
+// these cases vary is what a domain DECLARES — its replay, its window, its
+// ceiling — and a partitioned name would change every position they assert on
+// and none of what they are about. The partitioned grammar is certified by
+// statelogtest's control and by the layout's own tests.
+func specOf(d statelog.Domain) statelog.StreamSpec {
+	name, prefix := probeStream, probePrefix
+	if d.Name() == (secondProbeDomain{}).Name() {
+		name, prefix = secondProbeStream, secondProbePrefix
+	}
+	return statelog.StreamSpec{
+		Name:          name,
+		Subjects:      []string{prefix + ".>"},
+		SubjectPrefix: prefix,
+		StreamShape:   d.StreamShape(),
 	}
 }
 
@@ -126,6 +170,44 @@ type applier struct {
 	// truncated is what Truncated answers: nil while no peer's rows hold
 	// records the log lost.
 	truncated error
+
+	// rules, when set, is what answers Voided: a REAL runner whose
+	// checkpoint carries a reanchor's rules ([reanchorRules]), so what a
+	// resolution is told depends on the generation and the sequence it
+	// asks about exactly as the applier's own drop does. A fake answering
+	// one reason for every record certified that the rules were asked and
+	// nothing about what they were asked — a resolution asking about
+	// generation zero at sequence zero, which the rules void nothing at,
+	// passed it. voidedAsked is every question, in order.
+	rules       statelog.Voids
+	voidedAsked []voidedQuestion
+}
+
+// voidedQuestion is one question a resolution asked the reanchor rules: a
+// record stamped with generation Gen, at sequence Seq.
+type voidedQuestion struct {
+	Gen uint32
+	Seq uint64
+}
+
+// Voided answers what the staged rules answer, recording the question; with
+// none staged, no record is void.
+func (a *applier) Voided(gen uint32, seq uint64) (statelog.Reason, bool) {
+	a.mu.Lock()
+	rules := a.rules
+	a.voidedAsked = append(a.voidedAsked, voidedQuestion{Gen: gen, Seq: seq})
+	a.mu.Unlock()
+	if rules == nil {
+		return "", false
+	}
+	return rules.Voided(gen, seq)
+}
+
+// voidedQuestions is every question the reanchor rules were asked.
+func (a *applier) voidedQuestions() []voidedQuestion {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]voidedQuestion(nil), a.voidedAsked...)
 }
 
 func (a *applier) StreamIdentity() error {
@@ -456,12 +538,61 @@ type fakeGates struct {
 	mu     sync.Mutex
 	reason statelog.Reason
 	gated  bool
+
+	// writer, when set, is the one writer the gate holds — a writer's gate
+	// is an eviction or a release, which drops a record by who wrote it —
+	// and asked is every writer the publisher asked about, in order.
+	writer string
+	asked  []string
 }
 
-func (g *fakeGates) GatedAt(context.Context, statelog.Subject, string, string, statelog.Position) (statelog.Reason, bool, error) {
+func (g *fakeGates) GatedAt(_ context.Context, _ statelog.Subject, writer, _ string, _ statelog.Position) (statelog.Reason, bool, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.asked = append(g.asked, writer)
+	if g.writer != "" && writer != g.writer {
+		return "", false, nil
+	}
 	return g.reason, g.gated, nil
+}
+
+// holdWriter makes the gate hold writer's records, under reason, and no one
+// else's.
+func (g *fakeGates) holdWriter(writer string, reason statelog.Reason) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.writer, g.reason, g.gated = writer, reason, true
+}
+
+// askedAbout is every writer the gate was asked about.
+func (g *fakeGates) askedAbout() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]string(nil), g.asked...)
+}
+
+// faultyRecords is the log read by position, as the publisher's resolution
+// reads it, with a failure a case can inject.
+type faultyRecords struct {
+	inner statelog.LogReader
+	mu    sync.Mutex
+	err   error
+}
+
+func (r *faultyRecords) At(ctx context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
+	r.mu.Lock()
+	err := r.err
+	r.mu.Unlock()
+	if err != nil {
+		return "", nil, time.Time{}, false, err
+	}
+	return r.inner.At(ctx, seq)
+}
+
+func (r *faultyRecords) fail(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.err = err
 }
 
 // sweep is this node's retention sweep deleting every ledger row, as a sweep
@@ -581,11 +712,16 @@ type harness struct {
 	gates   *fakeGates
 	applier *applier
 	appends *countingAppender
+	records *faultyRecords
 	log     *js.DomainLog
 
 	// reserve is the log's gate reserve, nil for a domain that keeps none.
 	reserve *statelog.Reserve
 	gen     atomic.Uint32
+
+	// holding is whether this node serves the log's partition — gate 3's
+	// answer, which a case moves.
+	holding *statelogtest.Holding
 }
 
 func newHarness(t *testing.T) *harness { return newHarnessFor(t, probeDomain{}) }
@@ -622,6 +758,14 @@ func reserveOn(t testing.TB, log *js.DomainLog) *statelog.Reserve {
 // decides several of the write path's branches.
 func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 	t.Helper()
+	return newHarnessLogging(t, domain, nil)
+}
+
+// newHarnessLogging is [newHarnessFor] with the publisher writing its lines to
+// logger, for a case that reads what a write logged; nil is the package's own
+// logger, as the engine's publishers have.
+func newHarnessLogging(t *testing.T, domain statelog.Domain, logger *slog.Logger) *harness {
+	t.Helper()
 	// A STORE DIRECTORY, ALWAYS. An embedded broker with none keeps its
 	// streams in memory, and every property this framework rests on is
 	// about a stream that survives.
@@ -634,7 +778,7 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 			t.Errorf("stop the broker: %v", err)
 		}
 	})
-	spec := domain.Stream()
+	spec := specOf(domain)
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
 		Name:       spec.Name,
 		Subjects:   spec.Subjects,
@@ -654,6 +798,7 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 	h.fence = &fakeFence{}
 	h.gates = &fakeGates{}
 	h.appends = &countingAppender{inner: log, applier: h.applier, gen: h.gen.Load}
+	h.records = &faultyRecords{inner: log}
 	// A REAL RECORDER, because what the publisher counts a refusal as is an
 	// operator's only view of which remedy a fleet needs, and a case that
 	// asserts it has no other witness.
@@ -661,18 +806,25 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 		t.Fatalf("recorder: %v", err)
 	}
 
+	// A NODE SERVING THE LOG'S PARTITION, which a case moves to reach gate
+	// 3's refusals.
+	h.holding = statelogtest.NewHolding(logOf(domain).Partition)
 	deps := statelog.Deps{
-		Domain:        domain,
+		Domain: domain, Spec: specOf(domain), Layout: layoutOf(domain), LogID: logOf(domain),
+		Holding:       h.holding,
 		Log:           h.appends,
+		Records:       h.records,
 		Rows:          h.rows,
 		Fence:         h.fence,
 		Gates:         h.gates,
 		Waiter:        h.applier,
+		Voids:         h.applier,
 		Identity:      h.applier,
 		Metrics:       h.metrics,
 		NodeID:        "node-a",
 		Generation:    h.gen.Load,
 		ResolveBudget: 250 * time.Millisecond,
+		Logger:        logger,
 	}
 	// THE REAL LOG'S OWN RESERVE, where the domain keeps one: every write
 	// through the harness is admitted against the broker's usage, as the

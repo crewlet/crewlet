@@ -87,10 +87,10 @@ func (r TailRecord) String() string {
 // A record the log cannot say anything about — its envelope does not decode —
 // is an error: whether it writes rows cannot be told, and a reanchor that
 // cannot tell refuses rather than guesses.
-func UnheldTail(ctx context.Context, d Domain, db Estate, log LogReader, gen uint32,
-	first, last uint64) (*TailRecord, error) {
+func UnheldTail(ctx context.Context, d Domain, spec StreamSpec, db ReadEstate, log LogReader,
+	gen uint32, first, last uint64) (*TailRecord, error) {
 
-	t, err := newTables(d)
+	t, err := newTables(d, spec)
 	if err != nil {
 		return nil, err
 	}

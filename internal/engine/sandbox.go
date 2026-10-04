@@ -373,6 +373,13 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 // against the trigger the run was dispatched for. The instant is
 // [sandbox.PendingRun.WorkBegan], never the raw field, because a row an older
 // build parked has a key and no instant.
+//
+// THE START, NOT WHERE THE RESUMED HALF MINTS. That is decided afresh by every
+// attempt at the resume, against its own clock, when the telemetry that hands
+// the runner its turn is assembled ([Engine.describeResume], [rebaseFor]) — a
+// resume that comes longer after this start than the operation ledger
+// remembers mints its writes at the attempt, or at the instant an earlier
+// attempt or an earlier half of the turn recorded, never here.
 func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organization) *turnctx.Turn {
 	return &turnctx.Turn{
 		RunID: run.TurnID, WorkKey: run.UnitOfWork(), WorkSince: run.WorkBegan(),
@@ -551,7 +558,13 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	if err != nil {
 		return err
 	}
-	tel := e.describeResume(ctx, company, in)
+	tel, err := e.describeResume(ctx, company, in)
+	if err != nil {
+		// A RETRY, like every early return here: nothing ran, and the
+		// coordinator hands its claim back so the next attempt judges the
+		// rebase again against its own clock.
+		return err
+	}
 	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
 		in.Run.DelegationChain, resumeTask(in), resumedReply)
 	// The runtime, and the note box it decides — see [steerBox].
@@ -1642,6 +1655,11 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 			return fmt.Errorf("carrying the seat's memory: %w", err)
 		}
 	}
+	// AND WHAT IT HAS STILL TO LEARN: reflection runs where the seat is held,
+	// on the memory just hydrated.
+	if err := e.attachSeatReflection(ctx, handle); err != nil {
+		return err
+	}
 
 	if rt := e.sandbox.Load(); rt != nil {
 		if err := e.prepareSeatSandbox(ctx, rt, handle, epoch, owner); err != nil {
@@ -1832,6 +1850,10 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	// driver sees to itself, detaching and bounding each request it makes
 	// (see [notify.StatusDriver.ClearFor]).
 	e.Status().ClearFor(ctx, handle)
+
+	// REFLECTION FIRST, so nothing new writes the seat's memory here after
+	// the flush below.
+	e.detachSeatReflection(ctx, handle)
 
 	// A LAST PUBLISH, then forget the seat. The publish is what makes a
 	// graceful handoff lossless: whatever this node learned since its last

@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // liveStreamCreatedAt is the instant the probe stream was created, as both
@@ -26,6 +27,7 @@ var liveStreamCreatedAt = time.Unix(1_700_000_000, 0).UTC()
 type snapHarness struct {
 	t      *testing.T
 	db     *store.DB
+	estate store.PartitionHandle
 	dir    string
 	health statelog.Health
 	nodes  int
@@ -47,16 +49,13 @@ type snapHarness struct {
 func newSnapHarness(t *testing.T) *snapHarness {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := store.Open(t.Context(), filepath.Join(dir, "node.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	db, estate := storetest.OpenEstate(t, filepath.Join(dir, "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
 		}
 	})
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), probeDDL)
 		return err
 	}); err != nil {
@@ -66,6 +65,7 @@ func newSnapHarness(t *testing.T) *snapHarness {
 	h := &snapHarness{
 		t:       t,
 		db:      db,
+		estate:  estate,
 		dir:     filepath.Join(dir, "snapshots"),
 		nodes:   3,
 		created: liveStreamCreatedAt,
@@ -94,7 +94,7 @@ func newSnapHarness(t *testing.T) *snapHarness {
 // is what a real applier does with every batch.
 func (h *snapHarness) cursor(seq uint64) {
 	h.t.Helper()
-	if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(h.t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(h.t.Context(), `
 			INSERT INTO statelog_cursor
 				(stream, generation, seq, stream_created_at, updated_at)
@@ -111,15 +111,17 @@ func (h *snapHarness) cursor(seq uint64) {
 func (h *snapHarness) rebuild(interval time.Duration) {
 	h.t.Helper()
 	s, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
+		Layout:    statelog.EstateLayout(probeDomain{}.Name()),
+		Partition: statelog.EstatePartition,
 		Domains: []statelog.Registered{{
-			Domain: probeDomain{},
+			Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{}),
 			Health: func() statelog.Health { return h.health },
 		}},
-		DB:            h.db,
+		File:          h.estate,
 		Dir:           h.dir,
 		NodeID:        "node-a",
 		EngineVersion: "v0.0.0-test",
-		Counted:       func(context.Context) (int, error) { return h.nodes, nil },
+		Recipients:    func(context.Context) (int, error) { return h.nodes - 1, nil },
 		Interval:      interval,
 		Now:           func() time.Time { return h.clock },
 	})
@@ -217,7 +219,7 @@ func TestADonorScrubsItsOwnTablesBeforeItOffersAnything(t *testing.T) {
 	h := newSnapHarness(t)
 	// A row in the replicated table, a row in the ledger, both of which
 	// travel, and one in a table the domain classes Local.
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO probe_rows (position, kind, stored_at) VALUES (1, 'edit', 0);
 			INSERT INTO probe_ops (op_id, subject, position, applied_at)
@@ -373,7 +375,7 @@ func TestEverySnapshotPreconditionSaysWhyItSkipped(t *testing.T) {
 		if _, err := h.snap.Take(t.Context()); err != nil {
 			t.Fatalf("the first take: %v", err)
 		}
-		seedCursor(t, h.db, probeStream,
+		seedCursor(t, h.estate, probeStream,
 			statelog.Position{Stream: probeStream, Generation: 2, Seq: 10}, h.created)
 		h.health.Position = statelog.Position{Stream: probeStream, Generation: 2, Seq: 10}
 		h.clock = h.clock.Add(time.Minute)
@@ -601,7 +603,7 @@ func TestASnapshotNamesThePositionTheFileKeeps(t *testing.T) {
 func TestADomainWithNoCheckpointIsSnapshottedAtZero(t *testing.T) {
 	t.Parallel()
 	h := newSnapHarness(t)
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `DELETE FROM statelog_cursor`)
 		return err
 	}); err != nil {
@@ -673,7 +675,7 @@ func TestASnapshotNamesTheStreamItsFileWasApplying(t *testing.T) {
 func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 	t.Parallel()
 	offer := statelog.Offer{Manifest: statelog.Manifest{
-		V: statelog.ManifestVersion,
+		V: statelog.ManifestVersion, Partition: statelog.EstatePartition.String(),
 		Domains: map[string]statelog.DomainPosition{"probe": {
 			Stream:          probeStream,
 			Generation:      1,
@@ -683,14 +685,15 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 			Replay:          statelog.ReplayStrict,
 		}},
 	}}
-	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}}}
+	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{})}}
 
 	req := statelog.OfferRequest{
+		Partition:       statelog.EstatePartition.String(),
 		Need:            map[string]uint64{"probe": 1},
 		Generations:     map[string]uint32{"probe": 1},
 		StreamCreatedAt: map[string]time.Time{"probe": liveStreamCreatedAt},
 	}
-	err := offer.Usable(req, build)
+	err := offer.Usable(req, build, nil)
 	if err == nil {
 		t.Fatal("an artefact from a stream this node's log is not was accepted " +
 			"— its sequences name a history this stream does not have, and " +
@@ -703,7 +706,7 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 	// AND THE SAME OFFER IS USABLE when the instants agree, so this is a
 	// refusal of a mismatch rather than of the term's presence.
 	req.StreamCreatedAt["probe"] = liveStreamCreatedAt.Add(-72 * time.Hour)
-	if err := offer.Usable(req, build); err != nil {
+	if err := offer.Usable(req, build, nil); err != nil {
 		t.Errorf("an artefact from this node's own stream was refused: %v", err)
 	}
 
@@ -722,7 +725,7 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 		Replay:          statelog.ReplayStrict,
 	}
 	req.StreamCreatedAt["probe"] = liveStreamCreatedAt.Add(37 * time.Nanosecond)
-	if err := offer.Usable(req, build); err != nil {
+	if err := offer.Usable(req, build, nil); err != nil {
 		t.Errorf("an artefact whose instant differs by 37ns was refused: %v — "+
 			"the column keeps microseconds and the broker reports "+
 			"nanoseconds, so this refuses every real snapshot", err)
@@ -731,7 +734,7 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 	// AND A JOINER THAT COULD NOT READ ITS OWN INSTANT ASKS WITHOUT ONE
 	// rather than refusing every donor.
 	delete(req.StreamCreatedAt, "probe")
-	if err := offer.Usable(req, build); err != nil {
+	if err := offer.Usable(req, build, nil); err != nil {
 		t.Errorf("a joiner naming no instant refused an otherwise usable "+
 			"artefact: %v", err)
 	}
@@ -797,5 +800,97 @@ func TestASecondTakeAtTheSamePositionDoesNotPublishOverTheFirst(t *testing.T) {
 	if back.Artifact != second.Artifact {
 		t.Errorf("the manifest on disk names %q and the take reported %q",
 			back.Artifact, second.Artifact)
+	}
+}
+
+// A SNAPSHOT IS A COPY OF ONE PARTITION, AND ITS MANIFEST SAYS WHICH.
+//
+// The recipient installs the file as the partition the manifest names, of the
+// layout it names, so the snapshotter is built only over exactly one
+// partition's logs — none missing, none of another partition — and its file,
+// and every artefact it takes names both.
+func TestASnapshotIsACopyOfOnePartitionAndSaysWhich(t *testing.T) {
+	t.Parallel()
+	h := newSnapHarness(t)
+	m, err := h.snap.Take(t.Context())
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if m.Partition != statelog.EstatePartition.String() || m.Layout != 0 {
+		t.Errorf("the manifest names partition %q of layout %d, want estate.000 of 0",
+			m.Partition, m.Layout)
+	}
+	back, err := statelog.ReadManifest(filepath.Join(h.dir, strings.TrimSuffix(m.Artifact, ".db")+".json"))
+	if err != nil || back.Partition != m.Partition {
+		t.Fatalf("the manifest on disk reads (%+v, %v)", back, err)
+	}
+
+	reg := statelog.Registered{Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{}),
+		Health: func() statelog.Health { return h.health }}
+	two := statelog.EstateLayout(probeDomain{}.Name(), "pages")
+	for name, deps := range map[string]statelog.SnapshotDeps{
+		"a log of the partition missing": {Layout: two, Partition: statelog.EstatePartition,
+			Domains: []statelog.Registered{reg}, File: h.estate},
+		"no partition": {Layout: statelog.EstateLayout(probeDomain{}.Name()),
+			Domains: []statelog.Registered{reg}, File: h.estate},
+		"another partition's file": {Layout: statelog.EstateLayout(probeDomain{}.Name()),
+			Partition: statelog.EstatePartition, Domains: []statelog.Registered{reg},
+			File: (&store.DB{}).PartitionHandle("tracker.007")},
+	} {
+		deps.Dir, deps.NodeID, deps.Interval = h.dir, "node-a", time.Hour
+		deps.Recipients = func(context.Context) (int, error) { return 2, nil }
+		if _, err := statelog.NewSnapshotter(deps); err == nil {
+			t.Errorf("a snapshotter over %s was built", name)
+		}
+	}
+}
+
+// A MANIFEST THAT NAMES NO PARTITION OF A DIVIDED LAYOUT IS NOBODY'S ARTEFACT.
+//
+// One naming no partition at all is what every build before partitions wrote,
+// and it is layout 0's `estate.000` — the one file such a build held. But one
+// naming a divided layout and no partition, a version this build does not
+// write, or a partition that is no partition's name cannot be installed as any
+// file: it is refused on read, so no donor offers it and no loop counts it as a
+// partition's current artefact.
+func TestAManifestNamingNoPartitionIsRefused(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"a divided layout":  `{"v":2,"layout":1,"artifact":"snapshot-1-1.db","domains":{}}`,
+		"version 3":         `{"v":3,"layout":0,"partition":"estate.000","domains":{}}`,
+		"a negative layout": `{"v":2,"layout":-1,"partition":"estate.000","domains":{}}`,
+		"not a partition":   `{"v":2,"layout":0,"partition":"estate","domains":{}}`,
+	} {
+		path := filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+".json")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := statelog.ReadManifest(path); err == nil {
+			t.Errorf("a manifest of %s was read", name)
+		}
+	}
+}
+
+// EACH PARTITION'S ARTEFACTS ARE KEPT APART.
+//
+// SnapshotsKept and the rotation are per partition, so an artefact of one
+// partition never rotates another's away: layout 0's one partition keeps its
+// artefacts where they have always been, and every other partition has a
+// directory of its own, named as its file is.
+func TestEachPartitionsArtefactsAreKeptApart(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join("var", "snap")
+	if got := statelog.SnapshotDir(root, 0, statelog.EstatePartition); got != root {
+		t.Errorf("layout 0's artefacts are kept in %q, want %q", got, root)
+	}
+	seven := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 7}
+	eight := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 8}
+	if got, want := statelog.SnapshotDir(root, 1, seven), filepath.Join(root, "l1-tracker.007"); got != want {
+		t.Errorf("tracker.007's artefacts are kept in %q, want %q", got, want)
+	}
+	if statelog.SnapshotDir(root, 1, seven) == statelog.SnapshotDir(root, 1, eight) ||
+		statelog.SnapshotDir(root, 1, seven) == statelog.SnapshotDir(root, 2, seven) {
+		t.Error("two partitions' artefacts share a directory")
 	}
 }

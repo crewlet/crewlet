@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -81,7 +82,7 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 		// that has been reanchored — and the resume that was meant to skip
 		// what somebody read re-delivers all of it instead.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		at, err := tracker.ParseLogPosition(since)
+		at, err := statelog.ParsePosition(since)
 		if err != nil {
 			return nil, badParams("since", since, nil)
 		}

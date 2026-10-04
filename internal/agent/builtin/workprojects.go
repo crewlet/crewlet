@@ -147,7 +147,7 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return readFailure(tracker.ListProjectsTool, err), nil
 	}
-	return jsonResult(listing)
+	return jsonResult(projectsView{ProjectListing: listing, Unanswered: listing.Coverage.Notice()})
 }
 
 type describeProject struct{ deps WorkDeps }

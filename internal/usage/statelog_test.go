@@ -37,7 +37,7 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 // writer this domain has — over a node whose store holds one seat's day, run
 // as the suite's own node so the subject's node and the stamp's writer agree
 // as they do in production.
-func suiteWrite(ctx context.Context, pub *statelog.Publisher, _ *store.DB) error {
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, _ store.PartitionReader) error {
 	p, err := usage.NewPublisher(usage.PublisherDeps{
 		Store: oneSeatDay{}, Log: pub, NodeID: statelogtest.SuiteWriter,
 		Zone: func() *time.Location { return time.UTC },

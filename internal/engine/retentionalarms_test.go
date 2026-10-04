@@ -104,7 +104,7 @@ func TestTheAlarmEvaluationLeavesTheHardwareMeasurementToTheTrimTick(t *testing.
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
 	}
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
+	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestTheAlarmEvaluationLeavesTheHardwareMeasurementToTheTrimTick(t *testing.
 		pooled: map[string]poolCounters{
 			"index.db": {count: -4, waited: -2 * time.Second},
 		},
-		claim: func(context.Context) (bool, error) { return false, nil },
+		claim: func(context.Context, statelog.PartitionID) (bool, error) { return false, nil },
 	}
 	measured := func() (poolWaits uint64, holds bool) {
 		for _, snapshot := range recorder.Read() {

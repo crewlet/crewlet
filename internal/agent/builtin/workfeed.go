@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -139,7 +140,7 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// A POSITION FIRST, because it is unambiguous and a timestamp is
 		// not — and a caller resuming a page holds a position.
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		if at, err := tracker.ParseLogPosition(since); err == nil {
+		if at, err := statelog.ParsePosition(since); err == nil {
 			q.Since = at
 		} else if when, err := time.Parse(time.RFC3339, since); err == nil {
 			q.SinceAt = when
@@ -153,7 +154,7 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return readFailure(tracker.TaskActivityTool, err), nil
 	}
-	return jsonResult(answer)
+	return jsonResult(activityView{ActivityAnswer: answer, Unanswered: answer.Coverage.Notice()})
 }
 
 type myWork struct{ deps WorkDeps }
@@ -210,5 +211,5 @@ func (t *myWork) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return readFailure(tracker.MyWorkTool, err), nil
 	}
-	return jsonResult(out)
+	return jsonResult(myWorkView{MyWork: out, Unanswered: out.Coverage.Notice()})
 }

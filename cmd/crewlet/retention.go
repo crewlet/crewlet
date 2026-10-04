@@ -223,6 +223,11 @@ type retentionNode struct {
 }
 
 type retentionEviction struct {
+	// Kind is which gate the tombstone is — [statelog.EvictionKind] — and
+	// decides what the row calls it: a node that released its logs as it
+	// left said so itself, and "evicted by" it would send an operator after
+	// a gesture nobody made.
+	Kind        string    `json:"kind"`
 	By          string    `json:"by"`
 	At          time.Time `json:"at"`
 	EffectiveAt time.Time `json:"effective_at"`
@@ -268,10 +273,15 @@ func (d retentionNodeSeat) lagCell() string {
 
 // retentionSnapshot is one node's artefact, or its absence with the reason.
 type retentionSnapshot struct {
-	NodeID string    `json:"node_id"`
-	At     time.Time `json:"at"`
-	Bytes  int64     `json:"bytes"`
-	Skip   string    `json:"skip"`
+	NodeID string `json:"node_id"`
+
+	// Partition is the partition the artefact is a copy of, empty under
+	// layout 0, whose one artefact is the whole estate's.
+	Partition string `json:"partition"`
+
+	At    time.Time `json:"at"`
+	Bytes int64     `json:"bytes"`
+	Skip  string    `json:"skip"`
 
 	// Domains is the artefact's position KEYED BY DOMAIN.
 	Domains map[string]uint64 `json:"domains"`
@@ -604,7 +614,14 @@ func retentionSnapshots(args []string, stdout, stderr io.Writer) error {
 		if len(positions) == 0 {
 			positions = []string{"-"}
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", s.NodeID,
+		// A PARTITION'S ARTEFACT IS NAMED BESIDE ITS NODE: under a divided
+		// layout a node donates each partition it holds separately, and two
+		// rows naming only the node would read as one artefact twice.
+		node := s.NodeID
+		if s.Partition != "" {
+			node += " " + s.Partition
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", node,
 			strings.Join(positions, " / "), age, humanBytes(s.Bytes), state)
 	}
 	return w.Flush()
@@ -744,14 +761,20 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 		}
 		// A REFUSAL NAMES WHAT TO DO AS ACTIONS, which this command renders
 		// as the flags it has: the node's own sentence names no surface's
-		// controls, because the dashboard renders the same refusal.
+		// controls, because the dashboard renders the same refusal. It is
+		// the node's JUDGEMENT of the gesture, a 503 included
+		// ([nodeRefusal.asJudgement]), and what an action means can turn on
+		// which refusal it came with ([gateAdviceContext.refusal]).
 		var refused *nodeRefusal
 		if errors.As(err, &refused) {
+			refused = refused.asJudgement()
 			advice := gateAdvice(refused.Actions, gateAdviceContext{
-				again: again, forced: forced, readmit: !evict, node: node})
+				again: again, forced: forced, readmit: !evict, node: node,
+				refusal: refused.Code})
 			if len(advice) > 0 {
-				return fmt.Errorf("%w\n  %s", err, strings.Join(advice, "\n  "))
+				return fmt.Errorf("%w\n  %s", refused, strings.Join(advice, "\n  "))
 			}
+			return refused
 		}
 		return err
 	}
@@ -761,29 +784,37 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 	// operation id, never a fresh one.
 	pending, retry, keep := false, false, false
 	for _, d := range answer.Domains {
+		// WHO WROTE IT, where that is not the node asked: a log of a
+		// partition it does not serve, written for it by a node that does
+		// — and the outcome and the hint below are that node's.
+		by, who := "", "this node"
+		if d.Writer != "" {
+			by, who = " (written by "+d.Writer+")", "node "+d.Writer
+		}
 		switch {
 		case d.Outcome == string(statelog.OutcomeUnknown) && d.Unvouched:
 			// NOT FOR THIS NODE TO SETTLE: its line below sends the
 			// gesture elsewhere, because asking this node again answers
 			// the same way every time.
-			fmt.Fprintf(stdout, "  %s: unknown — this node cannot tell whether "+
-				"the record is on the log\n", d.Domain)
+			fmt.Fprintf(stdout, "  %s: unknown — %s cannot tell whether "+
+				"the record is on the log\n", d.Domain, who)
 		case d.Outcome == string(statelog.OutcomeUnknown):
 			// NO POSITION, which is the whole content of unknown: printed
 			// as "at 0" it read as a record landed at the log's origin.
 			fmt.Fprintf(stdout, "  %s: unknown — the record may or may not be "+
-				"on the log\n", d.Domain)
+				"on the log%s\n", d.Domain, by)
 		case d.Outcome != "" && d.Position != nil:
-			fmt.Fprintf(stdout, "  %s: %s at %s %d\n", d.Domain, d.Outcome,
-				d.Position.Stream, d.Position.Seq)
+			fmt.Fprintf(stdout, "  %s: %s at %s %d%s\n", d.Domain, d.Outcome,
+				d.Position.Stream, d.Position.Seq, by)
 			pending = pending || d.Outcome == string(statelog.OutcomePending)
 		case d.Outcome != "":
-			fmt.Fprintf(stdout, "  %s: %s\n", d.Domain, d.Outcome)
+			fmt.Fprintf(stdout, "  %s: %s%s\n", d.Domain, d.Outcome, by)
 			pending = pending || d.Outcome == string(statelog.OutcomePending)
 		case d.Reason != "":
-			fmt.Fprintf(stdout, "  %s: not written (%s) — %s\n", d.Domain, d.Reason, d.Error)
+			fmt.Fprintf(stdout, "  %s: not written (%s)%s — %s\n", d.Domain, d.Reason,
+				by, d.Error)
 		default:
-			fmt.Fprintf(stdout, "  %s: no outcome — %s\n", d.Domain, d.Error)
+			fmt.Fprintf(stdout, "  %s: no outcome%s — %s\n", d.Domain, by, d.Error)
 		}
 		// WHAT TO DO ABOUT A LOG THE GESTURE DID NOT FINISH: the node's
 		// sentence, then its actions as this command's own flags — and
@@ -880,10 +911,15 @@ type gateDomain struct {
 	OpID    string `json:"op_id"`
 	Outcome string `json:"outcome"`
 
-	// Unvouched marks an `unknown` this node cannot settle: its operation
-	// ledger may have lost the row the operation needs, so the same
-	// gesture through it answers the same way every time.
+	// Unvouched marks an `unknown` the writing node cannot settle: its
+	// operation ledger may have lost the row the operation needs, so the
+	// same gesture through it answers the same way every time.
 	Unvouched bool `json:"unvouched"`
+
+	// Writer is the node that wrote this log's record for the gesture
+	// when it is not the node asked — one serving the log's partition —
+	// and empty where the node asked wrote it.
+	Writer string `json:"writer"`
 
 	// Position is ABSENT for an unknown outcome, and a pointer so that
 	// absence is observable rather than a zero position that reads as a
@@ -917,6 +953,12 @@ type gateAdviceContext struct {
 	readmit bool
 	node    string
 	stream  string
+
+	// refusal is the code of the refusal the actions came with — empty
+	// for a log's or the map's line under a 200 — because one action
+	// names a different thing to wait for under each refusal that sends
+	// it ([waitAdvice]).
+	refusal string
 
 	// perLog is a line under one log of a 200, where the same gesture
 	// again is said once below for every log it finishes rather than on
@@ -960,32 +1002,57 @@ func gateAdvice(actions []string, c gateAdviceContext) []string {
 			out = append(out, "crewlet retention set-capacity "+c.stream+
 				" <bytes> -confirm <bytes>, then run this again with "+c.again)
 		case statelog.GateWait:
-			if c.readmit {
-				out = append(out, "its SEQ in `crewlet retention status`, at the "+
-					"domain's own GEN, says when it has caught up, and `crewlet "+
-					"retention snapshots` whether a peer can donate one; then run this "+
-					"again")
-			} else {
-				out = append(out, "its LIVE column in `crewlet retention status` reads "+
-					"no once the lease has lapsed; then run this again")
+			if line := waitAdvice(c.refusal); line != "" {
+				out = append(out, line)
 			}
 		}
 	}
 	return out
 }
 
+// waitAdvice is where to watch what a refusal's `wait` waits on — keyed on the
+// REFUSAL, never on the verb, because four refusals send it and each waits on
+// something else: an eviction's on the node's lease lapsing, a readmission's on
+// the node catching up, an unjudged readmission's on a partition being served
+// again, and either gesture's `not_publishing` on the fleet leaving a capacity
+// window. Keyed on the verb, an unjudged readmission was told to watch the
+// node catch up — a number that had already caught up, under a hint saying the
+// partition was what it waited on — and a gesture refused `not_publishing` to
+// watch a lease or a position that had nothing to do with it.
+//
+// Nothing for a refusal this build does not know: the node's own hint above
+// the line still says what it waits on, and a guess here would contradict it.
+func waitAdvice(refusal string) string {
+	switch refusal {
+	case "eviction_refused":
+		return "its LIVE column in `crewlet retention status` reads no once the " +
+			"lease has lapsed; then run this again"
+	case "readmission_refused":
+		return "its SEQ in `crewlet retention status`, at the domain's own GEN, " +
+			"says when it has caught up, and `crewlet retention snapshots` whether " +
+			"a peer can donate one; then run this again"
+	case "readmission_unjudged":
+		return "the node named above did not answer for the log: once a data " +
+			"node whose copy serves it is back, run this again"
+	case "not_publishing":
+		return "`crewlet retention status` leads with the capacity window while it " +
+			"is open; once the fleet has been restarted into normal mode, run this " +
+			"again"
+	}
+	return ""
+}
+
 // gateRequestTimeout is how long `retention evict` and `readmit` wait for the
 // node's answer.
 //
-// SEVENTY-FIVE SECONDS: the node bounds a gesture at a minute from its first
-// record to its last answer (engine.GateBudget), and the judgement before it
-// and the round trip around it are a coordination read and a request. Waiting
-// past the node's own bound is what makes its answer — every log's outcome and
-// what to do about the ones it could not finish — reach the operator rather
-// than a client timeout that knows none of it. The ten seconds every other
-// verb waits was two of the five-second resolutions a gesture legitimately
-// makes, back to back.
-const gateRequestTimeout = 75 * time.Second
+// TWO MINUTES: the node answers one gesture within engine.GateAnswerBudget — a
+// minute and a half: half a minute to judge it and a minute to write every
+// log — and the rest is the request's round trip. Waiting past the node's own bound is what makes its
+// answer — every log's outcome and what to do about the ones it could not
+// finish — reach the operator rather than a client timeout that knows none of
+// it. The ten seconds every other verb waits was two of the five-second
+// resolutions a gesture legitimately makes, back to back.
+const gateRequestTimeout = 2 * time.Minute
 
 // evictionFenceWindow is how long an evicted node stays counted, as this
 // command says it.
@@ -1068,15 +1135,18 @@ func yesNo(v bool) string {
 // set, and the row is how an operator finds the block's cause.
 func noteOrStamp(n retentionNode) string {
 	if n.Evicted != nil {
+		gone := "evicted by " + n.Evicted.By
+		if statelog.EvictionKind(n.Evicted.Kind) == statelog.EvictionKindRelease {
+			gone = "left, releasing its logs itself"
+		}
 		if !n.Evicted.Effective {
 			// INSIDE THE FENCE WINDOW the node is still counted, and
 			// an operator reading an unchanged floor beside a bare
 			// "evicted" runs the gesture again.
-			return fmt.Sprintf("evicted by %s, still counted until %s",
-				n.Evicted.By, stampOrDash(n.Evicted.EffectiveAt))
+			return fmt.Sprintf("%s, still counted until %s", gone,
+				stampOrDash(n.Evicted.EffectiveAt))
 		}
-		return fmt.Sprintf("evicted by %s, effective %s", n.Evicted.By,
-			stampOrDash(n.Evicted.EffectiveAt))
+		return fmt.Sprintf("%s, effective %s", gone, stampOrDash(n.Evicted.EffectiveAt))
 	}
 	if n.At.IsZero() {
 		return "no position yet"

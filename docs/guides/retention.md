@@ -57,6 +57,20 @@ never a horizon.
 | `feed_ack_floor` | how far **that log's own** wake feed has acknowledged |
 | `age_floor` | the newest sequence older than `min_age` |
 
+The **counted set** of a log is every node the trim waits for there: each node
+that has reported a position on the log, and each **live data node** even
+before its first report, when it counts at position zero because it is about
+to replay what the trim would otherwise delete. The live data nodes are listed
+afresh from the presence leases on every tick rather than read from a watched
+view, because a view up to a heartbeat old may miss a node that has just
+booted — the one node the trim must not pass. A node evicted from the log stops
+being counted about a minute after that record lands.
+
+**The estate's logs are trimmed by one node**: the holder of the trim duty,
+`worker:retention`. Only a data node that serves the estate may claim it.
+Every node still evaluates its own alarms on every tick, whatever duty it
+holds.
+
 `feed_ack_floor` is the acknowledgement floor of the durable consumer that each
 log's own change feed opens — the feed's **group** `crewlet-tracker-feed` on
 `CREWLET_TRACKER_LOG`, and its group `crewlet-pages-feed` on
@@ -253,6 +267,20 @@ peer's snapshot of the replicated estate, verify it, and adopt it wholesale. (A
 node that is only below the published trim floor, while the log still holds
 what it lacks, replays it instead and needs none of this.)
 
+**A snapshot is a copy of the replicated estate's file** — the estate's one
+partition, `estate.000` — and never of the node's own. It is taken on
+`snapshot_interval` and judged against the file's size for free space. A copy
+is kept whether or not the node may write the estate: an evicted machine,
+back with its files, keeps applying its logs and may hold
+the only copy a joiner can fetch. At every boot, until its copy is established,
+a node looks again every thirty seconds rather than an interval later. Its
+manifest names the partition and every log it carries: a joiner refuses an
+artefact naming another partition, or a log the estate does not carry, before
+a byte moves. A request that names no partition — from a build that predates
+the field — is answered as a request for the whole estate, which is the only
+thing that build can mean, so the two builds donate to each other through a
+rolling upgrade. Artefacts live in `store.snapshot_dir` itself.
+
 ```
 crewlet retention snapshots
 ```
@@ -262,8 +290,10 @@ node**: "which of my machines can donate, and how old is what they hold" is a
 disk question, and it is the one you ask when a join has failed.
 
 **`SnapshotsKept = 1`.** With N donors the fleet is the redundancy — one per
-node across at least two nodes — and a recipient that fails a verification asks
-the next donor.
+data node across at least two — and a recipient that fails a verification asks
+the next donor. The trim's `snapshot_floor` asks for two of a log's counted
+nodes to hold an artefact; an estate held by one node is satisfied by
+construction, its recovery artefact being a backup.
 
 **The manifest names the position the file keeps.** The checkpoint commits with
 the rows, so the position inside the copy is the only one that describes it,
@@ -274,15 +304,20 @@ where they do not. A domain nobody has written to yet is at position zero in
 both, and adoptable.
 
 **On a single node the loop does not run at all.** It skips with the published
-reason `sole_node`, because a full copy every day buys an artefact no peer can
-fetch. A solo deployment's recovery artefact is `crewlet backup`.
+reason `sole_node` — the fleet counts no data node but this one — because a
+full copy every day buys an artefact no peer can fetch. A solo deployment's
+recovery artefact is `crewlet backup`. Who counts is the estate's counted set,
+as the trim counts it: every node whose row names one of its logs, and every
+live data node — so a node joining the fleet is counted before its first
+report, and the lone data node already there takes the artefact that joiner
+needs.
 
-Every skip is published on the node's own register row, so a failed join has an
-answer rather than a silence:
+Every skip is published on the node's own register row, so a failed join has
+an answer rather than a silence:
 
 | Reason | What it means |
 |---|---|
-| `sole_node` | fewer than two counted nodes; nothing to donate to |
+| `sole_node` | no counted node but this one; nothing to donate to. This node need not be counted itself: one an eviction removed, back with its files, still donates to a joiner beside it. Counted as the trim counts: every node whose row names one of the estate's logs, every live data node — so a joiner that has not published a row yet is somebody to donate to — less nodes evicted longer ago than the fence window. A view of the data nodes this node cannot confirm leaves them out, and the rows alone are counted |
 | `lagging` | this node is more than 1 000 records behind |
 | `unhydrated` | this node has not established a complete copy of some domain |
 | `deferred` | this node holds a record it cannot decode |
@@ -347,8 +382,9 @@ below the published floor whose missing records the log still holds reports
    opened. (A failed install deletes the artefact it fetched before it reopens
    the live file, so the reopen never competes with it for room.) At boot the
    node stops, naming both failures. While running it logs
-   `statelog_estate_lost` at error level, naming the file: the node serves no
-   tracker, page or search read and gives up its seats until the file opens.
+   `statelog_estate_lost` at error level, naming the file: the node answers no
+   tracker, page or search read from its own copy until the file opens — its
+   seats stay, and read the estate from the other data nodes.
    It reopens the file on its next heartbeat rather than on the doubling
    interval, because reopening its own file asks nobody — but it asks the
    fleet again only on that interval, and a join that fetched an artefact
@@ -369,6 +405,25 @@ below the published floor whose missing records the log still holds reports
    the path is a restore from `crewlet backup`, and the log has to still reach
    the artefact's position. `crewlet retention verify --restore` is what tells
    you in advance that it does.
+
+**A donor on a newer schema is refused before anything moves.** An artefact
+whose file carries a migration this node's binary does not have holds rows
+shaped by code the node does not run, so the node cannot take it — and the
+manifest lists the file's migrations, so the offer is refused from that list
+rather than fetched whole and refused once it arrives (the file is still held
+to its own list when it does). During a rolling upgrade that adds a migration,
+a node still on the older build adopts from a peer still on it too, or is
+upgraded first.
+
+**So is a donor whose rows hold a record this build cannot read.** Each log's
+entry in the manifest states the highest record version its rows were
+*applied* from — kept beside the checkpoint and raised in the transaction that
+applied each record — and a node whose build reads less refuses it, since it
+would arrive past a record it could never apply. A build that merely *reads* a
+newer version does not make its snapshots unadoptable: until something
+publishes a record at that version the rows hold none, and a node still on the
+older build adopts them. A checkpoint from before the rows kept this states
+the donor build's own version instead, as every manifest used to.
 
 **An adoption carries the operation ledger with it.** The ledger — the table
 that says which operations have already been applied — travels inside the
@@ -396,7 +451,8 @@ adopts a snapshot from a node in the new generation, **on its own**:
   which stops its applier before anything of the new generation is applied.
 - From then until the adoption lands it refuses that domain's reads and writes
   as `wrong_stream`, logs `statelog_generation_passed` naming both generations,
-  and gives up its seats — whether or not its own readings of the log look
+  and stops serving the estate — its seats stay, and read it from the
+  other data nodes — whether or not its own readings of the log look
   wrong. On a broker restored from an older copy, a node whose checkpoint was
   below the restored end sees nothing wrong at all, which is why the fleet's
   generation is what decides it rather than the log.
@@ -482,8 +538,12 @@ It is also what stops an absent node's position counting anywhere else: an
 evicted node's row — and any trim floor it published — counts toward neither
 the generation the fleet is on nor a reanchor's guards, which is how a fleet
 stranded by a node that re-anchored and then vanished is released ([a node a
-peer re-anchored past](#a-node-a-peer-re-anchored-past)). The row itself stays:
-a readmission is judged by it.
+peer re-anchored past](#a-node-a-peer-re-anchored-past)). And it is what
+releases the [semantic index](../concepts/knowledge-system.md#the-first-stage-is-an-index-over-the-codes)
+a node on an older build holds back: the index is published only once every
+node applying the vector log reads its records, and a node evicted on both logs
+below is no longer one of them. The row itself stays: a readmission is judged
+by it.
 
 The trim counts nodes **per log**, so an eviction is a record on every log it
 counts nodes on: the tracker's log and the pages log. (The vector log counts
@@ -491,11 +551,26 @@ nothing — a node behind on it is a coverage figure — and gets none.) Every
 node running the state log can make the gesture, whichever backends the
 company uses: a company on an external tracker still runs both logs.
 
+**Each log is written by a node that serves the estate.** The node you run
+the gesture on writes the logs itself where its own copy serves; where it does
+not — its copy is out of service, or behind — it sends that log's record to
+another data node, which writes it under the same operation id on its behalf,
+so one gesture on any data node reaches every log. Such a log's line names the
+node that wrote it (`written by node-q`), and its hint is about that node: a
+refusal it gave — evicted, behind, a log rebuilt under it — is its standing,
+never the standing of the node you ran the gesture on. Each data node is given
+fifteen seconds before the next is asked; where none of them wrote the record
+the line says so, and the same `-op-id` finishes it once one does. A
+readmission is **judged** on every log it writes before any is written, and a
+log whose bound — the floor and first surviving sequence the writing node's
+fence holds a node to — no data node could give refuses the readmission rather
+than passing it unjudged: `readmission_unjudged`, with nothing written.
+
 It is **judged once, before anything is written**: a node that still holds a
 live presence lease is refused, because it is still reaching the fleet and
 almost certainly running — an eviction would drop everything it writes and
-move its seats. Stop it and wait for its `LIVE` column in `crewlet retention
-status` to read `no`; `-force` overrides the refusal for a node wedged in a way
+take its copy out of service. Stop it and wait for its `LIVE` column in
+`crewlet retention status` to read `no`; `-force` overrides the refusal for a node wedged in a way
 that still renews its lease. A refusal writes nothing to either log. If this
 node cannot read the presence leases at all — a coordination fault — the
 eviction is refused as one nobody could judge, and says so; `-force` takes it
@@ -505,14 +580,14 @@ could run under (the [`node.id`](../concepts/configuration.md#nodeid) rule:
 alphanumeric first, then letters, digits, `.`, `_` or `-`, at most 64
 characters) is refused before anything is judged.
 
-Past the judgement the record goes to each log in turn, and each answers on
-its own line with the [three-valued outcome](replication.md#a-write-has-three-outcomes)
+Past the judgement the record goes to every log at once, and each answers on
+its own line — the tracker's logs, then the pages logs — with the [three-valued outcome](replication.md#a-write-has-three-outcomes)
 every write has — `applied`, `pending` or `unknown` — or `not written` with the
 reason that stopped that log. A log that answered holds its record whatever
 the other did, and the gesture runs to its end **whatever happens to the
 command**: once the first record is about to be written the node finishes the
-gesture under its own one-minute budget, so a dropped connection or a client
-timeout does not leave the node evicted on one log and counted on the other.
+gesture under its own budget — a minute for the logs — so a dropped connection or a client timeout does not
+leave the node evicted on one log and counted on the other.
 
 When **not every log holds it**, the command exits non-zero, and under each
 log it did not finish prints what to do. Where running the gesture again can
@@ -547,14 +622,49 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   ordinary writes does not refuse an eviction at all.
 - `evicted` — the node you ran it on is itself evicted and writes nothing: run
   the gesture, under the same `-op-id`, through a node the fleet still counts
+  (`-url`). Where the answer names a **position**, the gesture's record on that
+  log landed and applies nowhere, and it holds the operation id there for the
+  log's duplicate window (two minutes) from when it landed: the same `-op-id`
+  sent sooner — through any node — is collapsed onto that record and answered
+  `evicted` again, so wait out the window first. A fresh id is not the way
+  round it, for the reason above.
+- `overtaken` or `abandoned` — the node you ran it on wrote that log's record
+  from rows a reanchor left behind — after a restored reanchor it had not yet
+  learned of, or in a generation a reanchor abandoned — so it landed and
+  applies nowhere. It holds the operation id for the log's duplicate window
+  (two minutes) from when it landed: once that has passed, run the gesture,
+  under the same `-op-id`, through a node on the log's current generation
   (`-url`).
+- **Another node's copy** — `evicted`, `overtaken` or `abandoned`,
+  with a hint naming another node as the writer of the record at that position.
+  The `-op-id` you sent had already been written under by that node — you ran
+  the gesture through it first, and by the time its record landed it had been
+  evicted, or it had written the record from
+  rows a reanchor left behind (overtaken or abandoned) — and the node you ran it
+  on this time had its append collapsed onto that node's record, which applies
+  nowhere. The refusal is about that node, not this one, which was counted and
+  served the estate when it tried: once the duplicate window (two minutes
+  from when the record landed) has passed, run the gesture again with the same
+  `-op-id` through the same node.
+- `not_holder` or `holding_unknown` — the node you ran it on stopped serving
+  the estate, or could not tell whether it serves it, between choosing to
+  write the log itself and writing it, so it wrote nothing there: run the
+  gesture again with the same `-op-id`, which sends the record to a data node
+  that serves the estate now.
+- **No node that serves the estate wrote it** — every data node the record
+  was sent to did not serve it, could not run it, or did not answer: run the
+  gesture again with the same `-op-id` once one does.
 - `unknown` that **this node cannot tell** — its operation ledger may have
   lost the row the operation needs, because the id was minted before the node
   adopted a peer's snapshot or before the ledger's sweep reached it. The node
   published nothing and answers the same gesture the same way every time, so
   it is not offered as a retry: run it, under the same `-op-id`, through a node
   whose ledger reaches back that far (`-url`). The dashboard says the same and
-  sends you to another node's dashboard.
+  sends you to another node's dashboard. Where the line names **another node**
+  as the writer, every data node that answered could not tell, and another
+  node would send the record to the same data nodes: run the same
+  gesture again, which asks them all again — one that did not answer this
+  time may vouch for it.
 - `wrong_stream` — the log was rebuilt under this node:
   [re-anchor it](#re-anchoring-a-recreated-or-restored-log) first, then run the
   gesture again with the same `-op-id`.
@@ -577,18 +687,20 @@ the flags it has. The dashboard renders the same actions as its own controls.
 
 ### From the dashboard
 
-**Settings › Backups & retention** offers **Evict…** and **Readmit…** on every
-node row, and the
-dialog behind them is the same gesture as the command, answered the same way:
-one row per log with its outcome and position — no position for `unknown` —
-or the reason it was not written and what to do.
+**Settings › Backups & retention** offers **Readmit…** on a node row its logs
+hold evicted and **Evict…** on every other, and the dialog behind them is the
+same gesture as the command, answered the same way: one row per log with its
+outcome and position — no position for `unknown` — or the reason it was not
+written and what to do.
 
 - The dialog **mints the operation id in the browser before its first
   request**, in the engine's grammar and on the browser's clock, and keeps it
-  for the whole gesture. So a request that timed out or dropped — the dialog
-  waits seventy-five seconds, past the minute the node allows a gesture — still
-  holds the id, and the dialog offers **Finish this gesture**, which sends the
-  same request under the same id and reads every log's answer. So does an
+  for the whole gesture. So a request that timed out or dropped still holds
+  the id — the dialog waits two minutes, past the minute and a half the node
+  takes at most to answer one: half a minute to judge it and a minute to write
+  every log — and the dialog
+  offers **Finish this gesture**, which sends the same request under the same
+  id and reads every log's answer. So does an
   answer the node did not write: a reverse proxy's 504 page, any status with no
   engine error code in it, or a 200 cut off part way through. Only a refusal
   carrying the engine's own code is read as one.
@@ -829,6 +941,51 @@ acknowledging from it is evidence that the process making the claim is not the
 one holding the request being retired — which is what a maintenance-mode
 acknowledgement could never establish about itself.
 
+A node in either maintenance mode **keeps its presence lease** — the process is
+running, and `crewlet fleet broker list`, the fleet view and the participant set
+below all read it — while it claims **no seat** and hands **no writer** to any
+surface: the operator's MCP endpoint offers only its search tool, the purge
+route is not served, the chart's projects and containers are applied at the
+next normal boot, and a stateless node's writes are answered "not here". Its
+reads are still served — every level but `linearizable`, which proves the
+log's end by appending a barrier to it and is refused
+[`maintenance`](consistency.md#the-thirteen-refusals). The operator gestures
+that append a record are refused the same way: an eviction and a readmission
+answer `409 not_publishing`, and a reanchor `409 reanchor_refused` naming the
+mode. None of them is what a window needs — a participant that will not
+acknowledge is excluded from the operation, not evicted from the logs — and
+each would move the usage the window is measuring.
+
+The [object store](../concepts/object-store.md)'s **collection and audit do
+not run** in either mode: the `object-collector` duty is a duty, and a node in
+a window claims none — and each pass first pins the estate with a
+`linearizable` read, which is exactly the barrier the mode refuses. They lose
+nothing they would have done: no write lands a file whose chunks a collection
+would free, and a pass that is due runs on the duty's next turn once a node is
+back in normal mode.
+
+### Who has to acknowledge
+
+The seal's proof is that every **broker** process restarted — a request the
+broker already queued is retired by the process holding it going away — and
+that every **publisher** was admitted. So the operation's participants are:
+
+- every node the fleet holds a position for;
+- every live node whose presence names the **`data`** role — or whose roles
+  cannot be read, since leaving out a node that may hold data could pass a seal
+  it should hold — because a data node publishes records;
+- every live **broker member**, whatever its roles, because its broker holds
+  queued requests whether or not the node keeps data;
+- every live node whose presence does not say what its broker is — a node
+  running a build older than the field — because leaving out a node that may
+  be a member could pass a seal it should hold, while waiting on one that is
+  not costs only an acknowledgement you can `exclude`;
+- and the coordinator itself.
+
+A **leaf** or a client of an external cluster that holds no data is not asked:
+its broker queues nothing, and its seats publish through a data node, which is.
+Each node's broker kind is on `crewlet fleet broker list`.
+
 ### What excludes a publisher
 
 On the default embedded topology, **nothing outside these processes can reach
@@ -898,8 +1055,8 @@ The engine detects this from the stream's own **creation instant**, which the
 broker reports and every applier compares at boot against the instant its
 checkpoint was committed under. On a difference the applier **stops** rather
 than resuming — the log line names both instants and this verb — the node's
-reads and writes refuse `wrong_stream` with that reason, its seats move to a
-peer, and `crewlet retention status` leads with `NOT READY <domain>:
+reads and writes refuse `wrong_stream` with that reason, it stops serving the
+estate — its seats read it from a peer — and `crewlet retention status` leads with `NOT READY <domain>:
 wrong_stream (recreated) — …` carrying the same sentence, both instants
 included (the dashboard shows the same refusal above the domain's block). A checkpoint past the log's end is caught as `wrong_stream` too,
 because a position the log has never reached is a position on another stream.
@@ -1059,7 +1216,8 @@ creation instant arrives in both answers. Nothing else can see it — a rebuilt
 stream comes back at generation 0 counting from 1, so once it has published
 past the node's checkpoint every sequence term reads healthy while the node
 applies a different history into rows keyed by the old one. The node logs
-`statelog_stream_recreated` with both instants, gives up its seats, and refuses
+`statelog_stream_recreated` with both instants, stops serving the estate —
+its seats stay, and read it from the other data nodes — and refuses
 every read and every write of that domain with `wrong_stream` until that stream
 is re-anchored, and it applies nothing from the rebuilt stream into rows keyed
 to the old one.
@@ -1206,7 +1364,8 @@ thing under test to test itself. It writes nothing to the live store and takes
 no lock on it.
 
 It prints what the artefact holds — when it was taken and by which node, each
-estate's size and migration count, and every domain's generation and sequence —
+store copy (its estate, as `crewlet backup` names it) with its size and migration count, and every domain's generation and
+sequence —
 and then **exits non-zero past its cadence**, which defaults to 30 days
 (`-cadence`). That default is derived rather than chosen: `min_age` is 7 days,
 so a restore path broken for longer than one replay window means the log can no
@@ -1236,6 +1395,30 @@ Three different things:
 ```
 crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>
 ```
+
+It removes every row the task's own records wrote, not only the task's: its
+comments and body revisions, every inbox notice, turn record and
+dependency-mirror row about it, and the content of every history row — a
+history row carries its record's whole change, so leaving it would leave the
+text the purge was run to destroy. One account survives, and it is the purge's
+own: its history row and the project lead's `purged` notice, which say that it
+happened, to which key, by whom and why. Beside it stays a **skeleton** of the
+task's history and nothing more: the rows that moved a count — its creation, a
+removal or restore, and each change of its status, assignee or project — each
+cut to its kind, its instant and those three changes, because the work flow
+answers the past by walking them backward and a purge takes the task out of
+that series only from the moment it happened.
+
+That is what a purge **this build writes** does (a task purge at record version
+13 — see [what a rolling upgrade blocks](replication.md#what-a-rolling-upgrade-blocks)).
+A purge written by an earlier build is applied, on every node and on every
+replay, exactly as that build applied it: the object rows go, and the task's
+history, notices, turn records and mirror rows stay, because every node that
+applied it at the time kept them and a node applying it differently would hold
+rows its peers do not. This build has no gesture that reaches them: the task is
+already gone, so purging it again is refused as already purged — only a retry
+of the purge that did it, under its own operation id, is answered, with that
+purge's outcome.
 
 The confirmation is the task's **key**, not its id: the id is already on the
 command line, so repeating it confirms nothing, while the key has to be looked
@@ -1340,13 +1523,29 @@ growing without bound and the forecast above does not apply to it.
 The read barriers add about **639 MB a year** to the log's throughput, which is
 inside the ceiling by a factor of five at year five. That figure is a term in
 the log's own size, so it is printed with its derivation rather than assumed:
-it comes from an assumed 12 500 linearizable reads a day.
+it comes from an assumed 125 linearizable reads a day per agent seat, which is
+12 500 for the reference company's 100 seats. The
+[`census_drift`](../reference/alarms.md) alarm holds every log to that
+assumption: a log is expected to take 125 reads a day per seat, divided across
+its domain's logs, plus what the engine reads on its own — the object store's
+collector, one in the fleet, pins the tracker's log 25 times a day (24
+collections and one audit), on each of its logs — and the alarm fires on the one furthest past twice its share.
+The rate is the log's, counted where every node applies it, and each barrier is
+counted in the hour it was **committed**: a node back from days away, or
+adopting a snapshot a day old, replays days of barriers in minutes, and they
+count toward the day they happened in rather than toward today.
 
 Two excursions are designed for and do not alarm:
 
 1. **A full re-embedding.** A width change republishes every vector, which at
-   year five bottoms the vector log's headroom at about 51 %. The alarm
-   threshold is 10 %, which is the first decile clear of it.
+   year five bottoms the vector log's headroom at about 51 % at the 16 GiB a
+   64 GiB volume asks for — about 43 % at the 13.8 GiB it is created with
+   once the one budget scales every log to fit the broker there — and at about
+   88 % at the 64 GiB a volume of about 290 GiB or more gets. The alarm threshold is
+   10 %, clear of each. The corpus is the company's whole history — about
+   17 MB per agent seat per year — so a larger or older company sets
+   `stream.tracker_vectors_max_bytes` at about twice it: 34 MB per agent seat
+   per year of history.
 2. **A bulk gesture.** One maximal bulk update is 16 seconds of applier
    occupancy on every peer; see [Replication](replication.md).
 
@@ -1388,7 +1587,7 @@ which:
 - **[Replication](replication.md)** — the two regimes, the write outcomes and
   what the design does not promise.
 - **[Read consistency](consistency.md)** — what a full log costs, and the
-  twelve refusals.
+  thirteen refusals.
 - **[Backups & restore](backup.md)** — the artefact and the runbook.
 - **[CLI reference](../reference/cli.md#crewlet-retention)** — every verb's
   flags and refusals.

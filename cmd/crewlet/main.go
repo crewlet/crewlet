@@ -39,6 +39,7 @@ import (
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -177,6 +178,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runRetention(rest, stdout, stderr)
 	case "work":
 		return runWork(rest, stdout, stderr)
+	case "objects":
+		return runObjects(rest, stdout, stderr)
+	case "fleet":
+		return runFleet(rest, stdout, stderr)
 	case "seats":
 		return runSeats(rest, stdout, stderr)
 	case "llm":
@@ -196,7 +201,7 @@ func usage(w io.Writer) {
 
 Usage:
   crewlet run [flags]         Run the engine (API, agents and workers by default)
-                              -roles ingress|seats|workers narrows what this node does
+                              -roles data|ingress|seats|workers narrows what this node does
   crewlet validate [flags]    Check both config tiers without starting anything
   crewlet schema [tier]       Print a tier's JSON Schema (company by default)
   crewlet migrate [config]    Apply pending schema migrations (-check reports only)
@@ -209,6 +214,11 @@ Usage:
   crewlet work <cmd>          The gestures on work items that belong to a person:
                               purge, which destroys a task and every row it
                               produced and which nothing undoes
+  crewlet objects status      Where the company's files are kept, and what the
+                              object store's collector last found missing
+  crewlet fleet broker <cmd>  The fleet broker's members, as the nodes advertise them
+                              and as its metadata group counts them: list, and
+                              remove a member that is gone for good
   crewlet seats <cmd>         Pause a seat (-stop also ends the turn it is on)
                               or resume it, as the person your token is bound to
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
@@ -1438,7 +1448,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// its box can reach. Gating the bridge on ingress as well took agent mode
 	// away from every node without that role, with the box launching and
 	// every one of its tool calls finding nothing listening.
-	if profile := boot.Node.Profile(nodeID); !profile.RunsIngress() {
+	if profile := boot.Profile(nodeID); !profile.RunsIngress() {
 		return serveBridgeOnly(ctx, boot, profile, e.Bridge(), nodeID, log)
 	}
 	// The config surface is the caller's, built before this function so a
@@ -1526,9 +1536,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	}
 	backups, err := backup.New(backup.Options{
 		Store: e.Backends().Store,
+		// WHAT THIS NODE HOLDS, from the engine that decides it — never
+		// the store's list of what happens to be open, which is short a
+		// partition while an adoption replaces it.
+		Partitions: e.HeldPartitions,
 		// Nil on a node that dialled an external NATS cluster, whose
 		// streams are backed up at the cluster. See internal/backup.
 		Conn: e.Backends().Conn(),
+		API:  e.Backends().API(),
 		// The trim-hold register. A backup is not a counted node, so
 		// without this the fleet's own trim can delete exactly the records
 		// the artefact's store-to-stream gap needs to be replayable, and
@@ -1543,6 +1558,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// raw field is empty on a node named through CREWLET_NODE_ID, and
 		// this id keys the node's trim hold and its announced backup point.
 		NodeID: nodeID,
+		// Every chunk the store copy names, read from whichever node
+		// holds it: this node holds only its share, and a backup of the
+		// company carries all of them.
+		Objects: &backup.Objects{Get: e.GetChunk, Stream: e.ObjectsStream()},
 		// THE PROCESS'S OWN RECORDER, never a second one: the copy's
 		// duration is a catalogued instrument, and two recorders in one
 		// process would be two sets of series for one fleet.
@@ -1609,6 +1628,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Company: func() *config.Company { return companyConfig(e) },
 			Coord:   e.Backends().Coord,
 			Plane:   e.Backends().Fleet,
+			// The object collector's last report, read from the store
+			// every node reads it from, for the fleet view's card.
+			Objects: e.Backends().Fleet,
 			Runs:    sqlledger.New(e.Backends().Store.SQL()),
 			// A SEAT'S MEMORY AND ITS CONVERSATION LEDGER, answered by
 			// the node HOLDING the seat. The ENGINE's reader, because
@@ -1707,6 +1729,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// backend.
 			Work:  nativeWork(e),
 			Pages: nativePages(e),
+			// A PROJECT'S FILES, the rows only: the bytes stream from
+			// the download route, which reads them through this node's
+			// object client.
+			Files: nativeFiles(e),
 			// WHO LINKS TO A PAGE, from this node's lexical index, which
 			// derives the links from the bodies it already reads. Untyped
 			// nil on a node with no index, which leaves the answer without
@@ -1755,10 +1781,19 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// the difference between an operator reading a procedure and an
 		// operator looking for a version mismatch.
 		Capacity: e,
+		// THE FLEET BROKER'S MEMBERSHIP: what every node advertises
+		// against what the metadata group counts, read through a member,
+		// and the removal of one gone for good through a member's system
+		// account — which is reachable only from inside a member.
+		FleetBroker: e.FleetBroker(),
 		// THE ONE OPERATION NOTHING UNDOES, and it had no caller at
 		// all until this line: no verb, no route, no tool. A company
 		// could not destroy a task under any circumstances.
 		Purger: nativePurger(e),
+		// A PROJECT'S FILE BYTES, streamed: the download and the upload
+		// read and write chunks through this node's object client and
+		// the rows through its tracker, attributed to the operator.
+		Files: api.EngineFiles(e),
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
@@ -2346,6 +2381,15 @@ func overrideNode(boot *config.Bootstrap, fs *flag.FlagSet,
 			return fmt.Errorf("-roles: %w", err)
 		}
 		boot.Node.Roles = names
+		// AND WHAT THE ROLES REQUIRE OF THE REST OF THE FILE. Whether a
+		// node holds data decides whether its store is deleted at boot
+		// and whether its broker joins as a leaf — so a flag that
+		// removed `data` from a node whose file keeps a durable store
+		// must be refused here, naming the file's setting, rather than
+		// booting a node that is neither.
+		if err := boot.ValidateRoles(); err != nil {
+			return fmt.Errorf("-roles %s: %w", strings.Join(names, ","), err)
+		}
 	}
 	if isFlagSet(fs, "api-host") {
 		boot.API.Host = apiHost
@@ -2498,17 +2542,27 @@ func appStateKeyMaterial(boot *config.Bootstrap) []string {
 	return out
 }
 
-// nativeWork and nativePages are this node's projections, as the read surface
-// wants them: an interface that is genuinely nil when the company runs the
-// vendor backends.
+// nativeWork and nativePages are the company's tracker and knowledge base as
+// the read surface wants them — through this node's estate router, as a seat's
+// tools reach them ([engine.OperatorWork]) — or an interface that is genuinely
+// nil when the company runs the vendor backends.
 //
 // THE CONVERSION IS THE POINT. Handing the read surface a typed nil pointer
 // would satisfy its `!= nil` registration check and then panic on the first
 // question — the exact shape [Engine.Knowledge]'s own doc warns about, in a
 // place where the check is a registration rather than a call.
 func nativeWork(e *engine.Engine) queries.WorkReader {
-	if r := e.Tracker(); r != nil {
-		return r
+	if w, ok := engine.OperatorWork(e); ok {
+		return w
+	}
+	return nil
+}
+
+// nativeFiles is a project's file rows, or nil — converted for [nativeWork]'s
+// reason.
+func nativeFiles(e *engine.Engine) queries.FileReader {
+	if w, ok := engine.OperatorWork(e); ok {
+		return w
 	}
 	return nil
 }
@@ -2538,26 +2592,28 @@ func nativeNodes(e *engine.Engine) api.NodeGate {
 // `As` is where that identity is bound, and it is a tracker concept the API
 // package deliberately does not import a concrete type for.
 func nativePurger(e *engine.Engine) api.TaskPurger {
-	w := e.TrackerWriter()
-	if w == nil {
+	as, ok := engine.OperatorWorkWriter(e)
+	if !ok {
 		return nil
 	}
-	return purgeAdapter{writer: w}
+	return purgeAdapter{as: as}
 }
 
-type purgeAdapter struct{ writer *tracker.Writer }
+type purgeAdapter struct {
+	as func(estate.Actor) estate.WorkWriter
+}
 
 func (p purgeAdapter) PurgeAs(ctx context.Context, operator, opID, id, project,
 	reason string) (tracker.WriteResult, error) {
 
-	return p.writer.As(operator, tracker.AuthorOperator,
-		tracker.Provenance{OperatorID: operator}).
+	return p.as(estate.Actor{Handle: operator, Kind: tracker.AuthorOperator,
+		Provenance: tracker.Provenance{OperatorID: operator}}).
 		PurgeTask(ctx, opID, id, project, reason)
 }
 
 func nativePages(e *engine.Engine) queries.PageReader {
-	if r := e.Pages(); r != nil {
-		return r
+	if p, ok := engine.OperatorPages(e); ok {
+		return p
 	}
 	return nil
 }
@@ -2613,15 +2669,16 @@ func sandboxTails(e *engine.Engine) queries.SandboxTails {
 	return nil
 }
 
-// nativeWorkSearch is this node's ranked item search, as the read surface
-// wants it — converted for [nativeWork]'s reason.
+// nativeWorkSearch is the ranked item search, as the read surface wants it —
+// through this node's estate router as a seat's search is
+// ([engine.WorkSearcher]), and converted for [nativeWork]'s reason.
 //
 // SEPARATE FROM [nativeWork], because the two are absent independently: a node
-// can hold the whole board and no lexical index at all, while it is building
-// one. Folding them into one seam would leave the board unregistered on a node
-// that can answer every question on it.
+// can hold the whole board and no lexical index at all. Folding them into one
+// seam would leave the board unregistered on a node that can answer every
+// question on it.
 func nativeWorkSearch(e *engine.Engine) queries.WorkSearcher {
-	if s := e.WorkSearch(); s != nil {
+	if s := engine.WorkSearcher(e); s != nil {
 		return s
 	}
 	return nil

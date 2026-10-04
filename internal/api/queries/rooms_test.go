@@ -102,11 +102,17 @@ func everySeam(t *testing.T) queries.Sources {
 		// THE SEARCH INDEX IS ITS OWN SEAM, so a node with a board and
 		// no index is a real shape this sweep can describe.
 		WorkSearch: emptyWork{},
+		// A PROJECT'S FILES, their own seam for the same reason.
+		Files: emptyFiles{},
 		// THE RETENTION DOCUMENT, which Settings › Nodes' replication
 		// panels read. A pass-through on the real surface, so the seam is
 		// a function rather than a reader — and this sweep is about which
 		// names exist, so what it answers is nothing.
 		Retention: func(context.Context) any { return nil },
+		// THE FLEET BROKER'S MEMBERSHIP, which every engine serves.
+		FleetBroker: emptyBroker{},
+		// THE ESTATE MAP, which every node with a coordination store
+		// serves: none stored, at the layout this build runs.
 		// THE GUARD'S POSTURE, which the API always supplies from the
 		// guard it mounts.
 		Access: &queries.AccessPosture{},
@@ -115,6 +121,24 @@ func everySeam(t *testing.T) queries.Sources {
 		// THE FLEET'S BACKUP REGISTER, which every node opens.
 		Backups: register{},
 	}
+}
+
+// emptyBroker is a fleet broker with nothing to list, on emptyWork's terms.
+type emptyBroker struct{}
+
+func (emptyBroker) List(context.Context) (engine.BrokerView, error) {
+	return engine.BrokerView{}, nil
+}
+
+// emptyFiles is a project with no files.
+type emptyFiles struct{}
+
+func (emptyFiles) Files(context.Context, tracker.FileQuery) (tracker.FileListing, error) {
+	return tracker.FileListing{}, nil
+}
+
+func (emptyFiles) File(context.Context, string, string, statelog.Freshness) (tracker.FileDetail, error) {
+	return tracker.FileDetail{}, tracker.ErrNoFile
 }
 
 // emptyWork and emptyPages are the native readers with nothing in them, on

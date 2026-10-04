@@ -26,7 +26,8 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
 		return statelogtest.Candidate{
-			Domain: pages.Domain{},
+			Domain:     pages.Domain{},
+			Generation: pages.GenerationRecord{},
 			// A NIL SKILL DETECTOR, which is the case the Divergent
 			// class exists for: this build has no parser wired, so it
 			// writes skill = 0 where a build with one writes 1, and
@@ -51,8 +52,18 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			// and a table for and no writer — so the trim never learned an
 			// evicted node had left this log.
 			EncodeGate: encodeSuiteGate,
+			// AND A NODE'S OWN RELEASE of the log as it leaves the log's
+			// partition, which the same table records as its own gate.
+			EncodeRelease: encodeSuiteRelease,
 		}
 	})
+}
+
+// encodeSuiteRelease is a node's release of this log, written by the node
+// itself as it leaves the log's partition.
+func encodeSuiteRelease(node string) ([]byte, error) {
+	return gateSuiteRecord(pages.EvictionSubject(node), pages.OpRelease, node,
+		"suite-release-"+node, gateSuiteEviction(node, false))
 }
 
 // encodeSuiteGate is the eviction record a peer's store publishes onto this
@@ -83,7 +94,7 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 // suiteWrite is one write through the knowledge base's own [pages.Store] —
 // the builder every write path in the domain shares, which is where the
 // framework's stamp is kept or lost.
-func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) error {
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.PartitionReader) error {
 	s, err := pages.NewStore(pages.Options{Publisher: pub, DB: db})
 	if err != nil {
 		return err
@@ -119,6 +130,23 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 				Writer: "suite-node",
 			},
 			Mutation: body, Actor: "suite", ActorKind: pages.AuthorOperator,
+		})
+	case "Op=release":
+		// A NODE'S RELEASE OF THE LOG: an eviction's bytes under its own op.
+		body, err := marshal(gateSuiteEviction("suite-node", false))
+		if err != nil {
+			return nil, err
+		}
+		return pages.Encode(pages.MutationRecord{
+			RecordEnvelope: pages.RecordEnvelope{
+				OpID:      "suite-carrying-" + field.Name,
+				Subject:   pages.EvictionSubject("suite-node"),
+				Op:        pages.OpRelease,
+				Scope:     pages.ScopeSet{Subject: true},
+				CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Gen: 1,
+				Writer: "suite-node",
+			},
+			Mutation: body, Actor: "suite-node", ActorKind: pages.AuthorOperator,
 		})
 	}
 	return nil, fmt.Errorf("no suite record carries %s — add a case that sets it "+
@@ -240,8 +268,9 @@ func TestThePagesGateReaderKeepsTheSharedRule(t *testing.T) {
 				Encode:  encodeSuiteRecord,
 				Kinds:   suiteKinds(),
 			},
-			Reader: func(db *store.DB) statelog.Gates { return pages.NewGates(db) },
-			Kind:   string(pages.KindPage),
+			Reader:       func(db store.PartitionReader) statelog.Gates { return pages.NewGates(db) },
+			Kind:         string(pages.KindPage),
+			SubjectKinds: kindNames(pages.ObjectKinds),
 			Create: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(pages.TitleSubject(suiteContainer, "Page "+id),
 					pages.OpCreate, writer, opID, pages.CreatePayload{
@@ -266,8 +295,23 @@ func TestThePagesGateReaderKeepsTheSharedRule(t *testing.T) {
 				return gateSuiteRecord(pages.EvictionSubject(node), pages.OpEviction,
 					writer, opID, gateSuiteEviction(node, true))
 			},
+			Release: func(node, opID string) ([]byte, error) {
+				return gateSuiteRecord(pages.EvictionSubject(node), pages.OpRelease,
+					node, opID, gateSuiteEviction(node, false))
+			},
 		}
 	})
+}
+
+// kindNames is every kind the knowledge base writes, as the strings its
+// envelope carries — the build's own list rather than one kept beside it, so a
+// kind added to the domain is a kind the gate family asks about.
+func kindNames(kinds []pages.ObjectKind) []string {
+	out := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		out = append(out, string(k))
+	}
+	return out
 }
 
 // gateSuiteRecord is one record the gate family applies, written by writer.

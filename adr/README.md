@@ -101,9 +101,9 @@ six false statements by the time anybody checked.
 | # | Decision | Enforced by |
 |---|---|---|
 | [0001](0001-one-broker-carries-the-stream-and-the-coordination-store.md) | One broker carries both the stream and the coordination store | `TestNoPackageBuildsASubjectByHand`, `queuetest` |
-| [0002](0002-the-stream-is-the-write-ahead-log.md) | The stream is the write-ahead log; the SQL estate is derived | `TestOnlyTheApplierWritesTheReplicatedEstate` |
+| [0002](0002-the-stream-is-the-write-ahead-log.md) | The stream is the write-ahead log; the SQL estate is derived | `TestOnlyTheApplierWritesThePartitions` |
 | [0003](0003-fleet-agreement-state-lives-in-coordination.md) | Fleet-agreement state lives in coordination, never a node's own file | `TestEveryNodeTableSaysWhoHasToAgreeOnIt` |
-| [0004](0004-a-node-keeps-two-database-files.md) | A node keeps two database files, and nothing spans them | `TestNoStatementNamesBothEstates` |
+| [0004](0004-a-node-keeps-two-database-files.md) | A node keeps two database files, and nothing spans them | `TestNoStatementSpansTwoFiles` |
 | [0005](0005-ownership-is-three-valued.md) | "Do I hold this?" has three answers, never two | the `(value, error)` signature |
 | [0006](0006-event-evolution-is-additive-only.md) | Event evolution is additive-only and unknown types round-trip | `TestAnUnknownTypesLargeIntegersSurviveARoundTrip` |
 | [0007](0007-turso-is-the-only-store-driver.md) | Turso is the only store driver, and it bounds the release matrix | `TestTursoIsTheOnlyDriverInTheBinary` |
@@ -124,3 +124,8 @@ six false statements by the time anybody checked.
 | [0022](0022-a-turn-is-charged-to-one-work-item.md) | A turn is charged to one work item, per segment, and never split | `TestTaskSpendNeverExceedsTheRollup` |
 | [0023](0023-a-decision-is-a-structured-ask.md) | A decision is a structured ask, and the engine enforces only its shape, its answer and its promise | `TestADecisionRecordIsRetainedByABuildThatCannotReadIt`, `TestAChoiceMustNameAnOptionOfTheAskItAnswers`, `TestAnInformedAnswerOwesTheChatSurface` |
 | [0024](0024-the-dashboard-acts-as-the-person-its-token-is-bound-to.md) | The dashboard acts as the person its token is bound to, and nobody else acts through it | `TestAnActWriteRecordsTheTokenAsAuthorAndTheBoundSeat`, `TestAnUnboundOrAnonymousCallerCannotAct` |
+| [0025](0025-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md) | A node without data reaches the estate through a node that holds it | `TestASeatOnAStatelessNodeWritesThroughADataNode` |
+| [0026](0026-the-estate-names-an-object-and-a-store-keeps-its-bytes.md) | The estate names an object, and a store the fleet shares keeps its bytes | `TestEveryTableThatNamesAChunkIsDeclared` |
+| [0027](0027-a-deletion-from-the-shared-store-is-judged-under-the-chunks-lock.md) | A deletion from the shared store is judged under the chunk's lock | `TestAChunkReUsedDuringThePassIsKept`, `TestAnIncompleteEstateDeletesNothing`, `TestARePutWaitsForTheChunksLock`, `TestAFirstPutTakesNoLock` |
+| [0028](0028-the-semantic-first-stage-is-an-index.md) | The semantic first stage is an index | `TestIVFRecallMeetsTheFloorCurve`, `TestEveryHolderBuildsTheSameIndex`, `TestAPartialRepublicationStillFilesEveryRow`, `TestTheIndexWaitsForEveryReaderAndForTheLog` |
+| [0029](0029-a-derived-id-older-than-the-ledger-is-rebased.md) | A derived operation id older than the ledger is rebased, by every attempt, onto an instant the fleet records | `TestAnAttemptRebasesOnlyPastTheHorizon`, `TestALaterAttemptIsJudgedAtItsOwnClock`, `TestALaterAttemptInheritsTheRebaseWhileItCan`, `TestADispatchPastTheHorizonMintsAtItsAttempt`, `TestAResumePastTheHorizonMintsAtItsAttemptOrItsHalfsRebase`, `TestTheRetentionsOutlastWhatTheyCover` |

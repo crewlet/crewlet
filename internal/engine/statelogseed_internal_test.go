@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -50,7 +51,7 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
 	s := e.native.Load().log
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 
 	// THE TRIM IS QUIESCED FIRST, because it is the other writer of the
 	// floor this case forges. `PutFloor` replaces a domain's floor
@@ -62,7 +63,7 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 	e.stopRetention()
 
 	name := tracker.Domain{}.Name()
-	stream := tracker.Domain{}.Stream().Name
+	stream := estateSpec(tracker.Domain{}).Name
 
 	// THE FLEET HAS RE-ANCHORED: an operator moved it to generation 3, and
 	// the trim has published a floor there.
@@ -75,7 +76,7 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 
 	// AND THIS NODE HOLDS NO CHECKPOINT AT ALL — a machine added to the
 	// company, or one whose replicated estate was lost and rebuilt.
-	if err := s.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(s.db).Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`DELETE FROM statelog_cursor WHERE stream = ?`, stream)
 		return err

@@ -28,8 +28,9 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
 		return statelogtest.Candidate{
-			Domain:  tracker.Domain{},
-			Applier: tracker.NewApplier("suite-node"),
+			Domain:     tracker.Domain{},
+			Generation: tracker.GenerationRecord{},
+			Applier:    tracker.NewApplier("suite-node"),
 			// Migrate is nil: the tracker's tables ship in the
 			// replicated estate's own migration, so a fresh store
 			// already has them. A domain that created its tables from
@@ -46,13 +47,21 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 			// fields built through the writer's own encoder — which is
 			// what proves each row's path is where that field is
 			// actually written.
-			Fields:     tracker.VersionedFields(),
-			Carrying:   carryingSuiteField,
-			Rows:       tracker.NewRows,
-			Write:      suiteWrite,
-			EncodeGate: encodeSuiteGate,
+			Fields:        tracker.VersionedFields(),
+			Carrying:      carryingSuiteField,
+			Rows:          tracker.NewRows,
+			Write:         suiteWrite,
+			EncodeGate:    encodeSuiteGate,
+			EncodeRelease: encodeSuiteRelease,
 		}
 	})
+}
+
+// encodeSuiteRelease is a node's release of this log, written by the node
+// itself as it leaves the log's partition.
+func encodeSuiteRelease(node string) ([]byte, error) {
+	return gateSuiteRecord(tracker.EvictionSubject(node), tracker.OpRelease,
+		node, "suite-release-"+node, gateSuiteEviction(node, false))
 }
 
 // carryingSuiteField builds a valid record carrying exactly one versioned
@@ -90,7 +99,7 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 		body, err := json.Marshal(tracker.Person{
 			V: tracker.DocumentVersion, Handle: "suite-person",
 			SeenThrough: tracker.Position{
-				Stream: tracker.Domain{}.Stream().Name, Generation: 1, Seq: 2,
+				Stream: statelog.EstateStream(tracker.Domain{}).Name, Generation: 1, Seq: 2,
 			},
 			UpdatedAt: at,
 		})
@@ -256,6 +265,74 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 			Kind: tracker.ChangeProjectUpdated, Mutation: body,
 			Actor: "lead", ActorKind: tracker.AuthorAgent,
 		}.Encode()
+	case "Subject.Kind=file":
+		// A FILE WRITTEN INTO A PROJECT: the kind is what an older build
+		// has no applier for, and every field of the payload is base.
+		body, err := json.Marshal(tracker.File{
+			V: tracker.DocumentVersion, Project: "SUITE", Path: "notes/plan.md",
+			Size: 0, CreatedAt: at, UpdatedAt: at,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.FileSubject("SUITE", "notes/plan.md"),
+				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+			},
+			Kind: tracker.ChangeFileWritten, Mutation: body,
+			Actor: "dev", ActorKind: tracker.AuthorAgent,
+		}.Encode()
+	case "RankOrder.Placements":
+		// A DRAG IN A PROJECT'S ORDER: the placements are what the apply
+		// writes into each moved task's document from this version.
+		body, err := json.Marshal(tracker.RankOrder{
+			V: tracker.DocumentVersion, Project: "SUITE",
+			Placements: []tracker.Placement{{Task: "suite-task", Rank: "a0"}},
+		})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.RankOrderSubject("SUITE"),
+				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+			},
+			Mutation: body, Actor: "dev", ActorKind: tracker.AuthorAgent,
+		}.Encode()
+	case "Op=purge":
+		// A PURGE: a gate whose apply changed, carrying nothing else new.
+		body, err := json.Marshal(map[string]any{
+			"v": tracker.GateRecordVersion, "reason": "filed by mistake",
+		})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
+				Op: tracker.OpPurge, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+			},
+			Kind: tracker.ChangePurged, Mutation: body,
+			Actor: "founder", ActorKind: tracker.AuthorHuman,
+		}.Encode()
+	case "Op=release":
+		// A NODE'S RELEASE OF THE LOG: an eviction's bytes under its own op.
+		body, err := json.Marshal(gateSuiteEviction("suite-node", false))
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.EvictionSubject("suite-node"),
+				Op: tracker.OpRelease, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true},
+			},
+			Mutation: body, Actor: "suite-node", ActorKind: tracker.AuthorSystem,
+		}.Encode()
 	default:
 		return nil, fmt.Errorf("the suite has no record carrying %s — add one "+
 			"beside the field's row", field.Name)
@@ -306,7 +383,7 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 // suiteWrite is one write through the tracker's own [tracker.Writer] — the
 // builder every write path in the domain shares, which is where the
 // framework's stamp is kept or lost.
-func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) error {
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.PartitionReader) error {
 	w, err := tracker.NewWriter(tracker.WriterDeps{
 		Publisher: pub, DB: db, NodeID: statelogtest.SuiteWriter,
 		Actor: "suite", ActorKind: tracker.AuthorSystem,
@@ -416,8 +493,9 @@ func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
 				Encode:  encodeSuiteRecord,
 				Kinds:   suiteKinds(),
 			},
-			Reader: func(db *store.DB) statelog.Gates { return tracker.NewGates(db) },
-			Kind:   string(tracker.KindTask),
+			Reader:       func(db store.PartitionReader) statelog.Gates { return tracker.NewGates(db) },
+			Kind:         string(tracker.KindTask),
+			SubjectKinds: kindNames(tracker.ObjectKinds),
 			Create: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(tracker.TaskSubject(id), tracker.OpCreate,
 					writer, opID, newTask(id))
@@ -440,8 +518,23 @@ func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
 				return gateSuiteRecord(tracker.EvictionSubject(node), tracker.OpEviction,
 					writer, opID, gateSuiteEviction(node, true))
 			},
+			Release: func(node, opID string) ([]byte, error) {
+				return gateSuiteRecord(tracker.EvictionSubject(node), tracker.OpRelease,
+					node, opID, gateSuiteEviction(node, false))
+			},
 		}
 	})
+}
+
+// kindNames is every kind the tracker writes, as the strings its envelope
+// carries — the build's own list rather than one kept beside it, so a kind
+// added to the domain is a kind the gate family asks about.
+func kindNames(kinds []tracker.ObjectKind) []string {
+	out := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		out = append(out, string(k))
+	}
+	return out
 }
 
 // gateSuiteRecord is one record the gate family applies, written by writer.

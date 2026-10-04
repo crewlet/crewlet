@@ -197,7 +197,7 @@ func fleet(t *testing.T, factory Factory) []*member {
 	queues := factory(t, Members)
 	out := make([]*member, 0, Members)
 	for i, q := range queues {
-		db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), fmt.Sprintf("n%d.db", i)), store.Options{})
+		db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), fmt.Sprintf("n%d.db", i)), store.Options{})
 		if err != nil {
 			t.Fatalf("open a store: %v", err)
 		}

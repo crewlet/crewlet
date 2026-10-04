@@ -657,6 +657,14 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
+	// WHAT THE RUN SAYS IT SPENT IS NEVER A REFUND — see [Result.usageFloored].
+	var floored bool
+	if result, floored = result.usageFloored(); floored {
+		log.WarnContext(ctx, "sandbox_usage_negative",
+			"turn_id", run.TurnID, "sandbox_id", run.SandboxID,
+			"detail", "the coding run reported a negative token count or cost; it "+
+				"is read as nothing spent rather than subtracted from the seat's budget")
+	}
 	if err := box.Pause(ctx); err != nil {
 		log.WarnContext(ctx, "sandbox_pause_failed", "turn_id", run.TurnID, "error", err.Error())
 	} else if err := c.pending.MarkBoxPaused(ctx, run.TurnID, c.now()); err != nil {

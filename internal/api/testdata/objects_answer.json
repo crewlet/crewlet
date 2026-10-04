@@ -1,0 +1,68 @@
+{
+  "fleet": {
+    "missing": {
+      "state": "reported",
+      "backend": "nats",
+      "node": "data-a",
+      "collect": {
+        "at": "2026-09-01T12:00:00Z",
+        "completed": true,
+        "listed": 1840,
+        "aged": 1702,
+        "deleted": 12,
+        "referenced": 1690,
+        "refreshed": 0
+      },
+      "audit": {
+        "at": "2026-09-01T09:00:00Z",
+        "completed": true,
+        "referenced": 1828,
+        "missing": 1,
+        "missing_chunks": [
+          "5e5ac53c4874f42e45cc0f5706a514a15a265da07c8f7cb75687b89c5480c21d"
+        ]
+      }
+    },
+    "not_yet": {
+      "state": "not_yet"
+    },
+    "reported": {
+      "state": "reported",
+      "backend": "s3:https://s3.example.com/files/acme/",
+      "node": "data-a",
+      "collect": {
+        "at": "2026-09-01T12:00:00Z",
+        "completed": true,
+        "listed": 1840,
+        "aged": 1702,
+        "deleted": 12,
+        "referenced": 1690,
+        "refreshed": 0
+      },
+      "audit": {
+        "at": "2026-09-01T09:00:00Z",
+        "completed": true,
+        "referenced": 1828,
+        "missing": 0
+      }
+    },
+    "skipped": {
+      "state": "reported",
+      "backend": "s3:https://s3.example.com/files/acme/",
+      "node": "data-a",
+      "collect": {
+        "at": "2026-09-01T12:00:00Z",
+        "completed": false,
+        "listed": 1840,
+        "aged": 1702,
+        "deleted": 0,
+        "referenced": 0,
+        "refreshed": 0,
+        "skipped": "a record this node could not apply may refer to chunks in the store"
+      }
+    },
+    "unavailable": {
+      "state": "unavailable"
+    }
+  }
+}

@@ -15,18 +15,13 @@ import (
 // openPinned is the fixture the cases below share: a store sized for n pinned
 // writers, with one probe table.
 //
-// IT RETURNS THE REPLICATED ESTATE, which is where a pin belongs: a pinned
-// writer is an applier's, an applier writes the replicated tables, and the
+// IT RETURNS THE PARTITION, which is where a pin belongs: a pinned writer is
+// an applier's, an applier writes a partition's tables, and the
 // node estate is sized for readers alone.
 func openPinned(t *testing.T, pins int) *store.DB {
 	t.Helper()
-	node, err := store.Open(t.Context(),
-		filepath.Join(t.TempDir(), "pinned.db"), store.Options{PinnedWriters: pins})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	node, db := openPartitioned(t, filepath.Join(t.TempDir(), "pinned.db"), store.Options{}, pins)
 	t.Cleanup(func() { _ = node.Close() })
-	db := node.Replicated()
 	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`CREATE TABLE crewlet_pin_probe (id INTEGER PRIMARY KEY, n INTEGER NOT NULL)`)
@@ -131,8 +126,8 @@ func TestAPinPastTheDeclaredCountIsRefused(t *testing.T) {
 
 	if _, err := db.Writer(t.Context()); err == nil {
 		t.Fatal("a second writer was pinned against a handle that declared one")
-	} else if !contains(err.Error(), "PinnedWriters") {
-		t.Errorf("refusal = %q, want it to name store.Options.PinnedWriters, "+
+	} else if !contains(err.Error(), "PartitionFile.Logs") {
+		t.Errorf("refusal = %q, want it to name store.PartitionFile.Logs, "+
 			"which is the field the caller has to change", err)
 	}
 
@@ -235,7 +230,7 @@ func TestWriterAndTxShareOneWritePath(t *testing.T) {
 // store being written report a total the page under it does not match.
 func TestReadSeesOneSnapshot(t *testing.T) {
 	t.Parallel()
-	db := openPinned(t, 0)
+	db := openPinned(t, 1)
 	ctx := t.Context()
 	if err := db.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,

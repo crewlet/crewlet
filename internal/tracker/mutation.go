@@ -51,7 +51,17 @@ import (
 // turn record's account of what the segment did: [TurnRecord.Summary],
 // [TurnRecord.Review], [TurnRecord.Tools] and [TurnRecord.FailedIn]. Version
 // 11 is the cross-project move's marker on a task patch: [TaskPatch.Moving].
-const RecordVersion = 11
+// Version 12 is the file KIND ([KindFile]): a build reading 11 knows every
+// field of a file record and not the kind, and would fault at the end of its
+// dispatch. Version 13 is a rank order and a purge whose APPLY changed — each
+// writes every OTHER task it changes into that task's document as well as its
+// rows, and a purge destroys what the purged task's own records wrote beside
+// its rows ([rewriteVersion]). Version 14 is a node's RELEASE of the log
+// ([OpRelease]), an eviction-kind record whose apply records the gate as the
+// node's own ([releaseVersion]). The purge's and the release's rows are the
+// two a GATE may carry ([statelog.VersionedField.Gate]): an older build halts
+// at either rather than apply it the old way.
+const RecordVersion = 14
 
 // baseRecordVersion is version 1, the base format: what every build there has
 // ever been reads, and what a record carrying no versioned field is stamped at.
@@ -81,12 +91,58 @@ const baseRecordVersion = 1
 // yields the same empty column wherever it is applied.
 const actorSeatVersion = 5
 
+// fileVersion is the version a file record is written at: the row on its
+// kind in [versionedFields].
+const fileVersion = 12
+
+// rewriteVersion is the version from which a record that changes ANOTHER task
+// — a rank order moving it, a purge taking itself out of it — writes that
+// task's DOCUMENT beside its rows ([rewriteOther]), and from which a purge
+// destroys the rows the purged task's own records wrote: its history, the
+// notices those routed, its turn records and its dependency mirror
+// ([forgetRecords], [purgeDeletes]). The two rows in [versionedFields] that
+// stamp a rank order and a purge at it are the rank order's placements and
+// the purge's op.
+//
+// # Why the rule is chosen by the record and not by the build
+//
+// The two records' APPLY changed and their shape did not: an older rank order
+// and an older purge carry exactly the bytes one at this version does. Applied
+// by whichever build happened to apply it, the same record would be applied
+// one way by a build from before the change and another by a build from after
+// it — in a rolling upgrade, and on every node that replays the log's older
+// records after adopting a snapshot — and the rows the identity claim says are
+// identical on every node ([Domain.ClaimsIdentity]) would differ for ever. So
+// the rule is a function of the record: a record below this version is applied
+// by the rule every build before it applied, for as long as one is in the log,
+// and a record at it by the new one. A node too old to read it RETAINS a rank
+// order (see the deferral contract in [statelog]) and HALTS at a purge, which
+// is a gate ([GateRecordVersion]) — the two answers a build has for a record it
+// cannot apply, and neither of them is applying it the old way.
+const rewriteVersion = 13
+
+// releaseVersion is the version a node's RELEASE of the log is written at
+// ([OpRelease]): the row on its op in [versionedFields].
+//
+// # Why a release raises the record where its shape does not
+//
+// A release carries exactly the bytes an eviction does, under the eviction's
+// own kind, so a build from before it would decode it without complaint and
+// apply it as an eviction: the same gate, and a row that names the wrong gate
+// — which every newer node holds as a release, so the rows the identity claim
+// says are identical would differ once that build migrated. Written at this
+// version, that build knows it for a gate by its kind ([Domain.InstallsGate])
+// and HALTS at it rather than apply it the old way — the answer
+// [GateRecordVersion] gives every change to what a gate's apply does.
+const releaseVersion = 14
+
 // keepsPlaceVersion is the record version from which a task write takes the
 // task's rank from its ROW rather than from its document.
 //
-// THE ORDER MOVES THE COLUMN AND NEVER THE DOCUMENT. After its create a task's
-// place is written by its project's order ([Applier.applyRankOrder]), which
-// sets `tracker_tasks.rank` and leaves the task's own document alone — so the
+// AN OLDER ORDER MOVED THE COLUMN AND NEVER THE DOCUMENT. After its create a
+// task's place is written by its project's order ([Applier.applyRankOrder]),
+// which below [rewriteVersion] sets `tracker_tasks.rank` and leaves the task's
+// own document alone — so for every such order still in the log the
 // document's `rank` is only the key the task was filed or last re-homed at. A
 // build reading 7 merges every task write into the DOCUMENT and upserts the
 // row from the result, which puts a dragged card back where it was filed the
@@ -230,6 +286,42 @@ var versionedFields = statelog.RecordFields{
 	// carry, and neither is a task.
 	{Name: "TaskPatch.Moving", Since: 11, Op: string(OpPatch),
 		Path: []string{"mutation", "moving"}},
+	// THE FILE KIND, at version 12 ([fileVersion]). Not a field but a KIND,
+	// and that is why the row names a value: a build reading 11 decodes a
+	// file record's every field and has no applier for its kind, so it
+	// would reach the end of its dispatch and fault — a node wedged at that
+	// position for as long as the record is in the log. Stamped here, it
+	// RETAINS the record instead, which holds back only that file's own
+	// address until the node upgrades. Every op, because a file is written
+	// under several.
+	{Name: "Subject.Kind=file", Since: fileVersion,
+		Path: []string{"subject", "kind"}, Equals: string(KindFile)},
+	// A RANK ORDER WHOSE APPLY CHANGED, at version 13 ([rewriteVersion]).
+	// Not a new key: an older rank order carries the same placements. What
+	// changed is the apply — it writes each moved task's document as well as
+	// its rank column — so a build reading 12 would apply a new rank order
+	// the old way and leave every moved task's document behind its peers'.
+	// Stamped here, that build retains it, holding back the project's order
+	// on that node until it upgrades. Scoped to the patch op, which is the
+	// one a rank order is published under; no other patch has placements.
+	{Name: "RankOrder.Placements", Since: rewriteVersion, Op: string(OpPatch),
+		Path: []string{"mutation", "placements"}},
+	// A PURGE WHOSE APPLY CHANGED, at version 13 ([rewriteVersion]), for
+	// the rank order's reason: a purge carries the bytes it always did, and
+	// its apply now also takes the purged task out of every other task's
+	// document and destroys what the task's own records wrote. A purge is a
+	// GATE, which an older build cannot defer and must not apply the old
+	// way, so this is one of the two rows a gate may carry: a build reading
+	// 12 HALTS at it ([GateRecordVersion]).
+	{Name: "Op=purge", Since: rewriteVersion, Op: string(OpPurge),
+		Path: []string{"op"}, Equals: string(OpPurge), Gate: true},
+	// A NODE'S RELEASE OF THE LOG, at version 14 ([releaseVersion]). An
+	// eviction's bytes under an op an older build does not know, whose
+	// apply records the gate as the node's own: the other row a gate may
+	// carry, so a build reading 13 halts at it rather than record it as an
+	// operator's eviction.
+	{Name: "Op=release", Since: releaseVersion, Op: string(OpRelease),
+		Path: []string{"op"}, Equals: string(OpRelease), Gate: true},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -282,14 +374,22 @@ const (
 	// OpEviction is a node's eviction or readmission.
 	OpEviction OpKind = "eviction"
 
+	// OpRelease is a node's RELEASE of the log: its own statement, as it
+	// leaves the log's partition, that nothing it publishes on the log
+	// afterwards applies anywhere. Published under the eviction's kind and
+	// subject, so it is a node gate and installs an apply gate as an
+	// eviction does, and a readmission lifts it the same way
+	// ([statelog.EvictionKindRelease]).
+	OpRelease OpKind = "release"
+
 	// OpBarrier is the read index's append, which writes nothing anywhere.
 	OpBarrier OpKind = "barrier"
 )
 
-// OpKinds are the nine, in the order they are documented.
+// OpKinds are the ten, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPatch, OpTombstone, OpRestore, OpPurge,
-	OpTurn, OpGeneration, OpEviction, OpBarrier,
+	OpTurn, OpGeneration, OpEviction, OpRelease, OpBarrier,
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -640,6 +740,17 @@ func subjectPath(s Subject, container string) string {
 		// records on every subject, so anything narrower would be a
 		// claim the record does not make.
 		return pathDomain
+	case KindFile:
+		// THE PROJECT IS IN THE SUBJECT, so a file's path is computed
+		// from it alone — under its project's container, which is what
+		// makes an archive block a write into it — and the token is the
+		// object. A token is lower-case hex and a task's id is a uuid,
+		// so the two never name one path.
+		project, token, ok := SplitFileID(s.ID)
+		if !ok {
+			return pathDomain
+		}
+		return ScopeTerm{Kind: TermObject, Container: project, ID: token}.Path()
 	default:
 		return ScopeTerm{Kind: TermObject, Container: container, ID: s.ID}.Path()
 	}
@@ -783,12 +894,14 @@ func (e RecordEnvelope) InstallsGate() bool {
 //
 // Each is pinned at a version every build reads for its own reason, and all
 // three reasons are what an older node does with a record it cannot read. A
-// gate it deferred would license every record above it, with no inverse that
-// repairs it; a barrier it retained is one more deferral row for every
-// linearizable read; a generation it retained is a transition it never
-// makes. So none of them may carry a versioned field, and
-// [MutationRecord.Encode] refuses one that does — a field such a record needs
-// is a field that belongs somewhere else.
+// gate it cannot defer — a deferred gate would license every record above it,
+// with no inverse that repairs it — so it halts there and leaves service; a
+// barrier it retained is one more deferral row for every linearizable read; a
+// generation it retained is a transition it never makes. So none of them may
+// carry a versioned field, and [MutationRecord.Encode] refuses one that does —
+// a field such a record needs is a field that belongs somewhere else. The one
+// exception is a gate's own APPLY changing ([statelog.VersionedField.Gate]),
+// where halting an older node is the only answer that is not a divergence.
 func (e RecordEnvelope) readByEveryBuild() bool {
 	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpGeneration
 }
@@ -1064,21 +1177,25 @@ func (r MutationRecord) encodeWith(fields statelog.RecordFields) ([]byte, error)
 	if err != nil {
 		return nil, fmt.Errorf("tracker: stamp the record on %s: %w", r.Subject, err)
 	}
+	refused := fields.Carried(string(r.Op), body)
+	if r.InstallsGate() {
+		refused = fields.Ungated(string(r.Op), body)
+	}
 	switch {
-	case r.readByEveryBuild() && minimum > baseRecordVersion:
+	case r.readByEveryBuild() && minimum > baseRecordVersion && len(refused) > 0:
 		// A GATE, A BARRIER OR A GENERATION NEVER CARRIES A VERSIONED
-		// FIELD, stamped or set — see [RecordEnvelope.readByEveryBuild].
-		// A gate's version is pinned at [GateRecordVersion] so that every
-		// build there will ever be can decode it, which is what lets an
-		// undecodable one be a stop rather than a deferral; a gate that
-		// needs a newer reader is a gate an older node defers, and a
-		// deferred gate licenses every record above it. A barrier or a
-		// generation an older node cannot read is one it retains.
+		// FIELD, stamped or set — see [RecordEnvelope.readByEveryBuild] —
+		// save the one kind a gate may: a change to what the gate's own
+		// apply does ([statelog.VersionedField.Gate]), at which an older
+		// node HALTS. Anything else a gate needs a newer reader for would
+		// take every older node out of service for a field rather than for
+		// a rule it cannot honour. A barrier or a generation an older node
+		// cannot read is one it retains.
 		return nil, fmt.Errorf("tracker: the %s record on %s must be readable "+
-			"by every build for ever — an older node defers a gate, and retains "+
+			"by every build for ever — an older node halts at a gate, and retains "+
 			"a barrier or a generation, that it cannot read — and it carries "+
 			"%s, so a field it needs belongs somewhere else",
-			r.Op, r.Subject, strings.Join(fields.Carried(string(r.Op), body), ", "))
+			r.Op, r.Subject, strings.Join(refused, ", "))
 	case r.V >= minimum:
 		// The common case, and the only one that marshals once: a record
 		// carrying nothing newer than its stamp.
@@ -1143,7 +1260,7 @@ func (r MutationRecord) marshal() ([]byte, error) {
 // kind has variants.
 type ChangeKind string
 
-// The twenty-seven, and each constant IS its wire value: a kind is written into
+// Each constant IS its wire value: a kind is written into
 // every history row and onto every notification the log carries, so these
 // spellings are stored data in every company already running this build.
 // A kind added here goes into [ChangeKinds] in the same change: that slice is
@@ -1192,14 +1309,22 @@ const (
 	// [ChangePrioritised] — the one person write that announces itself,
 	// because somebody else reordered your day.
 	ChangePersonUpdated ChangeKind = "person_updated"
+
+	// ChangeFileWritten is a file put at its path — created, or its content
+	// replaced — and ChangeFileRemoved is one taken away. Two kinds rather
+	// than one with a flag, for the task's own reason: "a report appeared"
+	// and "a report is gone" are two different lines in a project's
+	// account of itself.
+	ChangeFileWritten ChangeKind = "file_written"
+	ChangeFileRemoved ChangeKind = "file_removed"
 )
 
-// ChangeKinds are the twenty-seven.
+// ChangeKinds are every change kind this build writes.
 //
-// TWENTY-SEVEN AGAINST THIRTEEN SUBJECTS, and the gap is not an
-// inconsistency: five commit classes carry no notification at all — a turn, a
-// generation, an eviction, a rank move and a barrier — because a reposition is
-// not history and a barrier writes no rows whatever.
+// MORE KINDS THAN SUBJECTS, and some subjects have none: five commit classes
+// carry no notification at all — a turn, a generation, an eviction, a rank
+// move and a barrier — because a reposition is not history and a barrier
+// writes no rows whatever.
 var ChangeKinds = []ChangeKind{
 	ChangeCreated, ChangeFields, ChangeStatus, ChangeAssignee,
 	ChangeCollaborators, ChangeWatchers, ChangeTags, ChangeRelations,
@@ -1208,7 +1333,7 @@ var ChangeKinds = []ChangeKind{
 	ChangeCommentResolved, ChangeCommentRemoved, ChangeRemoved,
 	ChangeRestored, ChangePurged, ChangeProjectCreated, ChangeProjectUpdated,
 	ChangePolicyChanged, ChangeViewSaved, ChangeCatalogue,
-	ChangePrioritised, ChangePersonUpdated,
+	ChangePrioritised, ChangePersonUpdated, ChangeFileWritten, ChangeFileRemoved,
 }
 
 // Valid reports whether a change kind off the wire is one this build knows.

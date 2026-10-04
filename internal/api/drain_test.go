@@ -73,7 +73,7 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // WHETHER THIS FIXTURE MOUNTS THE ROUTE IS DECLARED, because the gate is
 // middleware and runs BEFORE the mux: it refuses on path and method alone, so
 // a refusal proves the rule whether or not a handler exists behind it. That is
-// what makes the refusal case above meaningful for all sixteen — and it is
+// what makes the refusal case above meaningful for all twenty — and it is
 // also what would let an entry naming a path nothing serves sit here for ever
 // looking exactly like one that works. [TestNothingIsRefusedForDrainingBeforeADrain]
 // holds the declaration in BOTH directions for that reason, in the idiom

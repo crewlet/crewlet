@@ -296,7 +296,7 @@ func TestANodeWithoutTheIngressRoleBindsNoListener(t *testing.T) {
 	boot := bootstrapFor(t, 0)
 	boot.API.Host = "127.0.0.1"
 	boot.API.Port = freePort(t)
-	boot.Node.Roles = []string{"seats", "workers"}
+	boot.Node.Roles = []string{"data", "seats", "workers"}
 
 	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, log)
 	if err != nil {
@@ -404,7 +404,7 @@ func TestANodeRunningNoSeatsBindsNoBridgeListener(t *testing.T) {
 		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
 	}))
 	boot := bootstrapFor(t, port)
-	boot.Node.Roles = []string{"workers"}
+	boot.Node.Roles = []string{"data", "workers"}
 
 	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, log)
 	if err != nil {
@@ -689,11 +689,12 @@ func TestRunFlagsOverrideTheBootstrap(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		args  []string
+		file  func(*config.Bootstrap)
 		check func(*testing.T, *config.Bootstrap)
 	}{
 		{
 			name: "roles narrow what this node does",
-			args: []string{"-roles", "ingress,workers"},
+			args: []string{"-roles", "data,ingress,workers"},
 			check: func(t *testing.T, b *config.Bootstrap) {
 				roles, err := b.Node.RoleSet()
 				if err != nil {
@@ -709,14 +710,33 @@ func TestRunFlagsOverrideTheBootstrap(t *testing.T) {
 		},
 		{
 			name: "whitespace and a trailing comma are not roles",
-			args: []string{"-roles", " seats , "},
+			args: []string{"-roles", " data , "},
 			check: func(t *testing.T, b *config.Bootstrap) {
 				roles, err := b.Node.RoleSet()
 				if err != nil {
 					t.Fatalf("RoleSet: %v", err)
 				}
-				if len(roles) != 1 || !roles.Has(placement.RoleSeats) {
-					t.Errorf("roles = %v, want only seats", roles)
+				if len(roles) != 1 || !roles.Has(placement.RoleData) {
+					t.Errorf("roles = %v, want only data", roles)
+				}
+			},
+		},
+		{
+			// A FILE THAT ALREADY SAYS STATELESS takes a stateless role
+			// set from the flag, which is how one image runs as either.
+			name: "a stateless file takes a stateless role set",
+			args: []string{"-roles", "seats"},
+			file: func(b *config.Bootstrap) {
+				b.Store.Scratch = true
+				b.Stream.Leaf.URLs = []string{"nats-leaf://data-a.example.com:7422"}
+			},
+			check: func(t *testing.T, b *config.Bootstrap) {
+				roles, err := b.Node.RoleSet()
+				if err != nil {
+					t.Fatalf("RoleSet: %v", err)
+				}
+				if roles.Has(placement.RoleData) || !roles.Has(placement.RoleSeats) {
+					t.Errorf("roles = %v, want seats alone", roles)
 				}
 			},
 		},
@@ -744,13 +764,32 @@ func TestRunFlagsOverrideTheBootstrap(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			boot := &config.Bootstrap{API: config.API{Host: "0.0.0.0", Port: 8080}}
-			boot.Node.Roles = []string{"seats"}
+			if tc.file != nil {
+				tc.file(boot)
+			}
 			fs, roles, host, port := parseOverrides(t, tc.args)
 			if err := overrideNode(boot, fs, roles, host, port); err != nil {
 				t.Fatalf("overrideNode: %v", err)
 			}
 			tc.check(t, boot)
 		})
+	}
+}
+
+// A FLAG CANNOT TAKE `data` AWAY FROM A NODE WHOSE FILE KEEPS A DURABLE STORE.
+// The flag is applied after the file validated, so without the role rules
+// re-run here it would boot a node whose roles say stateless on a store that
+// was never marked scratch — neither a data node nor a disposable one.
+func TestARolesFlagThatDropsDataFromADurableNodeIsRefused(t *testing.T) {
+	t.Parallel()
+	boot := &config.Bootstrap{API: config.API{Host: "0.0.0.0", Port: 8080}}
+	fs, roles, host, port := parseOverrides(t, []string{"-roles", "seats"})
+	err := overrideNode(boot, fs, roles, host, port)
+	if err == nil {
+		t.Fatal("-roles seats on a durable node was accepted")
+	}
+	if !strings.Contains(err.Error(), "store.scratch") {
+		t.Errorf("the refusal does not name the setting to change: %v", err)
 	}
 }
 

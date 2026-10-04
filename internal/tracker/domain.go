@@ -2,9 +2,9 @@ package tracker
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -44,16 +44,13 @@ const TrackerLogMaxBytes = 16 << 30
 // every message in the window costs memory on the server.
 const TrackerLogDuplicates = 2 * time.Minute
 
-// Stream is the mutation domain's log.
-func (Domain) Stream() statelog.StreamSpec {
-	return statelog.StreamSpec{
-		Name:          topics.TrackerLogStream,
-		Subjects:      []string{topics.TrackerLogWildcard},
-		SubjectPrefix: topics.TrackerLogPrefix,
-		MaxBytes:      TrackerLogMaxBytes,
-		Duplicates:    TrackerLogDuplicates,
-		Replay:        statelog.ReplayStrict,
-		// TWELVE OF THE FOURTEEN KINDS. A turn is additive and races
+// StreamShape is what every one of the mutation domain's logs is.
+func (Domain) StreamShape() statelog.StreamShape {
+	return statelog.StreamShape{
+		MaxBytes:   TrackerLogMaxBytes,
+		Duplicates: TrackerLogDuplicates,
+		Replay:     statelog.ReplayStrict,
+		// EVERY KIND BUT TWO. A turn is additive and races
 		// nobody; a barrier shares one subject across the whole company,
 		// so an expectation there would serialise every linearizable
 		// read behind every other one and write an anchor row per read
@@ -62,9 +59,10 @@ func (Domain) Stream() statelog.StreamSpec {
 	}
 }
 
-// arbitratedKinds is the twelve, derived from the enum rather than typed
-// again — a list written twice is a kind that arbitrates in one place and not
-// the other, which wedges that subject the first time a gate drops a record.
+// arbitratedKinds is every kind but those two, derived from the enum rather
+// than typed again — a list written twice is a kind that arbitrates in one
+// place and not the other, which wedges that subject the first time a gate
+// drops a record.
 func arbitratedKinds() []string {
 	out := make([]string, 0, len(ObjectKinds))
 	for _, k := range ObjectKinds {
@@ -73,6 +71,44 @@ func arbitratedKinds() []string {
 		}
 	}
 	return out
+}
+
+// PartitionOf is the partition a record belongs to: the one partition that
+// carries the tracker's log ([statelog.Layout.OnlyPartition]) — or, for the
+// framework's own records, none.
+//
+// # Unkeyed, so a layout that divides the tracker places nothing
+//
+// This build keys no tracker object to a partition, so the only layout it can
+// place a record in is one that gives the tracker a single log — layout 0's
+// estate. Under a layout that divides it, every record answers the zero
+// partition, which no log carries — "another partition" for every log there
+// is — rather than a guess putting a project's records on a log its
+// neighbours' reads never probe.
+//
+// # The framework's kinds belong to whichever log they are on
+//
+// A barrier, a node's eviction or readmission, and a reanchor's generation
+// record are appended to a log as the log's own — each of the domain's logs
+// has its own — so they name no partition: a partition named for one would
+// say every other log it is appended to holds it wrongly.
+func (Domain) PartitionOf(l statelog.Layout, env statelog.Envelope) (statelog.PartitionID, bool) {
+	switch ObjectKind(env.Kind) {
+	case KindBarrier, KindEviction, KindGeneration:
+		return statelog.PartitionID{}, false
+	}
+	return l.OnlyPartition(Domain{}.Name()), true
+}
+
+// ScopePartition is the partition a scope path lies in — where
+// [Domain.PartitionOf] places its object — or none for a path that names the
+// log itself: the domain term, and a family term, which names every object of
+// a family on whichever log the record is written to.
+func (Domain) ScopePartition(l statelog.Layout, path string) (statelog.PartitionID, bool) {
+	if path == pathDomain || strings.HasPrefix(path, pathDomain+statelog.ScopeSeparator+pathFamily+statelog.ScopeSeparator) {
+		return statelog.PartitionID{}, false
+	}
+	return l.OnlyPartition(Domain{}.Name()), true
 }
 
 // RecordVersion is the record shape this build reads.
@@ -107,13 +143,14 @@ func (Domain) InstallsGate(env statelog.Envelope) bool {
 	return ObjectKind(env.Kind).InstallsGate() || OpKind(env.Op) == OpPurge
 }
 
-// NodeGate reports a node's eviction or readmission — the one record a write
-// flagged [statelog.Request.NodeGate] may carry.
+// NodeGate reports a node's eviction, its release of the log or the
+// readmission of either — the one record a write flagged
+// [statelog.Request.NodeGate] may carry.
 //
-// BY ITS KIND, which nothing but a node's eviction or readmission is published
-// under — and deliberately not InstallsGate: the purge is this log's other
-// gate, and it is an ordinary write that the gate reserve and the fences a
-// node gate is excused must hold.
+// BY ITS KIND, which nothing but those three is published under — and
+// deliberately not InstallsGate: the purge is this log's other gate, and it is
+// an ordinary write that the gate reserve and the fences a node gate is
+// excused must hold.
 func (Domain) NodeGate(env statelog.Envelope) bool {
 	return ObjectKind(env.Kind) == KindEviction
 }
@@ -126,8 +163,14 @@ func (Domain) EvictionSubject(node string) statelog.Subject {
 	return wire(EvictionSubject(node))
 }
 
+// Releases reports a node's release of this log ([OpRelease]): the eviction
+// kind under the release op, from the envelope alone.
+func (Domain) Releases(env statelog.Envelope) bool {
+	return ObjectKind(env.Kind) == KindEviction && OpKind(env.Op) == OpRelease
+}
+
 // Evicts decodes one record from a node's eviction subject: true for an
-// eviction, false for the readmission that inverts one.
+// eviction or a release, false for the readmission that inverts either.
 func (Domain) Evicts(payload []byte) (bool, error) {
 	record, err := Decode(payload)
 	if err != nil {

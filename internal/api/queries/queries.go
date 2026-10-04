@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -368,15 +369,8 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operat
 // give up on a screen that would work in a few seconds. The reference had
 // promised a 503 for both.
 //
-// Two sources of "not yet", and each is its own subsystem's classification
-// rather than a second list here:
-//
-//   - a state-log read refusal whose code is retryable
-//     ([statelog.ReadRefusal.Retryable]). A node that is behind will catch
-//     up; a node holding a record it cannot decode will not, however long a
-//     caller waits, so that one stays a failure.
-//   - [coord.ErrUnavailable], the coordination contract's own third answer:
-//     the store could not be reached, which is neither "held" nor "absent".
+// Three sources of "not yet" ([transient]), and each is its own subsystem's
+// classification rather than a second list here.
 //
 // A refusal about the REQUEST is never reclassified, even when it wraps one of
 // those: the caller has to change what it asks, and "come back" would send the
@@ -390,8 +384,7 @@ func unavailableIfTransient(err error) error {
 		errors.Is(err, ErrUnauthorized):
 		return err
 	}
-	var refused *statelog.Refused
-	if errors.As(err, &refused) && refused.Code.Retryable() {
+	if transient(err) {
 		// WRAPPED, NOT REPLACED, so the refusal's own code, detail and
 		// derived hint survive for [RetryAfter] and for the log.
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
@@ -405,6 +398,32 @@ func unavailableIfTransient(err error) error {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return err
+}
+
+// transient reports a read nothing could serve YET:
+//
+//   - a state-log read refusal whose code is retryable
+//     ([statelog.ReadRefusal.Retryable]). A node that is behind will catch
+//     up; a node holding a record it cannot decode will not, however long a
+//     caller waits, so that one stays a failure.
+//   - [coord.ErrUnavailable], the coordination contract's own third answer:
+//     the store could not be reached, which is neither "held" nor "absent".
+//   - the estate router finding no copy to answer from: no holder serves the
+//     partition right now ([estate.ErrPartitionUnserved]) — no live node holds
+//     data, or none that does answers. The tracker and the knowledge base are
+//     read through the router, as a seat's tools read them, so a copy out of
+//     service or a peer restarting reaches this surface as this.
+//
+// ASKED BY THE ANSWERS as well as the registry, for the answers that read what
+// is left of a failure as a refusal of the request: handed one of these, they
+// told a caller to change a question nothing was wrong with.
+func transient(err error) bool {
+	var refused *statelog.Refused
+	if errors.As(err, &refused) && refused.Code.Retryable() {
+		return true
+	}
+	var unserved *estate.ErrPartitionUnserved
+	return errors.Is(err, coord.ErrUnavailable) || errors.As(err, &unserved)
 }
 
 // RequiresOperator reports whether a question needs one.

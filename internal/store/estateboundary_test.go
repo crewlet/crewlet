@@ -1,54 +1,63 @@
 package store_test
 
 import (
+	"context"
+	"database/sql"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// NO STATEMENT NAMES BOTH ESTATES.
+// NO STATEMENT SPANS TWO FILES.
 //
-// A node is two database FILES, and the two rules that makes true are that no
-// transaction spans them and no read joins across them. Both fail the same
-// way if they are broken: not with an error a caller can handle, but with a
-// driver refusing a table it cannot see, from a query nobody thought was
-// crossing a boundary — because in one file it was not.
+// A node is its own database file and one file per partition it holds, and
+// the two rules that makes true are that no transaction spans two of them and
+// no read joins across them. Both fail the same way if they are broken: not
+// with an error a caller can handle, but with a driver refusing a table it
+// cannot see, from a query nobody thought was crossing a boundary — because in
+// one file it was not.
 //
 // # What it walks
 //
 // Every non-test .go file under internal/ and cmd/, parsed with go/parser,
-// looking at *ast.BasicLit of kind STRING. A literal is a literal wherever it
-// sits, so a doc comment discussing `tracker_tasks` and `crewlet_events` in
-// one sentence — which several package docs legitimately do — is not one.
+// looking at every STRING the code composes — a literal, a concatenation, a
+// fmt.Sprintf format — rendered as the applier gate renders them
+// ([composedString]), with what it cannot resolve marked rather than dropped.
+// A comment is not a string, so a doc discussing `tracker_tasks` and
+// `crewlet_events` in one sentence — which several package docs legitimately
+// do — is not one.
 //
 // # What it looks for
 //
-// The table names are DERIVED from each estate's own embedded schema, so a
-// table added by a migration is covered by that migration and nothing else. A
-// literal that looks like SQL and names a table from BOTH estates is the
-// violation.
+// Two things. A literal that looks like SQL and names a table the node's own
+// schema declares AND one the partition schema declares — the table names are
+// DERIVED from each schema, so a table added by a migration is covered by that
+// migration and nothing else. And any ATTACH, which is the one way a statement
+// on one connection reaches a SECOND file, and so the one way it could join two
+// partitions: every partition carries the same table names, so no table name
+// can tell a statement that crossed from one partition into another from one
+// that did not, and the only statement that can cross is one that attaches.
 //
 // # Why the control strings are the load-bearing half
 //
-// A guard asserting an absence passes identically when the thing is absent
-// and when the guard has stopped working. That was acute when this was
-// written, because the replicated estate had no tables at all and the walk
-// could find nothing by construction; it now derives sixty of them, and the
-// controls are what keep the guarantee the same either way. They run the
-// matcher on strings whose verdict is known, so this is a test that can fail
-// today rather than one that starts working later and is trusted meanwhile.
-func TestNoStatementNamesBothEstates(t *testing.T) {
+// A guard asserting an absence passes identically when the thing is absent and
+// when the guard has stopped working. They run the matchers on strings whose
+// verdict is known, so this is a test that can fail today rather than one that
+// starts working later and is trusted meanwhile.
+func TestNoStatementSpansTwoFiles(t *testing.T) {
 	t.Parallel()
 
 	node := tablesIn(t, store.EstateNode)
@@ -56,21 +65,19 @@ func TestNoStatementNamesBothEstates(t *testing.T) {
 		t.Fatal("no tables were derived from the node estate's schema; the " +
 			"derivation no longer recognises the DDL it is meant to cover")
 	}
-	replicated := tablesIn(t, store.EstateReplicated)
+	partition := tablesIn(t, store.EstatePartition)
 
-	// The matcher, exercised on strings whose verdict is known. Both
+	// The matchers, exercised on strings whose verdict is known. Both
 	// estates are named explicitly here rather than taken from the schema,
-	// so these cases keep their meaning whatever either schema does next —
-	// including an estate emptied by a migration, which is the state this
-	// was written in.
+	// so these cases keep their meaning whatever either schema does next.
 	fakeNode := map[string]bool{"crewlet_events": true}
-	fakeReplicated := map[string]bool{"tracker_tasks": true}
+	fakePartition := map[string]bool{"tracker_tasks": true}
 	for _, positive := range []string{
 		`SELECT t.id FROM tracker_tasks t JOIN crewlet_events e ON e.id = t.turn_id`,
 		`INSERT INTO crewlet_events (id) SELECT id FROM tracker_tasks`,
 		`UPDATE tracker_tasks SET n = (SELECT count(*) FROM crewlet_events)`,
 	} {
-		if !bothEstates(positive, fakeNode, fakeReplicated) {
+		if !bothEstates(positive, fakeNode, fakePartition) {
 			t.Errorf("control: %q crosses the estate boundary and the matcher "+
 				"did not flag it", positive)
 		}
@@ -84,45 +91,112 @@ func TestNoStatementNamesBothEstates(t *testing.T) {
 		// A column that merely contains another table's name.
 		`SELECT tracker_tasks_seen FROM crewlet_events`,
 	} {
-		if bothEstates(negative, fakeNode, fakeReplicated) {
+		if bothEstates(negative, fakeNode, fakePartition) {
 			t.Errorf("control: %q does not cross the boundary but the matcher "+
 				"flagged it", negative)
 		}
 	}
+	for _, positive := range []string{
+		`ATTACH DATABASE 'l1-tracker.008.db' AS other`,
+		`attach '/data/crewlet-replicated.db' as estate`,
+		`ATTACH ? AS peer`,
+		// THE SHAPES A PATH COMPUTED IN GO TAKES, which is the natural
+		// way to attach a sibling partition's file: a format string, the
+		// literal prefix of a concatenation, a double-quoted name and
+		// the other parameter spellings.
+		`ATTACH DATABASE %q AS peer`,
+		`ATTACH DATABASE `,
+		`ATTACH DATABASE "l1-tracker.008.db" AS other`,
+		`ATTACH $1 AS peer`,
+		`ATTACH @path AS peer`,
+		`ATTACH :path AS peer`,
+		`ATTACH %s AS peer`,
+	} {
+		if !attaches(positive) {
+			t.Errorf("control: %q attaches a second file and the matcher did "+
+				"not flag it", positive)
+		}
+	}
+	for _, negative := range []string{
+		`the artefact is attached to the manifest`,
+		`SELECT attachment FROM tracker_files`,
+		`ATTACHED files are refused`,
+		`attach it to the report`,
+		`attach a file to the task`,
+	} {
+		if attaches(negative) {
+			t.Errorf("control: %q attaches nothing but the matcher flagged it", negative)
+		}
+	}
+	// AND THROUGH THE RENDERER the walk reads the tree with, which is what
+	// turns a concatenation into one string: its variable operand renders
+	// as the rune the walk cannot resolve, and that is an attach too.
+	for _, src := range []string{
+		`"ATTACH " + quote(path) + " AS peer"`,
+		`fmt.Sprintf("ATTACH DATABASE %q AS peer", path)`,
+		`"ATTACH DATABASE " + quote(path) + " AS peer"`,
+	} {
+		text, ok := composedString(mustParse(t, src), map[string]string{})
+		if !ok || !attaches(text) {
+			t.Errorf("control: %s attaches a second file and the walk did not "+
+				"flag it (rendered %q)", src, text)
+		}
+	}
 
+	// COMPOSED STRINGS, not literals alone, for the reason the applier
+	// gate's renderer gives: a statement built by concatenation or by
+	// fmt.Sprintf names its file — or its second table — in no single
+	// literal, and an ATTACH of a path computed in Go is exactly that.
 	root := sourcetree.Root(t)
 	var crossings []string
 	for _, dir := range []string{"internal", "cmd"} {
 		walkGoFiles(t, filepath.Join(root, dir), func(fset *token.FileSet, file *ast.File) {
+			consts := stringConsts(file)
 			ast.Inspect(file, func(n ast.Node) bool {
-				lit, ok := n.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
+				text, ok := composedString(n, consts)
+				if !ok {
 					return true
 				}
-				text, err := strconv.Unquote(lit.Value)
-				if err != nil {
-					return true
-				}
-				if bothEstates(text, node, replicated) {
-					crossings = append(crossings, shortPos(root, fset.Position(lit.Pos()).String())+
+				if bothEstates(text, node, partition) || attaches(text) {
+					crossings = append(crossings, shortPos(root, fset.Position(n.Pos()).String())+
 						": "+strings.Join(strings.Fields(text), " "))
 				}
-				return true
+				// A composed string's own operands are literals the walk
+				// would otherwise report again, at a worse position.
+				_, isLit := n.(*ast.BasicLit)
+				return isLit
 			})
 		})
 	}
 	for _, c := range crossings {
-		t.Errorf("a statement names tables in both estates, which are two "+
-			"database files: %s", c)
+		t.Errorf("a statement reaches two database files — a node's own and a "+
+			"partition, or a second file it attaches: %s", c)
 	}
-	t.Logf("estate boundary: %d node table(s), %d replicated table(s)",
-		len(node), len(replicated))
+	t.Logf("estate boundary: %d node table(s), %d partition table(s)",
+		len(node), len(partition))
 }
+
+// attachStatement is SQLite's ATTACH: the keyword, then either DATABASE or
+// whatever can name the file — a quoted string, any parameter spelling, a
+// format verb, or the rune [composedString] renders an operand it cannot
+// resolve as.
+//
+// THE KEYWORD MUST BE FOLLOWED BY SPACE, which is what keeps prose out: no
+// English sentence puts "attach" before one of these, and "attached" and
+// "attachment" never match the keyword at all. What it must not require is a
+// literal path after DATABASE: the first version did, and every attach whose
+// path is computed in Go — `fmt.Sprintf("ATTACH DATABASE %q AS p", path)`,
+// `"ATTACH DATABASE " + quote(path)` — passed.
+var attachStatement = regexp.MustCompile(`(?is)\bATTACH\s+(?:DATABASE\b|['"?:$@%` + unresolved + `])`)
+
+// attaches reports whether a statement attaches a second database file.
+func attaches(text string) bool { return attachStatement.MatchString(text) }
 
 // sqlVerb introduces a table name in the statements this engine writes.
 var sqlVerb = regexp.MustCompile(`(?is)\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+([a-z_][a-z0-9_]*)`)
 
-// bothEstates reports whether one statement names a table from each estate.
+// bothEstates reports whether one statement names a table of the node's own
+// schema and one of the partition schema.
 //
 // TABLES IN VERB POSITION ONLY. A bare containment test reads a column named
 // `tracker_tasks_seen` as the table `tracker_tasks`, and reads a package doc
@@ -141,79 +215,85 @@ func bothEstates(text string, node, replicated map[string]bool) bool {
 	return sawNode && sawReplicated
 }
 
-// createTable finds the tables an estate's DDL declares, and dropTable the
-// ones a later migration takes away again.
-var (
-	createTable = regexp.MustCompile(`(?is)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)`)
-	dropTable   = regexp.MustCompile(`(?im)^\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?([a-z_][a-z0-9_]*)`)
-)
-
-// tablesIn is every table one estate's embedded schema LEAVES BEHIND.
+// tablesIn is every table one estate's embedded schema LEAVES BEHIND, read
+// from a database that schema has just been applied to.
 //
-// THE DROPS COUNT, and reading only the creates is the bug that hid behind
-// this being append-only: a table that moves estate is created in the new one
-// and dropped in the old, and a derivation blind to the drop reports it in
-// both — which fails the one-estate rule below for exactly the change that
-// satisfies it, and silently makes every statement naming that table look like
-// a boundary crossing. The files are walked in migration order, so a create
-// after a drop is a table that came back.
+// FROM THE DATABASE, NOT FROM THE DDL'S TEXT. The derivation was a regular
+// expression over the migrations, and it read a COMMENT as a table:
+// replicated/0014 explains itself with "a CREATE TABLE plus an applier", and
+// every gate built on this saw a replicated table called `plus`. A phantom
+// table is a boundary a statement can cross by naming a word, and a missing
+// one — a table built by a statement the pattern did not anticipate — is a
+// write no gate watches. sqlite_master is what the migrations actually built,
+// after every drop and every rebuild, which is also why no ordering rule over
+// creates and drops has to be restated here.
 func tablesIn(t *testing.T, estate store.Estate) map[string]bool {
 	t.Helper()
-	dir := filepath.Join(sourcetree.Root(t), "internal", "store", "schema", string(estate))
-	out := map[string]bool{}
-	for _, name := range store.SchemaVersions(estate) {
-		body, err := os.ReadFile(filepath.Join(dir, name))
+	tables, err := estateTables(estate)
+	if err != nil {
+		t.Fatalf("derive the %s estate's tables: %v", estate, err)
+	}
+	return maps.Clone(tables)
+}
+
+// estateTables applies each estate's schema ONCE per test binary: every gate
+// in this package asks, several of them in parallel, and the answer is a
+// property of the binary.
+var estateTables = func() func(store.Estate) (map[string]bool, error) {
+	var mu sync.Mutex
+	done := map[store.Estate]map[string]bool{}
+	return func(estate store.Estate) (map[string]bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if tables, ok := done[estate]; ok {
+			return tables, nil
+		}
+		dir, err := os.MkdirTemp("", "estate-tables-*")
 		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
+			return nil, err
 		}
-		// DROPS FIRST WITHIN ONE FILE would be wrong for a migration
-		// that drops and recreates, so each file is applied in the
-		// order its statements appear.
-		for _, m := range ddlStatements(string(body)) {
-			if m.drop {
-				delete(out, m.table)
-				continue
+		defer func() { _ = os.RemoveAll(dir) }()
+		db, err := store.OpenEstate(context.Background(), estate,
+			filepath.Join(dir, string(estate)+".db"), store.Options{})
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = db.Close() }()
+		tables := map[string]bool{}
+		err = db.Read(context.Background(), func(tx *sql.Tx) error {
+			rows, err := tx.Query(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+			if err != nil {
+				return err
 			}
-			out[m.table] = true
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var name string
+				if err := rows.Scan(&name); err != nil {
+					return err
+				}
+				tables[strings.ToLower(name)] = true
+			}
+			return rows.Err()
+		})
+		if err != nil {
+			return nil, err
 		}
+		// schema_migrations is created by the migrator rather than by a
+		// file, and exists in BOTH estates — so it is neither estate's and
+		// naming it is never a crossing. The database engine's own
+		// bookkeeping is nobody's either: SQLite's `sqlite_` tables, and
+		// the sequence table Turso keeps behind an AUTOINCREMENT column,
+		// which no statement of ours names.
+		for name := range tables {
+			if name == "schema_migrations" || strings.HasPrefix(name, "sqlite_") ||
+				strings.HasPrefix(name, "__turso_internal_") {
+				delete(tables, name)
+			}
+		}
+		done[estate] = tables
+		return tables, nil
 	}
-	// schema_migrations is created by the migrator rather than by a file,
-	// and exists in BOTH estates — so it is neither estate's and naming it
-	// is never a crossing.
-	delete(out, "schema_migrations")
-	return out
-}
-
-// ddlStatement is one CREATE TABLE or DROP TABLE, in the order it appears.
-type ddlStatement struct {
-	table string
-	drop  bool
-}
-
-// ddlStatements walks one migration's creates and drops in source order.
-//
-// SOURCE ORDER, not creates-then-drops: a migration that drops a table and
-// recreates it in a new shape is a table the estate still has, and the reverse
-// reading loses it.
-func ddlStatements(body string) []ddlStatement {
-	type at struct {
-		pos int
-		st  ddlStatement
-	}
-	var all []at
-	for _, m := range createTable.FindAllStringSubmatchIndex(body, -1) {
-		all = append(all, at{m[0], ddlStatement{table: strings.ToLower(body[m[2]:m[3]])}})
-	}
-	for _, m := range dropTable.FindAllStringSubmatchIndex(body, -1) {
-		all = append(all, at{m[0], ddlStatement{table: strings.ToLower(body[m[2]:m[3]]), drop: true}})
-	}
-	slices.SortFunc(all, func(a, b at) int { return a.pos - b.pos })
-	out := make([]ddlStatement, 0, len(all))
-	for _, a := range all {
-		out = append(out, a.st)
-	}
-	return out
-}
+}()
 
 // walkGoFiles parses every non-test .go file under dir.
 func walkGoFiles(t *testing.T, dir string, fn func(*token.FileSet, *ast.File)) {
@@ -245,6 +325,110 @@ func walkGoFiles(t *testing.T, dir string, fn func(*token.FileSet, *ast.File)) {
 	}
 }
 
+// parsedFile is one non-test source file the gates in this package read, with
+// the names they judge it by.
+type parsedFile struct {
+	fset  *token.FileSet
+	file  *ast.File
+	rel   string
+	names fileNames
+}
+
+// parseTree parses every non-test .go file under each of dirs, relative to
+// root, once — for a gate that needs a first pass over the whole tree before
+// it can judge any one file.
+func parseTree(t *testing.T, root string, dirs ...string) []parsedFile {
+	t.Helper()
+	var out []parsedFile
+	for _, dir := range dirs {
+		walkGoFiles(t, filepath.Join(root, dir), func(fset *token.FileSet, file *ast.File) {
+			rel := shortPos(root, fset.Position(file.Pos()).Filename)
+			out = append(out, parsedFile{
+				fset: fset, file: file, rel: rel,
+				names: namesOf(file, filepath.ToSlash(filepath.Dir(rel))),
+			})
+		})
+	}
+	return out
+}
+
+// fileNames is what a name-based walk knows about one file: its package's
+// directory and what it imports under which local name.
+type fileNames struct {
+	// dir is the file's directory, repository-relative with forward slashes,
+	// which is how a package is told from another without the type checker.
+	dir string
+	// imports is every local import name, to its path.
+	imports map[string]string
+	// store and statelog are the names those two packages are imported
+	// under, empty where the file does not import them.
+	store, statelog string
+}
+
+// module is the module path, which an import of this tree's own packages
+// starts with.
+const module = "github.com/crewlet/crewlet"
+
+// namesOf reads a file's imports.
+//
+// An import with no explicit name is named by its path's last element. That
+// is Go's default for every package in this tree; for a path whose package
+// clause differs from its last element (a `.v3` suffix) the name read here
+// matches nothing, which makes a call through it look like a method call —
+// the safe direction for every gate that asks.
+func namesOf(file *ast.File, dir string) fileNames {
+	f := fileNames{dir: dir, imports: map[string]string{}}
+	for _, spec := range file.Imports {
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			continue
+		}
+		name := path[strings.LastIndex(path, "/")+1:]
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		f.imports[name] = path
+		switch path {
+		case module + "/internal/store":
+			f.store = name
+		case module + "/internal/statelog":
+			f.statelog = name
+		}
+	}
+	return f
+}
+
+// moduleDir is an import path as this tree's directory, or the path itself
+// for a package outside it.
+func moduleDir(path string) string {
+	if rest, ok := strings.CutPrefix(path, module+"/"); ok {
+		return rest
+	}
+	return path
+}
+
+// inspectWithParent is [ast.Inspect] with each node's parent, for a matcher
+// whose verdict on a call depends on what is done with its answer. fn's result
+// means what it means to Inspect: false skips the node's children.
+func inspectWithParent(root ast.Node, fn func(n, parent ast.Node) bool) {
+	var stack []ast.Node
+	ast.Inspect(root, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return false
+		}
+		var parent ast.Node
+		if len(stack) > 0 {
+			parent = stack[len(stack)-1]
+		}
+		if !fn(n, parent) {
+			return false
+		}
+		stack = append(stack, n)
+		return true
+	})
+}
+
 func shortPos(root, pos string) string {
 	if rel, err := filepath.Rel(root, pos); err == nil {
 		return rel
@@ -254,16 +438,16 @@ func shortPos(root, pos string) string {
 
 // EVERY TABLE BELONGS TO EXACTLY ONE ESTATE.
 //
-// Two files, two migration sequences, and nothing stops a table name being
-// declared in both — at which point every rule above it is meaningless: a
-// statement naming that table is in neither estate and in both, and a reader
-// tracing a row has two places to look.
+// A node's own file and its partitions carry two migration sequences, and
+// nothing stops a table name being declared in both — at which point every rule
+// above it is meaningless: a statement naming that table is in neither estate
+// and in both, and a reader tracing a row has two places to look.
 func TestNoTableIsDeclaredInBothEstates(t *testing.T) {
 	t.Parallel()
-	node, replicated := tablesIn(t, store.EstateNode), tablesIn(t, store.EstateReplicated)
+	node, partition := tablesIn(t, store.EstateNode), tablesIn(t, store.EstatePartition)
 	var shared []string
 	for name := range node {
-		if replicated[name] {
+		if partition[name] {
 			shared = append(shared, name)
 		}
 	}

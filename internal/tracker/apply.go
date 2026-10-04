@@ -65,10 +65,11 @@ func (a *Applier) Committed(context.Context) {}
 //     had one. It is FIRST and it touches no table: a node draining a log
 //     full of a retired kind should not also issue two queries per record it
 //     is certain to drop.
-//  2. THE EVICTION GATE. A record written by a node the fleet evicted before
-//     the record's own position is dropped everywhere. It depends on nothing
-//     but the log's own order, which is what makes it the fence that holds
-//     when coordination cannot be reached at all.
+//  2. THE EVICTION GATE. A record written by a node the fleet evicted — or
+//     that released this log as it left the log's partition — before the
+//     record's own position is dropped everywhere. It depends on nothing but
+//     the log's own order, which is what makes it the fence that holds when
+//     coordination cannot be reached at all.
 //  3. THE DELETION GATE. A record about a task a purge destroyed applies
 //     nowhere, for ever — otherwise a redelivery months later would resurrect
 //     rows an operator deliberately removed. A TURN charged to that task is
@@ -83,32 +84,43 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 
 	if rec.Writer != "" {
 		var from, readmitted sql.NullInt64
+		var kind string
 		err := tx.QueryRowContext(ctx, `
-			SELECT from_position, readmitted_position
+			SELECT from_position, readmitted_position, kind
 			FROM tracker_evictions WHERE node_id = ? AND log_stream = ?`,
-			rec.Writer, rec.Position.Stream).Scan(&from, &readmitted)
+			rec.Writer, rec.Position.Stream).Scan(&from, &readmitted, &kind)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 		case err != nil:
 			return "", false, fmt.Errorf("tracker: read the eviction gate for "+
 				"node %s: %w", rec.Writer, err)
 		default:
+			gate, err := gateKind(kind)
+			if err != nil {
+				return "", false, err
+			}
 			at := rec.Position.Packed()
 			// THE WINDOW IS HALF-OPEN AT BOTH ENDS, and both ends
 			// matter: a record at or below the eviction's own position
 			// was written while the node was still counted, and one at
 			// or above a readmission is written by a node the fleet has
 			// taken back.
+			//
+			// AND A RELEASE IS THE SAME WINDOW: the node's own statement
+			// that it left this log's partition, so a write it had in
+			// flight that landed after it is dropped here as on every
+			// holder — named `released` rather than `evicted`.
 			evicted := from.Valid && at > from.Int64
 			back := readmitted.Valid && at >= readmitted.Int64
 			if evicted && !back {
-				return statelog.ReasonEvicted, true, nil
+				return gate.Reason(), true, nil
 			}
 		}
 	}
 
-	// The deletion gate reads the subject's own marker. A purge is the one
-	// operation that removes rows, and its marker is what makes the
+	// The deletion gate reads the marker of the task the record is ABOUT —
+	// [markedTask], which the publisher's reader asks too. A purge is the
+	// one operation that removes rows, and its marker is what makes the
 	// removal permanent rather than a race a redelivery can undo.
 	//
 	// A TURN IS GATED TOO, on its task's marker — a turn's subject id IS its
@@ -119,17 +131,17 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 	// EVERY node, since every node applies the same log in the same order —
 	// a fleet-wide wedge from one ordinary race. Gated, it is read past and
 	// counted as a hit on the marker like any other late write.
-	if ObjectKind(rec.Subject.Kind).GatedByPurge() {
+	if taskID, ok := markedTask(rec.Subject); ok {
 		var author sql.NullString
 		err := tx.QueryRowContext(ctx,
 			`SELECT purge_record_id FROM tracker_deletions WHERE task_id = ?`,
-			rec.Subject.ID).Scan(&author)
+			taskID).Scan(&author)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return "", false, nil
 		case err != nil:
 			return "", false, fmt.Errorf("tracker: read the deletion gate for "+
-				"task %s: %w", rec.Subject.ID, err)
+				"task %s: %w", taskID, err)
 		}
 		// THE ONE EXCEPTION IS THE RECORD THAT WROTE THE MARKER, by its
 		// own id — not by its op kind. "Any purge" would let a SECOND
@@ -143,9 +155,9 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE tracker_deletions
 			SET rejects = rejects + 1, last_reject_at = ?
-			WHERE task_id = ?`, store.EncodeTime(rec.StoredAt), rec.Subject.ID); err != nil {
+			WHERE task_id = ?`, store.EncodeTime(rec.StoredAt), taskID); err != nil {
 			return "", false, fmt.Errorf("tracker: count a gate hit on the "+
-				"purged task %s: %w", rec.Subject.ID, err)
+				"purged task %s: %w", taskID, err)
 		}
 		return statelog.ReasonDeleted, true, nil
 	}
@@ -194,7 +206,7 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		return a.applyCounter(ctx, tx, at)
 	case KindTask:
 		return a.applyTask(ctx, tx, at)
-	case KindProject, KindTags, KindCatalogue, KindView, KindPerson:
+	case KindProject, KindTags, KindCatalogue, KindView, KindPerson, KindFile:
 		return a.applyDocument(ctx, tx, at)
 	}
 	// A KIND THIS BUILD DOES NOT KNOW REACHES HERE ONLY BY WAY OF A RECORD

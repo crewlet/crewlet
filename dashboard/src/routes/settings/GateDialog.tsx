@@ -31,7 +31,7 @@
  *
  * # The operation id is minted HERE, before the first request, and kept
  *
- * The node finishes a gesture under its own one-minute budget whatever happens
+ * The node finishes a gesture under its own budget whatever happens
  * to the connection, so a request that timed out or dropped has very likely
  * done its work — and an id the route minted comes back only in the answer
  * that never arrived. So the dialog mints the id in the engine's grammar
@@ -40,9 +40,10 @@
  * request, the same id, force carried — for a request nobody answered and for
  * a log whose remedy keeps the id ([keepsOperation]). "Nobody answered"
  * includes an answer the ENGINE did not write ([RestError.unanswered]): a
- * reverse proxy's read timeout is a minute by default, which is the node's own
- * budget, so a slow gesture reaches this page as a gateway's 504 — and read as
- * a refusal it dropped the id of a gesture the node went on to finish. The
+ * reverse proxy's read timeout is a minute by default, shorter than the
+ * node's own budget for a gesture past its judgement, so a slow gesture
+ * reaches this page as a gateway's 504 — and read as a refusal it dropped the
+ * id of a gesture the node went on to finish. The
  * gesture is lifted into the screen ([GateGesture]), so closing the dialog and
  * opening it again offers Finish rather than a fresh gesture — and so does a
  * COMPLETE one, until the report behind the dialog shows it (or, from a node
@@ -100,13 +101,21 @@ export interface GateGesture {
 /**
  * Whether a held gesture is one to finish under its own operation id: a
  * request nobody answered, or an incomplete answer where some log's remedy
- * keeps the id — sent again now, through another node, or once the log has
- * room or has been re-anchored.
+ * keeps the id: sent again now, through another node, or once the log has room
+ * or has been re-anchored.
  */
 export function finishable(g: GateGesture): boolean {
   if (g.unanswered) return true;
   if (!g.answer || g.answer.complete) return false;
-  return g.answer.domains.some((d) => (d.actions ?? []).some(keepsOperation));
+  return remedies(g.answer).some((actions) => actions.some(keepsOperation));
+}
+
+/**
+ * Every unfinished log's remedy actions, so a summary asks one question of the
+ * whole gesture.
+ */
+function remedies(result: RetentionGateResult): string[][] {
+  return result.domains.filter((d) => !holds(d)).map((d) => d.actions ?? []);
 }
 
 /**
@@ -125,6 +134,9 @@ interface Refusal {
   detail: string;
   hint: string;
   actions: string[];
+  /** The engine's own code for the refusal (`readmission_refused`, …), or
+   *  empty for one it did not write. */
+  code: string;
 }
 
 export function GateDialog({
@@ -230,7 +242,8 @@ export function GateDialog({
         // anywhere and the next attempt may reuse it; on a FINISH the logs
         // the gesture already reached still hold its record, and the
         // judgement a Finish re-runs (`503 eviction_unjudged`, `409
-        // readmission_refused`) says nothing about them. So what the gesture
+        // readmission_refused`, `503 readmission_unjudged`) says nothing
+        // about them. So what the gesture
         // already heard is KEPT and the refusal renders beside it: dropped,
         // the dialog fell back to "Type node-4 to confirm" with the per-log
         // answer and the operation id gone from the screen.
@@ -252,8 +265,9 @@ export function GateDialog({
                 actions: Array.isArray(err.body.actions)
                   ? err.body.actions.filter((a): a is string => typeof a === "string")
                   : [],
+                code: typeof err.body.error === "string" ? err.body.error : "",
               }
-            : { detail: String(err), hint: "", actions: [] },
+            : { detail: String(err), hint: "", actions: [], code: "" },
         );
       }
     } finally {
@@ -466,7 +480,7 @@ export function GateDialog({
               .filter((a) => a !== "force")
               .map((a) => (
                 <span key={a} className="t-caption">
-                  {actionWords(a, { evict, stream: "", refused: true })}
+                  {actionWords(a, { evict, stream: "", refused: true, code: refusal.code })}
                 </span>
               ))}
           </span>
@@ -489,7 +503,7 @@ export function GateDialog({
                 Evict <InlineCode>{node}</InlineCode> past the presence-lease judgement — for a node
                 wedged in a way that still renews its lease, or one this node cannot see because
                 coordination is unreachable. Only when you know it is gone: its records stop
-                applying everywhere and its seats move.
+                applying everywhere and its copy of the estate stops serving.
               </>
             }
           />
@@ -521,8 +535,8 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
   const done = evict ? "evicted" : "readmitted";
   const unfinished = result.domains.filter((d) => !holds(d));
   const pending = result.domains.filter((d) => d.outcome === "pending");
-  const retryNow = unfinished.some((d) => d.actions?.includes("retry_same_op"));
-  const keeps = unfinished.some((d) => (d.actions ?? []).some(keepsOperation));
+  const retryNow = remedies(result).some((actions) => actions.includes("retry_same_op"));
+  const keeps = remedies(result).some((actions) => actions.some(keepsOperation));
 
   let summary;
   if (result.complete && pending.length === 0) {
@@ -623,17 +637,22 @@ function holds(d: RetentionGateDomain): boolean {
  * reached the log at all.
  */
 function DomainAnswer({ d }: { d: RetentionGateDomain }) {
+  // WHO WROTE IT, where that is not this node: a log of a partition it does not
+  // serve, written for it by a node that does — whose answer this is.
+  const by = d.writer ? <> (written by {d.writer})</> : null;
   if (d.error) {
     return (
       <span className="t-caption">
-        not written{d.reason && <> ({d.reason})</>} — {d.error}
+        not written{d.reason && <> ({d.reason})</>}
+        {by} — {d.error}
       </span>
     );
   }
   if (d.outcome === "unknown" && d.unvouched) {
     return (
       <span className="t-caption">
-        <Tag variant="danger">unknown</Tag> this node cannot tell whether the record is on the log
+        <Tag variant="danger">unknown</Tag> {d.writer ? `node ${d.writer}` : "this node"} cannot
+        tell whether the record is on the log
       </span>
     );
   }
@@ -641,7 +660,7 @@ function DomainAnswer({ d }: { d: RetentionGateDomain }) {
     return (
       <span className="t-caption">
         <Tag variant="danger">{d.outcome ?? "no outcome"}</Tag> the record may or may not be on the
-        log
+        log{by}
       </span>
     );
   }
@@ -649,6 +668,7 @@ function DomainAnswer({ d }: { d: RetentionGateDomain }) {
     <span className="t-caption">
       <Tag variant={d.outcome === "applied" ? "success" : "warning"}>{d.outcome}</Tag> at{" "}
       {d.position.stream} {d.position.seq}
+      {by}
     </span>
   );
 }
@@ -668,7 +688,8 @@ function actionWords(
     stream,
     opId,
     refused = false,
-  }: { evict: boolean; stream: string; opId?: string; refused?: boolean },
+    code = "",
+  }: { evict: boolean; stream: string; opId?: string; refused?: boolean; code?: string },
 ): string {
   switch (action) {
     case "retry_same_op":
@@ -692,9 +713,29 @@ function actionWords(
     case "restore":
       return "Restore the store and the stream from one backup.";
     case "wait":
-      return evict
-        ? "Wait for its presence lease to lapse — its row stops showing it live — then evict it again."
-        : "Wait for it to catch up — its position on this screen says when — then readmit it again.";
+      // KEYED ON THE REFUSAL, NEVER THE GESTURE: four refusals send `wait`
+      // and each waits on something else. A readmission nobody could judge
+      // waits on a partition being served again, which is nothing about the
+      // node's own position — told to watch it catch up, an operator watched
+      // a number that had already caught up while the gesture stayed
+      // refused — and either gesture refused `not_publishing` waits on the
+      // fleet's capacity window, which neither a lease nor a position says
+      // anything about.
+      switch (code) {
+        case "eviction_refused":
+          return "Wait for its presence lease to lapse — its row stops showing it live — then evict it again.";
+        case "readmission_refused":
+          return "Wait for it to catch up — its position on this screen says when — then readmit it again.";
+        case "readmission_unjudged":
+          return "Wait until the partition the engine names above is served again, then readmit it again.";
+        case "not_publishing":
+          return `Wait until the fleet is back in normal mode — the retention screen's banner says while its capacity window is open — then ${
+            evict ? "evict" : "readmit"
+          } it again.`;
+      }
+      // A REFUSAL THIS BUILD HAS NO WORDS FOR: the engine's hint above says
+      // what it waits on, and a guess here would contradict it.
+      return "Wait for what the engine names above to clear, then send it again.";
   }
   return `The engine also names ${action}.`;
 }

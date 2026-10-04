@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
@@ -28,7 +29,7 @@ type fleetNode struct {
 // joinFleet brings a node up on cluster member q, applying the whole log.
 func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 	t.Helper()
-	spec := usage.Domain{}.Stream()
+	spec := statelog.EstateStream(usage.Domain{})
 	db := openStore(t)
 
 	// RETRIED UNTIL THE STREAM HAS A LEADER: a node that joins just after a
@@ -58,29 +59,38 @@ func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 	}
 	// AT THE CHECKPOINT THE ROWS HOLD, as the engine builds a node's runner
 	// — generation 1 on a node that never committed, which a fresh one is.
-	checkpoint, found, err := statelog.CheckpointOf(t.Context(), db.Replicated(), spec.Name)
+	checkpoint, found, err := statelog.CheckpointOf(t.Context(), storetest.EstateOf(db), spec.Name)
 	if err != nil {
 		t.Fatalf("%s: read the checkpoint: %v", id, err)
 	}
 	if !found {
 		checkpoint.At.Generation = 1
 	}
+	// LAYOUT 0's LOG, as the engine places the domain: a runner applies
+	// one log of one layout, and drops a record its layout does not place.
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: usage.Domain{}, Applier: usage.NewApplier(), Fetch: consumer,
-		Log: log, Node: db, DB: db.Replicated(),
+		Domain: usage.Domain{}, Spec: spec,
+		Layout: statelog.EstateLayout(usage.Domain{}.Name()), LogID: statelog.EstateLog(usage.Domain{}),
+		Applier: usage.NewApplier(), Fetch: consumer,
+		Log: log, Node: db, DB: storetest.EstateOf(db),
 		Checkpoint: checkpoint.At, CheckpointStoredAt: checkpoint.StoredAt,
 		StreamCreatedAt: stats.CreatedAt.UTC(), NodeID: id,
 	})
 	if err != nil {
 		t.Fatalf("%s: build the applier: %v", id, err)
 	}
-	rows, err := usage.NewRows(db)
+	rows, err := usage.NewRows(storetest.EstateOf(db).Reader(), statelog.EstateStream(usage.Domain{}))
 	if err != nil {
 		t.Fatalf("%s: build the read seam: %v", id, err)
 	}
+	// ON THE SAME LOG, and on a node that serves its partition: the write
+	// authority refuses a log it cannot be told it serves.
 	authority, err := statelog.NewPublisher(statelog.Deps{
-		Domain: usage.Domain{}, Log: log, Rows: rows, Fence: usage.NewFence(),
-		Gates: usage.NewGates(), Waiter: runner, Identity: runner, NodeID: id,
+		Domain: usage.Domain{}, Spec: spec,
+		Layout: statelog.EstateLayout(usage.Domain{}.Name()), LogID: statelog.EstateLog(usage.Domain{}),
+		Holding: statelog.ServesOnly(statelog.EstatePartition),
+		Log:     log, Records: log, Rows: rows, Fence: usage.NewFence(),
+		Gates: usage.NewGates(), Waiter: runner, Voids: runner, Identity: runner, NodeID: id,
 		Generation:    func() uint32 { return runner.Committed().Generation },
 		ResolveBudget: 5 * time.Second,
 	})
@@ -130,7 +140,7 @@ func (n *fleetNode) spendOf(t *testing.T, day string, want int) []usage.SpendRow
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		rows, err := usage.Spend(t.Context(), n.db.Replicated(), usage.SpendQuery{From: day, To: day})
+		rows, err := usage.Spend(t.Context(), storetest.EstateOf(n.db), usage.SpendQuery{From: day, To: day})
 		if err != nil {
 			t.Fatalf("%s: read the spend: %v", n.id, err)
 		}
@@ -157,7 +167,7 @@ func (n *fleetNode) spendOf(t *testing.T, day string, want int) []usage.SpendRow
 func TestADepartedNodesSpendIsStillAnswered(t *testing.T) {
 	t.Parallel()
 	c := jetstreamtest.StartPartitionableCluster(t, 3, js.Config{})
-	spec := usage.Domain{}.Stream()
+	spec := statelog.EstateStream(usage.Domain{})
 	// THE CEILING IS THE ONE FIELD OVERRIDDEN: a member in a temporary
 	// directory will not reserve the shipped gibibyte three times over, and
 	// the size is not what is under test.

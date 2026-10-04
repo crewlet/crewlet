@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -54,7 +55,15 @@ type tables struct {
 // other is a publisher that never finds an anchor at all — every arbitrated
 // write falls through to the last-message probe, loops its whole round budget
 // and reports a conflict on an object nobody else touched.
-func (t tables) subjectOf(s Subject) string { return t.prefix + "." + s.String() }
+func (t tables) subjectOf(s Subject) string { return wireSubject(t.prefix, s) }
+
+// wireSubject is a subject as the broker carries it on the log whose subject
+// prefix is prefix: the grammar's ([topics.LogSubject]), and never spelled
+// here, because the publisher, the applier's anchor and the eviction probe each
+// compose one and a second spelling is a key two of them disagree about.
+func wireSubject(prefix string, s Subject) string {
+	return topics.LogSubject(prefix, s.Kind, s.ID)
+}
 
 // identifier is what a domain may call a table. Deliberately narrower than SQL
 // allows: these names are interpolated into statements, so the set is what is
@@ -74,11 +83,27 @@ func validIdentifier(name string) bool {
 	return true
 }
 
-func newTables(d Domain) (tables, error) {
-	spec := d.Stream()
+// newTables is the framework's statements over domain d's tables on ONE of its
+// logs — the one spec names, whose stream keys the checkpoint and whose prefix
+// keys every anchor.
+func newTables(d Domain, spec StreamSpec) (tables, error) {
+	t, err := domainTables(d)
+	if err != nil {
+		return tables{}, err
+	}
+	if err := spec.Instantiates(d); err != nil {
+		return tables{}, err
+	}
+	t.stream, t.prefix = spec.Name, spec.SubjectPrefix
+	return t, nil
+}
+
+// domainTables is domain d's own table names, checked, with no log bound — for
+// what is kept per DOMAIN in a file rather than per log: the operation ledger
+// and the watermark of how far back it lost rows, which are keyed by the
+// ledger's table.
+func domainTables(d Domain) (tables, error) {
 	t := tables{
-		stream:   spec.Name,
-		prefix:   spec.SubjectPrefix,
 		ops:      d.OpsTable(),
 		deferred: d.DeferredTable(),
 		scope:    d.ScopeIndex(),
@@ -196,9 +221,11 @@ func (t tables) readCursor(ctx context.Context, tx *sql.Tx) (cursorRow, bool, er
 //
 // storedAt is the broker's instant for the record at p — the one this
 // transaction consumed there — which is how the checkpoint NAMES its record
-// ([cursorRow.storedAt]).
+// ([cursorRow.storedAt]). applied is the highest record version this
+// transaction APPLIED a record of, zero where it applied none, and it raises the
+// row's own ([tables.raiseApplied]).
 func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created, storedAt,
-	now time.Time) error {
+	now time.Time, applied int) error {
 
 	// THE DERIVATION IS WRITTEN ON INSERT ONLY. An existing row's
 	// derivation moves in exactly one place — [tables.setDerivation], in
@@ -207,20 +234,55 @@ func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created, 
 	// derived by this one.
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO statelog_cursor
-			(stream, generation, seq, stream_created_at, stored_at, updated_at, derivation)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+			(stream, generation, seq, stream_created_at, stored_at, updated_at,
+			 applied_version, derivation)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (stream) DO UPDATE SET
 			generation        = excluded.generation,
 			seq               = excluded.seq,
 			stream_created_at = excluded.stream_created_at,
 			stored_at         = excluded.stored_at,
-			updated_at        = excluded.updated_at`,
+			updated_at        = excluded.updated_at,
+			applied_version   = `+raisedApplied("excluded.applied_version"),
 		t.stream, int64(p.Generation), int64(p.Seq),
-		store.EncodeTime(created), encodeInstant(storedAt), store.EncodeTime(now), t.derivation)
+		store.EncodeTime(created), encodeInstant(storedAt), store.EncodeTime(now),
+		int64(applied), t.derivation)
 	if err != nil {
 		return fmt.Errorf("statelog: write the cursor at %s: %w", p, err)
 	}
 	return nil
+}
+
+// raiseApplied raises the highest record version this stream's rows were
+// applied from to at least v, in the transaction that applied a record of it
+// outside the checkpoint's own write — a build reprocessing what an earlier
+// one retained, which does not move the checkpoint.
+//
+// # Why the rows keep it at all
+//
+// A snapshot's manifest states it, and a joiner refuses an artefact whose rows
+// hold a record of a version its build cannot read: arriving past such a
+// record, it could never apply it, defer it or reprocess it. Stated as the
+// donor BUILD's version instead, the claim was false for every record version
+// nothing had published yet, and a rolling upgrade's older nodes refused every
+// upgraded donor for records that did not exist.
+func (t tables) raiseApplied(ctx context.Context, tx *sql.Tx, v int) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE statelog_cursor SET applied_version = `+raisedApplied("?")+`
+		WHERE stream = ?`, int64(v), t.stream)
+	if err != nil {
+		return fmt.Errorf("statelog: raise the applied record version to %d: %w", v, err)
+	}
+	return nil
+}
+
+// raisedApplied is the one expression that raises the row's applied record
+// version to at least by: the larger of the two, and UNKNOWN STAYS UNKNOWN — a
+// row from before the column held rows nothing recorded, and a maximum over
+// the records since is no bound on the ones before (migration 0035).
+func raisedApplied(by string) string {
+	return `CASE WHEN statelog_cursor.applied_version IS NULL THEN NULL
+		ELSE MAX(statelog_cursor.applied_version, ` + by + `) END`
 }
 
 // readDerivation reads the rule set this stream's rows were derived by,
@@ -270,11 +332,15 @@ func (t tables) setDerivation(ctx context.Context, tx *sql.Tx, v int) error {
 func (t tables) reanchorCursor(ctx context.Context, tx *sql.Tx, p Position,
 	created, storedAt time.Time, from uint32, staleAfter uint64, now time.Time) error {
 
+	// A ROW THIS CREATES STARTS AT APPLIED VERSION ZERO — there is no row
+	// only where nothing was ever applied on the stream — and a row it
+	// replaces keeps its own: a reanchor moves the checkpoint and keeps
+	// every row, whatever it was applied from.
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO statelog_cursor
 			(stream, generation, seq, stream_created_at, stored_at, updated_at,
-			 void_after, void_before, stale_after)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 void_after, void_before, stale_after, applied_version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 		ON CONFLICT (stream) DO UPDATE SET
 			generation        = excluded.generation,
 			seq               = excluded.seq,

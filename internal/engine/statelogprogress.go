@@ -14,15 +14,15 @@ import (
 //
 // [statelog.Health] is a SNAPSHOT — every field describes this instant — and
 // two of the conditions built on it are properties of a SERIES. `Stalled` is
-// "the applied prefix has not moved for [statelog.StallGrace]", and the shed
+// "the applied prefix has not moved for [statelog.StallGrace]", and the fault
 // in [statelog.Health.Healthy] is "a record this build cannot decode has been
 // held past [statelog.DeferralGrace]". Neither can be derived from one
 // reading, so both were left unset: `Health.Stalled` was never assigned by
 // anything, which made the `stalled` arm of [statelog.Health.Refusal]
 // unreachable and left a frozen applier serving reads as though it were
-// current, and `DeferredSince` had no producer at all, so the shed the
-// `deferred_old` alarm promises an operator — "its seats move at 30m" —
-// never happened.
+// current, and `DeferredSince` had no producer at all, so what the
+// `deferred_old` alarm promises an operator — then "its seats move at 30m",
+// now that the node stops serving the partition — never happened.
 //
 // # It is observed on the position heartbeat, not on the read
 //

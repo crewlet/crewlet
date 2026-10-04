@@ -245,7 +245,7 @@ func populatedBootstrap(t *testing.T) config.Bootstrap {
 	t.Helper()
 	b := config.DefaultBootstrap()
 	b.Node.ID = "node-a"
-	b.Node.Roles = []string{"seats"}
+	b.Node.Roles = []string{"data", "seats"}
 	b.Node.Labels = map[string]string{"zone": "eu"}
 	b.Stream = config.Stream{
 		Type: config.StreamEmbedded, Replicas: 3, StoreDir: t.TempDir(),

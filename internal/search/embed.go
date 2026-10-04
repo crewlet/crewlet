@@ -237,6 +237,26 @@ type EmbedDeps struct {
 	// Publisher is the vector domain's write authority.
 	Publisher *statelog.Publisher
 
+	// Estate is the partition the duty keeps an index for (ADR-0028): the
+	// codes it trains on and the rows it reads the index's state from. Read
+	// only — what the duty decides it publishes, and the applier writes.
+	Estate store.PartitionReader
+
+	// Log names the vector log this duty writes, which is what the index's
+	// training seed is derived from ([IVFSeed]) — so two partitions'
+	// trainings draw different samples and a re-run of one draws the same.
+	Log string
+
+	// Standing reads what the index step must know about the vector log
+	// before it may publish onto it: whether this node has applied all of
+	// it, and which build every node applying it reads ([LogStanding]).
+	//
+	// REQUIRED, never defaulted: a duty that could not ask would either
+	// publish the index's records onto a log a node cannot read — stopping
+	// that node's applier — or decide from rows a moment behind the log,
+	// and there is no safe answer to assume in its place.
+	Standing func(ctx context.Context) (LogStanding, error)
+
 	// Embedder is the provider. A batch embedder is required rather than
 	// preferred: one source at a time is 110 000 round trips for a cold
 	// fill, which does not fit in the tick it runs on.
@@ -262,7 +282,85 @@ type EmbedDeps struct {
 
 	// Now is the clock, injected so a test can hold it.
 	Now func() time.Time
+
+	// Budget is the bound the caller holds the tick to, which the index's
+	// steps show their progress to ([Budget]).
+	//
+	// REQUIRED, never defaulted to a bound nobody is told about: the duty's
+	// caller bounds every tick, and one that forgot to say which bound
+	// would measure a training by its length again — which on a one-core
+	// node cut off every training at the largest partition, so its index
+	// was never built and the node spent five minutes of its only core on
+	// it every tick, for ever.
+	Budget Budget
 }
+
+// Budget is a tick's bound, as the tick's steps show it their progress.
+//
+// # A tick is bounded by its progress, never by its length
+//
+// The caller bounds a tick because a tick can WEDGE — a read that never
+// returns, a provider that never answers — and a wedged tick holding the
+// duty's lease embeds nothing for anybody. A wedge is the ABSENCE of progress,
+// so that is what the bound measures, and every step of a tick shows it in the
+// way it can. A step with a natural end reports as it ends ([Budget.Advanced]):
+// a provider call answered, a vector published or withdrawn (one publish
+// each) and a batch of the index's rollout published. The index's
+// reading of every code and its exact pass stream rows, and say so every
+// [progressStride] of them. The arithmetic — the
+// k-means, filing every code, choosing the probe count — cannot wedge at all:
+// it is pure computation over values in memory, each a bounded number of
+// steps reading its context at least once a stride ([ivfStride]) or a probe
+// count, so cancellation and a lost lease still stop it promptly; it runs
+// EXEMPT ([Budget.Exempt]), whole, rather than reporting from inside functions
+// that know nothing of a tick.
+//
+// Measured by its LENGTH instead, a training at the largest partition an
+// index serves never finished on a node allowed one core and sharing it with
+// two searchers: its reading projects to three and a half minutes there
+// (394 µs a source at ≈ 545 000) and its arithmetic to seven and a half more
+// (BenchmarkIndexTraining and BenchmarkIVFTrainingShare at -cpu 1, pinned to
+// one CPU), eleven in all against five, so every training such a node began
+// was cut off and began again the next tick.
+//
+// # Why not exempt the arithmetic and keep a budget of time for the rest
+//
+// At that load the reading alone would have fitted five minutes, 1.4 times
+// over. But a budget of time is a cliff that moves: the reading nearly doubled
+// between an idle core and two searchers, it grows with the partition, and
+// the tick that trains also makes this tick's embedding batches, each a
+// provider call with a fifteen-second timeout of its own — eight of them and
+// the reading pass five minutes at the load measured. Progress has no such
+// cliff: it measures the one thing the bound is for, and needs the exemption
+// anyway.
+type Budget interface {
+	// Advanced says a bounded stretch of the tick's work is done.
+	Advanced()
+
+	// Exempt stops the bound's clock until the returned function is
+	// called, which it must be exactly once, and whose call is progress.
+	// Exemptions nest: the clock runs again when the last one open is
+	// resumed.
+	Exempt() (resume func())
+}
+
+// progressStride is how many rows one of the index's streaming reads covers
+// between two reports of its progress ([Budget.Advanced]): ONE THOUSAND AND
+// TWENTY-FOUR, the stride the arithmetic reads its context at ([ivfStride]).
+//
+// A report costs a lock and a clock read, under a millionth of the stride's
+// rows at the fastest they have been read (about 190 µs a row for the exact
+// pass, the costliest of the reading's parts, on an idle core); at the
+// slowest — 331 µs, one core shared with two searchers (BenchmarkIndexTraining
+// -cpu 1, pinned to one CPU) — a stride is a third of a second, so a read goes
+// hundreds of strides inside the engine's budget before its silence could be
+// taken for a wedge.
+const progressStride = ivfStride
+
+// unwatched is the progress report of a read no bound is watching — the
+// evaluation an operator runs, and the tests and benchmarks that read the way
+// the duty does.
+func unwatched() {}
 
 // Embedder is the duty.
 type Embedder struct {
@@ -275,6 +373,20 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 	switch {
 	case d.Publisher == nil:
 		return nil, fmt.Errorf("search: the embed duty has no publisher")
+	case d.Estate.IsZero():
+		return nil, fmt.Errorf("search: the embed duty has no partition — it keeps " +
+			"the partition's semantic index, and trains it from the codes there")
+	case d.Log == "":
+		return nil, fmt.Errorf("search: the embed duty names no vector log — " +
+			"the index's training seed is derived from it")
+	case d.Standing == nil:
+		return nil, fmt.Errorf("search: the embed duty cannot read the vector " +
+			"log's standing — it publishes nothing about the index without " +
+			"knowing this node has applied the log and every node reads the records")
+	case d.Budget == nil:
+		return nil, fmt.Errorf("search: the embed duty has no tick budget — " +
+			"EmbedDeps.Budget is the bound its caller holds the tick to, which " +
+			"the duty's steps show their progress to")
 	case d.Embedder == nil:
 		return nil, fmt.Errorf("search: the embed duty has no embedder")
 	case d.Model == "":
@@ -367,6 +479,23 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 func (e *Embedder) Tick(ctx context.Context) (int, error) {
 	dim := e.deps.Embedder.Width()
 	published := 0
+	var failed []error
+
+	// THE INDEX FIRST, before this tick publishes anything. Its step runs
+	// only on a node that has applied the whole vector log ([LogStanding]),
+	// and a tick that embedded first would have put its own node behind by
+	// every record it had just published — on a company whose corpus moves
+	// every minute, every tick, so the index would never be kept at all. The
+	// previous tick's records have had the interval to apply. A failure of
+	// it costs the index and never the tick's embeddings: a step that cannot
+	// run this tick runs on the next, over the rows as they are then.
+	n, err := e.maintainIndex(ctx, dim)
+	published += n
+	if err != nil {
+		e.deps.Logger.WarnContext(ctx, "search_index_step_failed",
+			"error", err.Error())
+		failed = append(failed, fmt.Errorf("search: the semantic index: %w", err))
+	}
 
 	// ONE SELECTION PER CORPUS PER TICK, ASKED FOR THE WHOLE TICK'S
 	// CEILING. Every batch a corpus is granted is sliced out of this one
@@ -410,7 +539,6 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 	//     waste plus a second query and an invariant nothing else here
 	//     depends on, rather than no waste.
 	stale := make([][]Document, len(e.deps.Corpora))
-	var failed []error
 	for i, corpus := range e.deps.Corpora {
 		docs, gone, err := corpus.Stale(ctx, e.deps.Model, dim,
 			EmbedBatchesPerTick*EmbedBatch)
@@ -451,6 +579,14 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 				return published, errors.Join(failed...)
 			}
 			published++
+			// A WITHDRAWAL PUBLISHED is progress ([Budget]): one
+			// publish, bounded as every publish is. There can be a
+			// selection's worth of them a corpus — 1 024 after a bulk
+			// purge — and unreported they were the longest stretch a
+			// live tick went silent, eight batches' publishes with no
+			// provider call between them to show for it, which a
+			// slow broker could stretch past the bound.
+			e.deps.Budget.Advanced()
 		}
 	}
 
@@ -471,6 +607,8 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 			stale[i] = stale[i][len(batch):]
 			budget--
 			spent = true
+			// The batch reports its own progress, call and publishes
+			// apart ([Embedder.embed]).
 			n, err := e.embed(ctx, corpus.Source(), dim, batch)
 			published += n
 			if err != nil {
@@ -498,6 +636,9 @@ func (e *Embedder) embed(ctx context.Context, source Source, dim int, batch []Do
 		texts[i] = doc.text()
 	}
 	vectors, err := e.deps.Embedder.EmbedBatch(ctx, texts)
+	// THE PROVIDER ANSWERED, WHATEVER IT ANSWERED, which is progress
+	// ([Budget]): one call, bounded by its own timeout.
+	e.deps.Budget.Advanced()
 	if err != nil {
 		return 0, err
 	}
@@ -517,7 +658,17 @@ func (e *Embedder) embed(ctx context.Context, source Source, dim int, batch []Do
 			// input is not sent.
 			continue
 		}
-		if err := e.publish(ctx, source, dim, batch[i], vector); err != nil {
+		err := e.publish(ctx, source, dim, batch[i], vector)
+		// EACH PUBLISH IS PROGRESS ([Budget]), as a withdrawal's is: one
+		// publish, bounded as every publish is. Counted as one stretch
+		// with the call before it, a batch's hundred and twenty-eight
+		// were the longest a live tick went silent, and a broker slow
+		// enough to take its bound's length over them cut off a tick
+		// that was publishing steadily — the slow-but-advancing tick the
+		// bound exists NOT to cut off. A refused vector published
+		// nothing, and its refusal is an answer all the same.
+		e.deps.Budget.Advanced()
+		if err != nil {
 			// A VECTOR THIS DUTY REFUSES COSTS ITS OWN DOCUMENT AND
 			// NOT THE BATCH, which is the same rule one level down
 			// from the tick's: the refusal is about one vector, and
@@ -660,10 +811,36 @@ func (e *Embedder) append(ctx context.Context, subject Subject, rec VectorRecord
 // genuinely newer vector for the same source carries a different one, because
 // the source version and the text digest are both in it.
 func opIDFor(rec VectorRecord) string {
-	sum := sha256.Sum256([]byte(strings.Join([]string{
+	parts := []string{
 		rec.Subject.String(), string(rec.Op), rec.Model,
 		fmt.Sprint(rec.Dim), fmt.Sprint(rec.SourceRev), rec.TextSHA,
-	}, "\x00")))
+	}
+	// AN INDEX RECORD IS NAMED BY WHAT IT INSTALLS, or two trainings inside
+	// the broker's duplicate window — an index and the verdict that replaces
+	// it, or two indexes a minute apart — would share one id and the second
+	// would be COLLAPSED into the first, dropped with an acknowledgement.
+	if x := rec.Index; x != nil {
+		parts = append(parts, x.Log, fmt.Sprint(x.Basis), fmt.Sprint(x.Seed),
+			fmt.Sprint(x.Lists), fmt.Sprint(x.Probes), fmt.Sprint(x.TrainedOn),
+			fmt.Sprint(x.Largest), string(x.Why), digestOf(x.Centroids),
+			fmt.Sprint(len(x.Rollout)))
+		if m := x.Measurement; m != nil {
+			parts = append(parts, fmt.Sprintf("%+v", *m))
+		}
+	}
+	// A BATCH IS NAMED BY ITS INDEX AND NUMBER, which fix its range, so every
+	// publication of it is one operation and the duplicate window collapses a
+	// repeat inside it.
+	if r := rec.Reassign; r != nil {
+		parts = append(parts, fmt.Sprint(r.Index), fmt.Sprint(r.Batch))
+	}
+	// A MEASUREMENT BY WHAT IT FOUND, so a second one inside the window that
+	// found something different is published rather than collapsed.
+	if m := rec.Measure; m != nil {
+		parts = append(parts, fmt.Sprint(m.Index), fmt.Sprint(m.Probes),
+			fmt.Sprintf("%+v", m.Measurement))
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return "vec-" + hex.EncodeToString(sum[:16])
 }
 
@@ -702,7 +879,7 @@ func pack(v []float32, dim int) ([]byte, error) {
 // ONE STATEMENT, because `tracker_tasks` and `kb_vectors` are both in the
 // replicated estate: the selection is an anti-join between the rows and their
 // own vectors, and there is no second read to keep in step.
-type TaskCorpus struct{ DB *store.DB }
+type TaskCorpus struct{ DB store.PartitionReader }
 
 // Source implements [Corpus].
 func (TaskCorpus) Source() Source { return SourceTask }
@@ -711,7 +888,7 @@ func (TaskCorpus) Source() Source { return SourceTask }
 func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]Document, []string, error) {
 	var stale []Document
 	var gone []string
-	err := c.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT t.id, t.project_key, t.version, t.title,
 			       COALESCE(json_extract(t.document, '$.body'), '')
@@ -786,7 +963,7 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 // task's version; every other row is exactly what the duty would select next.
 func (c TaskCorpus) Coverage(ctx context.Context, model string, dim int) (int, int, error) {
 	var current, total int
-	err := c.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 			SELECT COUNT(*),
 			       COUNT(CASE WHEN v.source_id IS NOT NULL

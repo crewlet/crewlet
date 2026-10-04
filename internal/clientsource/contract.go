@@ -164,6 +164,7 @@ var contract = []Entry{
 	{"RetentionTrimFloorState", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},
 	{"RetentionGenerationState", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},
 	{"RetentionIdentityCause", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},
+	{"RetentionEvictionKind", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},
 
 	// coverage.ts
 	{"Coverage", ReadInterface, "internal/eventfan.TestTheDashboardDeclaresExactlyTheCoverageTheEngineSends"},
@@ -194,6 +195,7 @@ var contract = []Entry{
 
 	// wire.ts
 	{"PushKind", ReadUnion, "internal/api/stream.TestTheDashboardKnowsExactlyThePushKindsTheEngineSends"},
+	{"QUERY_TIMEOUT_MS", ReadScalar, "internal/api.TestTheDashboardWaitsPastAReadOfTheGroup"},
 	{"MAX_EVENTS", ReadScalar, "internal/api/livestate.TestTheDashboardKeepsTheFeedTheEngineKeeps"},
 	{"COLLEAGUE_QUERY_MAX", ReadScalar, "internal/api/queries.TestTheDashboardSendsNoNameTheEngineWouldRefuse"},
 	{"SeatActivity", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
@@ -203,6 +205,12 @@ var contract = []Entry{
 
 	// steer.ts
 	{"STEER_NOTE_MAX_RUNES", ReadScalar, "internal/agent/steer.TestTheDashboardBoundsANoteAtTheEnginesCap"},
+
+	// fleet.ts
+	{"BROKER_KINDS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryBrokerKind"},
+	{"BROKER_FINDING_KINDS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryBrokerFinding"},
+	{"BROKER_REMOVE_TIMEOUT_MS", ReadScalar, "internal/api.TestTheDashboardWaitsPastABrokerRemoval"},
+	{"OBJECTS_STATES", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryObjectsState"},
 
 	// links.ts
 	{"PAGE_ADDRESS_PREFIX", ReadScalar, "internal/pages.TestTheDashboardAddressesAPageTheWayTheBacklinksReadIt"},

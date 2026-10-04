@@ -42,8 +42,8 @@
 // # And why the sequence is bounded separately
 //
 // Each budget below bounds ONE create, and a boot makes many of them in a row
-// — fourteen coordination buckets from [internal/coord/kv]'s OpenFleet, three
-// more from its Open, and the engine's own streams beside them.
+// — every coordination bucket [internal/coord/kv]'s OpenFleet and Open
+// provision, and the engine's own streams beside them.
 // Nothing bounded the sequence, so the real worst case was already the product
 // rather than the term, and raising the term alone would have multiplied it.
 // [SequenceBudget] is the wall-clock ceiling over a whole bring-up; a caller
@@ -101,9 +101,10 @@ const (
 	// before this, so the only way a number here can do harm is by being
 	// too SMALL — it would fail a boot that used to work, which is the
 	// exact bug this change exists to fix, reintroduced on the path that
-	// never had it. Two minutes is still a real bound (a quarter of what
-	// the per-create budgets alone would allow) and leaves roughly a
-	// thousandfold headroom over what the creates actually cost.
+	// never had it. Two minutes is still a real bound (a fraction of what
+	// the per-create budgets alone would allow over a boot's creates) and
+	// leaves roughly a thousandfold headroom over what the creates actually
+	// cost.
 	soloSequenceBudget = 2 * time.Minute
 
 	// clusterSequenceBudget bounds a whole clustered bring-up.
@@ -564,7 +565,7 @@ const SlowAfter = 10 * time.Second
 // # Why a provisioning call needs this at all
 //
 // Because a stalled one is COMPLETELY SILENT, and that is what made a failed
-// boot undiagnosable. A node opens eighteen buckets across its two coordination
+// boot undiagnosable. A node opens every bucket of its two coordination
 // stores, and several streams, in a row; if one of them hangs, nothing is
 // logged between the line before it and the failure a budget later — so the
 // log cannot say which object it was on,

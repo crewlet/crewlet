@@ -296,9 +296,12 @@ still one turn on the task. The segment that collects a run pays for that run.
 A turn charged only because of what it wrote is charged when it ends, for
 every segment before it too.
 
-**Counted once.** Each segment is recorded under an id of its own, and the
-counters move only when that record's row is new — so a segment retried after
-a failed resume, or a record delivered twice, adds nothing.
+**Counted once, whichever node runs the turn.** Each segment is recorded under
+an id of its own, and the counters move only when that record's row is new — so
+a segment retried after a failed resume, or a record delivered twice, adds
+nothing. A seat on a node without the `data` role records its charge through a
+data node like every other write, under the same id, so a charge asked again
+of the next data node after one did not answer is still counted once.
 
 **Removed versus purged.** A task in the trash is still charged: removing a
 task hides it and destroys nothing, and the work was done on it. A **purged**
@@ -885,6 +888,8 @@ is a person's arrangement and a seat moves work between lanes with
 its own write, between that card and the one next to it as the board stands
 when the move lands. So two people dragging in one project at once both land
 where they dropped, rather than between two keys that no longer bound anything.
+The key is part of the task from then on — the task's next edit keeps it, and
+reading the task back returns it.
 
 A drag within a lane writes one record, on the project's order, and wakes
 nobody — where a card sits says nothing about what the work is. It never
@@ -931,9 +936,10 @@ new task will be filed at, so the two can never share a place.
 
 ## What a seat can do
 
-Fourteen tools, and they are deliberately few — nine that act on a task,
+Eighteen tools, and they are deliberately few — nine that act on a task,
 three that read the container it is filed into, one that writes the one part of
-that container a seat owns, and one about CHANGE rather than about state:
+that container a seat owns, one about CHANGE rather than about state, and four
+over the project's [files](#a-projects-files):
 
 | Tool | What it does |
 |---|---|
@@ -952,6 +958,10 @@ that container a seat owns, and one about CHANGE rather than about state:
 | `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields, setting the default assignee and setting the **target date** are the project **lead's or a person's own**; archiving the project takes a person specifically |
 | `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
 | `my_work` | everything this seat is expected to look at, in one call — see below |
+| `list_project_files` | a project's files in path order, a page at a time; `folder` narrows to the paths under one |
+| `read_project_file` | one file's text, at most 48 KiB from `offset` with `next_offset` to continue; a file that is not text is described unless `encoding: base64` asks for its bytes |
+| `write_project_file` | put a file at a path — created, or its content replaced — with `if_version` to refuse the write if somebody changed it since you read it |
+| `remove_project_file` | take a file out of a project; its content is deleted from storage |
 
 ### When a task is due and how big it is
 
@@ -1715,9 +1725,9 @@ than what it is about:
 | `purged` | the lead of the project the task was filed in | nothing — the task is gone from every node and nothing restores it |
 
 `purge_task` is the one operation in this engine with no inverse, and for a
-long time it told **nobody**: a task, its comments, its revisions, its history
-and its turn records were destroyed on every node and the person accountable
-for that project heard nothing. The wake names the key, who ran it and their
+long time it told **nobody**: a task, its comments and its revisions were
+destroyed on every node and the person accountable for that project heard
+nothing. The wake names the key, who ran it and their
 stated reason — and nothing else. It quotes neither the title nor the body,
 because the record outlives the rows: an excerpt of what was purged would keep
 a copy of exactly that, on the log, for its whole retention window.
@@ -2131,6 +2141,42 @@ names the same list rather than adding a second one.
 A gesture that would grow the checklists past a cap is refused naming it; one
 that removes, renames, ticks or assigns is never refused for a size the task
 already has.
+## A project's files
+
+A project keeps **files** beside its work — the report a task asked for, the
+spec it is built from, the notes a seat left for the next one. A file lives at a
+**path** inside its project (`reports/2026/q3.md`), and a path is one file: two
+writers putting the same path contend, and exactly one wins.
+
+Seats reach them with the four tools in [What a seat can do](#what-a-seat-can-do);
+a person reaches them on the dashboard's project page, through their own
+assistant (the same four tools), or over REST —
+[`/work/files`](../reference/api-endpoints.md#project-files) takes an upload and
+streams a download without either passing through a model.
+
+**The bytes are not in the tracker.** A file is a row saying where it lives,
+what it is and which **chunks** make it up; the chunks are in the
+[object store](../concepts/object-store.md) — one store the whole fleet
+shares, a bucket on the fleet's own broker or an S3 bucket — rather than in
+every data node's database. So a node that holds no data at all reads and
+writes files as any other node does. Every upload stores its bytes **before** it writes the row naming
+them, so a file that is listed is always a file that can be read.
+
+| | |
+|---|---|
+| Largest file | 1 GiB — larger artefacts belong in a store built for them, with a link in the project |
+| Path | up to 1 024 bytes, `/` between folders; no empty folder, no `.` or `..`, no backslash or control character. A leading `/` and surrounding spaces are dropped |
+| Version | every write moves it; `if_version` (tools) or `If-Match` (REST) refuses a write when the file has changed since it was read |
+| Removing | the file leaves the project's listing and its history records who removed it and when; its content is deleted from storage by the object store's [hourly collection](../concepts/object-store.md#collection-and-audit) once no file names it and it was last written more than a day ago, so write it again to bring it back |
+
+A file's changes are history rows like any other — `file_written` and
+`file_removed` — naming who made them. They wake nobody: a file is read from its
+project rather than delivered to an inbox, so a seat that finished a report
+comments on the task that asked for it.
+
+**A move is a write and a removal.** There is no rename: write the file at its
+new path and remove the old one. The content is not copied — the new row names
+the same chunks — so a move costs two small records whatever the file's size.
 
 ## Removing, deleting and purging
 
@@ -2163,6 +2209,27 @@ crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>
 Its **children move rather than being destroyed**: each direct child
 re-parents onto the purged task's own parent, or becomes a root when the purged
 task was one. Destroying the subtree would destroy work nobody confirmed.
+
+**What its own records wrote goes with it** — the content of its history, the
+inbox notices that history routed, its turn records and its dependency mirror —
+leaving the purge's own history row and the lead's notice as the one account
+of it. Of its history, only a **skeleton** stays: the rows that moved a count —
+its creation, a removal or restore, and each change of status, assignee or
+project — each holding its kind, its instant and those three changes and
+nothing else, no title, no body, no comment and no excerpt. They are what
+[the flow](#how-the-work-has-moved) walks backward to answer the past, and a purge takes a
+task out of that series only from the moment it happened: a board two weeks
+ago held the task, and the chart still says so. That is a purge this build
+writes; one an earlier build wrote keeps those rows whole on every node, as
+that build applied it ([Retention](retention.md#removal-deletion-and-what-a-purge-does-not-reach)).
+
+**Every other task that named it stops naming it**, for good: a task that
+waited on it is no longer blocked by it, a task it waited on no longer lists it
+among the work it unblocks, a link to it is gone, and a child's parent is the
+one it moved onto. Each of those tasks keeps that through its own next edit.
+A purge is a gate on the log, so a node on a build that cannot apply it stops
+its tracker rather than guess — do not purge in the middle of a rolling upgrade
+([What a rolling upgrade blocks](replication.md#what-a-rolling-upgrade-blocks)).
 
 **The project's lead is told**, and nobody else. There is no assignee left to
 tell and no watcher list worth carrying — a notification naming them would be

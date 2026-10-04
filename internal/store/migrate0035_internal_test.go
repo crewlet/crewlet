@@ -22,7 +22,7 @@ const migration0035 = "0035_a_revision_says_what_wrote_it.sql"
 func TestNode0035ClassifiesTheRevisionsAnUpgradeHolds(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool, err := openPrepared(ctx, filepath.Join(t.TempDir(), "node.db"), Options{})
+	pool, err := openPrepared(ctx, filepath.Join(t.TempDir(), "node.db"), Options{}, nil)
 	if err != nil {
 		t.Fatalf("openPrepared: %v", err)
 	}

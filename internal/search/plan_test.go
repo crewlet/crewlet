@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // EVERY INDEX ON THE VECTOR TABLES SERVES A QUERY THIS PACKAGE ISSUES, and the
@@ -21,50 +22,40 @@ import (
 // piece of schema whose mistake looks exactly like a mistake nobody made.
 //
 // Measured at the pin, 20 000 sources at 3 072 dimensions, warm: the two-stage
-// search was 1 min 44 s with the two indexes 0024 created, 50 ms without them,
-// against 259 ms for the exact scan they were meant to beat. Two thousand
-// times, from two indexes nobody would look at twice.
+// search was 1 min 44 s with the two indexes the replicated estate's migration
+// 0003 created, 50 ms without them, against 259 ms for the exact scan they were
+// meant to beat. Two thousand times, from two indexes nobody would look at
+// twice.
 //
 // # What it walks
 //
-// Every statement this package issues against the vector tables, run through
-// EXPLAIN QUERY PLAN on a corpus large enough that the planner has a real
-// choice. Then the inverse: every index the schema declares must appear in at
-// least one of those plans, or it is a copy of the row order nobody reads and
-// a trap the planner can still fall into.
+// Every statement this package issues against the vector tables — the
+// two-stage search in each shape its callers issue it, through the index and
+// through the full scan, built by the function [search.Semantic] calls, and the
+// reads the index's own duty and applier make — run through EXPLAIN QUERY PLAN
+// on a corpus large enough that the planner has a real choice. Then the
+// inverse: every index the schema declares must appear in at least one of
+// those plans, or it is a copy of the row order nobody reads and a trap the
+// planner can still fall into.
 func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
-	db, dim, model := seedVectors(t, 2_000)
+	const dim, model = 32, "plan-embed"
+	db, generation := indexedStore(t, model, dim, 2_000)
 	query := randomEmbedding(rand.New(rand.NewPCG(21, 21)), dim)
 
 	// THE REGISTERED QUERIES: every read this package makes of the vector
 	// tables. A statement not here is a statement whose plan nothing checks.
-	registered := map[string]struct {
+	type registration struct {
 		statement string
 		args      []any
-	}{
-		"the two-stage search": {`
-			SELECT c.source, c.source_id, c.container,
-			       vector_distance_cos(v.embedding, ?) AS distance
-			FROM (
-				SELECT b.source, b.source_id, b.container
-				FROM kb_vectors_bin b
-				WHERE b.model = ? AND b.dim = ?
-				ORDER BY vector_distance_cos(b.bits, vector1bit(?)),
-				         b.source, b.source_id
-				LIMIT ?
-			) AS c
-			JOIN kb_vectors v ON v.source = c.source AND v.source_id = c.source_id
-			WHERE length(v.embedding) = ?
-			ORDER BY distance, c.source, c.source_id
-			LIMIT ?`,
-			[]any{query, model, dim, query, 1200, 4 * dim, 150}},
-		"the evaluation's exact scan": {`
-			SELECT source, source_id FROM kb_vectors
-			WHERE model = ? AND dim = ? AND length(embedding) = ?
-			ORDER BY vector_distance_cos(embedding, ?), source, source_id
-			LIMIT ?`,
-			[]any{model, dim, 4 * dim, query, 150}},
+	}
+	reassign, reassignArgs := search.ReassignStatement(search.RolloutRange{
+		Source: search.SourcePage, From: "s00100", To: "s00400",
+	}, search.IndexHead{Generation: generation, Model: model, Dim: dim})
+	lists := `[0, 1, 2]`
+	registered := map[string]registration{
+		"the evaluation's exact scan": {search.ExactTopsStatement(2),
+			[]any{query, query, model, dim, 4 * dim}},
 		"the embedding spaces an operator reads": {`
 			SELECT model, dim, COUNT(*) FROM kb_vectors
 			WHERE embedding IS NOT NULL GROUP BY model, dim`, nil},
@@ -76,10 +67,86 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			       OR v.model <> ? OR v.dim <> ?)
 			ORDER BY t.updated_at LIMIT ?`,
 			[]any{model, dim, 100}},
+		"the index duty's count of the space": {search.SpaceCountStatement,
+			[]any{model, dim}},
+		"the training's codes": {search.TrainingCodesStatement, []any{model, dim}},
+		"the rollout's unfiled rows": {search.StaleKeysStatement,
+			[]any{model, dim, generation}},
+		"a reassign's range": {reassign, reassignArgs},
+		"the probe's look for unfiled rows": {search.StaleRowsStatement,
+			[]any{model, dim, generation}},
+		"a narrowed probe's count of its rows": {search.MatchingCountStatement(
+			[]string{"b.source IN (?)", "b.container IN (?)"}),
+			[]any{lists, model, dim, generation, "page", "ENG"}},
+	}
+	// THE TWO-STAGE SEARCH IN EVERY SHAPE A CALLER ISSUES IT, built by the
+	// function Semantic itself calls rather than copied: a copy is a plan
+	// for a statement nothing runs. The copy this replaced had no filter at
+	// all, and both callers in the tree pass a source — the knowledge search
+	// its container scope as well, and a fan-out its bucket range. Each
+	// shape twice: through the index, and forced to the full scan.
+	//
+	// ONE PROBE A SEARCH, so every narrowed shape reads few enough lists to
+	// stay on the index ([search.ProbeCount]) — a plan of the index is what
+	// is being checked, and a narrowed shape handed to the scan would
+	// certify the scan's plan twice.
+	shapes := map[string]search.SemanticQuery{
+		"the two-stage search": {},
+		"the two-stage search over one source": {
+			Sources: []search.Source{search.SourceTask},
+		},
+		"the two-stage search over one source in a scope": {
+			Sources:    []search.Source{search.SourcePage},
+			Containers: []string{"ENG", "OPS"},
+		},
+		"the two-stage search over one source under an assignment": {
+			Sources:    []search.Source{search.SourcePage},
+			Containers: []string{"ENG"},
+			Shards:     search.Assignment{From: 0, To: 32},
+		},
+		"the two-stage search under an assignment": {
+			Shards: search.Assignment{From: 16, To: 48},
+		},
+	}
+	for name, shape := range shapes {
+		shape.Probes = 1
+		shapes[name] = shape
+	}
+	methods := map[string]search.Stage1Method{}
+	build := func(tx *sql.Tx, suffix string, fullScan bool) error {
+		for name, shape := range shapes {
+			shape.Vector, shape.Model, shape.Dim = query, model, dim
+			shape.FullScan = fullScan
+			statement, args, report, err := search.SemanticStatement(t.Context(), tx, shape)
+			if err != nil {
+				return fmt.Errorf("%s: build the statement: %w", name, err)
+			}
+			registered[name+suffix] = registration{statement, args}
+			methods[name+suffix] = report.Method
+		}
+		return nil
+	}
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
+		if err := build(tx, " through the index", false); err != nil {
+			return err
+		}
+		return build(tx, " by the full scan", true)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// AND MID-ROLLOUT: a second index installed and not yet rolled out, so
+	// the probe reads the unfiled rows beside its lists.
+	second := trainedIndex(t, db, model, dim)
+	second.Index.Seed++
+	applyAt(t, db, second, 1<<30)
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
+		return build(tx, " mid-rollout", false)
+	}); err != nil {
+		t.Fatal(err)
 	}
 
 	plans := map[string][]string{}
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		for name, q := range registered {
 			steps, err := explain(t, tx, q.statement, q.args...)
 			if err != nil {
@@ -92,27 +159,97 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// THE JOIN REACHES kb_vectors BY ITS PRIMARY KEY. This is the exact
-	// failure that cost the hundred seconds: an index leading on `source`
-	// alone made every candidate scan half the table.
-	joined := strings.Join(plans["the two-stage search"], "\n")
-	if !strings.Contains(joined, "sqlite_autoindex_kb_vectors_1") ||
-		!strings.Contains(joined, "source_id=?") {
-		t.Fatalf("the second stage reaches kb_vectors by something other than "+
-			"its primary key:\n%s\n\nA seek on `source` alone scans half the "+
-			"company per candidate, through rows twelve kilobytes wide — "+
-			"measured at 1 min 44 s against 50 ms", joined)
+	for name, method := range methods {
+		joined := strings.Join(plans[name], "\n")
+		// THE JOIN REACHES kb_vectors BY ITS PRIMARY KEY. This is the exact
+		// failure that cost the hundred seconds: an index leading on
+		// `source` alone made every candidate scan half the table.
+		if !strings.Contains(joined, "sqlite_autoindex_kb_vectors_1") ||
+			!strings.Contains(joined, "source_id=?") {
+			t.Fatalf("%s: the second stage reaches kb_vectors by something "+
+				"other than its primary key:\n%s\n\nA seek on `source` alone "+
+				"scans half the company per candidate, through rows twelve "+
+				"kilobytes wide — measured at 1 min 44 s against 50 ms",
+				name, joined)
+		}
+		wantMethod := search.Stage1IVF
+		if strings.HasSuffix(name, "by the full scan") {
+			wantMethod = search.Stage1Scan
+		}
+		if method != wantMethod {
+			t.Fatalf("%s: the first stage planned as %q", name, method)
+		}
+		switch method {
+		case search.Stage1Scan:
+			// THE FULL SCAN READS THE NARROW ROWS SEQUENTIALLY — the
+			// table, the primary key's own seek on `source` where a
+			// source filter gives it one, or the covering index, which is
+			// the same narrow rows in another order — and never an
+			// index that sends it back to the table per row. The cost
+			// model is N x c_row over 400-byte rows, and every
+			// uncovering index measured over it was that read plus a
+			// random access per row: see the package doc.
+			first := firstStage(plans[name])
+			if first != "SCAN kb_vectors_bin AS b" &&
+				!strings.Contains(first, "USING INDEX sqlite_autoindex_kb_vectors_bin_1") &&
+				!strings.Contains(first, "USING COVERING INDEX kb_vectors_bin_ivf_idx") {
+				t.Fatalf("%s: the full scan reads kb_vectors_bin through %q:\n%s\n\n"+
+					"only a scan, the primary key's own seek or the covering "+
+					"index keeps it N x c_row", name, first, joined)
+			}
+		case search.Stage1IVF:
+			// THE PROBE SEEKS EVERY LIST IT READS on the covering index,
+			// by the whole key a list is — the space, the generation and
+			// the list. A plan that seeks by less reads every list of the
+			// generation, and one on any other index reads the table per
+			// row: either is the scan's cost for the probe's answer.
+			if !strings.Contains(joined,
+				"USING COVERING INDEX kb_vectors_bin_ivf_idx (model=? AND dim=? AND ivf_gen=? AND ivf_list=?") {
+				t.Fatalf("%s: the probe does not seek each list on the covering "+
+					"index:\n%s", name, joined)
+			}
+			if strings.HasSuffix(name, "mid-rollout") &&
+				!strings.Contains(joined, "USING COVERING INDEX kb_vectors_bin_ivf_idx (model=? AND dim=? AND ivf_gen<?)") {
+				t.Fatalf("%s: the rows a rollout has not reached are not read "+
+					"as one range of the covering index:\n%s", name, joined)
+			}
+		}
 	}
-	// AND THE FIRST STAGE SCANS THE NARROW TABLE. The cost model is
-	// N x c_row over 400-byte rows; an index over it is that scan plus a
-	// random access per row.
-	if !strings.Contains(joined, "SCAN kb_vectors_bin") {
-		t.Fatalf("the first stage does not scan kb_vectors_bin:\n%s", joined)
+	// A REASSIGN SEEKS ITS RANGE ON THE PRIMARY KEY — it re-files a
+	// thousand rows, and a plan that walked the space to find them would
+	// cost every holder a partition's read per batch.
+	if joined := strings.Join(plans["a reassign's range"], "\n"); !strings.Contains(joined,
+		"sqlite_autoindex_kb_vectors_bin_1 (source=? AND source_id>=? AND source_id<?)") {
+		t.Fatalf("a reassign's range is not a seek on the primary key:\n%s", joined)
+	}
+	if joined := strings.Join(plans["the probe's look for unfiled rows"], "\n"); !strings.Contains(joined,
+		"kb_vectors_bin_ivf_idx (model=? AND dim=? AND ivf_gen<?)") {
+		t.Fatalf("the look for unfiled rows is not one seek on the covering "+
+			"index — it runs before every probe:\n%s", joined)
+	}
+	if joined := strings.Join(plans["the rollout's unfiled rows"], "\n"); !strings.Contains(joined,
+		"kb_vectors_bin_ivf_idx (model=? AND dim=? AND ivf_gen<?)") {
+		t.Fatalf("the rollout's read of the unfiled rows is not one range of "+
+			"the covering index:\n%s", joined)
+	}
+	// A NARROWED PROBE'S COUNT SEEKS EACH LIST ON THE COVERING INDEX and
+	// reads no row of the table: it runs before the probe it sizes.
+	if joined := strings.Join(plans["a narrowed probe's count of its rows"], "\n"); !strings.Contains(joined,
+		"USING COVERING INDEX kb_vectors_bin_ivf_idx (model=? AND dim=? AND ivf_gen=? AND ivf_list=?") {
+		t.Fatalf("a narrowed probe's count does not seek each list on the "+
+			"covering index:\n%s", joined)
+	}
+	// AND THE DUTY COUNTS ITS SPACE ON kb_vectors' MODEL INDEX, every tick —
+	// never by walking the wide table or the covering one.
+	if joined := strings.Join(plans["the index duty's count of the space"], "\n"); !strings.Contains(joined,
+		"USING COVERING INDEX kb_vectors_model_idx") {
+		t.Fatalf("the duty's count of its space does not read kb_vectors' "+
+			"model index:\n%s", joined)
 	}
 
 	// THE INVERSE: an index no registered plan reaches.
 	var declared []string
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(), `
 			SELECT name FROM sqlite_master
 			WHERE type = 'index' AND tbl_name IN ('kb_vectors', 'kb_vectors_bin')
@@ -148,6 +285,16 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 		}
 	}
 	t.Logf("vector indexes: %v", declared)
+}
+
+// firstStage is the plan step that reads kb_vectors_bin.
+func firstStage(steps []string) string {
+	for _, step := range steps {
+		if strings.Contains(step, "kb_vectors_bin") || strings.Contains(step, " b USING") {
+			return step
+		}
+	}
+	return ""
 }
 
 // explain runs one statement through EXPLAIN QUERY PLAN.
@@ -188,7 +335,7 @@ func explain(t *testing.T, tx *sql.Tx, statement string, args ...any) ([]string,
 func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
 	// A TERM THAT IS NOT IN EVERY DOCUMENT. If the queried term appeared in
 	// the whole corpus, the posting list and the bucket range would be the
 	// same size and driving on either would be a defensible plan — which
@@ -258,8 +405,11 @@ func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 			`DELETE FROM kb_postings WHERE doc_id = ?`, []any{"page:p.0001"}},
 	}
 
+	// IN A WRITE TRANSACTION, because two of the registered statements are
+	// the index's own removals: a read transaction runs with writes refused
+	// (store.DB.Read), and the engine refuses even to plan a DELETE there.
 	plans := map[string][]string{}
-	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 		for name, q := range registered {
 			steps, err := explain(t, tx, q.statement, q.args...)
 			if err != nil {

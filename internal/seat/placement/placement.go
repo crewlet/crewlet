@@ -45,6 +45,18 @@ import (
 type NodeRole string
 
 const (
+	// RoleData keeps the company's durable state on this node's own disk: a
+	// copy of the replicated estate and the node's own database. A node
+	// WITHOUT it keeps nothing that has to outlive it: its store is scratch,
+	// and it reads and writes the company's tracker and knowledge base
+	// through a data node. It is what a small, disposable agent node runs.
+	//
+	// IT SAYS NOTHING ABOUT THE BROKER. Whether this node's broker is a
+	// member of the fleet's JetStream cluster, a leaf of it or a client of
+	// an external one is its [BrokerKind], derived from the stream block;
+	// a question about who holds broker state asks that, never this.
+	RoleData NodeRole = "data"
+
 	// RoleIngress terminates inbound traffic: the HTTP API, the dashboard,
 	// and the webhooks every integration posts to. A fleet with none of
 	// these still runs its agents and never hears from the outside world.
@@ -66,7 +78,14 @@ const (
 // allRoles is the vocabulary, in the order a profile is written to the wire.
 // Alphabetical, so two nodes describing the same role set produce byte-equal
 // meta.
-var allRoles = []NodeRole{RoleIngress, RoleSeats, RoleWorkers}
+var allRoles = []NodeRole{RoleData, RoleIngress, RoleSeats, RoleWorkers}
+
+// Vocabulary is every role, in wire order — a fresh slice per call.
+//
+// EXPORTED SO NOTHING WRITES THE LIST AGAIN. The fleet's unmanned-role check
+// walked a copy of its own, and a copy is how a fourth role reaches every
+// node's config and no node's warning about nobody holding it.
+func Vocabulary() []NodeRole { return slices.Clone(allRoles) }
 
 // ErrUnknownRole reports a role name that is not in the vocabulary. Config
 // loading wraps it; nothing branches on it beyond refusing to boot.
@@ -252,11 +271,44 @@ func (p SeatPlacement) String() string {
 // The zero value is a node with no id that does everything and carries no
 // labels; see [RoleSet] for why an unset role set is every role rather than
 // none.
+//
+// NOTHING ABOUT THE OBJECT STORE rides here, deliberately. A data node's share
+// of it was once a field of this profile, and presence is the seat host's
+// lease: a shutdown drain gives it back first, while the node still serves
+// every chunk it holds. The object store's membership is its own lease
+// (coord.ClassObjects), claimed and released by the store itself.
+//
+// THE BROKER DOES, because it is a fact about the PROCESS rather than about a
+// disk: the broker starts and stops with the node, so the lease that says the
+// node is running is the one that says what its broker is.
 type NodeProfile struct {
 	ID     string
 	Roles  RoleSet
 	Labels map[string]string
+
+	// Held is how many seat leases the node says it holds — the seats it
+	// runs and the ones whose teardown it could not prove — as of its last
+	// presence renewal. NIL WHEN ITS ROW SAYS NOTHING, which a build that
+	// predates the field writes, and which is not the node saying zero (see
+	// [HeldKey]).
+	Held *int
+
+	// Broker is how this node's broker takes part in the fleet's. Read off
+	// a peer's row, [BrokerUnknown] means the row did not say — see
+	// [BrokerKind] for why that is never read as a leaf.
+	Broker BrokerKind
 }
+
+// HeldKey is where a presence row carries [NodeProfile.Held].
+//
+// ON THE PRESENCE ROW because it is the one read every sweep already makes:
+// a node with room for one more seat and nothing free — the steady state of
+// any fleet whose seats do not divide evenly — used to learn that nothing was
+// free by trying every seat it may run, a leader read each, every five
+// seconds. The fleet's own counts answer it from the listing the sweep has
+// already taken. Written by the seat host, beside the profile rather than in
+// it, because it is live state and the profile is configuration.
+const HeldKey = "seats_held"
 
 // RunsSeats reports whether this node claims seats at all. It is the
 // denominator test.
@@ -269,14 +321,36 @@ func (n NodeProfile) RunsWorkers() bool { return n.Roles.Has(RoleWorkers) }
 // RunsIngress reports whether this node serves inbound traffic.
 func (n NodeProfile) RunsIngress() bool { return n.Roles.Has(RoleIngress) }
 
+// HoldsData reports whether this node holds the company's durable state —
+// a copy of the replicated estate on its own disk. A node that does not is
+// stateless: see [RoleData]. It says nothing about the broker, which is
+// [NodeProfile.Broker].
+//
+// READ OFF A PEER'S ROW, it fails the way every role read does — an unknown
+// or unreadable set is every role — which is the safe reading for most
+// questions and a NARROW one here: a peer an older build describes is
+// counted as holding data, so a fleet mid-upgrade may wait on a node's
+// position it will not report. The alternative reading would trim past a
+// member's rows, which is the one thing a trim must never do.
+func (n NodeProfile) HoldsData() bool { return n.Roles.Has(RoleData) }
+
 // Meta is the lease payload for this node's presence row, in the shape
 // [coord.AcquireOptions].Meta takes. Roles are written resolved and sorted,
 // so a reader never has to know what this build's default was.
+//
+// THE BROKER ONLY WHEN IT IS KNOWN. Its absence is the one way to say
+// [BrokerUnknown] — an empty string on the wire would be a value a reader had
+// to know means nothing — and a profile nobody derived a kind for (a test's,
+// a caller that built one by hand) must not claim one.
 func (n NodeProfile) Meta() map[string]any {
-	return map[string]any{
+	meta := map[string]any{
 		"roles":  n.Roles.Names(),
 		"labels": maps.Clone(n.Labels),
 	}
+	if n.Broker.Valid() {
+		meta["broker"] = string(n.Broker)
+	}
+	return meta
 }
 
 // FromMeta reads a peer's profile back off its presence lease.
@@ -292,12 +366,43 @@ func (n NodeProfile) Meta() map[string]any {
 // The absent case is not hypothetical. A presence row written by a build
 // that predates this field has no meta at all, which is exactly what a
 // rolling upgrade puts in front of the new nodes.
+//
+// The broker follows the same rule with its own safe reading: anything this
+// build cannot read is [BrokerUnknown], which a question counting members
+// treats as one, and never a leaf.
 func FromMeta(nodeID string, meta map[string]any) NodeProfile {
 	return NodeProfile{
 		ID:     nodeID,
 		Roles:  rolesFromMeta(meta["roles"]),
 		Labels: labelsFromMeta(meta["labels"]),
+		Held:   heldFromMeta(meta[HeldKey]),
+		Broker: brokerFromMeta(meta["broker"]),
 	}
+}
+
+// heldFromMeta accepts the int this build writes and the float64 a JSON round
+// trip through the lease store returns, and reads anything else — absent, a
+// string, a negative or fractional count — as NOT SAYING. A reader that needs
+// a number decides what not saying means for its own question.
+func heldFromMeta(raw any) *int {
+	var n int
+	switch v := raw.(type) {
+	case int:
+		n = v
+	case int64:
+		n = int(v)
+	case float64:
+		if v != float64(int(v)) {
+			return nil
+		}
+		n = int(v)
+	default:
+		return nil
+	}
+	if n < 0 {
+		return nil
+	}
+	return &n
 }
 
 // FromLease reads a peer's profile off a presence lease, reporting false for

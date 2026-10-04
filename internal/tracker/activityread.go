@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -158,6 +157,12 @@ type ActivityAnswer struct {
 	LogLag         *uint64            `json:"log_lag,omitempty"`
 	Complete       bool               `json:"complete"`
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
+	// Coverage is which partitions this answer was read from and which it
+	// could not reach, with the cut each was read at — filled by the estate
+	// router that answered the caller, never by this reader, which reads
+	// one partition's rows and knows nothing of the others. A non-empty
+	// Missing is rendered as its Notice, never as the shorter list alone.
+	Coverage statelog.Coverage `json:"coverage,omitzero"`
 }
 
 // MaxActivityRows is how many commits one page carries.
@@ -783,7 +788,7 @@ func compileActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery) (
 		add(`h.excerpt LIKE ? ESCAPE '\'`, "%"+likeEscape(text)+"%")
 	}
 	if cursor := strings.TrimSpace(q.Cursor); cursor != "" {
-		at, err := ParseLogPosition(cursor)
+		at, err := statelog.ParsePosition(cursor)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -792,41 +797,4 @@ func compileActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery) (
 		add("h.log_seq < ?", at.Packed())
 	}
 	return where, args, nil
-}
-
-// ParseLogPosition reads back the `stream@generation:seq` triple a cursor is.
-//
-// THE TRIPLE RATHER THAN A BARE SEQUENCE, because a sequence names no stream
-// and no generation: handed one from a previous generation, a reader cannot
-// tell a position that is behind from one that is impossibly far ahead — and
-// the whole reason the public cursor carries all three is that it then never
-// needs a migration.
-func ParseLogPosition(raw string) (statelog.Position, error) {
-	refuse := func() (statelog.Position, error) {
-		return statelog.Position{}, fmt.Errorf("tracker: %q is not a log "+
-			"position — one reads `<stream>@<generation>:<sequence>`, and the "+
-			"answer that produced it carries the value to send back", raw)
-	}
-	stream, rest, found := strings.Cut(raw, "@")
-	if !found || stream == "" {
-		return refuse()
-	}
-	generation, sequence, found := strings.Cut(rest, ":")
-	if !found {
-		return refuse()
-	}
-	gen, err := strconv.ParseUint(generation, 10, 32)
-	if err != nil {
-		return refuse()
-	}
-	seq, err := strconv.ParseUint(sequence, 10, 64)
-	if err != nil {
-		return refuse()
-	}
-	at := statelog.Position{Stream: stream, Generation: uint32(gen), Seq: seq}
-	if err := at.Valid(); err != nil {
-		return statelog.Position{}, fmt.Errorf("tracker: %q is not a usable "+
-			"log position: %w", raw, err)
-	}
-	return at, nil
 }

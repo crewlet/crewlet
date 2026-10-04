@@ -2,21 +2,26 @@
 
 - **Status:** accepted
 - **Authority:** `internal/store`
-- **Enforced-by:** `internal/store.TestNoStatementNamesBothEstates`, `internal/store.TestNoTableIsDeclaredInBothEstates`
-- **Measured:** 17 tables in the node estate, 60 in the replicated one — one of the seventeen, `chat_thread_follows`, is permanently empty and is a handoff source rather than state (node migration 0028)
+- **Enforced-by:** `internal/store.TestNoStatementSpansTwoFiles`, `internal/store.TestNoTableIsDeclaredInBothEstates`
+- **Measured:** 18 tables in the node estate, 59 in the replicated one — one of the eighteen, `chat_thread_follows`, is permanently empty and is a handoff source rather than state (node migration 0028)
 - **Cost-when-tried:** taken from a single file, a snapshot is a copy of everything followed by a delete — and with no in-place `VACUUM`, the deleted pages ride along in the artefact, the transfer, the checksum and the integrity check anyway.
 - **Tag-status:** unreleased
 
 ## The decision
 
-One `Open` brings up **two** databases: the NODE estate (the audit event log,
+A node keeps **two** databases: the NODE estate (the audit event log,
 learning memory, config revisions, the lexical search index, the bootstrap half
-of the secret store) and the REPLICATED estate beside it, which is everything a
-state log's applier writes.
+of the secret store), which `store.OpenNode` brings up, and the REPLICATED
+estate beside it, which is everything a state log's applier writes — opened by
+the engine on every data node, from boot and whatever its company runs, as the
+file of layout 0's one partition (`store.DB.OpenPartition`), because that is
+what the estate becomes when a layout divides it.
 
 Two rules make that real, and both are enforced by a static walk rather than
 held as a convention: **no transaction spans the two, and no read joins across
-them.** A cross-estate comparison is a batch from each side, never a `JOIN`.
+them.** A cross-estate comparison is a batch from each side, never a `JOIN` —
+and there is no `ATTACH`, the one statement that would put a second file on a
+connection.
 
 ## Why the obvious alternative is wrong
 

@@ -29,7 +29,7 @@ const migration0037 = "0037_the_runtime_audit_tags_its_history.sql"
 func TestNode0037TagsTheRuntimeAuditAnUpgradeHolds(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	pool, err := openPrepared(ctx, filepath.Join(t.TempDir(), "node.db"), Options{})
+	pool, err := openPrepared(ctx, filepath.Join(t.TempDir(), "node.db"), Options{}, nil)
 	if err != nil {
 		t.Fatalf("openPrepared: %v", err)
 	}

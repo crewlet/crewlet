@@ -35,7 +35,7 @@ func TestThePositionRegisterSurvivesASweepThatExpiresEverythingElse(t *testing.T
 	leases := openStore(t, nc, ttl)
 	s := openFleetWithTTL(t, nc, ttl)
 
-	if _, err := leases.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
+	if _, _, err := leases.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 		Owner: "node-a:1", TTL: ttl,
 	}); err != nil {
 		t.Fatalf("TryAcquire: %v", err)
@@ -123,16 +123,19 @@ func rowFor(rows []coord.NodePositions, node string) (coord.NodePositions, bool)
 // so a case can prove what did NOT expire beside something that did.
 func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStore {
 	t.Helper()
-	store, err := OpenFleet(context.Background(), nc, FleetConfig{
-		BucketPrefix:    fmt.Sprintf("p%d", bucketSeq.Add(1)),
-		RateWindow:      ttl,
-		ClaimTTL:        ttl,
-		LedgerRetention: ttl,
-		FireRetention:   ttl,
-		FollowRetention: ttl,
-		CooldownMax:     ttl,
-		BudgetRetention: ttl,
-		StatusFreshness: ttl,
+	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
+		BucketPrefix:     fmt.Sprintf("p%d", bucketSeq.Add(1)),
+		RateWindow:       ttl,
+		ClaimTTL:         ttl,
+		LedgerRetention:  ttl,
+		FireRetention:    ttl,
+		FollowRetention:  ttl,
+		RebaseRetention:  ttl,
+		CooldownMax:      ttl,
+		BudgetRetention:  ttl,
+		StatusFreshness:  ttl,
+		CustodyRetention: ttl,
+		ChunkLockTTL:     ttl,
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)

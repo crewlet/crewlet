@@ -176,15 +176,19 @@
 // of two timestamps — see expires_at_is_a_utc_deadline_on_the_stores_clock for
 // why ordering admits a second reason.
 //
-// The largest thing this suite assumes without saying so is READ-YOUR-OWN-
-// WRITE: every case reads back a claim it just made, and coord.go never
-// promises that. Both certified backends make it true for free — one is a
-// mutex over a map, the other a single-connection KV — so no case here can
-// tell a store that guarantees it from one that happens to. A backend with
-// asynchronous replication would fail case after case for a property nobody
-// wrote down. It is enforced rather than relaxed because a claim you cannot
-// read back cannot provide mutual exclusion, and the seat host reads ListLive
-// and FleetProtocolFloor immediately after claiming.
+// The largest thing this suite assumes is READ-YOUR-OWN-WRITE: every case
+// reads back a claim it just made. [Run] hands a case ONE handle, and both
+// certified backends make that true through one handle for free — one is a
+// mutex over a map, the other a KV run here on a single member — so no case
+// in [Run] can tell a store that guarantees it from one that happens to. The
+// KV backend on a REPLICATED bucket did not: a read a replica answered from
+// its own copy could be behind the claim it was reading back, and claims that
+// won answered "not held". [RunShared] is the half that can tell: its cases
+// spread their handles across a store's members. It is enforced rather than
+// relaxed because a claim you cannot read back cannot provide mutual
+// exclusion, and the seat host acts on reads that follow its own writes: a
+// renewal a heartbeat after a claim, the next sweep's listing, and the floor a
+// refused claim asks for.
 //
 // Two lag shapes are not the same risk. A general READ lag fails loudly —
 // measured, by making the twin serve reads from a snapshot one write behind,
@@ -438,8 +442,10 @@ func newHarness(t *testing.T, newBackend func(t *testing.T) coord.Backend) *harn
 	// Per class, because there is no all-classes listing: a class is the
 	// leading segment of a resource name and the empty one addresses
 	// nothing, so "every lease" is a question this surface deliberately
-	// does not answer. These three are what the suite itself claims.
-	for _, class := range []coord.Class{coord.ClassSeat, coord.ClassWorker, coord.ClassNode} {
+	// does not answer. These four are what the suite itself claims.
+	for _, class := range []coord.Class{
+		coord.ClassSeat, coord.ClassWorker, coord.ClassNode, callerClass,
+	} {
 		if live := h.listLive(class); len(live) != 0 {
 			t.Fatalf("newBackend must return an empty store, got %d live %s lease(s): %v",
 				len(live), class, resources(live))
@@ -452,13 +458,17 @@ func newHarness(t *testing.T, newBackend func(t *testing.T) coord.Backend) *harn
 func (h *harness) claim(resource string, opts coord.AcquireOptions) *coord.Lease {
 	h.t.Helper()
 	h.lastClaimAt, h.lastClaimTTL, h.travelled = time.Now(), opts.TTL, false
-	lease, err := h.b.TryAcquire(h.ctx, resource, opts)
+	lease, refused, err := h.b.TryAcquire(h.ctx, resource, opts)
 	if err != nil {
 		h.t.Fatalf("TryAcquire(%q, owner=%q): unexpected error: %v", resource, opts.Owner, err)
 	}
 	if lease == nil {
-		h.t.Fatalf("TryAcquire(%q, owner=%q): refused, expected the claim to be granted",
-			resource, opts.Owner)
+		h.t.Fatalf("TryAcquire(%q, owner=%q): refused (%q), expected the claim to be granted",
+			resource, opts.Owner, refused)
+	}
+	if refused != "" {
+		h.t.Fatalf("TryAcquire(%q, owner=%q): granted AND refused %q — a claim has one answer",
+			resource, opts.Owner, refused)
 	}
 	if lease.Resource != resource || lease.Owner != opts.Owner {
 		h.t.Fatalf("TryAcquire(%q, owner=%q) returned a lease for (%q, %q)",
@@ -471,19 +481,26 @@ func (h *harness) claim(resource string, opts coord.AcquireOptions) *coord.Lease
 	return lease
 }
 
-// refused asserts the DEFINITE refusal — (nil, nil). An error here means the
-// backend collapsed "unknown" into "somebody else holds it", which is the
-// conflation the whole tri-state exists to prevent.
-func (h *harness) refused(resource string, opts coord.AcquireOptions) {
+// refused asserts the DEFINITE refusal, and that it names the rule that made
+// it. An error here means the backend collapsed "unknown" into a refusal,
+// which is the conflation the whole tri-state exists to prevent; the wrong
+// reason means a caller acts on the wrong fact — a seat host reading a held
+// seat as a protocol stall judges a gate on every sweep for nothing, and one
+// reading a stall as a held seat reports no stalled upgrade at all.
+func (h *harness) refused(resource string, opts coord.AcquireOptions, want coord.Refusal) {
 	h.t.Helper()
-	lease, err := h.b.TryAcquire(h.ctx, resource, opts)
+	lease, refused, err := h.b.TryAcquire(h.ctx, resource, opts)
 	if err != nil {
-		h.t.Fatalf("TryAcquire(%q, owner=%q): a genuine refusal must be (nil, nil), got error: %v",
+		h.t.Fatalf("TryAcquire(%q, owner=%q): a genuine refusal must not be an error, got: %v",
 			resource, opts.Owner, err)
 	}
 	if lease != nil {
 		h.t.Fatalf("TryAcquire(%q, owner=%q): granted at epoch %d, expected a refusal",
 			resource, opts.Owner, lease.Epoch)
+	}
+	if refused != want {
+		h.t.Fatalf("TryAcquire(%q, owner=%q): refused %q, want %q", resource, opts.Owner,
+			refused, want)
 	}
 }
 
@@ -800,3 +817,8 @@ func resources(leases []coord.Lease) []string {
 	}
 	return out
 }
+
+// callerClass is a lease class this package does not own, as a caller's own
+// claims are leased (the tracker's, under classes of their own): what the suite
+// claims to prove a listing of one class never returns another's.
+const callerClass coord.Class = "claim"

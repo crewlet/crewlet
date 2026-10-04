@@ -226,7 +226,7 @@ func TestAGateIsAboutTheWholeDomain(t *testing.T) {
 func TestEveryKindIsClassifiedAndEveryArbitratedKindIsDeclared(t *testing.T) {
 	t.Parallel()
 	declared := map[string]bool{}
-	for _, k := range (pages.Domain{}).Stream().ArbitratedKinds {
+	for _, k := range (pages.Domain{}).StreamShape().ArbitratedKinds {
 		declared[k] = true
 	}
 	for _, kind := range pages.ObjectKinds {

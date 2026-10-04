@@ -85,6 +85,47 @@ func (w *Window) Add(key string, n uint64) {
 	b[key] = v
 }
 
+// AddAt contributes to a counter in the hour at names rather than the current
+// one: a count of things that HAPPENED at a known instant, filed where they
+// happened.
+//
+// It exists for a count taken where an event is observed LATER than it
+// occurred — a record applied from a log, counted when the applier reaches it
+// but committed when the broker stored it. Filed at the hour it was counted, a
+// node that replays a backlog files days of events into one hour, and every
+// windowed reading of them says the day just seen was that many days long.
+//
+// An instant older than the window counts toward nothing here — it happened
+// outside the period every reader of the window asks about — and one past the
+// current hour, which only a clock that disagrees with this one produces, is
+// filed in the current hour, the latest the window has.
+func (w *Window) AddAt(key string, n uint64, at time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	hour := at.UTC().Unix() / 3600
+	now := w.now().UTC().Unix() / 3600
+	switch {
+	case hour > now:
+		hour = now
+	case now-hour > int64(Buckets):
+		return
+	}
+	idx := int(hour % int64(len(w.hours)))
+	if w.hours[idx] != hour {
+		if w.hours[idx] > hour {
+			// THE SLOT HOLDS A LATER HOUR, which inside the window is
+			// only possible once this node's clock has gone back: the
+			// later hour's count is the one still in the window.
+			return
+		}
+		w.hours[idx] = hour
+		w.ring[idx] = map[string]bucketValue{}
+	}
+	v := w.ring[idx][key]
+	v.total += n
+	w.ring[idx][key] = v
+}
+
 // Max contributes to a maximum in the current hour.
 func (w *Window) Max(key string, v float64) {
 	w.mu.Lock()

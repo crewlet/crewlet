@@ -19,6 +19,16 @@ func TestContract(t *testing.T) {
 	coordtest.Run(t, func(t *testing.T) coord.Backend { return memory.New() })
 }
 
+// And through several handles on one store — the twin has one process, so the
+// same store is every handle, which is the shape the shared cases hold a
+// replicated backend to.
+func TestSharedContract(t *testing.T) {
+	coordtest.RunShared(t, func(t *testing.T) []coord.Backend {
+		b := memory.New()
+		return []coord.Backend{b, b, b}
+	})
+}
+
 // The zero value has to work: callers construct plain data without
 // constructors, and a store that only functions when built by New would fail
 // on a struct field somebody forgot to initialise.
@@ -35,7 +45,7 @@ func TestInjectedClockDecidesExpiry(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	b := &memory.Backend{Clock: func() time.Time { return now }}
 
-	lease, err := b.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+	lease, _, err := b.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
 		Owner: "node-a:1", TTL: 30 * time.Second,
 	})
 	if err != nil || lease == nil {
@@ -82,7 +92,7 @@ func TestDeadContextIsUnknownNotRefusal(t *testing.T) {
 		call func() error
 	}{
 		{"TryAcquire", func() error {
-			lease, err := b.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+			lease, _, err := b.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
 				Owner: "node-a:1", TTL: time.Minute,
 			})
 			if lease != nil {
@@ -163,7 +173,7 @@ func TestUnencodableMetaIsRefusedNotDropped(t *testing.T) {
 		{"a value no encoder accepts", make(chan int)},
 		{"a value that encodes but will not decode", json.Number("1e1000")},
 	} {
-		lease, err := b.TryAcquire(ctx, resource, coord.AcquireOptions{
+		lease, _, err := b.TryAcquire(ctx, resource, coord.AcquireOptions{
 			Owner: "n1:a", TTL: time.Minute, Ungated: true,
 			Meta: map[string]any{"roles": []any{"seats"}, "bad": bad.value},
 		})

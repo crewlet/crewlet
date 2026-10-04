@@ -40,11 +40,11 @@ crewlet run -config crewlet.yaml -company company.yaml
 That is the deployment. Point a reverse proxy at the API port for inbound
 webhooks and the dashboard, and there is nothing else to operate.
 
-Give that proxy a **read timeout above 75 seconds** on the API port. Nearly
+Give that proxy a **read timeout above two minutes** on the API port. Nearly
 every request is answered in well under a second, but a node eviction or
-readmission ([Retention](retention.md#eviction)) may take up to a minute
-past its judgement to write every log, and `crewlet retention evict` and the
-dashboard's evict dialog both wait seventy-five seconds for its answer.
+readmission ([Retention](retention.md#eviction)) may take up to a minute and
+a half — half a minute to judge it and a minute to write every log — and `crewlet retention evict` and
+the dashboard's evict dialog both wait two minutes for its answer.
 nginx's `proxy_read_timeout` defaults to sixty, which cuts exactly those off
 with a 504. Nothing is lost when it does — the node finishes the gesture
 whatever happens to the connection, and both clients read an answer the engine
@@ -66,14 +66,14 @@ never below 1 GiB each, so:
   of 5⅓ GiB is the four 1 GiB floors. Below it the node refuses to boot with an
   error naming the log it could not reserve, the bytes it needed, the bytes
   the broker had left, and the Tier A field that sets the ceiling.
-- **More room buys longer logs, up to a point.** Unset, the mutation log asks
-  for a quarter of the free space (4..64 GiB), the knowledge base's log for a
-  quarter of that, the vector changelog for 16 GiB capped by the same
-  quarter, and the usage log for a fixed 1 GiB — its size is a count of
-  node-days rather than a rate, so more disk buys it nothing. They are scaled
-  down together whenever they ask for more than that half, which on a first
-  boot is every volume with less than 256 GiB free; from there up each log gets
-  what it asked for.
+- **More room buys longer logs, up to a point.** Unset, the mutation log and
+  the vector changelog each ask for a quarter of the free space (4..64 GiB),
+  the knowledge base's log for a quarter of the mutation log's, and the usage
+  log for a fixed 1 GiB — its size is a count of node-days rather than a rate,
+  so more disk buys it nothing. They are scaled down together whenever they
+  ask for more than half the free space, which on a first boot is every volume
+  with less than about 290 GiB free (at their 64 GiB clamps the four ask for
+  145 GiB); from there up each log gets what it asked for.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes` or
@@ -216,12 +216,19 @@ same precedence as everything else that identifies this node — `node.id` in
 the file, then `CREWLET_NODE_ID`, then the default — so an orchestrator
 injecting a pod name needs no `node:` block at all. Writing
 `node.id: "${CREWLET_NODE_ID}"` (or `"${HOSTNAME}"`) works too, and means the
-same thing: Tier A expands `${VAR}` references before it decodes.
+same thing: Tier A expands `${VAR}` references before it decodes. Into a text
+field like this one a reference expands anywhere in the value; into a number or
+a boolean — a port, `stream.replicas` — it must be the whole value, and what it
+resolves to is read as if it were written there (see [Environment Variable References](../getting-started/configuration.md#environment-variable-references)).
 
 **One node or three, never two.** Two embedded-KV members have no quorum
 without each other, so the fleet stops serving the moment either restarts —
 and a rolling upgrade restarts them one at a time, which makes the outage
-certain rather than unlucky. Tier A refuses a two-member config by name.
+certain rather than unlucky. Tier A refuses a two-member config by name,
+counting this node and the **other** members its `stream.cluster.peers`
+names: an entry recognisably this node's own route, or a repeat, is left out
+of the count with a warning, and an alias of this host it cannot recognise
+is counted as a member — see [Running a Fleet](fleet.md#what-a-fleet-needs).
 
 **A fresh cluster takes seconds to form, and the engine waits it out rather
 than hanging.** Accepting connections is not the same as being able to serve
@@ -396,33 +403,60 @@ hand this node's seats to a peer, and that is the intended behaviour rather
 than something a reconnect policy should paper over.
 
 **The account needs more than publish and subscribe.** A node creates what it
-uses, on every start and idempotently: the six engine streams
+uses, on every start and idempotently: the seven engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the four state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the four state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_PAGES_LOG`, `CREWLET_USAGE_LOG`), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
-call, measured at 1.7 ms), and the eighteen `crewlet_*` KV buckets:
+call, measured at 1.7 ms), the twenty-three `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
-leases and the fencing epochs, and fifteen in the fleet store holding the
-shared records. A credential
+leases and the fencing epochs, and twenty in the fleet store holding the
+shared records — the object store's backend record and its chunk locks among
+them — and, on the default `nats` object store, the `crewlet_files` object
+store bucket (its stream is `OBJ_crewlet_files`). A credential
 scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
 
-**A coordination read costs one ordered pass, and an account needs the
-consumer API.** A node lists coordination records constantly — several
+**A coordination read costs one ordered pass certified against the stream's
+key index, and an account needs the consumer, stream-info, message-get and
+purge APIs.** A node lists coordination records constantly — several
 fifteen-second duty loops on every tick, and the state-log write fence, which
 lists the published trim floors on every write at an expectation of zero, a
-subject's first write among them — and each of those is one pass over a temporary
-consumer, which on a replicated bucket is two metadata-raft proposals. The
-engine deliberately does **not** use the batched direct get that would avoid
-the consumer: it is served by any replica, and this estate has reads whose
-answer is acted on with nothing to arbitrate them. So a credential scoped only
-to publishing and consuming is not enough; the account needs the consumer API
-alongside the rest of `$JS.API`. If the broker's own debug logging is on, that
-consumer churn is what produces a steady stream of `JetStream connection
-closed: Client Closed` lines — see `stream.debug`, which is off by default for
-exactly this reason.
+subject's first write among them. Each listing is one pass over a temporary
+consumer, which on a replicated bucket is two metadata-raft proposals, and
+beside it one stream-info request narrowed to the listing's keys, which names
+every key that has a message. A pass alone cannot tell that it is complete — a
+key rewritten under it can land behind the marker that ends it, and every renew
+is such a rewrite — so a key the index names that the pass missed, or delivered
+only as a delete marker, is read by itself from the **stream leader**
+(`$JS.API.STREAM.MSG.GET`), never through the bucket's direct get, which any
+replica — one that has fallen behind included — may answer. A marker needs that
+read because on a replicated bucket the pass may be served by a replica that
+applied a key's delete and not yet its re-creation. On a quiet bucket the
+certification therefore costs the index read and one leader read per recent
+removal the pass meets, and under writes one more per key the pass lost. What
+keeps "recent" recent is the maintenance duty, which sweeps the removal markers
+older than three hours out of every shared bucket with no age, each with a
+leader-side `$JS.API.STREAM.PURGE` bounded at the marker's own revision so a
+key written again since is untouched (see
+[Coordination](../concepts/coordination.md#removal-markers-are-swept)). While a
+bucket's stream is **electing a leader**, a listing of it answers unavailable
+rather than a short list, since every member answers the index from its own
+store until one leads — the answer every caller already treats as a store
+that did not answer, never as "no records". A listing's one bound is
+the broker's page size for that index, **100,000 keys under one filter**; see
+[Coordination](../concepts/coordination.md#the-three-valued-answer) for what
+happens past it.
+The engine deliberately does **not** use the batched direct get that would
+avoid the consumer: it is served by any replica, and this estate has reads
+whose answer is acted on with nothing to arbitrate them. So a credential
+scoped only to publishing and consuming is not enough; the account needs the
+consumer API, `$JS.API.STREAM.INFO`, `$JS.API.STREAM.MSG.GET` and
+`$JS.API.STREAM.PURGE` alongside the rest of `$JS.API`. If the broker's own
+debug logging is on, that consumer churn is what produces a steady stream of
+`JetStream connection closed: Client Closed` lines — see `stream.debug`, which
+is off by default for exactly this reason.
 
 #### A clustered node is given longer to create them
 
@@ -458,9 +492,10 @@ comes back as a peer having won the race. A node no longer fails to start
 because it could not hear.
 
 **A create that is taking a while says so while it is happening.** Provisioning
-was otherwise silent — a node opens eighteen buckets and several streams in a
-row and logged nothing between them, so one that hung emitted nothing at all
-until its budget expired and the log could not say which object it was on. Any
+was otherwise silent — a node opens every coordination bucket and several
+streams in a row and logged nothing between them, so one that hung emitted
+nothing at all until its budget expired and the log could not say which object
+it was on. Any
 create still running after 10 seconds now writes one `WARN` naming it
 (`coord_kv_bucket_slow`, `jetstream_stream_slow`, `jetstream_consumer_slow`),
 and so does the lookup that precedes it
@@ -609,10 +644,10 @@ only the ingress node should bind one:
 
 ```bash
 # Terminal 1: the agents and the fleet duties, no HTTP
-crewlet run -config crewlet.yaml -roles seats,workers -api-port 0
+crewlet run -config crewlet.yaml -roles data,seats,workers -api-port 0
 
 # Terminal 2: the webhook receiver and the dashboard
-crewlet run -config crewlet.yaml -roles ingress -api-host 0.0.0.0 -api-port 8000
+crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port 8000
 ```
 
 Give each node a distinct `node.id` (or `CREWLET_NODE_ID`) — two nodes sharing an id miscount the fleet. See [Running a Fleet](fleet.md).
@@ -627,9 +662,10 @@ observable step rather than a side effect of startup.
 
 Both take the **Tier A** bootstrap file (`crewlet.yaml`) — the founder-owned company YAML is seeded separately (`crewlet config import`, or `crewlet run -company`).
 
-- **`-roles seats`** runs the agents — claims seat leases, boots the instances, processes their turns
-- **`-roles ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
-- **`-roles workers`** runs the company-wide duties — the scheduler tick, the retention sweeps, the sandbox waiter
+- **`data`** holds the company's durable state — a copy of the replicated estate and the node's own event log; `ingress` and `workers` need it, and a node without it is [stateless](fleet.md#nodes-that-hold-no-data)
+- **`seats`** runs the agents — claims seat leases, boots the instances, processes their turns
+- **`ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
+- **`workers`** runs the company-wide duties — the scheduler tick, the retention sweeps, the sandbox waiter
 
 They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory, and signing uses the Tier A keyring, so a split deployment needs one configured (`crewlet secrets keygen`); without it each process signs with an ephemeral key, logs `sandbox_otel_signing_key_ephemeral`, and every token one process mints is forged as far as the other is concerned. `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/subscription-llm-backends.md), is the opposite: a bridge session lives in the process that opened it, so each `seats` node sets it to **its own** address and serves `/mcp/{token}` itself, on its own `-api-port`, even without the `ingress` role.
 
@@ -748,7 +784,7 @@ What a fleet gets right, each of which was a real defect before:
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
 - *Token budgets.* Shared counters in the coordination slot, one slot per calendar window, so an org cap of 500 k a day is 500 k a day across the fleet — and they cover **every** completion the engine makes on a seat's behalf, the turn loop (the round-cap extension judge included), the coding sandbox, the turn-start context assembly and the auxiliary learning passes alike.
 - *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the seat-subscription walk and the retention sweeps. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the retention sweep, three hours for the curator).
-- *Unbounded table growth.* `scheduled_runs` and `conversation_sessions` both answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
+- *Unbounded table growth.* `scheduled_runs` and `conversation_sessions` both answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one — and so are the removal markers every bucket with no age keeps, which the duty sweeps after three hours so a listing never re-reads every record the company has ever removed. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
 The one thing that is still per-process: `max_concurrent`. Tier A's
 `node.max_concurrent` (default 32) is the gate every agent turn takes a slot
@@ -860,6 +896,37 @@ departure exports to an external sink over OTLP rather than pointing the
 nodes at one database, which the exclusive file ownership rules out by
 construction.
 
+#### Custody: the rows of a node without `data`
+
+A node without the `data` role writes none of its own. Its store is deleted
+at every boot, so rows written there would be gone at its next restart with
+nothing able to read them in between (the API runs only where the data is).
+So it hands every event it would have written to the data nodes, and **exactly
+one** of them keeps each one:
+
+1. **It publishes them durably.** Events are buffered for at most a second —
+   a turn never waits on its own audit trail — and published in batches of up
+   to 256 events or 1 MiB onto the custody topic, `crewlet.custody.records`,
+   on the `CREWLET_CUSTODY` stream. Once the broker acknowledges a batch it
+   survives the node that published it; a batch it could not publish is sent
+   again under the same id, which the broker collapses. The buffer holds 4 096
+   events while the broker is unreachable, and an event that finds it full is
+   dropped and counted (`event_custody_dropped`) rather than holding a turn.
+2. **The data nodes take them from one group,** `event-custody`, and each
+   writes the batch it takes into its own event log, where its `GET /events`
+   and the fleet's history reads find it.
+3. **One data node keeps each batch.** The group delivers a batch whose
+   acknowledgement was lost again, to whichever data node asks next — so after
+   writing a batch a data node *claims* it in the coordination store,
+   create-only. The claim's winner keeps the batch; any other node that wrote
+   it deletes its copy. A batch is acknowledged only once its keeper is
+   decided, and a data node that crashed between writing and claiming settles
+   its copy the same way at its next boot.
+
+That last step is what keeps every figure derived from a node's own log
+honest: the `usage` domain sums each node's day, so a batch two data nodes
+kept would bill a stateless node's spend twice.
+
 #### What gets stored, and under which category
 
 `category` is the one column with a closed vocabulary, and it is what the
@@ -893,6 +960,8 @@ test rather than vanishing quietly.
 | `a2a_message` | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
 | `sandbox_answer_given` | The wake an [answer by turn](../concepts/code-sandbox.md#answering-a-parked-run) puts on the seat's inbox, and never a turn. What the answer became is **already** a row (`sandbox_run_answered`), and that a person gave it is their `operator_acted` row — same reason as `a2a_request`. |
 | `tool_skill_page_changed` | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
+| `reflection_due` | The **wake** that puts a finished turn in front of [post-turn reflection](../concepts/agent-learning.md) on the seat's holder. The turn is **already** a row (`turn_completed`), and what reflecting on it did is its own (`reflection_completed`) — same reason as `a2a_request`. |
+| `custody_batch` | A **carrier**, not an event: a node without the `data` role keeps no event log, so it publishes its events in batches and one data node writes each event inside as the row it is ([custody](#custody-the-rows-of-a-node-without-data)). A row for the batch would describe the transport and repeat every event in it. |
 | `budget_meters` | A **snapshot** of the shared token counters, published by every node on a 15-second tick, so a durable row per report is about two million a year per node to answer a question the live projection and `GET /budgets` answer for free. What the audit log holds instead is the spend the counter is charged with, recorded per phase in the `agent_phase_completed` rows every spend query folds, so "what did we spend last month" is answerable and "what was the counter reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
 
 #### Querying events

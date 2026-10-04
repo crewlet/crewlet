@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/runner"
@@ -360,15 +361,20 @@ func (w writingDetach) CallDetached(ctx context.Context, t *turnctx.Turn,
 func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
 	e, _ := indicatingWith(t, notify.StatusAlways, suspendingModel{})
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	// THE WORK'S OWN START, as every dispatch derives it from the inbox: a
+	// work key with none is a start nobody knows, which reads as older than
+	// the operation ledger and is refused on a node with nowhere to record a
+	// rebase (rebase.go).
+	began := time.Now().UTC()
 	if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
-		TurnID: "run-code", WorkKey: "wk-code", AgentHandle: "swe", Role: "SWE",
+		TurnID: "run-code", WorkKey: "wk-code", WorkSince: began, AgentHandle: "swe", Role: "SWE",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	equipForCodeWith(t, e, store, writingDetach{})
 
 	res, err := e.runTurn(t.Context(), Request{
-		Handle: "swe", WorkKey: "wk-code", RunID: "run-code",
+		Handle: "swe", WorkKey: "wk-code", WorkSince: began, RunID: "run-code",
 		Events: []*events.Event{chatTrigger("D0ANA")},
 	})
 	if err != nil || !res.Suspended {
@@ -405,9 +411,12 @@ func TestTheToolsAndTheCompletionShareOneWriteSet(t *testing.T) {
 	t.Parallel()
 	e, _ := starting(t, refusingModels(t))
 	company := e.Company()
-	tel := e.describeTurn(t.Context(), company, Request{
+	tel, err := e.describeTurn(t.Context(), company, Request{
 		RunID: "run-1", Handle: "swe", Events: []*events.Event{trackerWake()},
 	})
+	if err != nil {
+		t.Fatalf("describeTurn: %v", err)
+	}
 	ctx := tel.runnerTurn(company, 0, nil, "task", turn.Reply{}).Context
 	if ctx.Written == nil || ctx.Written != tel.written {
 		t.Fatal("the turn context's write set is not the one the completion reads")
@@ -427,15 +436,25 @@ func TestTheTurnContextCarriesWhoWokeIt(t *testing.T) {
 	company := e.Company()
 	ask := events.New(types.A2ARequest{ChannelID: "c1", Requester: "ceo", Content: "why?"},
 		events.TraceContext{})
-	tel := e.describeTurn(t.Context(), company, Request{
+	tel, err := e.describeTurn(t.Context(), company, Request{
 		RunID: "run-1", Handle: "swe", Events: []*events.Event{ask},
 	})
+	if err != nil {
+		t.Fatalf("describeTurn: %v", err)
+	}
 	if got := tel.runnerTurn(company, 0, nil, "task", turn.Reply{}).Context.Requester; got != "ceo" {
 		t.Errorf("the turn context's requester = %q, want the asking seat", got)
 	}
-	resumed := e.describeResume(t.Context(), company, resumeInput{
-		Run: sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe", Requester: "ceo"},
+	// THE RESUMED TURN AS THE COORDINATOR BUILDS IT ([resumedTurn]), which
+	// is where a resume reads its identity from rather than the row.
+	run := sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe", Requester: "ceo"}
+	resumed, err := e.describeResume(t.Context(), company, resumeInput{
+		Run:  run,
+		Turn: resumedTurn(run, company.Org.AgentSeatByHandle("swe"), company.Org),
 	})
+	if err != nil {
+		t.Fatalf("describeResume: %v", err)
+	}
 	if got := resumed.runnerTurn(company, 0, nil, "task", turn.Reply{}).Context.Requester; got != "ceo" {
 		t.Errorf("a resumed turn's requester = %q, want the one its row recorded", got)
 	}
@@ -455,9 +474,12 @@ func TestTheWakingChatSurfaceReachesTheTurnContext(t *testing.T) {
 		{chatTrigger("C0PRODUCT"), slack.Backend},
 		{trackerWake(), ""},
 	} {
-		tel := e.describeTurn(t.Context(), company, Request{
+		tel, err := e.describeTurn(t.Context(), company, Request{
 			RunID: "run-1", Handle: "swe", Events: []*events.Event{tc.wake},
 		})
+		if err != nil {
+			t.Fatalf("describeTurn: %v", err)
+		}
 		if got := tel.runnerTurn(company, 0, nil, "task", turn.Reply{}).Context.Transport; got != tc.want {
 			t.Errorf("a turn woken by %s carries transport %q, want %q", tc.wake.Source, got, tc.want)
 		}

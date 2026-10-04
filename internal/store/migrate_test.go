@@ -1,11 +1,13 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -132,7 +134,7 @@ func TestPendingReleasesTheLockForTheMigrationThatFollows(t *testing.T) {
 			"by a lock nothing is using", path, held.holds)
 	}
 
-	db, err := Open(t.Context(), path, Options{})
+	db, err := OpenNode(t.Context(), path, Options{})
 	if err != nil {
 		t.Fatalf("Open after Pending: %v", err)
 	}
@@ -155,7 +157,7 @@ func TestPendingPredictsWhatOpenApplies(t *testing.T) {
 		t.Errorf("a fresh database reports %d applied, want none", len(before.Applied))
 	}
 
-	db, err := Open(t.Context(), path, Options{})
+	db, err := OpenNode(t.Context(), path, Options{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -201,7 +203,7 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "bounds.db")
 
-	pool, err := openPrepared(t.Context(), path, Options{MaxOpenConns: 3})
+	pool, err := openPrepared(t.Context(), path, Options{MaxOpenConns: 3}, nil)
 	if err != nil {
 		t.Fatalf("openPrepared: %v", err)
 	}
@@ -210,7 +212,7 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 		t.Errorf("max open conns = %d, want the requested 3", got)
 	}
 
-	unset, err := openPrepared(t.Context(), filepath.Join(t.TempDir(), "d.db"), Options{})
+	unset, err := openPrepared(t.Context(), filepath.Join(t.TempDir(), "d.db"), Options{}, nil)
 	if err != nil {
 		t.Fatalf("openPrepared: %v", err)
 	}
@@ -221,33 +223,30 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 			got, defaultReaderConns)
 	}
 
-	// AND A DECLARED PIN WIDENS THE ESTATE THAT HOLDS IT, rather than being
-	// taken out of the readers' share. The whole reason PinnedWriters
-	// exists is that a pin counts against MaxOpenConns like any other
-	// connection, so a handle running three statelog domains on a fixed
-	// four leaves one connection for every reader on the node.
+	// AND A PARTITION'S PINS WIDEN THE FILE THAT HOLDS THEM, rather than
+	// being taken out of the readers' share: a pin counts against the pool
+	// like any other connection, so a partition carrying three logs on a
+	// fixed four would leave one connection for every reader of it.
 	//
-	// AND ONLY THAT ESTATE. An applier writes to the replicated estate, so
-	// widening the node estate for its pins would be headroom nothing ever
-	// takes on the file that is not being written.
-	pinned, err := openPrepared(t.Context(), filepath.Join(t.TempDir(), "p.db"),
-		Options{PinnedWriters: 3}.forEstate(EstateReplicated))
+	// AND ONLY THAT FILE. An applier writes a partition, so widening the
+	// node's own file for the pins would be headroom nothing ever takes on
+	// the file that is not being written.
+	dir := t.TempDir()
+	node, err := OpenNode(t.Context(), filepath.Join(dir, "n.db"), Options{})
 	if err != nil {
-		t.Fatalf("openPrepared: %v", err)
+		t.Fatalf("open the node: %v", err)
 	}
-	defer func() { _ = pinned.Close() }()
-	if got, want := pinned.Stats().MaxOpenConnections, defaultReaderConns+3; got != want {
+	defer func() { _ = node.Close() }()
+	part, err := node.OpenPartition(t.Context(), PartitionFile{Name: "estate.000", Logs: 3})
+	if err != nil {
+		t.Fatalf("open the partition: %v", err)
+	}
+	if got, want := part.sql.Stats().MaxOpenConnections, defaultReaderConns+3; got != want {
 		t.Errorf("max open conns with 3 pinned writers = %d, want %d: a pin "+
 			"has to be ADDED to the readers' bound, not carved out of it",
 			got, want)
 	}
-	node, err := openPrepared(t.Context(), filepath.Join(t.TempDir(), "n.db"),
-		Options{PinnedWriters: 3}.forEstate(EstateNode))
-	if err != nil {
-		t.Fatalf("openPrepared: %v", err)
-	}
-	defer func() { _ = node.Close() }()
-	if got := node.Stats().MaxOpenConnections; got != defaultReaderConns {
+	if got := node.sql.Stats().MaxOpenConnections; got != defaultReaderConns {
 		t.Errorf("the node estate widened to %d for pins it never holds, want %d",
 			got, defaultReaderConns)
 	}
@@ -318,4 +317,45 @@ func TestEveryMigrationHasItsOwnNumberAndNoneAreMissing(t *testing.T) {
 			}
 		})
 	}
+}
+
+// migratedThrough stands an estate's file at path up at an OLDER schema: every
+// migration up to and including last applied and recorded, and none after —
+// the database a node that last ran an earlier build holds on disk. It answers
+// a pool on that file, for the caller to write rows in the old shape, and the
+// caller CLOSES it before opening the file again, since the next open is the
+// real migrator applying everything after last to those rows.
+//
+// THROUGH THE MIGRATOR'S OWN PARTS — [openPrepared], its ledger and
+// [DB.applyOne] — rather than a replay of the files' text, so what a case
+// proves about a later migration is proved against exactly the database the
+// migrator would have left behind.
+func migratedThrough(t *testing.T, estate Estate, path, last string) *sql.DB {
+	t.Helper()
+	versions := SchemaVersions(estate)
+	stop := slices.Index(versions, last)
+	if stop < 0 {
+		t.Fatalf("the %s estate has no migration %q, so a database 'through' it "+
+			"is either every migration or none — name one of %v", estate, last, versions)
+	}
+	pool, err := openPrepared(t.Context(), path, Options{}, nil)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	d := &DB{sql: pool, path: path, estate: estate}
+	if err := d.createMigrationLedger(t.Context()); err != nil {
+		_ = pool.Close()
+		t.Fatal(err)
+	}
+	for _, name := range versions[:stop+1] {
+		body, err := SchemaFile(estate, name)
+		if err == nil {
+			err = d.applyOne(t.Context(), name, string(body))
+		}
+		if err != nil {
+			_ = pool.Close()
+			t.Fatalf("apply %s: %v", name, err)
+		}
+	}
+	return pool
 }

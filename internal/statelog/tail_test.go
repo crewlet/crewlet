@@ -16,7 +16,7 @@ import (
 // unheld walks the harness's log back from last, as a restored reanchor does.
 func unheld(t *testing.T, h *applyHarness, last uint64) *statelog.TailRecord {
 	t.Helper()
-	got, err := statelog.UnheldTail(t.Context(), probeDomain{}, h.db.Replicated(), h.fetch,
+	got, err := statelog.UnheldTail(t.Context(), probeDomain{}, specOf(probeDomain{}), h.estate, h.fetch,
 		h.runner.Committed().Generation, 1, last)
 	if err != nil {
 		t.Fatalf("UnheldTail: %v", err)
@@ -101,7 +101,7 @@ func TestTheSameOperationAtTheSamePositionIsNotTheSameRecord(t *testing.T) {
 func TestALedgerRowThatNamesNoInstantVouchesForNothing(t *testing.T) {
 	t.Parallel()
 	h := appliedThrough(t, 3)
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `UPDATE probe_ops SET stored_at = 0`)
 		return err
 	}); err != nil {
@@ -138,7 +138,7 @@ func TestARecordWhoseEnvelopeDoesNotDecodeIsAnError(t *testing.T) {
 	h.fetch.mu.Lock()
 	h.fetch.log[4] = statelog.Message{Seq: 4, StoredAt: otherHistory, Payload: []byte("{")}
 	h.fetch.mu.Unlock()
-	_, err := statelog.UnheldTail(t.Context(), probeDomain{}, h.db.Replicated(), h.fetch,
+	_, err := statelog.UnheldTail(t.Context(), probeDomain{}, specOf(probeDomain{}), h.estate, h.fetch,
 		h.runner.Committed().Generation, 1, 4)
 	if err == nil || !strings.Contains(err.Error(), "does not decode") {
 		t.Fatalf("UnheldTail over an undecodable record = %v, want an error", err)
@@ -239,9 +239,9 @@ func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 	at := statelog.Position{Stream: probeStream, Generation: 1, Seq: 4_200}
 	// THE DONOR APPLIED THE RECORD AT ITS CHECKPOINT: its ledger names it by
 	// operation, position and the broker's instant.
-	seed := func(t *testing.T, db *store.DB) {
+	seed := func(t *testing.T, db store.PartitionHandle) {
 		t.Helper()
-		if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(t.Context(), `
 				INSERT INTO probe_ops (op_id, subject, position, applied_at, stored_at)
 				VALUES ('op-held', 'object.held', ?, 0, ?)`,
@@ -255,7 +255,7 @@ func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 	log.offerStored(at.Seq, held, env(at.Seq, "edit", "held", "op-held", 1))
 	walk := func(t *testing.T, h *joinHarness) *statelog.TailRecord {
 		t.Helper()
-		got, err := statelog.UnheldTail(t.Context(), probeDomain{}, h.joiner.Replicated(),
+		got, err := statelog.UnheldTail(t.Context(), probeDomain{}, specOf(probeDomain{}), h.joinEstate,
 			log, at.Generation, 1, at.Seq)
 		if err != nil {
 			t.Fatalf("UnheldTail over the adopted estate: %v", err)
@@ -325,7 +325,7 @@ func TestALedgersSilenceIsConclusiveOnlySinceItLastLostARow(t *testing.T) {
 			t.Parallel()
 			h := appliedThrough(t, 3)
 			if !c.lost.IsZero() {
-				if err := statelog.RecordLedgerLoss(t.Context(), h.db.Replicated(),
+				if err := statelog.RecordLedgerLoss(t.Context(), h.estate,
 					probeDomain{}, c.lost); err != nil {
 					t.Fatalf("record the ledger's loss: %v", err)
 				}

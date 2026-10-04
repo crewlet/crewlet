@@ -54,14 +54,17 @@ type Fetcher interface {
 	// Fetch pulls up to maxMessages records or maxBytes of them,
 	// whichever binds first, waiting up to wait for the first one.
 	//
-	// EVERYTHING THE BROKER DELIVERED IS RETURNED. An implementation may
-	// not take a prefix of what a pull handed over and drop the rest: a
+	// EVERYTHING THE BROKER DELIVERED IS RETURNED — by this call or a
+	// later one. An implementation may not take a prefix of what a pull
+	// handed over and drop the rest, nor let a delivery reach nobody: a
 	// delivered record the loop never sees is one the broker holds
 	// against the consumer's ack-pending cap and redelivers only after
 	// its ack window — a hole in a strict log, on every pull, for as long
-	// as the window is. Where the broker cannot bound a pull by both
-	// count and bytes, the count is the consumer's own in-flight ceiling
-	// (see [FetchMessages]) and maxMessages is honoured by that.
+	// as the window is. What one call does not return (a bound met, or a
+	// context that ended) is held for the next. Where the broker cannot
+	// bound a pull by both count and bytes, the count is the consumer's
+	// own in-flight ceiling (see [FetchMessages]) and maxMessages is
+	// honoured by that.
 	Fetch(ctx context.Context, maxMessages, maxBytes int, wait time.Duration) ([]Message, error)
 
 	// Pending is how many records this consumer has not yet delivered. It
@@ -126,6 +129,21 @@ type RunnerDeps struct {
 	Domain  Domain
 	Applier Applier
 	Fetch   Fetcher
+
+	// Spec is the log this runner applies: the domain's shape on one of
+	// its logs ([Layout.StreamSpec]). One runner per LOG, because every
+	// per-stream thing it keeps — the checkpoint row, the generation, the
+	// anchors, the stream identity — is the log's, and a domain with a log
+	// in each of two partitions has two of each.
+	Spec StreamSpec
+
+	// Layout and LogID are where Spec's log sits: the layout this node runs
+	// and which of its logs this is. REQUIRED, and held to Spec
+	// ([Layout.Places]), because the applier drops a record whose domain
+	// places it in another partition than this log's — a question about
+	// the layout that the stream's name cannot answer.
+	Layout Layout
+	LogID  LogID
 
 	// Log is the same stream read by position, which is how the applier
 	// establishes that the log still holds, at its checkpoint's sequence,
@@ -241,6 +259,10 @@ type Runner struct {
 	opts    ApplyOptions
 	nodeID  string
 	evicted func(ctx context.Context, node string) (bool, error)
+
+	// layout and logID are where this runner's log sits ([RunnerDeps.LogID]).
+	layout Layout
+	logID  LogID
 
 	waiters waiters
 
@@ -489,12 +511,23 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 			"own to remember a log that diverged from its rows in, and would " +
 			"forget it at the first restart after the log lost the record it " +
 			"was found by")
+	case d.Node.Estate() != store.EstateNode:
+		// A PARTITION'S OWN DATABASE is the one handle the type does not
+		// stop — it answers Estate like the node's — and the verdict
+		// written into it would be lost on the first adoption that
+		// replaces the file, which is when it is needed.
+		return nil, fmt.Errorf("statelog: applier was handed the %q estate as "+
+			"this node's own; a log's divergence verdict is kept in the node's "+
+			"file (store.OpenNode), which no adoption replaces", d.Node.Estate())
 	case d.DB == nil:
 		return nil, fmt.Errorf("statelog: applier has no database")
 	}
-	spec := d.Domain.Stream()
-	if err := spec.Validate(); err != nil {
+	spec := d.Spec
+	if err := spec.Instantiates(d.Domain); err != nil {
 		return nil, err
+	}
+	if err := d.Layout.Places(d.Domain, d.LogID, spec); err != nil {
+		return nil, fmt.Errorf("statelog: %s's applier: %w", d.Domain.Name(), err)
 	}
 	checkpoint := d.Checkpoint
 	switch checkpoint.Stream {
@@ -505,7 +538,7 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		return nil, fmt.Errorf("%w: %s's applier was handed a checkpoint on %s",
 			ErrWrongStream, d.Domain.Name(), checkpoint.Stream)
 	}
-	t, err := newTables(d.Domain)
+	t, err := newTables(d.Domain, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -530,6 +563,8 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		db:      d.DB,
 		tables:  t,
 		spec:    spec,
+		layout:  d.Layout,
+		logID:   d.LogID,
 		metrics: d.Metrics,
 		logger:  logger,
 		now:     now,
@@ -1641,7 +1676,8 @@ func (r *Runner) Rejoined(at Position, keyed, live time.Time) error {
 // fault is retried quietly inside the budget and reported only past it, when
 // the honest reading is that this node's rows have stopped moving. Reported,
 // it takes the same path a stop does: reads refuse `stalled` naming it, and
-// the seats move. It clears the moment a retry succeeds.
+// the node stops serving the partition. It clears the moment a retry
+// succeeds.
 func (r *Runner) Fault(now time.Time) (string, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1815,7 +1851,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	// loop that returned on any of them left the domain dead for the life
 	// of the process with nothing to restart it — a broker blip at the
 	// wrong moment took a node's tracker down until an operator noticed
-	// the seats had moved and restarted it. So a failure that is not a
+	// and restarted it. So a failure that is not a
 	// STOP is retried here, in place, on a pause that doubles to a
 	// ceiling, with the same run re-applied rather than abandoned to a
 	// thirty-second redelivery. What the outside sees is [Runner.Fault]:
@@ -2028,8 +2064,8 @@ func (r *Runner) startup(ctx context.Context) (*store.Writer, error) {
 // error on every read that refuses and in the node's status for as long as the
 // run lasts, and `crewlet.statelog.apply.retries` counts every attempt. And
 // the ERROR lands on the same retry that makes [Runner.Fault] start
-// answering, so the line and the refusals and seat moves it describes begin
-// together.
+// answering, so the line and the refusals and the copy's leaving service it
+// describes begin together.
 func (r *Runner) faulted(ctx context.Context, err error) error {
 	if errors.Is(err, ErrStopped) || ctx.Err() != nil {
 		return err
@@ -2058,7 +2094,8 @@ func (r *Runner) faulted(ctx context.Context, err error) error {
 			"domain", r.domain.Name(), "stream", r.spec.Name,
 			"position", r.Committed().String(), "error", err.Error(),
 			"since", since, "detail", "this node's rows have stopped moving; "+
-				"its reads refuse and its seats move until a retry succeeds")
+				"its reads refuse and it stops serving the partition until a "+
+				"retry succeeds")
 	}
 	r.count(metrics.StatelogApplyRetries)
 	return nil
@@ -2272,7 +2309,7 @@ const ReprocessPage = 256
 // already running.
 func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 	var after int64
-	var applied, kept int
+	var applied, gated, kept int
 	for {
 		var page []retained
 		if err := r.db.Read(ctx, func(tx *sql.Tx) error {
@@ -2307,40 +2344,56 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 				Payload:  row.payload,
 				StoredAt: row.storedAt,
 			}
-			landed, err := r.reprocessOne(ctx, w, rec)
-			if err != nil {
+			landed, reason, dropped, err := r.reprocessOne(ctx, w, rec)
+			switch {
+			case err != nil:
 				return err
-			}
-			if landed {
-				applied++
-				r.applier.Committed(ctx)
-			} else {
+			case !landed:
 				kept++
+				continue
+			case dropped:
+				// A GATE DROPPED IT, which the build that retained it
+				// could not ask — and that is not a reprocess: it
+				// wrote no row, so it is counted as the live loop
+				// counts one, under `gated`, beside the gate's own
+				// counter, which is reported here because the
+				// transaction that dropped it has committed.
+				r.gatedRecord(ctx, rec, reason)
+				gated++
+			default:
+				applied++
 			}
+			r.applier.Committed(ctx)
 		}
 	}
-	if applied == 0 && kept == 0 {
+	if applied == 0 && gated == 0 && kept == 0 {
 		return nil
 	}
 	if err := r.refreshDeferred(ctx); err != nil {
 		return err
 	}
 	r.logger.InfoContext(ctx, "statelog_retained_reprocessed",
-		"domain", r.domain.Name(), "applied", applied, "kept", kept,
-		"build_reads", r.domain.RecordVersion())
-	if applied > 0 && r.metrics != nil {
-		r.metrics.Add(metrics.StatelogApplyRecords, uint64(applied),
-			metrics.Attrs{"domain": r.domain.Name(), "result": "reprocessed"})
+		"domain", r.domain.Name(), "applied", applied, "gated", gated,
+		"kept", kept, "build_reads", r.domain.RecordVersion())
+	if r.metrics != nil {
+		for result, n := range map[string]int{"reprocessed": applied, "gated": gated} {
+			if n > 0 {
+				r.metrics.Add(metrics.StatelogApplyRecords, uint64(n),
+					metrics.Attrs{"domain": r.domain.Name(), "result": result})
+			}
+		}
 	}
 	return nil
 }
 
 // reprocessOne applies one retained record unless an earlier retained record
-// still covers it, reporting whether it landed.
-func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) (bool, error) {
-	landed := false
+// still covers it, reporting whether it landed — released from the retained
+// table — and whether a gate dropped it rather than applied it, and which.
+func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) (bool, Reason, bool, error) {
+	var landed, gated bool
+	var reason Reason
 	err := w.Tx(ctx, func(tx *sql.Tx) error {
-		landed = false
+		landed, reason, gated = false, "", false
 		if _, covered, err := r.tables.deferredBelow(ctx, tx, rec.Scope, &rec.Position); err != nil {
 			return err
 		} else if covered {
@@ -2349,20 +2402,29 @@ func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) 
 		opts := r.opts
 		opts.Now = r.now()
 		opts.MaxVariables = r.db.Caps().MaxVariables
-		if _, _, err := r.applyOne(ctx, tx, rec, opts); err != nil {
+		_, why, dropped, err := r.applyOne(ctx, tx, rec, opts)
+		if err != nil {
 			return err
+		}
+		// A RECORD THIS BUILD COULD NOT READ WHEN IT ARRIVED, now in the
+		// rows — the one case the checkpoint's own write never sees, since a
+		// reprocess does not move it.
+		if !dropped {
+			if err := r.tables.raiseApplied(ctx, tx, rec.V); err != nil {
+				return err
+			}
 		}
 		if err := r.tables.release(ctx, tx, rec.Position); err != nil {
 			return err
 		}
-		landed = true
+		landed, reason, gated = true, why, dropped
 		return nil
 	})
 	if err != nil {
-		return false, fmt.Errorf("statelog: reprocess the retained record at %s: %w",
+		return false, "", false, fmt.Errorf("statelog: reprocess the retained record at %s: %w",
 			rec.Position, err)
 	}
-	return landed, nil
+	return landed, reason, gated, nil
 }
 
 // nextRun fills a run toward the transaction budget, starting from whatever
@@ -2622,6 +2684,9 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 				tally.skipped++
 				continue
 			}
+			if rec.Kind == BarrierKind {
+				tally.barrier(rec.StoredAt, txStart)
+			}
 			// THE FRAMEWORK'S OWN WRITE FIRST, from the
 			// always-decodable envelope, because it happens
 			// whatever the record then does.
@@ -2632,6 +2697,16 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 			}
 
 			switch {
+			case r.misplaced(rec.Envelope):
+				// A RECORD THAT BELONGS TO ANOTHER PARTITION IS GATED
+				// WHATEVER ITS VERSION, and before the version is asked:
+				// retained, it would be filed under a scope this
+				// partition's probe reads and the partition it belongs to
+				// never does — the one deferral clause (i) of the floor
+				// theorem cannot see. The partition is read from the
+				// envelope, which every build decodes.
+				tally.drop(rec, ReasonWrongPartition)
+
 			case !rec.ReadableBy(r.domain.RecordVersion()):
 				if r.domain.InstallsGate(rec.Envelope) {
 					// A GATE IS A STOP, and it is the one
@@ -2645,7 +2720,8 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 					return fmt.Errorf("%w: %s at %s installs an apply gate at "+
 						"record version %d and this build reads %d — a gate this "+
 						"node cannot read would license every record above it, so "+
-						"the applier halts and its seats move to a node that can",
+						"the applier halts and this node stops serving the partition "+
+						"to its seats, which read it from a holder that can",
 						ErrStopped, rec.Kind, rec.Position, rec.V, r.domain.RecordVersion())
 				}
 				if err := r.tables.retain(ctx, tx, rec, r.spec.Replay == ReplayCompacted, opts.MaxVariables); err != nil {
@@ -2677,15 +2753,16 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 					}
 				}
 				if !blocked {
-					n, gated, err := r.applyOne(ctx, tx, rec, opts)
+					n, reason, gated, err := r.applyOne(ctx, tx, rec, opts)
 					if err != nil {
 						return err
 					}
 					rows += n
 					if gated {
-						tally.gated++
+						tally.drop(rec, reason)
 					} else {
 						tally.applied++
+						tally.version = max(tally.version, rec.V)
 					}
 				}
 			}
@@ -2737,7 +2814,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 			committedRecord = top.StoredAt
 		}
 		return r.tables.setCursor(ctx, tx, committedAt, r.StreamCreatedAt(),
-			committedRecord, r.now())
+			committedRecord, r.now(), tally.version)
 	})
 	if err != nil {
 		if errors.Is(err, ErrStopped) {
@@ -2751,6 +2828,13 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 
 	// AFTER THE OUTER TRANSACTION RETURNS, IN THIS ORDER.
 	//
+	// WHAT A GATE DROPPED, first: a drop is reported once it has committed,
+	// and before the checkpoint moves, so a caller that sees this node past
+	// a dropped record sees its count too ([Runner.gatedRecord]).
+	for _, d := range tally.dropped {
+		r.gatedRecord(ctx, d.rec, d.reason)
+	}
+
 	// THE POSITION THE TRANSACTION COMMITTED, so what this node reports,
 	// releases waiters through and resumes from is the same value the
 	// checkpoint row holds — see the comment at the setCursor above.
@@ -2834,47 +2918,50 @@ func (r *Runner) Commits() float64 {
 }
 
 // applyOne runs the domain's state machine for one record, unless a gate says
-// it must produce no rows.
-func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts ApplyOptions) (int, bool, error) {
+// it must produce no rows — reporting which gate, and whether one did, for the
+// caller to report once its transaction commits ([Runner.gatedRecord]).
+func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts ApplyOptions) (int, Reason, bool, error) {
 	started := r.now()
 	opts.StoredAt = rec.StoredAt
-	// THE FRAMEWORK'S OWN GATES FIRST: a record written in a generation the
-	// reanchor that placed this checkpoint abandoned, and one a restored
-	// reanchor overtook — after its generation record, in a generation
-	// below the one it opened. They are the framework's because both rules
-	// are the checkpoint's, and each is asked of the record's OWN generation
-	// — the writer's stamp — never of the position the loop composed, which
-	// is this checkpoint's generation for every record.
-	reason, gated := ReasonAbandoned, r.void.abandons(rec.Gen)
-	if !gated && r.void.overtakes(rec.Position.Seq, rec.Gen) {
+	// THE FRAMEWORK'S OWN GATES FIRST, and the partition's before the rest:
+	// a record its own domain places in another partition than this log's
+	// is not this log's record at all, whatever else is true of it — which
+	// the loop asks before a record is retained, and asks again here for a
+	// retained record reprocessed by a build that reads it.
+	//
+	// Then a record written in a generation the reanchor that placed this
+	// checkpoint abandoned, and one a restored reanchor overtook — after its
+	// generation record, in a generation below the one it opened. They are
+	// the framework's because both rules are the checkpoint's, and each is
+	// asked of the record's OWN generation — the writer's stamp — never of
+	// the position the loop composed, which is this checkpoint's generation
+	// for every record.
+	var reason Reason
+	var gated bool
+	switch {
+	case r.misplaced(rec.Envelope):
+		reason, gated = ReasonWrongPartition, true
+	case r.void.abandons(rec.Gen):
+		reason, gated = ReasonAbandoned, true
+	case r.void.overtakes(rec.Position.Seq, rec.Gen):
 		reason, gated = ReasonOvertaken, true
-	}
-	if !gated {
+	default:
 		var err error
 		reason, gated, err = r.applier.Gated(ctx, tx, rec)
 		if err != nil {
-			return 0, false, fmt.Errorf("statelog: read the apply gates at %s: %w", rec.Position, err)
+			return 0, "", false, fmt.Errorf("statelog: read the apply gates at %s: %w", rec.Position, err)
 		}
 	}
 	if gated {
-		// A DURABLE RECORD THAT APPLIES NOWHERE. It still advanced the
-		// anchor and it still advances the checkpoint: the log consumed
-		// it, and a checkpoint that skipped it would replay it for ever.
-		r.logger.WarnContext(ctx, "statelog_record_gated",
-			"domain", r.domain.Name(), "position", rec.Position.String(),
-			"kind", rec.Kind, "gate", string(reason), "writer", rec.Writer)
-		r.countWith(metrics.StatelogRecordsGated, metrics.Attrs{
-			"gate": string(reason), "subject_kind": rec.Subject.Kind,
-		})
-		return 0, true, nil
+		return 0, reason, true, nil
 	}
 	n, err := r.applier.Apply(ctx, tx, rec, opts)
 	if err != nil {
-		return 0, false, fmt.Errorf("statelog: apply %s at %s: %w", rec.Kind, rec.Position, err)
+		return 0, "", false, fmt.Errorf("statelog: apply %s at %s: %w", rec.Kind, rec.Position, err)
 	}
 	if err := r.tables.writeOp(ctx, tx, rec.OpID, r.tables.subjectOf(rec.Subject), rec.Position,
 		rec.StoredAt, opts.Now); err != nil {
-		return 0, false, err
+		return 0, "", false, err
 	}
 	if r.metrics != nil {
 		// ONE RECORD'S APPLY, which is the real ceiling on how long a
@@ -2884,7 +2971,81 @@ func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts Appl
 		r.metrics.Observe(metrics.StatelogApplyRecordDuration, r.now().Sub(started),
 			metrics.Attrs{"domain": r.domain.Name(), "kind": rec.Kind})
 	}
-	return n, false, nil
+	return n, "", false, nil
+}
+
+// Voided reports whether this applier drops a record stamped with generation gen
+// at sequence seq under a rule the reanchor that placed its checkpoint made — a
+// generation it abandoned, or one a restored reanchor overtook — and which. The
+// rules applyOne asks, read from the checkpoint they travel on ([Voids]).
+func (r *Runner) Voided(gen uint32, seq uint64) (Reason, bool) {
+	r.mu.Lock()
+	void := r.void
+	r.mu.Unlock()
+	switch {
+	case void.abandons(gen):
+		return ReasonAbandoned, true
+	case void.overtakes(seq, gen):
+		return ReasonOvertaken, true
+	}
+	return "", false
+}
+
+// misplaced reports whether a record's own domain places it in another
+// partition than this log's — the partition gate, [ReasonWrongPartition], and
+// the second of the three the floor theorem is held by per log (the package
+// doc's "who may write a log").
+//
+// FROM THE ENVELOPE ALONE, the half every build decodes, so a record this build
+// cannot read is judged too — and by the same function of the same bytes on
+// every holder, so every copy drops it alike. A FRAMEWORK record (a barrier, a
+// node gate, a generation) names no partition and belongs to whichever log it
+// is on, so it is never misplaced.
+func (r *Runner) misplaced(env Envelope) bool {
+	p, placed := r.domain.PartitionOf(r.layout, env)
+	return placed && p != r.logID.Partition
+}
+
+// gatedRecord says, where an operator looks, that a durable record applies
+// nowhere, and under which gate.
+//
+// A DURABLE RECORD THAT APPLIES NOWHERE still advanced the anchor and still
+// advances the checkpoint: the log consumed it, and a checkpoint that skipped
+// it would replay it for ever. What it does not do is leave a trace in the
+// rows, so the log line and the counter are the only witnesses there are.
+//
+// # Once the drop has committed, and never from inside the transaction
+//
+// The store RE-RUNS a transaction's body when an attempt fails transiently
+// ([store.Writer.Tx]), and a batch whose transaction fails outright is
+// applied again from the same checkpoint. A report made where the gate is
+// asked was therefore made once per attempt: one record dropped, counted and
+// logged as two — the counter the records_gated alarm reads, on a record
+// nothing recovers. So the transaction only notes the drop ([results.drop],
+// or the reprocess's own answer) and this runs after it commits, exactly once
+// per record this node's rows skip for good; a drop an attempt rolled back is
+// reported by the attempt that commits it.
+func (r *Runner) gatedRecord(ctx context.Context, rec Record, reason Reason) {
+	attrs := []any{
+		"domain", r.domain.Name(), "position", rec.Position.String(),
+		"kind", rec.Kind, "gate", string(reason), "writer", rec.Writer,
+	}
+	if reason == ReasonWrongPartition {
+		// WHERE IT BELONGS, which is what an operator needs to find the
+		// writer that put it here.
+		// A PARTITION THE LAYOUT DOES NOT CARRY — the zero one among them —
+		// is what a domain that cannot place the record answers, and says so
+		// rather than printing an empty name.
+		belongs := fmt.Sprintf("no partition of layout %d", r.layout.Number)
+		if p, _ := r.domain.PartitionOf(r.layout, rec.Envelope); len(r.layout.Logs(p)) > 0 {
+			belongs = p.String()
+		}
+		attrs = append(attrs, "log", r.logID.String(), "belongs_to", belongs)
+	}
+	r.logger.WarnContext(ctx, "statelog_record_gated", attrs...)
+	r.countWith(metrics.StatelogRecordsGated, metrics.Attrs{
+		"gate": string(reason), "subject_kind": rec.Subject.Kind,
+	})
 }
 
 // anyDeferred reports whether this node holds any record it cannot decode, so
@@ -2980,7 +3141,8 @@ func (r *Runner) stop(ctx context.Context, err error) error {
 		"position", r.Committed().String(), "error", err.Error(),
 		"detail", "this node's rows for this domain are frozen here and every "+
 			"read of them refuses; for a domain that gates seat admission this "+
-			"node also stops claiming seats, and the ones it holds move; a build "+
+			"node also stops serving the partition, and its seats read it from "+
+			"the partition's other holders; a build "+
 			"that can read what this one could not resumes it at its next boot, "+
 			"and for a recreated stream an operator's reanchor of this one "+
 			"stream resumes it in place, with no restart")
@@ -2996,8 +3158,56 @@ func (r *Runner) stop(ctx context.Context, err error) error {
 type results struct {
 	applied  int
 	retained int
-	gated    int
 	skipped  int
+
+	// dropped is every record a gate dropped in this attempt, in order,
+	// reported once the transaction commits ([Runner.gatedRecord]) — its
+	// length is how many were `gated`.
+	dropped []droppedRecord
+
+	// version is the highest record version of a record this transaction
+	// APPLIED — what the checkpoint row's applied record version is raised
+	// to ([tables.setCursor]) — zero where it applied none.
+	version int
+
+	// barriers is how many of the records this batch consumed for the
+	// first time were barriers, whatever became of them — each is a record
+	// on the log, which is what the census counts — BY THE HOUR THE BROKER
+	// STORED EACH, as the start of that hour. Nil until the first.
+	barriers map[time.Time]uint64
+}
+
+// droppedRecord is one record a gate dropped, and the gate that dropped it.
+type droppedRecord struct {
+	rec    Record
+	reason Reason
+}
+
+// drop notes that a gate dropped rec, for [Runner.gatedRecord] to report once
+// the transaction that dropped it commits.
+func (t *results) drop(rec Record, reason Reason) {
+	t.dropped = append(t.dropped, droppedRecord{rec: rec, reason: reason})
+}
+
+// barrier counts one barrier the broker stored at storedAt, or at applied — the
+// transaction's own instant — for a record that carries no broker instant,
+// which is the only instant there is for it.
+//
+// BY ITS COMMIT HOUR, never the hour it is applied in: the census reads these
+// as the reads the log took in the last day, and a node that replays a backlog
+// — back from days away, or adopting a snapshot a day old — applies days of
+// barriers in minutes. Counted where they were applied, that node read as a
+// company several times past its census for the next day, on reads that were
+// never made in it.
+func (t *results) barrier(storedAt, applied time.Time) {
+	at := storedAt
+	if at.IsZero() {
+		at = applied
+	}
+	if t.barriers == nil {
+		t.barriers = map[time.Time]uint64{}
+	}
+	t.barriers[at.UTC().Truncate(time.Hour)]++
 }
 
 // countAborts records the transactions the store rolled back under this apply.
@@ -3028,12 +3238,22 @@ func (r *Runner) observe(started time.Time, rows int, boundBy string, tally resu
 		metrics.Attrs{"domain": domain})
 	for result, n := range map[string]int{
 		"applied": tally.applied, "retained": tally.retained,
-		"gated": tally.gated, "skipped": tally.skipped,
+		"gated": len(tally.dropped), "skipped": tally.skipped,
 	} {
 		if n > 0 {
 			r.metrics.Add(metrics.StatelogApplyRecords, uint64(n),
 				metrics.Attrs{"domain": domain, "result": result})
 		}
+	}
+	// THE LOG'S READ RATE, as this node applies it: every node's barriers,
+	// counted after the transaction that consumed them committed — so an
+	// attempt the store rolled back and ran again counts once — and filed
+	// in the window at the hour each was COMMITTED ([results.barrier]).
+	// Keyed by the STREAM, which names one log in every layout, because a
+	// domain with a log per partition has a rate per partition.
+	for hour, n := range tally.barriers {
+		r.metrics.AddAt(metrics.StatelogBarriersApplied, n, hour,
+			metrics.Attrs{"domain": domain, "stream": r.spec.Name})
 	}
 	// THE COMMIT-TO-APPLY GAP, from the BROKER's own timestamp rather
 	// than from when this node fetched the record: every read level is a

@@ -269,3 +269,17 @@ func TestTheSweepReadsNoHintsWhenThereIsNothingToOrder(t *testing.T) {
 			"for an ordering that has one possible answer", counting.reads)
 	}
 }
+
+// EVERY ROLE NAMES WHAT A FLEET LOSES WITHOUT IT. The unmanned-role warning
+// walks the placement vocabulary, and a role with no hint would be reported
+// as missing with nothing telling an operator what stopped working — which
+// is the one thing the warning exists to say, since every symptom is an
+// absence.
+func TestEveryRoleSaysWhatAFleetWithoutItLoses(t *testing.T) {
+	t.Parallel()
+	for _, role := range placement.Vocabulary() {
+		if unmannedHints[role] == "" {
+			t.Errorf("role %q has no unmanned hint", role)
+		}
+	}
+}

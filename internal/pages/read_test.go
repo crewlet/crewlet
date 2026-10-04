@@ -11,7 +11,7 @@ import (
 
 // NO READ HERE TOUCHES THE BARE CONNECTION.
 //
-// Every statement in this file used to run on `db.Replicated().SQL()` directly,
+// Every statement in this file used to run on the bare connection directly,
 // with no transaction at all. A `Get` therefore read the head, the comments,
 // the history, the children and the ancestors at five different instants: a
 // page could answer with a comment thread from after the revision it reported,
@@ -41,7 +41,7 @@ func TestNoPageReadEscapesItsTransaction(t *testing.T) {
 	// absence passes identically when the thing is absent and when the
 	// guard has gone inert.
 	for _, positive := range []string{
-		"r.db.Replicated().SQL().QueryContext(ctx, q)",
+		"part.SQL().QueryContext(ctx, q)",
 		"r.db.Node().SQL().QueryRowContext(ctx, q)",
 	} {
 		if !readsOffATransaction(positive) {

@@ -32,7 +32,7 @@ var leaseCases = []testCase{
 
 	{"a_second_owner_cannot_take_a_live_lease", func(h *harness) {
 		h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
-		h.refused("seat:ceo", coord.AcquireOptions{Owner: "node-b", TTL: LongTTL})
+		h.refused("seat:ceo", coord.AcquireOptions{Owner: "node-b", TTL: LongTTL}, coord.RefusedHeld)
 	}},
 
 	{"two_incarnations_under_one_node_id_do_not_both_win", func(h *harness) {
@@ -42,7 +42,7 @@ var leaseCases = []testCase{
 		// at the same epoch, and the fencing token would then identify
 		// nothing.
 		h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-0:aaaa", TTL: LongTTL})
-		h.refused("seat:ceo", coord.AcquireOptions{Owner: "node-0:bbbb", TTL: LongTTL})
+		h.refused("seat:ceo", coord.AcquireOptions{Owner: "node-0:bbbb", TTL: LongTTL}, coord.RefusedHeld)
 	}},
 
 	{"an_unbroken_same_owner_reacquire_keeps_the_epoch", func(h *harness) {
@@ -210,7 +210,7 @@ var leaseCases = []testCase{
 			Preferred: "n2",
 			Ungated:   true,
 			Meta:      map[string]any{"roles": []any{"workers"}},
-		})
+		}, coord.RefusedHeld)
 		h.requireUnchanged("a claim refused by a live holder", before, h.mustHold(resource, "n1:winner"))
 	}},
 
@@ -379,7 +379,7 @@ var leaseCases = []testCase{
 		// renewing too late and shedding seats it still holds. Refusing
 		// is fine; lying is not.
 		baseline := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
-		lease, err := h.b.TryAcquire(h.ctx, "seat:cto", coord.AcquireOptions{
+		lease, refused, err := h.b.TryAcquire(h.ctx, "seat:cto", coord.AcquireOptions{
 			Owner: "node-b:1", TTL: LongTTL * 2,
 		})
 		if err != nil {
@@ -387,7 +387,7 @@ var leaseCases = []testCase{
 			return
 		}
 		if lease == nil {
-			h.t.Fatal("an unclaimed resource was refused without an error")
+			h.t.Fatalf("an unclaimed resource was refused (%q) without an error", refused)
 		}
 		// The gap must be roughly the difference between the two TTLs, not
 		// merely positive. "Is later" passes for the wrong reason: a store

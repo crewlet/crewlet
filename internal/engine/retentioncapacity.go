@@ -2,9 +2,13 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -147,14 +151,19 @@ func (r *retention) poolWait(db *store.DB, file string) {
 // own list is unexported and is about REMOVING sidecars from a copy.
 const walSuffix = "-wal"
 
-// storeFiles is every database file this node holds, in a stable order.
+// storeFiles is every database file this node holds, in a stable order: its
+// own, then each partition it holds open by name. A partition an adoption holds
+// closed is not measured while it is closed — the file under its name is the
+// one being replaced.
 func storeFiles(db *store.DB) []*store.DB {
 	if db == nil {
 		return nil
 	}
 	out := []*store.DB{db}
-	if peer := db.Replicated(); peer != nil && peer != db {
-		out = append(out, peer)
+	for _, name := range db.OpenPartitions() {
+		if part, err := db.PartitionDB(name); err == nil {
+			out = append(out, part)
+		}
 	}
 	return out
 }
@@ -186,10 +195,13 @@ func (r *retention) space(out *statelog.Reading) {
 	if r.db == nil {
 		return
 	}
+	measure := r.volumes
+	if measure == nil {
+		measure = measureVolume
+	}
+	var files []storedFile
+	var unmeasured []string
 	for _, db := range storeFiles(r.db) {
-		if size, err := fileBytes(db.Path()); err == nil {
-			out.StoreBytes += size
-		}
 		if wal, err := fileBytes(db.Path() + walSuffix); err == nil {
 			// THE LARGEST, NOT THE SUM. The alarm is about ONE
 			// checkpoint that is not happening, and a gibibyte
@@ -197,14 +209,103 @@ func (r *retention) space(out *statelog.Reading) {
 			// where a gibibyte in one is the fault.
 			out.WALBytes = max(out.WALBytes, wal)
 		}
+		// A FILE THAT CANNOT BE MEASURED IS SAID, never skipped: skipped,
+		// the node is judged on its other volume alone, which is the very
+		// blind spot measuring each file's own volume exists to close.
+		// Each error names the path it could not read.
+		size, err := fileBytes(db.Path())
+		if err != nil {
+			unmeasured = append(unmeasured, err.Error())
+			continue
+		}
+		dir := filepath.Dir(db.Path())
+		vol, free, err := measure(dir)
+		if err != nil {
+			unmeasured = append(unmeasured, err.Error())
+			continue
+		}
+		files = append(files, storedFile{volume: vol, dir: dir, free: free, size: size})
 	}
-	// ONE VOLUME, from the node estate's path. Both files are opened under
-	// `store.dir` and a deployment that split them across two mounts would
-	// need two free counts — but it cannot: [store.Open] derives both from
-	// one directory.
-	if free, err := freeSpace(r.db.Path()); err == nil {
-		out.FreeBytes = free
+	tightest := tightestVolume(files)
+	out.FreeBytes, out.StoreBytes, out.StoreVolume = tightest.free, tightest.stored, tightest.dir
+	out.StoreVolumeUnmeasured = strings.Join(unmeasured, "; ")
+}
+
+// measureVolume is the volume dir is on — the filesystem's own device number,
+// so two paths on one volume are one volume — and what an unprivileged process
+// may still write there ([volumeFree]).
+func measureVolume(dir string) (string, int64, error) {
+	var st unix.Stat_t
+	if err := unix.Stat(dir, &st); err != nil {
+		return "", 0, fmt.Errorf("engine: identify the volume holding %s: %w", dir, err)
 	}
+	free, err := volumeFree(dir)
+	if err != nil {
+		return "", 0, err
+	}
+	// Sprint rather than a conversion: Stat_t.Dev is a uint64 on linux and
+	// an int32 on darwin, both release targets, and the key only has to
+	// tell two devices apart.
+	return fmt.Sprint(st.Dev), free, nil
+}
+
+// storedFile is one database file as the volume alarm weighs it: the volume it
+// is on, the directory it is in — what an operator is told to grow — what that
+// volume has free, and how large the file is.
+type storedFile struct {
+	volume, dir string
+	free, size  int64
+}
+
+// storeVolume is one volume as the alarm reads it: a directory on it, what it
+// has free, and what the databases on it occupy.
+type storeVolume struct {
+	dir          string
+	free, stored int64
+}
+
+// tightestVolume is the free space and the stored bytes of the volume with the
+// least room for a second copy of what it holds — the one `volume_low` has to
+// be about.
+//
+// PER VOLUME, because the files need not share one. `store.replicated_path`
+// puts the replicated estate's partition files wherever an operator names —
+// the fast local disk for the node's own file and a large network volume for
+// the partitions is the reason it exists — and the reading used to measure the
+// node estate's volume alone against every file's bytes: a replicated estate
+// filling its own volume never fired, and a node estate beside a nearly full
+// disk of somebody else's fired for bytes that were not there. Two files on one volume are one volume's bytes, so the
+// volumes are told apart by what the filesystem says they are, never by their
+// paths.
+//
+// Named by the directory of the first file found on it, in the files' order —
+// the node estate before the replicated one — so the same volume is named the
+// same way on every reading.
+func tightestVolume(files []storedFile) storeVolume {
+	var order []string
+	byVolume := map[string]*storeVolume{}
+	for _, f := range files {
+		v, ok := byVolume[f.volume]
+		if !ok {
+			v = &storeVolume{dir: f.dir, free: f.free}
+			byVolume[f.volume] = v
+			order = append(order, f.volume)
+		}
+		v.stored += f.size
+	}
+	var out storeVolume
+	for i, id := range order {
+		v := byVolume[id]
+		// THE SMALLEST RATIO OF FREE TO STORED is the volume nearest the
+		// alarm's own condition — free below a multiple of stored — and
+		// comparing across multiplies rather than divides, so an empty
+		// volume is never a division by zero. In floating point, because
+		// the cross products of tens of terabytes overflow an int64.
+		if i == 0 || float64(v.free)*float64(out.stored) < float64(out.free)*float64(v.stored) {
+			out = *v
+		}
+	}
+	return out
 }
 
 // semanticCoverage is the fraction of this node's sources carrying a current

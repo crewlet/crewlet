@@ -160,9 +160,9 @@ var (
 	ErrReservedOperatorID = errors.New("operator id is reserved")
 
 	// ErrInvalidSchedule reports a schedule that cannot be evaluated: an
-	// empty name or task, a cron expression without five fields, an unknown
-	// timezone, a non-positive timeout, an unknown target, or a duplicate
-	// name within one role or unit.
+	// empty name or task, a cron expression without five fields or with
+	// five the grammar refuses, an unknown timezone, a non-positive timeout,
+	// an unknown target, or a duplicate name within one role or unit.
 	ErrInvalidSchedule = errors.New("invalid schedule")
 
 	// ErrUnrunnableSchedule reports a schedule nothing could ever run — a

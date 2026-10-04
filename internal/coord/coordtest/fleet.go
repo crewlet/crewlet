@@ -44,12 +44,17 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 		{"channels", channelCases},
 		{"follows", followCases},
 		{"fires", fireCases},
+		{"custody", custodyCases},
+		{"rebases", rebaseCases},
 		{"sandbox_runs", runCases},
 		{"secrets", secretCases},
 		{"integrations", integrationCases},
 		{"mailboxes", mailboxCases},
+		{"object stores", objectStoreCases},
 		{"seat_pauses", seatPauseCases},
 		{"maintenance", maintenanceCases},
+		{"listings", listingCases},
+		{"markers", markerCases},
 	}
 	for _, g := range groups {
 		t.Run(g.name, func(t *testing.T) {
@@ -1376,6 +1381,93 @@ var fireCases = []fleetCase{{
 		}
 		if won {
 			h.t.Error("ClaimFire granted an empty identity")
+		}
+	},
+}}
+
+// ---- the custody claims ------------------------------------------------ //
+
+func (h *fleetHarness) claimCustody(batch, node string) string {
+	h.t.Helper()
+	keeper, err := h.f.ClaimCustody(h.ctx, batch, node)
+	if err != nil {
+		h.t.Fatalf("ClaimCustody(%s, %s): %v", batch, node, err)
+	}
+	return keeper
+}
+
+var custodyCases = []fleetCase{{
+	// THE WHOLE POINT: two data nodes wrote one batch, and exactly one of
+	// them keeps it. The one that claimed second is told who did, which is
+	// what it deletes its own copy on.
+	name: "the first claimant keeps a batch and the second is told who does",
+	fn: func(h *fleetHarness) {
+		if got := h.claimCustody("batch-1", "data-a"); got != "data-a" {
+			h.t.Fatalf("the first claim answered %q, want the claimant", got)
+		}
+		if got := h.claimCustody("batch-1", "data-b"); got != "data-a" {
+			h.t.Errorf("a second node's claim answered %q, want data-a — answered "+
+				"itself, it would keep a second copy of a batch data-a keeps", got)
+		}
+	},
+}, {
+	// A node that crashed after claiming settles its copy at boot by
+	// claiming AGAIN, and must be told it keeps it — or it deletes the
+	// one copy the fleet has.
+	name: "the keeper claiming again is told it keeps the batch",
+	fn: func(h *fleetHarness) {
+		h.claimCustody("batch-2", "data-a")
+		if got := h.claimCustody("batch-2", "data-a"); got != "data-a" {
+			h.t.Errorf("the keeper's second claim answered %q, want itself", got)
+		}
+	},
+}, {
+	name: "each batch is its own decision",
+	fn: func(h *fleetHarness) {
+		h.claimCustody("batch-3", "data-a")
+		if got := h.claimCustody("batch-4", "data-b"); got != "data-b" {
+			h.t.Errorf("a claim on another batch answered %q, want its own claimant", got)
+		}
+	},
+}, {
+	// CONCURRENT CLAIMS AGREE: every claimant is told the same keeper, or
+	// two of them would each keep — or each delete — their copy.
+	name: "racing claims are all told one keeper",
+	fn: func(h *fleetHarness) {
+		const claimants = 8
+		answers := make(chan string, claimants)
+		var wg sync.WaitGroup
+		for i := range claimants {
+			wg.Go(func() {
+				keeper, err := h.f.ClaimCustody(h.ctx, "batch-race", fmt.Sprintf("data-%d", i))
+				if err != nil {
+					h.t.Errorf("ClaimCustody: %v", err)
+					return
+				}
+				answers <- keeper
+			})
+		}
+		wg.Wait()
+		close(answers)
+		var keeper string
+		for got := range answers {
+			if keeper == "" {
+				keeper = got
+			}
+			if got != keeper {
+				h.t.Fatalf("racing claims were told %q and %q — two nodes keep or "+
+					"lose one batch", keeper, got)
+			}
+		}
+	},
+}, {
+	name: "an unnamed batch or claimant is an error, not a keeper",
+	fn: func(h *fleetHarness) {
+		for _, c := range [][2]string{{"", "data-a"}, {"batch-5", ""}} {
+			if keeper, err := h.f.ClaimCustody(h.ctx, c[0], c[1]); err == nil || keeper != "" {
+				h.t.Errorf("ClaimCustody(%q, %q) = (%q, %v), want an error and no keeper",
+					c[0], c[1], keeper, err)
+			}
 		}
 	},
 }}

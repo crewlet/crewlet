@@ -102,7 +102,7 @@ test("a caller with a longer path keeps the request past the ordinary deadline",
 
 // A CALL WITH A LONGER PATH SAYS SO, AND ITS REFUSAL NAMES ITS OWN DEADLINE.
 //
-// The node gate is allowed a minute from its first record to its last answer,
+// The node gate takes up to a minute and three quarters to answer a gesture,
 // and the fixed thirty seconds gave up on a gesture the node went on to finish.
 // A per-call deadline replaces the default for that call only — it is not
 // abandoned at the default, it IS abandoned at its own, and the sentence says

@@ -106,7 +106,7 @@ func TestAnUnclaimedFleetStillCountsItsNodes(t *testing.T) {
 	a.renewNodePresence(f.ctx)
 	f.present("node-b", time.Minute, placement.NodeProfile{})
 
-	plan, live := a.plan(f.ctx, a.seats())
+	plan, live, _ := a.plan(f.ctx, a.seats())
 	wantInt(t, live, 2, "live seat-running nodes")
 	wantInt(t, plan.Capacity, 2, "capacity with nothing claimed anywhere")
 }
@@ -159,12 +159,12 @@ func TestAMembershipReadFailureReusesTheLastKnownFleet(t *testing.T) {
 	a.renewNodePresence(f.ctx)
 	f.present("node-b", time.Minute, placement.NodeProfile{})
 
-	plan, live := a.plan(f.ctx, a.seats())
+	plan, live, _ := a.plan(f.ctx, a.seats())
 	wantInt(t, plan.Capacity, 2, "capacity while the store answers")
 	wantInt(t, live, 2, "live nodes while the store answers")
 
 	faulty.Break(nil)
-	plan, live = a.plan(f.ctx, a.seats())
+	plan, live, _ = a.plan(f.ctx, a.seats())
 	wantInt(t, plan.Capacity, 2, "capacity during a blip")
 	wantInt(t, live, 2, "live nodes during a blip")
 }
@@ -179,7 +179,7 @@ func TestBeforeAnyReadTheHonestAssumptionIsAFleetOfOne(t *testing.T) {
 	faulty.Break(nil)
 	a := f.newHost("node-a", Config{Backend: faulty})
 
-	plan, live := a.plan(f.ctx, a.seats())
+	plan, live, _ := a.plan(f.ctx, a.seats())
 	wantInt(t, plan.Capacity, 3, "capacity with no membership at all")
 	wantInt(t, live, 1, "live nodes with no membership at all")
 	wantInt(t, len(plan.Unplaceable), 0, "unplaceable seats")
@@ -783,12 +783,14 @@ func TestPresenceSurvivesAnOlderProtocolPeer(t *testing.T) {
 	// seats by a count that excludes it and each take a larger share — and
 	// its own capacity excludes it too.
 	f := newFleet(t)
-	if _, err := f.store.TryAcquire(f.ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+	if _, _, err := f.store.TryAcquire(f.ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
 		Owner: "old-node:1", TTL: time.Minute, Protocol: 1,
 	}); err != nil {
 		t.Fatalf("stage an old peer: %v", err)
 	}
-	h := f.newHost("node-new", Config{Seats: seatsNamed("ceo"), Protocol: 2})
+	// A second seat nobody holds, so the gate — not the old peer's hold on
+	// "ceo" — is what refuses this node its seat claims.
+	h := f.newHost("node-new", Config{Seats: seatsNamed("ceo", "eng"), Protocol: 2})
 
 	h.renewNodePresence(f.ctx)
 	if f.leaseOf(coord.NodeResource("node-new")) == nil {
@@ -798,6 +800,83 @@ func TestPresenceSurvivesAnOlderProtocolPeer(t *testing.T) {
 	result := h.Sweep(f.ctx)
 	wantInt(t, len(result.Claimed), 0, "claims")
 	wantInt(t, result.BlockedByProtocol, 1, "protocol floor")
+}
+
+// floorCounter counts the protocol-floor reads a host makes.
+type floorCounter struct {
+	coord.Backend
+	floors atomic.Int64
+}
+
+func (c *floorCounter) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
+	c.floors.Add(1)
+	return c.Backend.FleetProtocolFloor(ctx)
+}
+
+// A SWEEP OVER SEATS ITS PEERS HOLD JUDGES NO GATE.
+//
+// A node whose share did not come out even has room for one more seat and
+// nothing free to take — the steady state of most of a fleet — and it used to
+// read the fleet's protocol floor on every sweep to rule the mixed-version
+// gate out. The floor is a question about every live lease, which the KV
+// backend answers from a view that takes in every lease write the fleet makes
+// while anybody asks it: asked every five seconds, the view never went idle,
+// and each such node took in the fleet's heartbeats — about 670 messages a
+// second at ten thousand seats — to learn what each refusal had already said.
+// So here every seat is held, by this node's peer and by a node that has
+// given up its presence (a drain's first step), this node has room, and its
+// sweeps must read no floor at all. And the gate half stands: once an
+// older-protocol lease is live and a seat comes free, the floor is read and
+// the stall reported.
+func TestASweepOverSeatsItsPeersHoldJudgesNoGate(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	peer := f.newHost("node-a", Config{Seats: seatsNamed("ceo", "eng", "ops")})
+	peer.renewNodePresence(f.ctx)
+	counter := &floorCounter{Backend: f.store}
+	h := f.newHost("node-b", Config{Backend: counter, Seats: seatsNamed("ceo", "eng", "ops")})
+	h.renewNodePresence(f.ctx)
+	peer.Sweep(f.ctx)
+	// The seat the peer's share left over, held by a node no longer
+	// counted in the fleet.
+	lease, _, err := f.store.TryAcquire(f.ctx, coord.SeatResource("ops"), coord.AcquireOptions{
+		Owner: "draining:1", TTL: time.Hour, Protocol: coord.ProtocolVersion,
+	})
+	if err != nil || lease == nil {
+		t.Fatalf("stage a draining holder: lease=%v err=%v", lease, err)
+	}
+
+	for range 3 {
+		result := h.Sweep(f.ctx)
+		wantInt(t, len(result.Claimed), 0, "claims")
+		if result.Capacity <= len(h.Held()) {
+			t.Fatalf("the host has no room (capacity %d, holding %d), so the case "+
+				"tests nothing", result.Capacity, len(h.Held()))
+		}
+		if result.Blocked() {
+			t.Fatal("peers holding everything was reported as a protocol block")
+		}
+	}
+	if n := counter.floors.Load(); n != 0 {
+		t.Fatalf("three sweeps over seats peers hold read the protocol floor %d times", n)
+	}
+
+	// An older build's lease lands and a seat comes free: now the gate is
+	// what refuses, and the stall is named.
+	if _, _, err := f.store.TryAcquire(f.ctx, coord.NodeResource("old"), coord.AcquireOptions{
+		Owner: "old:1", TTL: time.Hour, Protocol: 1, Ungated: true,
+	}); err != nil {
+		t.Fatalf("stage an older build: %v", err)
+	}
+	if ok, err := f.store.Release(f.ctx, coord.SeatResource("ops"), "draining:1", lease.Epoch); err != nil || !ok {
+		t.Fatalf("free a seat: ok=%v err=%v", ok, err)
+	}
+	result := h.Sweep(f.ctx)
+	wantInt(t, len(result.Claimed), 0, "claims beside an older build")
+	wantInt(t, result.BlockedByProtocol, 1, "protocol floor")
+	if n := counter.floors.Load(); n != 1 {
+		t.Fatalf("a sweep the gate stopped read the protocol floor %d times, want once", n)
+	}
 }
 
 func TestSweepResultReportsBlockedOnlyWhenAFloorIsSet(t *testing.T) {
@@ -1142,5 +1221,117 @@ func TestTheHeartbeatAlwaysFitsInsideTheLease(t *testing.T) {
 			t.Errorf("ttl %v: heartbeat %v leaves no room for two missed renewals",
 				ttl, h.heartbeat)
 		}
+	}
+}
+
+// seatClaimCounter counts the seat claims a host tries.
+type seatClaimCounter struct {
+	coord.Backend
+	claims atomic.Int64
+}
+
+func (c *seatClaimCounter) TryAcquire(ctx context.Context, resource string,
+	opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
+
+	if coord.ClassSeat.Holds(resource) {
+		c.claims.Add(1)
+	}
+	return c.Backend.TryAcquire(ctx, resource, opts)
+}
+
+// A NODE WHOSE PEERS HOLD EVERY SEAT TRIES NONE OF THEM.
+//
+// A node whose share did not come out even has room for one more seat and
+// nothing free — the steady state of most of a fleet — and it learned that
+// nothing was free by trying every seat it may run, every sweep: on the KV
+// backend a leader read each plus a walk of the epochs bucket, about four
+// thousand messages to that node per pass at two thousand seats. Every node
+// advertises how many seats it holds on the presence row each sweep already
+// lists, so a sweep that finds the counts cover every seat tries none.
+func TestANodeWhosePeersHoldEverySeatTriesNone(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	a := f.newHost("node-a", Config{})
+	counter := &seatClaimCounter{Backend: f.store}
+	b := f.newHost("node-b", Config{Backend: counter})
+	a.renewNodePresence(f.ctx)
+	b.renewNodePresence(f.ctx)
+	a.Sweep(f.ctx)
+	b.Sweep(f.ctx)
+	if got := len(a.Held()) + len(b.Held()); got != 3 {
+		t.Fatalf("the fleet holds %d of its 3 seats, so the case tests nothing", got)
+	}
+
+	counter.claims.Store(0)
+	for range 3 {
+		result := b.Sweep(f.ctx)
+		if result.Capacity <= len(b.Held()) {
+			t.Fatalf("node-b has no room (capacity %d, holding %d), so the case tests "+
+				"nothing", result.Capacity, len(b.Held()))
+		}
+		if !result.FleetFull {
+			t.Error("a sweep over a fleet that holds every seat did not say so")
+		}
+	}
+	if n := counter.claims.Load(); n != 0 {
+		t.Fatalf("three sweeps over a fleet holding every seat tried %d seat claims, want none", n)
+	}
+}
+
+// A SEAT A PEER GIVES BACK IS TAKEN AT THE NEXT SWEEP.
+//
+// The other half of trying nothing when the fleet is full: a peer's count
+// has to stop covering a seat the moment it gives it back, or every node
+// reads the fleet as full and the seat sits unclaimed until that peer's next
+// heartbeat. So a release advertises the new count itself — on every path
+// that releases, not only a sweep's.
+func TestASeatAPeerGivesBackIsTakenAtTheNextSweep(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	a := f.newHost("node-a", Config{})
+	b := f.newHost("node-b", Config{})
+	a.renewNodePresence(f.ctx)
+	b.renewNodePresence(f.ctx)
+	a.Sweep(f.ctx)
+	b.Sweep(f.ctx)
+	given := a.Held()[0]
+	if !a.Release(f.ctx, given, ReasonUnprepared) {
+		t.Fatalf("node-a could not give back %s", given)
+	}
+
+	result := b.Sweep(f.ctx)
+	if result.FleetFull {
+		t.Error("a sweep after a peer gave a seat back read the fleet as full")
+	}
+	if !slices.Contains(result.Claimed, given) {
+		t.Fatalf("node-b claimed %v at the sweep after node-a gave back %s", result.Claimed, given)
+	}
+}
+
+// A PEER THAT SAYS NOTHING ADDS NOTHING, so a fleet it holds seats in never
+// reads as full on its account.
+//
+// A build from before the count writes none, and the one thing its silence
+// must never do is make a free seat look held. It holds a seat here; the
+// others' counts do not cover the fleet, so a node with room goes on trying.
+func TestAPeerThatSaysNothingNeverMakesTheFleetFull(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	f.present("node-old", time.Hour, placement.NodeProfile{})
+	if lease, _, err := f.store.TryAcquire(f.ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+		Owner: "node-old:1", TTL: time.Hour, Protocol: coord.ProtocolVersion,
+	}); err != nil || lease == nil {
+		t.Fatalf("stage the silent peer's seat: lease=%v err=%v", lease, err)
+	}
+	counter := &seatClaimCounter{Backend: f.store}
+	b := f.newHost("node-b", Config{Backend: counter, Seats: seatsNamed("ceo")})
+	b.renewNodePresence(f.ctx)
+
+	result := b.Sweep(f.ctx)
+	if result.FleetFull {
+		t.Error("a seat a silent peer holds made the fleet read as full")
+	}
+	if n := counter.claims.Load(); n != 1 {
+		t.Errorf("node-b tried %d seat claims, want the one it may run", n)
 	}
 }

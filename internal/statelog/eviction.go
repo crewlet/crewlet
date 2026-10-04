@@ -34,16 +34,24 @@ import (
 // give.
 const EvictionFenceWindow = 4 * coord.ReconcileInterval
 
-// Tombstone is an eviction as coordination holds it.
+// Tombstone is a node put out of a log — by an operator's eviction or by its
+// own release — as the counted set and the report read it.
 type Tombstone struct {
-	// NodeID is who was evicted.
+	// NodeID is who was put out.
 	NodeID string
 
 	// At is when the tombstone was written.
 	At time.Time
 
-	// By is the operator who ran it, which is what a refusal names.
+	// By is who ran it, which is what a refusal names: the operator for an
+	// eviction, the node itself for a release.
 	By string
+
+	// Kind is which gate the tombstone is ([EvictionRow.Kind]), read off
+	// the domain's own row. The counted set treats both alike; a surface
+	// does not, because a node that LEFT a log said so itself and is not a
+	// machine an operator judged gone.
+	Kind EvictionKind
 
 	// Generation is the domain's generation at the time. One from a
 	// previous generation is UNKNOWN rather than old, on the same rule
@@ -83,17 +91,77 @@ type EvictionRow struct {
 	From       uint64
 	Readmitted uint64
 	Back       bool
+
+	// Kind is which gate record put the node out: an operator's eviction,
+	// or the node's own release of the log when it left the log's
+	// partition. The latest of them is the row's, and a readmission lifts
+	// either.
+	//
+	// THE TWO GATE ALIKE, and the trim counts them alike: every record the
+	// node publishes above either is dropped on every holder, so neither
+	// node is a writer the log has to keep a tail for. They differ in who
+	// said so and in what a surface calls it — an eviction is the
+	// operator's judgement of a machine that is not coming back, a release
+	// the node's own statement that it has left this log ([ReasonReleased])
+	// — and a release is readmitted by the node's next join rather than by
+	// an operator.
+	Kind EvictionKind
 }
 
-// Presence is a node holding a live lease, whether or not it has reported a
-// position yet.
+// EvictionKind is which gate record put a node out of one log.
+type EvictionKind string
+
+const (
+	// EvictionKindEviction is an operator's eviction of a node the fleet
+	// judges is not coming back ([PermitEviction]).
+	EvictionKindEviction EvictionKind = "eviction"
+
+	// EvictionKindRelease is a node's RELEASE of a log: its own statement,
+	// published on the log as it leaves the log's partition, that every
+	// record it publishes above it is to apply nowhere. Self-issued by a live
+	// node, so no live-lease refusal applies to it; readmitted by the node's
+	// own next join of the partition, before it adopts.
+	EvictionKindRelease EvictionKind = "release"
+)
+
+// EvictionKinds is every kind, for validation and for a test that walks them.
+var EvictionKinds = []EvictionKind{EvictionKindEviction, EvictionKindRelease}
+
+// Valid reports whether a kind read from a domain's rows is one this build
+// knows. An unknown one is a row a newer build's applier wrote, and a reader
+// refuses it rather than guessing which gate it is.
+func (k EvictionKind) Valid() bool { return slices.Contains(EvictionKinds, k) }
+
+// Reason is the refusal a record this gate dropped is reported under.
+func (k EvictionKind) Reason() Reason {
+	if k == EvictionKindRelease {
+		return ReasonReleased
+	}
+	return ReasonEvicted
+}
+
+// Presence is a node the fleet says is there, whether or not it has reported a
+// position yet: one holding a live lease, which the eviction gate refuses to
+// evict, or one holding a log's partition, which that log's counted set counts.
 type Presence struct {
 	NodeID string
+
+	// Leaving says the estate map lists this holder as LEAVING the log's
+	// partition — the one state in which a node releases the partition's
+	// logs, so the one in which its row's release takes it out of the
+	// counted set ([CountedSet]). False for a holder joining or serving, and
+	// for every presence that is not a map holder at all.
+	//
+	// LEAVING RATHER THAN A STATE, so the zero value is the one that COUNTS:
+	// a caller that knows no map state never has a released row suppress a
+	// holder, which errs toward keeping a tail rather than trimming past a
+	// joiner.
+	Leaving bool
 }
 
-// CountedSet is who the trim counts: the positions register's own keys, UNION
-// the live presence leases, MINUS any eviction tombstone older than the fence
-// window.
+// CountedSet is who the trim counts on ONE LOG: the positions register's rows
+// naming the log, UNION every node holding the log's partition, MINUS any
+// eviction or release tombstone older than the fence window.
 //
 // # Each of the three does something the others cannot
 //
@@ -101,26 +169,57 @@ type Presence struct {
 // is deliberate, and is why an offline node pins the floor rather than
 // vanishing from it.
 //
-// The presence leases are what catch a node between boot and its first
-// heartbeat — which is exactly a node adopting a snapshot. It counts at
-// position ZERO and blocks every term derived from the set, for at most one
-// heartbeat, and the operator surface renders it as counted with no position
-// yet so the block has a visible cause.
+// The holders are what catch a node between boot and its first heartbeat, or
+// between beginning to join a partition and its first report there — which is
+// exactly a node adopting a snapshot. It counts at position ZERO and blocks
+// every term derived from the set, for at most one heartbeat, and the operator
+// surface renders it as counted with no position yet so the block has a
+// visible cause. The PARTITION's holders and no other partition's, because
+// they are the nodes that apply the log: a holder of another partition applies
+// none of it, and counting it would let one node offline there pin this log as
+// well as its own.
 //
 // The tombstones are what let an operator advance a floor an absent node is
-// pinning, and they take effect only after the window — because a node that
-// has not yet noticed is a node still writing.
-func CountedSet(now time.Time, reported []NodePosition, live []Presence, tombs []Tombstone) []NodePosition {
-	byID := make(map[string]NodePosition, len(reported)+len(live))
+// pinning, and a node that left the partition take itself out; they take
+// effect only after the window — because a node that has not yet noticed is a
+// node still writing. An eviction and a release are subtracted alike
+// ([EvictionRow.Kind]): each is a node whose later records apply nowhere.
+//
+// And a row that says the node has RELEASED the log ([NodePosition.Released])
+// takes it out at once, as the node's own report rather than the fleet's: it
+// is the node saying its release is applied, which is the tombstone this
+// node's copy may not have applied yet, and a leaver the map still names as
+// the partition's holder ([Presence.Leaving]) is not a joiner about to replay —
+// so it is not counted at zero either.
+//
+// BUT ONLY A LEAVER. A released row outlives the leave until the node forgets
+// the log, and the map may place the node on the partition again before then —
+// a re-balance, a move cancelled — as a JOINER that has not declared the log
+// yet. That node is exactly the one whose tail must not be trimmed, and its
+// released row is about its previous tenure: so a holder the map lists in any
+// other state than leaving is counted at zero whatever its row says, as any
+// holder with no position yet is. Suppressed by the row alone, it was counted
+// nowhere, and only its trim hold — stale after [TrimHoldStale] — stood
+// between its adoption and the trim.
+func CountedSet(now time.Time, reported []NodePosition, holders []Presence, tombs []Tombstone) []NodePosition {
+	byID := make(map[string]NodePosition, len(reported)+len(holders))
+	released := map[string]bool{}
 	for _, n := range reported {
+		if n.Released {
+			released[n.NodeID] = true
+			continue
+		}
 		byID[n.NodeID] = n
 	}
-	for _, p := range live {
+	for _, p := range holders {
+		if released[p.NodeID] && p.Leaving {
+			continue
+		}
 		if _, known := byID[p.NodeID]; !known {
-			// A NODE WITH A LIVE LEASE AND NO POSITION YET COUNTS AT
-			// ZERO and blocks. It is a node between boot and its first
-			// heartbeat — which is a node adopting a snapshot — and
-			// treating it as absent would let the trim advance past
+			// A HOLDER WITH NO POSITION YET COUNTS AT ZERO and blocks.
+			// It is a node between boot, or the start of its join, and
+			// its first report — which is a node adopting a snapshot —
+			// and treating it as absent would let the trim advance past
 			// the tail it is about to replay.
 			byID[p.NodeID] = NodePosition{NodeID: p.NodeID}
 		}
@@ -135,6 +234,24 @@ func CountedSet(now time.Time, reported []NodePosition, live []Presence, tombs [
 		out = append(out, n)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
+	return out
+}
+
+// Readers is the record version every node of a counted set reads on its log,
+// zero for one that has not said: the set a writer asks before it publishes a
+// record an older build cannot even defer.
+//
+// THE TRIM'S COUNTED SET, and deliberately the same one. It is every node that
+// applies the log — a node between boot and its first report counts, at zero,
+// because it is about to replay — and a node on an old build that is offline
+// but not evicted applies the log the moment it returns: a record it cannot
+// read would stop it then, so it holds such a writer back exactly as it holds
+// back the trim, and an operator's eviction releases both.
+func Readers(counted []NodePosition) map[string]int {
+	out := make(map[string]int, len(counted))
+	for _, n := range counted {
+		out[n.NodeID] = n.RecordVersion
+	}
 	return out
 }
 
@@ -157,7 +274,8 @@ func (e *EvictionRefusal) Error() string {
 // running. Its position is advancing, so it pins nothing its own progress will
 // not release — and evicting it drops everything it writes above the eviction
 // on every applier, stops its own writes the moment its applier reaches the
-// eviction, and moves its seats. Eviction is the gesture for a node that is NOT
+// eviction, and takes its copy out of service. Eviction is the gesture for a
+// node that is NOT
 // coming back, and a live lease is the fleet's own evidence that this one is;
 // the refusal is what stops a mistyped node id taking a healthy machine out.
 //
@@ -180,8 +298,8 @@ func PermitEviction(nodeID string, live []Presence, force bool) error {
 		return &EvictionRefusal{NodeID: nodeID, Detail: "it holds a live presence " +
 			"lease, so it is still reaching coordination and almost certainly " +
 			"running — an eviction drops every record it writes on every node and " +
-			"moves its seats, which is the gesture for a node that is not coming " +
-			"back"}
+			"takes its copy out of service, which is the gesture for a node that " +
+			"is not coming back"}
 	}
 	return nil
 }
@@ -455,12 +573,21 @@ func GateStanding(opID, nodeID string, readmit bool, held Position,
 			"estate is not one a retry can be judged against", opID, nodeID,
 			held, detail)
 	}
+	// A LATER GATE IS NAMED AS WHAT IT IS: a row's latest gate may be the
+	// node's own release, and an operator told "a later eviction" of a node
+	// nobody evicted goes looking for a gesture that was never made. So a
+	// row that names no gate this build knows is not judged at all.
+	if found && !row.Kind.Valid() {
+		return inconsistent(fmt.Sprintf("the node's row records the gate %q, "+
+			"which this build does not know", row.Kind))
+	}
+	later := "a later " + string(row.Kind)
 	if !readmit {
 		switch {
 		case !found:
 			return inconsistent("no eviction row holds " + nodeID)
 		case row.From > landed:
-			return superseded("a later eviction", row.From)
+			return superseded(later, row.From)
 		case row.From < landed:
 			return inconsistent(fmt.Sprintf(
 				"the node's eviction row is at the earlier composed position %d", row.From))
@@ -480,7 +607,7 @@ func GateStanding(opID, nodeID string, readmit bool, held Position,
 	case row.Readmitted > landed:
 		return superseded("a later readmission", row.Readmitted)
 	case row.From > landed:
-		return superseded("a later eviction", row.From)
+		return superseded(later, row.From)
 	}
 	return inconsistent(fmt.Sprintf("the node's row is evicted at composed "+
 		"position %d and readmitted at %d", row.From, row.Readmitted))

@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -202,7 +203,16 @@ func blockedReport() *statelog.Report {
 				Seq: 918000000, AppliedThrough: 918000000,
 			}},
 			Evicted: &statelog.EvictionReport{
-				By: "sre@example.com", At: stamp("2031-04-01T12:00:00Z"),
+				Kind: statelog.EvictionKindEviction,
+				By:   "sre@example.com", At: stamp("2031-04-01T12:00:00Z"),
+				EffectiveAt: stamp("2031-04-01T12:01:00Z"), Effective: true,
+			},
+		}, {
+			NodeID: "node-5", Counted: false, Live: true,
+			At: stamp("2031-04-02T03:13:58Z"),
+			Evicted: &statelog.EvictionReport{
+				Kind: statelog.EvictionKindRelease,
+				By:   "node-5", At: stamp("2031-04-01T12:00:00Z"),
 				EffectiveAt: stamp("2031-04-01T12:01:00Z"), Effective: true,
 			},
 		}, {
@@ -250,6 +260,8 @@ func TestRetentionStatusLeadsWithTheBlockingTermInProse(t *testing.T) {
 		"918280001",                  // node-1's own tracker position
 		"918279004",                  // the applied term's sequence
 		"evicted by sre@example.com", // node-4's tombstone
+		// AND A RELEASE AS THE NODE'S OWN LEAVING, never "evicted by" it.
+		"left, releasing its logs itself",
 		// THE GATE RESERVE, beside the ceiling it is kept under: without
 		// it a headroom of 0% reads as a log nothing can be written to,
 		// when an eviction still lands there.
@@ -492,6 +504,32 @@ func TestRetentionSnapshotsNamesWhyANodeHoldsNone(t *testing.T) {
 	}
 }
 
+// A DIVIDED ESTATE'S ARTEFACTS ARE NAMED BY PARTITION.
+//
+// Under a partitioned layout a node donates each partition it holds on its own
+// — a snapshot is a copy of one partition's file — so its rows are one per
+// partition, and two rows naming only the node would read as one artefact
+// listed twice.
+func TestRetentionSnapshotsNamesEachArtefactsPartition(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report.Snapshots = []statelog.SnapshotReport{
+		{NodeID: "node-2", Partition: "tracker.000",
+			Domains: map[string]uint64{"tracker@tracker.000": 40}, Bytes: 1 << 20},
+		{NodeID: "node-2", Partition: "tracker.001", Skip: statelog.SkipLagging},
+	}
+	node.report = report
+	stdout, _, err := cli(t, "retention", "snapshots", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention snapshots: %v", err)
+	}
+	for _, want := range []string{"node-2 tracker.000", "node-2 tracker.001"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the inventory does not name %q:\n%s", want, stdout)
+		}
+	}
+}
+
 // TestAnAcknowledgementNamesBothTheLogAndTheSequence: an acknowledgement moves
 // the floor the trim deletes against, so there is no value to guess.
 func TestAnAcknowledgementNamesBothTheLogAndTheSequence(t *testing.T) {
@@ -691,6 +729,38 @@ func TestAGateGestureThatMissedALogSaysHowToFinishIt(t *testing.T) {
 	}
 }
 
+// A LOG ANOTHER NODE WROTE SAYS WHICH NODE.
+//
+// A log of a partition the node asked does not serve is written for it by a
+// node that does, and the line names that node — and an unknown it could not
+// vouch for is that node's, never "this node", which wrote nothing there.
+func TestAGateGestureNamesTheNodeThatWroteALog(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	gesture := statelog.NewOpID(time.Now().Add(-time.Minute), "evict-node-4")
+	node.gateResult = &engine.GateResult{Domains: []engine.DomainGate{
+		{Domain: "tracker@tracker.001", Stream: "CREWLET_TRACKER_001_LOG",
+			OpID: gesture + ".evict.tracker", Outcome: statelog.OutcomeApplied, Writer: "node-q",
+			Position: statelog.Position{Stream: "CREWLET_TRACKER_001_LOG", Seq: 12}},
+		{Domain: "pages@pages.000", Stream: "CREWLET_PAGES_000_LOG",
+			OpID: gesture + ".evict.pages", Outcome: statelog.OutcomeUnknown, Unvouched: true,
+			Writer: "node-q"},
+	}}
+	stdout, _, _ := cli(t, "retention", "evict", "node-4", base,
+		"-confirm", "node-4", "-op-id", gesture)
+	for _, want := range []string{
+		"tracker@tracker.001: applied at CREWLET_TRACKER_001_LOG 12 (written by node-q)",
+		"pages@pages.000: unknown — node node-q cannot tell whether the record is on the log",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the output never says %q:\n%s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "this node cannot tell") {
+		t.Errorf("an unknown another node gave is printed as this node's:\n%s", stdout)
+	}
+}
+
 // A REFUSED EVICTION SAYS HOW TO GET PAST IT IN THIS COMMAND'S OWN FLAGS.
 //
 // The node names what to do as actions and a sentence spelling no flag, since
@@ -720,6 +790,78 @@ func TestARefusedEvictionNamesTheFlagThatForcesIt(t *testing.T) {
 	_, _, err := cli(t, "retention", "evict", "node-4", base, "-confirm", "node-4")
 	if err == nil || !strings.Contains(err.Error(), "LIVE column") {
 		t.Errorf("a live node's refusal never says how to tell its lease lapsed: %v", err)
+	}
+}
+
+// A REFUSAL'S `wait` SAYS WHAT THAT REFUSAL WAITS ON, NOT WHAT ITS VERB USUALLY
+// DOES.
+//
+// Four refusals carry `wait`, each for something different. Rendered by the
+// verb, a readmission refused `readmission_unjudged` — a partition nobody
+// serves — was told to watch the node's SEQ catch up, a number that had already
+// caught up, directly under the node's own hint naming the partition; and
+// either gesture refused `not_publishing` was sent to a lease or a position
+// that had nothing to do with the capacity window it was waiting out. Each is
+// rendered here by the route's own renderer from the engine's own error, so the
+// codes this command switches on are the codes a node sends.
+//
+// AND A 503 GATE REFUSAL IS THE NODE'S ANSWER, not "this node cannot serve
+// that": a partition nobody serves is refused the same way by every node.
+func TestAGateRefusalsWaitNamesWhatItWaitsOn(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	// advice is each refusal's own line, which no other refusal's answer
+	// may carry.
+	advice := map[string]string{
+		"eviction_refused":     "LIVE column in `crewlet retention status`",
+		"readmission_refused":  "says when it has caught up",
+		"readmission_unjudged": "did not answer for the log",
+		"not_publishing":       "leads with the capacity window",
+	}
+	for _, c := range []struct {
+		name, verb, code string
+		err              error
+	}{
+		{"a live lease", "evict", "eviction_refused", fmt.Errorf("engine: evict node node-4: %w",
+			statelog.PermitEviction("node-4", []statelog.Presence{{NodeID: "node-4"}}, false))},
+		{"a node below a floor", "readmit", "readmission_refused",
+			fmt.Errorf("engine: readmit node node-4: %w", &statelog.ReadmissionRefusal{
+				NodeID: "node-4", Domain: "tracker", Published: true, Generation: 1, Seq: 1200,
+				Bound: statelog.ReadmissionBound{Domain: "tracker", Generation: 1,
+					Floor: 9000, First: 8800}})},
+		{"a partition nobody serves", "readmit", "readmission_unjudged",
+			fmt.Errorf("engine: readmit node node-4: %w", &engine.ReadmissionUnjudged{
+				Node: "node-4", Log: "tracker@tracker.007",
+				Err: fmt.Errorf("read its readmission bound: %w",
+					&estate.ErrPartitionUnserved{Partition: "tracker.007"})})},
+		{"an eviction in a capacity window", "evict", "not_publishing",
+			fmt.Errorf("%w: an eviction appends a record to the state log, and this "+
+				"node runs in seal mode", engine.ErrNotPublishing)},
+		{"a readmission in a capacity window", "readmit", "not_publishing",
+			fmt.Errorf("%w: a readmission appends a record to the state log, and this "+
+				"node runs in seal mode", engine.ErrNotPublishing)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			node.mu.Lock()
+			node.gateErr = c.err
+			node.mu.Unlock()
+			_, _, err := cli(t, "retention", c.verb, "node-4", base, "-confirm", "node-4")
+			if err == nil {
+				t.Fatalf("a refused %s exited zero", c.verb)
+			}
+			said := err.Error()
+			if !strings.HasPrefix(said, "the node answered ") ||
+				!strings.Contains(strings.SplitN(said, "\n", 2)[0], c.code) {
+				t.Errorf("the refusal is not introduced as the node's %s answer:\n%s",
+					c.code, said)
+			}
+			for code, line := range advice {
+				if got := strings.Contains(said, line); got != (code == c.code) {
+					t.Errorf("a %s refusal carries %s's advice %q: %v\n%s", c.code,
+						code, line, got, said)
+				}
+			}
+		})
 	}
 }
 
@@ -759,15 +901,16 @@ func TestAGateTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 
 	// AND THE NODE'S OWN BOUND IS INSIDE THE WAIT, so its answer — not a
 	// client timeout that knows none of it — is what reaches the operator.
-	if gateRequestTimeout <= engine.GateBudget {
-		t.Fatalf("the command waits %s for a gesture the node bounds at %s",
-			gateRequestTimeout, engine.GateBudget)
+	if gateRequestTimeout <= engine.GateAnswerBudget {
+		t.Fatalf("the command waits %s for a gesture the node answers within %s",
+			gateRequestTimeout, engine.GateAnswerBudget)
 	}
 }
 
 // AN ANSWER THE NODE DID NOT WRITE IS NOT A REFUSAL. A reverse proxy's read
-// timeout — a 504 with an HTML page, at a minute, which is also the budget the
-// node gives a gesture past its judgement — and a 200 cut off part way through
+// timeout — a 504 with an HTML page, at a minute, which is shorter than the
+// minute and a quarter the node gives a gesture past its judgement — and a 200
+// cut off part way through
 // both leave what the node did unknown, and the node finishes a gesture
 // whatever happens to the connection. Read as a refusal, the eviction printed
 // no -op-id, and the only way on was a second gesture over every log the first
@@ -869,7 +1012,7 @@ func TestReadmittingANodeBelowTheFloorIsRefused(t *testing.T) {
 	base := "http://127.0.0.1:" + strconv.Itoa(boot.API.Port)
 	node := []string{"-url", base, "-token", "a-test-token"}
 	deadline := time.Now().Add(20 * time.Second)
-	for !e.NativeHydrated() {
+	for !e.NativeHydrated(t.Context()) {
 		if time.Now().After(deadline) {
 			t.Fatal("the node never established its state log")
 		}

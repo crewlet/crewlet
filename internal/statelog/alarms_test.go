@@ -70,7 +70,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"a deferral past the grace": {
 			statelog.KindDeferredOld,
 			statelog.Reading{DeferredAge: 31 * time.Minute},
-			"seats move",
+			"stops serving the partition",
 		},
 		"a floor nobody can read": {
 			statelog.KindFloorUnknown,
@@ -107,6 +107,12 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{SemanticCoverage: statelog.Frac(0.5)},
 			"current vectors",
 		},
+		"an index measured below its floor": {
+			statelog.KindIVFRecallBelowFloor,
+			statelog.Reading{IVFRecall: statelog.Frac(0.91), IVFRecallFloor: 0.98,
+				IVFMeasuredOn: 20_000, IVFShape: "source:page"},
+			"0.9100 against the exact scan in the source:page shape over 20000 sources",
+		},
 		"a gated record": {
 			statelog.KindRecordsGated,
 			statelog.Reading{RecordsGated: 1},
@@ -124,8 +130,13 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		},
 		"a volume with no room for a second copy": {
 			statelog.KindVolumeLow,
-			statelog.Reading{FreeBytes: 1 << 30, StoreBytes: 4 << 30},
-			"free against",
+			statelog.Reading{FreeBytes: 1 << 30, StoreBytes: 4 << 30, StoreVolume: "/var/lib/crewlet"},
+			"1.0 GiB free on the volume holding /var/lib/crewlet",
+		},
+		"a store volume nobody can measure": {
+			statelog.KindVolumeLow,
+			statelog.Reading{StoreVolumeUnmeasured: "measure the free space on /mnt/estate: input/output error"},
+			"/mnt/estate",
 		},
 		"a write-ahead log nothing is checkpointing": {
 			statelog.KindWALLarge,
@@ -139,8 +150,14 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		},
 		"a read rate the sizing did not assume": {
 			statelog.KindCensusDrift,
-			statelog.Reading{LinearizableReads: 5000, LinearizableReadsExpected: 1000},
-			"sized for",
+			statelog.Reading{LinearizableReads: 5000, LinearizableReadsExpected: 1000,
+				CensusLog: "tracker@tracker.007"},
+			"on tracker@tracker.007 against the 1000",
+		},
+		"chunks the object store lost": {
+			statelog.KindObjectsMissing,
+			statelog.Reading{ObjectsMissing: 2},
+			"2 chunk(s) the company's files are made of are not in the object store",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -191,6 +208,46 @@ func TestAZeroReadingRaisesNothing(t *testing.T) {
 	got := statelog.Evaluate(measured)
 	if len(got) != 2 {
 		t.Errorf("a measured zero raised %v, want both fraction alarms", kindsOf(got))
+	}
+}
+
+// THE INDEX RECALL ALARM FIRES AT THE EVALUATION'S FLOOR, NOT BELOW A NUMBER OF
+// ITS OWN (ADR-0015).
+//
+// The floor is the curve `crewlet search eval` judges a corpus against, at the
+// size the training measured, handed in by the engine because the curve is the
+// search package's. A recall AT the floor passes that evaluation, so it must
+// not alarm; a partition whose index nobody trained measured nothing and must
+// not alarm either — zero recall is the alarm, not the absence.
+func TestTheIndexRecallAlarmFiresAtTheEvaluationsFloor(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		fires   bool
+	}{
+		"a recall at the floor": {statelog.Reading{
+			IVFRecall: statelog.Frac(0.93), IVFRecallFloor: 0.93}, false},
+		"a recall above it": {statelog.Reading{
+			IVFRecall: statelog.Frac(0.99), IVFRecallFloor: 0.93}, false},
+		"a recall a hair below it": {statelog.Reading{
+			IVFRecall: statelog.Frac(0.9299), IVFRecallFloor: 0.93}, true},
+		"a measured zero": {statelog.Reading{
+			IVFRecall: statelog.Frac(0), IVFRecallFloor: 0.93}, true},
+		"nothing measured": {statelog.Reading{IVFRecallFloor: 0.93}, false},
+	} {
+		_, fired := find(statelog.Evaluate(c.reading), statelog.KindIVFRecallBelowFloor)
+		if fired != c.fires {
+			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+	}
+}
+
+// THE MISSING-CHUNK ALARM IS SILENT ON NOTHING MISSING — including a reading
+// from a node that holds no collector duty, which reports no audit at all.
+func TestTheObjectStoreAlarmIsSilentWithNothingMissing(t *testing.T) {
+	t.Parallel()
+	if got := statelog.Evaluate(statelog.Reading{}); len(got) != 0 {
+		t.Errorf("an empty reading raised %v", kindsOf(got))
 	}
 }
 
@@ -417,6 +474,49 @@ func gauge(t *testing.T, rec *metrics.Recorder, kind statelog.Kind) float64 {
 	}
 	t.Fatalf("no gauge series for %s", kind)
 	return -1
+}
+
+// A LOG'S SHARE OF THE CENSUS IS PER SEAT, PER DOMAIN LOG, NEVER ZERO — AND
+// PLUS WHAT THE ENGINE READS ON ITS OWN, WHOLE.
+//
+// The reference company — 100 seats, one tracker log — is the 12 500 the
+// sizing was derived from, so that is what its log is expected to take. A
+// company twice the size doing the same work per seat takes twice it, which
+// the fixed figure read as drift. A partitioned domain divides its figure
+// across its own logs, ROUNDING UP, so no partition of a small company is told
+// to expect nothing; and a company with no agent seat is still one seat's
+// worth, since its operators read too and an expectation of zero is an alarm
+// that cannot fire. The engine's own periodic reads are added after the
+// division and not divided, since each of them is a barrier on every log it
+// reads: without them a one-seat company on one data node reading exactly its
+// census put 293 barriers a day on a log expected to take 125.
+func TestALogsCensusIsPerSeatAndPerDomainLog(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		census statelog.Census
+		want   int
+	}{
+		{"the reference company on layout 0", statelog.Census{Seats: 100, Logs: 1}, 12_500},
+		{"twice the company", statelog.Census{Seats: 200, Logs: 1}, 25_000},
+		{"no agent seat", statelog.Census{Logs: 1}, 125},
+		{"a small company on two partitions", statelog.Census{Seats: 3, Logs: 2}, 188},
+		{"the reference company on 256 partitions", statelog.Census{Seats: 100, Logs: 256}, 49},
+		{"no log to share it across", statelog.Census{Seats: 5, Background: 168}, 0},
+		{"one seat beside one data node's passes",
+			statelog.Census{Seats: 1, Logs: 1, Background: 168}, 293},
+		{"the engine's own reads are not divided across partitions",
+			statelog.Census{Seats: 3, Logs: 2, Background: 504}, 692},
+		{"a negative background adds nothing", statelog.Census{Seats: 1, Logs: 1, Background: -5}, 125},
+	} {
+		if got := tc.census.Expected(); got != tc.want {
+			t.Errorf("%s: %+v expects %d a day, want %d", tc.name, tc.census, got, tc.want)
+		}
+	}
+	if statelog.LinearizableReadsPerSeatDay*100 != 12_500 {
+		t.Errorf("the per-seat census is %d, and the reference company's 12 500 "+
+			"over its 100 seats is 125", statelog.LinearizableReadsPerSeatDay)
+	}
 }
 
 // THE HISTORY ALARM BORROWS THE READ BUDGET (ADR-0015).

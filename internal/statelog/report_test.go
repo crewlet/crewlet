@@ -3,6 +3,7 @@ package statelog_test
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"reflect"
 	"regexp"
 	"strings"
@@ -266,14 +267,17 @@ func TestAnEvictionIsEffectiveExactlyWhenTheGateSaysSo(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			tomb := statelog.Tombstone{NodeID: "node-9", At: evicted, By: "ops-3"}
+			d := healthyDomain("tracker", true)
+			d.Tombstones = []statelog.Tombstone{tomb}
 			rep := statelog.NewReport(statelog.ReportInputs{
 				NodeID:           "node-1",
 				At:               tc.at,
 				RegisterReadable: true,
-				Register: []coord.NodePositions{
-					{NodeID: "node-9", At: evicted},
-				},
-				Tombstones: []statelog.Tombstone{{NodeID: "node-9", At: evicted, By: "ops-3"}},
+				Domains:          []statelog.DomainInputs{d},
+				Register: []coord.NodePositions{{NodeID: "node-9", At: evicted,
+					Domains: map[string]coord.DomainPosition{"tracker": {Seq: 3}}}},
+				Tombstones: []statelog.Tombstone{tomb},
 			})
 			row := rep.Nodes[0]
 			if row.Evicted == nil {
@@ -291,6 +295,32 @@ func TestAnEvictionIsEffectiveExactlyWhenTheGateSaysSo(t *testing.T) {
 	}
 }
 
+// A NODE THAT RELEASED ITS LOGS IS REPORTED AS HAVING LEFT, NOT AS EVICTED.
+//
+// Both tombstones gate alike and the counted set drops both alike, but a
+// release is the node's own statement as it leaves a partition: rendered as an
+// eviction it reads "evicted by <the node itself>", and an operator goes
+// looking for a gesture nobody made. So the row carries the kind it read.
+func TestAReleasedNodesRowSaysItLeft(t *testing.T) {
+	t.Parallel()
+	at := reportAt.Add(-2 * statelog.EvictionFenceWindow)
+	for _, kind := range statelog.EvictionKinds {
+		rep := statelog.NewReport(statelog.ReportInputs{
+			NodeID:           "node-1",
+			At:               reportAt,
+			RegisterReadable: true,
+			Register:         []coord.NodePositions{{NodeID: "node-9", At: at}},
+			Tombstones: []statelog.Tombstone{{NodeID: "node-9", At: at,
+				By: "node-9", Kind: kind}},
+		})
+		row := rep.Nodes[0]
+		if row.Evicted == nil || row.Evicted.Kind != kind {
+			t.Errorf("a node whose tombstone is a %s is reported %+v, want the "+
+				"kind carried", kind, row.Evicted)
+		}
+	}
+}
+
 // A LIVE NODE WITH NO POSITION YET IS COUNTED, AND VISIBLE.
 //
 // It is a node between boot and its first heartbeat — a node adopting a
@@ -298,11 +328,14 @@ func TestAnEvictionIsEffectiveExactlyWhenTheGateSaysSo(t *testing.T) {
 // did not appear in would be a block with no visible cause.
 func TestALiveNodeWithNoPositionIsCountedAndRendered(t *testing.T) {
 	t.Parallel()
+	d := healthyDomain("tracker", true)
+	d.Holders = []statelog.Presence{{NodeID: "node-7"}}
 	rep := statelog.NewReport(statelog.ReportInputs{
 		NodeID:           "node-1",
 		At:               reportAt,
 		RegisterReadable: true,
 		Live:             []statelog.Presence{{NodeID: "node-7"}},
+		Domains:          []statelog.DomainInputs{d},
 	})
 	if len(rep.Nodes) != 1 || rep.Nodes[0].NodeID != "node-7" {
 		t.Fatalf("a live node that has never reported is missing from the node "+
@@ -316,6 +349,76 @@ func TestALiveNodeWithNoPositionIsCountedAndRendered(t *testing.T) {
 		t.Errorf("a node that has never reported shows a position (%v, %d domains); "+
 			"that is a node at zero rather than a node with nothing to say",
 			row.At, len(row.Domains))
+	}
+}
+
+// A LIVE NODE HOLDING NO PARTITION IS LIVE AND NOT COUNTED; A HOLDER THAT IS
+// NOT LIVE IS COUNTED.
+//
+// The counted mark is the trim's counted set, whose holder half is who holds
+// the log's partition — not who is running. A live node holding nothing is
+// waited for on no log, and a holder whose lease flickered mid-join is exactly
+// the node whose tail must be kept; marked the other way round, the screen
+// named a fleet the trim was not waiting for.
+func TestTheCountedMarkIsTheHoldersNotTheLiveNodes(t *testing.T) {
+	t.Parallel()
+	d := healthyDomain("tracker", true)
+	d.Holders = []statelog.Presence{{NodeID: "joining"}}
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID:           "node-1",
+		At:               reportAt,
+		RegisterReadable: true,
+		Live:             []statelog.Presence{{NodeID: "stateless"}},
+		Domains:          []statelog.DomainInputs{d},
+	})
+	marks := map[string][2]bool{}
+	for _, n := range rep.Nodes {
+		marks[n.NodeID] = [2]bool{n.Counted, n.Live}
+	}
+	want := map[string][2]bool{"stateless": {false, true}, "joining": {true, false}}
+	if !maps.Equal(marks, want) {
+		t.Errorf("the node block marks (counted, live) %v, want %v", marks, want)
+	}
+}
+
+// THE COUNTED MARK IS THE TRIM'S SET, LOG BY LOG.
+//
+// A node is marked counted where some log's counted set holds it, each set over
+// that log's own rows, holders and tombstones: a node whose row released every
+// log it names is counted nowhere, one evicted past the window on the only log
+// its row names is counted nowhere, and one evicted on one log and still
+// reporting another is counted — on the other. Folded into one set over every
+// row, the first two were marked counted while the trim waited for neither.
+func TestTheCountedMarkIsTheTrimsSetLogByLog(t *testing.T) {
+	t.Parallel()
+	tracker := healthyDomain("tracker", true)
+	tracker.Tombstones = []statelog.Tombstone{
+		{NodeID: "evicted", At: reportAt.Add(-time.Hour)},
+		{NodeID: "half", At: reportAt.Add(-time.Hour)},
+	}
+	pages := healthyDomain("pages", true)
+	row := func(node string, positions map[string]coord.DomainPosition) coord.NodePositions {
+		return coord.NodePositions{NodeID: node, At: reportAt, Domains: positions}
+	}
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID:           "node-1",
+		At:               reportAt,
+		RegisterReadable: true,
+		Domains:          []statelog.DomainInputs{tracker, pages},
+		Register: []coord.NodePositions{
+			row("server", map[string]coord.DomainPosition{"tracker": {Seq: 9}, "pages": {Seq: 9}}),
+			row("left", map[string]coord.DomainPosition{"tracker": {Seq: 3, State: coord.LogReleased}}),
+			row("evicted", map[string]coord.DomainPosition{"tracker": {Seq: 2}}),
+			row("half", map[string]coord.DomainPosition{"tracker": {Seq: 2}, "pages": {Seq: 2}}),
+		},
+	})
+	marks := map[string]bool{}
+	for _, n := range rep.Nodes {
+		marks[n.NodeID] = n.Counted
+	}
+	want := map[string]bool{"server": true, "left": false, "evicted": false, "half": true}
+	if !maps.Equal(marks, want) {
+		t.Errorf("the node block marks counted %v, want %v", marks, want)
 	}
 }
 

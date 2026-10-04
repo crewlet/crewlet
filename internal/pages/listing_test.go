@@ -1,6 +1,7 @@
 package pages_test
 
 import (
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
@@ -529,6 +530,31 @@ func TestEnsuringAnUnchangedContainerWritesNothing(t *testing.T) {
 	// same container rather than a second one.
 	if ensure("eng", "Platform", "Build it") {
 		t.Error("the lower-cased key wrote a record — want the same container")
+	}
+}
+
+// A LISTING THAT STATES NO COVERAGE SENDS NONE, and one that states some sends
+// it: the zero coverage is a listing answered below the router, and sent as
+// `{"addressed":0}` it would claim the read addressed no partition at all.
+func TestAListingStatingNoCoverageSendsNone(t *testing.T) {
+	t.Parallel()
+	keys := func(l pages.Listing) map[string]json.RawMessage {
+		raw, err := json.Marshal(l)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var out map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return out
+	}
+	if _, present := keys(pages.Listing{})["coverage"]; present {
+		t.Error("a listing stating no coverage sent one")
+	}
+	stated := pages.Listing{Coverage: statelog.Coverage{Addressed: 1, Answered: []string{"pages.000"}}}
+	if _, present := keys(stated)["coverage"]; !present {
+		t.Error("a listing stating its coverage did not send it")
 	}
 }
 

@@ -98,16 +98,21 @@ type barrierRun struct {
 // told that than left holding a request open.
 const DefaultBarrierBudget = 5 * time.Second
 
-// NewReadIndex builds a domain's read index.
+// NewReadIndex builds the read index of one of a domain's logs — the one spec
+// names, whose own barrier subject the index appends to.
+//
+// ONE PER LOG, AND SINGLE-FLIGHTED PER LOG: a barrier proves where ONE
+// stream's end is, so a domain with a log in each of two partitions has two
+// ends to prove and two indexes proving them, and readers of one never wait
+// on an append to the other.
 //
 // admission is the log's gate reserve ([Reserve]) — required of a domain that
 // keeps one, the one every other ordinary append on this log on this node is
 // admitted through, and refused on a domain that keeps none.
-func NewReadIndex(d Domain, log Appender, admission Admission,
+func NewReadIndex(d Domain, spec StreamSpec, log Appender, admission Admission,
 	encode func(Envelope) ([]byte, error), gen func() uint32,
 	rec *metrics.Recorder) (*ReadIndex, error) {
-	spec := d.Stream()
-	if err := spec.Validate(); err != nil {
+	if err := spec.Instantiates(d); err != nil {
 		return nil, err
 	}
 	if encode == nil {
@@ -131,7 +136,7 @@ func NewReadIndex(d Domain, log Appender, admission Admission,
 	return &ReadIndex{
 		log:       log,
 		stream:    spec.Name,
-		subject:   spec.SubjectPrefix + "." + BarrierKind,
+		subject:   wireSubject(spec.SubjectPrefix, Subject{Kind: BarrierKind}),
 		domain:    d.Name(),
 		encode:    encode,
 		gen:       gen,

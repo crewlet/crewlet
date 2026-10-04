@@ -50,9 +50,16 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	rows += claimed
 
+	// A PARENT THE PAGE CANNOT HOLD AT THIS POSITION files it at its
+	// container's top — see parent.go for why the apply salvages what the
+	// decide refused, and why the top is the one place that is always sound.
+	parent, err := salvageParent(ctx, tx, at, p.PageID, p.Container, p.ParentID, "")
+	if err != nil {
+		return 0, err
+	}
 	head := Page{
 		V: DocumentVersion, ID: p.PageID, Container: p.Container,
-		ParentID: p.ParentID, Title: p.Title, Body: p.Body,
+		ParentID: parent, Title: p.Title, Body: p.Body,
 		Status: p.Status, Labels: sorted(p.Labels), Watchers: sorted(p.Watchers),
 		Version: 1, Author: p.Author,
 		CreatedAt: at.brokerAt, UpdatedAt: at.brokerAt,
@@ -298,7 +305,18 @@ func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, at applyContext,
 		rows += written
 	}
 	if p.ParentID != nil {
-		head.ParentID = *p.ParentID
+		// A MOVE UNDER A PARENT THE PAGE CANNOT HOLD AT THIS POSITION
+		// leaves it where it was — see parent.go. The history row still
+		// says it was moved, because the history is the record's account
+		// of what its writer did and the wake has already said so; the
+		// ROW is what keeps the container a tree.
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+		parent, err := salvageParent(ctx, tx, at, head.ID, head.Container,
+			*p.ParentID, head.ParentID)
+		if err != nil {
+			return 0, err
+		}
+		head.ParentID = parent
 		changed = ChangeMoved
 	}
 	if p.Status != nil {
@@ -405,9 +423,10 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext,
 	p StatusPayload) (int, error) {
 
 	id := at.subject().ID
-	var container string
+	var container, parent string
 	err := tx.QueryRowContext(ctx,
-		`SELECT container FROM pages_heads WHERE id = ?`, id).Scan(&container)
+		`SELECT container, parent_id FROM pages_heads WHERE id = ?`, id).
+		Scan(&container, &parent)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("pages: read %s before purging it at %s: %w",
 			id, at.position, err)
@@ -455,6 +474,20 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext,
 	n, _ := res.RowsAffected()
 	rows += int(n)
 
+	// ITS CHILDREN ARE RE-FILED, not destroyed and not orphaned — the
+	// tracker's purge states the rule and this is the same one. Destroying
+	// the pages under it would destroy work nobody asked about, and leaving
+	// them would leave each pointing at a row that no longer exists: filed
+	// nowhere a walk of the container reaches, with nothing on the row to
+	// say so. Each goes under the purged page's OWN parent — the
+	// grandparent, or the container's top — which is sound for the reason
+	// the purged page's pointer was.
+	reparented, err := a.reparentChildren(ctx, tx, at, id, parent)
+	if err != nil {
+		return 0, err
+	}
+	rows += reparented
+
 	res, err = tx.ExecContext(ctx, `
 		INSERT INTO pages_deletions
 			(page_id, container, at, by, reason, purge_record_id, version)
@@ -471,6 +504,70 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext,
 		a.skillMoved = true
 	}
 	return rows + int(n), nil
+}
+
+// reparentChildren files every page directly under parentID under newParent
+// instead, in id order.
+//
+// FROM ANOTHER SUBJECT, so it moves `scoped_through` and never `version` — the
+// rule [Applier.applyRename] states for the same reason: each child's own
+// broker expectation is its own last record, and a version stamped here would
+// poison it into permanent unwritability. The document moves with the column,
+// because every reader decodes the document.
+//
+// A REDELIVERY FINDS NO CHILDREN, because the first apply already re-filed
+// them, so this is idempotent without a guard of its own.
+func (a *Applier) reparentChildren(ctx context.Context, tx *sql.Tx,
+	at applyContext, parentID, newParent string) (int, error) {
+
+	children, err := func() ([]string, error) {
+		found, err := tx.QueryContext(ctx,
+			`SELECT id FROM pages_heads WHERE parent_id = ? ORDER BY id`, parentID)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = found.Close() }()
+		var out []string
+		for found.Next() {
+			var child string
+			if err := found.Scan(&child); err != nil {
+				return nil, err
+			}
+			out = append(out, child)
+		}
+		return out, found.Err()
+	}()
+	if err != nil {
+		return 0, fmt.Errorf("pages: read the children of %s at %s: %w",
+			parentID, at.position, err)
+	}
+	rows := 0
+	for _, child := range children {
+		head, found, err := readHead(ctx, tx, child)
+		if err != nil {
+			return 0, err
+		}
+		if !found {
+			continue
+		}
+		head.ParentID = newParent
+		document, err := EncodePage(head)
+		if err != nil {
+			return 0, err
+		}
+		res, err := tx.ExecContext(ctx, `
+			UPDATE pages_heads
+			SET parent_id = ?, scoped_through = ?, document = ?
+			WHERE id = ? AND scoped_through < ? AND version < ?`,
+			newParent, at.packed, document, child, at.packed, at.packed)
+		if err != nil {
+			return 0, fmt.Errorf("pages: re-file %s under %q at %s: %w",
+				child, newParent, at.position, err)
+		}
+		n, _ := res.RowsAffected()
+		rows += int(n)
+	}
+	return rows, nil
 }
 
 // applyComment writes one comment's create, edit or removal.

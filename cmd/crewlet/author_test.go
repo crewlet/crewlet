@@ -84,7 +84,7 @@ func TestAPublishedLocalRevisionKeepsItsOperator(t *testing.T) {
 // read as an operator's on the audit screen.
 func TestTheEnginesConfigWriterWritesAsTheNode(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "w.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "w.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}

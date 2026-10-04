@@ -458,7 +458,9 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 }
 
 // outcome writes what a ranked search did onto its answer: the four fields
-// `knowledge` and `work_search` share, so one screen control reads both.
+// `knowledge` and `work_search` share, so one screen control reads both, and
+// a fifth, `partitions`, where the search was a gather over the estate's
+// partitions.
 //
 // NEVER NULL: an absent outcome — a search that did not run — is an empty
 // mode list, no served mode and a coverage of no nodes, not complete. A
@@ -477,6 +479,16 @@ func outcome(out map[string]any, o knowledge.Outcome) {
 	out["modes"] = modes
 	out["coverage"] = coverage
 	out["degraded"] = string(o.Degraded)
+	// AND THE PARTITIONS IT DID NOT REACH, beside the hits rather than folded
+	// into a shorter list: a part of the corpus nobody searched is not one
+	// with nothing in it. A different question from `coverage`, which is
+	// how the BUCKETS were divided across the nodes that searched: this is
+	// which partitions of the replicated estate answered at all. Absent where
+	// the backend states none (Confluence, Jira), as on every answer type
+	// that carries one.
+	if o.Partitions.Addressed > 0 {
+		out["partitions"] = o.Partitions
+	}
 }
 
 // modeNames is the search modes as a refusal names them.

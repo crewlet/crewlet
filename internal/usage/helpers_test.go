@@ -14,17 +14,14 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // openStore is a fresh node with both estates migrated.
 func openStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
@@ -88,7 +85,7 @@ func (l *loopback) Publish(ctx context.Context, req statelog.Request) (statelog.
 	l.seq++
 	rec := statelog.Record{
 		Envelope: env,
-		Position: statelog.Position{Stream: usage.Domain{}.Stream().Name,
+		Position: statelog.Position{Stream: statelog.EstateStream(usage.Domain{}).Name,
 			Generation: 1, Seq: l.seq},
 		Payload: decision.Payload,
 	}
@@ -107,9 +104,9 @@ func (l *loopback) sent() int {
 // applyRecord runs the shipped applier over one record in one transaction, as
 // the framework's loop does.
 func applyRecord(ctx context.Context, db *store.DB, rec statelog.Record) error {
-	return db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+	return storetest.EstateOf(db).Tx(ctx, func(tx *sql.Tx) error {
 		_, err := usage.NewApplier().Apply(ctx, tx, rec, statelog.ApplyOptions{
-			MaxVariables: db.Replicated().Caps().MaxVariables,
+			MaxVariables: storetest.EstateOf(db).Caps().MaxVariables,
 		})
 		return err
 	})
@@ -128,7 +125,7 @@ func recordAt(t *testing.T, r usage.Record, seq uint64) statelog.Record {
 	}
 	return statelog.Record{
 		Envelope: env,
-		Position: statelog.Position{Stream: usage.Domain{}.Stream().Name,
+		Position: statelog.Position{Stream: statelog.EstateStream(usage.Domain{}).Name,
 			Generation: 1, Seq: seq},
 		Payload: body,
 	}
@@ -146,7 +143,7 @@ func dump(t *testing.T, db *store.DB) map[string][]string {
 		"usage_schedule_runs": "day, node, scope_type, scope_id, name, fired_at, target",
 	}
 	out := map[string][]string{}
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		for table, order := range orders {
 			rows, err := tx.QueryContext(t.Context(), `SELECT * FROM `+table+` ORDER BY `+order)
 			if err != nil {

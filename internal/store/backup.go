@@ -112,8 +112,8 @@ var ErrBadBackupPath = errors.New("store: unusable backup destination")
 // It does not stop the engine; see the file doc for what the resulting
 // snapshot is a snapshot OF.
 func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
-	if d == nil || d.sql == nil {
-		return BackupInfo{}, errors.New("store: backup: no open database")
+	if !d.isOpen() {
+		return BackupInfo{}, fmt.Errorf("store: backup: %w", ErrNoEstate)
 	}
 	if dest == "" {
 		return BackupInfo{}, errors.New("store: backup: no destination path")
@@ -190,7 +190,7 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	// Also why this is an ExecContext rather than the [DB.Tx] every other
 	// write in this package goes through: VACUUM cannot run inside a
 	// transaction.
-	if _, err := d.sql.ExecContext(ctx, "VACUUM INTO "+sqlStringLiteral(part)); err != nil {
+	if err := d.vacuumInto(ctx, part); err != nil {
 		_ = removeDatabaseFiles(part)
 		return BackupInfo{}, fmt.Errorf("store: backup %s to %s: %w", d.path, dest, err)
 	}
@@ -292,12 +292,12 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 // restored node would, so a copy that cannot be opened is a failed backup
 // rather than a surprise on the worst day of the deployment's life.
 //
-// It goes through openPrepared rather than [Open] deliberately, for two
-// reasons that both matter: Open MIGRATES, which would mutate the artifact
-// being verified, and Open takes the exclusive lock, which is a claim on a
-// file this process is about to rename.
+// It goes through openPrepared rather than [OpenEstate] deliberately, for two
+// reasons that both matter: an open MIGRATES, which would mutate the artifact
+// being verified, and it takes the exclusive lock, which is a claim on a file
+// this process is about to rename.
 func verifyBackup(ctx context.Context, path string, want []string) ([]string, error) {
-	pool, err := openPrepared(ctx, path, Options{MaxOpenConns: 1})
+	pool, err := openPrepared(ctx, path, Options{MaxOpenConns: 1}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("store: backup verify: the copy at %s will not open: %w", path, err)
 	}
@@ -409,6 +409,22 @@ func remove(path string) error {
 		return fmt.Errorf("store: clear %s: %w", path, err)
 	}
 	return nil
+}
+
+// vacuumInto writes the copy to part through ONE CONNECTION DRAWN FROM THIS
+// HANDLE ([DB.conn]) rather than through the pool, so a close that lands after
+// [DB.Backup]'s guard — an adoption or a leave closing the partition a
+// snapshot is being taken of — answers [ErrNoEstate], the state every caller
+// branches on, rather than database/sql's "database is closed", which none
+// does.
+func (d *DB) vacuumInto(ctx context.Context, part string) error {
+	conn, err := d.conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	_, err = conn.ExecContext(ctx, "VACUUM INTO "+sqlStringLiteral(part))
+	return err
 }
 
 // sqlStringLiteral renders s as a SQL string literal.

@@ -68,9 +68,8 @@ func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, erro
 
 // ForgetPositions removes a node's row.
 //
-// PURGE rather than delete, on this estate's standing rule: a delete leaves a
-// tombstone revision that outlives the deployment, and a register listing that
-// returned tombstones would be a fleet view with ghosts in it.
+// PURGED, on this estate's standing rule (markers.go, "Every removal is a
+// purge").
 func (f *FleetStore) ForgetPositions(ctx context.Context, nodeID string) error {
 	if err := f.positions.Purge(ctx, coord.PositionKey(nodeID)); err != nil &&
 		!errors.Is(err, jetstream.ErrKeyNotFound) {
@@ -127,9 +126,8 @@ func (f *FleetStore) Holds(ctx context.Context) ([]coord.TrimHold, error) {
 
 // ReleaseHold removes one.
 //
-// PURGE rather than delete, on this estate's standing rule: a delete leaves a
-// tombstone revision that outlives the deployment, and this listing would
-// return it as a hold with no owner and no domains.
+// PURGED, on this estate's standing rule (markers.go, "Every removal is a
+// purge").
 func (f *FleetStore) ReleaseHold(ctx context.Context, owner string) error {
 	if err := f.positions.Purge(ctx, coord.HoldKey(owner)); err != nil &&
 		!errors.Is(err, jetstream.ErrKeyNotFound) {
@@ -186,9 +184,8 @@ func (f *FleetStore) Floors(ctx context.Context) ([]coord.TrimFloor, error) {
 
 // ForgetFloor removes one domain's row.
 //
-// PURGE rather than delete, on this estate's standing rule: a delete leaves a
-// tombstone revision that outlives the deployment, and this listing would
-// return it as a floor for a domain with no name.
+// PURGED, on this estate's standing rule (markers.go, "Every removal is a
+// purge").
 func (f *FleetStore) ForgetFloor(ctx context.Context, domain string) error {
 	if err := f.positions.Purge(ctx, coord.FloorKey(domain)); err != nil &&
 		!errors.Is(err, jetstream.ErrKeyNotFound) {
@@ -241,7 +238,8 @@ func (f *FleetStore) BackupPoints(ctx context.Context) ([]coord.BackupPoint, err
 
 // ForgetBackupPoint removes one owner's row.
 //
-// PURGE rather than delete, on this estate's standing rule.
+// PURGED, on this estate's standing rule (markers.go, "Every removal is a
+// purge").
 func (f *FleetStore) ForgetBackupPoint(ctx context.Context, owner string) error {
 	if err := f.positions.Purge(ctx, coord.BackupPointKey(owner)); err != nil &&
 		!errors.Is(err, jetstream.ErrKeyNotFound) {
@@ -271,12 +269,12 @@ func (f *FleetStore) OpenMaintenance(ctx context.Context, op coord.MaintenanceOp
 		return coord.MaintenanceOperation{}, false,
 			fmt.Errorf("coord: encode the maintenance operation on %s: %w", op.Stream, err)
 	}
-	revision, err := f.positions.Create(ctx, coord.MaintenanceKey(op.Stream), body)
+	revision, err := f.create(ctx, f.positions, coord.MaintenanceKey(op.Stream), body)
 	switch {
 	case err == nil:
 		op.Revision = revision
 		return op, true, nil
-	case !lostCreateRace(err):
+	case !errors.Is(err, jetstream.ErrKeyExists):
 		// AN UNKNOWN CREATE ESTABLISHES NOTHING. The request may never
 		// have been received and may still be outstanding, so the
 		// caller retries with the SAME id rather than concluding
@@ -300,7 +298,7 @@ func (f *FleetStore) OpenMaintenance(ctx context.Context, op coord.MaintenanceOp
 func (f *FleetStore) Maintenance(ctx context.Context, stream string) (
 	coord.MaintenanceOperation, bool, error) {
 
-	entry, err := f.positions.Get(ctx, coord.MaintenanceKey(stream))
+	entry, err := f.get(ctx, f.positions, coord.MaintenanceKey(stream))
 	switch {
 	case errors.Is(err, jetstream.ErrKeyNotFound):
 		return coord.MaintenanceOperation{}, false, nil
@@ -418,7 +416,7 @@ func (f *FleetStore) Admissions(ctx context.Context) ([]coord.Admission, error) 
 // remove the admission a NEWER process on that node has since written.
 func (f *FleetStore) ForgetAdmission(ctx context.Context, nodeID, incarnation string) error {
 	key := coord.AdmissionKey(nodeID)
-	entry, err := f.positions.Get(ctx, key)
+	entry, err := f.get(ctx, f.positions, key)
 	switch {
 	case errors.Is(err, jetstream.ErrKeyNotFound):
 		return nil
@@ -517,36 +515,25 @@ func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
 		})
 }
 
-// The two CAS-race classifiers, and why they live beside the positions rather
-// than beside the caller that first needed them.
+// The CAS-race classifier, and why it lives beside the positions rather than
+// beside the caller that first needed it.
 //
-// They arrived with the document families and outlived them: every key class
-// the fleet still writes — a position, a floor, a hold, a backup point, a
-// capacity operation — is a create-only or a compare-and-set append, and each
-// one has to tell "somebody else wrote first" from "the store could not be
-// reached". Reading the second as the first is a lost update reported as a
-// conflict a caller retries into, which is the failure the three-valued rule
-// exists to prevent.
-
-// lostCreateRace reports whether a create lost to a first writer.
+// It arrived with the document families and outlived them: every key class the
+// fleet still writes — a position, a floor, a hold, a backup point, a capacity
+// operation — is a create-only or a compare-and-set append, and each one has to
+// tell "somebody else wrote first" from "the store could not be reached".
+// Reading the second as the first is a lost update reported as a conflict a
+// caller retries into, which is the failure the three-valued rule exists to
+// prevent.
 //
-// THREE SHAPES FOR ONE FACT, and every one of them is somebody else's second
-// writer. ErrKeyExists is the ordinary case. A revision mismatch is what the
-// client reports when the key carried a delete or purge marker it tried to
-// step over and lost. And on a REPLICATED stream a share of those losers come
-// back as a bare API error the client wraps in neither sentinel — measured at
-// three replicas, where a fifth of the losers of a create over a marker
-// arrived that way.
-//
-// Getting this wrong is not loud. A lost race read as an outage makes a claim
-// answer "unknown", the caller fails open, and the delivery it was meant to
-// deduplicate is processed twice — on a clustered estate only, which is
-// exactly where nobody is running the single-server suite that would show it.
-func lostCreateRace(err error) bool {
-	return errors.Is(err, jetstream.ErrKeyExists) ||
-		errors.Is(err, jetstream.ErrKeyRevisionMismatch) ||
-		isWrongLastSequence(err)
-}
+// A CREATE needs no classifier of its own any more. It had one, because the
+// client's Create reported one lost race in three shapes — ErrKeyExists, a
+// revision mismatch when it stepped over a marker and lost, and on a
+// REPLICATED stream a bare API error matching neither, measured at a fifth of
+// the losers of a create over a marker — and a lost race read as an outage
+// makes a claim answer "unknown" and the caller process a delivery twice.
+// [createKey] reads the leader and answers the one shape, ErrKeyExists, for
+// every create in this package.
 
 // lostUpdateRace reports whether a conditional write lost its race.
 //

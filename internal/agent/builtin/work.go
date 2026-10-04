@@ -202,6 +202,14 @@ type WorkDeps struct {
 	// is resolved per call rather than per surface.
 	ProjectWriter func(actor Actor) ProjectWriter
 
+	// Files reads a project's files, FileWriter writes them for one actor,
+	// and Objects stores and reads their bytes. All three or no file tool:
+	// a file is a row naming chunks, and a surface holding one half could
+	// only record content it cannot store, or store content nothing names.
+	Files      FileReader
+	FileWriter func(actor Actor) FileWriter
+	Objects    ObjectStore
+
 	// TrashWriter resolves the removal and restore side for one actor, and
 	// is the operator surface's alone: a removal hides a task from every
 	// list in the company, and a seat that could hide work it did not want
@@ -308,24 +316,32 @@ type WorkDeps struct {
 	Now  func() time.Time
 	Zone func() *time.Location
 
-	// Await blocks until this node's applier has consumed a write.
+	// Await is handed the position every write here landed at, so the next
+	// read sees it.
 	//
 	// THE READ-YOUR-WRITES SEAM, and it is what makes a tool loop
-	// coherent: a write goes to the fleet's LOG while every read goes to
-	// this node's own rows, so a turn that files a task and then lists its
+	// coherent: a write goes to the fleet's LOG while a read is answered
+	// from some copy's rows, so a turn that files a task and then lists its
 	// project would not see what it just filed — and a model that cannot
 	// see its own write files it again. It is applied after every write
 	// here for that reason, never before a read.
+	//
+	// WHERE THE WAIT HAPPENS is the surface's. A seat's tools hand the
+	// position to the node's session floor (the estate router's), which
+	// every later read carries to whichever copy answers it — this node's
+	// or a peer's — and that copy waits; nothing waits here. A surface
+	// that reads this node's own rows directly, as the operator's does,
+	// waits here for this node's applier instead.
 	//
 	// It takes a POSITION rather than a revision, because that is what a
 	// log write answers with: a place on a stream, comparable only against
 	// the same stream and the same generation.
 	//
-	// Nil skips the wait, which is right for a caller that has established
-	// the ordering some other way. A failure is LOGGED AND IGNORED rather
-	// than failing the tool: the write landed, and telling a model its
-	// create failed when the task exists is the one answer that produces a
-	// duplicate.
+	// Nil skips it, which is right for a caller that has established the
+	// ordering some other way. A failure — which only a surface that waits
+	// here can have — is LOGGED AND IGNORED rather than failing the tool:
+	// the write landed, and telling a model its create failed when the task
+	// exists is the one answer that produces a duplicate.
 	Await func(ctx context.Context, at statelog.Position) error
 
 	// callerOperations is whether a caller with no turn holds the id of
@@ -395,6 +411,11 @@ type Actor struct {
 	// is the instant every operation id derived from the key carries. See
 	// [Actor.OperationSince].
 	WorkSince time.Time
+
+	// RebasedTo is the instant a derived operation id carries in place of
+	// its identity's own start, zero where it carries that start — see
+	// [turnctx.Turn.RebasedTo], which is the only place it comes from.
+	RebasedTo time.Time
 
 	// Calls is the run's call log, which a derived operation id reads its
 	// repeat count from — see [opIDFor] and [turnctx.CallLog]. Nil outside
@@ -486,7 +507,16 @@ func (a Actor) OperationSeed() string {
 // ids carried none — which reads as older than every loss: a node whose ledger
 // ever lost a row answers such a write `unknown`, unless it holds its row,
 // rather than risking it twice.
+//
+// UNLESS THE TURN WAS REBASED ([Actor.RebasedTo]), which outranks both: a turn
+// whose identity started before what the ledger may have swept mints at the
+// instant the engine rebased it onto, for either seed, since a start that old
+// answers every write `unknown` on every node whichever identity it is the
+// start of.
 func (a Actor) OperationSince() time.Time {
+	if !a.RebasedTo.IsZero() {
+		return a.RebasedTo
+	}
 	if a.WorkKey != "" {
 		return a.WorkSince
 	}
@@ -518,11 +548,12 @@ func (a Actor) Party() tracker.Party {
 	return tracker.Party{Handle: a.Record(), OperatorID: a.OperatorID}
 }
 
-// settle waits for a write to reach this node's projection.
+// settle hands a write's position to [WorkDeps.Await], so the next read sees
+// it.
 //
-// Best effort by design — see [WorkDeps.Await]. The wait is bounded by the
-// projector's own budget, so a wedged projection costs a tool call a couple
-// of seconds rather than the turn.
+// Best effort by design — see [WorkDeps.Await]. Where the surface waits here,
+// the wait is bounded by the applier's own budget, so a wedged copy costs a
+// tool call a couple of seconds rather than the turn.
 func (d WorkDeps) settle(ctx context.Context, at statelog.Position) {
 	if d.Await == nil || at.Seq == 0 {
 		return
@@ -530,9 +561,9 @@ func (d WorkDeps) settle(ctx context.Context, at statelog.Position) {
 	if err := d.Await(ctx, at); err != nil {
 		log.WarnContext(ctx, "work_write_not_applied_yet",
 			"position", at.String(), "error", err.Error(),
-			"detail", "the write landed on the fleet's log; this node's own "+
-				"applier has not consumed it, so a list in this same turn may "+
-				"not show it yet")
+			"detail", "the write landed on the fleet's log; the copy this "+
+				"surface reads has not applied it yet, so a list in this same "+
+				"turn may not show it")
 	}
 }
 
@@ -564,6 +595,7 @@ func actorFor(turn *turnctx.Turn) (Actor, error) {
 		TurnID:    turn.RunID,
 		WorkKey:   turn.WorkKey,
 		WorkSince: turn.WorkSince,
+		RebasedTo: turn.RebasedTo,
 		Chain:     turn.Chain,
 		Origin:    originOf(turn),
 		Written:   turn.Written,
@@ -667,7 +699,8 @@ func turnIdentity(turn *turnctx.Turn) Actor {
 	if turn == nil {
 		return Actor{}
 	}
-	return Actor{TurnID: turn.RunID, WorkKey: turn.WorkKey, WorkSince: turn.WorkSince}
+	return Actor{TurnID: turn.RunID, WorkKey: turn.WorkKey, WorkSince: turn.WorkSince,
+		RebasedTo: turn.RebasedTo}
 }
 
 // notInATurn is the refusal every one of these tools gives outside a turn.
@@ -1071,10 +1104,14 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// carries every column the query admits whether or not anything is in
 	// it (see internal/tracker's grouping doc), so the question is whether
 	// any column COUNTS anything.
-	if len(answer.Rows) == 0 && boardEmpty(answer.Groups) && answer.Complete {
+	// AND NOTHING IS "NO MATCH" WHILE A PARTITION DID NOT ANSWER: its items
+	// are the ones nobody looked at.
+	if len(answer.Rows) == 0 && boardEmpty(answer.Groups) && answer.Complete &&
+		answer.Coverage.Complete() {
 		return tools.Result{Output: "No work items match that filter."}, nil
 	}
 	result := map[string]any{"count": len(answer.Rows), "items": answer.Rows}
+	noteUnanswered(result, answer.Coverage)
 	if len(answer.Groups) > 0 {
 		result["groups"] = answer.Groups
 		result["groups_overlap"] = answer.GroupsOverlap
@@ -4103,9 +4140,12 @@ var seatReadLevel = statelog.DefaultReadLevel(statelog.SurfaceSeat)
 // seatRead is [seatReadLevel] for the readers that take a whole freshness.
 //
 // NO BOUND AND NO FLOOR, deliberately: a seat reads `linearizable`, which
-// establishes the log's end itself and takes no staleness bound, and the floor
-// a wake carried was waited for before the turn opened (read-your-trigger),
-// so there is nothing left for a tool call to name.
+// establishes the log's end itself and takes no staleness bound — and the
+// position a wake carried is already in the node's floors from the turn's start
+// (the engine's runTurn), which every read of that change's domain the router
+// routes carries to whichever holder answers it, so there is nothing left for a
+// tool call to name. (The ranked searches carry no floor at all: they read an
+// index, which no log position describes.)
 var seatRead = statelog.Freshness{Level: seatReadLevel}
 
 // boardEmpty reports whether a grouped answer holds no task at all — which,

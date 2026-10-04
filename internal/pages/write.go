@@ -140,7 +140,14 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 		Scope:   scope.Resolve(subject),
 		OpID:    opID,
 		Pattern: statelog.PatternCreate,
-		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			// THE PARENT IS JUDGED IN THIS SNAPSHOT, beside the address:
+			// a pointer at a page that is not there, is elsewhere or is
+			// in the trash files the new page where no walk of its
+			// container finds it — see parent.go.
+			if err := checkParent(ctx, tx, page.ID, container, page.ParentID); err != nil {
+				return statelog.Decision{}, err
+			}
 			return s.decide(stamp, actor, subject, OpCreate, scope, opID, CreatePayload{
 				V: DocumentVersion, PageID: page.ID, Container: container,
 				Title: title, ParentID: page.ParentID, Body: page.Body,
@@ -250,47 +257,63 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 	var read uint64
 	subject := PageSubject(pageID)
 
-	result, err := s.publish(ctx, statelog.Request{
-		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:   ScopeSet{Subject: true}.Resolve(subject),
-		OpID:    opID,
-		Pattern: statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			head, revision, err := readHeadTx(ctx, tx, pageID)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			if head.Version != save.BaseVersion {
-				return statelog.Decision{}, fmt.Errorf(
-					"%w: this edit is against version %d and the page is at %d",
-					ErrStaleVersion, save.BaseVersion, head.Version)
-			}
-			patch, kind, changed := s.patchOf(actor, &head, save, at)
-			// PATCHED OR NOT, THE HEAD IS THE ANSWER, and it is taken
-			// BEFORE the no-op return. patchOf mutates the page it was
-			// handed, so this one value is what the apply will produce
-			// on a change and what the page already says on a no-op —
-			// and a caller told its write landed reads the page out of
-			// that answer. Assigned below the check instead, an
-			// idempotent save reported success carrying an empty id,
-			// title and version, which a tool serializes verbatim.
-			//
-			// THE REVISION IS TAKEN HERE FOR THE SAME REASON, and from
-			// the same statement: on a no-op it is the only number
-			// there will ever be, because no record lands to produce a
-			// position.
-			out, read = head, revision
-			if !changed {
-				// A NO-OP IS A SUCCESS, not an error: an update that
-				// changes no field is one the caller should be told
-				// landed.
-				return statelog.Decision{}, nil
-			}
-			scope := ScopeSet{Subject: true, Container: head.Container}
-			notify := s.notifyOf(save.Quiet, kind, head,
-				excerptOfSave(save), nil)
-			return s.decide(stamp, actor, subject, OpPatch, scope, opID, patch, notify, at)
-		},
+	result, err := s.onPage(ctx, pageID, func(container string) statelog.Request {
+		return statelog.Request{
+			Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+			Scope:   ScopeSet{Subject: true, Container: container}.Resolve(subject),
+			OpID:    opID,
+			Pattern: statelog.PatternArbitrated,
+			Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+				head, revision, err := readHeadTx(ctx, tx, pageID)
+				if err != nil {
+					return statelog.Decision{}, err
+				}
+				if moved := inContainer(head, container); moved != nil {
+					return statelog.Decision{}, moved
+				}
+				if head.Version != save.BaseVersion {
+					return statelog.Decision{}, fmt.Errorf(
+						"%w: this edit is against version %d and the page is at %d",
+						ErrStaleVersion, save.BaseVersion, head.Version)
+				}
+				if save.ParentID != nil && *save.ParentID != head.ParentID {
+					// A MOVE IS JUDGED IN THE SNAPSHOT IT IS DECIDED IN,
+					// including the walk that finds this page above its new
+					// parent — see parent.go for what the applier does with
+					// the one shape two writers can still make.
+					//nolint:govet // shadow: scoped to this block; see .golangci.yml
+					if err := checkParent(ctx, tx, pageID, head.Container,
+						*save.ParentID); err != nil {
+						return statelog.Decision{}, err
+					}
+				}
+				patch, kind, changed := s.patchOf(actor, &head, save, at)
+				// PATCHED OR NOT, THE HEAD IS THE ANSWER, and it is taken
+				// BEFORE the no-op return. patchOf mutates the page it was
+				// handed, so this one value is what the apply will produce
+				// on a change and what the page already says on a no-op —
+				// and a caller told its write landed reads the page out of
+				// that answer. Assigned below the check instead, an
+				// idempotent save reported success carrying an empty id,
+				// title and version, which a tool serializes verbatim.
+				//
+				// THE REVISION IS TAKEN HERE FOR THE SAME REASON, and from
+				// the same statement: on a no-op it is the only number
+				// there will ever be, because no record lands to produce a
+				// position.
+				out, read = head, revision
+				if !changed {
+					// A NO-OP IS A SUCCESS, not an error: an update that
+					// changes no field is one the caller should be told
+					// landed.
+					return statelog.Decision{}, nil
+				}
+				scope := ScopeSet{Subject: true, Container: head.Container}
+				notify := s.notifyOf(save.Quiet, kind, head,
+					excerptOfSave(save), nil)
+				return s.decide(stamp, actor, subject, OpPatch, scope, opID, patch, notify, at)
+			},
+		}
 	})
 	if err != nil {
 		return Written{}, err
@@ -423,55 +446,60 @@ func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 	var out Page
 	var read uint64
 
-	result, err := s.publish(ctx, statelog.Request{
-		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:   ScopeSet{Subject: true}.Resolve(subject),
-		OpID:    opID,
-		Pattern: statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			current, revision, err := readHeadTx(ctx, tx, pageID)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			out, read = current, revision
-			if current.Title == title {
-				// THE TRUE NO-OP: the same displayed title at the
-				// same address, so there is nothing left to write.
-				//
-				// RETURNED AS AN EMPTY DECISION so the framework's
-				// own no-op arm answers it, rather than a result
-				// spelled out here. That arm reports FOUR fields —
-				// `applied`, the op id, the decision's version and
-				// the round count — and the literal this replaces
-				// set two of them, which was harmless only because
-				// [Store.decide] happens never to set
-				// Decision.Version on any path. A second copy of a
-				// contract, correct by coincidence, is the shape
-				// that breaks the day the coincidence ends.
-				return statelog.Decision{}, nil
-			}
-			if NormalizeTitle(current.Title) != NormalizeTitle(title) {
-				// THE ADDRESS MOVED UNDER THIS WRITE, so the
-				// gesture is no longer a retitle: it is a move to
-				// an address nothing has arbitrated. Refused
-				// rather than published, because the applier's
-				// own guard would drop it on every node while
-				// this caller was told `applied`.
-				return statelog.Decision{}, fmt.Errorf(
-					"%w: this rename was decided against the title %q and the "+
-						"page is now at %q, which is a different address — read "+
-						"the page again and rename from where it is",
-					ErrStaleVersion, title, current.Title)
-			}
-			out.Title = title
-			out.UpdatedAt = at
-			scope := ScopeSet{Subject: true, Container: current.Container}
-			notify := s.notifyOf(quiet, ChangeRenamed, out, "", nil)
-			return s.decide(stamp, actor, subject, OpRetitle, scope, opID, RetitlePayload{
-				V: DocumentVersion, PageID: pageID,
-				Title: title, FormerTitle: current.Title,
-			}, notify, at)
-		},
+	result, err := s.onPage(ctx, pageID, func(container string) statelog.Request {
+		return statelog.Request{
+			Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+			Scope:   ScopeSet{Subject: true, Container: container}.Resolve(subject),
+			OpID:    opID,
+			Pattern: statelog.PatternArbitrated,
+			Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+				current, revision, err := readHeadTx(ctx, tx, pageID)
+				if err != nil {
+					return statelog.Decision{}, err
+				}
+				if moved := inContainer(current, container); moved != nil {
+					return statelog.Decision{}, moved
+				}
+				out, read = current, revision
+				if current.Title == title {
+					// THE TRUE NO-OP: the same displayed title at the
+					// same address, so there is nothing left to write.
+					//
+					// RETURNED AS AN EMPTY DECISION so the framework's
+					// own no-op arm answers it, rather than a result
+					// spelled out here. That arm reports FOUR fields —
+					// `applied`, the op id, the decision's version and
+					// the round count — and the literal this replaces
+					// set two of them, which was harmless only because
+					// [Store.decide] happens never to set
+					// Decision.Version on any path. A second copy of a
+					// contract, correct by coincidence, is the shape
+					// that breaks the day the coincidence ends.
+					return statelog.Decision{}, nil
+				}
+				if NormalizeTitle(current.Title) != NormalizeTitle(title) {
+					// THE ADDRESS MOVED UNDER THIS WRITE, so the
+					// gesture is no longer a retitle: it is a move to
+					// an address nothing has arbitrated. Refused
+					// rather than published, because the applier's
+					// own guard would drop it on every node while
+					// this caller was told `applied`.
+					return statelog.Decision{}, fmt.Errorf(
+						"%w: this rename was decided against the title %q and the "+
+							"page is now at %q, which is a different address — read "+
+							"the page again and rename from where it is",
+						ErrStaleVersion, title, current.Title)
+				}
+				out.Title = title
+				out.UpdatedAt = at
+				scope := ScopeSet{Subject: true, Container: current.Container}
+				notify := s.notifyOf(quiet, ChangeRenamed, out, "", nil)
+				return s.decide(stamp, actor, subject, OpRetitle, scope, opID, RetitlePayload{
+					V: DocumentVersion, PageID: pageID,
+					Title: title, FormerTitle: current.Title,
+				}, notify, at)
+			},
+		}
 	})
 	if err != nil {
 		return Written{}, err
@@ -515,23 +543,26 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 	var out Page
 	var read uint64
 
-	result, err := s.publish(ctx, statelog.Request{
-		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:   ScopeSet{Subject: true}.Resolve(subject),
-		OpID:    opID,
-		Pattern: statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			head, revision, err := readHeadTx(ctx, tx, pageID)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			out, read = head, revision
-			scope := ScopeSet{Subject: true, Container: head.Container}
-			notify := s.notifyOf(false, kind, head, "", nil)
-			return s.decide(stamp, actor, subject, op, scope, opID, StatusPayload{
-				V: DocumentVersion, Reason: reason,
-			}, notify, at)
-		},
+	result, err := s.onPage(ctx, pageID, func(container string) statelog.Request {
+		return statelog.Request{
+			Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+			Scope:   statusScope(op, container).Resolve(subject),
+			OpID:    opID,
+			Pattern: statelog.PatternArbitrated,
+			Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+				head, revision, err := readHeadTx(ctx, tx, pageID)
+				if err != nil {
+					return statelog.Decision{}, err
+				}
+				if moved := inContainer(head, container); moved != nil {
+					return statelog.Decision{}, moved
+				}
+				out, read = head, revision
+				notify := s.notifyOf(false, kind, head, "", nil)
+				return s.decide(stamp, actor, subject, op, statusScope(op, head.Container),
+					opID, StatusPayload{V: DocumentVersion, Reason: reason}, notify, at)
+			},
+		}
 	})
 	if err != nil {
 		return Written{}, err
@@ -540,6 +571,23 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 		Page: out, Revision: writtenRevision(result, read), ChangeID: opID,
 		Outcome: result,
 	}, nil
+}
+
+// statusScope is what a trash, a restore or a purge of a page in container
+// touches.
+//
+// A PURGE WRITES ITS CHILDREN'S ROWS TOO: each is filed under the purged
+// page's own parent, so none is left pointing at a row that is gone (see the
+// applier's purge). Which pages those are is decided at the apply, against the
+// rows at that position — a child can be filed under this page after this
+// snapshot — so the scope is the CONTAINER, which covers every one of them
+// whatever arrives. The request and the record state it alike, or the probe
+// before the decide would look at one page for a write about a whole space.
+func statusScope(op OpKind, container string) ScopeSet {
+	if op == OpPurge && container != "" {
+		return ScopeSet{Terms: []ScopeTerm{{Kind: TermContainer, ID: container}}}
+	}
+	return ScopeSet{Subject: true, Container: container}
 }
 
 // EnsureContainer creates a space if it is not there, or updates its settings,
@@ -796,7 +844,7 @@ func (s *Store) head(ctx context.Context, pageID string) (Page, error) {
 func (s *Store) headAt(ctx context.Context, pageID string) (Page, uint64, error) {
 	var page Page
 	var revision uint64
-	err := s.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := s.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		page, revision, err = readHeadTx(ctx, tx, pageID)
 		return err

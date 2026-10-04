@@ -614,7 +614,7 @@ func TestAColumnHeadingIsTheSameOnEveryRequest(t *testing.T) {
 // the rows are deliberately not readable as tasks.
 func bulkTasks(t *testing.T, r *roundTrip, n int, project string) {
 	t.Helper()
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			WITH RECURSIVE n(i) AS (
 				SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?

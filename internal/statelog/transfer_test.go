@@ -57,11 +57,13 @@ func newTransferHarness(t *testing.T, bytes int) *transferHarness {
 	h := &transferHarness{
 		t: t, nc: nc, dir: dir, artefact: artefact,
 		manifest: statelog.Manifest{
-			V:       statelog.ManifestVersion,
-			TakenAt: time.Unix(1_700_000_000, 0).UTC(),
-			NodeID:  "donor",
-			Bytes:   int64(len(body)),
-			SHA256:  digest,
+			V:         statelog.ManifestVersion,
+			Partition: statelog.EstatePartition.String(),
+			Artifact:  filepath.Base(artefact),
+			TakenAt:   time.Unix(1_700_000_000, 0).UTC(),
+			NodeID:    "donor",
+			Bytes:     int64(len(body)),
+			SHA256:    digest,
 			Domains: map[string]statelog.DomainPosition{
 				"probe": {
 					Stream:        probeStream,
@@ -74,9 +76,10 @@ func newTransferHarness(t *testing.T, bytes int) *transferHarness {
 		},
 	}
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: "donor",
+		NodeID: "donor", Layout: statelog.EstateLayout(probeDomain{}.Name()),
+		Keeps:  statelog.KeepsOnly(statelog.EstatePartition).Keeps,
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.Conn(), nil },
-		Newest: func() (statelog.Manifest, bool) { return h.manifest, true },
+		Newest: func(statelog.PartitionID) (statelog.Manifest, bool) { return h.manifest, true },
 		Path:   func(statelog.Manifest) string { return h.artefact },
 	})
 	if err != nil {
@@ -95,13 +98,15 @@ func newTransferHarness(t *testing.T, bytes int) *transferHarness {
 	return h
 }
 
-// waitForSubject waits until somebody is listening, which is what makes a
-// request-response case about the protocol rather than about startup order.
+// waitForSubject waits until somebody answers an offer request for layout 0's
+// one partition, which is what makes a request-response case about the
+// protocol rather than about startup order.
 func waitForSubject(t *testing.T, nc *nats.Conn, subject string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
+	ask := []byte(`{"node_id":"probe","layout":0,"partition":"estate.000"}`)
 	for time.Now().Before(deadline) {
-		if _, err := nc.Request(subject, []byte(`{"node_id":"probe"}`), 200*time.Millisecond); err == nil {
+		if _, err := nc.Request(subject, ask, 200*time.Millisecond); err == nil {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -123,7 +128,7 @@ func TestAnArtefactArrivesByteForByte(t *testing.T) {
 	h := newTransferHarness(t, statelog.SnapshotChunkBytes*statelog.SnapshotTransferWindow*2+7)
 
 	offers, err := statelog.CollectOffers(t.Context(), h.nc, statelog.OfferRequest{
-		NodeID: "joiner",
+		NodeID: "joiner", Partition: statelog.EstatePartition.String(),
 	}, statelog.OfferWindow)
 	if err != nil {
 		t.Fatalf("CollectOffers: %v", err)
@@ -163,7 +168,7 @@ func TestAnAbandonedTransferIsNeverReportedAsASnapshot(t *testing.T) {
 	// The artefact goes away between the offer and the fetch, which is
 	// what a rotation mid-transfer looks like from here.
 	offers, err := statelog.CollectOffers(t.Context(), h.nc, statelog.OfferRequest{
-		NodeID: "joiner",
+		NodeID: "joiner", Partition: statelog.EstatePartition.String(),
 	}, statelog.OfferWindow)
 	if err != nil || len(offers) != 1 {
 		t.Fatalf("CollectOffers = (%d, %v)", len(offers), err)
@@ -189,10 +194,10 @@ func TestAnAbandonedTransferIsNeverReportedAsASnapshot(t *testing.T) {
 // manifest alone.
 func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 	t.Parallel()
-	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}}}
+	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{})}}
 	base := func() statelog.Offer {
 		return statelog.Offer{Manifest: statelog.Manifest{
-			V: statelog.ManifestVersion,
+			V: statelog.ManifestVersion, Partition: statelog.EstatePartition.String(),
 			Domains: map[string]statelog.DomainPosition{
 				"probe": {
 					Stream: probeStream, Generation: 1, Seq: 4_200,
@@ -202,12 +207,21 @@ func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 		}}
 	}
 	req := statelog.OfferRequest{
+		Partition:   statelog.EstatePartition.String(),
 		Need:        map[string]uint64{"probe": 4_000},
 		Generations: map[string]uint32{"probe": 1},
 	}
 
-	if err := base().Usable(req, build); err != nil {
+	if err := base().Usable(req, build, nil); err != nil {
 		t.Fatalf("a usable offer was refused: %v", err)
+	}
+	// A SCHEMA THIS BINARY HAS is no reason to refuse, so the migration case
+	// below is a refusal of the one it lacks rather than of the list.
+	known := []string{"0001_the_state_log_lands.sql"}
+	withSchema := base()
+	withSchema.Manifest.Migrations = known
+	if err := withSchema.Usable(req, build, known); err != nil {
+		t.Fatalf("an offer on a schema this binary has was refused: %v", err)
 	}
 
 	for name, tc := range map[string]struct {
@@ -218,7 +232,7 @@ func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 			breaks: func(o *statelog.Offer) { delete(o.Manifest.Domains, "probe") },
 			names:  "adopted wholesale",
 		},
-		"a donor that read more record versions than this build": {
+		"rows applied from a record version above this build's": {
 			breaks: func(o *statelog.Offer) {
 				p := o.Manifest.Domains["probe"]
 				p.RecordVersion = 9
@@ -254,11 +268,20 @@ func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 			breaks: func(o *statelog.Offer) { o.Manifest.V = 99 },
 			names:  "version 99",
 		},
+		// THE SCHEMA, from the list the manifest carries: fetched whole, the
+		// file was refused for the same migration once it had arrived.
+		"a migration this binary does not have": {
+			breaks: func(o *statelog.Offer) {
+				o.Manifest.Migrations = append(o.Manifest.Migrations,
+					"9999_a_newer_build_reshaped_this.sql")
+			},
+			names: "9999_a_newer_build_reshaped_this.sql",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			o := base()
 			tc.breaks(&o)
-			err := o.Usable(req, build)
+			err := o.Usable(req, build, known)
 			if err == nil {
 				t.Fatalf("an offer with %s was accepted", name)
 			}
@@ -583,5 +606,190 @@ func TestAFetchWhoseCallerHasGivenUpAsksNobody(t *testing.T) {
 	if string(first.Data) != "sentinel" {
 		t.Fatalf("a donor was asked to send (%q) by a joiner whose caller had "+
 			"already given up", first.Data)
+	}
+}
+
+// AN OFFER REQUEST NAMES A PARTITION OF THE DONOR'S LAYOUT, OR IT IS REFUSED —
+// UNLESS THE DONOR RUNS LAYOUT 0.
+//
+// A snapshot is a copy of ONE partition's file, so a donor answers for the
+// partition named. A request naming none is what a build from before
+// partitions asks, whose join installs whatever it is handed as its whole
+// estate: a donor running layout 0 answers it for `estate.000`, the whole
+// estate, and one running a divided layout refuses it. A request for another
+// layout's partition is not answered either: that layout's files are not the
+// copy the joiner needs, whatever their name.
+func TestAnOfferRequestMustNameAPartitionOfTheDonorsLayout(t *testing.T) {
+	t.Parallel()
+	one := statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
+		{Space: statelog.SpaceTracker, Partitions: 2, Domains: []string{"probe"}},
+	}}
+	for name, tc := range map[string]struct {
+		layout  statelog.Layout
+		req     statelog.OfferRequest
+		refused bool
+	}{
+		"layout 0's one partition": {layout: statelog.EstateLayout("probe"),
+			req: statelog.OfferRequest{Partition: "estate.000"}},
+		"no partition, at a donor running layout 0": {layout: statelog.EstateLayout("probe"),
+			req: statelog.OfferRequest{}},
+		"a partition of layout 1": {layout: one,
+			req: statelog.OfferRequest{Layout: 1, Partition: "tracker.001"}},
+		"no partition, as a build before partitions asks": {refused: true,
+			layout: one, req: statelog.OfferRequest{}},
+		"no partition, of layout 1": {refused: true,
+			layout: one, req: statelog.OfferRequest{Layout: 1}},
+		"another layout's partition": {refused: true, layout: one,
+			req: statelog.OfferRequest{Layout: 2, Partition: "tracker.001"}},
+		"a partition the layout does not have": {refused: true, layout: one,
+			req: statelog.OfferRequest{Layout: 1, Partition: "tracker.002"}},
+		"a name that is no partition's": {refused: true, layout: one,
+			req: statelog.OfferRequest{Layout: 1, Partition: "tracker.1"}},
+	} {
+		err := tc.req.Validate(tc.layout)
+		if (err != nil) != tc.refused {
+			t.Errorf("%s: refused %v (%v), want %v", name, err != nil, err, tc.refused)
+		}
+		if err != nil && !errors.Is(err, statelog.ErrOfferRequest) {
+			t.Errorf("%s: the refusal %v is not ErrOfferRequest", name, err)
+		}
+	}
+	// AND A REQUEST NAMING NONE IS SAID TO BE WHAT IT IS, which is what an
+	// operator reading a donor's log needs to know about the asker.
+	err := statelog.OfferRequest{}.Validate(one)
+	if err == nil || !strings.Contains(err.Error(), "predates partitions") {
+		t.Errorf("a request naming no partition is refused as %v", err)
+	}
+	// AND AT LAYOUT 0 IT IS FOR THE WHOLE ESTATE.
+	if p, err := (statelog.OfferRequest{}).Target(statelog.EstateLayout("probe")); err != nil ||
+		p != statelog.EstatePartition {
+		t.Errorf("a request naming no partition at layout 0 is for %v (%v), want %s", p, err,
+			statelog.EstatePartition)
+	}
+}
+
+// A DONOR ANSWERS ONLY FOR A PARTITION IT SERVES, AND NEVER A REQUEST NAMING
+// NONE.
+//
+// Its artefact of one partition is no copy of another's file, a copy of a
+// partition it is still joining or has begun to leave is not the partition's,
+// and a request naming no partition is a build that would install one
+// partition's file as its whole estate — so each is answered with silence,
+// the donor's "no", while the partition it serves is offered as ever.
+func TestADonorOffersOnlyThePartitionsItServes(t *testing.T) {
+	t.Parallel()
+	layout := statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
+		{Space: statelog.SpaceTracker, Partitions: 2, Domains: []string{"probe"}},
+	}}
+	served := statelog.PartitionID{Space: statelog.SpaceTracker}
+	other := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open a broker: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
+	donor, err := statelog.NewDonor(statelog.DonorDeps{
+		NodeID: "donor", Layout: layout, Keeps: statelog.KeepsOnly(served).Keeps,
+		Dial: func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
+		Newest: func(p statelog.PartitionID) (statelog.Manifest, bool) {
+			// AN ARTEFACT OF EVERY PARTITION, so what decides is whether
+			// the donor serves it.
+			return statelog.Manifest{V: statelog.ManifestVersion, Layout: 1,
+				Partition: p.String(), Artifact: "snapshot-1-1.db"}, true
+		},
+		Path: func(statelog.Manifest) string { return "" },
+	})
+	if err != nil {
+		t.Fatalf("NewDonor: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = donor.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	ask := func(req statelog.OfferRequest) []statelog.Offer {
+		offers, err := statelog.CollectOffers(t.Context(), q.Conn(), req, 300*time.Millisecond)
+		if err != nil {
+			t.Fatalf("CollectOffers: %v", err)
+		}
+		return offers
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	var offers []statelog.Offer
+	for len(offers) == 0 && time.Now().Before(deadline) {
+		offers = ask(statelog.OfferRequest{Layout: 1, Partition: served.String()})
+	}
+	if len(offers) != 1 || offers[0].Manifest.Partition != served.String() {
+		t.Fatalf("the served partition was offered %+v, want its one artefact", offers)
+	}
+	for name, req := range map[string]statelog.OfferRequest{
+		"a partition it keeps no copy of": {Layout: 1, Partition: other.String()},
+		"a request naming no partition":   {Layout: 1},
+	} {
+		if got := ask(req); len(got) != 0 {
+			t.Errorf("%s was answered with %+v", name, got)
+		}
+	}
+}
+
+// AN ARTEFACT IS ADOPTED ONLY AS THE PARTITION IT IS A COPY OF, AND ONLY IF IT
+// NAMES EXACTLY THAT PARTITION'S LOGS.
+//
+// A recipient installs the file whole, so an artefact of another partition —
+// or of the same name in another layout — is a copy of some other file's rows,
+// and one naming a log the recipient's partition does not carry is too: a
+// joiner that took it would believe it holds rows for a log that is not its
+// own. Each is refused from the manifest alone, before any byte moves.
+func TestAnArtefactIsAdoptedOnlyAsThePartitionItCopies(t *testing.T) {
+	t.Parallel()
+	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{})}}
+	req := statelog.OfferRequest{Partition: statelog.EstatePartition.String(),
+		Need: map[string]uint64{"probe": 1}}
+	offer := func(change func(*statelog.Manifest)) statelog.Offer {
+		m := statelog.Manifest{V: statelog.ManifestVersion, Partition: statelog.EstatePartition.String(),
+			Domains: map[string]statelog.DomainPosition{"probe": {
+				Stream: probeStream, Generation: 1, Seq: 4_200,
+				RecordVersion: 1, Replay: statelog.ReplayStrict,
+			}}}
+		change(&m)
+		return statelog.Offer{Manifest: m}
+	}
+	if err := offer(func(*statelog.Manifest) {}).Usable(req, build, nil); err != nil {
+		t.Fatalf("the control artefact was refused: %v", err)
+	}
+	for name, change := range map[string]func(*statelog.Manifest){
+		"another partition": func(m *statelog.Manifest) { m.Partition = "tracker.007" },
+		"another layout":    func(m *statelog.Manifest) { m.Layout = 1 },
+		"no partition":      func(m *statelog.Manifest) { m.Partition = "" },
+		"a log the partition does not carry": func(m *statelog.Manifest) {
+			m.Domains["tracker@tracker.007"] = statelog.DomainPosition{Seq: 9}
+		},
+	} {
+		if err := offer(change).Usable(req, build, nil); err == nil {
+			t.Errorf("an artefact of %s was accepted", name)
+		}
+	}
+}
+
+// A FETCH STREAMS THE ARTEFACT THE JOINER CHOSE, OR NONE.
+//
+// A joiner accepts an offer from its manifest, so the donor streams exactly
+// that artefact: one replaced by a newer take since the offer is refused at
+// once, naming what replaced it, rather than streamed and refused only after
+// the transfer by a checksum it could never match.
+func TestAFetchOfAReplacedArtefactIsRefusedBeforeItStreams(t *testing.T) {
+	t.Parallel()
+	h := newTransferHarness(t, 4096)
+	offers, err := statelog.CollectOffers(t.Context(), h.nc, statelog.OfferRequest{
+		NodeID: "joiner", Partition: statelog.EstatePartition.String(),
+	}, statelog.OfferWindow)
+	if err != nil || len(offers) != 1 {
+		t.Fatalf("CollectOffers = (%d, %v)", len(offers), err)
+	}
+	chosen := offers[0]
+	chosen.Manifest.Artifact = "snapshot-1-1.db"
+	_, err = statelog.FetchArtefact(t.Context(), h.nc, chosen, filepath.Join(t.TempDir(), "adopt.part"))
+	if err == nil || !strings.Contains(err.Error(), "410") {
+		t.Fatalf("a fetch of an artefact the donor no longer holds answered %v, "+
+			"want its refusal", err)
 	}
 }

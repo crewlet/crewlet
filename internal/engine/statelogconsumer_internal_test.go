@@ -83,8 +83,8 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 	first.Stop(context.Background())
 
 	// THE ROWS GO. The broker, and every consumer on it, stays.
-	path := back.Store.ReplicatedPath()
-	if err := back.Store.CloseReplicated(); err != nil {
+	path := estateZeroPath(back.Store)
+	if err := closeEstateZero(back.Store); err != nil {
 		t.Fatalf("close the replicated estate: %v", err)
 	}
 	files, err := filepath.Glob(path + "*")
@@ -96,7 +96,7 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 			t.Fatalf("delete %s: %v", f, err)
 		}
 	}
-	if err := back.Store.ReopenReplicated(t.Context()); err != nil {
+	if err := openEstateZero(t.Context(), back.Store); err != nil {
 		t.Fatalf("reopen the replicated estate: %v", err)
 	}
 
@@ -109,7 +109,7 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 	waitUntil(t, 10*time.Second, "the node whose rows went backwards to hydrate "+
 		"again — its consumers had acknowledged every record it is missing, and "+
 		"a consumer the broker was told is done never hands them over",
-		second.NativeHydrated)
+		hydrated(t, second))
 	for name, head := range heads {
 		running := second.native.Load().log.Domain(name)
 		if got := running.runner.Committed().Seq; got < head {

@@ -40,6 +40,32 @@
 // returned publish therefore reads the STREAM's own state, never a consumer's
 // count; see Backlog, which is where the tempting one-round-trip form was and
 // what it did.
+//
+// # A pull allocates for what it receives, never for what it may
+//
+// The client library's fetches size their delivery channels by the BATCH a
+// pull may receive, and its byte-bounded fetch fixes that batch at a million:
+// 32 MiB allocated on every call, measured, on a log with nothing in it. A
+// state log's applier pulls twice a second per domain for the life of a node,
+// so that was 181 MiB/s from three idle consumers and an OOM kill for a
+// process running a few hundred. Its count-only fetch costs the same per
+// record of batch — ≈ 172 KiB at the applier's four thousand — and cannot
+// bound bytes at all. [DomainConsumer.Fetch] therefore makes the server's own
+// pull request itself, carrying the count and the byte bound together, and
+// every request of a consumer is answered on ONE standing inbox — a callback
+// subscription whose queue grows with what arrives, and a buffer of what no
+// fetch has taken — so a delivery to a request the client stopped counting
+// reaches the next fetch rather than waiting out the ack window, and a fetch
+// returns its first burst rather than holding it for the wait. pullrequest.go
+// says why that and not the library's Messages iterator, whose prefetch would
+// hold records in flight whether or not an applier is reading and needs a
+// stop the applier has no call for.
+//
+// Every other pull in this package and in internal/learning/memsync is
+// count-bounded and small — one record for a mailbox's first wait, the
+// configured mailbox batch after a record has arrived, 256 for a peek or a
+// memory replay — so the library's per-batch sizing costs them a few
+// kilobytes at most, and only the first of them is issued while idle.
 package jetstream
 
 import (
@@ -63,6 +89,7 @@ const (
 	streamNotifications = "CREWLET_NOTIFICATIONS"
 	streamConfig        = "CREWLET_CONFIG"
 	streamDeadLetter    = "CREWLET_DLQ"
+	streamCustody       = "CREWLET_CUSTODY"
 	streamMemory        = topics.MemoryStream
 
 	// derivedPrefix names a stream provisioned for a subject namespace the
@@ -305,6 +332,20 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 			subjects:      []string{topics.MemoryPrefix + ">"},
 			retention:     jetstream.LimitsPolicy,
 			maxPerSubject: 1,
+		},
+		{
+			// A stateless node's events on their way into one data
+			// node's log. INTEREST retention, because it is a mailbox:
+			// a batch is kept until the custody group has taken it,
+			// whether or not a data node is attached at that moment.
+			//
+			// AND THE EVENT LOG'S AGE, because a batch nobody has taken
+			// within it holds events past the horizon every log reads
+			// to — keeping it longer keeps what no node would store.
+			name:      streamCustody,
+			subjects:  []string{topics.CustodyPrefix + ">"},
+			retention: jetstream.InterestPolicy,
+			maxAge:    eventRetention,
 		},
 		{
 			// Dead letters are kept by age, not by interest: nothing

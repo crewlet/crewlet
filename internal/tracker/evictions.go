@@ -21,16 +21,17 @@ import (
 // Each domain answers for its own log now, and the trim asks the domain it is
 // trimming.
 //
-// THROUGH THE NODE HANDLE'S REPLICATED PEER, and that is a correctness property
-// rather than a style: the peer is a legitimate nil while an adoption swaps the
-// file and after `Close`, and a statement issued on a nil pool panics inside
-// database/sql — which is what an earlier shape of this did when the trim's own
-// tick raced a shutdown. [store.DB.Read] answers [store.ErrNoEstate] instead.
-func (Domain) Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error) {
+// THROUGH THE PARTITION HANDLE, resolved on this call, and that is a
+// correctness property rather than a style: the partition is legitimately not
+// open while an adoption swaps its file and after the node closes, and a
+// statement issued on a closed pool panics inside database/sql — which is what
+// an earlier shape of this did when the trim's own tick raced a shutdown.
+// [store.PartitionReader.Read] answers [store.ErrNoEstate] instead.
+func (Domain) Evictions(ctx context.Context, db store.PartitionReader) ([]statelog.EvictionRow, error) {
 	var out []statelog.EvictionRow
-	err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
-			SELECT node_id, at, by, from_position, readmitted_position
+			SELECT node_id, at, by, from_position, readmitted_position, kind
 			FROM tracker_evictions WHERE log_stream = ?
 			ORDER BY node_id`, trackerStream)
 		if err != nil {
@@ -44,8 +45,12 @@ func (Domain) Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionR
 				e          statelog.EvictionRow
 				at, from   int64
 				readmitted sql.NullInt64
+				kind       string
 			)
-			if err := rows.Scan(&e.NodeID, &at, &e.By, &from, &readmitted); err != nil {
+			if scanErr := rows.Scan(&e.NodeID, &at, &e.By, &from, &readmitted, &kind); scanErr != nil {
+				return scanErr
+			}
+			if e.Kind, err = gateKind(kind); err != nil {
 				return err
 			}
 			e.At = store.DecodeTime(at)

@@ -11,11 +11,12 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // fenceStream is the log every cursor below is a position on.
-var fenceStream = tracker.Domain{}.Stream().Name
+var fenceStream = statelog.EstateStream(tracker.Domain{}).Name
 
 // standingAt is this node's applier, committed at p and staying there — the
 // ordinary state, in which the node stands where its write's snapshot did.
@@ -61,7 +62,7 @@ func TestTheFenceClearsZeroOnlyAtOrPastTheHigherBound(t *testing.T) {
 		"the log could not be read":           {floor: 40, firstErr: unreadable, want: statelog.ReasonFloorUnknown},
 	} {
 		t.Run(name, func(t *testing.T) {
-			fence := tracker.NewFence(db, "node-a")
+			fence := tracker.NewFence(db.Reader(), "node-a")
 			fence.Floor = func(context.Context, uint32) (uint64, error) { return tc.floor, tc.floorErr }
 			// The log ends well past the cursor, so every case here is
 			// about the floor and none about where the log ends.
@@ -109,10 +110,10 @@ func TestEveryZeroFenceRefusalNamesItsReason(t *testing.T) {
 	}
 	// wired is a fence over a fresh store, standing at the cursor, with the
 	// floor and the log answering as given.
-	wired := func(db *store.DB, floor func(context.Context, uint32) (uint64, error),
+	wired := func(db store.PartitionHandle, floor func(context.Context, uint32) (uint64, error),
 		ends func(context.Context) (statelog.LogEnds, error)) *tracker.Fence {
 
-		f := tracker.NewFence(db, "node-a")
+		f := tracker.NewFence(db.Reader(), "node-a")
 		f.Floor, f.Ends, f.Committed = floor, ends, standingAt(cursor)
 		return f
 	}
@@ -137,8 +138,8 @@ func TestEveryZeroFenceRefusalNamesItsReason(t *testing.T) {
 		},
 		"an eviction that cannot be read": {
 			build: func(t *testing.T) *tracker.Fence {
-				db := openFenceStore(t)
-				if err := db.Close(); err != nil {
+				node, db := openFenceNode(t)
+				if err := node.ClosePartition(db.Name()); err != nil {
 					t.Fatalf("close: %v", err)
 				}
 				return wired(db, floor, ends(40, 100))
@@ -208,7 +209,7 @@ func TestEveryZeroFenceRefusalNamesItsReason(t *testing.T) {
 // the write's: a node that applied past the end after deciding is past it.
 func TestACheckpointAtTheLogsEndIsNotPastIt(t *testing.T) {
 	t.Parallel()
-	fence := tracker.NewFence(openFenceStore(t), "node-a")
+	fence := tracker.NewFence(openFenceStore(t).Reader(), "node-a")
 	fence.Floor = func(context.Context, uint32) (uint64, error) { return 0, nil }
 	fence.Ends = func(context.Context) (statelog.LogEnds, error) {
 		return statelog.LogEnds{First: 1, Last: 100}, nil
@@ -237,22 +238,22 @@ func TestAFenceMissingABoundRefusesZero(t *testing.T) {
 		return statelog.LogEnds{Last: 100}, nil
 	}
 
-	onlyFloor := tracker.NewFence(db, "node-a")
+	onlyFloor := tracker.NewFence(db.Reader(), "node-a")
 	onlyFloor.Floor, onlyFloor.Committed = floor, standingAt(cursor)
 	if err := onlyFloor.ClearForZero(t.Context(), cursor); err == nil {
 		t.Fatal("a fence with no read of the log cleared an expectation of zero")
 	}
-	onlyEnds := tracker.NewFence(db, "node-a")
+	onlyEnds := tracker.NewFence(db.Reader(), "node-a")
 	onlyEnds.Ends, onlyEnds.Committed = ends, standingAt(cursor)
 	if err := onlyEnds.ClearForZero(t.Context(), cursor); err == nil {
 		t.Fatal("a fence with no published floor cleared an expectation of zero")
 	}
-	noCheckpoint := tracker.NewFence(db, "node-a")
+	noCheckpoint := tracker.NewFence(db.Reader(), "node-a")
 	noCheckpoint.Floor, noCheckpoint.Ends = floor, ends
 	if err := noCheckpoint.ClearForZero(t.Context(), cursor); err == nil {
 		t.Fatal("a fence with no read of this node's checkpoint cleared an expectation of zero")
 	}
-	full := tracker.NewFence(db, "node-a")
+	full := tracker.NewFence(db.Reader(), "node-a")
 	full.Floor, full.Ends, full.Committed = floor, ends, standingAt(cursor)
 	if err := full.ClearForZero(t.Context(), cursor); err != nil {
 		t.Fatalf("control: the fully wired fence refused %v, so the cases above "+
@@ -284,22 +285,26 @@ func requireFenceRefusal(t *testing.T, err error, want statelog.Reason) {
 	}
 }
 
-// openFenceStore opens a node's two estates in a fresh directory.
-func openFenceStore(t *testing.T) *store.DB {
+// openFenceStore opens a node's store and its partition in a fresh directory.
+func openFenceStore(t *testing.T) store.PartitionHandle {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	_, db := openFenceNode(t)
 	return db
+}
+
+// openFenceNode is [openFenceStore] with the node's own handle beside it.
+func openFenceNode(t *testing.T) (*store.DB, store.PartitionHandle) {
+	t.Helper()
+	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = node.Close() })
+	return node, db
 }
 
 // evictInTracker writes the row this node's applier writes when it applies its
 // own eviction, which is the one source the fence reads.
-func evictInTracker(t *testing.T, db *store.DB, nodeID string) {
+func evictInTracker(t *testing.T, db store.PartitionHandle, nodeID string) {
 	t.Helper()
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO tracker_evictions (node_id, log_stream, from_position, at, by)
 			VALUES (?, ?, ?, ?, 'operator')`,
@@ -324,7 +329,7 @@ func TestTheFenceReadsTheFloorAtTheCursorsGeneration(t *testing.T) {
 	cursor := statelog.Position{Stream: fenceStream, Generation: 1, Seq: 100}
 	floors := map[uint32]uint64{1: 150, 2: 0}
 
-	fence := tracker.NewFence(db, "node-a")
+	fence := tracker.NewFence(db.Reader(), "node-a")
 	fence.Floor = func(_ context.Context, generation uint32) (uint64, error) {
 		return floors[generation], nil
 	}

@@ -37,15 +37,16 @@ const (
 	// at every level meanwhile — as [RefuseBehind], or as [RefuseStalled]
 	// once the replay stops moving — because the floor is what every node
 	// must hold before it answers, and a write at an expectation of zero
-	// is refused by the fence until it holds it. It moves none of its
-	// seats: a copy that is BEHIND catches up on its own, and
-	// [Health.Healthy] sheds on no lag of any size, this one included.
+	// is refused by the fence until it holds it. It stays in service: a
+	// copy that is BEHIND catches up on its own, and [Health.Healthy]
+	// fires on no lag of any size, this one included.
 	FloorReplaying
 
 	// FloorBelow is below the log itself: the next record this node needs
 	// has been removed, so its rows are missing state no replay can
-	// supply. Reads and writes both refuse, its seats move, and the node
-	// adopts a peer's snapshot.
+	// supply. Reads and writes both refuse, the node stops serving the
+	// partition (its seats read it from another holder), and it adopts a
+	// peer's snapshot.
 	FloorBelow
 
 	// FloorUnknown is the fourth value, and it takes the SAME branch as
@@ -173,7 +174,8 @@ func Replayable(checkpoint, first uint64) bool {
 
 // ApplyRetryBudget is how long a transient apply error is retried in place
 // before the applier reports itself faulted — which its readers treat as
-// stalled: reads refuse naming the error, and the seats move.
+// stalled: reads refuse naming the error, and the node stops serving the
+// partition until a retry succeeds.
 //
 // HALF THE STALL GRACE, deliberately: a retry that outlasted the grace would
 // let a node report itself healthy while it made no progress, and one much
@@ -243,12 +245,13 @@ type Health struct {
 	// clears. The applier sees each one — the fetch the broker answered
 	// with nothing is the drain — and [Runner.Drained] is that record.
 	//
-	// ONE READER, AND IT IS THE DONOR GATE: may this node hand a peer a
-	// copy of its rows. That question is about whether the rows were ever
+	// TWO READERS, ASKING ONE QUESTION: the donor gate — may this node hand
+	// a peer a copy of its rows — and [Health.Serving] — may this copy
+	// answer for its partition. Each is about whether the rows were ever
 	// whole, and the separate question of how far they have since fallen
-	// behind is [Health.Lag] against [SnapshotLagSlack]. Neither readiness
-	// gate reads this — admission wants the instant and the shed wants a
-	// fault, and neither is a history.
+	// behind is [Health.Lag] against [SnapshotLagSlack], which both apply.
+	// Neither readiness gate reads this — admission wants the instant and
+	// a copy's fault wants a fault, and neither is a history.
 	Drained bool
 
 	// Stalled reports an applied prefix that has not moved for the stall
@@ -294,8 +297,8 @@ type Health struct {
 	// record gone from the log, or [FloorReplaying], the log still holding
 	// it. The choice picks the refusal — `below_floor`, which sends a
 	// caller elsewhere and the node to adopt, or the retryable `behind` —
-	// and whether the floor term alone sheds the node's seats, which
-	// [Health.Healthy] does for the first and not the second. So a
+	// and whether the floor term alone takes the copy out of service,
+	// which [Health.Healthy] does for the first and not the second. So a
 	// stale-low value reports a node as replaying records that are already
 	// gone. What bounds that is where a stale value comes from: only a
 	// replica of a group with no leader answers the stream info, and every
@@ -304,7 +307,8 @@ type Health struct {
 	// rejoin once a reading shows the record gone — a LATER reading of the
 	// same stream info, not an independent source — and meanwhile a strict
 	// applier the broker clamped past the hole faults when its reorder
-	// buffer overflows, which refuses and sheds as `stalled`.
+	// buffer overflows, which refuses as `stalled` and stops the copy
+	// serving.
 	FirstSeq *uint64
 
 	// TrimFloor is the register's published floor for this domain as last
@@ -429,16 +433,18 @@ func (h Health) AheadOfLog() bool {
 	return h.LastSeq != nil && pastEnd(h.Position.Seq, *h.LastSeq)
 }
 
-// Healthy reports whether this domain's state permits KEEPING the seats this
-// node already holds.
+// Healthy reports whether this copy of the domain's log is SOUND — the copy
+// its node may keep serving its partition from. One that is not stops serving
+// it, and the node's seats read the partition from its other holders; the
+// seats themselves stay, since a copy being wrong is no fault of theirs.
 //
 // # It answers "is this copy WRONG", never "is this copy BEHIND"
 //
 // That is the whole line between it and [Health.Established], which gates
 // admission. A copy that is behind catches up on its own, so withholding
-// claims is the entire remedy and dropping work in hand would be pure loss; a
-// copy that is wrong cannot catch up, so the work has to move. Every term
-// below is of the second kind.
+// claims is the entire remedy and taking it out of service would be pure
+// loss; a copy that is wrong cannot catch up, so nothing may be answered from
+// it. Every term below is of the second kind.
 //
 // # What does NOT make it false, and why
 //
@@ -446,10 +452,11 @@ func (h Health) AheadOfLog() bool {
 // because this node has yet to drain the log a first time. The reading that
 // conflated the two was `lag == 0` recomputed per heartbeat: on a single node
 // every tracker write put one record on the log the applier had not consumed
-// yet, so this went false for one heartbeat and the sweep released all seven
-// of the company's seats, reclaiming them about five seconds later — six
-// times in eight minutes, with a real model that is every turn on the node
-// interrupted by somebody filing a work item. A prefix that stops MOVING is a
+// yet, so this went false for one heartbeat and — when a false answer shed
+// seats — the sweep released all seven of the company's seats, reclaiming
+// them about five seconds later — six times in eight minutes, with a real
+// model that is every turn on the node interrupted by somebody filing a work
+// item. A prefix that stops MOVING is a
 // different fact and it is [Health.Stalled], which is below.
 //
 // Nor does replaying up to the published floor ([FloorReplaying]), which is
@@ -458,17 +465,17 @@ func (h Health) AheadOfLog() bool {
 // floor nobody could read ([FloorUnknown]), has a hole in its rows.
 //
 // Holding records this build cannot decode does not either, on its own.
-// Folding that into "stalled" sheds a company's seats fleet-wide on a routine
-// rolling upgrade — one upgraded writer taking every un-upgraded node out of
-// service at once, which is exactly the outage the retain rule exists to
-// prevent, arriving through the applier instead of the codec.
+// Folding that into "stalled" takes every copy out of service fleet-wide on a
+// routine rolling upgrade — one upgraded writer taking every un-upgraded node
+// out of service at once, which is exactly the outage the retain rule exists
+// to prevent, arriving through the applier instead of the codec.
 //
 // # And what does
 //
 // Holding them PAST THE DEFERRAL GRACE. At that point the honest reading is
 // "this node cannot run this company's records" rather than "this node is
-// briefly behind", and a node that fails every call about a growing set of
-// objects while keeping its seats is the same outage in a slower form. Under
+// briefly behind", and a copy that fails every call about a growing set of
+// objects while it keeps serving is the same outage in a slower form. Under
 // the grace nothing changes, which covers every rolling upgrade this design
 // describes — a config apply and a seat re-placement are one heartbeat each.
 //
@@ -567,6 +574,64 @@ func (h Health) Established(strict bool) (bool, ReadRefusal) {
 	// records left to apply holds a PREFIX of what the log says, whether
 	// or not it has ever held the whole of it.
 	if strict && *h.Lag > 0 {
+		return false, RefuseBehind
+	}
+	return true, ""
+}
+
+// Answers reports whether this copy of a log may answer a REQUEST now — a
+// read, or a write decided from its rows: it is [Health.Serving], or it is
+// established at a lag of zero this instant ([Health.Established] strict).
+//
+// # Neither half alone
+//
+// Serving alone refuses a copy that is level but has not yet LEARNED it is:
+// the drained latch is set on the fetch after the last record commits, up to a
+// fetch wait later, and a seat admitted at lag zero in that window would find
+// every call it made refused by the node that admitted it. Strict alone is
+// seat admission's question, and a request gate that asked it refused a busy
+// company's copy on most instants — a record in flight — so every request
+// went to whichever holder happened to be level at that moment, or to none.
+// What a request must see of its own node's writes is what the session floors
+// carry, and neither half is asked to supply it.
+//
+// Refused, it answers Serving's refusal: the one that says what the copy is
+// waiting for.
+func (h Health) Answers() (bool, ReadRefusal) {
+	ok, refusal := h.Serving()
+	if ok {
+		return true, ""
+	}
+	if level, _ := h.Established(true); level {
+		return true, ""
+	}
+	return false, refusal
+}
+
+// Serving reports whether this copy of a log may answer for its partition: the
+// state a node's estate lease names `serving`, which a joiner is promoted on
+// and a leaver's retirement waits for. It is ESTABLISHED on the log's own
+// terms — at or above the floor, on the stream its rows are keyed to — and
+// DRAINED since its applier started, and it is within [SnapshotLagSlack] of the
+// log's end. Otherwise it answers the refusal that holds, [RefuseBehind] for a
+// copy that has never drained or has fallen past the slack.
+//
+// A HISTORY AND A DISTANCE, NEVER THE INSTANT. [Health.Established] strict is
+// seat admission's question — may a seat attach and act on these rows right
+// now — and it refuses at a lag of one, which a busy log has on most
+// heartbeats: a lease sampling that instant said `catching_up` on an
+// established, drained copy of a company filing work, and a map routing by it
+// dropped the copy from its partition's servers on every beat that caught a
+// record in flight. Whether a copy holds a whole state is what the applier
+// observed ([Health.Drained]); how far it has since fallen behind is the lag
+// against the slack a donor is held to, since a copy close enough to hand a
+// joiner is close enough to answer for the partition.
+func (h Health) Serving() (bool, ReadRefusal) {
+	if ok, refusal := h.Established(false); !ok {
+		return false, refusal
+	}
+	// The lag is non-nil here: an unread end is refused above.
+	if !h.Drained || *h.Lag > SnapshotLagSlack {
 		return false, RefuseBehind
 	}
 	return true, ""

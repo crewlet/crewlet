@@ -168,7 +168,7 @@ func TestEverySeatHeldAnywhereCarriesAState(t *testing.T) {
 			t.Parallel()
 			leases := coordmemory.New()
 			for _, handle := range tc.peer {
-				lease, err := leases.TryAcquire(t.Context(), coord.SeatResource(handle),
+				lease, _, err := leases.TryAcquire(t.Context(), coord.SeatResource(handle),
 					coord.AcquireOptions{Owner: "node-b:1", TTL: time.Minute})
 				if err != nil || lease == nil {
 					t.Fatalf("a peer could not claim %s: %v", handle, err)

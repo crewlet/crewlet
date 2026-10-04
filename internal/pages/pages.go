@@ -264,3 +264,9 @@ func Sentence(err error) string {
 	}
 	return err.Error()
 }
+
+// badParent builds the refusal of a page's `parent_id`, which is both a field
+// refusal and the one fact [ErrParent] names.
+func badParent(why string, args ...any) error {
+	return fmt.Errorf("%w (%w)", invalid("parent_id", why, args...), ErrParent)
+}

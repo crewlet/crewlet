@@ -102,14 +102,14 @@ func (o OneSided) Final() (string, bool) {
 // SELECTED ON THE STORED FLAG, which the applier derives on both ends — so
 // this is an indexed read of exactly the broken edges rather than a join over
 // every relation in the company. On a healthy fleet it reads nothing.
-func ScanOneSided(ctx context.Context, db *store.DB, before time.Time,
+func ScanOneSided(ctx context.Context, db store.PartitionReader, before time.Time,
 	limit int) ([]OneSided, error) {
 
-	if db == nil {
+	if db.IsZero() {
 		return nil, fmt.Errorf("tracker: the one-sided repair has no replicated estate")
 	}
 	var out []OneSided
-	err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT r.task_id, r.other_id,
 			       COALESCE(t.key, ''), t.project_key, COALESCE(t.assignee, ''),

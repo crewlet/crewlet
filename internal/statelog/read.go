@@ -115,6 +115,15 @@ const (
 	// RefuseTooStale — this node's lag is past what the caller said it
 	// would accept.
 	RefuseTooStale ReadRefusal = "too_stale"
+
+	// RefuseMaintenance — this node runs in a mode that publishes nothing
+	// ([MaintenanceMode.Publishes]), and a linearizable read establishes the
+	// log's end by APPENDING a barrier to it. The other levels append
+	// nothing and keep answering; this one is answered again once the
+	// fleet is back in normal mode. Not retryable: the mode is the
+	// process's for its life, and every node of a fleet in a capacity
+	// window is in one, so neither waiting nor another node clears it.
+	RefuseMaintenance ReadRefusal = "maintenance"
 )
 
 // ReadRefusals are every code. The COUNT IS DERIVED from this slice rather
@@ -124,6 +133,7 @@ var ReadRefusals = []ReadRefusal{
 	RefuseBehind, RefuseDeferred, RefuseDeferredScopeUnknown, RefuseStalled,
 	RefuseBelowFloor, RefuseFloorUnknown, RefuseEvicted, RefuseBrokerUnreachable,
 	RefuseNoQuorum, RefuseLogFull, RefuseWrongStream, RefuseTooStale,
+	RefuseMaintenance,
 }
 
 // Valid reports whether a refusal code off the wire is one this build knows.
@@ -224,6 +234,29 @@ type Query struct {
 	// enumeration.
 	Scope ScopeSet
 
+	// Resolve replaces Scope for a read whose object is named by a
+	// REFERENCE — a key, an alias, an address — rather than by the path
+	// its own records are filed under. Exactly one of the two is set, and
+	// [Query.Set] still decides what a deferral does: a point read refuses
+	// and a read that reports its coverage is served and says so.
+	//
+	// A PATH CANNOT BE FORMED FROM A REFERENCE ALONE, and forming one
+	// anyway is the failure this exists for: a task named "ENG-12" is
+	// filed under `t/c/ENG/o/<uuid>`, and a scope built from the key as
+	// though it were the id (`t/c/workspace/o/ENG-12`) contains nothing
+	// any record is filed under — so the probe passes on every deferral
+	// there is, and the point read answers from rows a record it cannot
+	// decode has already made wrong. Only the rows know where the object
+	// is filed, so the resolver reads them, and it reads them INSIDE THE
+	// TRANSACTION THE ANSWER IS READ IN: a scope resolved in one and
+	// probed in another would certify an object a rename had moved.
+	//
+	// A reference that resolves to NOTHING still answers a scope — the
+	// widest one the reference itself bounds (an address, or the domain)
+	// — because "not found" is a claim about the rows too, and a deferred
+	// create is precisely a row this node does not have.
+	Resolve Resolver
+
 	// Session is the caller's own high-water mark on this stream, which
 	// is what a session read waits for.
 	Session Position
@@ -260,6 +293,23 @@ type Query struct {
 	// absence with no local row — so it is served at the level asked for
 	// and makes no completeness claim at all.
 	Set bool
+}
+
+// Resolver answers the scope a point read is about by reading the rows its
+// reference resolves to. See [Query.Resolve].
+type Resolver func(ctx context.Context, tx *sql.Tx) (ScopeSet, error)
+
+// scopeIn is the scope a query is about, resolved inside tx when it names its
+// object by reference.
+func (q Query) scopeIn(ctx context.Context, tx *sql.Tx) (ScopeSet, error) {
+	if q.Resolve == nil {
+		return q.Scope, nil
+	}
+	s, err := q.Resolve(ctx, tx)
+	if err != nil {
+		return ScopeSet{}, fmt.Errorf("statelog: resolve what this read is about: %w", err)
+	}
+	return s, nil
 }
 
 // Answer is what a read returns beside its rows.
@@ -322,6 +372,8 @@ type Incomplete struct {
 // Reader answers reads at a level, over one domain.
 type Reader struct {
 	domain  Domain
+	mode    MaintenanceMode
+	stream  string
 	tables  tables
 	db      readStore
 	index   *ReadIndex
@@ -339,6 +391,27 @@ type readStore interface {
 // ReaderDeps is everything a reader needs that it does not own.
 type ReaderDeps struct {
 	Domain Domain
+
+	// Spec is the log this reader answers for: the domain's shape on one of
+	// its logs ([Layout.StreamSpec]). A read's positions, its barrier and
+	// the deferrals its coverage probe reads are all that one log's.
+	Spec StreamSpec
+
+	// Mode is what this node started for, and it decides whether a read
+	// may append.
+	//
+	// A BARRIER IS A PUBLISH. It is a record on the log, admitted, stored
+	// and replicated like any other, and a node in a mode that publishes
+	// nothing exists so that the fleet's logs hold still while a capacity
+	// window measures them — a seal-mode acknowledgement is evidence
+	// precisely because nothing on that node writes. So in such a mode a
+	// linearizable read is refused [RefuseMaintenance] rather than
+	// answered, the reader is given no [ReadIndex] to append through
+	// ([NewReader] refuses one), and every level that appends nothing is
+	// served as ever. REQUIRED: the zero mode is refused rather than read
+	// as either, since each reading is wrong in one of the two postures.
+	Mode MaintenanceMode
+
 	DB     readStore
 	Index  *ReadIndex
 	Waiter Waiter
@@ -366,8 +439,15 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 		return nil, fmt.Errorf("statelog: reader has no waiter")
 	case d.Health == nil:
 		return nil, fmt.Errorf("statelog: reader has no health source")
+	case !d.Mode.Valid():
+		return nil, fmt.Errorf("statelog: reader has no mode (%q; want one of %v): "+
+			"whether a read may append a barrier turns on it", d.Mode, MaintenanceModes)
+	case !d.Mode.Publishes() && d.Index != nil:
+		return nil, fmt.Errorf("statelog: a reader in %s mode was given a read index, "+
+			"and a read index appends barriers to a log this mode publishes nothing to",
+			d.Mode)
 	}
-	t, err := newTables(d.Domain)
+	t, err := newTables(d.Domain, d.Spec)
 	if err != nil {
 		return nil, err
 	}
@@ -377,6 +457,8 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 	}
 	return &Reader{
 		domain:  d.Domain,
+		mode:    d.Mode,
+		stream:  d.Spec.Name,
 		tables:  t,
 		db:      d.DB,
 		index:   d.Index,
@@ -412,6 +494,11 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 		return Answer{}, fmt.Errorf("statelog: %q is not a read level (want %v)",
 			q.Level, ReadLevels)
 	}
+	if q.Resolve != nil && !q.Scope.Empty() {
+		return Answer{}, fmt.Errorf("statelog: this read both declares a scope " +
+			"and resolves one — an object named by reference has no scope " +
+			"until its rows are read")
+	}
 	h := r.health()
 
 	// 1. THE LOCAL REFUSALS, in order.
@@ -440,7 +527,7 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 	// 2. COVERAGE, before any append.
 	answer := Answer{Level: q.Level, Position: h.Position, Lag: h.Lag, Complete: true}
 	if h.Deferred > 0 {
-		gap, err := r.coverage(ctx, q.Scope)
+		gap, err := r.coverage(ctx, q)
 		if err != nil {
 			return r.refuse(h, q, RefuseDeferredScopeUnknown, err.Error(), started)
 		}
@@ -478,10 +565,10 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 
 	// 4. The wait, holding nothing.
 	if !target.IsZero() {
-		if target.Stream != "" && target.Stream != r.domain.Stream().Name {
+		if target.Stream != "" && target.Stream != r.stream {
 			return r.refuse(h, q, RefuseWrongStream,
 				fmt.Sprintf("this read names a position on %s and this domain "+
-					"reads %s", target.Stream, r.domain.Stream().Name), started)
+					"reads %s", target.Stream, r.stream), started)
 		}
 		waitCtx, cancel := context.WithTimeout(ctx, ReadBudget)
 		err := r.waiter.WaitCommitted(waitCtx, target)
@@ -516,19 +603,49 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 
 	// 5. ONE transaction, coverage first.
 	if err := r.db.Read(ctx, func(tx *sql.Tx) error {
-		if h.Deferred > 0 && !q.Set {
-			// THE SAME HOLE THROUGH ANOTHER DOOR. A deferred record
-			// landing between the probe above and this transaction
-			// would otherwise be invisible to both.
-			if d, hit, err := r.tables.deferredIn(ctx, tx, q.Scope); err != nil {
-				return err
-			} else if hit {
-				return &Refused{
-					Code: RefuseDeferred, Level: q.Level,
-					Detail: fmt.Sprintf("a record at version %d this node cannot "+
-						"decode, at %s, landed while this read was waiting",
-						d.Version, d.Position),
-				}
+		// THE SAME HOLE THROUGH ANOTHER DOOR. A deferred record landing
+		// between the probe above and this transaction would otherwise be
+		// invisible to both.
+		//
+		// UNCONDITIONAL, and not gated on the health read in step 1. That
+		// snapshot was taken BEFORE the wait, and the wait is exactly
+		// where a record this node cannot decode arrives: a linearizable
+		// read's barrier sits above it, so the applier has to cross it to
+		// release the read. Gated on the old snapshot, a node that held
+		// nothing deferred when the read began skipped this probe on the
+		// one path it was written for, and certified rows the record had
+		// already made wrong. The probe is an indexed join over the
+		// retained records, which is to say over nothing on every node
+		// that has nothing retained.
+		scope, err := q.scopeIn(ctx, tx)
+		if err != nil {
+			return err
+		}
+		d, hit, err := r.tables.deferredIn(ctx, tx, scope)
+		switch {
+		case err != nil:
+			return err
+		case hit && !q.Set:
+			return &Refused{
+				Code: RefuseDeferred, Level: q.Level,
+				Detail: fmt.Sprintf("a record at version %d this node cannot "+
+					"decode, at %s, covers what this read is about — it "+
+					"landed while the read was waiting, or the reference "+
+					"now resolves to an object it covers",
+					d.Version, d.Position),
+			}
+		case hit && answer.Complete:
+			// A SET READ CONTINUES AND CLAIMS NOTHING, here as in
+			// step 2 — and for the same reason it cannot be skipped
+			// here: a set read that began complete and waited across
+			// a deferral would otherwise report every row as there.
+			answer.Complete = false
+			answer.Incomplete = &Incomplete{
+				Records:   1,
+				From:      d.Position,
+				Scope:     d.Scope,
+				Direction: "unknown",
+				Version:   d.Version,
 			}
 		}
 		return fn(tx)
@@ -544,6 +661,49 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 	return answer, nil
 }
 
+// Barrier establishes where this log's end is NOW and waits for this node to
+// apply through it, answering the barrier's position: the `linearizable` half
+// of a read answered at a CUT rather than by one reader — a gather's partition,
+// whose holder appends one barrier on each of the partition's logs and then
+// answers at or after them ([Coverage.At]).
+//
+// THE SAME LADDER A LINEARIZABLE READ CLIMBS, without the rows: this node's own
+// refusals first (an evicted copy, a floor nobody could read, a stall — none
+// of which a barrier would make right), then the mode's (a node that publishes
+// nothing appends no barrier), then the single-flighted append and the wait.
+// Each refusal is the [Refused] a read would give, so a caller tells "this copy
+// cannot" from "the broker would not" exactly as a read's caller does.
+func (r *Reader) Barrier(ctx context.Context) (Position, error) {
+	started := time.Now()
+	q := Query{Level: ReadLinearizable}
+	h := r.health()
+	if code := h.Refusal(started); code != "" {
+		_, err := r.refuse(h, q, code, r.refusalDetail(h, code, started), started)
+		return Position{}, err
+	}
+	target, err := r.target(ctx, q, h)
+	if err != nil {
+		var refusal *Refused
+		if errors.As(err, &refusal) {
+			_, err = r.refuse(h, q, refusal.Code, refusal.Detail, started)
+		}
+		return Position{}, err
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, ReadBudget)
+	err = r.waiter.WaitCommitted(waitCtx, target)
+	cancel()
+	if err != nil {
+		if ctx.Err() != nil {
+			return Position{}, ctx.Err()
+		}
+		_, err = r.refuse(h, q, RefuseBehind,
+			fmt.Sprintf("this node has not reached %s within %s", target, ReadBudget), started)
+		return Position{}, err
+	}
+	r.observeServed(q.Level, started)
+	return target, nil
+}
+
 // gap is what a coverage probe found.
 type gap struct {
 	records uint64
@@ -554,15 +714,19 @@ type gap struct {
 
 // coverage probes this node's deferred scope index for anything covering what
 // the read is about.
-func (r *Reader) coverage(ctx context.Context, s ScopeSet) (*gap, error) {
-	if s.Empty() {
-		// A READ THAT NAMES NO OBJECTS cannot be certified about any,
-		// so it is the domain term rather than a free pass.
-		return nil, fmt.Errorf("this read declares no scope, so nothing can be " +
-			"said about what a deferred record would cover")
-	}
+func (r *Reader) coverage(ctx context.Context, q Query) (*gap, error) {
 	var found *gap
 	err := r.db.Read(ctx, func(tx *sql.Tx) error {
+		s, err := q.scopeIn(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if s.Empty() {
+			// A READ THAT NAMES NO OBJECTS cannot be certified about
+			// any, so it is the domain term rather than a free pass.
+			return fmt.Errorf("this read declares no scope, so nothing can " +
+				"be said about what a deferred record would cover")
+		}
 		d, hit, err := r.tables.deferredIn(ctx, tx, s)
 		if err != nil {
 			return err
@@ -598,18 +762,29 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 	// is the caller's bug rather than a state that clears — see
 	// [RefuseWrongStream].
 	if !q.MinPosition.IsZero() && q.MinPosition.Stream != "" &&
-		q.MinPosition.Stream != r.domain.Stream().Name {
+		q.MinPosition.Stream != r.stream {
 
 		return Position{}, &Refused{
 			Code: RefuseWrongStream, Level: q.Level,
 			Detail: fmt.Sprintf("this read floors at a position on %s and this "+
 				"domain reads %s — a position names the log it is a position "+
 				"in, and this one is not from this log",
-				q.MinPosition.Stream, r.domain.Stream().Name),
+				q.MinPosition.Stream, r.stream),
 		}
 	}
 	switch q.Level {
 	case ReadLinearizable:
+		if !r.mode.Publishes() {
+			return Position{}, &Refused{
+				Code: RefuseMaintenance, Level: q.Level,
+				Detail: fmt.Sprintf("this node runs in %s mode, which publishes "+
+					"nothing, and a linearizable read establishes the log's end "+
+					"by appending a barrier to it — `session`, `consistent_prefix` "+
+					"and `stale` reads append nothing and are still served here, "+
+					"and `linearizable` is answered again once the fleet is back "+
+					"in normal mode", r.mode),
+			}
+		}
 		if r.index == nil {
 			return Position{}, &Refused{
 				Code: RefuseBrokerUnreachable, Level: q.Level,

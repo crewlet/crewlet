@@ -86,10 +86,11 @@ export class RestError extends Error {
    *
    * WHAT A WRITE'S CALLER NEEDS BEFORE IT READS A REFUSAL AS ONE. A refusal
    * the engine wrote means nothing was done; this means nobody here knows. A
-   * reverse proxy's default read timeout is a minute, which is exactly what
-   * the engine allows a node gate past its judgement, so a slow eviction
-   * reached the browser as a 504 — and read as a refusal, its operation id
-   * was dropped with it.
+   * reverse proxy's default read timeout is a minute, shorter than the minute
+   * and a quarter the engine allows a node gate past its judgement (a minute
+   * for the logs, a quarter of one for the estate map's part), so a slow
+   * eviction reached the browser as a 504 — and read as a refusal, its
+   * operation id was dropped with it.
    */
   get unanswered(): boolean {
     return this.status === 0 || this.code === "" || this.code === "unreadable_body";
@@ -148,9 +149,9 @@ function offline(err: unknown): RestError {
  * It is the DEFAULT, not the only deadline: a call whose path is genuinely
  * longer passes [RequestOptions.timeoutMs] rather than removing the deadline.
  * Two do. A backup copies the whole store before it answers. And the node
- * gate is allowed a minute from its first record to its last answer, so
- * thirty seconds gave up on a gesture the node went on to finish, holding
- * nothing to finish it with.
+ * gate takes up to a minute and a half to answer a gesture (half a minute to
+ * judge it, a minute to write every log), so thirty seconds gave up on a
+ * gesture the node went on to finish, holding nothing to finish it with.
  */
 export const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -403,6 +404,65 @@ async function bodyOf(method: string, path: string, options?: RequestOptions): P
   return (await request(method, path, options)).body;
 }
 
+/**
+ * How long a download may take, from its request to its last byte.
+ *
+ * FIFTEEN MINUTES, not [REQUEST_TIMEOUT_MS]: a project's largest file is a
+ * gibibyte, and that is fourteen minutes at ten megabits a second. A deadline
+ * sized for a JSON answer would abandon every large download part way.
+ */
+export const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
+
+/**
+ * A file's bytes, fetched with the operator's token.
+ *
+ * NOT A LINK. A plain `<a href>` carries no bearer token, so on an engine that
+ * guards its reads it would download the refusal instead of the file — the
+ * bytes are fetched here, where the token is, and handed to the caller as a
+ * blob. A refusal is read as the engine's JSON, like every other.
+ */
+async function blob(path: string, signal?: AbortSignal): Promise<Blob> {
+  const token = apiToken();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+  const forward = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", forward, { once: true });
+  try {
+    let response: Response;
+    try {
+      response = await fetch(location.origin + path, {
+        method: "GET",
+        cache: "no-store",
+        headers: token ? { Authorization: "Bearer " + token } : {},
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (signal?.aborted) throw signal.reason;
+      throw offline(err);
+    }
+    if (!response.ok) {
+      let body: Record<string, unknown> = {};
+      try {
+        body = (await response.json()) as Record<string, unknown>;
+      } catch {
+        body = { error: "unreadable_body" };
+      }
+      throw new RestError(response.status, body);
+    }
+    try {
+      return await response.blob();
+    } catch (err) {
+      // CUT SHORT. The engine sends a file's length before its bytes and
+      // closes the connection when it cannot finish, so a body that fails
+      // to read is a download that did not complete — never a smaller file.
+      throw offline(err);
+    }
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", forward);
+  }
+}
+
 export const rest = {
   /**
    * The whole answer: status, entity-tag and body. For a caller that sends a
@@ -437,4 +497,6 @@ export const rest = {
   // choice in a proxy log.
   del: (path: string, body?: unknown, headers?: Record<string, string>) =>
     bodyOf("DELETE", path, { body, headers }),
+  /** A file's bytes — see [blob]. */
+  blob,
 };

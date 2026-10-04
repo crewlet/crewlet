@@ -88,6 +88,41 @@ var allowed = []Allowance{
 			"memory twin.",
 	},
 
+	// THE SAME FOUR, THROUGH A LEAF. The suite runs a second time against
+	// a client of a JetStream-less leaf, which is the same JetStream client
+	// reaching the members' domain across one link — so each case skips
+	// for the reason its member entry above gives, and the memory twin
+	// certifies it once for both.
+	{
+		Package: "internal/queue/jetstream",
+		Test:    "TestConformanceThroughALeaf/EventQueue/nak_returns_the_event_to_the_front_of_the_mailbox",
+		When:    Always,
+		Why: "The member's reason, across a leaf link: JetStream returns a redelivered " +
+			"message behind never-delivered ones. Certified on the memory twin.",
+	},
+	{
+		Package: "internal/queue/jetstream",
+		Test:    "TestConformanceThroughALeaf/EventQueue/start_stop_lifecycle",
+		When:    Always,
+		Why: "The member's reason, across a leaf link: Open establishes the connection " +
+			"and the streams, so there is no Start barrier. Certified on the memory twin.",
+	},
+	{
+		Package: "internal/queue/jetstream",
+		Test:    "TestConformanceThroughALeaf/EventQueue/stop_clears_pause",
+		When:    Always,
+		Why: "The member's reason, across a leaf link: Stop is terminal, so there is " +
+			"no restart for a pause to survive. Certified on the memory twin.",
+	},
+	{
+		Package: "internal/queue/jetstream",
+		Test:    "TestConformanceThroughALeaf/Batch/zero_linger_dispatches_inline_single_event_batches",
+		When:    Always,
+		Why: "The member's reason, across a leaf link: pull consumers fetch on their " +
+			"own schedule, so batch boundaries are not deterministic. Certified on the " +
+			"memory twin.",
+	},
+
 	// -----------------------------------------------------------------
 	// Structural: a driver capability that has not reached Go yet. This is
 	// the tree's model skip and CLAUDE.md names it — the case turns into a

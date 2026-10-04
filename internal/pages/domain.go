@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -62,15 +61,12 @@ const PagesLogMaxBytes = 4 << 30
 // on the server.
 const PagesLogDuplicates = 2 * time.Minute
 
-// Stream is the knowledge base's log.
-func (Domain) Stream() statelog.StreamSpec {
-	return statelog.StreamSpec{
-		Name:          topics.PagesLogStream,
-		Subjects:      []string{topics.PagesLogWildcard},
-		SubjectPrefix: topics.PagesLogPrefix,
-		MaxBytes:      PagesLogMaxBytes,
-		Duplicates:    PagesLogDuplicates,
-		Replay:        statelog.ReplayStrict,
+// StreamShape is what every one of the knowledge base's logs is.
+func (Domain) StreamShape() statelog.StreamShape {
+	return statelog.StreamShape{
+		MaxBytes:   PagesLogMaxBytes,
+		Duplicates: PagesLogDuplicates,
+		Replay:     statelog.ReplayStrict,
 		// FIVE OF THE SIX KINDS. A barrier shares one subject across
 		// the whole domain, so an expectation there would serialise
 		// every linearizable read behind every other one and write an
@@ -91,6 +87,33 @@ func arbitratedKinds() []string {
 		}
 	}
 	return out
+}
+
+// PartitionOf is the partition a record belongs to: the one partition that
+// carries the knowledge base's log ([statelog.Layout.OnlyPartition]) — or,
+// for the framework's own records, none.
+//
+// This build keys no container to a partition, so a layout that divides the
+// knowledge base places nothing: every record answers the zero partition,
+// which no log carries, rather than being guessed onto a log. A barrier, an eviction or readmission and a generation record are each
+// log's own, and name no partition — see the tracker's [Domain.PartitionOf]
+// for why.
+func (Domain) PartitionOf(l statelog.Layout, env statelog.Envelope) (statelog.PartitionID, bool) {
+	switch ObjectKind(env.Kind) {
+	case KindBarrier, KindEviction, KindGeneration:
+		return statelog.PartitionID{}, false
+	}
+	return l.OnlyPartition(Domain{}.Name()), true
+}
+
+// ScopePartition is the partition a scope path lies in — where
+// [Domain.PartitionOf] places its object — or none for the domain term, which
+// names everything on whichever log the record is written to.
+func (Domain) ScopePartition(l statelog.Layout, path string) (statelog.PartitionID, bool) {
+	if path == pathDomain {
+		return statelog.PartitionID{}, false
+	}
+	return l.OnlyPartition(Domain{}.Name()), true
 }
 
 // RecordVersion is the record shape this build reads.
@@ -125,13 +148,14 @@ func (Domain) InstallsGate(env statelog.Envelope) bool {
 	return ObjectKind(env.Kind).InstallsGate() || OpKind(env.Op) == OpPurge
 }
 
-// NodeGate reports a node's eviction or readmission — the one record a write
-// flagged [statelog.Request.NodeGate] may carry.
+// NodeGate reports a node's eviction, its release of the log or the
+// readmission of either — the one record a write flagged
+// [statelog.Request.NodeGate] may carry.
 //
-// BY ITS KIND, which nothing but a node's eviction or readmission is published
-// under — and deliberately not InstallsGate: the purge is this log's other
-// gate, and it is an ordinary write that the gate reserve and the fences a
-// node gate is excused must hold.
+// BY ITS KIND, which nothing but those three is published under — and
+// deliberately not InstallsGate: the purge is this log's other gate, and it is
+// an ordinary write that the gate reserve and the fences a node gate is
+// excused must hold.
 func (Domain) NodeGate(env statelog.Envelope) bool {
 	return ObjectKind(env.Kind) == KindEviction
 }
@@ -145,8 +169,14 @@ func (Domain) EvictionSubject(node string) statelog.Subject {
 	return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID}
 }
 
+// Releases reports a node's release of this log ([OpRelease]): the eviction
+// kind under the release op, from the envelope alone.
+func (Domain) Releases(env statelog.Envelope) bool {
+	return ObjectKind(env.Kind) == KindEviction && OpKind(env.Op) == OpRelease
+}
+
 // Evicts decodes one record from a node's eviction subject: true for an
-// eviction, false for the readmission that inverts one.
+// eviction or a release, false for the readmission that inverts either.
 func (Domain) Evicts(payload []byte) (bool, error) {
 	record, err := Decode(payload)
 	if err != nil {

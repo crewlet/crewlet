@@ -23,7 +23,7 @@ import (
 // the three partial cases name the primary key.
 func TestEveryPartiallyIndexedFilterSeeksItsIndex(t *testing.T) {
 	t.Parallel()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "node.db"), Options{})
+	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestEveryPartiallyIndexedFilterSeeksItsIndex(t *testing.T) {
 // Mutation: drop either `<> ”` term from [TurnQuery.turnWhere].
 func TestEveryTurnFilterSeeksItsIndex(t *testing.T) {
 	t.Parallel()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "node.db"), Options{})
+	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

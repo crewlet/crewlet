@@ -17,12 +17,12 @@ import (
 // is not a floor that is satisfied, and guessing keeps a node serving over a
 // hole it cannot see — which is the one failure a replicated log has no way to
 // notice later. A node replaying up to the floor serves no read either — the
-// floor is what every node must hold before it answers — but it keeps its
-// seats, being behind rather than wrong. So this is asserted through the two
-// decisions, [statelog.Health.Refusal] and [statelog.Health.Healthy], rather
-// than through one "does it serve" predicate: that predicate had no caller
-// left, and a caller reaching for it to decide the seats would have shed a
-// node that is only replaying.
+// floor is what every node must hold before it answers — but its copy stays
+// in service, being behind rather than wrong. So this is asserted through the
+// two decisions, [statelog.Health.Refusal] and [statelog.Health.Healthy],
+// rather than through one "does it serve" predicate: that predicate had no
+// caller left, and a caller reaching for it to judge the copy would have taken
+// out of service one that is only replaying.
 func TestAnUnreadableFloorTakesTheBadBranch(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
@@ -40,7 +40,7 @@ func TestAnUnreadableFloorTakesTheBadBranch(t *testing.T) {
 			t.Errorf("a %s floor refuses reads with %q, want %q", state, got, want.refusal)
 		}
 		if got := h.Healthy(now, statelog.DeferredSince{}); got != want.healthy {
-			t.Errorf("a %s floor keeps the seats: %v, want %v", state, got, want.healthy)
+			t.Errorf("a %s floor keeps the copy in service: %v, want %v", state, got, want.healthy)
 		}
 		if state.String() == "" || strings.HasPrefix(state.String(), "FloorState(") {
 			t.Errorf("%v has no name an operator could read", int(state))
@@ -111,16 +111,17 @@ func TestACheckpointOneBelowTheFirstRecordHasMissedNothing(t *testing.T) {
 	}
 }
 
-// HOLDING RECORDS THIS BUILD CANNOT DECODE DOES NOT SHED SEATS, UNTIL IT DOES.
+// HOLDING RECORDS THIS BUILD CANNOT DECODE DOES NOT TAKE A COPY OUT OF
+// SERVICE, UNTIL IT DOES.
 //
-// Folding a deferral into "stalled" takes every un-upgraded node out of
+// Folding a deferral into "stalled" takes every un-upgraded copy out of
 // service the moment one upgraded writer publishes — which is exactly the
 // outage the retain rule exists to prevent, arriving through the applier
 // instead of the codec. Past the grace the honest reading changes: "this node
-// cannot run this company's records" is worth moving work for, and a node that
-// fails every call about a growing set of objects while keeping its seats is
-// the same outage in a slower form.
-func TestADeferralShedsSeatsOnlyPastTheGrace(t *testing.T) {
+// cannot run this company's records" is worth sending its readers to another
+// holder for, and a copy that fails every call about a growing set of objects
+// while it goes on serving is the same outage in a slower form.
+func TestADeferralTakesACopyOutOfServiceOnlyPastTheGrace(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
 	base := statelog.Health{
@@ -137,16 +138,103 @@ func TestADeferralShedsSeatsOnlyPastTheGrace(t *testing.T) {
 	held.Deferred = 3
 	fresh := statelog.DeferredSince{Since: now.Add(-time.Minute), Held: true}
 	if !held.Healthy(now, fresh) {
-		t.Fatal("a node holding records for a minute lost its seats — every " +
-			"rolling upgrade this design describes is two heartbeats, and " +
-			"shedding for one takes the whole fleet out at once")
+		t.Fatal("a node holding records for a minute took its copy out of " +
+			"service — every rolling upgrade this design describes is two " +
+			"heartbeats, and taking copies out for one takes every " +
+			"un-upgraded copy out at once")
 	}
 
 	old := statelog.DeferredSince{Since: now.Add(-statelog.DeferralGrace - time.Second), Held: true}
 	if held.Healthy(now, old) {
 		t.Fatalf("a node holding records it cannot decode for longer than %s is "+
-			"still admitting seats — at that point it fails every call about a "+
+			"still serving its copy — at that point it fails every call about a "+
 			"growing set of objects", statelog.DeferralGrace)
+	}
+}
+
+// A SERVING COPY HOLDS A WHOLE STATE AND IS CLOSE TO THE LOG, WHATEVER THE
+// INSTANT SAYS: an established copy that has drained serves at a lag of one —
+// the record in flight a busy log has on most heartbeats — and at the snapshot
+// slack itself, and is behind one record past it or before it has ever
+// drained. Everything Established refuses on the log's own terms, it refuses
+// with the same reason.
+func TestAServingCopyIsDrainedAndWithinTheSlack(t *testing.T) {
+	t.Parallel()
+	ptr := func(v uint64) *uint64 { return &v }
+	copyAt := func(lag uint64, drained bool) statelog.Health {
+		end := uint64(10_000)
+		return statelog.Health{
+			Position:  statelog.Position{Stream: "S", Generation: 1, Seq: end - lag},
+			TrimFloor: ptr(50), FirstSeq: ptr(50), Lag: ptr(lag), LastSeq: ptr(end),
+			Drained: drained,
+		}
+	}
+	for name, tc := range map[string]struct {
+		health statelog.Health
+		ok     bool
+		want   statelog.ReadRefusal
+	}{
+		"caught up":            {health: copyAt(0, true), ok: true},
+		"one record in flight": {health: copyAt(1, true), ok: true},
+		"at the slack":         {health: copyAt(statelog.SnapshotLagSlack, true), ok: true},
+		"past the slack":       {health: copyAt(statelog.SnapshotLagSlack+1, true), want: statelog.RefuseBehind},
+		"never drained":        {health: copyAt(0, false), want: statelog.RefuseBehind},
+		"the end unread":       {health: func() statelog.Health { h := copyAt(0, true); h.Lag, h.LastSeq = nil, nil; return h }(), want: statelog.RefuseBrokerUnreachable},
+		"a floor nobody read":  {health: func() statelog.Health { h := copyAt(0, true); h.TrimFloor = nil; return h }(), want: statelog.RefuseFloorUnknown},
+		"a stream rebuilt":     {health: func() statelog.Health { h := copyAt(0, true); h.StreamRecreated = true; return h }(), want: statelog.RefuseWrongStream},
+		"below the log's start": {health: func() statelog.Health {
+			h := copyAt(0, true)
+			h.FirstSeq, h.TrimFloor = ptr(10_000), ptr(10_000)
+			h.Position.Seq = 10
+			return h
+		}(), want: statelog.RefuseBelowFloor},
+	} {
+		ok, refusal := tc.health.Serving()
+		if ok != tc.ok || refusal != tc.want {
+			t.Errorf("%s: Serving = (%v, %q), want (%v, %q)", name, ok, refusal, tc.ok, tc.want)
+		}
+	}
+	// THE PREMISE of the case the lease was flapping on: admission refuses
+	// the copy with one record in flight, and serving does not.
+	if ok, _ := copyAt(1, true).Established(true); ok {
+		t.Error("the premise: seat admission admits a copy with a record in flight")
+	}
+}
+
+// A COPY ANSWERS A REQUEST WHEN IT IS SERVING OR LEVEL THIS INSTANT: a drained
+// copy with a record in flight answers — a busy company has one on most
+// instants — and so does a copy at a lag of zero that has not yet learned it
+// drained, which is the window a seat admitted at lag zero would otherwise
+// spend refused. A copy that is neither — replaying far behind, or never
+// drained and behind — does not, and every refusal Established makes on the
+// log's own terms is its refusal too.
+func TestACopyAnswersWhenServingOrLevel(t *testing.T) {
+	t.Parallel()
+	ptr := func(v uint64) *uint64 { return &v }
+	copyAt := func(lag uint64, drained bool) statelog.Health {
+		end := uint64(10_000)
+		return statelog.Health{
+			Position:  statelog.Position{Stream: "S", Generation: 1, Seq: end - lag},
+			TrimFloor: ptr(50), FirstSeq: ptr(50), Lag: ptr(lag), LastSeq: ptr(end),
+			Drained: drained,
+		}
+	}
+	for name, tc := range map[string]struct {
+		health statelog.Health
+		ok     bool
+		want   statelog.ReadRefusal
+	}{
+		"drained, a record in flight":    {health: copyAt(1, true), ok: true},
+		"level before the drained latch": {health: copyAt(0, false), ok: true},
+		"never drained and behind":       {health: copyAt(3, false), want: statelog.RefuseBehind},
+		"past the slack":                 {health: copyAt(statelog.SnapshotLagSlack+1, true), want: statelog.RefuseBehind},
+		"a stream rebuilt":               {health: func() statelog.Health { h := copyAt(0, false); h.StreamRecreated = true; return h }(), want: statelog.RefuseWrongStream},
+		"a floor nobody read":            {health: func() statelog.Health { h := copyAt(0, false); h.TrimFloor = nil; return h }(), want: statelog.RefuseFloorUnknown},
+	} {
+		ok, refusal := tc.health.Answers()
+		if ok != tc.ok || refusal != tc.want {
+			t.Errorf("%s: Answers = (%v, %q), want (%v, %q)", name, ok, refusal, tc.ok, tc.want)
+		}
 	}
 }
 
@@ -394,7 +482,7 @@ func TestHealthCarriesEveryFieldItsContractsCite(t *testing.T) {
 // consequences were silent in exactly the way a zero value is: every arm of
 // [Health.Refusal] was unreachable, so an evicted node, a node below the trim
 // floor and a node whose applier had STOPPED all went on serving reads as
-// though current; and [Health.Healthy] could never go false, so the shed the
+// though current; and [Health.Healthy] could never go false, so the step the
 // `deferred_old` alarm promises an operator never happened.
 //
 // A STRUCTURAL TEST rather than a behavioural one, because the defect is
@@ -462,15 +550,15 @@ func TestEveryFieldTheDecisionsReadCanChangeTheAnswer(t *testing.T) {
 				"the answer, so nothing needs to produce it", tc.field, got, tc.want)
 		}
 		if h.Healthy(now, statelog.DeferredSince{}) {
-			t.Errorf("%s set: still Healthy, so a node in this state keeps its seats",
+			t.Errorf("%s set: still Healthy, so a copy in this state keeps serving",
 				tc.field)
 		}
 	}
 
-	// REPLAYING UP TO THE FLOOR IS A REFUSAL AND NOT A SHED. The records
+	// REPLAYING UP TO THE FLOOR IS A REFUSAL AND NOT A FAULT. The records
 	// are on the log and the node is reading them, so a read is told to
-	// come back and the node's seats stay: a copy that is behind catches
-	// up, and no distance behind is a shed, this one included.
+	// come back and the copy stays in service: a copy that is behind
+	// catches up, and no distance behind is a fault, this one included.
 	//
 	// WITH RECORDS PENDING, which is the only way the engine produces the
 	// state: a published floor is at most one past the log's end, so a node
@@ -486,8 +574,8 @@ func TestEveryFieldTheDecisionsReadCanChangeTheAnswer(t *testing.T) {
 			"away from a node that is only catching up", got, statelog.RefuseBehind)
 	}
 	if !replaying.Healthy(now, statelog.DeferredSince{}) {
-		t.Error("a node replaying up to the floor gave up its seats, which moves " +
-			"a company's work off a copy that is behind rather than wrong")
+		t.Error("a node replaying up to the floor was judged wrong, which takes " +
+			"out of service a copy that is behind rather than wrong")
 	}
 	// AND IT IS THE LAST REFUSAL, because it clears on its own only while
 	// the applier moves: a stalled node replaying nothing is stalled.
@@ -497,22 +585,22 @@ func TestEveryFieldTheDecisionsReadCanChangeTheAnswer(t *testing.T) {
 			"not replaying anything", got, statelog.RefuseStalled)
 	}
 
-	// The deferral shed is the one condition that needs a SERIES, so it is
+	// The deferral fault is the one condition that needs a SERIES, so it is
 	// the one whose input is a second argument rather than a field.
 	held := serving()
 	held.Deferred = 1
 	if !held.Healthy(now, statelog.DeferredSince{Since: now.Add(-time.Minute), Held: true}) {
-		t.Error("a deferral inside the grace shed the seats, which would move a " +
-			"company's work on every rolling upgrade")
+		t.Error("a deferral inside the grace took the copy out of service, which " +
+			"would take every un-upgraded copy out on every rolling upgrade")
 	}
 	if held.Healthy(now, statelog.DeferredSince{
 		Since: now.Add(-statelog.DeferralGrace - time.Second), Held: true}) {
-		t.Error("a deferral past the grace kept the seats, which is what the " +
-			"deferred_old alarm already tells an operator has stopped")
+		t.Error("a deferral past the grace kept the copy in service, which is " +
+			"what the deferred_old alarm already tells an operator has stopped")
 	}
 }
 
-// BEING BEHIND DOES NOT SHED SEATS; HAVING STOPPED DOES.
+// BEING BEHIND DOES NOT TAKE A COPY OUT OF SERVICE; HAVING STOPPED DOES.
 //
 // The two facts were one bool, and it was assigned `lag == 0` on every
 // heartbeat — so a node holding a record it had not applied YET read as a node
@@ -521,7 +609,7 @@ func TestEveryFieldTheDecisionsReadCanChangeTheAnswer(t *testing.T) {
 // five seconds later, six times in eight minutes. The distinction this pins is
 // the one [statelog.Health.Healthy]'s whole contract rests on: a copy that is
 // behind catches up, and a copy that has stopped moving does not.
-func TestALaggingNodeKeepsItsSeatsAndAStalledOneDoesNot(t *testing.T) {
+func TestALaggingCopyKeepsServingAndAStalledOneDoesNot(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
 	ptr := func(v uint64) *uint64 { return &v }
@@ -538,9 +626,10 @@ func TestALaggingNodeKeepsItsSeatsAndAStalledOneDoesNot(t *testing.T) {
 	}
 
 	if !behind().Healthy(now, statelog.DeferredSince{}) {
-		t.Fatal("a node seven records behind gave up its seats — with a real " +
-			"model that is every turn on the node interrupted by somebody " +
-			"filing a work item, and the records catch up on their own")
+		t.Fatal("a node seven records behind was judged wrong — its copy would " +
+			"stop serving on every burst of tracker writes, and a single node's " +
+			"seats would be refused every call, while the records catch up on " +
+			"their own")
 	}
 	if code := behind().Refusal(now); code != "" {
 		t.Errorf("a node seven records behind refuses reads with %q; ordinary "+
@@ -554,28 +643,28 @@ func TestALaggingNodeKeepsItsSeatsAndAStalledOneDoesNot(t *testing.T) {
 	far := behind()
 	far.Lag, far.LastSeq = ptr(1_000_000), ptr(1_000_100)
 	if !far.Healthy(now, statelog.DeferredSince{}) {
-		t.Error("a node a million records behind gave up its seats, so a fleet " +
-			"whose peer published a backlog moves the company's work rather " +
-			"than waiting out the replay")
+		t.Error("a node a million records behind was judged wrong, so a fleet " +
+			"whose peer published a backlog takes every copy out of service " +
+			"rather than waiting out the replay")
 	}
 
 	// AND A NODE THAT HAS NEVER DRAINED IS THE SAME KIND OF BEHIND. It is
 	// what a node looks like between its boot and its first catch-up, and
-	// the remedy is the admission gate below, never a shed.
+	// the remedy is the admission gate below, never a fault.
 	fresh := behind()
 	fresh.Drained = false
 	if !fresh.Healthy(now, statelog.DeferredSince{}) {
 		t.Error("a node that has not finished hydrating reports its copy WRONG, " +
-			"so the sweep logs `seats_shed_unserviceable` at WARN every pass " +
-			"for a node whose only fault is that it is still catching up")
+			"so it stops serving a partition whose only fault is that it is " +
+			"still catching up")
 	}
 
-	// THE STALL IS THE ONE THAT DOES SHED: this node owes progress and has
+	// THE STALL IS THE ONE THAT IS A FAULT: this node owes progress and has
 	// made none for the grace, so its rows are frozen rather than moving.
 	stalled := behind()
 	stalled.Stalled = true
 	if stalled.Healthy(now, statelog.DeferredSince{}) {
-		t.Errorf("a node frozen for %s kept its seats — every expectation it "+
+		t.Errorf("a node frozen for %s kept its copy in service — every expectation it "+
 			"forms is stale and every write burns its round budget on a "+
 			"conflict", statelog.StallGrace)
 	}

@@ -227,7 +227,7 @@ func TestAnUnenforcedDecisionSaysWhyAndStaysTrue(t *testing.T) {
 
 // A NAMED TEST EXISTS.
 //
-// `Enforced-by: internal/store.TestOnlyTheApplierWritesTheReplicatedEstate` is
+// `Enforced-by: internal/store.TestOnlyTheApplierWritesThePartitions` is
 // a claim about the tree, and a claim nobody checks is how the register's
 // predecessor came to assert that full-text search was unavailable while
 // internal/textindex shipped a BM25 index. A renamed or deleted test leaves the

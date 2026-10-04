@@ -2,13 +2,20 @@ package engine
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/objstore/collect"
+	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE THREE ALARMS ABOUT THE MACHINE, and the fields nothing filled.
@@ -20,9 +27,9 @@ import (
 // the same silence with an extra step, so this asserts the table fires too.
 func TestTheCapacityAlarmsFireOnWhatThisNodesDiskIsDoing(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
+	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -64,6 +71,122 @@ func TestTheCapacityAlarmsFireOnWhatThisNodesDiskIsDoing(t *testing.T) {
 	}
 }
 
+// THE VOLUME ALARM IS ABOUT THE VOLUME WITH THE LEAST ROOM, measured per
+// volume. `store.replicated_path` may put the replicated estate on a volume of
+// its own, and the reading measured the node estate's volume alone against
+// both files' bytes: a replicated estate filling its own disk never fired. Here
+// the replicated estate sits on a nearly full volume and the node estate on an
+// empty one, and the reading is the nearly full one's — its free space against
+// its own file, never the other volume's space or both files' bytes — and the
+// alarm NAMES it, since an operator has two disks and must know which to grow.
+// A volume that cannot be measured is said and alarmed on, never skipped: the
+// node would otherwise be judged on its roomy volume alone.
+func TestTheVolumeAlarmReadsEachFilesOwnVolume(t *testing.T) {
+	t.Parallel()
+	nodeDir, replicatedDir := t.TempDir(), t.TempDir()
+	db, err := store.OpenNode(t.Context(), nodeDir+"/company.db", store.Options{
+		ReplicatedPath: replicatedDir + "/crewlet-replicated.db"})
+	if err != nil {
+		t.Fatalf("store.OpenNode: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	part, err := db.OpenPartition(t.Context(), storetest.LayoutZero(1))
+	if err != nil {
+		t.Fatalf("open layout 0's partition: %v", err)
+	}
+	nodeSize, err := fileBytes(db.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	replicatedSize, err := fileBytes(part.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	free := map[string]int64{nodeDir: 1 << 40, replicatedDir: 1 << 10}
+	r := &retention{db: db, volumes: func(dir string) (string, int64, error) {
+		return dir, free[dir], nil
+	}}
+	var reading statelog.Reading
+	r.space(&reading)
+	if reading.FreeBytes != 1<<10 || reading.StoreBytes != replicatedSize ||
+		reading.StoreVolume != replicatedDir {
+		t.Fatalf("the reading is %d free against %d stored on %q, want the replicated "+
+			"volume's %d against its own %d on %q", reading.FreeBytes, reading.StoreBytes,
+			reading.StoreVolume, 1<<10, replicatedSize, replicatedDir)
+	}
+	alarms := statelog.Evaluate(reading)
+	if len(alarms) != 1 || alarms[0].Kind != statelog.KindVolumeLow {
+		t.Fatalf("a nearly full volume raised %v, want volume_low", alarms)
+	}
+	if !strings.Contains(alarms[0].Detail, replicatedDir) {
+		t.Errorf("volume_low does not name the volume to grow: %q", alarms[0].Detail)
+	}
+
+	// A VOLUME THAT CANNOT BE MEASURED beside a roomy one is the alarm,
+	// naming it — not a node judged on the roomy one alone.
+	r.volumes = func(dir string) (string, int64, error) {
+		if dir == replicatedDir {
+			return "", 0, fmt.Errorf("engine: measure the free space on %s: input/output error", dir)
+		}
+		return dir, 1 << 40, nil
+	}
+	reading = statelog.Reading{}
+	r.space(&reading)
+	if reading.StoreVolume != nodeDir || !strings.Contains(reading.StoreVolumeUnmeasured, replicatedDir) {
+		t.Fatalf("the reading is of %q with %q unmeasured, want the node volume read and the "+
+			"replicated one named", reading.StoreVolume, reading.StoreVolumeUnmeasured)
+	}
+	alarms = statelog.Evaluate(reading)
+	if len(alarms) != 1 || alarms[0].Kind != statelog.KindVolumeLow ||
+		!strings.Contains(alarms[0].Detail, replicatedDir) {
+		t.Errorf("an unmeasurable store volume raised %v, want volume_low naming it", alarms)
+	}
+
+	// ONE VOLUME UNDER BOTH is one volume's bytes, summed.
+	r.volumes = func(string) (string, int64, error) { return "one", 1 << 40, nil }
+	reading = statelog.Reading{}
+	r.space(&reading)
+	if reading.StoreBytes != nodeSize+replicatedSize {
+		t.Errorf("one volume holding both files is %d stored, want %d", reading.StoreBytes,
+			nodeSize+replicatedSize)
+	}
+}
+
+// THE TIGHTEST VOLUME IS THE ONE WITH THE SMALLEST ROOM FOR ITS OWN BYTES, and a
+// volume holding nothing is never it.
+func TestTheTightestVolumeIsTheOneNearestItsAlarm(t *testing.T) {
+	t.Parallel()
+	file := func(volume string, free, size int64) storedFile {
+		return storedFile{volume: volume, dir: "/" + volume, free: free, size: size}
+	}
+	for name, tc := range map[string]struct {
+		files []storedFile
+		want  storeVolume
+	}{
+		"no files": {nil, storeVolume{}},
+		"two files, one volume": {[]storedFile{file("a", 100, 10), file("a", 100, 30)},
+			storeVolume{"/a", 100, 40}},
+		"the smaller ratio, not the smaller free": {
+			[]storedFile{file("big", 1000, 900), file("small", 50, 5)}, storeVolume{"/big", 1000, 900}},
+		"an empty volume beside a full one": {
+			[]storedFile{file("empty", 1, 0), file("full", 10, 100)}, storeVolume{"/full", 10, 100}},
+		"a full volume beside an empty one": {
+			[]storedFile{file("full", 10, 100), file("empty", 1, 0)}, storeVolume{"/full", 10, 100}},
+		// Tens of terabytes each: the cross products overflow an int64,
+		// and wrapped they choose the roomier volume in either order.
+		"sizes past what a product of int64s holds": {
+			[]storedFile{file("a", 14773780071959, 34330076720781), file("b", 27431250736051, 18740855235886)},
+			storeVolume{"/a", 14773780071959, 34330076720781}},
+		"sizes past what a product of int64s holds, reversed": {
+			[]storedFile{file("b", 27431250736051, 18740855235886), file("a", 14773780071959, 34330076720781)},
+			storeVolume{"/a", 14773780071959, 34330076720781}},
+	} {
+		if got := tightestVolume(tc.files); got != tc.want {
+			t.Errorf("%s: %+v, want %+v", name, got, tc.want)
+		}
+	}
+}
+
 // A MISSING SIDECAR IS ZERO BYTES, NOT AN UNMEASURABLE ONE.
 //
 // A database with nothing uncheckpointed has no -wal at all, which is the
@@ -101,9 +224,9 @@ func TestAnIdlePoolRecordsNothingRatherThanAZeroWait(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
 	}
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
+	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -157,10 +280,13 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	recorder.Add(metrics.StatelogRecordsGated, 2,
 		metrics.Attrs{"gate": "deleted", "subject_kind": "task"})
 	recorder.Add(metrics.TrackerFeedUnreadable, 3, metrics.Attrs{"source": "tracker"})
-	recorder.Add(metrics.StatelogBarrierAppends,
-		uint64(3*statelog.LinearizableReadsPerDay), metrics.Attrs{"domain": "tracker"})
+	trackerLog := estateLog(tracker.Domain{})
+	recorder.Add(metrics.StatelogBarriersApplied,
+		uint64(3*statelog.Census{Seats: 100, Logs: 1}.Expected()),
+		metrics.Attrs{"domain": "tracker", "stream": estateSpec(tracker.Domain{}).Name})
 
-	r := &retention{metrics: recorder}
+	r := &retention{metrics: recorder, state: censusLogs(LayoutZero(), trackerLog),
+		seats: func() int { return 100 }}
 	var reading statelog.Reading
 	r.observed(&reading)
 
@@ -175,10 +301,11 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 		t.Errorf("three untranslatable records reached the reading as %d",
 			reading.FeedUnreadable)
 	}
-	if reading.LinearizableReadsExpected != statelog.LinearizableReadsPerDay {
-		t.Errorf("the declared read rate reached the reading as %d, so "+
+	if reading.LinearizableReadsExpected != (statelog.Census{Seats: 100, Logs: 1}).Expected() ||
+		reading.CensusLog != trackerLog.String() {
+		t.Errorf("the declared read rate reached the reading as %d on %q, so "+
 			"`census_drift` compares against nothing",
-			reading.LinearizableReadsExpected)
+			reading.LinearizableReadsExpected, reading.CensusLog)
 	}
 
 	fired := map[statelog.Kind]bool{}
@@ -220,16 +347,18 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 // nothing else: no collector series, no log line, no page.
 //
 // AND IT IS EVALUATED ON A NODE THAT HOLDS NO DUTY, which is the other half. A
-// reading describes ONE node, so a table evaluated only where the trim's
+// reading describes ONE node, so a table evaluated only where a trim's
 // singleton lease happens to sit would report the lease holder's health as the
-// fleet's — and the wedged node is the one nobody hears from.
+// fleet's — and the wedged node is the one nobody hears from. The node here
+// runs no log at all, so it holds no partition's trim duty and is asked for
+// none: the table is evaluated all the same.
 func TestTheAlarmTableIsEvaluatedOnANodeThatHoldsNoDuty(t *testing.T) {
 	t.Parallel()
 	recorder, err := metrics.New()
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
 	}
-	refused := 0
+	asked := 0
 	r := &retention{
 		fleet:   coordmem.NewFleet(),
 		state:   &stateLog{},
@@ -237,16 +366,16 @@ func TestTheAlarmTableIsEvaluatedOnANodeThatHoldsNoDuty(t *testing.T) {
 		metrics: recorder,
 		alarms:  statelog.NewTracker(recorder, nil),
 		pooled:  map[string]poolCounters{},
-		claim: func(context.Context) (bool, error) {
-			refused++
-			return false, nil
+		claim: func(context.Context, statelog.PartitionID) (bool, error) {
+			asked++
+			return true, nil
 		},
 	}
 	r.tick(t.Context())
 
-	if refused != 1 {
-		t.Fatalf("the duty was asked for %d time(s); this test is not "+
-			"exercising the path it names", refused)
+	if asked != 0 {
+		t.Fatalf("a node running no log was asked for %d partition duties; it "+
+			"holds no partition, so it has none to claim", asked)
 	}
 	var series int
 	for _, snapshot := range recorder.Read() {
@@ -259,5 +388,242 @@ func TestTheAlarmTableIsEvaluatedOnANodeThatHoldsNoDuty(t *testing.T) {
 			"series — every kind is written on every observation, firing or "+
 			"not, because a series that disappears reads as `no data` on "+
 			"every dashboard", series, len(statelog.Kinds()))
+	}
+}
+
+// censusLogs is a state log running the given logs of layout, with nothing
+// behind them but what the census reads: which log each is, and its stream.
+func censusLogs(layout statelog.Layout, ids ...statelog.LogID) *stateLog {
+	s := &stateLog{layout: layout}
+	var running []*runningLog
+	for _, id := range ids {
+		d, err := registeredDomain(id.Domain)
+		if err != nil {
+			panic(err)
+		}
+		running = append(running, &runningLog{domain: d, id: id, key: id.String(),
+			spec: layout.StreamSpec(d, id)})
+	}
+	return runsLogs(s, running...)
+}
+
+// A LOG IS HELD TO ITS OWN SHARE OF THE CENSUS, AT THE RATE IT RECEIVES.
+//
+// Three things the fixed, node-local figure got wrong. It was one number for
+// every company, so a two-hundred-seat company doing the reference company's
+// work per seat read as drifting. It was compared with the barriers THIS NODE
+// appended, which on a fleet is only this node's share of the reads — the
+// rate the log receives, from every node, is what its sizing is about, and it
+// is what every node's applier sees. And it was one figure for the estate,
+// where a partitioned domain divides its census across its logs as it divides
+// its ceiling. The vector log, which no read appends to, is held to nothing.
+//
+// AND THE ENGINE'S OWN READS ARE PART OF WHAT A LOG TAKES. The object store's
+// collector pins the tracker's estate on a fixed cadence, whatever the seats
+// do, so a small company doing exactly its census would put more barriers on
+// its log than its seats' share allowed — and fire the alarm, louder the
+// smaller it was.
+func TestALogIsHeldToItsOwnShareOfTheCensus(t *testing.T) {
+	t.Parallel()
+	zero := LayoutZero()
+	trackerLog, vectorLog := estateLog(tracker.Domain{}), estateLog(search.Domain{})
+	partitioned := partitionedTestLayout()
+	second := statelog.LogID{Domain: "tracker",
+		Partition: statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}}
+	stream := func(l statelog.Layout, id statelog.LogID) string { name, _ := l.Stream(id); return name }
+
+	for _, tc := range []struct {
+		name       string
+		layout     statelog.Layout
+		logs       []statelog.LogID
+		seats      int
+		background map[string]int
+		applied    map[statelog.LogID]int
+		appended   int
+		fires      bool
+		log        string
+		expected   int
+	}{
+		{
+			name: "one seat, at its census beside the collector",
+			// 125 a day from the seat and the collector's pins
+			// beside it: counted in the census, so the seat's own
+			// reads are measured against what the log really
+			// carries.
+			layout: zero, logs: []statelog.LogID{trackerLog}, seats: 1,
+			background: map[string]int{"tracker": collect.PinsPerDay},
+			applied:    map[statelog.LogID]int{trackerLog: 125 + collect.PinsPerDay},
+			fires:      false, log: "tracker", expected: 125 + collect.PinsPerDay,
+		},
+		{
+			name:   "the collector is no cover past twice the whole census",
+			layout: zero, logs: []statelog.LogID{trackerLog}, seats: 1,
+			background: map[string]int{"tracker": collect.PinsPerDay},
+			applied:    map[statelog.LogID]int{trackerLog: 2*(125+collect.PinsPerDay) + 1},
+			fires:      true, log: "tracker", expected: 125 + collect.PinsPerDay,
+		},
+		{
+			name: "a 200-seat company at 1.2 times its per-seat census",
+			// 30 000 a day: past twice the fixed 12 500, inside twice
+			// this company's 25 000.
+			layout: zero, logs: []statelog.LogID{trackerLog}, seats: 200,
+			applied: map[statelog.LogID]int{trackerLog: 30_000},
+			fires:   false, log: "tracker", expected: 25_000,
+		},
+		{
+			name:   "a 100-seat company at three times its census",
+			layout: zero, logs: []statelog.LogID{trackerLog}, seats: 100,
+			applied: map[statelog.LogID]int{trackerLog: 37_501},
+			fires:   true, log: "tracker", expected: 12_500,
+		},
+		{
+			name:   "this node's own appends, however many, are not the log's rate",
+			layout: zero, logs: []statelog.LogID{trackerLog}, seats: 100,
+			appended: 100_000,
+			fires:    false, log: "tracker", expected: 12_500,
+		},
+		{
+			name:   "the log's rate, from every node, past this node's own appends",
+			layout: zero, logs: []statelog.LogID{trackerLog}, seats: 100,
+			applied: map[statelog.LogID]int{trackerLog: 30_000}, appended: 10_000,
+			fires: true, log: "tracker", expected: 12_500,
+		},
+		{
+			name: "a partition past its share while its domain's other log is idle",
+			// Three seats: 375 a day, 188 per tracker partition (rounded
+			// up) and all 375 for the pages log. tracker.001 at 377 is
+			// past twice its 188; pages at 700 is inside twice its 375.
+			layout: partitioned,
+			logs: []statelog.LogID{
+				{Domain: "pages", Partition: statelog.PartitionID{Space: statelog.SpacePages}},
+				{Domain: "tracker", Partition: statelog.PartitionID{Space: statelog.SpaceTracker}},
+				second,
+			},
+			seats: 3,
+			applied: map[statelog.LogID]int{second: 377,
+				{Domain: "pages", Partition: statelog.PartitionID{Space: statelog.SpacePages}}: 700},
+			fires: true, log: second.String(), expected: 188,
+		},
+		{
+			name:   "the vector log, which no read appends to",
+			layout: zero, logs: []statelog.LogID{vectorLog, trackerLog}, seats: 1,
+			applied: map[statelog.LogID]int{vectorLog: 1_000_000},
+			fires:   false, log: "tracker", expected: 125,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			recorder, err := metrics.New()
+			if err != nil {
+				t.Fatalf("recorder: %v", err)
+			}
+			for id, n := range tc.applied {
+				recorder.Add(metrics.StatelogBarriersApplied, uint64(n),
+					metrics.Attrs{"domain": id.Domain, "stream": stream(tc.layout, id)})
+			}
+			if tc.appended > 0 {
+				recorder.Add(metrics.StatelogBarrierAppends, uint64(tc.appended),
+					metrics.Attrs{"domain": "tracker"})
+			}
+			r := &retention{metrics: recorder, state: censusLogs(tc.layout, tc.logs...),
+				seats:      func() int { return tc.seats },
+				background: func(domain string) int { return tc.background[domain] }}
+			var reading statelog.Reading
+			r.observed(&reading)
+			if reading.CensusLog != tc.log || reading.LinearizableReadsExpected != tc.expected {
+				t.Errorf("the census names %q expecting %d a day, want %q expecting %d",
+					reading.CensusLog, reading.LinearizableReadsExpected, tc.log, tc.expected)
+			}
+			fired := false
+			for _, alarm := range statelog.Evaluate(reading) {
+				fired = fired || alarm.Kind == statelog.KindCensusDrift
+			}
+			if fired != tc.fires {
+				t.Errorf("census_drift fired %v on %d a day against %d, want %v",
+					fired, reading.LinearizableReads, reading.LinearizableReadsExpected, tc.fires)
+			}
+		})
+	}
+}
+
+// THE CENSUS COUNTS THE RUNNING COMPANY'S AGENT SEATS.
+//
+// A log's share of the census is per seat, so the trim's reading has to be
+// handed the company this node is running — and a wiring that handed it none
+// would still produce a number, the one seat an empty company is counted as,
+// and hold a company of any size to that: an alarm firing on every company past
+// two seats' worth of reads.
+func TestTheCensusCountsTheRunningCompanysSeats(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNodeOf(t, `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${K}"]
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+    manages: ["CTO", "Engineer"]
+  - name: CTO
+    handle: cto
+    llm: zulu
+  - name: Engineer
+    handle: eng
+    llm: zulu
+`)
+	r := e.retention.Load()
+	if r == nil {
+		t.Fatal("a node running the state log started no trim")
+	}
+	want := len(e.Company().Seats())
+	if want < 2 {
+		t.Fatalf("the test company has %d agent seat(s), which cannot tell a "+
+			"census counting them from one counting the single seat it never "+
+			"goes below", want)
+	}
+	if r.seats == nil {
+		t.Fatalf("the trim was handed no seat count, so the census holds a "+
+			"%d-seat company to one seat's reads", want)
+	}
+	if got := r.seats(); got != want {
+		t.Errorf("the census counts %d seats, and the running company has %d", got, want)
+	}
+	if r.background == nil {
+		t.Error("the trim was handed nothing the engine reads on its own, so the " +
+			"census holds a small company's log to its seats' reads alone")
+	}
+}
+
+// THE ENGINE'S OWN READS ARE THE OBJECT COLLECTOR'S PINS, ONCE FOR THE FLEET.
+//
+// The collector pins the estate of every domain a declared table names, on a
+// fixed cadence — a collection hourly and an audit daily — and ONE collector
+// runs in the fleet, so the barriers a day the engine puts on each of those
+// logs is its count, never a count per member; on any other log, nothing; and
+// on a node running no object store, nothing.
+func TestTheEnginesOwnReadsAreTheCollectorsPins(t *testing.T) {
+	t.Parallel()
+	if got := (&Engine{}).backgroundBarriers(tracker.Domain{}.Name()); got != 0 {
+		t.Errorf("a node with no object store puts %d a day on the tracker's log, want none", got)
+	}
+	e := &Engine{objects: &objectStore{}}
+	if got := e.backgroundBarriers(tracker.Domain{}.Name()); got != collect.PinsPerDay {
+		t.Errorf("the collector puts %d a day on the tracker's log, want %d", got, collect.PinsPerDay)
+	}
+	for _, other := range []statelog.Domain{pages.Domain{}, search.Domain{}} {
+		if got := e.backgroundBarriers(other.Name()); got != 0 {
+			t.Errorf("the collector puts %d a day on the %s log, which no declared "+
+				"table names", got, other.Name())
+		}
+	}
+	perDay := int(24*time.Hour/collect.CollectInterval) + int(24*time.Hour/collect.AuditInterval)
+	if collect.PinsPerDay != perDay {
+		t.Errorf("the collector pins %d times a day, and a collection every %v and an "+
+			"audit every %v is %d", collect.PinsPerDay, collect.CollectInterval,
+			collect.AuditInterval, perDay)
 	}
 }

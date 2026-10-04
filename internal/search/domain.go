@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -33,10 +32,22 @@ const (
 	//
 	// ONE MESSAGE PER SOURCE, so the stream's size is the corpus rather
 	// than its history: at the packed 12 KiB a 3 072-wide vector costs,
-	// plus its envelope, 740 000 sources — this engine's declared
-	// supported corpus per node — is ≈ 9.1 GB. Sixteen gibibytes is that
-	// with room for the width to change under it and for the transition
-	// window in which both models' records are on the stream.
+	// plus its envelope, ≈ 12.3 KB a source. The ceiling is the mutation
+	// log's declared one (the tracker domain's 16 GiB), because a node
+	// derives both from the same share of the stream volume
+	// (config.Stream.VectorsMaxBytes) — so this harness sizes the two as a
+	// node does. At that figure it holds a model change, which puts the
+	// whole corpus in the window at once, twice over for the reference
+	// company's fifth year (8.46 GB).
+	//
+	// It is NOT sized from the corpus one node can SEARCH, and it must
+	// not be: that is ≈ 345 000 sources idle and ≈ 136 000 under eight
+	// concurrent readers through the full scan, ≈ 545 000 and ≈ 183 000
+	// through an index at its probe ceiling (see [SemanticScanBudget]) —
+	// between ≈ 1.7 GB and ≈ 6.7 GB of messages. A corpus past those
+	// figures is a fleet dividing its buckets, and every data node still
+	// holds every vector — so the log carries the whole corpus however the
+	// search is divided.
 	//
 	// Crossing it REFUSES an append rather than dropping the oldest
 	// record. A dropped vector is a document that silently stops being
@@ -71,12 +82,9 @@ const (
 	VectorLogDuplicates = 2 * time.Minute
 )
 
-// Stream is the vector domain's compacted changelog.
-func (Domain) Stream() statelog.StreamSpec {
-	return statelog.StreamSpec{
-		Name:          topics.TrackerVectorsStream,
-		Subjects:      []string{topics.TrackerVectorsWildcard},
-		SubjectPrefix: topics.TrackerVectorsPrefix,
+// StreamShape is what every one of the vector domain's compacted changelogs is.
+func (Domain) StreamShape() statelog.StreamShape {
+	return statelog.StreamShape{
 		MaxBytes:      VectorLogMaxBytes,
 		MaxPerSubject: 1,
 		MaxAge:        VectorLogMaxAge,
@@ -88,6 +96,34 @@ func (Domain) Stream() statelog.StreamSpec {
 		// would be a row nothing writes and nothing reads.
 		ArbitratedKinds: nil,
 	}
+}
+
+// PartitionOf is the partition a vector record belongs to: the one partition
+// that carries the vector domain's log ([statelog.Layout.OnlyPartition]).
+//
+// EVERY RECORD THIS LOG CARRIES IS THE DOMAIN'S OWN — an embed, a forget, and
+// the index's centroids, reassign and measure records — because it keeps no
+// eviction and no generation record and has no read index to append a
+// barrier. A barrier is still answered as the framework's, belonging to
+// whichever log it is on, so the answer does not depend on which domains
+// happen to read linearizably. This build keys no source to a partition, so a
+// layout that divides the vectors places nothing: every record answers the
+// zero partition, which no log carries, rather than being guessed onto a log.
+func (Domain) PartitionOf(l statelog.Layout, env statelog.Envelope) (statelog.PartitionID, bool) {
+	if env.Kind == statelog.BarrierKind {
+		return statelog.PartitionID{}, false
+	}
+	return l.OnlyPartition(Domain{}.Name()), true
+}
+
+// ScopePartition is the partition a scope path lies in — where
+// [Domain.PartitionOf] places its record — or none for the domain's own root,
+// which names every vector on whichever log the record is written to.
+func (Domain) ScopePartition(l statelog.Layout, path string) (statelog.PartitionID, bool) {
+	if path == ScopeRoot {
+		return statelog.PartitionID{}, false
+	}
+	return l.OnlyPartition(Domain{}.Name()), true
 }
 
 // RecordVersion is the record shape this build reads.
@@ -146,6 +182,19 @@ func (Domain) Tables() map[string]statelog.TableClass {
 		// travels anyway, because rebuilding half a million of them on
 		// an adopting node is work a copy already did.
 		"kb_vectors_bin": statelog.Derived,
+		// The installed semantic index (ADR-0028) — its head, its
+		// centroids and the rollout its training cut: written only by
+		// applying a centroids record, and not recomputable in this file
+		// — it is a training over every code in the partition — so they
+		// travel, and a node adopting a snapshot adopts the index with
+		// them. Divergent for kb_vectors' reason: no identity is claimed.
+		"kb_ivf":           statelog.Divergent,
+		"kb_ivf_centroids": statelog.Divergent,
+		"kb_ivf_rollout":   statelog.Divergent,
+		// How many rows of each source every list holds: a count of
+		// kb_vectors_bin under kb_ivf, both in this file. It travels for
+		// kb_vectors_bin's reason.
+		"kb_ivf_lists": statelog.Derived,
 
 		"vectors_log_deferred":       statelog.Local,
 		"vectors_log_deferred_scope": statelog.Local,
@@ -208,8 +257,10 @@ func (Domain) FeedGroup() string { return "" }
 // removed by a forget record, so there is no permanent deletion marker to
 // consult and no guarding row a first write has to see. It publishes
 // additively and arbitrates nothing.
-func NewRows(db *store.DB) (statelog.Rows, error) {
-	return statelog.NewRows(db, Domain{},
+//
+// spec is the log the publisher writes, whose checkpoint the seam reads.
+func NewRows(db store.PartitionReader, spec statelog.StreamSpec) (statelog.Rows, error) {
+	return statelog.NewRows(db, Domain{}, spec,
 		func(context.Context, *sql.Tx, statelog.Subject) (bool, bool, error) {
 			return false, false, nil
 		})

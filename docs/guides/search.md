@@ -16,7 +16,8 @@ A hybrid search runs two rankers and fuses them:
 
 - **Lexical** — BM25 over the engine's own inverted list, in this node's
   database.
-- **Semantic** — a two-stage vector scan over the replicated vectors.
+- **Semantic** — a two-stage vector search over the replicated vectors, whose
+  first stage probes the corpus's semantic index when it has one.
 
 Every indexed document carries a **search shard**: a stable hash of its own
 identity into 64 fixed buckets, written beside the row in both estates by the
@@ -90,6 +91,41 @@ A keyword search sends no vector at all, so a participant runs no vector scan
 for it; the rankers a query needs travel with it, and the asking node fuses
 only the ones it asked for even from a participant on an older build that ran
 both.
+## How big a corpus one node scans
+
+The semantic scan has a **one-second budget**, and how much fits inside it
+depends on how many searches the node is running *at the same moment* — seats
+taking turns, the dashboard, a person searching — and on which **first stage**
+answers: the full scan of every sign code, or the corpus's semantic index,
+which reads only the lists nearest the query (see
+[the knowledge system](../concepts/knowledge-system.md#the-first-stage-is-an-index-over-the-codes)).
+Measured side by side in one run, at 3 072 dimensions on four cores, p95, over
+40 000 sources of the test fixture's topical corpus — where the index's
+training chose to read **half** its lists:
+
+| Searches in flight | Full scan, per document | Inside one second | Index, per document | Inside one second |
+|---|---|---|---|---|
+| 1 (an idle node) | 2.90 µs | ≈ 345 000 | 1.84 µs | ≈ 545 000 |
+| 8 | 7.34 µs | ≈ 136 000 | 5.48 µs | ≈ 183 000 |
+
+The second row is the one for a node that is running a company. The metric
+`crewlet.tracker.search.concurrency` says which row your node is actually on;
+see [Metrics](../reference/metrics.md). The index's column is **per probe
+share**: an index that reads an eighth of its lists — which the same corpus's
+training chooses at 120 000 sources — reads a quarter of the rows this one
+does, and a corpus with no index is on the scan's column. So is a search
+**narrowed** to a small share of the corpus — to the pages in a corpus
+that is mostly tasks, or to one container: it reads lists until it has seen
+as many of its own rows as an unfiltered search reads, and past half the
+lists it runs the scan instead, which reads every row its filter keeps. `crewlet search
+eval` names the first stage and the share. Every figure here is a benchmark on
+one machine — the scan's own benchmark measured 2.58 µs and 6.14 µs on a
+quieter host — so treat them as a projection until the benchmarks have run on
+yours; [Replication](replication.md#three-things-ci-cannot-prove) says the
+same.
+
+Past the row your node is on, a single node's search is slower than its budget
+and `search_slow` fires. A fleet divides the scan, below.
 
 ---
 
@@ -104,9 +140,12 @@ sort the live node ids, give each a contiguous range, hand the remainder to the
 first few. 64 buckets over three nodes is 22, 21, 21.
 
 Below that floor a search is answered by the asking node alone. The floor is
-not a preference — a broker round trip is about a millisecond and 10 000
-documents is about 13 ms of scanning, so under it a fan-out spends more wall
-clock arranging the work than doing it.
+not a preference — a broker round trip is about a millisecond, and a semantic
+scan of 10 000 documents measures 49 ms at p95 on an idle node and 125 ms with
+eight searches in flight. Under it the scan's fixed cost dominates (its
+per-document cost at 10 000 is nearly twice its cost at 40 000), and a fan-out
+divides the documents but makes every node pay that fixed cost again, so it
+spends more wall clock arranging the work than it saves.
 
 **More nodes is not always faster, and the limit is CPU rather than count.**
 Measured on four cores over 4 000 documents, with every participant in one
@@ -213,6 +252,19 @@ broker. A search that returned nothing because the broker hiccupped would be a
 fleet-wide outage of a read every node can serve alone, so only the *peers'*
 ranges can go missing.
 
+### When the estate does not answer
+
+The bucket division above is how the corpus is scanned. On a node without the
+`data` role the search itself is asked of a data node — the estate is one
+partition, `estate.000`, held whole by every data node — and an answer that
+could not be had from any of them is **named** on the result rather than
+returned as an empty list: nobody serves it, its holder did not answer, was
+behind, or failed. A seat is told the knowledge base did not answer and that
+the list may be incomplete, and an empty answer with the estate missing is
+never told "nothing matched". The bucket coverage above stays what it is,
+beside it: the two say different things — a range of the corpus unscanned,
+and the estate not reached at all.
+
 ---
 
 ## The index also derives a page's backlinks
@@ -248,8 +300,20 @@ re-read once, and until that lap finishes the node reports `building`.
    configuration and no rebuild.
 3. **Check `recall_below_floor`.** A corpus whose vectors are behind is
    answering semantically from a fraction of itself.
+4. **Check the first stage.** `crewlet search eval` says whether searches are
+   probing the corpus's index or scanning, and why — unfiltered, and for
+   each narrowed shape how many of its searches scanned. A corpus scans
+   below 1 024 sources, while a model change is re-embedding it, when its
+   training measured that no index reading half its lists or fewer meets the
+   recall floor in every shape — which is a property of the corpus, and
+   `ivf_recall_below_floor` says when it is the codes rather than the index
+   that fall short — and throughout a rolling upgrade, until every node
+   applying the vector log runs a build that reads the index's records (the
+   duty logs `search_index_held`, naming the nodes it waits for; an offline
+   node on an old build holds it until it returns upgraded or is evicted).
 
-There is no index to tune, no shard count to set and no routing table to
-maintain. The bucket count is fixed for the life of a deployment: changing it
-re-buckets every document, which costs a full index rebuild rather than a
-rebalance.
+There is nothing to tune: the index's list count follows the corpus, how many
+lists a search reads is its own training's measurement, and there is no shard
+count to set and no routing table to maintain. The bucket count is fixed for
+the life of a deployment: changing it re-buckets every document, which costs a
+full index rebuild rather than a rebalance.

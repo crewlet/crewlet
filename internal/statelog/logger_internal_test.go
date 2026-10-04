@@ -30,42 +30,49 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 	t.Parallel()
 
 	runner, err := NewRunner(RunnerDeps{
-		Domain: loggerProbe{}, Applier: struct{ Applier }{},
+		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Applier: struct{ Applier }{},
+		Layout: EstateLayout(loggerProbe{}.Name()), LogID: loggerProbeLog,
 		Fetch: struct{ Fetcher }{}, Log: struct{ CheckpointLog }{},
-		Node: struct{ NodeEstate }{}, DB: struct{ Estate }{},
+		Node: nodeProbe{}, DB: struct{ Estate }{},
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
 	publisher, err := NewPublisher(Deps{
-		Domain: loggerProbe{}, Log: struct{ Appender }{}, Rows: struct{ Rows }{},
-		Fence: struct{ Fence }{}, Gates: struct{ Gates }{},
-		Waiter: struct{ Waiter }{}, Identity: struct{ Identity }{},
+		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Log: struct{ Appender }{},
+		Records: struct{ LogReader }{}, Rows: struct{ Rows }{},
+		Layout: EstateLayout(loggerProbe{}.Name()), LogID: loggerProbeLog,
+		Holding: ServesOnly(loggerProbeLog.Partition),
+		Fence:   struct{ Fence }{}, Gates: struct{ Gates }{},
+		Waiter: struct{ Waiter }{}, Voids: struct{ Voids }{}, Identity: struct{ Identity }{},
 		NodeID: "node-a", Generation: func() uint32 { return 1 },
 	})
 	if err != nil {
 		t.Fatalf("NewPublisher: %v", err)
 	}
 	snapshotter, err := NewSnapshotter(SnapshotDeps{
-		Domains: []Registered{{Domain: loggerProbe{}}}, DB: &store.DB{},
-		Dir: t.TempDir(), NodeID: "node-a",
-		Counted:  func(context.Context) (int, error) { return 2, nil },
-		Interval: time.Hour,
+		Layout: EstateLayout(loggerProbe{}.Name()), Partition: EstatePartition,
+		Domains: []Registered{{Domain: loggerProbe{}, Log: loggerProbeLog, Spec: loggerProbeSpec()}},
+		File:    (&store.DB{}).PartitionHandle("estate.000"),
+		Dir:     t.TempDir(), NodeID: "node-a",
+		Recipients: func(context.Context) (int, error) { return 1, nil },
+		Interval:   time.Hour,
 	})
 	if err != nil {
 		t.Fatalf("NewSnapshotter: %v", err)
 	}
 	donor, err := NewDonor(DonorDeps{
-		NodeID: "node-a",
+		NodeID: "node-a", Layout: EstateLayout(loggerProbe{}.Name()),
+		Keeps:  KeepsOnly(EstatePartition).Keeps,
 		Dial:   func(context.Context) (*nats.Conn, error) { return nil, nil },
-		Newest: func() (Manifest, bool) { return Manifest{}, false },
+		Newest: func(PartitionID) (Manifest, bool) { return Manifest{}, false },
 		Path:   func(Manifest) string { return "" },
 	})
 	if err != nil {
 		t.Fatalf("NewDonor: %v", err)
 	}
 	adopter, err := NewAdopter(AdoptDeps{
-		Domains:  map[string]Registered{loggerProbe{}.Name(): {Domain: loggerProbe{}}},
+		Domains:  map[string]Registered{loggerProbe{}.Name(): {Domain: loggerProbe{}, Log: loggerProbeLog, Spec: loggerProbeSpec()}},
 		LivePath: "replicated.db", NodeID: "node-a", Conn: &nats.Conn{},
 		Need: func(context.Context) (OfferRequest, error) { return OfferRequest{}, nil },
 		Hold: func(context.Context, map[string]uint64) (func(), error) {
@@ -111,16 +118,36 @@ const loggerProbeStream = "CREWLET_LOGGER_PROBE_LOG"
 
 func (loggerProbe) Name() string { return "logger_probe" }
 
-func (loggerProbe) Stream() StreamSpec {
-	return StreamSpec{
-		Name:            loggerProbeStream,
-		Subjects:        []string{"crewlet.loggerprobe.log.>"},
-		SubjectPrefix:   "crewlet.loggerprobe.log",
+func (loggerProbe) StreamShape() StreamShape {
+	return StreamShape{
 		MaxBytes:        16 << 20,
 		Duplicates:      2 * time.Minute,
 		Replay:          ReplayStrict,
 		ArbitratedKinds: []string{"object"},
 	}
+}
+
+// loggerProbeLog is the probe's one log, in layout 0's estate.
+var loggerProbeLog = LogID{Domain: loggerProbe{}.Name(), Partition: EstatePartition}
+
+// loggerProbeSpec is the probe's one log's stream. Named by hand rather than by a
+// layout, because the probe's name is not one the partition grammar can
+// spell, and what these cases construct is indifferent to the name.
+func loggerProbeSpec() StreamSpec {
+	return StreamSpec{
+		Name:          loggerProbeStream,
+		Subjects:      []string{"crewlet.loggerprobe.log.>"},
+		SubjectPrefix: "crewlet.loggerprobe.log",
+		StreamShape:   loggerProbe{}.StreamShape(),
+	}
+}
+
+func (loggerProbe) PartitionOf(Layout, Envelope) (PartitionID, bool) {
+	return PartitionID{}, false
+}
+
+func (loggerProbe) ScopePartition(Layout, string) (PartitionID, bool) {
+	return PartitionID{}, false
 }
 
 func (loggerProbe) RecordVersion() int                { return 1 }
@@ -134,3 +161,10 @@ func (loggerProbe) OpsTable() string                  { return "" }
 func (loggerProbe) ReadinessInput() bool              { return false }
 func (loggerProbe) ClaimsIdentity() bool              { return false }
 func (loggerProbe) FeedGroup() string                 { return "" }
+
+// nodeProbe is a node estate that is nothing but its kind: a runner checks it
+// was handed the node's own file, and the tests that use this never reach a
+// row of it.
+type nodeProbe struct{ NodeEstate }
+
+func (nodeProbe) Estate() store.Estate { return store.EstateNode }

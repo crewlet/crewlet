@@ -67,7 +67,9 @@
 //
 //	(lease, nil)  — held. Proceed.
 //	(nil, nil)    — definitively NOT held: lapsed, moved, or advanced.
-//	                Shed the work it covered, now.
+//	                Shed the work it covered, now. (A claim's definite
+//	                "no" also says why — see [Refusal] — and is still
+//	                never an error.)
 //	(nil, err)    — UNKNOWN. The store could not be reached or did not
 //	                answer. This says NOTHING about ownership: the record
 //	                is untouched and probably still held. Keep the seats,
@@ -137,6 +139,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -182,8 +185,8 @@ var ErrUnavailable = errors.New("coordination store unavailable")
 // ErrTTLTooLong reports a claim or renew asking for a TTL the store cannot
 // honour.
 //
-// An ERROR, never a (nil, nil) refusal: nobody else holds the resource, the
-// caller asked for a deadline the store cannot keep. And never a silent clamp,
+// An ERROR, never a [Refusal]: nobody else holds the resource, the caller
+// asked for a deadline the store cannot keep. And never a silent clamp,
 // because a heartbeat computes its next tick from [Lease.ExpiresAt], so a
 // deadline quietly cut short has the holder renewing too late and losing what
 // it still holds.
@@ -221,8 +224,8 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // A backend that stores duties apart from seats (the embedded KV does) meets a
 // build that stored them together, and two builds locking one duty in two
 // places would both hold it. The rule every such backend follows: a duty claim
-// is REFUSED, as the ordinary (nil, nil), while any node of a build that
-// predates the move is live, and a holder's own re-claim is refused with it so
+// is REFUSED, [RefusedLayout], while any node of a build that predates the move
+// is live, and a holder's own re-claim is refused with it so
 // the duty stops at its next tick. An older node never looks for the newer
 // record, so this is the only side that can wait. See the kv package doc for
 // how a backend tells the two builds apart, and for the one window the check
@@ -238,6 +241,12 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // running fleet (the KV backend only ever raises its duty bucket's age);
 // lowering it leaves an existing bucket older than it needs to be, which costs
 // nothing, because no duty record is judged by the bucket's age.
+//
+// It is also the removal-marker horizon, [MarkerRetention], by definition
+// rather than by coincidence: no operation that read a record before it was
+// removed outlives the claim it runs under, so none is still acting on that
+// read when the marker goes. Moving this moves that, which lengthens or
+// shortens the tail of markers a listing re-reads and changes no answer.
 const MaxDutyTTL = 3 * time.Hour
 
 // CheckDutyTTL refuses a claim on a duty resource whose TTL exceeds
@@ -406,40 +415,79 @@ type AcquireOptions struct {
 //
 // A BACKEND MUST SERVE ITS OWN WRITES, PER RESOURCE. A claim, renew or
 // release that has returned must be visible to this caller's next read of
-// THAT resource. Prefix listings are free to lag: ListLive is how a node
-// discovers peers, and a peer discovered a second late is a placement that
-// converges a second later.
+// THAT resource. A class listing may LAG — see a recent change late: ListLive
+// is how a node discovers peers, and a peer claimed a second ago and
+// discovered a second late is a placement that converges a second later. Lag
+// is never licence to DROP: a key live from before a listing began until
+// after it ended is in that listing, however often it was rewritten in
+// between. A renew is the write every live lease takes on every heartbeat, so
+// a listing that loses a key under rewrite loses live peers exactly when a
+// fleet is healthiest — a live node that looks gone to placement, an owner
+// whose drain looks finished, a minimum that rises over a row it never saw.
+// The conformance suite holds every backend to it with listings read
+// throughout a churn of renews and rewrites (coordtest's
+// "…_throughout_a_listing_is_in_every_listing" cases).
+//
+// And a listing that cannot establish it answers UNKNOWN — an error, never a
+// shorter list, since "no rows" is a legitimate answer everywhere one is
+// asked. On the KV backend that is not free, and internal/coord/kv's walk.go
+// is where it is argued: a pass cannot tell that it is complete, so every
+// listing is certified against the stream's own key index; a key the index
+// names that the pass lost, or delivered only as a delete marker — which a
+// replica behind a re-creation serves for a key live throughout — is read
+// again from the stream LEADER, never through a direct get any replica
+// answers; and an index answered while the stream has no leader is refused,
+// so a listing during a leader election is unknown rather than short. Its one
+// bound is a size: past the broker's 100,000-subject page for that index, a
+// key the pass also lost can go uncertified.
+//
+// Those markers are the one record of a removal a backend may keep, and no
+// answer may rest on one: every read that meets a marker asks what the key
+// holds NOW. That is what lets [Markers] sweep them, and the suite holds it by
+// sweeping every marker at once and every answer staying what it was.
 //
 // It reads like an implementation detail and it is the whole basis of mutual
 // exclusion: a claim you cannot read back cannot exclude anybody, and the
-// seat host reads ListLive and FleetProtocolFloor immediately after claiming.
-// Both certified backends make it true for free — one is a mutex over a map,
-// the other a single-connection KV — so it went unstated, and the suite
-// enforces it in about twenty places without ever naming it. A backend author
-// who did not know would meet it as twenty failures with no common theme.
+// seat host acts on reads that follow its own writes — the heartbeat renews a
+// seat a heartbeat after winning it, the next sweep lists what it holds, and a
+// claim the gate refused asks FleetProtocolFloor, which must count the lease
+// that refused it.
+// The twin makes it true for free, being a mutex over a map, and so did the KV
+// backend while a suite ran it on one member — which is how it went unstated
+// while the suite enforced it in about twenty places without naming it. On a
+// replicated bucket it is not free: a read any replica may answer can be
+// behind a write the quorum acknowledged, and the KV backend's claims answered
+// "not held" for leases they had won until every read it acts on became the
+// stream leader's (internal/coord/kv, "Every single-key read is the
+// leader's"). coordtest.RunShared is what holds a backend to it across
+// handles on different members.
 //
 // What it forecloses is asynchronous replication across the coordination
 // store, which nothing has asked for. Taking it up means changing this
 // sentence deliberately, not discovering it.
 type Backend interface {
-	// TryAcquire claims resource for the owner, or reports that someone
-	// else holds it.
+	// TryAcquire claims resource for the owner, or reports why it may not.
+	//
+	// Exactly one of the three is set: the lease (granted), a [Refusal]
+	// (definitively not granted, and why), or an error (UNKNOWN).
 	//
 	// Succeeds when the resource is unclaimed, its lease has expired, or
 	// the owner already holds it — in which case it doubles as a renew and
 	// KEEPS the epoch. The epoch increments on every ownership change and
 	// on a same-owner re-acquire after expiry.
 	//
-	// Refuses — the same (nil, nil) — while any live lease is held at a
-	// lower protocol, unless Ungated. Ask FleetProtocolFloor once per
-	// claim sweep to tell a protocol refusal apart from a peer simply
-	// holding the resource. A duty claim may also be refused, Ungated or
-	// not, during the storage-layout upgrade [MaxDutyTTL] describes.
+	// Refuses [RefusedHeld] while another owner holds a live lease on the
+	// resource, WHATEVER THE GATES WOULD SAY: a claim that cannot write
+	// judges no gate. Otherwise refuses [RefusedProtocol] while any live
+	// lease is held at a lower protocol, unless Ungated, and a duty claim
+	// [RefusedLayout], Ungated or not, during the storage-layout upgrade
+	// [MaxDutyTTL] describes. See [Refusal] for why the reason is part of
+	// the answer.
 	//
 	// A duty (a `worker:` resource) is honoured at any TTL up to
 	// [MaxDutyTTL] whatever TTL the backend's seat leases run on, and
 	// refused beyond it with an error wrapping [ErrTTLTooLong].
-	TryAcquire(ctx context.Context, resource string, opts AcquireOptions) (*Lease, error)
+	TryAcquire(ctx context.Context, resource string, opts AcquireOptions) (*Lease, Refusal, error)
 
 	// Renew extends a lease the caller already holds at this epoch.
 	// Reports false when the lease is definitively no longer theirs. A
@@ -460,7 +508,8 @@ type Backend interface {
 	ListOwned(ctx context.Context, owner string) ([]Lease, error)
 
 	// ListLive returns the live leases of one resource class. The
-	// membership read — ListLive(ClassNode) — is built on this.
+	// membership read is built on this: ListLive(ClassNode) is the fleet's
+	// roster.
 	ListLive(ctx context.Context, class Class) ([]Lease, error)
 
 	// PreferredResources returns resources of this class whose stickiness
@@ -469,11 +518,52 @@ type Backend interface {
 	PreferredResources(ctx context.Context, class Class, nodeID string) (map[string]struct{}, error)
 
 	// FleetProtocolFloor returns the lowest protocol among live leases,
-	// and whether there were any. The observability half of the gate: it
-	// tells a node whether it is blocked by an older peer or simply lost
-	// a race.
+	// and whether there were any. The observability half of the gate: a
+	// claim refused [RefusedProtocol] asks it for the floor to name.
 	FleetProtocolFloor(ctx context.Context) (int, bool, error)
 }
+
+// Refusal is why a claim was definitively not granted.
+//
+// # Why the reason is part of the answer
+//
+// It was not: every refusal was the same (nil, nil), and a caller that needed
+// to tell "a peer holds it" from "the mixed-version gate stopped me" was told
+// to ask [Backend.FleetProtocolFloor] once per claim sweep. That read looks
+// cheap and is not — a gate is a question about EVERY live lease, which a
+// backend answers from a standing view of the fleet's lease writes (the KV
+// backend's gate view) — so a node with room to claim whose every candidate
+// was held by a peer asked it on every five-second sweep, and its view took in
+// every lease write the fleet made for as long as the node stayed below its
+// share: at ten thousand seats, about 670 messages a second on each such node,
+// for a question whose answer the claims already knew. The backend knows at
+// the moment it refuses which rule refused, at no cost, so it says so.
+//
+// The zero value is "not refused": a granted claim, or an unknown one.
+type Refusal string
+
+const (
+	// RefusedHeld is the refusal of a claim on a resource another owner
+	// holds a live lease on. It takes precedence over the gates, because a
+	// claim that cannot write has nothing for a gate to stop — and because
+	// it is what lets a claim on a held resource judge no gate at all.
+	RefusedHeld Refusal = "held"
+	// RefusedProtocol is the refusal of a claim while a live lease is held
+	// at a lower protocol than the claim's (ADR-0016). Every gated claim
+	// this node makes is refused the same way until that lease goes, which
+	// is what a caller reports.
+	RefusedProtocol Refusal = "protocol"
+	// RefusedLayout is the refusal of a duty claim while a node of a build
+	// that keeps duties in the seat lease bucket is live — see
+	// [MaxDutyTTL].
+	RefusedLayout Refusal = "layout"
+)
+
+// Refusals are the three.
+var Refusals = []Refusal{RefusedHeld, RefusedProtocol, RefusedLayout}
+
+// Valid reports whether a refusal is one this build knows.
+func (r Refusal) Valid() bool { return slices.Contains(Refusals, r) }
 
 // --- resource naming ------------------------------------------------------
 

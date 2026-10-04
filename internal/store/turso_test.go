@@ -336,7 +336,7 @@ func TestOpenWithABrokenLibraryCacheInAChildProcess(t *testing.T) {
 	if os.Getenv(tursoChildEnv) == "" {
 		t.Skip("not a child process; see TestOpenReportsABrokenLibraryCacheInsteadOfPanicking")
 	}
-	_, err := Open(t.Context(), filepath.Join(t.TempDir(), "state.db"),
+	_, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "state.db"),
 		Options{})
 	if err == nil {
 		t.Fatal("Open succeeded against a library cache that cannot exist")

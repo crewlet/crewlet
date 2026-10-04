@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE TWO-STAGE SEARCH AGREES WITH THE EXACT SCAN AT THE SHIPPED DEPTH.
@@ -32,8 +33,8 @@ func TestTheTwoStageScanAgreesWithTheExactRanking(t *testing.T) {
 	query := randomEmbedding(rng, dim)
 
 	var got, want []string
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		hits, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
+		hits, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: query, Model: model, Dim: dim, Limit: 20,
 		})
 		if err != nil {
@@ -75,9 +76,9 @@ func TestASecondModelAtTheSameWidthIsExcluded(t *testing.T) {
 	// scannable.
 	writeVectors(t, db, "other-model", dim, 40, 100, 1000)
 
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		rng := rand.New(rand.NewPCG(3, 3))
-		hits, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
+		hits, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: randomEmbedding(rng, dim), Model: model, Dim: dim, Limit: 100,
 		})
 		if err != nil {
@@ -105,8 +106,8 @@ func TestTheScopeFiltersNarrowTheCandidatePool(t *testing.T) {
 	rng := rand.New(rand.NewPCG(11, 11))
 	query := randomEmbedding(rng, dim)
 
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		hits, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
+		hits, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: query, Model: model, Dim: dim, Limit: 100,
 			Containers: []string{"ENG"},
 		})
@@ -124,7 +125,7 @@ func TestTheScopeFiltersNarrowTheCandidatePool(t *testing.T) {
 				"so the fixture cannot tell a working filter from an absent "+
 				"one", len(hits))
 		}
-		pages, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
+		pages, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: query, Model: model, Dim: dim, Limit: 100,
 			Sources: []search.Source{search.SourcePage},
 		})
@@ -156,8 +157,8 @@ func TestTheAnswerIsOrderedByTheExactDistance(t *testing.T) {
 	t.Parallel()
 	db, dim, model := seedVectors(t, 200)
 	rng := rand.New(rand.NewPCG(5, 5))
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		hits, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
+		hits, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: randomEmbedding(rng, dim), Model: model, Dim: dim, Limit: 30,
 		})
 		if err != nil {
@@ -205,7 +206,7 @@ func TestTheTwoRowsMoveTogetherOrNotAtAll(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
 			_, err := applier.Apply(t.Context(), tx, statelog.Record{
 				Envelope: statelog.Envelope{Subject: statelog.Subject{
 					Kind: string(subject.Source), ID: subject.ID}},
@@ -239,7 +240,7 @@ func TestTheTwoRowsMoveTogetherOrNotAtAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := applier.Apply(t.Context(), tx, statelog.Record{
 			Position: statelog.Position{Stream: "S", Generation: 1, Seq: 30},
 			Payload:  payload,
@@ -256,7 +257,7 @@ func TestTheTwoRowsMoveTogetherOrNotAtAll(t *testing.T) {
 func assertPair(t *testing.T, db *store.DB, subject search.Subject, want string) {
 	t.Helper()
 	var wide, narrow string
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		read := func(table string) (string, error) {
 			var model string
 			err := tx.QueryRowContext(t.Context(),
@@ -288,11 +289,7 @@ func assertPair(t *testing.T, db *store.DB, subject search.Subject, want string)
 
 func openReplicated(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(),
-		filepath.Join(t.TempDir(), "node.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
@@ -311,7 +308,7 @@ func writeVectors(t *testing.T, db *store.DB, model string, dim, n int, seqBase 
 	t.Helper()
 	applier := search.NewApplier()
 	rng := rand.New(rand.NewPCG(1, uint64(len(model))))
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
 		for i := range n {
 			source := search.SourcePage
 			if i%2 == 1 {

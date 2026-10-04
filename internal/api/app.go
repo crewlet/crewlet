@@ -72,11 +72,20 @@ type App struct {
 	// serve it: an operator who cannot purge must not be told they can.
 	purger TaskPurger
 
+	// files serves a project's file bytes — the streamed download and
+	// upload, and the removal. Nil leaves the routes unmounted, on a build
+	// with no native tracker or no object store.
+	files ProjectFiles
+
 	// capacity drives a stream's byte ceiling through the maintenance
 	// window. On a node that is publishing the verb refuses rather than
 	// the route being absent, because "you are in the wrong mode" is the
 	// answer an operator needs.
 	capacity capacityRunner
+
+	// fleetBroker reads and changes the fleet broker's membership. See
+	// fleetbroker.go.
+	fleetBroker FleetBrokerControl
 
 	// company reads the engine's CURRENT epoch, which is what
 	// [App.Configured] asks.
@@ -100,9 +109,9 @@ type routeMounter interface {
 // # What is required, and why a nil is refused rather than served around
 //
 // Runtime, EventLog, Sources.Company, Sources.Events, Sources.NodeID, the Inbound edge's
-// Publisher, Claims, Secrets and AppFlow, Config, Secrets, Setup, Budgets,
-// Retention, Capacity, Backup and Audit are REQUIRED, and [New] refuses a missing one
-// by name.
+// Publisher, Claims, Secrets and AppFlow, Config, Secrets, Setup,
+// Retention, Capacity, FleetBroker, Backup and Audit are REQUIRED, and [New]
+// refuses a missing one by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
 // run` is the only thing that builds an App, it builds one over an engine that
@@ -217,8 +226,16 @@ type Options struct {
 	// purge route unmounted.
 	Purger TaskPurger
 
+	// Files serves a project's file bytes. Nil leaves the byte routes
+	// unmounted; the listing is [queries.Sources.Files].
+	Files ProjectFiles
+
 	// Capacity drives a stream's byte ceiling.
 	Capacity capacityRunner
+
+	// FleetBroker reads and changes the fleet broker's membership — see
+	// [FleetBrokerControl].
+	FleetBroker FleetBrokerControl
 
 	// Backup copies this node's durable state to a path an operator
 	// names.
@@ -312,6 +329,11 @@ func New(opts Options) (*App, error) {
 	if sources.State == nil {
 		sources.State = state
 	}
+	// THE BROKER'S MEMBERSHIP IS READ THROUGH THE SAME SEAM ITS REMOVAL IS
+	// MADE THROUGH, so one wiring serves the question and the gesture.
+	if sources.FleetBroker == nil {
+		sources.FleetBroker = opts.FleetBroker
+	}
 	// ONE CLOCK for the surface. The app's own was pinned by a test and the
 	// answers' was the wall clock, so a question stamping "now" on its answer
 	// — the live spend window's edges — answered a REST call and a socket call
@@ -344,7 +366,9 @@ func New(opts Options) (*App, error) {
 	queries.Register(a.queries, sources)
 	a.backup, a.audit = opts.Backup, opts.Audit
 	a.retention, a.nodes, a.purger = opts.Retention, opts.Nodes, opts.Purger
+	a.files = opts.Files
 	a.capacity = opts.Capacity
+	a.fleetBroker = opts.FleetBroker
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", http.HandlerFunc(a.serveHealth))
@@ -362,11 +386,16 @@ func New(opts Options) (*App, error) {
 	// writing and letting it write again are not reads, whatever the
 	// anonymous-read posture allows. See retention.go.
 	a.mountRetention(mux)
+	a.mountFiles(mux)
 	// The capacity window's own control surface. It is the one thing a
 	// maintenance-mode node serves that a publishing one does not need,
 	// and it is why the verb can run at all on a topology whose broker
 	// binds no socket. See retention.go.
 	a.mountCapacity(mux)
+	// The fleet broker's membership: what every node advertises against
+	// what the metadata group counts, and the removal of a member that is
+	// gone for good. See fleetbroker.go.
+	a.mountFleetBroker(mux)
 	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer))
 	// The OPERATOR surface: the same tracker and knowledge tools a seat
 	// holds, offered to a person's own assistant over MCP and to the person
@@ -460,6 +489,7 @@ func (o Options) missing() error {
 		{"Setup", o.Setup == nil},
 		{"Retention", o.Retention == nil},
 		{"Capacity", o.Capacity == nil},
+		{"FleetBroker", o.FleetBroker == nil},
 		{"Backup", o.Backup == nil},
 		{"Audit", o.Audit == nil},
 	} {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -102,6 +103,8 @@ func documentTable(s Subject) (table, key string, err error) {
 		return "tracker_views", s.ID, nil
 	case KindPerson:
 		return "tracker_persons", s.ID, nil
+	case KindFile:
+		return "tracker_files", s.ID, nil
 	}
 	return "", "", fmt.Errorf("tracker: %s is not a whole-document object", s.Kind)
 }
@@ -246,6 +249,40 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 			jsonOf(person.Priorities), jsonOf(person.PinnedViews),
 			jsonOf(person.Favorites), person.PrioritiesSetBy,
 			store.EncodeTime(person.PrioritiesSetAt), c.packed)
+	case "tracker_files":
+		var file File
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err := decodePayload(c.record.Mutation, &file); err != nil {
+			return 0, fmt.Errorf("tracker: decode the file at %s: %w", c.position, err)
+		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err := fileMatches(c, key, file); err != nil {
+			return 0, err
+		}
+		var removedAt any
+		if file.RemovedAt != nil {
+			removedAt = store.EncodeTime(*file.RemovedAt)
+		}
+		res, err = tx.ExecContext(ctx, `
+			INSERT INTO tracker_files
+				(id, project_key, path, content_type, hash, size, chunks,
+				 created_by, created_at, updated_by, updated_at,
+				 removed_by, removed_at, version, document)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			ON CONFLICT (id) DO UPDATE SET
+				project_key = excluded.project_key, path = excluded.path,
+				content_type = excluded.content_type, hash = excluded.hash,
+				size = excluded.size, chunks = excluded.chunks,
+				created_by = excluded.created_by, created_at = excluded.created_at,
+				updated_by = excluded.updated_by, updated_at = excluded.updated_at,
+				removed_by = excluded.removed_by, removed_at = excluded.removed_at,
+				version = excluded.version, document = excluded.document
+			WHERE excluded.version > tracker_files.version`,
+			key, file.Project, file.Path, file.ContentType, string(file.Hash),
+			file.Size, len(file.Chunks), file.CreatedBy,
+			store.EncodeTime(file.CreatedAt), file.UpdatedBy,
+			store.EncodeTime(file.UpdatedAt), file.RemovedBy, removedAt,
+			c.packed, []byte(c.record.Mutation))
 	default:
 		return 0, fmt.Errorf("tracker: %s has no upsert", table)
 	}
@@ -277,6 +314,44 @@ func (a *Applier) applyCounter(ctx context.Context, tx *sql.Tx, c applyContext) 
 		c.subject().ID, counter.Last, c.packed)
 	if err != nil {
 		return 0, fmt.Errorf("tracker: write the counter at %s: %w", c.position, err)
+	}
+	return affected(res)
+}
+
+// placeTask writes one placement of a rank order, by the rule of the record's
+// own version ([rewriteVersion]).
+//
+// FROM [rewriteVersion], INTO THE MOVED TASK'S DOCUMENT, not its rank column alone
+// ([rewriteOther]): the document is what the task's own next record is merged
+// from, and a rank written only to the column was put back by it — every drag
+// undone by the next edit to the card that was dragged. And only a task in
+// the order's project: a placement is a position in one project's order,
+// which is the container the record's scope names, so a task filed elsewhere
+// has no position in it and a write to it would be outside what the record
+// declared.
+//
+// BELOW [rewriteVersion], THE COLUMN ALONE AND WHEREVER THE TASK IS FILED, which is
+// what every build before that version wrote for the same record — and what every
+// node that applied one already holds. Applying an older record by the newer
+// rule on a node that replays it would give that node rows no other node has.
+func placeTask(ctx context.Context, tx *sql.Tx, c applyContext, project string,
+	placement Placement) (int, error) {
+
+	if c.record.V >= rewriteVersion {
+		return rewriteOther(ctx, tx, placement.Task, c, movedColumns{rank: true}, func(task *Task) bool {
+			if task.Project != project {
+				return false
+			}
+			task.Rank = placement.Rank
+			return true
+		})
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE tracker_tasks SET rank = ?, scoped_through = ?
+		WHERE id = ? AND ? > MAX(version, scoped_through)`,
+		string(placement.Rank), c.packed, placement.Task, c.packed)
+	if err != nil {
+		return 0, err
 	}
 	return affected(res)
 }
@@ -313,17 +388,10 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 		return 0, nil
 	}
 	for _, placement := range order.Placements {
-		moved, err := tx.ExecContext(ctx, `
-			UPDATE tracker_tasks SET rank = ?, scoped_through = ?
-			WHERE id = ? AND ? > MAX(version, scoped_through)`,
-			string(placement.Rank), c.packed, placement.Task, c.packed)
+		n, err := placeTask(ctx, tx, c, order.Project, placement)
 		if err != nil {
 			return 0, fmt.Errorf("tracker: move task %s at %s: %w",
 				placement.Task, c.position, err)
-		}
-		n, err := affected(moved)
-		if err != nil {
-			return 0, err
 		}
 		rows += n
 	}
@@ -377,11 +445,14 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 	return rows, nil
 }
 
-// applyEviction writes the gate that drops a node's records.
+// applyEviction writes the gate that drops a node's records: an operator's
+// eviction, or the node's own release of the log ([OpRelease]) — the same
+// window, recorded as the gate it is.
 //
 // A READMISSION IS THE INVERSE COMMIT rather than a delete, so an eviction's
 // whole history survives a replay — and a node that was evicted, readmitted
-// and evicted again reads correctly rather than as one long absence.
+// and evicted again reads correctly rather than as one long absence. It lifts
+// a release exactly as it lifts an eviction.
 func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	var eviction Eviction
 	if err := decodePayload(c.record.Mutation, &eviction); err != nil {
@@ -400,17 +471,22 @@ func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, c applyContext)
 		}
 		return affected(res)
 	}
+	gate := statelog.EvictionKindEviction
+	if c.record.Op == OpRelease {
+		gate = statelog.EvictionKindRelease
+	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO tracker_evictions
 			(node_id, log_stream, from_position, at, by, readmitted_position,
-			 readmitted_at)
-		VALUES (?,?,?,?,?,NULL,NULL)
+			 readmitted_at, kind)
+		VALUES (?,?,?,?,?,NULL,NULL,?)
 		ON CONFLICT (node_id, log_stream) DO UPDATE SET
 			from_position = excluded.from_position, at = excluded.at,
-			by = excluded.by, readmitted_position = NULL, readmitted_at = NULL
+			by = excluded.by, readmitted_position = NULL, readmitted_at = NULL,
+			kind = excluded.kind
 		WHERE excluded.from_position > tracker_evictions.from_position`,
 		eviction.NodeID, c.position.Stream, c.packed,
-		store.EncodeTime(c.brokerAt), eviction.EvictedBy)
+		store.EncodeTime(c.brokerAt), eviction.EvictedBy, string(gate))
 	if err != nil {
 		return 0, fmt.Errorf("tracker: evict node %s at %s: %w",
 			eviction.NodeID, c.position, err)
