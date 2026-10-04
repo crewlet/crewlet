@@ -5598,6 +5598,13 @@ span.list-position-step {
 .work-log-row:hover {
   background: var(--color-surface-hover);
 }
+/* THE ENGINE'S OWN BOOKKEEPING, folded to one line (a config apply
+   re-declaring the org chart's projects): said, in the quiet ink, so the
+   changes people made stand out around it. */
+.work-log-quiet .work-log-what,
+.work-log-quiet .work-log-who {
+  color: var(--color-text-tertiary);
+}
 .work-log-when {
   font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);

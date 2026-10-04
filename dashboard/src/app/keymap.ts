@@ -373,13 +373,7 @@ export type KeyHandler =
   | {
       /** `index` is which of the row's presses it was — the digit's position for `tab`. */
       run: (e: KeyboardEvent, index: number) => void;
-      /**
-       * Off without changing the shape of the bindings; per press for a row
-       * with several. A FUNCTION IS ASKED AT THE KEYSTROKE (`lib/keys.ts`'s
-       * `Chord.when`), never at the render that bound it: whose keystroke a
-       * press is (which grid drives) changes with no render to re-bind it, and
-       * a `when` frozen at registration answered for the render before.
-       */
+      /** Off without changing the shape of the bindings; per press for a row with several. */
       when?: boolean | ((index: number) => boolean);
     };
 
@@ -416,7 +410,7 @@ export function useKeymap(handlers: Record<string, KeyHandler>): void {
         run: (e) => run(e, index),
         meta: press.mod,
         whileTyping: row.whileTyping,
-        when: typeof when === "function" ? () => when(index) : when,
+        when: typeof when === "function" ? when(index) : when,
       };
       chords.push(press.after ? { ...chord, after: press.after } : chord);
     });

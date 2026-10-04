@@ -17,15 +17,12 @@
  */
 
 import { afterEach, expect, test, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { LayerHost } from "@crewlethq/ui";
 import { TimeRangePicker } from "./TimeRange.tsx";
-import type { TimeRange, Window, WindowChoice } from "~/lib/range.ts";
+import type { TimeRange, Window } from "~/lib/range.ts";
 
-afterEach(() => {
-  cleanup();
-  vi.useRealTimers();
-});
+afterEach(cleanup);
 
 const FROM = "2031-04-16T09:00:00Z";
 const TO = "2031-04-16T17:00:00Z";
@@ -184,43 +181,5 @@ test("a screen of company days picks two dates on the company's clock", () => {
   expect(set).toHaveBeenCalledWith({
     from: Date.parse("2031-03-31T15:00:00Z"),
     to: Date.parse("2031-04-08T15:00:00Z"),
-  });
-});
-
-// A LIST HANDS OVER NO EDGES, because it computes them when it asks — so the
-// dialog opens on the window AS OF THE PRESS that opened it. Edges a list
-// carried from render would be a second's-old pair at best, and holding them
-// in the value is what re-keyed every question once a second.
-test("a list's window opens on its edges as of the press", () => {
-  vi.useFakeTimers({ toFake: ["Date"] });
-  vi.setSystemTime(Date.parse("2031-04-16T12:00:00Z"));
-  const choice: WindowChoice = {
-    window: "1d",
-    bucket: "hour",
-    offer: { ranges: ["1d", "7d"], custom: true, fallback: "1d", buckets: ["hour"] },
-    set: vi.fn(),
-  };
-  render(
-    <LayerHost>
-      <TimeRangePicker range={choice} />
-    </LayerHost>,
-  );
-  // The clock moves between the render and the press; the press is what counts.
-  vi.setSystemTime(Date.parse("2031-04-16T15:00:00Z"));
-  fireEvent.click(screen.getByTitle("Name two instants of your own"));
-  const from = screen.getByLabelText("From") as HTMLInputElement;
-  const to = screen.getByLabelText("To") as HTMLInputElement;
-  // The boxes are wall clock in the reader's zone, so they are compared as
-  // the instants the dialog would apply rather than as strings.
-  fireEvent.click(screen.getByRole("button", { name: "Apply" }));
-  const picked = (choice.set as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-    from: number;
-    to: number;
-  };
-  expect(from.value).not.toBe("");
-  expect(to.value).not.toBe("");
-  expect(picked).toEqual({
-    from: Date.parse("2031-04-15T15:00:00Z"),
-    to: Date.parse("2031-04-16T15:00:00Z"),
   });
 });

@@ -52,7 +52,6 @@ import {
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import {
-  ClockText,
   DateCell,
   DurationCell,
   KeyCell,
@@ -64,7 +63,8 @@ import {
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
-import { fmtDate, fmtDateTime, fmtExact, plural, relTime, tsKey } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
+import { fmtDate, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -72,10 +72,11 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
-import { rest, RestError, type RestFailure } from "~/protocol/index.ts";
-import { useRestRead, type RestRead } from "~/lib/restRead.ts";
-import { needsSentence } from "~/lib/refusal.ts";
+import { rest, RestError } from "~/protocol/index.ts";
 import { goSignIn } from "~/lib/session.ts";
+import { needsSentence } from "~/lib/refusal.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { useRest } from "~/lib/useRest.ts";
 import type { EventRecord, SetupRun } from "~/protocol/types.ts";
 import {
   INTEGRATION_TOOLS,
@@ -471,6 +472,7 @@ function soonestOf(
 export function integrationFacts(
   entry: Entry,
   rows: Map<string, IntegrationRow>,
+  now: number,
   traffic: { known: boolean; since?: string | null },
 ): Fact[] {
   const present = presentSurfaces(entry, rows);
@@ -520,11 +522,11 @@ export function integrationFacts(
       // surface checked a moment ago and one nothing has looked at in an hour
       // read identically.
       label: "Last pass",
-      value: <DateCell at={latestOf(present, (r) => r.reconcile?.last_attempt_at)} />,
+      value: <DateCell at={latestOf(present, (r) => r.reconcile?.last_attempt_at)} now={now} />,
     },
     {
       label: "Next pass",
-      value: <DateCell at={soonestOf(present, (r) => r.reconcile?.next_attempt_at)} />,
+      value: <DateCell at={soonestOf(present, (r) => r.reconcile?.next_attempt_at)} now={now} />,
     },
   ];
 }
@@ -960,7 +962,7 @@ function SurfaceRow({
             <span>
               {row.skipped === 1
                 ? "1 delivery was verified and dropped"
-                : `${fmtExact(row.skipped ?? 0)} deliveries were verified and dropped`}
+                : `${(row.skipped ?? 0).toLocaleString()} deliveries were verified and dropped`}
             </span>
             <span className="int-row-note-when">
               A drop is a delivery this surface accepted and no parser turned into work, so whatever
@@ -1299,15 +1301,13 @@ function rosterOf(tools: SetupToolState[]): SetupToolState | undefined {
  * Why an action that opens the settings form cannot be pressed, or undefined.
  *
  * A WRITE CONTROL IS NEVER HIDDEN (dashboard rule 4): it is disabled with the
- * one sentence that says why. `/setup` takes a grant for every route, reads
- * included, so a reader refused its listing has no form to open, and a listing
- * that answered nothing for this tool has none either — which is a different
- * sentence, because a grant would not help.
+ * one sentence that says why. `/setup` is guarded in full, so a reader the
+ * engine refused has no form to open, and a listing that answered nothing for
+ * this tool has none either — which is a different sentence, because no grant
+ * would help.
  *
  * THE GRANTS, NAMED: reading what a tool needs is `config:read`, and
- * connecting it writes the company's configuration and seals a credential.
- * "Needs an operator token" sent a signed-in person to find a credential they
- * have no use for.
+ * connecting it is `config:write` and `secrets:write`.
  */
 export function formBlocked(sections: unknown[], guarded: boolean): string | undefined {
   if (sections.length > 0) return undefined;
@@ -1872,34 +1872,6 @@ function SeatBadge({ satisfied, finding }: { satisfied: boolean; finding?: Recon
 }
 
 /**
- * A REST read on this screen, in the terms each panel draws it in: the
- * refusal on AUTHORITY apart — every read here draws that as its own
- * `guarded` sentence naming the grant it takes — and every other failure as
- * the pair `QueryState` draws.
- *
- * EVERY FAILURE IS SAID, never only the engine's `503`. That was the one these
- * reads had learned to draw, and every other failure still drew nothing or a
- * lie: the listing went quiet with no buttons and no banner for a `500`, the
- * pass history said "No pass has run on this node" when its FIRST read
- * failed, and one pass drew nothing under the row that opened it. And a read
- * no answer came back to is `unanswered`, which asks again on its own — it
- * was `closed`, whose promise of a read "once the socket is back" nothing
- * kept while the socket stayed up. See `~/lib/restRead.ts`.
- */
-function setupState<T>(read: RestRead<T>): {
-  guarded: boolean;
-  needs: string[];
-  failure: RestFailure | null;
-} {
-  const refused = read.failure?.error === "unauthorized";
-  return {
-    guarded: refused,
-    needs: refused && read.error instanceof RestError ? read.error.grants : [],
-    failure: refused ? null : read.failure,
-  };
-}
-
-/**
  * What each tool still needs, from /setup.
  *
  * A SECOND READ, and it has to be: /integrations is an ordinary read served
@@ -1908,12 +1880,6 @@ function setupState<T>(read: RestRead<T>): {
  * the operator has no token still gets the whole screen, minus the buttons.
  */
 export function useSetup(): {
-  /**
-   * Each tool's setup state by surface key — empty while the listing is not
-   * known (not answered yet, refused, or failed before it ever answered). A
-   * failed re-read keeps the last answer. The card's STATE never turns on it
-   * — that is the engine's roll-up — only which form a card can open.
-   */
   byKey: Map<string, SetupToolState>;
   base: SetupListing["external_url"] | null;
   guarded: boolean;
@@ -1929,102 +1895,52 @@ export function useSetup(): {
    * else made the page re-render, which is why it looked like a refresh
    * fixed it. Nothing was wrong; the answer had not arrived.
    *
-   * TRUE AGAIN WHILE A RE-READ A PERSON ASKED FOR IS IN FLIGHT ([reload]),
-   * because the same disagreement happens in both directions. After a
-   * connect the rows say the block exists while this half still says it
-   * does not, and the card offered Connect beside Connected. After a
-   * disconnect the rows are gone while this half still says configured and
-   * satisfied, and the card had no tag and no button at all. A card rendered
-   * from one half is wrong either way, and a moment of the skeleton already
-   * on this screen is honest about which of the two it is: nothing is known
-   * yet. A refresh nobody asked for — the tab coming back, the socket coming
-   * back, a retry — keeps the cards: blanking six of them because somebody
-   * switched tabs would report an absence that is not there.
+   * TRUE AGAIN WHILE A RE-READ IS IN FLIGHT, because the same disagreement
+   * happens in both directions. After a connect the rows say the block
+   * exists while this half still says it does not, and the card offered
+   * Connect beside Connected. After a disconnect the rows are gone while
+   * this half still says configured and satisfied, and the card had no tag
+   * and no button at all. A card rendered from one half is wrong either way,
+   * and a moment of the skeleton already on this screen is honest about
+   * which of the two it is: nothing is known yet.
    */
   loading: boolean;
-  /**
-   * Why the listing could not be read, other than a refusal on authority —
-   * see [setupState] — or null. The screen draws it as the banner a socket
-   * question's failure draws, and the read asks again when that banner says
-   * it does.
-   */
-  failure: RestFailure | null;
-  /** Read again, holding [loading] until it answers — after a write. */
   reload: () => void;
 } {
-  // NOTHING POLLS THIS ROUTE: it is asked at mount, after a write, when the
-  // engine says, and — because AN AGENT'S APP IS SET UP AT THE CODE HOST, IN
-  // ANOTHER TAB, and this listing is the only thing that carries the roster —
-  // whenever the tab comes back, which is exactly the moment a seat that
-  // offered Create needs to be offering Install instead. A SIGN-IN FROM THIS
-  // SCREEN'S BANNER is a screen of its own that comes back here, so the mount
-  // is what reads again as the new reader.
-  const read = useRestRead(
+  // THE ONE REST LOADER, which supersedes a read that is still in flight: four
+  // things start one here — mount, a sign-in, the tab becoming visible
+  // and useRecheck, which fires the same read twice 700 ms apart — and before
+  // it every answer was written into state unconditionally, so whichever
+  // landed last was what the screen held.
+  //
+  // AN AGENT'S APP IS SET UP AT THE CODE HOST, IN ANOTHER TAB, and this
+  // listing is the only thing that carries the roster: nothing pushes it, and
+  // no answer this screen holds says when a person finished creating an app.
+  // So it is re-read when the tab comes back, quietly — a background refresh
+  // has no moment where the two halves disagree, and blanking six cards
+  // because somebody came back to the tab would report an absence that is not
+  // there. Every re-read a PERSON triggers is loud, for the reason `loading`
+  // gives.
+  const setup = useRest(
     "/setup/integrations",
     (signal) => rest.get("/setup/integrations", signal) as Promise<SetupListing>,
     { refetchOnFocus: true },
   );
-  const { refetch } = read;
-  const reload = useCallback(() => refetch(true), [refetch]);
+  // A REFUSAL IS NOT AN EMPTY ANSWER. The loader drops the listing on one, so
+  // the screen keeps every read the socket gave it and simply offers no
+  // writes; `guarded` is what tells a refused read from a missing one.
+  const listing = setup.data;
+  const { reload } = setup;
   return {
-    byKey: useMemo(() => new Map((read.data?.tools ?? []).map((t) => [t.key, t])), [read.data]),
-    base: read.data?.external_url ?? null,
-    ...setupState(read),
-    loading: read.loading,
-    reload,
+    byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
+    base: listing?.external_url ?? null,
+    guarded: setup.error?.unauthorized ?? false,
+    needs: setup.error?.grants ?? [],
+    // ANSWERED, not answered WELL. A refusal is a state the screen can render
+    // honestly, with the banner and no buttons; waiting is not.
+    loading: setup.loading,
+    reload: useCallback(() => void reload(), [reload]),
   };
-}
-
-/**
- * What the setup listing could not say, as a banner — ONE for both frames
- * that read it, the screen and the peek.
- *
- * NOTHING WHILE IT IS FIRST LOADING: the skeleton in place of the cards
- * already says it is on its way. A refusal and a failure are different
- * banners, because they have different remedies — a grant, or a node that
- * will answer — and a screen that drew only the refusal left a `500` or a
- * read nobody answered as a catalogue with no way to connect and no word on
- * why.
- */
-function SetupListingState({
-  setup,
-}: {
-  setup: Pick<ReturnType<typeof useSetup>, "guarded" | "needs" | "failure">;
-}) {
-  if (setup.guarded) {
-    return (
-      <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
-        {/* THE READ THAT WAS REFUSED, named as such: the listing is what
-            says what each integration still needs, and its refusal names
-            the grant IT takes. Connecting takes more, which the connect
-            route names when it is asked. */}
-        <span>
-          {needsSentence("Reading the integrations' setup state", setup.needs)} This screen shows
-          what it can read without it, and offers no way to connect.
-        </span>
-        <span className="spacer" />
-        {/* The same door QueryState opens, for the same reason: a banner
-            that only NAMES the missing grant leaves the reader with nothing
-            on the page that can act on it. */}
-        <Button size="small" leadingIcon={<KeyGlyph size="sm" />} onClick={goSignIn}>
-          Sign in
-        </Button>
-      </Callout>
-    );
-  }
-  // A LISTING THAT COULD NOT BE READ, which is not a company with nothing to
-  // set up: a card offers no way to connect until the listing has answered
-  // once — a re-read that failed keeps the last answer, as every read does —
-  // and the banner says why — a node that cannot answer yet or refuses until
-  // somebody acts, a request no answer came back to, a fault — and whether
-  // the read asks again on its own. Any failure but a refusal on authority
-  // drew nothing here but that `503`.
-  if (setup.failure) {
-    return (
-      <QueryState error={setup.failure.error} refusal={setup.failure.refusal} loading={false} />
-    );
-  }
-  return null;
 }
 
 /**
@@ -2056,6 +1972,7 @@ function stuckDisconnecting(entry: Entry, rows: Map<string, IntegrationRow>): st
  */
 function SurfaceDeliveries({ surface, name }: { surface: string; name: string }) {
   const nav = useNavigator();
+  const now = useNow();
   const org = useOrg();
   // WHO A DELIVERY REACHED. The tag carries a HANDLE, which is an address
   // rather than a label: passed straight through as the name it put
@@ -2070,73 +1987,6 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
     "events",
     { category: "webhook", source: surface, limit: DELIVERY_PAGE },
     { pollMs: 60_000, refetchOnFocus: true },
-  );
-  // THE COLUMNS HOLD STILL until the roster they name a recipient from moves:
-  // every row is memoised on this list, and one built in the render drew every
-  // delivery again on every minute's poll.
-  const columns = useMemo<GridColumn<EventRecord>[]>(
-    () => [
-      {
-        key: "at",
-        header: "Arrived",
-        shrink: true,
-        sortValue: (e) => tsKey(e.timestamp),
-        cell: (e) => <DateCell at={e.timestamp} />,
-      },
-      {
-        key: "event",
-        header: "Event",
-        shrink: true,
-        sortValue: (e) => e.type,
-        // `webhook:` and `forge:` are the engine's own filing
-        // prefixes, and the provider's event name is what an
-        // operator is matching against their own console.
-        cell: (e) => (
-          <code className="inline nowrap">{e.type.replace(/^(webhook|forge):/, "")}</code>
-        ),
-      },
-      {
-        key: "summary",
-        header: "What it said",
-        cell: (e) => <TextCell>{e.summary}</TextCell>,
-      },
-      {
-        key: "for",
-        header: "Addressed to",
-        shrink: true,
-        sortValue: (e) => e.tags?.recipient ?? "",
-        cell: (e) =>
-          e.tags?.recipient ? (
-            // THE SEAT AS IT LOOKS EVERYWHERE ELSE — the mark and the
-            // name, linking to the seat. A delivery is addressed to a
-            // colleague, and a colleague should not be a chip on this
-            // grid and an avatar on the next.
-            <SeatCell handle={e.tags.recipient} {...who(e.tags.recipient)} />
-          ) : (
-            // NOT THE CELL'S OWN "nobody" DASH: a company-wide
-            // delivery is routed by the notification spine rather than
-            // addressed in the URL, and calling that unaddressed would
-            // read as a delivery that reached no one.
-            <span className="t-caption">the company</span>
-          ),
-      },
-      {
-        key: "key",
-        header: "Provider id",
-        shrink: true,
-        sortValue: (e) => e.tags?.delivery_key ?? "",
-        cell: (e) =>
-          e.tags?.delivery_key ? (
-            <KeyCell value={e.tags.delivery_key} />
-          ) : (
-            // A DASH THAT SAYS WHICH ABSENCE THIS IS. Not every
-            // provider sends an id of its own, and a blank cell and an
-            // id nobody sent are different facts.
-            <EmptyValue label="This provider sent no delivery id" />
-          ),
-      },
-    ],
-    [who],
   );
   const rows = deliveries.data?.events ?? [];
 
@@ -2187,7 +2037,67 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
               if (!("button" in event)) nav.to(["live", "events", e.id]);
             }}
             empty={{ title: "No delivery matches" }}
-            columns={columns}
+            columns={[
+              {
+                key: "at",
+                header: "Arrived",
+                shrink: true,
+                sortValue: (e) => tsKey(e.timestamp),
+                cell: (e) => <DateCell at={e.timestamp} now={now} />,
+              },
+              {
+                key: "event",
+                header: "Event",
+                shrink: true,
+                sortValue: (e) => e.type,
+                // `webhook:` and `forge:` are the engine's own filing
+                // prefixes, and the provider's event name is what an
+                // operator is matching against their own console.
+                cell: (e) => (
+                  <code className="inline nowrap">{e.type.replace(/^(webhook|forge):/, "")}</code>
+                ),
+              },
+              {
+                key: "summary",
+                header: "What it said",
+                cell: (e) => <TextCell>{e.summary}</TextCell>,
+              },
+              {
+                key: "for",
+                header: "Addressed to",
+                shrink: true,
+                sortValue: (e) => e.tags?.recipient ?? "",
+                cell: (e) =>
+                  e.tags?.recipient ? (
+                    // THE SEAT AS IT LOOKS EVERYWHERE ELSE — the mark and the
+                    // name, linking to the seat. A delivery is addressed to a
+                    // colleague, and a colleague should not be a chip on this
+                    // grid and an avatar on the next.
+                    <SeatCell handle={e.tags.recipient} {...who(e.tags.recipient)} />
+                  ) : (
+                    // NOT THE CELL'S OWN "nobody" DASH: a company-wide
+                    // delivery is routed by the notification spine rather than
+                    // addressed in the URL, and calling that unaddressed would
+                    // read as a delivery that reached no one.
+                    <span className="t-caption">the company</span>
+                  ),
+              },
+              {
+                key: "key",
+                header: "Provider id",
+                shrink: true,
+                sortValue: (e) => e.tags?.delivery_key ?? "",
+                cell: (e) =>
+                  e.tags?.delivery_key ? (
+                    <KeyCell value={e.tags.delivery_key} />
+                  ) : (
+                    // A DASH THAT SAYS WHICH ABSENCE THIS IS. Not every
+                    // provider sends an id of its own, and a blank cell and an
+                    // id nobody sent are different facts.
+                    <EmptyValue label="This provider sent no delivery id" />
+                  ),
+              },
+            ]}
           />
         )}
       </QueryState>
@@ -2283,24 +2193,38 @@ const PASS_IDLE_POLL_MS = 60_000;
  *
  * REST, LIKE [useSetup], AND FOR THE SAME REASONS: no query in the socket's
  * registry answers anything about a pass, and `/setup` is guarded in full —
- * so a reader without its grant is REFUSED here rather than shown an
+ * so a reader without `config:read` is REFUSED here rather than shown an
  * empty history, and `guarded` is what tells those two apart.
  */
-export function useSetupRuns(kinds: string[]): {
+function useSetupRuns(kinds: string[]): {
   runs: SetupRun[];
   scope: string;
   guarded: boolean;
   needs: string[];
-  /** Why the last read failed, other than on authority — see [setupState]. */
-  failure: RestFailure | null;
   loading: boolean;
 } {
-  // THE KEY IS THE QUESTION, not the array. A caller derives its kinds from
-  // the catalogue on every render, so a read keyed on the array itself would
-  // be asked several times a second.
+  // THE KEY IS THE DEPENDENCY, not the array. A caller derives its kinds from
+  // the catalogue on every render, so a loader keyed on the array itself
+  // would re-read this several times a second. NOTHING TO ASK IS NOT A
+  // LOADING STATE: with no kind there is no route, and a panel that spun for
+  // ever would be reporting a wait on a request nobody made.
   const key = kinds.join(",");
-  const read = useRestRead(
-    `/setup/integrations/${key}/runs`,
+  const [running, setRunning] = useState(false);
+  // TWO CADENCES, ONE LOOP. A pass in flight ends on its own inside
+  // `setup.PassDeadline` and this list is the only place that says how it
+  // ended, so it is watched at [PASS_POLL_MS]; the rest of the time the
+  // history still moves without this panel touching anything, which is what
+  // [PASS_IDLE_POLL_MS] is for. QUIET, both of them — the loader's polls are —
+  // since a re-read that blanked the table into its skeleton once a minute
+  // would take the row an operator was reading out from under them to say
+  // nothing new.
+  //
+  // AND WHENEVER THIS TAB COMES BACK. Connecting an integration means leaving
+  // for the third-party app and returning, and the pass that ran while the
+  // reader was away is the one they came back to read — the same argument
+  // [useSetup] makes for re-reading its listing, on the same event.
+  const answer = useRest(
+    key === "" ? null : key,
     async (signal) => {
       const answers = (await Promise.all(
         key
@@ -2309,49 +2233,28 @@ export function useSetupRuns(kinds: string[]): {
       )) as RunListing[];
       return {
         runs: answers
-          .flatMap((answer) => answer.runs ?? [])
+          .flatMap((one) => one.runs ?? [])
           .sort((a, b) => tsKey(b.started_at) - tsKey(a.started_at)),
-        scope: answers.find((answer) => answer.scope)?.scope ?? "",
+        scope: answers.find((one) => one.scope)?.scope ?? "",
       };
     },
-    {
-      // NOTHING TO ASK IS NOT A LOADING STATE. With no kind there is no
-      // route, and a panel that spun for ever would be reporting a wait on a
-      // request nobody made.
-      enabled: key !== "",
-      // TWO CADENCES, ONE LOOP, every re-read quiet: one that blanked the
-      // table into its skeleton once a minute would take the row an operator
-      // was reading out from under them to say nothing new. A pass in flight
-      // ends on its own inside `setup.PassDeadline` and this list is the only
-      // place that says how it ended, so it is watched at [PASS_POLL_MS]; the
-      // rest of the time the history still moves without this panel touching
-      // anything, which is what [PASS_IDLE_POLL_MS] is for. A failure the
-      // engine gave no hint for keeps the cadence the history it HOLDS set —
-      // a failed read says nothing about whether the pass it was following
-      // has ended — and the engine's own hint replaces the next tick, sooner
-      // or later: a node that said two seconds is not left for a minute, one
-      // that said thirty is not asked at four, and at zero the poll stops
-      // until the tab comes back.
-      cadence: (held) =>
-        held?.runs.some((run) => run.state === "running") ? PASS_POLL_MS : PASS_IDLE_POLL_MS,
-      // AND WHENEVER THIS TAB COMES BACK. Connecting an integration means
-      // leaving for the third-party app and returning, and the pass that ran
-      // while the reader was away is the one they came back to read — the
-      // same argument [useSetup] makes for re-reading its listing.
-      refetchOnFocus: true,
-    },
+    { pollMs: running ? PASS_POLL_MS : PASS_IDLE_POLL_MS, refetchOnFocus: true },
   );
-  // A REFUSED READER IS SHOWN NOTHING it was refused, and any other failure
-  // KEEPS the last reading: it was a history blanked into "No pass has run on
-  // this node" by one failed quiet poll, which is a claim about the
-  // integration that nobody made.
+  const runs = answer.data?.runs ?? EMPTY_RUNS;
+  const nowRunning = runs.some((run) => run.state === "running");
+  useEffect(() => setRunning(nowRunning), [nowRunning]);
+
   return {
-    runs: read.data?.runs ?? [],
-    scope: read.data?.scope ?? "",
-    ...setupState(read),
-    loading: read.loading,
+    runs,
+    scope: answer.data?.scope ?? "",
+    guarded: answer.error?.unauthorized ?? false,
+    needs: answer.error?.grants ?? [],
+    loading: answer.loading,
   };
 }
+
+/** One shared empty history, so a panel with none keeps one identity. */
+const EMPTY_RUNS: SetupRun[] = [];
 
 /**
  * ONE pass, read fresh.
@@ -2368,7 +2271,7 @@ export function useSetupRuns(kinds: string[]): {
  * so ageing out is the ordinary end of one's life. What it concluded is folded
  * into the surface's state either way.
  */
-export function useSetupRun(
+function useSetupRun(
   kind: string,
   id: string,
 ): {
@@ -2376,45 +2279,30 @@ export function useSetupRun(
   missing: boolean;
   guarded: boolean;
   needs: string[];
-  /**
-   * Why the last read failed, other than on authority or as a pass nobody
-   * remembers — see [setupState].
-   */
-  failure: RestFailure | null;
   loading: boolean;
 } {
-  const pass = `${encodeURIComponent(kind)}/runs/${encodeURIComponent(id)}`;
-  const read = useRestRead(
-    `/setup/integrations/${pass}`,
-    async (signal): Promise<{ run: SetupRun | null }> => {
-      try {
-        // The surface's own path as a literal at the call, so
-        // `protocol/proxy.test.ts` can hold the dev server's proxy to it.
-        return { run: (await rest.get(`/setup/integrations/${pass}`, signal)) as SetupRun };
-      } catch (err) {
-        // A PASS NOBODY REMEMBERS IS AN ANSWER — the ENGINE's own 404, never
-        // a gateway's, which says nothing about the pass — and it asks
-        // nothing more: there is nothing left to follow.
-        if (err instanceof RestError && err.status === 404 && !err.unanswered) {
-          return { run: null };
-        }
-        throw err;
-      }
-    },
-    {
-      enabled: kind !== "" && id !== "",
-      // FOLLOWED TO ITS END, and only while it is going: the row that opened
-      // this may have been a pass that was running when the list answered. A
-      // failure the engine gave no hint for goes on following the pass it
-      // holds, and a reader refused holds none, so asks nothing more.
-      cadence: (held) => (held?.run?.state === "running" ? PASS_POLL_MS : null),
-    },
+  // FOLLOWED TO ITS END, and only while it is going: the row that opened this
+  // may have been a pass that was running when the list answered.
+  const [running, setRunning] = useState(false);
+  const answer = useRest(
+    kind === "" || id === "" ? null : `${kind}/${id}`,
+    (signal) =>
+      rest.get(
+        `/setup/integrations/${encodeURIComponent(kind)}/runs/${encodeURIComponent(id)}`,
+        signal,
+      ) as Promise<SetupRun>,
+    { pollMs: running ? PASS_POLL_MS : undefined },
   );
+  const run = answer.data;
+  const nowRunning = run?.state === "running";
+  useEffect(() => setRunning(nowRunning), [nowRunning]);
+
   return {
-    run: read.data?.run ?? null,
-    missing: read.data !== null && read.data.run === null,
-    ...setupState(read),
-    loading: read.loading,
+    run,
+    missing: answer.error?.status === 404,
+    guarded: answer.error?.unauthorized ?? false,
+    needs: answer.error?.grants ?? [],
+    loading: answer.loading,
   };
 }
 
@@ -2536,8 +2424,9 @@ function concludedLine(run: SetupRun): string {
  * THE FINDINGS ARE THE POINT OF A ROW, so opening one reads the pass itself
  * rather than expanding the row's own copy — see [useSetupRun].
  */
-export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
-  const { runs, scope, guarded, needs, failure, loading } = useSetupRuns(kinds);
+function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
+  const now = useNow();
+  const { runs, scope, guarded, needs, loading } = useSetupRuns(kinds);
   // WHICH PASS IS OPEN, as the surface AND the id rather than the id alone:
   // the detail route is keyed on both, and a tool has several kinds — an id on
   // its own could not say which surface's pass it was once the listing that
@@ -2548,100 +2437,10 @@ export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] })
     [entry],
   );
 
-  const several = kinds.length > 1;
-  // THE COLUMNS HOLD STILL, above the early returns a hook may not follow: every
-  // row is memoised on this list, and one built in the render — as this was —
-  // drew every pass again on every four-second tick while one runs. Keyed on
-  // whether there is more than one surface rather than on `kinds`, an array a
-  // parent may build afresh.
-  const columns = useMemo<GridColumn<SetupRun>[]>(
-    () => [
-      {
-        key: "ran",
-        header: "Ran",
-        shrink: true,
-        sortValue: (run) => tsKey(run.started_at),
-        cell: (run) => <DateCell at={run.started_at} />,
-      },
-      // THE SURFACE ONLY WHERE THERE IS MORE THAN ONE. A column whose every
-      // value is the tool's own name is a column that says nothing.
-      ...(several
-        ? [
-            {
-              key: "surface",
-              header: "Surface",
-              shrink: true,
-              sortValue: (run: SetupRun) => named.get(run.key) ?? run.key,
-              cell: (run: SetupRun) => <TextCell>{named.get(run.key) ?? run.key}</TextCell>,
-            },
-          ]
-        : []),
-      {
-        key: "state",
-        header: "How it ended",
-        shrink: true,
-        sortValue: (run) => run.state,
-        cell: (run) => {
-          const state = passState(run);
-          return (
-            <StatusCell
-              glyph={state.glyph}
-              label={state.label}
-              // `app/frame/cells.tsx` still speaks OUR tone names, and it is
-              // another port's file, so the spelling is turned back at this one
-              // seam rather than this screen keeping a second vocabulary for
-              // the one cell that needs it. It goes when that file takes
-              // uilet's `Tone` — see `app/frame/tone.ts`, which is this same
-              // translation in the other direction.
-              tone={cellTone(state.tone)}
-              title={state.title}
-            />
-          );
-        },
-      },
-      {
-        key: "took",
-        header: "Took",
-        shrink: true,
-        align: "right",
-        // A RUNNING PASS SORTS LAST rather than as zero: it has no duration
-        // yet, and a column sorted by "shortest" that put every live pass at
-        // the top would be ordering on a measurement nobody made.
-        sortValue: (run) => passMs(run) ?? -1,
-        cell: (run) => <DurationCell ms={passMs(run)} />,
-      },
-      {
-        key: "findings",
-        header: "Findings",
-        shrink: true,
-        align: "right",
-        sortValue: (run) => run.findings?.length ?? 0,
-        // ZERO IS THE GOOD ANSWER HERE, and it has to look like one: a
-        // converged third-party app reports an EMPTY slice rather than saying it
-        // is fine (`integration.Classify`), so "found nothing" and "nothing
-        // recorded" must not draw the same mark. That is the whole of
-        // [NumberCell].
-        cell: (run) => (
-          <NumberCell
-            value={run.findings?.length ?? 0}
-            title="what this pass observed that was not fine"
-          />
-        ),
-      },
-      {
-        key: "detail",
-        header: "What it concluded",
-        cell: (run) => <TextCell>{concludedLine(run)}</TextCell>,
-      },
-    ],
-    [several, named],
-  );
   if (guarded) {
-    // NOT AN EMPTY HISTORY. `/setup` takes a grant for every route, reads
-    // included, so this reader is being refused rather than told nothing has
-    // run — and the sentence names the grant the refusal did, never "an
-    // operator token", which sent a signed-in reader to find a credential
-    // they have no use for.
+    // NOT AN EMPTY HISTORY. `/setup` is guarded in full, reads included, so
+    // this reader is being refused rather than told nothing has run — and the
+    // refusal names the grant that would have admitted them.
     return (
       <Card>
         <Card.Header icon={<RotateCwGlyph size="sm" />}>Provisioning passes</Card.Header>
@@ -2649,18 +2448,86 @@ export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] })
       </Card>
     );
   }
-  if (failure) {
-    // NOT AN EMPTY HISTORY EITHER, and not the last one read as though it
-    // were current: the read failed, and the banner says why — a node that
-    // cannot answer yet, one that refuses until somebody acts, a request that
-    // never arrived, a fault — and whether the panel reads again on its own.
-    return (
-      <Card>
-        <Card.Header icon={<RotateCwGlyph size="sm" />}>Provisioning passes</Card.Header>
-        <QueryState error={failure.error} refusal={failure.refusal} loading={false} />
-      </Card>
-    );
-  }
+
+  const columns: GridColumn<SetupRun>[] = [
+    {
+      key: "ran",
+      header: "Ran",
+      shrink: true,
+      sortValue: (run) => tsKey(run.started_at),
+      cell: (run) => <DateCell at={run.started_at} now={now} />,
+    },
+    // THE SURFACE ONLY WHERE THERE IS MORE THAN ONE. A column whose every
+    // value is the tool's own name is a column that says nothing.
+    ...(kinds.length > 1
+      ? [
+          {
+            key: "surface",
+            header: "Surface",
+            shrink: true,
+            sortValue: (run: SetupRun) => named.get(run.key) ?? run.key,
+            cell: (run: SetupRun) => <TextCell>{named.get(run.key) ?? run.key}</TextCell>,
+          },
+        ]
+      : []),
+    {
+      key: "state",
+      header: "How it ended",
+      shrink: true,
+      sortValue: (run) => run.state,
+      cell: (run) => {
+        const state = passState(run);
+        return (
+          <StatusCell
+            glyph={state.glyph}
+            label={state.label}
+            // `app/frame/cells.tsx` still speaks OUR tone names, and it is
+            // another port's file, so the spelling is turned back at this one
+            // seam rather than this screen keeping a second vocabulary for
+            // the one cell that needs it. It goes when that file takes
+            // uilet's `Tone` — see `app/frame/tone.ts`, which is this same
+            // translation in the other direction.
+            tone={cellTone(state.tone)}
+            title={state.title}
+          />
+        );
+      },
+    },
+    {
+      key: "took",
+      header: "Took",
+      shrink: true,
+      align: "right",
+      // A RUNNING PASS SORTS LAST rather than as zero: it has no duration
+      // yet, and a column sorted by "shortest" that put every live pass at
+      // the top would be ordering on a measurement nobody made.
+      sortValue: (run) => passMs(run) ?? -1,
+      cell: (run) => <DurationCell ms={passMs(run)} />,
+    },
+    {
+      key: "findings",
+      header: "Findings",
+      shrink: true,
+      align: "right",
+      sortValue: (run) => run.findings?.length ?? 0,
+      // ZERO IS THE GOOD ANSWER HERE, and it has to look like one: a
+      // converged third-party app reports an EMPTY slice rather than saying it
+      // is fine (`integration.Classify`), so "found nothing" and "nothing
+      // recorded" must not draw the same mark. That is the whole of
+      // [NumberCell].
+      cell: (run) => (
+        <NumberCell
+          value={run.findings?.length ?? 0}
+          title="what this pass observed that was not fine"
+        />
+      ),
+    },
+    {
+      key: "detail",
+      header: "What it concluded",
+      cell: (run) => <TextCell>{concludedLine(run)}</TextCell>,
+    },
+  ];
 
   return (
     <Card padding="none">
@@ -2706,16 +2573,10 @@ export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] })
         // to the panel's edges, as every grid in this product is.
         <Card.Footer variant="meta">
           <PassDetail
-            // KEYED ON THE PASS, as the panel is keyed on the tool: what one
-            // pass's read holds — the reading a failed re-read keeps, whether
-            // it was being followed — is about THAT pass. Reused for the next
-            // row, a failed read of the second pass went on drawing the
-            // first one's findings under it, and while it loaded it drew them
-            // anyway.
-            key={`${open.kind}/${open.id}`}
             kind={open.kind}
             id={open.id}
             name={named.get(open.kind) ?? open.kind}
+            now={now}
           />
         </Card.Footer>
       )}
@@ -2736,13 +2597,15 @@ function PassDetail({
   kind,
   id,
   name,
+  now,
 }: {
   kind: string;
   id: string;
   /** The surface in the reader's words, from the catalogue. */
   name: string;
+  now: number;
 }) {
-  const { run, missing, guarded, needs, failure, loading } = useSetupRun(kind, id);
+  const { run, missing, guarded, needs, loading } = useSetupRun(kind, id);
 
   if (loading && !run) return <Skeleton variant="text" rows={4} label="Loading" />;
   if (missing) {
@@ -2768,11 +2631,6 @@ function PassDetail({
       </div>
     );
   }
-  // A READ THAT FAILED IS SAID, whatever failed — it drew nothing at all under
-  // the row that opened it for anything but the engine's own `503`.
-  if (failure) {
-    return <QueryState error={failure.error} refusal={failure.refusal} loading={false} />;
-  }
   if (!run) return null;
 
   const state = passState(run);
@@ -2784,8 +2642,7 @@ function PassDetail({
           {name} · {state.label}
         </p>
         <span className="int-row-note-when">
-          started {fmtDateTime(run.started_at)} (
-          <ClockText read={(now) => relTime(run.started_at, now)} />)
+          started {fmtDateTime(run.started_at)} ({relTime(run.started_at, now)})
           {run.ended_at ? `, ended ${fmtDateTime(run.ended_at)}` : ""}
         </span>
         {/* THE FAULT, WHERE THERE IS ONE. A pass that could not run has no
@@ -2851,7 +2708,7 @@ function openFindings(present: Present[]): { surface: string; finding: Reconcile
  * which on the panel that exists to say whether anything is arriving is the
  * one wrong answer.
  */
-function LastDelivery({ surface, name }: { surface: string; name: string }) {
+function LastDelivery({ surface, name, now }: { surface: string; name: string; now: number }) {
   // A minute, the cadence "is anything arriving at all" is asked at — the same
   // one the deliveries panel and the traffic counters use. A delivery arrives
   // on the provider's schedule rather than this panel's.
@@ -2880,7 +2737,7 @@ function LastDelivery({ surface, name }: { surface: string; name: string }) {
         </span>
       </div>
       {row ? (
-        <DateCell at={row.timestamp} />
+        <DateCell at={row.timestamp} now={now} />
       ) : (
         <EmptyValue label="No delivery is recorded for this surface" />
       )}
@@ -2907,6 +2764,7 @@ function LastDelivery({ surface, name }: { surface: string; name: string }) {
  * else.
  */
 export function IntegrationPeek({ kind }: { kind: string }) {
+  const now = useNow();
   const { data, loading, error, refusal } = useQuery("integrations", undefined, {
     enabled: kind !== "",
     // The same slow cadence the screen uses at rest: traffic counters move
@@ -2956,7 +2814,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
         // itself. The panel below says the one true thing instead.
         facts={
           present.length > 0
-            ? integrationFacts(entry, rows, {
+            ? integrationFacts(entry, rows, now, {
                 known: data?.traffic_known ?? false,
                 since: data?.traffic_since,
               })
@@ -3078,7 +2936,12 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                   {entry.surfaces
                     .filter((surface) => surface.key !== "forge")
                     .map((surface) => (
-                      <LastDelivery key={surface.key} surface={surface.key} name={surface.name} />
+                      <LastDelivery
+                        key={surface.key}
+                        surface={surface.key}
+                        name={surface.name}
+                        now={now}
+                      />
                     ))}
                 </ul>
               </Card>
@@ -3094,6 +2957,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
 type Show = "all" | "connected" | "available";
 
 export function Integrations({ kind }: { kind?: string }) {
+  const viewer = useViewer();
   // Traffic counters are not pushed, and they move slowly; a minute is the
   // right cadence for "is anything arriving at all".
   //
@@ -3135,6 +2999,10 @@ export function Integrations({ kind }: { kind?: string }) {
     refetchOnFocus: true,
   });
   const setup = useSetup();
+  // ONE CLOCK for every relative time on the screen, the header's facts
+  // included — two components reading their own is how "4m ago" comes to sit
+  // beside "3m ago" for one instant.
+  const now = useNow();
   // READ AGAIN AFTER A WRITE, because the first read can land before the
   // engine has applied the revision it just stored. See [useRecheck].
   const { watching, watch } = useRecheck(
@@ -3251,10 +3119,11 @@ export function Integrations({ kind }: { kind?: string }) {
 
       {/* THE ADDRESS EVERY INBOUND INTEGRATION IS BUILT ON, rendered once. It
           is one setting, and a screen that asked for it per integration would
-          ask the operator to keep seven copies consistent. It is
-          `api.external_url`, Tier A, required on every node serving this
-          screen and resolved before the file is decoded — so there is no
-          "unset" or "resolves to nothing" state left to name here. */}
+          ask the operator to keep seven copies consistent. */}
+      {/* ALWAYS SET: `api.external_url` is Tier A, required on every node
+          serving this screen and resolved before the file is decoded, so a
+          node that answers at all has an address — and the states that
+          described its absence can no longer occur. */}
       {setup.base && (
         <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
           <span>
@@ -3262,7 +3131,25 @@ export function Integrations({ kind }: { kind?: string }) {
           </span>
         </Callout>
       )}
-      <SetupListingState setup={setup} />
+      {setup.guarded && (
+        <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
+          <span>
+            {needsSentence("Reading the integrations' setup state", setup.needs)} This screen is
+            showing what it can read without it.
+          </span>
+          <span className="spacer" />
+          {/* THE DOOR, FOR A READER WHO IS NOBODY: a banner that only NAMES
+              the missing credential leaves them nothing on the page that can
+              supply it. A signed-in reader lacks a GRANT, which signing in
+              again as themselves would not change, so they get the sentence
+              alone. */}
+          {viewer.anonymous && (
+            <Button size="small" leadingIcon={<KeyGlyph size="sm" />} onClick={goSignIn}>
+              Sign in
+            </Button>
+          )}
+        </Callout>
+      )}
 
       {/* ONE OBJECT, ONE HEADER. `#/settings/integrations/{kind}` is a page about
           a single tool, and it opened with the catalogue's chrome and a card:
@@ -3288,7 +3175,7 @@ export function Integrations({ kind }: { kind?: string }) {
           }
           facts={
             presentSurfaces(focus, rows).length > 0
-              ? integrationFacts(focus, rows, {
+              ? integrationFacts(focus, rows, now, {
                   known: data?.traffic_known ?? false,
                   since: data?.traffic_since,
                 })

@@ -11,13 +11,12 @@
  * `ui/boundary.test.ts`:
  *
  * - runtime imports name a file in this directory, `~/lib/format.ts` (pure
- *   formatting), `~/lib/storage.ts` (the table of storage KEYS — the storage
- *   itself is still injected) or `~/protocol/retry.ts` (pure arithmetic over
- *   the engine's retry hint, which the check waits out exactly as the
- *   socket's questions do, so it is one reading rather than a copy); the last
- *   two are DOORS held below to being as pure as this directory, and the rest
- *   of `~/protocol` is imported for TYPES only, because its runtime half is
- *   the socket and `fetch`;
+ *   formatting), `~/lib/storage.ts` (the table of storage KEYS, which is
+ *   constants and imports nothing — the storage itself is still injected) or
+ *   `~/protocol/configAnswer.ts` (the ONE reading of a `/config` refusal,
+ *   which imports nothing but types — held below); the rest of `~/protocol`
+ *   is imported for TYPES only, because its runtime half is the socket and
+ *   `fetch`;
  * - no module names a browser or time global.
  */
 
@@ -25,24 +24,11 @@ import { describe, expect, test } from "vitest";
 
 import { modules } from "~/test/source.ts";
 
+/** The one runtime import the model may make from `~/protocol`. */
+const CONFIG_ANSWER = "~/protocol/configAnswer.ts";
+
 /** This directory, relative to `src/`. */
 const MODEL = "routes/org/builder/model/";
-
-/** Pure formatting: the one module outside this directory and its doors the core may import. */
-const FORMAT = "~/lib/format.ts";
-
-/**
- * The DOORS: the modules the core may import at runtime from where the
- * network lives, by the specifier it imports them under and their path under
- * `src/`, each with the runtime imports it may make itself — `protocol/retry.ts`
- * reads the engine's two waits out of the contract, which is data and nothing
- * else (the contract's own suite holds that), and nothing else may reach
- * further.
- */
-const DOORS: readonly { spec: string; path: string; reaches: readonly string[] }[] = [
-  { spec: "~/lib/storage.ts", path: "lib/storage.ts", reaches: [] },
-  { spec: "~/protocol/retry.ts", path: "protocol/retry.ts", reaches: ["../contract/retry.ts"] },
-];
 
 /** The modules of this directory, tests excluded: a test may use whatever it needs. */
 const sources = modules()
@@ -111,8 +97,9 @@ describe("the builder core", () => {
       for (const { spec, typeOnly } of imports(text)) {
         const allowed =
           spec.startsWith("./") ||
-          spec === FORMAT ||
-          DOORS.some((door) => door.spec === spec) ||
+          spec === "~/lib/format.ts" ||
+          spec === "~/lib/storage.ts" ||
+          spec === CONFIG_ANSWER ||
           (typeOnly && spec.startsWith("~/protocol/"));
         if (!allowed) offending.push(`${name}: ${typeOnly ? "import type" : "import"} "${spec}"`);
       }
@@ -120,25 +107,20 @@ describe("the builder core", () => {
     expect(offending).toEqual([]);
   });
 
-  // A DOOR IS ONLY AS PURE AS WHAT IT IMPORTS: one that reached for `rest.ts`
-  // or the socket would bring the network in with it, past every rule above.
-  // So each imports at runtime only what it is listed as reaching, and names
-  // no global either.
-  test.each(DOORS)(
-    "$spec imports only what it is listed as reaching and names no global",
-    (door) => {
-      const found = modules().find(({ path }) => path === door.path);
-      expect(found, `${door.path} is gone`).toBeDefined();
-      const runtime = imports(found!.text)
-        .filter(({ typeOnly }) => !typeOnly)
-        .map(({ spec }) => spec);
-      expect(runtime).toEqual(door.reaches);
-      const body = code(found!.text);
-      expect(FORBIDDEN_GLOBALS.filter(([, pattern]) => pattern.test(body)).map(([l]) => l)).toEqual(
-        [],
-      );
-    },
-  );
+  test("reads a /config refusal through a protocol module that is itself pure", () => {
+    // THE ONE RUNTIME DOOR INTO ~/protocol, and it stays a door only while
+    // what is behind it imports nothing at runtime: the day it reached for
+    // `rest.ts` the model would be one import away from the network.
+    const answer = modules().find(({ path }) => path === "protocol/configAnswer.ts");
+    expect(answer, "protocol/configAnswer.ts is gone").toBeDefined();
+    const runtime = imports(answer!.text).filter(({ typeOnly }) => !typeOnly);
+    expect(runtime).toEqual([]);
+    const body = code(answer!.text);
+    const reached = FORBIDDEN_GLOBALS.filter(([, pattern]) => pattern.test(body)).map(
+      ([label]) => label,
+    );
+    expect(reached).toEqual([]);
+  });
 
   test("names no browser, network, clock or randomness global", () => {
     const offending: string[] = [];

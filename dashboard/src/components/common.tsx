@@ -12,11 +12,14 @@ import type { ReactNode } from "react";
 import { Button, Callout, EmptyState, Section as UiSection, Tag, cx } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PlugGlyph, KeyGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
+// STILL OURS: an attention row's mark is named by `lib/attention.ts` as a
+// value, and uilet's glyphs are components. The name -> drawing lookup stays
+// in `~/ui/Icon.tsx`, which is the one place a port of it moves every caller
+// at once - the same call `app/frame/cells.tsx` makes for the same reason.
 import { PhaseTag } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
-import { useClockReading } from "~/lib/clock.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
+import { useNow } from "~/lib/clock.ts";
 import { isLogRefusal } from "~/protocol/index.ts";
 import { goSignIn } from "~/lib/session.ts";
 import {
@@ -32,13 +35,8 @@ import {
   type Seat,
   type SeatKind,
 } from "~/lib/seats.ts";
-import type {
-  AgentRow,
-  FeedRow,
-  LogRefusal,
-  QueryRefusal,
-  ReadErrorCode,
-} from "~/protocol/index.ts";
+import type { AgentRow, FeedRow, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
+import type { QueryErrorCode } from "~/contract/errors.ts";
 
 /**
  * How tall a block of machine text grows before it scrolls itself, in px.
@@ -129,6 +127,7 @@ export function SeatCard({
   /** A person's name by their handle, off the chart the caller holds — see `NameOf`. */
   nameOf: NameOf;
 }) {
+  const now = useNow();
   // THE RING'S TONE, OR NONE: a person is not run by the engine, and an idle
   // seat draws no edge, for the reason `ringOf` gives.
   const tone = seat.kind === "human" ? undefined : ringOf(activityOf(agent));
@@ -165,12 +164,7 @@ export function SeatCard({
           <StateBadge agent={agent} />
         )}
       </div>
-      <div className="seat-line truncate">
-        {/* THE CLOCK IS READ IN THE LINE THAT SHOWS IT: a card subscribed to
-            the second redrew its badge, its name and its phase once a second
-            for the one part of it whose words move. */}
-        <ClockText read={(now) => stateLine(agent, { now, seat, nameOf })} />
-      </div>
+      <div className="seat-line truncate">{stateLine(agent, { now, seat, nameOf })}</div>
       {call?.in_progress && (
         <div className="row gap-1">
           {/* THE PHASE IN THE PHASE'S OWN HUE, drawn by the one component that
@@ -198,9 +192,7 @@ export function SeatCard({
             {round?.text}
           </span>
           <span className="spacer" />
-          <span className="t-caption">
-            <ClockText read={(now) => relTime(call.updated_at, now)} />
-          </span>
+          <span className="t-caption">{relTime(call.updated_at, now)}</span>
         </div>
       )}
       {seat.unit && <div className="t-caption truncate">{seat.unit.name}</div>}
@@ -236,11 +228,7 @@ export function EventRow({
   onOpen?: () => void;
   compact?: boolean;
 }) {
-  // THE ONLY THING ON THE ROW THE CLOCK MOVES is the relative half of its
-  // title, and the row reads it as WORDS: subscribed to the second, every row
-  // of a four-hundred-row log rendered once a second for a tooltip, where now
-  // a row renders when "4m ago" becomes "5m ago".
-  const ago = useClockReading((now) => relTime(event.timestamp, now));
+  const now = useNow();
   const actor = event.actor || "engine";
   const what = event.summary || event.type;
   const failedMark = event.failed && (
@@ -254,7 +242,7 @@ export function EventRow({
     <time
       className="feed-time"
       dateTime={event.timestamp}
-      title={`${fmtDateTime(event.timestamp)} · ${ago}`}
+      title={`${fmtDateTime(event.timestamp)} · ${relTime(event.timestamp, now)}`}
     >
       {/* A WALL CLOCK, AND THE TRACK IS SIZED FOR ONE. The full instant is
           in the title; which DAY a row belongs to is a heading between days
@@ -352,13 +340,10 @@ export function Section({
  * branch at all for the same reason: `closed` told the reader "the engine
  * refused this query", which it did not — the socket went away.
  *
- * `Record<ReadErrorCode, …>` is what makes that checkable: a code added to
- * the type without a sentence here is a compile error. The union is the
- * socket's `QueryErrorCode` and the one code a REST read adds, `unanswered`,
- * because a screen reading over REST draws its failure through this same
- * table and its own failure needs its own true sentence.
+ * `Record<QueryErrorCode, …>` is what makes that checkable: a code added to
+ * the type without a sentence here is a compile error.
  */
-const REFUSALS: Record<ReadErrorCode, ReactNode> = {
+const REFUSALS: Record<QueryErrorCode, ReactNode> = {
   unauthorized: (
     // `action` IS the spacer-then-control our markup spelled by hand: a
     // Callout puts its control at the trailing edge, so the `spacer` span
@@ -375,11 +360,9 @@ const REFUSALS: Record<ReadErrorCode, ReactNode> = {
         </Button>
       }
     >
-      {/* ABOUT THE GRANT, NOT A TOKEN. It said this needed "an API token
-          matching one of your api.auth.tokens entries", which was the whole
-          of authority while a Tier A token was the only credential; a person
-          signed in with a session and refused one grant was sent to find a
-          token they have no use for. */}
+      {/* ABOUT THE GRANT, NOT A TOKEN: what a signed-in reader refused here
+          lacks is a grant, and an answer that names it is drawn by
+          `RefusedOnAuthority` below instead. */}
       The credential you presented does not carry the grant this answer needs, or none was
       presented. Sign in as somebody who holds it.
     </Callout>
@@ -427,23 +410,11 @@ const REFUSALS: Record<ReadErrorCode, ReactNode> = {
     </Callout>
   ),
   closed: (
-    // A SOCKET, drawn as one: the kit's plug, a connection that went away.
+    // A SOCKET, drawn as one. `plug` was ours; `Cable` is the nearest thing
+    // uilet vendors and says the same thing about a connection that went away.
     <Callout variant="neutral" icon={<PlugGlyph size="md" />}>
       The connection went away before this answered. Nothing refused it; the screen reads again once
       the socket is back.
-    </Callout>
-  ),
-  // A REST READ NO ANSWER CAME BACK TO, which is not `closed`: the socket can
-  // be up the whole time — one request past its deadline on a slow engine, or
-  // dropped on the way — and a banner promising a read "once the socket is
-  // back" was waiting on an event that never came. Nothing here knows what the
-  // engine would have said, so the sentence says only what is true of all of
-  // it, and the read backs off on its own (`restRetryMs`).
-  unanswered: (
-    <Callout variant="neutral" icon={<ClockGlyph size="md" />}>
-      No answer from the engine reached this page: it took too long, the request was lost on the
-      way, or something in front of the engine answered in its place. Nothing refused it, and this
-      screen asks again on its own.
     </Callout>
   ),
 };
@@ -502,11 +473,10 @@ function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
  * `unavailable` covers both, and the generic banner promises "this screen asks
  * again on its own", which for these would be a promise of a loop: the same
  * read is refused until an operator acts or another node is asked. So the
- * banner names the refusal and its own words, the remedy, and says the screen
- * is NOT asking again — nothing re-asks it on a timer, a poll included, so it
- * says what does: a reload once somebody has acted (a reconnect asks again
- * too, when the fix restarted the node). FROM THE ANSWER, NEVER WRITTEN HERE,
- * for the reason `RefusedOnAuthority` gives.
+ * banner names the refusal and its own words and says the screen is NOT
+ * asking again — nothing re-asks it on a timer — so it says what does: a
+ * reload once somebody has acted. FROM THE ANSWER, NEVER WRITTEN HERE, for the
+ * reason `RefusedOnAuthority` gives.
  */
 function RefusedByTheLog({ refusal }: { refusal: LogRefusal }) {
   return (
@@ -545,8 +515,8 @@ export function QueryState({
 }: {
   error: string | null;
   /**
-   * Why the answer was refused — `useQuery`'s own `refusal`. For an
-   * `unauthorized` answer the banner then says which grant would have
+   * Why the answer was refused — `useQuery`'s and `useRest`'s own `refusal`.
+   * For an `unauthorized` answer the banner then says which grant would have
    * admitted the reader, or that none would; for an `unavailable` one the
    * state log refused and waiting will not change, it says so and what the
    * refusal names, rather than that the node is catching up.
@@ -581,7 +551,7 @@ export function QueryState({
   if (error === "bad_params" && detail) {
     return <Callout variant="warning">The engine refused this request: {detail}</Callout>;
   }
-  const banner = error ? REFUSALS[error as ReadErrorCode] : undefined;
+  const banner = error ? REFUSALS[error as QueryErrorCode] : undefined;
   if (banner) return <>{banner}</>;
   // A CODE THIS BUILD DOES NOT KNOW. A newer node may send one — the wire
   // evolves additively — and naming it is more use than calling it a refusal.

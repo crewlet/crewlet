@@ -1,38 +1,34 @@
 /**
- * Changing a token ceiling, as values: which surface a scope's ceilings live
- * on, what the write that changes one carries, what it is recorded as, and
+ * Changing a token ceiling, as values: which document a scope's ceilings live
+ * in, what the write that changes one carries, what it is recorded as, and
  * what the engine's answer to it means.
  *
  * PURE, so every rule a screen's Save turns on is pinned by a test without a
  * network or a clock: `lib/useCeilingWrite.ts` is the half that sends it.
  *
- * # Two scopes, two surfaces
+ * # Two scopes, two writes
  *
- * The COMPANY's ceilings are the settings' `token_budget`, a top-level key of
- * the company document, so they change by a merge patch of `/config` naming
- * only the windows that change (`{token_budget: {day: 50000000}}`, and `null`
- * to remove one): a colleague's change to anything else in the document
- * survives it, and so does a ceiling on a window this write did not touch.
+ * The COMPANY's ceilings are a top-level key of the company document, so they
+ * change by a merge patch naming only the windows that change
+ * (`{token_budget: {day: 50000000}}`, and `null` to remove one): a colleague's
+ * change to anything else in the document survives it, and so does a ceiling
+ * on a window this write did not touch.
  *
- * A SEAT's are in its RUNTIME half on the org chart, which left the company
- * document for a log of its own — `/config` refuses a body naming a seat, and
- * the write that used to replace the seat there (`PUT /config/roles/{handle}`)
- * no longer exists: the engine serves no `roles` collection, so that path is
- * a `404 no_route`. A seat's ceilings change by its chart content write
- * (`PATCH /chart/seats/{handle}`): read the seat with its runtime half
- * (`?runtime=true`), change the runtime's `token_budget`, and send the seat
- * back. A content write is the object's whole post-state — its prose as read
- * — with the runtime half stated because it changed ([seatCeilingBody]).
- * Each window is `{day, week, month}`, the shape the company's takes too.
+ * A SEAT's live inside that seat, which may sit in a unit at any depth — and a
+ * merge patch cannot address a list element (RFC 7396 replaces an array
+ * whole), so a patch naming one seat would rewrite the roster. A seat's
+ * ceilings therefore change by replacing THAT SEAT (`PUT
+ * /config/roles/{handle}`): read it, change its `token_budget`, send it back.
+ * The engine validates the whole company behind either, so neither can store
+ * a ceiling that breaks it.
  */
 
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import type { ConfigRefusal } from "~/protocol/configAnswer.ts";
-import type { RestError } from "~/protocol/rest.ts";
-import type { ChartSeat, TokenBudget } from "~/protocol/types.ts";
-import { needsSentence } from "./refusal.ts";
+import type { TokenBudget } from "~/protocol/types.ts";
 import { PERIOD_ADJECTIVE, readCeiling } from "./budget.ts";
 import { fmtCount } from "./format.ts";
+import { configGuardedReason } from "./useWriteAccess.ts";
 
 export type Period = (typeof BUDGET_WINDOWS)[number]["period"];
 
@@ -41,7 +37,7 @@ export type CeilingScope =
   | { readonly kind: "company" }
   | {
       readonly kind: "seat";
-      /** The seat's handle — the address `PATCH /chart/seats/{handle}` writes. */
+      /** The seat's handle — the id `PUT /config/roles/{handle}` addresses. */
       readonly handle: string;
       /** How the chart names it, for the words a reader and the history see. */
       readonly name: string;
@@ -71,19 +67,19 @@ export function companyPatch(changes: CeilingChanges): Record<string, unknown> {
 }
 
 /**
- * A seat's runtime half as read, with its ceilings changed.
+ * A seat as read, with its ceilings changed — the body its `PUT` takes back.
  *
- * EVERYTHING ELSE AS READ, masks included: the chart restores a masked
- * credential from the row it patches, so a redacted value sent back is the
- * credential kept. And a runtime capping nothing carries NO `token_budget`
- * key at all rather than an empty one, which is how the chart holds a seat
- * nobody capped.
+ * EVERYTHING ELSE AS READ, masks included: the engine restores a mask it
+ * served against the revision it served it from, so a redacted credential
+ * sent back is the credential kept. And a seat left capping nothing carries
+ * NO `token_budget` key at all rather than an empty one, which is how the
+ * engine writes a seat nobody capped.
  */
-export function runtimeWithCeilings(
-  runtime: Readonly<Record<string, unknown>>,
+export function seatWithCeilings(
+  seat: Readonly<Record<string, unknown>>,
   changes: CeilingChanges,
 ): Record<string, unknown> {
-  const held = runtime.token_budget;
+  const held = seat.token_budget;
   const budget: Record<string, number> = {};
   if (held && typeof held === "object" && !Array.isArray(held)) {
     for (const [key, value] of Object.entries(held)) {
@@ -96,45 +92,10 @@ export function runtimeWithCeilings(
     if (next === null || next === undefined) delete budget[period];
     else budget[period] = next;
   }
-  const out: Record<string, unknown> = { ...runtime };
+  const out: Record<string, unknown> = { ...seat };
   if (Object.keys(budget).length === 0) delete out.token_budget;
   else out.token_budget = budget;
   return out;
-}
-
-/**
- * The body of the chart content write that changes a seat's ceilings: the
- * seat's content as read, and its runtime half with the ceilings changed.
- *
- * THE WHOLE CONTENT, because a content write is the object's post-state: a
- * field left out is a field cleared. Every one is restated as read — the
- * address masked as the chart served it, which it restores — so the write
- * changes the ceilings and nothing else. NO `kind` AND NO `manages`: both are
- * structure, which the content route refuses by name.
- *
- * THE RUNTIME STATED, never left out, since it is what changes; and a runtime
- * this change empties is CLEARED (`clear_runtime`) rather than sent as `{}`,
- * the one spelling the chart reads as "this seat has no runtime half".
- */
-export function seatCeilingBody(seat: ChartSeat, changes: CeilingChanges): Record<string, unknown> {
-  const content: Record<string, unknown> = {
-    unit: seat.unit ?? "",
-    name: seat.name ?? "",
-    email: seat.email ?? "",
-    backstory: seat.backstory ?? "",
-    goal: seat.goal ?? "",
-    responsibilities: seat.responsibilities ?? [],
-    behavioral_guidelines: seat.behavioral_guidelines ?? [],
-    project: seat.project ?? "",
-    space: seat.space ?? "",
-  };
-  const runtime = runtimeWithCeilings(
-    (seat.runtime ?? {}) as Readonly<Record<string, unknown>>,
-    changes,
-  );
-  return Object.keys(runtime).length > 0
-    ? { ...content, runtime }
-    : { ...content, clear_runtime: true };
 }
 
 /**
@@ -223,14 +184,7 @@ export function refusalWords(
 ): { message: string; reload: boolean } {
   switch (refusal.kind) {
     case "guarded":
-      // ABOUT THE GRANT, NOT A TOKEN: a ceiling is a change to the company's
-      // configuration, and the credential presented does not carry the right
-      // to make one.
-      return {
-        message:
-          "The credential you presented does not carry config:write, so the ceiling was not changed.",
-        reload: false,
-      };
+      return { message: configGuardedReason(refusal.code), reload: false };
     case "conflict":
       return {
         message:
@@ -252,7 +206,7 @@ export function refusalWords(
       return {
         message:
           scope.kind === "seat"
-            ? `${scope.name} is no longer in the org chart.`
+            ? `${scope.name} is no longer in the company's configuration.`
             : "No company is configured yet.",
         reload: true,
       };
@@ -261,54 +215,6 @@ export function refusalWords(
     case "problems":
       return {
         message: refusal.problems.map((p) => p.message).join(" ") || "The engine refused it.",
-        reload: false,
-      };
-  }
-}
-
-/**
- * A refused chart content write in one sentence a person can act on, and
- * whether a fresh read is the remedy — the seat scope's half of
- * [refusalWords].
- *
- * WHAT A CHART WRITE CAN ANSWER is not what `/config` can: there is no
- * revision to conflict with, and the object itself is the unit of contention
- * — a `409 stale` is a colleague's write to THIS seat landing first, settled
- * by reading it again. A `422` is the chart's own rule refusing the runtime
- * half (a ceiling it will not hold), in the rule's own words; a `403` names
- * the grant, or the fields a lead may not change; a `404` is a seat a removal
- * took. An outcome nobody can establish is not here: it is
- * `useCeilingWrite`'s `unknown`, resent under the same operation.
- */
-export function chartRefusalWords(
-  err: RestError,
-  scope: CeilingScope,
-): { message: string; reload: boolean } {
-  const whose = whoseCeiling(scope);
-  switch (err.status) {
-    case 401:
-    case 403:
-      return {
-        message: needsSentence(`Changing ${whose} ceilings`, err.grants),
-        reload: false,
-      };
-    case 404:
-      return {
-        message:
-          scope.kind === "seat"
-            ? `${scope.name} is no longer in the org chart.`
-            : "No company is configured yet.",
-        reload: true,
-      };
-    case 409:
-      return {
-        message:
-          "Somebody changed this seat at the same moment, so nothing was saved. Reload to see it as it is now.",
-        reload: true,
-      };
-    default:
-      return {
-        message: err.detail || err.sentence || `The engine refused the change (${err.status}).`,
         reload: false,
       };
   }

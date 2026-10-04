@@ -6,16 +6,17 @@
  * two meet on screen the way they are meant to: every tile carries exactly
  * ONE control, Manage and Learn more are real links, Rotate token opens the
  * settings form saying why, the filter narrows what is shown, and a reader
- * refused the listing sees every form action disabled with its reason
+ * the engine refuses `/setup` sees every form action disabled with its reason
  * rather than removed.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { LayerHost } from "@crewlethq/ui";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Integrations } from "./Integrations.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { IntegrationsAnswer } from "~/contract/integrations.ts";
 import type { SetupListing, SetupToolState } from "~/protocol/types.ts";
@@ -105,7 +106,7 @@ const listing: SetupListing = {
     tool("datadog", { configured: true, enabled: true, satisfied: true }),
     ...["slack", "mattermost", "atlassian", "jira", "confluence", "github"].map((k) => tool(k)),
   ],
-  public_base_url: { present: true, resolved: true, value: "https://engine.example.com" },
+  external_url: { value: "https://engine.example.com", config_path: "api.external_url" },
 } as unknown as SetupListing;
 
 function stubFetch(setup: { status: number; body: unknown }) {
@@ -125,22 +126,30 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
 });
 
+/** Somebody who may read and connect an integration. */
+const OPERATOR = {
+  login: "ops",
+  owner: "ops",
+  grants: ["config:read", "config:write", "secrets:write"],
+};
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
-  localStorage.clear();
 });
 
-function mount() {
+function mount(viewer: unknown = OPERATOR) {
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-    Promise.resolve(what === "integrations" ? answer : []);
+    Promise.resolve(what === "integrations" ? answer : what === "viewer" ? viewer : []);
   return render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <Integrations />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <Integrations />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
     { wrapper: LayerHost },
   );
@@ -206,12 +215,15 @@ test("the filter shows what the company has, or what it could have", async () =>
 });
 
 // A WRITE CONTROL IS NEVER HIDDEN. `/setup` is guarded in full, so a reader
-// refused its listing has no form to open — and every form action says so on
-// the control itself, naming the grants rather than a token, while Manage
-// (which writes nothing) still works.
-test("refused the listing, every form action is disabled with the grants it needs", async () => {
-  stubFetch({ status: 401, body: { error: "unauthorized" } });
-  mount();
+// the engine refuses has no form to open — and every form action says which
+// grants it takes on the control itself, while Manage (which writes nothing)
+// still works.
+test("a reader refused /setup sees every form action disabled with the grants it takes", async () => {
+  stubFetch({
+    status: 403,
+    body: { error: "unauthorized", reason: "config", grants: ["config:read"] },
+  });
+  mount({ login: "dee", owner: "dee", grants: ["state:read"] });
   const connect = await screen.findByRole("button", { name: "Connect Slack" });
   expect(connect.getAttribute("aria-disabled")).toBe("true");
   expect(connect.getAttribute("aria-describedby")).toBeTruthy();

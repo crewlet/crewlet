@@ -3,12 +3,17 @@
  * chart, with its derived hierarchy.
  */
 
-import type { OrgProjection, OrgSeat, OrgUnit } from "~/protocol/types.ts";
+import type { OrgProjection } from "~/protocol/types.ts";
 
 /** A founder above everything; a CEO and CTO in Leadership · Executives; two
  *  engineers in Engineering · Core, which the CTO leads from outside it; a PM
  *  in Product · Management, and DevRel in Product · Developer Relations whose
- *  lead the PM is by inheritance. */
+ *  lead the PM is by inheritance.
+ *
+ *  AS THE ENGINE SENDS IT: every seat carries the handle the engine minted for
+ *  it and every unit its key, a lead is named by handle, and the derived block
+ *  carries each unit's key beside its name — those, never a name, are what the
+ *  chart is addressed by. */
 export const CHART_ORG = {
   name: "Acme",
   roles: [
@@ -16,15 +21,44 @@ export const CHART_ORG = {
   ],
   units: [
     {
+      id: "leadership",
       name: "Leadership",
-      children: [{ name: "Executives", lead: "CEO", roles: [{ name: "CEO" }, { name: "CTO" }] }],
+      children: [
+        {
+          id: "executives",
+          name: "Executives",
+          lead: "ceo",
+          roles: [
+            { name: "CEO", handle: "ceo" },
+            { name: "CTO", handle: "cto" },
+          ],
+        },
+      ],
     },
-    { name: "Engineering", children: [{ name: "Core", roles: [{ name: "SWE" }, { name: "FE" }] }] },
     {
+      id: "engineering",
+      name: "Engineering",
+      children: [
+        {
+          id: "core",
+          name: "Core",
+          roles: [
+            { name: "SWE", handle: "swe" },
+            { name: "FE", handle: "fe" },
+          ],
+        },
+      ],
+    },
+    {
+      id: "product",
       name: "Product",
       children: [
-        { name: "Management", lead: "PM", roles: [{ name: "PM" }] },
-        { name: "Developer Relations", roles: [{ name: "DevRel" }] },
+        { id: "management", name: "Management", lead: "pm", roles: [{ name: "PM", handle: "pm" }] },
+        {
+          id: "developer-relations",
+          name: "Developer Relations",
+          roles: [{ name: "DevRel", handle: "devrel" }],
+        },
       ],
     },
   ],
@@ -39,13 +73,19 @@ export const CHART_ORG = {
       seat("devrel", "DevRel", "pm"),
     ],
     units: [
-      { name: "Leadership", seats: [], lead: "" },
-      { name: "Executives", seats: ["ceo", "cto"], lead: "ceo" },
-      { name: "Engineering", seats: [], lead: "" },
-      { name: "Core", seats: ["swe", "fe"], lead: "cto" },
-      { name: "Product", seats: [], lead: "" },
-      { name: "Management", seats: ["pm"], lead: "pm" },
-      { name: "Developer Relations", seats: ["devrel"], lead: "pm", lead_inherited: true },
+      { id: "leadership", name: "Leadership", seats: [], lead: "" },
+      { id: "executives", name: "Executives", seats: ["ceo", "cto"], lead: "ceo" },
+      { id: "engineering", name: "Engineering", seats: [], lead: "" },
+      { id: "core", name: "Core", seats: ["swe", "fe"], lead: "cto" },
+      { id: "product", name: "Product", seats: [], lead: "" },
+      { id: "management", name: "Management", seats: ["pm"], lead: "pm" },
+      {
+        id: "developer-relations",
+        name: "Developer Relations",
+        seats: ["devrel"],
+        lead: "pm",
+        lead_inherited: true,
+      },
     ],
   },
 } as unknown as OrgProjection;
@@ -60,30 +100,5 @@ function seat(handle: string, name: string, manager: string, kind = "agent") {
     reports: [],
     auto_reports: [],
     placed_by_ref: false,
-  };
-}
-
-/**
- * `org` as the engine sends it to a reader WITHOUT `config:read`: every seat,
- * at any depth, with its resolved model chain and tool sources removed — what
- * `internal/api`'s `OrgProjection.For` does for that audience. A suite drawing
- * a screen for such a reader hands it this, because a projection carrying the
- * chain to a reader the engine never sends it to certifies a screen against a
- * wire that does not exist.
- */
-export function forStateReader(org: OrgProjection): OrgProjection {
-  const seats = (roles: OrgSeat[] | undefined) =>
-    roles?.map(({ llm: _llm, tool_sources: _tools, ...rest }) => rest);
-  const units = (list: OrgUnit[] | undefined): OrgUnit[] | undefined =>
-    list?.map((u) => ({
-      ...u,
-      ...(u.roles ? { roles: seats(u.roles) } : {}),
-      ...(u.children ? { children: units(u.children) } : {}),
-    }));
-  const copy = structuredClone(org);
-  return {
-    ...copy,
-    ...(copy.roles ? { roles: seats(copy.roles) } : {}),
-    ...(copy.units ? { units: units(copy.units) } : {}),
   };
 }

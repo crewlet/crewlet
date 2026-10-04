@@ -3,41 +3,36 @@
  * The builder reducer.
  *
  * What these protect: a template can only start a company from nothing, never
- * replace one that exists; a reader the chart did not show the runtime half
- * cannot write one; the draft is always its base with the log replayed,
- * whatever sequence of actions produced it; every change moves the generation
- * and a check for another generation is ignored; the base is keyed by address
- * the moment it is read, and a derivation is kept only while it describes that
- * chart; a refused credential stops the log being kept; and an update or a
- * restore adopts a log only once every conflict is resolved.
+ * replace one that exists; the draft is always its base with the log
+ * replayed, whatever sequence of actions produced it; every change moves the
+ * generation and a check for another generation is ignored; the first check
+ * of a base keys it by the engine's handles; a refused token stops the log
+ * being kept; and an update or a restore adopts a log only once every
+ * conflict is resolved.
  */
 
 import { describe, expect, test } from "vitest";
-import type { ChartRead, CompanyDocument } from "~/protocol/index.ts";
-import { COMPANY_KEY } from "./keys.ts";
+import type { CompanyDocument } from "~/protocol/index.ts";
+import { COMPANY_KEY, seatPathKey } from "./keys.ts";
 import { allSeats, locate } from "./draft.ts";
+import { toDocument } from "./document.ts";
 import { replay } from "./history.ts";
-import { OPERATIONS_VERSION, type Intent } from "./operations.ts";
+import type { Intent } from "./operations.ts";
+import { OPERATIONS_VERSION } from "./operations.ts";
 import type { CheckOutcome } from "./scheduler.ts";
 import { templateIntent } from "./templates.ts";
 import {
   builderReducer,
   checkTrigger,
+  handlesOf,
   hasChanges,
   INITIAL_BUILDER,
+  isBaseKeyed,
   recordIntent,
   type BuilderAction,
   type BuilderState,
 } from "./reducer.ts";
-import type { KeptDraft } from "./persistence.ts";
-import {
-  chartOf,
-  countingKeys,
-  fixtureChart,
-  fixtureDerived,
-  fixtureSettings,
-  strippedChart,
-} from "./testkit.ts";
+import { countingKeys, fixtureCompany, fixtureDerived } from "./testkit.ts";
 
 /** mulberry32: a seeded PRNG, so a failing property names the run that found it. */
 function prng(seed: number): () => number {
@@ -54,234 +49,244 @@ function prng(seed: number): () => number {
 const run = (state: BuilderState, ...actions: BuilderAction[]) =>
   actions.reduce(builderReducer, state);
 
-function edit(
-  chart: ChartRead = fixtureChart(),
-  settings: CompanyDocument = fixtureSettings(),
-  revision = "rev-1",
-): BuilderState {
-  return run(INITIAL_BUILDER, { type: "load", mode: "edit", settings, revision, chart });
+function loadedEdit(doc: CompanyDocument = fixtureCompany()): BuilderState {
+  return run(INITIAL_BUILDER, { type: "load", mode: "edit", document: doc, revision: "rev-1" });
 }
 
-const create = () =>
-  run(INITIAL_BUILDER, {
-    type: "load",
-    mode: "create",
-    settings: null,
-    revision: null,
-    chart: null,
-  });
-
 /** The answer to the check of the state's own generation. */
-function checked(state: BuilderState, outcome: CheckOutcome): BuilderAction {
+function checked(
+  state: BuilderState,
+  outcome: CheckOutcome,
+  baseRevision = state.base.revision,
+): BuilderAction {
   return {
     type: "checked",
-    settled: {
-      generation: state.generation,
-      baseRevision: state.base.revision,
-      basePrint: state.base.print,
-      outcome,
-    },
+    settled: { generation: state.generation, sent: toDocument(state.draft), baseRevision, outcome },
   };
 }
 
-const template = (): Intent => {
-  const built = templateIntent(
-    { template: "new_company", charter: { name: "Acme" } },
-    countingKeys(),
+/** A loaded edit-mode builder whose base the first check has keyed. */
+function keyedEdit(doc: CompanyDocument = fixtureCompany()): BuilderState {
+  const loaded = loadedEdit(doc);
+  return run(
+    loaded,
+    checked(loaded, { status: "clean", warnings: [], derived: fixtureDerived(doc) }),
   );
-  if (!built.ok) throw new Error(built.message);
-  return built.intent;
-};
+}
 
 describe("mode guards", () => {
+  const template = (): Intent => {
+    const built = templateIntent(
+      { template: "new_company", charter: { name: "Acme" } },
+      countingKeys(),
+    );
+    if (!built.ok) throw new Error(built.message);
+    return built.intent;
+  };
+
   test("a template is refused in edit mode, and the company is left untouched", () => {
-    const state = edit();
+    const state = keyedEdit();
     const next = run(state, { type: "record", intent: template() });
     expect(next.refusal).toMatchObject({ reason: "mode" });
     expect(next.draft).toBe(state.draft);
     expect(next.generation).toBe(state.generation);
+    expect(next.log.ops).toEqual([]);
 
-    // The dangerous case: a company whose chart is empty, where nothing but the
-    // mode stands between a template and replacing its charter.
-    const bare = edit(chartOf({}), { name: "Existing", mission: "Keep me" });
+    // The dangerous case: a company with no seats or units yet, where nothing
+    // but the mode stands between a template and replacing the company's
+    // charter and roster in one merge patch.
+    const bare = keyedEdit({ name: "Existing", mission: "Keep me" });
     const refused = run(bare, { type: "record", intent: template() });
     expect(refused.refusal).toMatchObject({ reason: "mode" });
-    expect(refused.draft.company).toEqual({ name: "Existing", mission: "Keep me" });
+    expect(toDocument(refused.draft).document).toEqual({ name: "Existing", mission: "Keep me" });
   });
 
   test("a template starts a company in create mode, once", () => {
-    const created = run(create(), { type: "record", intent: template() });
+    const state = run(INITIAL_BUILDER, {
+      type: "load",
+      mode: "create",
+      document: null,
+      revision: null,
+    });
+    const created = run(state, { type: "record", intent: template() });
     expect(created.refusal).toBeNull();
     expect(created.log.ops.map((op) => op.type)).toEqual(["applyTemplate"]);
-    expect(created.draft.company.name).toBe("Acme");
+    expect(toDocument(created.draft).document.name).toBe("Acme");
     expect(run(created, { type: "record", intent: template() }).refusal).toMatchObject({
       reason: "not_empty",
     });
   });
 
-  test("before anything is loaded, a template is refused: nobody knows yet whether a company exists", () => {
-    expect(run(INITIAL_BUILDER, { type: "record", intent: template() }).refusal).toMatchObject({
-      reason: "mode",
-    });
-  });
-
-  test("create mode stands on nothing, whatever the chart read found", () => {
-    const state = run(INITIAL_BUILDER, {
+  test("a kept edit-mode log carrying a template is refused on restore", () => {
+    const create = run(INITIAL_BUILDER, {
       type: "load",
       mode: "create",
-      settings: null,
+      document: null,
       revision: null,
-      chart: fixtureChart(),
     });
-    expect(state.baseDraft.roles).toEqual([]);
-    expect(state.baseDraft.units).toEqual([]);
+    const op = run(create, { type: "record", intent: template() }).log.ops[0]!;
+    const next = run(keyedEdit(), {
+      type: "restore",
+      kept: {
+        v: OPERATIONS_VERSION,
+        mode: "edit",
+        baseRevision: "rev-1",
+        ops: [op],
+        undone: [],
+        savedAt: 0,
+      },
+    });
+    expect(next.refusal).toMatchObject({ reason: "mode" });
+    expect(next.log.ops).toEqual([]);
   });
 });
 
-describe("a reader the chart did not show the runtime half", () => {
-  const stripped = () => edit(fixtureChart(), fixtureSettings()).base.runtimeVisible;
-
-  test("may edit the prose and the relations, but nothing that writes the runtime half", () => {
-    expect(stripped()).toBe(true);
-    const reader = edit(strippedChart(fixtureChart()));
-    expect(reader.base.runtimeVisible).toBe(false);
-    const refusedIntents: Intent[] = [
-      { type: "changeKind", target: "seat:dev", kind: "human" },
-      { type: "updateSeat", target: "seat:dev", set: [{ path: ["runtime", "llm"], value: "x" }] },
-      {
-        type: "setScheduleEnabled",
-        target: "unit:engineering",
-        schedule: "standup",
-        enabled: false,
-      },
-      {
-        type: "addSeat",
-        key: "new:qa",
-        placement: { parent: COMPANY_KEY },
-        data: { handle: "qa", name: "QA", runtime: { llm: "fast" } },
-      },
-    ];
-    for (const intent of refusedIntents) {
-      expect(recordIntent(reader, intent), intent.type).toMatchObject({
-        ok: false,
-        refusal: "runtime_hidden",
-      });
-    }
-    // Control: prose, a relation and an add with no runtime record.
-    const allowed: Intent[] = [
-      { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Ship" }] },
-      { type: "updateSeat", target: "seat:dev", set: [{ path: ["project"], value: "ENG" }] },
-      {
-        type: "addSeat",
-        key: "new:qa",
-        placement: { parent: COMPANY_KEY },
-        data: { handle: "qa", name: "QA" },
-      },
-    ];
-    for (const intent of allowed) expect(recordIntent(reader, intent).ok, intent.type).toBe(true);
-    // And the same writes record for a reader who was shown it.
-    expect(recordIntent(edit(), refusedIntents[0]!).ok).toBe(true);
+describe("keying the base", () => {
+  test("the first check of the base keys it by the engine's handles, and places its answer on the new keys", () => {
+    const loaded = loadedEdit();
+    expect(isBaseKeyed(loaded)).toBe(false);
+    expect(loaded.draft.roles[0]!.key).toBe(seatPathKey("roles[0]"));
+    const problem = {
+      path: "roles[0].goal",
+      segments: ["roles", 0, "goal"],
+      kind: "invalid",
+      message: "bad goal",
+    };
+    const keyed = run(
+      loaded,
+      checked(loaded, {
+        status: "problems",
+        problems: [problem],
+        derived: fixtureDerived(fixtureCompany()),
+        code: "validation_error",
+        hint: "",
+      }),
+    );
+    expect(isBaseKeyed(keyed)).toBe(true);
+    expect(keyed.draft.roles[0]!.key).toBe("seat:ceo");
+    expect(keyed.baseDraft).toBe(keyed.draft);
+    expect(keyed.check.problems.byNode.get("seat:ceo")?.[0]?.message).toBe("bad goal");
+    expect(keyed.generation).toBe(loaded.generation);
   });
-});
 
-describe("loading and keying the base", () => {
-  test("the base is keyed by address the moment it is read", () => {
-    const state = edit();
-    expect(state.draft).toBe(state.baseDraft);
-    expect([...allSeats(state.draft)].map(({ seat }) => seat.key)).toContain("seat:vp-engineering");
-    expect(locate(state.draft, "unit:platform")?.parent).toBe("unit:engineering");
-    // An operation records against it at once.
+  // A dialog or a selection still holding the old key reads its node through
+  // this list in the very render the keys change, rather than finding no
+  // node there and drawing it as gone for that render.
+  test("keying the base lists every key it moved, and a load starts the list again", () => {
+    const loaded = loadedEdit();
+    const keyed = run(
+      loaded,
+      checked(loaded, { status: "clean", warnings: [], derived: fixtureDerived(fixtureCompany()) }),
+    );
+    expect(keyed.rekeyed.get(seatPathKey("roles[0]"))).toBe("seat:ceo");
+    // A unit is keyed by its name either way, and moves nowhere.
+    expect(keyed.rekeyed.has("unit:Sales")).toBe(false);
+    // A later check keys nothing, and leaves the list as it was.
+    const again = run(
+      keyed,
+      checked(keyed, { status: "clean", warnings: [], derived: fixtureDerived(fixtureCompany()) }),
+    );
+    expect(again.rekeyed).toBe(keyed.rekeyed);
     expect(
-      run(state, { type: "record", intent: { type: "remove", target: "seat:sre" } }).refusal,
-    ).toBeNull();
+      run(keyed, { type: "load", mode: "edit", document: fixtureCompany(), revision: "rev-2" })
+        .rekeyed.size,
+    ).toBe(0);
+
+    // A save keys the nodes it created by the engine's handles.
+    const added = run(keyed, {
+      type: "record",
+      intent: {
+        type: "addSeat",
+        key: "new:qa",
+        placement: { parent: COMPANY_KEY, after: null },
+        data: { name: "Quality Lead" },
+      },
+    });
+    const saved = run(added, {
+      type: "saved",
+      revisionId: "rev-2",
+      derived: fixtureDerived(toDocument(added.draft).document),
+    });
+    expect(saved.rekeyed.get("new:qa")).toBe("seat:quality-lead");
   });
 
-  test("a derivation is kept only while it describes the chart the draft was read from", () => {
-    const chart = fixtureChart();
-    const state = edit(chart);
-    const derived = fixtureDerived(chart);
-    const described = run(state, { type: "derived", derived });
-    expect(described.base.derived).toBe(derived);
-    // A derivation of a chart that has since gained a seat is not placed.
-    const other = chartOf({
-      units: chart.units,
-      seats: [...chart.seats, { handle: "qa", name: "QA" }],
+  test("nothing is recorded before the base is keyed, so no log ever names a path key", () => {
+    // A base is re-keyed only while its log is empty, so an operation
+    // recorded against a path key would keep that key for good: a reload or
+    // an update would then find its target gone, and a seat removed under a
+    // path key has no handle to clear its GitLab access level by.
+    const loaded = loadedEdit();
+    const intents: Intent[] = [
+      { type: "remove", target: seatPathKey("roles[1]") },
+      { type: "updateCompany", set: [{ path: ["vision"], value: "v" }] },
+    ];
+    for (const intent of intents) {
+      const refused = run(loaded, { type: "record", intent });
+      expect(refused.refusal, intent.type).toMatchObject({ reason: "not_keyed" });
+      expect(refused.log).toBe(loaded.log);
+      expect(refused.draft).toBe(loaded.draft);
+      expect(refused.generation).toBe(loaded.generation);
+    }
+
+    const keyed = run(
+      loaded,
+      checked(loaded, { status: "clean", warnings: [], derived: fixtureDerived(fixtureCompany()) }),
+    );
+    const removed = run(keyed, { type: "record", intent: { type: "remove", target: "seat:sre" } });
+    expect(removed.refusal).toBeNull();
+    expect(removed.log.ops[0]).toMatchObject({
+      target: "seat:sre",
+      accessLevels: [{ handle: "sre", before: "maintainer" }],
     });
-    const stale = run(state, { type: "derived", derived: fixtureDerived(other) });
-    expect(stale.base.derived).toBeNull();
-    expect(stale.orgDerived).not.toBeNull();
-    // A new derivation moves neither the generation nor the base's identity.
-    expect(described.generation).toBe(state.generation);
-    expect(checkTrigger(state, described)).toBeNull();
   });
 
-  test("a load carries the latest derivation onto its base when it describes it", () => {
-    const chart = fixtureChart();
-    const derived = run(INITIAL_BUILDER, { type: "derived", derived: fixtureDerived(chart) });
-    const loaded = run(derived, {
-      type: "load",
-      mode: "edit",
-      settings: fixtureSettings(),
-      revision: "rev-1",
-      chart,
+  test("before anything is loaded, neither an edit nor a template is recorded", () => {
+    const template = templateIntent(
+      { template: "new_company", charter: { name: "Acme" } },
+      countingKeys(),
+    );
+    if (!template.ok) throw new Error(template.message);
+    expect(run(INITIAL_BUILDER, { type: "record", intent: template.intent }).refusal).toMatchObject(
+      { reason: "mode" },
+    );
+    const added = run(INITIAL_BUILDER, {
+      type: "record",
+      intent: {
+        type: "addUnit",
+        key: "new:u",
+        placement: { parent: COMPANY_KEY, after: null },
+        data: { name: "Ops" },
+      },
     });
-    expect(loaded.base.derived).not.toBeNull();
+    expect(added.refusal).toMatchObject({ reason: "not_keyed" });
+    expect(added.log.ops).toEqual([]);
   });
 
   test("a check of another generation is ignored", () => {
-    const state = edit();
+    const state = keyedEdit();
     const stale: BuilderAction = {
       type: "checked",
       settled: {
         generation: state.generation - 1,
+        sent: toDocument(state.draft),
         baseRevision: "rev-1",
-        basePrint: state.base.print,
-        outcome: { status: "guarded", grants: [] },
+        outcome: { status: "guarded", code: "unauthorized" },
       },
     };
     expect(run(state, stale)).toBe(state);
-    // Control: the same answer for its own generation is taken.
-    expect(run(state, checked(state, { status: "guarded", grants: [] })).check.outcome).toEqual({
-      status: "guarded",
-      grants: [],
-    });
-  });
-
-  test("a check's findings are indexed onto the nodes they are about", () => {
-    const state = edit();
-    const next = run(
-      state,
-      checked(state, {
-        status: "problems",
-        findings: [
-          {
-            severity: "problem",
-            kind: "invalid",
-            message: "bad handle",
-            node: "seat:dev",
-            field: ["handle"],
-            link: null,
-            source: { path: "", segments: null, kind: "invalid", message: "bad handle" },
-          },
-        ],
-        code: "",
-        hint: "",
-      }),
-    );
-    expect(next.check.problems.byNode.get("seat:dev")?.[0]?.message).toBe("bad handle");
   });
 });
 
 describe("editing", () => {
   test("recording moves the generation, logs the operation with its report, and says what to announce and focus", () => {
-    const state = edit();
+    const state = keyedEdit();
     const next = run(state, {
       type: "record",
       intent: {
         type: "addSeat",
         key: "new:qa",
-        placement: { parent: "unit:sales" },
-        data: { handle: "qa", name: "QA" },
+        placement: { parent: "unit:Sales", after: null },
+        data: { name: "QA" },
       },
     });
     expect(next.generation).toBe(state.generation + 1);
@@ -293,11 +298,10 @@ describe("editing", () => {
       focus: "new:qa",
     });
     expect(hasChanges(next)).toBe(true);
-    expect(hasChanges(state)).toBe(false);
   });
 
-  test("operations that cancel out leave nothing to save", () => {
-    const state = edit();
+  test("operations that cancel out leave nothing to save in edit mode, where an empty patch would still activate a revision", () => {
+    const state = keyedEdit();
     const edited = run(state, {
       type: "record",
       intent: { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Ship" }] },
@@ -310,43 +314,49 @@ describe("editing", () => {
     expect(reverted.log.ops).toHaveLength(2);
     expect(hasChanges(reverted)).toBe(false);
 
-    // In create mode the settings are what make the company exist.
-    expect(hasChanges(create())).toBe(false);
+    // In create mode the base is nothing: a draft holding a company has changes.
+    const create = run(INITIAL_BUILDER, {
+      type: "load",
+      mode: "create",
+      document: null,
+      revision: null,
+    });
+    expect(hasChanges(create)).toBe(false);
     const built = templateIntent({ template: "empty", charter: { name: "Acme" } }, countingKeys());
     if (!built.ok) throw new Error(built.message);
-    expect(hasChanges(run(create(), { type: "record", intent: built.intent }))).toBe(true);
+    expect(hasChanges(run(create, { type: "record", intent: built.intent }))).toBe(true);
   });
 
   test("a refused intent changes nothing but the refusal", () => {
-    const state = edit();
+    const state = keyedEdit();
     const next = run(state, {
       type: "record",
-      intent: { type: "renameUnit", target: "unit:nope", name: "X" },
+      intent: { type: "renameUnit", target: "unit:Nope", name: "X" },
     });
     expect(next.refusal).toMatchObject({ reason: "missing_target" });
     expect({ ...next, refusal: null }).toEqual(state);
   });
 
   test("removing a node focuses its previous sibling, or else its parent", () => {
-    const state = edit();
+    const state = keyedEdit();
+    expect(
+      run(state, { type: "record", intent: { type: "remove", target: "seat:dev" } }).last?.focus,
+    ).toBe("seat:vp-engineering");
     expect(
       run(state, { type: "record", intent: { type: "remove", target: "seat:vp-engineering" } }).last
         ?.focus,
-    ).toBe("seat:dev");
+    ).toBe("unit:Engineering");
     expect(
-      run(state, { type: "record", intent: { type: "remove", target: "seat:dev" } }).last?.focus,
-    ).toBe("unit:engineering");
-    expect(
-      run(state, { type: "record", intent: { type: "remove", target: "unit:engineering" } }).last
+      run(state, { type: "record", intent: { type: "remove", target: "unit:Engineering" } }).last
         ?.focus,
     ).toBe(COMPANY_KEY);
   });
 
   test("undo and redo move the generation and focus what the operation touched", () => {
-    const state = edit();
+    const state = keyedEdit();
     const edited = run(state, {
       type: "record",
-      intent: { type: "move", target: "seat:dev", to: { parent: "unit:sales" } },
+      intent: { type: "move", target: "seat:dev", to: { parent: "unit:Sales", after: null } },
     });
     const undone = run(edited, { type: "undo" });
     expect(undone.draft).toEqual(state.draft);
@@ -362,7 +372,7 @@ describe("editing", () => {
     const failures: string[] = [];
     for (let seed = 1; seed <= 60; seed++) {
       const rand = prng(seed);
-      let state = edit();
+      let state = keyedEdit();
       let minted = 0;
       for (let step = 0; step < 25; step++) {
         const seats = [...allSeats(state.draft)].map(({ seat }) => seat);
@@ -381,13 +391,13 @@ describe("editing", () => {
                       intent: {
                         type: "addSeat",
                         key: `new:r${seed}x${++minted}`,
-                        placement: { parent: COMPANY_KEY },
-                        data: { handle: `s${seed}-${minted}`, name: `S${minted}` },
+                        placement: { parent: COMPANY_KEY, after: null },
+                        data: { name: `S${minted}` },
                       },
                     }
                   : roll < 0.6
                     ? { type: "record", intent: { type: "remove", target: seat.key } }
-                    : roll < 0.75
+                    : roll < 0.8
                       ? {
                           type: "record",
                           intent: {
@@ -396,23 +406,14 @@ describe("editing", () => {
                             set: [{ path: ["goal"], value: `g${step}` }],
                           },
                         }
-                      : roll < 0.9
-                        ? {
-                            type: "record",
-                            intent: {
-                              type: "updateSeat",
-                              target: seat.key,
-                              set: [{ path: ["handle"], value: `h${seed}-${step}` }],
-                            },
-                          }
-                        : {
-                            type: "record",
-                            intent: {
-                              type: "renameSeat",
-                              target: seat.key,
-                              name: `${seat.data.name} ${step}`,
-                            },
-                          };
+                      : {
+                          type: "record",
+                          intent: {
+                            type: "renameSeat",
+                            target: seat.key,
+                            name: `${seat.data.name} ${step}`,
+                          },
+                        };
         const before = state.generation;
         const next = builderReducer(state, action);
         const changed = next.draft !== state.draft || next.log !== state.log;
@@ -442,8 +443,8 @@ describe("editing", () => {
   });
 
   test("discard returns to the base", () => {
-    const state = edit();
-    const edited = run(state, { type: "record", intent: { type: "remove", target: "unit:sales" } });
+    const state = keyedEdit();
+    const edited = run(state, { type: "record", intent: { type: "remove", target: "unit:Sales" } });
     const discarded = run(edited, { type: "discard" });
     expect(discarded.draft).toBe(state.baseDraft);
     expect(discarded.log.ops).toEqual([]);
@@ -452,7 +453,7 @@ describe("editing", () => {
 });
 
 describe("an editor's edit", () => {
-  const change: Intent = {
+  const edit: Intent = {
     type: "edit",
     target: "seat:dev",
     intents: [
@@ -462,8 +463,8 @@ describe("an editor's edit", () => {
   };
 
   test("is one step: one operation logged, announced once, and undone at once", () => {
-    const state = edit();
-    const edited = run(state, { type: "record", intent: change });
+    const state = keyedEdit();
+    const edited = run(state, { type: "record", intent: edit });
     expect(edited.log.ops).toHaveLength(1);
     expect(edited.last).toMatchObject({
       description: "Edited Dev: renamed to Developer, goal.",
@@ -475,134 +476,195 @@ describe("an editor's edit", () => {
   });
 
   test("a dialog asking recordIntent hears exactly what the reducer would do", () => {
-    const state = edit();
-    const answer = recordIntent(state, change);
-    const next = run(state, { type: "record", intent: change });
+    const loaded = loadedEdit();
+    const refusedEarly = recordIntent(loaded, edit);
+    expect(refusedEarly).toMatchObject({ ok: false, refusal: "not_keyed" });
+    expect(run(loaded, { type: "record", intent: edit }).refusal?.reason).toBe("not_keyed");
+
+    const state = keyedEdit();
+    const answer = recordIntent(state, edit);
+    const next = run(state, { type: "record", intent: edit });
     expect(answer.ok && answer.op).toEqual(next.log.ops[0]);
-    expect(recordIntent(state, change)).toEqual(answer);
-    const reader = edit(strippedChart(fixtureChart()));
-    const kind: Intent = { type: "changeKind", target: "seat:dev", kind: "human" };
-    expect(recordIntent(reader, kind).ok).toBe(false);
-    expect(run(reader, { type: "record", intent: kind }).refusal?.reason).toBe("runtime_hidden");
+    expect(recordIntent(state, edit)).toEqual(answer);
+  });
+});
+
+describe("a created seat's handle", () => {
+  // THE REDUCER AND EVERY SCREEN READ ONE RULE (`document.knownHandles`). A
+  // screen offered a created seat's GitLab access level from a check that
+  // still saw its name while the reducer, reading only a check of the draft
+  // as it stands, refused the very operation the screen had offered.
+  test("is known to recording while the seat keeps the name a check saw, and not after a rename", () => {
+    const added = run(keyedEdit(), {
+      type: "record",
+      intent: {
+        type: "addSeat",
+        key: "new:qa",
+        placement: { parent: COMPANY_KEY, after: null },
+        data: { name: "Quality Lead" },
+      },
+    });
+    const rename = (state: BuilderState, name: string): Intent => ({
+      type: "renameSeat",
+      target: "new:qa",
+      name,
+    });
+    // The fixture holds GitLab access levels, so a rename must know the handle.
+    expect(recordIntent(added, rename(added, "QA"))).toMatchObject({
+      ok: false,
+      refusal: "unknown_handle",
+    });
+    const seen = run(
+      added,
+      checked(added, {
+        status: "clean",
+        warnings: [],
+        derived: fixtureDerived(toDocument(added.draft).document),
+      }),
+    );
+    // Another edit since: the check is of an older draft, and still saw the name.
+    const later = run(seen, {
+      type: "record",
+      intent: { type: "updateCompany", set: [{ path: ["mission"], value: "Make more." }] },
+    });
+    expect(handlesOf(later).get("new:qa")).toBe("quality-lead");
+    expect(recordIntent(later, rename(later, "QA")).ok).toBe(true);
+
+    const renamed = run(later, { type: "record", intent: rename(later, "QA") });
+    expect(handlesOf(renamed).has("new:qa")).toBe(false);
+    expect(recordIntent(renamed, rename(renamed, "QA Lead"))).toMatchObject({
+      ok: false,
+      refusal: "unknown_handle",
+    });
   });
 });
 
 describe("checkTrigger", () => {
-  test("a new base resets the check, a moved draft changes it, and a derivation does neither", () => {
-    const loaded = edit();
+  test("a new base resets the check, a moved draft changes it, and keying the base does neither", () => {
+    const loaded = loadedEdit();
     expect(checkTrigger(INITIAL_BUILDER, loaded)).toBe("reset");
-    const edited = run(loaded, { type: "record", intent: { type: "remove", target: "seat:dev" } });
-    expect(checkTrigger(loaded, edited)).toBe("changed");
+    const keyed = run(
+      loaded,
+      checked(loaded, { status: "clean", warnings: [], derived: fixtureDerived(fixtureCompany()) }),
+    );
+    expect(checkTrigger(loaded, keyed)).toBeNull();
+    const edited = run(keyed, { type: "record", intent: { type: "remove", target: "seat:dev" } });
+    expect(checkTrigger(keyed, edited)).toBe("changed");
     expect(checkTrigger(edited, run(edited, { type: "undo" }))).toBe("changed");
     expect(
-      checkTrigger(
-        edited,
-        run(edited, {
-          type: "saved",
-          settings: fixtureSettings(),
-          revision: "rev-1",
-          chart: chartOf({ seats: [{ handle: "ceo", name: "CEO" }] }),
-        }),
-      ),
+      checkTrigger(edited, run(edited, { type: "saved", revisionId: "rev-2", derived: null })),
     ).toBe("reset");
-    expect(checkTrigger(edited, run(edited, { type: "tokenChanged" }))).toBeNull();
-    expect(
-      checkTrigger(
-        edited,
-        run(edited, { type: "derived", derived: fixtureDerived(fixtureChart()) }),
-      ),
-    ).toBeNull();
+    expect(checkTrigger(edited, run(edited, { type: "readerChanged" }))).toBeNull();
   });
 });
 
 describe("keeping the log", () => {
-  test("a refused credential or a change of reader stops keeping it, and the next operation resumes", () => {
-    const state = edit();
-    const edited = run(state, { type: "record", intent: { type: "remove", target: "unit:sales" } });
-    const refused = run(edited, checked(edited, { status: "guarded", grants: [] }));
+  test("a refusal or a change of reader stops keeping it, and the next operation resumes", () => {
+    const state = keyedEdit();
+    const edited = run(state, { type: "record", intent: { type: "remove", target: "unit:Sales" } });
+    const refused = run(edited, checked(edited, { status: "guarded", code: "unauthorized" }));
     expect(refused.keep).toBe(false);
     expect(refused.log).toBe(edited.log);
-    expect(run(edited, { type: "tokenChanged" }).keep).toBe(false);
+    expect(run(edited, { type: "readerChanged" }).keep).toBe(false);
     expect(
       run(refused, { type: "record", intent: { type: "remove", target: "seat:dev" } }).keep,
     ).toBe(true);
   });
-});
 
-describe("a save", () => {
-  test("makes the company read back the base, keyed by address, and moves every key it created", () => {
-    const created = run(create(), { type: "record", intent: template() });
-    const chief = [...allSeats(created.draft)].find(
-      ({ seat }) => seat.data.name === "Chief Executive",
-    )!;
-    expect(chief.seat.key.startsWith("new:")).toBe(true);
-    const chart = chartOf({
-      seats: [{ handle: "chief-executive", name: "Chief Executive", goal: "Lead" }],
+  // A DECLINED STEP-UP IS THE SAME PERSON at the keyboard choosing not to
+  // confirm yet, not the tab changing hands: dropped, the draft they were
+  // about to confirm and save was gone on the next reload.
+  test("a step-up the person declined keeps it", () => {
+    const state = keyedEdit();
+    const edited = run(state, { type: "record", intent: { type: "remove", target: "unit:Sales" } });
+    const declined = run(edited, checked(edited, { status: "guarded", code: "step_up_required" }));
+    expect(declined.keep).toBe(true);
+    expect(declined.check.outcome).toEqual({ status: "guarded", code: "step_up_required" });
+  });
+
+  test("a save makes the draft the base, keyed by the derivation the write answered with", () => {
+    const create = run(INITIAL_BUILDER, {
+      type: "load",
+      mode: "create",
+      document: null,
+      revision: null,
     });
-    const saved = run(created, {
+    const built = templateIntent(
+      { template: "new_company", charter: { name: "Acme" } },
+      countingKeys(),
+    );
+    if (!built.ok) throw new Error(built.message);
+    const edited = run(create, { type: "record", intent: built.intent });
+    const sent = toDocument(edited.draft).document;
+    const saved = run(edited, {
       type: "saved",
-      settings: { name: "Acme" },
-      revision: "rev-9",
-      chart,
+      revisionId: "rev-9",
+      derived: fixtureDerived(sent),
     });
     expect(saved).toMatchObject({
       mode: "edit",
       base: { revision: "rev-9" },
       log: { ops: [], undone: [] },
     });
-    expect(saved.generation).toBe(created.generation + 1);
+    expect(saved.generation).toBe(edited.generation + 1);
     expect(saved.draft).toBe(saved.baseDraft);
-    // A surface still holding the minted key reads the node through this.
-    expect(saved.rekeyed.get(chief.seat.key)).toBe("seat:chief-executive");
-    // A load starts the list again.
+    expect(toDocument(saved.draft).document).toEqual(sent);
+    // The keys minted for the nodes the save created are gone: the seats it
+    // created are the engine's seats now, and are named as such.
+    const keys = [...allSeats(saved.draft)].map(({ seat }) => seat.key);
+    expect(keys).toContain("seat:chief-executive");
+    expect(keys.some((k) => k.startsWith("new:"))).toBe(false);
+    expect(isBaseKeyed(saved)).toBe(true);
+
+    // A write that answered with no derivation leaves a base to key, and
+    // nothing is recorded against it until a check does.
+    const unkeyed = run(edited, { type: "saved", revisionId: "rev-9", derived: null });
+    expect(isBaseKeyed(unkeyed)).toBe(false);
     expect(
-      run(saved, { type: "load", mode: "edit", settings: {}, revision: "rev-9", chart }).rekeyed
-        .size,
-    ).toBe(0);
+      run(unkeyed, {
+        type: "record",
+        intent: { type: "updateCompany", set: [{ path: ["vision"], value: "v" }] },
+      }).refusal,
+    ).toMatchObject({ reason: "not_keyed" });
   });
 });
 
-describe("updating onto a newer company", () => {
+describe("updating onto a newer revision", () => {
   function conflicted() {
-    const state = run(edit(), {
+    const doc = fixtureCompany();
+    const state = run(keyedEdit(doc), {
       type: "record",
       intent: { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Mine" }] },
     });
-    const theirs = fixtureChart();
-    const dev = theirs.seats.find((s) => s.handle === "dev")!;
-    (dev as { goal?: string }).goal = "Theirs";
-    const withLegal = chartOf({
-      units: [...theirs.units, { key: "legal", name: "Legal" }],
-      seats: theirs.seats,
-      manages: theirs.manages,
-    });
+    const theirs = fixtureCompany();
+    theirs.units![0]!.roles![1]!.goal = "Theirs";
+    theirs.units!.unshift({ name: "Legal" });
     return run(state, {
       type: "updateBegin",
-      settings: fixtureSettings(),
-      revision: "rev-1",
-      chart: withLegal,
+      document: theirs,
+      revision: "rev-2",
+      derived: fixtureDerived(theirs),
     });
   }
 
   test("holds the draft until every conflict is resolved, then adopts the rebased log", () => {
     const pending = conflicted();
     expect(pending.update?.result.pending).toBe(1);
-    expect(locate(pending.draft, "unit:legal")).toBeUndefined();
+    expect(pending.base.revision).toBe("rev-1");
     expect(run(pending, { type: "updateConfirm" })).toBe(pending);
 
     const chosen = run(pending, { type: "updateChoose", index: 0, choice: "mine" });
     expect(chosen.update?.result.pending).toBe(0);
     const adopted = run(chosen, { type: "updateConfirm" });
+    expect(adopted.base).toMatchObject({ revision: "rev-2" });
     expect(adopted.update).toBeNull();
     expect(adopted.generation).toBe(pending.generation + 1);
-    expect(locate(adopted.draft, "unit:legal")?.kind).toBe("unit");
-    const dev = locate(adopted.draft, "seat:dev");
-    expect(dev?.kind === "seat" && dev.node.data.goal).toBe("Mine");
+    const out = toDocument(adopted.draft).document;
+    expect(out.units!.map((u) => u.name)).toEqual(["Legal", "Engineering", "Sales"]);
+    expect(out.units![1]!.roles![1]!.goal).toBe("Mine");
     expect(JSON.stringify(replay(adopted.baseDraft, adopted.log.ops).draft)).toBe(
       JSON.stringify(adopted.draft),
     );
-    // The base it moved onto is the one a check now compares against.
-    expect(adopted.base.print).not.toBe(pending.base.print);
   });
 
   test("cancelling leaves the draft as it was", () => {
@@ -611,88 +673,57 @@ describe("updating onto a newer company", () => {
     expect(cancelled.update).toBeNull();
     expect(cancelled.draft).toBe(pending.draft);
   });
-
-  test("a save that stopped part way carries on from what landed at once, its creations resolved", () => {
-    const state = run(
-      edit(),
-      {
-        type: "record",
-        intent: {
-          type: "addSeat",
-          key: "new:qa",
-          placement: { parent: "unit:sales" },
-          data: { handle: "qa", name: "QA", goal: "Test" },
-        },
-      },
-      {
-        type: "record",
-        intent: {
-          type: "updateSeat",
-          target: "new:qa",
-          set: [{ path: ["backstory"], value: "New." }],
-        },
-      },
-    );
-    // The batch created the seat; its content write did not land.
-    const chart = fixtureChart();
-    const landed = chartOf({
-      units: chart.units,
-      seats: [...chart.seats, { handle: "qa", name: "", unit: "sales" }],
-      manages: chart.manages,
-    });
-    const next = run(state, {
-      type: "updateBegin",
-      settings: fixtureSettings(),
-      revision: "rev-1",
-      chart: landed,
-      landed: [{ key: "new:qa", kind: "seat", address: "qa" }],
-    });
-    expect(next.update).toBeNull();
-    const qa = locate(next.draft, "seat:qa");
-    expect(qa?.kind === "seat" && qa.node.data).toMatchObject({
-      name: "QA",
-      goal: "Test",
-      backstory: "New.",
-    });
-    expect(next.rekeyed.get("new:qa")).toBe("seat:qa");
-    // What is left is still to save.
-    expect(hasChanges(next)).toBe(true);
-  });
 });
 
 describe("restoring a kept draft", () => {
-  const kept = (state: BuilderState, base: BuilderState = edit()): KeptDraft => ({
+  const kept = (state: BuilderState, revision = "rev-1") => ({
     v: OPERATIONS_VERSION,
-    mode: "edit",
-    baseRevision: base.base.revision,
-    basePrint: base.base.print,
+    mode: "edit" as const,
+    baseRevision: revision,
     ops: state.log.ops,
     undone: state.log.undone,
     savedAt: 0,
-    reader: "p-1",
   });
 
-  test("on the same base, with every operation applying, is the draft the operator left, redo stack included", () => {
+  test("waits for a keyed base", () => {
+    expect(run(loadedEdit(), { type: "restore", kept: kept(keyedEdit()) }).refusal).toMatchObject({
+      reason: "not_keyed",
+    });
+  });
+
+  test("on the same revision, with every operation applying, is the draft the operator left, redo stack included", () => {
     const left = run(
-      edit(),
+      keyedEdit(),
       { type: "record", intent: { type: "remove", target: "seat:dev" } },
-      { type: "record", intent: { type: "renameUnit", target: "unit:sales", name: "Revenue" } },
+      { type: "record", intent: { type: "renameUnit", target: "unit:Sales", name: "Revenue" } },
       { type: "undo" },
     );
-    const restored = run(edit(), { type: "restore", kept: kept(left) });
+    const restored = run(keyedEdit(), { type: "restore", kept: kept(left) });
     expect(restored.draft).toEqual(left.draft);
     expect(restored.log).toEqual(left.log);
     expect(run(restored, { type: "redo" }).log.ops).toHaveLength(2);
   });
 
-  test("on a moved chart is an update to review, leaving the draft on screen untouched", () => {
-    const left = run(edit(), { type: "record", intent: { type: "remove", target: "seat:dev" } });
-    const theirs = fixtureChart();
-    (theirs.seats.find((s) => s.handle === "dev") as { goal?: string }).goal = "Changed upstream";
-    const loaded = edit(theirs);
-    const restoring = run(loaded, { type: "restore", kept: kept(left) });
+  test("on a moved revision is an update to review, leaving the draft on screen untouched", () => {
+    const left = run(keyedEdit(), {
+      type: "record",
+      intent: { type: "remove", target: "seat:dev" },
+    });
+    const theirs = fixtureCompany();
+    theirs.units![0]!.roles![1]!.goal = "Changed upstream";
+    const loaded = run(INITIAL_BUILDER, {
+      type: "load",
+      mode: "edit",
+      document: theirs,
+      revision: "rev-2",
+    });
+    const keyed = run(
+      loaded,
+      checked(loaded, { status: "clean", warnings: [], derived: fixtureDerived(theirs) }),
+    );
+    const restoring = run(keyed, { type: "restore", kept: kept(left, "rev-1") });
     expect(restoring.update).toMatchObject({ restoring: true, result: { pending: 1 } });
-    expect(restoring.draft).toBe(loaded.draft);
+    expect(restoring.draft).toBe(keyed.draft);
     expect(restoring.log.ops).toEqual([]);
     const theirsKept = run(
       restoring,
@@ -705,15 +736,17 @@ describe("restoring a kept draft", () => {
 
   test("never replaces work in progress, which the operator discards first", () => {
     const keptDraft = kept(
-      run(edit(), { type: "record", intent: { type: "remove", target: "seat:dev" } }),
+      run(keyedEdit(), { type: "record", intent: { type: "remove", target: "seat:dev" } }),
     );
-    const editing = run(edit(), {
+    const editing = run(keyedEdit(), {
       type: "record",
-      intent: { type: "renameUnit", target: "unit:sales", name: "Revenue" },
+      intent: { type: "renameUnit", target: "unit:Sales", name: "Revenue" },
     });
     const refused = run(editing, { type: "restore", kept: keptDraft });
     expect(refused.refusal).toMatchObject({ reason: "has_changes" });
     expect(refused.log).toBe(editing.log);
+    expect(refused.draft).toBe(editing.draft);
+
     // An undo still leaves work to redo, and that is work in progress too.
     const undone = run(editing, { type: "undo" });
     expect(run(undone, { type: "restore", kept: keptDraft }).refusal).toMatchObject({
@@ -725,55 +758,34 @@ describe("restoring a kept draft", () => {
 
   test("drops a kept redo stack that does not redo, rather than leaving a redo that throws", () => {
     const left = run(
-      edit(),
+      keyedEdit(),
       { type: "record", intent: { type: "remove", target: "seat:dev" } },
-      { type: "record", intent: { type: "renameUnit", target: "unit:sales", name: "Revenue" } },
+      { type: "record", intent: { type: "renameUnit", target: "unit:Sales", name: "Revenue" } },
       { type: "undo" },
     );
-    // An undone operation that names the removed seat, which no draft this log still holds.
-    const stale = run(edit(), {
+    // Storage handed back an undone operation that names the removed seat,
+    // which no draft this log produces still holds.
+    const stale = run(keyedEdit(), {
       type: "record",
       intent: { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "x" }] },
     }).log.ops[0]!;
-    const restored = run(edit(), { type: "restore", kept: { ...kept(left), undone: [stale] } });
+    const restored = run(keyedEdit(), {
+      type: "restore",
+      kept: { ...kept(left), undone: [stale] },
+    });
     expect(restored.log.ops).toEqual(left.log.ops);
     expect(restored.log.undone).toEqual([]);
     expect(() => run(restored, { type: "redo" })).not.toThrow();
   });
 
-  test("made for another mode is refused, and a kept edit log carrying a template is refused", () => {
-    expect(run(create(), { type: "restore", kept: kept(edit()) }).refusal).toMatchObject({
-      reason: "mode",
-    });
-    const op = run(create(), { type: "record", intent: template() }).log.ops[0]!;
-    const next = run(edit(), { type: "restore", kept: { ...kept(edit()), ops: [op] } });
-    expect(next.refusal).toMatchObject({ reason: "mode" });
-    expect(next.log.ops).toEqual([]);
-  });
-
-  test("a create draft whose save was sent is carried onto the company it made, as an edit", () => {
-    const made = run(create(), { type: "record", intent: template() });
-    const keptCreate: KeptDraft = {
-      v: OPERATIONS_VERSION,
+  test("made for another mode is refused", () => {
+    const create = run(INITIAL_BUILDER, {
+      type: "load",
       mode: "create",
-      baseRevision: null,
-      basePrint: made.base.print,
-      ops: made.log.ops,
-      undone: [],
-      savedAt: 0,
-      reader: "p-1",
-      write: "w1",
-      creates: [],
-    };
-    // The save wrote the settings and nothing of the chart.
-    const company = edit(chartOf({}), { name: "Acme" });
-    const restored = run(company, { type: "restore", kept: keptCreate });
-    const ops = restored.update?.ops ?? restored.log.ops;
-    expect(ops.some((op) => op.type === "applyTemplate")).toBe(false);
-    expect(ops.filter((op) => op.type === "addSeat").length).toBeGreaterThan(0);
-    // Control: without a write the same log is another mode's, and refused.
-    const { write: _w, ...unsent } = keptCreate;
-    expect(run(company, { type: "restore", kept: unsent }).refusal).toMatchObject({
+      document: null,
+      revision: null,
+    });
+    expect(run(create, { type: "restore", kept: kept(keyedEdit()) }).refusal).toMatchObject({
       reason: "mode",
     });
   });

@@ -15,7 +15,7 @@
  * mutually impossible figures for it.
  */
 
-import { cleanup, render, screen } from "~/test/inCase.ts";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import { TurnCard } from "./TurnCard.tsx";
@@ -32,8 +32,8 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     workKey: "wk-1",
     phase: "execute",
     iteration: 1,
-    agentId: "a-dev",
     role: "Dev A",
+    agentId: "",
     model: "scripted",
     providerKey: "",
     live: false,

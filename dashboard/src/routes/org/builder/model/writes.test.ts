@@ -1,29 +1,25 @@
 // @vitest-environment node
 /**
- * The settings write of a save, settling one whose answer never arrived, and
- * reading the company a draft stands on.
+ * Saves, and settling a save whose answer never arrived.
  *
- * What these protect: an unanswered settings write is never taken as somebody
- * else's until the line of revisions back to the draft's base has been read;
- * the write landed exactly when a revision in that line has the base as its
- * parent and the write id in its summary, even under a colleague's later save;
- * a conflicted draft is updated only onto the conflict's revision or a
- * descendant of it; and a reading of the company is the settings AND the chart,
- * or says why it is not.
+ * What these protect: an unanswered save (status 0 or a 5xx), or a 409 or 412
+ * right after one, is never taken as somebody else's write until the line of
+ * revisions back to the draft's base has been read; the write landed exactly
+ * when a revision in that line has the base as its parent and the write id in
+ * its summary, even under a colleague's later save; and a conflicted draft is
+ * updated only onto the conflict's revision or a descendant of it, with the
+ * engine's derivation of that document.
  */
 
 import { describe, expect, test } from "vitest";
-import { chartOf, fixtureChart, fixtureSettings } from "./testkit.ts";
-import type { EngineTransport, HttpAnswer } from "./transport.ts";
+import { fixtureCompany, fixtureDerived } from "./testkit.ts";
+import type { ConfigRequest, ConfigTransport, HttpAnswer } from "./transport.ts";
 import {
   UPDATE_ANCESTRY_LIMIT,
+  classifySave,
   isRevisionOfWrite,
-  isWriteId,
-  readChart,
-  readCompany,
-  readUpdate,
+  newWriteId,
   readyToUpdate,
-  saveStepID,
   settleUnknownWrite,
   signedSummary,
   summaryCarries,
@@ -34,30 +30,29 @@ const EDIT: SaveAttempt = { writeId: "w1234567", mode: "edit", baseRevision: "ba
 const CREATE: SaveAttempt = { writeId: "w7654321", mode: "create", baseRevision: null };
 const signal = new AbortController().signal;
 
-/** Answers `GET /config`, each revision by id, and `GET /chart` from a script; records every call. */
-class Engine implements EngineTransport {
+/** Answers `GET /config`, each revision by id, and dry runs, from a script; records every call. */
+class Engine implements ConfigTransport {
   calls: string[] = [];
   constructor(
     private readonly script: {
-      settings?: HttpAnswer;
+      current?: HttpAnswer;
       revisions?: Record<string, HttpAnswer>;
-      chart?: HttpAnswer;
+      send?: HttpAnswer;
     },
   ) {}
-  async settings(): Promise<HttpAnswer> {
-    this.calls.push("settings");
-    return this.script.settings ?? { status: 0, body: null };
+  async current(): Promise<HttpAnswer> {
+    this.calls.push("current");
+    return this.script.current ?? { status: 0, body: null };
   }
   async revision(id: string): Promise<HttpAnswer> {
     this.calls.push(`revision ${id}`);
     return this.script.revisions?.[id] ?? { status: 404, body: { error: "not_found" } };
   }
-  async chart(): Promise<HttpAnswer> {
-    this.calls.push("chart");
-    return this.script.chart ?? { status: 0, body: null };
-  }
-  async send(): Promise<HttpAnswer> {
-    throw new Error("nothing here writes");
+  async send(request: ConfigRequest): Promise<HttpAnswer> {
+    this.calls.push(
+      `${request.method} ${JSON.stringify(request.query)} ${JSON.stringify(request.headers)}`,
+    );
+    return this.script.send ?? { status: 0, body: null };
   }
 }
 
@@ -76,20 +71,12 @@ const revision = (parent: string | undefined, summary: string): HttpAnswer => ({
 });
 
 describe("signing a save", () => {
-  test("a write id is an operation id, and the summary carries it where no sentence does", () => {
-    // THE ENGINE'S GRAMMAR (statelog.NewOpID): the chart surface refuses a
-    // key that is not one. A random token of the old shape is not a write id.
-    const id = "01a0f246-7d2d-7c92-b7f0-78dd8229b774";
-    expect(isWriteId(id)).toBe(true);
-    expect(isWriteId("abcdefgh")).toBe(false);
-    expect(isWriteId("0123456789abcdef0123456789abcdef")).toBe(false);
-    // A v4 uuid carries no instant, so it is not one either.
-    expect(isWriteId("3f2504e0-4f89-41d3-9a0c-0305e82c3301")).toBe(false);
-    // Every step is a step of the save's own operation, and inherits its instant.
-    expect(saveStepID(id, 2)).toBe(`${id}.builder-save.2`);
-    const summary = signedSummary(" Moved Dev to Sales ", id);
-    expect(summary).toBe(`Moved Dev to Sales (write ${id})`);
-    expect(summaryCarries(summary, id)).toBe(true);
+  test("a write id is a bounded token, and the summary carries it where no sentence does", () => {
+    expect(newWriteId({ next: () => "abcdefgh" })).toBe("abcdefgh");
+    expect(() => newWriteId({ next: () => "short" })).toThrow(RangeError);
+    const summary = signedSummary(" Moved Dev to Sales ", "abcdefgh");
+    expect(summary).toBe("Moved Dev to Sales (write abcdefgh)");
+    expect(summaryCarries(summary, "abcdefgh")).toBe(true);
     expect(summaryCarries("Mentioned (write abcdefgh) in passing", "abcdefgh")).toBe(false);
     expect(summaryCarries(summary, "abcdefgX")).toBe(false);
   });
@@ -104,6 +91,113 @@ describe("signing a save", () => {
     expect(isRevisionOfWrite({ summary: signedSummary("Create", CREATE.writeId) }, CREATE)).toBe(
       true,
     );
+  });
+});
+
+describe("classifySave", () => {
+  test("a 201 is saved, with what the engine said about it", () => {
+    const derived = fixtureDerived(fixtureCompany());
+    expect(
+      classifySave(
+        { status: 201, body: { revision_id: "r2", epoch: 7, warnings: null, derived } },
+        EDIT,
+        false,
+      ),
+    ).toEqual({
+      kind: "saved",
+      revisionId: "r2",
+      epoch: 7,
+      warnings: [],
+      derived,
+    });
+  });
+
+  test("no answer is unknown, and so is a 409 or 412 right after no answer", () => {
+    expect(classifySave({ status: 0, body: null }, EDIT, false)).toEqual({
+      kind: "unknown",
+      currentRevisionId: null,
+      detail: "",
+    });
+    expect(
+      classifySave(
+        { status: 409, body: { error: "revision_advanced", current_revision_id: "r2" } },
+        EDIT,
+        true,
+      ),
+    ).toEqual({
+      kind: "unknown",
+      currentRevisionId: "r2",
+      detail: "revision_advanced",
+    });
+    expect(
+      classifySave(
+        { status: 412, body: { error: "already_configured", current_revision_id: "r1" } },
+        CREATE,
+        true,
+      ),
+    ).toEqual({
+      kind: "unknown",
+      currentRevisionId: "r1",
+      detail: "already_configured",
+    });
+  });
+
+  test("a 5xx is unknown, because the engine stores a revision before it activates it, except a refusal made before storing", () => {
+    // A failure after the revision was stored, and a gateway that gave up
+    // waiting, both leave a write that may be active.
+    for (const answer of [
+      { status: 500, body: { error: "internal_error", detail: "activate the config: timeout" } },
+      { status: 502, body: null },
+      { status: 504, body: "Gateway Timeout" },
+    ]) {
+      expect(classifySave(answer, EDIT, false), String(answer.status)).toMatchObject({
+        kind: "unknown",
+        currentRevisionId: null,
+      });
+    }
+    expect(
+      classifySave({ status: 500, body: { error: "internal_error", detail: "boom" } }, EDIT, false),
+    ).toMatchObject({ detail: "boom" });
+    // So the next 409 is settled rather than taken for a colleague's save.
+    expect(
+      classifySave(
+        { status: 409, body: { error: "revision_advanced", current_revision_id: "mine" } },
+        EDIT,
+        true,
+      ),
+    ).toMatchObject({ kind: "unknown", currentRevisionId: "mine" });
+    // A DRAIN IS THE ONE CERTAIN 5xx, so it is NOT unknown: the drain gate
+    // refuses a write before the handler runs, so nothing was stored and
+    // there is nothing to settle. Classifying it unknown locked the builder
+    // into "the outcome of the last save is not known" and sent it reading
+    // the revision chain back for a write that never happened.
+    expect(
+      classifySave({ status: 503, body: { error: "draining", detail: "restarting" } }, EDIT, false),
+    ).toMatchObject({ kind: "refused" });
+    // Every other 5xx stays unknown: the engine stores the revision before it
+    // activates it, so a failure after that point may have landed.
+    expect(
+      classifySave({ status: 500, body: { error: "internal_error" } }, EDIT, false),
+    ).toMatchObject({ kind: "unknown" });
+  });
+
+  test("a 409 on a first attempt is a conflict, and a refused document its problems", () => {
+    expect(
+      classifySave(
+        { status: 409, body: { error: "revision_advanced", current_revision_id: "r2" } },
+        EDIT,
+        false,
+      ),
+    ).toEqual({
+      kind: "refused",
+      outcome: { status: "conflict", reason: "revision_advanced", currentRevisionId: "r2" },
+    });
+    expect(
+      classifySave({ status: 400, body: { error: "validation_error", detail: "bad" } }, EDIT, true),
+    ).toMatchObject({
+      kind: "refused",
+      outcome: { status: "problems" },
+    });
   });
 });
 
@@ -171,9 +265,19 @@ describe("settleUnknownWrite", () => {
     expect(long.calls).toHaveLength(UPDATE_ANCESTRY_LIMIT);
   });
 
+  test("not landed when that revision is a colleague's", async () => {
+    const engine = new Engine({
+      revisions: { r2: revision("base", "A colleague's save (write zzzzzzzz)") },
+    });
+    expect(await settleUnknownWrite(engine, EDIT, "r2", signal)).toEqual({
+      kind: "not_landed",
+      currentRevisionId: "r2",
+    });
+  });
+
   test("without a named revision, reads the active one first", async () => {
     const landed = new Engine({
-      settings: { status: 200, body: {}, etag: '"r3"' },
+      current: { status: 200, body: {}, etag: '"r3"' },
       revisions: { r3: revision("base", signedSummary("Edit", EDIT.writeId)) },
     });
     expect(await settleUnknownWrite(landed, EDIT, null, signal)).toEqual({
@@ -181,18 +285,18 @@ describe("settleUnknownWrite", () => {
       revisionId: "r3",
       activeRevisionId: "r3",
     });
-    expect(landed.calls).toEqual(["settings", "revision r3"]);
+    expect(landed.calls).toEqual(["current", "revision r3"]);
 
-    const still = new Engine({ settings: { status: 200, body: {}, etag: '"base"' } });
+    const still = new Engine({ current: { status: 200, body: {}, etag: '"base"' } });
     expect(await settleUnknownWrite(still, EDIT, null, signal)).toEqual({
       kind: "not_landed",
       currentRevisionId: "base",
     });
-    expect(still.calls).toEqual(["settings"]);
+    expect(still.calls).toEqual(["current"]);
   });
 
   test("a create that did not land finds no company", async () => {
-    const engine = new Engine({ settings: { status: 404, body: { error: "no_active_revision" } } });
+    const engine = new Engine({ current: { status: 404, body: { error: "no_active_revision" } } });
     expect(await settleUnknownWrite(engine, CREATE, null, signal)).toEqual({
       kind: "not_landed",
       currentRevisionId: null,
@@ -211,117 +315,92 @@ describe("settleUnknownWrite", () => {
 });
 
 describe("readyToUpdate", () => {
-  const doc = fixtureSettings();
-  const conflict = { baseRevision: "base", conflictRevisionId: "r2" };
+  const doc = fixtureCompany();
+  const derived = fixtureDerived(doc);
+  const dryRun: HttpAnswer = {
+    status: 200,
+    body: { valid: true, base_revision_id: "", warnings: null, derived },
+  };
 
   test("behind while the node still serves the draft's base", async () => {
-    const engine = new Engine({ settings: { status: 200, body: doc, etag: '"base"' } });
-    expect(await readyToUpdate(engine, conflict, signal)).toEqual({ kind: "behind" });
+    const engine = new Engine({ current: { status: 200, body: doc, etag: '"base"' } });
+    expect(
+      await readyToUpdate(engine, { baseRevision: "base", conflictRevisionId: "r2" }, signal),
+    ).toEqual({ kind: "behind" });
   });
 
-  test("ready on the conflict's revision or a descendant, behind on one that does not descend from it", async () => {
-    const same = new Engine({ settings: { status: 200, body: doc, etag: '"r2"' } });
-    expect(await readyToUpdate(same, conflict, signal)).toEqual({
+  test("ready on the conflict's revision, with the engine's derivation of it from a dry run conditional on it", async () => {
+    const engine = new Engine({ current: { status: 200, body: doc, etag: '"r2"' }, send: dryRun });
+    expect(
+      await readyToUpdate(engine, { baseRevision: "base", conflictRevisionId: "r2" }, signal),
+    ).toEqual({
       kind: "ready",
       revisionId: "r2",
       document: doc,
+      derived,
     });
+    expect(engine.calls).toEqual(["current", 'PATCH {"dry_run":"true"} {"If-Match":"\\"r2\\""}']);
+  });
+
+  test("ready on a descendant of the conflict's revision, behind on a revision that does not descend from it", async () => {
     const descendant = new Engine({
-      settings: { status: 200, body: doc, etag: '"r4"' },
+      current: { status: 200, body: doc, etag: '"r4"' },
       revisions: { r4: revision("r3", "later"), r3: revision("r2", "later") },
+      send: dryRun,
     });
-    expect(await readyToUpdate(descendant, conflict, signal)).toMatchObject({
+    expect(
+      await readyToUpdate(descendant, { baseRevision: "base", conflictRevisionId: "r2" }, signal),
+    ).toMatchObject({
       kind: "ready",
       revisionId: "r4",
     });
-    const sibling = new Engine({
-      settings: { status: 200, body: doc, etag: '"s1"' },
-      revisions: { s1: revision("base", "raced") },
-    });
-    expect(await readyToUpdate(sibling, conflict, signal)).toEqual({ kind: "behind" });
-  });
 
-  test("a conflict that named no revision — the chart moved, not the settings — takes what is active", async () => {
-    const engine = new Engine({ settings: { status: 200, body: doc, etag: '"base"' } });
+    const sibling = new Engine({
+      current: { status: 200, body: doc, etag: '"s1"' },
+      revisions: { s1: revision("base", "raced") },
+      send: dryRun,
+    });
     expect(
-      await readyToUpdate(engine, { baseRevision: "base", conflictRevisionId: null }, signal),
-    ).toEqual({ kind: "ready", revisionId: "base", document: doc });
+      await readyToUpdate(sibling, { baseRevision: "base", conflictRevisionId: "r2" }, signal),
+    ).toEqual({ kind: "behind" });
   });
 
   test("gives up after the ancestry limit rather than walking the whole history", async () => {
     const revisions: Record<string, HttpAnswer> = {};
     for (let i = 0; i < UPDATE_ANCESTRY_LIMIT + 5; i++)
       revisions[`n${i}`] = revision(`n${i + 1}`, "later");
-    const engine = new Engine({ settings: { status: 200, body: doc, etag: '"n0"' }, revisions });
-    expect(await readyToUpdate(engine, conflict, signal)).toEqual({ kind: "behind" });
+    const engine = new Engine({
+      current: { status: 200, body: doc, etag: '"n0"' },
+      revisions,
+      send: dryRun,
+    });
+    expect(
+      await readyToUpdate(engine, { baseRevision: "base", conflictRevisionId: "r2" }, signal),
+    ).toEqual({ kind: "behind" });
     expect(engine.calls.filter((c) => c.startsWith("revision"))).toHaveLength(
       UPDATE_ANCESTRY_LIMIT,
     );
   });
 
-  test("unknown when the settings cannot be read or name no revision", async () => {
-    expect(await readyToUpdate(new Engine({}), conflict, signal)).toMatchObject({
+  test("unknown when the document cannot be read or moved again while it was", async () => {
+    expect(
+      await readyToUpdate(
+        new Engine({}),
+        { baseRevision: "base", conflictRevisionId: "r2" },
+        signal,
+      ),
+    ).toMatchObject({
       kind: "unknown",
     });
+    const moved = new Engine({
+      current: { status: 200, body: doc, etag: '"r2"' },
+      send: { status: 409, body: { error: "revision_advanced", current_revision_id: "r3" } },
+    });
     expect(
-      await readyToUpdate(new Engine({ settings: { status: 200, body: doc } }), conflict, signal),
-    ).toEqual({ kind: "unknown", detail: "The engine did not name its active revision." });
-  });
-});
-
-describe("reading the company", () => {
-  const settings: HttpAnswer = { status: 200, body: fixtureSettings(), etag: '"r1"' };
-  const chart: HttpAnswer = { status: 200, body: fixtureChart() };
-
-  test("the chart is read whole, and any other answer is handed back as it came", async () => {
-    expect(await readChart(new Engine({ chart }), signal)).toEqual({
-      kind: "read",
-      chart: fixtureChart(),
-    });
-    const refused: HttpAnswer = { status: 403, body: { error: "unauthorized" } };
-    expect(await readChart(new Engine({ chart: refused }), signal)).toEqual({
-      kind: "refused",
-      answer: refused,
-    });
-  });
-
-  test("a company is its settings and its chart, and one with no settings yet is still read", async () => {
-    expect(await readCompany(new Engine({ settings, chart }), signal)).toEqual({
-      kind: "read",
-      reading: { settings: fixtureSettings(), revision: "r1", chart: fixtureChart() },
-    });
-    const none = new Engine({
-      settings: { status: 404, body: { error: "no_active_revision" } },
-      chart: { status: 200, body: chartOf({}) },
-    });
-    expect(await readCompany(none, signal)).toMatchObject({
-      kind: "read",
-      reading: { settings: null, revision: null },
-    });
-    // Control: a chart that cannot be read is no reading at all.
-    expect(await readCompany(new Engine({ settings }), signal)).toMatchObject({
-      kind: "failed",
-      detail: "The engine could not be reached.",
-    });
-  });
-
-  test("an update of a create draft reads the company once, and of an edit waits for the conflict's revision", async () => {
-    const create = new Engine({ settings, chart });
-    expect(
-      await readUpdate(create, { baseRevision: null, conflictRevisionId: null }, signal),
-    ).toMatchObject({ kind: "ready", reading: { revision: "r1" } });
-    expect(create.calls.filter((c) => c === "chart")).toHaveLength(1);
-
-    const behind = new Engine({ settings: { ...settings, etag: '"base"' }, chart });
-    expect(
-      await readUpdate(behind, { baseRevision: "base", conflictRevisionId: "r1" }, signal),
-    ).toEqual({ kind: "behind" });
-    const ready = new Engine({ settings, chart });
-    expect(
-      await readUpdate(ready, { baseRevision: "base", conflictRevisionId: "r1" }, signal),
-    ).toEqual({
-      kind: "ready",
-      reading: { settings: fixtureSettings(), revision: "r1", chart: fixtureChart() },
+      await readyToUpdate(moved, { baseRevision: "base", conflictRevisionId: "r2" }, signal),
+    ).toMatchObject({
+      kind: "unknown",
+      detail: expect.stringContaining("changed again"),
     });
   });
 });

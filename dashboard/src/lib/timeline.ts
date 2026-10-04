@@ -21,7 +21,7 @@
  * does. Arithmetic over a day key is civil and zone-free ([civilAt]).
  */
 
-import { civilAt, civilKey, dateFormatter, readerDay } from "./format.ts";
+import { civilAt, civilKey, readerDay } from "./format.ts";
 import type { WorkSummary } from "~/protocol/index.ts";
 
 /** The reader's day an instant falls on, or empty when it is unreadable. */
@@ -134,15 +134,9 @@ export const MinTimelineDays = 14;
 
 /** What `timelineOf` is given beyond the rows. */
 export interface TimelineOptions {
-  /**
-   * The reader's today, as [readerDay] names it (`2026-06-15`) — the day key
-   * every bar is placed by.
-   * Passed rather than read, so the layout is a pure function and "today" is
-   * testable — and a DAY rather than an instant, because a day is all of the
-   * clock the layout reads: handed the second, the screen re-laid every band
-   * out once a second to draw the same today line (`useToday`).
-   */
-  today: string;
+  /** The reader's now, as epoch ms. Passed rather than read, so the layout is
+   *  a pure function and "today" is testable. */
+  now: number;
 }
 
 /** The two dates a row carries, as local days, either possibly empty. */
@@ -273,7 +267,8 @@ export function timelineOf(rows: WorkSummary[], opts: TimelineOptions): Timeline
     }
   }
 
-  const todayColumn = daysBetween(earliest, opts.today);
+  const todayKey = readerDay(opts.now);
+  const todayColumn = daysBetween(earliest, todayKey);
   return {
     from: earliest,
     to: latest,
@@ -340,7 +335,11 @@ export function monthDay(day: string): string {
   if (at === null) return day;
   // A CIVIL DATE, spelled in UTC so no zone west of Greenwich names the day
   // before — see `lib/format.ts`'s [civilAt].
-  return dateFormatter(undefined, { day: "numeric", month: "short", timeZone: "UTC" }).format(at);
+  return new Date(at).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  });
 }
 
 /**

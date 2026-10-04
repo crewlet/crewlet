@@ -11,7 +11,7 @@
  * read with only what was edited replaced.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -20,7 +20,7 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { POOL_STATE_WORDS } from "~/lib/models.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, QueryRefusedError, Store } from "~/protocol/index.ts";
+import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type { CredentialPoolAnswer } from "~/contract/credentials.ts";
 
 const inMinutes = (m: number) => new Date(Date.now() + m * 60_000).toISOString();
@@ -114,10 +114,19 @@ const org = {
   ],
 };
 
-/** What `viewer` answers for a person who may read and write the configuration. */
 const OPERATOR = {
-  login: "jane.founder",
-  grants: ["config:read", "config:write"],
+  login: "U0FOUNDER",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
   handle: "jane",
   owner: "jane",
   name: "Jane",
@@ -143,11 +152,7 @@ function mount(id?: string, { refuse = false, answer = pool() } = {}) {
     if (what === "credential_pool") {
       return refuse
         ? Promise.reject(
-            new QueryRefusedError(
-              "unauthorized",
-              { reason: "operator", grants: ["config:read"] },
-              "",
-            ),
+            new QueryError("unauthorized", { reason: "operator", grants: ["config:read"] }),
           )
         : Promise.resolve(answer);
     }

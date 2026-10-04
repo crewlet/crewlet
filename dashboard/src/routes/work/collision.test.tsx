@@ -10,7 +10,7 @@
  * shape and read where it went.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, afterAll, expect, test, vi } from "vitest";
 
 import { Work } from "./Work.tsx";

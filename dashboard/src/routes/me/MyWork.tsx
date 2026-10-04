@@ -85,31 +85,10 @@
  * Including the wake reasons and the decision lines. "You are the approver" on
  * an operator reading a report's day is a sentence about the reader, who is not
  * on the list.
- *
- * # Yours is `owner`, and it is pushed
- *
- * THE READER'S OWN DAY IS THE RECORD NAMED `owner` — their seat when the
- * identity directory binds them to one, their login when it does not — which
- * is the one name their priorities, their asks and their assistant's marks are
- * kept under. Read by `handle`, an unbound reader had no day here at all while
- * their assistant wrote their priorities under their login. No question takes
- * a `viewer=`: whose record a read is about is never a typed name.
- *
- * The record that hands somebody work, asks them something or reorders their
- * queue is the record that writes them a notice, so the frame that moves the
- * reader's inbox (`inbox_changed`) is the one that asks their day again
- * (`refetchOnInboxOf`). On a report's day no frame arrives — the frame
- * watches the viewer's own record — and the poll keeps it current.
- *
- * # The clock is read in its cell
- *
- * No section takes the second: a row's due date, an ask's "3h ago" and the
- * stamp's age each read the clock where they are drawn.
  */
 
 import { useMemo } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { ClockText } from "~/app/frame/cells.tsx";
 import type { MeSection } from "~/app/routes.ts";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { usePageCoverage, usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
@@ -124,7 +103,8 @@ import { indexOrg, leadsInLine, seatResolvers, type OrgIndex, type Seat } from "
 import { plural, relTime } from "~/lib/format.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { HoldWrites } from "~/lib/useWriteAccess.ts";
-import { askedByParams, itemPath, pageCount, type Scope } from "~/lib/work.ts";
+import { useNow } from "~/lib/clock.ts";
+import { askedByParams, pageCount, type Scope, itemPath } from "~/lib/work.ts";
 import { ItemsView, type ItemsHost } from "~/routes/work/ItemsView.tsx";
 import type {
   WorkClaimTotal,
@@ -190,6 +170,7 @@ type Tab = "assigned" | "priorities" | Exclude<MeSection, "queue">;
 
 export function MyWork({ section }: { section: MeSection }) {
   const org = useOrg();
+  const now = useNow();
   const nav = useNavigator();
   const [handle, setHandle] = useParam("handle", "");
   const [orderParam, setOrder] = useParam("order", "due", "section");
@@ -209,10 +190,19 @@ export function MyWork({ section }: { section: MeSection }) {
   // answers it: the engine resolves this browser to a principal, and the
   // identity directory binds that principal to a seat.
   //
-  // An explicit choice still wins — an operator reading a report's day is a
-  // real thing to do, and the header says whose day it is either way.
+  // An explicit choice still wins — a lead reading a report's day is a real
+  // thing to do, and the header says whose day it is either way.
   //
-  // YOURS IS `owner`, NOT `handle` — see the file head.
+  // YOURS IS `owner`, NOT `handle`: the record their priorities, their asks
+  // and their assistant's marks are kept under is their seat when the
+  // directory binds them to one and their login when it does not. Read by
+  // `handle`, an unbound reader had no day here at all while their assistant
+  // wrote their priorities under their login. And the record that hands
+  // somebody work, asks them something or reorders their queue is the record
+  // that writes them a notice, so the frame that moves the reader's inbox
+  // (`inbox_changed`) asks their day again (`refetchOnInboxOf`); on a
+  // report's day no frame arrives — the frame watches the viewer's own record
+  // — and the poll keeps it current.
   const viewer = useViewer();
   const whose = handle || viewer.owner;
   const ownDay = whose !== "" && whose === viewer.owner;
@@ -244,8 +234,7 @@ export function MyWork({ section }: { section: MeSection }) {
   });
 
   // NOT UNTIL SOMEBODY IS CHOSEN — `whose` is empty until the viewer has
-  // answered, and the engine refuses this question without a handle. PUSHED
-  // on the reader's own day — see the file head.
+  // answered, and the engine refuses this question without a handle.
   const state = useQuery("work_my_work", whose ? { handle: whose } : undefined, {
     enabled: whose !== "",
     pollMs: 30_000,
@@ -437,10 +426,10 @@ export function MyWork({ section }: { section: MeSection }) {
           rather than instead of it. */}
       {ownDay && viewer.unbound && (
         <Callout variant="info">
-          The directory binds <code className="inline">{viewer.login}</code> to no seat, so this is
+          You are <code className="inline">{viewer.login}</code> and not bound to a seat, so this is
           the day kept under that login: what you follow, what names you, and your own priorities.
-          Work the org chart hands to a seat reaches you once{" "}
-          <code className="inline">crewlet iam bind</code> binds you to one.
+          Work the org chart hands to a seat reaches you once an administrator binds you to one (
+          <code className="inline">crewlet iam bind</code>).
         </Callout>
       )}
       {!whose &&
@@ -462,12 +451,13 @@ export function MyWork({ section }: { section: MeSection }) {
         <WhoseDay
           handle={whose}
           seat={index.byHandle.get(whose)}
-          login={ownDay && viewer.unbound}
           ownDay={ownDay}
+          login={ownDay && viewer.unbound}
           they={they}
           stamp={person.data ?? undefined}
           setByName={setByName}
           onPriorities={tab === "priorities" ? undefined : () => showPriorities()}
+          now={now}
         />
       )}
 
@@ -506,6 +496,7 @@ export function MyWork({ section }: { section: MeSection }) {
                     they={they}
                     theirs={ownDay ? undefined : whoseName}
                     total={mine.totals?.priorities.total}
+                    now={now}
                     chrome={chrome}
                     hrefOf={workHref}
                   />
@@ -518,6 +509,7 @@ export function MyWork({ section }: { section: MeSection }) {
                   name={ownDay ? undefined : whoseName}
                   held={holds.all}
                   they={they}
+                  now={now}
                 />
               )}
               {tab === "asked-by-me" && <ItemsView host={askedHost} />}
@@ -525,6 +517,7 @@ export function MyWork({ section }: { section: MeSection }) {
                 <Block
                   rows={mine.unblocked_recent}
                   total={mine.totals?.unblocked_recent}
+                  now={now}
                   chrome={chrome}
                   hint="Work whose blockers have all finished — the one section about a change rather than a state."
                   empty={`Nothing that was waiting on something else has become workable for ${they}.`}
@@ -534,6 +527,7 @@ export function MyWork({ section }: { section: MeSection }) {
                 <Block
                   rows={mine.collaborating}
                   total={mine.totals?.collaborating}
+                  now={now}
                   chrome={chrome}
                   hint="Brought on without owning."
                   empty={`Nobody has brought ${they} onto a task they do not own.`}
@@ -543,6 +537,7 @@ export function MyWork({ section }: { section: MeSection }) {
                 <Block
                   rows={mine.watching_recent}
                   total={mine.totals?.watching_recent}
+                  now={now}
                   chrome={chrome}
                   hint="Followed, and changed recently."
                   empty={`Nothing ${ownDay ? "you follow" : "they follow"} has moved lately.`}
@@ -638,23 +633,24 @@ export function dayHolds({
 function WhoseDay({
   handle,
   seat,
-  login = false,
   ownDay,
+  login = false,
   they,
   stamp,
   setByName,
   onPriorities,
+  now,
 }: {
   handle: string;
   /** The chart's own row, absent for a handle it does not name. */
   seat?: Seat;
+  ownDay: boolean;
   /**
    * The day is kept under a LOGIN rather than a seat — an unbound reader's
    * own. A login has no seat page, so it is named rather than drawn as a chip
    * linking to one that would answer "no such seat".
    */
   login?: boolean;
-  ownDay: boolean;
   they: string;
   /** This person's own record, where it has answered. */
   stamp?: WorkPersonState;
@@ -662,8 +658,8 @@ function WhoseDay({
   setByName: string;
   /** Opens the Priorities reading, or absent where it is already open. */
   onPriorities?: () => void;
+  now: number;
 }) {
-  const setAt = stamp?.priorities_set_at;
   return (
     <>
       <div className="row gap-2 wrap">
@@ -680,16 +676,8 @@ function WhoseDay({
       {setByName && (
         <Callout variant="info">
           {setByName} put this order in place
-          {setAt && (
-            <>
-              {" "}
-              {/* THE STAMP'S AGE READS THE CLOCK HERE, in the words that show
-                  it, so the banner renders when "3h ago" turns over and the
-                  page above it does not. */}
-              <ClockText read={(now) => relTime(setAt, now)} />
-            </>
-          )}
-          . The next change {they === "you" ? "you make" : "they make"} to it clears the stamp.{" "}
+          {stamp?.priorities_set_at ? ` ${relTime(stamp.priorities_set_at, now)}` : ""}. The next
+          change {they === "you" ? "you make" : "they make"} to it clears the stamp.{" "}
           {onPriorities && (
             <button type="button" className="t-link" onClick={onPriorities}>
               Priorities →
@@ -948,6 +936,7 @@ function AskedOfMe({
   name,
   held,
   they,
+  now,
 }: {
   mine: WorkMyWork;
   whose: string;
@@ -956,6 +945,7 @@ function AskedOfMe({
   /** Why the answers are held here, or null where they are the reader's. */
   held: string | null;
   they: string;
+  now: number;
 }) {
   const rows = mine.asked_of_me;
   if (rows.length === 0) {
@@ -975,7 +965,7 @@ function AskedOfMe({
           of dimmed options with nothing said reads as a broken screen. */}
       {held && <p className="t-caption work-write-note">{`Answering is off. ${held}`}</p>}
       <div className="me-asks">
-        <AskList rows={rows} decider={{ handle: whose, name }} />
+        <AskList rows={rows} decider={{ handle: whose, name }} now={now} />
       </div>
       {claim && claim.total > rows.length && (
         <p className="t-caption me-page-foot">
@@ -997,12 +987,14 @@ function AskedOfMe({
 function Block({
   rows,
   total,
+  now,
   chrome,
   hint,
   empty,
 }: {
   rows: WorkSummary[];
   total?: WorkClaimTotal;
+  now: number;
   chrome: RowChrome;
   hint: string;
   empty: string;
@@ -1018,7 +1010,7 @@ function Block({
     <>
       <p className="t-caption">{hint}</p>
       <div className="work-list">
-        <RowList rows={rows} chrome={chrome} hrefOf={(row) => href(itemPath(row))} />
+        <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(itemPath(row))} />
       </div>
       <PageFoot shown={rows.length} claim={total} order="recent" />
     </>

@@ -25,7 +25,6 @@ import {
   FRAMELESS,
   RESERVED_SEGMENTS,
   WORKSPACES,
-  framelessOf,
   sectionOf,
   workspaceOf,
   workspaceRow,
@@ -216,51 +215,33 @@ describe("the navigation grammar", () => {
   // `#/work/views` is a list of saved views until somebody creates a project
   // called VIEWS, and then it is a project.
   test("no reserved segment is the shape of a minted key", () => {
-    for (const segment of RESERVED_SEGMENTS) {
+    // A FRAMELESS HEAD TOO: `#/login` is read before any workspace is, so a
+    // head the engine could mint would take the page that key names.
+    for (const segment of [...RESERVED_SEGMENTS, ...FRAMELESS]) {
       expect(KEY_SHAPE.test(segment), `${segment} is a project-key shape`).toBe(false);
       expect(ITEM_KEY_SHAPE.test(segment), `${segment} is an item-key shape`).toBe(false);
       expect(CONTAINER_SHAPE.test(segment), `${segment} is a container-key shape`).toBe(false);
       expect(segment).toBe(segment.toLowerCase());
     }
   });
-
-  // A ROUTE OUTSIDE THE FRAME IS NOBODY'S WORKSPACE. A workspace owning
-  // `login` would mark a sidebar row for a screen drawn without one, and a
-  // workspace owning a frameless head would never be drawn at all: the frame
-  // is not mounted there.
-  test("a frameless route is owned by no workspace, and names nothing", () => {
-    const owned = new Set<string>(WORKSPACES.map((row) => row.key));
-    for (const head of FRAMELESS) {
-      expect(owned.has(head), `${head} is frameless and owned by a workspace`).toBe(false);
-      expect(RESERVED_SEGMENTS.includes(head), `${head} is frameless and reserved`).toBe(false);
-      expect(workspaceOf([head]), head).toBe("");
-      expect(head).toBe(head.toLowerCase());
-      expect(framelessOf([head, "tail"]), head).toBe(head);
-    }
-    expect(framelessOf(["inbox"])).toBeNull();
-    expect(framelessOf([])).toBeNull();
-  });
 });
 
 describe("the resolver", () => {
   const uuid = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f";
 
-  // THE SIGN-IN SCREENS RESOLVE FIRST, AND TO NO WORKSPACE. A link to
-  // `#/login?next=…` is a link to a page, so the link gates hold it like any
-  // other; what it names is no workspace, because nothing in the frame draws
-  // it — a recent, a star or a breadcrumb that named one would lead a reader
-  // to a sidebar row for a screen drawn without the sidebar.
-  test("a sign-in route is a screen of its own, outside every workspace", () => {
-    expect(resolve(["login"])).toMatchObject({ resolved: true, screen: "login", workspace: "" });
-    expect(resolve(["enrol"])).toMatchObject({ resolved: true, screen: "enrol", workspace: "" });
-    // AN INVITATION IS ONE SEGMENT, kept whole — and a link that is not whole
-    // is still the invitation screen, which says what is missing.
-    expect(resolve(["invite", "id.secret"])).toMatchObject({ screen: "invite", link: "id.secret" });
-    expect(resolve(["invite"])).toMatchObject({ screen: "invite", link: "" });
-    expect(resolve(["invite", "id", "secret"])).toMatchObject({ screen: "invite", link: "" });
-    // AND ANY OTHER TAIL IS AN ADDRESS THE PRODUCT DOES NOT HAVE.
-    expect(resolve(["login", "x"])).toMatchObject({ resolved: false, workspace: "" });
-    expect(resolve(["enrol", "x"])).toMatchObject({ resolved: false, workspace: "" });
+  // THE SIGN-IN SCREENS take exactly the tail their address has. An
+  // invitation is the exception: its screen answers a link that is not whole
+  // (an empty one) rather than Not Found, since its holder pasted it.
+  test("a sign-in screen is its exact address, and an invitation its one link", () => {
+    expect(resolve(["login"])).toMatchObject({ screen: "login", workspace: "" });
+    expect(resolve(["login", "x"]).resolved).toBe(false);
+    expect(resolve(["enrol"])).toMatchObject({ screen: "enrol", workspace: "" });
+    expect(resolve(["enrol", "x"]).resolved).toBe(false);
+    expect(resolve(["invite", `${uuid}.secret`])).toMatchObject({
+      screen: "invite",
+      link: `${uuid}.secret`,
+    });
+    expect(resolve(["invite", "a", "b"])).toMatchObject({ screen: "invite", link: "" });
   });
 
   test("a key is a project, a key with a number or a uuid an item, and nothing else is", () => {
@@ -472,8 +453,7 @@ describe("the breadcrumb", () => {
   });
 
   // A SEAT IS NAMED BY ITS NAME AND ADDRESSED BY A SLUG, so an unresolved
-  // handle is drawn in the mono face and a resolved name is not. A unit's
-  // segment IS its name, so that one is deliberately not mono.
+  // handle is drawn in the mono face and a resolved name is not.
   test("a seat's crumb is its name, and an unnamed handle is an identifier", () => {
     const raw = crumbsFor(["agents", "seats", "agent-cto"]);
     expect(raw[raw.length - 1]?.label).toBe("agent-cto");
@@ -663,6 +643,11 @@ describe("the information architecture", () => {
       ...WORKSPACES.map((w) => w.path),
       ...WORKSPACES.flatMap((w) => w.sections.filter((s) => !s.elsewhere).map((s) => s.path)),
       ...DESTINATIONS.map((d) => d.path),
+      // THE SCREENS OUTSIDE THE FRAME, which no workspace declares: a page a
+      // person is sent to before anything else opens is one somebody
+      // starting from the document has to be able to find.
+      // An invitation is written down as the link it carries.
+      ...FRAMELESS.map((head) => (head === "invite" ? [head, "{id}.{secret}"] : [head])),
     ];
     for (const path of paths) {
       expect(
@@ -680,20 +665,6 @@ describe("the information architecture", () => {
       expect(written.has(segment), `“${segment}” is reserved but no documented route uses it`).toBe(
         true,
       );
-    }
-  });
-
-  // AND EVERY SCREEN OUTSIDE THE FRAME. None of them is a rail row or a
-  // destination, so neither walk above reaches them — and the sign-in
-  // screens are the first thing a person sees, which makes them the worst
-  // pages to leave off the one table a reader starts from.
-  test("every frameless route is written down", () => {
-    const heads = new Set(documented().map((route) => segmentsOf(route)[0]));
-    for (const head of FRAMELESS) {
-      expect(
-        heads.has(head),
-        `#/${head} is drawn outside the frame and not in the design doc`,
-      ).toBe(true);
     }
   });
 });

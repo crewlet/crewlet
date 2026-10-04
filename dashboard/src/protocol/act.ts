@@ -22,7 +22,7 @@
  * # What an answer can be, and what each tells a person
  *
  *  - `applied` — the record landed at `position`, and this tab's read floor
- *    for its domain rose to it (`protocol/floors.ts`), so every read after
+ *    for its domain rose to it (`protocol/session.ts`), so every read after
  *    this one includes it;
  *  - `pending` — the engine accepted it and this node has not applied it
  *    yet: the floor rises, and the reads wait for it;
@@ -44,7 +44,7 @@
 // where the alias does not exist.
 import { ACTIONS } from "../contract/actions.ts";
 import { ACT_ERRORS } from "../contract/errors.ts";
-import { tabFloors, type SessionDomain, type SessionFloors } from "./floors.ts";
+import { session, type SessionDomain, type SessionFloors } from "./session.ts";
 import { layoutOpID } from "./gate.ts";
 import { isAbort, rest, RestError } from "./rest.ts";
 import { retryAfterMs } from "./retry.ts";
@@ -165,7 +165,7 @@ export async function act<T extends ActionTool>(
   options: ActOptions = {},
 ): Promise<ActResult> {
   const opId = options.opId ?? newActOpID();
-  const floors = options.floors ?? tabFloors;
+  const floors = options.floors ?? session;
   const unknown = (reason: string): ActResult => ({ kind: "unknown", tool, opId, reason });
 
   let body: unknown;

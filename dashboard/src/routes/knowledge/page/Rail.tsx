@@ -18,14 +18,11 @@ import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { AvatarStack, Button, cx } from "@crewlethq/ui";
 import { FileTextGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { ClockText } from "~/app/frame/cells.tsx";
-import { QueryState } from "~/components/common.tsx";
 import { StatusMark } from "~/components/work.tsx";
 import { SeatAvatar, seatBadge } from "~/ui/SeatAvatar.tsx";
 import { fmtDateCompact, fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { readCount, readVia } from "~/lib/pageReads.ts";
 import { shortAge } from "~/lib/seats.ts";
-import { itemPath } from "~/lib/work.ts";
 import { REDUCED_MOTION } from "~/components/time/SpanBar.tsx";
 import type { Heading } from "~/lib/markdown.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
@@ -36,7 +33,8 @@ import type {
   PageReadsAnswer,
   TaskLink,
 } from "~/contract/pages.ts";
-import type { LogRefusal, PageRevision, PageSummary, QueryRefusal } from "~/protocol/index.ts";
+import type { PageRevision, PageSummary } from "~/protocol/index.ts";
+import { itemPath } from "~/lib/work.ts";
 
 type Who = (handle: string) => { name: string; kind?: "agent" | "human" };
 
@@ -187,14 +185,13 @@ export function OnThisPage({ headings }: { headings: Heading[] }) {
 export function ReadBy({
   reads,
   error,
-  refusal,
   who,
+  now,
 }: {
   reads: PageReadsAnswer | null;
   error: QueryErrorCode | null;
-  /** Why the read was refused, beside `error` — the grant that would admit the reader. */
-  refusal: QueryRefusal | LogRefusal | null;
   who: Who;
+  now: number;
 }) {
   const readers = useMemo(() => reads?.readers ?? [], [reads]);
   const { rows, more, listID } = useShown(readers);
@@ -210,9 +207,7 @@ export function ReadBy({
       window={reads ? `last ${plural(reads.days, "day")}` : undefined}
     >
       {error ? (
-        // THE FAILURE WHOLE, in the words every refused read is drawn in: a
-        // bare code here could not name the grant that would admit the reader.
-        <QueryState error={error} refusal={refusal} loading={false} />
+        <p className="kpage-rail-note">Who read it could not be read ({error}).</p>
       ) : !reads ? (
         <p className="kpage-rail-note">Reading…</p>
       ) : readers.length === 0 ? (
@@ -258,7 +253,7 @@ export function ReadBy({
                       <span className="kpage-reader-when">
                         {" · "}
                         <time dateTime={r.last_at} title={fmtDateTime(r.last_at)}>
-                          <ClockText read={(now) => relTime(r.last_at, now)} />
+                          {relTime(r.last_at, now)}
                         </time>
                       </span>
                     </span>
@@ -379,8 +374,6 @@ export function LinkedFrom({
             {shown.map((row) =>
               row.kind === "task" ? (
                 <li key={`t:${row.t.id}`}>
-                  {/* BY ITS ADDRESS, never its key: a key another task
-                      claimed first opens the claimant ([itemPath]). */}
                   <a
                     className="kpage-link"
                     href={href(itemPath(row.t))}
@@ -428,11 +421,13 @@ export function Revisions({
   open,
   onOpen,
   who,
+  now,
 }: {
   history: PageRevision[];
   open: number;
   onOpen: (version: number) => void;
   who: Who;
+  now: number;
 }) {
   const { rows, more, listID } = useShown(history);
   return (
@@ -471,7 +466,7 @@ export function Revisions({
                       dateTime={rev.created_at}
                       title={fmtDateTime(rev.created_at)}
                     >
-                      <ClockText read={(now) => when(rev.created_at, now)} />
+                      {when(rev.created_at, now)}
                     </time>
                   </button>
                 </li>

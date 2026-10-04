@@ -1,153 +1,152 @@
 /**
- * What this browser's session needs from the person, as the transports learn
- * it.
+ * This tab's read floors: the newest position each domain has been written at
+ * from here, which every later read of that domain waits for.
  *
- * # Why this is a module and not a prop
+ * WRITES ARE CONFIRMED, NEVER OPTIMISTIC. A change made through
+ * `protocol/act.ts` answers with the position its record landed at in its
+ * domain's log, and the node serving the next read may not have applied it
+ * yet — a board redrawn from that node shows the card where it was before the
+ * drag, which reads as "the change did not take". The engine's answer to that
+ * is a SESSION read: `read_level=session&min_position=<p>` waits until the
+ * node holds `p`, then answers. So a write raises this tab's floor for its
+ * domain, and every read of a question that takes a floor
+ * (`contract/domains.ts`) names it from then on — the refetch the write fires
+ * included. Nothing is drawn ahead of the engine, and nothing drawn after the
+ * write is older than it.
  *
- * The code that DISCOVERS a session problem is the transport: a REST answer
- * of `401`, a socket handshake the refusal probe reads as one, a `403` that
- * says the session may only enrol a second factor. The code that REPAIRS it is
- * the application: a route to the sign-in screen, or to the screen that
- * enrols the factor. Neither may reach into the other — a transport that draws a
- * dialog cannot be tested without a browser, and a screen that inspects every
- * status itself is a screen that forgets one — so the fact travels here,
- * beside neither.
+ * PER TAB AND MONOTONIC. A floor only ever rises: a slow answer to an earlier
+ * write arriving after a later one must not lower what the tab has already
+ * seen. And it is this tab's alone — another tab's writes are its own
+ * business, reached by its own polls.
  *
- * # A need is a STATE, not an event
- *
- * The socket is started before React mounts, so its refusal probe can answer
- * before anything has subscribed to hear it. An event fired into nobody is a
- * browser that never learns it is signed out, so what is kept is the latest
- * need, read by whoever subscribes when they subscribe. It is cleared by the
- * one thing that answers it: a sign-in that ends holding a whole session.
- *
- * # And a step-up is a QUESTION, asked once however many requests need it
- *
- * A guarded write refused `403 step_up_required` is not a mistake the person
- * made: they are signed in, and the engine wants a fresher proof of who they
- * are before this particular gesture. The repair is to ask for the password
- * again and send the SAME request — so nothing typed into a form is lost —
- * and it is asked once however many requests were refused at the same
- * moment: a screen that saves three things together must not stack three
- * password dialogs. The transport asks here; the application answers.
+ * `unknown` RAISES NOTHING. An outcome nobody can vouch for has no position
+ * worth waiting on, and a floor at a position that never lands would make
+ * every read of the domain wait for it.
  */
 
-/**
- * What the session lacks: a credential the engine accepts at all, or a second
- * factor the deployment requires before this session may do anything else.
- */
-export type SessionNeed = "sign_in" | "second_factor";
+// RELATIVE, not through `~`: protocol/ is also built alone as protocol.js,
+// where the alias does not exist.
+import { SESSION_QUERIES } from "../contract/domains.ts";
 
-let need: SessionNeed | null = null;
-const listeners = new Set<() => void>();
+/** A log a write lands in and a read can wait on. */
+export type SessionDomain = keyof typeof SESSION_QUERIES;
 
-function announce(): void {
-  for (const listener of listeners) listener();
-}
-
-/** The session's outstanding need, or null for one that needs nothing. */
-export function currentSessionNeed(): SessionNeed | null {
-  return need;
+/** A position as the engine spells it: `<stream>@<generation>:<sequence>`. */
+export interface LogPosition {
+  stream: string;
+  generation: number;
+  seq: number;
 }
 
 /**
- * Record what the session lacks. Called by the transports, never by a screen:
- * a screen that wants a person to sign in navigates there itself.
- */
-export function needSession(what: SessionNeed): void {
-  if (need === what) return;
-  need = what;
-  announce();
-}
-
-/**
- * The browser holds a whole session again — a sign-in, a redemption or an
- * enrolment finished — so whatever a transport recorded before it no longer
- * describes this browser.
- */
-export function sessionRestored(): void {
-  if (need === null) return;
-  need = null;
-  announce();
-}
-
-/**
- * The browser holds a session that may only enrol a second factor — a
- * sign-in or a redemption answered `second_factor_enrolment_required`.
+ * A position off the wire, or null for one this client cannot read.
  *
- * THE SIGN-IN'S OWN ANSWER REPLACES WHATEVER A TRANSPORT RECORDED BEFORE IT,
- * because it is the newest fact about this browser's session. The sign-in
- * screen's own `GET /auth/session` and the socket's refusal probe both record
- * `sign_in` for a browser holding nothing, which is the state every sign-in
- * starts from; left in place, it routed the enrolment straight back to the
- * sign-in form the moment the enrolment screen mounted.
+ * THE ENGINE'S OWN GRAMMAR (`tracker.ParseLogPosition`), so the value handed
+ * back as `min_position` is one the engine will accept: a stream name, then a
+ * generation and a sequence that are both non-negative integers.
  */
-export function sessionNeedsEnrolment(): void {
-  needSession("second_factor");
+export function parsePosition(raw: string | null | undefined): LogPosition | null {
+  const match = /^([^@\s]+)@(\d+):(\d+)$/.exec(raw ?? "");
+  if (!match) return null;
+  const generation = Number(match[2]);
+  const seq = Number(match[3]);
+  if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(seq)) return null;
+  return { stream: match[1]!, generation, seq };
 }
 
 /**
- * Subscribe to a change of need. Returns the unsubscribe. The shape
- * `useSyncExternalStore` takes, which is what reads it.
+ * Whether `next` is later than `held` on one log.
+ *
+ * GENERATION FIRST, as the engine orders them (`statelog.Later`): a log
+ * restored or re-anchored starts a new generation whose sequence may restart
+ * below the old one, and a comparison by sequence alone would keep the old
+ * floor for ever. A position on ANOTHER stream is taken as later — the only
+ * way the stream behind a domain changes is the engine replacing its log, and
+ * a floor on a log that no longer exists is one no read could ever meet.
  */
-export function onSessionNeed(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+export function isLater(next: LogPosition, held: LogPosition): boolean {
+  if (next.stream !== held.stream) return true;
+  if (next.generation !== held.generation) return next.generation > held.generation;
+  return next.seq > held.seq;
 }
 
-/**
- * The two windows a step-up refusal names, spelled as the `api.auth.session`
- * keys that size them: `step_up` for an ordinary guarded gesture, and
- * `step_up_sensitive` for one that changes how somebody proves who they are
- * or reveals a credential. A value this build does not know is still a
- * window, and is asked for the same way.
- */
-export type StepUpWindow = "step_up" | "step_up_sensitive" | (string & {});
+/** Heard when a domain was written from this tab: its floor rose. */
+export type WrittenListener = (domain: SessionDomain | null, refreshes: readonly string[]) => void;
 
 /**
- * Asks the person to confirm who they are, resolving true once the engine has
- * accepted the proof and false when they declined or could not.
+ * One tab's floors. A class rather than module state so a suite can hold its
+ * own; the dashboard uses [session], the one per tab.
  */
-export type StepUpConfirmer = (window: StepUpWindow) => Promise<boolean>;
+export class SessionFloors {
+  private readonly floors = new Map<SessionDomain, { raw: string; at: LogPosition }>();
+  private readonly listeners = new Set<WrittenListener>();
 
-let confirmer: StepUpConfirmer | null = null;
-let confirming: Promise<boolean> | null = null;
-
-/**
- * Install what confirms a step-up. Returns the uninstall, which leaves a
- * later installation in place.
- *
- * ONE AT A TIME, because there is one person at the keyboard: a second
- * installation replaces the first rather than queueing behind it.
- */
-export function setStepUpConfirmer(fn: StepUpConfirmer): () => void {
-  confirmer = fn;
-  return () => {
-    if (confirmer === fn) confirmer = null;
-  };
-}
-
-/**
- * Ask for a step-up, or join the one already being asked.
- *
- * FALSE WITH NOBODY TO ASK, so a refused request is reported as the refusal it
- * was rather than waiting for a dialog that will never open; and false for a
- * confirmer that failed, which is not a proof.
- *
- * ANY CONFIRMATION COVERS EVERY WINDOW: the password the dialog asks for
- * proves inside both, so a request refused for the sensitive window joins one
- * opened for the ordinary one rather than asking twice.
- */
-export function confirmStepUp(window: StepUpWindow): Promise<boolean> {
-  if (!confirmer) return Promise.resolve(false);
-  if (!confirming) {
-    confirming = confirmer(window)
-      .catch(() => false)
-      .finally(() => {
-        confirming = null;
-      });
+  /** The floor a read of `domain` names, or null before this tab wrote to it. */
+  floor(domain: SessionDomain): string | null {
+    return this.floors.get(domain)?.raw ?? null;
   }
-  return confirming;
+
+  /**
+   * Record a write this tab made to `domain` (null for one that lands in no
+   * log a question reads), landed at `position`, and tell
+   * every listener the domain moved — whether or not the floor rose, because
+   * a write that appended nothing (`position` null) still answered, and the
+   * questions it named are worth asking again.
+   *
+   * Returns whether the floor rose.
+   */
+  written(
+    domain: SessionDomain | null,
+    position: string | null,
+    refreshes: readonly string[],
+  ): boolean {
+    let rose = false;
+    const at = parsePosition(position);
+    if (domain !== null && at && position) {
+      const held = this.floors.get(domain);
+      if (!held || isLater(at, held.at)) {
+        this.floors.set(domain, { raw: position, at });
+        rose = true;
+      }
+    }
+    for (const listener of this.listeners) listener(domain, refreshes);
+    return rose;
+  }
+
+  /** Subscribe to writes. Returns the unsubscribe. */
+  onWritten(listener: WrittenListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  /**
+   * Whether a write heard by a listener moves the answer to `kind`: a question
+   * that reads the written domain at a floor, or one the write names as
+   * moving beside it.
+   */
+  static moves(kind: string, domain: SessionDomain | null, refreshes: readonly string[]): boolean {
+    return (domain !== null && domainOf(kind) === domain) || refreshes.includes(kind);
+  }
+
+  /**
+   * The freshness a read of `kind` names, or null when it names none: the
+   * question takes no floor, or this tab has not written its domain.
+   */
+  freshness(kind: string): { read_level: "session"; min_position: string } | null {
+    const domain = domainOf(kind);
+    if (domain === null) return null;
+    const floor = this.floor(domain);
+    return floor === null ? null : { read_level: "session", min_position: floor };
+  }
 }
+
+/** The domain whose log a question reads at a floor, or null for one that takes none. */
+export function domainOf(kind: string): SessionDomain | null {
+  for (const domain of Object.keys(SESSION_QUERIES) as SessionDomain[]) {
+    if ((SESSION_QUERIES[domain] as readonly string[]).includes(kind)) return domain;
+  }
+  return null;
+}
+
+/** This tab's floors. */
+export const session = new SessionFloors();

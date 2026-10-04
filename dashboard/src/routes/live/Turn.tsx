@@ -54,12 +54,12 @@ import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { PauseSeatButton, SteerTurnButton } from "~/components/writes.tsx";
-import { useClockReading } from "~/lib/clock.ts";
+import { useNow } from "~/lib/clock.ts";
 import { roundOf } from "~/lib/seats.ts";
 import { buildWaterfall, phaseLabel } from "~/lib/waterfall.ts";
 import type { Coverage } from "~/contract/coverage.ts";
 import { ToolsTab } from "./trace/Tools.tsx";
-import { taskPath, useTurnOrdinal } from "./trace/useTurnOrdinal.ts";
+import { useTurnOrdinal } from "./trace/useTurnOrdinal.ts";
 import { steerMarks, Waterfall } from "./trace/Waterfall.tsx";
 import { QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
@@ -126,7 +126,6 @@ import {
   fromPhaseEvent,
   groupTurns,
   mergePhases,
-  nestedUnder,
   phaseDuration,
   streamedPhases,
   turnSpan,
@@ -170,9 +169,6 @@ interface TurnRecord {
   /** `turn_completed` — the learning record: the clock, the outcome, the words. */
   learning: EventRecord | undefined;
 }
-
-/** A turn with no group in hand files nothing under any phase. */
-const NO_NESTED: Record<string, PhaseRecord[]> = {};
 
 function field(event: EventRecord | undefined, key: string): unknown {
   return (event?.payload as Record<string, unknown> | undefined)?.[key];
@@ -301,8 +297,7 @@ export interface TurnView {
   turnId: string;
   loading: boolean;
   error: string | null;
-  /** Why the answer was refused — on authority, or by the state log — for
-   *  the refusal banner. */
+  /** What the refusal said beyond its code — see `useQuery`. */
   refusal: QueryRefusal | LogRefusal | null;
   /** Oldest first: a turn is read forwards. */
   events: EventRecord[];
@@ -313,20 +308,9 @@ export interface TurnView {
   /** The turn's OWN phases, without those workers. */
   own: PhaseRecord[];
   /** The workers, filed under the phase that spawned each. */
-  nested: Record<string, PhaseRecord[]>;
+  nested: Map<string, PhaseRecord[]>;
   rec: TurnRecord;
-  /**
-   * The seat the turn ran for: its name, and the HANDLE its page is at — and
-   * what a pause or a note to the turn names — resolved from the agent id the
-   * turn's phases carry, through the roster, so a renamed seat is named and
-   * linked as it is now. Where the roster no longer carries the seat it is the
-   * handle the turn's own opening record names (`agent_handle`), which the
-   * seat's page follows through a rename; "" where neither says, and the seat
-   * then draws unlinked. It was linked by its NAME, as though a name were a
-   * handle, and opened whichever seat of that name came first.
-   */
   role: string;
-  handle: string;
   trigger: PhaseRecord["trigger"] | null;
   outcome: ReturnType<typeof outcomeOf>;
   running: boolean;
@@ -403,7 +387,8 @@ export interface TurnView {
   overlay: boolean;
   /** When the turn began, as the engine stamped it; 0 where nothing says. */
   startedAt: number;
-  /** Whether the seat — by [handle] — is paused now. */
+  /** The seat's handle — what a pause names — and whether it is paused now. */
+  handle: string;
   paused: boolean;
   /** The phase running now, as the seat's overlay carries it. */
   liveCall: LiveCall | null;
@@ -526,7 +511,7 @@ export function useTurnView(turnId: string): TurnView {
     const streamed = streamedPhases(phaseEvents, (r) => r.turnId === turnId);
     const live = agents
       .filter((a) => a.live_call && a.live_call.turn_id === turnId)
-      .map((a) => fromLiveCall(a.live_call!, a, a.turn));
+      .map((a) => fromLiveCall(a.live_call!, a.role, a.turn));
     // Within a turn, oldest first: a turn is read forwards. `mergePhases`
     // orders newest first, which is right for a feed and wrong here.
     return mergePhases([...streamed, ...answered], live).sort((a, b) => tsKey(a.at) - tsKey(b.at));
@@ -544,7 +529,7 @@ export function useTurnView(turnId: string): TurnView {
     [phases, turnId],
   );
   const own = group?.phases ?? phases;
-  const nested = group?.nested ?? NO_NESTED;
+  const nested = group?.nested ?? new Map<string, PhaseRecord[]>();
   const workerTokens = phases.reduce((n, p) => n + (p.hostPhase ? p.totalTokens : 0), 0);
   const workerCount = phases.filter((p) => p.hostPhase).length;
 
@@ -596,9 +581,8 @@ export function useTurnView(turnId: string): TurnView {
           liveCall?.work_item ??
           null) as WorkItemRef | null);
   // WHOSE TURN, by the AGENT ID its phases (or its own records) name, paired
-  // with the roster by that id — see `TurnView.role`. Never by the role NAME,
-  // which namesakes share: a second "Engineer" was drawn as the first one's
-  // turn, linked to the first one's page and offered the first one's pause.
+  // with the roster by that id. Never by the role NAME, which namesakes share:
+  // a second "Engineer" was drawn as the first one's turn.
   const agentId =
     phases.find((p) => p.agentId)?.agentId ||
     str(rec.summary, "agent_id") ||
@@ -807,17 +791,10 @@ export function turnFacts(
       ? [
           {
             label: "Seat",
-            // The chip is its own link, so the fact carries no `path`: an
-            // anchor inside the fact's own anchor is markup no browser agrees
-            // about. A seat the roster no longer carries has no handle to
-            // link by, and is drawn unlinked rather than linked by its NAME,
-            // which opened whichever seat of that name came first.
-            value: !view.role ? (
-              "the engine"
-            ) : view.handle ? (
-              <SeatChip name={view.role} handle={view.handle} kind="agent" />
+            value: view.role ? (
+              <SeatChip name={view.role} handle={view.handle || view.role} kind="agent" />
             ) : (
-              view.role
+              "the engine"
             ),
           },
         ]
@@ -911,22 +888,6 @@ function phaseFact(view: TurnView): { value: string; note?: string } {
     value: names.join(" → "),
     ...(view.iterations > 1 ? { note: plural(view.iterations, "iteration") } : {}),
   };
-}
-
-/**
- * The shared instant while a turn RUNS, and a constant 0 once it has settled.
- *
- * A running turn's header counts its elapsed time and its waterfall grows, so
- * both frames re-render with the clock — but a settled turn has nothing on
- * screen that moves, and reading `useNow` for it re-rendered the whole page,
- * every phase card and every band, once a second for as long as it was open.
- * Read through [useClockReading], the reading for a settled turn never
- * changes, so the clock never reaches it; every consumer of the value
- * (`turnStatus`, `turnFacts`, the waterfall) reads it only while the turn
- * runs.
- */
-function useRunningClock(running: boolean): number {
-  return useClockReading((now) => (running ? now : 0));
 }
 
 /**
@@ -1562,12 +1523,12 @@ export function turnCrumbLabel(view: TurnView, ordinal: number | null): string {
 
 export function TurnScreen({ turnId }: { turnId: string }) {
   const nav = useNavigator();
+  const now = useNow();
   // ONE DERIVATION FOR THE PAGE AND THE RAIL — see [useTurnView]. What stays
   // here is what only a page has room for: the waterfall, the story bands,
   // the prompt weights, every trace the turn touched, and the JSON somebody
   // attaches to a bug report.
   const view = useTurnView(turnId);
-  const now = useRunningClock(view.running);
   const { loading, error, refusal, events, cut, attempt, phases, own, nested, rec, role } = view;
   const { running, durationMs, story } = view;
   const [tab, setTab] = useTab<TurnTab>("tab", TURN_TABS);
@@ -1583,8 +1544,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
 
   // THE CLOCK MOVES THE WATERFALL ONLY WHILE THE TURN RUNS. A settled turn's
   // spans all have ends, so ticking it every second would rebuild the same
-  // model sixty times a minute for a screen that cannot change — which is
-  // why [useRunningClock] reads 0 for one.
+  // model sixty times a minute for a screen that cannot change.
   const clock = running ? now : 0;
   const model = useMemo(
     () =>
@@ -1597,7 +1557,12 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // THE TRAIL: Live › {agent} › Turn n · KEY — see [turnCrumbLabel], and
   // `app/crumbs.ts` for the seat crumb, which leads back to what is running
   // for that seat.
-  const ordinal = useTurnOrdinal(view.workItem, turnId, running, view.startedAt || view.span.from);
+  const ordinal = useTurnOrdinal(
+    view.workItem?.key ?? "",
+    turnId,
+    running,
+    view.startedAt || view.span.from,
+  );
   const crumb = turnCrumbLabel(view, ordinal);
   usePageLabels({
     ...(crumb ? { [turnId]: crumb } : {}),
@@ -1656,13 +1621,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // "Copied" on, so what happened is said in a toast.
   const toast = useToast();
   const [pausing, setPausing] = useState(false);
-  // THE TASK BY ITS IDENTITY ([taskPath]): this page reads nothing that says
-  // whether the turn's key is one another task claimed first, and the key
-  // would open that task — the turn's own id never does.
-  const workItem = view.workItem;
-  const openTask = useCallback(() => {
-    if (workItem) nav.to(taskPath(workItem, null));
-  }, [nav, workItem]);
+  const itemKey = view.workItem?.key ?? "";
+  const openTask = useCallback(() => nav.to(["work", itemKey]), [nav, itemKey]);
   const moreItems = useMemo<MenuItem[]>(
     () => [
       ...(attempt?.rows ?? [])
@@ -1726,7 +1686,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           },
         ]
       : []),
-    ...(workItem?.key
+    ...(itemKey
       ? [
           {
             key: "task",
@@ -1916,7 +1876,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                     <PhaseCard
                       key={p.key}
                       record={p}
-                      nested={nestedUnder(nested, p.key)}
+                      nested={nested.get(p.key)}
                       defaultOpen={i === 0}
                     />
                   ))}
@@ -2167,7 +2127,7 @@ function PhaseStrip({ phases }: { phases: PhaseRecord[] }) {
  */
 export function TurnPeek({ turnId }: { turnId: string }) {
   const view = useTurnView(turnId);
-  const now = useRunningClock(view.running);
+  const now = useNow();
   // NOTHING HAS BEEN READ, which is three states and only one of them is an
   // empty rail: an answer that has not landed is a skeleton, a refusal is the
   // engine's own words, and a turn no event names is said plainly. A header
@@ -2175,7 +2135,9 @@ export function TurnPeek({ turnId }: { turnId: string }) {
   const nothing = view.events.length === 0 && view.phases.length === 0;
   if (nothing) {
     if (view.loading) return <Skeleton variant="text" rows={6} label="Loading the turn" />;
-    if (view.error) return <QueryState error={view.error} refusal={view.refusal} loading={false} />;
+    if (view.error) {
+      return <QueryState error={view.error} refusal={view.refusal} loading={false} />;
+    }
     return (
       <EmptyState
         size="compact"

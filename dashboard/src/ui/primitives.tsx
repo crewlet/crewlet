@@ -53,7 +53,6 @@ import { CheckGlyph, CopyGlyph, CircleAlertGlyph, SaveGlyph } from "@crewlethq/i
 import { Button, cx, EmptyValue, Tag, type Tone as UiletTone, writeClipboard } from "@crewlethq/ui";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { Mark } from "./glyph.tsx";
-import { fmtExact } from "~/lib/format.ts";
 
 // ---------------------------------------------------------------------------
 // Vocabulary
@@ -433,7 +432,7 @@ export function Segmented<T extends string>({
           {o.icon && <Mark name={o.icon} size="xs" />}
           {o.label}
           {o.count != null && (
-            <span className="count-chip t-num">{`${fmtExact(o.count)}${o.capped ? "+" : ""}`}</span>
+            <span className="count-chip t-num">{`${o.count.toLocaleString()}${o.capped ? "+" : ""}`}</span>
           )}
         </button>
       ))}

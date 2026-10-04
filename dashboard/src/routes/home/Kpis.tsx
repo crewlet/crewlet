@@ -21,8 +21,8 @@ import {
 import { ArrowRightGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { decisionsHref } from "~/components/DecisionRow.tsx";
-import { ClockText } from "~/app/frame/cells.tsx";
-import { fmtCount, fmtExact } from "~/lib/format.ts";
+import { fmtCount } from "~/lib/format.ts";
+import { CONFIG_WRITE_GRANT } from "~/lib/useWriteAccess.ts";
 import { useOrgBudget, useOrg } from "~/lib/store-hooks.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
@@ -54,6 +54,7 @@ export function Kpis({
   waitingError,
   flow,
   spend,
+  now,
 }: {
   range: HomeRange;
   crew: Crew;
@@ -62,16 +63,21 @@ export function Kpis({
   waitingError: QueryErrorCode | null;
   flow: QueryResult<WorkFlowAnswer>;
   spend: QueryResult<TokenSeries>;
+  now: number;
 }) {
   return (
     <section className="home-kpis" aria-label="The company at a glance">
       <AgentsTile crew={crew} />
-      <WaitingTile viewer={viewer} waiting={waiting} error={waitingError} />
+      <WaitingTile viewer={viewer} waiting={waiting} error={waitingError} now={now} />
       <InProgressTile flow={flow} />
       <CompletedTile flow={flow} range={range} />
       {/* WHO MAY SET A BUDGET is whoever holds `config:write` — the grant a
           ceiling is written under — never a kind of credential. */}
-      <TokensTile spend={spend} range={range} canBudget={viewer.grants.includes("config:write")} />
+      <TokensTile
+        spend={spend}
+        range={range}
+        canBudget={viewer.grants.includes(CONFIG_WRITE_GRANT)}
+      />
     </section>
   );
 }
@@ -81,8 +87,8 @@ function AgentsTile({ crew }: { crew: Crew }) {
   return (
     <StatCard
       label="Agents working now"
-      value={fmtExact(crew.working)}
-      unit={`/ ${fmtExact(crew.total)}`}
+      value={crew.working.toLocaleString()}
+      unit={`/ ${crew.total.toLocaleString()}`}
       trend={
         crew.total > 0 ? (
           <SegmentedMeter
@@ -107,10 +113,12 @@ function WaitingTile({
   viewer,
   waiting,
   error,
+  now,
 }: {
   viewer: ViewerState;
   waiting: Waiting | null;
   error: QueryErrorCode | null;
+  now: number;
 }) {
   const review = (
     <ButtonLink
@@ -152,25 +160,16 @@ function WaitingTile({
   return (
     <StatCard
       label="Waiting on your decision"
-      value={`${fmtExact(waiting.count)}${waiting.floor ? "+" : ""}`}
+      value={`${waiting.count.toLocaleString()}${waiting.floor ? "+" : ""}`}
       trend={review}
       sub={
-        waiting.count > 0 && waiting.oldestAt ? (
-          // THE AGE READS THE CLOCK HERE, so the tile renders when "for 3h"
-          // turns over and the page around it does not.
-          <OldestWaiting at={waiting.oldestAt} />
-        ) : (
-          "Nothing waiting on you"
-        )
+        waiting.count > 0 && waiting.oldestAt
+          ? `Oldest waiting ${waitedFor(waiting.oldestAt, now)}`
+          : "Nothing waiting on you"
       }
       subTone={waiting.count > 0 ? "warning" : undefined}
     />
   );
-}
-
-/** "Oldest waiting for 3h", read off the clock in the one line that says it. */
-function OldestWaiting({ at }: { at: string }) {
-  return <ClockText read={(now) => `Oldest waiting ${waitedFor(at, now)}`} />;
 }
 
 /** Open work somebody has started, its change over a week, and what is stuck. */
@@ -186,7 +185,7 @@ function InProgressTile({ flow }: { flow: QueryResult<WorkFlowAnswer> }) {
   return (
     <StatCard
       label="Tasks in progress"
-      value={fmtExact(current)}
+      value={current.toLocaleString()}
       trend={<Sparkline values={points.slice(-14).map((p) => p.active)} current />}
       delta={delta ? { value: delta, polarity: "neutral" } : undefined}
       sub={<Parts parts={inProgressParts(delta !== null, trouble)} />}
@@ -206,7 +205,7 @@ function CompletedTile({ flow, range }: { flow: QueryResult<WorkFlowAnswer>; ran
   return (
     <StatCard
       label={label}
-      value={fmtExact(current)}
+      value={current.toLocaleString()}
       trend={<Sparkline values={data.points.slice(-shown).map((p) => p.completed)} current />}
       delta={
         delta
@@ -267,7 +266,7 @@ function TokensTile({
             value={week.used}
             max={week.limit ?? 0}
             state={week.state as MeterState}
-            valueText={`${fmtExact(week.used)} of ${fmtExact(week.limit ?? 0)} tokens this week`}
+            valueText={`${week.used.toLocaleString()} of ${(week.limit ?? 0).toLocaleString()} tokens this week`}
           />
         ) : undefined
       }

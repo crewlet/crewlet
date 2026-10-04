@@ -1,16 +1,6 @@
 /**
- * How a seat is configured, from the org chart's own row for it — its RUNTIME
- * half, which the chart serves only to a reader holding `config:read` and the
- * org projection deliberately does not carry.
- *
- * # Read from the chart, by handle, never from the company document
- *
- * The company document holds no seats any more: the org chart left it for a
- * log of its own, so a seat found in it by NAME was nothing for every seat in
- * every company. The profile reads the chart once ([useSeatSetup]) and hands
- * the reading here; every outcome of it — still out, refused naming the
- * grants, a node that could not answer, absent, or the runtime half withheld
- * — has its own sentence ([SettingsState]) rather than an empty value.
+ * How a seat is configured, from the company document — the operator-gated
+ * half of a seat, which the public chart deliberately does not carry.
  *
  * # Read-only here, and it says where the change is made
  *
@@ -45,7 +35,7 @@ import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
 import { configValueKind, fmtCount } from "~/lib/format.ts";
 import { handleLabel, llmChain, mcpEnvOf, type Seat, type SeatSetup } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import type { AgentRow, HumanContactKey } from "~/protocol/index.ts";
+import type { AgentRow } from "~/protocol/index.ts";
 import { ConfigValue, ModelChain, SettingsState } from "./shared.tsx";
 
 /**
@@ -62,7 +52,7 @@ export function credentialState(value: string | undefined): string {
       return "from the secret store";
     case "hidden":
     case "literal":
-      return "set on the seat (hidden)";
+      return "set in the document (hidden)";
     default:
       return "not set";
   }
@@ -70,15 +60,10 @@ export function credentialState(value: string | undefined): string {
 
 /**
  * What each contact identity is called, as a person names it — `contact`'s
- * keys are the chart's own (`HumanContactKey`, `internal/org/role.go`), and
- * printed with their underscores swapped for spaces they read "slack user id"
- * for a Slack MEMBER id.
- *
- * NO OPERATOR ID. A contact block says how to reach a person, not which
- * credential they hold: the identity directory binds a credential to a seat,
- * and the key that once did it here is gone with the binding it named.
+ * keys are the config's own (`internal/org/role.go`), and printed with their
+ * underscores swapped for spaces they read "github login".
  */
-const CONTACT_LABELS: Readonly<Record<HumanContactKey, string>> = {
+const CONTACT_LABELS: Readonly<Record<string, string>> = {
   slack_user_id: "Slack member id",
   mattermost_user_id: "Mattermost user id",
   atlassian_account_id: "Atlassian account id",
@@ -88,7 +73,7 @@ const CONTACT_LABELS: Readonly<Record<HumanContactKey, string>> = {
 
 /** A contact key's label: the table's, or the key in sentence case for one a newer engine added. */
 export function contactLabel(key: string): string {
-  const known = (CONTACT_LABELS as Readonly<Record<string, string>>)[key];
+  const known = CONTACT_LABELS[key];
   if (known) return known;
   const words = key.replace(/_/g, " ");
   return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
@@ -101,23 +86,30 @@ export function Settings({
 }: {
   seat: Seat;
   agent: AgentRow | undefined;
-  /** The profile's one read of the seat's chart row ([useSeatSetup]): asked
-   *  again here, the tab read the seat and its home unit twice. */
+  /** The profile's one read of the guarded document ([useSeatSetup]): asked
+   *  again here, the tab fetched the whole company document twice. */
   setup: SeatSetup;
 }) {
   const human = seat.kind === "human";
-  const { reading } = setup;
-  const row = reading.state === "read" ? reading.seat : null;
-  const runtime = row?.runtime;
-  // ITS UNIT'S, WITH THE SEAT'S OWN WINNING per variable — and none for a
-  // person, who runs no tools (`mcpEnvOf`).
-  const credentials = useMemo(() => mcpEnvOf(reading, seat.kind), [reading, seat.kind]);
+  const { config, settings, reading } = setup;
+  const role = reading.state === "read" ? reading.role : null;
+  const credentials = useMemo(
+    () => (settings && !human ? mcpEnvOf(settings, seat.kind) : {}),
+    [settings, human, seat.kind],
+  );
   const edit = href(["agents", "edit"], { seat: seat.handle || seat.name });
   // THE COMPANY'S CEILINGS, as written on the public chart: a seat with none
   // of its own in a window is still bound by the company's there.
   const company = useOrg()?.token_budget;
   const state = (children: ReactNode) => (
-    <SettingsState reading={reading} seat={seat}>
+    <SettingsState
+      error={config.error}
+      refusal={config.refusal}
+      loading={config.loading}
+      doc={config.doc}
+      settings={settings}
+      seat={seat}
+    >
       {children}
     </SettingsState>
   );
@@ -127,10 +119,8 @@ export function Settings({
       value: seat.handle ? <code className="inline">{handleLabel(seat.handle)}</code> : undefined,
     },
     { label: "Kind", value: human ? "person — never run by the engine" : "agent" },
-    // SEALED BY THE CHART: the row carries the `${VAR}` reference that names
-    // the address in the secret store, or the mask — never the address.
-    { label: "Email", value: <ConfigValue value={row?.email} /> },
-    ...Object.entries(runtime?.contact ?? {}).map(([k, v]) => ({
+    { label: "Email", value: <ConfigValue value={role?.email} /> },
+    ...Object.entries(role?.contact ?? {}).map(([k, v]) => ({
       label: contactLabel(k),
       // NOT A CREDENTIAL: a contact identity is a public handle at a vendor
       // — a Slack member id, a GitHub login — so the literal is the value.
@@ -141,8 +131,8 @@ export function Settings({
     <div className="col gap-4">
       <div className="row gap-2 wrap">
         <p className="t-caption prof-lede">
-          From the org chart. Every value here is changed in the org editor, which writes the change
-          to the chart.
+          From the company document. Every value here is changed in the org editor, where the change
+          is validated and applied as a new revision.
         </p>
         <span className="spacer" />
         <ButtonLink
@@ -162,15 +152,10 @@ export function Settings({
         {state(
           <div className="col gap-3">
             <PropertiesRail groups={[{ properties: identity }]} />
-            {/* ADMITTED, AND SAID: the engine lets a human seat hold no
-                contact identity (a person who works only through the
-                dashboard has no chat account to declare), and the chart
-                check reports it as `seat_unreachable`. "Needs at least one"
-                was a rule the engine does not have. */}
-            {human && Object.keys(runtime?.contact ?? {}).length === 0 && (
+            {human && Object.keys(role?.contact ?? {}).length === 0 && (
               <Callout variant="warning">
-                A person with no contact identity is reached through the dashboard only: no agent
-                can @-mention them, and their activity on other surfaces is not attributed to them.
+                A person needs at least one contact identity, so inbound activity on Slack, GitHub
+                or the tracker can be attributed to them.
               </Callout>
             )}
           </div>,
@@ -192,10 +177,9 @@ export function Settings({
                         label: "Model",
                         // WHAT THE SEAT RUNS ON when it writes no chain of
                         // its own is the company's default, RESOLVED — the
-                        // org projection carries the chain a turn walks to a
-                        // `config:read` reader, which this card's is.
-                        value: llmChain(runtime?.llm).length ? (
-                          <ModelChain keys={llmChain(runtime?.llm)} />
+                        // public chart carries the chain a turn walks.
+                        value: llmChain(role?.llm).length ? (
+                          <ModelChain keys={llmChain(role?.llm)} />
                         ) : (seat.raw.llm?.["execute"] ?? []).length ? (
                           <span className="row gap-2 wrap">
                             <span className="muted">the company&rsquo;s default:</span>
@@ -207,8 +191,8 @@ export function Settings({
                       },
                       {
                         label: "Auxiliary model",
-                        value: llmChain(runtime?.llm_auxiliary).length ? (
-                          <ModelChain keys={llmChain(runtime?.llm_auxiliary)} />
+                        value: llmChain(role?.llm_auxiliary).length ? (
+                          <ModelChain keys={llmChain(role?.llm_auxiliary)} />
                         ) : (
                           <span className="muted">none — reflection uses the model above</span>
                         ),
@@ -220,16 +204,16 @@ export function Settings({
                         // A DEFAULTED VALUE IN THE QUIET TONE every other
                         // unset row on this card takes.
                         value:
-                          runtime?.learning_enabled == null ? (
+                          role?.learning_enabled == null ? (
                             <span className="muted">the company&rsquo;s default</span>
-                          ) : runtime.learning_enabled ? (
+                          ) : role.learning_enabled ? (
                             "on"
                           ) : (
                             "off"
                           ),
                       },
                       ...BUDGET_WINDOWS.map(({ period }) => {
-                        const limit = runtime?.token_budget?.[period];
+                        const limit = role?.token_budget?.[period];
                         const theirs = company?.[period];
                         return {
                           label: `${PERIOD_ADJECTIVE[period][0]!.toUpperCase()}${PERIOD_ADJECTIVE[period].slice(1)} budget`,
@@ -251,10 +235,10 @@ export function Settings({
               />
             </div>,
           )}
-          {/* THE ENGINE'S METER, under the ceilings the runtime half writes:
-              what the fleet's counter holds the seat to and how much of each
+          {/* THE ENGINE'S METER, under the ceilings the document writes: what
+              the fleet's counter holds the seat to and how much of each
               capped window is spent. PUSHED to every reader, so it is drawn
-              whether or not the chart's guarded half could be read. */}
+              whether or not the document could be read. */}
           {agent?.budget?.windows?.length ? (
             <div className="prof-meters">
               <WindowMeters windows={agent.budget.windows} whose={`${seat.name}'s`} />

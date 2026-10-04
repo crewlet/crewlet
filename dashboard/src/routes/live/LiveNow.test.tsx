@@ -8,7 +8,7 @@
  * state promising a record the engine had deleted.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -41,14 +41,23 @@ afterEach(() => {
   location.hash = "";
 });
 
-/** Jane, signed in and bound to her seat, whom the engine serves `answer_run`. */
 const JANE = {
-  login: "jane.founder",
-  grants: ["state:read", "audit:read"],
+  login: "U0FOUNDER",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   kind: "human",
-  owner: "jane",
   acts: ["answer_run"],
 };
 
@@ -109,11 +118,7 @@ function mount({
   const store = new Store();
   store.applyHealth({ status: "healthy" } as never);
   store.applyOrg(ORG as never);
-  // THE ROSTER, set whole (`applySeats`; `applyAgents` only patches a seat the
-  // roster already holds), each row under the agent id the store keeps it by.
-  store.applySeats(
-    agents.map((a) => ({ agent_id: `a-${String(a.handle ?? a.role ?? "")}`, ...a })) as never,
-  );
+  store.applySeats(agents as never);
   const socket = new LiveSocket(store);
   const asked: { kind: string; params: Record<string, unknown> }[] = [];
   const base: Record<string, Answer> = {
@@ -171,6 +176,7 @@ test("a turn that has only started is on its Context step, timed from its start"
   mount({
     agents: [
       {
+        agent_id: "a1",
         id: "a1",
         role: "Search Engineer",
         handle: "eng-search",
@@ -213,6 +219,7 @@ test("a quiet round is marked on its row, and a parked turn is not", async () =>
   mount({
     agents: [
       {
+        agent_id: "a1",
         id: "a1",
         role: "Search Engineer",
         handle: "eng-search",
@@ -221,6 +228,7 @@ test("a quiet round is marked on its row, and a parked turn is not", async () =>
         live_call: call("t-quiet"),
       },
       {
+        agent_id: "a2",
         id: "a2",
         role: "Payments Engineer",
         handle: "eng-payments",
@@ -288,7 +296,7 @@ test("a finished phase is held back under a reader, unless it was running above"
   const card = cardOf("Recent phases");
   await within(card).findByText("delivered");
   expect(within(card).getAllByRole("row").length).toBeGreaterThan(0);
-  const rowsBefore = card.querySelectorAll(".grid-body .grid-row").length;
+  const rowsBefore = card.querySelectorAll("[data-row-index]").length;
 
   act(() => {
     store.applyEvent(phaseEvent("p-watched", "t-watched", "id-search"));
@@ -296,7 +304,7 @@ test("a finished phase is held back under a reader, unless it was running above"
   });
   // THE WATCHED ONE IS IN; THE OTHER WAITS.
   await waitFor(() =>
-    expect(card.querySelectorAll(".grid-body .grid-row").length).toBe(rowsBefore + 1),
+    expect(card.querySelectorAll("[data-row-index]").length).toBe(rowsBefore + 1),
   );
   expect(within(card).getByRole("button", { name: /1 new phase finished/ })).toBeTruthy();
 });
@@ -497,6 +505,7 @@ test("a running turn on no item names what woke it after the verb", async () => 
   mount({
     agents: [
       {
+        agent_id: "a1",
         id: "a1",
         role: "Search Engineer",
         handle: "eng-search",
@@ -530,6 +539,7 @@ test("the page draws no working count of its own", async () => {
   mount({
     agents: [
       {
+        agent_id: "a1",
         id: "a1",
         role: "Search Engineer",
         handle: "eng-search",

@@ -24,7 +24,7 @@
 
 import { reasonPhrase } from "~/lib/reasons.ts";
 import { companyMidnight } from "~/lib/range.ts";
-import { dateFormatter, zoneOffset } from "~/lib/format.ts";
+import { zoneOffset } from "~/lib/format.ts";
 import { conditionKey, type Attention } from "~/lib/attention.ts";
 import { DECISIONS_VIEW, subjectKey, type DecisionSubject } from "~/components/DecisionRow.tsx";
 import type { WorkInboxAnswer, WorkInboxNotice } from "~/protocol/index.ts";
@@ -66,23 +66,17 @@ const CHIP_REASON: Partial<Record<Chip, string>> = {
   assigned: "assignee",
 };
 
-/**
- * One row of the list. `id` is the ROW's identity — what `row=` names in the
- * address and what the pane is remounted on: a decision's subject key, a
- * condition's key or a notice's record id. Never a work item's key, which is a
- * different thing a row may be ABOUT (`NoticeList.rowItem`).
- */
 export type InboxRow =
   | {
       kind: "decision";
-      id: string;
+      key: string;
       at?: string;
       subject: DecisionSubject;
       /** The notices this person holds about it — what Done and Snooze mark. */
       notices: WorkInboxNotice[];
     }
-  | { kind: "condition"; id: string; at?: string; item: Attention }
-  | { kind: "notice"; id: string; at: string; notice: WorkInboxNotice };
+  | { kind: "condition"; key: string; at?: string; item: Attention }
+  | { kind: "notice"; key: string; at: string; notice: WorkInboxNotice };
 
 /** The rows, split into the decisions group and the notices it leaves. */
 export interface InboxRows {
@@ -117,10 +111,10 @@ export function inboxRows(input: {
   const decisions: InboxRow[] = subjects.map((subject) => {
     const held = subject.kind === "ask" ? (byAsk.get(subject.ask.comment) ?? []) : [];
     for (const n of held) attached.add(n.record_id);
-    return { kind: "decision", id: subjectKey(subject), at: subject.at, subject, notices: held };
+    return { kind: "decision", key: subjectKey(subject), at: subject.at, subject, notices: held };
   });
   for (const item of conditions) {
-    decisions.push({ kind: "condition", id: conditionKey(item.id), at: item.at, item });
+    decisions.push({ kind: "condition", key: conditionKey(item.id), at: item.at, item });
   }
   return {
     decisions,
@@ -129,7 +123,7 @@ export function inboxRows(input: {
 }
 
 function noticeRow(notice: WorkInboxNotice): InboxRow {
-  return { kind: "notice", id: notice.record_id, at: notice.at, notice };
+  return { kind: "notice", key: notice.record_id, at: notice.at, notice };
 }
 
 /** Whether a row answers a chip. */
@@ -275,19 +269,16 @@ interface Civil {
 }
 
 function civilDate(at: number, tz: string): Civil {
-  // THROUGH THE KEPT FORMATTERS (`lib/format.ts`), one per zone: a zone
-  // `Intl` does not know throws at construction and is never kept, which is
-  // what sends a mistyped company zone to UTC here.
   let parts: Intl.DateTimeFormatPart[];
   try {
-    parts = dateFormatter("en-CA", {
+    parts = new Intl.DateTimeFormat("en-CA", {
       timeZone: tz,
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
     }).formatToParts(at);
   } catch {
-    parts = dateFormatter("en-CA", {
+    parts = new Intl.DateTimeFormat("en-CA", {
       timeZone: "UTC",
       year: "numeric",
       month: "2-digit",
@@ -300,7 +291,7 @@ function civilDate(at: number, tz: string): Civil {
 
 /** A civil date as a reader names it: "Mon, Sep 28". */
 function dayIn(c: Civil): string {
-  return dateFormatter("en-US", {
+  return new Intl.DateTimeFormat("en-US", {
     weekday: "short",
     month: "short",
     day: "numeric",

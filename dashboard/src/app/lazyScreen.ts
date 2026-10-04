@@ -40,16 +40,6 @@
  * therefore reads the chunk through React's `use` over the cache below, and
  * the cache FORGETS a rejected load — the next render of any screen in that
  * chunk asks the server again.
- *
- * BUT NOT BEFORE THE RENDER THAT ASKED FOR IT HAS SEEN IT. React delivers a
- * rejection by REPLAYING the render that suspended, and the replay asks the
- * cache again: a cache that had already forgotten the load started a second
- * fetch nobody would read, and React — handed a promise it had never seen —
- * warned that the component made an uncached promise, reused the first one
- * and threw ITS rejection anyway. So a load a render waited on keeps its
- * rejection until the boundary drawing it has drawn it
- * ([forgetDrawnFailure]); a load only a hover or the idle prefetch asked for
- * has no render to deliver it to and is forgotten as it fails.
  */
 
 import { createElement, use, type ComponentType } from "react";
@@ -126,68 +116,28 @@ export class ChunkLoadError extends Error {
   }
 }
 
-/** One chunk's fetch, in flight or settled. */
-interface Load {
-  promise: Promise<unknown>;
-  /** A render is waiting on it, so a rejection is kept until it is drawn. */
-  rendered: boolean;
-  /** The rejection, once one is kept for the render that asked. */
-  failure?: ChunkLoadError;
-}
-
 /** The loads in flight or settled. A rejected load is removed — see the file's doc. */
-const pending = new Map<Chunk, Load>();
+const pending = new Map<Chunk, Promise<unknown>>();
 /** The chunks that arrived, so a screen whose code is in memory never suspends. */
 const loaded = new Map<Chunk, unknown>();
 
-/** The chunk's load: the one in flight or kept, or a fresh fetch. */
-function request(chunk: Chunk): Load {
-  const kept = pending.get(chunk);
-  if (kept) return kept;
-  const load: Load = { promise: Promise.resolve(), rendered: false };
-  load.promise = (overrides.get(chunk) ?? LOADERS[chunk])().then(
-    (module) => {
-      loaded.set(chunk, module);
-      return module;
-    },
-    (cause: unknown) => {
-      const failure = new ChunkLoadError(chunk, cause);
-      if (load.rendered) load.failure = failure;
-      // ONLY ITS OWN ENTRY: a newer fetch of the chunk may have replaced it.
-      else if (pending.get(chunk) === load) pending.delete(chunk);
-      throw failure;
-    },
-  );
-  pending.set(chunk, load);
-  return load;
-}
-
-/**
- * Fetch a chunk, once; a failed fetch is forgotten, so the next ask retries.
- * For whatever asks without drawing — a hover, the idle prefetch, a suite.
- */
+/** Fetch a chunk, once; a failed fetch is forgotten, so the next ask retries. */
 export function loadChunk<C extends Chunk>(chunk: C): Promise<ChunkModule<C>> {
-  return request(chunk).promise as Promise<ChunkModule<C>>;
-}
-
-/**
- * The fetch a render suspends on: [loadChunk]'s, marked as awaited by a
- * render, so its rejection is still the same promise when React replays that
- * render to deliver it — see the file's doc.
- */
-function renderChunk<C extends Chunk>(chunk: C): Promise<ChunkModule<C>> {
-  const load = request(chunk);
-  load.rendered = true;
-  return load.promise as Promise<ChunkModule<C>>;
-}
-
-/**
- * A boundary has drawn this failure, so the next render of the chunk — the
- * boundary's Try again, or a navigation that resets it — fetches again.
- * Forgets nothing but that very failure: a newer fetch is left alone.
- */
-export function forgetDrawnFailure(failure: ChunkLoadError): void {
-  if (pending.get(failure.chunk)?.failure === failure) pending.delete(failure.chunk);
+  let load = pending.get(chunk);
+  if (!load) {
+    load = (overrides.get(chunk) ?? LOADERS[chunk])().then(
+      (module) => {
+        loaded.set(chunk, module);
+        return module;
+      },
+      (cause: unknown) => {
+        pending.delete(chunk);
+        throw new ChunkLoadError(chunk, cause);
+      },
+    );
+    pending.set(chunk, load);
+  }
+  return load as Promise<ChunkModule<C>>;
 }
 
 /**
@@ -205,7 +155,7 @@ export function lazyScreen<C extends Chunk, P extends object>(
   pick: (module: ChunkModule<C>) => ComponentType<P>,
 ): ComponentType<P> {
   function Lazy(props: P) {
-    const module = (loaded.get(chunk) as ChunkModule<C> | undefined) ?? use(renderChunk(chunk));
+    const module = (loaded.get(chunk) as ChunkModule<C> | undefined) ?? use(loadChunk(chunk));
     return createElement(pick(module), props);
   }
   Lazy.displayName = `Lazy(${chunk})`;

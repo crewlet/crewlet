@@ -43,6 +43,7 @@ import { createContext, createElement, useContext, type ReactNode } from "react"
 import { useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import type { ActionTool } from "~/protocol/act.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
 
 /** Why a control cannot act, as a value a test can name. */
 export type WriteBlock = "offline" | "loading" | "anonymous" | "not_served" | "held";
@@ -139,11 +140,11 @@ export function menuHold(access: WriteAccess): { disabled?: boolean; description
 
 /**
  * Why this browser cannot change the company's CONFIGURATION — a ceiling, a
- * seat's runtime, a server — as opposed to acting in it.
+ * seat, a server — as opposed to acting in it.
  *
- * A DIFFERENT GATE FROM AN ACT, and the difference is the engine's: `/config`
- * and a `/chart` runtime write are decided by the `config:write` GRANT, not
- * by the act catalogue and not by a seat binding — so a person bound to no
+ * A DIFFERENT GATE FROM AN ACT, and the difference is the engine's: a
+ * `/config` write is decided by the `config:write` GRANT, not by the act
+ * catalogue and not by a seat binding — so a person bound to no
  * seat who holds it may change a ceiling, and a bound person without it may
  * not. `viewer.grants` is the engine's own answer to exactly that question,
  * read here rather than guessed per screen. The step-up such a write may
@@ -166,6 +167,23 @@ export const CONFIG_WRITE_REASONS: Readonly<Record<Exclude<ConfigWriteBlock, "he
   no_grant:
     "Changing the company's configuration takes the config:write grant, which you do not hold — an administrator who holds people:manage can give it to you.",
 };
+
+/**
+ * What a `/config` write the engine refused on AUTHORITY says, in one
+ * sentence — the one reading every writer of the company document shows.
+ *
+ * BY THE REFUSAL'S CODE. Most are the grant this module gates on, and say so
+ * in the gate's own words. But a step-up the person declined and a write sent
+ * from another site are refused 403 too, and "you do not hold config:write"
+ * about either sends somebody to an administrator for nothing — so every
+ * other code the request guard writes is said in the act surface's words
+ * for it (`ACT_ERRORS`), which are the same refusals. A 401 has already sent
+ * the reader to sign in (`protocol/rest.ts`); its sentence says the same.
+ */
+export function configGuardedReason(code: string): string {
+  const own = Object.hasOwn(ACT_ERRORS, code) ? ACT_ERRORS[code as keyof typeof ACT_ERRORS] : null;
+  return code === "unauthorized" || own === null ? CONFIG_WRITE_REASONS.no_grant : own;
+}
 
 /** The decision over values — what the hook reads, and what a test pins. */
 export function configWriteAccess(

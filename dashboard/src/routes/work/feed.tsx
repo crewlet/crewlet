@@ -19,7 +19,6 @@
 
 import { Card, EmptyValue, Tag } from "@crewlethq/ui";
 import { TrashGlyph } from "@crewlethq/icons/glyphs";
-import { ClockText } from "~/app/frame/cells.tsx";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { pageCount } from "~/lib/work.ts";
@@ -49,9 +48,11 @@ import type { WorkActivityAnswer, WorkActivityRecord } from "~/protocol/index.ts
 export function PurgeBand({
   records,
   answer,
+  now,
 }: {
   records: WorkActivityRecord[];
   answer?: WorkActivityAnswer;
+  now: number;
 }) {
   if (records.length === 0) return null;
   const more = !!answer?.next_cursor;
@@ -70,7 +71,7 @@ export function PurgeBand({
       {records.map((record) => (
         <div key={record.id} className="work-feed-row">
           <span className="work-feed-when" title={fmtDateTime(record.at)}>
-            <ClockText read={(now) => relTime(record.at, now)} />
+            {relTime(record.at, now)}
           </span>
           <span className="work-feed-kind">
             <Tag variant="danger" appearance="outline">

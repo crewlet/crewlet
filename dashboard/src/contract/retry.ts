@@ -4,8 +4,7 @@
  *
  * Each is a COPY of an engine value, held to it by `internal/api`'s
  * `TestTheDashboardRetriesOnTheEnginesOwnHints`. What is done with them — the
- * arithmetic over a hint, the backoff for a request nobody answered — is
- * behaviour, and lives in `protocol/retry.ts`.
+ * arithmetic over a hint — is behaviour, and lives in `protocol/retry.ts`.
  */
 
 /**

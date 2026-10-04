@@ -8,7 +8,7 @@
  * a revision.
  */
 
-import { act, cleanup, render, screen } from "~/test/inCase.ts";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { Tools } from "./Tools.tsx";

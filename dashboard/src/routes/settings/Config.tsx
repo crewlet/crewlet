@@ -48,7 +48,7 @@ import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 // is four queries nobody asked for and four Back presses to undo. See the
 // note on `useRovingGroup`; this is the trade the pattern itself names.
 import { Segmented } from "~/ui/primitives.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
@@ -57,6 +57,7 @@ import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
 import { authorLabel, throughOf } from "~/lib/attribution.ts";
 import type { ConfigChange, FleetNode, RevisionMeta } from "~/protocol/index.ts";
 import { reveal } from "~/lib/scroller.ts";
@@ -81,7 +82,7 @@ const HISTORY_LIMIT = 100;
 /**
  * How often the fleet's apply status is re-read.
  *
- * `settings/Fleet.tsx`'s interval, because it is the same lease table and the
+ * `admin/Fleet.tsx`'s interval, because it is the same lease table and the
  * same question — which node is on which revision — and two screens polling
  * one answer at different cadences is how two readings of one fleet come to
  * disagree while sitting side by side.
@@ -499,66 +500,6 @@ export function RevisionPeek({ id }: { id: string }) {
   );
 }
 
-// The revision history's columns, which close over nothing on the screen —
-// so a module constant, and every row is drawn once per change of its own
-// revision rather than on every render of the screen.
-const REVISION_COLUMNS: GridColumn<RevisionMeta>[] = [
-  {
-    key: "at",
-    header: "When",
-    shrink: true,
-    // THE ONE COLUMN THAT GIVES WAY, and it is the revision
-    // peek's own "Created". Beside a peek at 1440 the table is
-    // ~486px, and with When drawn the summary kept ~128px —
-    // "Add the MCP server…" — while When, the id and its pill
-    // held the rest.
-    drop: 1,
-    sortValue: (r) => tsKey(r.created_at),
-    cell: (r) => <DateCell at={r.created_at} />,
-  },
-  {
-    key: "id",
-    header: "Revision",
-    // ITS OWN WIDTH, EXACTLY. Ten characters of id and an
-    // `active` pill are bounded, and as a second `1fr` this
-    // column took ~340px at 1440 while Summary was cut — and
-    // under a peek it cut the active id itself ("cebf4afb…").
-    // Summary is the one flexible track.
-    width: "max-content",
-    cell: (r) => (
-      <span className="row gap-1">
-        <KeyCell value={r.revision_id.slice(0, 10)} />
-        {r.is_active && <Tag variant="success">active</Tag>}
-      </span>
-    ),
-  },
-  {
-    key: "summary",
-    header: "Summary",
-    // THE ONE FLEXIBLE TRACK, floored so it cannot be the
-    // column that gives way: at a floor of zero every
-    // content-sized column beside it was drawn whole and the
-    // summary took what was left, so the grid never had a
-    // reason to hide When. At 12rem a row that cannot hold
-    // When, the id and the author beside it drops When
-    // instead ("Hidden to fit: When").
-    floor: "12rem",
-    sortValue: (r) => r.summary,
-    // NOT `value || "—"`. A revision imported without a
-    // message has no summary, and the dash says so rather
-    // than standing in for an empty string.
-    cell: (r) =>
-      r.summary ? <TextCell>{r.summary}</TextCell> : <EmptyValue label="No summary was written" />,
-  },
-  {
-    key: "author",
-    header: "By",
-    shrink: true,
-    sortValue: (r) => r.created_by,
-    cell: (r) => <RevisionAuthor revision={r} />,
-  },
-];
-
 export function ConfigScreen({
   revision: revisionPath,
   revisions = false,
@@ -567,6 +508,7 @@ export function ConfigScreen({
   /** The address is `#/settings/config/revisions[/{id}]`. */
   revisions?: boolean;
 }) {
+  const now = useNow();
   // ONE REVISION'S PAGE IS AN OBJECT, NOT A LENS. It drew the lens bar with
   // Active pressed and the whole active document under the revision's own
   // header, so a reader looking at last week's save was told, by the one
@@ -593,9 +535,6 @@ export function ConfigScreen({
   // history entry instead of adding one to press Back through.
   const [against, setAgainst] = useParam("against", "", "filter");
 
-  // THE CONTRACT'S LIST, in its own order, rather than a copy of it: that
-  // list is the one a gate holds against `configapi.EntityKinds()`, and the
-  // lens opens on its first collection.
   const [kind, setKind] = useParam("kind", ENTITY_KINDS[0].kind);
   const [entity, setEntity] = useParam("entity", "");
 
@@ -611,7 +550,7 @@ export function ConfigScreen({
   // ONE COLLECTION AT A TIME, which is what makes this different from the
   // Active lens rather than a second copy of it: the whole document is one
   // unreadable block of JSON, and the question a reader actually has is
-  // "what does THIS provider's configuration say".
+  // "what does THIS seat's configuration say".
   const ids = useQuery(
     "config_entities",
     { kind },
@@ -853,7 +792,7 @@ export function ConfigScreen({
             onChange={(next) => {
               setKind(next);
               // AN ID BELONGS TO ONE COLLECTION. Carrying it across would ask
-              // for a provider's key out of the MCP servers and render the
+              // for a seat's handle out of the MCP servers and render the
               // refusal that comes back.
               setEntity("");
             }}
@@ -889,8 +828,8 @@ export function ConfigScreen({
                   {(ids.data?.ids ?? []).map((id) => (
                     // A LIST SELECTION, NOT AN ACTION, so it is drawn as the
                     // Settings column draws its current row — the neutral
-                    // raised surface and its hairline, the id in the primary
-                    // ink — and never as the kit's primary button.
+                    // raised surface and its hairline, the handle in the
+                    // primary ink — and never as the kit's primary button.
                     // As one it filled solid violet under the pointer the
                     // moment it was picked, over a code chip that kept its
                     // own grey ink: 1.5:1 in the light theme. The accent is
@@ -900,8 +839,8 @@ export function ConfigScreen({
                       type="button"
                       className="entity-pick-row"
                       aria-pressed={id === entity}
-                      // The list track is fixed, so an id longer than it is cut;
-                      // the whole id is still one hover away.
+                      // The list track is fixed, so a handle longer than it is
+                      // cut; the whole handle is still one hover away.
                       title={id}
                       onClick={() => setEntity(id === entity ? "" : id)}
                     >
@@ -948,8 +887,8 @@ export function ConfigScreen({
                       // THE SAME SILENCE, IN THE PANEL. `entity` is a URL key,
                       // so a shared `?lens=entities&entity=…` lands here on a
                       // deployment with nothing active — and this rendered the
-                      // literal word `null` as if it were the entity's own
-                      // slice of the document.
+                      // literal word `null` as if it were the seat's own slice
+                      // of the document.
                       <EmptyState
                         size="compact"
                         icon={<SlidersVerticalGlyph size="xl" />}
@@ -1059,7 +998,66 @@ export function ConfigScreen({
                 rowHref={(r) => peekHref({ kind: "revision", id: r.revision_id })}
                 onRowActivate={openRevision}
                 isSelected={(r) => r.revision_id === marked}
-                columns={REVISION_COLUMNS}
+                columns={[
+                  {
+                    key: "at",
+                    header: "When",
+                    shrink: true,
+                    // THE ONE COLUMN THAT GIVES WAY, and it is the revision
+                    // peek's own "Created". Beside a peek at 1440 the table is
+                    // ~486px, and with When drawn the summary kept ~128px —
+                    // "Add the MCP server…" — while When, the id and its pill
+                    // held the rest.
+                    drop: 1,
+                    sortValue: (r) => tsKey(r.created_at),
+                    cell: (r) => <DateCell at={r.created_at} now={now} />,
+                  },
+                  {
+                    key: "id",
+                    header: "Revision",
+                    // ITS OWN WIDTH, EXACTLY. Ten characters of id and an
+                    // `active` pill are bounded, and as a second `1fr` this
+                    // column took ~340px at 1440 while Summary was cut — and
+                    // under a peek it cut the active id itself ("cebf4afb…").
+                    // Summary is the one flexible track.
+                    width: "max-content",
+                    cell: (r) => (
+                      <span className="row gap-1">
+                        <KeyCell value={r.revision_id.slice(0, 10)} />
+                        {r.is_active && <Tag variant="success">active</Tag>}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: "summary",
+                    header: "Summary",
+                    // THE ONE FLEXIBLE TRACK, floored so it cannot be the
+                    // column that gives way: at a floor of zero every
+                    // content-sized column beside it was drawn whole and the
+                    // summary took what was left, so the grid never had a
+                    // reason to hide When. At 12rem a row that cannot hold
+                    // When, the id and the author beside it drops When
+                    // instead ("Hidden to fit: When").
+                    floor: "12rem",
+                    sortValue: (r) => r.summary,
+                    // NOT `value || "—"`. A revision imported without a
+                    // message has no summary, and the dash says so rather
+                    // than standing in for an empty string.
+                    cell: (r) =>
+                      r.summary ? (
+                        <TextCell>{r.summary}</TextCell>
+                      ) : (
+                        <EmptyValue label="No summary was written" />
+                      ),
+                  },
+                  {
+                    key: "author",
+                    header: "By",
+                    shrink: true,
+                    sortValue: (r) => r.created_by,
+                    cell: (r) => <RevisionAuthor revision={r} />,
+                  },
+                ]}
               />
             </Card>
           </QueryState>

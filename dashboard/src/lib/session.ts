@@ -26,7 +26,7 @@
  * `next` along, and the socket waits: it would only be refused again.
  *
  * Either way the sign-in's answer REPLACES the session need a transport
- * recorded (`protocol/session.ts`): it is the newest fact about this browser,
+ * recorded (`protocol/signin.ts`): it is the newest fact about this browser,
  * and every sign-in starts from a recorded `sign_in`, which left in place
  * sends the enrolment straight back to the sign-in form.
  *

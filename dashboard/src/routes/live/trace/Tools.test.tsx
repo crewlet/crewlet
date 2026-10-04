@@ -7,7 +7,7 @@
  * as never timed. Both now ask the waterfall's one answer (`callMeasured`).
  */
 
-import { cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";

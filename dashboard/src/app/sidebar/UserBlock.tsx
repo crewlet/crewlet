@@ -67,7 +67,7 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { browserZone, useViewerPrefs, type DateFormat } from "~/lib/prefs.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { adoptReader } from "~/lib/reader.ts";
-import { useRestRead } from "~/lib/restRead.ts";
+import { useRest } from "~/lib/useRest.ts";
 import { goSignIn, signOut, signOutEverywhere } from "~/lib/session.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import { auth, type SessionAnswer } from "~/protocol/index.ts";
@@ -116,17 +116,15 @@ export function whoLine(
  *
  * ASKED UNLESS THE VIEWER HAS ANSWERED NOBODY — before it has answered too,
  * see the file's note — and again when the viewer's login moves, which is a
- * different session. AND ASKED AGAIN ON ITS OWN WHEN NOTHING ANSWERED IT,
- * because it is the shared REST read (`~/lib/restRead.ts`): for the people
- * the socket refuses this read is the ONLY way to the sign-outs, and one
- * request lost on the way left them none until a reload. A refusal is still
- * an answer and is not asked again on a timer.
+ * different session, and when the tab comes back: for the people the socket
+ * refuses this read is the ONLY way to the sign-outs, so a request lost on the
+ * way must not leave them none until a reload.
  */
 function useSessionAnswer(enabled: boolean, login: string): SessionAnswer | null {
-  return useRestRead(
+  return useRest(
     // A DIFFERENT LOGIN IS A DIFFERENT SESSION, so it is a different question
     // and starts from nothing.
-    `/auth/session as ${login}`,
+    enabled ? `/auth/session as ${login}` : null,
     async (signal) => {
       const session = await auth.session(signal);
       // A TAB OPENED WITH A SESSION ALREADY IN THE BROWSER learns who it is
@@ -134,7 +132,7 @@ function useSessionAnswer(enabled: boolean, login: string): SessionAnswer | null
       adoptReader(session.person);
       return session;
     },
-    { enabled },
+    { refetchOnFocus: true },
   ).data;
 }
 

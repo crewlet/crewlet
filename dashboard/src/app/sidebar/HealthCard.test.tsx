@@ -3,7 +3,7 @@
  * precedence, and never "healthy" on the strength of nothing.
  */
 
-import { cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { HealthCard, healthReading } from "./HealthCard.tsx";

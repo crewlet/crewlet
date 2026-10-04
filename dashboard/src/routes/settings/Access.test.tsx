@@ -1,423 +1,253 @@
 /**
- * People & access draws the identity directory as the engine answers it, and
- * changes none of it.
+ * People & access draws the identity directory from both ends, read-only.
  *
- * The invariants, in the order they cost when they go: a reader the directory
- * is refused to sees the refusal alone — never tiles over an empty company; a
- * directory longer than one page is drawn whole; a bound seat is drawn by the
- * chart's CURRENT name, never by the identity the binding records; each Tier A
- * token's binding reads as its own state, because each has its own remedy; a
- * report this node could only half-evaluate says so rather than reading clean;
- * and a reader the chart's report alone is refused to sees every other card.
+ * The invariants, in the order they cost when they go: the whole directory is
+ * drawn, not its first page — a directory cut at a page is a company that
+ * looks smaller than it is; a reader the engine refuses sees the refusal and
+ * the grants that would have admitted them, never an empty company; a sealed
+ * row is a state, never a blank; and a reader who may not read the company
+ * document is told so rather than shown seats nobody can reach.
  */
 
-import { act, answered, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { ReactElement } from "react";
 
 import { BINDING_WORDS, PeopleAndAccess, STAGE_WORDS, TOKEN_ROW_WORDS } from "./Access.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { CHART_ORG } from "~/test/orgchart.ts";
 
-let store = new Store();
-
-beforeEach(() => {
-  store = new Store();
-  // The chart this node composed: Ana's seat, under the handle a binding
-  // records as its identity.
-  store.applyOrg({
-    name: "Acme",
-    roles: [
-      { name: "Ana Diaz", handle: "ana", kind: "human" },
-      { name: "Ops Desk", handle: "ops", kind: "human" },
-    ],
-  } as never);
-});
-
-afterEach(() => {
-  cleanup();
-  vi.restoreAllMocks();
-});
-
-function mount(): ReturnType<typeof render> {
-  const ui: ReactElement = (
-    <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
-      <Router>
-        <PeopleAndAccess />
-      </Router>
-    </ClientContext.Provider>
-  );
-  return render(ui);
+class InertWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
+  readyState = InertWebSocket.CONNECTING;
+  send(): void {}
+  close(): void {}
 }
 
-function json(payload: unknown, status = 200): Response {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
+/** An auditor: reads the directory, and the company document beside it. */
+const AUDITOR = { login: "ana.diaz", owner: "jane", grants: ["audit:read", "config:read"] };
 
-const ANA = {
-  id: "p-ana",
-  kind: "person",
-  stage: "active",
-  login: "ana.diaz",
-  name: "Ana Diaz",
-  email: "ana@example.com",
-  seat: "ana",
-  grants: ["people:manage", "config:read"],
-  colleague: "write",
-  revocation_epoch: 0,
-  version: 3,
+const PAGE_ONE = {
+  people: [
+    {
+      id: "p-ana",
+      kind: "person",
+      stage: "active",
+      login: "ana.diaz",
+      name: "Ana Diaz",
+      seat: "jane",
+      grants: ["audit:read", "config:read"],
+    },
+    { id: "p-sealed", kind: "person", stage: "active", login: "bo.lang", sealed: true },
+  ],
+  next: "cursor-1",
 };
 
-const BO = {
-  id: "p-bo",
-  kind: "person",
-  stage: "suspended",
-  login: "bo.lang",
-  name: "Bo Lang",
-  colleague: "write",
-  revocation_epoch: 1,
-  version: 2,
+const PAGE_TWO = {
+  people: [{ id: "p-ci", kind: "machine", stage: "suspended", login: "ci:release" }],
+  next: "",
 };
 
-const CI = {
-  id: "p-ci",
-  kind: "machine",
-  stage: "active",
-  login: "ci:release",
-  colleague: "none",
-  grants: ["work:write"],
-  revocation_epoch: 0,
-  version: 1,
-};
-
-/** A seat identity the chart no longer holds, drawn as written. */
-const GONE = {
-  id: "p-gone",
-  kind: "person",
-  stage: "active",
-  login: "cy.moss",
-  name: "Cy Moss",
-  seat: "retired-desk",
-  colleague: "write",
-  revocation_epoch: 0,
-  version: 1,
+const SEATS = {
+  seats: [
+    {
+      handle: "jane",
+      name: "Jane Founder",
+      holders: [{ person: "p-ana", login: "ana.diaz", stage: "active" }],
+    },
+  ],
 };
 
 const TOKENS = {
   tokens: [
-    { id: "break-glass", login: "token:break-glass", row: "none", binding: "unbound" },
-    { id: "half", login: "token:half", row: "reserved", binding: "unbound" },
     {
-      id: "ops",
-      login: "token:ops",
+      id: "deploy",
+      login: "token:deploy",
       row: "held",
-      person: "p-ops",
-      stage: "active",
-      seat: "ops",
+      person: "p-deploy",
+      seat: "jane",
       binding: "bound",
     },
-    {
-      id: "old",
-      login: "token:old",
-      row: "held",
-      person: "p-old",
-      stage: "active",
-      seat: "gone",
-      binding: "dangling",
-      detail: "the seat gone is no longer in the org chart",
-    },
+    { id: "spare", login: "token:spare", row: "none", binding: "unbound" },
   ],
 };
 
 const CHECK = {
   findings: [
     {
-      kind: "claim_duplicated",
-      claim: "login",
-      login: "ana.diaz",
-      people: ["p-ana", "p-bo"],
-      detail: "more than one person holds this login claim",
-    },
-    {
       kind: "claim_orphaned",
-      person: "p-half",
-      login: "half.done",
-      detail: "an enrolment stopped after reserving these claims",
+      claim: "iam.login.ghost",
+      detail: "a reservation holds login ghost and is nobody",
     },
   ],
-  position: "12",
   people_with_people_manage: 1,
   bindings_unchecked: 0,
 };
 
-const CHART = {
-  report: {
-    findings: [
-      {
-        kind: "seat_unheld",
-        severity: "warning",
-        object: "ops",
-        detail: "nobody in the identity directory is bound to this seat",
-        remedy: "invite its person and bind them",
-      },
-      {
-        kind: "budget_idle",
-        severity: "info",
-        object: "ada",
-        detail: "a ceiling nothing charges",
-      },
-    ],
-    seats: 2,
-    units: 0,
-    evaluated: true,
-  },
-  worst: "warning",
-};
+function json(status: number, payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
-type Handler = (url: URL) => Response | null;
-
-/** Every read the screen makes, answering; `over` answers first. */
-function serve(over: Handler = () => null) {
+/** `/iam` answering, with `override` consulted first. */
+function stubIam(override: (url: URL) => Response | null = () => null) {
+  const asked: URL[] = [];
   const spy = vi.fn((input: RequestInfo | URL) => {
     const url = new URL(String(input), "http://engine.test");
-    const answer = over(url);
+    asked.push(url);
+    const answer = override(url);
     if (answer) return Promise.resolve(answer);
     switch (url.pathname) {
       case "/iam/people":
-        return Promise.resolve(json({ people: [ANA, BO, CI, GONE], next: "", position: "12" }));
+        return Promise.resolve(json(200, url.searchParams.get("after") ? PAGE_TWO : PAGE_ONE));
+      case "/iam/seats":
+        return Promise.resolve(json(200, SEATS));
       case "/iam/node-tokens":
-        return Promise.resolve(json(TOKENS));
+        return Promise.resolve(json(200, TOKENS));
       case "/iam/check":
-        return Promise.resolve(json(CHECK));
-      case "/chart/check":
-        return Promise.resolve(json(CHART));
-      default:
-        return Promise.resolve(json({}));
+        return Promise.resolve(json(200, CHECK));
+      case "/iam/credentials":
+        return Promise.resolve(
+          json(200, {
+            credentials: [
+              { id: "c-1", person: "p-ana", method: "password", revoked: false },
+              { id: "c-2", person: "p-ana", method: "totp", revoked: false },
+            ],
+          }),
+        );
+      case "/iam/people/p-ana/sessions":
+        return Promise.resolve(
+          json(200, { sessions: [{ lineage: "s-1", person: "p-ana", live: true }] }),
+        );
     }
+    return Promise.resolve(json(404, { error: "no_route", message: "no such route" }));
   });
   Object.defineProperty(globalThis, "fetch", { writable: true, value: spy });
-  return spy;
+  return asked;
 }
 
-function rowOf(text: string): HTMLElement {
-  return screen.getAllByText(text)[0]!.closest(".grid-row") as HTMLElement;
-}
-
-test("a reader refused the directory sees the refusal alone — no tiles, no empty lists", async () => {
-  serve((url) =>
-    url.pathname.startsWith("/iam/") || url.pathname === "/chart/check"
-      ? json(
-          { error: "unauthorized", reason: "directory", grants: ["people:manage", "audit:read"] },
-          403,
-        )
-      : null,
-  );
-  const view = mount();
-  await answered();
-  expect(screen.getByText("people:manage")).toBeDefined();
-  expect(screen.getByText("audit:read")).toBeDefined();
-  expect(view.container.querySelector(".crewlet-statcard")).toBeNull();
-  expect(screen.queryByText("People")).toBeNull();
-  expect(screen.queryByText("API tokens on this node")).toBeNull();
-  expect(screen.queryByText("Nobody is enrolled")).toBeNull();
-});
-
-test("a directory longer than one page is walked to its end", async () => {
-  const spy = serve((url) => {
-    if (url.pathname !== "/iam/people") return null;
-    return url.searchParams.get("after") === "p-bo"
-      ? json({ people: [CI, GONE], next: "", position: "12" })
-      : json({ people: [ANA, BO], next: "p-bo", position: "12" });
-  });
-  mount();
-  await answered();
-  for (const who of ["Ana Diaz", "Bo Lang", "ci:release", "Cy Moss"]) {
-    expect(screen.getAllByText(who).length).toBeGreaterThan(0);
-  }
-  const asked = spy.mock.calls
-    .map(([input]) => new URL(String(input), "http://engine.test"))
-    .filter((url) => url.pathname === "/iam/people");
-  expect(asked.map((url) => url.searchParams.get("after"))).toEqual([null, "p-bo"]);
-});
-
-test("each principal reads its stage and kind, and a bound seat by the chart's current name", async () => {
-  serve();
-  mount();
-  await answered();
-  const ana = rowOf("ana@example.com");
-  expect(within(ana).getByText(STAGE_WORDS.active!.label)).toBeDefined();
-  // THE SEAT BY ITS NAME IN THE CHART, linked to its page.
-  const seat = within(ana).getByRole("link", { name: /Ana Diaz/ });
-  expect(seat.getAttribute("href")).toBe("#/agents/seats/ana");
-  expect(within(ana).getByText("people:manage")).toBeDefined();
-
-  expect(within(rowOf("Bo Lang")).getByText(STAGE_WORDS.suspended!.label)).toBeDefined();
-  expect(within(rowOf("ci:release")).getByText("Service account")).toBeDefined();
-  // AN IDENTITY THE CHART DOES NOT HOLD is drawn as written, never as nobody.
-  expect(within(rowOf("Cy Moss")).getByText("retired-desk")).toBeDefined();
-});
-
-test("each Tier A token's directory row and binding reads as its own state", async () => {
-  serve();
-  mount();
-  await answered();
-  expect(within(rowOf("break-glass")).getByText(TOKEN_ROW_WORDS.none!.label)).toBeDefined();
-  expect(within(rowOf("break-glass")).getByText(BINDING_WORDS.unbound!.label)).toBeDefined();
-  expect(within(rowOf("half")).getByText(TOKEN_ROW_WORDS.reserved!.label)).toBeDefined();
-  const ops = rowOf("token:ops");
-  expect(within(ops).getByText(BINDING_WORDS.bound!.label)).toBeDefined();
-  expect(within(ops).getByRole("link", { name: /Ops Desk/ })).toBeDefined();
-  // A DANGLING BINDING carries the engine's own sentence on why.
-  const dangling = within(rowOf("token:old")).getByText(BINDING_WORDS.dangling!.label);
-  expect(dangling.closest("[title]")?.getAttribute("title")).toBe(
-    "The seat gone is no longer in the org chart.",
-  );
-});
-
-test("opening a principal reads its credentials and sessions, and no verifier", async () => {
-  const spy = serve((url) => {
-    if (url.pathname === "/iam/credentials") {
-      return json({
-        credentials: [
-          {
-            id: "c-1",
-            person: "p-ci",
-            method: "token",
-            label: "release pipeline",
-            revoked: false,
-            grants: ["work:write"],
-          },
-          {
-            id: "c-2",
-            person: "p-ci",
-            method: "token",
-            label: "old pipeline",
-            revoked: true,
-            revoked_at: "2026-09-01T00:00:00Z",
-          },
-          { id: "c-3", person: "p-ci", method: "token", label: "lapsed", revoked: true },
-        ],
-      });
-    }
-    if (url.pathname === "/iam/people/p-ci/sessions") return json({ sessions: [] });
-    return null;
-  });
-  mount();
-  await answered();
-  act(() => fireEvent.click(rowOf("ci:release")));
-  await answered();
-  const asked = spy.mock.calls.map(([input]) => new URL(String(input), "http://engine.test"));
-  expect(
-    asked.some((u) => u.pathname === "/iam/credentials" && u.searchParams.get("person") === "p-ci"),
-  ).toBe(true);
-  expect(screen.getByText(/credentials and sessions/)).toBeDefined();
-  expect(within(rowOf("release pipeline")).getByText("Live")).toBeDefined();
-  expect(within(rowOf("old pipeline")).getByText("Revoked")).toBeDefined();
-  expect(within(rowOf("lapsed")).getByText("Expired")).toBeDefined();
-  expect(screen.getByText("No session")).toBeDefined();
-});
-
-test("the directory's report names a claim's holders by name, and says when bindings went unchecked", async () => {
-  serve((url) =>
-    url.pathname === "/iam/check" ? json({ ...CHECK, bindings_unchecked: 2 }) : null,
-  );
-  mount();
-  await answered();
-  const duplicate = document.querySelector('[data-finding="claim_duplicated"]') as HTMLElement;
-  expect(within(duplicate).getByText("Held twice")).toBeDefined();
-  expect(within(duplicate).getByText("Held by Ana Diaz, Bo Lang")).toBeDefined();
-  const orphan = document.querySelector('[data-finding="claim_orphaned"]') as HTMLElement;
-  expect(within(orphan).getByText("Reservation left behind")).toBeDefined();
-  expect(screen.getByText(/2 seat bindings could not be checked on this node/)).toBeDefined();
-  expect(screen.queryByText("The directory reports nothing wrong.")).toBeNull();
-});
-
-test("the chart's report shows the seats nobody holds and nothing else it found", async () => {
-  serve();
-  mount();
-  await answered();
-  const unheld = document.querySelector('[data-finding="seat_unheld"]') as HTMLElement;
-  expect(within(unheld).getByText("Nobody holds it")).toBeDefined();
-  expect(within(unheld).getByRole("link", { name: /Ops Desk/ })).toBeDefined();
-  expect(within(unheld).getByText("Invite its person and bind them.")).toBeDefined();
-  expect(document.querySelector('[data-finding="budget_idle"]')).toBeNull();
-});
-
-test("a chart that was never evaluated is not a clean bill", async () => {
-  serve((url) =>
-    url.pathname === "/chart/check"
-      ? json({ report: { findings: null, seats: 0, units: 0, evaluated: false }, worst: "" })
-      : null,
-  );
-  mount();
-  await answered();
-  expect(screen.getByText(/has not evaluated the org chart yet/)).toBeDefined();
-  expect(screen.queryByText(/Every human seat is held/)).toBeNull();
-});
-
-test("a reader refused only the chart's report sees every other card and that refusal", async () => {
-  serve((url) =>
-    url.pathname === "/chart/check"
-      ? json({ error: "unauthorized", reason: "operator", grants: ["audit:read"] }, 403)
-      : null,
-  );
-  mount();
-  await answered();
-  expect(screen.getAllByText("Ana Diaz").length).toBeGreaterThan(0);
-  expect(screen.getByText("break-glass")).toBeDefined();
-  const card = screen.getByText("Human seats nobody holds or reaches").closest(".crewlet-card");
-  expect(within(card as HTMLElement).getByText("audit:read")).toBeDefined();
-});
-
-// ABSENT EVIDENCE IS NOT A CLEAN BILL ON THE TILE EITHER. It summed whatever
-// had answered, so a directory report that failed beside a clean chart — or a
-// chart this node never evaluated — read "0, nothing reported" above the
-// cards saying otherwise.
-test("the findings tile claims nothing the reports did not establish", async () => {
-  const clean = { ...CHECK, findings: [] };
-  const tile = () => {
-    const card = screen.getByText("Findings").closest(".crewlet-statcard") as HTMLElement;
-    return card.textContent ?? "";
+function mount(viewer: Record<string, unknown> = AUDITOR) {
+  const store = new Store();
+  store.applyOrg(CHART_ORG);
+  const socket = new LiveSocket(store);
+  const queried: string[] = [];
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
+    queried.push(what);
+    if (what === "viewer") return Promise.resolve(viewer);
+    if (what === "config") return Promise.resolve({ name: "Acme", roles: [], units: [] });
+    return new Promise(() => {});
   };
-
-  serve((url) =>
-    url.pathname === "/iam/check"
-      ? json({ error: "internal_error" }, 500)
-      : url.pathname === "/chart/check"
-        ? json({ ...CHART, report: { ...CHART.report, findings: [] } })
-        : null,
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <ViewerProvider>
+        <Router>
+          <PeopleAndAccess />
+        </Router>
+      </ViewerProvider>
+    </ClientContext.Provider>,
   );
-  mount();
-  await answered();
-  expect(tile()).toContain("a report could not be read");
-  expect(tile()).not.toContain("nothing reported");
+  return { queried };
+}
+
+beforeEach(() => {
+  Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  location.hash = "#/settings/access";
+});
+
+afterEach(() => {
   cleanup();
+  location.hash = "";
+  vi.restoreAllMocks();
+});
 
-  serve((url) =>
-    url.pathname === "/iam/check"
-      ? json(clean)
-      : url.pathname === "/chart/check"
-        ? json({ report: { findings: null, seats: 0, units: 0, evaluated: false }, worst: "" })
-        : null,
-  );
+// THE WHOLE DIRECTORY: the second page is asked for with the first page's
+// cursor, and the walk stops at the page that names none.
+test("every page of the directory is drawn, walked by its cursor", async () => {
+  const asked = stubIam();
   mount();
-  await answered();
-  expect(tile()).toContain("not everything could be checked");
-  cleanup();
+  expect(await screen.findByText("Ana Diaz")).toBeTruthy();
+  expect((await screen.findAllByText("ci:release")).length).toBeGreaterThan(0);
+  const pages = asked.filter((u) => u.pathname === "/iam/people");
+  expect(pages.map((u) => u.searchParams.get("after"))).toEqual([null, "cursor-1"]);
+  // Each row's stage in the engine's own words, and a machine as a service
+  // account rather than a person.
+  expect(screen.getAllByText(STAGE_WORDS.active!.label).length).toBeGreaterThan(0);
+  expect(screen.getByText(STAGE_WORDS.suspended!.label)).toBeTruthy();
+  expect(screen.getByText("Service account")).toBeTruthy();
+});
 
-  // THE CONTROL: both reports answered whole, and found nothing.
-  serve((url) =>
-    url.pathname === "/iam/check"
-      ? json(clean)
-      : url.pathname === "/chart/check"
-        ? json({ ...CHART, report: { ...CHART.report, findings: [] } })
-        : null,
-  );
+// A SEALED VALUE IS A STATE the operator can end by putting a key back — never
+// a blank name, which reads as somebody who never gave one.
+test("a row this node cannot open is drawn as sealed", async () => {
+  stubIam();
   mount();
-  await answered();
-  expect(tile()).toContain("nothing reported");
+  expect(await screen.findByText("sealed")).toBeTruthy();
+});
+
+// FROM BOTH ENDS: the seat with whoever holds it, and each of this node's
+// tokens with the row its login names and the seat that row binds it to.
+test("a seat names who holds it and a token what it acts as", async () => {
+  stubIam();
+  mount();
+  const deploy = (await screen.findByText("token:deploy")).closest(".grid-row") as HTMLElement;
+  expect(within(deploy).getByText(TOKEN_ROW_WORDS.held!.label)).toBeTruthy();
+  expect(within(deploy).getByText(BINDING_WORDS.bound!.label)).toBeTruthy();
+  expect(within(deploy).getByRole("link", { name: /Jane Founder/ })).toBeTruthy();
+  const spare = screen.getByText("token:spare").closest(".grid-row") as HTMLElement;
+  expect(within(spare).getByText(TOKEN_ROW_WORDS.none!.label)).toBeTruthy();
+  expect(within(spare).getByText(BINDING_WORDS.unbound!.label)).toBeTruthy();
+  // The directory's own finding, in the engine's words.
+  expect(screen.getByText("A reservation holds login ghost and is nobody.")).toBeTruthy();
+});
+
+// A REFUSED DIRECTORY IS NOT AN EMPTY COMPANY: the reader sees the refusal and
+// the grants the engine named, and no tile counting nobody.
+test("a refused reader sees the refusal and its grants, and no tiles", async () => {
+  stubIam((url) =>
+    url.pathname.startsWith("/iam/")
+      ? json(403, {
+          error: "unauthorized",
+          message: "you may not",
+          reason: "directory",
+          grants: ["people:manage", "audit:read"],
+        })
+      : null,
+  );
+  mount({ login: "dee", owner: "dee", grants: ["state:read"] });
+  const banner = await screen.findByText(/You may not read this/);
+  expect(banner.textContent).toMatch(/people:manage/);
+  expect(banner.textContent).toMatch(/audit:read/);
+  expect(screen.queryByText("People")).toBeNull();
+  expect(screen.queryByText("Nobody is in the directory yet")).toBeNull();
+});
+
+// THE CONTACT IDENTITIES ARE THE COMPANY DOCUMENT'S: a reader without
+// `config:read` is never put the question, and each seat says what it takes.
+test("a reader without config:read is told what reading a seat's surfaces needs", async () => {
+  stubIam();
+  const { queried } = mount({ login: "ana.diaz", owner: "jane", grants: ["audit:read"] });
+  expect(
+    await screen.findByText(
+      "Reading where a seat is reached needs config:read, which the credential you presented does not carry.",
+    ),
+  ).toBeTruthy();
+  expect(queried).not.toContain("config");
+});
+
+// OPENING A PERSON reads that one principal's credentials and sessions.
+test("an opened person shows the credentials and sessions read for them", async () => {
+  location.hash = "#/settings/access?person=p-ana";
+  const asked = stubIam();
+  mount();
+  expect(await screen.findByText("Authenticator app")).toBeTruthy();
+  expect(screen.getByText("Password")).toBeTruthy();
+  expect(screen.getByText("Signed in")).toBeTruthy();
+  const credentials = asked.find((u) => u.pathname === "/iam/credentials");
+  expect(credentials?.searchParams.get("person")).toBe("p-ana");
 });

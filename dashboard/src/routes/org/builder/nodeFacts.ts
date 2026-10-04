@@ -2,15 +2,26 @@
  * What the node editor and the builder's dialogs read about one node, beyond
  * its own authored fields.
  *
- * READ, NEVER DERIVED, WHERE THE ENGINE DERIVES. A seat's primary manager
- * and the seats a lead manages automatically are the ENGINE's answers, and
- * they come from the one derivation there is: the org push's, of the SAVED
- * chart (`chartModel.ts`). Nothing derives a draft — the chart has no dry run
- * — so those answers are read only while the draft's chart is still the saved
- * one ([savedDerivation]), and a screen says they are not derived yet rather
- * than guess. What the chart's rows STATE is read off the draft: where a seat
- * sits, who a unit declares as its lead, and the lead and channel a unit
- * inherits by the one cascade `chartModel.effectiveLeads` restates.
+ * READ, NEVER DERIVED. A seat's manager, the units it leads by inheritance
+ * and its effective home are the ENGINE's answers, and they come from the
+ * derivation the last check returned, placed on nodes through the path index
+ * of the document that check sent (`model/document.placeDerivation`, the one
+ * placing every reader shares). A node the last check has not described (one
+ * added since) has no answer here, and the screens say so rather than guess.
+ * What a card also shows is read where the card reads it, so a card and the
+ * dialog it opens can never name a seat two ways: a seat's handle through the
+ * one rule the reducer records by (`model/document.knownHandles`, read as
+ * `reducer.handlesOf`), and the seat a reported handle names and the Datadog
+ * fallback from `chartModel.ts`.
+ *
+ * ONLY A CHECK OF THE DRAFT AS IT STANDS. A check still out, or one that
+ * answered for an older draft, describes a company the operator has since
+ * changed: a unit added since is missing from it, a lead changed since is the
+ * old one. Read through it, a dialog states the old answer as the
+ * consequence of the next change. So nothing here answers from a check of
+ * another generation, which is the line the Builder's own context holds
+ * (`BuilderApi.derived`), and a screen and the operation it records agree on
+ * what is known.
  *
  * A few small rules ARE restated, each because a screen has to say something
  * the engine does not report, and each marked at its definition: the order
@@ -24,101 +35,82 @@
  * anything the engine validates.
  *
  * NAMES, NEVER VALUES. Every credential-adjacent helper here returns the
- * names a seat's runtime half uses (a tool server, a variable, a `${NAME}`
- * reference), because no screen renders a credential and a reference is the
- * name of a sealed entry rather than one.
+ * names a document uses (a tool server, a variable, a `${NAME}` reference),
+ * because no screen renders a credential and a reference is the name of a
+ * sealed entry rather than one.
  */
 
 import type {
   AgentRow,
   CompanyDocument,
-  Derived,
+  ConfigRole,
+  ConfigUnit,
   DerivedSeat,
+  DerivedUnit,
   SandboxEntry,
 } from "~/protocol/index.ts";
 import { activityOf } from "~/lib/seats.ts";
 import { keyOfHandle } from "./chartModel.ts";
-import { placeDerivation, type PlacedDerivation } from "./model/document.ts";
+import { placeDerivation, type CheckedDocument, type PlacedDerivation } from "./model/document.ts";
 import { COMPANY_KEY, isMintedKey, type NodeKey } from "./model/keys.ts";
-import {
-  allUnits,
-  locate,
-  sameChart,
-  type Draft,
-  type DraftSeat,
-  type DraftUnit,
-  type SeatData,
-  type UnitData,
-} from "./model/draft.ts";
+import { allUnits, locate, type Draft, type DraftSeat, type DraftUnit } from "./model/draft.ts";
 import { getPath, isRecord } from "./model/json.ts";
-import type { BuilderState } from "./model/reducer.ts";
+import { checkedDocument, type BuilderState } from "./model/reducer.ts";
 
 // ---------------------------------------------------------------------------
-// The engine's derivation of the saved chart
+// The engine's derivation, placed on nodes
 // ---------------------------------------------------------------------------
 
-/** The saved chart's derivation, whole and placed on the base's nodes. */
-export interface SavedDerivation extends PlacedDerivation {
-  readonly derived: Derived;
+/** What a check of the draft as it stands described, placed on the draft's nodes. */
+export interface CurrentCheck extends CheckedDocument, PlacedDerivation {}
+
+/** The last check, when it answered for this very draft with a derivation; see the module doc. */
+export function currentCheck(state: BuilderState): CurrentCheck | undefined {
+  const checked = checkedDocument(state.check);
+  if (!checked || state.check.generation !== state.generation) return undefined;
+  return { ...checked, ...placeDerivation(checked.sent.index, checked.derived) };
 }
 
-/**
- * The engine's derivation of the saved chart, while the draft's chart is
- * still the saved one: see the module doc. `undefined` otherwise, and while
- * the engine has not described the saved chart.
- */
-export function savedDerivation(
-  state: Pick<BuilderState, "draft" | "baseDraft" | "base">,
-): SavedDerivation | undefined {
-  const derived = state.base.derived;
-  if (!derived || !sameChart(state.draft, state.baseDraft)) return undefined;
-  return { derived, ...placeDerivation(state.baseDraft, derived) };
-}
-
-/** The derivation of a seat, while [savedDerivation] answers. */
+/** The current check's derivation of a seat, when that check described it. */
 export function derivedSeatOf(state: BuilderState, key: NodeKey): DerivedSeat | undefined {
-  return key === COMPANY_KEY ? undefined : savedDerivation(state)?.seatByKey.get(key);
+  return key === COMPANY_KEY ? undefined : currentCheck(state)?.seatByKey.get(key);
+}
+
+/** The current check's derivation of a unit, when that check described it. */
+export function derivedUnitOf(state: BuilderState, key: NodeKey): DerivedUnit | undefined {
+  return key === COMPANY_KEY ? undefined : currentCheck(state)?.unitByKey.get(key);
 }
 
 /**
- * The name to show for a handle the engine derived: the seat's name as the
- * draft now has it, else the name the derivation carries, else the handle.
+ * The name to show for a handle the engine reported: the seat's name as the
+ * draft now has it, else the name the check reported, else the handle.
  */
 export function nameOfHandle(state: BuilderState, handle: string): string {
   const key = keyOfHandle(state, handle);
   const found = key === undefined ? undefined : locate(state.draft, key);
-  if (found?.kind === "seat") return found.node.data.name || found.node.data.handle;
-  const reported = state.base.derived?.seats?.find((s) => s.handle === handle);
+  if (found?.kind === "seat") return found.node.data.name;
+  const reported = state.check.derived?.seats?.find((s) => s.handle === handle);
   return reported?.name ?? handle;
 }
 
 /**
- * The unit a seat is a direct member of: the one the draft holds it in, which
- * is where its chart row places it. `undefined` at the top level.
+ * The unit a seat is a direct member of, as the current check reported it:
+ * the unit it sits in, or the one a root seat's `unit:` reference places it
+ * in. `undefined` at the top level, and while no current check describes the
+ * seat.
  */
-export function homeUnitOf(draft: Draft, key: NodeKey): DraftUnit | undefined {
-  const found = locate(draft, key);
-  if (found?.kind !== "seat" || found.parent === COMPANY_KEY) return undefined;
-  const home = locate(draft, found.parent);
-  return home?.kind === "unit" ? home.node : undefined;
+export function homeUnitOf(state: BuilderState, key: NodeKey): DraftUnit | undefined {
+  const check = currentCheck(state);
+  const path = check?.seatByKey.get(key)?.unit_path;
+  if (check === undefined || path === undefined || path === "") return undefined;
+  const unit = check.sent.index.byPath.get(path);
+  const found = unit === undefined ? undefined : locate(state.draft, unit);
+  return found?.kind === "unit" ? found.node : undefined;
 }
 
-/**
- * The handle the RUNNING seat answers to: the one the saved chart holds it
- * under, which a new handle in this draft has not changed yet. `undefined`
- * for a seat this draft created, which nothing runs.
- */
-export function savedHandleOf(
-  state: Pick<BuilderState, "baseDraft">,
-  key: NodeKey,
-): string | undefined {
-  const saved = locate(state.baseDraft, key);
-  return saved?.kind === "seat" ? saved.node.data.handle : undefined;
-}
-
-/** The units whose DECLARED lead is this seat's handle, depth-first. */
-export function unitsLedBy(draft: Draft, handle: string): DraftUnit[] {
-  return [...allUnits(draft)].map(({ unit }) => unit).filter((unit) => unit.data.lead === handle);
+/** The units whose DECLARED lead names this seat, in the document's order. */
+export function unitsLedBy(draft: Draft, seatName: string): DraftUnit[] {
+  return [...allUnits(draft)].map(({ unit }) => unit).filter((unit) => unit.data.lead === seatName);
 }
 
 // ---------------------------------------------------------------------------
@@ -308,16 +300,11 @@ export function referenceNames(value: unknown): string[] {
   return [...out].sort();
 }
 
-/**
- * A unit's or seat's tool credentials, as server names and the variable names
- * under each: its runtime half's `mcp_env`. Empty where the reader was not
- * shown that half, which a caller that must tell the two apart asks the base
- * about (`BaseCompany.runtimeVisible`).
- */
+/** A unit's or seat's tool credentials, as server names and the variable names under each. */
 export function toolCredentialNames(
-  data: SeatData | UnitData,
+  data: ConfigRole | ConfigUnit,
 ): { server: string; variables: string[] }[] {
-  const env = getPath(data, ["runtime", "mcp_env"]);
+  const env = data.mcp_env;
   if (!isRecord(env)) return [];
   return Object.entries(env).map(([server, vars]) => ({
     server,
@@ -330,7 +317,7 @@ export function toolCredentialNames(
  * and its home unit's, which the engine layers under every direct member
  * (`org.inheritMCPEnv`).
  */
-export function toolServersOf(seat: SeatData, home: DraftUnit | undefined): Set<string> {
+export function toolServersOf(seat: ConfigRole, home: DraftUnit | undefined): Set<string> {
   return new Set(
     [...toolCredentialNames(seat), ...(home ? toolCredentialNames(home.data) : [])].map(
       (entry) => entry.server,
@@ -354,12 +341,9 @@ const VENDOR_SERVERS = {
 
 /**
  * What exists at the vendors for a seat, by name, never by value: its own
- * GitHub App, Slack app and Mattermost bot (its runtime half's `github`,
- * `slack` and `mattermost`), and the GitLab, Datadog and Atlassian accounts it
- * is enrolled for. Each stays when the seat is deleted or stops being an
- * agent, until somebody decommissions it. All of it is in the runtime half, so
- * a reader who was not shown that half is told nothing here, and the dialog
- * says so (`dialogParts.StaysUntilDecommissioned`).
+ * GitHub App, Slack app and Mattermost bot, and the GitLab, Datadog and
+ * Atlassian accounts it is enrolled for. Each stays when the seat is deleted
+ * or stops being an agent, until somebody decommissions it.
  *
  * NOTHING FOR A SEAT THIS DRAFT CREATED: it was never saved, so no engine
  * made anything for it anywhere. And an account is named only where the seat
@@ -371,16 +355,16 @@ const VENDOR_SERVERS = {
 export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[] {
   if (isMintedKey(seat.key)) return [];
   const company = state.draft.company;
-  const servers = toolServersOf(seat.data, homeUnitOf(state.draft, seat.key));
+  const servers = toolServersOf(seat.data, homeUnitOf(state, seat.key));
   const enrolled = (vendor: keyof typeof VENDOR_SERVERS) =>
     VENDOR_SERVERS[vendor].some((server) => servers.has(server));
   const out: string[] = [];
-  const github = getPath(seat.data, ["runtime", "github"]);
+  const github = getPath(seat.data, ["integrations", "github"]);
   if (isRecord(github) && typeof github.app_slug === "string" && github.app_slug !== "") {
     out.push(`the GitHub App ${github.app_slug}`);
   }
-  if (isRecord(getPath(seat.data, ["runtime", "slack"]))) out.push("its Slack app");
-  if (isRecord(getPath(seat.data, ["runtime", "mattermost"]))) out.push("its Mattermost bot");
+  if (isRecord(getPath(seat.data, ["integrations", "slack"]))) out.push("its Slack app");
+  if (isRecord(getPath(seat.data, ["integrations", "mattermost"]))) out.push("its Mattermost bot");
   if (hasGitLabProvisioning(company) && enrolled("gitlab")) {
     out.push("its GitLab service account");
   }

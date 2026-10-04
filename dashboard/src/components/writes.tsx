@@ -945,9 +945,10 @@ function assignOptions(
   return [...movable, ...theirs].slice(0, ASSIGN_MATCHES).map((hit) => {
     const own = (hit.assignee ?? "") === handle;
     return {
-      // THE ADDRESS IS THE VALUE (`itemAddress`), the key the label: a key
-      // another task claimed first names that task to the engine.
-      value: itemAddress(hit),
+      // THE ID IS THE VALUE, the key the label: a key two tasks hold is one
+      // value for two options, and the one that did not claim it is reached
+      // by its id alone (`itemAddress`).
+      value: hit.id,
       label: `${hit.key} · ${hit.title}`,
       hint: own ? "already theirs" : hit.assignee ? `with ${nameOf(hit.assignee)}` : "unassigned",
       ...(own ? { disabled: true } : {}),
@@ -1038,6 +1039,8 @@ function AssignToSeatDialog({
   const [term, setTerm] = useState("");
   const [listOpen, setListOpen] = useState(false);
   const [chosen, setChosen] = useState<{
+    id: string;
+    /** What the engine opens this task by ([itemAddress]). */
     address: string;
     key: string;
     title: string;
@@ -1056,7 +1059,7 @@ function AssignToSeatDialog({
   });
   const hits = q.length >= ASSIGN_MIN_TERM ? (search.data?.hits ?? []) : [];
   const options = useMemo(() => assignOptions(hits, handle, nameOf), [hits, handle, nameOf]);
-  const task = read.data && itemAddress(read.data.task) === chosen?.address ? read.data.task : null;
+  const task = read.data && read.data.task.id === chosen?.id ? read.data.task : null;
   const version = task ? task.version : null;
   // WHOSE IT IS NOW is the READ's, once it lands — the same answer the
   // hand-off's `if_match` is taken from. The search hit's assignee is the
@@ -1159,9 +1162,10 @@ function AssignToSeatDialog({
                       : "No task matches"
                 }
                 onCommit={(option) => {
-                  const hit = hits.find((h) => itemAddress(h) === option.value);
+                  const hit = hits.find((h) => h.id === option.value);
                   if (!hit) return;
                   setChosen({
+                    id: hit.id,
                     address: itemAddress(hit),
                     key: hit.key,
                     title: hit.title,

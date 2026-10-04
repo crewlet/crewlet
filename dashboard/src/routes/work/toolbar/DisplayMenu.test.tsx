@@ -17,7 +17,7 @@
  * drawing must not throw the order away.
  */
 
-import { answered, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { DisplayMenu, type DisplayMenuProps } from "./DisplayMenu.tsx";
@@ -63,7 +63,7 @@ function wrote() {
   };
 }
 
-/** The menu, rendered and opened: its trigger and the callbacks it writes through. */
+/** The menu, rendered and opened. */
 function openDisplay(over: Partial<DisplayMenuProps> = {}) {
   const calls = wrote();
   render(
@@ -461,20 +461,7 @@ const task: WorkSummary = {
   version: 1,
 };
 
-/**
- * The list. A case lets the stubbed socket's answers land, and renders what
- * they leave, with [answered].
- *
- * NOT A POLL. A `findBy` or a `waitFor` re-ran its query on every change to
- * the page and every fifty milliseconds against a one-second deadline, each
- * time a query by role over the whole list, which computes the name of every
- * button on it — and on a loaded machine the deadline passed before the list
- * had drawn. The answers are promises, so `act` runs them, and the renders
- * they cause, to the end, however long that takes; and the flush is refused
- * once the case that asks has ended, so a case still running after its time
- * ran out opens no `act` beside the next one.
- */
-function mountList(): void {
+const mountList = () =>
   render(
     <Router>
       <ViewerProvider>
@@ -482,24 +469,10 @@ function mountList(): void {
       </ViewerProvider>
     </Router>,
   );
-}
 
-/**
- * The list's first row — what is drawn: the shape tabs, the views and the
- * Display menu's trigger. Found by its own class rather than by a role over the
- * whole page, which computes the name of every button the list draws.
- */
-function shapeRow(): HTMLElement {
-  const row = document.querySelector<HTMLElement>(".work-tabs");
-  if (!row) throw new Error("the list draws no shape row");
-  return row;
-}
-
-/** The Display menu of the mounted list, opened from the list's own first row. */
+/** The Display menu of the mounted list, opened. */
 async function openOnScreen() {
-  await answered();
-  fireEvent.click(within(shapeRow()).getByRole("button", { name: "Display" }));
-  await answered();
+  fireEvent.click(await screen.findByRole("button", { name: "Display" }));
 }
 
 // THE COLUMN KEY IS THE SHAPE'S OWN. `cols=` carries an ORDER as well as a
@@ -510,12 +483,11 @@ test("the Columns control writes the active shape's own key and never the other"
   serving({ work_items: { items: [task], groups: [], total_hint: 1, complete: true } });
   mountList();
   await openOnScreen();
-  expect(screen.getByText("Columns")).toBeTruthy();
+  await waitFor(() => expect(screen.getByText("Columns")).toBeTruthy());
   const optional = columnChoices("list", true).find((c) => c.optional);
   if (!optional) throw new Error("the list set has no optional column to tick");
   fireEvent.click(screen.getByLabelText(optional.label));
-  await answered();
-  expect(location.hash).toContain("cols.list=");
+  await waitFor(() => expect(location.hash).toContain("cols.list="));
   expect(location.hash).not.toContain("cols.table=");
   cleanup();
 
@@ -523,12 +495,11 @@ test("the Columns control writes the active shape's own key and never the other"
   serving({ work_items: { items: [task], groups: [], total_hint: 1, complete: true } });
   mountList();
   await openOnScreen();
-  expect(screen.getByText("Columns")).toBeTruthy();
+  await waitFor(() => expect(screen.getByText("Columns")).toBeTruthy());
   const tableOptional = columnChoices("table", true).find((c) => c.optional);
   if (!tableOptional) throw new Error("the table set has no optional column to tick");
   fireEvent.click(screen.getByLabelText(tableOptional.label));
-  await answered();
-  expect(location.hash).toContain("cols.table=");
+  await waitFor(() => expect(location.hash).toContain("cols.table="));
   expect(location.hash).not.toContain("cols.list=");
 });
 
@@ -556,11 +527,9 @@ test("switching the shape keeps the order and the view the reader is on", async 
     work_items: { items: [task], groups: [], total_hint: 1, complete: true },
   });
   mountList();
-  await answered();
-  const shapes = within(shapeRow()).getByRole("group", { name: "Draw as" });
+  const shapes = await screen.findByRole("group", { name: "Draw as" });
   fireEvent.click(within(shapes).getByRole("button", { name: "Board" }));
-  await answered();
-  expect(location.hash).toContain("shape=board");
+  await waitFor(() => expect(location.hash).toContain("shape=board"));
   expect(location.hash).toContain("sort=-updated");
   expect(location.hash).toContain("view=arranged");
 });
@@ -586,10 +555,8 @@ test("moving to another saved view keeps the arrangement", async () => {
     work_items: { items: [task], groups: [], total_hint: 1, complete: true },
   });
   mountList();
-  await answered();
-  fireEvent.click(screen.getByRole("button", { name: "Two" }));
-  await answered();
-  expect(location.hash).toContain("view=two");
+  fireEvent.click(await screen.findByRole("button", { name: "Two" }));
+  await waitFor(() => expect(location.hash).toContain("view=two"));
   expect(location.hash).toContain("sort=-updated");
   expect(location.hash).toContain("shape=table");
 });

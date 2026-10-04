@@ -14,28 +14,19 @@
  * would go red for reasons that have nothing to do with how a seat is drawn.
  */
 
-import { cleanup, render, screen } from "~/test/inCase.ts";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { WorkGrid } from "./Grid.tsx";
 import { Router } from "~/app/router.tsx";
 import type { RowChrome } from "~/components/work.tsx";
-import type { ViewerState } from "~/lib/viewer.ts";
 import type { WorkActivityRecord, WorkSummary } from "~/protocol/index.ts";
-import {
-  CLAIMANT,
-  CLAIMANT_TITLE,
-  DUPLICATE,
-  DUPLICATE_TITLE,
-  SHARED_KEY,
-  collidingRows,
-} from "~/test/keyCollision.ts";
 
 // THE TRASH COLUMN'S RESTORE IS A WRITE CONTROL, and asks who is reading and
 // whether the socket is up before it says whether it can act. These cases are
 // about the column's other cells, so it reads as an anonymous, connected tab.
 vi.mock("~/lib/viewer.ts", () => ({
-  useViewer: (): ViewerState => ({
+  useViewer: () => ({
     login: "",
     grants: [],
     operatesFleet: false,
@@ -44,7 +35,6 @@ vi.mock("~/lib/viewer.ts", () => ({
     name: "",
     acts: [],
     kind: "",
-    project: "",
     unbound: false,
     anonymous: true,
     loading: false,
@@ -61,6 +51,8 @@ afterEach(() => {
   cleanup();
   location.hash = "#/";
 });
+
+const NOW = Date.parse("2031-04-16T12:00:00Z");
 
 const row = (over: Partial<WorkSummary> = {}): WorkSummary => ({
   id: "t-1",
@@ -135,17 +127,7 @@ function mount(
   removals?: Map<string, WorkActivityRecord>,
   onOpen: (row: WorkSummary) => void = () => {},
 ) {
-  return render(grid(shape, rows, removals, onOpen));
-}
-
-/** The grid as `mount` draws it, for a case that hands it a second answer. */
-function grid(
-  shape: "list" | "table",
-  rows: WorkSummary[],
-  removals?: Map<string, WorkActivityRecord>,
-  onOpen: (row: WorkSummary) => void = () => {},
-) {
-  return (
+  return render(
     <Router>
       <WorkGrid
         shape={shape}
@@ -153,6 +135,7 @@ function grid(
         groups={[]}
         axis=""
         chrome={chrome}
+        now={NOW}
         workspace={false}
         hrefOf={(r) => `#/work/${r.key}`}
         onOpen={onOpen}
@@ -160,7 +143,7 @@ function grid(
         overflowHref={() => "#/work"}
         removals={removals}
       />
-    </Router>
+    </Router>,
   );
 }
 
@@ -235,14 +218,16 @@ test("an operator's removal is marked as one, beside the name", () => {
   expect(screen.getByText("operator")).toBeTruthy();
 });
 
-// AND A PERSON THE DIRECTORY BINDS TO A SEAT IS THAT SEAT, as the change log
-// names the same removal: they write AS the seat (`iam.ActorFor`, kind
-// `human`), so the trash names them by the chart's name and marks no operator.
-test("a removal by a person bound to a seat names them by the seat", () => {
-  const removals = new Map([["t-1", removal({ actor: "ada", actor_kind: "human" })]]);
+// AND A PERSON BOUND TO A SEAT IS NAMED AS THE SEAT, as the change log names
+// the same removal: they write AS the seat (`iam.ActorFor`), and the
+// credential they wrote through is the audit trail's half, never their name.
+test("a removal a bound person made names the seat they write as, not the credential", () => {
+  const removals = new Map([
+    ["t-1", removal({ actor: "ada", actor_kind: "human", operator_id: "pat:t-1" })],
+  ]);
   mount("table", [row({})], removals);
   expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
-  expect(screen.queryByText("operator")).toBeNull();
+  expect(screen.queryByText("pat:t-1")).toBeNull();
 });
 
 // ONE SEAT LOOKS LIKE ONE SEAT ON BOTH COLUMN SETS. The outline is the only
@@ -351,60 +336,4 @@ test("the list is compact on a phone with its key and title leading, the table i
   cleanup();
   const table = mount("table", [row()]);
   expect(table.container.querySelector(".grid-wrap")!.hasAttribute("data-phone-rows")).toBe(false);
-});
-
-/** The grid's rows, in the order they are drawn. */
-const drawnRows = (container: HTMLElement) =>
-  Array.from(container.querySelectorAll<HTMLElement>(".grid-row"));
-
-// TWO TASKS CAN HOLD ONE KEY, and they are still two rows. A key is the
-// tracker's ADDRESS, not its identity: a counter restored beside tasks minted
-// after it mints numbers those tasks already hold, the applier writes what the
-// record says rather than stall the log, and `key_collision` is the attention
-// flag that lists exactly those tasks — together, on this grid. Keyed on the
-// key, React met two children under one key and reconciled them by place, so
-// whatever a row holds that the answer does not (here the focus a reader left
-// on it) stayed where the row WAS when the next answer ordered them the other
-// way. Keyed on the id, the one thing two tasks never share, it travels with
-// its task — as it already did on the board, the calendar and the timeline.
-test("two tasks holding one key are two rows, each keeping its own state", () => {
-  const original = row({ id: "t-1", title: "the original" });
-  const restored = row({ id: "t-2", title: "minted after the restore" });
-  for (const shape of ["list", "table"] as const) {
-    const { container, rerender } = render(grid(shape, [original, restored]));
-    expect(drawnRows(container)).toHaveLength(2);
-
-    const link = drawnRows(container)[0]!.querySelector<HTMLAnchorElement>("a.row-link")!;
-    link.focus();
-    expect(document.activeElement).toBe(link);
-
-    // The next answer orders the same two tasks the other way round.
-    rerender(grid(shape, [restored, original]));
-    const [top, below] = drawnRows(container);
-    expect(top!.textContent).toContain("minted after the restore");
-    expect(below!.textContent).toContain("the original");
-    expect((document.activeElement as HTMLElement).closest(".grid-row")).toBe(below);
-    cleanup();
-  }
-});
-
-// AND IN THE TRASH, THE RESTORE NAMES THE ONE IT BRINGS BACK. It sent
-// `restore_work_item` on the row's key, and a key two tasks hold opens the one
-// that claimed it first — so a Restore pressed on the duplicate's row would
-// restore the claimant, which is not in the trash, and leave the task a reader
-// meant where it was.
-test("the restore for a removed duplicate names it by its id", () => {
-  const [claimant, duplicate] = collidingRows();
-  const removals = new Map([
-    [CLAIMANT, removal({ subject_id: CLAIMANT, subject_key: SHARED_KEY })],
-    [DUPLICATE, removal({ subject_id: DUPLICATE, subject_key: SHARED_KEY })],
-  ]);
-  const { container } = mount("table", [claimant, duplicate], removals);
-  const restore = (title: string) =>
-    drawnRows(container)
-      .find((el) => el.textContent?.includes(title))
-      ?.querySelector("button")
-      ?.getAttribute("aria-label");
-  expect(restore(DUPLICATE_TITLE)).toBe(`Restore ${DUPLICATE}`);
-  expect(restore(CLAIMANT_TITLE)).toBe(`Restore ${SHARED_KEY}`);
 });

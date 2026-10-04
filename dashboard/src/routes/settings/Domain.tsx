@@ -38,11 +38,10 @@ import { ServerGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useShared } from "~/lib/share.ts";
 import {
   DomainBlock,
   DomainRefusals,
@@ -71,86 +70,6 @@ interface Position {
   log_diverged?: boolean;
 }
 
-// The positions table's columns, which close over nothing on the screen — so a
-// module constant, and a poll that moved one node's position draws that row.
-const POSITION_COLUMNS: GridColumn<Position>[] = [
-  {
-    key: "node",
-    header: "Node",
-    cell: (p) => <TextCell icon="server">{p.node_id}</TextCell>,
-    sortValue: (p) => p.node_id,
-  },
-  {
-    key: "position",
-    header: "Position",
-    shrink: true,
-    sortValue: (p) => p.seq,
-    cell: (p) =>
-      p.seq < 0 ? (
-        // COUNTED AND SILENT, which is the state that pins a
-        // log: the trim waits for a node it cannot see.
-        <EmptyValue label="This node has published no position for this domain" />
-      ) : (
-        <span className="t-num">
-          {p.seq}
-          {p.applied_through !== p.seq && (
-            <span className="muted"> · applied {p.applied_through}</span>
-          )}
-        </span>
-      ),
-  },
-  {
-    key: "generation",
-    header: "Generation",
-    shrink: true,
-    sortValue: (p) => p.generation,
-    // THE GENERATION ITS POSITION IS IN, because a sequence
-    // is a number in one generation's space and the
-    // readmission refusal asks for a position "at the log's
-    // current generation".
-    cell: (p) =>
-      p.seq < 0 ? (
-        <EmptyValue label="This node has published no position for this domain" />
-      ) : (
-        <span className="t-num">{p.generation}</span>
-      ),
-  },
-  {
-    key: "behind",
-    header: "Behind",
-    shrink: true,
-    sortValue: (p) => p.lag ?? 0,
-    cell: (p) =>
-      // A POSITION FROM ANOTHER GENERATION IS NOT A
-      // DISTANCE: its sequence compares with nothing the
-      // log holds now, and subtracted it read 0.
-      p.generation_state === "left" || p.generation_state === "ahead" ? (
-        <Tag variant="warning">stale generation</Tag>
-      ) : p.lag == null ? (
-        <EmptyValue label="Not reported" />
-      ) : (
-        <span className="t-num">{p.lag}</span>
-      ),
-  },
-  {
-    key: "state",
-    header: "",
-    label: "State",
-    shrink: true,
-    cell: (p) => (
-      <span className="row gap-1">
-        {/* COUNTED AND LIVE ARE INDEPENDENT, which the
-                              fleet's own rows say too: counted-and-not-live is
-                              the node pinning the log, and live-and-not-counted
-                              is one inside its eviction fence window. */}
-        {p.counted && <Tag appearance="outline">counted</Tag>}
-        {p.live && <Tag variant="success">live</Tag>}
-        {p.log_diverged && <Tag variant="danger">log diverged</Tag>}
-      </span>
-    ),
-  },
-];
-
 export function DomainScreen({ name }: { name: string }) {
   const { data, loading, error, refusal } = useQuery("retention", undefined, {
     enabled: name !== "",
@@ -162,46 +81,40 @@ export function DomainScreen({ name }: { name: string }) {
   // EVERY NODE'S POSITION IN THIS ONE DOMAIN. The fleet's own table has this
   // folded into a cell that lists every domain a node reports, so reading one
   // domain's rows meant reading every node's cell and filtering by eye.
-  //
-  // SHARED WITH THE ROWS LAST DRAWN (`~/lib/share.ts`): each is built here
-  // afresh on every poll, so a report that moved one node's position drew
-  // every node's row again.
-  const positions = useShared(
-    useMemo<Position[]>(() => {
-      const nodes: RetentionNode[] = data?.nodes ?? [];
-      const out: Position[] = [];
-      for (const node of nodes) {
-        const at = node.domains?.[name];
-        // A NODE THAT HAS PUBLISHED NOTHING FOR THIS DOMAIN IS NOT AT ZERO, and
-        // it is the one the trim is most likely waiting on — the minimum is
-        // taken across these rows, so a node it cannot see is a node it cannot
-        // trim past. It is kept as a row with no position rather than dropped.
-        if (!at) {
-          out.push({
-            node_id: node.node_id,
-            counted: node.counted,
-            live: node.live,
-            seq: -1,
-            applied_through: -1,
-            generation: 0,
-          });
-          continue;
-        }
+  const positions = useMemo<Position[]>(() => {
+    const nodes: RetentionNode[] = data?.nodes ?? [];
+    const out: Position[] = [];
+    for (const node of nodes) {
+      const at = node.domains?.[name];
+      // A NODE THAT HAS PUBLISHED NOTHING FOR THIS DOMAIN IS NOT AT ZERO, and
+      // it is the one the trim is most likely waiting on — the minimum is
+      // taken across these rows, so a node it cannot see is a node it cannot
+      // trim past. It is kept as a row with no position rather than dropped.
+      if (!at) {
         out.push({
           node_id: node.node_id,
           counted: node.counted,
           live: node.live,
-          seq: at.seq,
-          applied_through: at.applied_through,
-          lag: at.lag,
-          generation: at.generation,
-          generation_state: at.generation_state,
-          log_diverged: at.log_diverged,
+          seq: -1,
+          applied_through: -1,
+          generation: 0,
         });
+        continue;
       }
-      return out;
-    }, [data, name]),
-  );
+      out.push({
+        node_id: node.node_id,
+        counted: node.counted,
+        live: node.live,
+        seq: at.seq,
+        applied_through: at.applied_through,
+        lag: at.lag,
+        generation: at.generation,
+        generation_state: at.generation_state,
+        log_diverged: at.log_diverged,
+      });
+    }
+    return out;
+  }, [data, name]);
 
   const facts: Fact[] = domain
     ? [
@@ -295,7 +208,83 @@ export function DomainScreen({ name }: { name: string }) {
                   rowKey={(p) => p.node_id}
                   rowHref={(p) => href(["settings", "nodes", p.node_id])}
                   defaultSort="position"
-                  columns={POSITION_COLUMNS}
+                  columns={[
+                    {
+                      key: "node",
+                      header: "Node",
+                      cell: (p) => <TextCell icon="server">{p.node_id}</TextCell>,
+                      sortValue: (p) => p.node_id,
+                    },
+                    {
+                      key: "position",
+                      header: "Position",
+                      shrink: true,
+                      sortValue: (p) => p.seq,
+                      cell: (p) =>
+                        p.seq < 0 ? (
+                          // COUNTED AND SILENT, which is the state that pins a
+                          // log: the trim waits for a node it cannot see.
+                          <EmptyValue label="This node has published no position for this domain" />
+                        ) : (
+                          <span className="t-num">
+                            {p.seq}
+                            {p.applied_through !== p.seq && (
+                              <span className="muted"> · applied {p.applied_through}</span>
+                            )}
+                          </span>
+                        ),
+                    },
+                    {
+                      key: "generation",
+                      header: "Generation",
+                      shrink: true,
+                      sortValue: (p) => p.generation,
+                      // THE GENERATION ITS POSITION IS IN, because a sequence
+                      // is a number in one generation's space and the
+                      // readmission refusal asks for a position "at the log's
+                      // current generation".
+                      cell: (p) =>
+                        p.seq < 0 ? (
+                          <EmptyValue label="This node has published no position for this domain" />
+                        ) : (
+                          <span className="t-num">{p.generation}</span>
+                        ),
+                    },
+                    {
+                      key: "behind",
+                      header: "Behind",
+                      shrink: true,
+                      sortValue: (p) => p.lag ?? 0,
+                      cell: (p) =>
+                        // A POSITION FROM ANOTHER GENERATION IS NOT A
+                        // DISTANCE: its sequence compares with nothing the
+                        // log holds now, and subtracted it read 0.
+                        p.generation_state === "left" || p.generation_state === "ahead" ? (
+                          <Tag variant="warning">stale generation</Tag>
+                        ) : p.lag == null ? (
+                          <EmptyValue label="Not reported" />
+                        ) : (
+                          <span className="t-num">{p.lag}</span>
+                        ),
+                    },
+                    {
+                      key: "state",
+                      header: "",
+                      label: "State",
+                      shrink: true,
+                      cell: (p) => (
+                        <span className="row gap-1">
+                          {/* COUNTED AND LIVE ARE INDEPENDENT, which the
+                              fleet's own rows say too: counted-and-not-live is
+                              the node pinning the log, and live-and-not-counted
+                              is one inside its eviction fence window. */}
+                          {p.counted && <Tag appearance="outline">counted</Tag>}
+                          {p.live && <Tag variant="success">live</Tag>}
+                          {p.log_diverged && <Tag variant="danger">log diverged</Tag>}
+                        </span>
+                      ),
+                    },
+                  ]}
                 />
               </Card>
             </>

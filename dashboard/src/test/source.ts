@@ -16,9 +16,7 @@
  * with its neighbours would certify a different tree while its name claimed
  * the same one. Every suite that reads the tree's code now takes it from
  * `modules()`, and one whose subject is a single directory or extension
- * narrows it by `path` rather than walking again; the one gate whose subject is
- * the SUITES as well (`test/inCase.source.test.ts`, where the testing library
- * may be reached from) reads `everyModule()`, the same walk unnarrowed. A STYLESHEET is not a
+ * narrows it by `path` rather than walking again. A STYLESHEET is not a
  * module, and the suites about the sheets list them themselves.
  *
  * Not a suite itself, and never imported by anything that ships: it reads the
@@ -45,47 +43,9 @@ export interface Module {
   path: string;
   text: string;
   lang: Lang;
-  /** Whether it is a suite (`*.test.ts`, `*.test.tsx`) rather than code. */
-  suite: boolean;
 }
 
-/** How a file is parsed, from its name. */
-export function langOf(file: string): Lang {
-  return file.endsWith(".d.ts") ? "dts" : file.endsWith(".tsx") ? "tsx" : "ts";
-}
-
-let walked: Module[] | null = null;
-let code: Module[] | null = null;
-
-/**
- * Every `.ts` and `.tsx` file under `src/`, suites included, sorted by path:
- * the ONE walk, which [modules] narrows to code. A gate whose subject is the
- * suites themselves — where the testing library may be reached from — reads
- * this rather than walking again.
- */
-export function everyModule(): Module[] {
-  if (walked) return walked;
-  const out: Module[] = [];
-  (function walk(dir: string): void {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) {
-        walk(full);
-        continue;
-      }
-      if (!/\.tsx?$/.test(entry)) continue;
-      out.push({
-        path: relative(SRC, full).split("\\").join("/"),
-        text: readFileSync(full, "utf8"),
-        lang: langOf(entry),
-        suite: entry.includes(".test."),
-      });
-    }
-  })(SRC);
-  out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  walked = out;
-  return out;
-}
+let cached: Module[] | null = null;
 
 /**
  * Every `.ts` and `.tsx` module under `src/` that is not itself a suite, sorted
@@ -97,8 +57,27 @@ export function everyModule(): Module[] {
  * says so in its own suite rather than here.
  */
 export function modules(): Module[] {
-  code ??= everyModule().filter((module) => !module.suite);
-  return code;
+  if (cached) return cached;
+  const out: Module[] = [];
+  (function walk(dir: string): void {
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!/\.tsx?$/.test(entry) || entry.includes(".test.")) continue;
+      const lang: Lang = entry.endsWith(".d.ts") ? "dts" : entry.endsWith(".tsx") ? "tsx" : "ts";
+      out.push({
+        path: relative(SRC, full).split("\\").join("/"),
+        text: readFileSync(full, "utf8"),
+        lang,
+      });
+    }
+  })(SRC);
+  out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  cached = out;
+  return out;
 }
 
 /** An ESTree node as `parseAst` returns it. */

@@ -3,7 +3,7 @@
  * them: the fallback wrapper and the page header's slot are one rule.
  */
 
-import { cleanup, render } from "~/test/inCase.ts";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import { PAGE_LENSES_SLOT, PageActions, PageLenses } from "./PageActions.tsx";

@@ -4,7 +4,7 @@
  *
  * WRITES ARE CONFIRMED, NOT OPTIMISTIC. Nothing on screen moves until the
  * engine has answered: an `applied` or `pending` answer raises this tab's read
- * floor for the domain (`protocol/floors.ts`), every question that reads that
+ * floor for the domain (`protocol/session.ts`), every question that reads that
  * domain asks again at the floor, and the screen is redrawn from an answer
  * that includes the change. A board that moved the card first and put it back
  * on a refusal would have shown a person a company that never existed.

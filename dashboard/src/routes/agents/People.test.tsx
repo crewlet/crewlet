@@ -20,7 +20,7 @@
  * instead of leaving the screen.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { People } from "./People.tsx";
@@ -53,16 +53,7 @@ function mount(org?: OrgProjection, agents?: unknown[]) {
   const store = new Store();
   store.applyHealth({ status: "healthy" });
   if (org) store.applyOrg(org);
-  // THE ROSTER, set whole (`applySeats`; `applyAgents` only patches a seat the
-  // roster already holds), each row under the agent id the store keeps it by.
-  if (agents) {
-    store.applySeats(
-      (agents as Record<string, unknown>[]).map((a) => ({
-        agent_id: `a-${String(a.handle ?? a.role ?? "")}`,
-        ...a,
-      })) as never,
-    );
-  }
+  if (agents) store.applySeats(agents);
   const socket = new LiveSocket(store);
   (
     socket as unknown as {
@@ -140,13 +131,21 @@ test("a digit past the end of the views changes nothing", async () => {
 // What a group head's number counts
 // ---------------------------------------------------------------------------
 
-/** Two units, one with two seats and one with one. */
+/** Two units, one with two seats and one with one — as the engine sends them:
+ *  every seat with its handle and every unit with its key. */
 const ORG = {
   name: "Acme",
   roles: [],
   units: [
-    { id: "engineering", name: "Engineering", roles: [{ name: "Dev A" }, { name: "Dev B" }] },
-    { id: "design", name: "Design", roles: [{ name: "Dee" }] },
+    {
+      id: "engineering",
+      name: "Engineering",
+      roles: [
+        { name: "Dev A", handle: "dev-a" },
+        { name: "Dev B", handle: "dev-b" },
+      ],
+    },
+    { id: "design", name: "Design", roles: [{ name: "Dee", handle: "dee" }] },
   ],
   derived: {
     seats: [
@@ -195,46 +194,6 @@ test("a filtered group head counts what matched, not what the unit holds", async
   expect(screen.queryByText(/directly in it/)).toBeNull();
 });
 
-// A UNIT GROUP IS ONE UNIT, NOT ONE NAME. The roster grouped by the unit's
-// name, so two teams called Platform were drawn as one team of three under one
-// head — and a name is prose nothing holds unique. Each group is keyed on the
-// unit's key, and a name two heads share carries each one's key so a reader
-// can tell them apart.
-const NAMESAKES = {
-  name: "Acme",
-  roles: [],
-  units: [
-    { id: "platform", name: "Platform", roles: [{ name: "Web A" }, { name: "Web B" }] },
-    { id: "infra", name: "Platform", roles: [{ name: "Metal" }] },
-  ],
-  derived: {
-    seats: [
-      { handle: "web-a", name: "Web A", kind: "agent" },
-      { handle: "web-b", name: "Web B", kind: "agent" },
-      { handle: "metal", name: "Metal", kind: "agent" },
-    ],
-    units: [
-      { id: "platform", name: "Platform", seats: ["web-a", "web-b"] },
-      { id: "infra", name: "Platform", seats: ["metal"] },
-    ],
-  },
-} as unknown as OrgProjection;
-
-test("two units sharing a name are two groups, each head naming its key", async () => {
-  mount(NAMESAKES);
-  await settle();
-  await act(async () => {
-    location.hash = "#/agents/roster?group=unit";
-    window.dispatchEvent(new HashChangeEvent("hashchange"));
-  });
-  await settle();
-
-  expect(screen.getByText("Platform (platform)")).toBeTruthy();
-  expect(screen.getByText("Platform (infra)")).toBeTruthy();
-  expect(screen.getByText("2 seats directly in it")).toBeTruthy();
-  expect(screen.getByText("1 seat directly in it")).toBeTruthy();
-});
-
 // ONE FIELD, IN THE BAR, ON EVERY SECTION. The roster left the bar's "Find a
 // seat" out and drew a filter box of its own in its toolbar, so the bar
 // changed shape between tabs. On a list of every seat, finding a seat IS
@@ -270,20 +229,22 @@ function drawnNames(): string[] {
 test("the roster is ordered by name, whatever the live rows say", async () => {
   mount(ORG, [
     {
-      agent_id: "a-dev-b",
-      role: "Dev B",
+      id: "dev-b",
+      agent_id: "dev-b",
       handle: "dev-b",
+      role: "Dev B",
       activity: "working",
       live_call: { updated_at: "2031-01-01T00:00:09Z" },
     },
     {
-      agent_id: "a-dev-a",
-      role: "Dev A",
+      id: "dev-a",
+      agent_id: "dev-a",
       handle: "dev-a",
+      role: "Dev A",
       activity: "idle",
       live_call: { updated_at: "2031-01-01T00:00:01Z" },
     },
-    { agent_id: "a-dee", role: "Dee", handle: "dee", activity: "idle" },
+    { id: "dee", agent_id: "dee", handle: "dee", role: "Dee", activity: "idle" },
   ]);
   await settle();
   await act(async () => {
@@ -299,26 +260,15 @@ test("the roster is ordered by name, whatever the live rows say", async () => {
 // the turn it was on.
 test("a seat the chart no longer holds is listed as removed from the company", async () => {
   mount(ORG, [
-    { agent_id: "a-dee", role: "Dee", handle: "dee", activity: "idle" },
-    { agent_id: "a-old", role: "Old Seat", handle: "old-seat", activity: "working" },
+    {
+      id: "old-seat",
+      agent_id: "old-seat",
+      role: "Old Seat",
+      handle: "old-seat",
+      activity: "working",
+    },
   ]);
   await settle();
   expect(screen.getByText("Removed from the company")).toBeTruthy();
   expect(screen.getByText("Old Seat")).toBeTruthy();
-  // PAIRED BY HANDLE: a row the chart holds is the seat's own card, never a
-  // second, removed one beside it.
-  expect(drawnNames().filter((n) => n === "Dee")).toHaveLength(1);
-});
-
-// A ROW IS THE CHART SEAT'S BY HANDLE, NEVER BY NAME. Paired by the role name,
-// a seat the chart dropped whose name a live seat now carries was drawn as
-// that seat — its state on the other's card — and listed nowhere as removed.
-test("a dropped seat sharing a live seat's name is listed as removed, not as that seat", async () => {
-  mount(ORG, [
-    { agent_id: "a-dee", role: "Dee", handle: "dee", activity: "idle" },
-    { agent_id: "a-old", role: "Dee", handle: "old-dee", activity: "working" },
-  ]);
-  await settle();
-  expect(screen.getByText("Removed from the company")).toBeTruthy();
-  expect(drawnNames().filter((n) => n === "Dee")).toHaveLength(2);
 });

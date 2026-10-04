@@ -2,20 +2,19 @@
  * The builder's table, which is the organization as an indented table of rows.
  *
  * What these protect:
- * - the rows are the TREE, in the chart's own order — by ADDRESS, the only
- *   order the chart keeps — and where a node sits is its level rather than a
- *   path written out on every line;
- * - a row says what it knows about the node: what it IS, once, under its name
- *   and in the chart's own wording; the address the chart names it by; who
- *   leads or manages it; and what the last check placed on it, with a cell
- *   that cannot hold a value saying so once in the design system's own mark;
+ * - the rows are the TREE, in the chart's own order, and where a node sits is
+ *   its level rather than a path written out on every line;
+ * - a row says what the engine knows about it: what it IS, once, under its
+ *   name and in the chart's own wording; the handle it runs under; who leads
+ *   or manages it; and what the last dry run placed on it, with a cell that
+ *   cannot hold a value saying so once in the design system's own mark;
  * - a row acts through the same one list of a node's actions the chart's cards
  *   offer, and EACH ACTION HAS ONE OWNER: the add pill, the pencil and the
  *   trash the console draws on a row are the row's, the menu carries what has
  *   no button of its own, a row whose menu would be empty draws none, and
  *   pressing a row selects it;
- * - a row offers no move among its siblings, because the chart keeps no order
- *   among them to write;
+ * - a row moves among the siblings it is drawn beside, by Alt with an arrow
+ *   and from its own menu, and only where that move is a place to write;
  * - read-only refuses every change and still offers every reading;
  * - the table opens and closes its own hierarchy, and registers itself as the
  *   view the Builder focuses a node in.
@@ -25,15 +24,17 @@
  * nothing here asserts them again.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { drawnClasses, drawnPart, insidePart, menuEntryLabel, orgTableParts } from "~/testing.tsx";
 import { Tag } from "@crewlethq/ui";
+import { fixtureCompany } from "./model/testkit.ts";
 import { checkedEdit } from "./testState.ts";
 import { TableView } from "./TableView.tsx";
 import { NodeGlyph } from "./nodeMarks.tsx";
 import { builderSpies, BuilderHarness, harnessProbe } from "./viewTestkit.tsx";
+import { render } from "@testing-library/react";
 
 afterEach(() => {
   cleanup();
@@ -48,7 +49,12 @@ function mount(options: { readOnly?: boolean } = {}) {
   const spies = builderSpies();
   const probe = harnessProbe();
   const rendered = render(
-    <BuilderHarness initial={checkedEdit()} spies={spies} probe={probe} readOnly={options.readOnly}>
+    <BuilderHarness
+      initial={checkedEdit(fixtureCompany())}
+      spies={spies}
+      probe={probe}
+      readOnly={options.readOnly}
+    >
       <TableView />
     </BuilderHarness>,
   );
@@ -73,25 +79,6 @@ function names(): string[] {
     .flatMap((row) => [...row.querySelectorAll<HTMLElement>(".btable-label")])
     .map((name) => name.textContent?.trim() ?? "");
 }
-
-/**
- * Every row the fixture draws, in the chart's own order — the company first.
- * Named once, because the cases that walk every row are one case PER row and
- * a list cannot come out of a mount that has not happened yet; the first case
- * below holds it to what the table actually draws.
- */
-const ROWS = [
-  "Acme",
-  "CEO",
-  "Engineering",
-  "Dev",
-  "VP Engineering",
-  "Platform",
-  "Designer",
-  "SRE",
-  "Sales",
-  "Account Executive",
-];
 
 /*
  * What the design system calls the parts of a row, asked of the design system
@@ -132,6 +119,7 @@ const strip = (name: string): string[] =>
     .getAllByRole("button")
     .map((control) => control.getAttribute("aria-label") ?? control.textContent ?? "");
 
+/** Every cell of a row, as words. A treegrid's cells are `gridcell`s. */
 /** An element's text with a seat badge's initials left out: the name is printed beside them. */
 const said = (el: Element): string =>
   [...el.childNodes]
@@ -144,7 +132,6 @@ const said = (el: Element): string =>
     )
     .join("");
 
-/** Every cell of a row, as words. A treegrid's cells are `gridcell`s. */
 const cells = (name: string) =>
   within(row(name))
     .getAllByRole("gridcell")
@@ -152,14 +139,27 @@ const cells = (name: string) =>
 
 describe("the rows", () => {
   /*
-   * THE CHART'S OWN ORDER: the company, then its root seats and units, each
-   * unit's own rows directly under it, siblings by address — the one order
-   * the chart keeps. This is the order the visualization draws, so a reader
-   * arriving from it finds the organization already assembled.
+   * THE CHART'S OWN ORDER, which is the document's: the company, then its root
+   * seats and units as the company writes them, each unit's own rows directly
+   * under it. This is the order the visualization draws, so a reader arriving
+   * from it finds the organization already assembled.
    */
   test("every seat and unit is a row, in the order the chart draws them", () => {
     mount();
-    expect(names()).toEqual(ROWS);
+    expect(names()).toEqual([
+      "Acme",
+      "CEO",
+      "Engineering",
+      "VP Engineering",
+      "Dev",
+      "Platform",
+      // A unit's OWN seats first, then the root seats a `unit:` reference
+      // placed in it, which is the order the chart stacks them in.
+      "SRE",
+      "Designer",
+      "Sales",
+      "Account Executive",
+    ]);
   });
 
   /*
@@ -197,7 +197,7 @@ describe("the rows", () => {
     const headers = screen
       .getAllByRole("columnheader")
       .map((head) => head.textContent?.trim() ?? "");
-    expect(headers).toEqual(["Name", "Address", "Lead or reports to", "Problems", "Actions"]);
+    expect(headers).toEqual(["Name", "Handle", "Lead or reports to", "Problems", "Actions"]);
     const said = (name: string, word: string) =>
       (cells(name).join(" ").match(new RegExp(word, "g")) ?? []).length;
     expect(said("Dev", "Agent seat")).toBe(1);
@@ -237,20 +237,18 @@ describe("the rows", () => {
    * measured on a live row took the caption from 13.2px to 20 and the row with
    * it, which made a seat's height depend on its wiring. The sentence is the
    * glyph's own name and its tooltip, so nothing is carried by the drawing
-   * alone. The Datadog fallback wears one.
+   * alone.
    */
   test("a wiring mark on a row is a glyph carrying its sentence, not a tag", () => {
     mount();
-    const caption = drawnPart(row("SRE"), PART.caption)!;
+    const caption = drawnPart(row("Designer"), PART.caption)!;
     const mark = caption.querySelector(".bnode-mark")!;
-    expect(mark.getAttribute("title")).toBe("Alerts that name no seat wake this seat");
+    expect(mark.getAttribute("title")).toBe("Declared at the root with a unit reference");
     expect(within(mark as HTMLElement).getByRole("img")).toBeDefined();
     // A tag is the row's own height, so one on this line is a row whose
     // height depends on its wiring.
     const tag = drawnClasses(Tag, { children: "x" })[0]!;
     expect(drawnPart(caption, tag)).toBeNull();
-    // The control: a seat with no wiring wears no mark.
-    expect(drawnPart(row("Dev"), PART.caption)!.querySelector(".bnode-mark")).toBeNull();
   });
 
   /*
@@ -288,14 +286,14 @@ describe("opening and closing the hierarchy", () => {
    * neither and still opens and closes through the handle it registers, which
    * is what the toolbar's buttons call.
    */
-  test("the table draws no controls of its own and closes through its handle", () => {
+  test("the table draws no controls of its own and closes through its handle", async () => {
     const { view } = mount();
     expect(screen.queryByRole("button", { name: "Collapse all" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Expand all" })).toBeNull();
     act(() => view()!.collapseAll());
-    expect(names()).not.toContain("SRE");
+    await waitFor(() => expect(names()).not.toContain("SRE"));
     act(() => view()!.expandAll());
-    expect(names()).toContain("SRE");
+    await waitFor(() => expect(names()).toContain("SRE"));
   });
 
   /* WHICH node to focus after an operation is the Builder's decision, and
@@ -322,6 +320,8 @@ describe("acting on a row", () => {
       "Edit reports",
       "Change to human seat",
       "Move to",
+      "Move up",
+      "Move down",
     ]);
   });
 
@@ -330,28 +330,20 @@ describe("acting on a row", () => {
    * over one, because the duplication was per node kind: the seat's row
    * repeated Edit and Delete and the company's repeated Edit and all three
    * adds.
-   *
-   * ONE CASE PER ROW. Every row is a menu opened and read, each a re-render
-   * and a handful of role queries over the whole table — about 150 ms a row,
-   * measured — and the one case that walked all nine took 1.1 s alone and ran
-   * past the five-second budget whenever the suite shared its cores. Apart,
-   * a case is one mount and one menu, and a duplicate names its row. The
-   * company's row draws no menu at all, and the case after this one says so.
    */
-  test.each(ROWS.slice(1))(
-    "on the %s row, no label is both a control and an entry of its own menu",
-    (name) => {
-      mount();
+  test("no label is both a control the row draws and an entry of its own menu", () => {
+    mount();
+    for (const name of names()) {
+      if (menuTrigger(name) === null) continue;
       const drawn = strip(name).map((label) => label.replace(` ${name}`, "").replace(/ to .*/, ""));
-      const entries = actions(name).map(([entry]) => entry);
-      // A ROW THAT LOST ITS MENU is the next case's claim for the company and
-      // nobody else's, so an empty list here would be a case asserting nothing.
-      expect(entries.length, name).toBeGreaterThan(0);
-      for (const entry of entries) {
+      for (const [entry] of actions(name)) {
         expect(drawn, `${name}: ${entry}`).not.toContain(entry);
       }
-    },
-  );
+      fireEvent.keyDown(screen.getByRole("menu", { name: `Actions for ${name}` }), {
+        key: "Escape",
+      });
+    }
+  });
 
   /*
    * AND A ROW WHOSE MENU WOULD BE EMPTY DRAWS NONE. Everything the company can
@@ -391,14 +383,14 @@ describe("acting on a row", () => {
     expect(spies.openDelete).toHaveBeenLastCalledWith("seat:dev");
   });
 
-  test("the add pill offers every kind under a unit, and under the company too", () => {
+  test("the add pill offers every kind under a unit, and under the company too", async () => {
     const { spies } = mount();
     fireEvent.click(within(row("Engineering")).getByRole("button", { name: "Add to Engineering" }));
-    fireEvent.click(screen.getByRole("button", { name: "Add human seat to Engineering" }));
-    expect(spies.openAdd).toHaveBeenLastCalledWith("unit:engineering", "human");
+    fireEvent.click(await screen.findByRole("button", { name: "Add human seat to Engineering" }));
+    expect(spies.openAdd).toHaveBeenLastCalledWith("unit:Engineering", "human");
 
     fireEvent.click(within(row("Acme")).getByRole("button", { name: "Add to Acme" }));
-    fireEvent.click(screen.getByRole("button", { name: "Add unit to Acme" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add unit to Acme" }));
     expect(spies.openAdd).toHaveBeenLastCalledWith(null, "unit");
   });
 
@@ -410,11 +402,11 @@ describe("acting on a row", () => {
    * unit entries carry `NodeGlyph`'s marks — the Crewlet figure and the tree a
    * unit row on this table already wears.
    */
-  test("the pill's marks are the chart's own, from the one add list", () => {
+  test("the pill's marks are the chart's own, from the one add list", async () => {
     mount();
     fireEvent.click(within(row("Engineering")).getByRole("button", { name: "Add to Engineering" }));
-    const agent = screen.getByRole("button", { name: "Add agent seat to Engineering" });
     const drawing = (element: Element) => element.querySelector("svg")?.innerHTML ?? "";
+    const agent = await screen.findByRole("button", { name: "Add agent seat to Engineering" });
     const figure = render(<NodeGlyph kind="agent" />);
     expect(drawing(agent)).not.toBe("");
     expect(drawing(agent)).toBe(drawing(figure.container));
@@ -467,14 +459,22 @@ describe("acting on a row", () => {
   /* Read-only is a draft nobody may change, so every change refuses rather
      than disappearing: a menu whose entries come and go is a menu nobody
      learns, and an operator has to be able to see that Delete exists. */
-  test("read-only refuses every change and still offers every reading", () => {
+  test("read-only refuses every change and still offers every reading", async () => {
     const { spies } = mount({ readOnly: true });
-    // READ-ONLY DISABLES, IT DOES NOT HIDE.
+    /*
+     * READ-ONLY DISABLES, IT DOES NOT HIDE, and that holds for the two moves
+     * as well: a seat with siblings to pass is offered both, refused. They
+     * used to vanish while Move to beside them stayed and said it was
+     * unavailable, which told an operator this seat could not be reordered at
+     * all.
+     */
     expect(actions("Dev")).toEqual([
       ["Open seat", false],
       ["Edit reports", false],
       ["Change to human seat", true],
       ["Move to", true],
+      ["Move up", true],
+      ["Move down", true],
     ]);
     fireEvent.keyDown(screen.getByRole("menu", { name: "Actions for Dev" }), { key: "Escape" });
     expect(
@@ -483,35 +483,55 @@ describe("acting on a row", () => {
     // The plus still opens, and says the kinds are unavailable rather than
     // offering nothing at all.
     fireEvent.click(within(row("Engineering")).getByRole("button", { name: "Add to Engineering" }));
-    const add = screen.getByRole("button", { name: "Add unit to Engineering" });
+    const add = await screen.findByRole("button", { name: "Add unit to Engineering" });
     expect(add.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(add);
     expect(spies.openAdd).not.toHaveBeenCalled();
   });
 });
 
-/*
- * THE CHART KEEPS NO ORDER AMONG SIBLINGS: a row is where its address sorts,
- * so there is no place among them to move one to, and nothing offers to.
- * Where a seat sits is its parent, which Move to changes.
- */
-describe("a row among its siblings", () => {
-  test("a row offers no move among its siblings, and Alt with an arrow records nothing", () => {
+describe("moving a row among its siblings", () => {
+  /*
+   * A SEAT'S PLACE AMONG ITS SIBLINGS DECIDES ITS PRIMARY MANAGER, since the
+   * engine's is the first seat that lists it, so the move writes a real change
+   * to the document rather than reordering a view.
+   */
+  test("moving a seat up writes it before the sibling it passes", () => {
     const { state } = mount();
-    const labels = actions("VP Engineering").map(([label]) => label);
+    fireEvent.click(menuTrigger("Dev")!);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move up" }));
+    expect(names().slice(3, 5)).toEqual(["Dev", "VP Engineering"]);
+    expect(state().draft.units[0]!.roles.map((seat) => seat.data.name)).toEqual([
+      "Dev",
+      "VP Engineering",
+    ]);
+  });
+
+  /* Alt with an arrow, which is the move without opening anything: the same
+     operation the menu records. */
+  test("Alt and an arrow move the row the keyboard is on", () => {
+    const { state } = mount();
+    fireEvent.keyDown(row("Dev"), { key: "ArrowUp", altKey: true });
+    expect(state().draft.units[0]!.roles.map((seat) => seat.data.name)).toEqual([
+      "Dev",
+      "VP Engineering",
+    ]);
+  });
+
+  /* A root seat the engine placed in a unit by its `unit:` reference lives in
+     the COMPANY's list, so its place among the rows it is drawn beside is not
+     a place to write. It is offered no move rather than a move that writes
+     somewhere else. */
+  test("a seat a unit reference placed is offered no move at all", () => {
+    mount();
+    const labels = actions("Designer").map(([label]) => label);
     expect(labels).not.toContain("Move up");
     expect(labels).not.toContain("Move down");
     expect(labels).toContain("Move to");
-    fireEvent.keyDown(screen.getByRole("menu", { name: "Actions for VP Engineering" }), {
-      key: "Escape",
-    });
-    fireEvent.keyDown(row("VP Engineering"), { key: "ArrowUp", altKey: true });
-    expect(state().log.ops).toHaveLength(0);
-    expect(names().slice(3, 5)).toEqual(["Dev", "VP Engineering"]);
   });
 
   /* It has no menu at all, which is the same answer: the company is not a row
-     that moves, and nothing on it offers to. */
+     that moves among siblings, and nothing on it offers to. */
   test("the company is never moved", () => {
     mount();
     expect(menuTrigger("Acme")).toBeNull();

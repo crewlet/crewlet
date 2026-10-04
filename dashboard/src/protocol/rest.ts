@@ -2,14 +2,18 @@
  * The dashboard's one REST transport: every write, and the guarded reads the
  * socket has no question for.
  *
- * The socket remains the data channel for state. This is not a second one: it
- * carries the requests that are not questions about state at all. Writes never
- * go over the socket, deliberately: a write is judged on its `Origin` by the
- * engine's cross-site check before its handler runs, answers the three write
- * outcomes as statuses with an op id to retry by, and may be refused for a
- * step-up this module confirms and replays — none of which a frame on an open
- * socket carries. And a handful of reads exist only as REST, `GET /secrets`
- * above all, because no query in the registry answers them.
+ * The socket remains the data channel for the projection and for every
+ * question in the query registry. This is not a second one: it carries the
+ * requests that are not questions about state at all, and the reads that no
+ * query answers. A screen does not call it for a read directly — it reads
+ * through `lib/useRest.ts`, the one loader, so that a superseded answer, an
+ * unmounted screen and a server's `Retry-After` are each handled once. Writes
+ * never go over the socket, deliberately: a write is judged on its `Origin` by
+ * the engine's cross-site check before its handler runs, answers the three
+ * write outcomes as statuses with an op id to retry by, and may be refused for
+ * a step-up this module confirms and replays — none of which a frame on an
+ * open socket carries. And a handful of reads exist only as REST,
+ * `GET /secrets` above all, because no query in the registry answers them.
  *
  * ONE MODULE, for the reason `api.ts` states about itself: a screen reaching
  * for its own transport takes its client from somewhere, and the somewhere the
@@ -26,9 +30,7 @@
  * that one request, and nothing keeps it.
  */
 
-import { retryAfterMs, unansweredRetryMs } from "./retry.ts";
-import { confirmStepUp, needSession, type StepUpWindow } from "./session.ts";
-import type { QueryErrorCode } from "../contract/errors.ts";
+import { confirmStepUp, needSession } from "./signin.ts";
 import type { LogRefusal, QueryRefusal } from "./types.ts";
 
 /**
@@ -53,18 +55,19 @@ export class RestError extends Error {
    * wording, the one that goes stale.
    */
   readonly sentence: string;
-  /**
-   * The `Retry-After` the answer carried, in whole seconds, or null for none —
-   * either form the RFC allows ([retryAfterSeconds]). A `429` always carries
-   * one and says how long the curve makes the next attempt wait; a `503` the
-   * engine wrote carries one where waiting can clear the cause and none where
-   * it cannot, which is a difference a screen has to render. A refusal
-   * something in front of the engine wrote keeps its header here too, though
-   * [retryHint] never reads it as the engine's.
-   */
-  readonly retryAfter: number | null;
   /** Everything else the body carried, for a caller that needs a field. */
   readonly body: Record<string, unknown>;
+  /**
+   * The `Retry-After` the answer carried, in whole seconds — either form the
+   * RFC allows ([retryAfterSeconds]) — or null where it named no wait.
+   *
+   * A `429` always carries one and says how long the sign-in curve makes the
+   * next attempt wait. A `503` the engine wrote carries one where waiting can
+   * clear the cause and NONE where it cannot (a node with no keyring, a full
+   * log), which is the difference a loader retries on — see [retryHint],
+   * which also refuses to read a proxy's header as the engine's.
+   */
+  readonly retryAfterSeconds: number | null;
 
   constructor(status: number, body: Record<string, unknown>, retryAfter: number | null = null) {
     const code = typeof body.error === "string" ? body.error : "";
@@ -76,20 +79,18 @@ export class RestError extends Error {
     this.detail = detail;
     this.hint = typeof body.hint === "string" ? body.hint : "";
     this.sentence = typeof body.message === "string" ? body.message : "";
-    this.retryAfter = retryAfter;
     this.body = body;
+    this.retryAfterSeconds = retryAfter;
   }
 
   /**
    * Whether the engine refused on AUTHORITY rather than on the request.
    *
-   * Both statuses, because a screen locks the same way for either and the
-   * distinction is not one it can act on: 401 is "present a credential" and
-   * 403 is "the one you presented does not carry this grant". What neither
-   * is, any more, is a reason to send the reader to sign in again — a reader
-   * holding a perfectly good session meets 403 the moment they open a screen
-   * outside their grants, which is the ordinary case rather than the
-   * exceptional one. Only a 401 says nobody is signed in (see [noteSession]).
+   * Both statuses, because a screen locks the same way for either: 401 is
+   * "nobody is signed in" and 403 is "the credential you presented does not
+   * carry this". Only a 401 sends the reader to sign in (see [noteSession]): a
+   * person holding a perfectly good session meets 403 the moment they open a
+   * screen outside their grants, which is the ordinary case.
    */
   get unauthorized(): boolean {
     return this.status === 401 || this.status === 403;
@@ -102,44 +103,45 @@ export class RestError extends Error {
 
   /**
    * This refusal in the shape `QueryState` renders from — the one the
-   * socket's error frame carries, under the same keys: a 403's rule and the
-   * grants that would have admitted the caller, and a 503's state-log code,
-   * its own words and whether waiting changes it (no `Retry-After` is the
-   * engine saying it will not). Null for anything else, a 401 included:
-   * nobody being signed in is not a rule's refusal, and there are no grants
-   * to name to nobody.
+   * socket's error frame carries, under the same keys and on the same terms:
+   * a `403 unauthorized`'s rule and the grants that would have admitted the
+   * caller, and a 503's state-log code, its own words and whether waiting
+   * changes it (no `Retry-After` is the engine saying it will not). Null for
+   * anything else, a 401 included: nobody being signed in is not a rule's
+   * refusal, and there are no grants to name to nobody.
+   *
+   * ONLY `unauthorized` IS A RULE'S REFUSAL. Every 403 used to be read as one,
+   * with its code standing in for the rule, so a read refused
+   * `seat_unavailable` or `csrf_origin` reached the banner as a refusal naming
+   * no grant — which says "no grant would change that: the rule asks a
+   * relation the org chart does not hold", a claim about neither.
    */
   get refusal(): QueryRefusal | LogRefusal | null {
-    if (this.status === 403) {
-      return {
-        reason: typeof this.body.reason === "string" ? this.body.reason : this.code,
-        grants: this.grants,
-      };
+    if (
+      this.status === 403 &&
+      this.code === "unauthorized" &&
+      typeof this.body.reason === "string"
+    ) {
+      return { reason: this.body.reason, grants: this.grants };
     }
     const hint = this.retryHint;
-    if (hint !== null) {
-      return {
-        code: typeof this.body.refusal === "string" ? this.body.refusal : null,
-        detail: this.detail || null,
-        retryAfter: hint,
-      };
-    }
-    return null;
+    if (hint === null) return null;
+    return {
+      code: typeof this.body.refusal === "string" ? this.body.refusal : null,
+      detail: this.detail || null,
+      retryAfter: hint,
+    };
   }
 
   /**
-   * When the engine said to ask again, in whole seconds, or null where it said
+   * When the ENGINE said to ask again, in whole seconds, or null where it said
    * nothing: a `503` it wrote says its `Retry-After`, and ZERO where it sent
    * none — its statement that waiting will not change the answer. Every other
    * answer, a `503` something in front of the engine wrote included, carries
    * no hint, because nobody at the engine decided one.
-   *
-   * What a retry loop waits out (`retryAfterMs` in `retry.ts`), and what
-   * [refusal] hands `QueryState` for a `503`: the rule for which `503` is the
-   * engine's lives here and nowhere else.
    */
   get retryHint(): number | null {
-    return this.status === 503 && !this.unanswered ? (this.retryAfter ?? 0) : null;
+    return this.status === 503 && !this.unanswered ? (this.retryAfterSeconds ?? 0) : null;
   }
 
   /**
@@ -171,9 +173,7 @@ export class RestError extends Error {
  * READ FROM THE ANSWER, because the engine's envelope carries them under
  * `grants` precisely so no screen has to name a grant itself: a sentence
  * typed into a screen is a second statement of the rule, and the one that
- * goes stale the day the rule's grant moves. Takes the raw body rather than
- * only a [RestError] because the org builder reads `GET /config` through its
- * own answer type.
+ * goes stale the day the rule's grant moves.
  */
 export function refusedGrants(body: unknown): string[] {
   if (typeof body !== "object" || body === null) return [];
@@ -208,118 +208,6 @@ function noteSession(refusal: RestError): void {
   }
 }
 
-/** What [restRetryMs] needs to know beyond the failure itself. */
-export interface RetryContext {
-  /**
-   * The screen's own cadence for the answer it holds, in milliseconds, or
-   * `null` where it has none: what a failure the engine gave no hint for
-   * waits, as the poll it replaces would have.
-   */
-  readonly cadence: number | null;
-  /**
-   * How many reads IN A ROW, this one included, nobody answered
-   * ([RestError.unanswered]) — what the backoff is counted from. Any answer
-   * the engine wrote, a refusal included, starts the count again.
-   */
-  readonly unanswered: number;
-}
-
-/**
- * When a REST read that failed with `err` is asked again, in milliseconds, or
- * `null` for "not on a timer" — the REST twin of the socket's
- * `unavailableRetryMs`, for a screen that reads over REST and asks again on
- * its own. Decided on the code [restFailure] draws the failure as, so the
- * banner and the timer can never disagree about which failure this is.
- *
- * - A `503` the engine wrote says when ([RestError.retryHint]), read through
- *   `retryAfterMs`: waited out exactly, bounded, and its ZERO — a `503` with
- *   no `Retry-After` — never on a timer, because the engine is saying waiting
- *   will not change the answer.
- * - A read NOBODY ANSWERED backs off (`unansweredRetryMs`), from a second to
- *   thirty. It is the one failure with nothing that would ever ask again
- *   otherwise: the live socket can be up the whole time — a request past its
- *   deadline on a slow engine, one dropped on the way — so its coming back
- *   never happens, and a screen with no poll of its own held the banner until
- *   somebody reloaded. A `Retry-After` something in front of the engine wrote
- *   — a proxy's `503` page — is not waited out: nobody at the engine decided
- *   it, and the backoff is already this tab's whole answer to a node it
- *   cannot hear.
- * - Every other failure carries no hint, since nobody at the engine decided
- *   one, and waits the screen's own `cadence`.
- */
-export function restRetryMs(err: unknown, context: RetryContext): number | null {
-  switch (restFailure(err).error) {
-    case "unavailable":
-      return retryAfterMs((err as RestError).retryHint ?? 0);
-    case "unanswered":
-      return unansweredRetryMs(context.unanswered);
-    default:
-      return context.cadence;
-  }
-}
-
-/**
- * What a failed READ is drawn as: every code a socket question fails with, and
- * the one a REST read adds — `unanswered`, a request no answer from the engine
- * came back to ([RestError.unanswered]).
- *
- * NOT A MEMBER OF `QueryErrorCode`, which is the socket's vocabulary: a Go
- * test in `internal/api/stream` pins that union to the codes the engine sends
- * plus the two the socket mints itself, and a REST read is not a socket
- * question. `QueryState`'s banner table is keyed on this wider union, so a
- * code here with no sentence is a compile error exactly as one there is.
- */
-export type ReadErrorCode = QueryErrorCode | "unanswered";
-
-/** A failed REST read as the pair `QueryState` renders — see [restFailure]. */
-export interface RestFailure {
-  readonly error: ReadErrorCode;
-  readonly refusal: QueryRefusal | LogRefusal | null;
-}
-
-/**
- * A failed REST read in `QueryState`'s terms: the code its banner is chosen
- * by, and the refusal that lets the banner say what would change the answer.
- *
- * THE REST TWIN OF `queryFailure`, for a screen that reads over REST and draws
- * its failure the way a socket question's is drawn. Each such screen used to
- * map a failure for itself, and each forgot a different case: the credential
- * listing drew an engine `503` as a fault on the node, the Integrations
- * listing drew nothing for any failure but a refusal and a `503`, and the pass
- * history drew a first read that failed as "No pass has run on this node" — an
- * answer about the integration that nobody gave.
- *
- * - A refusal on AUTHORITY (`401`, `403`) is `unauthorized`, carrying the rule
- *   and the grants it named.
- * - A `503` the engine wrote ([RestError.retryHint]) is `unavailable`, with
- *   its state-log code and hint: the banner says the screen asks again on its
- *   own, or — at zero — that asking will not change it.
- * - A read NO ANSWER FROM THE ENGINE CAME BACK TO ([RestError.unanswered]) is
- *   `unanswered`: status 0 — a request past its thirty-second deadline, one
- *   dropped on the way — or a status something in front of the engine wrote
- *   (a gateway's `502` or `504`, a body cut off part way). Nothing refused it
- *   and nothing here knows what the engine would have said, and its banner
- *   says the screen asks again on its own, which [restRetryMs]'s backoff
- *   makes true. It was `closed`, whose banner says the SOCKET went away and
- *   the screen reads again once it is back: while the socket stayed up — the
- *   ordinary case for one slow request — neither was true, and the screen
- *   read again only on a reload. And a gateway's answer was `query_failed`,
- *   "the engine tried to answer and failed", about an answer the engine never
- *   wrote.
- * - Anything else is `query_failed`, a fault on the node: a `500` it wrote.
- *
- * A `404` is the CALLER'S to read first, because what it means is the route's
- * — the credential surface unregistered on this process, or one pass nobody
- * remembers — and reading it here would say one of those about the other.
- */
-export function restFailure(err: unknown): RestFailure {
-  if (!(err instanceof RestError)) return { error: "query_failed", refusal: null };
-  if (err.unauthorized) return { error: "unauthorized", refusal: err.refusal };
-  if (err.retryHint !== null) return { error: "unavailable", refusal: err.refusal };
-  if (err.unanswered) return { error: "unanswered", refusal: null };
-  return { error: "query_failed", refusal: null };
-}
-
 /**
  * A `Retry-After` header value as whole seconds from `now`, or null for a
  * header that is absent or says nothing usable.
@@ -327,9 +215,7 @@ export function restFailure(err: unknown): RestFailure {
  * BOTH FORMS RFC 9110 ALLOWS. The engine writes delay-seconds, but a proxy in
  * front of it may answer for it with an HTTP-date, and reading that as "no
  * hint" would drop the one instruction the refusal carried. A date already
- * past is a wait of zero, never a negative one. Which of the two WROTE it —
- * and so whether a zero means "waiting will not change it" — is not this
- * function's question: that is [RestError.retryHint]'s rule.
+ * past is a wait of zero, never a negative one.
  */
 export function retryAfterSeconds(header: string | null | undefined, now: number): number | null {
   const value = header?.trim() ?? "";
@@ -352,13 +238,7 @@ function retryAfterOf(response: Response): number | null {
  * [RestError.retryHint] for a refused response that did not come through
  * [request] — the degraded-mode snapshot (`api.ts`) and the socket's
  * plain-HTTP re-ask of a refused handshake (`socket.ts`), each of which reads
- * the response itself.
- *
- * ONE READING for both, because each needs the same three steps — the body
- * read as an envelope whatever it holds, the header read as whole seconds, and
- * the rule for which `503` is the engine's — and each spelled them out for
- * itself, which is how two copies come to disagree about a proxy's `503`.
- * Consumes the body.
+ * the response itself. Consumes the body.
  */
 export async function retryHintOf(response: Response): Promise<number | null> {
   const body = (await response.json().catch(() => null)) as unknown;
@@ -398,7 +278,7 @@ function offline(err: unknown): RestError {
  * It is the DEFAULT, not the only deadline: a call whose path is genuinely
  * longer passes [RequestOptions.timeoutMs] rather than removing the deadline.
  * Two do. A backup copies the whole store before it answers. And the node
- * gate is allowed two minutes from its first record to its last answer
+ * gate is allowed longer than this from its first record to its last answer
  * (`contract/gate.ts`), so thirty seconds gave up on a gesture the node went
  * on to finish, holding nothing to finish it with.
  */
@@ -432,15 +312,6 @@ export interface RequestOptions {
    */
   signal?: AbortSignal;
   /**
-   * How long this request may take before it is abandoned, in milliseconds —
-   * [REQUEST_TIMEOUT_MS] unless the caller's path is genuinely longer and
-   * says so here, rather than removing the deadline; the refusal it gets on
-   * expiry names ITS deadline, not the default's. Two paths are: `POST
-   * /backup`, whose copy is synchronous and bounded by the size of the store
-   * rather than by anything a screen decides, and the node gate.
-   */
-  timeoutMs?: number;
-  /**
    * How a SUCCESSFUL body is read. `json` (the default) parses it; `text`
    * hands it over as the string the engine sent, for the one kind of answer
    * that is a file rather than a document: `GET /config?format=yaml`, which a
@@ -448,6 +319,16 @@ export interface RequestOptions {
    * JSON either way, because every refusal the engine writes is one.
    */
   read?: "json" | "text";
+  /**
+   * How long this request may take before it is abandoned, in milliseconds —
+   * [REQUEST_TIMEOUT_MS] unless the caller's path is genuinely longer and
+   * says so here, rather than removing the deadline; the refusal it gets on
+   * expiry names ITS deadline, not the default's. Two paths are: `POST
+   * /backup`, whose copy is synchronous and bounded by the size of the store
+   * rather than by anything a screen decides, and the node gate
+   * (`contract/gate.ts`).
+   */
+  timeoutMs?: number;
 }
 
 /** What the engine answered, whole: the status and entity-tag beside the body. */
@@ -466,16 +347,11 @@ export interface RestResponse {
   etag: string | null;
 }
 
-/**
- * A deadline as a person would say it: in minutes where it is a whole number
- * of them past the first, and in seconds otherwise — EXACT either way, because
- * the sentence names the deadline that ran out, and the node gate's two
- * minutes and fifteen seconds rounded to "2 minutes" would be a deadline
- * nobody set.
- */
+/** A deadline as a person would say it: seconds under two minutes, else
+ *  minutes. */
 function waitWords(ms: number): string {
   const seconds = Math.round(ms / 1000);
-  return seconds >= 120 && seconds % 60 === 0 ? `${seconds / 60} minutes` : `${seconds} seconds`;
+  return seconds < 120 ? `${seconds} seconds` : `${Math.round(seconds / 60)} minutes`;
 }
 
 /** Whether a rejection is the caller's own abort rather than a failure. */
@@ -504,17 +380,10 @@ function withQuery(path: string, query: Record<string, QueryValue> | undefined):
 }
 
 /**
- * The route a step-up is given at. It answers `step_up_required` itself when
- * the caller is a credential nobody present can confirm — and asking to
- * confirm the confirmation would be a dialog that reopens for ever.
+ * The route a step-up is given at. Asking to confirm the confirmation would
+ * be a dialog that reopens for ever, so a refusal there is the refusal.
  */
 const STEP_UP_PATH = "/auth/step-up";
-
-/** Which window a step-up refusal names, from the envelope's own key. */
-function windowOf(refusal: RestError): StepUpWindow {
-  const window = refusal.body.window;
-  return typeof window === "string" && window !== "" ? window : "step_up";
-}
 
 /**
  * `waiting`, or the caller's own abort if that comes first. A person can sit
@@ -540,6 +409,39 @@ function unlessAborted<T>(waiting: Promise<T>, signal: AbortSignal | undefined):
   });
 }
 
+/** How many requests are out right now, and who is waiting for none to be. */
+let inFlight = 0;
+let settled: (() => void)[] = [];
+
+/**
+ * Resolves once no request this module sent is still out — at once when none
+ * is.
+ *
+ * WHAT A SOCKET CLOSED 4401 WAITS FOR before it dials again. A step-up
+ * REPLACES the session it was made from, so the engine ends the old one and
+ * closes every socket it opened; the answer that sets the new cookie may
+ * still be on its way, and a dial before it lands carries the cookie the
+ * engine just ended and is refused — which would send a person who had just
+ * proved who they are to the sign-in form.
+ */
+export function whenRequestsSettle(): Promise<void> {
+  if (inFlight === 0) return Promise.resolve();
+  return new Promise((resolve) => settled.push(resolve));
+}
+
+/** The wall-clock instant, in ms, the engine last answered a request here. */
+let answeredAt = 0;
+
+/**
+ * When the engine last answered any request this module sent, in ms since
+ * the epoch, or 0 for never. Any answer to a request carrying the session
+ * cookie re-issues it once it is five minutes old, so a tab that has heard
+ * from the engine this recently needs no keepalive (`keepalive.ts`).
+ */
+export function lastAnsweredAt(): number {
+  return answeredAt;
+}
+
 /**
  * The one request path, answering the status and entity-tag as well as the
  * body.
@@ -553,13 +455,12 @@ function unlessAborted<T>(waiting: Promise<T>, signal: AbortSignal | undefined):
  * # A step-up is confirmed HERE, and the refused request sent again
  *
  * A gesture refused `403 step_up_required` is asked of the person once —
- * through whatever confirms a step-up (`session.ts`), however many requests
+ * through whatever confirms a step-up (`signin.ts`), however many requests
  * were refused together — and then REPLAYED: the same method, path, body and
  * headers, so a form that was being saved is saved, rather than lost to a
  * refusal its screen could only report. Once: a replay refused again is the
  * refusal. Every screen gets this by sending its writes through here, and no
- * screen implements it, which is what makes it one ceremony rather than a
- * dozen that disagree.
+ * screen implements it.
  *
  * The deadline is each ATTEMPT's, not the gesture's: the time a person spends
  * typing their password is not the engine taking too long.
@@ -570,13 +471,32 @@ async function request(
   options: RequestOptions = {},
 ): Promise<RestResponse> {
   try {
-    return await attempt(method, path, options);
+    return await counted(method, path, options);
   } catch (err) {
     const refused =
       err instanceof RestError && err.status === 403 && err.code === "step_up_required";
     if (!refused || path.split("?")[0] === STEP_UP_PATH) throw err;
-    if (!(await unlessAborted(confirmStepUp(windowOf(err)), options.signal))) throw err;
-    return attempt(method, path, options);
+    if (!(await unlessAborted(confirmStepUp(), options.signal))) throw err;
+    return counted(method, path, options);
+  }
+}
+
+/** One attempt, counted in flight for [whenRequestsSettle]. */
+async function counted(
+  method: string,
+  path: string,
+  options: RequestOptions,
+): Promise<RestResponse> {
+  inFlight++;
+  try {
+    return await attempt(method, path, options);
+  } finally {
+    inFlight--;
+    if (inFlight === 0) {
+      const waiting = settled;
+      settled = [];
+      for (const resolve of waiting) resolve();
+    }
   }
 }
 
@@ -682,6 +602,8 @@ async function attempt(
     signal?.removeEventListener("abort", forward);
   }
 
+  answeredAt = Date.now();
+
   if (read === "text" && response.ok) {
     return { status: response.status, body: text, etag: response.headers.get("ETag") };
   }
@@ -696,10 +618,9 @@ async function attempt(
       // way, so both become an error rather than a silent null — and one
       // that says it is not the engine's answer ([RestError.unanswered]),
       // since nothing in it says what the engine did. A refusal's
-      // `Retry-After` still travels on the error, as what was said — a
-      // proxy answering a 503 page for an engine that is restarting says
-      // when to come back in the header, whatever its body is — though
-      // [RestError.retryHint] never reads it as the engine's.
+      // `Retry-After` still travels: a proxy answering a 503 page for an
+      // engine that is restarting says when to come back in the header,
+      // whatever its body is.
       throw new RestError(
         response.ok ? 502 : response.status,
         {
@@ -736,11 +657,8 @@ export const rest = {
    * precondition, reads a tag, cancels, or branches on a success status.
    */
   request,
-  /**
-   * A read, ended by `signal` where the caller passes one: a read whose
-   * screen went, or whose answer a newer read superseded, has nobody left to
-   * hand its answer to (`lib/restRead.ts`).
-   */
+  /** A read's body. `signal` is the loader's: `lib/useRest.ts` aborts a read
+   *  it superseded, and a screen reads through that rather than calling this. */
   get: (path: string, signal?: AbortSignal) => bodyOf("GET", path, { signal }),
   post: (path: string, body?: unknown, headers?: Record<string, string>) =>
     bodyOf("POST", path, { body: body ?? {}, headers }),

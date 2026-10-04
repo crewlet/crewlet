@@ -1,9 +1,9 @@
 /**
  * The dashboard's one path onto the company document: `/config`.
  *
- * A change to the COMPANY — a provider, the company's budget ceiling, an MCP
- * server — is a new configuration revision, not an act: it is validated whole,
- * stored, and activated by the fleet at a new epoch. So it does not go through
+ * A change to the COMPANY — a seat, a budget ceiling, an MCP server, a model —
+ * is a new configuration revision, not an act: it is validated whole, stored,
+ * and activated by the fleet at a new epoch. So it does not go through
  * `protocol/act.ts`, and every screen that makes one goes through here:
  *
  *  - [getConfig] reads the active document and the entity tag that names its
@@ -11,10 +11,10 @@
  *  - [dryRunPatch] validates a merge patch against that revision and stores
  *    nothing;
  *  - [savePatch] stores it, carrying the audit `_summary` every revision needs;
- *  - [getEntity] reads one addressable entity (a provider or an MCP server)
- *    with the tag of its revision, [dryRunEntity] checks a replacement of it,
- *    and [putEntity] stores one — each with the same validation of the whole
- *    document behind it;
+ *  - [getEntity] reads one addressable entity (a seat, a unit, a provider, an
+ *    MCP server) with the tag of its revision, [dryRunEntity] checks a
+ *    replacement of it, and [putEntity] stores one — each with the same
+ *    validation of the whole document behind it;
  *  - [dryRunCreate] and [createEntity] ADD an MCP server or a provider: the
  *    same PUT at the new entity's own address, create-only.
  *
@@ -31,7 +31,6 @@
 import { classifyConfigRefusal, type ConfigAnswer, type ConfigRefusal } from "./configAnswer.ts";
 import { isAbort, rest, RestError, type QueryValue, type RestResponse } from "./rest.ts";
 import type { CompanyDocument, ConfigWarning, Derived } from "./types.ts";
-import type { ENTITY_KINDS } from "../contract/config.ts";
 
 /**
  * Runs one REST call and resolves with the answer, refusal or not. An abort
@@ -198,14 +197,8 @@ export async function savePatch(
   );
 }
 
-/**
- * The collections `PUT /config/{kind}/{id}` addresses — read off
- * `contract/config.ts`'s list rather than spelled again here, because that
- * list is the one the engine's own test holds against `configapi.EntityKinds`,
- * and a second spelling is how this type went on naming `roles` and `units`
- * after the org chart took both off the company document.
- */
-export type EntityPath = (typeof ENTITY_KINDS)[number]["kind"];
+/** The collections `PUT /config/{kind}/{id}` addresses (`contract/config.ts` holds the list). */
+export type EntityPath = "roles" | "units" | "llm-providers" | "mcp-servers";
 
 /** One entity of the active revision, or why there is none to read. */
 export type EntityRead =
@@ -305,6 +298,9 @@ export async function putEntity(
   );
 }
 
+/** The collections an entity can be ADDED to by its address: the flat ones. */
+export type CreatablePath = Extract<EntityPath, "llm-providers" | "mcp-servers">;
+
 /**
  * The create-only condition: `If-None-Match: *` at the new entity's address.
  *
@@ -322,7 +318,7 @@ const CREATE_ONLY = { "If-None-Match": "*" } as const;
  * validated with it in. Stores nothing, carries no summary.
  */
 export async function dryRunCreate(
-  kind: EntityPath,
+  kind: CreatablePath,
   id: string,
   entity: Record<string, unknown>,
   signal: AbortSignal,
@@ -341,7 +337,7 @@ export async function dryRunCreate(
 
 /** Add `entity` under `id`, with its audit summary. */
 export async function createEntity(
-  kind: EntityPath,
+  kind: CreatablePath,
   id: string,
   entity: Record<string, unknown>,
   summary: string,

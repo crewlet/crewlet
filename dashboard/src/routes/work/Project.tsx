@@ -25,11 +25,10 @@
  * approved Board draws a project: the work is the first screenful, not a
  * header about it. The lenses themselves are on the PAGE BAR, beside the name
  * they are lenses on (`PageLenses`): as a row of their own they pushed the
- * lanes a line further down than the Board puts them. ABOUT is what the
- * CONTAINER is — who leads it, which unit owns it, its target, how far along
- * it is, its vocabulary, its tags and the findings on its own record — which a
- * board can say none of. HISTORY is what has happened, ordered by the log
- * rather than by anything the rows sort on.
+ * lanes a line further down than the Board puts them. ABOUT is what the CONTAINER is — who leads it, which unit
+ * owns it, its target, how far along it is, its vocabulary, its tags and the
+ * findings on its own record — which a board can say none of. HISTORY is what
+ * has happened, ordered by the log rather than by anything the rows sort on.
  *
  * A LENS IS A SECTION, so each pushes history: a reader who walked Items →
  * About → History and pressed Back three times walks out through them.
@@ -80,7 +79,7 @@ import { useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatResolvers } from "~/lib/seats.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
+import { useNow } from "~/lib/clock.ts";
 import {
   pageCount,
   pageNote,
@@ -90,11 +89,13 @@ import {
   targetLabel,
   typeName,
   unfinished,
+  itemPath,
+  subjectItem,
 } from "~/lib/work.ts";
-import { describeChange, itemPath, subjectItem } from "~/lib/work.ts";
+import { describeChange, foldChartReapplies, reapplySentence } from "~/lib/work.ts";
 import { filed, ProjectCensus } from "./census.tsx";
 import { ItemsView } from "./ItemsView.tsx";
-import { actorName, HistoryView } from "./History.tsx";
+import { HistoryView } from "./History.tsx";
 import { FEED_PAGE } from "./feed.tsx";
 import { statusDot } from "./shapes/group.tsx";
 import type { WorkGroup, WorkProjectDetail } from "~/protocol/index.ts";
@@ -249,11 +250,11 @@ export function Project({ projectKey }: { projectKey: string }) {
  * What the CONTAINER is, as against what is in it.
  *
  * Its header first — the facts, the sentence and the census the rail wears
- * too ([ProjectHead]) — then its vocabulary — the statuses, the types and the
- * fields it declares — its labels, and how its open work is distributed. Every
- * one of these is a fact a board cannot state from its rows, and each was
- * either buried in a rail or reachable nowhere at all: a company that renamed
- * four statuses and declared six fields had no screen that said so.
+ * too ([ProjectHead]) — then its vocabulary — the statuses, the types and the fields it declares — its
+ * labels, and how its open work is distributed. Every one of these is a fact a
+ * board cannot state from its rows, and each was either buried in a rail or
+ * reachable nowhere at all: a company that renamed four statuses and declared
+ * six fields had no screen that said so.
  */
 function ProjectAbout({ detail, chrome }: { detail: WorkProjectDetail; chrome: RowChrome }) {
   // `group_limit: 1` because only the COUNTS are drawn here and the engine runs
@@ -388,6 +389,7 @@ function ProjectAbout({ detail, chrome }: { detail: WorkProjectDetail; chrome: R
 
 /** The last few changes, as a companion to the container's own facts. */
 function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: RowChrome }) {
+  const now = useNow();
   const feed = useQuery(
     "work_activity",
     { container: `project:${detail.key}`, limit: FEED_PAGE.rail },
@@ -407,28 +409,44 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
         {feed.data &&
           (records.length > 0 ? (
             <div className="col gap-2">
-              {records.map((record) => (
-                <div className="col gap-1" key={record.id}>
-                  <div className="row gap-2">
-                    {record.subject_key ? (
-                      // BY ADDRESS — see `HistoryRow`: a duplicate's changes
-                      // carry the key its claimant answers to.
-                      <a className="mono t-link" href={href(itemPath(subjectItem(record)))}>
-                        {record.subject_key}
-                      </a>
-                    ) : (
-                      <EmptyValue label="No work item" />
-                    )}
-                    <span className="spacer" />
-                    <span className="t-caption" title={fmtDateTime(record.at)}>
-                      <ClockText read={(now) => relTime(record.at, now)} />
+              {/* A CONFIG APPLY'S RE-DECLARATION IS ONE QUIET LINE, never the
+                  chart epoch it moved — see `lib/work.ts` [foldChartReapplies]. */}
+              {foldChartReapplies(records).map((line) => {
+                if (line.kind === "reapply") {
+                  return (
+                    <div className="row gap-2" key={line.id}>
+                      <span className="t-caption truncate">
+                        {reapplySentence(line.projects)} · the engine
+                      </span>
+                      <span className="spacer" />
+                      <span className="t-caption" title={fmtDateTime(line.at)}>
+                        {relTime(line.at, now)}
+                      </span>
+                    </div>
+                  );
+                }
+                const record = line.record;
+                return (
+                  <div className="col gap-1" key={record.id}>
+                    <div className="row gap-2">
+                      {record.subject_key ? (
+                        <a className="mono t-link" href={href(itemPath(subjectItem(record)))}>
+                          {record.subject_key}
+                        </a>
+                      ) : (
+                        <EmptyValue label="No work item" />
+                      )}
+                      <span className="spacer" />
+                      <span className="t-caption" title={fmtDateTime(record.at)}>
+                        {relTime(record.at, now)}
+                      </span>
+                    </div>
+                    <span className="t-caption truncate">
+                      {describeChange(record, chrome)} · {record.actor || "the engine"}
                     </span>
                   </div>
-                  <span className="t-caption truncate">
-                    {describeChange(record, chrome)} · {actorName(record, chrome)}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
               <a className="t-link" href={href(["work", "history"], { project: detail.key })}>
                 Every change →
               </a>
@@ -629,7 +647,7 @@ function projectLede(detail: WorkProjectDetail): string {
  *
  * IT NAMES HOW WORK GETS FILED, because a reader looking at an empty project
  * is looking for the way in — and the way in is on the state itself: New task,
- * filing into this project, as the principal the request resolves to.
+ * filing into this project, as the person signed in.
  */
 function NothingFiled({ detail }: { detail: WorkProjectDetail }) {
   return (

@@ -3,7 +3,7 @@
  *
  * A NEW CONFIGURATION REVISION, not an act: a server is a `mcp_servers` entry,
  * so the write goes through `protocol/configWrite.ts` like a seat or a budget
- * ceiling, guarded by the operator credential (`useConfigWriteAccess`) rather
+ * ceiling, guarded by the `config:write` grant (`useConfigWriteAccess`) rather
  * than a seat binding. The button is drawn for every reader and disabled with
  * the reason for one who cannot change the configuration.
  *
@@ -40,7 +40,7 @@ import {
   type ServerForm,
 } from "~/lib/mcpServers.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
-import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { configGuardedReason, useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import { introducedWarnings, type ConfigRefusal } from "~/protocol/configAnswer.ts";
 import { createEntity, dryRunCreate, dryRunPatch, getConfig } from "~/protocol/configWrite.ts";
 import { isAbort } from "~/protocol/rest.ts";
@@ -63,7 +63,7 @@ type AddState =
 function addRefusalWords(refusal: ConfigRefusal, name: string): string {
   switch (refusal.kind) {
     case "guarded":
-      return "The engine did not take this token as an operator's, so the server was not added.";
+      return configGuardedReason(refusal.code);
     case "conflict":
       switch (refusal.reason) {
         case "entity_exists":

@@ -21,7 +21,7 @@ import { Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PlugGlyph, ExternalLinkGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
 import { marked } from "~/ui/Problems.tsx";
-import { rest, RestError, retryAfterMs } from "~/protocol/index.ts";
+import { rest, RestError } from "~/protocol/index.ts";
 
 /**
  * How long one surface is waited out while something else is writing at it.
@@ -42,6 +42,9 @@ import { rest, RestError, retryAfterMs } from "~/protocol/index.ts";
  */
 const BUSY_RETRY_MS = 45_000;
 
+/** How long between attempts while a surface is busy. */
+const BUSY_RETRY_EVERY_MS = 3_000;
+
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 /**
@@ -50,14 +53,6 @@ const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
  * Only `surface_busy` is retried. Every other refusal is terminal by
  * construction — a bad body, a node with no status store, a credential the
  * engine will not accept — and repeating one of those is a slower way to fail.
- *
- * FOR AS LONG AS THE ENGINE SAYS, read off the refusal's `Retry-After` the way
- * every other re-ask in this dashboard reads a hint (`retryAfterMs`). The wait
- * was this dialog's own three seconds, and the engine's header was justified
- * as matching it: two copies of one number, each citing the other, and the
- * header — the only one of the two the engine can change — was the one nobody
- * read. A busy answer with NO `Retry-After` is the engine saying waiting will
- * not clear it, so it is terminal like any other refusal.
  */
 async function disconnectOne(
   kind: string,
@@ -76,13 +71,9 @@ async function disconnectOne(
       return answer;
     } catch (err) {
       const busy = err instanceof RestError && err.code === "surface_busy";
-      const wait = busy ? retryAfterMs(err.retryHint ?? 0) : null;
-      // THE WINDOW BOUNDS THE WHOLE WAIT, the last sleep included: a wait
-      // that would end past it is not started, so a hint longer than the
-      // time left ends the wait now rather than one hint late.
-      if (wait === null || Date.now() + wait > until) throw err;
+      if (!busy || Date.now() >= until) throw err;
       waiting(kind);
-      await sleep(wait);
+      await sleep(BUSY_RETRY_EVERY_MS);
     }
   }
 }

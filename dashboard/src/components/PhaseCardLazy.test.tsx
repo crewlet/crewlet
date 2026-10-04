@@ -13,7 +13,7 @@
  * this protects against is the parse nobody could see.
  */
 
-import { cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 const indentJSON = vi.fn((text: string) => text);

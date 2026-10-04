@@ -11,7 +11,7 @@
  * founder looks for "what did we tell them" — Settings, under Company.
  *
  * It reads the org PROJECTION rather than the guarded configuration, so a
- * reader without an operator credential can read it: the charter is not a
+ * reader without `config:read` can read it: the charter is not a
  * secret, and a settings screen that refused everybody would hide the one
  * section of Settings that is the company's own voice. A unit's goals are the
  * unit's, and are drawn at Agents › Teams.

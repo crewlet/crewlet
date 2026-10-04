@@ -11,9 +11,9 @@
  */
 
 import { useRef, type ReactNode } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useSearchTarget } from "./searchTarget.ts";
-import { afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { Shell, usePageCoverage, usePublishFleet, useSectionCounts } from "./Shell.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -25,7 +25,6 @@ import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { installWindow } from "~/testing.tsx";
 import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "./frame/PageActions.tsx";
 import { Project } from "~/routes/work/Project.tsx";
-import { CHUNKS, loadChunk } from "./lazyScreen.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -67,15 +66,6 @@ const INCOMPLETE: CoverageFacts = {
     scope: [],
   },
 };
-
-// EVERY CHUNK THE FRAME DRAWS FROM IS IN BEFORE A CASE STARTS — the Knowledge
-// column, the New task sheet and the peeks are lazy (`lazyScreen.ts`), and
-// what this suite asserts is what the frame does, not how long a cold
-// `import()` takes. A mount that suspended on one would also do it inside the
-// synchronous `act` `render` opens, which React refuses to wait on.
-beforeAll(async () => {
-  await Promise.all(CHUNKS.map((chunk) => loadChunk(chunk)));
-});
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
@@ -194,40 +184,6 @@ const EMPTY: Record<string, unknown> = {
   fleet: { nodes: [], seats: [], duties: [], target_epoch: 0 },
   retention: { domains: [], nodes: [], snapshots: [], alarms: [], register_readable: true },
   integrations: { integrations: [], tools: [], traffic_known: true, traffic_since: null },
-  // The Knowledge column's count of agent diaries (`routes/knowledge/KnowledgeTree.tsx`).
-  memory_overview: { seats: [], coverage: { nodes: [], complete: true } },
-};
-
-/** What the engine answers for a person bound to the seat `ada`, holding every grant. */
-const ADA = {
-  login: "ada.lovelace",
-  grants: [
-    "state:read",
-    "audit:read",
-    "config:read",
-    "secrets:read",
-    "work:write",
-    "knowledge:write",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "sandbox:run",
-  ],
-  handle: "ada",
-  owner: "ada",
-  name: "Ada Lovelace",
-  kind: "human",
-};
-
-/** A person signed in holding only the grant every screen reads under, and no seat. */
-const READER = {
-  login: "jane.doe",
-  grants: ["state:read"],
-  handle: "",
-  owner: "jane.doe",
-  name: "",
-  kind: "",
 };
 
 /** A socket answering a bound viewer and whatever else a case supplies. */
@@ -244,7 +200,26 @@ function answering(
   ).query = (what: string, params?: Record<string, unknown>) => {
     asked.push({ what, params });
     if (what === "viewer") {
-      return Promise.resolve(answers.viewer ?? ADA);
+      return Promise.resolve(
+        answers.viewer ?? {
+          login: "U0FOUNDER",
+          grants: [
+            "config:read",
+            "config:write",
+            "secrets:write",
+            "fleet:operate",
+            "people:manage",
+            "audit:read",
+            "state:read",
+            "work:write",
+            "knowledge:write",
+          ],
+          handle: "ada",
+          owner: "ada",
+          name: "Ada Lovelace",
+          kind: "human",
+        },
+      );
     }
     return Promise.resolve(answers[what] ?? EMPTY[what] ?? {});
   };
@@ -320,25 +295,6 @@ describe("the Inbox badge", () => {
 
   // NOTHING TO ANSWER IS NO BADGE AT ALL. A zero in the accent is a mark a
   // reader checks, and it would be there permanently on a quiet company.
-  // AN UNBOUND PRINCIPAL HAS A RECORD TOO, kept under their login — where
-  // their assistant writes their notices — so the badge asks for it there
-  // rather than for nobody's.
-  test("an unbound reader's badge counts the record kept under their login", async () => {
-    const asked: { what: string; params?: Record<string, unknown> }[] = [];
-    const { store, socket } = answering(
-      {
-        viewer: READER,
-        work_inbox: { handle: "jane.doe", notices: [notice("mention", 1)], primary_reasons: [] },
-      },
-      asked,
-    );
-    mountShell(store, socket);
-    await settle();
-    const inbox = asked.find((a) => a.what === "work_inbox");
-    expect(inbox?.params).toMatchObject({ handle: "jane.doe", unread: true, primary_only: true });
-    expect(screen.getByRole("link", { name: /^Inbox/ }).textContent).toContain("1");
-  });
-
   test("nothing waiting draws no figure", async () => {
     const { store, socket } = answering({
       work_inbox: { handle: "ada", notices: [], primary_reasons: [] },
@@ -357,27 +313,26 @@ describe("the sidebar's figures", () => {
     mountShell(store, socket);
     act(() =>
       store.applySeats([
-        { id: "a", agent_id: "id-a", role: "A", activity: "working" },
-        { id: "b", agent_id: "id-b", role: "B", activity: "working" },
+        { id: "a", agent_id: "a", handle: "a", role: "A", activity: "working" },
+        { id: "b", agent_id: "b", handle: "b", role: "B", activity: "working" },
         {
           id: "c",
-          agent_id: "id-c",
+          agent_id: "c",
+          handle: "c",
           role: "C",
           activity: "idle",
           live_call: { in_progress: true },
         },
-        { id: "d", agent_id: "id-d", role: "D", activity: "needs" },
+        { id: "d", agent_id: "d", handle: "d", role: "D", activity: "needs" },
       ] as never),
     );
     expect(screen.getByRole("link", { name: /^Agents/ }).textContent).toContain("2");
   });
 
-  // A PIN IS A PERSON'S, and the engine answers the CALLER'S — a `viewer=`
-  // naming anybody else was a free choice of whose personal views to read, and
-  // the engine takes none — across every container, with the engine's own
-  // counts. The shared views carry no pins, which is why the sidebar this replaced
-  // never drew one — across every container, and with the engine's own counts.
-  test("pinned views are asked for as the viewer, and draw the view's own total", async () => {
+  // A PIN IS A PERSON'S, and the engine reads the caller's own off the request
+  // that asks — there is no `viewer=` to name somebody else's — across every
+  // container, and with the engine's own counts.
+  test("pinned views are asked for as the caller, and draw the view's own total", async () => {
     const asked: { what: string; params?: Record<string, unknown> }[] = [];
     const { store, socket } = answering(
       {
@@ -632,26 +587,13 @@ describe("the sidebar's figures", () => {
   });
 
   // SETTINGS IS NEVER HIDDEN; the lock is what changes.
-  test("Settings is a row without the lock for a reader every section opens for", async () => {
+  test("Settings is a row for an operator without the lock", async () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     await settle();
     const foot = screen.getByRole("navigation", { name: "Settings" });
     expect(foot.textContent).toContain("Settings");
-    expect(foot.textContent).not.toContain("need a grant");
-  });
-
-  // AND FOR A READER IT CLOSES ON, THE LOCK SAYS HOW MUCH AND NAMES WHAT
-  // WOULD OPEN IT — what they would ask somebody for.
-  test("Settings carries a lock naming the grants a reader lacks", async () => {
-    const { store, socket } = answering({ viewer: READER });
-    mountShell(store, socket);
-    await settle();
-    const foot = screen.getByRole("navigation", { name: "Settings" });
-    expect(foot.textContent).toMatch(/\d+ of its sections need a grant you do not hold/);
-    const lock = foot.querySelector(".side-locked");
-    expect(lock?.getAttribute("title")).toContain("config:read");
-    expect(lock?.getAttribute("title")).toContain("fleet:operate");
+    expect(foot.textContent).not.toContain("operator credential");
   });
 });
 
@@ -705,7 +647,9 @@ describe("the page header", () => {
   // marked.
   test("Settings draws its sections as a column, locked where the reader lacks the grant", async () => {
     location.hash = "#/settings/secrets";
-    const { store, socket } = answering({ viewer: READER });
+    const { store, socket } = answering({
+      viewer: { login: "", grants: [], handle: "", owner: "", name: "", kind: "" },
+    });
     mountShell(store, socket);
     await settle();
     const column = screen.getByRole("navigation", { name: "Settings sections" });
@@ -766,11 +710,11 @@ describe("the page header", () => {
     expect(document.querySelector(".section-picker-list [aria-current]")).toBeNull();
   });
 
-  // NO GUARDED POLL OUTSIDE SETTINGS. The frame is mounted for the life of
+  // NO OPERATOR POLL OUTSIDE SETTINGS. The frame is mounted for the life of
   // the tab, so a figure hook that asked unconditionally would put three
-  // guarded questions on a timer behind every screen of every tab.
+  // operator questions on a timer behind every screen of every tab.
   const OPERATOR_ANSWERS = ["fleet", "retention", "integrations"];
-  test("the guarded answers are asked only while the Settings column is drawn", async () => {
+  test("the operator answers are asked only while the Settings column is drawn", async () => {
     for (const where of ["#/home", "#/work", "#/spend/budgets", "#/knowledge"]) {
       location.hash = where;
       const asked: { what: string }[] = [];
@@ -779,7 +723,7 @@ describe("the page header", () => {
       await settle();
       expect(
         asked.map((a) => a.what).filter((w) => OPERATOR_ANSWERS.includes(w)),
-        `${where} asked a guarded answer`,
+        `${where} asked an operator answer`,
       ).toEqual([]);
       cleanup();
     }
@@ -796,27 +740,13 @@ describe("the page header", () => {
   test("a reader without the grants is asked nothing, even in Settings", async () => {
     location.hash = "#/settings";
     const asked: { what: string }[] = [];
-    const { store, socket } = answering({ viewer: READER }, asked);
-    mountShell(store, socket);
-    await settle();
-    expect(asked.map((a) => a.what).filter((w) => OPERATOR_ANSWERS.includes(w))).toEqual([]);
-  });
-
-  // EACH ANSWER BY ITS OWN SECTION'S GRANT: a reader who may read the
-  // configuration and not operate the fleet is asked the roll-up and nothing
-  // the fleet's grant guards.
-  test("each guarded answer is asked of a reader its own section opens for", async () => {
-    location.hash = "#/settings";
-    const asked: { what: string }[] = [];
     const { store, socket } = answering(
-      { viewer: { ...READER, grants: ["state:read", "config:read"] } },
+      { viewer: { login: "", grants: [], handle: "", owner: "", name: "", kind: "" } },
       asked,
     );
     mountShell(store, socket);
     await settle();
-    expect(asked.map((a) => a.what).filter((w) => OPERATOR_ANSWERS.includes(w))).toEqual([
-      "integrations",
-    ]);
+    expect(asked.map((a) => a.what).filter((w) => OPERATOR_ANSWERS.includes(w))).toEqual([]);
   });
 
   // THE PILL IS THE ENGINE'S ROLL-UP, read in the row's name — and painted

@@ -3,17 +3,14 @@
  * they make on it as themselves.
  *
  * Its failure modes are quiet ones. A Done that sent the whole inbox back
- * erased a snooze made in another tab; a row drawn as somebody other than
- * whoever the record names; a Snoozed tab that listed everything; an option
- * button that sent something other than the choice; a snooze preset the
- * engine refuses every time it is pressed; "posts it to #leadership" promised
- * on an ask that promised nothing; a notice about a duplicate that opened its
- * claimant; an unbound reader shown no inbox at all; and a screen drawn whole
- * once a second.
+ * erased a snooze made in another tab; a row drawn with the token's id put a
+ * credential where a person belongs; a Snoozed tab that listed everything;
+ * an option button that sent something other than the choice; a snooze preset
+ * the engine refuses every time it is pressed; and "posts it to #leadership"
+ * promised on an ask that promised nothing.
  */
 
-import { Profiler } from "react";
-import { act, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -23,16 +20,8 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
-import { INBOX_SETTLE_MS } from "~/lib/useQuery.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
-import {
-  CLAIMANT,
-  CLAIMANT_HREF,
-  DUPLICATE,
-  DUPLICATE_HREF,
-  SHARED_KEY,
-} from "~/test/keyCollision.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -52,8 +41,18 @@ const EVERY_TOOL = [
 ];
 
 const JANE = {
-  login: "jane.founder",
-  grants: ["state:read", "work:write", "knowledge:write"],
+  login: "U0FOUNDER",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -117,9 +116,6 @@ function notice(id: string, extra: Record<string, unknown> = {}) {
     kind: "comment_added",
     subject_id: "t-91",
     subject_key: "PROD-91",
-    // A TASK COMMIT'S NOTICE NAMES ITS OWN SUBJECT as its task, as the
-    // engine sends it.
-    task: "t-91",
     excerpt: `something about ${id}`,
     actor: "cto",
     actor_kind: "agent",
@@ -201,12 +197,10 @@ function mount({
   answers = {},
   viewer = JANE,
   agents = [],
-  onCommit = () => {},
 }: {
   answers?: Record<string, Answer>;
   viewer?: Record<string, unknown>;
   agents?: Record<string, unknown>[];
-  onCommit?: () => void;
 } = {}) {
   const store = new Store();
   store.applyHealth({ status: "healthy", nodes: 1 } as never);
@@ -230,9 +224,7 @@ function mount({
         <ClientContext.Provider value={{ store, socket }}>
           <FrameReadings>
             <Router>
-              <Profiler id="inbox" onRender={onCommit}>
-                <Inbox />
-              </Profiler>
+              <Inbox />
             </Router>
           </FrameReadings>
         </ClientContext.Provider>
@@ -280,23 +272,24 @@ describe("the list", () => {
     expect(today.getByText("something about r-2")).toBeTruthy();
   });
 
-  // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the directory binds to
-  // a seat writes AS the seat, so the row is that seat by its name; anybody
-  // bound to none writes under their login, a name drawn as one; and what the
-  // engine did itself names nobody.
-  test("a row is drawn as whoever the record names", async () => {
+  // THE PERSON, NEVER THE CREDENTIAL.
+  // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the directory binds
+  // to a seat writes AS the seat, so their row draws as the seat — never as
+  // the credential they wrote through — and a principal bound to none writes
+  // under its own login, which is a name and is drawn as one.
+  test("a row is drawn as the seat a person writes as, and an unbound principal as its login", async () => {
     mount({
       answers: {
         work_inbox: inboxOf([
-          notice("r-1", { actor: "maya", actor_kind: "human" }),
-          notice("r-2", { actor: "ci.release", actor_kind: "operator" }),
-          notice("r-3", { actor: "", actor_kind: "system" }),
+          notice("r-1", { actor: "maya", actor_kind: "human", operator_id: "pat:t-1" }),
+          notice("r-2", { actor: "ci.bot", actor_kind: "operator" }),
         ]),
       },
     });
     await settle();
-    const who = [...document.querySelectorAll(".inbox-row-who")].map((n) => n.textContent);
-    expect(who).toEqual(["Maya Ops", "ci.release", "The engine"]);
+    expect(screen.getAllByText("Maya Ops").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("ci.bot").length).toBeGreaterThan(0);
+    expect(screen.queryByText("pat:t-1")).toBeNull();
   });
 
   // AND THE SENTENCE NAMES THEM AS THE ROW DOES. The engine writes a lead's
@@ -545,7 +538,7 @@ describe("the pane", () => {
     expect(reasonOf(snooze)).toContain("This is not a notice");
   });
 
-  test("the thread is read a page at a time and names whoever wrote each reply", async () => {
+  test("the thread is read a page at a time and names each comment's author", async () => {
     location.hash = "#/inbox?row=ask%3Ac-12";
     mount({
       answers: {
@@ -588,26 +581,18 @@ describe("the pane", () => {
 // THREE VIEWER STATES, three sentences, and every control drawn for each —
 // enabled only where the engine makes the change for this person.
 describe("who is looking", () => {
-  const NOBODY = {
-    login: "",
-    grants: [],
-    handle: "",
-    owner: "",
-    name: "",
-    kind: "",
-    acts: [],
-  };
+  const NOBODY = { login: "", grants: [], handle: "", owner: "", name: "", kind: "", acts: [] };
   const UNBOUND = {
-    login: "ci.release",
-    grants: ["state:read", "work:write"],
+    login: "ops.lead",
+    grants: ["work:write"],
     handle: "",
-    owner: "ci.release",
+    owner: "ops.lead",
     name: "",
     kind: "",
     acts: ["mark_inbox"],
   };
 
-  test("an anonymous reader is told to sign in, and nothing is asked on nobody's behalf", async () => {
+  test("an anonymous reader is told what would make this their inbox", async () => {
     const viewer = { ...NOBODY, anonymous: true };
     mount({ viewer, answers: { viewer } });
     await settle();
@@ -619,31 +604,19 @@ describe("who is looking", () => {
     expect(reasonOf(markAll)).toContain(WRITE_REASONS.anonymous);
   });
 
-  // AN UNBOUND READER HAS AN INBOX: the record kept under their login, which
-  // is what their own assistant's notices and the work that names them reach.
-  // Asked by the seat they do not hold, the screen was empty for them.
-  test("an unbound reader reads the inbox kept under their login", async () => {
+  // AN UNBOUND READER IS SOMEBODY: their record is their login, and what they
+  // follow and what names them reaches it. Asked by `handle`, they had no
+  // inbox here at all while their assistant wrote notices to their login.
+  test("a person bound to no seat reads the inbox kept under their login", async () => {
     mount({
       viewer: UNBOUND,
-      answers: {
-        viewer: UNBOUND,
-        work_inbox: inboxOf([notice("r-1", { excerpt: "the release moved" })], {
-          handle: "ci.release",
-        }),
-      },
+      answers: { viewer: UNBOUND, work_inbox: inboxOf([notice("r-1")]) },
     });
     await settle();
-    expect(screen.getByText(/binds you to no seat/)).toBeTruthy();
-    const own = asked.filter((a) => a.kind === "work_inbox" && !a.params.primary_only);
-    expect(own.length).toBeGreaterThan(0);
-    expect(own.every((a) => a.params.handle === "ci.release")).toBe(true);
-    expect(asked.some((a) => a.kind === "decisions")).toBe(true);
-    // NO QUESTION NAMES WHOSE RECORD IT IS by a `viewer=`.
-    expect(asked.some((a) => "viewer" in a.params)).toBe(false);
-    expect(screen.getAllByText("the release moved").length).toBeGreaterThan(0);
-    // AND THEY MARK IT AS THEMSELVES.
+    expect(screen.getByText(/not bound to a seat/)).toBeTruthy();
+    expect(asked.find((a) => a.kind === "work_inbox")?.params.handle).toBe("ops.lead");
     const markAll = screen.getByRole("button", { name: "Mark all read" });
-    expect(markAll.getAttribute("aria-disabled")).toBeNull();
+    expect(markAll.getAttribute("aria-disabled")).not.toBe("true");
   });
 
   test("a bound person the engine does not serve sees every control, disabled with the reason", async () => {
@@ -662,211 +635,5 @@ describe("who is looking", () => {
       expect(button.getAttribute("aria-disabled")).toBe("true");
       expect(reasonOf(button)).toContain(WRITE_REASONS.not_served);
     }
-  });
-});
-
-// A NOTICE IS ASKED AGAIN THE MOMENT THE READER'S RECORD MOVES. The frame
-// watches it and the engine sends `inbox_changed`; a list that waited out its
-// poll left a new notice unseen for up to half a minute.
-test("a move of the reader's own record asks the list again", async () => {
-  const { store } = mount();
-  await settle();
-  const own = () =>
-    asked.filter((a) => a.kind === "work_inbox" && !a.params.primary_only && a.params.handle);
-  const before = own().length;
-  act(() => {
-    store.applyInboxChanged({ handle: "jane" });
-  });
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, INBOX_SETTLE_MS + 100));
-  });
-  await settle();
-  expect(own().length).toBeGreaterThan(before);
-  expect(own().at(-1)?.params.handle).toBe("jane");
-});
-
-/** Seconds of the shared clock, one tick at a time, as the browser runs it. */
-function tick(times: number) {
-  for (let i = 0; i < times; i++) {
-    act(() => {
-      vi.advanceTimersByTime(1_000);
-    });
-  }
-}
-
-/** A seat on one round, last heard from `updated`. */
-function onOneRound(updated: string) {
-  return {
-    id: "a",
-    agent_id: "id-a",
-    role: "Dev A",
-    handle: "dev-a",
-    kind: "agent",
-    activity: "working",
-    live_call: {
-      turn_id: "t1",
-      phase: "execute",
-      iteration: 1,
-      model: "",
-      trigger: null,
-      prompt: "",
-      prompt_messages: null,
-      response: "",
-      input_tokens: 0,
-      output_tokens: 0,
-      total_tokens: 0,
-      tool_executions: null,
-      round_num: 3,
-      rounds: 3,
-      in_progress: true,
-      updated_at: updated,
-    },
-  };
-}
-
-// THE SCREEN IS NOT DRAWN ONCE A SECOND.
-//
-// It held the one-second clock for the attention queue and handed it to every
-// row for its "12m": a tick drew both groups, every row and the pane again, on
-// a screen a person opens and leaves open. The queue is read as a value now,
-// the day groups read only the company's midnight, and each cell reads its own
-// words — so ten seconds in which nothing crosses a threshold commit nothing.
-test("a tick of the clock draws nothing on the inbox", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
-  const now = Date.parse("2031-04-16T12:00:00Z");
-  vi.setSystemTime(now);
-  let commits = 0;
-  const { store } = mount({
-    answers: {
-      // FIVE MINUTES AGO AND MORE, so ten seconds cannot change a row's words:
-      // a row whose "4m" turned over would commit honestly, and this case is
-      // about the ones that did not.
-      work_inbox: inboxOf([
-        notice("r-5", { at: new Date(now - 5 * 60_000).toISOString() }),
-        notice("r-6", { at: new Date(now - 6 * 60_000).toISOString() }),
-      ]),
-    },
-    onCommit: () => {
-      commits += 1;
-    },
-  });
-  // A LIVE ROUND HEARD FROM JUST NOW, so the queue has a condition that reads
-  // the clock on every tick and finds nothing to raise.
-  act(() => {
-    store.applySeats([onOneRound(new Date(now - 1_000).toISOString())] as never);
-  });
-  await settle();
-  expect(screen.getAllByText("something about r-5").length).toBeGreaterThan(0);
-  expect(screen.getByText("5m")).toBeTruthy();
-
-  const settled = commits;
-  tick(10);
-  expect(commits).toBe(settled);
-});
-
-// A NOTICE LEADS TO THE TASK IT IS ABOUT, even under a key another task holds.
-//
-// A notice keeps the key its task held when it was written, and a key two
-// tasks hold opens the one that claimed it first — so a notice about the
-// duplicate sent its reader to the claimant. The engine says beside the stored
-// key when it opens another task, and that notice's link, its thread and its
-// reply go by the task's id.
-describe("a notice under a key two tasks hold", () => {
-  const paneLink = () => document.querySelector<HTMLAnchorElement>("a.inbox-pane-key");
-
-  test("each of two notices under one key leads to its own task", async () => {
-    mount({
-      answers: {
-        work_inbox: inboxOf([
-          notice("r-1", {
-            subject_id: DUPLICATE,
-            subject_key: SHARED_KEY,
-            task: DUPLICATE,
-            subject_key_collision: true,
-            excerpt: "about the duplicate",
-          }),
-          notice("r-2", {
-            subject_id: CLAIMANT,
-            subject_key: SHARED_KEY,
-            task: CLAIMANT,
-            excerpt: "about the claimant",
-          }),
-        ]),
-      },
-    });
-    await settle();
-    fireEvent.click(screen.getAllByText("about the duplicate")[0]!.closest("button")!);
-    await settle();
-    expect(paneLink()?.textContent).toBe(SHARED_KEY);
-    expect(paneLink()?.getAttribute("href")).toBe(DUPLICATE_HREF);
-    // ITS THREAD IS THE DUPLICATE'S, read by the address and never the key.
-    expect(asked.filter((a) => a.kind === "work_comments").at(-1)?.params.item).toBe(DUPLICATE);
-
-    fireEvent.click(screen.getAllByText("about the claimant")[0]!.closest("button")!);
-    await settle();
-    expect(paneLink()?.getAttribute("href")).toBe(CLAIMANT_HREF);
-    expect(asked.filter((a) => a.kind === "work_comments").at(-1)?.params.item).toBe(SHARED_KEY);
-  });
-
-  // A PRIORITISED NOTICE LEADS TO THE TASK, NOT TO THE PERSON WHOSE LIST IT IS:
-  // its subject is that PERSON and the key beside it is the task's, so read off
-  // the subject a duplicate at the top of somebody's list sent its reader to
-  // `#/work/<their handle>`.
-  test("a prioritised notice leads to the task it put first", async () => {
-    const prioritised = (id: string, task: string, excerpt: string, collision?: boolean) =>
-      notice(id, {
-        kind: "prioritised",
-        reason: "prioritised",
-        primary: true,
-        subject_id: "jane",
-        subject_key: SHARED_KEY,
-        task,
-        subject_key_collision: collision,
-        excerpt,
-      });
-    mount({
-      answers: {
-        work_inbox: inboxOf([
-          prioritised("r-1", DUPLICATE, "the duplicate is first", true),
-          prioritised("r-2", CLAIMANT, "the claimant is first"),
-        ]),
-      },
-    });
-    await settle();
-    fireEvent.click(screen.getAllByText("the duplicate is first")[0]!.closest("button")!);
-    await settle();
-    expect(paneLink()?.getAttribute("href")).toBe(DUPLICATE_HREF);
-    fireEvent.click(screen.getAllByText("the claimant is first")[0]!.closest("button")!);
-    await settle();
-    expect(paneLink()?.getAttribute("href")).toBe(CLAIMANT_HREF);
-  });
-
-  // AN ANSWER NAMES THE ASK'S TASK BY ITS ADDRESS: by the key, a choice made on
-  // a duplicate's ask was a comment on the claimant.
-  test("an option on a duplicate's ask answers on the duplicate", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
-    const ask = askItem();
-    mount({
-      answers: {
-        decisions: {
-          handle: "jane",
-          items: [
-            {
-              ...ask,
-              ask: { ...ask.ask, id: DUPLICATE, key: SHARED_KEY, key_collision: true },
-            },
-          ],
-          total: 1,
-          capped: false,
-        },
-      },
-    });
-    await settle();
-    expect(paneLink()?.getAttribute("href")).toBe(DUPLICATE_HREF);
-    fireEvent.click(screen.getByRole("button", { name: /Ship anyway/ }));
-    await settle();
-    expect(posted).toEqual([
-      { tool: "comment_on_work_item", args: { item: DUPLICATE, answers: "c-12", choice: "ship" } },
-    ]);
   });
 });

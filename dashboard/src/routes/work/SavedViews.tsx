@@ -40,18 +40,17 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { usePageCoverage, usePageLabels } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { Button, EmptyState, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
 import { ArrowRightGlyph, LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, seatByAddress, seatLookup, type OrgIndex } from "~/lib/seats.ts";
-import { useViewer } from "~/lib/viewer.ts";
+import { indexOrg, seatLookup, type OrgIndex } from "~/lib/seats.ts";
+
 import { PinButton } from "~/components/writes.tsx";
 import type { WorkView } from "~/protocol/index.ts";
 import { viewRun } from "~/lib/work.ts";
-import { fmtExact } from "~/lib/format.ts";
 
 /**
  * How a view's container is written, everywhere it is written.
@@ -119,27 +118,12 @@ function viewMarks(view: WorkView): ReactNode[] {
   // two are facts about the view itself.
   if (view.pinned) {
     marks.push(
-      <Tag key="pinned" variant="brand" title={pinnedTitle(view)}>
+      <Tag key="pinned" variant="brand" title="pinned by you — pins are per reader">
         pinned
       </Tag>,
     );
   }
   return marks;
-}
-
-/**
- * What a pinned view's mark says on hover: that the pin is the reader's own,
- * and what the engine counted for it — how many tasks it selects, or why it
- * no longer runs. A view that stopped compiling against the company (a field
- * it filters on was archived) looks exactly like a working one in every other
- * column, and the count is where the engine says so.
- */
-function pinnedTitle(view: WorkView): string {
-  const own = "pinned by you — pins are per reader";
-  if (view.count_refused) return `${own}. It no longer runs: ${view.count_refused}`;
-  if (view.count === undefined) return own;
-  const counted = `${fmtExact(view.count)}${view.count_capped ? "+" : ""}`;
-  return `${own}. It selects ${counted} ${view.count === 1 ? "task" : "tasks"}.`;
 }
 
 export function SavedViews({ id }: { id?: string }) {
@@ -151,20 +135,18 @@ export function SavedViews({ id }: { id?: string }) {
   // machine token's — falls through to the name itself rather than to nothing.
   const index = useMemo(() => indexOrg(org), [org]);
   const who = useMemo(() => seatLookup(index), [index]);
-  const viewer = useViewer();
   // THE VIEWER IS THE CALLER, and the engine knows who that is: every view the
   // reader can see, in whichever container it was saved, with THEIR pins
   // marked — the record kept under their own name, a seat or a login — and no
   // parameter that could choose somebody else's. AND EVERY CONTAINER — see the
   // file's doc.
-  //
-  // COUNTED, the question the sidebar's Pinned section asks: a pin's mark
-  // says how many tasks the view selects, and a pinned view that no longer
-  // runs against this company says why rather than looking fine. A caller with
-  // no record has no pins to count, and the engine refuses `counts` for them.
-  const views = useQuery("work_saved_views", viewer.owner !== "" ? { counts: true } : {}, {
-    pollMs: 120_000,
-  });
+  const views = useQuery(
+    "work_saved_views",
+    {},
+    {
+      pollMs: 120_000,
+    },
+  );
   usePageCoverage(views.data);
 
   const saved = useMemo(
@@ -177,95 +159,6 @@ export function SavedViews({ id }: { id?: string }) {
   // ONE VIEW IS THE BOARD RUNNING IT. There is no second renderer: a view is
   // a set of parameters for the tracker, so the page for one is the tracker
   // with `view=` set, and a copy here would be a second board to keep correct.
-  // THE COLUMNS HOLD STILL until the chart's answer about an owner moves, above
-  // the early return a hook may not follow: every row is memoised on this list,
-  // and one built inline drew every view on every render.
-  const columns = useMemo<GridColumn<WorkView>[]>(
-    () => [
-      {
-        key: "name",
-        header: "View",
-        sortValue: (v) => v.name,
-        cell: (v) => <TextCell icon="columns-3">{v.name}</TextCell>,
-      },
-      {
-        key: "type",
-        header: "Shape",
-        shrink: true,
-        sortValue: (v) => v.type,
-        cell: (v) => <Tag appearance="outline">{v.type}</Tag>,
-      },
-      {
-        key: "owner",
-        header: "Owner",
-        sortValue: (v) => v.owner ?? "",
-        // A SEAT IS AN AVATAR AND A NAME, not a handle in a chip: this
-        // column named a person and rendered them differently from
-        // every other column in the product that does.
-        //
-        // AND AN ABSENT OWNER IS NOT AN ABSENT PERSON, which is why
-        // `SeatCell`'s own dash is not what draws here: empty means the
-        // view is SHARED, a setting somebody chose.
-        cell: (v) =>
-          v.owner ? (
-            <OwnerCell owner={v.owner} index={index} />
-          ) : (
-            <span className="t-caption">shared</span>
-          ),
-      },
-      {
-        key: "container",
-        header: "Container",
-        sortValue: containerRef,
-        // WHERE IT LIVES, in a person's words, with the grammar's own
-        // spelling in the title for somebody writing a `view=` by hand.
-        cell: (v) => (
-          <span className="truncate" title={containerRef(v)}>
-            {containerLabel(v, who)}
-          </span>
-        ),
-      },
-      {
-        key: "marks",
-        header: "Marks",
-        // A HEADED COLUMN ANSWERS ON EVERY ROW. None of the three marks is
-        // set on a view somebody just saved, so this cell drew an empty
-        // span for most rows — and in a company where nobody has pinned or
-        // protected anything, for ALL of them: a column headed "Marks"
-        // blank the whole way down reads as a screen that failed to load
-        // its own data rather than as three settings nobody has turned on.
-        // `cells.tsx`'s rule is that an absence renders a mark saying
-        // WHICH absence it is, and the dash names all three rather than
-        // saying "no marks", because "none of the three" is the only form
-        // of it a reader can act on.
-        cell: (v) => {
-          const marks = viewMarks(v);
-          return marks.length > 0 ? (
-            <span className="row gap-1">{marks}</span>
-          ) : (
-            <EmptyValue label="Not the default, not protected, not pinned by you" />
-          );
-        },
-      },
-      {
-        key: "pin",
-        header: "Pin",
-        shrink: true,
-        // A PIN ON EVERY ROW, whatever container the view lives in: the
-        // inventory is where a person meets every view they could pin,
-        // and a view saved on a project board had no row here at all.
-        cell: (v) => (
-          <PinButton
-            key={v.id as string}
-            view={v.id as string}
-            name={v.name}
-            pinned={Boolean(v.pinned)}
-          />
-        ),
-      },
-    ],
-    [who, index],
-  );
   if (id) {
     if (views.loading && !views.data) return <PageNote>Loading the saved view…</PageNote>;
     // A FAILED READ IS NOT A MISSING VIEW. The inventory is the ONLY answer
@@ -291,9 +184,9 @@ export function SavedViews({ id }: { id?: string }) {
     // chart — so `ada-okonkwo` and "Ada Okonkwo" appeared on one page as if
     // they were two people. Resolved once, here, and handed to both.
     //
-    // FALLING BACK TO THE HANDLE rather than to nothing: an operator writing
-    // through the MCP surface owns views too and holds no seat, and their
-    // handle is still the thing to say.
+    // FALLING BACK TO THE NAME rather than to nothing: a person bound to no
+    // seat, or a machine token, keeps views under a login, and that login is
+    // still the thing to say.
     //
     // AND THE KIND TRAVELS WITH IT, because the badge draws the dashed ring
     // off it: a name alone makes a human owner look like an agent.
@@ -370,32 +263,93 @@ export function SavedViews({ id }: { id?: string }) {
           rowKey={(v) => v.id as string}
           rowHref={(v) => href(["work", "views", v.id as string])}
           defaultSort="name"
-          columns={columns}
+          columns={[
+            {
+              key: "name",
+              header: "View",
+              sortValue: (v) => v.name,
+              cell: (v) => <TextCell icon="columns-3">{v.name}</TextCell>,
+            },
+            {
+              key: "type",
+              header: "Shape",
+              shrink: true,
+              sortValue: (v) => v.type,
+              cell: (v) => <Tag appearance="outline">{v.type}</Tag>,
+            },
+            {
+              key: "owner",
+              header: "Owner",
+              sortValue: (v) => v.owner ?? "",
+              // A SEAT IS AN AVATAR AND A NAME, not a handle in a chip: this
+              // column named a person and rendered them differently from
+              // every other column in the product that does.
+              //
+              // AND AN ABSENT OWNER IS NOT AN ABSENT PERSON, which is why
+              // `SeatCell`'s own dash is not what draws here: empty means the
+              // view is SHARED, a setting somebody chose.
+              cell: (v) =>
+                v.owner ? (
+                  <OwnerCell owner={v.owner} index={index} />
+                ) : (
+                  <span className="t-caption">shared</span>
+                ),
+            },
+            {
+              key: "container",
+              header: "Container",
+              sortValue: containerRef,
+              // WHERE IT LIVES, in a person's words, with the grammar's own
+              // spelling in the title for somebody writing a `view=` by hand.
+              cell: (v) => (
+                <span className="truncate" title={containerRef(v)}>
+                  {containerLabel(v, who)}
+                </span>
+              ),
+            },
+            {
+              key: "marks",
+              header: "Marks",
+              // A HEADED COLUMN ANSWERS ON EVERY ROW. None of the three marks is
+              // set on a view somebody just saved, so this cell drew an empty
+              // span for most rows — and in a company where nobody has pinned or
+              // protected anything, for ALL of them: a column headed "Marks"
+              // blank the whole way down reads as a screen that failed to load
+              // its own data rather than as three settings nobody has turned on.
+              // `cells.tsx`'s rule is that an absence renders a mark saying
+              // WHICH absence it is, and the dash names all three rather than
+              // saying "no marks", because "none of the three" is the only form
+              // of it a reader can act on.
+              cell: (v) => {
+                const marks = viewMarks(v);
+                return marks.length > 0 ? (
+                  <span className="row gap-1">{marks}</span>
+                ) : (
+                  <EmptyValue label="Not the default, not protected, not pinned by you" />
+                );
+              },
+            },
+            {
+              key: "pin",
+              header: "Pin",
+              shrink: true,
+              // A PIN ON EVERY ROW, whatever container the view lives in: the
+              // inventory is where a person meets every view they could pin,
+              // and a view saved on a project board had no row here at all.
+              cell: (v) => (
+                <PinButton
+                  key={v.id as string}
+                  view={v.id as string}
+                  name={v.name}
+                  pinned={Boolean(v.pinned)}
+                />
+              ),
+            },
+          ]}
           loadedNote={`${saved.length} saved`}
         />
       </QueryState>
     </>
-  );
-}
-
-/**
- * A view's owner, wherever the screen names one.
- *
- * A SEAT is drawn as every column in the product draws one — its badge and
- * name, linking to its page, found by any address it has answered to. A name
- * NO SEAT ANSWERS TO is a LOGIN: a person the identity directory binds to no
- * seat keeps their personal views under it (`iam.RecordOwner`), and so does a
- * machine token. A login has no seat page, so it is named rather than drawn as
- * a link to one that would answer "no such seat".
- */
-function OwnerCell({ owner, index }: { owner: string; index: OrgIndex }) {
-  const seat = seatByAddress(index, owner);
-  return seat ? (
-    <SeatCell handle={owner} name={seat.name} kind={seat.kind} />
-  ) : (
-    <span className="mono truncate" title={`${owner} holds no seat`}>
-      {owner}
-    </span>
   );
 }
 
@@ -407,6 +361,27 @@ function OwnerCell({ owner, index }: { owner: string; index: OrgIndex }) {
  * dropped, and [ViewFacts] below is now what it was always named for: the
  * parameters the view actually carries.
  */
+/**
+ * A view's owner, wherever the screen names one.
+ *
+ * A SEAT is drawn as every column in the product draws one — its badge and
+ * name, linking to its page. A name NO SEAT ANSWERS TO is a LOGIN: a person the
+ * identity directory binds to no seat keeps their personal views under it
+ * (`iam.RecordOwner`), and so does a machine token. A login has no seat page,
+ * so it is named rather than drawn as a link to one that would answer "no such
+ * seat".
+ */
+function OwnerCell({ owner, index }: { owner: string; index: OrgIndex }) {
+  const seat = index.byHandle.get(owner);
+  return seat ? (
+    <SeatCell handle={owner} name={seat.name} kind={seat.kind} />
+  ) : (
+    <span className="mono truncate" title={`${owner} holds no seat`}>
+      {owner}
+    </span>
+  );
+}
+
 function viewFacts(view: WorkView, index: OrgIndex): Fact[] {
   const marks = viewMarks(view);
   return [

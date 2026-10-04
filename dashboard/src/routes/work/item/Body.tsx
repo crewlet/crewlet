@@ -38,10 +38,9 @@ import { renderMarkdown } from "~/lib/markdown.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { plural } from "~/lib/format.ts";
 import type { SeatRing } from "~/lib/seats.ts";
-import { itemAddress, itemPath } from "~/lib/work.ts";
 import type { LogRefusal, QueryRefusal, WorkItem, WorkSummary } from "~/protocol/index.ts";
-import type { QueryErrorCode } from "~/contract/errors.ts";
 import { useItemEdits } from "./edit.tsx";
+import { itemPath } from "~/lib/work.ts";
 
 /** The title, drawn as the page's heading and edited in place. */
 export function ItemTitle({ item }: { item: WorkItem }) {
@@ -229,6 +228,7 @@ export function Checklists({ item, chrome }: { item: WorkItem; chrome: RowChrome
                       </span>
                       <span className="task-check-name">{entry.name}</span>
                     </label>
+
                     {entry.assignee && (
                       <Assignee
                         handle={entry.assignee}
@@ -254,16 +254,15 @@ export function Checklists({ item, chrome }: { item: WorkItem; chrome: RowChrome
 export function Subtasks({
   rows,
   error,
-  refusal,
+  refusal = null,
   chrome,
   parent,
   ringOf,
   peek,
-  selected,
 }: {
   rows: WorkSummary[];
-  error?: QueryErrorCode | null;
-  /** Why the read was refused, beside `error` — what `QueryState` names. */
+  error?: string | null;
+  /** What the refusal said beyond its code — see `useQuery`. */
   refusal?: QueryRefusal | LogRefusal | null;
   chrome: RowChrome;
   /** The task a new sub-task is filed under; absent where none may be added. */
@@ -277,12 +276,6 @@ export function Subtasks({
    * would leave `[` and `]` walking a list this task is not in.
    */
   peek?: (row: WorkSummary) => void;
-  /**
-   * The ADDRESS of the task the rail holds (`itemAddress`), drawn as the open
-   * row. By the address and never the key: a key two tasks hold would light up
-   * both of the pair, or neither.
-   */
-  selected?: string;
 }) {
   const [adding, setAdding] = useState(false);
   if (error) {
@@ -291,7 +284,7 @@ export function Subtasks({
         <div className="task-subtasks-head">
           <span className="task-subtasks-title">Sub-tasks</span>
         </div>
-        <QueryState error={error} refusal={refusal ?? null} loading={false} />
+        <QueryState error={error} refusal={refusal} loading={false} />
       </section>
     );
   }
@@ -328,11 +321,7 @@ export function Subtasks({
         <a
           key={row.id}
           className="task-subtask"
-          // BY ITS ADDRESS — a key another task claimed first opens that one.
           href={href(itemPath(row))}
-          aria-current={
-            selected !== undefined && selected === itemAddress(row) ? "true" : undefined
-          }
           onClick={
             peek
               ? (event) => {

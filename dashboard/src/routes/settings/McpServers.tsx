@@ -11,20 +11,19 @@
  * each agent seat's `tool_sources` on the pushed org (`lib/mcpServers.ts`
  * `grantedSeats`). This component derives neither; it draws both.
  *
- * # Behind `config:read`, and the rest of the screen is not
+ * # Operator-only, and the rest of the screen is not
  *
  * The answer names nodes, launch commands and the first line of each failure,
  * so the engine refuses it to a reader without `config:read` — and that
- * refusal is drawn HERE, in this section's place and naming the grant, while
- * the tool catalogue around it (a push every reader gets) stays exactly as it
- * is.
+ * refusal is drawn HERE, in this section's place, while the tool catalogue
+ * around it (a push every reader gets) stays exactly as it is.
  */
 
 import { useMemo } from "react";
 import { Card, EmptyState, Tag } from "@crewlethq/ui";
 import { PlugGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, NumberCell } from "~/app/frame/cells.tsx";
 import { href } from "~/app/router.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
@@ -78,12 +77,11 @@ export function McpServers({
   data: McpServersStatusAnswer | null;
   loading: boolean;
   error: string | null;
-  /** Why the answer was refused — the query's own `refusal`, for [QueryState]. */
+  /** What the refusal said beyond its code — the grant that would admit. */
   refusal: QueryRefusal | LogRefusal | null;
   seats: Seat[];
 }) {
   const servers = useMemo(() => data?.servers ?? [], [data]);
-  const columns = useMemo(() => serverColumns(seats), [seats]);
 
   if (error || (loading && !data)) {
     return <QueryState error={error} refusal={refusal} loading={loading && !data} />;
@@ -111,87 +109,78 @@ export function McpServers({
           // this origin, which is what `servers/{name}` is.
           rowHref={(s) => href(["settings", "tools", "servers", s.name])}
           defaultSort="name"
-          columns={columns}
+          columns={[
+            {
+              key: "name",
+              header: "Server",
+              shrink: true,
+              sortValue: (s) => s.name,
+              cell: (s) => (
+                <span className="col" style={{ gap: 2 }}>
+                  <KeyCell value={s.name} />
+                  {!s.configured && <span className="t-caption">not in this configuration</span>}
+                </span>
+              ),
+            },
+            {
+              key: "state",
+              header: "State",
+              shrink: true,
+              sortValue: (s) => s.state,
+              cell: (s) => <ServerStateTag state={s.state} />,
+            },
+            {
+              key: "launch",
+              header: "Launch",
+              floor: "8rem",
+              drop: 2,
+              // ONE LINE, CUT AT ITS END. A launch is an identifier a reader
+              // matches against a config file, so a break inside
+              // `--read-only` or a URL (which `.clamp`'s `overflow-wrap:
+              // anywhere` made at 1280) is worse than an ellipsis; the whole
+              // launch is in the title and on the server's own page, which
+              // the row opens.
+              cell: (s) => (
+                <span className="col" style={{ gap: 2, minWidth: 0 }}>
+                  <span className="t-caption mono truncate" title={launchLine(s)}>
+                    {launchLine(s) || <span className="muted">not configured here</span>}
+                  </span>
+                  <span className="t-caption">
+                    {s.transport || "unknown transport"} · {s.shared ? "shared" : "one per seat"}
+                  </span>
+                </span>
+              ),
+            },
+            {
+              key: "reach",
+              header: "Reaches",
+              shrink: true,
+              drop: 1,
+              cell: (s) => <Reach server={s} seats={seats} />,
+            },
+            {
+              key: "tools",
+              header: "Tools",
+              shrink: true,
+              align: "right",
+              drop: 3,
+              // A COUNT ONLY WHERE AN INSTANCE STARTED: with none running, how
+              // many tools the server serves is unknown, not zero — a 0 beside
+              // a failing server reads as a server that offers nothing.
+              sortValue: (s) => toolsOf(s),
+              cell: (s) => <NumberCell value={toolsOf(s)} />,
+            },
+            {
+              key: "nodes",
+              header: "On each node",
+              floor: "10rem",
+              cell: (s) => <NodeCells server={s} />,
+            },
+          ]}
         />
       </Card>
     </div>
   );
-}
-
-/**
- * The server grid's columns, over the seats the Reaches cell counts — held
- * still by the caller's `useMemo` while the chart does not move, so a poll
- * that changed nothing redraws no row.
- */
-function serverColumns(seats: Seat[]): GridColumn<McpServerStatus>[] {
-  return [
-    {
-      key: "name",
-      header: "Server",
-      shrink: true,
-      sortValue: (s) => s.name,
-      cell: (s) => (
-        <span className="col" style={{ gap: 2 }}>
-          <KeyCell value={s.name} />
-          {!s.configured && <span className="t-caption">not in this configuration</span>}
-        </span>
-      ),
-    },
-    {
-      key: "state",
-      header: "State",
-      shrink: true,
-      sortValue: (s) => s.state,
-      cell: (s) => <ServerStateTag state={s.state} />,
-    },
-    {
-      key: "launch",
-      header: "Launch",
-      floor: "8rem",
-      drop: 2,
-      // ONE LINE, CUT AT ITS END. A launch is an identifier a reader
-      // matches against a config file, so a break inside
-      // `--read-only` or a URL (which `.clamp`'s `overflow-wrap:
-      // anywhere` made at 1280) is worse than an ellipsis; the whole
-      // launch is in the title and on the server's own page, which
-      // the row opens.
-      cell: (s) => (
-        <span className="col" style={{ gap: 2, minWidth: 0 }}>
-          <span className="t-caption mono truncate" title={launchLine(s)}>
-            {launchLine(s) || <span className="muted">not configured here</span>}
-          </span>
-          <span className="t-caption">
-            {s.transport || "unknown transport"} · {s.shared ? "shared" : "one per seat"}
-          </span>
-        </span>
-      ),
-    },
-    {
-      key: "reach",
-      header: "Reaches",
-      shrink: true,
-      drop: 1,
-      cell: (s) => <Reach server={s} seats={seats} />,
-    },
-    {
-      key: "tools",
-      header: "Tools",
-      shrink: true,
-      align: "right",
-      drop: 3,
-      // A COUNT ONLY WHERE AN INSTANCE STARTED: with none running, how
-      // many tools the server serves is unknown, not zero — a 0 beside
-      // a failing server reads as a server that offers nothing.
-      sortValue: (s) => toolsOf(s),
-      cell: (s) => <NumberCell value={toolsOf(s)} />,
-    },
-    {
-      key: "nodes",
-      header: "On each node",
-      floor: "10rem",
-      cell: (s) => <NodeCells server={s} />,
-    },
-  ];
 }
 
 /**

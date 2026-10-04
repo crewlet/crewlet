@@ -28,7 +28,7 @@
  * closes.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Segmented } from "./primitives.tsx";

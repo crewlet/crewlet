@@ -35,7 +35,7 @@ import { Router } from "./app/router.tsx";
 import { ClientContext } from "./lib/store-hooks.ts";
 import { bootTheme } from "./lib/prefs.ts";
 import { forgetRetiredKeys } from "./lib/storage.ts";
-import { LiveSocket, Store } from "./protocol/index.ts";
+import { LiveSocket, SessionKeepAlive, Store } from "./protocol/index.ts";
 
 // OURS, AFTER ALL OF THEIRS. There is no alias layer between the two: every
 // stylesheet here reads the design system's tokens under their own names, so
@@ -56,6 +56,9 @@ forgetRetiredKeys(() => localStorage);
 
 const store = new Store();
 const socket = new LiveSocket(store);
+// The session idles out after twelve hours with no request, and the socket is
+// not one: a tab that only listens keeps it alive here (`protocol/keepalive.ts`).
+new SessionKeepAlive(socket).start();
 socket.start();
 
 const host = document.getElementById("root");

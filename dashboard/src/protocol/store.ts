@@ -30,11 +30,8 @@ import type {
   Snapshot,
   ToolRow,
 } from "./types.ts";
-import { share } from "./share.ts";
-
 // RELATIVE, like every contract import in this directory: it is also built
-// alone as `protocol.js`, where the `~` alias does not exist. `MAX_EVENTS` is
-// the server's own feed length, held there by a Go gate.
+// alone as `protocol.js`, where the `~` alias does not exist.
 import { MAX_EVENTS } from "../contract/wire.ts";
 import type { EngineHealth } from "../contract/health.ts";
 
@@ -136,23 +133,24 @@ export interface StoreState {
    * anyway, so there is nothing for a snapshot to restore.
    */
   inboxMoves: Record<string, number>;
-  /**
-   * How many org projections this socket has been pushed.
-   *
-   * THE PUSH AS AN EVENT, beside `org` as a state. A chart write that landed is
-   * followed by an org push, so a screen holding something it read from the
-   * chart reads it again on one — and a write that changed only what the
-   * projection leaves out (a seat's model chain, its credentials, a unit's
-   * knowledge space) is pushed as a projection deep-equal to the last, which
-   * the store shares and so does not move. Keyed on `org`'s identity, those
-   * screens went on showing the settings from before the write. NOT part of
-   * what a snapshot replaces: a reconnect re-reads every chart read anyway,
-   * and the org builder checks its draft again on one.
-   */
-  orgPushes: number;
 }
 
 export type Slice = keyof StoreState;
+
+// What a snapshot replaces. `phases` is deliberately absent: a snapshot carries
+// payload-free feed rows and no phase payloads, so emitting it here would wake
+// every phase reader for an answer that did not move.
+const ALL_DATA_SLICES: Slice[] = [
+  "agents",
+  "events",
+  "sandboxes",
+  "org",
+  "tools",
+  "tokens",
+  "budget",
+  "schedules",
+  "health",
+];
 
 function emptyState(): StoreState {
   return {
@@ -170,7 +168,6 @@ function emptyState(): StoreState {
     authRejected: false,
     accessRefused: null,
     inboxMoves: {},
-    orgPushes: 0,
   };
 }
 
@@ -180,14 +177,15 @@ export class Store {
   /**
    * The push kinds this build does not know, each with how many arrived.
    *
-   * IGNORED AND COUNTED. A node on another build may push a kind this bundle
-   * was built before, and throwing on it — or applying it to a slice by a
-   * guess — would break a screen over a frame it has no use for. But the same
-   * fall-through is exactly what this build's own engine sending a kind its
-   * own client forgot looks like, which is the silent failure the e2e replay
-   * exists to catch: so it is kept here, and the replay asserts it is empty.
-   * Not a slice, because nothing renders it and a listener woken by a frame
-   * nobody can read would be woken for nothing.
+   * IGNORED AND COUNTED. A fleet part way through an upgrade has a node
+   * pushing a kind this bundle was built before, and throwing on it — or
+   * applying it to a slice by a guess — would break a screen over a frame it
+   * has no use for. But the same fall-through is exactly what this build's
+   * own engine sending a kind its own client forgot looks like, which is the
+   * silent failure the e2e replay exists to catch: so it is kept here, and
+   * the replay asserts it is empty. Not a slice, because nothing renders it
+   * and a listener woken by a frame nobody can read would be woken for
+   * nothing.
    */
   readonly unknownPushes = new Map<string, number>();
 
@@ -223,24 +221,6 @@ export class Store {
     };
   }
 
-  /**
-   * Replace one slice with what was pushed, SHARED with what it held
-   * (`./share.ts`), and say whether anything moved.
-   *
-   * A push is an answer like any other — parsed afresh off the wire — so a
-   * spend rollup pushed after every phase handed the spend tables a new object
-   * for every seat and every turn, and every row of both was drawn again for
-   * the one turn that finished. Shared, a push that changed nothing moves no
-   * version and wakes nobody, and one that changed something keeps the objects
-   * of everything it did not change.
-   */
-  private replace<K extends Slice>(slice: K, next: StoreState[K]): boolean {
-    const kept = share(this.state[slice], next);
-    if (kept === this.state[slice]) return false;
-    this.state[slice] = kept;
-    return true;
-  }
-
   private emit(...slices: Slice[]): void {
     for (const slice of slices) this.versions[slice] = (this.versions[slice] ?? 0) + 1;
     const called = new Set<() => void>();
@@ -257,29 +237,21 @@ export class Store {
 
   applySnapshot(snap: Snapshot | null | undefined): void {
     if (!snap) return;
-    // ONLY THE SLICES IT MOVED are announced: a reconnect's snapshot is mostly
-    // what this tab already holds, and announcing every slice redrew every
-    // screen for it. `phases` is never among them — a snapshot carries
-    // payload-free feed rows and no phase payloads.
-    const moved: Slice[] = [];
-    const put = <K extends Slice>(slice: K, next: StoreState[K]) => {
-      if (this.replace(slice, next)) moved.push(slice);
-    };
-    put("agents", snap.agents ?? []);
-    put("events", (snap.events ?? []).slice(0, MAX_EVENTS));
-    put("sandboxes", snap.sandboxes ?? []);
-    put("org", snap.org ?? {});
-    put("tools", snap.tools ?? []);
-    if (snap.tokens && snap.tokens.totals) put("tokens", snap.tokens);
-    put("budget", snap.budget ?? null);
+    this.state.agents = snap.agents ?? [];
+    this.state.events = (snap.events ?? []).slice(0, MAX_EVENTS);
+    this.state.sandboxes = snap.sandboxes ?? [];
+    this.state.org = snap.org ?? {};
+    this.state.tools = snap.tools ?? [];
+    if (snap.tokens && snap.tokens.totals) this.state.tokens = snap.tokens;
+    this.state.budget = snap.budget ?? null;
     // A bare list here, unlike the push's `{schedules: […]}` object.
-    if (snap.schedules) put("schedules", snap.schedules);
+    if (snap.schedules) this.state.schedules = snap.schedules;
     // NOT `connected`. That belongs to the transport, which knows whether the
     // socket is open; deriving it from a payload's contents meant a snapshot
     // arriving over the degraded REST fallback announced a live connection
     // that did not exist.
-    if (snap.health) put("health", snap.health);
-    if (moved.length > 0) this.emit(...moved);
+    if (snap.health) this.state.health = snap.health;
+    this.emit(...ALL_DATA_SLICES);
   }
 
   /**
@@ -287,10 +259,8 @@ export class Store {
    *
    * By the id and nothing else. They were merged by ROLE NAME, which is prose:
    * two seats sharing a name both took every overlay either of them moved, so
-   * each card rendered whatever the other was last doing. The handle is no
-   * better a key — a rename moves it while the overlays already in flight were
-   * cut before it — and the id, derived from the handle a seat was created
-   * under, is the one value a rename leaves where it was.
+   * each card rendered whatever the other was last doing. The id is what the
+   * engine sends on an overlay, and it names exactly one seat.
    *
    * An overlay for a seat the roster does not carry is DROPPED rather than
    * appended as a row of its own. A seat reaches this list through the roster
@@ -312,14 +282,12 @@ export class Store {
         byID.set(row.agent_id, row);
       }
     }
-    // A PATCH THAT RESTATES WHAT THE ROW SAYS MOVES NOTHING: an overlay is
-    // pushed twice per tool-loop round, and a round that changed only one seat
-    // re-sends the others' state as it was.
-    const merged = this.state.agents.map((a) => {
+    if (byID.size === 0) return;
+    this.state.agents = this.state.agents.map((a) => {
       const patch = byID.get(a.agent_id);
       return patch ? { ...a, ...patch } : a;
     });
-    if (this.replace("agents", merged)) this.emit("agents");
+    this.emit("agents");
   }
 
   /**
@@ -331,58 +299,56 @@ export class Store {
    */
   applySeats(rows: AgentRow[] | unknown): void {
     if (!Array.isArray(rows)) return;
-    // Keep the live overlay each seat already carries, matched by AGENT ID —
-    // which is what a renamed seat still carries when its handle and name
-    // have both moved.
+    // Keep the live overlay each seat already carries — the config payload is
+    // static config and knows nothing about what a seat is doing right now —
+    // matched by AGENT ID, never by the name two seats may share.
     const live = new Map(this.state.agents.map((a) => [a.agent_id, a]));
-    const roster = (rows as AgentRow[]).map((row) => {
+    this.state.agents = (rows as AgentRow[]).map((row) => {
       const current = live.get(row.agent_id);
       return current ? { ...current, ...row } : row;
     });
-    if (this.replace("agents", roster)) this.emit("agents");
+    this.emit("agents");
   }
 
   applySandboxes(list: SandboxEntry[] | null | undefined): void {
+    this.state.sandboxes = list ?? [];
     // `agents` too: a seat's effective state folds in whether it is parked on
     // a sandbox question, so a sandbox move is a seat move.
-    if (this.replace("sandboxes", list ?? [])) this.emit("sandboxes", "agents");
+    this.emit("sandboxes", "agents");
   }
 
   applyTokens(rollup: Rollup | null | undefined): void {
     if (!rollup) return;
-    if (this.replace("tokens", rollup)) this.emit("tokens");
+    this.state.tokens = rollup;
+    this.emit("tokens");
   }
 
   applyBudget(budget: OrgBudget | null | undefined): void {
-    if (this.replace("budget", budget ?? null)) this.emit("budget");
+    this.state.budget = budget ?? null;
+    this.emit("budget");
   }
 
   applySchedules(payload: { schedules?: ScheduleRow[] } | null): void {
     if (!payload) return;
     // Applied only when present: the push carries the CONFIGURED rows and
     // nothing else, so an absent key means "unchanged" rather than "empty".
-    if (payload.schedules && this.replace("schedules", payload.schedules)) {
-      this.emit("schedules");
-    }
+    if (payload.schedules) this.state.schedules = payload.schedules;
+    this.emit("schedules");
   }
 
   applyOrg(org: OrgProjection | null | undefined): void {
-    // EVERY PUSH IS COUNTED, one deep-equal to the last included — see
-    // `orgPushes` — while `org` moves only when the projection did.
-    this.state.orgPushes += 1;
-    if (this.replace("org", org ?? {})) this.emit("org", "orgPushes");
-    else this.emit("orgPushes");
+    this.state.org = org ?? {};
+    this.emit("org");
   }
 
   applyTools(tools: ToolRow[] | null | undefined): void {
-    if (this.replace("tools", tools ?? [])) this.emit("tools");
+    this.state.tools = tools ?? [];
+    this.emit("tools");
   }
 
   applyHealth(health: EngineHealth | null | undefined): void {
-    const connected = !!health && health.status !== "unknown";
-    const moved = this.replace("health", health ?? { status: "unknown" });
-    if (!moved && connected === this.state.connected) return;
-    this.state.connected = connected;
+    this.state.health = health ?? { status: "unknown" };
+    this.state.connected = !!health && health.status !== "unknown";
     this.emit("health");
   }
 
@@ -414,12 +380,6 @@ export class Store {
     if (this.state.accessRefused === next) return;
     this.state.accessRefused = next;
     this.emit("health");
-  }
-
-  /** Count one frame whose `kind` this build does not dispatch. */
-  noteUnknownPush(kind: unknown): void {
-    const name = typeof kind === "string" ? kind : JSON.stringify(kind ?? null);
-    this.unknownPushes.set(name, (this.unknownPushes.get(name) ?? 0) + 1);
   }
 
   setAuthRejected(value: boolean): void {
@@ -457,5 +417,11 @@ export class Store {
         this.emit("phases");
       }
     }
+  }
+
+  /** Count one frame whose `kind` this build does not dispatch. */
+  noteUnknownPush(kind: unknown): void {
+    const name = typeof kind === "string" ? kind : JSON.stringify(kind ?? null);
+    this.unknownPushes.set(name, (this.unknownPushes.get(name) ?? 0) + 1);
   }
 }

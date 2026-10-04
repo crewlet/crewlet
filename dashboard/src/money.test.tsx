@@ -22,7 +22,7 @@
  *     which is what a browser actually runs.
  */
 
-import { cleanup, render, screen, waitFor } from "~/test/inCase.ts";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 

@@ -854,15 +854,15 @@ export interface BudgetsAnswer {
 // ---------------------------------------------------------------------------
 
 /**
- * The company's SETTINGS document as the configuration surface serves it,
- * REDACTED: a credential field holds a whole `${VAR}` reference or the mask
+ * The company document as the configuration surface serves it, REDACTED: a
+ * credential field holds a whole `${VAR}` reference or the mask
  * `__redacted__`, never a value.
  *
- * NO SEATS AND NO UNITS. The org chart left this document for a log of its
- * own (`/chart`, [ChartRead]), and `/config` refuses a body carrying one by
- * name. A seat's email, model chain, token budget, contact identities, tool
- * credentials and schedules are read from the chart, with its runtime half
- * where the reader may have it.
+ * WHERE EVERYTHING THE PROJECTION DOES NOT CARRY IS READ. `/org` is
+ * anonymous, so it carries a charter, a tree, the budgets and each seat's
+ * RESOLVED chain and tool sources ([OrgProjection]); a seat's email, authored
+ * `llm` fields, contact identities, tool credentials, integration blocks and
+ * schedules live here instead, behind the `config:read` grant.
  *
  * A SUPERSET, deliberately open. Only the fields a screen reads are named, and
  * the index signature keeps every other key the engine writes — including the
@@ -874,28 +874,64 @@ export interface CompanyDocument {
   mission?: string;
   vision?: string;
   policies?: string[];
+  roles?: ConfigRole[];
+  units?: ConfigUnit[];
   integrations?: Record<string, unknown>;
   providers?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
 /**
- * A `token_budget:` mapping, as `config.TokenBudget` and `org.TokenCeilings`
- * write it: the most one scope may spend in each calendar window on the
- * company clock. A window with no key has no ceiling; the engine refuses a 0
- * rather than reading it as unlimited. The company's own sits in the settings
- * document, and a seat's in its chart runtime half ([SeatRuntime]).
+ * A `token_budget:` mapping, as `config.TokenBudget` writes it: the most one
+ * scope may spend in each calendar window on the company clock. A window with
+ * no key has no ceiling; the engine refuses a 0 rather than reading it as
+ * unlimited.
  */
 export type TokenBudget = {
   readonly [P in (typeof BUDGET_WINDOWS)[number]["period"]]?: number;
 };
 
+/** One seat in the company document, as `config.Role` writes it. */
+export interface ConfigRole {
+  name: string;
+  kind?: string;
+  handle?: string;
+  email?: string;
+  /** A root seat's home unit: the engine MOVES the seat into it. */
+  unit?: string;
+  goal?: string;
+  backstory?: string;
+  responsibilities?: string[];
+  behavioral_guidelines?: string[];
+  manages?: string[];
+  workers?: string[];
+  /** This seat's own ceilings, per calendar window; absent is uncapped. */
+  token_budget?: TokenBudget;
+  llm?: PhaseLLM;
+  llm_review?: ProviderKeys;
+  llm_subagent?: ProviderKeys;
+  llm_auxiliary?: ProviderKeys;
+  llm_judge?: ProviderKeys;
+  llm_sandbox?: ProviderKeys;
+  /** Unset means the company default, so this is three-valued. */
+  learning_enabled?: boolean | null;
+  /** A human seat's identities: one per surface, keyed by [HumanContactKey]. */
+  contact?: Record<string, string>;
+  availability?: string;
+  /** Server name to variable name to a `${VAR}` reference or the mask. */
+  mcp_env?: Record<string, Record<string, string>>;
+  sandbox?: Record<string, unknown>;
+  placement?: Record<string, unknown>;
+  integrations?: ConfigRoleIntegrations;
+  schedules?: ScheduleSpec[];
+  [key: string]: unknown;
+}
+
 /**
  * The identities a human seat's `contact` holds, as `org.HumanContact` names
  * them: a Slack member ID, a Mattermost USERNAME (the key says user id, the
  * value is the name a mention renders), an Atlassian account ID, a GitHub
- * login and a GitLab username. A human seat may hold none: the engine admits
- * it, and the chart check reports it as `seat_unreachable`.
+ * login and a GitLab username. The engine refuses a human seat with none.
  */
 export type HumanContactKey =
   | "slack_user_id"
@@ -904,49 +940,8 @@ export type HumanContactKey =
   | "github_login"
   | "gitlab_username";
 
-// ---------------------------------------------------------------------------
-// The org chart (`/chart`)
-// ---------------------------------------------------------------------------
-
-/**
- * A seat's RUNTIME half, as the org chart carries it: everything about the
- * seat only the engine reads — its model chain, budget, contact identities,
- * credentials, sandbox cell, placement, worker grants, schedules and its own
- * vendor identities.
- *
- * THE ENGINE'S OWN SHAPE, `org.Role` with the chart's row fields cleared, and
- * OPAQUE to the chart domain: it travels as bytes and `internal/org` owns both
- * ends. So it is not the company file's shape — the model chain is one list
- * per phase (`llm`, `llm_review`, …) rather than a per-phase mapping, and a
- * seat's own Slack, Mattermost and GitHub identities sit at the top level
- * rather than under `integrations`. Deliberately open: a key this build does
- * not name is carried, never dropped, because a content write REPLACES the
- * half it states.
- *
- * ABSENT from every answer that was not asked for it with `?runtime=true`, or
- * whose reader may not read it — and the answer's own `runtime` flag says
- * which, so a seat with no runtime and a reader who was not shown one are
- * never the same shape.
- */
-export interface SeatRuntime {
-  contact?: Record<string, string>;
-  availability?: string;
-  /** This seat's own ceilings, per calendar window; absent is uncapped. */
-  token_budget?: TokenBudget;
-  llm?: ProviderKeys;
-  llm_review?: ProviderKeys;
-  llm_subagent?: ProviderKeys;
-  llm_auxiliary?: ProviderKeys;
-  llm_judge?: ProviderKeys;
-  llm_sandbox?: ProviderKeys;
-  workers?: string[];
-  learning_enabled?: boolean | null;
-  /** Server name to variable name to a `${VAR}` reference. */
-  mcp_env?: Record<string, Record<string, string>>;
-  sandbox?: Record<string, unknown>;
-  placement?: Record<string, unknown>;
-  slack?: { bot_token?: string; signing_secret?: string; [key: string]: unknown };
-  mattermost?: { bot_token?: string; username?: string; channel?: string; [key: string]: unknown };
+/** A seat's own integration blocks, as `config.RoleIntegrations` writes them. */
+export interface ConfigRoleIntegrations {
   github?: {
     tier?: string;
     repos?: string[];
@@ -957,144 +952,40 @@ export interface SeatRuntime {
     webhook_secret?: string;
     [key: string]: unknown;
   };
-  schedules?: ScheduleSpec[];
+  slack?: { bot_token?: string; signing_secret?: string; channel?: string; [key: string]: unknown };
+  mattermost?: { bot_token?: string; username?: string; channel?: string; [key: string]: unknown };
+  jira?: { project?: string; [key: string]: unknown };
+  confluence?: { space?: string; [key: string]: unknown };
   [key: string]: unknown;
 }
 
-/** A unit's runtime half: the credentials its direct agent members inherit, its schedules. */
-export interface UnitRuntime {
-  mcp_env?: Record<string, Record<string, string>>;
-  schedules?: ScheduleSpec[];
-  [key: string]: unknown;
-}
-
-/**
- * One seat as `/chart` serves it (`internal/api/chartapi/read.go`).
- *
- * ADDRESSED BY ITS HANDLE, which every reference — a unit's `lead`, a
- * `manages:` entry — names it by; `name` is prose a person reads. Every field a
- * content write takes is here, because a write is full post-state.
- */
-export interface ChartSeat {
-  handle: string;
-  kind?: string;
-  /** The unit key it sits in; absent at the org root. */
-  unit?: string;
-  name?: string;
-  email?: string;
-  backstory?: string;
-  goal?: string;
-  responsibilities?: string[];
-  behavioral_guidelines?: string[];
-  project?: string;
-  space?: string;
-  /** Addresses it used to answer to, which references written earlier still resolve through. */
-  former_handles?: string[];
-  /**
-   * The handle it was CREATED under — its identity, which no rename moves and
-   * the chart never issues again. Absent until its first rename, while it
-   * still answers to that handle.
-   */
-  origin_handle?: string;
-  runtime?: SeatRuntime;
-}
-
-/** One unit as `/chart` serves it. Addressed by its KEY; `name` is prose. */
-export interface ChartUnit {
-  key: string;
-  name?: string;
+/** One unit in the company document, as `config.Unit` writes it. */
+export interface ConfigUnit {
+  name: string;
   type?: string;
+  /**
+   * The unit's KEY and STABLE IDENTITY, which a name is not — a rename moves
+   * nothing keyed on this. The engine mints it from the name on every write
+   * that stores a unit without one, so every stored unit carries it; [OrgUnit]
+   * carries the same value as `id`.
+   */
+  id?: string;
   purpose?: string;
+  lead?: string;
   goals?: string[];
-  /** The unit key it sits under; absent at the org root. */
-  parent?: string;
-  /** The AUTHORED lead's handle; absent where the unit inherits one. */
-  lead?: string;
   channel?: string;
+  knowledge?: string[];
+  /** Inherited by the unit's direct AGENT members; a seat's own values win. */
+  mcp_env?: Record<string, Record<string, string>>;
+  /** The tracker project this unit owns. Vendor-neutral, and guarded. */
   project?: string;
+  /** The knowledge container this unit writes pages in. Guarded. */
   space?: string;
-  knowledge_refs?: string[];
-  former_keys?: string[];
-  /** The key it was CREATED under: its identity, as a seat's `origin_handle` is. */
-  origin_key?: string;
-  runtime?: UnitRuntime;
-}
-
-/**
- * What a chart read reports about itself: the level it was SERVED at and the
- * position it is true as of — `STREAM@generation:seq`, a string, because the
- * sequence is a 64-bit number a JSON float would round.
- */
-export interface ChartAnswer {
-  level: ReadLevel;
-  position: string;
-  /** Absent rather than zero when the broker could not say how far behind this node is. */
-  lag?: number;
-}
-
-/** `GET /chart`: the whole chart. */
-export interface ChartRead {
-  units: ChartUnit[];
-  seats: ChartSeat[];
-  /** Every seat's AUTHORED `manages:` list, by handle. */
-  manages: Record<string, string[]> | null;
-  /** Every unit's authored lead, by key. */
-  leads: Record<string, string> | null;
-  answer: ChartAnswer;
-  /** Whether the runtime half was served: false for a reader who was not asked for it or may not read it. */
-  runtime: boolean;
-}
-
-/** `GET /chart/seats/{handle}`. */
-export interface ChartSeatRead {
-  seat: ChartSeat;
-  manages: string[] | null;
-  answer: ChartAnswer;
-  runtime: boolean;
-}
-
-/** `GET /chart/units/{key}`. */
-export interface ChartUnitRead {
-  unit: ChartUnit;
-  children: ChartUnit[];
-  seats: ChartSeat[];
-  answer: ChartAnswer;
-  runtime: boolean;
-}
-
-/**
- * What a chart WRITE answers when it did not fail: `applied` (200 — this node
- * has applied it, so the next read here sees it) or `pending` (202 — durable
- * at `position`, not applied here yet). The third outcome, `unknown`, is a 503
- * whose envelope carries `outcome: "unknown"` beside `op_id` — which a refusal
- * never does: retry with the SAME id, never a fresh one.
- */
-export interface ChartWriteResult {
-  outcome: "applied" | "pending" | "unknown";
-  position: string;
-  op_id: string;
-  /** What the record was about, as `{k: kind, i: address}`. */
-  objects?: { k: string; i: string }[] | null;
-  detail?: string;
-}
-
-/** One operation of a structural batch (`POST /chart/batch`), as `internal/chart/batch.go` reads it. */
-export interface ChartOperation {
-  kind:
-    | "create_unit"
-    | "create_seat"
-    | "move"
-    | "set_lead"
-    | "set_kind"
-    | "set_manages"
-    | "rename"
-    | "remove";
-  object: { kind: "unit" | "seat"; id: string };
-  parent?: string;
-  lead?: string;
-  to?: string;
-  seat_kind?: "agent" | "human";
-  manages?: string[];
+  integrations?: { jira?: { project?: string }; confluence?: { space?: string } };
+  roles?: ConfigRole[];
+  children?: ConfigUnit[];
+  schedules?: ScheduleSpec[];
+  [key: string]: unknown;
 }
 
 /**
@@ -1165,12 +1056,7 @@ export interface DryRunResult {
   /** The revision the draft was validated against. */
   base_revision_id: string;
   warnings: ConfigWarning[] | null;
-  /** ABSENT from any engine whose revisions carry the SETTINGS only: the
-   *  hierarchy came from `roles:` and `units:`, which are the org chart's own
-   *  domain, and an engine that answered an empty one would be telling this
-   *  client the company has no seats. A check without it leaves the authored
-   *  tree standing — see `overlay` in `~/lib/seats.ts`. */
-  derived?: Derived;
+  derived: Derived;
 }
 
 /** `201` from a configuration write that stored and activated a revision. */
@@ -1178,41 +1064,47 @@ export interface WriteResult {
   revision_id: string;
   epoch: number;
   warnings: ConfigWarning[] | null;
-  /** ABSENT from any engine whose revisions carry the SETTINGS only, for
-   *  [DryRunResult.derived]'s reason. It was once required here — a caller
-   *  that wanted the new chart after a save read it back from a second
-   *  request the answer already carried — and the chart it named moved to a
-   *  domain of its own, so the answer stopped carrying one. */
-  derived?: Derived;
+  /** The hierarchy the stored document derives to, as `configapi` writes it
+   *  beside the revision id on every 201. It was missing from this shape,
+   *  which is how a caller that wanted the new chart after a save came to
+   *  read it back from a second request the answer already carried. */
+  derived: Derived;
 }
 
 // ---------------------------------------------------------------------------
 // Org, tools, schedules
 // ---------------------------------------------------------------------------
 
-/**
- * One phase's model chain on a seat's runtime half, as `org.ProviderKeys`
- * marshals it: a STRING for one provider, an ARRAY for a fallback chain.
+/** The `llm:` field of a seat, in every shape `config.PhaseLLM` accepts:
  *
- * NEVER THE PER-PHASE MAPPING. The company file accepts
- * `llm: {default: fast, judge: tiny}`, and the engine lowers it into one field
- * per phase (`llm`, `llm_judge`, …) before a seat is stored, so the chart —
- * the only place this browser reads a seat's runtime from — never serves one.
- */
+ *      llm: fast                        one provider for every phase
+ *      llm: [fast, backup]              a fallback chain for every phase
+ *      llm: {default: fast, judge: tiny} a chain per phase
+ *
+ *  A phase left unset in the mapping form falls back to `default`. */
 export type ProviderKeys = string | string[];
+export type PhaseLLM =
+  | ProviderKeys
+  | {
+      default?: ProviderKeys;
+      review?: ProviderKeys;
+      subagent?: ProviderKeys;
+      auxiliary?: ProviderKeys;
+      judge?: ProviderKeys;
+      sandbox?: ProviderKeys;
+    };
 
 /**
- * One seat on the `state:read` org projection (`/org`, the snapshot's `org`
- * key and the `org` push), as `internal/api`'s `OrgSeat` writes it.
+ * One seat on the ANONYMOUS org projection (`/org`, the snapshot's `org` key
+ * and the `org` push), as `internal/api`'s `OrgSeat` writes it.
  *
- * AN EXPLICIT SHAPE, never a marshal of the config's own role. The projection
- * used to be `config.Role` verbatim, so every field a role gained reached
- * every reader the day it landed: contact identities, per-seat credentials,
- * placement labels and sandbox setup commands among them. What is NOT here is
- * read from the org chart (`lib/chartReads.ts`, `useSeatSetup`): `email` from
- * the seat's own row, and `contact`, the authored `llm_*` fields,
- * `schedules`, `integrations` and `mcp_env` from its RUNTIME half, which the
- * chart serves only to a `config:read` reader.
+ * AN EXPLICIT PUBLIC SHAPE, never a marshal of the config's own role. The
+ * projection used to be `config.Role` verbatim, so every field a role gained
+ * reached anonymous readers the day it landed: contact identities, per-seat
+ * credentials, placement labels and sandbox setup commands among them. What
+ * is NOT here — `email`, `contact`, the authored `llm_*` fields,
+ * `schedules`, `integrations`, `mcp_env` — is read through the `config`
+ * query instead, as [CompanyDocument], which takes `config:read`.
  *
  * `llm` and `tool_sources` are RESOLVED by the engine, never the authored
  * fields of the same name: a client re-running the precedence between a flat
@@ -1220,9 +1112,10 @@ export type ProviderKeys = string | string[];
  * the grant rule between a shared server, a template and a unit's `mcp_env` —
  * would be a second implementation of a rule the engine already applies.
  *
- * `handle` is what the DOCUMENT declares, and empty where the engine derives
- * one from the name. The handle a seat actually runs under is
- * [DerivedSeat.handle]; this client never derives one of its own.
+ * `handle` is what the DOCUMENT declares — the engine mints one from the name
+ * on every write that stores a seat without one, and never moves it after. The
+ * handle a seat actually runs under is [DerivedSeat.handle]; this client never
+ * derives one of its own.
  */
 export interface OrgSeat {
   name: string;
@@ -1261,20 +1154,21 @@ export interface OrgSeat {
  * `project`, `space`, `mcp_env` and `schedules` are GUARDED and are not here:
  * `internal/api/orgprojection_test.go` classifies every field of `config.Unit`
  * and fails the build over an unclassified one. A screen that needs one of
- * them reads the org chart (`lib/chartReads.ts`).
+ * them reads the company document through the `config` query.
  */
 export interface OrgUnit {
   /**
-   * The unit's KEY — its declared `id`, or its name where it declares none —
-   * which is what the org chart addresses it by, what a `manages:` entry and a
-   * seat's `unit:` resolve, and what every route to a unit carries. `name` is
-   * prose and two units may share one, so nothing addresses a unit by it.
+   * The unit's KEY — its declared `id`, which the engine mints from the name
+   * where the document declares none — which is what a `manages:` entry and a
+   * seat's `unit:` resolve, what `/config/units/{id}` addresses, and what every
+   * route to a unit carries. `name` is prose and two units may share one, so
+   * nothing addresses a unit by it.
    */
   id: string;
   name: string;
   type?: string;
   purpose?: string;
-  /** The seat NAME the document declares as lead. Empty when it inherits one. */
+  /** The seat HANDLE the document declares as lead. Empty when it inherits one. */
   lead?: string;
   goals?: string[];
   channel?: string;
@@ -1352,9 +1246,9 @@ export interface DerivedSeat {
   /**
    * A root seat the engine moved into a unit because of its `unit:` reference.
    *
-   * Absent wherever `path` is: a company composed from the org chart's rows
-   * was written nowhere, so nothing was moved by a reference and "not moved"
-   * would be an answer rather than an absence. Read it as false.
+   * Absent wherever `path` is — the projection hands a reader no document to
+   * have been moved in, so "not moved" would be an answer rather than an
+   * absence. Read it as false.
    */
   placed_by_ref?: boolean;
   /** Handle of the primary manager, by the engine's own rule. "" when none. */
@@ -1367,22 +1261,15 @@ export interface DerivedSeat {
   auto_reports: string[] | null;
   /** The unit names whose change makes this seat onboard again. */
   onboarding_chain: string[] | null;
-  /**
-   * The handle the seat was CREATED under, present only once a rename moved
-   * it off it; with `former_handles` (newest first), the addresses a kept link
-   * may still carry. Absent for a seat never renamed.
-   */
-  origin_handle?: string;
-  former_handles?: string[] | null;
 }
 
 export interface DerivedUnit {
   /** Authored path; omitted from the `state:read` projection, as on a seat. */
   path?: string;
   /**
-   * The unit's KEY — what a `manages:` entry and a seat's placement resolve,
-   * and what the org chart addresses the unit by. `name` is prose and two
-   * units may share one, so a derived unit is placed on a node by this.
+   * The unit's KEY — what a `manages:` entry and a seat's placement resolve.
+   * `name` is prose and two units may share one, so a derived unit is matched
+   * to its authored unit by this.
    */
   id: string;
   name: string;
@@ -1395,17 +1282,14 @@ export interface DerivedUnit {
   channel_inherited: boolean;
   /** Handles of the direct members, after root seats were attached. */
   seats: string[] | null;
-  /** `origin_handle` and `former_handles`, for a unit's key. */
-  origin_key?: string;
-  former_keys?: string[] | null;
 }
 
 /**
  * One entry of a seat's or a unit's `schedules:`, as `org.Schedule` writes it.
  *
  * GUARDED, like everything else a seat's own configuration holds: it reaches
- * this client through the org chart (`lib/chartReads.ts`) or through
- * `/schedules`, never through the org projection.
+ * this client through the `config` query or through `/schedules`, never
+ * through the anonymous org projection.
  */
 export interface ScheduleSpec {
   name: string;

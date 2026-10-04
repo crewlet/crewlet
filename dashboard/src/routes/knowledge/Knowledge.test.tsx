@@ -18,22 +18,19 @@
  *  - AN ADDRESS NAMING NO MODE RUNS IN ONE THE ENGINE SERVES. With no
  *    embeddings provider that is Keyword, and the search waits for the probe
  *    to say so rather than running Hybrid and reporting its degradation.
- *  - WHO FILES HERE HAS FOUR STATES, read from the org chart — a unit's
- *    `space:` is guarded, so the org projection does not carry it — and
- *    each has its own sentence: a refusal names the grant it named, a node
- *    that could not answer is not a refusal of the reader, and a read still in
- *    flight says so. It was read from the company document, which holds no
- *    units any more, so it answered "no unit" for every container.
+ *  - WHO FILES HERE HAS FOUR STATES, and "needs config:read" is said
+ *    only to a reader who does not hold it — never to one whose read of
+ *    the company document is merely in flight.
  */
 
-import { cleanup, render, screen, waitFor } from "~/test/inCase.ts";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { ContainerPeek, Knowledge } from "./Knowledge.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import type { ChartRead } from "~/protocol/index.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -51,6 +48,11 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  try {
+    localStorage.clear();
+  } catch {
+    // no storage in this environment is fine
+  }
   vi.unstubAllGlobals();
   location.hash = "#/";
 });
@@ -203,42 +205,17 @@ function pageRow(n: number) {
   };
 }
 
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
+/** A signed-in reader holding `config:read`, which who files here is read under. */
+const READER = { login: "ana", owner: "ana", grants: ["state:read", "config:read"] };
 
-/** The org chart: two units, one filing into the container under another case. */
-const chart: ChartRead = {
-  units: [
-    { key: "engineering", name: "Engineering Unit", space: "eng", project: "ENG" },
-    { key: "sales", name: "Sales", space: "SALES" },
-  ],
-  seats: [],
-  manages: null,
-  leads: null,
-  answer: { level: "consistent_prefix", position: "CREWLET_CHART_LOG@1:4" },
-  runtime: false,
-};
-
-/**
- * Render the container rail over a socket answering the container and its
- * pages, and `/chart` as told — by default in flight for ever.
- */
+/** Render the container rail; `config` undefined leaves that read in flight. */
 function mountPeek(options: {
   rows: number;
   total: number;
   after?: string;
-  chart?: () => Response | Promise<Response>;
+  config?: unknown;
+  viewer?: unknown;
 }) {
-  const answer = options.chart ?? (() => new Promise<Response>(() => {}));
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL) =>
-      new URL(String(input)).pathname === "/chart" ? answer() : json({}),
-    ),
-  );
   const store = new Store();
   const socket = new LiveSocket(store);
   const asked: { what: string; params: Record<string, unknown> }[] = [];
@@ -255,13 +232,18 @@ function mountPeek(options: {
         total: options.total,
         after: options.after,
       });
+    if (what === "config")
+      return options.config === undefined ? new Promise(() => {}) : Promise.resolve(options.config);
+    if (what === "viewer") return Promise.resolve(options.viewer ?? READER);
     return Promise.resolve({});
   }) as typeof socket.query;
   render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <ContainerPeek id="ENG" />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <ContainerPeek id="ENG" />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
   return asked;
@@ -290,51 +272,26 @@ test("a container read whole says nothing about a window", async () => {
   expect(screen.getByText("creators, not editors")).toBeTruthy();
 });
 
-// A UNIT'S `space:` IS COMPARED CASE-INSENSITIVELY, because the engine
-// upper-cases a container key on the way in and whoever wrote the unit wrote
-// what they typed. The runtime half is not needed: `space` is on every row.
-test("the units whose space names the container are read from the chart", async () => {
-  mountPeek({ rows: 1, total: 1, chart: () => json(chart) });
-  expect(await screen.findByText("Engineering Unit")).toBeDefined();
-  // The control: a unit filing somewhere else is not named.
-  expect(screen.queryByText(/Sales/)).toBeNull();
-  expect(screen.queryByText(/Who files here/)).toBeNull();
-});
+test("who files here: a reader without the grant is told so, and one whose read is in flight is not", async () => {
+  mountPeek({ rows: 1, total: 1, viewer: { ...READER, grants: ["state:read"] } });
+  await waitFor(() =>
+    expect(screen.getByText("Who files here needs config:read to read")).toBeTruthy(),
+  );
 
-// THE LINK CARRIES THE UNIT'S KEY. It was built from the unit's NAME, which is
-// prose: here the unit is `engineering` and is called "Engineering Unit", so
-// the link reached a page that answered "no unit" — and where two units share
-// a name it reached whichever the page found first.
-test("the one unit filing here links to its page by its key", async () => {
-  mountPeek({ rows: 1, total: 1, chart: () => json(chart) });
-  const name = await screen.findByText("Engineering Unit");
-  expect(name.closest("a")?.getAttribute("href")).toBe("#/agents/teams/engineering");
-});
+  cleanup();
+  mountPeek({ rows: 1, total: 1 });
+  await waitFor(() => expect(screen.getByText("Who files here is still being read")).toBeTruthy());
+  expect(screen.queryByText(/needs config:read/)).toBeNull();
 
-test("a refused chart read names the grant the refusal named", async () => {
+  cleanup();
   mountPeek({
     rows: 1,
     total: 1,
-    chart: () => json({ error: "unauthorized", reason: "no_grant", grants: ["state:read"] }, 403),
+    config: { units: [{ name: "Engineering", space: "eng", project: "ENG" }] },
   });
-  expect(
-    await screen.findByText(
-      "Reading who files here needs state:read, which the credential you presented does not carry.",
-    ),
-  ).toBeDefined();
-  expect(screen.queryByText(/operator token/)).toBeNull();
-});
-
-test("a node that could not answer is not a refusal of the reader", async () => {
-  mountPeek({ rows: 1, total: 1, chart: () => json({ error: "unavailable" }, 503) });
-  expect(await screen.findByText("Who files here could not be read just now")).toBeDefined();
-  expect(screen.queryByText(/needs/)).toBeNull();
-});
-
-test("a read still in flight says so", async () => {
-  mountPeek({ rows: 1, total: 1 });
-  await waitFor(() => expect(screen.getByText("Who files here is still being read")).toBeTruthy());
-  expect(screen.queryByText(/needs/)).toBeNull();
+  // THE TITLE AND THE FACT: the unit that files here, named.
+  await waitFor(() => expect(screen.getAllByText("Engineering").length).toBe(2));
+  expect(screen.queryByText(/Who files here/)).toBeNull();
 });
 
 test("an address naming no mode runs in a mode the engine serves, never a degraded default", async () => {

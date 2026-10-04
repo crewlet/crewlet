@@ -52,28 +52,19 @@
  * cannot drift from the one on the card. A client-side count dressed as the
  * engine's is the one thing this product never does.
  *
- * # Every row is a change
+ * # Bookkeeping is not a change
  *
- * A chart apply that leaves a project's name, purpose and unit as they were
- * writes nothing (`tracker.Writer.applyChartProject` compares them first), and
- * the chart position a project is stamped with is never recorded as a delta —
- * so no row on this log is bookkeeping, and each one is drawn as the change it
- * is.
+ * A config activation re-declares every project and the tracker records the
+ * one thing that moved, the chart epoch. Those rows are folded into one quiet
+ * line by the engine ("Org chart re-applied to 3 projects") and the epoch is
+ * never printed — see `lib/work.ts` [foldChartReapplies].
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { href, useParam } from "~/app/router.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import {
-  appliedThrough,
-  Coverage,
-  HOLDS_UNAPPLIED,
-  INCOMPLETE,
-  unreadable,
-  unreadableRemedy,
-  type CoverageFacts,
-} from "~/components/work.tsx";
+import { Coverage, type CoverageFacts } from "~/components/work.tsx";
 import { Button, Card, EmptyValue, Select, Skeleton, Tag } from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
@@ -82,17 +73,20 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useClient, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
-import { fmtDateTime, fmtExact, plural, relTime } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
+import { fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { barsOver, useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
-import { describeChange, itemPath, subjectItem, type LabelContext } from "~/lib/work.ts";
-import { FEED_PAGE } from "./feed.tsx";
 import {
-  queryFailure,
-  type QueryFailure,
-  type WorkActivityAnswer,
-  type WorkActivityRecord,
-} from "~/protocol/index.ts";
+  describeChange,
+  foldChartReapplies,
+  reapplySentence,
+  type ChangeLine,
+  type LabelContext,
+  itemPath,
+  subjectItem,
+} from "~/lib/work.ts";
+import { FEED_PAGE } from "./feed.tsx";
+import type { WorkActivityAnswer, WorkActivityRecord } from "~/protocol/index.ts";
 
 /**
  * The window this screen offers.
@@ -157,12 +151,13 @@ export function HistoryView({
 }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
+  const now = useNow();
   const { socket } = useClient();
   const viewer = useViewer();
   // ALIGNED TO THE BUCKET, so the hour in progress is on the chart while it is
   // still being spent and the query changes once per bucket rather than once
   // per second — the rule `lib/range.ts` states for every chart's edges.
-  const range = useTimeRange(HISTORY_OFFER);
+  const range = useTimeRange(now, HISTORY_OFFER);
   const [kind, setKind] = useParam("kind", "");
   const [actor, setActor] = useParam("actor", "");
   const limit = embedded ? FEED_PAGE.board : FEED_PAGE.page;
@@ -195,8 +190,7 @@ export function HistoryView({
   const [olderKeys, setOlderKeys] = useState<Record<string, string>>({});
   const [cursor, setCursor] = useState("");
   const [paging, setPaging] = useState(false);
-  // THE WHOLE FAILURE, its refusal included — see [queryFailure].
-  const [pageFailure, setPageFailure] = useState<QueryFailure | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
 
   // A FILTER CHANGE IS A NEW QUERY, so the pages fetched under the old one go
   // with it — the rule the event log states at length (`routes/live`). Kept
@@ -214,7 +208,7 @@ export function HistoryView({
     setOlder([]);
     setOlderKeys({});
     setCursor("");
-    setPageFailure(null);
+    setPageError(null);
   }, [container, kind, actor, windowKey]);
 
   const live = useMemo(() => state.data?.records ?? [], [state.data]);
@@ -243,7 +237,7 @@ export function HistoryView({
   const loadOlder = useCallback(async () => {
     if (!next) return;
     setPaging(true);
-    setPageFailure(null);
+    setPageError(null);
     // THE FIRST PAGE IS FROZEN THE MOMENT A SECOND ONE IS ASKED FOR, and that
     // is not caching: the cursor this page resumes at was minted from the last
     // row of the first page at the instant it was read, so a poll that then
@@ -263,7 +257,7 @@ export function HistoryView({
       setOlderKeys((prev) => ({ ...prev, ...(page.keys ?? {}) }));
       setCursor(page.next_cursor ?? "");
     } catch (err) {
-      setPageFailure(queryFailure(err));
+      setPageError(err instanceof Error ? err.message : "query_failed");
     } finally {
       setPaging(false);
     }
@@ -387,7 +381,7 @@ export function HistoryView({
         {embedded && <Coverage answer={state.data} />}
         {records.length > 0 && (
           <span className="work-summary">
-            {`Showing the latest ${fmtExact(records.length)}`}
+            {`Showing the latest ${records.length.toLocaleString()}`}
             {more && (
               <>
                 {" · "}
@@ -431,6 +425,7 @@ export function HistoryView({
             noun="change"
             over="loaded"
             axis
+            now={now}
             label="Changes over this window"
           />
         ) : (
@@ -450,12 +445,23 @@ export function HistoryView({
         error={state.error}
         refusal={state.refusal}
         loading={state.loading}
-        empty={records.length ? undefined : emptyLog(state.data)}
+        empty={
+          records.length
+            ? undefined
+            : {
+                title: "Nothing changed in this window",
+                hint: "Widen the window, or take off a filter. A change is written when a seat or an operator writes to the tracker, so a company whose agents are idle has none.",
+              }
+        }
       >
         <div className="work-log">
-          {records.map((record) => (
-            <HistoryRow key={record.id} record={record} chrome={chrome} />
-          ))}
+          {foldChartReapplies(records).map((line) =>
+            line.kind === "record" ? (
+              <HistoryRow key={line.record.id} record={line.record} chrome={chrome} now={now} />
+            ) : (
+              <ReapplyRow key={line.id} line={line} now={now} />
+            ),
+          )}
         </div>
       </QueryState>
 
@@ -463,10 +469,10 @@ export function HistoryView({
           this replaces told a reader to narrow the window to see what came
           before this page — which moves the window's newest edge and reaches
           fewer, newer rows. */}
-      {(more || paging || pageFailure || head) && (
+      {(more || paging || pageError || head) && (
         <footer className="panel-foot">
-          {pageFailure ? (
-            <QueryState error={pageFailure.error} refusal={pageFailure.refusal} loading={false} />
+          {pageError ? (
+            <QueryState error={pageError} refusal={null} loading={false} />
           ) : (
             <>
               {more ? (
@@ -514,38 +520,32 @@ function PublishCoverage({ answer }: { answer?: CoverageFacts | null }) {
 }
 
 /**
- * What an answer with no rows says, which depends on whether it could read
- * everything it was asked about.
- *
- * NOTHING HAPPENED AND NOTHING COULD BE READ ARE OPPOSITE FACTS, and an empty
- * page is either. A node holding records this build cannot decode, or records
- * it has not applied yet, answers an empty window too — and "Nothing changed"
- * over that told a reader their company had been quiet when the changes were
- * there and unread. The shortfall is said in the coverage words
- * (`components/work.tsx`) the banner and the state bar use, so a reader who
- * has met "applied through 41 of 88" on one surface meets it here.
+ * A run of chart re-applications, as the one quiet line it is: what the engine
+ * did, to which projects, and never the epoch it did it at.
  */
-function emptyLog(answer: CoverageFacts | null | undefined): {
-  title: string;
-  hint: string;
-} {
-  if (answer?.complete === false) {
-    return {
-      title: "No change here could be read",
-      hint: `${INCOMPLETE}${unreadable(answer.incomplete)}, so an empty log is not a quiet one.${unreadableRemedy(answer.incomplete)}`,
-    };
-  }
-  const behind = appliedThrough(answer);
-  if (behind !== null) {
-    return {
-      title: "Nothing in this window has been applied here",
-      hint: `${HOLDS_UNAPPLIED} (${behind}), so a change in this window may not be listed until it catches up.`,
-    };
-  }
-  return {
-    title: "Nothing changed in this window",
-    hint: "Widen the window, or take off a filter. A change is written when a seat or an operator writes to the tracker, so a company whose agents are idle has none.",
-  };
+function ReapplyRow({
+  line,
+  now,
+}: {
+  line: Extract<ChangeLine, { kind: "reapply" }>;
+  now: number;
+}) {
+  return (
+    <div className="work-log-row work-log-quiet">
+      <span className="work-log-when" title={fmtDateTime(line.at)}>
+        {relTime(line.at, now)}
+      </span>
+      <span className="work-log-key">
+        <EmptyValue label="No work item" />
+      </span>
+      <span className="work-log-what" title={line.projects.join(", ")}>
+        {reapplySentence(line.projects)}
+      </span>
+      <span className="work-log-who">
+        <span className="truncate">the engine</span>
+      </span>
+    </div>
+  );
 }
 
 /**
@@ -607,20 +607,22 @@ export function actorName(record: WorkActivityRecord, chrome: LabelContext): str
 }
 
 /** One change, as the delta it was. */
-function HistoryRow({ record, chrome }: { record: WorkActivityRecord; chrome: LabelContext }) {
+function HistoryRow({
+  record,
+  chrome,
+  now,
+}: {
+  record: WorkActivityRecord;
+  chrome: LabelContext;
+  now: number;
+}) {
   return (
     <div className="work-log-row">
       <span className="work-log-when" title={fmtDateTime(record.at)}>
-        <ClockText read={(now) => relTime(record.at, now)} />
+        {relTime(record.at, now)}
       </span>
       <span className="work-log-key">
         {record.subject_key ? (
-          // THE SUBJECT'S ADDRESS, NOT ITS KEY. A change to a task whose key
-          // another task claimed first is drawn under that shared key, and the
-          // key opens the claimant — so every row of a duplicate's history
-          // led to somebody else's task. `subjectItem` reads the flag the
-          // engine sends beside the key, and the label stays the key a reader
-          // recognises.
           <a className="mono t-link" href={href(itemPath(subjectItem(record)))}>
             {record.subject_key}
           </a>
@@ -642,13 +644,11 @@ function HistoryRow({ record, chrome }: { record: WorkActivityRecord; chrome: La
           wrapped delta grow rather than overflow. */}
       <span className="work-log-what">{describeChange(record, chrome)}</span>
       <span className="work-log-who">
-        {/* THE PERSON, AND THE CREDENTIAL ON THE TITLE. A person the
-            directory binds to a seat writes AS that seat, so `actor` is who
-            the row is about and every other screen names them the same way;
-            `operator_id` is the credential the write came through — a
-            session, a machine token — which is the audit trail's half and
-            not a second name for the author. An agent's own turn carries
-            nothing a reader would ask about there. */}
+        {/* THE AUTHOR AS EVERY RECORD NAMES THEM (`iam.ActorFor`), and the
+            credential beside it on the title: `operator_id` is what the write
+            came through — a session, a machine token — which is the audit
+            trail's half and not a second name for the author. An agent's own
+            turn carries nothing a reader would ask about there. */}
         <span
           className="truncate"
           title={

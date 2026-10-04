@@ -9,7 +9,7 @@
  * instead, for a reader who could otherwise press it.
  */
 
-import { cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { SteerTurnButton } from "./writes.tsx";
@@ -25,11 +25,19 @@ vi.mock("~/lib/store-hooks.ts", () => ({
 vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
 const JANE: ViewerState = {
-  // A PERSON BOUND TO A SEAT, signed in: the seat is who the write is
-  // recorded as, and their record is kept under it.
-  login: "jane",
-  grants: ["work:write"],
-  operatesFleet: false,
+  login: "founder",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
+  operatesFleet: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",

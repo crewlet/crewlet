@@ -2,16 +2,12 @@
  * What is on a seat's plate — an agent's or a person's.
  *
  * TWO HALVES, AND THEY ARE NOT THE SAME READ. The list is `work_items
- * {assignee}`, which every reader of the company's work gets, and it is the
- * floor. The blocks under it are `work_my_work`, which the engine answers to
- * the seat's owner, to whoever leads them and to `fleet:operate` — so they are
- * asked for a person reading their own page and for a `fleet:operate` holder,
- * and a lead is pointed at My work, which asks the engine on their behalf.
- * One tab, because the question a reader has is "what is this seat doing",
- * and the answer is simply fuller when they are entitled to more of it.
- *
- * EVERY TASK IS OPENED BY ITS ADDRESS (`itemPath`): a key two tasks hold opens
- * the one that claimed it first, and the other is reached by its id.
+ * {assignee}`, which is ungated: every reader of this page gets it, and it is
+ * the floor. The blocks under it are `work_my_work`, which the engine answers
+ * to the record's owner, to whoever leads them and to `fleet:operate`, so they
+ * are asked for those readers ([mayReadRecord]). One tab, because the question a
+ * reader has is "what is this seat doing", and the answer is simply fuller
+ * when they are entitled to more of it.
  *
  * THE TRACKER'S OWN ROW AND THE PERSON'S OWN BLOCKS, imported rather than
  * redrawn: `components/work.tsx` states the rule — one renderer, screens pick
@@ -34,29 +30,31 @@ import {
 import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { itemPath, type ItemRef } from "~/lib/work.ts";
-import type { Seat } from "~/lib/seats.ts";
+import type { OrgIndex, Seat } from "~/lib/seats.ts";
+import { mayReadRecord } from "./profile.ts";
 import type { WorkItemsAnswer } from "~/protocol/index.ts";
-
-/** Where a task's page is, for every list on this tab — see the file's doc. */
-const taskHref = (row: ItemRef) => href(itemPath(row));
+import { itemPath } from "~/lib/work.ts";
 
 export function Work({
   seat,
+  index,
   work,
   chrome,
+  now,
 }: {
   seat: Seat;
+  index: OrgIndex;
   work: QueryResult<WorkItemsAnswer>;
   chrome: RowChrome;
+  now: number;
 }) {
   const handle = seat.handle;
   const viewer = useViewer();
-  // THE SEVEN CLAIMS, and only where the reader may have them — the same
-  // rule the person record follows: its owner, and `fleet:operate`, the
-  // admin path of the owner-or-lead rule (never `people:manage`, which opens
-  // directory rows and nobody's work).
-  const mayRead = viewer.operatesFleet || (viewer.handle !== "" && viewer.handle === handle);
+  // THE SEVEN CLAIMS, and only where the reader may have them — the rule the
+  // person record follows: its owner, whoever leads them, and `fleet:operate`,
+  // the admin path of the owner-or-lead rule (never `people:manage`, which
+  // opens directory rows and nobody's work).
+  const mayRead = mayReadRecord(viewer, index, handle);
   const mine = useQuery(
     "work_my_work",
     { handle },
@@ -98,7 +96,7 @@ export function Work({
           >
             <Card.Title as="h3">Assigned and open</Card.Title>
           </Card.Header>
-          <RowList rows={rows} chrome={chrome} hrefOf={taskHref} />
+          <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(itemPath(row))} />
         </Card>
       </QueryState>
 
@@ -126,6 +124,7 @@ export function Work({
                 <AskList
                   rows={mine.data?.asked_of_me ?? []}
                   decider={{ handle, name: viewer.handle === handle ? undefined : seat.name }}
+                  now={now}
                 />
               </HoldWrites>
             </Card>
@@ -138,16 +137,18 @@ export function Work({
             hint="Their own order, as they set it."
             total={mine.data?.totals?.priorities}
             rows={mine.data?.priorities ?? []}
+            now={now}
             chrome={chrome}
-            hrefOf={taskHref}
+            hrefOf={(row) => href(itemPath(row))}
           />
           <TaskBlock
             title="Collaborating"
             hint="Tasks they are named on without owning."
             total={mine.data?.totals?.collaborating}
             rows={mine.data?.collaborating ?? []}
+            now={now}
             chrome={chrome}
-            hrefOf={taskHref}
+            hrefOf={(row) => href(itemPath(row))}
           />
           <ChecklistClaims
             rows={mine.data?.checklist_items ?? []}
@@ -155,17 +156,10 @@ export function Work({
           />
         </>
       ) : (
-        // THE RULE, NOT A CREDENTIAL: "an operator credential shows it" was
-        // never the rule, and a lead is entitled to it — so a lead is pointed
-        // at My work, which asks the engine and shows what it answers.
         <p className="t-caption">
           Their own queue — what they mean to do first, the questions put to them and their
-          checklist items on other seats&apos; tasks — is theirs to read. It shows here to them and
-          to <code className="inline">fleet:operate</code>; if you lead them,{" "}
-          <a className="t-link prose-link" href={href(["me"], { handle })}>
-            open their day in My work
-          </a>
-          .
+          checklist items on other seats&apos; tasks — is theirs to read. Signing in as them, or as
+          somebody holding fleet:operate, shows it here.
         </p>
       )}
     </div>

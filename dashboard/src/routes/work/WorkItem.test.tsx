@@ -8,12 +8,10 @@
  * the wrong end, a zero where nobody wrote anything, a team's key where its
  * name belongs. The page is where the task's three histories meet: a turn card
  * that must say what the turn did and what the reviewer asked for, a thread
- * past its first page, and the one turn running on THIS task now. And a task
- * whose key another task claimed first is still ITSELF everywhere it is
- * reached from — its own page, its links and its sub-tasks.
+ * past its first page, and the one turn running on THIS task now.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 import { EMPTY_VALUE, LayerHost, ToastProvider } from "@crewlethq/ui";
@@ -38,17 +36,6 @@ import type {
   WorkProjectDetail,
   WorkRoutingAnswer,
 } from "~/protocol/index.ts";
-import {
-  CLAIMANT,
-  CLAIMANT_HREF,
-  CLAIMANT_TITLE,
-  DUPLICATE,
-  DUPLICATE_HREF,
-  DUPLICATE_TITLE,
-  SHARED_KEY,
-  collidingRows,
-  peekNow,
-} from "~/test/keyCollision.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -70,8 +57,18 @@ const EVERY_TOOL = [
 ];
 
 const JANE = {
-  login: "jane.founder",
-  grants: ["state:read", "work:write", "knowledge:write"],
+  login: "U0FOUNDER",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -262,7 +259,7 @@ function reasonOf(button: HTMLElement): string {
 
 /** The rail alone, read-only (no page write around it). */
 function rail(d: WorkItemDetail, p: WorkProjectDetail | null = project(), chrome = {}) {
-  return mount(<ItemRail detail={d} chrome={chrome} project={p} />);
+  return mount(<ItemRail detail={d} chrome={chrome} project={p} now={NOW} />);
 }
 
 /** The value cell of a rail row, found by its label. */
@@ -451,7 +448,7 @@ test("the cost is the task's own turns, tokens and agent time, and no price", as
     ["DT:tokens", "DD:79.6k"],
     ["DT:agent time", "DD:20m"],
   ]);
-  expect(container.textContent).not.toMatch(/[$€£]|USD/);
+  expect(container.textContent).not.toMatch(/[$€£]|USD|cost_usd/);
 
   cleanup();
   rail(detail());
@@ -628,9 +625,10 @@ test("a task with no relations draws no section", async () => {
 // through `pathOf`, the frame's one definition of where a page lives — and is
 // named by the page's own title.
 test("a linked page points at the page by its id and reads its title", async () => {
-  mount(<ItemRail detail={detail({ links: [{ kind: "page", other: "p-1" }] })} chrome={{}} />, {
-    answers: { page: { page: { id: "p-1", title: "Provisioner runbook" } } },
-  });
+  mount(
+    <ItemRail detail={detail({ links: [{ kind: "page", other: "p-1" }] })} chrome={{}} now={NOW} />,
+    { answers: { page: { page: { id: "p-1", title: "Provisioner runbook" } } } },
+  );
   await settle();
   const link = screen.getByText("Provisioner runbook").closest("a")!;
   expect(link.getAttribute("href")).toBe(href(pathOf({ kind: "page", id: "p-1" })));
@@ -861,6 +859,7 @@ test("a turn card shows the send-back notes", async () => {
           ],
         })}
         chrome={{ seatName: (h: string) => (h === "swe" ? "SWE" : h) }}
+        now={NOW}
       />
     </ol>,
   );
@@ -910,6 +909,7 @@ test("a failed turn marks the phase it broke in", async () => {
           tools: [{ name: "run_sandbox", calls: 1 }],
         })}
         chrome={{}}
+        now={NOW}
       />
     </ol>,
   );
@@ -932,7 +932,6 @@ test("a failed turn marks the phase it broke in", async () => {
 // working on another task, or one stopped mid-turn on this one, draws nothing.
 test("the live row appears only for a turn on this item", async () => {
   const on = (key: string, activity = "working") => ({
-    agent_id: "id-swe",
     handle: "swe",
     activity,
     turn: {
@@ -944,9 +943,9 @@ test("the live row appears only for a turn on this item", async () => {
     // THE SEVENTH ROUND IN FLIGHT: `round_num` is zero-based.
     live_call: { turn_id: "run-9", phase: "execute", round_num: 6, rounds_used: 6, max_rounds: 25 },
   });
-  expect(liveOn([on("ENG-9")] as never, { id: "t-1" })).toBeNull();
-  expect(liveOn([on("ENG-42", "stopped")] as never, { id: "t-1" })).toBeNull();
-  expect(liveOn([on("ENG-42")] as never, { id: "t-1" })?.handle).toBe("swe");
+  expect(liveOn([on("ENG-9")] as never, { id: "t-1", key: "ENG-42" })).toBeNull();
+  expect(liveOn([on("ENG-42", "stopped")] as never, { id: "t-1", key: "ENG-42" })).toBeNull();
+  expect(liveOn([on("ENG-42")] as never, { id: "t-1", key: "ENG-42" })?.handle).toBe("swe");
 
   mount(<WorkItemPage id="ENG-42" />, {
     agents: [on("ENG-42")],
@@ -977,26 +976,6 @@ test("the live row appears only for a turn on this item", async () => {
   expect(screen.queryByRole("link", { name: "Watch live" })).toBeNull();
 });
 
-// THE BODY IS NOT REBUILT ON A RE-RENDER. The page re-renders on every poll of
-// the item and every push about the seats, and a wrapper around the
-// description defined INSIDE a render is a new component type each time, so
-// React tears the subtree down and builds it again — a reader selecting a
-// sentence to copy lost the selection on the next push. Asserted on DOM node
-// identity, which is the only thing that tells a re-render from a remount.
-test("the description keeps its own DOM across a re-render", async () => {
-  const { store } = mount(<WorkItemPage id="ENG-42" />, {
-    answers: { work_item: detail({ task: task({ body: "the runbook is **here**" }) }) },
-  });
-  await settle();
-  const before = document.querySelector(".prose");
-  expect(before?.textContent).toContain("the runbook is here");
-  act(() => {
-    store.applySeats([{ agent_id: "id-swe", handle: "swe", activity: "idle" }] as never);
-  });
-  await settle();
-  expect(document.querySelector(".prose")).toBe(before);
-});
-
 // THE LIVE ROW NAMES THE ROUND AND THE PHASE THE SEAT'S PROFILE NAMES. It kept
 // a private reading of the live call that took the zero-based `round_num` raw
 // — no round at all during the first, one lower than the stepper and the peek
@@ -1004,7 +983,6 @@ test("the description keeps its own DOM across a re-render", async () => {
 // card's strip's words (`doingWords`), so a turn is described once.
 test("the live row counts rounds from one and names the phase running", async () => {
   const working = (live_call: Record<string, unknown>) => ({
-    agent_id: "id-swe",
     handle: "swe",
     activity: "working",
     turn: {
@@ -1041,7 +1019,6 @@ test("the live row says a sub-minute turn's seconds, as the profile does", async
   mount(<WorkItemPage id="ENG-42" />, {
     agents: [
       {
-        agent_id: "id-swe",
         handle: "swe",
         activity: "working",
         turn: {
@@ -1171,19 +1148,12 @@ test("the Woke panel spends no accent, and 'asks' is its own mark", async () => 
 // A READER WHO CANNOT CHANGE THE TASK SEES THE SAME PAGE, every control drawn
 // and disabled with the sentence that says what would change that — never a
 // hidden button, never a picker that silently does nothing — for each of the
-// readers who cannot act. An UNBOUND reader is not one of them by being
-// unbound: they act under their own login, so what holds them is what holds
-// anybody, the change the engine will not make for them.
+// three readers who cannot act.
 test.each([
   [
     "an anonymous reader",
-    { login: "", grants: [], handle: "", owner: "", name: "", acts: [] },
+    { login: "", grants: [], handle: "", owner: "", name: "", acts: [], anonymous: true },
     WRITE_REASONS.anonymous,
-  ],
-  [
-    "an unbound reader the engine does not serve",
-    { login: "ci.release", grants: ["state:read"], handle: "", owner: "ci.release", acts: [] },
-    WRITE_REASONS.not_served,
   ],
   ["a person the engine does not serve", { ...JANE, acts: [] }, WRITE_REASONS.not_served],
 ])("%s sees disabled controls with the reason", async (_who, viewer, reason) => {
@@ -1390,7 +1360,7 @@ test("a second Enter on the title sends one rename and reports no conflict", asy
 // org chart, and a peek that waited to be handed a resolver drew every handle
 // raw — the set-by lines included.
 test("the peek names a person, exactly as the page does", async () => {
-  const { container } = mount(<ItemPeek address="ENG-42" />, {
+  const { container } = mount(<ItemPeek itemKey="ENG-42" />, {
     answers: {
       work_item: detail({
         task: task({ assignee: "ada" }),
@@ -1415,11 +1385,10 @@ test("the peek names a person, exactly as the page does", async () => {
   expect(setBy.every((line) => line.includes("Ada Okonkwo"))).toBe(true);
 });
 
-// A LOGIN IS A PERSON, AND IS DRAWN AS ONE: somebody the identity directory
-// binds to no seat files under their own login (`iam.ActorFor`, kind
-// `operator`), which is in no chart, and takes the kind its writes carry.
-test("a reporter filed under a login is drawn with a person's circle", async () => {
-  const { container } = mount(<ItemPeek address="ENG-42" />, {
+// AN OPERATOR IS A PERSON, AND IS DRAWN AS ONE: the reporter a token filed as
+// is in no chart, and takes the kind its writes carry.
+test("an operator reporter is drawn with a person's circle", async () => {
+  const { container } = mount(<ItemPeek itemKey="ENG-42" />, {
     answers: {
       work_item: detail({
         task: task({ assignee: "ada", reporter: "founder" }),
@@ -1444,13 +1413,13 @@ test("a reporter filed under a login is drawn with a person's circle", async () 
   expect(chip!.querySelector(".crewlet-avatar--human")).not.toBeNull();
 });
 
-// ONE PERSON, ONE NAME ON ONE PAGE. A person the identity directory binds to a
-// seat files and changes AS that seat (`iam.ActorFor`: the actor is the seat,
-// kind `human`), so the reporter and every set-by line name them by the seat's
-// name — the same resolution the activity column makes. And the create itself
-// draws no set-by line: the Reporter row already says who filed it.
-test("a task a person filed names them in the reporter and set-by lines", async () => {
-  const { container } = mount(<ItemPeek address="ENG-42" />, {
+// ONE PERSON, ONE NAME ON ONE PAGE. A person the directory binds to a seat
+// files AS that seat (`iam.ActorFor`): the reporter and every set-by line name
+// the seat the record names, and the credential they wrote through rides
+// beside it rather than standing in for them. And the create itself draws no
+// set-by line: the Reporter row already says who filed it.
+test("a task a bound person filed names them in the reporter and set-by lines", async () => {
+  const { container } = mount(<ItemPeek itemKey="ENG-42" />, {
     answers: {
       work_item: detail({
         task: task({ reporter: "jane", priority: "high", assignee: "ada" }),
@@ -1460,6 +1429,7 @@ test("a task a person filed names them in the reporter and set-by lines", async 
             kind: "fields",
             actor: "jane",
             actor_kind: "human",
+            operator_id: "session:s-1",
             at: "2031-04-16T10:00:00Z",
             log_seq: 2,
             fields: { priority: { from: "normal", to: "high" } },
@@ -1469,6 +1439,7 @@ test("a task a person filed names them in the reporter and set-by lines", async 
             kind: "created",
             actor: "jane",
             actor_kind: "human",
+            operator_id: "session:s-1",
             at: "2031-04-16T09:00:00Z",
             log_seq: 1,
             fields: { assignee: { from: "", to: "ada" }, reporter: { from: "", to: "jane" } },
@@ -1480,6 +1451,7 @@ test("a task a person filed names them in the reporter and set-by lines", async 
   await settle();
   const reporter = rowValue("Reporter");
   expect(reporter.textContent).toContain("Jane Founder");
+  expect(reporter.textContent).not.toContain("session:s-1");
   const lines = [...container.querySelectorAll(".props-setby")].map((el) => el.textContent ?? "");
   expect(lines).toHaveLength(1);
   expect(lines[0]).toContain("set by Jane Founder");
@@ -1489,7 +1461,7 @@ test("a task a person filed names them in the reporter and set-by lines", async 
 // THE PEEK STATES EACH PROPERTY ONCE: its header is the identity and the state
 // marks, and every field is the rail's, in the same column.
 test("the peek states each property once", async () => {
-  const { container } = mount(<ItemPeek address="ENG-42" />);
+  const { container } = mount(<ItemPeek itemKey="ENG-42" />);
   await settle();
   expect(container.querySelector(".fact-line")).toBeNull();
   expect(screen.getAllByText("Status")).toHaveLength(1);
@@ -1500,16 +1472,11 @@ test("the peek states each property once", async () => {
 // A to task B, and a different object is a different mount.
 test("moving the rail to another task mounts a new body", async () => {
   location.hash = `#/work?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
-  // IN AN ASYNC ACT: the item's peek body is a lazy chunk, and a render that
-  // suspends on one inside a synchronous act is an act nobody awaited.
-  let container!: HTMLElement;
-  await act(async () => {
-    ({ container } = mount(
-      <PeekNeighbours>
-        <PeekHost />
-      </PeekNeighbours>,
-    ));
-  });
+  const { container } = mount(
+    <PeekNeighbours>
+      <PeekHost />
+    </PeekNeighbours>,
+  );
   // THE PEEK'S BODY IS A LAZY CHUNK, so it is waited for rather than settled.
   await waitFor(() => expect(container.querySelector(".object-head")).toBeTruthy(), {
     timeout: 5000,
@@ -1560,7 +1527,7 @@ test("a removed task is marked, and a live one carries no such mark", () => {
 });
 
 test("the removal note names its author and says it is reversible", () => {
-  render(<RemovedNote tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" }} />);
+  render(<RemovedNote tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" }} now={NOW} />);
   expect(screen.getByText(/ada/)).toBeTruthy();
   expect(screen.getByText(/reversible at any age/)).toBeTruthy();
 });
@@ -1569,100 +1536,8 @@ test("a task removed alongside its parent names the parent", () => {
   render(
     <RemovedNote
       tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z", removed_with: "ENG-1" }}
+      now={NOW}
     />,
   );
   expect(screen.getByText("ENG-1")).toBeTruthy();
-});
-
-// ---------------------------------------------------------------------------
-// Two tasks under one key
-// ---------------------------------------------------------------------------
-
-// A DUPLICATE'S OWN PAGE HANDS ITSELF ON BY ITS ID.
-//
-// The page is reached by the id — the key opens the task that claimed it
-// first — and everything it hands onward was built from the key: the way out
-// to the board reopened the claimant in the rail, and an edit would have
-// changed the claimant. It also says why its address is a uuid while its
-// header says ENG-7, which nothing did.
-test("a task whose key another claimed first hands itself on by its id", async () => {
-  mount(<WorkItemPage id={DUPLICATE} />, {
-    answers: {
-      work_item: detail({
-        task: task({ id: DUPLICATE, key: SHARED_KEY, title: DUPLICATE_TITLE }),
-        key_collision: true,
-      }),
-    },
-  });
-  await settle();
-  expect(screen.getByText("Key shared")).toBeTruthy();
-  // THE WAY OUT TO THE BOARD peeks the duplicate, by its id.
-  fireEvent.click(screen.getByRole("button", { name: `More for ${SHARED_KEY}` }));
-  fireEvent.click(await screen.findByRole("menuitem", { name: /Open on the board/ }));
-  await settle();
-  expect(peekNow()).toBe(`item:${DUPLICATE}`);
-  expect(location.hash.split("?")[0]).toBe("#/work/ENG");
-  // AND A CHANGE MADE HERE NAMES THE DUPLICATE: a comment by the key would
-  // have landed on the claimant.
-  expect(
-    asked.filter((a) => a.kind === "work_comments").every((a) => a.params.item === DUPLICATE),
-  ).toBe(true);
-});
-
-// AND THE CLAIMANT'S PAGE SAYS NOTHING OF IT: the key is its own.
-test("the task that claimed the key carries no shared-key mark", () => {
-  const { container } = render(<>{itemFlags(detail({ task: task({ key: SHARED_KEY }) }))}</>);
-  expect(container.textContent ?? "").not.toContain("Key shared");
-});
-
-// A TASK'S LINKS AND SUBTASKS OPEN TWO TASKS UNDER ONE KEY AS TWO. A link was
-// built from the other end's key and a subtask row from its own, so a task
-// linked to — or parent of — both holders of a key led to the claimant twice.
-test("links and subtasks to two tasks under one key open each as itself", async () => {
-  const [claimant, duplicate] = collidingRows();
-  const { container } = mount(<WorkItemPage id="ENG-9" />, {
-    answers: {
-      work_item: detail({
-        task: task({ id: "t-9", key: "ENG-9" }),
-        links: [
-          { kind: "linked", other: CLAIMANT, key: SHARED_KEY, title: CLAIMANT_TITLE },
-          {
-            kind: "linked",
-            other: DUPLICATE,
-            key: SHARED_KEY,
-            key_collision: true,
-            title: DUPLICATE_TITLE,
-          },
-        ],
-      }),
-      work_items: { items: [claimant, duplicate], groups: [], complete: true },
-    },
-  });
-  const hrefs = (root: ParentNode) =>
-    [...root.querySelectorAll("a")]
-      .map((a) => a.getAttribute("href"))
-      .filter((h) => h === CLAIMANT_HREF || h === DUPLICATE_HREF);
-  const subtasks = () => container.querySelector<HTMLElement>(".task-subtasks");
-  await waitFor(() => expect(subtasks()).toBeTruthy());
-  // ONE OF EACH in the sub-tasks and one of each among the relations.
-  expect(hrefs(subtasks()!).sort()).toEqual([CLAIMANT_HREF, DUPLICATE_HREF].sort());
-  expect(hrefs(container).filter((h) => h === DUPLICATE_HREF).length).toBe(2);
-  expect(hrefs(container).filter((h) => h === CLAIMANT_HREF).length).toBe(2);
-
-  // AND A SUBTASK PEEKS BY THE SAME ADDRESS IT LINKS TO, and the one the rail
-  // holds is drawn as the open one — matched on its key, both of the pair
-  // would light up, or neither.
-  const subtask = (title: string) =>
-    [...subtasks()!.querySelectorAll<HTMLAnchorElement>("a.task-subtask")].find((a) =>
-      a.textContent?.includes(title),
-    )!;
-  fireEvent.click(subtask(DUPLICATE_TITLE));
-  await waitFor(() => expect(peekNow()).toBe(`item:${DUPLICATE}`));
-  await waitFor(() => expect(subtask(DUPLICATE_TITLE).getAttribute("aria-current")).toBe("true"));
-  expect(subtask(CLAIMANT_TITLE).getAttribute("aria-current")).toBeNull();
-
-  fireEvent.click(subtask(CLAIMANT_TITLE));
-  await waitFor(() => expect(peekNow()).toBe(`item:${SHARED_KEY}`));
-  await waitFor(() => expect(subtask(CLAIMANT_TITLE).getAttribute("aria-current")).toBe("true"));
-  expect(subtask(DUPLICATE_TITLE).getAttribute("aria-current")).toBeNull();
 });

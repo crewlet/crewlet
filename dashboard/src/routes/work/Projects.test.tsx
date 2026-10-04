@@ -15,7 +15,7 @@
  * meant to open a panel beside the list rather than leave it.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Projects } from "./Projects.tsx";

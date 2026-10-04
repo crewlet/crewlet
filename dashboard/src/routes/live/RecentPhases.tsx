@@ -53,7 +53,6 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
-import { queryFailure, type QueryFailure } from "~/protocol/index.ts";
 import type { EventRecord, PhasesPage } from "~/protocol/index.ts";
 
 /**
@@ -75,6 +74,7 @@ export function RecentPhases({
   failed,
   runningKeys,
   nameOf,
+  now,
 }: {
   /** The seat's handle, or "" for the company. */
   seat: string;
@@ -88,6 +88,7 @@ export function RecentPhases({
   runningKeys: readonly string[];
   /** A seat's name, from whatever a record names it by. */
   nameOf: (r: PhaseRecord) => string;
+  now: number;
 }) {
   const { socket } = useClient();
   const engine = useEngineHealth();
@@ -101,8 +102,7 @@ export function RecentPhases({
   // is a different list, and its pages must not be appended to this one.
   const [older, setOlder] = useState<{ for: string; pages: PhasesPage[] }>({ for: "", pages: [] });
   const [paging, setPaging] = useState(false);
-  // THE WHOLE FAILURE, its refusal included — see [queryFailure].
-  const [pageFailure, setPageFailure] = useState<QueryFailure | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
   const pages = older.for === seat ? older.pages : [];
   const last = pages.at(-1) ?? first.data;
 
@@ -142,7 +142,7 @@ export function RecentPhases({
     const next = last?.next;
     if (!next?.before_id) return;
     setPaging(true);
-    setPageFailure(null);
+    setPageError(null);
     try {
       const page = await socket.query("phases", {
         limit: PHASE_PAGE,
@@ -152,7 +152,7 @@ export function RecentPhases({
       });
       setOlder((prev) => ({ for: seat, pages: [...(prev.for === seat ? prev.pages : []), page] }));
     } catch (err) {
-      setPageFailure(queryFailure(err));
+      setPageError(err instanceof Error ? err.message : "query_failed");
     } finally {
       setPaging(false);
     }
@@ -256,13 +256,11 @@ export function RecentPhases({
         key: "when",
         header: "When",
         shrink: true,
-        // THE CELL READS THE CLOCK ITSELF, so the columns hold still across a
-        // tick and only the cells whose words moved are drawn again.
-        cell: (r) => <DateCell at={r.at} />,
+        cell: (r) => <DateCell at={r.at} now={now} />,
         sortValue: (r) => Date.parse(r.at) || 0,
       },
     ],
-    [nameOf],
+    [nameOf, now],
   );
 
   const exhausted = !!last && (last.exhausted || !last.next?.before_id);
@@ -317,8 +315,8 @@ export function RecentPhases({
         />
       )}
       <div className="live-card-foot">
-        {pageFailure ? (
-          <QueryState error={pageFailure.error} refusal={pageFailure.refusal} loading={false} />
+        {pageError ? (
+          <QueryState error={pageError} refusal={null} loading={false} />
         ) : exhausted ? (
           <span className="t-caption">That is the beginning of the retained record.</span>
         ) : (

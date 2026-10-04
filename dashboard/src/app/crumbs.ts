@@ -56,7 +56,7 @@ export interface Crumb {
 /**
  * The label keys a seat's page publishes besides its name: the unit the seat
  * sits in — its KEY, which is the Teams address (`lib/seats.ts`'s
- * `unitPath`), and its path as a reader names it ("Engineering · Core") — and
+ * `unitRoute`), and its path as a reader names it ("Engineering · Core") — and
  * whether it is an agent or a person. The KEY and never the name: two units
  * may share a name, and a crumb addressed by one led to whichever came first.
  *

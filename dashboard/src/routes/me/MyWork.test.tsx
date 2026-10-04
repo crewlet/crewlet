@@ -25,7 +25,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { MyWork } from "./MyWork.tsx";
@@ -34,16 +34,6 @@ import { usePageCoverage, useSectionCounts } from "~/app/Shell.tsx";
 import type { MeSection } from "~/app/routes.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { Store, type QueryName, type WorkSummary } from "~/protocol/index.ts";
-import {
-  CLAIMANT,
-  CLAIMANT_HREF,
-  CLAIMANT_TITLE,
-  DUPLICATE,
-  DUPLICATE_HREF,
-  DUPLICATE_TITLE,
-  SHARED_KEY,
-  collidingRows,
-} from "~/test/keyCollision.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { QueueCountProvider, queueCountParams } from "~/lib/useQueueCount.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
@@ -119,9 +109,6 @@ function serving(answers: Partial<Record<QueryName, Answer>>, org: unknown = fla
     const answer = answers[what as QueryName];
     return typeof answer === "function" ? answer(params ?? {}) : (answer ?? {});
   });
-  // A REAL STORE beside the scripted socket: the day's reads are asked again
-  // when the store says the reader's inbox moved, so a client with no store is
-  // a client this screen cannot be mounted on.
   vi.mocked(useClient).mockReturnValue({ store: new Store(), socket: { query } } as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
   vi.mocked(useOrg).mockReturnValue(org as never);
@@ -199,15 +186,25 @@ const emptyDay = {
 const noWork = { items: [], groups: [], total_hint: 0, complete: true };
 
 const ada = {
-  login: "ada.okonkwo",
-  grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
+  login: "ops-1",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
   handle: "ada",
   owner: "ada",
   name: "Ada Okonkwo",
   kind: "human",
 };
 
-/** A reader the directory binds to no seat: their record is their login. */
+/** A principal the directory binds to no seat: their record is their login. */
 const unbound = {
   login: "token:ops-7",
   grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
@@ -217,7 +214,7 @@ const unbound = {
   kind: "",
 };
 
-/** Nobody at all. */
+/** Nobody signed in. */
 const anonymous = { login: "", grants: [], handle: "", owner: "", name: "", kind: "" };
 
 /** One task with the fields a row and a band are decided from. */
@@ -297,10 +294,10 @@ test("an explicit handle names whose day it is, in the third person", async () =
 });
 
 // AN UNBOUND READER HAS A DAY OF THEIR OWN, kept under their login — the name
-// their assistant writes their priorities and marks under. The screen asked
-// for "mine" by the SEAT and showed an unbound reader nothing but a sentence
-// about binding, while the record sat under a name it never asked for. It shows
-// the day now, and says what binding would add above it.
+// their assistant writes their priorities and marks under. Asked for by the
+// SEAT, an unbound reader was shown nothing but a sentence about binding while
+// the record sat under a name the screen never asked for. It shows the day
+// now, and says what binding would add above it.
 test("an unbound reader's own day is the one kept under their login", async () => {
   const query = serving({
     viewer: unbound,
@@ -327,7 +324,7 @@ test("nobody signed in is a different sentence from an unbound reader", async ()
   serving({ viewer: anonymous });
   mount();
   await waitFor(() => expect(screen.getByText(/Nobody is signed in/)).toBeTruthy());
-  expect(screen.queryByText(/to no seat/)).toBeNull();
+  expect(screen.queryByText(/not bound to a seat/)).toBeNull();
 });
 
 // THE DAY MOVES WITH THE READER'S INBOX. The record that hands somebody work,
@@ -335,7 +332,7 @@ test("nobody signed in is a different sentence from an unbound reader", async ()
 // notice, so the frame that moves their inbox is what asks the day again —
 // every read the strip and the banner are drawn from, not only one of them,
 // since a tab count that moved while the banner did not is two answers about
-// one change. The poll behind it is half a minute or more.
+// one change.
 test("the reader's own day is asked again when their inbox moves", async () => {
   const store = new Store();
   const answers: Partial<Record<QueryName, unknown>> = {
@@ -844,11 +841,9 @@ test("a page of asks under a larger total says which ones it holds", async () =>
 // ---------------------------------------------------------------------------
 
 // WHAT THIS PERSON IS WAITING ON is the work list held to the ASKER, by the
-// ONE name their questions are recorded under (`iam.ActorFor`): the seat for a
-// person the directory binds to one, whether they asked through a colleague's
-// turn or their own assistant. There is no second name for a `viewer=` to
-// supply — the engine refuses that key on every question — so the section and
-// its count ask by `asked_by` alone, on anybody's day.
+// one name the engine records them under (`iam.ActorFor`): a person bound to a
+// seat asks AS the seat whichever credential they asked through, so there is
+// no second name to ask under and no `viewer` to send beside it.
 test("asked by me asks for the person's questions by the one name they are recorded under", async () => {
   location.hash = "#/me/asked-by-me?handle=rui";
   const query = serving({
@@ -1157,24 +1152,6 @@ test("no derived hierarchy draws no line, rather than an empty one", async () =>
   expect(groups).toContain("Yours");
 });
 
-// AN UNBOUND READER'S OWN DAY IS A ROW TOO. It is kept under their login, which
-// no seat in the chart names, so without a row of its own the control's value
-// named nothing it offered — and "Pick somebody" wrote the parameter's own
-// fallback, which is that same login, so it silently refused.
-test("an unbound reader's picker leads with the day kept under their login", async () => {
-  serving({
-    viewer: unbound,
-    work_my_work: { ...emptyDay, handle: "token:ops-7" },
-    work_items: noWork,
-    work_workload: { rows: [], complete: true },
-  });
-  mount();
-  const rows = await pickerRows();
-  const texts = rows.map((r) => r.textContent ?? "");
-  expect(texts[0]).toContain("token:ops-7");
-  expect(texts).not.toContain("Pick somebody");
-});
-
 // AND THERE IS NO "PICK SOMEBODY" ROW FOR A READER WHO HAS A DAY. It wrote the
 // parameter's own fallback, which the router deletes, so it resolved straight
 // back to their own seat and the control re-labelled itself with their name —
@@ -1197,8 +1174,10 @@ test("a bound reader is offered no row that returns them where they are", async 
 // AND A READER THE ENGINE WILL REFUSE IS OFFERED NO PICKER AT ALL. Naming
 // anybody's handle needs a credential, so for an anonymous reader every row is
 // a refusal — and the screen's own sentence named that pick as the remedy.
-test("an anonymous reader gets the sign-in sentence, not a menu of refusals", async () => {
-  const query = serving({ viewer: anonymous });
+test("an anonymous reader gets the credential sentence, not a menu of refusals", async () => {
+  const query = serving({
+    viewer: { login: "", grants: [], handle: "", owner: "", name: "", kind: "" },
+  });
   mount();
   await waitFor(() => expect(screen.getByText(/Nobody is signed in/)).toBeTruthy());
   expect(screen.queryByRole("combobox", { name: "Whose day" })).toBeNull();
@@ -1506,13 +1485,10 @@ describe("somebody else's day", () => {
 // the engine will not make it for is told why ONCE, above the rows, in the
 // sentence every other control uses; the rows do not lift.
 test.each([
-  ["an anonymous reader", anonymous, WRITE_REASONS.anonymous],
-  // AN UNBOUND READER IS NOT A BLOCK: they act under their own login, so what
-  // holds them is the same as anybody's — the tool the engine will not make.
   [
-    "an unbound reader the engine does not reorder for",
-    { ...unbound, acts: [] },
-    WRITE_REASONS.not_served,
+    "an anonymous reader",
+    { login: "", grants: [], handle: "", owner: "", name: "", kind: "" },
+    WRITE_REASONS.anonymous,
   ],
   ["a person the engine does not reorder for", { ...ada, acts: [] }, WRITE_REASONS.not_served],
 ])("%s sees the rows and the reason they do not move", async (_who, viewer, reason) => {
@@ -1563,68 +1539,4 @@ test("what reached somebody is the Inbox, and is not drawn here", async () => {
   expect(query.mock.calls.map((c) => c[0])).not.toContain("work_inbox");
   // And the way to it is a link rather than a copy.
   expect(screen.getByText("Inbox →")).toBeTruthy();
-});
-
-// TWO TASKS UNDER ONE KEY ARE TWO LINKS ON EVERY TAB.
-//
-// A key two tasks hold opens the one that claimed it first, so a queue, an ask
-// and a checklist item about the other one — linked by the key — all led to its
-// claimant: the duplicate was on somebody's day and could not be opened from
-// it. Each claim carries the flag beside the key it qualifies, and the flagged
-// one goes by its id.
-test("two tasks under one key open as two from every claim", async () => {
-  const [claimant, duplicate] = collidingRows();
-  const ask = (row: WorkSummary, comment: string) => ({
-    ...row,
-    comment,
-    asked_by: "rui",
-    asked_at: "2031-04-16T09:00:00Z",
-    body: "which one?",
-    answer_with: "",
-  });
-  const day = {
-    ...emptyDay,
-    priorities: [claimant, duplicate],
-    watching_recent: [claimant, duplicate],
-    asked_of_me: [ask(claimant, "c1"), ask(duplicate, "c2")],
-    checklist_items: [
-      {
-        task: CLAIMANT,
-        task_key: SHARED_KEY,
-        task_title: CLAIMANT_TITLE,
-        checklist: "l",
-        item: "i1",
-        name: "check one",
-        done: false,
-      },
-      {
-        task: DUPLICATE,
-        task_key: SHARED_KEY,
-        task_key_collision: true,
-        task_title: DUPLICATE_TITLE,
-        checklist: "l",
-        item: "i2",
-        name: "check two",
-        done: false,
-      },
-    ],
-  };
-  const hrefs = () =>
-    [...document.querySelectorAll("a")]
-      .map((a) => a.getAttribute("href"))
-      .filter((h) => h === CLAIMANT_HREF || h === DUPLICATE_HREF);
-  const sections: [string, MeSection][] = [
-    ["#/me?order=priorities", "queue"],
-    ["#/me/watching", "watching"],
-    ["#/me/asked-of-me", "asked-of-me"],
-    ["#/me/checklist", "checklist"],
-  ];
-  for (const [hash, section] of sections) {
-    location.hash = hash;
-    serving({ viewer: ada, work_items: noWork, work_my_work: day });
-    mount(section);
-    await waitFor(() => expect(hrefs().length, hash).toBeGreaterThanOrEqual(2));
-    expect(new Set(hrefs()), hash).toEqual(new Set([CLAIMANT_HREF, DUPLICATE_HREF]));
-    cleanup();
-  }
 });

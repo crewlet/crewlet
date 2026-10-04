@@ -39,8 +39,9 @@
  */
 
 import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { href, useNavigator, useRoute } from "../router.tsx";
+import { useNavigator, useRoute } from "../router.tsx";
 import { KINDS, parseRef, pathOf, refToken, type ObjectRef } from "./objects.ts";
+import { href } from "../router.tsx";
 import { ButtonLink, IconButton } from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,

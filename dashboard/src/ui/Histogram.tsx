@@ -34,16 +34,7 @@
 
 import type { CSSProperties } from "react";
 
-import { useClockReading } from "~/lib/clock.ts";
-import {
-  currentYear,
-  fmtDate,
-  fmtDateCompactIn,
-  fmtExact,
-  fmtMinute,
-  plural,
-  toWall,
-} from "~/lib/format.ts";
+import { fmtDate, fmtDateCompact, fmtMinute, plural, toWall } from "~/lib/format.ts";
 import type { FacetScope } from "~/ui/FacetRail.tsx";
 import type { Interval } from "~/lib/range.ts";
 
@@ -93,6 +84,7 @@ export function Histogram({
   over,
   onPick,
   axis = false,
+  now = Date.now(),
   height = 96,
   label = "Events over the window",
 }: {
@@ -113,15 +105,14 @@ export function Histogram({
    *  room for a date — and a tick row that collides with itself is worse than
    *  none. Every full-width log in this product passes it. */
   axis?: boolean;
+  /** The clock the axis's own date rule reads — [fmtDateCompact] drops the year
+   *  in the reader's CURRENT year, and a component that read the clock itself
+   *  would decide that separately from every other date on the screen. Every
+   *  caller drawing an axis holds a `useNow()` and passes it. */
+  now?: number;
   height?: number;
   label?: string;
 }) {
-  // THE YEAR THE AXIS'S DATE RULE READS — a day's label drops the reader's
-  // CURRENT year — taken off the shared clock as the year itself, so every
-  // date on the screen agrees about which year it is and the chart renders
-  // when the year turns. It was a `now` every caller held and passed, which
-  // kept each of them rendering once a second for a value that moves yearly.
-  const thisYear = useClockReading(currentYear);
   const peak = Math.max(1, ...bars.map((b) => b.count));
   const step = STEP_MS[bucket];
   return (
@@ -132,7 +123,7 @@ export function Histogram({
           const failed = Math.min(b.count, b.failed ?? 0);
           const title =
             `${when(b.at, bucket)} — ${plural(b.count, noun)}` +
-            (failed > 0 ? `, ${fmtExact(failed)} failed` : "");
+            (failed > 0 ? `, ${failed.toLocaleString()} failed` : "");
           const size = {
             height: `${(b.count / peak) * 100}%`,
             minHeight: b.count === 0 ? EMPTY_PX : MIN_PX,
@@ -206,7 +197,7 @@ export function Histogram({
               className="histogram-tick"
               style={edgeOf(index, bars.length)}
             >
-              {tick(bars[index]!.at, bucket, thisYear)}
+              {tick(bars[index]!.at, bucket, now)}
             </span>
           ))}
         </div>
@@ -311,8 +302,8 @@ function edgeOf(index: number, bars: number): CSSProperties {
  * own wall clock. Reading the browser's clock instead would put a tick an hour
  * out for every reader who set the preference.
  */
-function tick(at: string, bucket: "minute" | "hour" | "day", thisYear: string): string {
-  if (bucket === "day") return fmtDateCompactIn(at, thisYear);
+function tick(at: string, bucket: "minute" | "hour" | "day", now: number): string {
+  if (bucket === "day") return fmtDateCompact(at, now);
   const ms = Date.parse(at);
   return Number.isFinite(ms) ? toWall(ms).slice(11) : fmtMinute(at);
 }

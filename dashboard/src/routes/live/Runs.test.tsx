@@ -8,7 +8,14 @@
  * that the log in front of them is complete.
  */
 
-import { act, cleanup, fireEvent, render as rtlRender, screen, within } from "~/test/inCase.ts";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { ReactElement } from "react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
@@ -224,14 +231,23 @@ class InertWebSocket {
   close(): void {}
 }
 
-/** Jane, signed in and bound to her seat, whom the engine serves `answer_run`. */
 const JANE = {
-  login: "jane.founder",
-  grants: ["state:read", "audit:read"],
+  login: "U0FOUNDER",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   kind: "human",
-  owner: "jane",
   acts: ["answer_run"],
 };
 
@@ -268,8 +284,6 @@ function mountPage(answers: Record<string, unknown>, outcome = "pending") {
   const store = new Store();
   store.applyHealth({ status: "healthy" } as never);
   store.applyOrg(ORG as never);
-  // CONNECTED: a write is held while the socket is down, nothing queued.
-  store.setConnected(true);
   const socket = new LiveSocket(store);
   socket.query = ((what: string, params?: Record<string, unknown>) => {
     asked.push({ what, params: params ?? {} });

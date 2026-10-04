@@ -10,7 +10,7 @@
  *    than reading as an agent that remembers nothing.
  */
 
-import { act, cleanup, render, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -57,7 +57,7 @@ const entry = (content: string) => ({
 
 function row(handle: string, over: Partial<MemoryOverviewSeat> = {}): MemoryOverviewSeat {
   return {
-    agent_id: `agent-${handle}`,
+    agent_id: `a-${handle}`,
     handle,
     diary_total: 7,
     episodes_total: 3,
@@ -112,7 +112,7 @@ async function settle() {
   });
 }
 
-const rowOf = (text: string) => screen.getByText(text).closest(".grid-row") as HTMLElement;
+const rowOf = (text: string) => screen.getByText(text).closest("[data-row-index]") as HTMLElement;
 
 test("every agent is listed, past a dozen, each linking to its diary", async () => {
   mount(<Diaries />, {

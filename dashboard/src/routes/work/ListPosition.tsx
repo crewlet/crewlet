@@ -22,11 +22,10 @@
  */
 
 import { ChevronDownGlyph, ChevronUpGlyph } from "@crewlethq/icons/glyphs";
-import { anyGridDriving } from "~/app/frame/DataGrid.tsx";
+import { useAnyGridDriving } from "~/app/frame/DataGrid.tsx";
 import { useKeymap } from "~/app/keymap.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtExact } from "~/lib/format.ts";
 import { aroundParams } from "~/lib/work.ts";
 
 /**
@@ -44,22 +43,20 @@ export function ListPosition({ address }: { address: string }) {
   // `j` AND `k` STEP THROUGH THE LIST, as they step through a list's rows —
   // the same two rows of the keymap, because on a task opened from a list the
   // task IS the row. A grid on this page holds them first, so one press is
-  // never two actions — ASKED AT THE KEYSTROKE (`anyGridDriving`), since a
-  // grid mounting or emptying re-renders nothing here.
-  const next = around?.next ?? "";
-  const prev = around?.prev ?? "";
+  // never two actions.
+  const gridHasKeys = useAnyGridDriving();
   useKeymap({
     "list.next": {
-      run: () => next && nav.to(["work", next], { list }),
-      when: () => next !== "" && !anyGridDriving(),
+      run: () => around?.next && nav.to(["work", around.next], { list }),
+      when: Boolean(around?.next) && !gridHasKeys,
     },
     "list.previous": {
-      run: () => prev && nav.to(["work", prev], { list }),
-      when: () => prev !== "" && !anyGridDriving(),
+      run: () => around?.prev && nav.to(["work", around.prev], { list }),
+      when: Boolean(around?.prev) && !gridHasKeys,
     },
   });
   if (!params || !around) return null;
-  const total = `${fmtExact(around.total_hint)}${around.total_capped ? "+" : ""}`;
+  const total = `${around.total_hint.toLocaleString()}${around.total_capped ? "+" : ""}`;
   const step = (key: string) => href(["work", key], { list });
   // UP AND DOWN, then the place, as the approved Issue page draws it: the list
   // a task was opened from runs top to bottom, so its neighbours are above and

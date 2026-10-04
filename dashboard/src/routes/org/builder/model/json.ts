@@ -1,10 +1,10 @@
 /**
  * JSON values: compared by meaning, copied, and edited without mutation.
  *
- * THE DRAFT IS THE ENGINE'S OWN JSON, NOT A TYPED COPY OF IT. Every entity in
- * the builder carries the JSON the org chart served, verbatim, including keys this build
+ * THE DRAFT IS THE ENGINE'S DOCUMENT, NOT A TYPED COPY OF IT. Every entity in
+ * the builder carries its authored JSON verbatim, including keys this build
  * has never heard of, so the helpers here work on plain JSON rather than on
- * `SeatData` fields. A typed copy would silently drop a key a newer engine
+ * `ConfigRole` fields. A typed copy would silently drop a key a newer engine
  * wrote, and the save would delete it.
  *
  * ABSENT AND `undefined` ARE THE SAME THING, deliberately. An operation records
@@ -109,9 +109,9 @@ export function getPath(value: unknown, path: readonly string[]): unknown {
  * is `undefined`.
  *
  * Setting creates the objects on the way. Removing PRUNES the objects the
- * removal emptied: clearing the only key of `runtime.github` leaves no
- * `runtime: { github: {} }` behind, because an empty block is not "the
- * same object minus one field" to the engine (an empty GitHub block still
+ * removal emptied: clearing the only key of `integrations.jira` leaves no
+ * `integrations: { jira: {} }` behind, because an empty block is not "the
+ * same document minus one field" to the engine (an empty Jira block still
  * decodes as a block) and it would show up as an edit nobody made.
  */
 export function setPath(record: JsonRecord, path: readonly string[], value: unknown): JsonRecord {

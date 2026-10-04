@@ -69,8 +69,6 @@ import { resolve } from "~/app/routes.ts";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { Segmented } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtExact } from "~/lib/format.ts";
-import { QueryState } from "~/components/common.tsx";
 import { useMediaQuery } from "~/lib/media.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { SEARCH_MODES, asSearchMode, defaultSearchMode, modeUnavailable } from "~/lib/search.ts";
@@ -369,7 +367,7 @@ function Spaces({
               <ChevronRightGlyph size="xs" aria-hidden="true" />
             )}
             <span>Spaces</span>
-            {count !== null && <span className="ktree-fold-count">{fmtExact(count)}</span>}
+            {count !== null && <span className="ktree-fold-count">{count.toLocaleString()}</span>}
           </button>
         </h2>
         {fold.unfolded && <div id={bodyID}>{body}</div>}
@@ -450,7 +448,7 @@ function SectionRow({
           <span className="ktree-title">{label}</span>
           {count !== undefined && (
             <span className="ktree-count" title={countTitle}>
-              {fmtExact(count)}
+              {count.toLocaleString()}
             </span>
           )}
         </a>
@@ -598,17 +596,12 @@ function Level({
           {/* A WINDOW LABELLED AS A WINDOW: how many are drawn of how many
               there are, never the drawn count as if it were the level. */}
           <span className="t-caption">
-            {fmtExact(level.rows.length)} of {fmtExact(level.total ?? 0)}
+            {level.rows.length.toLocaleString()} of {(level.total ?? 0).toLocaleString()}
           </span>
-          {level.pageFailure && (
-            // THE FAILURE WHOLE, as every page of older rows says it: the
-            // grant a refusal named, or that the state log will not lift it.
-            <QueryState
-              error={level.pageFailure.error}
-              refusal={level.pageFailure.refusal}
-              detail={level.pageFailure.detail ?? undefined}
-              loading={false}
-            />
+          {level.pageError && (
+            <span className="t-caption" role="alert">
+              The next pages could not be read ({level.pageError}).
+            </span>
           )}
         </div>
       )}

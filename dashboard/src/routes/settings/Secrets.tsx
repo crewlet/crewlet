@@ -49,7 +49,7 @@ import {
   ShieldGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -58,38 +58,27 @@ import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
-import { useRestRead } from "~/lib/restRead.ts";
+import { useNow } from "~/lib/clock.ts";
 import { authorLabel, throughOf } from "~/lib/attribution.ts";
-import { rest, RestError, restFailure } from "~/protocol/index.ts";
-import type { ConfigReference, RestFailure, SecretRow } from "~/protocol/index.ts";
+import { needsSentence } from "~/lib/refusal.ts";
+import { isAbort, rest, RestError } from "~/protocol/index.ts";
+import { restErrorCode, useRest } from "~/lib/useRest.ts";
+import type { ConfigReference, LogRefusal, QueryRefusal, SecretRow } from "~/protocol/index.ts";
+import type { QueryErrorCode } from "~/contract/errors.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /**
- * A failed read of the list as the pair [QueryState] is keyed on.
+ * A refusal as the code [QueryState] renders, with this surface's one 404.
  *
- * THE BANNER IS A TABLE OVER `QueryErrorCode`, not a place to put a sentence:
- * this screen handed it prose, the lookup missed every time, and a 401 —
- * the refusal an unguarded operator actually hits here, since `/secrets` is
- * guarded reads included — rendered the red "a code this build does not know"
- * banner instead of the auth-gated one. The sentence even promised a button
- * that only exists inside the entry that was being skipped.
- *
- * EVERY OTHER CASE IS [restFailure]'s, the one reading every REST screen
- * shares: a read no answer from the engine came back to is `unanswered`, a
- * `503` the engine wrote is `unavailable` — it was drawn here as a fault on
- * the node, "its log says what went wrong", for a node only catching up — and
- * anything else is a fault. The one case that is this route's own is the
- * ENGINE's 404, which on the LIST route is the whole surface being
- * unregistered: `secretsapi.Routes` does that on a process that cannot reach
- * the fleet's coordination store. A gateway's 404 says nothing of the kind,
- * so it stays `unanswered`.
+ * The loader maps every status (`restErrorCode`); what it cannot know is that
+ * a 404 on THIS list route is the whole surface being unregistered —
+ * `secretsapi.Routes` does that on a process that cannot reach the fleet's
+ * coordination store — rather than a record that is not there.
  */
-function failureOf(err: unknown): RestFailure {
-  if (err instanceof RestError && err.status === 404 && !err.unanswered) {
-    return { error: "unknown_query", refusal: null };
-  }
-  return restFailure(err);
+function refusalCode(err: RestError | null): QueryErrorCode | null {
+  if (err?.status === 404) return "unknown_query";
+  return restErrorCode(err);
 }
 
 /**
@@ -98,22 +87,15 @@ function failureOf(err: unknown): RestFailure {
  * Only the reference index needs this: its refusal is a caption under the
  * caution banner in the removal confirmation, where there is no `QueryState`
  * to key a code on and the engine's own words are what an operator acts on.
- * The list's refusal goes through [failureOf] instead — see there for why a
+ * The list's refusal goes through [refusalCode] instead — see there for why a
  * sentence must never reach the banner.
  */
-function refusalSentence(err: unknown): string {
+function refusal(err: unknown): string {
   if (!(err instanceof RestError)) return String(err);
   if (err.unauthorized) {
-    // THE GRANT THE ENGINE NAMED, where it named one: a refusal on
-    // authority carries the grants that would have admitted the caller, and
-    // "needs an operator token" sent a signed-in person to find a token when
-    // what they lacked was `config:read`.
-    const grants = Array.isArray(err.body.grants)
-      ? err.body.grants.filter((g): g is string => typeof g === "string")
-      : [];
-    return grants.length > 0
-      ? `This needs ${grants.join(" or ")}, which the credential you presented does not carry.`
-      : "This needs a credential that carries the grant to read it. Sign in as somebody who holds it.";
+    // THE GRANT THE REFUSAL NAMED: "needs an operator token" sent a
+    // signed-in person to find a credential they already held.
+    return needsSentence("This", err.grants);
   }
   return err.detail || err.code || "the engine refused the read";
 }
@@ -122,18 +104,18 @@ interface Credentials {
   /** Null until the first answer — never an empty list standing in for one. */
   rows: SecretRow[] | null;
   loading: boolean;
+  /** The refusal as a machine code, which is what [QueryState] renders from. */
+  error: QueryErrorCode | null;
   /**
-   * Why the list could not be read, in the terms [QueryState] renders from —
-   * the code, and the refusal that lets the banner say what would change the
-   * answer — or null. See [failureOf].
+   * What the refusal said beyond its code — the grants that would have
+   * admitted the reader, or the state log's refusal — for [QueryState].
    */
-  failure: RestFailure | null;
+  refusal: QueryRefusal | LogRefusal | null;
   /** Why the reference index is unknown, when it is. */
   unknown: string | null;
   /** The config fields naming one credential, or null where the check did not answer. */
   readersOf: (name: string) => string[] | null;
-  /** Read both again, quietly: a write this screen made has landed. */
-  reload: () => void;
+  reload: () => Promise<void>;
 }
 
 /**
@@ -146,105 +128,87 @@ interface Credentials {
  * two are on top of each other, so sharing has to be the hook rather than a
  * prop.
  *
- * EACH IS THE SHARED REST READ (`~/lib/restRead.ts`), which is what keeps the
- * banner true. Nothing polls this surface, so a read is asked again only when
- * something says to: a `503` the engine wrote — a node whose identity estate
- * or chart is behind, one draining — when its `Retry-After` says, and never on
- * a timer at its zero; a read no answer came back to on a backoff, because
- * the socket can be up the whole time (one request past its deadline on a slow
- * engine) and its coming back was the only thing that read this again; the
- * socket coming back; and a write this screen made. A failure with no hint (a
- * fault, a refusal on authority) waits for a person.
- *
- * `enabled` is the peek's guard: a rail opened on no name asks nothing, and a
- * rail CLOSED asks nothing more — not what an answer armed while it was open,
- * and not what an answer still in flight would arm when it lands, which a
- * `503` landing after the rail closed used to do for as long as the node
- * refused, with nothing on screen to read into.
+ * `enabled` is the peek's guard: a rail opened on no name asks nothing.
  */
 function useCredentials(enabled = true): Credentials {
   // GET /secrets, over REST, because no question in the registry answers it.
   //
   // This screen asked `config_entities {kind: "secrets"}`, and that kind does
-  // not exist: the entity kinds are llm-providers and mcp-servers, so the
-  // answer was always an ErrUnknownEntityKind folded to a bad-params error
-  // and the table could never hold a row. The socket is still the data
-  // channel for everything it answers; this surface is simply not one of
-  // them.
+  // not exist: the entity kinds are roles, units, llm-providers and
+  // mcp-servers, so the answer was always an ErrUnknownEntityKind folded to
+  // a bad-params error and the table could never hold a row. The socket is
+  // still the data channel for everything it answers; this surface is simply
+  // not one of them.
   //
-  // THE LAST GOOD LIST STAYS. A refusal to refresh is not a reason to tell an
-  // operator the company holds no credentials.
-  const list = useRestRead(
-    "/secrets",
-    async (signal) =>
-      ((await rest.get("/secrets", signal)) as { secrets?: SecretRow[] } | null)?.secrets ?? [],
-    { enabled },
-  );
-
-  // THE REFERENCE INDEX IS THREE-VALUED, and collapsing it to two is the one
-  // mistake this screen must not make: null means the question was not
-  // answered — never that the answer was "nothing" — and the removal
-  // confirmation branches on exactly that.
-  const references = useRestRead(
-    "/config/references",
-    async (signal) => {
-      try {
-        return (
-          (
-            (await rest.get("/config/references", signal)) as {
-              references?: ConfigReference[];
-            } | null
-          )?.references ?? []
-        );
-      } catch (err) {
-        // A 404 IS AN ANSWER — the ENGINE's, never a gateway's. A deployment
-        // before its first config import has no active document, so nothing
-        // can be pointing at anything, and treating that as a failed check
-        // would put a warning in front of every removal on a new install.
-        if (err instanceof RestError && err.status === 404 && !err.unanswered) return [];
-        throw err;
-      }
-    },
-    { enabled },
-  );
-  // NOT THE LAST ANSWER, unlike the list: an index from before a check that
-  // failed is the old answer to "what breaks if this goes", and drawn as the
-  // current one it would let a removal through with no warning about a field
-  // that names the row now.
-  const index = references.failure ? null : references.data;
+  // ONE READ FOR THE PAIR, because the list and its reference index are one
+  // refresh: two loaders would let the second answer land beside a first
+  // that a newer refresh already superseded.
+  const answer = useRest(enabled ? "/secrets+/config/references" : null, async (signal) => {
+    const [list, index] = await Promise.all([
+      rest.get("/secrets", signal) as Promise<{ secrets?: SecretRow[] } | null>,
+      readReferences(signal),
+    ]);
+    return { rows: list?.secrets ?? [], ...index };
+  });
 
   // Grouped by name, because one credential routinely has several readers: a
   // seat's bot_token and its mcp_env entry are two pointers at one row, and
   // both have to be visible before it goes.
+  const references = answer.data?.references ?? null;
   const readers = useMemo(() => {
-    if (index === null) return null;
+    if (references === null) return null;
     const byName = new Map<string, string[]>();
-    for (const ref of index) {
+    for (const ref of references) {
       byName.set(ref.name, [...(byName.get(ref.name) ?? []), ref.path]);
     }
     return byName;
-  }, [index]);
+  }, [references]);
 
   const readersOf = useCallback(
     (name: string): string[] | null => readers?.get(name) ?? (readers ? [] : null),
     [readers],
   );
 
-  const { refetch: rereadList } = list;
-  const { refetch: rereadReferences } = references;
-  const reload = useCallback(() => {
-    rereadList();
-    rereadReferences();
-  }, [rereadList, rereadReferences]);
-
+  const { reload } = answer;
   return {
-    rows: list.data,
-    loading: list.loading,
-    failure: list.failure ? failureOf(list.error) : null,
-    unknown: references.failure ? refusalSentence(references.error) : null,
+    rows: answer.data?.rows ?? null,
+    loading: answer.loading,
+    error: refusalCode(answer.error),
+    refusal: answer.refusal,
+    unknown: answer.data?.unknown ?? null,
     readersOf,
-    reload,
+    reload: useCallback(() => reload(), [reload]),
   };
+}
+
+/**
+ * The reference index, THREE-VALUED — and collapsing it to two is the one
+ * mistake this screen must not make. `references` null means the question
+ * was not answered, never that the answer was "nothing", and the removal
+ * confirmation branches on exactly that. So its refusal is caught HERE rather
+ * than failing the pair: a list that answered is still the list, and only the
+ * check beside each row becomes "unknown".
+ */
+async function readReferences(
+  signal: AbortSignal,
+): Promise<{ references: ConfigReference[] | null; unknown: string | null }> {
+  try {
+    const body = (await rest.get("/config/references", signal)) as {
+      references?: ConfigReference[];
+    } | null;
+    return { references: body?.references ?? [], unknown: null };
+  } catch (err) {
+    // The pair's own abort is the loader's to recognise, not an answer.
+    if (isAbort(err)) throw err;
+    // A 404 IS AN ANSWER. A deployment before its first config import has
+    // no active document, so nothing can be pointing at anything, and
+    // treating that as a failed check would put a warning in front of
+    // every removal on a new install.
+    if (err instanceof RestError && err.status === 404) {
+      return { references: [], unknown: null };
+    }
+    return { references: null, unknown: refusal(err) };
+  }
 }
 
 /**
@@ -381,7 +345,6 @@ function CredentialBody({
                   value: throughOf(row.updated_by, row.operator_id) ? (
                     <span className="mono">{throughOf(row.updated_by, row.operator_id)}</span>
                   ) : undefined,
-                  title: "the credential the value was stored through",
                 },
                 { label: "Updated", value: fmtDateTime(row.updated_at) },
               ],
@@ -416,17 +379,13 @@ function CredentialBody({
  * is what somebody deciding about a name actually reads.
  */
 export function CredentialPeek({ name }: { name: string }) {
-  const { rows, loading, failure, unknown, readersOf } = useCredentials(name !== "");
+  const { rows, loading, error, refusal, unknown, readersOf } = useCredentials(name !== "");
   const row = (rows ?? []).find((r) => r.name === name) ?? null;
 
   return (
     <>
       {loading && rows === null && <Skeleton variant="text" rows={6} label="Loading" />}
-      <QueryState
-        error={failure?.error ?? null}
-        refusal={failure?.refusal ?? null}
-        loading={loading}
-      >
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {/* NOT AN EMPTY RAIL. A name that matches no row is a hand-edited URL
             or a credential removed since the link was made, and naming the one
             that resolved to nothing is more use than a header over no row. */}
@@ -451,26 +410,10 @@ export function CredentialPeek({ name }: { name: string }) {
   );
 }
 
-/**
- * A row action, inside a row that is a link.
- *
- * THE DEFAULT ACTION OF THE ROW IS NOT THIS BUTTON'S. Edit and Remove sit
- * inside the anchor each row now is, so without this an operator aiming at
- * the X would also peek the row it belongs to — and the browser would follow
- * the href on its way past. `Button` passes the event through for exactly
- * this case; see its own comment.
- */
-function rowAction(run: () => void): (e: React.MouseEvent) => void {
-  return (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    run();
-  };
-}
-
 export function Secrets({ name }: { name?: string }) {
+  const now = useNow();
   const toast = useToast();
-  const { rows, loading, failure, unknown, readersOf, reload } = useCredentials();
+  const { rows, loading, error, refusal, unknown, readersOf, reload } = useCredentials();
 
   const [writing, setWriting] = useState<{ editing: string } | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
@@ -510,120 +453,22 @@ export function Secrets({ name }: { name?: string }) {
     [openPeek],
   );
 
-  // THE COLUMNS HOLD STILL until the reference index moves (`readersOf`): every
-  // row is memoised on this list, so one built inline drew every row on every render.
-  const columns = useMemo<GridColumn<SecretRow>[]>(
-    () => [
-      {
-        key: "name",
-        header: "Name",
-        // THE ONE FLEXIBLE TRACK, as the node is on Nodes and the seat
-        // in each lease table: the row exists to name a credential,
-        // so the name takes whatever width is spare and every fact
-        // beside it sizes to its content. As one of two `1fr` columns
-        // it split the spare width with Set by — at a 1280 window
-        // "DATADOG_WEBHOOK_TOK…" sat beside "founder" in ~120px of
-        // air, and beside a peek at 1440 every name fell to "DAT…".
-        //
-        // AND IT NEVER CUTS: the floor is its content. A credential's
-        // name is the one thing a reader matches against the `${VAR}`
-        // in their configuration, so where the row cannot hold every
-        // fact, facts give way (`drop`) rather than the name — each
-        // one a fact the credential's peek carries.
-        floor: "max-content",
-        sortValue: (s) => s.name,
-        cell: (s) => <KeyCell value={s.name} />,
-      },
-      {
-        // NEVER GIVES WAY: what reads a name is what breaks when it
-        // goes, which is the question this list is scanned for.
-        key: "read",
-        header: "Read by",
-        shrink: true,
-        // AN UNANSWERED CHECK SORTS AS ITS OWN THING, below every
-        // count: -1 rather than 0, so "not known" never sits among
-        // the rows nothing reads.
-        sortValue: (s) => readersOf(s.name)?.length ?? -1,
-        cell: (s) => <Readers paths={readersOf(s.name)} />,
-      },
-      {
-        key: "source",
-        header: "Source",
-        shrink: true,
-        // The peek's own pill.
-        drop: 3,
-        sortValue: (s) => s.source,
-        // Which path wrote it, said in full on the pointer; the peek
-        // says it in words.
-        cell: (s) => (
-          <Tag appearance="outline" title={provenance(s.source)}>
-            {s.source}
-          </Tag>
-        ),
-      },
-      {
-        key: "key",
-        header: "Key id",
-        shrink: true,
-        // First to go: one id covers every row until a rekey, so the
-        // column repeats itself down the list.
-        drop: 1,
-        sortValue: (s) => s.key_id,
-        cell: (s) => <KeyCell value={s.key_id} />,
-      },
-      {
-        key: "by",
-        header: "Set by",
-        shrink: true,
-        drop: 2,
-        sortValue: (s) => s.updated_by,
-        // NOT `value || "—"`. An operator name is either recorded or
-        // it is not, and the dash says which rather than standing in
-        // for an empty string the reader would read as a name.
-        cell: (s) =>
-          s.updated_by ? (
-            <TextCell>{authorLabel(s.updated_by, s.operator_id)}</TextCell>
-          ) : (
-            <EmptyValue label="Nobody recorded" />
-          ),
-      },
-      {
-        key: "at",
-        header: "Updated",
-        shrink: true,
-        drop: 4,
-        sortValue: (s) => tsKey(s.updated_at),
-        cell: (s) => <DateCell at={s.updated_at} />,
-      },
-      {
-        key: "act",
-        header: "",
-        label: "Actions",
-        shrink: true,
-        cell: (s) => (
-          <span className="row gap-1">
-            <IconButton
-              size="sm"
-              variant="ghost"
-              icon={<PencilGlyph size="sm" />}
-              label={`Edit ${s.name}`}
-              title={`Edit ${s.name}`}
-              onClick={rowAction(() => setWriting({ editing: s.name }))}
-            />
-            <IconButton
-              size="sm"
-              variant="ghost"
-              icon={<XGlyph size="sm" />}
-              label={`Remove ${s.name}`}
-              title={`Remove ${s.name}`}
-              onClick={rowAction(() => setRemoving(s.name))}
-            />
-          </span>
-        ),
-      },
-    ],
-    [readersOf],
-  );
+  /**
+   * A row action, inside a row that is a link.
+   *
+   * THE DEFAULT ACTION OF THE ROW IS NOT THIS BUTTON'S. Edit and Remove sit
+   * inside the anchor each row now is, so without this an operator aiming at
+   * the X would also peek the row it belongs to — and the browser would follow
+   * the href on its way past. `Button` passes the event through for exactly
+   * this case; see its own comment.
+   */
+  function rowAction(run: () => void): (e: React.MouseEvent) => void {
+    return (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      run();
+    };
+  }
 
   // `#/settings/secrets/{name}` ADDRESSES ONE ROW, and this screen accepted
   // the segment and dropped it: a reader who followed a link to one credential
@@ -708,8 +553,8 @@ export function Secrets({ name }: { name?: string }) {
 
       {loading && rows === null && <Skeleton variant="text" rows={4} label="Loading" />}
       <QueryState
-        error={failure?.error ?? null}
-        refusal={failure?.refusal ?? null}
+        error={error}
+        refusal={refusal}
         loading={loading}
         empty={
           list.length
@@ -738,7 +583,115 @@ export function Secrets({ name }: { name?: string }) {
             onRowActivate={openCredential}
             isSelected={(s) => s.name === addressed}
             defaultSort="name"
-            columns={columns}
+            columns={[
+              {
+                key: "name",
+                header: "Name",
+                // THE ONE FLEXIBLE TRACK, as the node is on Nodes and the seat
+                // in each lease table: the row exists to name a credential,
+                // so the name takes whatever width is spare and every fact
+                // beside it sizes to its content. As one of two `1fr` columns
+                // it split the spare width with Set by — at a 1280 window
+                // "DATADOG_WEBHOOK_TOK…" sat beside "founder" in ~120px of
+                // air, and beside a peek at 1440 every name fell to "DAT…".
+                //
+                // AND IT NEVER CUTS: the floor is its content. A credential's
+                // name is the one thing a reader matches against the `${VAR}`
+                // in their configuration, so where the row cannot hold every
+                // fact, facts give way (`drop`) rather than the name — each
+                // one a fact the credential's peek carries.
+                floor: "max-content",
+                sortValue: (s) => s.name,
+                cell: (s) => <KeyCell value={s.name} />,
+              },
+              {
+                // NEVER GIVES WAY: what reads a name is what breaks when it
+                // goes, which is the question this list is scanned for.
+                key: "read",
+                header: "Read by",
+                shrink: true,
+                // AN UNANSWERED CHECK SORTS AS ITS OWN THING, below every
+                // count: -1 rather than 0, so "not known" never sits among
+                // the rows nothing reads.
+                sortValue: (s) => readersOf(s.name)?.length ?? -1,
+                cell: (s) => <Readers paths={readersOf(s.name)} />,
+              },
+              {
+                key: "source",
+                header: "Source",
+                shrink: true,
+                // The peek's own pill.
+                drop: 3,
+                sortValue: (s) => s.source,
+                // Which path wrote it, said in full on the pointer; the peek
+                // says it in words.
+                cell: (s) => (
+                  <Tag appearance="outline" title={provenance(s.source)}>
+                    {s.source}
+                  </Tag>
+                ),
+              },
+              {
+                key: "key",
+                header: "Key id",
+                shrink: true,
+                // First to go: one id covers every row until a rekey, so the
+                // column repeats itself down the list.
+                drop: 1,
+                sortValue: (s) => s.key_id,
+                cell: (s) => <KeyCell value={s.key_id} />,
+              },
+              {
+                key: "by",
+                header: "Set by",
+                shrink: true,
+                drop: 2,
+                sortValue: (s) => s.updated_by,
+                // NOT `value || "—"`. An operator name is either recorded or
+                // it is not, and the dash says which rather than standing in
+                // for an empty string the reader would read as a name.
+                cell: (s) =>
+                  s.updated_by ? (
+                    <TextCell>{authorLabel(s.updated_by, s.operator_id)}</TextCell>
+                  ) : (
+                    <EmptyValue label="Nobody recorded" />
+                  ),
+              },
+              {
+                key: "at",
+                header: "Updated",
+                shrink: true,
+                drop: 4,
+                sortValue: (s) => tsKey(s.updated_at),
+                cell: (s) => <DateCell at={s.updated_at} now={now} />,
+              },
+              {
+                key: "act",
+                header: "",
+                label: "Actions",
+                shrink: true,
+                cell: (s) => (
+                  <span className="row gap-1">
+                    <IconButton
+                      size="sm"
+                      variant="ghost"
+                      icon={<PencilGlyph size="sm" />}
+                      label={`Edit ${s.name}`}
+                      title={`Edit ${s.name}`}
+                      onClick={rowAction(() => setWriting({ editing: s.name }))}
+                    />
+                    <IconButton
+                      size="sm"
+                      variant="ghost"
+                      icon={<XGlyph size="sm" />}
+                      label={`Remove ${s.name}`}
+                      title={`Remove ${s.name}`}
+                      onClick={rowAction(() => setRemoving(s.name))}
+                    />
+                  </span>
+                ),
+              },
+            ]}
           />
         </Card>
       </QueryState>
@@ -773,7 +726,7 @@ export function Secrets({ name }: { name?: string }) {
           onClose={() => setWriting(null)}
           onDone={(stored) => {
             toast.ok(writing.editing ? `Updated ${stored}` : `Stored ${stored}`);
-            reload();
+            void reload();
           }}
         />
       )}
@@ -786,7 +739,7 @@ export function Secrets({ name }: { name?: string }) {
           onClose={() => setRemoving(null)}
           onDone={() => {
             toast.ok(`Removed ${removing}`);
-            reload();
+            void reload();
           }}
         />
       )}

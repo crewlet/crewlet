@@ -15,41 +15,23 @@
  *
  * The seat, its state, its model chain and tool sources, and its budget
  * windows all arrive with the org projection and the `agents` push, so they
- * cost nothing — the chain and the tool sources only to a reader holding
- * `config:read`, which the engine strips them for everybody else without, so
- * an absent chain is "No provider configured" only to a reader it would have
- * been sent to, and everybody else is told which grant shows it
- * ([resolvedAbsence]). The model SERVING the call in flight is the `agents`
- * push's, never the projection's, and is said to every reader. What does cost
- * a read:
+ * cost nothing. What does cost a read:
  *
  *   * `work_workload` — the seat's open work, for every reader;
  *   * `fleet` — which node holds the seat and since when — on
  *     `fleet:operate`, so it is asked only of a reader holding it; every
- *     other reader is told what the public health push says (`heldBy`: this
- *     node, by name, or another), exactly as the profile's Setup card tells
- *     them, rather than being sent a refusal to draw or told a fact already
- *     on their screen is withheld;
+ *     other reader is told what the health push says (`heldBy`: this node, by
+ *     name, or another),
+ *     exactly as the profile's Setup card tells them, rather than being sent
+ *     a refusal to draw or told a fact already on their screen is withheld;
  *   * `work_item_turns` — which turn this is on its task ("Turn 2") — asked
  *     only while the seat is working on one.
  *
- * The org chart's guarded half is NOT read: the model chain a turn resolves
- * arrives on the projection for a reader holding `config:read`, so a per-peek
- * chart read (on every `[`/`]` step through a list) would buy nothing.
- *
- * # Which seat, and which live row
- *
- * The seat is the one the address names, followed through a rename
- * (`findSeat`), and the peek MOVES to the handle it holds now. Its live row
- * and its coding run are paired by HANDLE and AGENT ID (`liveRowFor`,
- * `sandboxFor`), never by name — two seats may share one, and paired by it
- * the second wore the first one's state.
- *
- * # The clock is read where a time is shown
- *
- * The state line, the turn's elapsed time and the lease's tenure each read
- * the clock in their own text (`ClockText`), so a tick redraws those words
- * and nothing else.
+ * The company document is NOT read: the model chain a turn resolves is on the
+ * org projection for a reader holding `config:read` — the one who could read
+ * the document — and everybody else is told which grant shows it
+ * ([resolvedAbsence]), so a per-peek read of the whole guarded configuration
+ * (on every `[`/`]` step through a list) would buy nothing.
  *
  * # Message is a task that asks
  *
@@ -58,22 +40,13 @@
  * work the seat owes an answer on, and the answer lands in the asker's Inbox.
  */
 
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { ButtonLink, Callout, EmptyState, EmptyValue, Meter, StatusDot, Tag } from "@crewlethq/ui";
 import { UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { usePeekControls } from "~/app/frame/DetailRail.tsx";
-import { ClockText } from "~/app/frame/cells.tsx";
 import { MessageSeatButton } from "~/components/writes.tsx";
-import {
-  fmtCount,
-  fmtElapsed,
-  fmtExact,
-  fmtMinute,
-  fmtTime,
-  plural,
-  readerDay,
-} from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
+import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/lib/format.ts";
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -89,7 +62,6 @@ import {
   resolvedWithheld,
   ringOf,
   roundOf,
-  sandboxFor,
   seatPath,
   stateLine,
   toneOf,
@@ -101,8 +73,7 @@ import { useSandboxes } from "~/lib/store-hooks.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { renderInline } from "~/lib/markdown.ts";
-import { companyCeilings, findSeat } from "./seat/profile.ts";
-import { answersFor, taskAsked } from "~/routes/live/trace/useTurnOrdinal.ts";
+import { companyCeilings } from "./seat/profile.ts";
 
 /** How many tool sources the peek names before "+n". */
 const TOOL_CHIPS = 3;
@@ -166,13 +137,7 @@ export function SeatPeek({ handle }: { handle: string }) {
   const org = useOrg();
   const agents = useAgents();
   const index = useMemo(() => indexOrg(org), [org]);
-  const seat = findSeat(index, handle);
-  // A RETIRED ADDRESS IS MOVED TO THE CURRENT ONE, as the profile does — by
-  // the rail's own replacing move, so Back does not reopen the old spelling.
-  const { move } = usePeekControls();
-  useEffect(() => {
-    if (seat?.handle && seat.handle !== handle) move({ kind: "seat", id: seat.handle });
-  }, [seat, handle, move]);
+  const seat = index.byHandle.get(handle) ?? index.byName.get(handle);
   if (!seat) {
     // NOT AN EMPTY RAIL. A `peek=seat:` reaches this from a pasted or
     // hand-edited URL as often as from a card, so the honest answer names the
@@ -207,6 +172,7 @@ function SeatPeekBody({
   hierarchy: boolean;
   nameOf: (key: string) => string;
 }) {
+  const now = useNow();
   const viewer = useViewer();
   const org = useOrg();
   const health = useEngineHealth();
@@ -216,14 +182,13 @@ function SeatPeekBody({
   const ring = human ? undefined : ringOf(state);
   const turn = agent?.turn ?? null;
   const call = agent?.live_call ?? null;
-  // THE TASK THE TURN IS CHARGED TO, asked for by its id where it is the
-  // engine's own ([taskAsked]): its key may be one another task claimed first,
-  // and asked by the key the list is that task's.
-  const task = call?.work_item ?? turn?.work_item ?? null;
-  const item = taskAsked(task);
+  const item = call?.work_item?.key || turn?.work_item?.key || "";
 
   // THE THREE READS — see the file's doc.
   const workload = useQuery("work_workload", undefined, { pollMs: 60_000 });
+  // THE FLEET'S LEASES ARE THE DEPLOYMENT'S, read on `fleet:operate`: asked
+  // only of a reader holding it, and everybody else is told what the health
+  // push says.
   const fleet = useQuery("fleet", undefined, { enabled: viewer.operatesFleet, pollMs: 60_000 });
   const turns = useQuery(
     "work_item_turns",
@@ -233,21 +198,20 @@ function SeatPeekBody({
 
   const ordinal =
     turn && item
-      ? turnOrdinal(
-          turn.turn_id,
-          turns.data?.turns?.[0],
-          !!turns.data && answersFor(task, { id: turns.data.item, key: turns.data.key }),
-        )
+      ? turnOrdinal(turn.turn_id, turns.data?.turns?.[0], !!turns.data && turns.data.key === item)
       : null;
   const started = turn?.started_at ?? call?.started_at;
+  const elapsed = started ? now - Date.parse(started) : null;
   const facts = turnFacts(turn, call, ordinal);
   const load = workload.data?.rows?.find((r) => r.handle === seat.handle);
   const lease = fleet.data?.seats?.find((s) => s.handle === seat.handle);
   const windows = agent?.budget?.windows ?? [];
   const chain = seat.raw.llm?.["execute"] ?? [];
   const tools = seat.raw.tool_sources ?? [];
+  // BY THE SEAT'S HANDLE, never the name a run was started under, which two
+  // seats may share.
+  const sandbox = sandboxes.find((s) => s.agent_handle === seat.handle) ?? null;
   const absent = resolvedAbsence(viewer);
-  const sandbox = sandboxFor(sandboxes, agent);
   const place = unitPath(seat.unit);
 
   return (
@@ -274,14 +238,8 @@ function SeatPeekBody({
         <span className="seat-peek-line">
           <StatusDot tone={human ? "neutral" : toneOf(state)} pulse={state === "working"} />
           <span>
-            <ClockText
-              read={(now) =>
-                stateLine(agent, { now, seat, nameOf }) +
-                (state === "working" && started
-                  ? ` · ${fmtElapsed(now - Date.parse(started))}`
-                  : "")
-              }
-            />
+            {stateLine(agent, { now, seat, nameOf })}
+            {state === "working" && elapsed !== null && ` · ${fmtElapsed(elapsed)}`}
           </span>
         </span>
         {state === "working" && facts && <span className="seat-peek-facts">{facts}</span>}
@@ -335,6 +293,9 @@ function SeatPeekBody({
                   {chain.length > 1 && (
                     <span className="muted"> +{plural(chain.length - 1, "fallback")}</span>
                   )}
+                  {call?.model && (
+                    <span className="seat-peek-serving">serving now: {call.model}</span>
+                  )}
                 </span>
               ) : absent === "none" ? (
                 <EmptyValue label="No provider configured" />
@@ -343,10 +304,6 @@ function SeatPeekBody({
               ) : (
                 <EmptyValue label="Not reported yet" />
               )}
-              {/* THE LIVE CALL'S, NOT THE PROJECTION'S: which model is serving
-                  the call in flight reaches every reader the `agents` push
-                  does, the chain or no chain. */}
-              {call?.model && <span className="seat-peek-serving">serving now: {call.model}</span>}
             </dd>
 
             {windows.length ? (
@@ -380,9 +337,7 @@ function SeatPeekBody({
                 <span className="seat-peek-node">
                   <StatusDot tone="success" />
                   {lease.node}
-                  {lease.acquired_at && (
-                    <ClockText read={(now) => ` · since ${sinceWords(lease.acquired_at!, now)}`} />
-                  )}
+                  {lease.acquired_at && ` · since ${sinceWords(lease.acquired_at, now)}`}
                 </span>
               ) : fleet.data ? (
                 "No node holds it"
@@ -469,7 +424,7 @@ function BudgetFact({
           value={w.used}
           max={w.limit ?? 0}
           state={w.state}
-          valueText={`${fmtExact(w.used)} of ${fmtExact(w.limit ?? 0)} tokens`}
+          valueText={`${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens`}
         />
       </dd>
     </>

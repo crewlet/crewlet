@@ -1,19 +1,18 @@
 /**
- * Spend › Budgets, rendered over wire-shaped answers, with the two surfaces
- * behind the ceiling editor — the configuration and the org chart — stubbed
- * at `fetch`.
+ * Spend › Budgets, rendered over wire-shaped answers, with the configuration
+ * surface behind the ceiling editor stubbed at `fetch`.
  *
  * What these hold, one case each: every scope states all three windows; a
- * bar is the engine's `state` as served, never a fraction judged here; each
- * scope is written where it lives (a checked merge patch of the settings for
- * the company, the seat's chart content write of its runtime half for a
- * seat); a company change that introduces a warning waits for a second press;
- * a seat write that lost a race offers a reload; a 0 is refused before any
- * request; a reader who may not change the configuration sees every ceiling
- * with the reason, and no screen offers a reset.
+ * bar is the engine's `state` as served, never a fraction judged here; a
+ * ceiling change is CHECKED before it is saved, and each scope is written the
+ * way its document holds it (a merge patch for the company, the seat itself
+ * for a seat); a change that introduces a warning waits for a second press; a
+ * conflict offers a reload; a 0 is refused before any request; a reader who
+ * may not change the configuration sees every ceiling with the reason, and no
+ * screen offers a reset.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -23,6 +22,7 @@ import { Budgets } from "./Budgets.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { CONFIG_WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { BudgetWindow, BudgetsAnswer } from "~/protocol/index.ts";
 
@@ -90,26 +90,25 @@ function answer(extra: Partial<BudgetsAnswer> = {}): BudgetsAnswer {
   };
 }
 
-// The viewer answer as the engine sends it. The operator holds the company's
-// grants; the reader holds the state grant alone.
 const OPERATOR = {
-  login: "jane.doe",
-  grants: ["state:read", "config:read", "config:write"],
+  login: "U0FOUNDER",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
   handle: "jane",
   owner: "jane",
   name: "Jane",
   kind: "human",
-  acts: [],
 };
-const READER = {
-  login: "reader",
-  grants: ["state:read"],
-  handle: "",
-  owner: "reader",
-  name: "",
-  kind: "",
-  acts: [],
-};
+const READER = { login: "", grants: [], handle: "", owner: "", name: "", kind: "" };
 
 let budgetAsks = 0;
 
@@ -162,10 +161,9 @@ interface Call {
   url: string;
   body: unknown;
   ifMatch: string | null;
-  key: string | null;
 }
 
-/** Stub the engine's two surfaces; `respond` answers each request in order. */
+/** Stub the configuration surface; `respond` answers each request in order. */
 function stubConfig(respond: (call: Call) => Response): Call[] {
   const calls: Call[] = [];
   vi.stubGlobal(
@@ -177,7 +175,6 @@ function stubConfig(respond: (call: Call) => Response): Call[] {
         url: String(url),
         body: init.body ? JSON.parse(init.body as string) : undefined,
         ifMatch: headers.get("If-Match"),
-        key: headers.get("Idempotency-Key"),
       };
       calls.push(call);
       return respond(call);
@@ -186,22 +183,7 @@ function stubConfig(respond: (call: Call) => Response): Call[] {
   return calls;
 }
 
-/** The PM seat as `GET /chart/seats/pm?runtime=true` serves it. */
-const PM_SEAT = {
-  seat: {
-    handle: "pm",
-    kind: "agent",
-    unit: "product",
-    name: "PM",
-    goal: "ship the roadmap",
-    runtime: { llm: "zulu", token_budget: { month: 1000 } },
-  },
-  manages: null,
-  answer: { level: "consistent_prefix", position: "CREWLET_CHART_LOG@1:4" },
-  runtime: true,
-};
-/** The company's settings as `GET /config` serves them. */
-const COMPANY_DOC = { name: "Acme", token_budget: { day: 40_000_000 } };
+const PM_SEAT = { name: "PM", handle: "pm", llm: "zulu", token_budget: { month: 1000 } };
 const valid = (warnings: unknown[] = []) =>
   json({ valid: true, base_revision_id: "r1", warnings, derived: null }, 200);
 const saved = () => json({ revision_id: "r2", epoch: 5, warnings: [], derived: null }, 201);
@@ -256,51 +238,47 @@ test("each bar is the state the engine served, whatever its fill", async () => {
   expect(screen.getByText(/near at 90% of its ceiling/)).toBeTruthy();
 });
 
-// A SEAT'S CEILING IS ITS CHART RUNTIME: read with the runtime half at the
-// moment of the save, sent back as the seat's content with its ceiling
-// changed, under an operation a retry can resend. There is no check: the
-// chart has no dry run, and refuses a ceiling it will not hold outright.
-test("a seat's ceiling is written as the seat's chart content, and applies on the org push", async () => {
+// A CHECK, THEN THE SAVE — and a seat is written as the seat, read at the
+// moment of the save and sent back whole with its ceiling changed, on the
+// revision it was read from.
+test("a seat's ceiling is checked before it is saved, as the seat itself", async () => {
   const calls = stubConfig((call) => {
-    if (call.method === "GET") return json(PM_SEAT, 200);
-    return json({ outcome: "applied", position: "CREWLET_CHART_LOG@1:5", op_id: "k" }, 200);
+    if (call.method === "GET") return json(PM_SEAT, 200, { ETag: '"r1"' });
+    if (call.url.includes("dry_run=true")) return valid();
+    return saved();
   });
-  const store = mount(answer());
+  mount(answer());
   await settle();
   await edit(/Change PM's daily token ceiling/, "2.5M");
 
-  const writes = calls.map((c) => `${c.method} ${c.url.replace(/^https?:\/\/[^/]+/, "")}`);
-  expect(writes).toEqual(["GET /chart/seats/pm?runtime=true", "PATCH /chart/seats/pm"]);
-  const save = calls[1]!;
-  expect(save.key).toBeTruthy();
-  expect(save.body).toEqual({
-    unit: "product",
+  const writes = calls.map((c) => `${c.method} ${c.url.replace(/^.*\/config/, "/config")}`);
+  expect(writes).toEqual([
+    "GET /config/roles/pm",
+    "PUT /config/roles/pm?dry_run=true",
+    "PUT /config/roles/pm?dry_run=true",
+    "PUT /config/roles/pm",
+  ]);
+  const save = calls[3]!;
+  expect(save.ifMatch).toBe('"r1"');
+  expect(save.body).toMatchObject({
     name: "PM",
-    email: "",
-    backstory: "",
-    goal: "ship the roadmap",
-    responsibilities: [],
-    behavioral_guidelines: [],
-    project: "",
-    space: "",
-    runtime: { llm: "zulu", token_budget: { month: 1000, day: 2_500_000 } },
+    llm: "zulu",
+    token_budget: { month: 1000, day: 2_500_000 },
+    _summary: "Set PM's daily token ceiling to 2.5M",
   });
-  // Saved, and applying until this node pushes its org again.
+  // The check that preceded it carried the same seat and no summary.
+  expect(calls[2]!.body).toEqual({ ...PM_SEAT, token_budget: { month: 1000, day: 2_500_000 } });
+  // Saved, and applying until this node reports the epoch.
   expect(screen.getByText("of 2.5M")).toBeTruthy();
   expect(screen.getByText("applying…")).toBeTruthy();
-  const before = budgetAsks;
-  await act(async () => {
-    store.applyOrg({ timezone: "UTC", roles: [{ name: "PM", handle: "pm" }] });
-  });
-  await settle();
-  expect(budgetAsks).toBeGreaterThan(before);
 });
 
 // THE COMPANY'S CEILINGS ARE A MERGE PATCH naming only the window changed —
 // and an emptied field removes the key, which is the only "no ceiling".
 test("the company's ceiling is a merge patch of the one window, and empty removes it", async () => {
   const calls = stubConfig((call) => {
-    if (call.method === "GET") return json(COMPANY_DOC, 200, { ETag: '"r1"' });
+    if (call.method === "GET")
+      return json({ name: "Acme", token_budget: { day: 40_000_000 } }, 200, { ETag: '"r1"' });
     if (call.url.includes("dry_run=true")) return valid();
     return saved();
   });
@@ -310,7 +288,6 @@ test("the company's ceiling is a merge patch of the one window, and empty remove
   const save = calls.at(-1)!;
   expect(save.method).toBe("PATCH");
   expect(save.url).not.toContain("dry_run");
-  expect(save.ifMatch).toBe('"r1"');
   expect(save.body).toEqual({
     token_budget: { day: null },
     _summary: "Remove the company's daily token ceiling (was 40M)",
@@ -320,50 +297,53 @@ test("the company's ceiling is a merge patch of the one window, and empty remove
 // A WARNING THE CHANGE INTRODUCES STOPS IT. The check answers every warning
 // the company raises; only the new one is shown, and nothing is saved until
 // the person presses again.
-test("a company change that introduces a warning waits for Save anyway", async () => {
-  const fresh = {
+test("a change that introduces a warning waits for Save anyway", async () => {
+  const idle = {
     kind: "advisory",
-    path: "token_budget.week",
-    message: "the company's token_budget.week is below its token_budget.day",
+    path: "roles[0].token_budget.day",
+    seat: "pm",
+    message: "seat \"pm\"'s token_budget.day is at or above the company's",
   };
-  const old = { kind: "advisory", path: "scheduler.default", message: "an old one" };
+  const old = {
+    kind: "dangling_reference",
+    path: "roles[3].manages[0]",
+    seat: "x",
+    message: "an old one",
+  };
   let checks = 0;
   const calls = stubConfig((call) => {
-    if (call.method === "GET") return json(COMPANY_DOC, 200, { ETag: '"r1"' });
+    if (call.method === "GET") return json(PM_SEAT, 200, { ETag: '"r1"' });
     if (call.url.includes("dry_run=true")) {
       checks += 1;
-      return valid(checks === 1 ? [old] : [old, fresh]);
+      return valid(checks === 1 ? [old] : [old, idle]);
     }
     return saved();
   });
   mount(answer());
   await settle();
-  await edit(/Change the company's daily token ceiling/, "90M");
-  expect(screen.getByText(/below its token_budget.day/)).toBeTruthy();
+  await edit(/Change PM's daily token ceiling/, "90M");
+  expect(screen.getByText(/at or above the company's/)).toBeTruthy();
   expect(screen.queryByText("an old one")).toBeNull();
-  const stored = () => calls.filter((c) => c.method === "PATCH" && !c.url.includes("dry_run"));
-  expect(stored()).toHaveLength(0);
+  expect(calls.some((c) => c.method === "PUT" && !c.url.includes("dry_run"))).toBe(false);
 
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
   });
   await settle();
-  expect(stored()).toHaveLength(1);
+  expect(calls.filter((c) => c.method === "PUT" && !c.url.includes("dry_run"))).toHaveLength(1);
 });
 
-// A SEAT WRITE THAT LOST A RACE IS NOT AN OVERWRITE: a colleague's write to
-// the same seat landed first, nothing was saved, and Reload re-reads.
-test("a seat write that lost a race saves nothing and offers a reload", async () => {
+// A CONFLICT IS NOT AN OVERWRITE: nothing was saved, and Reload re-reads.
+test("a conflict saves nothing and offers a reload", async () => {
   stubConfig((call) => {
-    if (call.method === "GET") return json(PM_SEAT, 200);
-    return json({ error: "stale", detail: "the seat moved under this write" }, 409);
+    if (call.method === "GET") return json(PM_SEAT, 200, { ETag: '"r1"' });
+    if (call.url.includes("dry_run=true")) return valid();
+    return json({ error: "revision_advanced", current_revision_id: "r9" }, 409);
   });
   mount(answer());
   await settle();
   await edit(/Change PM's daily token ceiling/, "5M");
-  expect(
-    screen.getByText(/changed this seat at the same moment, so nothing was saved/),
-  ).toBeTruthy();
+  expect(screen.getByText(/changed since this was read, so nothing was saved/)).toBeTruthy();
   const before = budgetAsks;
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Reload" }));
@@ -385,15 +365,21 @@ test("a ceiling of 0 is refused before anything is sent", async () => {
   expect(calls).toHaveLength(0);
 });
 
-// NEVER HIDDEN: a reader without `config:write` sees every ceiling and every
-// pencil, disabled with the reason, and the reason once above.
+// NEVER HIDDEN: a reader who may not write the configuration sees every
+// ceiling and every pencil, disabled with the reason, and the reason once
+// above — the grant a ceiling is written under, for a signed-in reader
+// without it, and signing in for nobody at all.
 test("a reader who cannot change the configuration sees why, on every ceiling", async () => {
-  mount(answer(), READER);
+  mount(answer(), { login: "dee", owner: "dee", grants: ["state:read"] });
   await settle();
   const pencils = screen.getAllByRole("button", { name: /token ceiling/ });
   expect(pencils.length).toBe(6);
   for (const pencil of pencils) expect(pencil.getAttribute("aria-disabled")).toBe("true");
-  expect(screen.getAllByText(/takes the config:write grant/).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(CONFIG_WRITE_REASONS.no_grant).length).toBeGreaterThan(0);
+  cleanup();
+  mount(answer(), READER);
+  await settle();
+  expect(screen.getAllByText(CONFIG_WRITE_REASONS.anonymous).length).toBeGreaterThan(0);
 });
 
 // UNREADABLE IS NOT ZERO.

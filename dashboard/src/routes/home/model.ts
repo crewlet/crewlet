@@ -25,7 +25,7 @@ import type {
   FeedScheduleRun,
   WorkFlowPoint,
 } from "~/protocol/index.ts";
-import { dateFormatter, fmtExact, plural } from "~/lib/format.ts";
+import { plural } from "~/lib/format.ts";
 
 /** The three windows the screen reads over, and what each is called. */
 export const HOME_RANGES = [
@@ -85,7 +85,7 @@ export function deltaWords(
     const pct = Math.round((diff / previous) * 100);
     return `${pct > 0 ? "+" : pct < 0 ? "−" : "±"}${Math.abs(pct)}%`;
   }
-  return `${diff > 0 ? "+" : diff < 0 ? "−" : "±"}${fmtExact(Math.abs(diff))}`;
+  return `${diff > 0 ? "+" : diff < 0 ? "−" : "±"}${Math.abs(diff).toLocaleString()}`;
 }
 
 /** The seats in each state the engine names, for the first tile. */
@@ -124,9 +124,9 @@ export function joinParts(parts: readonly string[]): string {
 export function crewParts(crew: Crew): string[] {
   if (crew.total === 0) return ["No agent seats in the chart"];
   const parts = [
-    crew.needs && `${fmtExact(crew.needs)} waiting`,
-    crew.stopped && `${fmtExact(crew.stopped)} stopped`,
-    crew.idle && `${fmtExact(crew.idle)} idle`,
+    crew.needs && `${crew.needs.toLocaleString()} waiting`,
+    crew.stopped && `${crew.stopped.toLocaleString()} stopped`,
+    crew.idle && `${crew.idle.toLocaleString()} idle`,
   ].filter(Boolean) as string[];
   if (parts.length === 0) return crew.working === crew.total ? ["Every seat is working"] : [];
   return parts;
@@ -135,8 +135,8 @@ export function crewParts(crew: Crew): string[] {
 /** "2 blocked · 1 overdue", naming only the shapes of trouble that are there. */
 export function troubleParts(now: { blocked: number; overdue: number }): string[] {
   return [
-    now.blocked && `${fmtExact(now.blocked)} blocked`,
-    now.overdue && `${fmtExact(now.overdue)} overdue`,
+    now.blocked && `${now.blocked.toLocaleString()} blocked`,
+    now.overdue && `${now.overdue.toLocaleString()} overdue`,
   ].filter(Boolean) as string[];
 }
 
@@ -170,12 +170,12 @@ function weekday(at: string, zone: string | undefined): string {
   const t = Date.parse(at);
   if (!Number.isFinite(t)) return "";
   try {
-    return dateFormatter(undefined, {
+    return new Intl.DateTimeFormat(undefined, {
       weekday: "short",
       timeZone: zone || undefined,
     }).format(t);
   } catch {
-    return dateFormatter(undefined, { weekday: "short" }).format(t);
+    return new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(t);
   }
 }
 
@@ -223,7 +223,7 @@ export interface Segment {
 /**
  * The one sentence under the greeting, as runs of text.
  *
- * THE ORDER IS PRECEDENCE: a refused token and a lost connection are said
+ * THE ORDER IS PRECEDENCE: a refused session and a lost connection are said
  * before anything the last push claimed, because what was pushed may be stale;
  * an engine running no company is said before a fleet size, because a fleet
  * running nothing is not "running"; a node that shed its seats says so rather
@@ -252,8 +252,10 @@ export function statusSentence(input: {
 }): Segment[] {
   const { company, connected, authRejected, configured, posture, draining, nodes } = input;
   const sole = (text: string): Segment[] => [{ text }];
+  // NOBODY IS SIGNED IN: the browser holds a session or nothing, never a token
+  // to set, so the repair is the sign-in the frame already offers.
   if (authRejected)
-    return sole("The engine refused this browser's token — set one to read the company.");
+    return sole("Nobody is signed in on this browser — sign in to read the company.");
   if (!connected)
     return sole("Not connected to the engine. What is shown is the last state it sent.");
   if (configured === false) return sole("No configuration is active, so no seat is running.");
@@ -284,7 +286,7 @@ export function statusSentence(input: {
       const one = w.count === 1 && !w.floor;
       clauses.push([
         {
-          text: `${fmtExact(w.count)}${w.floor ? "+" : ""} ${one ? "decision" : "decisions"}`,
+          text: `${w.count.toLocaleString()}${w.floor ? "+" : ""} ${one ? "decision" : "decisions"}`,
           strong: true,
         },
         { text: one ? " is waiting on you" : " are waiting on you" },
@@ -426,14 +428,14 @@ export const FEED_PHRASES = {
  * sentence a tick nobody ran must not say.
  */
 export const SCHEDULE_OUTCOMES = {
-  fired: { one: "ran", many: (n: number) => `ran ${fmtExact(n)} times` },
+  fired: { one: "ran", many: (n: number) => `ran ${n.toLocaleString()} times` },
   skipped_catchup: {
     one: "skipped a missed tick",
-    many: (n: number) => `skipped ${fmtExact(n)} missed ticks`,
+    many: (n: number) => `skipped ${n.toLocaleString()} missed ticks`,
   },
   skipped_paused: {
     one: "skipped a tick while its runner was paused",
-    many: (n: number) => `skipped ${fmtExact(n)} ticks while its runner was paused`,
+    many: (n: number) => `skipped ${n.toLocaleString()} ticks while its runner was paused`,
   },
 } as const satisfies Record<string, { one: string; many: (n: number) => string }>;
 
@@ -448,7 +450,7 @@ export function scheduleVerb(run: FeedScheduleRun): string {
   )[outcome];
   if (!phrase) {
     const word = outcome.replace(/_/g, " ");
-    return n > 1 ? `recorded “${word}” ${fmtExact(n)} times` : `recorded “${word}”`;
+    return n > 1 ? `recorded “${word}” ${n.toLocaleString()} times` : `recorded “${word}”`;
   }
   return n > 1 ? phrase.many(n) : phrase.one;
 }

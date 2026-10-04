@@ -14,7 +14,7 @@
  * one axis query, however long the tab stays open.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Activity, dayKey } from "./Activity.tsx";
@@ -45,10 +45,9 @@ afterEach(() => {
 });
 
 /** Mount the log over a socket that counts what it is asked, and for what. */
-function mount(seed?: (store: Store) => void) {
+function mount() {
   const asked: { what: string; params: Record<string, unknown> }[] = [];
   const store = new Store();
-  seed?.(store);
   const socket = new LiveSocket(store);
   (
     socket as unknown as {
@@ -261,93 +260,6 @@ test("the key a heading groups on is the string it draws", () => {
   }
 });
 
-/** Two agent seats sharing one name, told apart only by handle and agent id. */
-function namesakes(store: Store): void {
-  store.applyOrg({
-    name: "Acme",
-    roles: [
-      { name: "Engineer", handle: "eng-a" },
-      { name: "Engineer", handle: "eng-b" },
-    ],
-  });
-  store.applySeats([
-    { id: "eng-a", agent_id: "id-a", role: "Engineer", handle: "eng-a" },
-    { id: "eng-b", agent_id: "id-b", role: "Engineer", handle: "eng-b" },
-  ]);
-  const at = new Date(Date.now() - 30_000).toISOString();
-  for (const [id, agent] of [
-    ["live-a", "id-a"],
-    ["live-b", "id-b"],
-  ] as const) {
-    store.applyEvent({
-      id,
-      type: "agent_turn_completed",
-      timestamp: at,
-      source: "Engineer",
-      actor: "Engineer",
-      summary: `turn by ${agent}`,
-      category: "lifecycle",
-      trace_id: "",
-      span_id: "",
-      parent_span_id: "",
-      topic: "",
-      failed: false,
-      agent_id: agent,
-    });
-  }
-}
-
-// ONE SEAT'S ACTIVITY IS ITS OWN WHEN ITS NAME IS SHARED.
-//
-// A seat's "Its events" arrived here as `actor` carrying the seat's NAME, so
-// the list, its paged history and the axis above it all counted a namesake's
-// events as this seat's. It arrives as the HANDLE now, is asked of the engine
-// by that handle (`seat=`, which the engine resolves to the agent id), and the
-// live rows are narrowed by the agent id the handle pairs with on the roster.
-//
-// Mutation: narrow the live rows by the seat's name, or ask by `actor`, and
-// the namesake's turn is listed as this seat's.
-test("a seat filter asks by handle and lists by agent id, never by the name it shares", async () => {
-  location.hash = "#/live/events?seat=eng-b";
-  try {
-    const { asked } = mount(namesakes);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    for (const what of ["events", "event_series"]) {
-      const ask = asked.find((a) => a.what === what);
-      expect(ask?.params.seat, what).toBe("eng-b");
-      expect(ask?.params.actor, what).toBeUndefined();
-    }
-    expect(screen.getByText("turn by id-b")).toBeDefined();
-    expect(screen.queryByText("turn by id-a")).toBeNull();
-  } finally {
-    location.hash = "";
-  }
-});
-
-// AND A HANDLE NO SEAT ON THE ROSTER ANSWERS TO NARROWS THE LIVE ROWS TO
-// NOTHING, rather than to everything: shown unfiltered, the log would list
-// every seat's events under the one a reader followed a link to. The pages and
-// the axis are still asked, by that handle — the engine resolves a handle a
-// rename retired to the seat that held it, and refuses one that names no seat,
-// which is an answer this screen draws rather than one it guesses.
-test("a seat the roster cannot place lists none of the live rows and still asks the engine", async () => {
-  location.hash = "#/live/events?seat=nobody";
-  try {
-    const { asked } = mount(namesakes);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    for (const what of ["events", "event_series"]) {
-      expect(asked.find((a) => a.what === what)?.params.seat, what).toBe("nobody");
-    }
-    expect(screen.queryByText(/turn by/)).toBeNull();
-  } finally {
-    location.hash = "";
-  }
-});
-
 // ONE SEAT'S EVENTS, which is where a profile's "Events" lands. The engine
 // narrows every page and the axis by the handle; the LIVE rows arrive on the
 // socket for every seat, so the log narrows those itself — by the id the
@@ -362,8 +274,6 @@ test("a seat's log asks for that seat and shows only its live rows", async () =>
       { name: "CTO", handle: "cto" },
     ],
   });
-  // THE ROSTER, set whole (`applySeats`): `applyAgents` only patches the live
-  // overlay of a seat the roster already holds.
   store.applySeats([
     { role: "SWE", handle: "swe", agent_id: "a-swe" },
     { role: "CTO", handle: "cto", agent_id: "a-cto" },

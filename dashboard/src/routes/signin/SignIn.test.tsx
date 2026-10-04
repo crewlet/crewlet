@@ -9,7 +9,7 @@
  * exchange is sent once, in the header, and kept nowhere.
  */
 
-import { act, answered, cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { CHUNKS, loadChunk } from "~/app/lazyScreen.ts";
 import { App } from "~/app/App.tsx";
@@ -127,6 +127,12 @@ const SIGNED_IN: Answer = {
  * once the case that asks has ended, so a case still running after its time
  * ran out opens no `act` beside the next one.
  */
+/** Every answer in flight lands, after `step` if given. */
+async function answered(step?: () => void): Promise<void> {
+  if (step) act(step);
+  await act(async () => {});
+}
+
 function mount() {
   const store = new Store();
   const socket = new LiveSocket(store);

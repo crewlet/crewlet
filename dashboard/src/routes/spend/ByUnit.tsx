@@ -14,7 +14,7 @@ import { BarList, Card, DATA_COLORS, Skeleton } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { fmtCount, plural } from "~/lib/format.ts";
-import { indexOrg, unitByKey, unitPath } from "~/lib/seats.ts";
+import { indexOrg, unitByKey, unitRoute, type Unit } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 
@@ -38,9 +38,7 @@ export function ByUnit({
   // A BAND IS A UNIT'S KEY, labelled by the engine with its name — two units
   // may share a name, so a band keyed on one pooled them — and it LINKS TO A
   // TEAM ONLY WHERE THE CHART HOLDS ONE BY THAT KEY: the root seats' band is
-  // "no unit" and the residual is several. A key a unit has since given up
-  // still resolves to it (`unitByKey`), and the link opens it by the key it
-  // answers to now.
+  // "no unit" and the residual is several.
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   return (
@@ -49,12 +47,7 @@ export function ByUnit({
         <h2 className="spend-title">By team</h2>
         {words && <span className="spend-caption">{words}</span>}
       </div>
-      <QueryState
-        error={units.error}
-        refusal={units.refusal}
-        detail={units.detail ?? undefined}
-        loading={false}
-      >
+      <QueryState error={units.error} refusal={units.refusal} detail={units.detail} loading={false}>
         {units.loading && !units.data ? (
           <Skeleton height="4.5rem" />
         ) : (
@@ -84,6 +77,6 @@ export function ByUnit({
 }
 
 /** A team's page, where the chart holds the unit a band names. */
-function teamHref(unit: Parameters<typeof unitPath>[0] | null): string | undefined {
-  return unit ? href(unitPath(unit)) : undefined;
+function teamHref(unit: Unit | null): string | undefined {
+  return unit ? href(unitRoute(unit)) : undefined;
 }

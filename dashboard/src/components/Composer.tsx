@@ -1,7 +1,6 @@
 /**
- * Writing on a task as the signed-in principal (ADR-0024) — a person bound to
- * a seat writes AS the seat: from the Inbox's pane, and from the task's own
- * page.
+ * Writing on a task as the person signed in (ADR-0024): from the
+ * Inbox's pane, and from the task's own page.
  *
  * THREE MODES, and the difference is whether an ask CLOSES or OPENS:
  *
@@ -25,8 +24,8 @@
  * AND THE TWO THINGS A COMMENT CANNOT CARRY: a link to another task (the item's
  * `linked` relation) and a page — an existing one, or what was written here
  * saved as a new one (`write_page`) — attached to the item (`linked_pages`).
- * Both are writes of their own, made as the same person, so a reader sees
- * them land in the item's links rather than in the prose.
+ * Both are writes of their own, made with the same person's token, so a
+ * reader sees them land in the item's links rather than in the prose.
  */
 
 import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from "react";
@@ -56,7 +55,6 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { matchesRow } from "~/app/keymap.ts";
 import { handleLabel, type OrgIndex } from "~/lib/seats.ts";
 import { firstLine } from "~/lib/format.ts";
-import { itemAddress } from "~/lib/work.ts";
 
 /** How the composer posts. */
 export type ComposeMode =
@@ -543,25 +541,20 @@ function AskDialog({
 function LinkTaskDialog({ item, onClose }: { item: string; onClose: () => void }) {
   const write = useAct("update_work_item");
   const [q, setQ] = useState("");
-  // A HIT IS CHOSEN AND SENT BY ITS ADDRESS (`itemAddress`), and drawn by
-  // its key: a key another task claimed first names that task to the engine,
-  // so the link would land on the claimant.
-  const [chosen, setChosen] = useState<{ address: string; key: string; title: string } | null>(
-    null,
-  );
+  const [chosen, setChosen] = useState<{ key: string; title: string } | null>(null);
   const search = useQuery(
     "work_search",
     { q: q.trim(), mode: "hybrid", limit: 8 },
     { enabled: q.trim().length >= 2 },
   );
-  const hits = (search.data?.hits ?? []).filter((h) => itemAddress(h) !== item);
+  const hits = (search.data?.hits ?? []).filter((h) => h.key !== item);
   const blocked = chosen ? undefined : "Choose a task first.";
   const submit = async () => {
     // THE BUTTON'S OWN GATE: the dialog is a form its search field submits
     // on Enter.
     if (!chosen || !pressable(write, blocked)) return;
     const result = await write.run(
-      { item, linked: { add: [chosen.address] } },
+      { item, linked: { add: [chosen.key] } },
       { done: `Linked ${chosen.key} to ${item}` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
@@ -602,11 +595,11 @@ function LinkTaskDialog({ item, onClose }: { item: string; onClose: () => void }
         </FormField>
         <PickList
           label="Tasks"
-          items={hits.map((h) => ({ id: itemAddress(h), title: h.title, meta: h.key }))}
-          chosen={chosen?.address ?? ""}
+          items={hits.map((h) => ({ id: h.key, title: h.title, meta: h.key }))}
+          chosen={chosen?.key ?? ""}
           onChoose={(id) => {
-            const hit = hits.find((h) => itemAddress(h) === id);
-            if (hit) setChosen({ address: itemAddress(hit), key: hit.key, title: hit.title });
+            const hit = hits.find((h) => h.key === id);
+            if (hit) setChosen({ key: hit.key, title: hit.title });
           }}
           empty={
             q.trim().length < 2

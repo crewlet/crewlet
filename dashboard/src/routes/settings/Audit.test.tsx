@@ -1,40 +1,31 @@
 /**
- * The audit reads six subsystems as one feed, and says what it cannot see.
+ * The audit reads four subsystems as one feed, and says what it cannot see.
  *
  * Three claims, and each is the whole reason the screen exists:
  *
  *  1. IT ASKS FOR WHO WAS WRITING. Both history feeds are asked with
- *     `actor_kinds`, not with a set of handles — a person bound to a seat
- *     writes AS the seat, kind `human`, and a credential bound to none writes
- *     under its whole login, kind `operator`, so the name spaces are disjoint,
- *     and the set of people is the roster, which changes. Asked by handle, this
- *     screen would quietly lose every write made by somebody who has since
- *     left, which is the one write an audit is usually opened to find.
- *  2. SIX SOURCES, ONE ORDER. A tracker commit, a page change, a config
- *     revision, a credential write, a runtime call and an identity change are
- *     six honest records in six places; read separately they cannot answer
- *     "what did we change on Tuesday".
- *  3. A PAGE THAT DID NOT REACH THE WINDOW SAYS SO. Three sources are narrowed
- *     here, and every one of the six answers a single page, so a busy
+ *     `actor_kinds`, not with a set of handles — an `operator` commit carries
+ *     a token's own label where an `agent` one carries a seat handle, so the
+ *     two name spaces are disjoint, and the set of people is the roster, which
+ *     changes. Asked by handle, this screen would quietly lose every write
+ *     made by somebody who has since left, which is the one write an audit is
+ *     usually opened to find.
+ *  2. FOUR SOURCES, ONE ORDER. A tracker commit, a page change, a config
+ *     revision and a credential write are four honest records in four places;
+ *     read separately they cannot answer "what did we change on Tuesday".
+ *  3. A PAGE THAT DID NOT REACH THE WINDOW SAYS SO. Only the tracker's feed
+ *     takes a wall-clock window; the other three are narrowed here, so a busy
  *     company's window can extend past the oldest row that arrived — and a
  *     screen silent about that is claiming those rows do not exist.
  */
 
-import { Profiler } from "react";
-import { act, answered, cleanup, render, screen } from "~/test/inCase.ts";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Audit, auditCsv, writerOf } from "./Audit.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
-import type { QueryName } from "~/protocol/index.ts";
-import {
-  CLAIMANT,
-  CLAIMANT_HREF,
-  DUPLICATE,
-  DUPLICATE_HREF,
-  SHARED_KEY,
-} from "~/test/keyCollision.ts";
+import { QueryError, type QueryName } from "~/protocol/index.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -50,37 +41,17 @@ const json = (body: unknown, status = 200) =>
 
 /**
  * The engine's two REST reads this screen makes — the credential listing and
- * the identity trail — each answered as told, every read recorded by its
- * path.
+ * the identity trail — each answered as told, every read recorded by its path.
  */
 let restAnswers: {
-  secrets: (call: number) => Response | Promise<Response>;
-  identity: (call: number) => Response | Promise<Response>;
+  secrets: () => Response;
+  identity: () => Response | Promise<Response>;
 };
-let restReads: { path: string; query: URLSearchParams; at: number }[] = [];
-
-function stubRest() {
-  Object.defineProperty(globalThis, "fetch", {
-    writable: true,
-    value: vi.fn(async (input: RequestInfo | URL) => {
-      const url = new URL(String(input), "http://engine.test");
-      restReads.push({ path: url.pathname, query: url.searchParams, at: Date.now() });
-      const calls = restReads.filter((r) => r.path === url.pathname).length;
-      if (url.pathname === "/secrets") return restAnswers.secrets(calls);
-      if (url.pathname === "/iam/audit") return restAnswers.identity(calls);
-      return json({});
-    }),
-  });
-}
+let restReads: { path: string; query: URLSearchParams }[] = [];
 
 /** The reads made of one REST path, in order. */
 const readsOf = (path: string) => restReads.filter((r) => r.path === path);
 
-// THE CLOCK RUNS FOR REAL. This suite used to fake the interval it ticks on,
-// because every tick re-asked the tracker and drew every row again, so a case
-// did more work the slower its runner was. A tick reaches only the date cells
-// whose words change now — which is what the case below about ticks pins — and
-// the cases about time passing move every timer themselves.
 beforeEach(() => {
   location.hash = "#/settings/audit";
   restReads = [];
@@ -88,15 +59,38 @@ beforeEach(() => {
     secrets: () => json({ secrets: [] }),
     identity: () => json({ events: [], next: 0, position: "CREWLET_IAM_LOG@1:1" }),
   };
-  stubRest();
+  Object.defineProperty(globalThis, "fetch", {
+    writable: true,
+    value: vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://engine.test");
+      restReads.push({ path: url.pathname, query: url.searchParams });
+      if (url.pathname === "/iam/audit") return restAnswers.identity();
+      if (url.pathname === "/secrets") return restAnswers.secrets();
+      return json({});
+    }),
+  });
 });
 
 afterEach(() => {
   cleanup();
-  vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.useRealTimers();
+  // The tab's visibility goes back to jsdom's own, which stops the clock.
+  delete (document as { visibilityState?: unknown }).visibilityState;
   location.hash = "";
 });
+
+/**
+ * A clock the test moves, started half way through a minute — so a few
+ * seconds passing cross no minute, and a poll a minute on comes after one —
+ * in a tab that is VISIBLE, which jsdom's is not and the shared clock ticks
+ * only in.
+ */
+function clockMidMinute() {
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.setSystemTime(Math.ceil(Date.now() / 60_000) * 60_000 + 30_000);
+}
 
 /** An instant inside every window this screen offers. */
 const RECENTLY = new Date(Date.now() - 60_000).toISOString();
@@ -110,7 +104,7 @@ function commit(over: Record<string, unknown> = {}) {
     at: RECENTLY,
     effective_at: RECENTLY,
     kind: "removed",
-    actor: "maya.lee",
+    actor: "U0FOUNDER",
     actor_kind: "operator",
     subject_kind: "task",
     subject_id: "t-1",
@@ -121,8 +115,13 @@ function commit(over: Record<string, unknown> = {}) {
   };
 }
 
+/** The socket's answers, one per question; an Error is the question refused. */
 function serving(answers: Partial<Record<QueryName, unknown>> = {}) {
-  const query = vi.fn(async (what: string) => answers[what as QueryName] ?? {});
+  const query = vi.fn(async (what: string) => {
+    const answer = answers[what as QueryName];
+    if (answer instanceof Error) throw answer;
+    return answer ?? {};
+  });
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
   vi.mocked(useOrg).mockReturnValue({
@@ -135,25 +134,12 @@ function serving(answers: Partial<Record<QueryName, unknown>> = {}) {
   return query;
 }
 
-/**
- * The screen. A case lets every answer the stubbed socket and fetch give land,
- * and renders what they change, with [answered].
- *
- * NOT A POLL. A `waitFor` gave the screen a second of real time to show a
- * row, re-reading the whole document each time it looked — a hundred rows of
- * it, in the case whose page is full — and on a loaded machine the second ran
- * out while the grid was still rendering. The answers are promises, so `act`
- * runs them, and the renders they cause, to the end, however long that takes.
- * And the flush is refused once the case that asks has ended, so a case still
- * running after its time ran out cannot open an `act` beside the next one.
- */
-function mount() {
-  return render(
+const mount = () =>
+  render(
     <Router>
       <Audit />
     </Router>,
   );
-}
 
 /** The parameters one question was actually asked with. */
 function asked(query: ReturnType<typeof serving>, what: QueryName): Record<string, unknown> {
@@ -161,20 +147,11 @@ function asked(query: ReturnType<typeof serving>, what: QueryName): Record<strin
   return calls.findLast(([name]) => name === what)?.[1] ?? {};
 }
 
-/** The notice above the grid that says how the rows fall short, as one text. */
-function shortfall(): string {
-  return document.querySelector(".crewlet-callout")?.textContent ?? "";
-}
-
-/** The claim the card's header makes when no source fell short. */
-const CLAIM = /Every write a person or a credential made/;
-
 // IT ASKS BY KIND, ON BOTH FEEDS.
 test("both history feeds are asked for who was writing, not for a list of people", async () => {
   const query = serving({ work_activity: { records: [], complete: true } });
   mount();
-  await answered();
-  expect(asked(query, "work_activity").actor_kinds).toBeTruthy();
+  await waitFor(() => expect(asked(query, "work_activity").actor_kinds).toBeTruthy());
 
   for (const what of ["work_activity", "page_activity"] as const) {
     const kinds = String(asked(query, what).actor_kinds ?? "");
@@ -192,98 +169,6 @@ test("both history feeds are asked for who was writing, not for a list of people
   expect(asked(query, "work_activity").to).toBeTruthy();
 });
 
-// THE TRACKER IS ASKED ON THE POLL, NOT ON THE CLOCK.
-//
-// The window's edges were read off the one-second clock at render and written
-// into the question, so every tick was a new question: the feed was asked one,
-// two, three, four times over three ticks where the poll says once a minute,
-// and a minute moved in one `act` re-keyed it sixty times in a row — which
-// React reports as "Maximum update depth exceeded". Keyed on the window, with
-// its edges computed by the ask, a tick asks nothing and the poll asks over
-// the window ending when it asks.
-test("the tracker is asked once a minute however often the clock ticks", async () => {
-  vi.useFakeTimers();
-  const errors = vi.spyOn(console, "error");
-  const query = serving({ work_activity: { records: [], complete: true } });
-  const asks = () =>
-    (query.mock.calls as unknown as [string, Record<string, unknown>][])
-      .filter(([what]) => what === "work_activity")
-      .map(([, params]) => params);
-  mount();
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(0);
-  });
-  expect(asks()).toHaveLength(1);
-
-  // FIFTY-NINE TICKS of the clock, one at a time, as a tab open on the screen
-  // sees them.
-  for (let tick = 1; tick < 60; tick++) {
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_000);
-    });
-  }
-  expect(asks()).toHaveLength(1);
-
-  // AND THE POLL, which asks over the window as of ITS instant: a minute on
-  // from the first ask, still seven days wide.
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(1_000);
-  });
-  expect(asks()).toHaveLength(2);
-  const [first, second] = asks();
-  const at = (params: Record<string, unknown> | undefined, edge: "from" | "to") =>
-    Date.parse(String(params?.[edge]));
-  expect(at(second, "to") - at(first, "to")).toBe(60_000);
-  expect(at(second, "to") - at(second, "from")).toBe(7 * 24 * 60 * 60_000);
-
-  // A MINUTE MOVED IN ONE GO is one more ask, not sixty.
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(60_000);
-  });
-  expect(asks()).toHaveLength(3);
-  expect(
-    errors.mock.calls.filter(([message]) => /Maximum update depth/.test(String(message))),
-  ).toEqual([]);
-});
-
-// AND A TICK DRAWS NOTHING. The window was the clock and the columns closed
-// over it, so every second re-asked the feed and drew every row again — a
-// probe counted 131 to 248 ms of render a tick for a hundred rows under the
-// development build. A row aged a minute reads "1m ago" for the next minute,
-// so ten ticks inside it are ten ticks in which nothing on this screen moves.
-test("a tick of the clock draws nothing on the audit", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
-  // THE ROWS' AGE IS SET, not inherited from when this case happens to run.
-  // They were written at RECENTLY, fixed when the file loaded; on the real
-  // clock their age was a minute plus however long the cases before this one
-  // took, and fifty seconds of that on a loaded runner put the ten ticks
-  // across "2m ago" — a render this case would then count against the screen.
-  // Sixty-five seconds old, they read "1m ago" for the next fifty-five.
-  vi.setSystemTime(Date.parse(RECENTLY) + 65_000);
-  const records = Array.from({ length: 20 }, (_, i) =>
-    commit({ id: `h-${i}`, subject_key: `ENG-${i}`, excerpt: `edit ${i}` }),
-  );
-  serving({ work_activity: { records, complete: true } });
-  let commits = 0;
-  render(
-    <Profiler id="audit" onRender={() => (commits += 1)}>
-      <Router>
-        <Audit />
-      </Router>
-    </Profiler>,
-  );
-  await answered();
-  expect(screen.getByText("edit 19")).toBeTruthy();
-  const settled = commits;
-
-  for (let tick = 0; tick < 10; tick++) {
-    act(() => {
-      vi.advanceTimersByTime(1_000);
-    });
-  }
-  expect(commits).toBe(settled);
-});
-
 // FOUR SOURCES, ONE FEED, NEWEST FIRST.
 test("a tracker commit, a page change and a config revision land in one list", async () => {
   serving({
@@ -296,7 +181,6 @@ test("a tracker commit, a page change and a config revision land in one list", a
           kind: "saved",
           actor: "ada",
           actor_kind: "human",
-          operator_id: "session:0192f00e",
           at: RECENTLY,
           log_seq: 2,
           title: "Deploy runbook",
@@ -312,28 +196,20 @@ test("a tracker commit, a page change and a config revision land in one list", a
         summary: "turn on the Slack integration",
         source: "dashboard",
         created_by: "founder",
-        created_by_kind: "human",
-        operator_id: "pat:0192f00d",
+        created_by_kind: "operator",
         created_at: RECENTLY,
       },
     ],
   });
   mount();
 
-  await answered();
-
-  expect(screen.getByText("took it off the board")).toBeTruthy();
+  await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
   expect(screen.getByText("rewrote the rollback step")).toBeTruthy();
   expect(screen.getByText("turn on the Slack integration")).toBeTruthy();
   // AND EVERY ROW SAYS WHICH KIND OF WRITER MADE IT, which is the fact that
   // separates "a person did this" from "a token did" from "the engine did".
   expect(screen.getAllByText("operator").length).toBeGreaterThan(0);
   expect(screen.getAllByText("human").length).toBeGreaterThan(0);
-  // AND THE CREDENTIAL BESIDE THE WRITER, on every source that records one:
-  // a revision a person's token wrote is theirs, and saying which token is
-  // what tells it from one they wrote by hand.
-  expect(screen.getByText("pat:0192f00d")).toBeTruthy();
-  expect(screen.getByText("session:0192f00e")).toBeTruthy();
 });
 
 // A PURGED TASK IS NOT A LINK.
@@ -348,8 +224,7 @@ test("a purge names its key and does not link to a page that is gone", async () 
     },
   });
   mount();
-  await answered();
-  expect(screen.getByText("duplicate of ENG-4")).toBeTruthy();
+  await waitFor(() => expect(screen.getByText("duplicate of ENG-4")).toBeTruthy());
   // BY ROLE, not by walking up from a span: a grid wraps each cell, so the
   // wrapper's own `closest("a")` is null whether or not the anchor is INSIDE
   // it — an assertion that passes either way.
@@ -360,45 +235,8 @@ test("a purge names its key and does not link to a page that is gone", async () 
   cleanup();
   serving({ work_activity: { records: [commit()], complete: true } });
   mount();
-  await answered();
-  expect(screen.getByText("took it off the board")).toBeTruthy();
+  await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
   expect(screen.getByRole("link", { name: "ENG-9" })).toBeTruthy();
-});
-
-// TWO TASKS UNDER ONE KEY ARE TWO LINKS.
-//
-// A commit is named by its task's key, and a key two tasks hold opens the one
-// that claimed it first — so the audit row for a change to the duplicate led
-// to its claimant, which is the one place a reader goes to check what was done
-// to which task. The engine says beside the key when it opens another task,
-// and that row goes by the task's id.
-test("changes to two tasks under one key link to their own two tasks", async () => {
-  serving({
-    work_activity: {
-      records: [
-        commit({
-          id: "h-2",
-          subject_id: DUPLICATE,
-          subject_key: SHARED_KEY,
-          subject_key_collision: true,
-          excerpt: "edited the duplicate",
-        }),
-        commit({
-          id: "h-1",
-          subject_id: CLAIMANT,
-          subject_key: SHARED_KEY,
-          excerpt: "edited the claimant",
-        }),
-      ],
-      complete: true,
-    },
-  });
-  mount();
-  await answered();
-  const hrefs = screen
-    .getAllByRole("link", { name: SHARED_KEY })
-    .map((a) => a.getAttribute("href"));
-  expect(new Set(hrefs)).toEqual(new Set([CLAIMANT_HREF, DUPLICATE_HREF]));
 });
 
 // A SHORT PAGE IS REPORTED, NOT SWALLOWED.
@@ -408,161 +246,36 @@ test("changes to two tasks under one key link to their own two tasks", async () 
 // window this screen cannot honestly claim to have covered.
 test("a source whose page stops inside the window says so", async () => {
   const old = new Date(Date.now() - 60_000).toISOString();
-  // THE PAGE ANSWERS LAST, once the other three sources have, so its hundred
-  // rows are rendered twice — for the answer, and again as the grid takes the
-  // keyboard — rather than three times: answered beside the others, the
-  // credentials' answer, a REST read landing a few turns after the socket's,
-  // rendered every row once more. On an idle machine the case went from
-  // 700 ms to 575.
-  let answerThePage: (page: unknown) => void = () => {};
   serving({
     work_activity: { records: [], complete: true },
-    page_activity: new Promise((resolve) => {
-      answerThePage = resolve;
-    }),
+    // A FULL PAGE whose oldest row is still inside the window: the page
+    // filled up before it reached the start, so there are older rows the
+    // screen never saw.
+    page_activity: {
+      changes: Array.from({ length: 100 }, (_, i) => ({
+        id: `p-${i}`,
+        page_id: "pg-1",
+        kind: "saved",
+        actor: "ada",
+        actor_kind: "human",
+        at: old,
+        log_seq: 100 - i,
+        title: "Deploy runbook",
+        container: "ENG",
+        excerpt: `edit ${i}`,
+      })),
+      complete: true,
+    },
   });
   mount();
-  await answered();
-  // A FULL PAGE whose oldest row is still inside the window: the page filled
-  // up before it reached the start, so there are older rows the screen never
-  // saw.
-  answerThePage({
-    changes: Array.from({ length: 100 }, (_, i) => ({
-      id: `p-${i}`,
-      page_id: "pg-1",
-      kind: "saved",
-      actor: "ada",
-      actor_kind: "human",
-      at: old,
-      log_seq: 100 - i,
-      title: "Deploy runbook",
-      container: "ENG",
-      excerpt: `edit ${i}`,
-    })),
-    complete: true,
-  });
-  await answered();
-  // Found once: a text query walks every element of the page, and this page
-  // is a hundred rows.
-  const caption = screen.getByText(/does not reach the start of this window/);
+  await waitFor(() =>
+    expect(screen.getByText(/does not reach the start of this window/)).toBeTruthy(),
+  );
   // AND IT NAMES WHICH SOURCE. "Some of this may be missing" is a caption
   // nobody can act on; "Knowledge answered one page" says where to look.
-  expect(caption.textContent).toContain("Knowledge");
-});
-
-// AND THE TRACKER'S PAGE IS A PAGE TOO. The engine windows its feed, but it
-// answers one page of two hundred, and a busy week fills it before reaching
-// the window's start — while the header claimed every write across the
-// tracker. A cursor comes back exactly when more rows match.
-test("a tracker page that stops inside the window says so, and one that covers it does not", async () => {
-  serving({
-    work_activity: { records: [commit()], next_cursor: "CREWLET_WORK_LOG@1:1", complete: true },
-  });
-  mount();
-  await answered();
-  expect(
-    screen.getByText(/Work answered one page, which does not reach the start of this window/),
-  ).toBeTruthy();
-  cleanup();
-
-  // THE CONTROL: the same page with nothing after it is the whole window.
-  serving({ work_activity: { records: [commit()], complete: true } });
-  mount();
-  await answered();
-  expect(screen.queryByText(/does not reach the start of this window/)).toBeNull();
-  expect(screen.getByText(CLAIM)).toBeTruthy();
-});
-
-// A SOURCE WHOSE ANSWER COULD NOT ACCOUNT FOR EVERYTHING SAYS SO, AND SAYS
-// WHICH. The tracker's feed carries its own coverage — complete or not, the
-// records this build cannot read, the applied prefix against the position —
-// and this screen read none of it: a node holding tracker records it could not
-// decode served an audit missing their writes under a header claiming every
-// write across the tracker. It is said in History's words and named by its
-// source, because the knowledge base's log, the configuration and the
-// credentials are not behind with it.
-test("a tracker answer that is incomplete or behind is named as the tracker's", async () => {
-  serving({
-    work_activity: {
-      records: [commit()],
-      complete: false,
-      incomplete: {
-        records: 2,
-        from: { stream: "CREWLET_WORK_LOG", generation: 1, seq: 40 },
-        scope: ["project:ENG"],
-        version: 9,
-      },
-      log_seq: 52,
-      applied_through: 40,
-    },
-    page_activity: { changes: [], complete: true, log_seq: 7, applied_through: 7 },
-  });
-  mount();
-  await answered();
-  await answered();
-  const header = shortfall();
-  expect(header).toContain(
-    "Work: This answer is incomplete — 2 record(s) this build cannot read. Rows may be missing",
+  expect(screen.getByText(/does not reach the start of this window/).textContent).toContain(
+    "Knowledge",
   );
-  // AND WHOLE, as History says it: which objects the unread records are about,
-  // and that a build which reads them — not a refresh — is what resolves it.
-  expect(header).toContain(
-    "the counts were computed over what is shown. Affected: project:ENG. Record version 9, from sequence 40 — a build that can read it is what resolves this, not a refresh.",
-  );
-  expect(header).toContain(
-    "Work: This node holds records it has not applied yet (applied through 40 of 52).",
-  );
-  // ONE SOURCE'S SHORTFALL IS NOT THE PAGE'S: the knowledge base answered
-  // whole and is not named, and the claim that every source is covered goes.
-  expect(header).not.toContain("Knowledge:");
-  expect(screen.queryByText(CLAIM)).toBeNull();
-});
-
-test("a knowledge base answer that is behind is named as the knowledge base's", async () => {
-  serving({
-    work_activity: { records: [commit()], complete: true, log_seq: 5, applied_through: 5 },
-    page_activity: { changes: [], complete: false, log_seq: 30, applied_through: 12 },
-  });
-  mount();
-  await answered();
-  const header = shortfall();
-  expect(header).toContain("Knowledge: This answer is incomplete.");
-  expect(header).toContain(
-    "Knowledge: This node holds records it has not applied yet (applied through 12 of 30).",
-  );
-  expect(header).not.toContain("Work:");
-});
-
-// AN ANSWER OF NO KNOWN AGE IS ITS SOURCE'S TOO. A node that could not measure
-// its own distance from a log serves a coherent point in that log's order and
-// says nothing about how old it is — the chip History draws — and that is a
-// fact about the one log, not about the page.
-test("a source served at a level of unknown age is named as that source's", async () => {
-  serving({
-    work_activity: { records: [commit()], complete: true, read_level: "stale" },
-    page_activity: { changes: [], complete: true, read_level: "consistent_prefix" },
-  });
-  mount();
-  await answered();
-  const header = shortfall();
-  expect(header).toContain(
-    "Knowledge: This node could not measure its own distance from the log, so this answer is a coherent point in its order with no statement about age (read level consistent_prefix).",
-  );
-  expect(header).not.toContain("Work:");
-  expect(screen.queryByText(CLAIM)).toBeNull();
-});
-
-// THE CONTROL: answers that covered everything say nothing of the kind, and the
-// header still claims every source.
-test("sources that answered whole leave the header's claim standing", async () => {
-  serving({
-    work_activity: { records: [commit()], complete: true, log_seq: 5, applied_through: 5 },
-    page_activity: { changes: [], complete: true, log_seq: 7, applied_through: 7 },
-  });
-  mount();
-  await answered();
-  expect(screen.queryByText(/This answer is incomplete|has not applied yet/)).toBeNull();
-  expect(screen.getByText(CLAIM)).toBeTruthy();
 });
 
 // THE EXPORT IS WHAT IS ON SCREEN.
@@ -646,8 +359,7 @@ test("a bound person is drawn as their seat, and a login as plain text", async (
     },
   });
   const { container } = mount();
-  await answered();
-  expect(screen.getByText("unbound write")).toBeTruthy();
+  await waitFor(() => expect(screen.getByText("unbound write")).toBeTruthy());
 
   // UNBOUND: the human circle and the login, with nothing to follow.
   expect(screen.getByText("maya.lee")).toBeTruthy();
@@ -669,34 +381,26 @@ test("a bound person is drawn as their seat, and a login as plain text", async (
 });
 
 test("writerOf: a login is a person's, a seat is the chart's, and the engine is named", () => {
-  const seatOf = (address: string) =>
-    address === "cto"
-      ? { handle: "cto", name: "CTO", kind: "agent" as const }
-      : address === "old-cto"
-        ? { handle: "cto", name: "CTO", kind: "agent" as const }
-        : null;
+  const seatOf = (handle: string) =>
+    handle === "cto" ? { name: "CTO", kind: "agent" as const } : null;
   expect(writerOf({ actor: "maya.lee", actorKind: "operator" }, seatOf)).toEqual({
     as: "login",
     name: "maya.lee",
   });
-  // A SEAT THE CHART HOLDS keeps the chart's word, under the handle it answers
-  // to NOW — a write recorded before a rename links to where the seat lives.
+  // A SEAT THE CHART HOLDS keeps the chart's word; one it no longer holds
+  // takes the kind its write was recorded under.
   expect(writerOf({ actor: "cto", actorKind: "human" }, seatOf)).toMatchObject({
     as: "seat",
     kind: "agent",
   });
-  expect(writerOf({ actor: "old-cto", actorKind: "agent" }, seatOf)).toMatchObject({
-    as: "seat",
-    handle: "cto",
-  });
-  // …and one it no longer holds takes the kind its write was recorded under.
   expect(writerOf({ actor: "gone", actorKind: "human" }, seatOf)).toMatchObject({
     as: "seat",
     kind: "human",
   });
-  expect(writerOf({ actor: "trim", actorKind: "system" }, seatOf)).toEqual({
+  // THE ENGINE, NAMED: a node's seed and a loop both write as `system`.
+  expect(writerOf({ actor: "node-a", actorKind: "system" }, seatOf)).toEqual({
     as: "system",
-    name: "trim",
+    name: "node-a",
   });
   expect(writerOf({ actor: "", actorKind: "" }, seatOf)).toEqual({ as: "engine" });
   // THE IDENTITY TRAIL'S PRINCIPAL KINDS read the same way: a machine is a
@@ -726,7 +430,8 @@ test("writerOf: a login is a person's, a seat is the chart's, and the engine is 
 // The row used to be labelled `operator` whatever wrote the revision — so a
 // node's boot seed and the reconcile loop's reload after sealing a credential
 // read as a person's writes. The kind is the revision's own now, and one with
-// no recorded author says so rather than being drawn as the engine.
+// no recorded author (adopted from an older engine's pointer) says so rather
+// than being drawn as the engine.
 test("a config revision is labelled with the kind it recorded, not with operator", async () => {
   serving({
     config_audit: [
@@ -747,8 +452,8 @@ test("a config revision is labelled with the kind it recorded, not with operator
         created_at: RECENTLY,
       },
       {
-        revision_id: "rev-nobody01",
-        summary: "nobody recorded the author",
+        revision_id: "rev-oldpeer1",
+        summary: "adopted from an older engine",
         source: "fleet",
         created_by: "",
         created_by_kind: "",
@@ -757,8 +462,7 @@ test("a config revision is labelled with the kind it recorded, not with operator
     ],
   });
   mount();
-  await answered();
-  expect(screen.getByText("seeded from company.yaml")).toBeTruthy();
+  await waitFor(() => expect(screen.getByText("seeded from company.yaml")).toBeTruthy());
   expect(screen.getByText("node-a")).toBeTruthy();
   expect(screen.getByText("reconcile loop")).toBeTruthy();
   expect(screen.getAllByText("system")).toHaveLength(2);
@@ -824,8 +528,7 @@ test("runtime calls are merged in, drawn as their author, and narrowed by Where"
     },
   });
   mount();
-  await answered();
-  expect(screen.getByText(/ran update_work_item/)).toBeTruthy();
+  await waitFor(() => expect(screen.getByText(/ran update_work_item/)).toBeTruthy());
   expect(asked(query, "events").source).toBe("operator");
   expect(asked(query, "events").since).toBeTruthy();
   expect(asked(query, "events").until).toBeTruthy();
@@ -855,8 +558,7 @@ test("runtime calls are merged in, drawn as their author, and narrowed by Where"
     events: { events: [runtimeEvent()], next: null, exhausted: true },
   });
   mount();
-  await answered();
-  expect(screen.getByText(/ran update_work_item/)).toBeTruthy();
+  await waitFor(() => expect(screen.getByText(/ran update_work_item/)).toBeTruthy());
   expect(screen.queryByText("took it off the board")).toBeNull();
 });
 
@@ -873,11 +575,15 @@ test("a windowed source whose page filled says so", async () => {
     },
   });
   mount();
-  await answered();
-  const note = screen.getByText(/does not reach the start of this window/);
-  expect(note.textContent).toContain("Runtime");
+  await waitFor(() =>
+    expect(screen.getByText(/does not reach the start of this window/)).toBeTruthy(),
+  );
+  expect(screen.getByText(/does not reach the start of this window/).textContent).toContain(
+    "Runtime",
+  );
   // A NOTICE OF ITS OWN, never the card header's one line, which cut the
   // sentence before "not all of them" at every width.
+  const note = screen.getByText(/does not reach the start of this window/);
   expect(note.textContent).toMatch(/not all of them\.$/);
   expect(note.closest(".crewlet-card")).toBeNull();
 });
@@ -893,8 +599,8 @@ test("an empty To cell says why in the row's own terms", async () => {
           id: "ev-nodir",
           type: "backup_requested",
           failed: false,
-          summary: "jane backed up to /var/backups/two (12 streams)",
-          tags: { node: "node-a", actor_kind: "human" },
+          summary: "U0FOUNDER backed up to /var/backups/two (12 streams)",
+          tags: { node: "node-a" },
         }),
       ],
       next: null,
@@ -902,8 +608,7 @@ test("an empty To cell says why in the row's own terms", async () => {
     },
   });
   mount();
-  await answered();
-  expect(screen.getByText(/backed up to \/var\/backups\/two/)).toBeTruthy();
+  await waitFor(() => expect(screen.getByText(/backed up to \/var\/backups\/two/)).toBeTruthy());
   expect(screen.getByText("No directory recorded")).toBeTruthy();
   expect(screen.queryByText("Not recorded")).toBeNull();
 });
@@ -932,38 +637,22 @@ function identityEntry(over: Record<string, unknown> = {}) {
 // An invitation, a grant edit and a revoked token change no tracker or wiki
 // record either. The identity estate keeps its own trail, which the route
 // pages by POSITION — so the window's start is handed over as an instant for
-// the route to resolve, computed when the trail is asked.
+// the route to resolve.
 test("the identity trail is merged in, asked from the window's start", async () => {
   restAnswers.identity = () =>
     json({ events: [identityEntry()], next: 0, position: "CREWLET_IAM_LOG@1:41" });
   serving({ work_activity: { records: [commit()], complete: true } });
   mount();
-  await answered();
-  expect(screen.getByText("invited sam.okafor")).toBeTruthy();
+  await waitFor(() => expect(screen.getByText("invited sam.okafor")).toBeTruthy());
   const read = readsOf("/iam/audit")[0]!;
   expect(Date.parse(read.query.get("at") ?? "")).toBeLessThan(Date.now() - 6 * 86_400_000);
   expect(read.query.get("limit")).toBe("200");
-  // THE RECORD'S OWN KIND, the principal's, and its author drawn as the seat
-  // the chart holds by that address.
-  expect(screen.getByText("person")).toBeTruthy();
-  expect(screen.getByRole("link", { name: /Jane Founder/ })).toBeTruthy();
-  // ITS SUBJECT a name a person reads, opening the screen that shows it.
-  expect(screen.getByRole("link", { name: "sam.okafor" }).getAttribute("href")).toBe(
-    "#/settings/people",
-  );
-});
-
-// A TRAIL PAGE WHOSE ENGINE SAID MORE MATCH, stopping inside the window, is a
-// page short of it — and one that says nothing more is the whole window.
-test("an identity page that stops inside the window says so", async () => {
-  restAnswers.identity = () =>
-    json({ events: [identityEntry()], next: 40, position: "CREWLET_IAM_LOG@1:41" });
-  serving({ work_activity: { records: [], complete: true } });
-  mount();
-  await answered();
-  expect(shortfall()).toContain(
-    "Identity answered one page, which does not reach the start of this window",
-  );
+  // ITS AUTHOR drawn as the seat the chart holds by that address, and the
+  // credential it came through beside it.
+  expect(screen.getAllByRole("link", { name: /Jane Founder/ }).length).toBeGreaterThan(0);
+  expect(screen.getAllByText("session:0192f00e").length).toBeGreaterThan(0);
+  // AND THE REST STAND beside it.
+  expect(screen.getByText("took it off the board")).toBeTruthy();
 });
 
 // A REFUSED TRAIL IS SAID, AND THE REST STAND: the directory's trail is the
@@ -973,138 +662,106 @@ test("a refused identity trail names the grant, and the other sources stand", as
     json({ error: "unauthorized", reason: "no_grant", grants: ["audit:read"] }, 403);
   serving({ work_activity: { records: [commit()], complete: true } });
   mount();
-  await answered();
-  expect(shortfall()).toContain("Reading the identity trail needs audit:read");
+  await waitFor(() =>
+    expect(screen.getByText(/Reading the identity trail needs audit:read/)).toBeTruthy(),
+  );
   expect(screen.getByText("took it off the board")).toBeTruthy();
-  expect(screen.queryByText(CLAIM)).toBeNull();
 });
 
-const SECRET = {
-  name: "GITHUB_TOKEN",
-  key_id: "k1",
-  updated_at: RECENTLY,
-  updated_by: "founder",
-  updated_by_kind: "human",
-  source: "dashboard",
-};
-
-// THE CREDENTIALS MISSING IS SAID, AND THE REST STAND. This read failed in
-// silence: the credentials dropped out of an audit whose header said it covered
-// them, so a reader refused them, or one whose request nothing answered, was
-// told every write was here.
-test("a refused credential listing names the grant, and the other sources stand", async () => {
-  restAnswers.secrets = () =>
-    json({ error: "unauthorized", reason: "no_grant", grants: ["config:read"] }, 403);
-  serving({ work_activity: { records: [commit()], complete: true } });
-  mount();
-  await answered();
-  expect(shortfall()).toContain("Listing the credentials' writes needs config:read");
-  expect(screen.getByText("took it off the board")).toBeTruthy();
-  expect(screen.queryByText(CLAIM)).toBeNull();
-});
-
-// AND A READ NOBODY ANSWERED IS ASKED AGAIN ON ITS OWN — it was read once, at
-// mount, and never again while the sources beside it polled — and then on the
-// cadence those keep, so a credential stored after the screen opened arrives
-// with the rest.
-test("a credential listing nothing answered is said, asked again, and then polled", async () => {
-  vi.useFakeTimers();
-  try {
-    restAnswers.secrets = (call) => {
-      if (call === 1) throw new TypeError("Failed to fetch");
-      return json({ secrets: [SECRET] });
-    };
-    serving({ work_activity: { records: [], complete: true } });
-    mount();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(shortfall()).toContain("none of their writes are listed here");
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_000);
-    });
-    expect(readsOf("/secrets")).toHaveLength(2);
-    expect(screen.getByText("GITHUB_TOKEN")).toBeTruthy();
-    expect(shortfall()).not.toContain("none of their writes are listed here");
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(60_000);
-    });
-    expect(readsOf("/secrets")).toHaveLength(3);
-  } finally {
-    vi.useRealTimers();
-  }
-});
-
-// A NAMED RANGE ENDS NOW, NOT AT THE TRACKER'S LAST ASK.
+// A SOURCE REFUSED ON AUTHORITY IS WITHHELD, AND THE REST STAND.
 //
-// The sources narrowed here were cut at both edges the tracker was last asked
-// over, and the top one is only the instant of that ask: "the last seven days"
-// ends now. So a credential, a revision or a page change written after it was
-// hidden until the tracker was asked again — a minute on every poll, and for
-// ever once a refusal no wait clears stopped the tracker's poll while the
-// others went on answering. Here the credentials' read is retried a second
-// after the tracker's ask and finds one stored in that second; the tracker is
-// not asked again, so nothing but its own source's answer can let it in.
-test("a write after the tracker's last ask is listed when its own source answers", async () => {
-  vi.useFakeTimers();
-  try {
-    let stored = 0;
-    restAnswers.secrets = (call) => {
-      if (call === 1) throw new TypeError("Failed to fetch");
-      stored = Date.now();
-      return json({ secrets: [{ ...SECRET, updated_at: new Date(stored).toISOString() }] });
-    };
-    const query = serving({ work_activity: { records: [], complete: true } });
-    mount();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    const tracked = Date.parse(String(asked(query, "work_activity").to));
+// The section opens on the audit grant, and the configuration's revisions
+// answer to another. An auditor without it was shown the refusal banner alone,
+// which hid every row of the sources they may read.
+test("a source refused on authority names its grant, and the other sources stand", async () => {
+  serving({
+    work_activity: { records: [commit()], complete: true },
+    config_audit: new QueryError("unauthorized", { reason: "no_grant", grants: ["config:read"] }),
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
+  expect(screen.getByText(/Reading the configuration's revisions needs config:read/)).toBeTruthy();
+  expect(screen.queryByText(/You may not read this/)).toBeNull();
+});
 
+// AND A REFUSAL REPLACES WHAT IT REFUSED: rows read before a grant was taken
+// away are not drawn under the sentence saying they are withheld.
+test("a source refused after it answered takes its rows off the grid", async () => {
+  clockMidMinute();
+  const query = serving();
+  let asked = 0;
+  query.mockImplementation(async (what: string) => {
+    if (what !== "config_audit") return {};
+    if (asked++ > 0) {
+      throw new QueryError("unauthorized", { reason: "no_grant", grants: ["config:read"] });
+    }
+    return [
+      {
+        revision_id: "rev-seed0001",
+        summary: "seeded from company.yaml",
+        source: "file",
+        created_by: "node-a",
+        created_by_kind: "system",
+        created_at: RECENTLY,
+      },
+    ];
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("seeded from company.yaml")).toBeTruthy());
+  for (let second = 0; second < 61; second++) {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
-    expect(stored).toBeGreaterThan(tracked);
-    expect(
-      (query.mock.calls as unknown as [string][]).filter(([what]) => what === "work_activity"),
-    ).toHaveLength(1);
-    expect(screen.getByText("GITHUB_TOKEN")).toBeTruthy();
-  } finally {
-    vi.useRealTimers();
   }
+  expect(screen.getByText(/Reading the configuration's revisions needs config:read/)).toBeTruthy();
+  expect(screen.queryByText("seeded from company.yaml")).toBeNull();
 });
 
-// AND A READER'S OWN WINDOW STILL ENDS WHERE THEY SAID. Two instants a reader
-// named are a bound at both ends, so a revision written after the second one
-// is outside it whatever source it came from — which is what makes the case
-// above about the named range rather than about dropping the top edge.
-test("a reader's own window cuts every source at the end they named", async () => {
-  const to = Date.now() - 3_600_000;
-  const from = to - 86_400_000;
-  const iso = (at: number) => new Date(at).toISOString();
-  location.hash = `#/settings/audit?window=${encodeURIComponent(`${iso(from)}/${iso(to)}`)}`;
-  const revision = (id: string, at: number, summary: string) => ({
-    revision_id: id,
-    summary,
-    source: "dashboard",
-    created_by: "founder",
-    created_by_kind: "human",
-    created_at: iso(at),
-  });
-  const query = serving({
-    work_activity: { records: [], complete: true },
-    config_audit: [
-      revision("rev-inside", to - 60_000, "inside the window"),
-      revision("rev-after", to + 60_000, "after the window"),
-    ],
-  });
+// THE WINDOW IS NOT THE SECOND HAND.
+//
+// The windowed questions were keyed on edges read off the one-second clock,
+// so each was asked again every tick — the fleet-wide event read among them,
+// whose answer can take two seconds and was dropped for the next tick's.
+test("a second passing asks the windowed sources nothing again", async () => {
+  clockMidMinute();
+  const query = serving({ work_activity: { records: [], complete: true } });
   mount();
-  await answered();
-  expect(asked(query, "work_activity").to).toBe(iso(to));
-  // AND THE IDENTITY TRAIL IS ASKED FROM THE START THEY NAMED.
-  expect(readsOf("/iam/audit")[0]?.query.get("at")).toBe(iso(from));
-  expect(screen.getByText("inside the window")).toBeTruthy();
-  expect(screen.queryByText("after the window")).toBeNull();
+  const asks = (what: QueryName) => query.mock.calls.filter(([name]) => name === what).length;
+  await waitFor(() => expect(asks("events")).toBeGreaterThan(0));
+  const before = { work: asks("work_activity"), events: asks("events") };
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3_000);
+  });
+  expect(asks("work_activity")).toBe(before.work);
+  expect(asks("events")).toBe(before.events);
+});
+
+// A RE-READ OF THE TRAIL IS QUIET, AND STILL MOVES THE WINDOW.
+//
+// A REST read whose key changes shows nothing until it answers. Keyed on the
+// window's start, the trail's rows left the grid every time the window moved,
+// and a read slower than that was aborted by the next and never answered.
+test("the identity trail stays on screen while its poll asks from the moved start", async () => {
+  clockMidMinute();
+  let answered = 0;
+  restAnswers.identity = () =>
+    answered++ === 0
+      ? json({ events: [identityEntry()], next: 0, position: "CREWLET_IAM_LOG@1:41" })
+      : new Promise<Response>(() => {});
+  serving({ work_activity: { records: [], complete: true } });
+  mount();
+  await waitFor(() => expect(screen.getByText("invited sam.okafor")).toBeTruthy());
+
+  // A SECOND AT A TIME, as the clock ticks: one jump of a minute would be
+  // sixty ticks rendered inside one update.
+  for (let second = 0; second < 61; second++) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+  }
+  const [first, second] = readsOf("/iam/audit");
+  expect(second).toBeTruthy();
+  expect(Date.parse(second!.query.get("at")!)).toBeGreaterThan(Date.parse(first!.query.get("at")!));
+  // THE SECOND READ HAS NOT ANSWERED, and the first one's rows are still drawn.
+  expect(screen.getByText("invited sam.okafor")).toBeTruthy();
 });

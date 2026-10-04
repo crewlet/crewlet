@@ -5,14 +5,14 @@
  * The invariants: the replay is the SAME request, body and headers included,
  * so nothing typed is lost; one confirmation answers every request refused at
  * the same moment; a declined confirmation, or nobody to ask, is the refusal
- * it was; the confirmation is never asked of the step-up route itself; and a
- * replay refused again is not asked twice.
+ * it was; the confirmation is never asked of the step-up route itself; a
+ * replay refused again is not asked twice; a caller that gives up while the
+ * person is asked is released; and a refusal on authority is not a step-up.
  */
 
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { poll } from "~/test/inCase.ts";
 
-import { rest, RestError, setStepUpConfirmer, type StepUpWindow } from "./index.ts";
+import { rest, RestError, setStepUpConfirmer } from "./index.ts";
 
 interface Sent {
   method: string;
@@ -27,7 +27,7 @@ const STEP_UP = {
     error: "step_up_required",
     message: "This action needs you to have confirmed who you are recently.",
     reason: "step_up",
-    window: "step_up_sensitive",
+    window: "step_up",
     grants: [],
   },
 };
@@ -58,14 +58,14 @@ function engine(...answers: { status: number; body: unknown }[]): Sent[] {
 
 let uninstall: (() => void) | null = null;
 
-/** A confirmer that records the windows it was asked for and answers `with`. */
-function confirming(withAnswer: boolean | Promise<boolean>) {
-  const asked: StepUpWindow[] = [];
-  uninstall = setStepUpConfirmer(async (window) => {
-    asked.push(window);
+/** A confirmer that counts how often it was asked and answers `withAnswer`. */
+function confirming(withAnswer: boolean | Promise<boolean>): { asked: number } {
+  const count = { asked: 0 };
+  uninstall = setStepUpConfirmer(async () => {
+    count.asked++;
     return withAnswer;
   });
-  return asked;
+  return count;
 }
 
 afterEach(() => {
@@ -77,7 +77,7 @@ afterEach(() => {
 describe("a refused gesture, confirmed", () => {
   test("is sent again, the same request, body and headers", async () => {
     const sent = engine(STEP_UP, DONE);
-    const asked = confirming(true);
+    const confirmer = confirming(true);
 
     const answer = await rest.put(
       "/config",
@@ -86,24 +86,26 @@ describe("a refused gesture, confirmed", () => {
     );
 
     expect(answer).toEqual({ status: "applied" });
-    expect(asked).toEqual(["step_up_sensitive"]);
+    expect(confirmer.asked).toBe(1);
     expect(sent).toHaveLength(2);
     expect(sent[1]).toEqual(sent[0]);
     expect(JSON.parse(sent[1]!.body!)).toEqual({ name: "Acme", mission: "Ship" });
     expect(sent[1]!.headers["If-Match"]).toBe('"01JREV"');
   });
 
+  // A SCREEN THAT SAVES THREE THINGS TOGETHER must not stack three password
+  // dialogs: the person is asked once, and every refused request replays.
   test("one confirmation answers every request refused at the same moment", async () => {
     const sent = engine(STEP_UP, STEP_UP, DONE);
     let release!: (confirmed: boolean) => void;
-    const asked = confirming(new Promise<boolean>((resolve) => (release = resolve)));
+    const confirmer = confirming(new Promise<boolean>((resolve) => (release = resolve)));
 
     const both = Promise.all([rest.post("/secrets/A", {}), rest.post("/secrets/B", {})]);
-    await poll(() => expect(sent).toHaveLength(2));
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
     release(true);
     await both;
 
-    expect(asked).toHaveLength(1);
+    expect(confirmer.asked).toBe(1);
     expect(sent.map((s) => s.path)).toEqual([
       "/secrets/A",
       "/secrets/B",
@@ -115,13 +117,15 @@ describe("a refused gesture, confirmed", () => {
   // A REPLAY REFUSED AGAIN IS THE REFUSAL. Asking again would be a dialog
   // that reopens for as long as the engine keeps saying no.
   test("is asked once: a replay refused again is the refusal", async () => {
-    const sent = engine(STEP_UP);
-    const asked = confirming(true);
+    // A THIRD ANSWER THAT WOULD SUCCEED, so a transport that asked again
+    // would end with it rather than with the refusal.
+    const sent = engine(STEP_UP, STEP_UP, DONE);
+    const confirmer = confirming(true);
 
     const err = await rest.post("/config/rekey", {}).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(RestError);
     expect((err as RestError).code).toBe("step_up_required");
-    expect(asked).toHaveLength(1);
+    expect(confirmer.asked).toBe(1);
     expect(sent).toHaveLength(2);
   });
 });
@@ -150,23 +154,31 @@ describe("a refused gesture, not confirmed", () => {
   // dialog that never closes.
   test("the step-up route is never asked to confirm itself", async () => {
     const sent = engine(STEP_UP, DONE);
-    const asked = confirming(true);
+    const confirmer = confirming(true);
     const err = await rest.post("/auth/step-up", { password: "x" }).catch((e: unknown) => e);
     expect((err as RestError).code).toBe("step_up_required");
-    expect(asked).toEqual([]);
+    expect(confirmer.asked).toBe(0);
     expect(sent).toHaveLength(1);
   });
 
+  // A PERSON CAN SIT AT THE CONFIRMATION FOR AS LONG AS THEY LIKE, and a
+  // screen that gave up on its request meanwhile is not held to an answer it
+  // no longer wants.
   test("a caller that gives up while the person is asked is not held to it", async () => {
     engine(STEP_UP, DONE);
-    confirming(new Promise<boolean>(() => {}));
+    let release!: (confirmed: boolean) => void;
+    confirming(new Promise<boolean>((resolve) => (release = resolve)));
     const controller = new AbortController();
     const pending = rest
       .request("POST", "/secrets/A", { body: {}, signal: controller.signal })
       .catch((e: unknown) => e);
-    await poll(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1));
     controller.abort();
     expect(((await pending) as Error).name).toBe("AbortError");
+    // THE PERSON ANSWERS LATER, and the request that gave up is not replayed.
+    release(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
   });
 
   // ONLY THE STEP-UP CODE: a refusal on authority is not cured by a
@@ -176,9 +188,9 @@ describe("a refused gesture, not confirmed", () => {
       status: 403,
       body: { error: "unauthorized", grants: ["secrets:write"] },
     });
-    const asked = confirming(true);
+    const confirmer = confirming(true);
     await rest.post("/secrets/A", {}).catch(() => {});
-    expect(asked).toEqual([]);
+    expect(confirmer.asked).toBe(0);
     expect(sent).toHaveLength(1);
   });
 });

@@ -38,11 +38,12 @@ import { useParam } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { GROUPS } from "~/contract/spend.ts";
+import { useNow } from "~/lib/clock.ts";
+import { CONFIG_WRITE_GRANT } from "~/lib/useWriteAccess.ts";
 import { isRange, useTimeRange, windowParam } from "~/lib/range.ts";
 import { useAgents, useOrg, useOrgBudget } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { CONFIG_WRITE_GRANT } from "~/lib/useWriteAccess.ts";
 import { DownloadButton } from "~/ui/primitives.tsx";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import type { BudgetWindow } from "~/protocol/types.ts";
@@ -60,7 +61,8 @@ const GROUP_VALUES: readonly string[] = GROUPS.map((g) => g.value);
 
 export function Spend() {
   const zone = useOrg()?.timezone;
-  const range = useTimeRange(spendOffer(zone));
+  const now = useNow();
+  const range = useTimeRange(now, spendOffer(zone));
   const named = isRange(range.window);
   const params = spendWindowParams(range.window, zone);
 
@@ -132,7 +134,7 @@ export function Spend() {
         <QueryState
           error={tokens.error}
           refusal={tokens.refusal}
-          detail={tokens.detail ?? undefined}
+          detail={tokens.detail}
           loading={false}
         />
       )}

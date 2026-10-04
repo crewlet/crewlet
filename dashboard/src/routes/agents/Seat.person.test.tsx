@@ -15,7 +15,7 @@
  * the other's back.
  */
 
-import { cleanup, render, waitFor } from "~/test/inCase.ts";
+import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatScreen } from "./Seat.tsx";
@@ -64,11 +64,45 @@ const ANSWERS: Record<string, unknown> = {
   },
 };
 
+/** One seat as the engine's derived hierarchy states it. */
+const derivedSeat = (handle: string, name: string, reports: string[], managers: string[]) => ({
+  handle,
+  name,
+  kind: "human",
+  placed_by_ref: false,
+  manager: managers[0] ?? "",
+  managers: managers.length ? managers : null,
+  reports: reports.length ? reports : null,
+  auto_reports: null,
+  onboarding_chain: null,
+});
+
+/**
+ * The company, with the engine's own hierarchy: Ana and the CEO, and Ana
+ * leading the CEO only where `anaLeads` says so — every reporting line is
+ * KNOWN either way, so "does not lead them" is the chart's answer rather
+ * than an absence of one.
+ */
+const company = (anaLeads: boolean) => ({
+  roles: [
+    { name: "Ana", handle: "ana", kind: "human" },
+    { name: "CEO", handle: "ceo", kind: "human" },
+  ],
+  units: [],
+  derived: {
+    units: [],
+    seats: [
+      derivedSeat("ana", "Ana", anaLeads ? ["ceo"] : [], []),
+      derivedSeat("ceo", "CEO", [], anaLeads ? ["ana"] : []),
+    ],
+  },
+});
+
 /**
  * askedAs renders a colleague's seat for a reader bound to `ana` holding
  * exactly these grants, and reports every question the screen asked.
  */
-async function askedAs(grants: string[]): Promise<string[]> {
+async function askedAs(grants: string[], anaLeads = false): Promise<string[]> {
   const store = new Store();
   const socket = new LiveSocket(store);
   const asked: string[] = [];
@@ -87,7 +121,7 @@ async function askedAs(grants: string[]): Promise<string[]> {
     }
     return Promise.resolve(ANSWERS[what] ?? {});
   };
-  store.applyOrg({ roles: [{ name: "CEO", handle: "ceo" }] });
+  store.applyOrg(company(anaLeads));
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
@@ -118,4 +152,20 @@ test("people:manage alone does not ask for a colleague's queue", async () => {
 test("fleet:operate alone does", async () => {
   const asked = await askedAs(["state:read", "fleet:operate"]);
   await waitFor(() => expect(asked).toContain("work_my_work"));
+});
+
+// A LEAD IS ANSWERED A REPORT'S RECORD, and asked for it: the engine's rule is
+// owner, lead or `fleet:operate`, and a page that asked on the grant and the
+// owner alone told a lead the record needs "fleet:operate, or leading them"
+// about somebody they lead.
+test("a lead holding neither grant asks for a report's queue", async () => {
+  const asked = await askedAs(["state:read"], true);
+  await waitFor(() => expect(asked).toContain("work_my_work"));
+});
+
+// AND THE OVERVIEW'S DAY READS THE SAME RULE.
+test("a lead's overview of a report asks for their day", async () => {
+  location.hash = "#/agents/seats/ceo";
+  const asked = await askedAs(["state:read"], true);
+  await waitFor(() => expect(asked).toContain("work_person"));
 });

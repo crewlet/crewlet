@@ -27,7 +27,6 @@ import {
 import { Assignee, PriorityMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
 import { Button, EmptyState, Tag, cx } from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
-import { useToday } from "~/lib/clock.ts";
 import { plural } from "~/lib/format.ts";
 import { itemAddress } from "~/lib/work.ts";
 
@@ -186,7 +185,7 @@ function Band({
   hrefOf,
   onOpen,
   selected,
-  today,
+  now,
 }: {
   title?: string;
   count?: number;
@@ -194,12 +193,10 @@ function Band({
   chrome: RowChrome;
   hrefOf: (row: WorkSummary) => string;
   onOpen: (row: WorkSummary) => void;
-  /** The ADDRESS of the task the rail holds — see `itemAddress`. */
   selected: string;
-  /** The browser's day, from the view's one [useToday]. */
-  today: string;
+  now: number;
 }) {
-  const line = useMemo(() => timelineOf(rows, { today }), [rows, today]);
+  const line = useMemo(() => timelineOf(rows, { now }), [rows, now]);
   const ticks = useMemo(() => weekTicks(line), [line]);
   const height = line.bars.length * ROW_PX;
 
@@ -366,6 +363,7 @@ export function TimelineView({
   hrefOf,
   onOpen,
   selected,
+  now,
   more,
 }: {
   rows: WorkSummary[];
@@ -374,15 +372,13 @@ export function TimelineView({
   hrefOf: (row: WorkSummary) => string;
   onOpen: (row: WorkSummary) => void;
   selected: string;
+  now: number;
   /**
    * The rest of an ungrouped answer, where it carried a cursor. A grouped one
    * has none: each band carries its own count and holds a page of its own.
    */
   more?: { load: () => void; note: string };
 }) {
-  // THE DAY, NOT THE SECOND: the today line is the only thing here the clock
-  // moves, and it moves at midnight.
-  const today = useToday();
   if (groups.length === 0 && rows.length === 0) {
     return (
       // THE MARK SAYS WHICH SCREEN IS EMPTY. uilet's EmptyState draws an inbox
@@ -408,7 +404,7 @@ export function TimelineView({
               hrefOf={hrefOf}
               onOpen={onOpen}
               selected={selected}
-              today={today}
+              now={now}
             />
           </Fragment>
         ))}
@@ -423,7 +419,7 @@ export function TimelineView({
         hrefOf={hrefOf}
         onOpen={onOpen}
         selected={selected}
-        today={today}
+        now={now}
       />
       {/* THE AXIS IS DERIVED FROM THE ROWS PRESENT, so a later page may widen
           it — which is the honest drawing of more rows, and the only way to the

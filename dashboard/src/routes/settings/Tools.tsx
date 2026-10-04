@@ -36,7 +36,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { RECORD_MAX_HEIGHT, Section, SeatChip } from "~/components/common.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { NumberCell, KeyCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -44,8 +44,6 @@ import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRai
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
-import { needsSentence } from "~/lib/refusal.ts";
-import { useViewer } from "~/lib/viewer.ts";
 import {
   grantedSeats,
   nodeOnlyNames,
@@ -219,14 +217,6 @@ function holdersOf(tool: ToolRow, seats: Seat[]): Holders | null {
 }
 
 /**
- * The grant a seat's `tool_sources` is published under: it is derived from the
- * seat's runtime half (the credentials it declares under `mcp_env`), which the
- * org projection carries only for an audience that may read the company's
- * configuration.
- */
-const GRANT_SOURCES = "config:read";
-
-/**
  * One tool, resolved from its name, wherever it is being shown.
  *
  * THE PAGE AND THE RAIL RESOLVE IT THE SAME WAY, which is the only reason the
@@ -276,7 +266,6 @@ function useTool(name: string): {
  */
 function ToolBody({ name }: { name: string }) {
   const org = useOrg();
-  const viewer = useViewer();
   const index = useMemo(() => indexOrg(org), [org]);
   const { matches, tool, server, cold } = useTool(name);
 
@@ -377,22 +366,9 @@ function ToolBody({ name }: { name: string }) {
       <section className="col gap-2">
         <div className="t-label">Which seats hold it</div>
         {holders === null ? (
-          // WHICH OF TWO ABSENCES, named. A seat's `tool_sources` is derived
-          // from its runtime half — the credentials it declares — so the
-          // engine sends it only to a reader who may read the company's
-          // configuration; a roster without it for anybody else is the grant
-          // withheld, and only for a reader who holds it is it a node older
-          // than the field. Said as the second to the first, it sent a person
-          // looking for an upgrade when what they lacked was a grant.
           <p className="t-body muted">
-            {viewer.grants.includes(GRANT_SOURCES) ? (
-              <>
-                Which seats are granted <span className="mono">{server}</span> is not on the roster
-                this engine sent: the node serving it is older than the grant.
-              </>
-            ) : (
-              needsSentence(`Seeing which seats are granted ${server}`, [GRANT_SOURCES])
-            )}
+            Which seats are granted <span className="mono">{server}</span> is not on the roster this
+            engine sent: the node serving it is older than the grant.
           </p>
         ) : holders.everyone ? (
           <>
@@ -544,136 +520,6 @@ export function emptyOriginReason(
       return "It is running, and the node serving this page has not listed its tools yet.";
   }
 }
-
-// The catalogue's columns, which close over nothing on the screen — so a module
-// constant: a tools push that moved one tool draws that row, and typing in the
-// search box above draws only the rows it brings back.
-const TOOL_COLUMNS: GridColumn<ToolRow>[] = [
-  {
-    key: "name",
-    header: "Tool",
-    // SIZED TO THE NAME. With the columns this table grew, the
-    // name column took whatever was left and broke
-    // `comment_on_work_item` across three lines mid-word — an
-    // identifier a reader is matching against a config file, so
-    // a break in the middle of one is worse than a narrower
-    // description beside it. A shrunk cell never wraps, which is
-    // what `KeyCell` inherits here rather than restating.
-    shrink: true,
-    // TWICE A SHRINK COLUMN'S SHARE. The name is the identifier the
-    // list is scanned by, and at a shrink column's fifth of the grid
-    // — beside Settings' column at 1280, 150px — the long ones were
-    // clipped mid-word ("comment_on_work_it"). What gives way
-    // instead is below: the description to its floor, then the
-    // columns a tool's own page answers.
-    width: "fit-content(40%)",
-    sortValue: (t) => t.name,
-    cell: (t) => <KeyCell value={t.name} />,
-  },
-  {
-    key: "origin",
-    header: "Origin",
-    shrink: true,
-    drop: 2,
-    sortValue: (t) => t.source,
-    cell: (t) => {
-      const { kind, detail } = originOf(t.source);
-      return (
-        <span className="row gap-1">
-          <Tag appearance="outline">{kind}</Tag>
-          {detail && <span className="t-caption mono">{detail}</span>}
-        </span>
-      );
-    },
-  },
-  {
-    key: "desc",
-    header: "What it does",
-    floor: "8rem",
-    // CLAMPED, with the whole sentence on the tool's own page and
-    // in the title. A description is written for a MODEL and runs
-    // to a paragraph, and beside Settings' column at 1280 this
-    // track is a sixth of the grid: unclamped, every row was a
-    // 350px column of prose and the table showed two tools a
-    // screen. The list is for finding a tool; its page is for
-    // reading one.
-    cell: (t) => (
-      <span className="col" style={{ gap: 2 }}>
-        <span className="t-caption clamp" title={t.description || undefined}>
-          {t.description || <span className="muted">no description</span>}
-        </span>
-        <span
-          className="t-caption clamp"
-          style={{ "--clamp-lines": 1 } as CSSProperties}
-          title={hintSentence(t.annotations)}
-        >
-          {hintSentence(t.annotations)}
-        </span>
-      </span>
-    ),
-  },
-  {
-    key: "can",
-    header: "Can",
-    shrink: true,
-    // Sorted worst-first, which is the order an operator
-    // auditing a new server reads: the tools that can destroy
-    // something are the ones they have to decide about.
-    sortValue: (t) => CAPABILITY_ORDER[capabilityOf(t.annotations)],
-    cell: (t) => {
-      const c = capabilityOf(t.annotations);
-      return (
-        <span className="row gap-1">
-          <Tag variant={capabilityVariant(c)}>{c}</Tag>
-          {t.annotations?.open_world === "yes" && <Tag appearance="outline">outside</Tag>}
-        </span>
-      );
-    },
-  },
-  {
-    key: "delivers",
-    header: "Delivers to",
-    shrink: true,
-    drop: 1,
-    sortValue: (t) => t.delivers ?? "",
-    cell: (t) =>
-      t.delivers ? (
-        <Tag appearance="outline">{t.delivers}</Tag>
-      ) : (
-        <span className="t-caption">nobody</span>
-      ),
-  },
-  {
-    key: "args",
-    header: "Arguments",
-    shrink: true,
-    drop: 3,
-    align: "right",
-    // ABSENT SORTS LAST in both directions, which is the grid's
-    // own rule for a null — "this build sent no schema" is not
-    // the smallest count, it is not a count.
-    sortValue: (t) => argumentCount(t),
-    cell: (t) => {
-      const fields = schemaFields(t);
-      const required = fields.filter((f) => f.required).length;
-      return (
-        <span className="row gap-1">
-          <NumberCell
-            value={argumentCount(t)}
-            title={
-              fields.length
-                ? fields
-                    .map((f) => `${f.name}${f.required ? "*" : ""}: ${f.type || "type not stated"}`)
-                    .join("\n")
-                : undefined
-            }
-          />
-          {required > 0 && <span className="t-caption">{required} required</span>}
-        </span>
-      );
-    },
-  },
-];
 
 /**
  * How often the servers' status is asked again, in ms.
@@ -1001,7 +847,137 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
             onRowActivate={openTool}
             defaultSort="name"
             empty={{ title: `No tool matches “${q.trim()}”` }}
-            columns={TOOL_COLUMNS}
+            columns={[
+              {
+                key: "name",
+                header: "Tool",
+                // SIZED TO THE NAME. With the columns this table grew, the
+                // name column took whatever was left and broke
+                // `comment_on_work_item` across three lines mid-word — an
+                // identifier a reader is matching against a config file, so
+                // a break in the middle of one is worse than a narrower
+                // description beside it. A shrunk cell never wraps, which is
+                // what `KeyCell` inherits here rather than restating.
+                shrink: true,
+                // TWICE A SHRINK COLUMN'S SHARE. The name is the identifier the
+                // list is scanned by, and at a shrink column's fifth of the grid
+                // — beside Settings' column at 1280, 150px — the long ones were
+                // clipped mid-word ("comment_on_work_it"). What gives way
+                // instead is below: the description to its floor, then the
+                // columns a tool's own page answers.
+                width: "fit-content(40%)",
+                sortValue: (t) => t.name,
+                cell: (t) => <KeyCell value={t.name} />,
+              },
+              {
+                key: "origin",
+                header: "Origin",
+                shrink: true,
+                drop: 2,
+                sortValue: (t) => t.source,
+                cell: (t) => {
+                  const { kind, detail } = originOf(t.source);
+                  return (
+                    <span className="row gap-1">
+                      <Tag appearance="outline">{kind}</Tag>
+                      {detail && <span className="t-caption mono">{detail}</span>}
+                    </span>
+                  );
+                },
+              },
+              {
+                key: "desc",
+                header: "What it does",
+                floor: "8rem",
+                // CLAMPED, with the whole sentence on the tool's own page and
+                // in the title. A description is written for a MODEL and runs
+                // to a paragraph, and beside Settings' column at 1280 this
+                // track is a sixth of the grid: unclamped, every row was a
+                // 350px column of prose and the table showed two tools a
+                // screen. The list is for finding a tool; its page is for
+                // reading one.
+                cell: (t) => (
+                  <span className="col" style={{ gap: 2 }}>
+                    <span className="t-caption clamp" title={t.description || undefined}>
+                      {t.description || <span className="muted">no description</span>}
+                    </span>
+                    <span
+                      className="t-caption clamp"
+                      style={{ "--clamp-lines": 1 } as CSSProperties}
+                      title={hintSentence(t.annotations)}
+                    >
+                      {hintSentence(t.annotations)}
+                    </span>
+                  </span>
+                ),
+              },
+              {
+                key: "can",
+                header: "Can",
+                shrink: true,
+                // Sorted worst-first, which is the order an operator
+                // auditing a new server reads: the tools that can destroy
+                // something are the ones they have to decide about.
+                sortValue: (t) => CAPABILITY_ORDER[capabilityOf(t.annotations)],
+                cell: (t) => {
+                  const c = capabilityOf(t.annotations);
+                  return (
+                    <span className="row gap-1">
+                      <Tag variant={capabilityVariant(c)}>{c}</Tag>
+                      {t.annotations?.open_world === "yes" && (
+                        <Tag appearance="outline">outside</Tag>
+                      )}
+                    </span>
+                  );
+                },
+              },
+              {
+                key: "delivers",
+                header: "Delivers to",
+                shrink: true,
+                drop: 1,
+                sortValue: (t) => t.delivers ?? "",
+                cell: (t) =>
+                  t.delivers ? (
+                    <Tag appearance="outline">{t.delivers}</Tag>
+                  ) : (
+                    <span className="t-caption">nobody</span>
+                  ),
+              },
+              {
+                key: "args",
+                header: "Arguments",
+                shrink: true,
+                drop: 3,
+                align: "right",
+                // ABSENT SORTS LAST in both directions, which is the grid's
+                // own rule for a null — "this build sent no schema" is not
+                // the smallest count, it is not a count.
+                sortValue: (t) => argumentCount(t),
+                cell: (t) => {
+                  const fields = schemaFields(t);
+                  const required = fields.filter((f) => f.required).length;
+                  return (
+                    <span className="row gap-1">
+                      <NumberCell
+                        value={argumentCount(t)}
+                        title={
+                          fields.length
+                            ? fields
+                                .map(
+                                  (f) =>
+                                    `${f.name}${f.required ? "*" : ""}: ${f.type || "type not stated"}`,
+                                )
+                                .join("\n")
+                            : undefined
+                        }
+                      />
+                      {required > 0 && <span className="t-caption">{required} required</span>}
+                    </span>
+                  );
+                },
+              },
+            ]}
           />
         </Card>
       )}

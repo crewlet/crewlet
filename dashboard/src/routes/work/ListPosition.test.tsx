@@ -7,7 +7,7 @@
  * the task in the whole answer.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import { ListPosition } from "./ListPosition.tsx";

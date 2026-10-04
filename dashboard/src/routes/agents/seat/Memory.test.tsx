@@ -20,34 +20,24 @@
  * running company rather than from the type.
  */
 
-import { cleanup, render, screen } from "~/test/inCase.ts";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, expect, test } from "vitest";
 
 import { CounterpartyRow, ThreadTurn, counterpartyKey } from "./Memory.tsx";
 import { Router } from "~/app/router.tsx";
 import { overflowing } from "~/testing.tsx";
 
+afterEach(cleanup);
+
 const seen = "2026-03-01T09:00:00Z";
 /** The reader's clock: two days after `seen`. */
 const NOW = Date.parse("2026-03-03T09:00:00Z");
-
-// THE CLOCK THE ROWS READ, faked rather than handed in: a relative time reads
-// the shared clock in the cell that shows it, so the instant under test is the
-// system's.
-beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
-  vi.setSystemTime(NOW);
-});
-
-afterEach(() => {
-  cleanup();
-  vi.useRealTimers();
-});
 
 test("a profile renders its traits, not a summary field that does not exist", () => {
   render(
     <Router>
       <CounterpartyRow
+        now={NOW}
         profile={{
           subject: { handle: "bo", name: "Bo Lang" },
           resolved: true,
@@ -75,6 +65,7 @@ test("an unresolved subject is named and marked, not blank", () => {
   render(
     <Router>
       <CounterpartyRow
+        now={NOW}
         profile={{
           subject: { external_id: "U0EXTERNAL", platform: "slack", name: "Sam Rivera" },
           resolved: false,
@@ -129,6 +120,7 @@ test("a stale profile says it has stopped learning, not that it has stopped work
   render(
     <Router>
       <CounterpartyRow
+        now={NOW}
         profile={{
           subject: { handle: "bo", name: "Bo Lang" },
           resolved: true,
@@ -150,6 +142,7 @@ test("a freshly corroborated profile carries no staleness line", () => {
   render(
     <Router>
       <CounterpartyRow
+        now={NOW}
         profile={{
           subject: { handle: "bo", name: "Bo Lang" },
           resolved: true,
@@ -214,6 +207,7 @@ test("a profile's last interaction reads relative, the instant on its title", ()
   render(
     <Router>
       <CounterpartyRow
+        now={NOW}
         profile={{
           subject: { handle: "bo", name: "Bo Lang" },
           resolved: true,

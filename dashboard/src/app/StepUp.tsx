@@ -5,21 +5,22 @@
  * # One dialog, and no screen draws its own
  *
  * The engine asks for a fresh proof of identity before the gestures that
- * change what a company is — its configuration, its credentials, its chart,
- * how somebody signs in — and refuses them `403 step_up_required` naming the
- * window. Every screen's writes go through `protocol/rest.ts`, which asks
- * here and REPLAYS the refused request once the person has confirmed, so a
- * form being saved is saved rather than lost to a refusal. Mounted once,
- * beside the frame and outside it, because the enrolment screen asks for the
- * sensitive window too and it is drawn outside the frame.
+ * change what a company is — its configuration, its credentials, how somebody
+ * signs in, who is in its directory — and refuses them `403
+ * step_up_required`, naming its one window (`api.auth.session.step_up`).
+ * Every screen's writes go through `protocol/rest.ts`, which asks here and
+ * REPLAYS the refused request once the person has confirmed, so a form being
+ * saved is saved rather than lost to a refusal. Mounted once, beside the
+ * frame and outside it, because the enrolment screen asks for a step-up too
+ * and it is drawn outside the frame.
  *
  * # What confirming does to the session
  *
  * `POST /auth/step-up` ENDS the session it was given and answers a fresh one,
- * whose cookie the browser now holds. The socket was opened on the old
- * session, so it is re-dialled — the engine would close it within a minute
- * anyway, and a minute of pushes on an ended session is a minute nobody
- * should have to reason about.
+ * whose cookie the browser now holds. The engine closes every socket the old
+ * session opened `4401`, and the socket dials again once this tab's requests
+ * — the step-up's own answer among them — have settled, with the new cookie
+ * (`protocol/socket.ts`). Nothing here re-dials it.
  *
  * # When confirming cannot work
  *
@@ -34,24 +35,10 @@ import { useEffect, useRef, useState } from "react";
 import { Button, Callout, FormField, Input, Modal, Text } from "@crewlethq/ui";
 import { ShieldUserGlyph } from "@crewlethq/icons/glyphs";
 import { refusalText } from "~/lib/refusal.ts";
-import { useClient } from "~/lib/store-hooks.ts";
-import {
-  auth,
-  currentSessionNeed,
-  setStepUpConfirmer,
-  type StepUpWindow,
-} from "~/protocol/index.ts";
-
-/** Why this window is being asked for, in a person's terms. */
-function reasonFor(window: StepUpWindow): string {
-  return window === "step_up_sensitive"
-    ? "This is one of the few changes that need a very recent confirmation: it changes how somebody signs in, or shows a credential."
-    : "This change needs you to have confirmed who you are recently.";
-}
+import { auth, currentSessionNeed, setStepUpConfirmer } from "~/protocol/index.ts";
 
 export function StepUpHost() {
-  const { socket } = useClient();
-  const [asking, setAsking] = useState<StepUpWindow | null>(null);
+  const [asking, setAsking] = useState(false);
   // THE ANSWER THE TRANSPORT IS WAITING ON. A ref rather than state, because
   // settling it is a side effect of closing the dialog, not something to
   // render — and it must be settled whichever way the dialog goes, the host
@@ -60,10 +47,10 @@ export function StepUpHost() {
 
   useEffect(() => {
     const uninstall = setStepUpConfirmer(
-      (window) =>
+      () =>
         new Promise<boolean>((resolve) => {
           settle.current = resolve;
-          setAsking(window);
+          setAsking(true);
         }),
     );
     return () => {
@@ -73,25 +60,18 @@ export function StepUpHost() {
     };
   }, []);
 
-  if (asking === null) return null;
+  if (!asking) return null;
 
   const done = (confirmed: boolean) => {
     settle.current?.(confirmed);
     settle.current = null;
-    setAsking(null);
-    if (confirmed) socket.reconnect();
+    setAsking(false);
   };
 
-  return <StepUpDialog window={asking} onDone={done} />;
+  return <StepUpDialog onDone={done} />;
 }
 
-function StepUpDialog({
-  window,
-  onDone,
-}: {
-  window: StepUpWindow;
-  onDone: (confirmed: boolean) => void;
-}) {
+function StepUpDialog({ onDone }: { onDone: (confirmed: boolean) => void }) {
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -142,8 +122,8 @@ function StepUpDialog({
       }
     >
       <Text as="p" variant="body">
-        {reasonFor(window)} Enter your password to carry on: what you were doing is kept, and sent
-        again once you have.
+        This change needs you to have confirmed who you are recently. Enter your password to carry
+        on: what you were doing is kept, and sent again once you have.
       </Text>
       <FormField label="Password">
         {(field) => (

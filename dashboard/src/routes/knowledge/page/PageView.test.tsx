@@ -4,7 +4,7 @@
  * as themselves, including the one that races somebody else's save.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
@@ -36,11 +36,19 @@ class InertWebSocket {
 const NOW = Date.parse("2026-09-25T00:00:00Z");
 const ID = "0b6f5a4e-6a41-4b6e-9d8c-3f1e2d4c5b6a";
 
-// The viewer answer as the engine sends it: who, the grants they carry, the
-// seat the directory binds them to, and the changes it makes for them.
 const JANE = {
-  login: "jane.doe",
-  grants: ["state:read", "knowledge:write"],
+  login: "U0FOUNDER",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -315,10 +323,6 @@ test("an unloaded skill says so, and a node that cannot say draws the bare pill"
   expect(screen.queryByText(/not loaded/)).toBeNull();
 });
 
-// A TASK LINKS BY ITS ADDRESS, NEVER ITS KEY: the engine flags a task whose key
-// another task claimed first, and `#/work/ENG-412` opens the CLAIMANT — so the
-// duplicate is reached by its id. Both rows print the same key, which is why
-// each is found by its title.
 test("linked from lists the tasks and the pages that point here", async () => {
   mount(<PageView id={ID} />, {
     page: detail({
@@ -331,17 +335,9 @@ test("linked from lists the tasks and the pages that point here", async () => {
             status: "in_progress",
             via: ["linked_page"],
           },
-          {
-            id: "t-2",
-            key: "ENG-412",
-            key_collision: true,
-            title: "Retry PXE boot (dup)",
-            status: "todo",
-            via: ["description"],
-          },
         ],
         pages: [{ id: "p-2", container: "ENG", title: "Scheduler on-call" }],
-        tasks_total: 2,
+        tasks_total: 1,
         pages_total: 1,
       },
     }),
@@ -349,13 +345,11 @@ test("linked from lists the tasks and the pages that point here", async () => {
   });
   await settle();
   const links = screen.getByRole("region", { name: "Linked from" });
-  const task = (title: string) =>
+  expect(
     within(links)
-      .getByText(title, { selector: ".kpage-link-title" })
-      .closest("a")
-      ?.getAttribute("href");
-  expect(task("Retry PXE boot")).toBe("#/work/ENG-412");
-  expect(task("Retry PXE boot (dup)")).toBe("#/work/t-2");
+      .getByRole("link", { name: /ENG-412/ })
+      .getAttribute("href"),
+  ).toBe("#/work/ENG-412");
   expect(within(links).getByRole("link", { name: "Scheduler on-call" }).getAttribute("href")).toBe(
     "#/knowledge/pages/p-2",
   );
@@ -570,13 +564,12 @@ test("only an exact repeat of the title on the first line is dropped", () => {
 
 // A READER WHO CANNOT CHANGE THE PAGE SEES THE SAME PAGE: Edit, Comment and a
 // new page's Write are drawn for everybody and disabled with the sentence
-// that says what would change that — for each reader who cannot act. (An
-// unbound caller acts too, under their own login: binding adds the seat they
-// act as, not the right to act.)
+// that says what would change that — for each of the three readers who
+// cannot act.
 test.each([
   [
     "an anonymous reader",
-    { login: "", grants: [], handle: "", owner: "", name: "", kind: "", acts: [] },
+    { login: "", grants: [], handle: "", owner: "", name: "", acts: [], anonymous: true },
     WRITE_REASONS.anonymous,
   ],
   ["a person the engine does not serve", { ...JANE, acts: [] }, WRITE_REASONS.not_served],

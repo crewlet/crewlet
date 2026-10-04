@@ -85,8 +85,7 @@ import {
 } from "~/lib/phases.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
 import { staleness } from "~/lib/seats.ts";
-import { useClockReading } from "~/lib/clock.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
+import { useNow } from "~/lib/clock.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
@@ -375,6 +374,7 @@ export function PhaseCard({
   // Latched: seeded from `defaultOpen` and then owned by the reader. A phase
   // completing is not a reason to hide it.
   const [open, setOpen] = useState(!!defaultOpen);
+  const now = useNow();
   const { ledger, legacy } = ledgerOf(record);
   // A CODING RUN IS NOT A MODEL CALL. Its record has no rounds because the
   // engine drove none — the run's own loop happened in a box — so what the
@@ -387,14 +387,7 @@ export function PhaseCard({
   // back, so the stage is passed and the alarm stays down for as long as the
   // run takes.
   const parked = record.live && record.stage === "parked";
-  // WHETHER A LIVE PHASE HAS GONE QUIET, read as the word: it changes at two
-  // minutes and at ten, so the card renders on those two ticks. The stopwatch
-  // beside it moves every second and reads the clock in the element that
-  // shows it (below) — read here, it drew the whole card once a second, every
-  // round, tool call and prompt document of a running phase included.
-  const stale = useClockReading((now) =>
-    record.live ? staleness(record.at, now, record.stage) : "",
-  );
+  const stale = record.live ? staleness(record.at, now, record.stage) : "";
   const took = phaseDuration(record);
   // THE EVENT'S ADDRESS, FROM THE ONE MAP, for the link and for the guard
   // alike. The guard spelled the address itself and kept the old one when the
@@ -565,11 +558,7 @@ export function PhaseCard({
           dateTime={record.live ? record.startedAt : record.at}
           title={fmtDateTime(record.live ? record.startedAt : record.at)}
         >
-          <ClockText
-            read={(now) =>
-              record.live ? fmtElapsed(now - tsKey(record.startedAt)) : relTime(record.at, now)
-            }
-          />
+          {record.live ? fmtElapsed(now - tsKey(record.startedAt)) : relTime(record.at, now)}
         </time>
       </header>
 

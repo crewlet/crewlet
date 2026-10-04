@@ -96,7 +96,7 @@ function Comparison({
     // THE WINDOW BEFORE A LONG ENOUGH ONE STARTS PAST THE HISTORY, and the
     // engine refuses it naming why — which is what the reader is told.
     return (
-      <span className="spend-hero-change" title={prior.detail ?? undefined}>
+      <span className="spend-hero-change" title={prior.detail}>
         No comparison — {prior.detail ?? "the window before this one could not be read"}
       </span>
     );

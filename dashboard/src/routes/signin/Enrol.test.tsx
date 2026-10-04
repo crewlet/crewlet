@@ -8,7 +8,7 @@
  * terminal.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { CHUNKS, loadChunk } from "~/app/lazyScreen.ts";
 import { App } from "~/app/App.tsx";

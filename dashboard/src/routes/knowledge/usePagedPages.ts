@@ -27,11 +27,10 @@ import { useCallback, useMemo, useState } from "react";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import {
-  queryFailure,
+  queryErrorCode,
   type LogRefusal,
   type PageSummary,
   type PagesAnswer,
-  type QueryFailure,
   type QueryRefusal,
 } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
@@ -51,7 +50,7 @@ export interface PagedPages {
   data: PagesAnswer | null;
   loading: boolean;
   error: QueryErrorCode | null;
-  /** Why the first window was refused, beside `error` — what `QueryState` names. */
+  /** What the first window's refusal said beyond its code — see `useQuery`. */
   refusal: QueryRefusal | LogRefusal | null;
   /** Every page loaded, each once, in the listing's own order. */
   rows: PageSummary[];
@@ -62,13 +61,8 @@ export interface PagedPages {
   /** Ask for the next window. A no-op when there is none or one is in flight. */
   loadMore: () => void;
   paging: boolean;
-  /**
-   * Why the last "Load more" failed, until the next one — WHOLE
-   * ([queryFailure]), its refusal and the engine's own sentence included, so
-   * the screen can name the grant that would admit the reader rather than a
-   * bare code.
-   */
-  pageFailure: QueryFailure | null;
+  /** Why the last "Load more" failed, until the next one. */
+  pageError: QueryErrorCode | null;
   /**
    * Who each loaded TOOL SKILL reached as a skill, by page id, from every
    * window — present only on a `skills: true` listing on a node that reads the
@@ -106,7 +100,7 @@ export function usePagedPages(
   const question = JSON.stringify(asked);
   const [held, setHeld] = useState<{ question: string; windows: PagesAnswer[] } | null>(null);
   const [paging, setPaging] = useState(false);
-  const [pageFailure, setPageFailure] = useState<QueryFailure | null>(null);
+  const [pageError, setPageError] = useState<QueryErrorCode | null>(null);
   const windows = held && held.question === question ? held.windows : NO_WINDOWS;
   const last = windows.length > 0 ? windows[windows.length - 1] : first.data;
   const after = last?.after ?? "";
@@ -114,7 +108,7 @@ export function usePagedPages(
   const load = useCallback(async () => {
     if (!after || paging) return;
     setPaging(true);
-    setPageFailure(null);
+    setPageError(null);
     try {
       const window = await socket.query(
         "pages",
@@ -126,7 +120,7 @@ export function usePagedPages(
           : { question, windows: [window] },
       );
     } catch (err) {
-      setPageFailure(queryFailure(err));
+      setPageError(queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed");
     } finally {
       setPaging(false);
     }
@@ -157,6 +151,6 @@ export function usePagedPages(
     more: after !== "",
     loadMore: () => void load(),
     paging,
-    pageFailure,
+    pageError,
   };
 }

@@ -11,7 +11,7 @@
  */
 
 import { StrictMode } from "react";
-import { act, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -19,7 +19,7 @@ import { Backups } from "./Backups.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, QueryRefusedError, Store } from "~/protocol/index.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { BackupsAnswer } from "~/contract/backups.ts";
 
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
@@ -64,22 +64,25 @@ const answer = (): BackupsAnswer => ({
   ],
   history: [
     {
+      // A PRINCIPAL BOUND TO NO SEAT, under its own login (`iam.ActorFor`).
       id: "b-failed",
       at: hoursAgo(1),
       node: "node-b",
-      actor: "token:ops-cron",
+      actor: "ops-cron",
       actor_kind: "operator",
       dir: "/full/disk",
       outcome: "failed",
-      summary: "token:ops-cron: backup to /full/disk failed",
+      summary: "ops-cron: backup to /full/disk failed",
     },
     {
+      // A PERSON BOUND TO A SEAT asks AS the seat, and the credential they
+      // asked through rides beside them.
       id: "b-landed",
       at: hoursAgo(2),
       node: "node-a",
       actor: "jane",
       actor_kind: "human",
-      operator_id: "pat:jane-laptop",
+      operator_id: "session:s-1",
       dir: "/var/backups/crewlet-20260929-0200",
       outcome: "applied",
       summary: "jane backed up",
@@ -103,23 +106,15 @@ class InertWebSocket {
   close(): void {}
 }
 
-/** What `viewer` answers for a reader holding only `grants`. */
-const viewerHolding = (grants: string[]) => ({
-  login: "ana",
-  grants,
-  handle: "",
-  owner: "ana",
-  name: "",
-  kind: "",
-});
+/** Who is reading: somebody holding the grant a backup is taken under. */
+const OPERATOR = { login: "ops", owner: "ops", grants: ["fleet:operate"] };
 
 function mount(
   over: Partial<BackupsAnswer> = {},
   {
     strict = false,
     historySeconds = (30 * 86_400) as number | null,
-    viewer = null as unknown,
-    refused = false,
+    viewer = OPERATOR as unknown,
   } = {},
 ) {
   const store = new Store();
@@ -132,20 +127,8 @@ function mount(
   store.setConnected(true);
   const socket = new LiveSocket(store);
   const query = vi.fn((what: string) => {
-    if (what === "backups") {
-      return refused
-        ? Promise.reject(
-            new QueryRefusedError(
-              "unauthorized",
-              { reason: "operator", grants: ["fleet:operate"] },
-              "",
-            ),
-          )
-        : Promise.resolve({ ...answer(), ...over });
-    }
-    // THE VIEWER, where a case states one; otherwise nobody has said yet,
-    // which leaves the button to the engine's own refusal.
-    if (what === "viewer" && viewer) return Promise.resolve(viewer);
+    if (what === "backups") return Promise.resolve({ ...answer(), ...over });
+    if (what === "viewer") return Promise.resolve(viewer);
     return new Promise(() => {});
   });
   (socket as unknown as { query: typeof query }).query = query;
@@ -222,24 +205,22 @@ test("the newest counted point is the engine's, and the others say why they are 
   ).toMatch(/node-a/);
 });
 
-// EVERY REQUESTED BACKUP, WITH THE HOST THAT HOLDS IT, a failure drawn as one,
-// a person bound to a seat drawn as the seat they asked as — with the
-// credential they asked through beside it — and a credential bound to nobody
-// under its whole login.
-test("the history lists each backup with its node, its writer and its outcome", async () => {
+// EVERY REQUESTED BACKUP, WITH THE HOST THAT HOLDS IT, a failure drawn as one
+// and a person drawn as the seat they asked as, with the credential beside.
+test("the history lists each backup with its node, its person and its outcome", async () => {
   mount();
   await settle();
   const history = screen.getByText("Backup history").closest(".crewlet-card") as HTMLElement;
   const failed = within(history).getByText("/full/disk").closest(".grid-row") as HTMLElement;
   expect(within(failed).getByText("Failed")).toBeTruthy();
   expect(within(failed).getByText("node-b")).toBeTruthy();
-  expect(within(failed).getByText("token:ops-cron")).toBeTruthy();
+  expect(within(failed).getByText("ops-cron")).toBeTruthy();
   const landed = within(history)
     .getByText("/var/backups/crewlet-20260929-0200")
     .closest(".grid-row") as HTMLElement;
   expect(within(landed).getByText("Written")).toBeTruthy();
   expect(within(landed).getByRole("link", { name: /Jane Founder/ })).toBeTruthy();
-  expect(within(landed).getByText("pat:jane-laptop")).toBeTruthy();
+  expect(within(landed).getByText("session:s-1")).toBeTruthy();
   expect(screen.getByText("Requested").closest(".crewlet-statcard")?.textContent).toMatch(
     /1 failed/,
   );
@@ -354,20 +335,16 @@ test("a directory the host cannot create is said on the field", async () => {
   expect(screen.queryByText(/api_backup_failed/)).toBeNull();
 });
 
-// A READER WITHOUT `fleet:operate` is refused the record by the ENGINE, which
-// names the grant, and the button says why before a press it would refuse.
-test("a reader without fleet:operate sees the engine's refusal, and the button says why", async () => {
-  mount({}, { viewer: viewerHolding(["state:read"]), refused: true });
+// A READER WITHOUT THE GRANT is told which one before pressing: the button is
+// drawn, disabled with the grant a backup is taken under.
+test("without fleet:operate the button is held and names the grant", async () => {
+  mount({}, { viewer: { login: "jane.doe", owner: "jane.doe", grants: ["state:read"] } });
   await settle();
-  expect(screen.getByText("fleet:operate")).toBeTruthy();
-  expect(screen.queryByText("Newest per owner")).toBeNull();
   const button = screen.getByRole("button", { name: "Take a backup" });
   expect(
     button.getAttribute("aria-disabled") ?? String((button as HTMLButtonElement).disabled),
   ).toMatch(/true/);
-  expect(button.getAttribute("title")).toBe(
-    "Taking a backup needs fleet:operate, which the credential you presented does not carry.",
-  );
+  expect(button.getAttribute("title")).toMatch(/needs fleet:operate/);
 });
 
 // CLOSING DOES NOT LOSE THE OUTCOME. The engine finishes a copy whether or not

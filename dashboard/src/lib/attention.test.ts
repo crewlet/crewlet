@@ -72,20 +72,10 @@ describe("what it surfaces", () => {
     expect(items[0]?.detail).toContain("webhook");
   });
 
-  test("nobody signed in and an unreachable engine are different items", () => {
+  test("a refused token and an unreachable engine are different items", () => {
     // The repair differs: one comes back on its own, the other never does.
     expect(attentionQueue(input({ connected: false }))[0]?.id).toBe("offline");
     expect(attentionQueue(input({ authRejected: true }))[0]?.id).toBe("auth");
-  });
-
-  // THE REPAIR IS A SIGN-IN, WHATEVER THE CREDENTIAL. The item said to "set a
-  // token matching one of the api.auth.tokens entries", which a person whose
-  // session had ended could not act on at all — and there is no token to set
-  // any more: an API token is exchanged for a session on the sign-in screen.
-  test("nobody signed in is repaired by signing in, and names no token to set", () => {
-    const auth = attentionQueue(input({ authRejected: true }))[0];
-    expect(auth?.detail).toContain("Sign in");
-    expect(`${auth?.title} ${auth?.detail}`).not.toMatch(/operator token|set a token/i);
   });
 
   // THE ENGINE'S OWN WORD. This case asserted `awaiting_input`, which
@@ -193,7 +183,7 @@ describe("what it surfaces", () => {
     // the round started two seconds or eleven minutes ago.
     const call = (updated: string) => ({
       id: "a",
-      agent_id: "id-a",
+      agent_id: "a",
       role: "Dev A",
       handle: "dev-a",
       live_call: {
@@ -299,7 +289,7 @@ describe("what it surfaces", () => {
         agents: [
           {
             id: "a",
-            agent_id: "id-dev-a",
+            agent_id: "a",
             role: "Dev A",
             handle: "dev-a",
             budget: { windows: [win({ state: "refusing", refused_at: "2026-01-01T11:59:00Z" })] },
@@ -307,7 +297,7 @@ describe("what it surfaces", () => {
         ],
       }),
     );
-    expect(items[0]?.id).toBe("seat-budget-id-dev-a");
+    expect(items[0]?.id).toBe("seat-budget-a");
     expect(items[0]?.detail).toContain("11:59");
   });
 
@@ -344,7 +334,7 @@ describe("what it surfaces", () => {
         agents: [
           {
             id: "a",
-            agent_id: "id-a",
+            agent_id: "a",
             role: "Dev A",
             last_error: {
               kind: "llm_unavailable",
@@ -357,7 +347,7 @@ describe("what it surfaces", () => {
           },
           {
             id: "b",
-            agent_id: "id-dev-b",
+            agent_id: "b",
             role: "Dev B",
             handle: "dev-b",
             live_call: {
@@ -421,7 +411,7 @@ describe("where a condition is shown", () => {
         agents: [
           {
             id: "b",
-            agent_id: "id-dev-b",
+            agent_id: "b",
             role: "Dev B",
             handle: "dev-b",
             live_call: {
@@ -445,7 +435,7 @@ describe("where a condition is shown", () => {
           },
           {
             id: "c",
-            agent_id: "id-dev-c",
+            agent_id: "c",
             role: "Dev C",
             handle: "dev-c",
             activity: "stopped",
@@ -459,7 +449,7 @@ describe("where a condition is shown", () => {
     expect(WHERE_OF[stalled!.subject]).toBe("live");
     // THE INBOX'S ROWS: the stopped seat, and neither the engine's own
     // condition nor the round.
-    expect(conditionsToDecide(items).map((i) => i.id)).toEqual(["stopped-id-dev-c"]);
+    expect(conditionsToDecide(items).map((i) => i.id)).toEqual(["stopped-c"]);
   });
 });
 
@@ -472,7 +462,7 @@ describe("ordering", () => {
         agents: [
           {
             id: "a",
-            agent_id: "id-a",
+            agent_id: "a",
             role: "Dev A",
             last_error: {
               kind: "llm_unavailable",
@@ -499,21 +489,8 @@ describe("ordering", () => {
         connected: false,
         engine: { status: "ok", configured: false },
         agents: [
-          // TWO SEATS SHARING A NAME: keyed by the name, their rows were one id.
-          {
-            id: "a",
-            agent_id: "id-a",
-            role: "Engineer",
-            activity: "stopped",
-            stopped_reason: "provider",
-          },
-          {
-            id: "b",
-            agent_id: "id-b",
-            role: "Engineer",
-            activity: "stopped",
-            stopped_reason: "provider",
-          },
+          { id: "a", agent_id: "a", role: "A", activity: "stopped", stopped_reason: "provider" },
+          { id: "b", agent_id: "b", role: "B", activity: "stopped", stopped_reason: "provider" },
         ],
       }),
     );
@@ -531,10 +508,10 @@ describe("ordering", () => {
   });
 });
 
-// WHO PAUSED A SEAT IS SAID BY NAME. The engine names the pauser as it records
-// every author — a person bound to a seat by that seat's handle — and the row
-// read "paused by jane-founder" on Home and in the Inbox — an address where a
-// person is meant.
+// WHO PAUSED A SEAT IS SAID BY NAME. The engine names the pauser as it names
+// every author (`iam.ActorFor`) — the seat handle a person is bound to — and
+// the row read "paused by jane-founder" on Home and in the Inbox — an address
+// where a person is meant.
 describe("a stopped seat's row", () => {
   test("names the person who paused it, off the chart", () => {
     const items = attentionQueue(
@@ -542,14 +519,14 @@ describe("a stopped seat's row", () => {
         agents: [
           {
             id: "devrel",
-            agent_id: "id-agent-devrel",
+            agent_id: "devrel",
             role: "Agent DevRel",
             handle: "agent-devrel",
             activity: "stopped",
             stopped_reason: "paused",
             paused: {
-              by: "jane-founder",
               by_kind: "human",
+              by: "jane-founder",
               at: "2026-01-01T11:00:00Z",
               stop_running: false,
             },
@@ -558,8 +535,39 @@ describe("a stopped seat's row", () => {
         nameOf: (key) => (key === "jane-founder" ? "Jane Founder" : key),
       }),
     );
-    expect(items.find((i) => i.id === "stopped-id-agent-devrel")?.detail).toBe(
+    expect(items.find((i) => i.id === "stopped-devrel")?.detail).toBe(
       "The seat cannot take work: paused by Jane Founder.",
     );
+  });
+
+  // EACH ROW IS ITS SEAT'S, BY AGENT ID: two seats sharing a name that both
+  // stopped were one row, and the queue said one seat was down when two were.
+  test("two stopped seats that share a name are two rows", () => {
+    const items = attentionQueue(
+      input({
+        agents: [
+          {
+            id: "one",
+            agent_id: "one",
+            role: "Support",
+            handle: "support",
+            activity: "stopped",
+            stopped_reason: "provider",
+          },
+          {
+            id: "two",
+            agent_id: "two",
+            role: "Support",
+            handle: "support-2",
+            activity: "stopped",
+            stopped_reason: "provider",
+          },
+        ],
+      }),
+    );
+    expect(items.filter((i) => i.id.startsWith("stopped-")).map((i) => i.id)).toEqual([
+      "stopped-one",
+      "stopped-two",
+    ]);
   });
 });

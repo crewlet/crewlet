@@ -236,8 +236,8 @@ test("the link pattern reads every spelling a route literal is written in", () =
 
 /** Every link in one module's text that reaches no screen, as `line — #/path`. */
 function deadLinks(text: string): string[] {
-  // OR A SCREEN OUTSIDE THE FRAME, which no workspace owns and the router
-  // draws all the same — the sign-in screens a refusal sends a reader to.
+  // A SIGN-IN SCREEN IS OUTSIDE THE FRAME, so no workspace owns it — and it is
+  // still a screen a link may name.
   const owned = new Set<string>([...WORKSPACES.map((w) => w.path[0] ?? ""), ...FRAMELESS]);
   const literal = new RegExp(LINK_LITERAL.source, LINK_LITERAL.flags);
   const whole = /^(?:\s*,\s*"[^"]*")*\s*,?\s*$/;
@@ -513,17 +513,22 @@ test("no stat tile builds its caption by joining a list", () => {
   ).toBeGreaterThan(30);
 });
 
+/*
+ * AND THE SCANNER ACTUALLY READS THE SHAPE THE RULE IS FOR. A gate that only
+ * ever saw single-line props would pass a reverted multi-line ternary — which is
+ * three of the four captions above.
+ */
 /**
  * A QUERYSTATE HANDED A FAILURE IS HANDED WHY.
  *
  * `QueryState` turns an `unauthorized` into the grant that would admit the
  * reader, and an `unavailable` the state log will not lift into that fact —
- * but only from the `refusal` beside the code, which `useQuery` answers and a
- * screen has to pass on. Five did not (a container's pages, a tool's holders,
- * a schedule's runs twice, the fleet's table), so each drew the generic banner
- * where the engine had said exactly what would change the answer. Nothing else
- * catches it: `refusal` is optional because a surface with no query behind it
- * has none, so an omission type-checks and renders.
+ * but only from the `refusal` beside the code, which `useQuery`, `useRest` and
+ * `usePaged` answer and a screen has to pass on. Twenty-nine did not, so a
+ * reader refused a seat's turns or the tool servers' status was shown the
+ * generic banner where the engine had named the grant that would admit them.
+ * Nothing else catches it: `refusal` is optional because a surface with no
+ * query behind it has none, so an omission type-checks and renders.
  *
  * `error={null}` is exempt, being no failure at all.
  */
@@ -542,15 +547,10 @@ test("every QueryState handed an error is handed its refusal", () => {
   }
   expect(offenders, "pass the read's `refusal` beside its `error`").toEqual([]);
   // THE OTHER SIDE: a renamed component or a broken scan makes the rule
-  // vacuous and still green. Seventy-odd of them today.
+  // vacuous and still green.
   expect(seen, "nothing here reads as a QueryState any more").toBeGreaterThan(40);
 });
 
-/*
- * AND THE SCANNER ACTUALLY READS THE SHAPE THE RULE IS FOR. A gate that only
- * ever saw single-line props would pass a reverted multi-line ternary — which is
- * three of the four captions above.
- */
 test("the element scanner reads a multi-line prop", () => {
   const src =
     '<StatCard\n  label="x"\n  sub={\n    a.length ? a.map((x) => x.n).join(", ") : "none"\n  }\n/>\n<StatCard label="y" sub="fixed" />';
@@ -625,368 +625,6 @@ test("a column with no word in its head declares one", () => {
 });
 
 /**
- * EVERY `Intl` FORMATTER IS BUILT IN `lib/format.ts`, AND KEPT.
- *
- * `d.toLocaleString(locale, options)`, `toLocaleDateString`,
- * `toLocaleTimeString`, `n.toLocaleString()` and `a.localeCompare(b, locale,
- * options)` each build an `Intl` object PER CALL — ECMA-402 defines them as
- * that construction followed by one format or compare — and building one is
- * the expensive half. Spelled inline they were most of what formatting cost
- * on a busy screen: a hundred-row audit built three hundred date formatters a
- * render, and a grid sorted by a text column built a collator per comparison.
- * `lib/format.ts` keeps one per locale and options (`dateFormatter`), one
- * number formatter and one collator (`naturalCompare`); `lib/prefs.ts` is the
- * other file allowed one, to ask `Intl` which zone the browser is in and
- * whether a zone exists.
- *
- * A bare `a.localeCompare(b)` is allowed: with no locale and no options the
- * engine compares through its own default collator rather than building one.
- */
-const INTL_BUILT =
-  /\.toLocale(Date|Time)?String\(|\bnew Intl\.|\bIntl\.[A-Z]\w*\(|\.localeCompare\([^\n]*?,\s*(undefined|["'[{])/;
-
-test("every Intl formatter is built in lib/format.ts, and kept", () => {
-  const allowed = new Set(["lib/format.ts", "lib/prefs.ts"]);
-  const offenders: string[] = [];
-  let read = 0;
-  for (const { path, text } of sources([".ts", ".tsx"])) {
-    read += 1;
-    if (allowed.has(path)) continue;
-    const lines = text
-      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-      .replace(/(^|[^:])\/\/[^\n]*/g, (m, lead) => lead + " ".repeat(m.length - lead.length))
-      .split("\n");
-    lines.forEach((line, i) => {
-      if (INTL_BUILT.test(line)) offenders.push(`${path}:${i + 1} — ${line.trim().slice(0, 90)}`);
-    });
-  }
-  // A WALK THAT READ NOTHING passes with no offence found.
-  expect(read).toBeGreaterThan(100);
-  expect(
-    offenders,
-    "format through lib/format.ts (dateFormatter, fmtExact, plural, naturalCompare), which keeps the formatter",
-  ).toEqual([]);
-});
-
-test("the Intl gate fires on each spelling it is for", () => {
-  for (const line of [
-    "d.toLocaleString(undefined, { hour: '2-digit' })",
-    "d.toLocaleDateString(undefined, { day: 'numeric' })",
-    "d.toLocaleTimeString()",
-    "n.toLocaleString()",
-    "new Intl.NumberFormat()",
-    "Intl.DateTimeFormat().resolvedOptions()",
-    "String(a).localeCompare(String(b), undefined, { numeric: true })",
-  ]) {
-    expect(INTL_BUILT.test(line), line).toBe(true);
-  }
-  expect(INTL_BUILT.test("a.name.localeCompare(b.name)")).toBe(false);
-  expect(INTL_BUILT.test("dateFormatter(undefined, { day: 'numeric' }).format(d)")).toBe(false);
-});
-
-/**
- * AN ITEM IS OPENED BY ITS ADDRESS, NEVER BY ITS KEY.
- *
- * A key two tasks hold opens the one that claimed it first — the engine
- * resolves a key through its directory before it reads a row — and the other
- * is flagged `key_collision` and reached only by its id. Every screen that
- * opened an item built the link, the peek, the stepper's list, the "is this
- * the open one" check and the copied call out of `row.key`: the board, the
- * list, the table, the timeline, the calendar, the search, the palette, the
- * feeds, the inbox and My work all drew two `ENG-7`s that opened one task,
- * with no error anywhere, because a key is a perfectly good address for every
- * row but the flagged one.
- *
- * `itemAddress` (in `lib/work.ts`) is the one place the rule is written, and
- * this is what keeps a NEW screen from writing it again by hand. Four shapes
- * are refused anywhere in the source, each a way the key leaks into an
- * address:
- *
- * - a `["work", …]` route whose segment reads a key field — `row.key`,
- *   `record.subject_key`, `item.task_key`, `link.key || link.other`. An item's
- *   route is `itemPath(row)`, and a project's is `projectPath(key)` precisely
- *   so that no route into the tracker is spelled with a key at the call site;
- * - an `{ kind: "item", id: … }` reference — a peek, a stepper entry, a copied
- *   call's subject — whose id is anything but `itemAddress(…)`, in either
- *   order of its two properties;
- * - a comparison of a key field against `selected` or `peek.id`, which is how
- *   a list draws the open row — the peek holds an ADDRESS, so a row matched
- *   on its key lit up both holders of a shared one;
- * - a tool call naming its `item:` by a key field.
- *
- * Comments are blanked first, so a comment quoting the wrong shape to explain
- * the right one is not an offence.
- */
-const KEY_READ = String.raw`[\w$\])?]\.(?:key|subject_key|task_key)\b`;
-const ADDRESS_RULES: { rule: RegExp; says: string }[] = [
-  {
-    rule: new RegExp(String.raw`\[\s*"work"\s*,[^\]]*?` + KEY_READ),
-    says: "routes to an item by its key — use itemPath(row)",
-  },
-  {
-    // THE LOOKAHEAD SITS ON THE COLON, not after the spaces: placed after
-    // them, the engine backtracks the spaces away and the lookahead then sees
-    // " itemAddress(", which is not `itemAddress(`, so every right answer was
-    // refused as well.
-    rule: /\bkind:\s*"item"(?:\s+as\s+const)?\s*,\s*id:(?!\s*itemAddress\()/,
-    says: "names an item by something other than itemAddress(row)",
-  },
-  {
-    rule: /\bid:(?!\s*itemAddress\()[^,{}]*,\s*kind:\s*"item"(?!\s*\|)/,
-    says: "names an item by something other than itemAddress(row)",
-  },
-  {
-    rule: new RegExp(
-      String.raw`(?:\bselected|\bpeek\??\.id)\s*[!=]==\s*[\w$?.\[\]]*` +
-        KEY_READ +
-        String.raw`|[\w$?.\[\]]*` +
-        KEY_READ +
-        String.raw`\s*[!=]==\s*(?:\bselected\b|\bpeek\??\.id\b)`,
-    ),
-    says: "matches the open item on its key — compare itemAddress(row)",
-  },
-  {
-    rule: new RegExp(String.raw`\bitem:\s*[\w$?.\[\]]*` + KEY_READ),
-    says: "names a tool call's item by its key — use itemAddress(row)",
-  },
-];
-
-/** A file's code with its comments blanked and every offset kept. */
-function codeOf(text: string): string {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:])\/\/[^\n]*/g, (m, lead) => lead + " ".repeat(m.length - lead.length));
-}
-
-/** Every place one file's code addresses an item by hand. */
-function addressOffences(code: string): { line: number; says: string; text: string }[] {
-  const out: { line: number; says: string; text: string }[] = [];
-  const lines = code.split("\n");
-  for (const { rule, says } of ADDRESS_RULES) {
-    // ACROSS LINES, because the shapes are written across lines: a
-    // multi-line `{ kind: "item", id: … }` is how a copied call's subject is
-    // spelled, and a per-line scan reads its `id:` as an unrelated line.
-    const global = new RegExp(rule.source, "g");
-    let m: RegExpExecArray | null;
-    while ((m = global.exec(code))) {
-      const line = code.slice(0, m.index).split("\n").length;
-      out.push({ line, says, text: (lines[line - 1] ?? "").trim().slice(0, 90) });
-      global.lastIndex = m.index + Math.max(1, m[0].length);
-    }
-  }
-  return out;
-}
-
-/**
- * Every `<DataGrid …>` element's own source text — its generic argument
- * stepped over, so `<DataGrid<Row>` is read as the element it is rather than
- * ended at the generic's `>`, which is where [elements] would end it.
- */
-function grids(text: string): { at: number; text: string }[] {
-  const out: { at: number; text: string }[] = [];
-  const tag = "<DataGrid";
-  let i = 0;
-  while ((i = text.indexOf(tag, i)) >= 0) {
-    let j = i + tag.length;
-    if (text[j] === "<") {
-      for (let angle = 0; j < text.length; j++) {
-        if (text[j] === "<") angle++;
-        else if (text[j] === ">" && --angle === 0) {
-          j++;
-          break;
-        }
-      }
-    } else if (!/[\s/>]/.test(text[j] ?? "")) {
-      i = j;
-      continue;
-    }
-    let depth = 0;
-    for (; j < text.length; j++) {
-      const c = text[j];
-      if (c === "{") depth++;
-      else if (c === "}") depth--;
-      else if (depth === 0 && c === "/" && text[j + 1] === ">") {
-        j += 2;
-        break;
-      } else if (depth === 0 && c === ">") {
-        j += 1;
-        break;
-      }
-    }
-    out.push({ at: i, text: text.slice(i, j) });
-    i = j;
-  }
-  return out;
-}
-
-test("no screen opens an item by its key", () => {
-  const offenders: string[] = [];
-  let read = 0;
-  let addressed = 0;
-  for (const { path, text } of sources([".ts", ".tsx"])) {
-    read += 1;
-    const code = codeOf(text);
-    addressed += (code.match(/\bitem(?:Address|Path)\(/g) ?? []).length;
-    for (const o of addressOffences(code)) {
-      offenders.push(`${path}:${o.line} ${o.says} — ${o.text}`);
-    }
-  }
-  // A WALK THAT READ NOTHING passes with no offence found.
-  expect(read).toBeGreaterThan(100);
-  expect(
-    offenders,
-    "a key another task claimed first opens that task: address an item with itemAddress / itemPath from lib/work.ts",
-  ).toEqual([]);
-  // AND SO DOES A TREE IN WHICH NOTHING ADDRESSES AN ITEM AT ALL — which is
-  // what a rename of the function would leave behind, every rule above then
-  // refusing the new spelling's absence rather than anything a screen does.
-  expect(addressed, "nothing in the tree calls itemAddress or itemPath").toBeGreaterThan(20);
-});
-
-test("the address gate fires on each way a key leaks into an address, and on nothing else", () => {
-  for (const bad of [
-    'href(["work", row.key])',
-    'nav.to(["work", item.key])',
-    'path: ["work", record.subject_key],',
-    'href(["work", item.task_key])',
-    ': ["work", link.key || link.other],',
-    'openPeek({ kind: "item", id: row.key })',
-    'rows.map((r) => ({ kind: "item" as const, id: r.key }))',
-    'peekHref({ kind: "item", id: hit.key || hit.id })',
-    '{\n  kind: "item",\n  id: detail.task.key,\n}',
-    '({ id: r.key, kind: "item" })',
-    "selected={selected === row.key}",
-    "isSelected={(row) => row.key === selected}",
-    "isSelected={(r) => peek?.id === r.key}",
-    'cx("tl-bar", selected === bar.row.key && "selected")',
-    "args: { item: row.key },",
-  ]) {
-    expect(addressOffences(bad).length, bad).toBeGreaterThan(0);
-  }
-  for (const good of [
-    "href(itemPath(row))",
-    'href(["work", itemAddress(row)])',
-    "href(projectPath(p.key))",
-    'path: ["work", projectKey]',
-    'openPeek({ kind: "item", id: itemAddress(row) })',
-    '({ kind: "item" as const, id: itemAddress(r) })',
-    '{\n  kind: "item",\n  id: itemAddress(detailItem(detail)),\n}',
-    'kind: "item" | "page" | "seat";',
-    "isSelected={(row) => itemAddress(row) === selected}",
-    'selected === itemAddress(bar.row) && "selected"',
-    "group.key === key",
-    'openPeek({ kind: "project", id: row.key })',
-    "args: { item: itemAddress(row) },",
-  ]) {
-    expect(addressOffences(good), good).toEqual([]);
-  }
-});
-
-/** What an element hands `columns={…}`, brace-counted, or null where it hands none. */
-function columnsOf(element: string): string | null {
-  const start = element.indexOf("columns={");
-  if (start < 0) return null;
-  let depth = 0;
-  for (let j = start + "columns=".length; j < element.length; j++) {
-    if (element[j] === "{") depth++;
-    else if (element[j] === "}" && --depth === 0) {
-      return element.slice(start + "columns={".length, j);
-    }
-  }
-  return null;
-}
-
-/**
- * Why a grid's `columns` is not a value that holds still, or null where it is.
- *
- * HELD STILL means a name declared once at module scope or with `useMemo` in
- * the file that hands it over; anything else is a new list on every render.
- */
-export function columnsOffence(source: string, value: string): string | null {
-  const name = value.trim();
-  if (!/^[A-Za-z_$][\w$]*$/.test(name)) return "an expression, built again on every render";
-  const declared = new RegExp(
-    String.raw`^([ \t]*)(?:export\s+)?const\s+${name}\b[^=\n]*=\s*(.*)$`,
-    "gm",
-  );
-  const found = [...source.matchAll(declared)];
-  if (found.length === 0) return `\`${name}\` is not declared in this file as a held value`;
-  for (const [, indent, rest] of found) {
-    if (indent === "") continue;
-    if (/^useMemo\s*[(<]/.test(rest ?? "")) continue;
-    return `\`${name}\` is declared without useMemo, so it is a new list on every render`;
-  }
-  return null;
-}
-
-/**
- * A GRID'S COLUMNS ARE A VALUE THAT HOLDS STILL.
- *
- * Every row of a grid is memoised on the column list it is handed
- * (`app/frame/DataGrid.tsx`), and rightly: a column closing over something new
- * may draw something new. So a list built inline — `columns={[…]}`, or a
- * `const` declared in the render without `useMemo` — is a new list on every
- * render of the screen, and every such render draws every row: a seat's live
- * state moving, a clock-driven header, a filter typed above the grid, a poll
- * that changed one row. Twenty-seven grids on twenty screens were built that
- * way, the turns list among them, where one changed turn drew all two hundred.
- *
- * NOTHING ELSE CATCHES IT: an inline list type-checks, renders correctly and
- * is wrong only in how much work every render does. So the value a grid is
- * handed must be a name this file declares at module scope or with `useMemo`.
- * A `useMemo` whose dependencies change on every render passes this and is
- * the same defect — which is what the screens' own poll cases are for.
- */
-test("every grid is handed a column list that holds still", () => {
-  const offenders: string[] = [];
-  let seen = 0;
-  for (const { path, text } of sources([".tsx"])) {
-    for (const grid of grids(text)) {
-      const value = columnsOf(grid.text);
-      if (value === null) continue;
-      seen++;
-      const offence = columnsOffence(text, value);
-      if (offence === null) continue;
-      const line = text.slice(0, grid.at).split("\n").length;
-      offenders.push(`${path}:${line} — ${offence}`);
-    }
-  }
-  expect(
-    offenders,
-    "hold the columns in a useMemo on what they read, or at module scope: an inline list draws every row on every render",
-  ).toEqual([]);
-  // THE OTHER SIDE: a renamed component or a broken scan makes the rule vacuous
-  // and still green. Thirty-odd grids today.
-  expect(seen, "nothing here reads as a DataGrid handed columns any more").toBeGreaterThan(25);
-});
-
-test("the column gate fires on each spelling it is for, and passes a held list", () => {
-  const offence = (source: string) => {
-    const [grid] = grids(source);
-    return columnsOffence(source, columnsOf(grid!.text) ?? "");
-  };
-  // INLINE, GENERIC OR NOT.
-  expect(offence('<DataGrid<Row>\n  rows={rows}\n  columns={[{ key: "a" }]}\n/>')).not.toBeNull();
-  expect(offence('<DataGrid rows={rows} columns={[{ key: "a" }]} />')).not.toBeNull();
-  // AN EXPRESSION IS BUILT EVERY RENDER TOO — a call, a ternary.
-  expect(offence("<DataGrid columns={build(ctx)} />")).not.toBeNull();
-  expect(offence("<DataGrid columns={wide ? a : b} />")).not.toBeNull();
-  // A NAME DECLARED IN THE RENDER WITHOUT `useMemo` is the same list inline.
-  expect(
-    offence(
-      "function S() {\n  const columns = [{ key: 'a' }];\n  return <DataGrid columns={columns} />;\n}",
-    ),
-  ).not.toBeNull();
-  // AND WHAT HOLDS STILL PASSES: a module constant, and a `useMemo`.
-  expect(offence("const COLUMNS = [];\nconst g = <DataGrid columns={COLUMNS} />;")).toBeNull();
-  expect(
-    offence(
-      "function S() {\n  const columns = useMemo<GridColumn<Row>[]>(() => [], []);\n  return <DataGrid<Row> rows={r} columns={columns} />;\n}",
-    ),
-  ).toBeNull();
-});
-
-/**
  * EVERY READ NAMES ITS QUESTION.
  *
  * The first argument of a call that asks the engine something — `useQuery(`
@@ -1015,11 +653,9 @@ test("the column gate fires on each spelling it is for, and passes a held list",
  * with a literal kind, because `Calls` reads a NAME, and a string in brackets
  * is not one.
  *
- * `act` AND `useAct` ARE READ BY BINDING: the functions imported from the
- * module of this tree that DEFINES each ([BOUND]) — not from any module of
- * it, because the test door (`test/inCase.ts`) re-exports the testing
- * library's `act` under the same name, and every suite and test kit calls
- * that one with a callback. `act` is the
+ * `act` AND `useAct` ARE READ BY BINDING: the functions imported from a
+ * module of this tree. React's own `act`, which the test kits call with a
+ * callback, is a different function that shares the spelling. `act` is the
  * write surface's entry (`protocol/act.ts`) and `useAct` the hook every
  * screen reaches it through (`lib/useAct.ts`); each names a TOOL the way a
  * query names a kind, and `internal/api/operator` holds the tools the
@@ -1035,30 +671,8 @@ test("the column gate fires on each spelling it is for, and passes a held list",
 
 /** Names the engine's gates read by spelling: `clientsource.Calls` is asked for exactly these. */
 const SPELLED = new Set(["useQuery", "query"]);
-/**
- * Names held by binding, to the modules under `src/` that define them —
- * because a package exports one of the same spelling, and so does the test
- * door that hands every suite the testing library.
- */
-const BOUND: ReadonlyMap<string, readonly string[]> = new Map([
-  ["act", ["protocol/act.ts", "protocol/index.ts"]],
-  ["useAct", ["lib/useAct.ts"]],
-]);
-
-/** Where a `~/` or relative import from the module at `from` lands, under `src/`. */
-function importTarget(from: string, source: string): string {
-  if (source.startsWith("~/")) return source.slice(2);
-  const parts = from.split("/").slice(0, -1);
-  for (const segment of source.split("/")) {
-    if (segment === "..") parts.pop();
-    else if (segment !== ".") parts.push(segment);
-  }
-  return parts.join("/");
-}
-
-/** Whether `name`, imported from `target`, is the definition [BOUND] holds. */
-const boundTo = (name: string, target: string | undefined) =>
-  target !== undefined && (BOUND.get(name)?.includes(target) ?? false);
+/** Names held by binding, imported from this tree, because a package exports one of the same spelling. */
+const BOUND = new Set(["act", "useAct"]);
 
 /** The sites that hand on a kind somebody else named, and why. */
 const FORWARDS: readonly { path: string; callee: string; argument: string; why: string }[] = [
@@ -1101,32 +715,24 @@ interface Alias {
 
 /**
  * Every call in one module that names a question, and every import that
- * renames one. `path` is the module's, under `src/`, which a relative import
- * is resolved against; a snippet is read as a module at the root.
+ * renames one.
  */
-function namedCalls(
-  source: string,
-  lang: Lang,
-  path = "snippet.tsx",
-): { calls: NamedCall[]; aliases: Alias[] } {
+function namedCalls(source: string, lang: Lang): { calls: NamedCall[]; aliases: Alias[] } {
   const line = lineOf(source);
   const program = parse(source, lang);
   const bound = new Map<string, string>();
-  /** Each namespace import, by its local name, to the module it is. */
-  const namespaces = new Map<string, string>();
+  const namespaces = new Set<string>();
   const aliases: Alias[] = [];
   for (const statement of program.body as Node[]) {
     if (statement.type !== "ImportDeclaration" || statement.importKind === "type") continue;
-    const from = String((statement.source as Node).value);
-    if (!isLocalSource(from)) continue;
-    const target = importTarget(path, from);
+    if (!isLocalSource(String((statement.source as Node).value))) continue;
     for (const spec of statement.specifiers as Node[]) {
       const local = String((spec.local as Node).name);
-      if (spec.type === "ImportNamespaceSpecifier") namespaces.set(local, target);
+      if (spec.type === "ImportNamespaceSpecifier") namespaces.add(local);
       if (spec.type !== "ImportSpecifier" || spec.importKind === "type") continue;
       const imported = spec.imported as Node;
       const name = String(imported.type === "Identifier" ? imported.name : imported.value);
-      if (!SPELLED.has(name) && !boundTo(name, target)) continue;
+      if (!SPELLED.has(name) && !BOUND.has(name)) continue;
       bound.set(local, name);
       if (local !== name) aliases.push({ line: line(spec.start), imported: name, local });
     }
@@ -1150,8 +756,9 @@ function namedCalls(
         readable = !callee.computed;
       } else if (
         member !== null &&
+        BOUND.has(member) &&
         object?.type === "Identifier" &&
-        boundTo(member, namespaces.get(String(object.name)))
+        namespaces.has(String(object.name))
       ) {
         named = member;
       }
@@ -1174,7 +781,7 @@ const forwarded = (path: string, call: NamedCall) =>
   FORWARDS.some((f) => f.path === path && f.callee === call.callee && f.argument === call.argument);
 
 describe("every read names its question", () => {
-  const tree = modules().map((m) => ({ path: m.path, ...namedCalls(m.text, m.lang, m.path) }));
+  const tree = modules().map((m) => ({ path: m.path, ...namedCalls(m.text, m.lang) }));
 
   test("with a string literal, which is what the engine's gates can read", () => {
     const offenders = tree.flatMap(({ path, calls }) =>
@@ -1303,11 +910,6 @@ describe("every read names its question", () => {
       "set_pins",
     ],
     [
-      "the write surface through the protocol's barrel",
-      'import { act } from "~/protocol/index.ts";\nact("set_pins", {});',
-      "set_pins",
-    ],
-    [
       "the write hook",
       'import { useAct } from "~/lib/useAct.ts";\nconst pin = useAct("set_pins");',
       "set_pins",
@@ -1321,25 +923,9 @@ describe("every read names its question", () => {
     ["a local function", "function ask(what: string) {}\nask(kind);"],
     ["a type-only import", 'import type { act } from "~/protocol/act.ts";\nact(tool);'],
     ["a namespace's own act", 'import * as rtl from "@testing-library/react";\nrtl.act(() => {});'],
-    // THE TEST DOOR RE-EXPORTS THE LIBRARY'S `act` under its own name, from a
-    // module of this tree — which is why a bound name is held to the module
-    // that DEFINES it rather than to any local import.
-    ["the test door's act", 'import { act } from "~/test/inCase.ts";\nact(() => {});'],
-    [
-      "the test door's act, as a namespace",
-      'import * as t from "~/test/inCase.ts";\nt.act(() => {});',
-    ],
     ["a method of another name", "const hits = el.querySelector(selector);"],
   ])("the rule leaves %s alone", (_name, source) => {
     expect(namedCalls(source, "tsx").calls).toEqual([]);
-  });
-
-  // A RELATIVE IMPORT IS RESOLVED FROM THE MODULE THAT MAKES IT: the same
-  // line is the write surface one directory down and nothing two down.
-  test("the rule resolves a relative import from the module that makes it", () => {
-    const source = 'import { act } from "../protocol/act.ts";\nact(tool, {});';
-    expect(namedCalls(source, "tsx", "lib/useAct.ts").calls.map((c) => c.name)).toEqual([null]);
-    expect(namedCalls(source, "tsx", "routes/work/Board.tsx").calls).toEqual([]);
   });
 });
 

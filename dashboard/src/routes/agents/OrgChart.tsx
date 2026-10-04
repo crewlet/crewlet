@@ -62,7 +62,7 @@ import { useFillScreen } from "~/app/fill.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours, usePeekStep } from "~/app/frame/PeekHost.tsx";
 import { usePeekWidth } from "~/app/frame/peekWidth.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
+import { useNow } from "~/lib/clock.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useMediaQuery } from "~/lib/media.ts";
@@ -73,7 +73,6 @@ import {
   indexOrg,
   nameOfIn,
   ringOf,
-  seatByAddress,
   stateLine,
   toneOf,
   type NameOf,
@@ -115,6 +114,7 @@ export function OrgChart() {
   usePeekWidth(phone ? null : CANVAS_PEEK_WIDTH);
   const org = useOrg();
   const agents = useAgents();
+  const now = useNow();
   const index = useMemo(() => indexOrg(org), [org]);
   const nameOf = useMemo(() => nameOfIn(index), [index]);
   useAgentsCounts(index);
@@ -126,20 +126,15 @@ export function OrgChart() {
   const projectRows = projects.error ? undefined : projects.data?.projects;
   const chart = useMemo(() => buildOrgChart(index, projectRows ?? []), [index, projectRows]);
   const counts = useMemo(() => stateCounts(index, agents), [index, agents]);
-  // EACH CARD'S LIVE ROW, BY HANDLE (`liveRowFor`'s rule): paired by the
-  // seat's NAME, the second "Engineer" in a company wore the first one's
-  // state, its ring and its state line.
-  const live = useMemo(
-    () => new Map(agents.flatMap((a) => (a.handle ? [[a.handle, a] as const] : []))),
-    [agents],
-  );
+  // EACH SEAT'S ROW BY ITS HANDLE — the roster row's `id` — never by its name,
+  // which two seats may share.
+  const byHandle = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
 
   const view = useRef<TreeCanvasHandle>(null);
   const peek = usePeek();
   const { open, move } = usePeekControls();
-  // THE SEAT THE PEEK'S ADDRESS NAMES, followed through a rename — never by
-  // name, which two seats may share (`seatByAddress`).
-  const peeked = peek?.kind === "seat" ? (seatByAddress(index, peek.id) ?? undefined) : undefined;
+  const peeked =
+    peek?.kind === "seat" ? (index.byHandle.get(peek.id) ?? index.byName.get(peek.id)) : undefined;
 
   // `[` AND `]` WALK THE SEATS in the order the tree reads them.
   const order = useMemo(() => {
@@ -277,8 +272,9 @@ export function OrgChart() {
       {phone ? (
         <OrgOutline
           chart={chart}
-          live={live}
+          byHandle={byHandle}
           counts={counts}
+          now={now}
           nameOf={nameOf}
           peeked={peeked}
           following={peek?.kind === "seat"}
@@ -312,8 +308,9 @@ export function OrgChart() {
               return seat ? (
                 <SeatCardNode
                   seat={seat}
-                  agent={seat.handle ? live.get(seat.handle) : undefined}
+                  agent={byHandle.get(seat.handle)}
                   card={card}
+                  now={now}
                   nameOf={nameOf}
                   onOpen={() => peekSeat(seat)}
                 />
@@ -349,17 +346,18 @@ export function OrgChart() {
  */
 function OrgOutline({
   chart,
-  live,
+  byHandle,
   counts,
+  now,
   nameOf,
   peeked,
   following,
   onOpen,
 }: {
   chart: ReturnType<typeof buildOrgChart>;
-  /** Each seat's live row, by its handle. */
-  live: ReadonlyMap<string, AgentRow>;
+  byHandle: ReadonlyMap<string, AgentRow>;
   counts: StateCounts;
+  now: number;
   nameOf: NameOf;
   peeked: Seat | undefined;
   /** The peek is open on a seat, so focus moving to a row moves it too. */
@@ -392,7 +390,8 @@ function OrgOutline({
           return seat ? (
             <SeatRowCell
               seat={seat}
-              agent={seat.handle ? live.get(seat.handle) : undefined}
+              agent={byHandle.get(seat.handle)}
+              now={now}
               nameOf={nameOf}
               tabIndex={grid.tabStop(id, column) ? 0 : -1}
               onOpen={() => onOpen(seat)}
@@ -412,12 +411,14 @@ function OrgOutline({
 function SeatRowCell({
   seat,
   agent,
+  now,
   nameOf,
   tabIndex,
   onOpen,
 }: {
   seat: Seat;
   agent: AgentRow | undefined;
+  now: number;
   nameOf: NameOf;
   tabIndex: number;
   onOpen: () => void;
@@ -455,9 +456,7 @@ function SeatRowCell({
         </span>
         <span className="oc-state">
           <StatusDot tone={human ? "neutral" : toneOf(state)} pulse={state === "working"} />
-          <span className="oc-line">
-            <ClockText read={(now) => cardLine(seat, agent, now, nameOf)} />
-          </span>
+          <span className="oc-line">{cardLine(seat, agent, now, nameOf)}</span>
         </span>
       </span>
     </span>
@@ -667,12 +666,14 @@ function SeatCardNode({
   seat,
   agent,
   card,
+  now,
   nameOf,
   onOpen,
 }: {
   seat: Seat;
   agent: AgentRow | undefined;
   card: TreeCardContext;
+  now: number;
   nameOf: NameOf;
   onOpen: () => void;
 }) {
@@ -720,9 +721,7 @@ function SeatCardNode({
       </span>
       <span className="oc-state">
         <StatusDot tone={human ? "neutral" : toneOf(state)} pulse={state === "working"} />
-        <span className="oc-line">
-          <ClockText read={(now) => cardLine(seat, agent, now, nameOf)} />
-        </span>
+        <span className="oc-line">{cardLine(seat, agent, now, nameOf)}</span>
       </span>
     </div>
   );

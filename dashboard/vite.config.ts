@@ -319,31 +319,26 @@ export default defineConfig({
       "/ws/stream": { target: "ws://localhost:8000", ws: true },
       // The degraded-mode snapshot poll, for a browser that cannot upgrade.
       "/stream": { target: "http://localhost:8000" },
-      // The sign-in surface: signing in, invitations, the second factor and
-      // the step-up, whose answers set the session cookie every other request
-      // here carries.
-      "/auth": { target: "http://localhost:8000" },
-      // The org chart and the company export, which the org builder reads and
-      // writes — the chart left the settings document for a log of its own.
-      "/chart": { target: "http://localhost:8000" },
-      "/company/export": { target: "http://localhost:8000" },
       "/config": { target: "http://localhost:8000" },
       "/secrets": { target: "http://localhost:8000" },
       "/setup": { target: "http://localhost:8000" },
       // The state log's two operator gates, evict and readmit, which the
-      // Fleet screen's replication panels write — the retention document they
+      // Fleet screen's replication panels write. The retention document they
       // sit beside is read over the socket.
       "/work": { target: "http://localhost:8000" },
-      // The identity directory: People & access, the invitations, a person's
-      // own credentials and sessions.
-      "/iam": { target: "http://localhost:8000" },
-      // Every change a screen makes, as the principal the session resolves to
+      // Every change a screen makes, as the signed-in person
       // (protocol/act.ts). Only the act route: /operator/mcp is a person's
       // assistant's surface, and nothing in the dashboard dials it.
       "/operator/act": { target: "http://localhost:8000" },
       // Taking a backup (Settings › Backups & retention). The record it
       // lands in is read over the socket.
       "/backup": { target: "http://localhost:8000" },
+      // Signing in, out and up, and an invitation's redemption — how a
+      // browser comes to hold a session cookie (protocol/auth.ts).
+      "/auth": { target: "http://localhost:8000" },
+      // The identity directory People & access reads, and the identity
+      // trail the audit screen reads beside it.
+      "/iam": { target: "http://localhost:8000" },
     },
   },
 });

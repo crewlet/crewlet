@@ -1,286 +1,146 @@
 // @vitest-environment node
 /**
- * What is wrong with a draft, placed on the nodes it is about.
+ * Placing problems and warnings on nodes.
  *
- * What these protect: the draft's own shape is judged by the chart's own
- * rules before anything is written (an address's grammar, a reserved word, a
- * field past its cap, what a seat's kind forbids); the addresses the chart
- * would refuse given the chart the draft was made on are named on the node
- * that took one, with a node's IDENTITY read off its key rather than guessed;
- * a reference naming nothing is a warning, resolved the way the chart resolves
- * one; and a settings dry run's findings go to the company node or to the
- * screen that fixes them.
+ * What these protect: a problem is placed through the path index of the
+ * document that was SENT, never the draft as it stands when the answer lands;
+ * the engine's segments are used as given, without parsing a path; and what
+ * the builder cannot fix is kept at document level with a link to where it is
+ * fixed.
  */
 
 import { describe, expect, test } from "vitest";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import { COMPANY_KEY } from "./keys.ts";
-import { fromChart } from "./document.ts";
-import type { Draft } from "./draft.ts";
-import { apply, record, type Intent } from "./operations.ts";
-import {
-  CHART_LIMITS,
-  foldKey,
-  handleProblem,
-  indexProblems,
-  placeSettingsFindings,
-  preflight,
-  problemCountOf,
-  referenceWarnings,
-  reservedAddresses,
-  unitKeyProblem,
-} from "./problems.ts";
-import { chartOf, fixtureChart, fixtureSettings } from "./testkit.ts";
+import { fromDocument, toDocument } from "./document.ts";
+import { apply, record } from "./operations.ts";
+import { placeProblems, problemCountOf } from "./problems.ts";
+import { fixtureCompany, fixtureDerived } from "./testkit.ts";
 
-const base = () => fromChart(fixtureSettings(), fixtureChart());
+const problem = (
+  segments: (string | number)[] | null,
+  extra: Partial<ConfigProblem> = {},
+): ConfigProblem => ({
+  path: "",
+  segments,
+  kind: "invalid",
+  message: `problem at ${JSON.stringify(segments)}`,
+  ...extra,
+});
 
-function run(draft: Draft, ...intents: Intent[]): Draft {
-  for (const intent of intents) {
-    const result = record(draft, intent);
-    if (!result.ok) throw new Error(`${intent.type}: ${result.message}`);
-    draft = apply(draft, result.op).draft;
-  }
-  return draft;
+const warning = (segments: (string | number)[] | null): ConfigWarning => ({
+  kind: "dangling_reference",
+  ref: "lead",
+  path: "",
+  segments,
+  seat: "",
+  unit: "",
+  from: "",
+  to: "",
+  message: "a warning",
+});
+
+function sentFixture() {
+  const doc = fixtureCompany();
+  const draft = fromDocument(doc, fixtureDerived(doc));
+  return { doc, draft, sent: toDocument(draft) };
 }
 
-/** A draft's problems as [node, field, kind], warnings left out. */
-const problemsOf = (draft: Draft, against: Draft | null = null) =>
-  preflight(draft, against)
-    .filter((p) => p.severity === "problem")
-    .map((p) => [p.node, p.field.join("."), p.kind]);
-
-describe("an address", () => {
-  test("a handle is one run of lowercase letters, digits and hyphens, and never a reserved word", () => {
-    expect(handleProblem("dev-2")).toBeNull();
-    for (const bad of ["", "Dev", "jane.doe", "ci:release", "-x", "none", "root", "x".repeat(65)]) {
-      expect(handleProblem(bad), bad).not.toBeNull();
-    }
-  });
-
-  test("a unit key carries nothing that splits a subject, and is written folded", () => {
-    expect(unitKeyProblem("go-to-market")).toBeNull();
-    expect(foldKey("  Go  To Market ")).toBe("go-to-market");
-    for (const bad of ["", "a b", "a/b", "a*", "a>", "Sales", "tree"]) {
-      expect(unitKeyProblem(bad), bad).not.toBeNull();
-    }
-    // A unit may take `none`, which only a seat reserves.
-    expect(unitKeyProblem("none")).toBeNull();
-  });
-});
-
-describe("the draft's own shape", () => {
-  test("a clean draft has no problems", () => {
-    expect(problemsOf(base())).toEqual([]);
-  });
-
-  test("a bad or repeated address, an unknown kind and a field past its cap are problems on their node", () => {
-    const draft = run(
-      base(),
-      {
-        type: "addSeat",
-        key: "new:a",
-        placement: { parent: "unit:sales" },
-        data: { handle: "Bad.Handle", name: "A", kind: "robot" },
-      },
-      {
-        type: "updateSeat",
-        target: "seat:dev",
-        set: [{ path: ["goal"], value: "x".repeat(CHART_LIMITS.prose + 1) }],
-      },
-    );
-    // In walk order: the root's seats, then each unit's, depth first.
-    expect(problemsOf(draft)).toEqual([
-      ["seat:dev", "goal", "out_of_range"],
-      ["new:a", "handle", "invalid"],
-      ["new:a", "kind", "unknown_value"],
-    ]);
-  });
-
-  test("what a seat's kind forbids is a problem on the field that carries it", () => {
-    // A kind change strips these; a draft that set the kind another way still holds them.
-    const draft: Draft = {
-      ...base(),
-      roles: [
-        {
-          key: "seat:ceo",
-          data: { handle: "ceo", name: "CEO", kind: "human", runtime: { llm: "fast" } },
-        },
-      ],
-    };
-    expect(problemsOf(draft)).toEqual([["seat:ceo", "runtime.llm", "conflict"]]);
-  });
-
-  test("a reference naming nothing is a warning, and a retired address still names what used to answer to it", () => {
-    const draft = fromChart(
-      null,
-      chartOf({
-        units: [{ key: "ops", name: "Ops", lead: "boss" }],
-        seats: [
-          { handle: "lead", name: "Lead", former_handles: ["boss"] },
-          { handle: "ceo", name: "CEO" },
-        ],
-        manages: { ceo: ["lead", "ghost"] },
-      }),
-    );
-    expect(referenceWarnings(draft).map((w) => [w.node, w.field.join(".")])).toEqual([
-      ["seat:ceo", "manages.1"],
-    ]);
-    // Control: without the seat the alias answered to, the lead names nobody.
-    const unanswered: Draft = {
-      ...draft,
-      roles: draft.roles.filter((s) => s.key !== "seat:lead"),
-    };
-    expect(referenceWarnings(unanswered).map((w) => [w.node, w.field.join(".")])).toEqual([
-      ["seat:ceo", "manages.0"],
-      ["seat:ceo", "manages.1"],
-      ["unit:ops", "lead"],
-    ]);
-  });
-});
-
-describe("the addresses the chart would refuse", () => {
-  const messages = (draft: Draft, against: Draft) =>
-    reservedAddresses(draft, against).map((r) => [r.node, r.message.split(",")[0]]);
-
-  test("a removed node's address is never given to anything else", () => {
-    const b = base();
-    const draft = run(
-      b,
-      { type: "remove", target: "seat:designer" },
-      {
-        type: "addSeat",
-        key: "new:d",
-        placement: { parent: COMPANY_KEY },
-        data: { handle: "designer", name: "New designer" },
-      },
-    );
-    expect(messages(draft, b)).toEqual([
-      ["new:d", "The handle designer belongs to a seat this draft removes"],
-    ]);
-  });
-
-  test("a renamed node's identity is never given to anything else, but it may take it back", () => {
-    // `chief-tech` was created as `cto`: its key says so.
-    const b = fromChart(
-      null,
-      chartOf({
-        seats: [
-          { handle: "chief-tech", name: "CTO", origin_handle: "cto" },
-          { handle: "ceo", name: "CEO" },
-        ],
-      }),
-    );
-    const taken = run(b, {
-      type: "addSeat",
-      key: "new:c",
-      placement: { parent: COMPANY_KEY },
-      data: { handle: "cto", name: "Another" },
-    });
-    expect(messages(taken, b)).toEqual([
-      ["new:c", "The handle cto is the address @chief-tech was created under"],
-    ]);
-    const renamed = run(b, {
-      type: "updateSeat",
-      target: "seat:ceo",
-      set: [{ path: ["handle"], value: "cto" }],
-    });
-    expect(messages(renamed, b)).toHaveLength(1);
-    // Control: the seat renaming back to its own identity collides with nothing.
-    const back = run(b, {
-      type: "updateSeat",
-      target: "seat:cto",
-      set: [{ path: ["handle"], value: "cto" }],
-    });
-    expect(messages(back, b)).toEqual([]);
-  });
-
-  test("a retired alias may be taken by a creation, and not by a rename", () => {
-    const b = fromChart(
-      null,
-      chartOf({
-        seats: [
-          { handle: "lead", name: "Lead", former_handles: ["boss"] },
-          { handle: "ceo", name: "CEO" },
-        ],
-      }),
-    );
-    const created = run(b, {
-      type: "addSeat",
-      key: "new:b",
-      placement: { parent: COMPANY_KEY },
-      data: { handle: "boss", name: "Boss" },
-    });
-    expect(messages(created, b)).toEqual([]);
-    const renamed = run(b, {
-      type: "updateSeat",
-      target: "seat:ceo",
-      set: [{ path: ["handle"], value: "boss" }],
-    });
-    expect(messages(renamed, b)).toEqual([["seat:ceo", "The handle boss still reaches @lead"]]);
-  });
-
-  test("preflight names them on the node's own address field", () => {
-    const b = base();
-    const draft = run(
-      b,
-      { type: "remove", target: "unit:sales" },
-      {
-        type: "addUnit",
-        key: "new:s",
-        placement: { parent: COMPANY_KEY },
-        data: { key: "sales", name: "Sales again" },
-      },
-    );
-    expect(problemsOf(draft, b)).toEqual([["new:s", "key", "conflict"]]);
-    // Control: without the chart it was made on, nothing is reserved.
-    expect(problemsOf(draft)).toEqual([]);
-  });
-});
-
-describe("a settings dry run's findings", () => {
-  const problem = (segments: (string | number)[] | null): ConfigProblem => ({
-    path: "",
-    segments,
-    kind: "invalid",
-    message: `problem at ${JSON.stringify(segments)}`,
-  });
-  const warning = (segments: (string | number)[] | null): ConfigWarning => ({
-    kind: "unused",
-    ref: "",
-    path: "",
-    segments,
-    seat: "",
-    unit: "",
-    from: "",
-    to: "",
-    message: "a warning",
-  });
-
-  test("a charter field's go to the company node, and what the builder cannot fix is linked to where it is fixed", () => {
-    const placed = placeSettingsFindings({
+describe("placeProblems", () => {
+  test("places a problem on the node its longest indexed prefix names, with the field below it", () => {
+    const { sent } = sentFixture();
+    const index = placeProblems(sent, {
       problems: [
-        problem(["name"]),
-        problem(["policies", 0]),
+        problem(["units", 0, "roles", 1, "goal"]),
+        problem(["units", 0, "children", 0, "roles", 0, "integrations", "jira", "project"]),
+        problem(["units", 1]),
+      ],
+    });
+    expect(index.byNode.get("seat:dev")?.map((p) => p.field)).toEqual([["goal"]]);
+    expect(index.byNode.get("seat:sre")?.[0]).toMatchObject({
+      field: ["integrations", "jira", "project"],
+      link: null,
+      severity: "problem",
+    });
+    expect(index.byNode.get("unit:Sales")?.[0]?.field).toEqual([]);
+    expect(index.document).toEqual([]);
+    expect(index.problemCount).toBe(3);
+  });
+
+  test("uses the index of the document that was sent, not the draft as it stands now", () => {
+    const { draft, sent } = sentFixture();
+    const moved = record(draft, {
+      type: "reorder",
+      target: "seat:dev",
+      to: { parent: "unit:Engineering", after: null },
+    });
+    if (!moved.ok) throw new Error(moved.message);
+    const now = toDocument(apply(draft, moved.op).draft);
+    const answer = { problems: [problem(["units", 0, "roles", 1, "goal"])] };
+    expect(placeProblems(sent, answer).byNode.has("seat:dev")).toBe(true);
+    expect(placeProblems(now, answer).byNode.has("seat:vp-engineering")).toBe(true);
+  });
+
+  test("charter fields belong to the company node", () => {
+    const { sent } = sentFixture();
+    const index = placeProblems(sent, { problems: [problem(["name"]), problem(["policies", 0])] });
+    expect(index.byNode.get(COMPANY_KEY)?.map((p) => p.field)).toEqual([["name"], ["policies", 0]]);
+  });
+
+  test("what the builder cannot fix stays at document level, linked to where it is fixed", () => {
+    const { sent } = sentFixture();
+    const index = placeProblems(sent, {
+      problems: [
         problem(["integrations", "datadog", "route_to"]),
         problem(["scheduling", "tick_seconds"]),
         problem(["providers", "llm"]),
-        problem(null),
+        problem(null, { message: "yaml: line 3: could not parse" }),
+        problem(["roles", 9, "goal"]),
       ],
-      warnings: [warning(["mission"])],
     });
-    expect(placed.map((p) => [p.severity, p.node, p.link])).toEqual([
-      ["problem", COMPANY_KEY, null],
-      ["problem", COMPANY_KEY, null],
-      ["problem", null, "integrations"],
-      ["problem", null, "schedules"],
-      ["problem", null, null],
-      ["problem", null, null],
-      ["warning", COMPANY_KEY, null],
+    expect(index.document.map((p) => [p.node, p.link])).toEqual([
+      [null, "integrations"],
+      [null, "schedules"],
+      [null, null],
+      [null, null],
+      [null, null],
     ]);
-    const index = indexProblems(placed);
-    expect(index.problemCount).toBe(6);
-    expect(index.warningCount).toBe(1);
-    expect(problemCountOf(index, COMPANY_KEY)).toBe(2);
-    expect(index.document).toHaveLength(4);
+  });
+
+  test("a node's own schedule links to the Schedules screen, and a tool server named schedules does not", () => {
+    const { sent } = sentFixture();
+    const index = placeProblems(sent, {
+      problems: [
+        problem(["units", 0, "schedules", 0, "cron"]),
+        problem(["units", 0, "mcp_env", "schedules", "TOKEN"]),
+      ],
+    });
+    expect(index.byNode.get("unit:Engineering")?.map((p) => p.link)).toEqual(["schedules", null]);
+  });
+
+  test("a problem naming only a seat is placed through the derivation that came with it", () => {
+    const { doc, sent } = sentFixture();
+    const derived = fixtureDerived(doc);
+    const answer = { problems: [problem([], { seat: "sre" }), problem(null, { seat: "nobody" })] };
+    const index = placeProblems(sent, { ...answer, derived });
+    expect(index.byNode.get("seat:sre")).toHaveLength(1);
+    expect(index.document).toHaveLength(1);
+    expect(placeProblems(sent, answer).document).toHaveLength(2);
+  });
+
+  test("warnings are placed the same way and counted apart from problems", () => {
+    const { sent } = sentFixture();
+    const index = placeProblems(sent, {
+      problems: [problem(["units", 1, "roles", 0, "goal"])],
+      warnings: [warning(["units", 1]), warning(["units", 1, "roles", 0])],
+    });
+    expect(index.problemCount).toBe(1);
+    expect(index.warningCount).toBe(2);
+    expect(index.byNode.get("seat:account-executive")?.map((p) => p.severity)).toEqual([
+      "problem",
+      "warning",
+    ]);
+    expect(problemCountOf(index, "seat:account-executive")).toBe(1);
+    expect(problemCountOf(index, "unit:Sales")).toBe(0);
   });
 });

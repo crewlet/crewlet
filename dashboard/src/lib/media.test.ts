@@ -8,7 +8,7 @@
  * keeps the caller's choice.
  */
 
-import { act, renderHook } from "~/test/inCase.ts";
+import { renderHook, act } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import { usePanelAlign } from "./media.ts";

@@ -30,12 +30,12 @@
  *
  * A window's `used` IS what it spent — there is nothing to reset. Its room
  * comes back when it turns over on the company clock, or now by raising the
- * ceiling (`components/budgetWrite.tsx`). The company's is a change to its
- * settings, checked against the whole company first and stored as a revision;
- * a seat's is its org chart runtime half, written as the seat's content and
- * arbitrated by the chart. Either is applied by every node in its own time,
- * and the figure says "applying" until this one has. The editor is drawn for
- * every reader and disabled with the reason for one without `config:write`.
+ * ceiling, which is a change to the company's configuration: checked against
+ * the whole company first (a seat ceiling above the company's never refuses
+ * a turn, and the check says so before it is saved), stored as a revision,
+ * and applied by every node (`components/budgetWrite.tsx`). The editor is
+ * drawn for every reader and disabled with the reason for one without
+ * `config:write`.
  *
  * # The counter is the FLEET's, and unreadable is not zero
  *
@@ -48,8 +48,8 @@
 import { useMemo } from "react";
 import { Callout, Card, EmptyValue, Meter, Skeleton } from "@crewlethq/ui";
 import { BuildingComplexGlyph, DatabaseGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
-import { ClockText, SeatLabel } from "~/app/frame/cells.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { SeatLabel } from "~/app/frame/cells.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -58,9 +58,10 @@ import { QueryState } from "~/components/common.tsx";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_ADJECTIVE, windowOf } from "~/lib/budget.ts";
 import type { CeilingScope, Period } from "~/lib/ceilings.ts";
-import { companyDateLabel, dateFormatter, fmtCount, fmtExact, relTime } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
+import { companyDateLabel, fmtCount, fmtExact, relTime } from "~/lib/format.ts";
 import { dayLabelIn } from "~/lib/range.ts";
-import { seatAddress, useSeatBadgeOf } from "~/lib/seats.ts";
+import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { BudgetWindow, BudgetsAnswer } from "~/protocol/types.ts";
@@ -79,9 +80,6 @@ const HEADING: Readonly<Record<Period, string>> = {
 
 const COMPANY: CeilingScope = { kind: "company" };
 
-/** One seat's row of the budgets answer. */
-type BudgetSeat = BudgetsAnswer["seats"][number];
-
 /** A window's state in words, for the reader who is told the bar rather than shown it. */
 function stateWords(w: BudgetWindow): string {
   return w.state === "refusing"
@@ -97,29 +95,18 @@ function windowName(w: BudgetWindow, zone: string): string {
   if (w.period === "week") return `Week ${w.window.slice(-2).replace(/^0/, "")}`;
   const starts = Date.parse(w.starts_at);
   return Number.isFinite(starts)
-    ? dateFormatter(undefined, { month: "long", timeZone: zone || "UTC" }).format(starts)
+    ? new Date(starts).toLocaleDateString(undefined, { month: "long", timeZone: zone || "UTC" })
     : w.window;
 }
 
-/**
- * "Refusing charges since 12m ago" — the gate's own stamp, where it has one.
- *
- * THE CLOCK IS READ HERE, in the one line that shows it (`ClockText`), never
- * handed down from the screen: a screen holding the second rendered every
- * tile and every row once a second to move these few words.
- */
-function RefusedLine({ w }: { w: BudgetWindow }) {
+/** "Refusing since 14:02, 12m ago" — the gate's own stamp, where it has one. */
+function RefusedLine({ w, now }: { w: BudgetWindow; now: number }) {
   if (w.state !== "refusing") return null;
-  const at = w.refused_at;
   return (
     <span className="budget-refused t-caption">
-      {at ? (
-        <>
-          Refusing charges since <ClockText read={(now) => relTime(at, now)} />
-        </>
-      ) : (
-        "No further charge fits"
-      )}
+      {w.refused_at
+        ? `Refusing charges since ${relTime(w.refused_at, now)}`
+        : "No further charge fits"}
     </span>
   );
 }
@@ -132,11 +119,13 @@ function CompanyWindow({
   w,
   period,
   zone,
+  now,
   onApplied,
 }: {
   w: BudgetWindow | undefined;
   period: Period;
   zone: string;
+  now: number;
   onApplied: () => void;
 }) {
   const capped = w?.limit !== undefined;
@@ -176,7 +165,7 @@ function CompanyWindow({
             />
             <span className="t-caption muted">{resetsWords(w, zone)}</span>
           </div>
-          <RefusedLine w={w} />
+          <RefusedLine w={w} now={now} />
         </>
       ) : (
         <EmptyValue label="Not stated" />
@@ -192,6 +181,7 @@ function SeatWindow({
   w,
   period,
   zone,
+  now,
   onApplied,
 }: {
   seat: string;
@@ -199,6 +189,7 @@ function SeatWindow({
   w: BudgetWindow | undefined;
   period: Period;
   zone: string;
+  now: number;
   onApplied: () => void;
 }) {
   if (!w) return <EmptyValue label="Not stated" />;
@@ -222,7 +213,7 @@ function SeatWindow({
           valueText={`${fmtExact(w.used)} of ${fmtExact(w.limit)} tokens, ${stateWords(w)}`}
         />
       )}
-      <RefusedLine w={w} />
+      <RefusedLine w={w} now={now} />
     </div>
   );
 }
@@ -246,6 +237,7 @@ export function Budgets() {
   const seatBadge = useSeatBadgeOf();
   const budgets = useQuery("budgets", undefined, { pollMs: BUDGETS_POLL_MS });
   const access = useConfigWriteAccess();
+  const now = useNow();
   const { open: openPeek } = usePeekControls();
   const answer = budgets.data;
   const zone = answer?.timezone ?? "";
@@ -264,58 +256,22 @@ export function Budgets() {
         ),
     [answer],
   );
-  // EACH SEAT BY ITS ADDRESS (`seatAddress`): its handle, or for a row the
-  // chart no longer holds its agent id — never its name, which opened
-  // whichever seat of that name came first.
   usePeekNeighbours(
-    useMemo(() => seats.map((s) => ({ kind: "seat" as const, id: seatAddress(s) })), [seats]),
+    useMemo(() => seats.map((s) => ({ kind: "seat" as const, id: s.handle || s.role })), [seats]),
   );
 
   const nearPct = answer ? Math.round(answer.near_fraction * 100) : 90;
-
-  // THE COLUMNS HOLD STILL until what they read moves — the chart's names, the
-  // company clock, the re-read a save asks for: every row is memoised on this
-  // list, and one built inline drew every seat on every render.
-  const columns = useMemo<GridColumn<BudgetSeat>[]>(() => {
-    const seatWindow = (s: BudgetSeat, period: Period) => (
-      <SeatWindow
-        seat={s.handle}
-        name={seatBadge(s.handle || s.role).name}
-        w={windowOf(s.windows, period)}
-        period={period}
-        zone={zone}
-        onApplied={refetch}
-      />
-    );
-    return [
-      {
-        key: "seat",
-        header: "Seat",
-        sortValue: (s) => s.role,
-        cell: (s) => <SeatLabel {...seatBadge(s.handle || s.role)} />,
-      },
-      // ONE COLUMN PER WINDOW, spelled out: each heading is a word
-      // the phone's card layout reads beside its value.
-      {
-        key: "day",
-        header: "Today",
-        sortValue: (s) => windowOf(s.windows, "day")?.used ?? 0,
-        cell: (s) => seatWindow(s, "day"),
-      },
-      {
-        key: "week",
-        header: "This week",
-        sortValue: (s) => windowOf(s.windows, "week")?.used ?? 0,
-        cell: (s) => seatWindow(s, "week"),
-      },
-      {
-        key: "month",
-        header: "This month",
-        sortValue: (s) => windowOf(s.windows, "month")?.used ?? 0,
-        cell: (s) => seatWindow(s, "month"),
-      },
-    ];
-  }, [seatBadge, zone, refetch]);
+  const seatWindow = (s: BudgetsAnswer["seats"][number], period: Period) => (
+    <SeatWindow
+      seat={s.handle}
+      name={seatBadge(s.role).name}
+      w={windowOf(s.windows, period)}
+      period={period}
+      zone={zone}
+      now={now}
+      onApplied={refetch}
+    />
+  );
 
   return (
     <>
@@ -338,12 +294,7 @@ export function Budgets() {
         <Skeleton variant="text" rows={4} label="Loading the budget counters" />
       )}
       {!answer && (
-        <QueryState
-          error={budgets.error}
-          refusal={budgets.refusal}
-          detail={budgets.detail ?? undefined}
-          loading={budgets.loading}
-        />
+        <QueryState error={budgets.error} refusal={budgets.refusal} loading={budgets.loading} />
       )}
 
       {answer && answer.durable === false && (
@@ -369,6 +320,7 @@ export function Budgets() {
                   period={period}
                   w={windowOf(answer.org.windows, period)}
                   zone={zone}
+                  now={now}
                   onApplied={refetch}
                 />
               ))}
@@ -385,9 +337,9 @@ export function Budgets() {
               defaultSort="-month"
               // THE SEAT BESIDE ITS BUDGET: the rail answers "what is it, what
               // was it doing" without losing the row that raised it.
-              rowHref={(s) => peekHref({ kind: "seat", id: seatAddress(s) })}
+              rowHref={(s) => peekHref({ kind: "seat", id: s.handle || s.role })}
               onRowActivate={(s, e) => {
-                const go = () => openPeek({ kind: "seat", id: seatAddress(s) });
+                const go = () => openPeek({ kind: "seat", id: s.handle || s.role });
                 if (!("button" in e)) {
                   go();
                   return;
@@ -395,7 +347,34 @@ export function Budgets() {
                 rowPeekHandler(go)?.(e);
               }}
               empty={{ title: "No agent seats to count" }}
-              columns={columns}
+              columns={[
+                {
+                  key: "seat",
+                  header: "Seat",
+                  sortValue: (s) => s.role,
+                  cell: (s) => <SeatLabel {...seatBadge(s.role)} />,
+                },
+                // ONE COLUMN PER WINDOW, spelled out: each heading is a word
+                // the phone's card layout reads beside its value.
+                {
+                  key: "day",
+                  header: "Today",
+                  sortValue: (s) => windowOf(s.windows, "day")?.used ?? 0,
+                  cell: (s) => seatWindow(s, "day"),
+                },
+                {
+                  key: "week",
+                  header: "This week",
+                  sortValue: (s) => windowOf(s.windows, "week")?.used ?? 0,
+                  cell: (s) => seatWindow(s, "week"),
+                },
+                {
+                  key: "month",
+                  header: "This month",
+                  sortValue: (s) => windowOf(s.windows, "month")?.used ?? 0,
+                  cell: (s) => seatWindow(s, "month"),
+                },
+              ]}
             />
           </Card>
         </div>

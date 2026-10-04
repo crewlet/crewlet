@@ -19,15 +19,13 @@
  * is the only thing that moved.
  */
 
-import { useState, type ReactElement, type ReactNode } from "react";
-import { cleanup, fireEvent, poll, render as rtlRender, screen } from "~/test/inCase.ts";
+import type { ReactElement } from "react";
+import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 
 // uilet's PROVIDER, which is the one `app/App.tsx` mounts now. Our own
 // context is no longer supplied anywhere, so a dialog tested under it would
 // pass while writing its confirmation into a hook nothing is listening to.
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
-import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
 import { afterEach, expect, test, vi } from "vitest";
 import {
   HELD,
@@ -146,25 +144,7 @@ afterEach(() => {
  * the product cannot be in and a test can sit in indefinitely.
  */
 function render(ui: ReactElement): ReturnType<typeof rtlRender> {
-  return rtlRender(ui, { wrapper: Frame });
-}
-
-/**
- * AND INSIDE A CLIENT, the way the frame mounts one: the form's `${NAME}`
- * completion reads the secret names through the one REST loader, which
- * re-reads when the socket comes back and so reads the connection out of the
- * store. Idle here — nothing connects it.
- */
-function Frame({ children }: { children: ReactNode }) {
-  const [client] = useState(() => {
-    const store = new Store();
-    return { store, socket: new LiveSocket(store) };
-  });
-  return (
-    <ClientContext.Provider value={client}>
-      <LayerHost>{children}</LayerHost>
-    </ClientContext.Provider>
-  );
+  return rtlRender(ui, { wrapper: LayerHost });
 }
 
 /**
@@ -324,7 +304,7 @@ test("untouched dots are not submitted", async () => {
   );
   fireEvent.change(screen.getByLabelText("Instance"), { target: { value: "https://gitlab.com" } });
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
-  await poll(() => expect(spy).toHaveBeenCalled());
+  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
 
   const body = JSON.parse(String(sent(spy)?.body)) as {
     values: Record<string, string>;
@@ -383,7 +363,7 @@ test("a shared field appears once and is submitted to both surfaces", async () =
   // stopped waiting before the second block was written. See [sent].
   const writes = () =>
     spy.mock.calls.filter(([, init]) => String(init?.method ?? "GET").toUpperCase() !== "GET");
-  await poll(() => expect(writes().length).toBe(2));
+  await vi.waitFor(() => expect(writes().length).toBe(2));
   for (const [, init] of writes()) {
     const body = JSON.parse(String(init?.body)) as { values: Record<string, string> };
     expect(body.values.email).toBe("ops@example.com");
@@ -466,7 +446,7 @@ test("a hidden field is submitted from its default and never rendered", async ()
   expect(screen.queryByText("Accept Datadog deliveries")).toBeNull();
 
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
-  await poll(() => expect(spy).toHaveBeenCalled());
+  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
   const body = JSON.parse(String(sent(spy)?.body)) as {
     values: Record<string, string>;
   };
@@ -539,7 +519,7 @@ test("submitting asks for the mint and sends only what was filled in", async () 
     />,
   );
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
-  await poll(() => expect(spy).toHaveBeenCalled());
+  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
 
   const init = sent(spy);
   const body = JSON.parse(String(init?.body)) as {
@@ -950,7 +930,7 @@ test("an untouched credential is not written", async () => {
   );
   fireEvent.change(screen.getByLabelText(/Owner tag key/), { target: { value: "owner" } });
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
-  await poll(() => expect(spy).toHaveBeenCalled());
+  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
 
   const body = JSON.parse(String(sent(spy)?.body)) as {
     values: Record<string, string>;
@@ -1426,7 +1406,7 @@ test("typing after the dots submits only what was typed", async () => {
   // What an insert at the caret produces when the box is genuinely empty.
   fireEvent.change(box, { target: { value: "brand-new-token" } });
   fireEvent.click(screen.getByRole("button", { name: /save|connect/i }));
-  await poll(() => expect(spy).toHaveBeenCalled());
+  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
 
   const values = sent.values as Record<string, string>;
   expect(values.webhook_token).toBe("brand-new-token");
@@ -1855,7 +1835,8 @@ test("an agent with no manifest is told why not", () => {
     seats: [
       {
         ...perSeatTool.seats![0]!,
-        manifest_note: "no manifest yet: set api.external_url",
+        manifest_note:
+          "no manifest yet: set `api.external_url` in this node's Tier A file to the address this agent's app delivers to, and restart the node",
       },
     ],
   };
@@ -1989,7 +1970,7 @@ test("only the section that changed is written", async () => {
   if (!cto) throw new Error("the second seat has no field");
   fireEvent.change(cto, { target: { value: "#leadership" } });
   fireEvent.click(screen.getByRole("button", { name: /Save|Connect/ }));
-  await poll(() => expect(spy).toHaveBeenCalled());
+  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
 
   expect(writes).toHaveLength(1);
 });
@@ -2026,7 +2007,7 @@ test("a save that changed nothing writes nothing", async () => {
     />,
   );
   fireEvent.click(screen.getByRole("button", { name: /Save|Connect/ }));
-  await poll(() => expect(screen.getByText(/Nothing to submit/)).toBeTruthy());
+  await vi.waitFor(() => expect(screen.getByText(/Nothing to submit/)).toBeTruthy());
   const posts = spy.mock.calls.filter(
     ([, init]) => (init as RequestInit | undefined)?.method === "POST",
   );
@@ -2075,12 +2056,14 @@ test("saving a connected app does not say it connected", async () => {
   );
   choose(screen.getByLabelText("Fallback seat"), /sre-lead/);
   fireEvent.click(screen.getByRole("button", { name: /Save|Connect/ }));
-  await poll(() => expect(spy).toHaveBeenCalled());
+  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
 
   // `getAllByText`, because uilet's toaster says it TWICE on purpose: once in
   // the visible message and once in the live region a screen reader hears. The
   // invariant is which sentence it is, not how many nodes carry it.
-  await poll(() => expect(screen.getAllByText(/Datadog settings saved/).length).toBeGreaterThan(0));
+  await vi.waitFor(() =>
+    expect(screen.getAllByText(/Datadog settings saved/).length).toBeGreaterThan(0),
+  );
   expect(screen.queryAllByText(/Datadog connected/)).toHaveLength(0);
 });
 
@@ -2525,7 +2508,7 @@ test("a dialog mid-write refuses Escape and a press on the veil, and otherwise t
   expect(closed).toHaveBeenCalledTimes(2);
 
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
-  await poll(() => expect(writing).toBe(true));
+  await vi.waitFor(() => expect(writing).toBe(true));
 
   // AND NOW NEITHER OF THEM DOES.
   fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });

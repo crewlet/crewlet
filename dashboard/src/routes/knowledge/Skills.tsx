@@ -27,18 +27,18 @@ import { useMemo } from "react";
 import { AvatarStack, Button, Card, EmptyState, EmptyValue, Select } from "@crewlethq/ui";
 import { WandSparklesGlyph } from "@crewlethq/icons/glyphs";
 import { href, useParam } from "~/app/router.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, NumberCell, TextCell } from "~/app/frame/cells.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, seatByAddress } from "~/lib/seats.ts";
-import { fmtExact, plural, tsKey } from "~/lib/format.ts";
+import { indexOrg } from "~/lib/seats.ts";
+import { useNow } from "~/lib/clock.ts";
+import { plural, tsKey } from "~/lib/format.ts";
 import { loadedBy } from "~/lib/pageReads.ts";
 import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { Segmented } from "~/ui/primitives.tsx";
-import type { AgentMemory } from "~/contract/memory.ts";
 import type { SkillLoad } from "~/contract/pages.ts";
 import type { PageSummary } from "~/protocol/index.ts";
 import { usePagedPages } from "./usePagedPages.ts";
@@ -73,84 +73,16 @@ export function Skills() {
 function ToolSkills() {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
+  const now = useNow();
   const listing = usePagedPages(SKILL_PAGES, { pollMs: 60_000 });
   const rows = useMemo(
     () => [...listing.rows].sort((a, b) => a.title.localeCompare(b.title)),
     [listing.rows],
   );
-  const { loadedBy: loadedByPage } = listing;
-
-  // THE COLUMNS HOLD STILL until what they read moves — the chart's names and
-  // who loaded each skill: every row is memoised on this list, and one built
-  // inline drew every skill on every poll.
-  const columns = useMemo<GridColumn<PageSummary>[]>(() => {
-    // BY ADDRESS — a handle a rename retired still finds its seat.
-    const name = (handle: string) => seatByAddress(index, handle)?.name ?? handle;
-    const kindOf = (handle: string) => seatByAddress(index, handle)?.kind;
-    const loads = (row: PageSummary): SkillLoad[] | null =>
-      loadedByPage ? (loadedByPage[row.id] ?? []) : null;
-    return [
-      {
-        key: "title",
-        header: "Skill",
-        sortValue: (r) => r.title,
-        cell: (r) => <TextCell icon="wand-sparkles">{r.title}</TextCell>,
-      },
-      {
-        key: "loaded",
-        header: "Loaded by, 30 days",
-        sortValue: (r) => (loads(r) ?? []).reduce((n, l) => n + l.loaded, 0),
-        cell: (r) => {
-          const l = loads(r);
-          if (l === null) return <span className="muted">Not recorded on this node</span>;
-          const said = loadedBy(l, name);
-          if (!said) return <span className="muted">Nobody</span>;
-          const who = l.filter((x) => (said.verb === "Loaded" ? x.loaded : x.offered) > 0);
-          return (
-            <span className="row gap-2" title={who.map((x) => name(x.handle)).join(", ")}>
-              <AvatarStack
-                size="xs"
-                max={3}
-                decorative
-                members={who.map((x) => ({
-                  id: x.handle,
-                  ...seatBadge(name(x.handle), kindOf(x.handle)),
-                }))}
-              />
-              <span className="truncate">
-                {said.verb === "Loaded" ? "" : "offered to "}
-                {said.names}
-                {said.more ? ` +${said.more}` : ""}
-              </span>
-            </span>
-          );
-        },
-      },
-      {
-        key: "loads",
-        header: "Loads",
-        shrink: true,
-        align: "right",
-        sortValue: (r) => (loads(r) ?? []).reduce((n, l) => n + l.loaded, 0),
-        cell: (r) => {
-          const l = loads(r);
-          return l === null ? (
-            <EmptyValue label="Not recorded on this node" />
-          ) : (
-            <NumberCell value={l.reduce((n, x) => n + x.loaded, 0)} />
-          );
-        },
-      },
-      {
-        key: "updated",
-        header: "Updated",
-        shrink: true,
-        align: "right",
-        sortValue: (r) => tsKey(r.updated_at),
-        cell: (r) => <DateCell at={r.updated_at} />,
-      },
-    ];
-  }, [index, loadedByPage]);
+  const name = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
+  const kindOf = (handle: string) => index.byHandle.get(handle)?.kind;
+  const loads = (row: PageSummary): SkillLoad[] | null =>
+    listing.loadedBy ? (listing.loadedBy[row.id] ?? []) : null;
 
   return (
     <QueryState
@@ -175,13 +107,74 @@ function ToolSkills() {
           rowKey={(r) => r.id}
           defaultSort="title"
           rowHref={(r) => href(["knowledge", "pages", r.id])}
-          columns={columns}
+          columns={[
+            {
+              key: "title",
+              header: "Skill",
+              sortValue: (r) => r.title,
+              cell: (r) => <TextCell icon="wand-sparkles">{r.title}</TextCell>,
+            },
+            {
+              key: "loaded",
+              header: "Loaded by, 30 days",
+              sortValue: (r) => (loads(r) ?? []).reduce((n, l) => n + l.loaded, 0),
+              cell: (r) => {
+                const l = loads(r);
+                if (l === null) return <span className="muted">Not recorded on this node</span>;
+                const said = loadedBy(l, name);
+                if (!said) return <span className="muted">Nobody</span>;
+                const who = l.filter((x) => (said.verb === "Loaded" ? x.loaded : x.offered) > 0);
+                return (
+                  <span className="row gap-2" title={who.map((x) => name(x.handle)).join(", ")}>
+                    <AvatarStack
+                      size="xs"
+                      max={3}
+                      decorative
+                      members={who.map((x) => ({
+                        id: x.handle,
+                        ...seatBadge(name(x.handle), kindOf(x.handle)),
+                      }))}
+                    />
+                    <span className="truncate">
+                      {said.verb === "Loaded" ? "" : "offered to "}
+                      {said.names}
+                      {said.more ? ` +${said.more}` : ""}
+                    </span>
+                  </span>
+                );
+              },
+            },
+            {
+              key: "loads",
+              header: "Loads",
+              shrink: true,
+              align: "right",
+              sortValue: (r) => (loads(r) ?? []).reduce((n, l) => n + l.loaded, 0),
+              cell: (r) => {
+                const l = loads(r);
+                return l === null ? (
+                  <EmptyValue label="Not recorded on this node" />
+                ) : (
+                  <NumberCell value={l.reduce((n, x) => n + x.loaded, 0)} />
+                );
+              },
+            },
+            {
+              key: "updated",
+              header: "Updated",
+              shrink: true,
+              align: "right",
+              sortValue: (r) => tsKey(r.updated_at),
+              cell: (r) => <DateCell at={r.updated_at} now={now} />,
+            },
+          ]}
         />
         {listing.more && (
           <Card.Footer variant="meta">
             <span className="row wrap gap-2">
               <span>
-                {fmtExact(rows.length)} of {fmtExact(listing.total ?? 0)} skills loaded.
+                {rows.length.toLocaleString()} of {(listing.total ?? 0).toLocaleString()} skills
+                loaded.
               </span>
               <Button
                 size="small"
@@ -202,6 +195,7 @@ function ToolSkills() {
 function LearnedSkills() {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
+  const now = useNow();
   // EVERY AGENT SEAT — a person learns no skills the engine keeps.
   const agents = useMemo(
     () =>
@@ -255,7 +249,43 @@ function LearnedSkills() {
           rows={skills}
           rowKey={(r) => r.id}
           defaultSort="-uses"
-          columns={LEARNED_COLUMNS}
+          columns={[
+            {
+              key: "title",
+              header: "Skill",
+              sortValue: (r) => r.title,
+              cell: (r) => (
+                <span className="col">
+                  <span>{r.title || r.key}</span>
+                  {r.summary && <span className="t-caption truncate">{r.summary}</span>}
+                </span>
+              ),
+            },
+            {
+              key: "uses",
+              header: "Uses",
+              shrink: true,
+              align: "right",
+              sortValue: (r) => r.uses,
+              cell: (r) => <NumberCell value={r.uses} />,
+            },
+            {
+              key: "version",
+              header: "Version",
+              shrink: true,
+              align: "right",
+              sortValue: (r) => r.version,
+              cell: (r) => <NumberCell value={r.version} />,
+            },
+            {
+              key: "updated",
+              header: "Updated",
+              shrink: true,
+              align: "right",
+              sortValue: (r) => tsKey(r.updated_at),
+              cell: (r) => <DateCell at={r.updated_at} now={now} />,
+            },
+          ]}
         />
         <Card.Footer variant="meta">
           <span className="row wrap gap-2">
@@ -276,43 +306,3 @@ function LearnedSkills() {
     </Card>
   );
 }
-
-// The learned-skill table's columns, which close over nothing on the screen —
-// a module constant, so a poll that moved one skill draws that row.
-const LEARNED_COLUMNS: GridColumn<AgentMemory["skills"][number]>[] = [
-  {
-    key: "title",
-    header: "Skill",
-    sortValue: (r) => r.title,
-    cell: (r) => (
-      <span className="col">
-        <span>{r.title || r.key}</span>
-        {r.summary && <span className="t-caption truncate">{r.summary}</span>}
-      </span>
-    ),
-  },
-  {
-    key: "uses",
-    header: "Uses",
-    shrink: true,
-    align: "right",
-    sortValue: (r) => r.uses,
-    cell: (r) => <NumberCell value={r.uses} />,
-  },
-  {
-    key: "version",
-    header: "Version",
-    shrink: true,
-    align: "right",
-    sortValue: (r) => r.version,
-    cell: (r) => <NumberCell value={r.version} />,
-  },
-  {
-    key: "updated",
-    header: "Updated",
-    shrink: true,
-    align: "right",
-    sortValue: (r) => tsKey(r.updated_at),
-    cell: (r) => <DateCell at={r.updated_at} />,
-  },
-];

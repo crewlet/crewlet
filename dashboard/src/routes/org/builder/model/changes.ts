@@ -1,34 +1,41 @@
 /**
  * What a save changes, and what follows from it.
  *
- * DERIVED FROM THE TWO CHARTS, NEVER FROM OPERATION TYPES ALONE. A unit's
- * rename re-onboards the agent seats inside it, a move changes the tool
- * credentials a seat receives from its unit, and removing most of the company
- * is worth a second look. None of that is visible in the operation that caused
- * it, so this module compares the BASE and the DRAFT node by node, and reads
- * the operation log only for what no chart can say afterwards: the fields a
- * kind change removed, and the references an operation cleared.
+ * DERIVED FROM THE TWO ORGANIZATIONS, NEVER FROM OPERATION TYPES ALONE. A
+ * rename does not only rename: it re-onboards the seats whose chain it is in
+ * and gives a unit's schedules a new identity. A reorder can change who a seat
+ * reports to, because the engine's primary manager is the first seat that
+ * lists it. Deleting a lead changes the lead of every child unit that
+ * inherited it, and where unrouted tracker work goes. None of that is visible
+ * in the operation that caused it, so this module compares the BASE and the
+ * DRAFT as the engine derived them (each side's `derived` block, placed on
+ * nodes through that side's own path index) and reads the operation log only
+ * for what no document can say afterwards: the fields a kind change removed,
+ * and the references an operation cleared.
  *
- * Nodes are matched by key (see `keys.ts`), so "the same seat" here means the
- * seat the chart holds under that address — the identity its memory, its
- * mailbox and whoever is bound to it are keyed on — and never "a seat with the
- * same name".
+ * Nodes are matched by key, which is the engine's identity (see `keys.ts`), so
+ * "the same seat" here means what it means to the engine's memory and
+ * mailboxes, not "a seat with the same name".
  *
- * WHAT THE ENGINE DERIVES IS NOT GUESSED AT. Who a seat reports to, the lead
- * and channel a unit inherits, and where unrouted work goes are the engine's
- * derivation of the chart it holds, and there is no derivation of a draft: the
- * chart has no dry run. So this module says nothing about them, and the review
- * says that it does not, rather than working the answers out again here and
- * drifting from the engine the day one of its rules moves. What it does say is
- * read off the tree itself: which unit a seat sits in, and the names of the
- * units above it.
+ * A SIDE WITHOUT A DERIVATION SAYS SO. Every consequence that needs the
+ * engine's derivation (handles, onboarding, reporting lines, effective leads
+ * and channels, routing, inherited credentials) is left empty and
+ * `derivedKnown` is false, rather than filled in by a guess. An empty
+ * organization needs no derivation to be known.
  */
 
-import type { CompanyDocument } from "~/protocol/index.ts";
+import type { CompanyDocument, Derived, DerivedSeat, DerivedUnit } from "~/protocol/index.ts";
 import { plural } from "~/lib/format.ts";
 import { COMPANY_KEY, type NodeKey } from "./keys.ts";
-import { allSeats, allUnits, type Draft, type SeatData, type UnitData } from "./draft.ts";
-import { CHARTER_FIELDS, DATADOG_ROUTE_TO, GITLAB_ACCESS_LEVELS } from "./document.ts";
+import { allSeats, allUnits, type Draft } from "./draft.ts";
+import {
+  CHARTER_FIELDS,
+  DATADOG_ROUTE_TO,
+  GITLAB_ACCESS_LEVELS,
+  type PathIndex,
+  placeDerivation,
+  toDocument,
+} from "./document.ts";
 import { getPath, isRecord, jsonEqual } from "./json.ts";
 import {
   fieldName,
@@ -39,14 +46,21 @@ import {
   type ReferenceEffect,
 } from "./operations.ts";
 
+/** One side of the comparison: a keyed draft and the engine's derivation of its document. */
+export interface Side {
+  readonly draft: Draft;
+  /** The derivation of `toDocument(draft).document`, or `null` when none is known. */
+  readonly derived: Derived | null;
+}
+
 export interface ChangeInputs {
-  /** The chart the draft was made on. */
-  readonly base: Draft;
-  /** The draft as it stands. */
-  readonly next: Draft;
+  readonly base: Side;
+  readonly next: Side;
   /** The draft's operation log, and what applying each one did (aligned). */
   readonly ops: readonly Operation[];
   readonly reports: readonly ApplyReport[];
+  /** Seats removed in recent revisions: handle to the name the seat had. */
+  readonly recentlyRemoved?: ReadonlyMap<string, string>;
 }
 
 /** A seat or a unit, by key, with the name it has on the side it was read from. */
@@ -56,19 +70,13 @@ export interface EntityRef {
   readonly name: string;
 }
 
-/**
- * Why an agent seat onboards again. The engine's onboarding marker is a hash
- * of the company's name and the IDENTITIES of the units above the seat and of
- * the seat itself (`learning.ChainHash`) — never their names or addresses —
- * so only these two change it: a company rename, which re-derives every
- * seat's id, and a move, which puts a seat under other units.
- */
-export type OnboardingCause = "company_rename" | "move";
+export type OnboardingCause = "company_rename" | "seat_rename" | "unit_rename" | "move";
 
 export type Acknowledgement =
-  "company_rename" | "kind_change" | "credential_servers" | "mass_removal";
+  "company_rename" | "handle_change" | "kind_change" | "credential_servers" | "mass_removal";
 
 export interface ChangeSet {
+  readonly derivedKnown: boolean;
   readonly added: readonly EntityRef[];
   readonly removed: readonly EntityRef[];
   readonly renamed: readonly {
@@ -85,26 +93,58 @@ export interface ChangeSet {
   /** Charter fields that changed. */
   readonly charter: readonly string[];
   readonly companyRename: { readonly before: string; readonly after: string } | null;
-  /**
-   * Seats and units given a new ADDRESS — a handle, a key — that the chart
-   * holds under the old one: the chart's own rename, which keeps the object
-   * and leaves the old address resolving to it until something else takes it.
-   */
-  readonly addressChanges: readonly {
+  readonly handleChanges: readonly {
     readonly ref: EntityRef;
     readonly before: string;
     readonly after: string;
   }[];
-  /** Agent seats whose onboarding chain changes, grouped by the first cause that applies. */
+  /** Agent seats whose onboarding chain changed, grouped by the first cause that applies. */
   readonly onboarding: readonly {
     readonly cause: OnboardingCause;
     readonly seats: readonly EntityRef[];
   }[];
-  /** Renamed units: onboarding pages are looked up under the new name. */
+  /** Renamed units: their schedules get a new identity, and onboarding pages are looked up under the new name. */
   readonly unitRenames: readonly {
     readonly ref: EntityRef;
     readonly before: string;
     readonly after: string;
+    readonly schedules: readonly string[];
+  }[];
+  readonly reportsTo: readonly {
+    readonly ref: EntityRef;
+    readonly before: EntityRef | null;
+    readonly after: EntityRef | null;
+    /** The seat's managers are the same seats; only which of them is primary changed. */
+    readonly orderOnly: boolean;
+  }[];
+  readonly leads: readonly {
+    readonly ref: EntityRef;
+    readonly before: EntityRef | null;
+    readonly beforeInherited: boolean;
+    readonly after: EntityRef | null;
+    readonly afterInherited: boolean;
+  }[];
+  readonly channels: readonly {
+    readonly ref: EntityRef;
+    readonly before: string;
+    readonly beforeInherited: boolean;
+    readonly after: string;
+    readonly afterInherited: boolean;
+  }[];
+  /**
+   * Where unrouted work in a Jira project or Confluence space goes, per
+   * declaration: a unit declaring it routes to the unit's effective lead, a
+   * root seat declaring it to itself. `shared` marks a scope declared with
+   * different owners, where the engine routes to the first declaration it
+   * walks and reports the ambiguity in its own log.
+   */
+  readonly routing: readonly {
+    readonly tool: "jira" | "confluence";
+    readonly scope: string;
+    readonly holder: EntityRef;
+    readonly before: EntityRef | null;
+    readonly after: EntityRef | null;
+    readonly shared: boolean;
   }[];
   /** Tool credential server names an agent seat gains or loses (names only). */
   readonly credentialServers: readonly {
@@ -130,6 +170,12 @@ export interface ChangeSet {
     readonly before: string | null;
     readonly after: string | null;
   }[];
+  /** An added seat the engine gives the handle of a removed seat: it reattaches that seat's memory. */
+  readonly memoryReuse: readonly {
+    readonly ref: EntityRef;
+    readonly handle: string;
+    readonly previous: string;
+  }[];
   readonly massRemoval: { readonly removed: number; readonly total: number } | null;
   readonly acknowledgements: readonly Acknowledgement[];
   /** The default audit summary line. */
@@ -142,61 +188,81 @@ export interface ChangeSet {
 
 interface Indexed {
   readonly draft: Draft;
-  readonly company: CompanyDocument;
+  readonly index: PathIndex;
+  readonly document: CompanyDocument;
+  readonly known: boolean;
+  readonly seatByKey: ReadonlyMap<NodeKey, DerivedSeat>;
+  readonly unitByKey: ReadonlyMap<NodeKey, DerivedUnit>;
+  readonly keyOfHandle: ReadonlyMap<string, NodeKey>;
   readonly refs: ReadonlyMap<NodeKey, EntityRef>;
   /** Structural parent of every seat and unit. */
   readonly parentOf: ReadonlyMap<NodeKey, NodeKey>;
-  readonly seats: ReadonlyMap<NodeKey, SeatData>;
-  readonly units: ReadonlyMap<NodeKey, UnitData>;
 }
 
-function indexSide(draft: Draft): Indexed {
+function indexSide(side: Side): Indexed {
+  const { document, index } = toDocument(side.draft);
+  const empty = side.draft.roles.length === 0 && side.draft.units.length === 0;
+  const known = side.derived !== null || empty;
+  const { seatByKey, unitByKey, keyOfHandle } = placeDerivation(index, side.derived);
   const refs = new Map<NodeKey, EntityRef>([
-    [COMPANY_KEY, { key: COMPANY_KEY, kind: "company", name: companyName(draft.company) }],
+    [COMPANY_KEY, { key: COMPANY_KEY, kind: "company", name: companyName(document) }],
   ]);
   const parentOf = new Map<NodeKey, NodeKey>();
-  const seats = new Map<NodeKey, SeatData>();
-  const units = new Map<NodeKey, UnitData>();
-  for (const { seat, parent } of allSeats(draft)) {
+  for (const { seat, parent } of allSeats(side.draft)) {
     refs.set(seat.key, { key: seat.key, kind: "seat", name: seat.data.name });
     parentOf.set(seat.key, parent);
-    seats.set(seat.key, seat.data);
   }
-  for (const { unit, parent } of allUnits(draft)) {
+  for (const { unit, parent } of allUnits(side.draft)) {
     refs.set(unit.key, { key: unit.key, kind: "unit", name: unit.data.name });
     parentOf.set(unit.key, parent);
-    units.set(unit.key, unit.data);
   }
-  return { draft, company: draft.company, refs, parentOf, seats, units };
+  return {
+    draft: side.draft,
+    index,
+    document,
+    known,
+    seatByKey,
+    unitByKey,
+    keyOfHandle,
+    refs,
+    parentOf,
+  };
 }
 
 function companyName(doc: CompanyDocument): string {
   return typeof doc.name === "string" ? doc.name : "";
 }
 
-/** The units above a node, outermost first, as keys. */
-function chainOf(side: Indexed, key: NodeKey): NodeKey[] {
+/** The key of a seat's effective home unit on a side, [COMPANY_KEY] at the root; `undefined` when not derived. */
+function homeOf(side: Indexed, key: NodeKey): NodeKey | undefined {
+  const seat = side.seatByKey.get(key);
+  if (!seat || seat.unit_path === undefined) return undefined;
+  if (seat.unit_path === "") return COMPANY_KEY;
+  return side.index.byPath.get(seat.unit_path);
+}
+
+/** A unit and its ancestors, nearest first, as keys. */
+function unitChain(side: Indexed, unit: NodeKey | undefined): NodeKey[] {
   const out: NodeKey[] = [];
-  let at = side.parentOf.get(key);
+  let at = unit;
   while (at !== undefined && at !== COMPANY_KEY) {
-    out.unshift(at);
+    out.push(at);
     at = side.parentOf.get(at);
   }
   return out;
 }
 
 const keysOf = (map: unknown): string[] => (isRecord(map) ? Object.keys(map) : []);
-const mcpEnvOf = (data: SeatData | UnitData | undefined): unknown =>
-  (data?.runtime as { mcp_env?: unknown } | undefined)?.mcp_env;
 
 // ---------------------------------------------------------------------------
 // The comparison
 // ---------------------------------------------------------------------------
 
-/** Every change between the base and the draft, and what follows from it. */
+/** Every change between the base and the draft, and every consequence the engine will act on. */
 export function deriveChanges(inputs: ChangeInputs): ChangeSet {
   const base = indexSide(inputs.base);
   const next = indexSide(inputs.next);
+  const derivedKnown = base.known && next.known;
   const both = (key: NodeKey) => base.refs.has(key) && next.refs.has(key);
   const ref = (side: Indexed, key: NodeKey): EntityRef =>
     side.refs.get(key) ?? { key, kind: key === COMPANY_KEY ? "company" : "seat", name: "" };
@@ -207,7 +273,6 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
   const renamed: ChangeSet["renamed"][number][] = [];
   const moved: ChangeSet["moved"][number][] = [];
   const edited: ChangeSet["edited"][number][] = [];
-  const addressChanges: ChangeSet["addressChanges"][number][] = [];
 
   for (const [key, entity] of next.refs) {
     if (key !== COMPANY_KEY && !base.refs.has(key)) added.push(entity);
@@ -216,9 +281,13 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
     if (key !== COMPANY_KEY && !next.refs.has(key)) removed.push(entity);
   }
 
+  const baseSeats = new Map([...allSeats(base.draft)].map(({ seat }) => [seat.key, seat.data]));
+  const nextSeats = new Map([...allSeats(next.draft)].map(({ seat }) => [seat.key, seat.data]));
+  const baseUnits = new Map([...allUnits(base.draft)].map(({ unit }) => [unit.key, unit.data]));
+  const nextUnits = new Map([...allUnits(next.draft)].map(({ unit }) => [unit.key, unit.data]));
+
   const entityChanges = (
     key: NodeKey,
-    address: "handle" | "key",
     before: Record<string, unknown>,
     after: Record<string, unknown>,
   ) => {
@@ -229,81 +298,163 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
         after: String(after.name ?? ""),
       });
     }
-    if (before[address] !== after[address]) {
-      addressChanges.push({
-        ref: ref(next, key),
-        before: String(before[address] ?? ""),
-        after: String(after[address] ?? ""),
-      });
-    }
-    const fields = changedFields(before, after, address);
+    const fields = changedFields(before, after);
     if (fields.length > 0) edited.push({ ref: ref(next, key), fields });
   };
-  for (const [key, after] of next.seats) {
-    const before = base.seats.get(key);
-    if (before) entityChanges(key, "handle", before, after);
+  for (const [key, after] of nextSeats) {
+    const before = baseSeats.get(key);
+    if (before) entityChanges(key, before, after);
   }
-  for (const [key, after] of next.units) {
-    const before = base.units.get(key);
-    if (before) entityChanges(key, "key", before, after);
+  for (const [key, after] of nextUnits) {
+    const before = baseUnits.get(key);
+    if (before) entityChanges(key, before, after);
   }
 
   for (const [key] of next.refs) {
     if (key === COMPANY_KEY || !both(key)) continue;
-    const from = base.parentOf.get(key)!;
-    const to = next.parentOf.get(key)!;
+    const isSeat = nextSeats.has(key);
+    // A seat is where the engine places it: its effective home, when both
+    // sides are derived, so a root seat whose `unit:` reference was replaced
+    // by a physical placement in that same unit has not moved.
+    const homeFrom = isSeat && derivedKnown ? homeOf(base, key) : undefined;
+    const homeTo = isSeat && derivedKnown ? homeOf(next, key) : undefined;
+    const homes = homeFrom !== undefined && homeTo !== undefined;
+    const from = homes ? homeFrom : base.parentOf.get(key)!;
+    const to = homes ? homeTo : next.parentOf.get(key)!;
     if (from !== to) moved.push({ ref: ref(next, key), from: ref(base, from), to: ref(next, to) });
   }
 
-  const charter = CHARTER_FIELDS.filter((f) => !jsonEqual(base.company[f], next.company[f]));
-  const beforeName = companyName(base.company);
-  const afterName = companyName(next.company);
+  const charter = CHARTER_FIELDS.filter((f) => !jsonEqual(base.document[f], next.document[f]));
+  const beforeName = companyName(base.document);
+  const afterName = companyName(next.document);
   const companyRename =
     beforeName !== "" && beforeName !== afterName ? { before: beforeName, after: afterName } : null;
 
-  // What follows from the tree ----------------------------------------------
-  //
-  // AN AGENT SEAT ONBOARDS AGAIN when its onboarding marker stops matching:
-  // the company is renamed, or the units above it (read here off the tree,
-  // outermost first, which is the chain the engine walks) are other units.
-  // The chain is compared by KEY, the draft's own stable name for a node,
-  // because the engine hashes identities: renaming a seat, a unit or either's
-  // address re-onboards nobody.
+  // Derived consequences ---------------------------------------------------
+  const handleChanges: ChangeSet["handleChanges"][number][] = [];
   const onboardingBy = new Map<OnboardingCause, EntityRef[]>();
+  const reportsTo: ChangeSet["reportsTo"][number][] = [];
+  const leads: ChangeSet["leads"][number][] = [];
+  const channels: ChangeSet["channels"][number][] = [];
   const credentialServers: ChangeSet["credentialServers"][number][] = [];
-  for (const [key, after] of next.seats) {
-    const before = base.seats.get(key);
-    if (!before || kindOf(before) !== "agent" || kindOf(after) !== "agent") continue;
-    const seatRef = ref(next, key);
-    const chainBefore = chainOf(base, key);
-    const chainAfter = chainOf(next, key);
-    let cause: OnboardingCause | null = null;
-    if (beforeName !== afterName) cause = "company_rename";
-    else if (!jsonEqual(chainBefore, chainAfter)) cause = "move";
-    if (cause) onboardingBy.set(cause, [...(onboardingBy.get(cause) ?? []), seatRef]);
 
-    // A SEAT'S TOOL CREDENTIALS are its own `mcp_env` and its unit's: the
-    // unit's go to its DIRECT agent members.
-    const servers = (side: Indexed, data: SeatData) => {
-      const home = side.parentOf.get(key);
-      const unit = home === undefined || home === COMPANY_KEY ? undefined : side.units.get(home);
-      return new Set([...keysOf(mcpEnvOf(data)), ...keysOf(mcpEnvOf(unit))]);
-    };
-    const had = servers(base, before);
-    const has = servers(next, after);
-    const gained = [...has].filter((s) => !had.has(s)).sort();
-    const lost = [...had].filter((s) => !has.has(s)).sort();
-    if (gained.length > 0 || lost.length > 0)
-      credentialServers.push({ ref: seatRef, gained, lost });
+  if (derivedKnown) {
+    for (const [key, after] of next.seatByKey) {
+      const before = base.seatByKey.get(key);
+      if (!before) continue;
+      const seatRef = ref(next, key);
+      if (before.handle !== after.handle)
+        handleChanges.push({ ref: seatRef, before: before.handle, after: after.handle });
+
+      const agentBoth =
+        kindOf(baseSeats.get(key)!) === "agent" && kindOf(nextSeats.get(key)!) === "agent";
+      if (agentBoth) {
+        const chainChanged =
+          beforeName !== afterName ||
+          before.name !== after.name ||
+          !jsonEqual(before.onboarding_chain ?? [], after.onboarding_chain ?? []);
+        if (chainChanged) {
+          let cause: OnboardingCause;
+          if (beforeName !== afterName) cause = "company_rename";
+          else if (before.name !== after.name) cause = "seat_rename";
+          else if (
+            jsonEqual(unitChain(base, homeOf(base, key)), unitChain(next, homeOf(next, key)))
+          )
+            cause = "unit_rename";
+          else cause = "move";
+          const group = onboardingBy.get(cause);
+          if (group) group.push(seatRef);
+          else onboardingBy.set(cause, [seatRef]);
+        }
+
+        const servers = (side: Indexed, data: Record<string, unknown>) => {
+          const home = homeOf(side, key);
+          const unit =
+            home === undefined || home === COMPANY_KEY
+              ? undefined
+              : (side === base ? baseUnits : nextUnits).get(home);
+          return new Set([...keysOf(data.mcp_env), ...keysOf(unit?.mcp_env)]);
+        };
+        const had = servers(base, baseSeats.get(key)!);
+        const has = servers(next, nextSeats.get(key)!);
+        const gained = [...has].filter((s) => !had.has(s)).sort();
+        const lost = [...had].filter((s) => !has.has(s)).sort();
+        if (gained.length > 0 || lost.length > 0)
+          credentialServers.push({ ref: seatRef, gained, lost });
+      }
+
+      const managerBefore = before.manager ? base.keyOfHandle.get(before.manager) : undefined;
+      const managerAfter = after.manager ? next.keyOfHandle.get(after.manager) : undefined;
+      if (managerBefore !== managerAfter) {
+        const managerSet = (side: Indexed, seat: DerivedSeat) =>
+          new Set((seat.managers ?? []).map((h) => side.keyOfHandle.get(h) ?? `handle:${h}`));
+        const a = managerSet(base, before);
+        const b = managerSet(next, after);
+        const orderOnly = a.size === b.size && [...a].every((k) => b.has(k));
+        reportsTo.push({
+          ref: seatRef,
+          before: managerBefore === undefined ? null : ref(base, managerBefore),
+          after: managerAfter === undefined ? null : ref(next, managerAfter),
+          orderOnly,
+        });
+      }
+    }
+
+    for (const [key, after] of next.unitByKey) {
+      const before = base.unitByKey.get(key);
+      if (!before) continue;
+      const unitRef = ref(next, key);
+      const leadBefore = before.lead ? base.keyOfHandle.get(before.lead) : undefined;
+      const leadAfter = after.lead ? next.keyOfHandle.get(after.lead) : undefined;
+      if (leadBefore !== leadAfter || before.lead_inherited !== after.lead_inherited) {
+        leads.push({
+          ref: unitRef,
+          before: leadBefore === undefined ? null : ref(base, leadBefore),
+          beforeInherited: before.lead_inherited,
+          after: leadAfter === undefined ? null : ref(next, leadAfter),
+          afterInherited: after.lead_inherited,
+        });
+      }
+      if (
+        before.channel !== after.channel ||
+        before.channel_inherited !== after.channel_inherited
+      ) {
+        channels.push({
+          ref: unitRef,
+          before: before.channel,
+          beforeInherited: before.channel_inherited,
+          after: after.channel,
+          afterInherited: after.channel_inherited,
+        });
+      }
+    }
   }
-  const onboardingOrder: OnboardingCause[] = ["company_rename", "move"];
+
+  const onboardingOrder: OnboardingCause[] = [
+    "company_rename",
+    "seat_rename",
+    "unit_rename",
+    "move",
+  ];
   const onboarding = onboardingOrder
     .filter((c) => onboardingBy.has(c))
     .map((cause) => ({ cause, seats: onboardingBy.get(cause)! }));
 
   const unitRenames = renamed
     .filter((r) => r.ref.kind === "unit")
-    .map((r) => ({ ref: r.ref, before: r.before, after: r.after }));
+    .map((r) => {
+      const schedules = nextUnits.get(r.ref.key)?.schedules;
+      return {
+        ref: r.ref,
+        before: r.before,
+        after: r.after,
+        schedules: Array.isArray(schedules) ? schedules.map((s) => s.name) : [],
+      };
+    });
+
+  const routing = derivedKnown
+    ? routingChanges(base, next, baseUnits, nextUnits, baseSeats, nextSeats, ref)
+    : [];
 
   // What only the log can say -------------------------------------------------
   const stripped = new Map<NodeKey, Map<string, boolean>>();
@@ -329,8 +480,8 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
     })),
   );
 
-  const routeBefore = getPath(base.company, DATADOG_ROUTE_TO);
-  const routeAfter = getPath(next.company, DATADOG_ROUTE_TO);
+  const routeBefore = getPath(base.document, DATADOG_ROUTE_TO);
+  const routeAfter = getPath(next.document, DATADOG_ROUTE_TO);
   const datadogFallback = jsonEqual(routeBefore, routeAfter)
     ? null
     : {
@@ -338,8 +489,8 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
         after: typeof routeAfter === "string" ? routeAfter : null,
       };
 
-  const levelsBefore = getPath(base.company, GITLAB_ACCESS_LEVELS);
-  const levelsAfter = getPath(next.company, GITLAB_ACCESS_LEVELS);
+  const levelsBefore = getPath(base.document, GITLAB_ACCESS_LEVELS);
+  const levelsAfter = getPath(next.document, GITLAB_ACCESS_LEVELS);
   const lb = isRecord(levelsBefore) ? levelsBefore : {};
   const la = isRecord(levelsAfter) ? levelsAfter : {};
   const gitlabAccessLevels = [...new Set([...Object.keys(lb), ...Object.keys(la)])]
@@ -351,19 +502,35 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
       after: typeof la[handle] === "string" ? (la[handle] as string) : null,
     }));
 
-  const baseSeatCount = base.seats.size;
+  const memoryReuse: ChangeSet["memoryReuse"][number][] = [];
+  if (derivedKnown) {
+    const removedHandles = new Map<string, string>();
+    for (const entity of removed) {
+      const seat = base.seatByKey.get(entity.key);
+      if (seat?.handle) removedHandles.set(seat.handle, entity.name);
+    }
+    for (const entity of added) {
+      const seat = next.seatByKey.get(entity.key);
+      if (!seat?.handle) continue;
+      const previous = removedHandles.get(seat.handle) ?? inputs.recentlyRemoved?.get(seat.handle);
+      if (previous !== undefined) memoryReuse.push({ ref: entity, handle: seat.handle, previous });
+    }
+  }
+
+  const baseSeatCount = baseSeats.size;
   const removedSeats = removed.filter((r) => r.kind === "seat").length;
   const massRemoval =
     baseSeatCount > 0 && removedSeats * 2 > baseSeatCount
       ? { removed: removedSeats, total: baseSeatCount }
       : null;
 
-  const kindChanged = [...next.seats].some(([key, data]) => {
-    const before = base.seats.get(key);
+  const kindChanged = [...nextSeats].some(([key, data]) => {
+    const before = baseSeats.get(key);
     return before !== undefined && kindOf(before) !== kindOf(data);
   });
   const acknowledgements: Acknowledgement[] = [];
   if (companyRename) acknowledgements.push("company_rename");
+  if (handleChanges.length > 0) acknowledgements.push("handle_change");
   if (kindChanged) acknowledgements.push("kind_change");
   if (
     credentialServers.length > 0 ||
@@ -374,6 +541,7 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
   if (massRemoval) acknowledgements.push("mass_removal");
 
   return {
+    derivedKnown,
     added,
     removed,
     renamed,
@@ -381,14 +549,19 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
     edited,
     charter,
     companyRename,
-    addressChanges,
+    handleChanges,
     onboarding,
     unitRenames,
+    reportsTo,
+    leads,
+    channels,
+    routing,
     credentialServers,
     strippedFields,
     clearedReferences,
     datadogFallback,
     gitlabAccessLevels,
+    memoryReuse,
     massRemoval,
     acknowledgements,
     summary: auditSummary({ added, removed, renamed, moved, edited, charter, ops: inputs.ops }),
@@ -396,33 +569,117 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
 }
 
 /**
- * The fields that differ between two versions of a node's data, by the name a
- * person reads: top-level keys, and one level into the runtime half, where a
- * seat's model chain, its tools and its own vendor identities live. The name
- * and the address are reported on their own lines, and the addresses the
- * chart keeps beside an object are the chart's.
+ * The fields that differ between two versions of an entity's data, by
+ * authored name: top-level keys, and one level into `integrations`, where a
+ * seat's separate tools live. `name` is reported as a rename instead.
  */
-function changedFields(
-  before: Record<string, unknown>,
-  after: Record<string, unknown>,
-  address: "handle" | "key",
-): string[] {
-  const skip = new Set(["name", address, "former_handles", "former_keys"]);
+function changedFields(before: Record<string, unknown>, after: Record<string, unknown>): string[] {
   const out: string[] = [];
   const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])]
-    .filter((k) => !skip.has(k))
+    .filter((k) => k !== "name")
     .sort();
   for (const key of keys) {
     if (jsonEqual(before[key], after[key])) continue;
-    if (key === "runtime" && (isRecord(before[key]) || isRecord(after[key]))) {
+    if (key === "integrations" && (isRecord(before[key]) || isRecord(after[key]))) {
       const b = isRecord(before[key]) ? before[key] : {};
       const a = isRecord(after[key]) ? after[key] : {};
-      for (const field of [...new Set([...Object.keys(b), ...Object.keys(a)])].sort()) {
-        if (!jsonEqual(b[field], a[field])) out.push(field);
+      for (const tool of [...new Set([...Object.keys(b), ...Object.keys(a)])].sort()) {
+        if (!jsonEqual(b[tool], a[tool])) out.push(`integrations.${tool}`);
       }
     } else {
       out.push(key);
     }
+  }
+  return out;
+}
+
+/** Scope keys are compared as the engine keys them: trimmed and upper case. */
+const scopeKey = (value: unknown): string =>
+  typeof value === "string" ? value.trim().toUpperCase() : "";
+
+function routingChanges(
+  base: Indexed,
+  next: Indexed,
+  baseUnits: ReadonlyMap<NodeKey, Record<string, unknown>>,
+  nextUnits: ReadonlyMap<NodeKey, Record<string, unknown>>,
+  baseSeats: ReadonlyMap<NodeKey, Record<string, unknown>>,
+  nextSeats: ReadonlyMap<NodeKey, Record<string, unknown>>,
+  ref: (side: Indexed, key: NodeKey) => EntityRef,
+): ChangeSet["routing"][number][] {
+  type Declaration = {
+    tool: "jira" | "confluence";
+    scope: string;
+    holder: NodeKey;
+    owner: NodeKey | undefined;
+  };
+  const TOOLS = [
+    { tool: "jira", field: "project" },
+    { tool: "confluence", field: "space" },
+  ] as const;
+
+  const declarations = (
+    side: Indexed,
+    units: ReadonlyMap<NodeKey, Record<string, unknown>>,
+    seats: ReadonlyMap<NodeKey, Record<string, unknown>>,
+  ): Declaration[] => {
+    const out: Declaration[] = [];
+    for (const [key, data] of units) {
+      for (const { tool, field } of TOOLS) {
+        const scope = scopeKey(getPath(data, ["integrations", tool, field]));
+        if (scope === "") continue;
+        const lead = side.unitByKey.get(key)?.lead;
+        out.push({
+          tool,
+          scope,
+          holder: key,
+          owner: lead ? side.keyOfHandle.get(lead) : undefined,
+        });
+      }
+    }
+    for (const [key, data] of seats) {
+      // Only a seat the engine keeps at the root owns a scope; a member of a
+      // unit declares where it writes, and its unit's lead owns the scope.
+      if (homeOf(side, key) !== COMPANY_KEY) continue;
+      for (const { tool, field } of TOOLS) {
+        const scope = scopeKey(getPath(data, ["integrations", tool, field]));
+        if (scope !== "") out.push({ tool, scope, holder: key, owner: key });
+      }
+    }
+    return out;
+  };
+
+  const before = declarations(base, baseUnits, baseSeats);
+  const after = declarations(next, nextUnits, nextSeats);
+  const id = (d: Declaration) => `${d.tool}\u0000${d.scope}\u0000${d.holder}`;
+  const shared = (list: Declaration[]) => {
+    const owners = new Map<string, Set<string>>();
+    for (const d of list) {
+      const k = `${d.tool}\u0000${d.scope}`;
+      const set = owners.get(k) ?? new Set<string>();
+      set.add(d.owner ?? "");
+      owners.set(k, set);
+    }
+    return (d: Declaration) => (owners.get(`${d.tool}\u0000${d.scope}`)?.size ?? 0) > 1;
+  };
+  const sharedBefore = shared(before);
+  const sharedAfter = shared(after);
+  const beforeById = new Map(before.map((d) => [id(d), d]));
+  const afterById = new Map(after.map((d) => [id(d), d]));
+
+  const out: ChangeSet["routing"][number][] = [];
+  for (const key of [...new Set([...beforeById.keys(), ...afterById.keys()])].sort()) {
+    const b = beforeById.get(key);
+    const a = afterById.get(key);
+    if (b && a && b.owner === a.owner) continue;
+    const any = (a ?? b)!;
+    out.push({
+      tool: any.tool,
+      scope: any.scope,
+      holder: a ? ref(next, a.holder) : ref(base, b!.holder),
+      before: b?.owner === undefined ? null : ref(base, b.owner),
+      after: a?.owner === undefined ? null : ref(next, a.owner),
+      shared: (b ? sharedBefore(b) : false) || (a ? sharedAfter(a) : false),
+    });
   }
   return out;
 }

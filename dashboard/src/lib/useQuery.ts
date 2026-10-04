@@ -12,23 +12,13 @@
  * every poll interval is named and justified at the call site, and a query
  * re-runs when the socket comes back because an answer taken before a
  * reconnect is an answer about a company that has since moved.
- *
- * And AN ANSWER THAT DID NOT CHANGE KEEPS ITS OBJECTS. Every answer is parsed
- * afresh off the wire, so a poll that brought back exactly what the screen
- * held used to hand it all-new objects, and every memoised grid row drew
- * again to change no pixel. Each answer is shared with the one it replaces
- * (`~/protocol/share.ts`): an unchanged poll is the state already held and renders
- * nothing, and a poll that moved one row hands back the old object for every
- * other.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useClient, useConnection } from "./store-hooks.ts";
-import { windowEdges, type Window } from "./range.ts";
 import {
+  QueryError,
   queryErrorCode,
-  queryFailure,
-  share,
   unavailableRetryMs,
   type LogRefusal,
   type QueryMap,
@@ -36,7 +26,7 @@ import {
   type QueryRefusal,
 } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
-import { tabFloors, SessionFloors } from "~/protocol/floors.ts";
+import { session, SessionFloors } from "~/protocol/session.ts";
 
 export interface QueryResult<T> {
   data: T | null;
@@ -50,35 +40,22 @@ export interface QueryResult<T> {
    *  typecheck. */
   error: QueryErrorCode | null;
   /**
-   * Why an `unauthorized` answer was refused — the rule, and the grants any
-   * one of which would have admitted the reader — or, for an `unavailable`
-   * one, the state log's refusal behind it and whether asking this node again
-   * can change it; null otherwise. Pass it to `QueryState` beside `error`,
-   * which is what lets the banner say what would change the answer rather than
-   * only that there was one.
+   * What the engine said beyond the code, or null: on a refusal on AUTHORITY,
+   * the rule and the grants any one of which would have admitted the reader;
+   * on `unavailable`, the state log's refusal behind it and whether asking
+   * this node again can change the answer. What `QueryState` renders a
+   * refusal FROM, so a screen says "this needs audit:read" rather than "not
+   * allowed".
    */
   refusal: QueryRefusal | LogRefusal | null;
   /**
    * The engine's own sentence on a `bad_params` refusal — which parameter to
-   * change, and what it accepts — and null on every other answer. The one
+   * change, and what it accepts — and absent on every other answer. The one
    * refusal written for the reader: a window past the spend history is the
    * READER's choice to change, and "the engine refused this request" with no
    * word of why left them nothing to change it to.
    */
-  detail: string | null;
-  /**
-   * The window a question with a `window` was LAST ASKED over, and the two
-   * instants that ask computed from it — null before its first ask, and
-   * always for a question without one.
-   *
-   * For what a screen narrows BESIDE the answer. The audit reads four
-   * sources and only the tracker's takes a window; the other three are cut to
-   * it in the browser, and cut from below to this `since` rather than to an
-   * instant of their own they cannot disagree with the engine about where
-   * "the last seven days" begins. See [AskedWindow] for why the top edge is
-   * a bound only where `over` is an interval.
-   */
-  asked: AskedWindow | null;
+  detail?: string;
   /**
    * Ask again now.
    *
@@ -92,66 +69,12 @@ export interface QueryResult<T> {
   refetch: () => void;
 }
 
-/**
- * A wall-clock window a question is asked over, and the two parameters its
- * edges are written to.
- *
- * THE EDGES ARE COMPUTED WHEN THE QUESTION IS ASKED — the first ask, every
- * poll, a refetch, a reconnect — and the question is KEYED ON THE WINDOW
- * rather than on its edges. A named range's edges ARE the clock: computed at
- * render they were a fresh pair of instants on every tick of `useNow`, so the
- * key changed once a second and a list meant to be polled once a minute was
- * asked once a second instead — the audit asked the tracker for its feed one,
- * two, three, four times over three ticks. A test that moved its clock a
- * minute in one `act` re-keyed the question sixty times in a row, which React
- * reports as "Maximum update depth exceeded". Keyed on `7d`, a second passing
- * is not a new question: the poll is what asks again, over the seven days
- * ending when it asks.
- */
-export interface QueryWindow {
-  /** The window, as the screen holds it. */
-  over: Window;
-  /** The parameter the inclusive start is written to — `from` on the tracker's feed. */
-  since: string;
-  /** The parameter the end is written to. */
-  until: string;
-}
-
-/**
- * The window a question was last asked over, and the edges that ask computed.
- *
- * THE CHOICE TRAVELS WITH ITS EDGES, because the two edges are not the same
- * kind of fact. `since` is where the window begins, which is what a screen
- * cutting another source beside this answer has to agree with. `until` is a
- * BOUND only for an interval — a reader's own two instants. For a named range
- * it is merely the instant of the ask: "the last seven days" ends now, and a
- * row another source answers with after this ask is inside it. Cut at this
- * `until`, the audit hid every config revision, page change and credential
- * written after the tracker's last ask until the tracker was asked again — a
- * minute on every poll, and for ever once a refusal the engine said waiting
- * cannot clear stopped the tracker's poll while the other three went on
- * answering. Carrying `over` beside the edges lets a caller tell the two
- * apart from the same ask, rather than from a window chosen since.
- */
-export interface AskedWindow {
-  /** The window as chosen when this ask was made. */
-  over: Window;
-  /** The inclusive start, RFC3339. */
-  since: string;
-  /** The end, RFC3339 — a bound only where `over` is an interval. */
-  until: string;
-}
-
 export interface QueryOptions {
   /** Skip the query entirely — for a screen whose parameter is not chosen yet. */
   enabled?: boolean;
   /**
    * Re-ask every N ms. Only for answers with NO push behind them; anything the
    * projection pushes must not be polled on top of it.
-   *
-   * AN `unavailable` ANSWER REPLACES THE NEXT TICK with the engine's own hint
-   * (`unavailableRetryMs`), sooner or later than the poll, and a hint of zero
-   * stops the poll until something a person does asks again — see `useQuery`.
    */
   pollMs?: number;
   /** Ask again when the socket reconnects. Default true. */
@@ -173,36 +96,30 @@ export interface QueryOptions {
    */
   refetchOnFocus?: boolean;
   /**
-   * Ask again shortly after an `inbox_changed` frame for this seat.
-   *
-   * FOR THE ANSWERS A COMMITTED TRACKER RECORD MOVES — the inbox, and what is
-   * read beside it. The frame reaches only a socket watching the seat (the
-   * shell watches the viewer's own), so on any other seat this never fires
-   * and the poll is what keeps the screen current, exactly as before there
-   * was a push. Keep the poll either way: a frame lost to backpressure or to
-   * a reconnect is not re-sent, and the poll is what bounds how stale that
-   * leaves the screen.
+   * Ask again whenever the engine pushes `inbox_changed` for this seat — the
+   * seat this tab WATCHES (`app/Shell.tsx`), so a person's inbox and queue
+   * move the moment a commit moves them rather than at the next poll. The
+   * poll stays: the push is only sent to a socket whose watch the engine
+   * allowed, and a refused or dropped one must not leave a screen frozen.
    */
   refetchOnInboxOf?: string;
-  /** Ask over a wall-clock window whose edges the ask computes — see [QueryWindow]. */
-  window?: QueryWindow;
 }
 
 /**
- * How long after an `inbox_changed` frame the answer is asked for, collecting
- * any frame that lands in the meantime into the same ask.
+ * How soon a refused question is asked again, in ms — or null for "not on
+ * its own".
  *
- * A BOUND, NOT A DEBOUNCE: the first frame starts the clock and later ones
- * join it, so a steady run of pushes still produces an answer every half
- * second rather than none until the run stops. Half a second, because the
- * engine pushes once per APPLIED BATCH and a bulk gesture — a person moving a
- * column of items, a triage seat filing a set — lands as a run of batches over
- * a few hundred milliseconds; collected, the run is one read rather than one
- * per batch, which matters against a per-person budget of four questions in
- * flight at once. Next to the sixty-second poll this replaces, the wait is
- * invisible.
+ * ONLY `unavailable` IS ASKED AGAIN, AND WHEN THE ENGINE SAID: its error
+ * frame carries `retry_after`, read through `unavailableRetryMs` — exactly,
+ * bounded, and ZERO meaning waiting will not change the answer (a full log, a
+ * record this node cannot decode), so nothing re-asks on a timer. Every other
+ * refusal is a fact about the request or the reader that waiting does not
+ * change; the poll, a reconnect or the reader asks again.
  */
-export const INBOX_SETTLE_MS = 500;
+export function retryDelayMs(code: QueryErrorCode, err: unknown): number | null {
+  if (code !== "unavailable") return null;
+  return unavailableRetryMs(err instanceof QueryError ? err.refusal : null);
+}
 
 export function useQuery<K extends QueryName>(
   what: K,
@@ -217,7 +134,6 @@ export function useQuery<K extends QueryName>(
     refetchOnReconnect = true,
     refetchOnFocus = false,
     refetchOnInboxOf = "",
-    window: over,
   } = options;
 
   const [state, setState] = useState<{
@@ -225,16 +141,12 @@ export function useQuery<K extends QueryName>(
     loading: boolean;
     error: QueryErrorCode | null;
     refusal: QueryRefusal | LogRefusal | null;
-    detail: string | null;
-    asked: AskedWindow | null;
-  }>({ data: null, loading: enabled, error: null, refusal: null, detail: null, asked: null });
+    detail?: string;
+  }>({ data: null, loading: enabled, error: null, refusal: null });
 
   // The params object is a fresh literal on every render, so it cannot be a
   // dependency. Its serialisation can.
   const key = JSON.stringify(params ?? {});
-  // AND THE WINDOW BY WHAT WAS CHOSEN — `7d`, or a reader's two instants —
-  // never by the edges an ask computes from it. See [QueryWindow].
-  const windowKey = over ? JSON.stringify([over.over, over.since, over.until]) : "";
 
   // Which generation of the effect is allowed to write state. A ref rather
   // than a captured boolean so a poll tick started by an earlier generation
@@ -244,84 +156,31 @@ export function useQuery<K extends QueryName>(
   // A COUNTER RATHER THAN A CALLBACK holding the query, so an explicit ask
   // goes through exactly the same path as a poll tick: one implementation of
   // "what does the engine say", and a refetch that cannot drift from it.
-  const [refetches, setRefetches] = useState(0);
-  const refetch = useCallback(() => setRefetches((n) => n + 1), []);
+  const [asked, setAsked] = useState(0);
+  const refetch = useCallback(() => setAsked((n) => n + 1), []);
 
   useEffect(() => {
     if (!enabled) {
-      setState({
-        data: null,
-        loading: false,
-        error: null,
-        refusal: null,
-        detail: null,
-        asked: null,
-      });
+      setState({ data: null, loading: false, error: null, refusal: null });
       return;
     }
     const mine = ++generation.current;
     let timer: ReturnType<typeof setTimeout> | 0 = 0;
 
     const run = async (): Promise<void> => {
-      // When this answer is asked again: the screen's own poll, unless the
-      // engine said otherwise. `null` is never on a timer.
-      let next: number | null = pollMs !== undefined && pollMs > 0 ? pollMs : null;
-      // THIS TAB'S READ FLOOR for the question's domain, where it wrote one
-      // ([withFloor]) — on every ask, the poll's and the refetch a write
-      // fired alike.
-      const asking = withFloor(what, key);
-      if (windowKey !== "") {
-        // THE EDGES OF THIS ASK, read off the clock now — on the first ask and
-        // on every poll alike, which is what makes a minute's poll ask over
-        // the window ending a minute later rather than the one the screen
-        // rendered with.
-        const [chosen, sinceParam, untilParam] = JSON.parse(windowKey) as [Window, string, string];
-        const { since, until } = windowEdges(chosen, Date.now());
-        asking[sinceParam] = since;
-        asking[untilParam] = until;
-        // SHARED like an answer, so an ask over a reader's own two instants —
-        // the same edges every time — renders nothing before its answer does.
-        setState((prev) => {
-          const asked = share(prev.asked, { over: chosen, since, until });
-          return asked === prev.asked ? prev : { ...prev, asked };
-        });
-      }
+      let retryMs: number | null = null;
       try {
-        const data = await socket.query(what, asking);
+        const data = await socket.query(what, withFloor(what, key));
         if (generation.current !== mine) return;
-        setState((prev) => {
-          // THE ANSWER IS SHARED WITH THE ONE IT REPLACES (`~/protocol/share.ts`), so
-          // every row a poll brought back unchanged is the object the screen
-          // already drew — and a poll that changed nothing at all is the state
-          // this hook already holds, which renders nothing.
-          const kept = share(prev.data, data);
-          if (kept === prev.data && !prev.loading && prev.error === null) return prev;
-          return {
-            data: kept,
-            loading: false,
-            error: null,
-            refusal: null,
-            detail: null,
-            asked: prev.asked,
-          };
-        });
+        setState({ data, loading: false, error: null, refusal: null });
       } catch (err) {
         if (generation.current !== mine) return;
         // A socket rejection always carries a code; anything else that
         // threw is a failure nobody explained, which is `query_failed`.
         const code = queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed";
-        const { refusal, detail } = queryFailure(err);
-        // AN `unavailable` ANSWER IS ASKED AGAIN WHEN THE ENGINE SAID, and
-        // that replaces the poll's next tick in both directions. Sooner,
-        // because a minute-long poll would leave a recovered node looking
-        // broken for most of that minute; later, because a node that said
-        // "twenty seconds" refuses a five-second poll every time it asks. And
-        // NOT AT ALL when the hint is zero — a full log, a record this node
-        // cannot decode, a barrier its broker refused: each is refused the
-        // same until an operator acts, so the poll stops too, the banner
-        // says the node refused and what would change it, and a reconnect, a
-        // refetch or the screen's next mount asks again.
-        if (code === "unavailable") next = unavailableRetryMs(refusal);
+        retryMs = retryDelayMs(code, err);
+        const detail = err instanceof QueryError && err.detail ? err.detail : undefined;
+        const refusal = err instanceof QueryError ? err.refusal : null;
         setState((prev) => ({
           // KEEP the last good answer. A screen that blanks on one failed poll
           // tells the reader less than one that shows the last reading and
@@ -330,19 +189,21 @@ export function useQuery<K extends QueryName>(
           loading: false,
           error: code,
           refusal,
-          detail,
-          asked: prev.asked,
+          ...(detail ? { detail } : {}),
         }));
       } finally {
-        if (generation.current === mine && next !== null) {
+        // THE SOONER OF THE TWO. A poll keeps its own cadence; a refusal
+        // the engine named a wait for comes back after that wait whether or
+        // not anything polls, because a minute-long poll would leave a
+        // recovered node looking broken for most of that minute.
+        const next = retryMs !== null ? Math.min(pollMs ?? retryMs, retryMs) : pollMs;
+        if (generation.current === mine && next) {
           timer = setTimeout(() => void run(), next);
         }
       }
     };
 
-    setState((prev) =>
-      prev.loading === (prev.data === null) ? prev : { ...prev, loading: prev.data === null },
-    );
+    setState((prev) => ({ ...prev, loading: prev.data === null }));
     void run();
 
     return () => {
@@ -353,7 +214,7 @@ export function useQuery<K extends QueryName>(
     // re-ask; including it unconditionally would re-run every query on every
     // socket blip.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socket, what, key, windowKey, enabled, pollMs, refetches, refetchOnReconnect && connected]);
+  }, [socket, what, key, enabled, pollMs, asked, refetchOnReconnect && connected]);
 
   // A WRITE FROM THIS TAB ASKS AGAIN — at the floor it raised, which
   // `withFloor` reads on the very next ask. The screen that pressed a button
@@ -361,7 +222,7 @@ export function useQuery<K extends QueryName>(
   // held before it, and never from a guess about what the press did.
   useEffect(() => {
     if (!enabled) return;
-    return tabFloors.onWritten((domain, refreshes) => {
+    return session.onWritten((domain, refreshes) => {
       if (SessionFloors.moves(what, domain, refreshes)) refetch();
     });
   }, [enabled, what, refetch]);
@@ -385,31 +246,19 @@ export function useQuery<K extends QueryName>(
     return () => document.removeEventListener("visibilitychange", wake);
   }, [enabled, refetchOnFocus, refetch]);
 
-  // A SEAT'S INBOX MOVING ASKS AGAIN, within INBOX_SETTLE_MS.
-  //
-  // Subscribed to the store directly rather than through `useSlice`, because
-  // nothing here renders the counter: a re-render per frame would be work
-  // done to reach a timer. The count is compared against the one this effect
-  // started from, so a frame for ANOTHER seat — which moves the same slice —
-  // asks nothing.
+  // A SEAT'S INBOX MOVING ASKS AGAIN. Subscribed to the store directly rather
+  // than through `useSlice`, because nothing here renders the counter; it is
+  // compared against the count this effect started from, so a frame for
+  // ANOTHER seat — which moves the same slice — asks nothing.
   useEffect(() => {
     if (!enabled || refetchOnInboxOf === "") return;
     let seen = store.state.inboxMoves[refetchOnInboxOf] ?? 0;
-    let timer: ReturnType<typeof setTimeout> | 0 = 0;
-    const unsubscribe = store.subscribe(["inboxMoves"], () => {
+    return store.subscribe(["inboxMoves"], () => {
       const now = store.state.inboxMoves[refetchOnInboxOf] ?? 0;
       if (now === seen) return;
       seen = now;
-      if (timer) return; // already collecting
-      timer = setTimeout(() => {
-        timer = 0;
-        refetch();
-      }, INBOX_SETTLE_MS);
+      refetch();
     });
-    return () => {
-      unsubscribe();
-      clearTimeout(timer);
-    };
   }, [store, enabled, refetchOnInboxOf, refetch]);
 
   return { ...state, refetch };
@@ -420,17 +269,17 @@ const FRESHNESS_KEYS = ["read_level", "min_position", "max_lag_seq", "max_lag_se
 
 /**
  * A question's parameters, with this tab's read floor for its domain named
- * where it has one (`protocol/floors.ts`).
+ * where it has one (`protocol/session.ts`).
  *
  * EVERY ASK, NOT ONLY THE REFETCH A WRITE FIRES: a poll that came round a
  * second after the write, on a node that had not applied it yet, would
  * otherwise redraw the row as it was before the press. A caller that named
  * its own freshness keeps it — it asked for something specific, and a
- * staleness bound beside `read_level=session` is a request the engine refuses.
+ * staleness bound beside `session` is a request the engine refuses.
  */
 export function withFloor(what: string, key: string): Record<string, unknown> {
   const params = JSON.parse(key) as Record<string, unknown>;
-  const floor = tabFloors.freshness(what);
+  const floor = session.freshness(what);
   if (floor === null || FRESHNESS_KEYS.some((k) => k in params)) return params;
   return { ...params, ...floor };
 }

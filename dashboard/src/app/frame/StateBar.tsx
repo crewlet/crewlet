@@ -27,17 +27,7 @@ import {
   SlidersVerticalGlyph,
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
-import {
-  CoverageTags,
-  INCOMPLETE,
-  INCOMPLETE_ROWS,
-  affected,
-  appliedThrough,
-  oddLevel,
-  unreadable,
-  unreadableRemedy,
-  type CoverageFacts,
-} from "~/components/work.tsx";
+import { CoverageTags, oddLevel, type CoverageFacts } from "~/components/work.tsx";
 
 export interface Degradation {
   /** The strip's own variant, in uilet's spelling: two states, both of them bad. */
@@ -150,7 +140,10 @@ export function StateBar({
   /** A screen's own freshness line — "as of", "aggregated through". */
   extra?: ReactNode;
 }) {
-  const behind = appliedThrough(coverage) !== null;
+  const behind =
+    coverage?.applied_through !== undefined &&
+    coverage.log_seq !== undefined &&
+    coverage.applied_through < coverage.log_seq;
   const incomplete = coverage?.complete === false;
   // A LEVEL THIS SURFACE EXPECTS IS NOT NEWS, and the bar must not open a band
   // for one: `stale` is the dashboard's own default, so a `read_level` test
@@ -202,10 +195,18 @@ export function StateBar({
                 `title`. Its title is a lead-in label with its own trailing
                 space; this is one running sentence whose opening clause is
                 emphasised and whose next word is an em dash or a full stop. */}
-            <strong>{INCOMPLETE}</strong>
-            {`${unreadable(coverage?.incomplete)}.`} {INCOMPLETE_ROWS}
-            {affected(coverage?.incomplete)}
-            {unreadableRemedy(coverage?.incomplete)}
+            <strong>This answer is incomplete</strong>
+            {coverage?.incomplete
+              ? ` — ${coverage.incomplete.records} record(s) this build cannot read.`
+              : "."}{" "}
+            Rows may be missing, rows that should have gone may still be here, and the counts were
+            computed over what is shown.
+            {coverage?.incomplete?.scope?.length
+              ? ` Affected: ${coverage.incomplete.scope.join(", ")}.`
+              : ""}
+            {coverage?.incomplete
+              ? ` Record version ${coverage.incomplete.version}, from sequence ${coverage.incomplete.from.seq} — a build that can read it is what resolves this, not a refresh.`
+              : ""}
           </span>
         </Callout>
       )}

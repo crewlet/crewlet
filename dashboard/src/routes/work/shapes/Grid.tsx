@@ -86,7 +86,6 @@
  */
 
 import { useMemo } from "react";
-import { useShared } from "~/lib/share.ts";
 import { EmptyValue, Tag } from "@crewlethq/ui";
 
 import {
@@ -100,7 +99,7 @@ import { DateCell, KeyCell, SeatCell } from "~/app/frame/cells.tsx";
 import { peekRow } from "~/app/frame/DetailRail.tsx";
 import { Assignee, DueMark, TypeIcon, blockedBy, type RowChrome } from "~/components/work.tsx";
 import { GroupMark, headingOf } from "./group.tsx";
-import { itemAddress, type Shape } from "~/lib/work.ts";
+import { type Shape, itemAddress } from "~/lib/work.ts";
 import { COLUMN_SORT_KEYS } from "~/contract/work.ts";
 import { fmtDuration } from "~/lib/format.ts";
 import { RestoreButton } from "~/components/writes.tsx";
@@ -185,6 +184,7 @@ export function removalsOf(records: WorkActivityRecord[], kind = "removed"): Rem
 interface ColumnContext {
   chrome: RowChrome;
   detail?: WorkProjectDetail | null;
+  now: number;
   /** The company's own list rather than one project's — so project is a column. */
   workspace: boolean;
   removals?: Removals;
@@ -210,7 +210,7 @@ interface ColumnContext {
  * the seat, so the timestamp stays the row's last column either way.
  */
 function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
-  const { chrome, detail, workspace } = ctx;
+  const { chrome, detail, now, workspace } = ctx;
   const out: GridColumn<WorkSummary>[] = [
     {
       key: "priority",
@@ -279,9 +279,13 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       shrink: true,
       sortValue: (row) => row.due ?? "",
       cell: (row) =>
-        row.due ? <DueMark due={row.due} overdue={row.overdue} /> : <EmptyValue label="No date" />,
+        row.due ? (
+          <DueMark due={row.due} overdue={row.overdue} now={now} />
+        ) : (
+          <EmptyValue label="No date" />
+        ),
     }),
-    startColumn(),
+    startColumn(now),
     pointsColumn(),
     estimateColumn(),
     {
@@ -314,7 +318,7 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
         />
       ),
     },
-    updatedColumn(),
+    updatedColumn(now),
   );
   return out;
 }
@@ -329,7 +333,7 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
  * position depends on how long the title above it was.
  */
 function tableColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
-  const { chrome, detail, workspace } = ctx;
+  const { chrome, detail, now, workspace } = ctx;
   const out: GridColumn<WorkSummary>[] = [
     {
       key: "key",
@@ -403,12 +407,16 @@ function tableColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       // overdue tint is `DueMark`'s and two spellings of it is two rules
       // as soon as one screen's changes.
       cell: (row) =>
-        row.due ? <DueMark due={row.due} overdue={row.overdue} /> : <EmptyValue label="No date" />,
+        row.due ? (
+          <DueMark due={row.due} overdue={row.overdue} now={now} />
+        ) : (
+          <EmptyValue label="No date" />
+        ),
     }),
-    startColumn(),
+    startColumn(now),
     pointsColumn(),
     estimateColumn(),
-    updatedColumn(),
+    updatedColumn(now),
   );
   return out;
 }
@@ -439,13 +447,14 @@ function projectColumn(optional: boolean): GridColumn<WorkSummary> {
   };
 }
 
-function startColumn(): GridColumn<WorkSummary> {
+function startColumn(now: number): GridColumn<WorkSummary> {
   return sorted("start", {
     header: "Start",
     shrink: true,
     optional: true,
     sortValue: (row) => row.start ?? "",
-    cell: (row) => (row.start ? <DateCell at={row.start} /> : <EmptyValue label="No date" />),
+    cell: (row) =>
+      row.start ? <DateCell at={row.start} now={now} /> : <EmptyValue label="No date" />,
   });
 }
 
@@ -484,7 +493,7 @@ function estimateColumn(): GridColumn<WorkSummary> {
 // RELATIVE, WITH THE INSTANT ON THE TITLE — [DateCell]'s own rendering, which
 // is what the compact row spelled by hand. One value, one drawing, wherever it
 // appears: that is the rule `app/frame/cells.tsx` exists for.
-function updatedColumn(): GridColumn<WorkSummary> {
+function updatedColumn(now: number): GridColumn<WorkSummary> {
   return sorted("updated", {
     header: "Updated",
     shrink: true,
@@ -493,7 +502,7 @@ function updatedColumn(): GridColumn<WorkSummary> {
     // wrapped onto a third line of its own.
     phoneOmit: true,
     sortValue: (row) => row.updated ?? "",
-    cell: (row) => <DateCell at={row.updated} />,
+    cell: (row) => <DateCell at={row.updated} now={now} />,
   });
 }
 
@@ -571,7 +580,7 @@ function buildColumns(shape: GridShape, ctx: ColumnContext): GridColumn<WorkSumm
       ? givingWay(tableColumns(ctx), TABLE_GIVES_WAY)
       : givingWay(listColumns(ctx), LIST_GIVES_WAY);
   if (!ctx.removals) return out;
-  return out.concat(trashColumns(ctx.removals, ctx.chrome));
+  return out.concat(trashColumns(ctx.removals, ctx.chrome, ctx.now));
 }
 
 /**
@@ -592,7 +601,7 @@ function buildColumns(shape: GridShape, ctx: ColumnContext): GridColumn<WorkSumm
  * column the grid never draws.
  */
 export function columnChoices(shape: GridShape, workspace: boolean): ColumnChoice[] {
-  return columnChoicesOf(buildColumns(shape, { chrome: {}, detail: null, workspace }));
+  return columnChoicesOf(buildColumns(shape, { chrome: {}, detail: null, now: 0, workspace }));
 }
 
 export function WorkGrid({
@@ -603,6 +612,7 @@ export function WorkGrid({
   subAxis,
   chrome,
   detail,
+  now,
   selected,
   workspace,
   hrefOf,
@@ -623,7 +633,7 @@ export function WorkGrid({
   subAxis?: string;
   chrome: RowChrome;
   detail?: WorkProjectDetail | null;
-  /** The ADDRESS of the task the rail holds — see `itemAddress`. */
+  now: number;
   selected?: string;
   /** The company's own list rather than one project's. */
   workspace: boolean;
@@ -656,43 +666,32 @@ export function WorkGrid({
    */
   more?: { load: () => void; note: string };
 }) {
-  // THE PAGE IS WHAT CAN RESOLVE AN EDGE. A dependency names the blocking
-  // task's id and the key a reader recognises is on that task's own row, so
-  // only something holding the rows can turn one into the other — and a
-  // grouped answer's rows are under its groups rather than in `items`. Built
-  // once per answer rather than per row, because a lookup rebuilt inside a
-  // cell is quadratic over a page of a hundred.
-  //
-  // A PLAIN RECORD, SHARED (`~/lib/share.ts`), because the columns close over
-  // it: built from the rows it was a new value on every poll that moved any of
-  // them — a status, an assignee — and every row of the list drew again for
-  // the one that changed. Shared, it moves only when an id or a key does.
-  const keys = useShared(
-    useMemo(() => {
-      const out: Record<string, string> = {};
-      const add = (list: WorkSummary[]) => {
-        for (const row of list) out[row.id] = row.key;
-      };
-      add(rows);
-      for (const group of groups) {
-        add(group.rows);
-        for (const sub of group.subgroups ?? []) add(sub.rows);
-      }
-      return out;
-    }, [rows, groups]),
-  );
-  const ctx = useMemo<ColumnContext>(
-    () => ({
+  const ctx = useMemo<ColumnContext>(() => {
+    // THE PAGE IS WHAT CAN RESOLVE AN EDGE. A dependency names the blocking
+    // task's id and the key a reader recognises is on that task's own row, so
+    // only something holding the rows can turn one into the other — and a
+    // grouped answer's rows are under its groups rather than in `items`. Built
+    // once per answer rather than per row, because a lookup rebuilt inside a
+    // cell is quadratic over a page of a hundred.
+    const keys = new Map<string, string>();
+    const add = (list: WorkSummary[]) => {
+      for (const row of list) keys.set(row.id, row.key);
+    };
+    add(rows);
+    for (const group of groups) {
+      add(group.rows);
+      for (const sub of group.subgroups ?? []) add(sub.rows);
+    }
+    return {
       chrome,
       detail,
+      now,
       workspace,
       removals,
-      // OWN KEYS ONLY: a record inherits `toString` and its kind.
-      keyOf: (id: string) => (Object.hasOwn(keys, id) ? keys[id] : undefined),
+      keyOf: (id: string) => keys.get(id),
       seats,
-    }),
-    [keys, chrome, detail, workspace, removals, seats],
-  );
+    };
+  }, [rows, groups, chrome, detail, now, workspace, removals, seats]);
 
   const columns = useMemo(() => buildColumns(shape, ctx), [shape, ctx]);
 
@@ -737,13 +736,6 @@ export function WorkGrid({
       rows={bands ? undefined : rows}
       bands={bands}
       columns={columns}
-      // A ROW IS ITS TASK'S ID, NOT ITS KEY. The key is an ADDRESS two tasks
-      // can hold at once — a counter restored beside tasks minted after it
-      // mints numbers they already hold, and `key_collision` is the attention
-      // flag that lists exactly those tasks together, on this grid. Keyed on
-      // the key, React reconciled the pair by place and a row's state stayed
-      // behind when the next answer re-ordered them. The board, the calendar
-      // and the timeline key on the id already.
       rowKey={(row) => row.id}
       rowHref={hrefOf}
       // THROUGH `peekRow`, which is the one thing that calls `preventDefault`.
@@ -755,8 +747,6 @@ export function WorkGrid({
       // card, the embedded compact row and the Projects directory all go
       // through it; the collapsed grid was the one that did not.
       onRowActivate={peekRow<WorkSummary>((row) => onOpen(row))}
-      // BY ADDRESS, the same value the peek was opened with: a row matched on
-      // its key drew both holders of a shared key as the open one.
       isSelected={(row) => itemAddress(row) === selected}
       // THE ORDER IS THE QUERY'S. See the header: the grid writes `sort=`,
       // the screen sends it, and the engine orders the whole set.
@@ -836,7 +826,11 @@ function bandFoot({
 }
 
 /** The two facts a trash listing adds, plus the way back. */
-function trashColumns(removals: Removals, chrome: RowChrome): GridColumn<WorkSummary>[] {
+function trashColumns(
+  removals: Removals,
+  chrome: RowChrome,
+  now: number,
+): GridColumn<WorkSummary>[] {
   return [
     sorted("removed", {
       header: "Removed",
@@ -852,7 +846,7 @@ function trashColumns(removals: Removals, chrome: RowChrome): GridColumn<WorkSum
         // loaded has no record here, and the honest cell says which fact is
         // missing rather than drawing an empty one that reads as "just now".
         if (!record) return <EmptyValue label="Its removal is older than the loaded history" />;
-        return <DateCell at={record.at} />;
+        return <DateCell at={record.at} now={now} />;
       },
     }),
     {
@@ -894,11 +888,7 @@ function trashColumns(removals: Removals, chrome: RowChrome): GridColumn<WorkSum
       header: "",
       label: "Restore",
       shrink: true,
-      // THE TASK'S ADDRESS, not its key: a removed task whose key another
-      // task claimed first would otherwise be restored as the claimant —
-      // which is not in the trash, so the write is refused, and the task a
-      // reader meant stays there.
-      cell: (row) => <RestoreButton item={itemAddress(row)} />,
+      cell: (row) => <RestoreButton item={row.key} />,
     },
   ];
 }

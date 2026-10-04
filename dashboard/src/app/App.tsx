@@ -26,8 +26,8 @@
  * ceremony (`StepUp.tsx`) is mounted beside both for the same reason: a
  * refusal that asks for a fresher proof arrives on either side. So is the
  * live region the design system's controls speak into (`announcer.tsx`),
- * which a region inside the frame would lose on every sign-in. Those four are
- * EAGER: a browser that has lost its session must reach the sign-in without
+ * which a region inside the frame would lose on every sign-in. Those three
+ * are EAGER: a browser that has lost its session must reach the sign-in without
  * waiting on a chunk. The sign-in screens themselves are not — they are a
  * chunk of their own (`signin` in `lazyScreen.ts`), which a reader who is
  * signed in never downloads, and `resolve` names them like any other screen
@@ -45,8 +45,8 @@
 import { useEffect, useSyncExternalStore, type ReactNode } from "react";
 import { LayerHost, Skeleton, ToastProvider } from "@crewlethq/ui";
 import { Shell } from "./Shell.tsx";
-import { AppAnnouncer } from "./announcer.tsx";
 import { StepUpHost } from "./StepUp.tsx";
+import { AppAnnouncer } from "./announcer.tsx";
 import { parseHash, useNavigator, useRoute } from "./router.tsx";
 import { resolve, type Resolved, type Route } from "./routes.ts";
 import { framelessOf, grantsOpen, sectionOf } from "./nav.ts";
@@ -289,7 +289,7 @@ function Screen({ where, path }: { where: Route; path: string[] }) {
   // frame knew to). A viewer read that FAILED is no answer and does not hold
   // the section: the screen mounts, and its own reads say what they find.
   const section = sectionOf(path);
-  if (section?.grants && !section.answersRefusal) {
+  if (section?.grants) {
     if (viewer.asking) {
       return (
         <Skeleton variant="text" rows={4} label={`Checking your access to ${section.label}`} />
@@ -322,7 +322,7 @@ export function App() {
       <LayerHost>
         {/* EAGER, AND OUTSIDE THE FRAME: the session's routing, the step-up
             ceremony and the one live region are what a sign-in screen and a
-            framed one both need, so neither may tear them down and none of
+            framed one both need, so none may tear them down and none of
             them waits on a chunk. */}
         <FollowSessionNeed />
         <StepUpHost />

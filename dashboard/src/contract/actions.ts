@@ -22,7 +22,7 @@
  *  - `args` — the arguments a screen may pass. Every one is a property of the
  *    tool's own schema, and every property the schema REQUIRES is here;
  *  - `domain` — the log the write lands in, whose position raises this tab's
- *    read floor for that domain (`protocol/floors.ts`), or `null` for a
+ *    read floor for that domain (`protocol/session.ts`), or `null` for a
  *    write that lands in no log a question reads;
  *  - `refreshes` — questions OUTSIDE that domain's session set
  *    (`contract/domains.ts`) that the write also moves, asked again without a

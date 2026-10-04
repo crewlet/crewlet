@@ -102,127 +102,35 @@ function dateLocale(): string | undefined {
   return dates() === "iso" ? "en-CA" : undefined;
 }
 
-/**
- * The formatter for a locale and a set of options, built once and kept.
- *
- * EVERY DATE IN THIS PRODUCT IS FORMATTED THROUGH HERE, because building an
- * `Intl.DateTimeFormat` is the expensive half of formatting one — the format
- * is a few microseconds, the construction a couple of hundred under the
- * development build — and `toLocaleString(locale, options)` builds one per
- * call. A hundred-row audit built three hundred of them a render (its dates,
- * its tooltips, and a third to learn the browser's zone each time), to
- * produce the same handful of formatters over and over. ECMA-402 defines the
- * `toLocale*String` methods as exactly this construction followed by
- * `format`, which is what makes the output identical and what
- * `format.intl.test.ts` holds across zones and date shapes.
- *
- * KEYED ON THE LOCALE AND THE OPTIONS AS GIVEN — the zone is one of the
- * options — so a reader changing their zone or their date shape is a new key
- * and the old formatters age out rather than answering for the new choice.
- * Callers build their options in one order per call site, which is what lets
- * the serialisation be the key.
- */
-export function dateFormatter(
-  locale: string | undefined,
-  options: Intl.DateTimeFormatOptions,
-): Intl.DateTimeFormat {
-  const key = JSON.stringify([locale ?? "", options]);
-  const held = dateFormatters.get(key);
-  if (held) {
-    // MOST RECENTLY USED LAST, so the bound evicts what nothing has asked for
-    // longest — a zone the reader left, a date shape they changed.
-    dateFormatters.delete(key);
-    dateFormatters.set(key, held);
-    return held;
-  }
-  const made = new Intl.DateTimeFormat(locale, options);
-  dateFormatters.set(key, made);
-  if (dateFormatters.size > FORMATTERS_KEPT) {
-    const oldest = dateFormatters.keys().next().value;
-    if (oldest !== undefined) dateFormatters.delete(oldest);
-  }
-  return made;
-}
-
-/**
- * How many formatters [dateFormatter] keeps.
- *
- * THE LIVE SET IS SMALL AND KNOWN: the six formatters below in the one zone
- * and date shape a reader has chosen, the handful of calendar and axis labels
- * in the browser's own, and one per zone the schedules are evaluated in
- * ([zoneOffset]) — a few dozen at the outside. Sixty-four holds all of that
- * with room for a reader flipping through zones and date shapes in the
- * preferences, and bounds what a session that does so for an hour can hold.
- * A formatter evicted while still in use is rebuilt once, which is the whole
- * cost of the bound being too small; there is no reader-visible difference
- * between this and any larger number, so it is a constant and not a setting.
- */
-export const FORMATTERS_KEPT = 64;
-
-const dateFormatters = new Map<string, Intl.DateTimeFormat>();
-
-/**
- * A number grouped in the reader's locale — `12,345` — through one formatter.
- *
- * `n.toLocaleString()` with no arguments is this formatter's `format`, by the
- * same ECMA-402 definition, built afresh per call.
- */
-function grouped(n: number): string {
-  return numberFormatter().format(n);
-}
-
-const numberFormatter = (() => {
-  let made: Intl.NumberFormat | null = null;
-  return () => (made ??= new Intl.NumberFormat());
-})();
-
-/**
- * Two strings in the order a reader expects — `seat-2` before `seat-10`, and
- * case and accents aside — through one collator.
- *
- * `a.localeCompare(b, locale, options)` is `new Intl.Collator(locale,
- * options).compare(a, b)` by definition, so a sort over it built a collator
- * per COMPARISON: a grid sorting a hundred rows by a text column built
- * several hundred of them to order one list.
- */
-export function naturalCompare(a: string, b: string): number {
-  return naturalCollator().compare(a, b);
-}
-
-const naturalCollator = (() => {
-  let made: Intl.Collator | null = null;
-  return () => (made ??= new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }));
-})();
-
 export function fmtTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return "";
-  return dateFormatter(undefined, {
+  return d.toLocaleTimeString(undefined, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
     timeZone: zone(),
-  }).format(d);
+  });
 }
 
 export function fmtDateTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return dateFormatter(dateLocale(), {
+  return d.toLocaleString(dateLocale(), {
     ...dateParts(),
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
     timeZone: zone(),
-  }).format(d);
+  });
 }
 
 export function fmtDate(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return dateFormatter(dateLocale(), { ...dateParts(), timeZone: zone() }).format(d);
+  return d.toLocaleDateString(dateLocale(), { ...dateParts(), timeZone: zone() });
 }
 
 /**
@@ -237,13 +145,13 @@ export function fmtDate(ts: string | null | undefined): string {
 export function fmtMinute(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return dateFormatter(dateLocale(), {
+  return d.toLocaleString(dateLocale(), {
     ...dateParts(),
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
     timeZone: zone(),
-  }).format(d);
+  });
 }
 
 /**
@@ -259,18 +167,6 @@ export function fmtMinute(ts: string | null | undefined): string {
  * that read the clock itself would decide that separately per render.
  */
 export function fmtDateCompact(ts: string | null | undefined, now: number): string {
-  return fmtDateCompactIn(ts, currentYear(now));
-}
-
-/**
- * [fmtDateCompact], given the current year rather than the instant.
- *
- * FOR A MARK DRAWN ON EVERY ROW. The only thing a compact date reads off the
- * clock is which year it is, and that changes once a year — so a row's due
- * date subscribes to the YEAR (`useClockReading(currentYear)`) and renders when
- * it turns, rather than taking the second and rendering with it.
- */
-export function fmtDateCompactIn(ts: string | null | undefined, thisYear: string): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
   // BOTH YEARS READ IN THE VIEWER'S ZONE, and the date rendered in it. This
@@ -278,30 +174,14 @@ export function fmtDateCompactIn(ts: string | null | undefined, thisYear: string
   // this file rendered in the chosen one, so a reader in `Pacific/Auckland`
   // whose browser sat in `UTC` saw a due date one day earlier here than in the
   // tooltip beside it — and, for thirteen hours a year, a year earlier.
-  return dateFormatter(undefined, {
+  const thisYear = calendarYear(new Date(now));
+  return d.toLocaleDateString(undefined, {
     month: "short",
     day: "2-digit",
     timeZone: zone(),
     ...(calendarYear(d) === thisYear ? {} : { year: "numeric" }),
-  }).format(d);
+  });
 }
-
-/**
- * Which calendar year `now` falls in, IN THE VIEWER'S ZONE.
- *
- * REMEMBERED FOR THE LAST INSTANT ASKED, because every due date on a screen
- * asks it of the same instant in the same tick of the clock: a board of two
- * hundred cards is one reading per second rather than two hundred.
- */
-export function currentYear(now: number): string {
-  const tz = zone();
-  if (lastYear.now !== now || lastYear.zone !== tz) {
-    lastYear = { now, zone: tz, year: calendarYear(new Date(now)) };
-  }
-  return lastYear.year;
-}
-
-let lastYear = { now: Number.NaN, zone: "", year: "" };
 
 /**
  * "Sep 9", from a COMPANY DATE LABEL (`2026-09-09`) — a day the engine cut on
@@ -317,12 +197,16 @@ let lastYear = { now: Number.NaN, zone: "", year: "" };
 export function companyDateLabel(date: string): string {
   const at = Date.parse(`${date}T12:00:00Z`);
   if (!Number.isFinite(at)) return date;
-  return dateFormatter(undefined, { month: "short", day: "numeric", timeZone: "UTC" }).format(at);
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(at);
 }
 
 /** Which calendar year an instant falls in, IN THE VIEWER'S ZONE. */
 function calendarYear(at: Date): string {
-  return dateFormatter("en-US", { year: "numeric", timeZone: zone() }).format(at);
+  return at.toLocaleDateString("en-US", { year: "numeric", timeZone: zone() });
 }
 
 /**
@@ -535,7 +419,7 @@ export function civilKey(at: number): string {
 export function fmtCount(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return EMPTY_VALUE;
   const abs = Math.abs(n);
-  if (abs < 10_000) return grouped(n);
+  if (abs < 10_000) return n.toLocaleString();
   if (abs < 1_000_000) return `${whole((n / 1000).toFixed(abs < 100_000 ? 1 : 0))}k`;
   if (abs < 1_000_000_000) return `${whole((n / 1_000_000).toFixed(1))}M`;
   return `${whole((n / 1_000_000_000).toFixed(2))}B`;
@@ -548,7 +432,7 @@ const whole = (fixed: string) => fixed.replace(/\.0+$/, "");
 
 /** Always the exact figure, grouped. For a cell a reader is comparing. */
 export function fmtExact(n: number | null | undefined): string {
-  return n == null || !Number.isFinite(n) ? EMPTY_VALUE : grouped(n);
+  return n == null || !Number.isFinite(n) ? EMPTY_VALUE : n.toLocaleString();
 }
 
 export function fmtPct(part: number, whole: number, digits = 0): string {
@@ -633,7 +517,7 @@ export function conversationLabel(key: string): string {
  * screens, which is the kind of thing nobody fixes one at a time.
  */
 export function plural(n: number, one: string, many?: string): string {
-  return `${grouped(n)} ${n === 1 ? one : (many ?? `${one}s`)}`;
+  return `${n.toLocaleString()} ${n === 1 ? one : (many ?? `${one}s`)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -713,33 +597,97 @@ function wallParts(at: number, tz: string): Record<string, string> {
   return out;
 }
 
-// One formatter per zone, kept by [dateFormatter] with every other one: a range
-// picker rebuilds its two fields on every keystroke, and the cron preview works
-// out a schedule's fires through here. A zone `Intl` does not know throws at
-// construction and is never kept, which is what lets [zoneOffset] say so.
+// One formatter per zone. Constructing an Intl.DateTimeFormat is the expensive
+// half of this file, and a range picker rebuilds its two fields on every
+// keystroke.
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
 function wallFormatter(tz: string): Intl.DateTimeFormat {
-  return dateFormatter("en-US", {
-    timeZone: tz,
-    // `hourCycle: "h23"` RATHER THAN `hour12: false`, which is the legacy
-    // spelling and selects h24 in some engines: midnight comes back as "24",
-    // the previous day's twenty-fourth hour, and fed to Date.UTC it rolls the
-    // day forward and lands a whole day out. `h23` is the explicit 00–23
-    // cycle, so there is no reading to fold back — and `hour12` takes
-    // precedence over `hourCycle` where both are given, so it is absent
-    // rather than set to false.
-    hourCycle: "h23",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+  let f = formatters.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      // `hourCycle: "h23"` RATHER THAN `hour12: false`, which is the legacy
+      // spelling and selects h24 in some engines: midnight comes back as
+      // "24", the previous day's twenty-fourth hour, and fed to Date.UTC it
+      // rolls the day forward and lands a whole day out. `h23` is the
+      // explicit 00–23 cycle, so there is no reading to fold back — and
+      // `hour12` takes precedence over `hourCycle` where both are given, so
+      // it is absent rather than set to false.
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    formatters.set(tz, f);
+  }
+  return f;
 }
 
 // ---------------------------------------------------------------------------
-// Values read out of a redacted answer
+// Values read out of the company document
 // ---------------------------------------------------------------------------
+
+/**
+ * The order the engine declares a seat's per-phase chains in
+ * (`config.PhaseLLM`), so a mapping renders in the order its reader wrote it
+ * against rather than in whatever order a JSON object happened to arrive.
+ *
+ * `LLM_` in the name deliberately: "phase" means an integration's reconcile
+ * phase elsewhere in this tree, and an unqualified `PHASE_ORDER` is how one of
+ * two unrelated orders gets changed in the other's name.
+ */
+const LLM_PHASE_ORDER = ["default", "review", "subagent", "auxiliary", "judge", "sandbox"];
+
+/** One row of a seat's model setting: which phase, and the chain it runs on. */
+export interface PhaseChain {
+  /** The mapping key, or "" when one chain covers every phase. */
+  phase: string;
+  /** The provider keys, first choice first, joined for reading. */
+  chain: string;
+}
+
+/**
+ * A seat's `llm:` field as rows a person reads.
+ *
+ * THREE SHAPES, ONE READING. A key and a chain are one row covering every
+ * phase; a per-phase mapping is one row per phase it names. The seat screen
+ * used to render the field as a React child, which drew a chain as its keys
+ * glued together and threw on the mapping, taking the whole page with it.
+ *
+ * A fallback chain reads as "first, then second": the order is the whole
+ * meaning of a chain, and a bare comma list reads as a set.
+ *
+ * `unknown` in, because this is the one reader standing between a field a
+ * newer engine may shape differently and a render that must not throw.
+ */
+export function formatPhaseLLM(llm: unknown): PhaseChain[] {
+  const chain = (keys: unknown): string => {
+    if (typeof keys === "string") return keys.trim();
+    if (!Array.isArray(keys)) return "";
+    return keys
+      .filter((k): k is string => typeof k === "string" && k.trim() !== "")
+      .map((k) => k.trim())
+      .join(", then ");
+  };
+  if (typeof llm === "string" || Array.isArray(llm)) {
+    const only = chain(llm);
+    return only ? [{ phase: "", chain: only }] : [];
+  }
+  if (!llm || typeof llm !== "object") return [];
+  const rank = (phase: string) => {
+    const at = LLM_PHASE_ORDER.indexOf(phase);
+    return at < 0 ? LLM_PHASE_ORDER.length : at;
+  };
+  return Object.entries(llm as Record<string, unknown>)
+    .map(([phase, keys], i) => ({ phase, chain: chain(keys), i }))
+    .filter((row) => row.chain !== "")
+    .sort((a, b) => rank(a.phase) - rank(b.phase) || a.i - b.i)
+    .map(({ phase, chain: joined }) => ({ phase, chain: joined }));
+}
 
 /**
  * The mask the engine writes in place of a credential it will not send.

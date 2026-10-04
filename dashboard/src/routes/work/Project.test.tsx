@@ -10,20 +10,13 @@
  * to shape, and that each lens answers its own question.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Project, ProjectPeek } from "./Project.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkProjectDetail } from "~/protocol/index.ts";
-import {
-  CLAIMANT,
-  CLAIMANT_HREF,
-  DUPLICATE,
-  DUPLICATE_HREF,
-  SHARED_KEY,
-} from "~/test/keyCollision.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
@@ -510,41 +503,4 @@ test("About's breakdown of the open work asks for open work", async () => {
   await waitFor(() => expect(asked(query).group_by).toBe("status"));
   expect(asked(query).status_group).toBe("not_started,active");
   expect(asked(query).subtasks).toBe("separate");
-});
-
-// THE LATEST CHANGES LEAD TO THE TASK EACH IS ABOUT.
-//
-// A change is drawn under its task's key, and a key two tasks hold opens the
-// one that claimed it first — so a change to the duplicate linked its claimant.
-// The engine says beside the key when it opens another task, and that row goes
-// by the task's id.
-test("the latest changes to two tasks under one key link each to itself", async () => {
-  location.hash = "#/work/ENG?lens=about";
-  const change = (id: string, subject: string, collision?: boolean) => ({
-    id,
-    log_seq: 1,
-    log_stream: "CREWLET_WORK_LOG",
-    log_generation: 1,
-    at: "2031-04-16T09:00:00Z",
-    effective_at: "2031-04-16T09:00:00Z",
-    kind: "status",
-    subject_kind: "task",
-    subject_id: subject,
-    subject_key: SHARED_KEY,
-    subject_key_collision: collision,
-    notified: false,
-  });
-  serving({
-    work_project: detail(),
-    work_items: { items: [], groups: [], complete: true },
-    work_activity: {
-      records: [change("h-2", DUPLICATE, true), change("h-1", CLAIMANT)],
-      complete: true,
-    },
-  });
-  mount();
-  await waitFor(() => expect(screen.getAllByRole("link", { name: SHARED_KEY }).length).toBe(2));
-  expect(
-    screen.getAllByRole("link", { name: SHARED_KEY }).map((a) => a.getAttribute("href")),
-  ).toEqual([DUPLICATE_HREF, CLAIMANT_HREF]);
 });

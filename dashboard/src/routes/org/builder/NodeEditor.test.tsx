@@ -3,37 +3,33 @@
  *
  * What these protect: Apply records the form as ONE operation and a refusal
  * keeps the form open with its reason; closing a changed form asks first,
- * whichever field changed, and one Escape closes only the question; a node's
- * address is edited as the chart's rename; a sealed address is never shown or
- * sent as though it were one, and an untouched one is sent back as read; a
- * field for a tool is drawn only where the company connected the tool, with
- * the consequences a GitHub tier and a Mattermost username carry said beside
- * them; a reader not shown the runtime half is told so rather than handed
- * empty fields; the check's findings sit beside the fields they name; and no
+ * whichever field changed, and one Escape closes only the question; a field
+ * for a tool is drawn only where the company connected the tool, with the
+ * consequences a GitHub tier and a Mattermost username carry said beside
+ * them; the engine's problems sit beside the fields they name; and no
  * credential, masked or referenced, reaches the page.
  */
 
-import { act, cleanup, fireEvent, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import type { ChartRead, ChartSeat, CompanyDocument } from "~/protocol/index.ts";
-import { REDACTED } from "~/lib/format.ts";
+import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
-import { locate, type SeatData } from "./model/draft.ts";
+import { locate } from "./model/draft.ts";
 import type { BuilderState } from "./model/reducer.ts";
-import {
-  chartOf,
-  fixtureChart,
-  fixtureSettings,
-  type DerivedOverrides,
-  strippedChart,
-} from "./model/testkit.ts";
-import type { PlacedProblem } from "./model/problems.ts";
+import { fixtureCompany } from "./model/testkit.ts";
+import { builderReducer } from "./model/reducer.ts";
 import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
 import type { EditorSectionName } from "./BuilderContext.tsx";
 import { NodeEditor } from "./NodeEditor.tsx";
-import { ANNOUNCER_LABEL } from "~/app/announcer.tsx";
-import { renderInBuilder, waitInCase, type HarnessOptions } from "./viewTestkit.tsx";
-import { checkedEdit, checkWith, findingOn, record } from "./testState.ts";
+import { renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
+import {
+  checkWithProblems,
+  checkWithWarnings,
+  keyedState,
+  problemAt,
+  recheck,
+  warningAt,
+} from "./testState.ts";
 import { Callout } from "@crewlethq/ui";
 import { drawnClasses, isDrawnAs } from "~/testing.tsx";
 
@@ -106,45 +102,35 @@ const shownReason = (text: string): HTMLElement => {
   );
   return screen.getAllByText(text).find((el) => !announced.has(el.id))!;
 };
-const seatData = (state: BuilderState, key: NodeKey): SeatData => {
+const seatData = (state: BuilderState, key: NodeKey): ConfigRole => {
   const found = locate(state.draft, key);
   if (found?.kind !== "seat") throw new Error(`no seat ${key}`);
   return found.node.data;
 };
 
-/** The fixture chart with Dev's seat as `dev` states it, in Engineering. */
-function withDev(dev: Omit<ChartSeat, "handle" | "unit">, chart = fixtureChart()): ChartRead {
-  chart.seats = chart.seats.map((s) =>
-    s.handle === "dev" ? { handle: "dev", unit: "engineering", ...dev } : s,
-  );
-  return chart;
-}
-
-/** A state on the fixture chart, checked clean. */
-const editing = (chart: ChartRead = fixtureChart(), settings?: CompanyDocument) =>
-  checkedEdit(chart, {}, settings);
-
 /** The fixture company with every tool a seat's fields depend on connected. */
-function connected(): BuilderState {
-  const settings = fixtureSettings();
-  settings.providers = { llm: { fast: {}, smart: {} }, llm_order: ["smart", "fast"] };
-  settings.integrations = {
-    ...settings.integrations,
-    github: { enabled: true, webhook_secret: REDACTED },
+function connected(): CompanyDocument {
+  const doc = fixtureCompany();
+  doc.providers = { llm: { fast: {}, smart: {} }, llm_order: ["smart", "fast"] };
+  doc.integrations = {
+    ...doc.integrations,
+    github: { enabled: true, webhook_secret: "__redacted__" },
     slack: {},
     mattermost: { enabled: true, url: "https://chat.example.com", team: "acme" },
+    jira: { enabled: true },
+    confluence: { enabled: true },
   };
-  const chart = withDev({
+  doc.units![0]!.roles![1] = {
     name: "Dev",
     goal: "Build",
-    runtime: {
-      mcp_env: { tracker: { TOKEN: REDACTED, URL: "${TRACKER_URL}" } },
-      sandbox: { enabled: true, run_in: "e2b", env: { KEY: REDACTED } },
+    mcp_env: { tracker: { TOKEN: "__redacted__", URL: "${TRACKER_URL}" } },
+    sandbox: { enabled: true, run_in: "e2b", env: { KEY: "__redacted__" } },
+    integrations: {
       github: {
         tier: "review",
         app_slug: "acme-dev",
         private_key: "${DEV_GITHUB_KEY}",
-        webhook_secret: REDACTED,
+        webhook_secret: "__redacted__",
       },
       slack: {
         bot_token: "Bearer sk-live-${SUFFIX}",
@@ -153,17 +139,13 @@ function connected(): BuilderState {
       },
       mattermost: { bot_token: "${DEV_MM_TOKEN}", channel: "eng", username: "dev-bot" },
     },
-  });
-  return editing(chart, settings);
+  };
+  return doc;
 }
-
-/** Dev as a human seat holding a GitHub login. */
-const humanDev = () =>
-  withDev({ name: "Dev", kind: "human", runtime: { contact: { github_login: "dev" } } });
 
 describe("applying", () => {
   test("Apply records every changed field as one operation and closes the editor", () => {
-    const view = edit(editing(), "seat:dev");
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
     type("Name", "Developer");
     type("Goal", "Ship");
     apply();
@@ -175,7 +157,7 @@ describe("applying", () => {
   });
 
   test("an untouched form records nothing and closes without asking", () => {
-    const view = edit(editing(), "seat:dev");
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
     apply();
     expect(view.state().log.ops).toHaveLength(0);
     expect(view.onClose).toHaveBeenCalledTimes(1);
@@ -185,20 +167,28 @@ describe("applying", () => {
   });
 
   test("a refused edit stays open with the reducer's reason, and nothing is recorded", () => {
-    // A handle another seat holds: the chart names one seat by it, so the
-    // rename is refused rather than recorded.
-    const view = edit(editing(), "seat:dev");
-    type("Handle", "ceo");
+    // A seat added in this draft has no handle until the next check, and the
+    // company holds GitLab access levels keyed by handle, so renaming it now
+    // is refused rather than leaving a level behind.
+    const state = builderReducer(keyedState(fixtureCompany()), {
+      type: "record",
+      intent: {
+        type: "addSeat",
+        key: "new:qa",
+        placement: { parent: "unit:Sales", after: null },
+        data: { name: "QA" },
+      },
+    });
+    const view = edit(state, "new:qa");
+    type("Name", "Quality");
     apply();
     expect(view.onClose).not.toHaveBeenCalled();
-    expect(
-      screen.getByText("The handle ceo already names a seat in this draft (CEO)."),
-    ).toBeDefined();
-    expect(view.state().log.ops).toHaveLength(0);
+    expect(screen.getByText(/has not reported this seat's handle yet/)).toBeDefined();
+    expect(view.state().log.ops).toHaveLength(1);
   });
 
   test("a read-only builder applies nothing", () => {
-    const view = edit(editing(), "seat:dev", { readOnly: true });
+    const view = edit(keyedState(fixtureCompany()), "seat:dev", { readOnly: true });
     expect(applyRefuses()).toBe(true);
     expect(screen.getByText(/cannot be changed right now/)).toBeDefined();
     view.unmount();
@@ -215,17 +205,17 @@ describe("applying", () => {
         .filter((el) => !(el as HTMLInputElement).disabled)
         .map((el) => el.getAttribute("aria-label") ?? el.id);
 
-    edit(editing(), COMPANY_KEY, readOnly);
+    edit(keyedState(fixtureCompany()), COMPANY_KEY, readOnly);
     expect(field("Company name")).toBeDefined();
     expect(enabled()).toEqual([]);
     cleanup();
 
-    edit(editing(), "unit:engineering", readOnly);
+    edit(keyedState(fixtureCompany()), "unit:Engineering", readOnly);
     expect(field("Type")).toBeDefined();
     expect(enabled()).toEqual([]);
     cleanup();
 
-    edit(connected(), "seat:dev", readOnly);
+    edit(keyedState(connected()), "seat:dev", readOnly);
     expect(enabled()).toEqual([]);
   });
 });
@@ -241,17 +231,18 @@ describe("the head", () => {
   const mark = (): string => document.querySelector("svg")!.outerHTML;
 
   test("Cancel and Apply are in the head, before every field, and there is no second way out", () => {
-    edit(editing(), "seat:dev");
+    edit(keyedState(fixtureCompany()), "seat:dev");
     const cancel = screen.getByRole("button", { name: "Cancel" });
-    const applyButton = screen.getByRole("button", { name: "Apply" });
+    const apply = screen.getByRole("button", { name: "Apply" });
     const firstField = field("Name");
-    for (const control of [cancel, applyButton]) {
+    for (const control of [cancel, apply]) {
       expect(
         control.compareDocumentPosition(firstField) & Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
     }
     // Cancel IS the way out. A close control beside the title would be a
-    // second, unnamed spelling of it.
+    // second, unnamed spelling of it, which is what the console does not have
+    // and what this panel drew at the same time as Cancel.
     expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
   });
 
@@ -261,15 +252,17 @@ describe("the head", () => {
    * so the panel said that it edits rather than what it is editing.
    */
   test("each kind of node is marked as its own kind", () => {
-    const cases: [ChartRead, NodeKey][] = [
-      [fixtureChart(), COMPANY_KEY],
-      [fixtureChart(), "unit:engineering"],
-      [fixtureChart(), "seat:dev"],
-      [humanDev(), "seat:dev"],
+    const human = fixtureCompany();
+    human.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
+    const cases: [CompanyDocument, NodeKey][] = [
+      [fixtureCompany(), COMPANY_KEY],
+      [fixtureCompany(), "unit:Engineering"],
+      [fixtureCompany(), "seat:dev"],
+      [human, "seat:dev"],
     ];
     const drawn: string[] = [];
-    for (const [chart, key] of cases) {
-      edit(editing(chart), key);
+    for (const [doc, key] of cases) {
+      edit(keyedState(doc), key);
       drawn.push(mark());
       cleanup();
     }
@@ -285,12 +278,14 @@ describe("the head", () => {
  * the seat's key — a legend for a decoration the live chart never drew.
  */
 test("no node's editor states or offers a colour", () => {
-  for (const [state, key] of [
-    [editing(), "seat:dev"],
-    [editing(humanDev()), "seat:dev"],
-    [editing(), "unit:engineering"],
+  const human = fixtureCompany();
+  human.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
+  for (const [doc, key] of [
+    [fixtureCompany(), "seat:dev"],
+    [human, "seat:dev"],
+    [fixtureCompany(), "unit:Engineering"],
   ] as const) {
-    edit(state, key);
+    edit(keyedState(doc), key);
     expect(screen.queryByText("Colour"), key).toBeNull();
     expect(screen.queryByText(/\bhue\b/i), key).toBeNull();
     expect(screen.queryByRole("radio", { name: /purple|cyan|green|amber|rose|blue/i })).toBeNull();
@@ -326,7 +321,7 @@ describe("the unsaved-changes prompt", () => {
   ];
 
   test.each(changes)("asks before discarding a change to %s", (_, change) => {
-    const view = edit(connected(), "seat:dev");
+    const view = edit(keyedState(connected()), "seat:dev");
     change();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     const prompt = screen.getByRole("alertdialog", { name: "Discard your changes?" });
@@ -336,81 +331,44 @@ describe("the unsaved-changes prompt", () => {
     expect(view.state().log.ops).toHaveLength(0);
   });
 
-  /**
-   * Makes a move with `go` — a link pressed, a hash written, Back — and waits
-   * until the browser has landed on `landsOn`, then renders what the router
-   * made of it.
-   *
-   * ON THE BROWSER'S OWN EVENTS, never a poll of `location.hash`: the hash is
-   * written at once, before the router has heard of the move, so a poll for
-   * it passed before anything the case meant to wait for — and an assertion
-   * that nothing asked was read before there was anything to ask. jsdom
-   * dispatches `hashchange` and `popstate` as tasks of their own, and a held
-   * move is undone with a second traversal, so the landing is the first of
-   * those events to find the browser on `landsOn`. Waited for outside `act`
-   * and ended with the case ([waitInCase]), because the guard that undoes a
-   * held move runs in the router's listener and its question renders from
-   * it; then `act` renders that question.
-   */
-  async function move(go: () => void, landsOn: string): Promise<void> {
-    await waitInCase<void>(
-      "move",
-      (done) => {
-        const moved = () => {
-          if (location.hash === landsOn) done();
-        };
-        window.addEventListener("hashchange", moved);
-        window.addEventListener("popstate", moved);
-        return () => {
-          window.removeEventListener("hashchange", moved);
-          window.removeEventListener("popstate", moved);
-        };
-      },
-      go,
-    );
-    await act(async () => {});
-  }
-
-  const discardPrompt = () => screen.getByRole("alertdialog", { name: "Discard your changes?" });
-
   // A MOVE TO ANOTHER ENTRY takes the form with it, whatever makes it: one of
   // the form's own links, Back or Forward, or a push from code. So a changed
   // form holds every move and asks first; keeping the changes undoes the
   // move, and discarding them makes it.
   test("a link, Back and a push each ask before they leave a changed form", async () => {
-    const onTheBuilder = "#/agents/edit";
-    const elsewhere = "#/settings/integrations";
-    history.replaceState(null, "", onTheBuilder);
-    const view = edit(editing(), "seat:dev");
+    history.replaceState(null, "", "#/agents/edit");
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
     const link = () =>
       within(screen.getByText("GitHub is not connected.", { exact: false })).getByRole("link");
+    const prompt = () => screen.findByRole("alertdialog", { name: "Discard your changes?" });
     // Untouched: the link simply goes.
-    await move(() => fireEvent.click(link()), elsewhere);
+    fireEvent.click(link());
+    await waitFor(() => expect(location.hash).toBe("#/settings/integrations"));
     expect(screen.queryByRole("alertdialog", { name: "Discard your changes?" })).toBeNull();
-    await move(() => {
-      location.hash = onTheBuilder;
-    }, onTheBuilder);
+    act(() => {
+      location.hash = "#/agents/edit";
+    });
+    await waitFor(() => expect(location.hash).toBe("#/agents/edit"));
 
     type("Goal", "Ship");
-    // Held, and undone: the page is back where it was, and so is the form.
-    await move(() => fireEvent.click(link()), onTheBuilder);
-    const asked = discardPrompt();
+    fireEvent.click(link());
+    const asked = await prompt();
     expect(asked.textContent).toContain("you are leaving the builder");
+    // Held, and undone: the page is where it was, and so is the form.
+    await waitFor(() => expect(location.hash).toBe("#/agents/edit"));
     fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
     expect((field("Goal") as HTMLTextAreaElement).value).toBe("Ship");
 
-    await move(() => history.back(), onTheBuilder);
-    fireEvent.click(within(discardPrompt()).getByRole("button", { name: "Keep editing" }));
+    act(() => history.back());
+    fireEvent.click(within(await prompt()).getByRole("button", { name: "Keep editing" }));
+    await waitFor(() => expect(location.hash).toBe("#/agents/edit"));
     expect(view.onClose).not.toHaveBeenCalled();
 
-    await move(() => history.back(), onTheBuilder);
-    // The move the reader asked for is made: back past the entry they were on.
-    await move(
-      () =>
-        fireEvent.click(within(discardPrompt()).getByRole("button", { name: "Discard changes" })),
-      elsewhere,
-    );
+    act(() => history.back());
+    fireEvent.click(within(await prompt()).getByRole("button", { name: "Discard changes" }));
     expect(view.onClose).toHaveBeenCalledTimes(1);
+    // The move the reader asked for is made: back past the entry they were on.
+    await waitFor(() => expect(location.hash).toBe("#/settings/integrations"));
     cleanup();
     history.replaceState(null, "", "#/");
   });
@@ -425,16 +383,17 @@ describe("the unsaved-changes prompt", () => {
    */
   test("a move within the builder is not a departure, and asks nothing", async () => {
     history.replaceState(null, "", "#/agents/edit?view=visualization");
-    const view = edit(editing(), "seat:dev");
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
     type("Goal", "Ship");
     for (const hash of [
       "#/agents/edit?view=table",
       "#/agents/edit?view=visualization&chart=reporting",
       "#/agents/edit?view=visualization&chart=reporting&seat=ceo",
     ]) {
-      await move(() => {
+      act(() => {
         location.hash = hash;
-      }, hash);
+      });
+      await waitFor(() => expect(location.hash).toBe(hash));
       expect(screen.queryByRole("alertdialog", { name: "Discard your changes?" }), hash).toBeNull();
     }
     // The form is still open, still changed, and was never closed.
@@ -445,7 +404,7 @@ describe("the unsaved-changes prompt", () => {
   });
 
   test("a schedule toggle is a change too", () => {
-    const view = edit(editing(), "unit:engineering");
+    const view = edit(keyedState(fixtureCompany()), "unit:Engineering");
     fireEvent.click(screen.getByRole("checkbox", { name: "Enabled: standup" }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByRole("alertdialog", { name: "Discard your changes?" })).toBeDefined();
@@ -453,7 +412,7 @@ describe("the unsaved-changes prompt", () => {
   });
 
   test("Keep editing and one Escape close only the question, and the edit is still there", () => {
-    const view = edit(editing(), "seat:dev");
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
     type("Goal", "Ship");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
@@ -469,58 +428,109 @@ describe("the unsaved-changes prompt", () => {
 });
 
 describe("seat fields", () => {
-  // A NEW HANDLE ON A SAVED SEAT IS THE CHART'S RENAME: the seat keeps its
-  // identity, and the form says so rather than refusing the edit.
-  test("a saved seat's handle is its address, and a new one is recorded as its rename", () => {
-    const view = edit(editing(), "seat:dev");
+  test("an existing seat's handle is read-only with the reason; a new seat's is editable", () => {
+    edit(keyedState(fixtureCompany()), "seat:dev");
+    expect(screen.queryByLabelText(labelled("Handle"))).toBeNull();
     expect(
-      screen.getByText(/A new handle keeps the seat, its memory and its mailbox/),
+      screen.getByText(/keeps its handle: it is the identity its memory and mailbox attach to/),
     ).toBeDefined();
-    type("Handle", "developer");
-    apply();
-    expect(seatData(view.state(), "seat:dev").handle).toBe("developer");
     cleanup();
-
-    const added = record(editing(), {
-      type: "addSeat",
-      key: "new:qa",
-      placement: { parent: "unit:sales" },
-      data: { handle: "qa", name: "QA" },
+    const state = builderReducer(keyedState(fixtureCompany()), {
+      type: "record",
+      intent: {
+        type: "addSeat",
+        key: "new:qa",
+        placement: { parent: "unit:Sales", after: null },
+        data: { name: "QA" },
+      },
     });
-    edit(added, "new:qa");
-    // A seat this draft creates has no identity yet to keep.
-    expect(screen.queryByText(/A new handle keeps the seat/)).toBeNull();
-    expect((field("Handle") as HTMLInputElement).value).toBe("qa");
+    edit(state, "new:qa");
+    expect(field("Handle")).toBeDefined();
   });
 
-  // A MODEL CHAIN IS MOVED rather than retyped: the order is the fallback.
-  test("a model chain says the order it is tried in, and is reordered in place", () => {
-    const state = connected();
-    const chain = record(state, {
-      type: "updateSeat",
-      target: "seat:dev",
-      set: [{ path: ["runtime", "llm"], value: ["smart", "fast"] }],
+  // The engine derives an undeclared handle from the seat's own name, so a
+  // check vouches for it exactly while the seat keeps the name that check saw,
+  // whatever else changed since; the reducer reads the same rule, so an access
+  // level offered here is one it records.
+  test("a new seat's derived handle is the one a check reported for the name it has now", () => {
+    const added = builderReducer(keyedState(fixtureCompany()), {
+      type: "record",
+      intent: {
+        type: "addSeat",
+        key: "new:qa",
+        placement: { parent: "unit:Sales", after: null },
+        data: { name: "QA" },
+      },
     });
-    const view = edit(chain, "seat:dev");
+    const checked = recheck(added, { seats: { "units[1].roles[0]": { handle: "qa" } } });
+    edit(checked, "new:qa");
+    expect(
+      screen.getByText("Empty uses the handle the engine derives from the name: qa."),
+    ).toBeDefined();
+    expect((field("Access level") as HTMLSelectElement).disabled).toBe(false);
+    expect(
+      screen.getByText(
+        "Kept by handle: choosing a handle for this seat carries its level with it.",
+      ),
+    ).toBeDefined();
+    type("Name", "Quality");
+    expect(
+      screen.getByText(
+        "Empty uses the handle the engine derives from the name, shown here after the next check.",
+      ),
+    ).toBeDefined();
+    cleanup();
+
+    // Another node edited since: the check is of an older draft, and still
+    // saw this seat's name.
+    const later = builderReducer(checked, {
+      type: "record",
+      intent: {
+        type: "updateUnit",
+        target: "unit:Sales",
+        set: [{ path: ["purpose"], value: "Sell" }],
+      },
+    });
+    edit(later, "new:qa");
+    expect((field("Access level") as HTMLSelectElement).disabled).toBe(false);
+    cleanup();
+
+    // Renamed in the draft: no check has seen the name it derives from now.
+    const renamed = builderReducer(later, {
+      type: "record",
+      intent: { type: "renameSeat", target: "new:qa", name: "Quality" },
+    });
+    edit(renamed, "new:qa");
+    expect((field("Access level") as HTMLSelectElement).disabled).toBe(true);
+    expect(
+      screen.getByText(
+        "Access levels are kept by handle, so this is available once the check reports this seat's handle.",
+      ),
+    ).toBeDefined();
+  });
+
+  // THE ORDER IS THE CHAIN, read first to last, so it is MOVED rather than
+  // retyped. The help line used to end "to change the order, remove a provider
+  // and choose it again", which was a workaround for a control that could not
+  // reorder its own chips.
+  test("a model chain says the order it is tried in, and is reordered in place", () => {
+    const doc = connected();
+    doc.units![0]!.roles![1]!.llm = ["smart", "fast"];
+    const view = edit(keyedState(doc), "seat:dev");
     expect(screen.getByText("Tried in this order: smart, then fast.")).toBeDefined();
 
     fireEvent.click(screen.getByRole("button", { name: "Move fast earlier" }));
     expect(screen.getByText("Tried in this order: fast, then smart.")).toBeDefined();
-    // AND A READER WHO CANNOT SEE THE LIST IS TOLD, in the application's own
-    // region: nothing mounted one, so this move was said to nobody.
-    expect(screen.getByRole("status", { name: ANNOUNCER_LABEL }).textContent).toBe(
-      "Moved fast to position 1 of 2",
-    );
 
     apply();
-    expect(view.state().log.ops).toHaveLength(2);
-    expect(seatData(view.state(), "seat:dev").runtime?.llm).toEqual(["fast", "smart"]);
+    expect(view.state().log.ops).toHaveLength(1);
+    expect(seatData(view.state(), "seat:dev").llm).toEqual(["fast", "smart"]);
   });
 
   test("a GitLab block without provisioning has no access level to set, and says so", () => {
-    const settings = fixtureSettings();
-    settings.integrations = { ...settings.integrations, gitlab: { enabled: true } };
-    edit(editing(fixtureChart(), settings), "seat:dev");
+    const doc = fixtureCompany();
+    doc.integrations = { ...doc.integrations, gitlab: { enabled: true } };
+    edit(keyedState(doc), "seat:dev");
     expect(screen.queryByLabelText(labelled("Access level"))).toBeNull();
     expect(
       screen.getByText(/GitLab provisioning is not set up, so there is no access level to set./),
@@ -530,11 +540,11 @@ describe("seat fields", () => {
   test("a seat, a unit and the charter each need a name before Apply", () => {
     const cases: [NodeKey, string, string][] = [
       ["seat:dev", "Name", "A seat needs a name."],
-      ["unit:engineering", "Name", "A unit needs a name."],
+      ["unit:Engineering", "Name", "A unit needs a name."],
       [COMPANY_KEY, "Company name", "The company needs a name."],
     ];
     for (const [key, label, reason] of cases) {
-      edit(editing(), key);
+      edit(keyedState(fixtureCompany()), key);
       type(label, "  ");
       expect(shownReason(reason)).toBeDefined();
       expect(applyRefuses()).toBe(true);
@@ -543,46 +553,61 @@ describe("seat fields", () => {
   });
 
   test("a node that has left the draft opens as an editor that says so", () => {
-    edit(editing(), "seat:gone");
+    edit(keyedState(fixtureCompany()), "seat:gone");
     expect(screen.getByText("This node is no longer in the draft")).toBeDefined();
     expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
   });
 
-  // A MANAGES ENTRY NAMES AN ADDRESS, and one that is both a seat's handle
-  // and a unit's key reaches the seat, so the unit is not offered as a second
-  // meaning of it.
-  test("a unit whose key is a seat's handle is not offered as a second meaning of it", () => {
-    const chart = fixtureChart();
-    chart.seats.push({ handle: "sales", name: "Sales Desk" });
-    edit(editing(chart), "seat:dev");
+  // A manages entry that names both a seat and a unit names the seat, so a
+  // unit sharing a seat's name, or the edited seat's own, is not offered as a
+  // second meaning of it.
+  test("a unit that shares a seat's name is not offered as a second meaning of it", () => {
+    const doc = fixtureCompany();
+    doc.roles!.push({ name: "Sales" });
+    edit(keyedState(doc), "seat:dev");
     fireEvent.click(screen.getByRole("combobox", { name: /^Manages/ }));
     expect(screen.getAllByRole("option", { name: /^Sales/ })).toHaveLength(1);
-    expect(screen.getByRole("option", { name: /^Sales Desk/ })).toBeDefined();
-    // The control: a unit whose key no seat holds is offered.
     expect(screen.getByRole("option", { name: /^Engineering/ })).toBeDefined();
+    cleanup();
+
+    edit(keyedState(doc), "seat:sales");
+    fireEvent.click(screen.getByRole("combobox", { name: /^Manages/ }));
+    expect(screen.queryByRole("option", { name: /^Sales/ })).toBeNull();
   });
 
   test("automatic reports are their own read-only group beside the manages list", () => {
-    const overrides: DerivedOverrides = {
-      seats: { "vp-engineering": { auto_reports: ["dev"], reports: ["dev"] } },
-    };
-    edit(checkedEdit(fixtureChart(), overrides), "seat:vp-engineering");
+    edit(
+      keyedState(fixtureCompany(), {
+        seats: { "units[0].roles[0]": { auto_reports: ["dev"], reports: ["dev"] } },
+      }),
+      "seat:vp-engineering",
+    );
     expect(screen.getByText("Managed automatically as lead of Engineering")).toBeDefined();
     expect(screen.getByRole("combobox", { name: /^Manages/ })).toBeDefined();
   });
 
-  test("an unpinned seat says which provider it runs on", () => {
-    edit(connected(), "seat:dev");
+  test("the model is a chain over the company's providers; a per-phase mapping is shown and not edited", () => {
+    edit(keyedState(connected()), "seat:dev");
     expect(
       screen.getByText(/Runs on smart, the provider a seat that names none runs on/),
     ).toBeDefined();
+    cleanup();
+    const doc = connected();
+    doc.units![0]!.roles![1]!.llm = { default: "fast", review: ["smart", "fast"] };
+    edit(keyedState(doc), "seat:dev");
+    expect(screen.queryByRole("combobox", { name: /^Model/ })).toBeNull();
+    expect(screen.getByText("review: smart, then fast")).toBeDefined();
+    expect(
+      screen.getByRole("link", { name: "Edit in the configuration document" }).getAttribute("href"),
+    ).toBe("#/settings/config");
   });
 
   // Read only, the banner is the reason Apply is unavailable; a caption asking
   // to correct a field nobody can type in would be a second, wrong one.
   test("a read-only editor asks nobody to correct a field", () => {
-    const chart = withDev({ name: "Dev", runtime: { token_budget: { week: -5 } } });
-    edit(editing(chart), "seat:dev", { readOnly: true });
+    const doc = fixtureCompany();
+    doc.units![0]!.roles![1]!.token_budget = { week: -5 };
+    edit(keyedState(doc), "seat:dev", { readOnly: true });
     expect(screen.getByText(/cannot be changed right now/)).toBeDefined();
     // The foot says the posture, not the field: a form nobody can write is
     // not a form with a mistake in it.
@@ -590,12 +615,12 @@ describe("seat fields", () => {
       shownReason("These fields are for reading, so there is nothing to apply."),
     ).toBeDefined();
     cleanup();
-    edit(editing(chart), "seat:dev");
+    edit(keyedState(doc), "seat:dev");
     expect(shownReason("Correct the token budget first.")).toBeDefined();
   });
 
   test("a malformed token ceiling blocks Apply with the reason, under its own window", () => {
-    edit(editing(), "seat:dev");
+    edit(keyedState(fixtureCompany()), "seat:dev");
     type("Weekly token ceiling", "lots");
     expect(applyRefuses()).toBe(true);
     expect(
@@ -608,7 +633,7 @@ describe("seat fields", () => {
   // A 0 WAS "UNLIMITED" AND IS REFUSED NOW, by the engine and so by the form
   // before a save: the only way to leave a window uncapped is an empty box.
   test("a ceiling of 0 is refused in the engine's words", () => {
-    edit(editing(), "seat:dev");
+    edit(keyedState(fixtureCompany()), "seat:dev");
     type("Daily token ceiling", "0");
     expect(applyRefuses()).toBe(true);
     expect(
@@ -619,10 +644,9 @@ describe("seat fields", () => {
   // ONE BOX PER WINDOW, and a saved window is shown in its own box: the
   // form reads the mapping the engine writes, not one number.
   test("each window the seat caps is shown in its own box", () => {
-    edit(
-      editing(withDev({ name: "Dev", runtime: { token_budget: { day: 1500, month: 40000 } } })),
-      "seat:dev",
-    );
+    const doc = fixtureCompany();
+    doc.units![0]!.roles![1]!.token_budget = { day: 1500, month: 40000 };
+    edit(keyedState(doc), "seat:dev");
     const box = (label: string) => field(label) as HTMLInputElement;
     expect(box("Daily token ceiling").value).toBe("1500");
     expect(box("Weekly token ceiling").value).toBe("");
@@ -630,17 +654,16 @@ describe("seat fields", () => {
   });
 
   // THE THREE WINDOWS ARE WRITTEN AS THE ENGINE READS THEM: one key per
-  // calendar window on the seat's runtime `token_budget`, each a number of
-  // tokens — never a single lifetime ceiling, which the periodic budgets
-  // replaced.
+  // calendar window on the seat's `token_budget`, each a number of tokens —
+  // never a single lifetime ceiling, which the periodic budgets replaced.
   test("the budget editor writes the day, week and month the reader typed", () => {
-    const view = edit(editing(), "seat:dev");
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
     type("Daily token ceiling", "2000");
     type("Weekly token ceiling", "10000");
     type("Monthly token ceiling", "40000");
     apply();
     expect(view.state().log.ops).toHaveLength(1);
-    expect(seatData(view.state(), "seat:dev").runtime?.token_budget).toEqual({
+    expect(seatData(view.state(), "seat:dev").token_budget).toEqual({
       day: 2000,
       week: 10000,
       month: 40000,
@@ -648,34 +671,32 @@ describe("seat fields", () => {
   });
 
   test("changing the kind is its own step: the editor closes and opens it, unless the form has changes", () => {
-    const view = edit(editing(), "seat:dev");
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
     fireEvent.click(screen.getByRole("button", { name: "Change to human seat" }));
     expect(view.onClose).toHaveBeenCalledTimes(1);
     expect(view.spies.openChangeKind).toHaveBeenCalledWith("seat:dev");
     cleanup();
-    edit(editing(), "seat:dev");
+    edit(keyedState(fixtureCompany()), "seat:dev");
     type("Goal", "Ship");
     expect(
       (screen.getByRole("button", { name: "Change to human seat" }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 
-  // The runtime half's settings the builder shows and does not write, each
-  // with the reason and where it is written instead.
-  test("the runtime settings the builder does not edit are shown, each saying why", () => {
-    const chart = withDev({
-      name: "Dev",
-      runtime: {
-        llm_review: ["smart", "fast"],
-        llm_judge: "fast",
-        sandbox: { enabled: true, run_in: "e2b", env: { KEY: REDACTED } },
-        workers: ["researcher", "writer"],
-        learning_enabled: false,
-      },
+  // The field coverage's read-only row: each setting the builder shows and
+  // does not edit, with the reason and where it is edited instead.
+  test("the settings the builder does not edit are shown, each with where it is edited", () => {
+    const doc = fixtureCompany();
+    Object.assign(doc.units![0]!.roles![1]!, {
+      llm_review: ["smart", "fast"],
+      llm_judge: "fast",
+      sandbox: { enabled: true, run_in: "e2b", env: { KEY: "__redacted__" } },
+      workers: ["researcher", "writer"],
+      learning_enabled: false,
     });
-    edit(editing(chart), "seat:dev");
+    edit(keyedState(doc), "seat:dev");
     const section = screen
-      .getByRole("heading", { name: "Shown, not edited here" })
+      .getByRole("heading", { name: "Configured in the document" })
       .closest("section") as HTMLElement;
     const fact = (label: string) =>
       within(section).getByText(label).closest(".builder-fact") as HTMLElement;
@@ -689,126 +710,52 @@ describe("seat fields", () => {
       within(section).getByText("5 settings the builder shows and does not edit."),
     ).toBeDefined();
     for (const label of ["Models per phase", "Sandbox", "Workers", "Learning"]) {
-      expect(fact(label).textContent).toContain("crewlet config import");
+      expect(within(fact(label)).getByRole("link").getAttribute("href")).toBe("#/settings/config");
     }
-    expect(section.innerHTML).not.toContain(REDACTED);
+    expect(section.innerHTML).not.toContain("__redacted__");
   });
 
   test("a seat's placement is shown as the node and labels it names", () => {
-    const chart = withDev({ name: "Dev", runtime: { placement: { labels: { region: "eu" } } } });
-    edit(editing(chart), "seat:dev");
+    const doc = fixtureCompany();
+    doc.units![0]!.roles![1]!.placement = { labels: { region: "eu" } };
+    edit(keyedState(doc), "seat:dev");
     const fact = screen.getByText("Placement").closest(".builder-fact") as HTMLElement;
     expect(fact.textContent).toContain("Nodes labelled region=eu");
     expect(fact.textContent).not.toContain("[object Object]");
   });
 
   test("a human seat shows contact and availability, and no agent-only field", () => {
-    edit(editing(humanDev()), "seat:dev");
+    const doc = fixtureCompany();
+    doc.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
+    edit(keyedState(doc), "seat:dev");
     expect((field("GitHub login") as HTMLInputElement).value).toBe("dev");
     expect(field("Availability")).toBeDefined();
-    for (const agentOnly of ["Model", "Daily token ceiling", "Behavioral guidelines"]) {
+    for (const agentOnly of ["Model", "Token budget", "Behavioral guidelines"]) {
       expect(screen.queryByLabelText(labelled(agentOnly))).toBeNull();
     }
     expect(screen.queryByRole("heading", { name: "Integrations" })).toBeNull();
-  });
-
-  // THE RUNTIME HALF IS SERVED ONLY TO A READER WHO MAY READ IT, and one who
-  // may not is told so: empty fields would read as a seat with no model and
-  // no contact, and an Apply of them would clear what the reader never saw.
-  test("a reader not shown the runtime half is told so, and edits the rest without touching it", () => {
-    const view = edit(editing(strippedChart(fixtureChart())), "seat:dev");
-    expect(screen.getByText(/runtime half was not shown to you/)).toBeDefined();
-    expect(screen.queryByRole("combobox", { name: /^Model/ })).toBeNull();
-    expect(screen.queryByLabelText(labelled("Daily token ceiling"))).toBeNull();
-    type("Goal", "Ship");
-    apply();
-    expect(seatData(view.state(), "seat:dev")).not.toHaveProperty("runtime");
-    cleanup();
-    // The control: shown the half, the fields are there.
-    edit(editing(), "seat:dev");
-    expect(screen.queryByText(/runtime half was not shown to you/)).toBeNull();
-    expect(field("Daily token ceiling")).toBeDefined();
-  });
-});
-
-// A SEAT'S ADDRESS IS SEALED LIKE A CREDENTIAL: the chart serves the reference
-// it was sealed under, or the mask where a row holds something else, and
-// restores either from the row when a write sends it back unchanged.
-describe("a sealed email address", () => {
-  const sealed = (email: string) => editing(withDev({ name: "Dev", goal: "Build", email }));
-
-  test("a masked address is said to be set, never put in a box as text", () => {
-    const view = edit(sealed(REDACTED), "seat:dev");
-    expect(screen.getByText("An address is set (hidden).")).toBeDefined();
-    expect(screen.queryByLabelText(labelled("Email"))).toBeNull();
-    expect(view.container.ownerDocument.body.innerHTML).not.toContain(REDACTED);
-  });
-
-  test("a sealed reference is named as the reference it is, and not offered for editing", () => {
-    edit(sealed("${CHART_SEAT_DEV_EMAIL}"), "seat:dev");
-    const fact = screen.getByText(/An address is set, sealed as/);
-    expect(fact.textContent).toContain("${CHART_SEAT_DEV_EMAIL}");
-    expect(screen.queryByLabelText(labelled("Email"))).toBeNull();
-  });
-
-  // THE ROUND TRIP: an edit of another field sends the address back exactly
-  // as it was read, which the chart restores from the row.
-  test("an edit of another field leaves the sealed address exactly as read", () => {
-    for (const email of [REDACTED, "${CHART_SEAT_DEV_EMAIL}"]) {
-      const view = edit(sealed(email), "seat:dev");
-      type("Goal", "Ship");
-      apply();
-      expect(view.state().log.ops).toHaveLength(1);
-      expect(seatData(view.state(), "seat:dev")).toMatchObject({ goal: "Ship", email });
-      cleanup();
-    }
-  });
-
-  test("Replace types a new address, and Keep puts the sealed one back", () => {
-    const view = edit(sealed(REDACTED), "seat:dev");
-    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
-    expect((field("Email") as HTMLInputElement).value).toBe("");
-    fireEvent.click(screen.getByRole("button", { name: "Keep the sealed address" }));
-    expect(screen.getByText("An address is set (hidden).")).toBeDefined();
-    // Kept, so nothing changed and nothing is recorded.
-    apply();
-    expect(view.state().log.ops).toHaveLength(0);
-    cleanup();
-
-    const replaced = edit(sealed(REDACTED), "seat:dev");
-    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
-    type("Email", "dev@example.com");
-    apply();
-    expect(seatData(replaced.state(), "seat:dev").email).toBe("dev@example.com");
-  });
-
-  // The control: an address no read masked (one this draft typed, or a row
-  // written before the chart sealed addresses) is an ordinary field.
-  test("an address in the clear is an ordinary field", () => {
-    edit(sealed("dev@example.com"), "seat:dev");
-    expect((field("Email") as HTMLInputElement).value).toBe("dev@example.com");
-    expect(screen.queryByText(/An address is set/)).toBeNull();
   });
 });
 
 describe("integrations", () => {
   test("a tool the company has not connected says so and links to Integrations", () => {
-    edit(editing(), "seat:dev");
-    for (const tool of ["GitHub", "Mattermost"]) {
+    edit(keyedState(fixtureCompany()), "seat:dev");
+    for (const tool of ["GitHub", "Slack", "Mattermost", "Jira", "Confluence"]) {
       const note = screen.getByText(`${tool} is not connected.`, { exact: false });
       expect(within(note).getByRole("link").getAttribute("href")).toBe("#/settings/integrations");
     }
     expect(screen.queryByLabelText(labelled("Access tier"))).toBeNull();
+    expect(screen.queryByLabelText(labelled("Jira project"))).toBeNull();
     // GitLab provisioning is connected in the fixture.
     expect(field("Access level")).toBeDefined();
   });
 
   test("with the tools connected, each field is there and says what it changes", () => {
-    edit(connected(), "seat:dev");
+    edit(keyedState(connected()), "seat:dev");
     // A tool's section is a part of Integrations, and is heard as one.
     expect(screen.getByRole("heading", { name: "Integrations", level: 2 })).toBeDefined();
     expect(screen.getByRole("heading", { name: "GitHub", level: 3 })).toBeDefined();
-    expect(screen.getByText("acme-dev")).toBeDefined();
+    expect((field("Slack channel ID") as HTMLInputElement).value).toBe("C1");
     expect((field("Mattermost channel") as HTMLInputElement).value).toBe("eng");
     expect(screen.queryByLabelText(labelled("Bot username"))).toBeNull();
     expect(
@@ -816,6 +763,11 @@ describe("integrations", () => {
         "The engine provisions this bot, because its token names a secret store entry. Changing the username would make the provisioner find or create a second bot.",
       ),
     ).toBeDefined();
+    expect(
+      screen.getByText("Where unrouted work for this seat goes. Not a permission."),
+    ).toBeDefined();
+    expect(field("Jira project")).toBeDefined();
+    expect(field("Confluence space")).toBeDefined();
     expect(screen.getByText("Not the Datadog fallback.")).toBeDefined();
     // Already enrolled: its block exists, so a tier says nothing about enrolling.
     expect(screen.queryByText(/This enrols the seat in GitHub/)).toBeNull();
@@ -834,22 +786,18 @@ describe("integrations", () => {
   // read "has a token" as "is provisioned" locked the username of a bot the
   // engine never touches, with copy saying the opposite.
   test("a bot whose token is a literal is managed by hand, and its username stays editable", () => {
-    const state = connected();
-    const settings = state.draft.company;
-    settings.integrations = {
-      ...(settings.integrations as Record<string, unknown>),
-      mattermost: {
-        enabled: true,
-        url: "https://chat.example.com",
-        team: "acme",
-        provisioning: { username_prefix: "Agent-" },
-      },
+    const doc = connected();
+    doc.integrations!.mattermost = {
+      enabled: true,
+      url: "https://chat.example.com",
+      team: "acme",
+      provisioning: { username_prefix: "Agent-" },
     };
-    const chart = withDev({
-      name: "Dev",
-      runtime: { mattermost: { bot_token: REDACTED, channel: "eng" } },
-    });
-    edit(editing(chart, settings), "seat:dev");
+    doc.units![0]!.roles![1]!.integrations!.mattermost = {
+      bot_token: "__redacted__",
+      channel: "eng",
+    };
+    edit(keyedState(doc), "seat:dev");
     const username = field("Bot username") as HTMLInputElement;
     expect(username.disabled).toBe(false);
     expect(username.value).toBe("");
@@ -860,34 +808,9 @@ describe("integrations", () => {
     ).toBeDefined();
   });
 
-  // THE PROVISIONER NAMES A BOT AFTER THE HANDLE THE SEAT WAS CREATED UNDER,
-  // which no rename moves: a renamed seat's default is its identity's.
-  test("a renamed seat's default bot name is the handle it was created under", () => {
-    const settings = fixtureSettings();
-    settings.integrations = {
-      ...settings.integrations,
-      mattermost: { enabled: true, url: "https://chat.example.com", team: "acme" },
-    };
-    const chart = chartOf({
-      seats: [
-        {
-          handle: "developer",
-          name: "Developer",
-          origin_handle: "dev",
-          former_handles: ["dev"],
-          runtime: { mattermost: { bot_token: REDACTED, channel: "eng" } },
-        },
-      ],
-    });
-    edit(editing(chart, settings), "seat:dev");
-    expect(screen.getByText(/so this one is managed by hand\. Empty uses dev\./)).toBeDefined();
-    // Typing a new handle moves nothing: the identity is the chart's.
-    type("Handle", "engineer");
-    expect(screen.getByText(/Empty uses dev\./)).toBeDefined();
-  });
-
   test("a tier on a seat with no GitHub block enrols it, and says so", () => {
-    edit(connected(), "seat:sre");
+    const doc = connected();
+    edit(keyedState(doc), "seat:sre");
     expect(screen.queryByText(/This enrols the seat in GitHub/)).toBeNull();
     choose("Access tier", "Review");
     expect(
@@ -896,14 +819,17 @@ describe("integrations", () => {
     cleanup();
 
     // A repository alone writes the block as well, so it enrols the seat too.
-    edit(connected(), "seat:sre");
+    edit(keyedState(doc), "seat:sre");
     type("New repository", "acme/api");
     fireEvent.keyDown(field("New repository"), { key: "Enter" });
     expect(screen.getByText(/This enrols the seat in GitHub/)).toBeDefined();
   });
 
-  test("a Mattermost channel needs the seat's own bot, and the Datadog fallback is named on its seat", () => {
-    edit(connected(), "seat:sre");
+  test("a Slack channel needs the seat's own app, and the Datadog fallback is named on its seat", () => {
+    edit(keyedState(connected()), "seat:sre");
+    expect(screen.queryByLabelText(labelled("Slack channel ID"))).toBeNull();
+    expect(screen.getByText(/has no Slack app of its own/)).toBeDefined();
+    // The same for a Mattermost channel, which a bot of the seat's own carries.
     expect(screen.queryByLabelText(labelled("Mattermost channel"))).toBeNull();
     expect(
       screen.getByText(/This seat has no Mattermost bot of its own, so it has no channel to set./),
@@ -919,9 +845,9 @@ describe("integrations", () => {
 
     // Switched off, Datadog wakes nobody whatever its route_to names, which
     // is how the engine and the chart read it.
-    const off = fixtureSettings();
+    const off = connected();
     off.integrations = { ...off.integrations, datadog: { enabled: false, route_to: "sre" } };
-    edit(editing(fixtureChart(), off), "seat:sre");
+    edit(keyedState(off), "seat:sre");
     expect(
       screen.getByText("Datadog is switched off, so no alert wakes a fallback seat."),
     ).toBeDefined();
@@ -929,10 +855,10 @@ describe("integrations", () => {
   });
 
   test("no credential reaches the page: not a mask, not a reference, not the literal half of a partial one", () => {
-    const view = edit(connected(), "seat:dev");
+    const view = edit(keyedState(connected()), "seat:dev");
     const html = view.container.ownerDocument.body.innerHTML;
     for (const secret of [
-      REDACTED,
+      "__redacted__",
       "sk-live",
       "DEV_GITHUB_KEY",
       "DEV_SLACK_SECRET",
@@ -947,41 +873,60 @@ describe("integrations", () => {
   });
 });
 
-describe("findings", () => {
+describe("problems", () => {
   /**
    * Whether any control on screen points at this alert as its description.
    *
    * That is what "attached to a field" MEANS: the design system's field gives
    * its error an id and names it in the control's `aria-describedby`, so a
-   * reader on the control hears it.
+   * reader on the control hears it. The question used to be asked as
+   * `closest(".field")`, the class the engine's own field drew, which has no
+   * owner in this tree any more: the answer became null for every alert and
+   * the two cases below passed while asserting nothing at all.
    */
   function describesAControl(alert: HTMLElement): boolean {
     return alert.id !== "" && document.querySelector(`[aria-describedby~="${alert.id}"]`) !== null;
   }
 
-  // A finding about a field this form does not draw must not be attached to
+  // A problem about a field this form does not draw must not be attached to
   // one: it would be reported nowhere a reader can see it.
   test("a problem about a field the form does not draw is listed at the top", () => {
-    // The fixture company has not connected GitHub, so the tier is not drawn.
-    const state = checkWith(editing(), [
-      findingOn("seat:dev", ["runtime", "github", "tier"], "names no tier"),
+    // The fixture company has not connected Jira, so the seat's Jira field is
+    // not drawn at all.
+    const state = checkWithProblems(keyedState(fixtureCompany()), [
+      problemAt(
+        ["units", 0, "roles", 1, "integrations", "jira", "project"],
+        "units[0].roles[1].integrations.jira.project: names no project",
+      ),
     ]);
     edit(state, "seat:dev");
     const alerts = screen.getAllByRole("alert");
     expect(alerts).toHaveLength(1);
-    expect(alerts[0]!.textContent).toContain("names no tier");
+    expect(alerts[0]!.textContent).toContain("names no project");
     expect(describesAControl(alerts[0]!)).toBe(false);
+    cleanup();
+
+    // The same for a unit, whose Confluence field is not drawn either.
+    const unit = checkWithProblems(keyedState(fixtureCompany()), [
+      problemAt(
+        ["units", 0, "integrations", "confluence", "space"],
+        "units[0].integrations.confluence.space: names no space",
+      ),
+    ]);
+    edit(unit, "unit:Engineering");
+    const unitAlerts = screen.getAllByRole("alert");
+    expect(unitAlerts).toHaveLength(1);
+    expect(describesAControl(unitAlerts[0]!)).toBe(false);
   });
 
   test("a schedule problem is shown in the schedules panel, where the toggle that fixes it is", () => {
-    const state = checkWith(editing(), [
-      findingOn(
-        "unit:engineering",
-        ["runtime", "schedules"],
-        "schedule has no runner: the effective lead is a human seat",
+    const state = checkWithProblems(keyedState(fixtureCompany()), [
+      problemAt(
+        ["units", 0, "schedules", 0],
+        "units[0].schedules[0]: schedule has no runner: the effective lead is a human seat",
       ),
     ]);
-    edit(state, "unit:engineering");
+    edit(state, "unit:Engineering");
     const panel = screen.getByRole("heading", { name: "Schedules" }).closest("section")!;
     expect(within(panel as HTMLElement).getByRole("alert").textContent).toContain(
       "schedule has no runner",
@@ -992,11 +937,20 @@ describe("findings", () => {
   // not author, so the link it carries is the only thing on screen saying
   // where it is fixed. A human seat draws no schedules panel at all.
   test("a problem the form cannot place keeps the link that says where it is fixed", () => {
-    const finding: PlacedProblem = {
-      ...findingOn("seat:dev", ["runtime", "schedules"], "a human seat must not carry schedules"),
-      link: "schedules",
+    const doc = fixtureCompany();
+    doc.units![0]!.roles![1] = {
+      name: "Dev",
+      kind: "human",
+      contact: { github_login: "dev" },
+      schedules: [{ name: "digest", cron: "0 8 * * *", task: "Digest" }],
     };
-    edit(checkWith(editing(humanDev()), [finding]), "seat:dev");
+    const state = checkWithProblems(keyedState(doc), [
+      problemAt(
+        ["units", 0, "roles", 1, "schedules"],
+        "units[0].roles[1]: a human seat must not carry schedules",
+      ),
+    ]);
+    edit(state, "seat:dev");
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain("must not carry schedules");
     expect(within(alert).getByRole("link", { name: "Open Schedules" }).getAttribute("href")).toBe(
@@ -1005,18 +959,20 @@ describe("findings", () => {
   });
 
   // The engine takes a draft with warnings; a field's error slot says it is
-  // refused (critical, invalid, an alert). So a warning names its field at the
+  // refused (critical, invalid, an alert). So a warning names its path at the
   // top, in the caution tone, and a refusal beside it stays a refusal.
   test("a warning is a caution at the top, never a field's error", () => {
-    const warned = checkWith(editing(), [
-      findingOn("unit:platform", ["lead"], "the lead names no seat", "warning"),
+    const warned = checkWithWarnings(keyedState(fixtureCompany()), [
+      warningAt(["units", 0, "children", 0, "lead"], "units[0].children[0].lead: names no seat"),
     ]);
-    edit(warned, "unit:platform");
+    edit(warned, "unit:Platform");
     const lead = field("Lead");
     expect(lead.getAttribute("aria-invalid")).toBeNull();
     expect(errorOf(lead)).toBeNull();
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
-    // In the caution tone, not the critical one.
+    // In the caution tone, not the critical one: a warning is a thing to look
+    // at, and drawing it in the refusal colour makes every save look refused.
+    // The tone is asked of the design system rather than named by its class.
     const said = screen.getByText(/names no seat/);
     const caution = said.closest(`.${drawnClasses(Callout, { children: "" })[0]}`)!;
     expect(
@@ -1028,8 +984,11 @@ describe("findings", () => {
   // under that window's box and no other: a daily ceiling of 0 blamed on the
   // monthly box is an operator correcting the wrong number.
   test("a refused ceiling sits beside its own window's box", () => {
-    const state = checkWith(editing(), [
-      findingOn("seat:dev", ["runtime", "token_budget", "week"], "must be at least 1 token"),
+    const state = checkWithProblems(keyedState(fixtureCompany()), [
+      problemAt(
+        ["units", 0, "roles", 1, "token_budget", "week"],
+        "units[0].roles[1].token_budget.week: must be at least 1 token",
+      ),
     ]);
     edit(state, "seat:dev");
     expect(errorOf(field("Weekly token ceiling"))?.textContent).toContain("must be at least 1");
@@ -1038,12 +997,15 @@ describe("findings", () => {
   });
 
   test("a problem sits beside the field it names, and the rest are listed at the top", () => {
-    const state = checkWith(editing(), [
-      findingOn("seat:dev", ["goal"], "the goal is too long for the chart"),
-      findingOn("seat:dev", ["runtime", "workers"], "names no template"),
+    const state = checkWithProblems(keyedState(fixtureCompany()), [
+      problemAt(["units", 0, "roles", 1, "goal"], "units[0].roles[1].goal: too vague to act on"),
+      problemAt(
+        ["units", 0, "roles", 1, "workers"],
+        "units[0].roles[1].workers: names no template",
+      ),
     ]);
     edit(state, "seat:dev");
-    expect(errorOf(field("Goal"))?.textContent).toContain("too long for the chart");
+    expect(errorOf(field("Goal"))?.textContent).toContain("too vague to act on");
     // AND THE REST ARE LISTED AT THE TOP: an alert no field points at.
     const top = screen
       .getAllByRole("alert")
@@ -1060,67 +1022,66 @@ describe("findings", () => {
 
 describe("a unit", () => {
   test("the lead shows the lead it would inherit, and a lead change applies with the rest", () => {
-    const view = edit(editing(), "unit:platform");
+    const state = keyedState(fixtureCompany());
+    const view = edit(state, "unit:Platform");
     expect(field("Lead").textContent).toBe("No lead (inherits VP Engineering from Engineering)");
     choose("Lead", "SRE");
     type("Purpose", "Keep it running");
     apply();
     expect(view.state().log.ops).toHaveLength(1);
-    const found = locate(view.state().draft, "unit:platform");
+    const found = locate(view.state().draft, "unit:Platform");
     expect(found?.kind === "unit" && found.node.data).toMatchObject({
-      lead: "sre",
+      lead: "SRE",
       purpose: "Keep it running",
-    });
-  });
-
-  // A NEW KEY ON A SAVED UNIT IS ITS RENAME, as a seat's handle is; a new NAME
-  // is prose, and says what reads the name.
-  test("a saved unit's key is its address, and a new name says what reads it", () => {
-    const view = edit(editing(), "unit:engineering");
-    expect(screen.getByText(/A new key keeps the unit/)).toBeDefined();
-    type("Name", "Product Engineering");
-    expect(
-      screen.getByText(
-        "Onboarding pages are looked up under a unit's name, so the seats in it read the pages under the new name.",
-      ),
-    ).toBeDefined();
-    type("Key", "product-engineering");
-    apply();
-    const found = locate(view.state().draft, "unit:engineering");
-    expect(found?.kind === "unit" && found.node.data).toMatchObject({
-      key: "product-engineering",
-      name: "Product Engineering",
     });
   });
 
   /*
    * ONE CONTROL FOR ONE STRING. The type used to be a select whose "Custom
-   * type" option revealed a SECOND labelled field below it. It is one field
-   * that offers the engine's nine names and takes whatever is typed.
+   * type" option revealed a SECOND labelled field below it, so a custom type
+   * cost two stacked controls. It is one field that offers the engine's nine
+   * names and takes whatever is typed, which is exactly what the engine
+   * accepts.
    */
   test("a unit type the engine does not name is typed in the same one box", () => {
-    const view = edit(editing(), "unit:platform");
+    const view = edit(keyedState(fixtureCompany()), "unit:Platform");
     expect(screen.queryByLabelText(labelled("Custom type"))).toBeNull();
     type("Type", "tribe");
     apply();
-    const found = locate(view.state().draft, "unit:platform");
+    const found = locate(view.state().draft, "unit:Platform");
     expect(found?.kind === "unit" && found.node.data.type).toBe("tribe");
   });
 
   test("the nine names the engine knows are offered in that same box", () => {
-    const view = edit(editing(), "unit:platform");
+    const view = edit(keyedState(fixtureCompany()), "unit:Platform");
     choose("Type", "Department");
     apply();
-    const found = locate(view.state().draft, "unit:platform");
+    const found = locate(view.state().draft, "unit:Platform");
     expect(found?.kind === "unit" && found.node.data.type).toBe("department");
   });
 
+  test("renaming a unit names its masked literal credentials and links to Secrets", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.mcp_env = { tracker: { TOKEN: "__redacted__" } };
+    const view = edit(keyedState(doc), "unit:Engineering");
+    expect(screen.queryByText(/stored as literals/)).toBeNull();
+    type("Name", "Product Engineering");
+    expect(
+      screen.getByText(
+        "These credentials are stored as literals. Move each one to the secret store and reference it as ${NAME} before renaming, or the engine will refuse the save.",
+      ),
+    ).toBeDefined();
+    expect(screen.getByText("units[0].mcp_env.tracker.TOKEN")).toBeDefined();
+    expect(screen.getByRole("link", { name: "Open Secrets" }).getAttribute("href")).toBe(
+      "#/settings/secrets",
+    );
+    expect(view.container.ownerDocument.body.innerHTML).not.toContain("__redacted__");
+  });
+
   test("a unit's schedule says when it runs and who runs it", () => {
-    const chart = fixtureChart();
-    chart.units
-      .find((u) => u.key === "engineering")!
-      .runtime!.schedules!.push({ name: "triage", cron: "0 * * * *", task: "Triage the queue" });
-    edit(editing(chart), "unit:engineering");
+    const doc = fixtureCompany();
+    doc.units![0]!.schedules!.push({ name: "triage", cron: "0 * * * *", task: "Triage the queue" });
+    edit(keyedState(doc), "unit:Engineering");
     const standup = screen.getByRole("checkbox", { name: "Enabled: standup" });
     const triage = screen.getByRole("checkbox", { name: "Enabled: triage" });
     const described = (box: HTMLElement) =>
@@ -1129,28 +1090,23 @@ describe("a unit", () => {
     expect(described(triage)).toBe("0 * * * *, run by each agent member. Triage the queue");
   });
 
-  test("an empty channel says what the unit inherits from the unit above it", () => {
-    const chart = fixtureChart();
-    chart.units.find((u) => u.key === "engineering")!.channel = "eng";
-    edit(editing(chart), "unit:platform");
+  test("an empty channel says what the unit inherits, as the check reported it", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.channel = "eng";
+    edit(keyedState(doc, { units: { "units[0]": { channel: "eng" } } }), "unit:Platform");
     const channel = field("Channel") as HTMLInputElement;
     expect(channel.placeholder).toBe("eng");
     expect(screen.getByText("Empty inherits eng from Engineering.")).toBeDefined();
   });
 
   test("a unit schedule is toggled as part of the edit", () => {
-    const view = edit(editing(), "unit:engineering");
+    const view = edit(keyedState(fixtureCompany()), "unit:Engineering");
     fireEvent.click(screen.getByRole("checkbox", { name: "Enabled: standup" }));
     apply();
-    const found = locate(view.state().draft, "unit:engineering");
-    expect(found?.kind === "unit" && found.node.data.runtime?.schedules?.[0]?.enabled).toBe(false);
+    const found = locate(view.state().draft, "unit:Engineering");
+    expect(found?.kind === "unit" && found.node.data.schedules?.[0]?.enabled).toBe(false);
+    expect(screen.getByText(/Knowledge/)).toBeDefined();
     expect(screen.getByText("Free-text references, not a read scope.")).toBeDefined();
-  });
-
-  test("a reader not shown the runtime half is told a unit's schedules and credentials are withheld", () => {
-    edit(editing(strippedChart(fixtureChart())), "unit:engineering");
-    expect(screen.getByText(/runtime half was not shown to you/)).toBeDefined();
-    expect(screen.queryByRole("checkbox", { name: "Enabled: standup" })).toBeNull();
   });
 });
 
@@ -1159,22 +1115,22 @@ describe("a unit", () => {
 // field rather than on the name at the top.
 describe("opening at a part of the form", () => {
   test("a seat opened at its reports starts on Manages, and one opened plainly on its name", () => {
-    edit(editing(), "seat:dev", {}, "reports");
+    edit(keyedState(fixtureCompany()), "seat:dev", {}, "reports");
     expect(document.activeElement).toBe(screen.getByRole("combobox", { name: /^Manages/ }));
     cleanup();
-    edit(editing(), "seat:dev");
+    edit(keyedState(fixtureCompany()), "seat:dev");
     expect(document.activeElement).toBe(field("Name"));
   });
 
   test("a unit opened at its leadership starts on its lead", () => {
-    edit(editing(), "unit:sales", {}, "leadership");
+    edit(keyedState(fixtureCompany()), "unit:Sales", {}, "leadership");
     expect(document.activeElement).toBe(field("Lead"));
   });
 });
 
 describe("the charter", () => {
   test("renaming the company needs its consequences confirmed before Apply", () => {
-    const view = edit(editing(), COMPANY_KEY);
+    const view = edit(keyedState(fixtureCompany()), COMPANY_KEY);
     type("Company name", "Acme Labs");
     expect(applyRefuses()).toBe(true);
     // The same sentence the review asks the operator to accept before a save,
@@ -1190,12 +1146,12 @@ describe("the charter", () => {
   });
 
   // The acknowledgement is about what THIS Apply does: a name the draft
-  // already carries, or one the settings stored with a space around it, is
+  // already carries, or one the document stored with a space around it, is
   // not a rename of the mission edit that follows.
   test("a charter edit that renames nothing asks nothing, and renames nothing", () => {
-    const renamed = record(editing(), {
-      type: "updateCompany",
-      set: [{ path: ["name"], value: "Acme Labs" }],
+    const renamed = builderReducer(keyedState(fixtureCompany()), {
+      type: "record",
+      intent: { type: "updateCompany", set: [{ path: ["name"], value: "Acme Labs" }] },
     });
     const view = edit(renamed, COMPANY_KEY);
     type("Mission", "Make more things.");
@@ -1204,8 +1160,8 @@ describe("the charter", () => {
     expect(view.state().log.ops).toHaveLength(2);
     cleanup();
 
-    const padded = { ...fixtureSettings(), name: " Acme" };
-    const second = edit(editing(fixtureChart(), padded), COMPANY_KEY);
+    const padded = { ...fixtureCompany(), name: " Acme" };
+    const second = edit(keyedState(padded), COMPANY_KEY);
     type("Mission", "Make more things.");
     expect(screen.queryByRole("checkbox", { name: /renaming the company/ })).toBeNull();
     apply();
@@ -1215,7 +1171,7 @@ describe("the charter", () => {
 
     // Taking the space out IS a rename: the engine derives agent ids from the
     // name exactly as stored.
-    edit(editing(fixtureChart(), padded), COMPANY_KEY);
+    edit(keyedState(padded), COMPANY_KEY);
     type("Company name", "Acme");
     expect(
       screen.getByRole("checkbox", { name: "I understand what renaming the company does" }),

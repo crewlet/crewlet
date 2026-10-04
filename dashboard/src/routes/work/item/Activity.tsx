@@ -48,7 +48,6 @@ import {
   XGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useParam } from "~/app/router.tsx";
-import { ClockText } from "~/app/frame/cells.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { AsksTag, type RowChrome } from "~/components/work.tsx";
 import { Composer, type ComposeMode } from "~/components/Composer.tsx";
@@ -112,22 +111,16 @@ const EMPTY: Record<ActivityTab, string> = {
 
 export function Activity({
   item,
-  address,
   chrome,
   index,
+  now,
   live,
   param = "activity",
 }: {
   item: WorkItem;
-  /**
-   * The task's ADDRESS (`itemAddress`) — its key, or its id where another task
-   * claimed the key first. Every question this asks and the comment it writes
-   * name the task by it: by the key, a duplicate's activity was its
-   * claimant's, and a comment posted on it landed on the claimant.
-   */
-  address: string;
   chrome: RowChrome & LabelContext;
   index: OrgIndex;
+  now: number;
   /** The seat running a turn on this task now, or null. */
   live: AgentRow | null;
   /** The address key the tab is kept under — the peek's own, so a task page
@@ -141,7 +134,9 @@ export function Activity({
   const [replyTo, setReplyTo] = useState<WorkComment | null>(null);
 
   const { socket } = useClient();
-  const changesAsked = { task: address, limit: CHANGES_PAGE };
+  // BY ITS ID, which names this task and no other: a key two tasks hold
+  // reads the history and the comments of whichever claimed it first.
+  const changesAsked = { task: item.id, limit: CHANGES_PAGE };
   const changes = usePaged(
     useQuery("work_activity", changesAsked, { pollMs: ACTIVITY_POLL_MS }),
     changesAsked,
@@ -154,7 +149,7 @@ export function Activity({
     recordId,
     nextCursor,
   );
-  const commentsAsked = { item: address, limit: COMMENTS_PAGE };
+  const commentsAsked = { item: item.id, limit: COMMENTS_PAGE };
   const comments = usePaged(
     useQuery("work_comments", commentsAsked, { pollMs: ACTIVITY_POLL_MS }),
     commentsAsked,
@@ -167,7 +162,7 @@ export function Activity({
     commentId,
     nextCursor,
   );
-  const turnsAsked = { id: address, limit: TURNS_PAGE };
+  const turnsAsked = { id: item.key, limit: TURNS_PAGE };
   const turns = usePaged(
     useQuery("work_item_turns", turnsAsked, { pollMs: ACTIVITY_POLL_MS }),
     turnsAsked,
@@ -202,11 +197,9 @@ export function Activity({
   const shown: readonly Source[] =
     tab === "all" ? ["changes", "comments", "turns"] : [tab === "turns" ? "turns" : tab];
   const loading = shown.some((source) => paged[source].loading && paged[source].items.length === 0);
-  // EACH FAILED SOURCE WHOLE, its refusal beside its code, so the banner can
-  // say which grant would admit the reader rather than that a read failed.
-  const failed = shown.map((source) => paged[source]).filter((source) => source.error !== null);
+  const failed = shown.map((source) => paged[source]).filter((read) => read.error !== null);
   const paging = shown.some((source) => paged[source].paging);
-  const pageFailure = shown.map((source) => paged[source].pageFailure).find(Boolean) ?? null;
+  const pageError = shown.map((source) => paged[source].pageError).find(Boolean) ?? null;
   const runningHere = live && (tab === "all" || tab === "turns") ? live : null;
 
   // THE NUMBER THE RUNNING TURN WILL HAVE: its own, where a parked segment was
@@ -239,8 +232,8 @@ export function Activity({
         />
       </div>
 
-      {failed.map((source, i) => (
-        <QueryState key={i} error={source.error} refusal={source.refusal} loading={false} />
+      {failed.map((read, i) => (
+        <QueryState key={i} error={read.error} refusal={read.refusal} loading={false} />
       ))}
       {drawn.earlier.length > 0 && (
         <div className="task-earlier">
@@ -258,14 +251,7 @@ export function Activity({
           >
             Earlier activity
           </Button>
-          {pageFailure && (
-            <QueryState
-              error={pageFailure.error}
-              refusal={pageFailure.refusal}
-              detail={pageFailure.detail ?? undefined}
-              loading={false}
-            />
-          )}
+          {pageError && <QueryState error={pageError} refusal={null} loading={false} />}
         </div>
       )}
       {loading ? (
@@ -281,11 +267,19 @@ export function Activity({
               item={item}
               chrome={labels}
               index={index}
+              now={now}
+
               onReply={setReplyTo}
             />
           ))}
           {runningHere && (
-            <LiveRow item={item} row={runningHere} ordinal={liveOrdinal} chrome={chrome} />
+            <LiveRow
+              item={item}
+              row={runningHere}
+              ordinal={liveOrdinal}
+              chrome={chrome}
+              now={now}
+            />
           )}
         </ol>
       )}
@@ -304,7 +298,7 @@ export function Activity({
             </div>
           )}
           <Composer
-            item={address}
+            item={item.key}
             mode={compose}
             to={replyTo ? (chrome.seatName?.(replyTo.author) ?? replyTo.author) : item.key}
             index={index}
@@ -337,28 +331,37 @@ function FeedEntry({
   item,
   chrome,
   index,
+  now,
   onReply,
 }: {
   entry: Entry;
   item: WorkItem;
   chrome: RowChrome & LabelContext;
   index: OrgIndex;
+  now: number;
   onReply: (c: WorkComment) => void;
 }) {
   switch (entry.kind) {
     case "change":
-      return <ChangeRow record={entry.record} item={item} chrome={chrome} />;
+      return <ChangeRow record={entry.record} item={item} chrome={chrome} now={now} />;
     case "comment":
-      return <CommentRow comment={entry.comment} chrome={chrome} index={index} onReply={onReply} />;
+      return (
+        <CommentRow
+          comment={entry.comment}
+          chrome={chrome}
+          index={index}
+          now={now}
+          onReply={onReply}
+        />
+      );
     case "turn":
-      return <TurnCard turn={entry.turn} chrome={chrome} />;
+      return <TurnCard turn={entry.turn} chrome={chrome} now={now} />;
   }
 }
 
 /**
- * Who a record names as its author: the seat — an agent's own, or the one a
- * person the identity directory binds to it writes AS (`iam.ActorFor`) — or
- * the login of anybody bound to none.
+ * Who a record names as its author (`iam.ActorFor`): the seat a bound person
+ * writes as, or the login of anybody bound to none.
  */
 function actorOf(record: WorkActivityRecord, chrome: RowChrome): string {
   const who = record.actor || "";
@@ -417,10 +420,12 @@ function ChangeRow({
   record,
   item,
   chrome,
+  now,
 }: {
   record: WorkActivityRecord;
   item: WorkItem;
   chrome: RowChrome & LabelContext;
+  now: number;
 }) {
   const [open, setOpen] = useState(false);
   const { what, why } = changeSentence(record, item, chrome);
@@ -435,7 +440,7 @@ function ChangeRow({
           <b>{actorOf(record, chrome)}</b> {what}
           {why && <> — “{why}”</>}{" "}
           <time className="task-when" dateTime={at} title={fmtDateTime(at)}>
-            <ClockText read={(now) => `· ${fmtDateCompact(at, now)}`} />
+            {`· ${fmtDateCompact(at, now)}`}
           </time>
           {record.turn_id && (
             <>
@@ -474,17 +479,19 @@ function CommentRow({
   comment,
   chrome,
   index,
+  now,
   onReply,
 }: {
   comment: WorkComment;
   chrome: RowChrome;
   index: OrgIndex;
+  now: number;
   onReply: (c: WorkComment) => void;
 }) {
-  // THE PERSON, NEVER THE CREDENTIAL: a person the identity directory binds
-  // to a seat comments AS that seat (`iam.ActorFor`), so the author is who
-  // they are; anybody bound to none is their login, which is the name their
-  // own record is kept under. A comment with no author at all is the engine's.
+  // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the identity directory
+  // binds to a seat comments AS that seat, so the author is who they are;
+  // anybody bound to none is their login, which is the name their own record
+  // is kept under. A comment with no author at all is the engine's.
   const handle = comment.author;
   const person = handle ? index.byHandle.get(handle) : undefined;
   const name = handle ? (chrome.seatName?.(handle) ?? handle) : "The engine";
@@ -509,7 +516,7 @@ function CommentRow({
             dateTime={comment.created_at}
             title={fmtDateTime(comment.created_at)}
           >
-            <ClockText read={(now) => fmtDateCompact(comment.created_at, now)} />
+            {fmtDateCompact(comment.created_at, now)}
           </time>
           {comment.updated_at && <span className="task-when">(edited)</span>}
           {comment.ask && (
@@ -607,7 +614,15 @@ export function turnPills(
 }
 
 /** One agent turn charged to the task, as the card the artboard draws. */
-export function TurnCard({ turn, chrome }: { turn: WorkItemTurn; chrome: RowChrome }) {
+export function TurnCard({
+  turn,
+  chrome,
+  now,
+}: {
+  turn: WorkItemTurn;
+  chrome: RowChrome;
+  now: number;
+}) {
   const name = chrome.seatName?.(turn.seat) ?? turn.seat;
   const kind = chrome.seatKind?.(turn.seat) === "human" ? "human" : "agent";
   return (
@@ -705,11 +720,13 @@ function LiveRow({
   row,
   ordinal,
   chrome,
+  now,
 }: {
   item: WorkItem;
   row: AgentRow;
   ordinal: number;
   chrome: RowChrome;
+  now: number;
 }) {
   const handle = row.handle ?? "";
   const name = chrome.seatName?.(handle) ?? handle;
@@ -718,10 +735,8 @@ function LiveRow({
   const since = Date.parse(row.turn?.started_at ?? row.live_call?.started_at ?? "");
   // THE PROFILE CARD'S CLOCK (`fmtElapsed`), seconds under a minute: the
   // list's `shortAge` reads a sub-minute turn as "for 0m" where the seat's
-  // own card said "0s" of the same turn. Read in the cell that shows it, so
-  // the elapsed time ticks without drawing the whole feed again.
-  const words = (now: number) =>
-    [doing, Number.isFinite(since) && `for ${fmtElapsed(now - since)}`].filter(Boolean).join(" · ");
+  // own card said "0s" of the same turn.
+  const age = Number.isFinite(since) ? fmtElapsed(now - since) : "";
   return (
     <li className="task-entry" data-kind="live">
       <span className="task-entry-avatar">
@@ -734,9 +749,7 @@ function LiveRow({
       >
         <span className="task-live-dot" aria-hidden="true" />
         <b>{`${name} is on turn ${ordinal}`}</b>
-        <span className="truncate">
-          <ClockText read={words} />
-        </span>
+        <span className="truncate">{[doing, age && `for ${age}`].filter(Boolean).join(" · ")}</span>
         <span className="spacer" />
         <span className="task-live-go">
           Watch live <ArrowRightGlyph size="xs" />

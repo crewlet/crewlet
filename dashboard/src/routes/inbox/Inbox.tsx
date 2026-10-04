@@ -29,20 +29,6 @@
  * design draws it; the chips narrow the rows loaded, and where the page is not
  * every row each chip says its count is the page's.
  *
- * # Whose inbox
- *
- * THE READER'S OWN RECORD, under `owner` — their seat when the identity
- * directory binds them to one, their login when it does not — which is the
- * name every notice routed to them, and every mark their assistant made, is
- * kept under. An unbound reader is an ordinary state, not a fault: what they
- * follow and what names them reaches that record, and the screen draws it.
- * Nobody types whose inbox this is — no question takes a `viewer=`.
- *
- * PUSHED AS WELL AS POLLED: the frame watches the reader's own record, the
- * engine sends `inbox_changed` when a committed batch moves it, and the list
- * is asked again within half a second (`refetchOnInboxOf`). The poll stays,
- * because a frame lost to a reconnect is never re-sent.
- *
  * # Every mark is a gesture, made as you
  *
  * Done, Snooze and "Mark all read" each name exactly what they mark
@@ -50,14 +36,6 @@
  * loaded) as the person signed in (ADR-0024). The engine changes that and
  * nothing else, and the list is re-read at the position the write answered
  * with, so a row moves only once the engine says it has.
- *
- * # The clock
- *
- * READ WHERE IT IS SHOWN. A row's "12m", the pane's "asked you 3h ago" and a
- * parked run's countdown each read the clock in their own cell; the screen
- * itself reads only the company's MIDNIGHT, which is what cuts Today from
- * Yesterday and moves once a day. Taking the second here drew every row of
- * both groups once a second to change the handful whose words moved.
  */
 
 import { useCallback, useMemo } from "react";
@@ -75,8 +53,7 @@ import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { useClockReading } from "~/lib/clock.ts";
-import { companyMidnight } from "~/lib/range.ts";
+import { useNow } from "~/lib/clock.ts";
 import { useMediaQuery } from "~/lib/media.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -107,14 +84,12 @@ const INBOX_POLL_MS = 30_000;
 
 export function Inbox() {
   const viewer = useViewer();
+  const now = useNow();
   const org = useOrg();
   const agents = useAgents();
   const nav = useNavigator();
   const index = useMemo(() => indexOrg(org), [org]);
   const zone = org?.timezone;
-  // THE COMPANY'S MIDNIGHT, the one reading of the clock the list itself
-  // takes: it moves once a day, and with it a notice from Today to Yesterday.
-  const midnight = useClockReading((now) => companyMidnight(now, zone));
   const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
   // THE LIST AND THE PANE EACH SCROLL ON THEIR OWN, so the screen takes the
   // window's height rather than growing the page — above a phone, where the
@@ -130,7 +105,10 @@ export function Inbox() {
 
   // A RECORD OF THEIR OWN — anybody signed in, bound to a seat or not. Asked
   // by `handle`, an unbound reader had no inbox here at all while their
-  // assistant wrote notices to their login.
+  // assistant wrote notices to their login. PUSHED AS WELL AS POLLED: the
+  // engine sends `inbox_changed` when a committed batch moves that record
+  // (`refetchOnInboxOf`), and the poll stays, because a frame lost to a
+  // reconnect is never sent again.
   const owner = viewer.owner;
   const bound = owner !== "";
   const inbox = useQuery(
@@ -147,8 +125,6 @@ export function Inbox() {
     { enabled: bound, pollMs: INBOX_POLL_MS, refetchOnInboxOf: owner },
   );
   usePageCoverage(inbox.data);
-  // THE CALLER'S OWN: the question names nobody, and the engine answers for
-  // the principal that asked.
   const decisions = useQuery("decisions", undefined, {
     enabled: bound,
     pollMs: INBOX_POLL_MS,
@@ -177,30 +153,30 @@ export function Inbox() {
   const counts = useMemo(() => chipCounts(rows), [rows]);
   const shownDecisions = rows.decisions.filter((r) => rowMatches(r, chip));
   const shownNotices = rows.notices.filter((r) => rowMatches(r, chip));
-  const groups = dayGroups(shownNotices, midnight, zone);
+  const groups = dayGroups(shownNotices, now, zone);
   const visible: InboxRow[] = [...shownDecisions, ...groups.flatMap((g) => g.rows)];
 
   // THE OPEN ROW: the one the URL names, or — beside the list, never on a
   // phone where the pane replaces it — the first one, so the pane is never an
   // empty box beside a list with something in it.
-  const named = visible.find((r) => r.id === open) ?? null;
+  const named = visible.find((r) => r.key === open) ?? null;
   const selected = named ?? (phone ? null : (visible[0] ?? null));
-  const openRow = useCallback((id: string) => nav.filter({ row: id }), [nav]);
+  const openRow = useCallback((key: string) => nav.filter({ row: key }), [nav]);
 
   // j AND k STEP THROUGH THE LIST, opening each row in the pane.
-  const at = selected ? visible.findIndex((r) => r.id === selected.id) : -1;
+  const at = selected ? visible.findIndex((r) => r.key === selected.key) : -1;
   useKeymap({
     "list.next": {
       run: () => {
         const next = visible[Math.min(visible.length - 1, at + 1)];
-        if (next) openRow(next.id);
+        if (next) openRow(next.key);
       },
       when: visible.length > 0,
     },
     "list.previous": {
       run: () => {
         const prev = visible[Math.max(0, at - 1)];
-        if (prev) openRow(prev.id);
+        if (prev) openRow(prev.key);
       },
       when: visible.length > 0,
     },
@@ -234,16 +210,15 @@ export function Inbox() {
           three, which is why the screen is not simply locked. */}
       {viewer.anonymous ? (
         <Callout variant="warning" className="inbox-callout">
-          Nobody is signed in and no API token is presented, so this browser is nobody. The
-          conditions below are the engine&rsquo;s; your own notices and decisions appear once you
-          sign in.
+          Nobody is signed in, so this browser is nobody. The conditions below are the
+          engine&rsquo;s; your own notices and decisions appear once you sign in.
         </Callout>
       ) : viewer.unbound ? (
         <Callout variant="info" className="inbox-callout">
-          You are <code className="inline">{viewer.login}</code> and the directory binds you to no
-          seat, so the notices below are the ones kept under that login — what you follow and what
-          names you. Work the org chart hands to a seat reaches you once{" "}
-          <code className="inline">crewlet iam bind</code> binds you to one.
+          You are <code className="inline">{viewer.login}</code> and not bound to a seat, so the
+          notices below are the ones kept under that login — what you follow and what names you.
+          Work the org chart hands to a seat reaches you once an administrator binds you to one (
+          <code className="inline">crewlet iam bind</code>).
         </Callout>
       ) : null}
 
@@ -258,9 +233,10 @@ export function Inbox() {
             counts={counts}
             decisions={shownDecisions}
             groups={groups}
-            selected={selected?.id ?? ""}
+            selected={selected?.key ?? ""}
             onOpen={openRow}
             index={index}
+            now={now}
             loading={bound && inbox.loading && !inbox.data}
             quiet={quiet}
             more={Boolean(inbox.data?.next_cursor)}
@@ -296,6 +272,7 @@ export function Inbox() {
             row={selected}
             index={index}
             viewerHandle={viewer.handle}
+            now={now}
             zone={zone}
             maxSnoozeAhead={person.data?.max_snooze_ahead}
             onBack={phone ? () => nav.filter({ row: null }) : undefined}

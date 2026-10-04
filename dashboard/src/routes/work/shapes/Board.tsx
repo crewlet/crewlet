@@ -15,10 +15,9 @@
  *
  * # A drag is a write, made as the reader
  *
- * Dropping a card calls `place_work_item` as the reader — the principal this
- * browser signed in as, recorded as the seat the directory binds them to where
- * there is one (ADR-0024): into another lane is a status change and a place in
- * the order, within a lane it is a place alone. Three rules make it honest:
+ * Dropping a card calls `place_work_item` as the person signed in
+ * (ADR-0024): into another lane is a status change and a place in the order,
+ * within a lane it is a place alone. Three rules make it honest:
  *
  *  - ONLY UNDER THE MANUAL ORDER. A board sorted by due date is not in an
  *    order a drag can change; a card dropped there would jump back to where
@@ -37,13 +36,6 @@
  * AND A KEYBOARD MOVES IT TOO: `Alt` with an arrow on a focused card is the
  * same gesture ([keyboardDrop]), because a pointer-only drag is a write a
  * keyboard reader cannot make.
- *
- * A CARD IS ITS TASK'S ID — what a drag carries, what a drop names, which card
- * is lifted, which strip and which waiting run are its own — and its link and
- * its selection are its ADDRESS ([itemAddress]). A key two tasks hold
- * (`key_collision`) is one value for two cards, so a board that knew its cards
- * by key drew the claimant's turn on both, lit both when the rail held one,
- * and moved the claimant when the other was dragged.
  */
 
 import {
@@ -75,10 +67,10 @@ import { useAct } from "~/lib/useAct.ts";
 import type { WriteAccess } from "~/lib/useWriteAccess.ts";
 import type { CardLive, SeatRing } from "~/lib/seats.ts";
 import { plural } from "~/lib/format.ts";
-import { itemAddress } from "~/lib/work.ts";
 import { GroupMark, headingOf } from "./group.tsx";
 import { keyboardDrop, moveFor, withDrop, type Drop } from "./boardMove.ts";
 import type { WorkGroup, WorkProjectDetail, WorkSummary } from "~/protocol/index.ts";
+import { itemAddress } from "~/lib/work.ts";
 
 /** What the board knows about the seats and runs on its cards, keyed by task id or handle. */
 export interface BoardFacts {
@@ -97,6 +89,7 @@ export function Board({
   axis,
   chrome,
   detail,
+  now,
   selected,
   hrefOf,
   onOpen,
@@ -116,7 +109,7 @@ export function Board({
   axis: string;
   chrome: RowChrome;
   detail?: WorkProjectDetail | null;
-  /** The ADDRESS of the task the rail holds — see `itemAddress`. */
+  now: number;
   selected?: string;
   hrefOf: (row: WorkSummary) => string;
   onOpen: (row: WorkSummary) => void;
@@ -413,6 +406,7 @@ export function Board({
                     >
                       <WorkCard
                         row={row}
+                        now={now}
                         chrome={chrome}
                         href={hrefOf(row)}
                         selected={selected === itemAddress(row)}
@@ -457,19 +451,6 @@ export function Board({
       </div>
     </>
   );
-}
-
-/**
- * The card a drop moves, by the key a person reads on it — its address would
- * be its id where the key is another task's, and a toast naming a uuid names
- * nothing a reader can find.
- */
-function movedName(drop: Drop, groups: readonly WorkGroup[]): string {
-  for (const group of groups) {
-    const card = group.rows.find((row) => row.id === drop.id);
-    if (card) return card.key || card.id;
-  }
-  return "the task";
 }
 
 /**
@@ -619,3 +600,16 @@ const ARROWS: Record<string, "up" | "down" | "left" | "right"> = {
   ArrowLeft: "left",
   ArrowRight: "right",
 };
+
+/**
+ * The card a drop moves, by the key a person reads on it — its address would
+ * be its id where the key is another task's, and a toast naming a uuid names
+ * nothing a reader can find.
+ */
+function movedName(drop: Drop, groups: readonly WorkGroup[]): string {
+  for (const group of groups) {
+    const card = group.rows.find((row) => row.id === drop.id);
+    if (card) return card.key || card.id;
+  }
+  return "the task";
+}

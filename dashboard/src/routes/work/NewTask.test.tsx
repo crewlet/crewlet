@@ -9,7 +9,7 @@
  * engine's own sentence naming the argument.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
@@ -37,8 +37,18 @@ class InertWebSocket {
 }
 
 const JANE = {
-  login: "jane.founder",
-  grants: ["state:read", "work:write"],
+  login: "U0FOUNDER",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -299,9 +309,10 @@ test("the project is the door's, else the person's own, else the first", () => {
 // ENG — the first project — while the CEO's unit files its work under LEAD.
 test("a door naming only a seat opens on the project of that seat's own unit", () => {
   const index = indexOrg(CHART_ORG);
+  // A project names its unit by KEY, the address the chart is read by.
   const filed = (key: string, unit: string): WorkProjectRow =>
-    ({ ...row(key, unit), unit: { name: unit, resolved: true } }) as WorkProjectRow;
-  const listed = [filed("ENG", "Core"), filed("LEAD", "Executives"), filed("PROD", "Product")];
+    ({ ...row(key, unit), unit: { key: unit, resolved: true } }) as WorkProjectRow;
+  const listed = [filed("ENG", "core"), filed("LEAD", "executives"), filed("PROD", "product")];
   expect(startingProject({ assignee: "ceo", ask: "ceo" }, "ENG", listed, index)).toBe("LEAD");
   // The nearest unit ABOVE the seat's own, when its own files nothing.
   expect(startingProject({ assignee: "devrel" }, "ENG", listed, index)).toBe("PROD");
@@ -334,18 +345,17 @@ test("a lane's status reaches the wire and applied opens the new task", async ()
   expect(location.hash).toBe("#/work/ENG-9");
 });
 
-// A NEW TASK OPENS BY THE ADDRESS ITS RECEIPT NAMES. A counter restored beside
-// work minted after it hands a new task a key an older one claimed first, and
-// that key opens the OLDER task: the engine names the new one by its id there
-// (`item`), with the key beside it, and the sheet follows the address.
-test("a create whose key another task holds opens the new task by its id", async () => {
+// A KEY A RESTORED COUNTER HANDED OUT AGAIN is one another task already
+// claimed, and it opens THAT task — so the new one is opened at the address its
+// receipt names (`item`, its id here), never at its key.
+test("a new task whose key another task claimed opens at the address its receipt names", async () => {
   reply = {
     status: 200,
     body: {
       tool: "create_work_item",
       outcome: "applied",
       position: "CREWLET_TRACKER_LOG@1:9",
-      receipt: { item: "t-new", key: "ENG-9", key_collision: true },
+      receipt: { item: "t-new", key: "ENG-7", key_collision: true },
     },
   };
   mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={() => {}} />);
@@ -395,13 +405,6 @@ test.each([
     who: "anonymous",
     viewer: { login: "", grants: [], handle: "", owner: "", name: "", acts: [] },
     reason: WRITE_REASONS.anonymous,
-  },
-  // UNBOUND IS NOT A BLOCK: an unbound reader files under their own login, so
-  // what holds them is what holds anybody — the tool the engine will not make.
-  {
-    who: "unbound and not served the create",
-    viewer: { login: "ci.release", grants: [], handle: "", owner: "ci.release", acts: [] },
-    reason: WRITE_REASONS.not_served,
   },
   {
     who: "not served the create",
@@ -826,6 +829,7 @@ test("an applied create's warnings are said, not dropped", async () => {
       outcome: "applied",
       position: "CREWLET_TRACKER_LOG@1:9",
       receipt: {
+        item: "ENG-9",
         key: "ENG-9",
         warnings: ['ENG\'s default assignee "ana" is not a seat on the org chart any more.'],
       },

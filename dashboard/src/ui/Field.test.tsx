@@ -6,7 +6,7 @@
  * the engine rejects after the fact.
  */
 
-import { cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { useState } from "react";
 import { Field } from "./Field.tsx";

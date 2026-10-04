@@ -12,7 +12,7 @@
  * dimensions the chart offers are the contract's six.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { ExpensiveTasks } from "./ExpensiveTasks.tsx";
@@ -22,7 +22,7 @@ import { LayerHost } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { GROUPS } from "~/contract/spend.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, QueryRefusedError, Store } from "~/protocol/index.ts";
+import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type {
   Bucket,
   BudgetWindow,
@@ -179,26 +179,23 @@ async function settle() {
 
 const params = (what: string) => asks.filter((a) => a.what === what).map((a) => a.params);
 
-// The viewer answer as the engine sends it: a founder holding the grant every
-// ceiling write takes (`config:write`), and a reader holding the state grant
-// alone.
 const VIEWER = {
-  login: "jane.doe",
-  grants: ["state:read", "config:read", "config:write"],
+  login: "op-1",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
   handle: "jane",
   owner: "jane",
   name: "Jane",
   kind: "human",
-  acts: [],
-};
-const READER = {
-  login: "reader",
-  grants: ["state:read"],
-  handle: "",
-  owner: "reader",
-  name: "",
-  kind: "",
-  acts: [],
 };
 
 // THE CONTROL: a window that answered is what the hero is of, and says so in
@@ -292,7 +289,7 @@ test("a window the engine refuses shows the engine's own sentence and no figures
   const sentence =
     "2026-06-01 to 2026-08-30 is 91 days, and a spend window is at most 90 — bring since and until closer together";
   mount("#/spend?window=2026-06-01T00:00:00.000Z/2026-08-31T00:00:00.000Z", <Spend />, {
-    tokens: new QueryRefusedError("bad_params", null, sentence),
+    tokens: new QueryError("bad_params", null, sentence),
     viewer: VIEWER,
   });
   await settle();
@@ -310,7 +307,7 @@ test("a window the engine refuses shows the engine's own sentence and no figures
 test("a refused window draws none of the previous window's figures, and says so once", async () => {
   const sentence =
     "2026-05-01 to 2026-09-29 is 152 days, and a spend window is at most 90 — bring since and until closer together";
-  const refusal = () => new QueryRefusedError("bad_params", null, sentence);
+  const refusal = () => new QueryError("bad_params", null, sentence);
   mount("#/spend?window=30d", <Spend />, {
     tokens: (p: Record<string, unknown>) => (p.since ? refusal() : rollup(48_600_000)),
     token_series: (p: Record<string, unknown>) => (p.since ? refusal() : series(48_600_000)),
@@ -380,7 +377,7 @@ test("no monthly budget says so, and offers to set one only to an operator", asy
     <Spend />,
     {
       tokens: rollup(1),
-      viewer: READER,
+      viewer: { login: "", grants: [], handle: "", owner: "", name: "", kind: "" },
     },
     (store) => store.applyBudget(UNCAPPED),
   );
@@ -438,7 +435,7 @@ test("the median task tile asks the tracker, and is absent on a non-native track
   mount("#/spend?window=30d", <Spend />, {
     tokens: rollup(1),
     viewer: VIEWER,
-    work_items: new QueryRefusedError("unknown_query", null),
+    work_items: new QueryError("unknown_query"),
   });
   await settle();
   expect(screen.queryByText(/median tokens per finished task/)).toBeNull();
@@ -468,11 +465,10 @@ test("a seat whose day is refusing reads exhausted, and share and per-turn are t
     "#/spend?window=30d",
     <Spend />,
     { tokens: rollup(4_000, { by_agent: [ceo, swe] }), viewer: VIEWER },
-    (store) => {
-      store.applySeats([{ id: "swe", agent_id: "a-swe", role: "SWE", handle: "swe" }]);
-      store.applyAgents([
+    (store) =>
+      store.applySeats([
         {
-          // PAIRED BY AGENT ID with the spend row, never by handle.
+          id: "swe",
           agent_id: "a-swe",
           role: "SWE",
           handle: "swe",
@@ -492,11 +488,10 @@ test("a seat whose day is refusing reads exhausted, and share and per-turn are t
             ],
           },
         },
-      ]);
-    },
+      ]),
   );
   await settle();
-  const rows = [...document.querySelectorAll<HTMLElement>(".grid-row")];
+  const rows = [...document.querySelectorAll<HTMLElement>("[data-row-index]")];
   const sweRow = rows.find((r) => within(r).queryByText("SWE"))!;
   expect(within(sweRow).getByText("exhausted")).toBeTruthy();
   // The meter is named for the seat the row DRAWS — its name, never the
@@ -598,9 +593,9 @@ test("the phase legend is all four bands, a band nothing spent in included", asy
 });
 
 // A SEAT SERIES IS NAMED AS THE TABLE BELOW NAMES IT: the engine keys the band
-// on the seat's agent id — the identity a rename does not move — and sends the
-// seat's name beside it, which the legend reads.
-test("splitting by seat labels each band with the seat's name, not its handle", async () => {
+// on the seat's agent id and carries the name it read off the chart as its
+// `label`, so the legend draws the name and never the id.
+test("splitting by seat labels each band with the seat's name, not its key", async () => {
   mount("#/spend?window=30d&group=seat", <Spend />, {
     tokens: rollup(100),
     token_series: (p: Record<string, unknown>) => ({
@@ -618,16 +613,7 @@ test("splitting by seat labels each band with the seat's name, not its handle", 
       ],
       by_group:
         p.group === "seat"
-          ? [
-              {
-                ...bucket(100),
-                group: "a-swe",
-                label: "SWE",
-                handle: "swe",
-                other: false,
-                folded: 0,
-              },
-            ]
+          ? [{ ...bucket(100), group: "a-swe", label: "SWE", other: false, folded: 0 }]
           : [],
     }),
     viewer: VIEWER,
@@ -637,7 +623,6 @@ test("splitting by seat labels each band with the seat's name, not its handle", 
     .getByRole("heading", { name: "Daily tokens by agent" })
     .closest(".spend-chart");
   expect(within(chart as HTMLElement).getAllByText("SWE").length).toBeGreaterThan(0);
-  expect(within(chart as HTMLElement).queryByText("swe")).toBeNull();
   expect(within(chart as HTMLElement).queryByText("a-swe")).toBeNull();
 });
 
@@ -682,7 +667,7 @@ test("the expensive tasks under a refused window say the refusal and settle", as
     "#/spend/tasks?window=2026-06-01T00:00:00.000Z/2026-08-31T00:00:00.000Z",
     <ExpensiveTasks />,
     {
-      tokens: new QueryRefusedError("bad_params", null, sentence),
+      tokens: new QueryError("bad_params", null, sentence),
       viewer: VIEWER,
     },
   );

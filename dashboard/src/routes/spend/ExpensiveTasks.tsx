@@ -22,15 +22,15 @@
 import { Card, Skeleton } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, TokenCell } from "~/app/frame/cells.tsx";
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtExact } from "~/lib/format.ts";
 import { isRange, useTimeRange } from "~/lib/range.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { itemAddress } from "~/lib/work.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import type { WorkSummary } from "~/protocol/types.ts";
@@ -42,6 +42,7 @@ import {
   taskFacts,
   windowWords,
 } from "./model.ts";
+import { itemAddress } from "~/lib/work.ts";
 
 /** How many the overview's card lists — the design's three. */
 export const TOP_TASKS = 3;
@@ -49,11 +50,7 @@ export const TOP_TASKS = 3;
 /** How many the list asks for: the tracker's page ceiling for one answer. */
 export const TASK_ROWS = 50;
 
-/**
- * A task's peek, by its ADDRESS (`itemAddress`): its key, unless another task
- * claimed that key first and it is reached by its id — never the bare key,
- * which opens the claimant for both.
- */
+/** A task's peek, at its address ([itemAddress]). */
 function itemRef(row: WorkSummary): { kind: "item"; id: string } {
   return { kind: "item", id: itemAddress(row) };
 }
@@ -93,7 +90,7 @@ export function ExpensiveTasksCard({
       <QueryState
         error={answer.error}
         refusal={answer.refusal}
-        detail={answer.detail ?? undefined}
+        detail={answer.detail}
         loading={false}
       >
         {!answer.data ? (
@@ -135,7 +132,8 @@ export function ExpensiveTasksCard({
 /** `#/spend/tasks`: the list. */
 export function ExpensiveTasks() {
   const zone = useOrg()?.timezone;
-  const range = useTimeRange(spendOffer(zone));
+  const now = useNow();
+  const range = useTimeRange(now, spendOffer(zone));
   // THE WINDOW'S TWO INSTANTS, from the same spend answer the overview reads
   // — the engine cuts the company days, and this list starts and ends where
   // they do.
@@ -155,57 +153,6 @@ export function ExpensiveTasks() {
   // to be a share of, and a percentage would claim one.
   const top = rows.reduce((m, r) => Math.max(m, r.spend?.tokens ?? 0), 0);
   usePeekNeighbours(useMemo(() => rows.map(itemRef), [rows]));
-  // THE COLUMNS HOLD STILL until the top task's tokens move — the one thing
-  // they read off the answer: every row is memoised on this list.
-  const columns = useMemo<GridColumn<WorkSummary>[]>(
-    () => [
-      {
-        key: "key",
-        header: "Task",
-        shrink: true,
-        phoneLead: true,
-        cell: (r) => <KeyCell value={r.key || r.id.slice(0, 8)} />,
-      },
-      {
-        key: "title",
-        header: "Title",
-        floor: "12rem",
-        phoneLead: true,
-        cell: (r) => (
-          <span className="spend-task-main">
-            <span className="truncate">{r.title}</span>
-            {r.spend && <span className="spend-caption">{taskFacts(r.spend)}</span>}
-          </span>
-        ),
-      },
-      {
-        key: "tokens",
-        header: "Tokens",
-        align: "right",
-        // A FIXED TRACK beside the figure, as By agent draws its
-        // share: three columns stretched across a wide screen put the
-        // figure seven hundred pixels from the task it belongs to,
-        // with nothing between them to say how the rows compare.
-        width: "14rem",
-        phoneLead: true,
-        cell: (r) => (
-          <span className="spend-task-spend">
-            <span className="spend-share-track" aria-hidden="true">
-              <span
-                className="spend-share-bar"
-                style={{
-                  width: `${top > 0 ? ((r.spend?.tokens ?? 0) / top) * 100 : 0}%`,
-                }}
-              />
-            </span>
-            <TokenCell value={r.spend?.tokens} />
-          </span>
-        ),
-      },
-    ],
-    [top],
-  );
-
   // THE ANSWER'S OWN DAYS, as every other card on Spend names its window —
   // never the control's, and never "since" a date with today as the tacit
   // other end, which was wrong for a window that ended in the past.
@@ -225,7 +172,7 @@ export function ExpensiveTasks() {
         <QueryState
           error={refused}
           refusal={spend.error ? spend.refusal : answer.refusal}
-          detail={spend.error ? (spend.detail ?? undefined) : undefined}
+          detail={spend.error ? spend.detail : undefined}
           loading={false}
         />
       </>
@@ -247,7 +194,7 @@ export function ExpensiveTasks() {
         <QueryState
           error={answer.error}
           refusal={answer.refusal}
-          detail={answer.detail ?? undefined}
+          detail={answer.detail}
           loading={false}
         >
           <DataGrid
@@ -269,7 +216,51 @@ export function ExpensiveTasks() {
               title: "No task last changed in this window has spent tokens",
               hint: "A task appears here once an agent's turn is charged to it.",
             }}
-            columns={columns}
+            columns={[
+              {
+                key: "key",
+                header: "Task",
+                shrink: true,
+                phoneLead: true,
+                cell: (r) => <KeyCell value={r.key || r.id.slice(0, 8)} />,
+              },
+              {
+                key: "title",
+                header: "Title",
+                floor: "12rem",
+                phoneLead: true,
+                cell: (r) => (
+                  <span className="spend-task-main">
+                    <span className="truncate">{r.title}</span>
+                    {r.spend && <span className="spend-caption">{taskFacts(r.spend)}</span>}
+                  </span>
+                ),
+              },
+              {
+                key: "tokens",
+                header: "Tokens",
+                align: "right",
+                // A FIXED TRACK beside the figure, as By agent draws its
+                // share: three columns stretched across a wide screen put the
+                // figure seven hundred pixels from the task it belongs to,
+                // with nothing between them to say how the rows compare.
+                width: "14rem",
+                phoneLead: true,
+                cell: (r) => (
+                  <span className="spend-task-spend">
+                    <span className="spend-share-track" aria-hidden="true">
+                      <span
+                        className="spend-share-bar"
+                        style={{
+                          width: `${top > 0 ? ((r.spend?.tokens ?? 0) / top) * 100 : 0}%`,
+                        }}
+                      />
+                    </span>
+                    <TokenCell value={r.spend?.tokens} />
+                  </span>
+                ),
+              },
+            ]}
             footer={
               answer.data && answer.data.total_hint > rows.length ? (
                 <span className="spend-caption">

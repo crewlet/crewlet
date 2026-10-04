@@ -18,7 +18,7 @@
  */
 
 import { useMemo } from "react";
-import { useClockReading } from "~/lib/clock.ts";
+import { useNow } from "~/lib/clock.ts";
 import { fmtMinutes } from "~/lib/work.ts";
 import { plural } from "~/lib/format.ts";
 import { href, useParam } from "~/app/router.tsx";
@@ -37,13 +37,11 @@ import {
   activityOf,
   handleLabel,
   indexOrg,
-  liveRowFor,
   nameOfIn,
   stateLine,
   unitDirectLabel,
   type NameOf,
   type Seat,
-  type Unit,
 } from "~/lib/seats.ts";
 import { loadFraction, loadRows, loadSentence, loadTone, type Load } from "~/lib/workload.ts";
 import type { AgentRow } from "~/protocol/index.ts";
@@ -269,21 +267,23 @@ export function People() {
   const rows = useMemo<Row[]>(() => {
     const matches = (...fields: (string | undefined)[]) =>
       !needle || fields.some((f) => f?.toLowerCase().includes(needle));
-    // EACH CHART SEAT PAIRED WITH ITS ROSTER ROW BY HANDLE (`liveRowFor`),
-    // never by NAME: two seats sharing one wore the first one's state, and a
-    // seat renamed in the chart lost its row to whichever seat took the name.
-    const chart = index.seats.map((seat) => ({ seat, agent: liveRowFor(agents, seat) }));
-    // WHAT NO CHART SEAT PAIRED WITH is a seat the engine still reports and
-    // the chart no longer holds — keyed by the agent id the row is one per.
-    const paired = new Set(chart.flatMap(({ agent }) => (agent ? [agent.agent_id] : [])));
+    // EACH SEAT'S ROW BY ITS HANDLE — the roster row's `id` — never by its
+    // name, which two seats may share.
+    const inChart = new Set(index.seats.map((s) => s.handle).filter(Boolean));
+    const byHandle = new Map(agents.map((a) => [a.id, a]));
     const out: Row[] = [
-      ...chart
-        .filter(({ seat }) => matches(seat.name, seat.handle, seat.goal, seat.unit?.name))
-        .map(({ seat, agent }) => ({ key: seat.key, name: seat.name, seat, agent })),
+      ...index.seats
+        .filter((s) => matches(s.name, s.handle, s.goal, s.unit?.name))
+        .map((seat) => ({
+          key: seat.key,
+          name: seat.name,
+          seat,
+          agent: seat.handle ? byHandle.get(seat.handle) : undefined,
+        })),
       ...agents
-        .filter((a) => !paired.has(a.agent_id) && matches(a.role, a.handle))
+        .filter((a) => !inChart.has(a.id) && matches(a.role, a.handle))
         .map((agent) => ({
-          key: `removed:${agent.agent_id || agent.role}`,
+          key: `removed:${agent.agent_id}`,
           name: agent.role,
           seat: null,
           agent,
@@ -296,49 +296,16 @@ export function People() {
   const groups = useMemo(() => {
     if (group === "flat") return [{ key: "all", label: "", rows }];
     if (group === "unit") {
-      // BY THE UNIT'S KEY, never its name: two units may share a name, and
-      // grouped by it their people were drawn as one team under one count.
-      // The key "" is the root, which no unit's key can be.
-      const byUnit = new Map<string, { unit: Unit | null; rows: typeof rows }>();
-      // A SEAT THE CHART DROPPED belongs to no unit the chart holds, so it is
-      // a group of its own, drawn last — never a key in the unit map, where
-      // any string chosen for it is one a unit could be keyed by.
-      const removed: typeof rows = [];
+      const byUnit = new Map<string, typeof rows>();
       for (const row of rows) {
-        if (!row.seat) {
-          removed.push(row);
-          continue;
-        }
-        const unit = row.seat.unit;
-        const key = unit?.id ?? "";
-        const entry = byUnit.get(key) ?? { unit, rows: [] };
-        entry.rows.push(row);
-        byUnit.set(key, entry);
+        const key = row.seat
+          ? (row.seat.unit?.name ?? "No unit — org-wide")
+          : "Removed from the company";
+        byUnit.set(key, [...(byUnit.get(key) ?? []), row]);
       }
-      // A NAME TWO GROUPS SHARE carries each one's key, so the heads a reader
-      // tells them apart by are not two identical words.
-      const names = new Map<string, number>();
-      for (const { unit } of byUnit.values()) {
-        if (unit) names.set(unit.name, (names.get(unit.name) ?? 0) + 1);
-      }
-      const labelOf = (unit: Unit | null) =>
-        !unit
-          ? "No unit — org-wide"
-          : (names.get(unit.name) ?? 0) > 1
-            ? `${unit.name} (${unit.id})`
-            : unit.name;
-      const units = [...byUnit.entries()]
-        // THE GROUP'S KEY IS PREFIXED, so the removed group's own can never
-        // be one of them.
-        .map(([key, { unit, rows: list }]) => ({
-          key: `unit:${key}`,
-          label: labelOf(unit),
-          rows: list,
-        }))
-        .sort((a, b) => a.label.localeCompare(b.label));
-      return removed.length
-        ? [...units, { key: "removed", label: "Removed from the company", rows: removed }]
-        : units;
+      return [...byUnit.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([key, list]) => ({ key, label: key, rows: list }));
     }
     return STATE_ORDER.map((b) => ({
       key: b.key,
@@ -490,9 +457,7 @@ export function People() {
  * the company does not have.
  */
 function RemovedCard({ agent, nameOf }: { agent: AgentRow; nameOf: NameOf }) {
-  // THE LINE READS THE CLOCK AS ITS OWN WORDS ("Idle · last turn 12m ago"),
-  // so a tick redraws this card only when they change.
-  const line = useClockReading((now) => stateLine(agent, { now, nameOf }));
+  const now = useNow();
   return (
     <div className="seat-card" data-removed="">
       <div className="row">
@@ -504,7 +469,7 @@ function RemovedCard({ agent, nameOf }: { agent: AgentRow; nameOf: NameOf }) {
         </div>
         <Tag appearance="outline">removed</Tag>
       </div>
-      <div className="seat-line truncate">{line}</div>
+      <div className="seat-line truncate">{stateLine(agent, { now, nameOf })}</div>
     </div>
   );
 }

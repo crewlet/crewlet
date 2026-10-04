@@ -1,14 +1,16 @@
 /**
  * Moving a seat or a unit to another unit, or to the company's top level.
  *
- * A MOVE CHANGES MORE THAN WHERE A CARD SITS: who a seat reports to (a unit's
- * lead manages its direct members), what a moved unit inherits (a lead and a
- * channel it does not declare), which agent seats onboard again (the units
- * above them changed) and which tool credentials a seat receives from its
- * home unit. The dialog previews those (`movePreview.ts`), and the review
- * lists the move before the save.
+ * A MOVE CHANGES MORE THAN WHERE A CARD SITS, and the engine derives all of
+ * it: who a seat reports to (a unit's lead manages its direct members), what
+ * a moved unit inherits (a lead and a channel it does not declare), which
+ * agent seats onboard again (the unit names above them changed) and which
+ * tool credentials a seat receives from its home unit. The dialog previews
+ * those from what the check of the draft as it stands reported at both ends
+ * (`movePreview.ts`), and the check after the move, and the review before the
+ * save, show the engine's own result.
  *
- * A LEAD STAYS A LEAD. A unit's lead is a seat's HANDLE, not a position, so a
+ * A LEAD STAYS A LEAD. A unit's lead is a seat NAME, not a position, so a
  * seat that leads a unit keeps leading it from anywhere in the chart. That is
  * right for a department lead who sits in one of its teams and wrong for a
  * seat moved to another team, so the dialog says "Stays lead of" and offers
@@ -30,12 +32,12 @@ import {
   StrandedNotes,
   WorkingNotes,
 } from "./dialogParts.tsx";
-import { allSeats, allUnits, locate, subtreeKeys } from "./model/draft.ts";
+import { allSeats, allUnits, locate, siblingsAt, subtreeKeys } from "./model/draft.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import type { Intent } from "./model/operations.ts";
-import { recordIntent } from "./model/reducer.ts";
+import { handlesOf, recordIntent } from "./model/reducer.ts";
 import { movePreview, type MovePreview } from "./movePreview.ts";
-import { isWorking, savedHandleOf, unitsLedBy } from "./nodeFacts.ts";
+import { isWorking, unitsLedBy } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
 import { FolderInputGlyph } from "@crewlethq/icons/glyphs";
 import { Button, Checkbox, Modal } from "@crewlethq/ui";
@@ -69,10 +71,7 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
     );
   }
 
-  const name =
-    found.kind === "seat"
-      ? found.node.data.name || found.node.data.handle
-      : found.node.data.name || found.node.data.key;
+  const name = found.node.data.name;
   const isUnit = found.kind === "unit";
   const inside = new Set(found.kind === "unit" ? subtreeKeys(found.node) : [nodeKey]);
 
@@ -92,30 +91,38 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
       .map(({ unit }) => ({ value: unit.key, label: pathName(unit.key) })),
   ];
 
-  const led = found.kind === "seat" ? unitsLedBy(state.draft, found.node.data.handle) : [];
+  const led = isUnit ? [] : unitsLedBy(state.draft, name);
+  const unitRef = !isUnit && typeof found.node.data.unit === "string" ? found.node.data.unit : "";
 
-  const intentFor = (to: NodeKey): Intent => ({
-    type: "move",
-    target: nodeKey,
-    to: { parent: to },
-    clearLeads: clearLead ? led.map((u) => u.key) : [],
-  });
+  const intentFor = (to: NodeKey): Intent => {
+    const kind = isUnit ? "unit" : "seat";
+    const siblings = (siblingsAt(state.draft, to, kind) ?? []).filter((s) => s.key !== nodeKey);
+    return {
+      type: "move",
+      target: nodeKey,
+      to: { parent: to, after: siblings.at(-1)?.key ?? null },
+      clearLeads: clearLead ? led.map((u) => u.key) : [],
+    };
+  };
 
   const chosen = destination !== "";
   const preview = chosen ? simulate(state, intentFor(destination)) : null;
   const derived = chosen ? movePreview(state, nodeKey, destination) : null;
   const stranded = preview?.ok ? newlyStranded(state.draft, preview.after) : [];
-  // Already there: where a node sits is its parent and nothing else.
+  // Already there: its own parent is a place to reorder in, not to move to,
+  // unless the seat sits there only by its unit reference, which the move
+  // replaces with a placement.
   const sameSpot =
-    (chosen && destination === found.parent) ||
+    (chosen && destination === found.parent && unitRef === "") ||
     (preview !== null && !preview.ok && preview.refusal === "no_change");
 
   const moving = isUnit
     ? [...allSeats(state.draft)].filter(({ parent }) => inside.has(parent)).map(({ seat }) => seat)
     : [found.node];
+  const handles = handlesOf(state);
   const working = moving
-    .filter((seat) => isWorking(savedHandleOf(state, seat.key), api.agents, api.sandboxes))
-    .map((seat) => seat.data.name || seat.data.handle);
+    .filter((seat) => isWorking(handles.get(seat.key), api.agents, api.sandboxes))
+    .map((seat) => seat.data.name);
 
   function move() {
     if (!chosen || api.readOnly) return;
@@ -171,11 +178,17 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
               : undefined
         }
       />
+      {unitRef && (
+        <p className="t-caption">
+          {name} is placed in {unitRef} by its unit reference. Moving it writes it into the
+          destination and removes the reference.
+        </p>
+      )}
       {led.length > 0 && (
         <EditorSection title={`Stays lead of ${led.map((u) => u.data.name).join(", ")}`}>
           <p className="t-caption">
-            A unit&apos;s lead is a seat&apos;s handle, so {name} leads{" "}
-            {led.length === 1 ? "it" : "them"} from wherever it sits.
+            A unit's lead is a seat's name, so {name} leads {led.length === 1 ? "it" : "them"} from
+            wherever it sits.
           </p>
           <Checkbox
             label="Clear lead"
@@ -205,22 +218,29 @@ function MoveChanges({
   destination: string;
   isUnit: boolean;
 }) {
+  if (!preview.known) {
+    return (
+      <EditorSection title="What changes">
+        <p className="t-body muted">
+          The engine has not described this draft yet, so what the move changes is shown after the
+          next check.
+        </p>
+      </EditorSection>
+    );
+  }
   const lines: string[] = [];
   if (!isUnit) {
-    // BEFORE THE MOVE, SAID AS SUCH. Who the seat reports to after it is the
-    // engine's to derive once the draft is saved; what is known now is who
-    // manages the seat today, and whether that is only as the lead of the
-    // unit the seat is leaving, which the move ends — and only while this
-    // draft has not changed the chart the engine derived that from.
-    if (preview.reportsTo !== undefined) {
-      lines.push(
-        preview.reportsTo === null
-          ? `Today ${name} reports to nobody.`
-          : preview.endsAsLeadOf
-            ? `Today ${name} reports to ${preview.reportsTo} as the lead of ${preview.endsAsLeadOf}, which ends with the move.`
-            : `Today ${name} reports to ${preview.reportsTo}.`,
-      );
-    }
+    // BEFORE THE MOVE, SAID AS SUCH. What the engine will derive after the
+    // move is the next check's to report; what is known now is who manages
+    // the seat today, and whether that is only as the lead of the unit the
+    // seat is leaving, which the move ends.
+    lines.push(
+      !preview.reportsTo
+        ? `Today ${name} reports to nobody.`
+        : preview.endsAsLeadOf
+          ? `Today ${name} reports to ${preview.reportsTo} as the lead of ${preview.endsAsLeadOf}, which ends with the move.`
+          : `Today ${name} reports to ${preview.reportsTo}.`,
+    );
     if (preview.destinationLead) {
       lines.push(
         `In ${destination}, ${preview.destinationLead} leads the unit and manages its direct members unless another member manages ${name}.`,
@@ -251,11 +271,10 @@ function MoveChanges({
   if (preview.credentials.lost.length > 0) {
     lines.push(`${name} loses the tool credentials of ${preview.credentials.lost.join(", ")}.`);
   }
-  if (lines.length === 0) return null;
   return (
     <EditorSection
       title="What changes"
-      hint="Who reports to whom after the move is derived by the engine once the draft is saved. The review lists the move before you save."
+      hint="From the engine's check of the draft as it stands. The check after the move confirms it, and the review lists it before you save."
     >
       <ul className="builder-list">
         {lines.map((line) => (

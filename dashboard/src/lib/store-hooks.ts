@@ -98,17 +98,6 @@ export function useOrg() {
   return useSlice(["org"], (s) => s.org);
 }
 
-/**
- * How many org projections have been pushed — the signal a chart read is
- * asked again on (`lib/chartReads.ts`) and the org builder checks its draft
- * again on, which `useOrg`'s identity is not: an org push deep-equal to the
- * last is shared by the store and moves nothing, and it still says a chart
- * write or a settings revision landed. See `StoreState.orgPushes`.
- */
-export function useOrgPushes() {
-  return useSlice(["orgPushes"], (s) => s.orgPushes);
-}
-
 export function useTools() {
   return useSlice(["tools"], (s) => s.tools);
 }
@@ -127,13 +116,12 @@ export function useTokens() {
  * round trip for rows this client already held, kept fresh on every apply.
  *
  * These are the RESOLVED rows, which is the distinction that matters against
- * the other way to get a seat's schedules: the org builder's `schedulesOf`
- * (`routes/org/builder/editorForm.ts`) reads the `schedules:` a seat AUTHORED
- * in its runtime half on the org chart, which only a `config:read` reader is
- * served, and carries name, cron and task. A row here carries the effective
- * timezone, the engine's own `next_run`, the `runners` a fire actually
- * reaches, and `problem` when a cron or a zone cannot be read — and it is
- * pushed to every reader holding `state:read`.
+ * the other way to get a seat's schedules: `lib/seats.ts`'s `schedulesOf`
+ * reads the `schedules:` a seat AUTHORED out of the company document, so it
+ * takes `config:read` and carries name, cron and task. A row here carries the
+ * effective timezone, the engine's own `next_run`, the `runners` a fire
+ * actually reaches, and `problem` when a cron or a zone cannot be read — and
+ * it is pushed to every reader holding `state:read`.
  *
  * WHAT IT DOES NOT CARRY is the run ledger. `recent_runs` arrives only on the
  * `schedules` QUESTION, so `routes/agents/Schedules.tsx` polls that
@@ -153,9 +141,8 @@ export function useOrgBudget() {
  *
  * Four states, not two, because the repair differs and a reader cannot guess
  * which one they are looking at: connected, unreachable (comes back on its
- * own), a refused credential (the reader supplies another), and access
- * refused to a credential the engine accepts (only an administrator repairs
- * it).
+ * own), nobody signed in (the reader signs in), and access refused to a
+ * person the engine knows (only an administrator repairs it).
  */
 export function useConnection() {
   return useSlice(["health"], (s) => ({

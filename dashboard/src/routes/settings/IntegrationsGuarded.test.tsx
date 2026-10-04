@@ -1,20 +1,22 @@
 /**
- * A banner that names a missing grant has to offer the door to it.
+ * A banner that names a missing credential has to offer the door to it — and
+ * one that names a missing GRANT must not offer a door that does not open.
  *
  * `/setup` is guarded in full, reads included, so a reader the engine refuses
- * gets a 401 or 403 on the listing and the screen falls back to what the
- * socket can see. That much is deliberate. What was not is that the banner
- * explaining it once offered nothing that could act on it: the reader was
- * told what is missing and left with no way to supply it. The door is a
- * sign-in, and it comes back to this screen.
+ * gets a refusal on the listing and the screen falls back to what the socket
+ * can see. That much is deliberate. What was not is that the banner
+ * explaining it offered nothing that could change it. Nobody signed in is
+ * offered the sign-in; a signed-in reader lacking the grant is told which
+ * grant, since signing in again as themselves would change nothing.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Integrations } from "./Integrations.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
+import { LiveSocket, Store, sessionRestored } from "~/protocol/index.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -25,41 +27,65 @@ class InertWebSocket {
   close(): void {}
 }
 
+/** The engine's refusal of every `/setup` read, at `status`, naming `grants`. */
+function refusing(status: number, grants: string[] = []) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: "unauthorized",
+            ...(grants.length ? { reason: "no_grant", grants } : {}),
+          }),
+          { status },
+        ),
+    ),
+  );
+}
+
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = "#/settings/integrations";
-  // The engine's own refusal, byte for byte: internal/api/auth answers 401
-  // with this body, and RestError.unauthorized is what the screen branches on.
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 })),
-  );
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  sessionRestored();
   location.hash = "#/";
 });
 
-function mount() {
+function mount(viewer: unknown) {
   const store = new Store();
   const socket = new LiveSocket(store);
-  (socket as unknown as { query: () => Promise<unknown> }).query = () => Promise.resolve([]);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+    Promise.resolve(what === "viewer" ? viewer : []);
   return render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
-        <Integrations />
+        <ViewerProvider>
+          <Integrations />
+        </ViewerProvider>
       </Router>
     </ClientContext.Provider>,
   );
 }
 
-test("the guarded banner offers a sign-in that comes back to this screen", async () => {
-  mount();
+test("for nobody signed in, the guarded banner offers the sign-in", async () => {
+  refusing(401);
+  mount({ login: "", owner: "", grants: [] });
 
   fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
-  await waitFor(() =>
-    expect(location.hash).toBe(`#/login?next=${encodeURIComponent("#/settings/integrations")}`),
-  );
+  expect(location.hash).toMatch(/^#\/login/);
+});
+
+test("for a reader without the grant, the banner names it and offers no sign-in", async () => {
+  refusing(403, ["config:read"]);
+  mount({ login: "jane.doe", owner: "jane.doe", grants: ["state:read"] });
+
+  expect(
+    await screen.findByText(/Reading the integrations' setup state needs config:read/),
+  ).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
 });

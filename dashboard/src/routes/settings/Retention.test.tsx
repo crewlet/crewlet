@@ -10,7 +10,7 @@
  * and finishes under, force — are in GateDialog.test.tsx.
  */
 
-import { cleanup, render, screen, waitFor } from "~/test/inCase.ts";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
@@ -20,14 +20,9 @@ import {
   gateAction,
   MaintenanceBanner,
   NodePositions,
-  RetentionPanels,
   ServedLevelBanner,
   Terms,
 } from "./Retention.tsx";
-import { Router } from "~/app/router.tsx";
-import { ClientContext } from "~/lib/store-hooks.ts";
-import { ViewerProvider } from "~/lib/viewer.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { RetentionDomain, RetentionNode, RetentionTerm } from "~/protocol/index.ts";
 
 afterEach(cleanup);
@@ -190,6 +185,7 @@ test("an open capacity operation is rendered as an outage in progress", () => {
         by: "sre@example.com",
         participants_missing: ["node-b", "node-c"],
       }}
+      now={Date.now()}
     />,
   );
   expect(screen.getByRole("alert").className).toContain("danger");
@@ -211,6 +207,7 @@ test("an operation with nobody outstanding says it is waiting on its operator", 
         original_max_bytes: 1_000_000_000,
         since: new Date(Date.now() - 60_000).toISOString(),
       }}
+      now={Date.now()}
     />,
   );
   expect(screen.getByText(/waiting on its operator/)).toBeTruthy();
@@ -245,72 +242,6 @@ test("an answer served at stale renders no banner at all", () => {
   expect(missing.container.textContent).toBe("");
 });
 
-// A LOG'S DAILY INTAKE RENDERS ONLY WHERE IT WAS MEASURED. It is the rate
-// `log_ceiling_short` holds the ceiling against, and the server sends it absent
-// for a log nobody could measure — compacted, in its first two days, a node
-// that has not ticked. "0 B a day" is the claim that a log took in nothing, which is
-// the opposite fact, so the absent field must draw nothing rather than a zero.
-test("a log's daily intake renders as measured, and an unmeasured one draws nothing", () => {
-  render(<DomainBlock domain={domain({ bytes_per_day: 3 << 20 })} />);
-  expect(screen.getByText(/3\.0 MB a day/)).toBeTruthy();
-
-  // A MEASURED ZERO IS A VALUE, and it renders as one.
-  cleanup();
-  render(<DomainBlock domain={domain({ bytes_per_day: 0 })} />);
-  expect(screen.getByText(/0 B a day/)).toBeTruthy();
-
-  // THE CONTROL: absent draws no rate at all.
-  cleanup();
-  render(<DomainBlock domain={domain()} />);
-  expect(screen.queryByText(/a day/)).toBeNull();
-});
-
-/** The panels, for a reader holding `grants`; records the questions asked. */
-function mountPanels(grants: string[]): string[] {
-  const asked: string[] = [];
-  const store = new Store();
-  const socket = new LiveSocket(store);
-  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = async (what) => {
-    asked.push(what);
-    if (what === "viewer") {
-      return {
-        login: "jane.doe",
-        grants,
-        handle: "jane",
-        name: "Jane",
-        kind: "human",
-        owner: "jane",
-      };
-    }
-    return { domains: [], nodes: [] };
-  };
-  render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <ViewerProvider>
-        <Router>
-          <RetentionPanels />
-        </Router>
-      </ViewerProvider>
-    </ClientContext.Provider>,
-  );
-  return asked;
-}
-
-// THE GATE IS THE GRANT THE QUESTION TAKES. It was "this browser holds a
-// token", which a person signed in with `state:read` alone satisfies as well
-// as an operator does — and for them every poll would come back refused.
-test("the retention panels ask only for a reader who holds fleet:operate", async () => {
-  const reader = mountPanels(["state:read"]);
-  await waitFor(() => expect(reader).toContain("viewer"));
-  await new Promise((settled) => setTimeout(settled, 20));
-  expect(reader).not.toContain("retention");
-
-  cleanup();
-  // THE CONTROL: the operator is asked for.
-  const operator = mountPanels(["state:read", "fleet:operate"]);
-  await waitFor(() => expect(operator).toContain("retention"));
-});
-
 // THE SERVER'S SENTENCE IS THE WHOLE SENTENCE. `statelog`'s report composes
 // "Nothing is being trimmed on tracker: <why>." — the headline included,
 // because the CLI prints the same line — and the banner once put its own
@@ -324,6 +255,7 @@ test("a blocked trim's banner states its headline exactly once", () => {
       domain={blocked({
         prose: "Nothing is being trimmed on tracker: no backup has been recorded.",
       })}
+      now={Date.now()}
     />,
   );
   const text = container.textContent ?? "";
@@ -333,7 +265,7 @@ test("a blocked trim's banner states its headline exactly once", () => {
 
   // No sentence from the server: the banner composes one, naming the term.
   cleanup();
-  const bare = render(<BlockedBanner domain={blocked({})} />).container;
+  const bare = render(<BlockedBanner domain={blocked({})} now={Date.now()} />).container;
   expect(bare.textContent).toMatch(/Nothing is being trimmed on tracker: the backup_max_age term/);
 });
 
@@ -347,7 +279,7 @@ test("a node with an unfinished gesture offers to finish it rather than start af
   const held = {
     opId: "01a0c450-6c00-7011-a233-445566778899.evict-node-a",
     force: false,
-    unanswered: "the engine did not answer within 105 seconds",
+    unanswered: "the engine did not answer within 75 seconds",
   };
   expect(gateAction(node(), { "node-a:evict": held })).toEqual({
     evict: true,

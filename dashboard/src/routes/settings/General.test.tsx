@@ -8,7 +8,7 @@
  * figure the engine did not answer is absent, never a zero.
  */
 
-import { act, cleanup, render, screen } from "~/test/inCase.ts";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { General } from "./General.tsx";

@@ -10,7 +10,7 @@
 
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { cleanup, render, screen } from "~/test/inCase.ts";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import { getInitials } from "@crewlethq/ui";
 import { SeatAvatar, badgeName, seatBadge } from "./SeatAvatar.tsx";

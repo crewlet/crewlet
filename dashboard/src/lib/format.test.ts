@@ -19,6 +19,7 @@ import {
   eventHistoryLabel,
   eventHistorySpan,
   nodeCountLabel,
+  formatPhaseLLM,
   fmtCount,
   fmtDate,
   fmtDuration,
@@ -276,8 +277,35 @@ describe("a live counter reads as a clock, not as a glitch", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Values read out of a redacted answer
+// Values read out of the company document
 // ---------------------------------------------------------------------------
+
+// `config.PhaseLLM` marshals as a STRING for one provider, an ARRAY for a
+// fallback chain, and an OBJECT keyed on phase for a per-phase mapping. The
+// seat screen rendered the field as a React child, which drew a chain as its
+// keys glued together and THREW on the mapping, taking the whole page with it.
+describe("a seat's model setting, as rows a person reads", () => {
+  test("one key and a chain are one row covering every phase", () => {
+    expect(formatPhaseLLM("fast")).toEqual([{ phase: "", chain: "fast" }]);
+    // The ORDER is the whole meaning of a chain, so it reads as one.
+    expect(formatPhaseLLM(["fast", "backup"])).toEqual([{ phase: "", chain: "fast, then backup" }]);
+  });
+
+  test("a mapping is one row per phase, in the engine's own order", () => {
+    expect(formatPhaseLLM({ judge: "tiny", default: ["big", "fast"] })).toEqual([
+      { phase: "default", chain: "big, then fast" },
+      { phase: "judge", chain: "tiny" },
+    ]);
+  });
+
+  // THE ONE READER standing between a field a newer engine may shape
+  // differently and a render that must not throw.
+  test("anything else is no rows rather than a throw", () => {
+    for (const odd of [undefined, null, 0, true, {}, [], "", [""], { default: "" }]) {
+      expect(formatPhaseLLM(odd)).toEqual([]);
+    }
+  });
+});
 
 describe("a value read from the redacted document", () => {
   test("the mask says something is set and never what", () => {

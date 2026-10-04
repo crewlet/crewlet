@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { cleanup, render } from "~/test/inCase.ts";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -215,6 +215,7 @@ function grouped() {
             groups={[group("todo", ["1", "2"]), group("in_progress", ["3"])]}
             axis="status"
             chrome={{}}
+            now={Date.parse("2031-04-16T00:00:00Z")}
             workspace
             hrefOf={(r) => `#/work/${r.key}`}
             onOpen={() => {}}

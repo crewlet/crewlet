@@ -25,7 +25,6 @@ import {
   type SeatCondition,
 } from "~/components/DecisionRow.tsx";
 import type { ViewerState } from "~/lib/viewer.ts";
-import { fmtExact } from "~/lib/format.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { DecisionsAnswer, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
 
@@ -43,6 +42,7 @@ export function Decisions({
   refusal,
   loading,
   seatConditions,
+  now,
 }: {
   viewer: ViewerState;
   answer: DecisionsAnswer | null;
@@ -51,6 +51,7 @@ export function Decisions({
   refusal: QueryRefusal | LogRefusal | null;
   loading: boolean;
   seatConditions: readonly SeatCondition[];
+  now: number;
 }) {
   const subjects = decisionSubjects(answer, seatConditions);
   const total = typeof answer?.total === "number" ? answer.total + seatConditions.length : null;
@@ -70,7 +71,7 @@ export function Decisions({
           Needs your decision
           {total !== null && total > 0 && (
             <Tag size="xs" variant="warning" className="home-card-count">
-              {`${fmtExact(total)}${answer?.capped ? "+" : ""}`}
+              {`${total.toLocaleString()}${answer?.capped ? "+" : ""}`}
             </Tag>
           )}
         </Card.Title>
@@ -94,6 +95,7 @@ export function Decisions({
                   key={subjectKey(subject)}
                   subject={subject}
                   decider={{ handle: viewer.handle }}
+                  now={now}
                 />
               ))}
             </ul>

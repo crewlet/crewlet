@@ -5,18 +5,16 @@
  * ONE DOOR. The canvas, the outline, the node editor and the dialogs never
  * call the transport or storage. They read the draft and the engine's last
  * answer from here, record operations with `dispatch`, and open each other
- * through the `open*` functions. Everything with a lifetime (the check, the
- * save, the kept draft, the live region) belongs to `Builder.tsx`,
+ * through the `open*` functions. Everything with a lifetime (the dry-run
+ * check, the save, the kept draft, the live region) belongs to `Builder.tsx`,
  * which provides this value, so a view can be rendered in a test against a
  * plain object and cannot start a request of its own.
  *
- * WHAT THE CHECK SAID IS PER NODE. `problemsFor` and `warningsFor` answer
- * from the last check of the CURRENT draft — the draft's own preflight and the
- * settings' dry run, placed on the nodes they are about (see
- * `model/problems.ts`): a check that is still out, or answered for an older
- * draft, contributes nothing, so a badge never names a problem the draft no
- * longer has. What the engine DERIVES (a manager, the reporting forest) is
- * the saved chart's and is read through `chartModel.ts`.
+ * WHAT THE ENGINE SAID IS PER NODE. `problemsFor` and `warningsFor` answer
+ * from the last check of the CURRENT draft, placed through the path index of
+ * the document that check sent (see `model/problems.ts`): a check that is
+ * still out, or answered for an older draft, contributes nothing, so a badge
+ * never names a problem the draft no longer has.
  *
  * A VIEW REGISTERS ITSELF. Focus, reveal and expanding a whole tree are the
  * mounted view's to perform (the canvas pans, the outline scrolls), while the
@@ -30,7 +28,14 @@
 import { createContext, useContext, useEffect } from "react";
 import type { Route } from "~/app/router.tsx";
 import { resolve } from "~/app/routes.ts";
-import type { AgentRow, ConfigProblem, ConfigWarning, SandboxEntry } from "~/protocol/index.ts";
+import type {
+  AgentRow,
+  ConfigProblem,
+  ConfigWarning,
+  DerivedSeat,
+  DerivedUnit,
+  SandboxEntry,
+} from "~/protocol/index.ts";
 import type { KeySource, NodeKey } from "./model/keys.ts";
 import type { BuilderAction, BuilderState } from "./model/reducer.ts";
 
@@ -83,6 +88,12 @@ export function keepsTheLens(to: Route): boolean {
  */
 export type ChartKind = "structure" | "reporting";
 
+/** The engine's derivation of the current draft, with its lists always present. */
+export interface BuilderDerived {
+  readonly seats: DerivedSeat[];
+  readonly units: DerivedUnit[];
+}
+
 /**
  * A part of the node editor it can be opened at: a seat's Reports (whom it
  * manages) or a unit's Leadership (its lead). The editor then starts on that
@@ -105,6 +116,8 @@ export interface BuilderApi {
   state: BuilderState;
   /** Records an operation, undoes, redoes. Never a transport call. */
   dispatch(action: BuilderAction): void;
+  /** From the last check of the current draft; `null` until one answers with a derivation. */
+  derived: BuilderDerived | null;
   /** The problems the last check of the current draft placed on this node. */
   problemsFor(key: NodeKey): ConfigProblem[];
   /** The warnings the last check of the current draft placed on this node. */

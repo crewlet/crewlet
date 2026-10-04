@@ -12,7 +12,6 @@ import { useId, useState } from "react";
 import { Button, Textarea } from "@crewlethq/ui";
 import { MessageSquareGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import { SeatChip } from "~/components/common.tsx";
-import { ClockText } from "~/app/frame/cells.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
@@ -26,11 +25,13 @@ export function PageComments({
   title,
   comments,
   who,
+  now,
 }: {
   pageID: string;
   title: string;
   comments: PageComment[];
   who: Who;
+  now: number;
 }) {
   const write = useAct("comment_on_page");
   const [draft, setDraft] = useState("");
@@ -72,7 +73,7 @@ export function PageComments({
                     dateTime={c.created_at}
                     title={fmtDateTime(c.created_at)}
                   >
-                    <ClockText read={(now) => relTime(c.created_at, now)} />
+                    {relTime(c.created_at, now)}
                   </time>
                   {c.updated_at && c.updated_at !== c.created_at && (
                     <span className="muted t-caption" title={fmtDateTime(c.updated_at)}>

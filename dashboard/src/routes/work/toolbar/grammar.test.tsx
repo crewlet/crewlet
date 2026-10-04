@@ -25,7 +25,7 @@
  * later with nowhere to live fails here rather than shipping invisible.
  */
 
-import { answered, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { ItemsView } from "../ItemsView.tsx";
@@ -68,13 +68,12 @@ afterEach(() => {
  * Every URL key this screen reads or writes.
  *
  * `useParam` IS THE WHOLE GRAMMAR of it — a key nothing reads is a key nothing
- * can act on — plus what is read off the whole query rather than one key at a
- * time: the family of a company's own fields, because that set is the
- * company's and there is no key for a build to ask for, and the column
- * narrowing (`group`), because it is THREE-VALUED and `useParam` cannot say so
- * (an absent key and a present empty one are different columns). Both
- * spellings of the column key arrive through [colsParam], so they are
- * recognised in that form rather than as literals the screen does not contain.
+ * can act on — plus what is read off the whole query rather than through it:
+ * the one family whose keys are the company's own fields, since there is no
+ * key for a build to ask for, and a key whose absence and emptiness are two
+ * values (`route.query.get`), which `useParam` reads as one. Both spellings of
+ * the column key arrive through [colsParam], so they are recognised in that
+ * form rather than as literals the screen does not contain.
  */
 function screenKeys(): string[] {
   const out = new Set<string>();
@@ -84,11 +83,11 @@ function screenKeys(): string[] {
     if (literal) out.add(literal);
     if (shape) out.add(colsParam(shape as (typeof GRID_SHAPES)[number]));
   }
+  for (const [, key] of SOURCE.matchAll(/route\.query\.get\("([^"]+)"\)/g)) {
+    if (key) out.add(key);
+  }
   for (const [, prefix] of SOURCE.matchAll(/key\.startsWith\("([^"]+)"\)/g)) {
     if (prefix) out.add(prefix);
-  }
-  for (const [, key] of SOURCE.matchAll(/route\.query\.(?:has|get)\("([^"]+)"\)/g)) {
-    if (key) out.add(key);
   }
   return [...out];
 }
@@ -213,22 +212,9 @@ const task: WorkSummary = {
 
 const rows = { work_items: { items: [task], groups: [], total_hint: 1, complete: true } };
 
-/**
- * The list, UNDER A VIEWER as the frame mounts every screen: a board card's
- * drag and a row's inline status are writes, and they ask who is reading. A
- * case lets the stubbed socket's answers land, and renders what they leave,
- * with [answered].
- *
- * NOT A POLL. A `findBy` or a `waitFor` re-ran its query on every change to
- * the page and every fifty milliseconds against a one-second deadline, each
- * time a query by role over the whole list, which computes the name of every
- * button on it — and on a loaded machine the deadline passed before the list
- * had drawn. The answers are promises, so `act` runs them, and the renders
- * they cause, to the end, however long that takes; and the flush is refused
- * once the case that asks has ended, so a case still running after its time
- * ran out opens no `act` beside the next one.
- */
-function mountList(): void {
+// UNDER A VIEWER, as the frame mounts every screen: a board card's drag and a
+// row's inline status are writes, and they ask who is reading.
+const mountList = () =>
   render(
     <Router>
       <ViewerProvider>
@@ -236,48 +222,25 @@ function mountList(): void {
       </ViewerProvider>
     </Router>,
   );
-}
-
-/**
- * The list's first row — what is drawn: the shape tabs and the Display menu's
- * trigger.
- */
-function shapeRow(): HTMLElement {
-  const row = document.querySelector<HTMLElement>(".work-tabs");
-  if (!row) throw new Error("the list draws no shape row");
-  return row;
-}
-
-/** The list's own bar — what cuts the answer: the filters, the scope and the arrangement. */
-function workBar(): HTMLElement {
-  const bar = document.querySelector<HTMLElement>(".work-bar");
-  if (!bar) throw new Error("the list draws no bar");
-  return bar;
-}
 
 /**
  * The list at one address, with one item on it.
  *
- * IT HOLDS THE BAR rather than the row, because the row is not on every
- * shape: a calendar draws the month it is in, and an item due in another one
- * is not on the grid at all — where the toolbar these cases are about is drawn
- * whatever the answer holds.
+ * IT WAITS FOR THE BAR rather than for the row, because the row is not on
+ * every shape: a calendar draws the month it is in, and an item due in another
+ * one is not on the grid at all — where the toolbar these cases are about is
+ * drawn whatever the answer holds.
  */
-async function listAt(
-  hash: string,
-  answers: Partial<Record<QueryName, unknown>> = rows,
-): Promise<void> {
+async function listAt(hash: string, answers: Partial<Record<QueryName, unknown>> = rows) {
   location.hash = hash;
   serving(answers);
-  mountList();
-  await answered();
-  expect(workBar()).toBeTruthy();
+  const { container } = mountList();
+  await waitFor(() => expect(container.querySelector(".work-bar")).toBeTruthy());
 }
 
-/** The Display menu, opened from the list's own first row. */
+/** The Display menu, opened. */
 async function openDisplay() {
-  fireEvent.click(within(shapeRow()).getByRole("button", { name: "Display" }));
-  await answered();
+  fireEvent.click(await screen.findByRole("button", { name: "Display" }));
 }
 
 /** An optional column of the list's set — the one a tick can turn on. */
@@ -308,7 +271,7 @@ const ARRANGEMENT: Record<
     // THE FIRST ROW'S OWN TABS, never the Display menu: the shape is the one
     // arrangement a team switches all day.
     press: async () => {
-      const shapes = within(shapeRow()).getByRole("group", { name: "Draw as" });
+      const shapes = await screen.findByRole("group", { name: "Draw as" });
       fireEvent.click(within(shapes).getByRole("button", { name: "Board" }));
     },
     writes: "shape=board",
@@ -316,7 +279,7 @@ const ARRANGEMENT: Record<
   group_by: {
     at: "#/work",
     press: async () => {
-      pick(within(workBar()).getByRole("combobox", { name: "Group by" }), "Assignee");
+      pick(await screen.findByRole("combobox", { name: "Group by" }), "Assignee");
     },
     writes: "group_by=assignee",
   },
@@ -326,14 +289,14 @@ const ARRANGEMENT: Record<
     at: "#/work?group_by=status",
     press: async () => {
       await openDisplay();
-      pick(screen.getByRole("combobox", { name: "Then by" }), "Priority");
+      pick(await screen.findByRole("combobox", { name: "Then by" }), "Priority");
     },
     writes: "group_by2=priority",
   },
   sort: {
     at: "#/work",
     press: async () => {
-      pick(within(workBar()).getByRole("combobox", { name: "Sort" }), "Recently updated");
+      pick(await screen.findByRole("combobox", { name: "Sort" }), "Recently updated");
     },
     writes: "sort=-updated",
   },
@@ -341,7 +304,7 @@ const ARRANGEMENT: Record<
     at: "#/work",
     press: async () => {
       await openDisplay();
-      fireEvent.click(screen.getByLabelText(optionalColumn()));
+      fireEvent.click(await screen.findByLabelText(optionalColumn()));
     },
     // THE ACTIVE SHAPE'S OWN KEY, which is the family's whole point.
     writes: `${colsParam("list")}=`,
@@ -358,9 +321,8 @@ const ARRANGEMENT: Record<
       },
     },
     press: async () => {
-      fireEvent.click(screen.getByRole("button", { name: "To do lane options" }));
-      await answered();
-      fireEvent.click(screen.getByRole("menuitem", { name: "Hide this lane" }));
+      fireEvent.click(await screen.findByRole("button", { name: "To do lane options" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Hide this lane" }));
     },
     writes: "hide=todo",
   },
@@ -369,36 +331,31 @@ const ARRANGEMENT: Record<
     at: "#/work?shape=board",
     press: async () => {
       await openDisplay();
-      fireEvent.click(screen.getByLabelText("Labels"));
+      fireEvent.click(await screen.findByLabelText("Labels"));
     },
     writes: "card_hide=labels",
   },
 };
 
-const ARRANGEMENT_HOMED = Object.entries(URL_HOMES)
-  .filter(([, home]) => home === "arrangement")
-  .map(([key]) => key);
+test("every arrangement key is one an arrangement control writes", async () => {
+  const homed = Object.entries(URL_HOMES)
+    .filter(([, home]) => home === "arrangement")
+    .map(([key]) => key);
+  expect(Object.keys(ARRANGEMENT).sort()).toEqual(homed.sort());
 
-test("every arrangement key is one this suite presses", () => {
-  expect(Object.keys(ARRANGEMENT).sort()).toEqual([...ARRANGEMENT_HOMED].sort());
-});
-
-// ONE CASE PER KEY, not one case pressing them all. Each press is a whole list
-// screen mounted and a control driven — 100 to 380 ms a key, measured — and a
-// single case pressing every key ran past the five-second budget whenever the
-// suite shared its cores: a budget that holds one screen was being spent on
-// every key the grammar homes there. Apart, each case is one screen, and a key
-// whose control stopped writing it names itself.
-test.each(ARRANGEMENT_HOMED)("its arrangement control writes %s", async (key) => {
-  const entry = ARRANGEMENT[key] as (typeof ARRANGEMENT)[string];
-  await listAt(entry.at, entry.answers);
-  await entry.press();
-  await answered();
-  expect(location.hash, `${key} was not written by its control`).toContain(entry.writes);
-  // AND NO CHIP SAYS SO, because an arrangement narrows nothing: a chip for
-  // one would offer to remove a drawing.
-  const chips = document.querySelector(".work-chips")?.textContent ?? "";
-  expect(chips, `${key} drew a chip`).not.toContain(key);
+  for (const key of homed) {
+    const entry = ARRANGEMENT[key] as (typeof ARRANGEMENT)[string];
+    await listAt(entry.at, entry.answers);
+    await entry.press();
+    await waitFor(() =>
+      expect(location.hash, `${key} was not written by its control`).toContain(entry.writes),
+    );
+    // AND NO CHIP SAYS SO, because an arrangement narrows nothing: a chip for
+    // one would offer to remove a drawing.
+    const chips = document.querySelector(".work-chips")?.textContent ?? "";
+    expect(chips, `${key} drew a chip`).not.toContain(key);
+    cleanup();
+  }
 });
 
 // AND THE COLUMN FAMILY IS ONE KEY PER GRID SHAPE, so a third grid shape
@@ -437,14 +394,12 @@ test("exactly three keys are neither a chip nor an arrangement", () => {
 test("the scope is the bar's own switch, with no chip and no row in the Filter menu", async () => {
   await listAt("#/work");
   pick(screen.getByRole("combobox", { name: "Which work" }), /^Closed/);
-  await answered();
-  expect(location.hash).toContain("scope=closed");
+  await waitFor(() => expect(location.hash).toContain("scope=closed"));
   // NO CHIP FOR IT, on a list where it is the only thing that moved.
   expect(document.querySelector(".work-chip-field")).toBeNull();
   // AND NO SECOND CONTROL FOR IT in the menu that owns the narrowings.
-  fireEvent.click(within(workBar()).getByRole("button", { name: "Filter" }));
-  await answered();
-  expect(screen.getByText("status=")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+  await screen.findByText("status=");
   expect(screen.queryByText("scope=")).toBeNull();
 });
 
@@ -472,10 +427,8 @@ test("the saved view is a tab rather than a chip or a menu row", async () => {
     },
   });
   mountList();
-  await answered();
-  fireEvent.click(screen.getByRole("button", { name: "Arranged" }));
-  await answered();
-  expect(location.hash).toContain("view=arranged");
+  fireEvent.click(await screen.findByRole("button", { name: "Arranged" }));
+  await waitFor(() => expect(location.hash).toContain("view=arranged"));
   expect(document.querySelector(".work-chip-field")).toBeNull();
 });
 
@@ -486,7 +439,6 @@ test("the saved view is a tab rather than a chip or a menu row", async () => {
 test("the month is the calendar's own control", async () => {
   await listAt("#/work?shape=calendar");
   fireEvent.click(screen.getByRole("button", { name: "The month after" }));
-  await answered();
-  expect(location.hash).toContain("month=");
+  await waitFor(() => expect(location.hash).toContain("month="));
   expect(document.querySelector(".work-chip-field")).toBeNull();
 });

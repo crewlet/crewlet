@@ -18,15 +18,19 @@
  * a fixed size and each card by what it holds.
  */
 
-import { act, getConfig, render } from "~/test/inCase.ts";
+import { act, render } from "@testing-library/react";
 import { OrgNodeLabel } from "@crewlethq/ui";
 import { treeCanvasParts } from "~/testing.tsx";
 import { useCallback, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
-import { onTestFinished, vi } from "vitest";
-import { AppAnnouncer } from "~/app/announcer.tsx";
+import { vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import type { AgentRow, ConfigProblem, ConfigWarning, SandboxEntry } from "~/protocol/index.ts";
-import { BuilderContext, type BuilderApi, type BuilderViewHandle } from "./BuilderContext.tsx";
+import {
+  BuilderContext,
+  type BuilderApi,
+  type BuilderDerived,
+  type BuilderViewHandle,
+} from "./BuilderContext.tsx";
 import type { NodeKey } from "./model/keys.ts";
 import { countingKeys } from "./model/testkit.ts";
 import { builderReducer, type BuilderAction, type BuilderState } from "./model/reducer.ts";
@@ -118,11 +122,16 @@ export function BuilderHarness({
           .filter((p) => p.severity === severity)
           .map((p) => p.source)
       : [];
+  const derived: BuilderDerived | null =
+    current && state.check.derived
+      ? { seats: state.check.derived.seats ?? [], units: state.check.derived.units ?? [] }
+      : null;
 
   const api = useMemo<BuilderApi>(
     () => ({
       state,
       dispatch,
+      derived,
       problemsFor: (key) => placed(key, "problem") as ConfigProblem[],
       warningsFor: (key) => placed(key, "warning") as ConfigWarning[],
       documentProblems: [],
@@ -145,12 +154,6 @@ export function BuilderHarness({
 
   return (
     <Router>
-      {/* WHAT THE APPLICATION MOUNTS AROUND EVERY SCREEN, beside the router:
-          the live region the design system's controls speak into. The
-          editor's lists and pickers announce every add, remove and move, and
-          a harness without it is a page in which nothing can be heard — the
-          package warns on each one, and a suite cannot ask what was said. */}
-      <AppAnnouncer />
       <BuilderContext.Provider value={api}>{children}</BuilderContext.Provider>
     </Router>
   );
@@ -200,110 +203,17 @@ export function renderInBuilder(
   return { ...rendered, state: () => probe.state, spies };
 }
 
-/**
- * Waits for something the browser or the page does on its own — an event the
- * page fires, an element it draws — with NO DEADLINE, and ENDS WITH ITS CASE.
- *
- * `arm` starts listening and returns how to stop; it calls `done` once what
- * it listens for has happened, which may be at once. `go`, when given, is the
- * gesture that sets it in motion, made inside `act` after `arm` is listening
- * so nothing it causes can be missed.
- *
- * OUTSIDE `act`, through the library's own wrapper, for the reason a `findBy`
- * waits there: what is waited for is usually a render, and `act` holds every
- * render back until its callback resolves, so a wait inside one waits for
- * itself.
- *
- * AN EVENT RATHER THAN A POLL, because a poll carries a deadline: `findBy`
- * and `waitFor` gave the page one second of real time, which a loaded runner
- * spent before the page had drawn, so the same case passed or failed on how
- * busy the machine was. This resolves the moment the thing happens, on any
- * machine, and a page that never does it fails the case at its own budget.
- *
- * REFUSED WHEN THE CASE ENDS, for the reason the builder harness retires its
- * waits ([settle] in `testkit.tsx`): a case that times out is failed, not
- * stopped, and a wait still listening would be satisfied by the next case's
- * page — a hash the next mount writes, a toolbar the next case draws — and
- * hand that page to a case that already failed, whose next `act` then
- * interleaves with the live case's and leaves React's one act scope count
- * raised for every case after it.
- */
-export async function waitInCase<T>(
-  what: string,
-  arm: (done: (value: T) => void) => () => void,
-  go?: () => void,
-): Promise<T> {
-  // Whether the wait is still listening, and how it stops: held on one
-  // object because `arm` returns the stop from inside the promise's executor.
-  const wait = { open: true, stop: () => {} };
-  let refuse: (cause: Error) => void = () => {};
-  const outcome = new Promise<T>((resolve, reject) => {
-    refuse = reject;
-    let armed = false;
-    let early = false;
-    const done = (value: T) => {
-      if (!wait.open) return;
-      wait.open = false;
-      if (armed) wait.stop();
-      else early = true;
-      resolve(value);
-    };
-    wait.stop = arm(done);
-    armed = true;
-    if (early) wait.stop();
-  });
-  /** Stops listening, once; says whether this call is the one that did. */
-  const close = (): boolean => {
-    if (!wait.open) return false;
-    wait.open = false;
-    wait.stop();
-    return true;
-  };
-  onTestFinished(() => {
-    if (!close()) return;
-    refuse(
-      new Error(
-        `${what}: the case that waited for it has ended — this is that case, still running after its time ran out`,
-      ),
-    );
-  });
-  if (go) {
-    // A GESTURE THAT THROWS — a control it presses is not drawn — ends the
-    // wait there: nothing will await it, so its refusal at the case's end
-    // would be a rejection nobody handles, reported as a second failure.
-    try {
-      act(go);
-    } catch (err) {
-      close();
-      throw err;
-    }
-  }
-  return (await getConfig().asyncWrapper(() => outcome)) as T;
-}
-
 type Sizer = (el: Element) => { width: number; height: number } | null;
-
-/** How many rounds [LayoutObserver.settle] reports before it calls the layout unsettled. */
-const SETTLE_ROUNDS = 8;
 
 /**
  * A ResizeObserver a suite drives. Every instance records what it observes;
  * [LayoutObserver.settle] reports a size for every observed element, as a
  * browser does after layout, until nothing changes.
- *
- * A SIZE IS REPORTED WHEN IT CHANGES, as a browser's observer reports one: on
- * the first layout after an element is observed, and then only when its box
- * is a different size. Reporting every observed element on every round told
- * the chart its whole layout again four times per settle, and each telling was
- * a render of every card — the most expensive thing a chart case did, for
- * answers nothing had changed.
  */
 export class LayoutObserver {
   static instances: LayoutObserver[] = [];
   static sizer: Sizer = () => null;
   readonly observed = new Set<Element>();
-  /** The size last reported for each element, so an unchanged one is not reported again. */
-  private readonly reported = new Map<Element, { width: number; height: number }>();
   constructor(private readonly callback: ResizeObserverCallback) {
     LayoutObserver.instances.push(this);
   }
@@ -312,22 +222,16 @@ export class LayoutObserver {
   }
   unobserve(el: Element): void {
     this.observed.delete(el);
-    this.reported.delete(el);
   }
   disconnect(): void {
     this.observed.clear();
-    this.reported.clear();
   }
 
-  /** Reports what changed size since the last report, and says whether anything did. */
-  private deliver(): boolean {
+  private deliver(): void {
     const entries = [...this.observed]
       .map((target) => {
         const size = LayoutObserver.sizer(target);
         if (!size) return null;
-        const was = this.reported.get(target);
-        if (was && was.width === size.width && was.height === size.height) return null;
-        this.reported.set(target, size);
         return {
           target,
           contentRect: { width: size.width, height: size.height },
@@ -336,18 +240,11 @@ export class LayoutObserver {
       })
       .filter((e) => e !== null) as unknown as ResizeObserverEntry[];
     if (entries.length > 0) this.callback(entries, this as unknown as ResizeObserver);
-    return entries.length > 0;
   }
 
   /**
-   * Reports every observed element whose size changed, round after round, so
-   * cards rendered by a layout are measured too, until a round reports
-   * nothing; then lands every card at its target.
-   *
-   * BOUNDED, because a layout whose every report produces another size is a
-   * defect to name rather than a loop to wait out: a chart converges in two
-   * rounds (the cards, then what the cards' sizes placed), and eight is room
-   * for a nested one to take twice that.
+   * Reports every observed element's size, a few rounds, so cards rendered by a
+   * layout are measured too, and then lands every card at its target.
    *
    * THE CHART TRAVELS. The design system tweens a relayout over real frames, so
    * a card's transform in the tick a suite changed the draft in is where the
@@ -357,16 +254,11 @@ export class LayoutObserver {
    * about. A suite about the travel itself drives [runFrames].
    */
   static settle(motion = true): void {
-    let quiet = false;
-    for (let round = 0; round < SETTLE_ROUNDS && !quiet; round++) {
+    for (let round = 0; round < 4; round++) {
       act(() => {
-        quiet = true;
-        for (const observer of [...LayoutObserver.instances]) {
-          if (observer.deliver()) quiet = false;
-        }
+        for (const observer of [...LayoutObserver.instances]) observer.deliver();
       });
     }
-    if (!quiet) throw new Error(`the chart's layout still changed after ${SETTLE_ROUNDS} rounds`);
     if (motion) settleMotion();
   }
 

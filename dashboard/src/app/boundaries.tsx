@@ -27,9 +27,9 @@
  * Reload, because what fixes it is a reload and not a report.
  */
 
-import { Suspense, useEffect, type ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import { Button, Callout, ErrorBoundary, Modal, Skeleton, SidebarNav } from "@crewlethq/ui";
-import { ChunkLoadError, forgetDrawnFailure } from "./lazyScreen.ts";
+import { ChunkLoadError } from "./lazyScreen.ts";
 
 /** Reload the page — the one fix for a chunk from another engine version. */
 function reload(): void {
@@ -41,11 +41,9 @@ function reload(): void {
  *
  * RELOAD FIRST, because the usual cause is an upgrade and nothing else fixes
  * that. TRY AGAIN beside it, because the other cause is a dropped request,
- * and `lazyScreen.ts` forgets a failed load once it is DRAWN — here — so a
- * retry really does ask again.
+ * and `lazyScreen.ts` forgets a failed load so a retry really does ask again.
  */
 function ChunkFailed({ error, reset }: { error: ChunkLoadError; reset: () => void }) {
-  useEffect(() => forgetDrawnFailure(error), [error]);
   return (
     <Callout
       variant="neutral"
@@ -185,55 +183,37 @@ export function LayerBoundary({
 }) {
   return (
     <ErrorBoundary
-      fallback={(error) => <LayerFailed title={title} error={error} onClose={onClose} />}
+      fallback={(error) => (
+        <Modal
+          open
+          onClose={onClose}
+          size="sm"
+          title={`${title} could not be drawn`}
+          footer={
+            error instanceof ChunkLoadError ? (
+              <>
+                <Button variant="secondary" onClick={onClose}>
+                  Close
+                </Button>
+                <Button variant="primary" onClick={reload}>
+                  Reload
+                </Button>
+              </>
+            ) : (
+              <Button variant="secondary" onClick={onClose}>
+                Close
+              </Button>
+            )
+          }
+        >
+          <p className="boundary-message">
+            {error instanceof ChunkLoadError ? error.advice : error.message || error.name}
+          </p>
+        </Modal>
+      )}
     >
       <Suspense fallback={null}>{children}</Suspense>
     </ErrorBoundary>
-  );
-}
-
-/** A layer's failure, as the dialog [LayerBoundary] draws in its place. */
-function LayerFailed({
-  title,
-  error,
-  onClose,
-}: {
-  title: string;
-  error: Error;
-  onClose: () => void;
-}) {
-  // DRAWN, SO FORGOTTEN: the next press opens a fresh layer, and its chunk is
-  // fetched again (`lazyScreen.ts`).
-  useEffect(() => {
-    if (error instanceof ChunkLoadError) forgetDrawnFailure(error);
-  }, [error]);
-  return (
-    <Modal
-      open
-      onClose={onClose}
-      size="sm"
-      title={`${title} could not be drawn`}
-      footer={
-        error instanceof ChunkLoadError ? (
-          <>
-            <Button variant="secondary" onClick={onClose}>
-              Close
-            </Button>
-            <Button variant="primary" onClick={reload}>
-              Reload
-            </Button>
-          </>
-        ) : (
-          <Button variant="secondary" onClick={onClose}>
-            Close
-          </Button>
-        )
-      }
-    >
-      <p className="boundary-message">
-        {error instanceof ChunkLoadError ? error.advice : error.message || error.name}
-      </p>
-    </Modal>
   );
 }
 

@@ -6,24 +6,24 @@
 
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
-import { fmtCount, fmtExact, tsKey } from "~/lib/format.ts";
+import { fmtCount, tsKey } from "~/lib/format.ts";
 import { callWords } from "~/lib/turnsteps.ts";
 import {
   activityOf,
-  liveRowFor,
+  leadsInLine,
   roundOf,
-  seatByAddress,
   type OrgIndex,
   type Seat,
   type SeatState,
 } from "~/lib/seats.ts";
+import type { ViewerState } from "~/lib/viewer.ts";
 import type {
   AgentRow,
   BudgetWindow,
+  ConfigRole,
   SeatActivityDay,
   ScheduleRow,
   SeatActivityRow,
-  SeatRuntime,
   TokenBudget,
   TurnRow,
 } from "~/protocol/index.ts";
@@ -63,31 +63,57 @@ export const TAB_LABELS: Readonly<Record<SeatTab, string>> = {
 // ---------------------------------------------------------------------------
 
 /**
- * The seat an address names, resolved the ONE way — [seatByAddress], so the
- * profile and the peek can never disagree about which seat a `peek=` token
- * names: the rail and the page its `Open ↗` leads to must be the same seat.
+ * The seat a handle names, resolved the ONE way.
  *
- * NEVER A NAME. It resolved a ROLE NAME too, for links "built from a config
- * field", and no link is built that way any more; a name is prose two seats
- * may share, so that arm opened whichever namesake came first under a URL
- * that looked right. What it did NOT resolve was the one address a link
- * genuinely carries after a rename — the handle the seat answered to when the
- * link was kept — so every such link opened "No seat called". [seatByAddress]
- * resolves those in the engine's order, and both callers then move the route
- * to the handle the seat holds now.
+ * Three lookups rather than one, because a handle reaches this screen spelled
+ * three ways: a link built from the roster carries the handle, a link built
+ * from a config field carries the ROLE NAME (`seatPath` addresses a seat the
+ * engine reported no handle for by name), and a pasted URL carries whatever
+ * somebody typed.
  */
-export function findSeat(index: OrgIndex, address: string): Seat | null {
-  return seatByAddress(index, address);
+export function findSeat(index: OrgIndex, handle: string): Seat | null {
+  return (
+    index.byHandle.get(handle) ??
+    index.byName.get(handle) ??
+    [...index.byHandle.values()].find((s) => s.handle.toLowerCase() === handle.toLowerCase()) ??
+    null
+  );
 }
 
 /**
- * The live row for a seat: the roster row carrying the seat's HANDLE
- * ([liveRowFor]), never one carrying its name — two seats may share a name,
- * and paired by it the second "Engineer" in a company wore the first one's
- * state, live call and sandbox on its own profile.
+ * Whether this page asks for a person's own record — their inbox, the order
+ * they mean to work in, the claims on their plate — which the engine answers
+ * to its owner, to whoever leads them and to `fleet:operate`.
+ *
+ * THE LEAD IS ASKED FOR TOO, on the chart's own reading of who is in their
+ * line, the rule My work reads a report's day by. Asked only on the grant and
+ * the owner, a lead opening a report's page was told the record needs
+ * `fleet:operate` "or leading them" about somebody they lead, and their day
+ * was never drawn. And where this client holds no hierarchy it cannot tell
+ * ([leadsInLine]'s null), so it asks and the engine decides.
  */
-export function liveRow(agents: readonly AgentRow[], seat: Seat | null): AgentRow | undefined {
-  return liveRowFor(agents, seat);
+export function mayReadRecord(
+  viewer: Pick<ViewerState, "operatesFleet" | "handle">,
+  index: OrgIndex,
+  handle: string,
+): boolean {
+  if (viewer.operatesFleet) return true;
+  if (viewer.handle !== "" && viewer.handle === handle) return true;
+  return leadsInLine(index, viewer.handle, handle) !== false;
+}
+
+/**
+ * The live row for a seat: the roster row whose `id` — the seat's handle — is
+ * the one the route named, or the resolved seat's own handle. Never by NAME,
+ * which two seats may share.
+ */
+export function liveRow(
+  agents: readonly AgentRow[],
+  handle: string,
+  seat: Seat | null,
+): AgentRow | undefined {
+  const wanted = seat?.handle || handle;
+  return agents.find((a) => a.id === wanted);
 }
 
 // ---------------------------------------------------------------------------
@@ -218,10 +244,10 @@ export function companyCeilingShort(budget: TokenBudget | undefined): string {
   return `company cap ${caps[0]!}${caps.length > 1 ? ` +${caps.length - 1}` : ""}`;
 }
 
-/** A signed change for a delta: "+9", "−3", "±0" — grouped through `lib/format.ts`. */
+/** A signed change for a delta: "+9", "−3", "±0". */
 export function signed(n: number): string {
-  if (n > 0) return `+${fmtExact(n)}`;
-  if (n < 0) return `−${fmtExact(Math.abs(n))}`;
+  if (n > 0) return `+${n.toLocaleString()}`;
+  if (n < 0) return `−${Math.abs(n).toLocaleString()}`;
   return "±0";
 }
 
@@ -341,13 +367,9 @@ export function turnTokens(
  * cell and the coding agent — "e2b · claude-code". An empty `run_in` or
  * `coding_agent` inherits the provider's default, and says so rather than
  * naming a default this client would have to guess.
- *
- * READ OFF THE SEAT'S RUNTIME HALF, which the org chart serves to a reader
- * holding `config:read` (`lib/seats.ts`'s `SeatReading`): the company
- * document holds no seats any more.
  */
-export function sandboxWords(runtime: SeatRuntime | undefined): string {
-  const box = runtime?.sandbox as
+export function sandboxWords(role: ConfigRole): string {
+  const box = role.sandbox as
     { enabled?: boolean; run_in?: string; coding_agent?: string } | undefined;
   if (!box?.enabled) return "not offered";
   return [box.run_in || "the provider's default cell", box.coding_agent]
@@ -359,9 +381,8 @@ export function sandboxWords(runtime: SeatRuntime | undefined): string {
  * Which nodes may hold a seat, as its placement says: pinned to one node,
  * limited to nodes carrying labels, or any node that runs seats.
  */
-export function placementWords(runtime: SeatRuntime | undefined): string {
-  const place = runtime?.placement as
-    { node?: string; labels?: Record<string, string> } | undefined;
+export function placementWords(role: ConfigRole): string {
+  const place = role.placement as { node?: string; labels?: Record<string, string> } | undefined;
   if (place?.node) return `only ${place.node}`;
   const labels = Object.entries(place?.labels ?? {});
   if (labels.length) return `nodes labelled ${labels.map(([k, v]) => `${k}=${v}`).join(", ")}`;
@@ -370,11 +391,11 @@ export function placementWords(runtime: SeatRuntime | undefined): string {
 
 /**
  * The delegate templates a seat's executor may hand work to. An empty list is
- * the runtime's "every one" — `workers:` NARROWS the company's templates, it
- * never grants — so it is said as that rather than as none.
+ * the document's "every one" — `workers:` NARROWS the company's templates,
+ * it never grants — so it is said as that rather than as none.
  */
-export function workersWords(runtime: SeatRuntime | undefined): string {
-  const workers = (runtime?.workers ?? []).filter(Boolean);
+export function workersWords(role: ConfigRole): string {
+  const workers = (role.workers ?? []).filter(Boolean);
   return workers.length ? workers.join(", ") : "every template the company defines";
 }
 
@@ -389,16 +410,10 @@ export function workersWords(runtime: SeatRuntime | undefined): string {
  * lands in). Soonest first, and a schedule that cannot fire — no `next_run` —
  * last, so the card's head is what happens next.
  *
- * NOT the `schedules:` a seat AUTHORED in its runtime half: that is a guarded
- * read, carries no effective zone, next run or problem, and never sees a unit
- * schedule at all — so the rows that actually wake a seat were the ones an
- * authored read could not find.
- *
- * A ROLE SCHEDULE IS MATCHED BY ITS SCOPE'S NAME. `scope_id` is the identity
- * the fire ledger keys on — a seat's agent id — so comparing a handle to it
- * matched nothing and a seat's own schedules vanished from its page. The
- * fallback is the id, which is never a handle, so a row carrying no name
- * matches on `runners` alone.
+ * NOT the `schedules:` a seat AUTHORED in the company document: that is an
+ * operator read, carries no effective zone, next run or problem, and never
+ * sees a unit schedule at all — so the rows that actually wake a seat were
+ * the ones an authored read could not find.
  */
 export function seatSchedules(rows: readonly ScheduleRow[], handle: string): ScheduleRow[] {
   return rows

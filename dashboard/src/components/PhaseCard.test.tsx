@@ -10,7 +10,7 @@
  * grouped and the rendering did not say so.
  */
 
-import { cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import { PhaseCard } from "./PhaseCard.tsx";
 import type { PhaseRecord } from "~/lib/phases.ts";
@@ -28,8 +28,8 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     workKey: "wk-1",
     phase: "execute",
     iteration: 1,
-    agentId: "a-support",
     role: "Support Engineer",
+    agentId: "",
     model: "scripted",
     providerKey: "",
     live: false,

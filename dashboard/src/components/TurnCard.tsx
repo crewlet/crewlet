@@ -12,7 +12,7 @@
  * and shoved everything below it down the page.
  */
 
-import { memo, useState } from "react";
+import { useState } from "react";
 import { Button, cx, EmptyValue, Tag } from "@crewlethq/ui";
 import { ChevronRightGlyph, ChevronDownGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS, and for the reason PhaseCard gives at its own import: `PhaseTag`
@@ -21,24 +21,12 @@ import { ChevronRightGlyph, ChevronDownGlyph, LayersGlyph } from "@crewlethq/ico
 import { PhaseTag } from "~/ui/primitives.tsx";
 import { PhaseCard } from "./PhaseCard.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
+import { useNow } from "~/lib/clock.ts";
 import { useNavigator } from "~/app/router.tsx";
-import { nestedUnder, triggerHeadline, type Attempt, type TurnGroup } from "~/lib/phases.ts";
+import { triggerHeadline, type Attempt, type TurnGroup } from "~/lib/phases.ts";
 import type { TurnRow } from "~/protocol/index.ts";
 
-/**
- * A turn card, drawn again only when something it draws has changed.
- *
- * MEMOISED ON ITS PROPS, which are values: the group (kept by the screen
- * through `useShared`, so an unchanged turn is the object drawn last time),
- * the engine's row for it, its attempt and whether it opens. A seat's page
- * renders for every push it reads — any seat's phase, the roster, the spend
- * rollup — and unmemoised every card drew again, with every phase card inside
- * an open one, for a phase that belonged to somebody else.
- */
-export const TurnCard = memo(TurnCardView);
-
-function TurnCardView({
+export function TurnCard({
   group,
   row,
   attempt,
@@ -55,6 +43,7 @@ function TurnCardView({
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(!!defaultOpen);
+  const now = useNow();
   const nav = useNavigator();
 
   // THE ENGINE'S OWN FIGURES WHERE A RECORD CARRIES THEM, the window across this
@@ -191,16 +180,14 @@ function TurnCardView({
           dateTime={group.live ? startedAt : group.at}
           title={fmtDateTime(group.live ? startedAt : group.at)}
         >
-          {/* THE CLOCK READ IN THE ELEMENT THAT SHOWS IT. A running turn's
-              stopwatch moves every second, and read at the top of the card it
-              drew the card and every phase card open under it once a second
-              for as long as the turn ran. */}
-          {group.live && began <= 0 ? (
-            <EmptyValue label="Started at an instant this build could not read" />
+          {group.live ? (
+            began > 0 ? (
+              fmtElapsed(now - began)
+            ) : (
+              <EmptyValue label="Started at an instant this build could not read" />
+            )
           ) : (
-            <ClockText
-              read={(now) => (group.live ? fmtElapsed(now - began) : relTime(group.at, now))}
-            />
+            relTime(group.at, now)
           )}
         </time>
       </header>
@@ -211,7 +198,7 @@ function TurnCardView({
             <PhaseCard
               key={p.key}
               record={p}
-              nested={nestedUnder(group.nested, p.key)}
+              nested={group.nested.get(p.key)}
               defaultOpen={i === 0 && group.phases.length === 1}
             />
           ))}

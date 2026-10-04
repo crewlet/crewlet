@@ -4,7 +4,7 @@
  * same request, with nothing retyped.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import { StepUpHost } from "./StepUp.tsx";
@@ -159,16 +159,21 @@ describe("a gesture that needs a fresher proof", () => {
     expect(sent[1]?.body).toEqual({ password: "correct horse battery staple" });
     // THE REPLAY IS THE REQUEST THAT WAS REFUSED, which is what keeps a form.
     expect(sent[2]?.body).toEqual(sent[0]?.body);
-    // THE SESSION WAS REPLACED, so the socket opened on the old one re-dials.
-    expect(reconnect).toHaveBeenCalled();
+    // THE SESSION WAS REPLACED, and NOTHING HERE RE-DIALS the socket opened on
+    // the old one: the engine closes it `4401`, and the socket dials again
+    // itself once this tab's requests have settled, with the new cookie.
+    expect(reconnect).not.toHaveBeenCalled();
   });
 
-  test("says which window, when it is the sensitive one", async () => {
-    engine({ "/secrets/GITHUB_TOKEN": [refusedFor("step_up_sensitive")] });
+  // ONE WINDOW, so the dialog names none: every sensitive gesture is held to
+  // the same `step_up`, and a second sentence for a second window would be a
+  // claim about a window the engine no longer has.
+  test("names the one confirmation every sensitive change asks for", async () => {
+    engine({ "/secrets/GITHUB_TOKEN": [refusedFor("step_up")] });
     mount();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByRole("dialog", { name: "Confirm it is you" });
-    expect(screen.getByText(/very recent confirmation/)).toBeDefined();
+    expect(screen.getByText(/confirmed who you are recently/)).toBeDefined();
   });
 
   test("a wrong password is the engine's own sentence, and the dialog stays for another try", async () => {

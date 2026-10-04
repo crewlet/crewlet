@@ -22,31 +22,28 @@ import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { fmtMinute, fromWall, toWall } from "~/lib/format.ts";
 import { usePanelAlign } from "~/lib/media.ts";
-import { useClockReading } from "~/lib/clock.ts";
-import { itemPath, type ItemRef } from "~/lib/work.ts";
 import { useNavigator } from "~/app/router.tsx";
 import { snoozePresets } from "./model.ts";
 import type { WorkInboxNotice } from "~/protocol/index.ts";
+import { itemPath, type ItemRef } from "~/lib/work.ts";
 
 /** Why a row that is not a notice cannot be marked. */
 export const NOT_A_NOTICE =
   "This is not a notice — it leaves your inbox when it is answered or cleared.";
 
-/** The instant to the minute: what a preset's words and a picked time move at. */
-function minuteOf(now: number): number {
-  return Math.floor(now / 60_000) * 60_000;
-}
-
 export function NoticeActions({
   notices,
   item,
+  now,
   zone,
   maxSnoozeAhead,
 }: {
   /** The notices this row stands for; empty for a row that is not one. */
   notices: readonly WorkInboxNotice[];
-  /** The work item the row is on, for "Open", or null — opened by its address. */
+  /** The work item the row is on, for "Open" — opened at its address
+   *  ([itemPath]) and named by its key — or null. */
   item: { ref: ItemRef; key: string } | null;
+  now: number;
   /** The company's clock, which "tomorrow at nine" is read on. */
   zone: string | undefined;
   /** The engine's bound on a snooze, in seconds, where it said one. */
@@ -67,12 +64,7 @@ export function NoticeActions({
       { done: `Snoozed until ${words}` },
     );
 
-  // THE MINUTE, NOT THE SECOND: a preset's words move once a minute at most,
-  // so the pane's head renders then rather than on every tick. What a preset
-  // SENDS is worked out at the press, against the clock as it is then — an
-  // hour from a reading up to a minute old would come back early.
-  const minute = useClockReading(minuteOf);
-  const presets = snoozePresets(minute, zone, maxSnoozeAhead);
+  const presets = snoozePresets(now, zone, maxSnoozeAhead);
   const snoozeEntries: MenuEntry[] = [
     ...presets.map((p) => ({
       key: p.key,
@@ -80,12 +72,7 @@ export function NoticeActions({
       // A COMPANY-CLOCK PRESET SAYS ITS DAY AND WHOSE NINE O'CLOCK it is;
       // the hour says the reader's own time it comes back at.
       hint: p.day ? `${p.day} · company time` : fmtMinute(p.until),
-      onSelect: () => {
-        const until =
-          snoozePresets(Date.now(), zone, maxSnoozeAhead).find((at) => at.key === p.key)?.until ??
-          p.until;
-        snooze(until, fmtMinute(until));
-      },
+      onSelect: () => snooze(p.until, fmtMinute(p.until)),
     })),
     { kind: "separator" as const, key: "sep" },
     { key: "pick", label: "Pick a date and time…", onSelect: () => setPicking(true) },
@@ -180,6 +167,7 @@ export function NoticeActions({
       <RefusalNote write={write} />
       {picking && (
         <PickDialog
+          now={now}
           maxSnoozeAhead={maxSnoozeAhead}
           onClose={() => setPicking(false)}
           onPick={(until) => {
@@ -198,17 +186,17 @@ export function NoticeActions({
  * means to them.
  */
 function PickDialog({
+  now,
   maxSnoozeAhead,
   onClose,
   onPick,
 }: {
+  now: number;
   maxSnoozeAhead: number | undefined;
   onClose: () => void;
   onPick: (until: string) => void;
 }) {
-  // TO THE MINUTE, which is all a `datetime-local` field holds.
-  const now = useClockReading(minuteOf);
-  const [wall, setWall] = useState(() => toWall(now + 3_600_000));
+  const [wall, setWall] = useState(toWall(now + 3_600_000));
   const at = fromWall(wall);
   const limit = maxSnoozeAhead && maxSnoozeAhead > 0 ? now + maxSnoozeAhead * 1_000 : null;
   const problem =

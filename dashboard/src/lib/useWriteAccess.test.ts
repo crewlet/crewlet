@@ -8,14 +8,16 @@ import { describe, expect, test } from "vitest";
 import {
   CONFIG_WRITE_REASONS,
   WRITE_REASONS,
+  configGuardedReason,
   configWriteAccess,
   writeAccess,
 } from "./useWriteAccess.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
 import type { ViewerState } from "./viewer.ts";
 
 const BOUND: ViewerState = {
   login: "jane.founder",
-  grants: ["state:read", "work:write"],
+  grants: ["work:write", "knowledge:write"],
   operatesFleet: false,
   handle: "jane",
   owner: "jane",
@@ -29,33 +31,25 @@ const BOUND: ViewerState = {
   asking: false,
 };
 
-/** A principal the directory binds to no seat, which the engine still serves. */
+/** Signed in, and the directory binds them to no seat. */
 const UNBOUND: ViewerState = {
   ...BOUND,
-  login: "ops.lead",
   handle: "",
-  owner: "ops.lead",
+  owner: "jane.founder",
   name: "",
   kind: "",
   unbound: true,
 };
 
-const NOBODY: ViewerState = {
-  ...BOUND,
-  login: "",
-  grants: [],
-  handle: "",
-  owner: "",
-  name: "",
-  kind: "",
-  acts: [],
-  anonymous: true,
-};
-
 test.each([
   ["offline, whoever is reading", BOUND, false, "offline"],
   ["nobody has said who this is", { ...BOUND, loading: true }, true, "loading"],
-  ["nobody signed in", NOBODY, true, "anonymous"],
+  [
+    "nobody is signed in",
+    { ...BOUND, login: "", handle: "", owner: "", anonymous: true, acts: [] },
+    true,
+    "anonymous",
+  ],
   ["a change the engine does not make for this person", { ...BOUND, acts: [] }, true, "not_served"],
 ] as const)("%s", (_name, viewer, connected, block) => {
   const access = writeAccess("set_pins", viewer, connected);
@@ -76,13 +70,14 @@ test("a bound person the engine serves acts as their own seat", () => {
   });
 });
 
-// UNBOUND IS NOT A REASON: the engine makes the change and records it under
-// the caller's own login (ADR-0024), so a gate that held them would lock a
-// person out of a change the engine makes for them.
-test("a caller bound to no seat acts under their own login", () => {
+// AN UNBOUND PRINCIPAL ACTS TOO, under its own login (ADR-0024): what a
+// binding adds is the seat a person acts as, never the right to act. Blocked
+// here, a person the directory had not bound yet could change nothing the
+// engine would have taken from them.
+test("a person bound to no seat acts under their own login", () => {
   expect(writeAccess("set_pins", UNBOUND, true)).toEqual({
     can: true,
-    as: "ops.lead",
+    as: "jane.founder",
     acts: ["set_pins"],
   });
 });
@@ -95,9 +90,8 @@ test("a handle with an empty acts list acts for nobody", () => {
 });
 
 // A SCREEN SHOWING SOMEBODY ELSE'S RECORD HOLDS EVERY CHANGE ON IT, with its
-// own sentence — but LAST: a reader who is offline, anonymous or not served
-// is told the thing they can clear first, and a hold is a fact about the
-// screen.
+// own sentence — but LAST: a reader who is offline or signed out is told the
+// thing they can clear first, and a hold is a fact about the screen.
 test("a hold is the screen's sentence, and it ranks after everything a person can clear", () => {
   const hold = "This is Rui Santos’s day.";
   expect(writeAccess("set_pins", BOUND, true, hold)).toEqual({
@@ -106,37 +100,35 @@ test("a hold is the screen's sentence, and it ranks after everything a person ca
     reason: hold,
   });
   expect(writeAccess("set_pins", BOUND, false, hold)).toMatchObject({ block: "offline" });
-  expect(writeAccess("set_pins", NOBODY, true, hold)).toMatchObject({ block: "anonymous" });
-  expect(writeAccess("set_pins", { ...BOUND, acts: [] }, true, hold)).toMatchObject({
-    block: "not_served",
-  });
+  expect(
+    writeAccess(
+      "set_pins",
+      { ...BOUND, login: "", handle: "", owner: "", anonymous: true, acts: [] },
+      true,
+      hold,
+    ),
+  ).toMatchObject({ block: "anonymous" });
   // AND NO HOLD IS NO HOLD: the empty value of the context is `null`.
   expect(writeAccess("set_pins", BOUND, true, null).can).toBe(true);
-});
-
-// NO SENTENCE NAMES A CREDENTIAL TO PASTE: the dashboard holds no token, and a
-// remedy pointing at one sends a person looking for a setting that is gone.
-test("no reason tells a person to set a token", () => {
-  for (const reason of [...Object.values(WRITE_REASONS), ...Object.values(CONFIG_WRITE_REASONS)]) {
-    expect(reason).not.toMatch(/token/i);
-  }
 });
 
 describe("changing the company's configuration", () => {
   const viewer = (over: Partial<ViewerState>): ViewerState => ({
     ...UNBOUND,
+    login: "ops.lead",
+    owner: "ops.lead",
     grants: ["config:read", "config:write"],
     ...over,
   });
 
-  // THE GRANT, NOT A BINDING: `/config` and a `/chart` runtime write are
-  // decided by `config:write`, so a caller bound to no seat who holds it may
-  // change a ceiling — and a bound person without it may not.
+  // THE GRANT, NOT A BINDING: `/config` is decided by `config:write`, so a
+  // person bound to no seat who holds it may change a ceiling, and a bound
+  // person without it may not.
   test("is the config:write grant, not the seat binding", () => {
     expect(configWriteAccess(viewer({ unbound: true }), true)).toEqual({ can: true });
     expect(
       configWriteAccess(
-        viewer({ grants: ["state:read"], handle: "jane", owner: "jane", unbound: false }),
+        viewer({ grants: ["config:read"], handle: "jane", owner: "jane", unbound: false }),
         true,
       ),
     ).toEqual({
@@ -144,22 +136,42 @@ describe("changing the company's configuration", () => {
       block: "no_grant",
       reason: CONFIG_WRITE_REASONS.no_grant,
     });
-    // `config:read` alone reads the company document and changes nothing.
-    expect(configWriteAccess(viewer({ grants: ["config:read"] }), true)).toMatchObject({
-      block: "no_grant",
-    });
   });
 
   test("in the order a person clears them", () => {
     expect(configWriteAccess(viewer({}), false)).toMatchObject({ block: "offline" });
     expect(configWriteAccess(viewer({ loading: true }), true)).toMatchObject({ block: "loading" });
-    expect(configWriteAccess(viewer({ anonymous: true, grants: [] }), true)).toMatchObject({
-      block: "anonymous",
-    });
+    expect(
+      configWriteAccess(viewer({ anonymous: true, login: "", owner: "", grants: [] }), true),
+    ).toMatchObject({ block: "anonymous" });
     expect(configWriteAccess(viewer({}), true, "these are Rui's")).toEqual({
       can: false,
       block: "held",
       reason: "these are Rui's",
     });
+  });
+});
+
+// A REFUSED /config WRITE IS SAID BY ITS CODE. The browser holds no token, so
+// "the engine did not take this token" sent a person looking for one; and a
+// 403 is not always the grant — a step-up they declined, or a write from
+// another site, sent to an administrator for a grant would never be cured.
+describe("a configuration write refused on authority", () => {
+  test("is the grant the gate names when the engine refused on the grant", () => {
+    expect(configGuardedReason("unauthorized")).toBe(CONFIG_WRITE_REASONS.no_grant);
+    // AN ANSWER WITH NO CODE is a refusal on authority all the same.
+    expect(configGuardedReason("")).toBe(CONFIG_WRITE_REASONS.no_grant);
+  });
+
+  test("is the guard's own refusal when the engine named another", () => {
+    expect(configGuardedReason("step_up_required")).toBe(ACT_ERRORS.step_up_required);
+    expect(configGuardedReason("csrf_origin")).toBe(ACT_ERRORS.csrf_origin);
+    expect(configGuardedReason("invalid_token")).toBe(ACT_ERRORS.invalid_token);
+  });
+
+  test("never speaks of a token", () => {
+    for (const code of ["unauthorized", "", "step_up_required", "csrf_origin", "invalid_token"]) {
+      expect(configGuardedReason(code)).not.toMatch(/token/i);
+    }
   });
 });

@@ -3,7 +3,7 @@
  * do — without a refused request and within three reads.
  */
 
-import { act, cleanup, render, screen } from "~/test/inCase.ts";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { SeatPeek, budgetLine, turnOrdinal } from "./SeatPeek.tsx";
@@ -12,8 +12,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
-import { CHART_ORG, forStateReader } from "~/test/orgchart.ts";
-import { DUPLICATE, SHARED_KEY } from "~/test/keyCollision.ts";
+import { CHART_ORG } from "~/test/orgchart.ts";
 import { LiveSocket, Store, type AgentRow, type OrgProjection } from "~/protocol/index.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
 
@@ -47,8 +46,7 @@ const window_ = (period: BudgetWindow["period"], used: number, limit: number): B
 });
 
 /** SWE, working ENG-412 on its seventh round of twenty-five, with a model
- *  chain and four tool sources — the projection a `config:read` holder is
- *  sent; [forStateReader] is what everybody else is. */
+ *  chain and three tool sources on the public projection. */
 function org(): OrgProjection {
   const copy = structuredClone(CHART_ORG) as OrgProjection & {
     units: { children?: { roles?: Record<string, unknown>[] }[] }[];
@@ -61,10 +59,10 @@ function org(): OrgProjection {
 }
 
 const SWE: AgentRow = {
-  id: "SWE",
+  agent_id: "a-swe",
+  id: "swe",
   role: "SWE",
   handle: "swe",
-  agent_id: "a-swe",
   activity: "working",
   turn: {
     turn_id: "turn-2",
@@ -88,20 +86,10 @@ const SWE: AgentRow = {
   budget: { windows: [window_("day", 630_000, 1_000_000), window_("month", 2_000_000, 9_000_000)] },
 } as unknown as AgentRow;
 
-/**
- * The projection the engine sends `viewer` (`OrgProjection.For`): whole to a
- * `config:read` holder and [forStateReader] of it to anybody else — so no case
- * certifies the peek against a chain its reader is never sent.
- */
-function sentTo(viewer: Record<string, unknown>): OrgProjection {
-  const grants = Array.isArray(viewer.grants) ? (viewer.grants as unknown[]) : [];
-  return grants.includes("config:read") ? org() : forStateReader(org());
-}
-
 async function mount(
   viewer: Record<string, unknown>,
   {
-    projection = sentTo(viewer),
+    projection = org(),
     agents = [SWE],
     handle = "swe",
     health = { status: "healthy" },
@@ -115,16 +103,11 @@ async function mount(
   const store = new Store();
   store.applyHealth(health as never);
   store.applyOrg(projection);
-  // THE ROSTER, which `applySeats` sets whole: `applyAgents` only patches the
-  // live overlay of a seat the roster already holds.
   store.applySeats(agents);
-  store.setConnected(true);
   const socket = new LiveSocket(store);
   const asked: string[] = [];
-  const turnsFor: unknown[] = [];
   (socket as unknown as { query: (what: string, p?: unknown) => Promise<unknown> }).query = (
     what,
-    params,
   ) => {
     asked.push(what);
     if (what === "viewer") return Promise.resolve(viewer);
@@ -139,15 +122,7 @@ async function mount(
       return Promise.resolve({ rows: [{ handle: "swe", open: 4, blocked: 1, overdue: 0 }] });
     }
     if (what === "work_item_turns") {
-      const id = (params as { id?: unknown } | undefined)?.id;
-      turnsFor.push(id);
-      // THE KEY ANSWERS WITH WHICHEVER TASK CLAIMED IT FIRST, as the engine's
-      // does; the duplicate's own id answers with its own list.
-      return Promise.resolve(
-        id === DUPLICATE
-          ? { item: DUPLICATE, key: SHARED_KEY, turns: [{ turn_id: "turn-1", ordinal: 4 }] }
-          : { item: "i-412", key: "ENG-412", turns: [{ turn_id: "turn-1", ordinal: 1 }] },
-      );
+      return Promise.resolve({ key: "ENG-412", turns: [{ turn_id: "turn-1", ordinal: 1 }] });
     }
     return Promise.reject(new Error(`the peek asked for ${what}`));
   };
@@ -163,22 +138,31 @@ async function mount(
   await act(async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve();
   });
-  return { asked: asked.filter((w) => w !== "viewer"), turnsFor };
+  return { asked: asked.filter((w) => w !== "viewer") };
 }
 
-const ANONYMOUS = { login: "", grants: [], handle: "", acts: [] };
-/** A person holding `fleet:operate`, which is what reads the fleet's leases. */
+const ANONYMOUS = { login: "", owner: "", acts: [] };
 const OPERATOR = {
-  login: "jane.founder",
-  grants: ["state:read", "fleet:operate"],
+  login: "ops",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
   handle: "jane",
-  name: "Jane Founder",
   owner: "jane",
+  name: "Jane Founder",
   acts: ["create_work_item"],
 };
 
 // AN ANONYMOUS READER IS TOLD WHAT THE PUBLIC PUSH SAYS, AND ASKED FOR
-// NOTHING IT WOULD BE REFUSED. `fleet` is on `fleet:operate`; a read sent anyway
+// NOTHING IT WOULD BE REFUSED. `fleet` is operator-only; a read sent anyway
 // would come back refused and draw a refusal where a sentence belongs. But
 // `/health` is public, so the node's own name and the seats it holds are
 // already on this reader's screen — and the profile's Setup card says them.
@@ -192,44 +176,8 @@ test("an anonymous reader sees what the health push says of the node, and sends 
   expect(running?.textContent).toBe("this node · node-1");
   expect(asked).not.toContain("fleet");
   expect(asked).not.toContain("config");
-});
-
-/** A person reading the company who holds `config:read` as well. */
-const CONFIG_READER = { ...OPERATOR, grants: [...OPERATOR.grants, "config:read"] };
-
-// THE CHAIN IS THE PROJECTION'S ONLY FOR A READER IT IS SENT TO. The engine
-// strips a seat's resolved model chain and tool sources for every audience
-// without `config:read`, so an absent chain says nothing about the seat — and
-// "No provider configured" told every such reader something false about a
-// seat that has one. Which model is SERVING the call in flight is the live
-// row's, and every reader is told it.
-//
-// Mutation: draw "No provider configured" whenever the chain is absent, or
-// put "serving now" back inside the chain's branch, and this goes red.
-test("a reader without config:read is told the chain is withheld, and which model is serving", async () => {
-  await mount(OPERATOR, { projection: forStateReader(org()) });
-  const model = screen.getByText("Model").nextElementSibling as HTMLElement;
-  expect(model.textContent).toContain(
-    "Reading its model chain needs config:read, which the credential you presented does not carry.",
-  );
-  expect(model.textContent).not.toContain("No provider configured");
-  expect(model.textContent).toContain("serving now: claude-sonnet-5");
-});
-
-test("a config:read holder sees the chain, and is told when a seat has none", async () => {
-  await mount(CONFIG_READER);
-  const model = screen.getByText("Model").nextElementSibling as HTMLElement;
-  expect(model.textContent).toContain("anthropic-main");
-  expect(model.textContent).toContain("+1 fallback");
-  expect(model.textContent).toContain("serving now: claude-sonnet-5");
-  cleanup();
-
-  // A SEAT WITH NO CHAIN, sent whole: the same projection with the seat's
-  // resolved fields removed, which to this reader is the seat's own absence.
-  await mount(CONFIG_READER, { projection: forStateReader(org()) });
-  const none = screen.getByText("Model").nextElementSibling as HTMLElement;
-  expect(none.textContent).toContain("No provider configured");
-  expect(none.textContent).not.toContain("needs config:read");
+  // THE CHAIN IS PUBLIC, so it is drawn for everybody.
+  expect(screen.getByText("anthropic-main")).toBeTruthy();
 });
 
 // NEVER WHICH PEER: that is the fleet read's, and the push does not say it.
@@ -238,14 +186,14 @@ test("an anonymous reader is told a seat another node holds is another node's", 
   expect(screen.getByText("Running on").nextElementSibling?.textContent).toBe("another node");
 });
 
-test("a fleet:operate holder sees the node that holds the seat and since when", async () => {
+test("an operator sees the node that holds the seat and since when", async () => {
   const { asked } = await mount(OPERATOR);
   expect(asked).toContain("fleet");
   expect(screen.getByText(/node-2/)).toBeTruthy();
 });
 
-// AT MOST THREE READS PER OPEN, in the heaviest case: a fleet:operate holder,
-// a seat working on a task.
+// AT MOST THREE READS PER OPEN, in the heaviest case: an operator, a seat
+// working on a task.
 test("the peek asks at most three questions", async () => {
   const { asked } = await mount(OPERATOR);
   expect(new Set(asked).size).toBeLessThanOrEqual(3);
@@ -259,42 +207,6 @@ test("the state card names the turn on the task and the round", async () => {
   expect(screen.getByText(/Executing ENG-412/)).toBeTruthy();
   expect(screen.getByText("Turn 2 · round 7 of 25")).toBeTruthy();
   expect(screen.getByText(/serving now: claude-sonnet-5/)).toBeTruthy();
-});
-
-// A TURN ON A TASK WHOSE KEY ANOTHER CLAIMED FIRST IS NUMBERED ON ITS OWN
-// LIST. Asked by the key, the list is the claimant's, and "Turn 2" counted the
-// claimant's turns. The engine's own task is asked for by its id.
-//
-// Mutation: ask `work_item_turns` by the turn's key again, and the peek asks
-// for "ENG-7" and reads "Turn 2".
-test("the turn on a task is numbered on that task's own list, asked by its id", async () => {
-  const item = { backend: "native", id: DUPLICATE, key: SHARED_KEY, project: "ENG" };
-  const onDuplicate = {
-    ...SWE,
-    turn: { ...SWE.turn!, work_item: item },
-    live_call: { ...SWE.live_call!, work_item: item },
-  } as AgentRow;
-  const { turnsFor } = await mount(OPERATOR, { agents: [onDuplicate] });
-  expect(turnsFor).toEqual([DUPLICATE]);
-  expect(screen.getByText("Turn 5 · round 7 of 25")).toBeTruthy();
-});
-
-// AND A PAGE ABOUT ANOTHER TASK NUMBERS NOTHING. A question keeps its last
-// answer while a new one is out, so a seat that moved to another task still
-// holds the previous task's list for a moment — and counted from it, the peek
-// named a turn number on a task it had never been on.
-//
-// Mutation: drop the `answersFor` check, and the peek reads "Turn 2".
-test("a turn list answered for another task gives the turn no number", async () => {
-  const item = { backend: "native", id: "i-elsewhere", key: "ENG-412", project: "ENG" };
-  const moved = {
-    ...SWE,
-    turn: { ...SWE.turn!, work_item: item },
-    live_call: { ...SWE.live_call!, work_item: item },
-  } as AgentRow;
-  await mount(OPERATOR, { agents: [moved] });
-  expect(screen.getByText("round 7 of 25")).toBeTruthy();
-  expect(screen.queryByText(/^Turn \d/)).toBeNull();
 });
 
 // A BUDGET IS LABELLED BY ITS OWN WINDOW, never by a period the screen
@@ -353,35 +265,8 @@ test("with no derived hierarchy the peek does not claim the seat reports to nobo
   expect(screen.queryByText(/Nobody/)).toBeNull();
 });
 
-// A SEAT IS PAIRED WITH ITS LIVE ROW BY HANDLE, never by name: a row whose
-// name had moved, or a namesake's, wore — or lent — the wrong state.
-//
-// Mutation: pair by `role` against the seat's name again, and the peek says
-// nothing about ENG-412.
-test("the peek pairs the seat with its live row by handle, not by name", async () => {
-  await mount(OPERATOR, { agents: [{ ...SWE, role: "Somebody else" } as AgentRow] });
-  expect(screen.getByText(/Executing ENG-412/)).toBeTruthy();
-});
-
-// A RETIRED ADDRESS OPENS THE SEAT IT NAMED, and the rail MOVES to the handle
-// the seat holds now: a link kept from before a rename used to open "No seat
-// called".
-//
-// Mutation: resolve the address through `byHandle` alone again, and the peek
-// says there is no such seat.
-test("a peek on a retired handle opens the renamed seat and moves to its handle", async () => {
-  const projection = forStateReader(org());
-  const derived = (projection.derived?.seats ?? []).find((d) => d.handle === "swe")!;
-  Object.assign(derived, { former_handles: ["engineer"] });
-  location.hash = "#/agents?peek=seat%3Aengineer";
-  await mount(ANONYMOUS, { projection, handle: "engineer" });
-  expect(screen.queryByText(/No seat called/)).toBeNull();
-  expect(screen.getByRole("heading", { name: "SWE" })).toBeTruthy();
-  expect(location.hash).toContain("peek=seat%3Aswe");
-});
-
 test("the tools name their source, and more than three fold into a count", async () => {
-  await mount(CONFIG_READER);
+  await mount(ANONYMOUS);
   expect(screen.getByText("built-in")).toBeTruthy();
   expect(screen.getByText("gitlab")).toBeTruthy();
   expect(screen.getByText("+1")).toBeTruthy();

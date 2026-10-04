@@ -92,13 +92,13 @@ describe("what a refusal carries for a person", () => {
 
   test("a 429's wait is read off its Retry-After, in seconds", async () => {
     answering(429, { error: "throttled" }, { "Retry-After": "16" });
-    expect((await refusal()).retryAfter).toBe(16);
+    expect((await refusal()).retryAfterSeconds).toBe(16);
   });
 
   // NO HEADER IS NOT ZERO. A 503 with no Retry-After is the engine saying
   // waiting will not help, which a screen must not render as "try again now".
   test("an answer with no Retry-After carries none", async () => {
     answering(503, { error: "unavailable" });
-    expect((await refusal()).retryAfter).toBeNull();
+    expect((await refusal()).retryAfterSeconds).toBeNull();
   });
 });

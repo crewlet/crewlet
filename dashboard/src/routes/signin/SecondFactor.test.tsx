@@ -7,7 +7,7 @@
  * not called harmless: it may have stored a set this page will never see.
  */
 
-import { cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { RecoveryCodesDialog } from "./SecondFactor.tsx";

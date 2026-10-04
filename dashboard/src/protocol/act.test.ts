@@ -10,8 +10,8 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { ACT_ERRORS } from "../contract/errors.ts";
 import { act, newActOpID } from "./act.ts";
-import { SessionFloors } from "./floors.ts";
-import { currentSessionNeed, sessionRestored, setStepUpConfirmer } from "./session.ts";
+import { SessionFloors } from "./session.ts";
+import { currentSessionNeed, sessionRestored, setStepUpConfirmer } from "./signin.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();

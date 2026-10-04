@@ -30,8 +30,8 @@ import { useCallback, useMemo } from "react";
 import { EventRow, QueryState, Section } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { Callout, Card, EmptyState, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
-import { ClockText, DateCell, NumberCell, SeatLabel } from "~/app/frame/cells.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DateCell, NumberCell, SeatLabel } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -41,7 +41,7 @@ import { href } from "~/app/router.tsx";
 import { MessageSquareGlyph, UsersGlyph, InfoGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { indexOrg, seatByAddress, useSeatBadgeOf } from "~/lib/seats.ts";
+import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";
 import {
   elapsedMs,
   fmtDateTime,
@@ -51,6 +51,7 @@ import {
   relTime,
   tsKey,
 } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
 import type { A2AChannel } from "~/protocol/index.ts";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
@@ -71,7 +72,7 @@ const WHOLE_RECORD = { state: "all" };
 function useSeatName(): (handle: string) => string {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
-  return useCallback((handle: string) => seatByAddress(index, handle)?.name || handle, [index]);
+  return useCallback((handle: string) => index.byHandle.get(handle)?.name || handle, [index]);
 }
 
 /**
@@ -108,7 +109,11 @@ function ChannelState({ channel }: { channel: A2AChannel }) {
  * not among them — it is the header's own pill, and a state spelled in colour
  * and again in a list reads as two facts about one channel.
  */
-function channelFacts(channel: A2AChannel, seatName: (handle: string) => string): Fact[] {
+function channelFacts(
+  channel: A2AChannel,
+  seatName: (handle: string) => string,
+  now: number,
+): Fact[] {
   return [
     {
       label: "Asked by",
@@ -121,8 +126,8 @@ function channelFacts(channel: A2AChannel, seatName: (handle: string) => string)
       path: ["agents", "seats", channel.target],
     },
     { label: "Messages", value: <NumberCell value={channel.messages} /> },
-    { label: "Opened", value: <DateCell at={channel.opened_at} /> },
-    { label: "Last message", value: <DateCell at={channel.last_at} /> },
+    { label: "Opened", value: <DateCell at={channel.opened_at} now={now} /> },
+    { label: "Last message", value: <DateCell at={channel.last_at} now={now} /> },
   ];
 }
 
@@ -141,9 +146,11 @@ function channelFacts(channel: A2AChannel, seatName: (handle: string) => string)
 function Exchange({
   channel,
   seatName,
+  now,
 }: {
   channel: A2AChannel;
   seatName: (handle: string) => string;
+  now: number;
 }) {
   const answered = channel.messages > 1;
   return (
@@ -154,9 +161,7 @@ function Exchange({
           {seatName(channel.requester)} asked {seatName(channel.target)}
         </span>
         <span className="spacer" />
-        <span className="t-caption nowrap">
-          <ClockText read={(now) => relTime(channel.opened_at, now)} />
-        </span>
+        <span className="t-caption nowrap">{relTime(channel.opened_at, now)}</span>
       </div>
       <div className="row gap-2">
         <Tag appearance="outline">answer</Tag>
@@ -166,11 +171,7 @@ function Exchange({
             : "nothing has come back on this channel yet"}
         </span>
         <span className="spacer" />
-        {answered && (
-          <span className="t-caption nowrap">
-            <ClockText read={(now) => relTime(channel.last_at, now)} />
-          </span>
-        )}
+        {answered && <span className="t-caption nowrap">{relTime(channel.last_at, now)}</span>}
       </div>
       <span className="t-caption">
         The words themselves are not in the channel record: both halves travel over the seat inbox
@@ -198,7 +199,7 @@ export function channelEventsHref(id: string): string {
  * component defined inside a render body is a NEW function on every render, so
  * `<Wrap>` is a different element type each time and React unmounts the whole
  * subtree and builds it again rather than reconciling it. Both callers of
- * [ChannelBody] passed a `now` that ticked once a second, so the body's DOM was
+ * [ChannelBody] pass a `now` that ticks once a second, so the body's DOM was
  * replaced sixty times a minute — and a reader dragging over the channel id to
  * copy it lost the selection within the second, because the node it anchored
  * to no longer existed.
@@ -240,10 +241,12 @@ function Wrap({
 function ChannelBody({
   channel,
   seatName,
+  now,
   flush,
 }: {
   channel: A2AChannel;
   seatName: (handle: string) => string;
+  now: number;
   flush?: boolean;
 }) {
   // OPEN FOR HOW LONG, measured to the close where there is one and to the
@@ -254,7 +257,7 @@ function ChannelBody({
   return (
     <>
       <Wrap flush={flush} title="The exchange">
-        <Exchange channel={channel} seatName={seatName} />
+        <Exchange channel={channel} seatName={seatName} now={now} />
       </Wrap>
       <Wrap flush={flush} title="The record">
         <PropertiesRail
@@ -320,6 +323,7 @@ function missingChannel(truncated: boolean | undefined): string {
  * tells them apart — see `queries.a2aChannels`.
  */
 export function ChannelPeek({ id }: { id: string }) {
+  const now = useNow();
   const seatName = useSeatName();
   const { data, loading, error, refusal } = useQuery("a2a_channels", WHOLE_RECORD, {
     enabled: id !== "",
@@ -354,10 +358,10 @@ export function ChannelPeek({ id }: { id: string }) {
               identifier={channel.id}
               title={channelTitle(channel, seatName)}
               status={<ChannelState channel={channel} />}
-              facts={channelFacts(channel, seatName)}
+              facts={channelFacts(channel, seatName, now)}
             />
             <div className="col gap-3">
-              <ChannelBody channel={channel} seatName={seatName} flush />
+              <ChannelBody channel={channel} seatName={seatName} now={now} flush />
             </div>
           </>
         )}
@@ -368,6 +372,7 @@ export function ChannelPeek({ id }: { id: string }) {
 
 export function Conversations() {
   const seatBadge = useSeatBadgeOf();
+  const now = useNow();
   const seatName = useSeatName();
   const channels = useQuery("a2a_channels", WHOLE_RECORD, { pollMs: POLL_MS });
   const rows = useMemo(() => channels.data?.channels ?? [], [channels.data]);
@@ -399,70 +404,6 @@ export function Conversations() {
     [openPeek],
   );
 
-  // THE COLUMNS HOLD STILL until the roster's names move (`seatName`,
-  // `seatBadge`): every row is memoised on this list, so one built inline drew
-  // every channel on every render — and each date cell reads the clock itself,
-  // so no tick reaches them through here.
-  const columns = useMemo<GridColumn<A2AChannel>[]>(
-    () => [
-      {
-        key: "state",
-        header: "State",
-        shrink: true,
-        sortValue: (c) => (c.closed_at ? "closed" : "open"),
-        cell: (c) => <ChannelState channel={c} />,
-      },
-      {
-        key: "from",
-        header: "Asked by",
-        // WHO ASKED WHOM is what a row is; the counts and the dates give way
-        // first beside a peek (DataGrid's `fitColumns`).
-        floor: "9rem",
-        sortValue: (c) => seatName(c.requester),
-        // NOT `SeatCell`, and not the `SeatChip` this column used to draw:
-        // both are anchors and every row here is one now, and an anchor
-        // inside an anchor is markup no browser agrees about. The seat is a
-        // link again in the peek's own facts.
-        cell: (c) => <SeatLabel {...seatBadge(c.requester)} />,
-      },
-      {
-        key: "to",
-        header: "Asked",
-        floor: "9rem",
-        sortValue: (c) => seatName(c.target),
-        cell: (c) => <SeatLabel {...seatBadge(c.target)} />,
-      },
-      {
-        key: "messages",
-        header: "Messages",
-        align: "right",
-        shrink: true,
-        drop: 2,
-        sortValue: (c) => c.messages,
-        // A CELL RATHER THAN THE BARE NUMBER it used to render: a channel with
-        // nothing on it yet is a real zero and must read as one, and the
-        // tabular face is what lets a column of counts be compared down the
-        // page.
-        cell: (c) => <NumberCell value={c.messages} />,
-      },
-      {
-        key: "opened",
-        header: "Opened",
-        shrink: true,
-        drop: 1,
-        sortValue: (c) => tsKey(c.opened_at),
-        cell: (c) => <DateCell at={c.opened_at} />,
-      },
-      {
-        key: "last",
-        header: "Last message",
-        shrink: true,
-        sortValue: (c) => tsKey(c.last_at),
-        cell: (c) => <DateCell at={c.last_at} />,
-      },
-    ],
-    [seatBadge, seatName],
-  );
   return (
     <>
       <PageNote>
@@ -531,7 +472,63 @@ export function Conversations() {
               onRowActivate={openChannel}
               rowHref={(c) => peekHref({ kind: "channel", id: c.id })}
               defaultSort="-last"
-              columns={columns}
+              columns={[
+                {
+                  key: "state",
+                  header: "State",
+                  shrink: true,
+                  sortValue: (c) => (c.closed_at ? "closed" : "open"),
+                  cell: (c) => <ChannelState channel={c} />,
+                },
+                {
+                  key: "from",
+                  header: "Asked by",
+                  // WHO ASKED WHOM is what a row is; the counts and the dates
+                  // give way first beside a peek (DataGrid's `fitColumns`).
+                  floor: "9rem",
+                  sortValue: (c) => seatName(c.requester),
+                  // NOT `SeatCell`, and not the `SeatChip` this column used to
+                  // draw: both are anchors and every row here is one now, and
+                  // an anchor inside an anchor is markup no browser agrees
+                  // about. The seat is a link again in the peek's own facts.
+                  cell: (c) => <SeatLabel {...seatBadge(c.requester)} />,
+                },
+                {
+                  key: "to",
+                  header: "Asked",
+                  floor: "9rem",
+                  sortValue: (c) => seatName(c.target),
+                  cell: (c) => <SeatLabel {...seatBadge(c.target)} />,
+                },
+                {
+                  key: "messages",
+                  header: "Messages",
+                  align: "right",
+                  shrink: true,
+                  drop: 2,
+                  sortValue: (c) => c.messages,
+                  // A CELL RATHER THAN THE BARE NUMBER it used to render: a
+                  // channel with nothing on it yet is a real zero and must
+                  // read as one, and the tabular face is what lets a column of
+                  // counts be compared down the page.
+                  cell: (c) => <NumberCell value={c.messages} />,
+                },
+                {
+                  key: "opened",
+                  header: "Opened",
+                  shrink: true,
+                  drop: 1,
+                  sortValue: (c) => tsKey(c.opened_at),
+                  cell: (c) => <DateCell at={c.opened_at} now={now} />,
+                },
+                {
+                  key: "last",
+                  header: "Last message",
+                  shrink: true,
+                  sortValue: (c) => tsKey(c.last_at),
+                  cell: (c) => <DateCell at={c.last_at} now={now} />,
+                },
+              ]}
             />
           </Card>
         </QueryState>
@@ -578,6 +575,7 @@ const CHANNEL_EVENTS = 50;
  * happened — a conversation reads top down — with the whole log one link away.
  */
 export function ChannelScreen({ id }: { id: string }) {
+  const now = useNow();
   const seatName = useSeatName();
   const channels = useQuery("a2a_channels", WHOLE_RECORD, { pollMs: POLL_MS });
   const events = useQuery("events", { channel_id: id, limit: CHANNEL_EVENTS });
@@ -605,7 +603,7 @@ export function ChannelScreen({ id }: { id: string }) {
         identifier={id}
         title={name || (missing ? "No such channel" : "A2A channel")}
         status={channel ? <ChannelState channel={channel} /> : undefined}
-        facts={channel ? channelFacts(channel, seatName) : []}
+        facts={channel ? channelFacts(channel, seatName, now) : []}
       />
       {channels.loading && !channels.data && (
         <Skeleton variant="text" rows={5} label="Loading the channel" />
@@ -638,7 +636,7 @@ export function ChannelScreen({ id }: { id: string }) {
             it.
           </Callout>
         )}
-        {channel && <ChannelBody channel={channel} seatName={seatName} />}
+        {channel && <ChannelBody channel={channel} seatName={seatName} now={now} />}
       </QueryState>
 
       {eventsCard && (

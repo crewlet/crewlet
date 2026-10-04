@@ -3,7 +3,7 @@
  * ways a skill reaches a seat.
  */
 
-import { act, cleanup, render, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -115,9 +115,11 @@ test("the tool skills count is the listing's total, and loaded-by reads both way
   });
   expect(screen.getByText("600")).toBeTruthy();
   expect(screen.getByText(/2 of 600 skills loaded/)).toBeTruthy();
-  const tracker = screen.getByText("Working the tracker").closest(".grid-row") as HTMLElement;
+  const tracker = screen
+    .getByText("Working the tracker")
+    .closest("[data-row-index]") as HTMLElement;
   expect(within(tracker).getByText("SWE")).toBeTruthy();
-  const wiki = screen.getByText("Reading the wiki").closest(".grid-row") as HTMLElement;
+  const wiki = screen.getByText("Reading the wiki").closest("[data-row-index]") as HTMLElement;
   expect(within(wiki).getByText(/offered to PM/)).toBeTruthy();
 });
 

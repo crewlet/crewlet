@@ -9,9 +9,9 @@
  * hold the application, not a harness, to mounting it.
  */
 
-import { act, cleanup, render, screen } from "~/test/inCase.ts";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { announce } from "@crewlethq/ui";
-import { afterEach, beforeAll, beforeEach, expect, test } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { CHUNKS, loadChunk } from "./lazyScreen.ts";
 import { App } from "./App.tsx";
 import { ANNOUNCER_LABEL } from "./announcer.tsx";
@@ -72,15 +72,19 @@ function fullscreen(element: Element | null): void {
 }
 
 // THE PACKAGE'S OWN WITNESS is the console: it warns on every announcement
-// nothing hears, and a case that writes to the console fails
-// (`src/test/setup.ts`), so each case below also holds that nothing went
-// unheard.
+// nothing hears, so each case below also holds that nothing went unheard.
+let unheard: { mock: { calls: unknown[][] }; mockRestore: () => void };
+
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = "#/";
+  unheard = vi.spyOn(console, "warn");
 });
 
 afterEach(() => {
+  const said = unheard.mock.calls.filter((call) => String(call[0]).includes("announce()"));
+  unheard.mockRestore();
+  expect(said, "an announcement nothing heard").toEqual([]);
   cleanup();
   Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
   sessionStorage.clear();

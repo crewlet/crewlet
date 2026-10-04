@@ -2,19 +2,17 @@
 /**
  * Keeping the operation log across a reload.
  *
- * What these protect: only the log is kept, under one key, beside the
- * fingerprint of the chart it was made on and never the chart; everything this
+ * What these protect: only the log is kept, under one key; everything this
  * build records reads back, and anything else (a wrong version, an unknown or
  * reshaped operation, an edit written around its own operation's rules, a
- * template in edit mode, a fingerprint that is not one) is discarded whole;
- * storage that refuses is reported rather than thrown; a draft over the cap is
- * not kept; and what a restored draft offers depends on the mode, the revision
- * and the chart it meets.
+ * template in edit mode) is discarded whole; storage that refuses is reported
+ * rather than thrown; a draft over the cap is not kept; and what a restored
+ * draft offers depends on the mode and revision it meets.
  */
 
 import { describe, expect, test } from "vitest";
 import { EMPTY_DRAFT, type Draft } from "./draft.ts";
-import { chartPrint, fingerprint, fromChart } from "./document.ts";
+import { fromDocument } from "./document.ts";
 import { apply, record, OPERATIONS_VERSION, type Intent, type Operation } from "./operations.ts";
 import { EMPTY_LOG } from "./history.ts";
 import {
@@ -32,10 +30,7 @@ import {
   type KeptDraft,
 } from "./persistence.ts";
 import { templateIntent } from "./templates.ts";
-import { countingKeys, fixtureChart, fixtureSettings } from "./testkit.ts";
-
-/** A write id as the runtime mints one: a bare operation id in the engine's grammar. */
-const WRITE = "01a0f246-7d2d-7c92-b7f0-78dd8229b774";
+import { countingKeys, fixtureCompany, fixtureDerived } from "./testkit.ts";
 
 class MemoryStorage implements DraftStorage {
   readonly items = new Map<string, string>();
@@ -62,44 +57,53 @@ class RefusingStorage implements DraftStorage {
   }
 }
 
-const PRINT = fingerprint(chartPrint(fixtureChart()));
-
-/** One operation of every type this build records, from the fixture company. */
+/**
+ * One operation of every type this build records, from the fixture company.
+ * A renamed node keeps its key, so the later operations on `seat:dev` and
+ * `unit:Sales` address the renamed seat and unit.
+ */
 function everyOperation(): Operation[] {
-  let draft: Draft = fromChart(fixtureSettings(), fixtureChart());
+  const doc = fixtureCompany();
+  let draft: Draft = fromDocument(doc, fixtureDerived(doc));
   const ops: Operation[] = [];
   const intents: Intent[] = [
     {
       type: "addUnit",
       key: "new:u1",
-      placement: { parent: "company" },
-      data: { key: "legal", name: "Legal" },
+      placement: { parent: "company", after: null },
+      data: { name: "Legal" },
     },
     {
       type: "addSeat",
       key: "new:s1",
-      placement: { parent: "new:u1" },
-      data: { handle: "counsel", name: "Counsel" },
+      placement: { parent: "new:u1", after: null },
+      data: { name: "Counsel" },
     },
     { type: "renameSeat", target: "seat:dev", name: "Developer" },
-    { type: "renameUnit", target: "unit:sales", name: "Revenue" },
-    { type: "move", target: "seat:designer", to: { parent: "unit:engineering" }, clearLeads: [] },
+    { type: "renameUnit", target: "unit:Sales", name: "Revenue" },
+    {
+      type: "move",
+      target: "seat:designer",
+      to: { parent: "unit:Platform", after: null },
+      clearLeads: [],
+    },
+    { type: "reorder", target: "seat:dev", to: { parent: "unit:Engineering", after: null } },
     {
       type: "updateSeat",
       target: "seat:sre",
       set: [{ path: ["goal"], value: "Automate" }],
       accessLevel: "developer",
     },
-    { type: "updateUnit", target: "unit:platform", set: [{ path: ["purpose"], value: "Run it" }] },
-    { type: "setLead", target: "unit:sales", lead: "account-executive" },
-    { type: "setManages", target: "seat:ceo", manages: ["engineering"] },
+    { type: "updateUnit", target: "unit:Platform", set: [{ path: ["purpose"], value: "Run it" }] },
+    { type: "setLead", target: "unit:Sales", lead: "Account Executive" },
+    { type: "setManages", target: "seat:ceo", manages: ["Engineering"] },
     {
       type: "changeKind",
       target: "seat:account-executive",
       kind: "human",
       contact: { slack_user_id: "U1" },
     },
-    { type: "setScheduleEnabled", target: "unit:engineering", schedule: "standup", enabled: false },
+    { type: "setScheduleEnabled", target: "unit:Engineering", schedule: "standup", enabled: false },
     { type: "setDatadogRouteTo", routeTo: "dev" },
     { type: "updateCompany", set: [{ path: ["vision"], value: "Everywhere" }] },
     {
@@ -110,7 +114,7 @@ function everyOperation(): Operation[] {
         { type: "updateSeat", target: "seat:sre", set: [{ path: ["goal"], value: "Automate it" }] },
       ],
     },
-    { type: "remove", target: "unit:sales" },
+    { type: "remove", target: "unit:Sales" },
   ];
   for (const intent of intents) {
     const result = record(draft, intent);
@@ -138,11 +142,9 @@ const kept = (overrides: Partial<KeptDraft> = {}): KeptDraft => ({
   v: OPERATIONS_VERSION,
   mode: "edit",
   baseRevision: "rev-1",
-  basePrint: PRINT,
   ops: [],
   undone: [],
   savedAt: 1_700_000_000_000,
-  reader: "p-1",
   ...overrides,
 });
 
@@ -150,7 +152,7 @@ describe("isOperation", () => {
   test("accepts every operation type this build records, after a trip through JSON", () => {
     const ops = [...everyOperation(), templateOperation()];
     const types = new Set(ops.map((op) => op.type));
-    expect(types.size).toBe(16);
+    expect(types.size).toBe(17);
     for (const op of ops) expect(isOperation(JSON.parse(JSON.stringify(op))), op.type).toBe(true);
   });
 
@@ -158,36 +160,29 @@ describe("isOperation", () => {
     const [addUnit, addSeat] = everyOperation();
     expect(isOperation({ ...addUnit, extra: 1 })).toBe(false);
     expect(isOperation({ ...addSeat, key: "seat:not-minted" })).toBe(false);
-    // A placement is a parent and nothing else: the chart keeps no sibling order.
-    expect(isOperation({ ...addSeat, placement: { parent: "company", after: null } })).toBe(false);
-    // A created node states its address.
-    expect(isOperation({ ...addSeat, data: { name: "Counsel" } })).toBe(false);
-    expect(isOperation({ ...addUnit, data: { name: "Legal" } })).toBe(false);
-    expect(isOperation({ type: "reorder", target: "seat:dev", to: { parent: "company" } })).toBe(
-      false,
-    );
+    expect(isOperation({ ...addSeat, placement: { parent: "company" } })).toBe(false);
+    expect(isOperation({ type: "renameEverything" })).toBe(false);
     // An edit holds only the changes an editor makes, each in its own shape.
     const edit = everyOperation().find((op) => op.type === "edit")!;
     const remove = everyOperation().find((op) => op.type === "remove")!;
     expect(isOperation({ ...edit, ops: [remove, remove] })).toBe(false);
     expect(isOperation({ ...edit, ops: [edit, edit] })).toBe(false);
+    expect(isOperation({ ...edit, ops: [{ ...addSeat, key: "seat:x" }] })).toBe(false);
     expect(isOperation(null)).toBe(false);
   });
 });
 
 describe("keeping and restoring", () => {
-  test("only the log is kept, under one key, with the chart's fingerprint and never the chart", () => {
+  test("only the log is kept, under one key, and reads back whole", () => {
     const storage = new MemoryStorage();
     const ops = everyOperation();
     const value = kept({ ops: ops.slice(0, 5), undone: ops.slice(5, 7) });
     expect(keepDraft(storage, value)).toBe("kept");
     expect([...storage.items.keys()]).toEqual([DRAFT_STORAGE_KEY]);
     expect(Object.keys(JSON.parse(storage.items.get(DRAFT_STORAGE_KEY)!)).sort()).toEqual([
-      "basePrint",
       "baseRevision",
       "mode",
       "ops",
-      "reader",
       "savedAt",
       "undone",
       "v",
@@ -204,12 +199,7 @@ describe("keeping and restoring", () => {
       ["an unknown mode", { ...kept(), mode: "merge" }],
       ["an edit without its revision", kept({ baseRevision: null })],
       ["a create with a revision", kept({ mode: "create", baseRevision: "rev-1" })],
-      ["no fingerprint", { ...kept(), basePrint: undefined }],
-      // A DRAFT NOBODY KEPT is a draft nobody can be offered.
-      ["no reader", { ...kept(), reader: undefined }],
-      ["an empty reader", kept({ reader: "" })],
-      ["a chart where a fingerprint goes", kept({ basePrint: JSON.stringify(fixtureChart()) })],
-      ["an extra key", { ...kept(), chart: { seats: [] } }],
+      ["an extra key", { ...kept(), document: { name: "leaked" } }],
       ["a template in edit mode", kept({ ops: [templateOperation()] })],
       [
         "a rename written as an edit",
@@ -228,10 +218,6 @@ describe("keeping and restoring", () => {
         "over the cap",
         kept({ ops: Array.from({ length: MAX_KEPT_OPERATIONS + 1 }, () => charterEdit) }),
       ],
-      [
-        "creations without a write",
-        kept({ creates: [{ key: "new:a", kind: "seat", address: "a" }] }),
-      ],
     ];
     for (const [label, value] of cases) {
       const storage = new MemoryStorage();
@@ -239,7 +225,6 @@ describe("keeping and restoring", () => {
       expect(restoreDraft(storage), label).toEqual({ kind: "discarded" });
       expect(storage.items.size, label).toBe(0);
     }
-    // Control: a template in create mode is what a create draft keeps.
     expect(
       parseKeptDraft(kept({ mode: "create", baseRevision: null, ops: [templateOperation()] })),
     ).toBeDefined();
@@ -264,49 +249,27 @@ describe("keeping and restoring", () => {
 });
 
 describe("restoreOffer", () => {
-  const loaded = (
-    revision: string | null,
-    print = PRINT,
-    mode: "edit" | "create" = "edit",
-    reader = "p-1",
-  ) => ({ mode, revision, print, reader });
-
-  test("keep or discard on the same company, update when its settings or its chart moved", () => {
-    expect(restoreOffer(kept(), loaded("rev-1"))).toEqual({ kind: "keep_or_discard" });
-    expect(restoreOffer(kept(), loaded("rev-2"))).toEqual({ kind: "update" });
-    // The chart's rows changed while the settings did not: still somebody else's save.
-    expect(restoreOffer(kept(), loaded("rev-1", "0123456789abcdef"))).toEqual({ kind: "update" });
-    // A save of the draft was out: whatever landed is the rebase's to meet.
-    expect(restoreOffer(kept({ write: WRITE }), loaded("rev-1"))).toEqual({
+  test("keep or discard on the same revision, update when it moved, discard when the mode changed", () => {
+    expect(restoreOffer(kept(), { mode: "edit", revision: "rev-1" })).toEqual({
+      kind: "keep_or_discard",
+    });
+    expect(restoreOffer(kept(), { mode: "edit", revision: "rev-2" })).toEqual({
       kind: "update",
+      from: "rev-1",
+      to: "rev-2",
     });
-  });
-
-  // A DRAFT IS KEPT FOR SOMEBODY. A session that ended with the builder closed
-  // routed the tab to the sign-in, and the next person to sign in was offered
-  // the last one's unsaved company edits as their own — a save of which would
-  // be recorded as theirs. Whatever else the draft could be carried onto.
-  test("a draft kept for another reader is discarded, before anything it could be carried onto", () => {
-    const other = loaded("rev-1", PRINT, "edit", "p-2");
-    expect(restoreOffer(kept(), other)).toEqual({ kind: "discard_other_reader" });
-    expect(restoreOffer(kept({ write: WRITE }), other)).toEqual({
-      kind: "discard_other_reader",
-    });
-    expect(restoreOffer(kept(), loaded(null, PRINT, "create", "p-2"))).toEqual({
-      kind: "discard_other_reader",
-    });
-  });
-
-  test("a draft made for another mode is discarded, unless it is a create whose save was out", () => {
-    expect(restoreOffer(kept(), loaded(null, PRINT, "create"))).toEqual({
+    expect(restoreOffer(kept(), { mode: "create", revision: null })).toEqual({
       kind: "discard_mode_changed",
       kept: "edit",
       loaded: "create",
     });
-    const create = kept({ mode: "create", baseRevision: null });
-    expect(restoreOffer(create, loaded("rev-1"))).toMatchObject({ kind: "discard_mode_changed" });
-    expect(restoreOffer({ ...create, write: WRITE }, loaded("rev-1"))).toEqual({
-      kind: "update",
+    expect(
+      restoreOffer(kept({ mode: "create", baseRevision: null }), {
+        mode: "edit",
+        revision: "rev-1",
+      }),
+    ).toMatchObject({
+      kind: "discard_mode_changed",
     });
   });
 });
@@ -317,11 +280,9 @@ describe("persistencePlan", () => {
     const state = {
       mode: "edit" as const,
       baseRevision: "rev-1",
-      basePrint: PRINT,
       log: { ops, undone: [] },
       keep: true,
-      pending: null,
-      reader: "p-1",
+      write: null,
     };
     expect(persistencePlan(state, 42)).toEqual({
       action: "keep",
@@ -329,26 +290,23 @@ describe("persistencePlan", () => {
     });
     expect(persistencePlan({ ...state, keep: false }, 42)).toEqual({ action: "clear" });
     expect(persistencePlan({ ...state, log: EMPTY_LOG }, 42)).toEqual({ action: "clear" });
-    // A save of the log that is out travels with it, and what it creates.
-    const creates = [{ key: "new:u1", kind: "unit" as const, address: "legal" }];
-    expect(persistencePlan({ ...state, pending: { write: WRITE, creates } }, 42)).toEqual({
+    // A save of the log that is out travels with it.
+    expect(persistencePlan({ ...state, write: "write-0001" }, 42)).toEqual({
       action: "keep",
-      kept: kept({ ops, savedAt: 42, write: WRITE, creates }),
+      kept: kept({ ops, savedAt: 42, write: "write-0001" }),
     });
   });
 });
 
 describe("a save of the kept log whose answer may be lost", () => {
-  const creates = [{ key: "new:s1", kind: "seat" as const, address: "counsel" }];
-
-  test("is marked on the kept log before it goes, with what it creates, and the mark is cleared once it is known", () => {
+  test("is marked on the kept log before it goes, and the mark is cleared once it is known", () => {
     const storage = new MemoryStorage();
-    const draft = kept({ ops: everyOperation().slice(0, 2) });
+    const draft = kept({ ops: everyOperation().slice(0, 1) });
     expect(keepDraft(storage, draft)).toBe("kept");
-    expect(markPendingWrite(storage, { write: WRITE, creates })).toBe("kept");
+    expect(markPendingWrite(storage, "write-0001")).toBe("kept");
     expect(restoreDraft(storage)).toEqual({
       kind: "restored",
-      kept: { ...draft, write: WRITE, creates },
+      kept: { ...draft, write: "write-0001" },
     });
     expect(markPendingWrite(storage, null)).toBe("kept");
     expect(restoreDraft(storage)).toEqual({ kind: "restored", kept: draft });
@@ -357,24 +315,17 @@ describe("a save of the kept log whose answer may be lost", () => {
   // A log no storage holds is never offered again, so no lost answer could
   // replay it; storage that refuses says so rather than pretending.
   test("marks nothing where no draft is kept, and says when storage refuses", () => {
-    const pending = { write: WRITE, creates };
-    expect(markPendingWrite(new MemoryStorage(), pending)).toBe("cleared");
-    expect(markPendingWrite(null, pending)).toBe("unavailable");
-    expect(markPendingWrite(new RefusingStorage(), pending)).toBe("refused");
+    expect(markPendingWrite(new MemoryStorage(), "write-0001")).toBe("cleared");
+    expect(markPendingWrite(null, "write-0001")).toBe("unavailable");
+    expect(markPendingWrite(new RefusingStorage(), "write-0001")).toBe("refused");
   });
 
-  test("a mark that is not a write id, or a creation that is not one, is not a draft this build kept", () => {
-    for (const bad of [
-      { write: "not one" },
-      { write: WRITE, creates: [{ key: "seat:x", kind: "seat", address: "x" }] },
-      { write: WRITE, creates: [{ key: "new:x", kind: "role", address: "x" }] },
-    ]) {
-      const storage = new MemoryStorage();
-      storage.setItem(
-        DRAFT_STORAGE_KEY,
-        JSON.stringify({ ...kept({ ops: everyOperation().slice(0, 1) }), ...bad }),
-      );
-      expect(restoreDraft(storage), JSON.stringify(bad)).toEqual({ kind: "discarded" });
-    }
+  test("a mark that is not a write id is not a draft this build kept", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(
+      DRAFT_STORAGE_KEY,
+      JSON.stringify({ ...kept({ ops: everyOperation().slice(0, 1) }), write: "not one" }),
+    );
+    expect(restoreDraft(storage)).toEqual({ kind: "discarded" });
   });
 });

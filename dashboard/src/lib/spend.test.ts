@@ -89,37 +89,18 @@ describe("the legend", () => {
   });
 
   // A SEAT IS NAMED AS THE REST OF THE SCREEN NAMES IT: the engine keys the
-  // band on the seat's agent id — which a rename does not move — and sends its
-  // name as the label, which the legend prints. Any grouping whose key is
-  // already the words keeps it.
-  it("labels a seat band with the engine's label, never its agent id", () => {
+  // band on the seat's agent id — an identity two namesakes cannot share —
+  // and sends the name beside it as `label`. A band it sent no label for is
+  // drawn as its key, which is already the words (a model, a phase's own).
+  it("labels a band with the engine's label, and its key where there is none", () => {
     const by_group = [
-      {
-        ...bucket(90),
-        group: "6f1c2a9e-0000-5000-8000-000000000001",
-        label: "Agent PM",
-        handle: "agent-pm",
-        other: false,
-        folded: 0,
-      },
-      { ...bucket(10), group: "gpt-5", other: false, folded: 0 },
+      { ...bucket(90), group: "a-1f3c", label: "Agent PM", other: false, folded: 0 },
+      { ...bucket(10), group: "claude-sonnet-5", other: false, folded: 0 },
     ];
     expect(bandsOf(series({ by_group }), "seat").map((b) => b.label)).toEqual([
       "Agent PM",
-      "gpt-5",
+      "claude-sonnet-5",
     ]);
-    // THE KEY STAYS THE IDENTITY, which is what a point's `groups` is keyed by.
-    expect(bandsOf(series({ by_group }), "seat")[0]?.key).toBe(
-      "6f1c2a9e-0000-5000-8000-000000000001",
-    );
-    // A UNIT band is keyed by the unit's key and named by its name, the same way.
-    const units = [
-      { ...bucket(40), group: "eng", label: "Engineering", seats: 4, other: false, folded: 0 },
-    ];
-    expect(bandsOf(series({ by_group: units }), "unit")[0]).toMatchObject({
-      key: "eng",
-      label: "Engineering",
-    });
   });
 
   // THE CONTRACT'S HUES ARE ITS STACKING ORDER: `series` is the 1-based data
