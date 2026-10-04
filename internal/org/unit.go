@@ -52,8 +52,7 @@ type Unit struct {
 	// renaming a team moves nothing that points at it. The config layer
 	// REQUIRES one on every authored unit and mints it from the name at
 	// import (config.MintUnitID), so a document read from YAML always
-	// carries one; the fallback in [Unit.Key] is for a tree built in Go and
-	// for a revision stored before the field existed.
+	// carries one; the fallback in [Unit.Key] is for a tree built in Go.
 	//
 	// IT DOES NOT STOP A RENAME RE-ONBOARDING THE SEATS BENEATH IT. That
 	// is a different mechanism: onboarding turns on the unit's NAME, which
@@ -152,9 +151,8 @@ type Unit struct {
 // EVERYTHING KEYS ON THIS — every durable row, and every reference in the
 // document itself ([Organization.Unit], a `manages:` entry, a root seat's
 // `unit:`) — while everything a person reads keys on [Unit.Name]. The
-// fallback is what keeps a tree built in Go, or a revision stored before the
-// id existed, addressable; an authored document always carries an id, which
-// the config layer requires and mints.
+// fallback is what keeps a tree built in Go addressable; an authored document
+// always carries an id, which the config layer requires and mints.
 func (u *Unit) Key() string {
 	if u == nil {
 		return ""

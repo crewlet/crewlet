@@ -822,11 +822,9 @@ func MintUnitID(name string) string {
 // AN ADMISSION RULE rather than a runnable one (see
 // [org.Organization.Validate] for the class), and the distinction is the
 // whole reason it is not beside the shape check in [Unit.validate]. A unit
-// with no id is addressable — [org.Unit.Key] falls back to its name, which is
-// exactly how every company behaved before the field — so a revision stored
-// by an earlier build must still boot, reload and be reverted to. What may
-// not happen is a NEW document leaving a team keyed on prose somebody will
-// rename, so a submitted one is refused.
+// with no id is addressable — [org.Unit.Key] falls back to its name — so it
+// runs. What may not happen is a NEW document leaving a team keyed on prose
+// somebody will rename, so a submitted one is refused.
 //
 // Unreachable from any document a write stores, every one of which is minted
 // ([MintIdentities]). What it catches is a unit assembled in Go.
