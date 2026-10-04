@@ -409,7 +409,7 @@ func waitUntil(t *testing.T, within time.Duration, what string, cond func() bool
 // With nothing missing — the state an earlier rejoin leaves when the artefact
 // it installed is what failed to open — the restore alone is the recovery.
 //
-// AND A REOPENED ESTATE DECIDES EVERY CREDENTIAL AGAIN, because the file it
+// AND A REOPENED ESTATE NAMES EVERYONE TO THE LISTENER, because the file it
 // opened may be a donor's whose revocations no committed batch here ever named
 // — while a rejoin that found nobody to ask changed no row and says nothing,
 // which is the control.

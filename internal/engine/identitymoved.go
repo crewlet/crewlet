@@ -61,9 +61,10 @@ func (e *Engine) identityMoved(moved iamdomain.Moved) {
 // EVERYTHING, because nothing narrower is honest: the rows are a peer's now,
 // and every revocation that peer applied while this node was too far behind to
 // follow arrived without an apply. An open socket still serving a session one
-// of them ended would go on serving it until it closed on its own — so every
-// credential is decided again ([iamdomain.Moved.Everyone]), and the party
-// registry is rebuilt at once rather than at its next periodic re-read.
+// of them ended would go on serving it until it closed on its own — so the
+// move names everyone ([iamdomain.Moved.Everyone]), which closes every socket
+// for its handshake to decide, and the party registry is rebuilt at once
+// rather than at its next periodic re-read.
 func (s *stateLog) estateReplaced() {
 	if s.identityMoved != nil {
 		s.identityMoved(iamdomain.Moved{Seats: true, Everyone: true})

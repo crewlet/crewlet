@@ -38,7 +38,7 @@ func (h *heardMoves) take() []iamdomain.Moved {
 // WHOSE CREDENTIALS AN IDENTITY BATCH MOVED REACHES THE LISTENER, THROUGH THE
 // REGISTER, and a batch that moved none does not.
 //
-// The listener is what decides an open dashboard socket again — a handshake
+// The listener is what ends or decides an open dashboard socket — a handshake
 // decision alone leaves a revoked session's tab receiving the company's state
 // for as long as it stays open — and nothing would notice a register that
 // built the identity applier with no hook: every case in internal/iamdomain
@@ -85,7 +85,7 @@ func TestAnIdentityBatchReachesTheCredentialListener(t *testing.T) {
 	}
 }
 
-// A RECORD THE IDENTITY RUNNER RETAINS DECIDES EVERY CREDENTIAL AGAIN, through
+// A RECORD THE IDENTITY RUNNER RETAINS NAMES EVERYONE TO THE LISTENER, through
 // the applier the register builds.
 //
 // The framework finds an applier's retention hook by a type assertion on what
@@ -129,14 +129,14 @@ func TestARetainedIdentityRecordReachesTheCredentialListener(t *testing.T) {
 	}
 }
 
-// AN ESTATE REPLACED WITH NO BATCH TO SAY SO DECIDES EVERY CREDENTIAL AGAIN.
+// AN ESTATE REPLACED WITH NO BATCH TO SAY SO NAMES EVERYONE TO THE LISTENER.
 //
 // An adoption puts a donor's rows in place and a reopened estate may be the
 // one a failed join installed: every revocation the donor applied while this
 // node was too far behind to follow arrives without an apply, so no committed
 // batch will ever name it. Told nothing, a socket opened on a session one of
 // those records ended goes on serving it until it closes on its own.
-func TestAReplacedEstateDecidesEveryCredentialAgain(t *testing.T) {
+func TestAReplacedEstateNamesEveryone(t *testing.T) {
 	t.Parallel()
 	e := &Engine{directoryNudge: make(chan struct{}, 1)}
 	heard := &heardMoves{}
@@ -157,14 +157,14 @@ func TestAReplacedEstateDecidesEveryCredentialAgain(t *testing.T) {
 	}
 }
 
-// AN ADOPTION DECIDES EVERY CREDENTIAL AGAIN, once the donor's rows are in
+// AN ADOPTION NAMES EVERYONE TO THE LISTENER, once the donor's rows are in
 // place and the appliers are running over them.
 //
 // The node was below the floor: every revocation a peer applied in that time
 // arrives inside the donor's file and through no apply of this node's, so
 // nothing else would ever say which open socket's credential one of them
 // ended.
-func TestAnAdoptionDecidesEveryCredentialAgain(t *testing.T) {
+func TestAnAdoptionNamesEveryone(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
 	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)

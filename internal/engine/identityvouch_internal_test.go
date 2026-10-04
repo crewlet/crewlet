@@ -8,8 +8,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A NODE THAT STOPS VOUCHING FOR ITS IDENTITY ROWS DECIDES EVERY CREDENTIAL
-// AGAIN, once, at the instant its request path stops serving them.
+// A NODE THAT STOPS VOUCHING FOR ITS IDENTITY ROWS NAMES EVERYONE, once, at the
+// instant its request path stops serving them.
 //
 // An applier halted on a record it cannot read — the removal or the
 // company-wide invalidation meant to end an open socket's credential, signed
@@ -17,9 +17,9 @@ import (
 // about it; and an applier frozen behind an unreachable broker says nothing
 // either. What changes is the identity log's lag: its checkpoint stops moving
 // while it owes records, and past the stall grace every identity read on the
-// node answers unknown, so REST answers 503. The open socket has to be told at
-// that same instant, or it is served on its last decision for as long as the
-// node runs.
+// node answers unknown, so REST answers 503. The open sockets have to be closed
+// at that same instant, or each is served on its last decision for as long as
+// the node runs.
 //
 // The domain here is a running domain whose checkpoint was last seen moving at
 // t0 with records owed — the figure the identity reader is built with — and
@@ -32,7 +32,7 @@ import (
 // Mutations: fire on every stalled reading and the third reading is heard
 // twice; compare at the grace rather than past it and the first reading is
 // heard; drop the re-arm and the second stall is never said.
-func TestANodeThatStopsVouchingDecidesEveryCredentialAgain(t *testing.T) {
+func TestANodeThatStopsVouchingNamesEveryoneOnce(t *testing.T) {
 	t.Parallel()
 	e := &Engine{directoryNudge: make(chan struct{}, 1)}
 	heard := &heardMoves{}
