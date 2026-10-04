@@ -481,7 +481,7 @@ export function Turns() {
       {(rows.length > 0 || more || pageError) && (
         <div className="row gap-2">
           {pageError ? (
-            <QueryState error={pageError} loading={false} />
+            <QueryState error={pageError} refusal={null} loading={false} />
           ) : more ? (
             <Button
               size="small"

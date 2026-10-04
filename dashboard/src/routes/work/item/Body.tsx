@@ -38,7 +38,7 @@ import { renderMarkdown } from "~/lib/markdown.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { plural } from "~/lib/format.ts";
 import type { SeatRing } from "~/lib/seats.ts";
-import type { WorkItem, WorkSummary } from "~/protocol/index.ts";
+import type { LogRefusal, QueryRefusal, WorkItem, WorkSummary } from "~/protocol/index.ts";
 import { useItemEdits } from "./edit.tsx";
 import { itemPath } from "~/lib/work.ts";
 
@@ -254,6 +254,7 @@ export function Checklists({ item, chrome }: { item: WorkItem; chrome: RowChrome
 export function Subtasks({
   rows,
   error,
+  refusal = null,
   chrome,
   parent,
   ringOf,
@@ -261,6 +262,8 @@ export function Subtasks({
 }: {
   rows: WorkSummary[];
   error?: string | null;
+  /** What the refusal said beyond its code — see `useQuery`. */
+  refusal?: QueryRefusal | LogRefusal | null;
   chrome: RowChrome;
   /** The task a new sub-task is filed under; absent where none may be added. */
   parent?: WorkItem;
@@ -281,7 +284,7 @@ export function Subtasks({
         <div className="task-subtasks-head">
           <span className="task-subtasks-title">Sub-tasks</span>
         </div>
-        <QueryState error={error} loading={false} />
+        <QueryState error={error} refusal={refusal} loading={false} />
       </section>
     );
   }

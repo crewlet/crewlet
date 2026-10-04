@@ -316,7 +316,7 @@ export function RecentPhases({
       )}
       <div className="live-card-foot">
         {pageError ? (
-          <QueryState error={pageError} loading={false} />
+          <QueryState error={pageError} refusal={null} loading={false} />
         ) : exhausted ? (
           <span className="t-caption">That is the beginning of the retained record.</span>
         ) : (

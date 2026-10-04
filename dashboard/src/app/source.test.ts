@@ -518,6 +518,39 @@ test("no stat tile builds its caption by joining a list", () => {
  * ever saw single-line props would pass a reverted multi-line ternary — which is
  * three of the four captions above.
  */
+/**
+ * A QUERYSTATE HANDED A FAILURE IS HANDED WHY.
+ *
+ * `QueryState` turns an `unauthorized` into the grant that would admit the
+ * reader, and an `unavailable` the state log will not lift into that fact —
+ * but only from the `refusal` beside the code, which `useQuery`, `useRest` and
+ * `usePaged` answer and a screen has to pass on. Twenty-nine did not, so a
+ * reader refused a seat's turns or the tool servers' status was shown the
+ * generic banner where the engine had named the grant that would admit them.
+ * Nothing else catches it: `refusal` is optional because a surface with no
+ * query behind it has none, so an omission type-checks and renders.
+ *
+ * `error={null}` is exempt, being no failure at all.
+ */
+test("every QueryState handed an error is handed its refusal", () => {
+  const offenders: string[] = [];
+  let seen = 0;
+  for (const { path, text } of sources()) {
+    for (const el of elements(text, "QueryState")) {
+      const error = /\berror=\{([^}]*)\}/.exec(el.text);
+      if (!error || error[1]!.trim() === "null") continue;
+      seen++;
+      if (/\brefusal=\{/.test(el.text)) continue;
+      const line = text.slice(0, el.at).split("\n").length;
+      offenders.push(`${path}:${line} — error={${error[1]!.trim()}}`);
+    }
+  }
+  expect(offenders, "pass the read's `refusal` beside its `error`").toEqual([]);
+  // THE OTHER SIDE: a renamed component or a broken scan makes the rule
+  // vacuous and still green.
+  expect(seen, "nothing here reads as a QueryState any more").toBeGreaterThan(40);
+});
+
 test("the element scanner reads a multi-line prop", () => {
   const src =
     '<StatCard\n  label="x"\n  sub={\n    a.length ? a.map((x) => x.n).join(", ") : "none"\n  }\n/>\n<StatCard label="y" sub="fixed" />';

@@ -171,6 +171,7 @@ export function ExpensiveTasks() {
         </PageActions>
         <QueryState
           error={refused}
+          refusal={spend.error ? spend.refusal : answer.refusal}
           detail={spend.error ? spend.detail : undefined}
           loading={false}
         />

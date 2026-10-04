@@ -26,7 +26,13 @@
 import { useCallback, useMemo, useState } from "react";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
-import { queryErrorCode, type PageSummary, type PagesAnswer } from "~/protocol/index.ts";
+import {
+  queryErrorCode,
+  type LogRefusal,
+  type PageSummary,
+  type PagesAnswer,
+  type QueryRefusal,
+} from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { SkillLoad } from "~/contract/pages.ts";
 
@@ -44,6 +50,8 @@ export interface PagedPages {
   data: PagesAnswer | null;
   loading: boolean;
   error: QueryErrorCode | null;
+  /** What the first window's refusal said beyond its code — see `useQuery`. */
+  refusal: QueryRefusal | LogRefusal | null;
   /** Every page loaded, each once, in the listing's own order. */
   rows: PageSummary[];
   /** How many pages the listing matches in all, or null before an answer. */
@@ -137,6 +145,7 @@ export function usePagedPages(
     data: first.data,
     loading: first.loading,
     error: first.error,
+    refusal: first.refusal,
     rows,
     total: first.data ? (first.data.total ?? rows.length) : null,
     more: after !== "",

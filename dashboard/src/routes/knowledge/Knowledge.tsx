@@ -54,7 +54,13 @@ import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRai
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { DateCell, NumberCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import type { KnowledgeAnswer, PageContainer, PageSummary } from "~/protocol/index.ts";
+import type {
+  KnowledgeAnswer,
+  LogRefusal,
+  PageContainer,
+  PageSummary,
+  QueryRefusal,
+} from "~/protocol/index.ts";
 // THE BROWSE'S OWN SPELLING of a page's address and of a link that peeks,
 // rather than a second one here: a hit, a grid row and a container's page list
 // must resolve to the same `peek=` token, or the stepper walks past the page
@@ -155,7 +161,12 @@ function Results({
   search,
 }: {
   phrase: string;
-  search: { data: KnowledgeAnswer | null; loading: boolean; error: string | null };
+  search: {
+    data: KnowledgeAnswer | null;
+    loading: boolean;
+    error: string | null;
+    refusal: QueryRefusal | LogRefusal | null;
+  };
 }) {
   const { open: openPeek } = usePeekControls();
   const data = search.data;
@@ -205,6 +216,7 @@ function Results({
       )}
       <QueryState
         error={search.error}
+        refusal={search.refusal}
         loading={search.loading}
         empty={
           hits.length || !ran
@@ -633,7 +645,7 @@ function ContainerPages({
   total: number | null;
   /** The read returned fewer pages than the container holds. */
   capped: boolean;
-  list: { error: string | null; loading: boolean };
+  list: { error: string | null; refusal: QueryRefusal | LogRefusal | null; loading: boolean };
   now: number;
 }) {
   const shown = Math.min(recent.length, PEEK_PAGES);
@@ -657,6 +669,7 @@ function ContainerPages({
       </Card.Header>
       <QueryState
         error={list.error}
+        refusal={list.refusal}
         loading={list.loading}
         empty={
           recent.length

@@ -10,7 +10,7 @@ import { QueryState } from "~/components/common.tsx";
 import { href } from "~/app/router.tsx";
 import { configValueKind } from "~/lib/format.ts";
 import type { Seat, SeatSettings } from "~/lib/seats.ts";
-import type { CompanyDocument } from "~/protocol/index.ts";
+import type { CompanyDocument, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
 
 /**
  * The operator-gated half of a seat, said precisely when it cannot be shown.
@@ -27,6 +27,7 @@ import type { CompanyDocument } from "~/protocol/index.ts";
  */
 export function SettingsState({
   error,
+  refusal,
   loading,
   doc,
   settings,
@@ -34,6 +35,7 @@ export function SettingsState({
   children,
 }: {
   error: string | null;
+  refusal: QueryRefusal | LogRefusal | null;
   loading: boolean;
   doc: CompanyDocument | null;
   settings: SeatSettings | null;
@@ -43,7 +45,7 @@ export function SettingsState({
   if (loading && !doc && !error) {
     return <Skeleton variant="text" rows={3} label="Loading the company document" />;
   }
-  if (error) return <QueryState error={error} loading={loading} />;
+  if (error) return <QueryState error={error} refusal={refusal} loading={loading} />;
   if (!doc) {
     return (
       <EmptyState

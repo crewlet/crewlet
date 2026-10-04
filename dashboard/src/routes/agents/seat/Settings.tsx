@@ -104,6 +104,7 @@ export function Settings({
   const state = (children: ReactNode) => (
     <SettingsState
       error={config.error}
+      refusal={config.refusal}
       loading={config.loading}
       doc={config.doc}
       settings={settings}

@@ -57,11 +57,13 @@ import type {
   ConfigUnit,
   Derived,
   LiveCall,
+  LogRefusal,
   OrgProjection,
   OrgSeat,
   OrgUnit,
   PhaseLLM,
   ProviderKeys,
+  QueryRefusal,
   ScheduleSpec,
 } from "~/protocol/index.ts";
 
@@ -810,7 +812,12 @@ export interface SeatSetup {
   reading: SeatReading;
   /** The raw answer, for a panel that states its own read: the document
    *  (never beside a refusal), whether it is in flight, and the refusal. */
-  config: { doc: CompanyDocument | null; loading: boolean; error: string | null };
+  config: {
+    doc: CompanyDocument | null;
+    loading: boolean;
+    error: string | null;
+    refusal: QueryRefusal | LogRefusal | null;
+  };
 }
 
 /**
@@ -856,6 +863,7 @@ export function useSeatSetup(handle: string): SeatSetup {
       doc: config.error ? null : (config.data ?? null),
       loading: config.loading,
       error: config.error,
+      refusal: config.refusal,
     },
   };
 }

@@ -472,7 +472,9 @@ export function Runs() {
   const now = useNow();
   // Durable runs have no push behind them, so this is the one place a poll is
   // correct — and it is slow, because a run's lifetime is minutes.
-  const { data, loading, error } = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
+  const { data, loading, error, refusal } = useQuery("sandbox_runs", undefined, {
+    pollMs: RUNS_POLL_MS,
+  });
 
   const rows = useMemo(() => mergeRuns(data?.runs ?? [], live), [data, live]);
 
@@ -559,6 +561,7 @@ export function Runs() {
       {loading && !rows.length && <Skeleton variant="text" rows={4} label="Loading runs" />}
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         empty={
           rows.length
@@ -838,7 +841,11 @@ export function RunScreen({ turnId }: { turnId: string }) {
         }
       />
       {loading && <Skeleton variant="text" rows={6} label="Loading the run" />}
-      <QueryState error={board.error && turn.error ? board.error : null} loading={loading}>
+      <QueryState
+        error={board.error && turn.error ? board.error : null}
+        refusal={board.refusal}
+        loading={loading}
+      >
         {unread && (
           <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
             {unread === "board"

@@ -87,6 +87,7 @@ function ToolSkills() {
   return (
     <QueryState
       error={listing.error}
+      refusal={listing.refusal}
       loading={listing.loading}
       empty={
         rows.length

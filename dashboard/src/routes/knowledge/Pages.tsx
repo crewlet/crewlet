@@ -240,7 +240,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
   // was fifty rows with nothing to say the rest existed. It reads windows of
   // 500 now, with the listing's own total and "Load more" from its cursor.
   const listing = usePagedPages(params, { pollMs: 20_000 });
-  const { loading, error } = listing;
+  const { loading, error, refusal } = listing;
 
   const rows = useMemo(
     () => [...listing.rows].sort((a, b) => tsKey(b.updated_at) - tsKey(a.updated_at)),
@@ -366,6 +366,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
 
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         // ONE EMPTY STATE. There used to be two, and on a company with no
         // pages at all they rendered TOGETHER: `QueryState` fired on

@@ -68,7 +68,7 @@ import {
   plural,
 } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import type { ScheduleRow, ScheduleRunRow } from "~/protocol/index.ts";
+import type { LogRefusal, QueryRefusal, ScheduleRow, ScheduleRunRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
@@ -570,7 +570,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
   );
   // Schedules are pushed on a config apply, and the RUNS are not pushed at
   // all — so this polls, slowly, because a cron's next fire moves in minutes.
-  const { data, loading, error } = useQuery("schedules", undefined, { pollMs: 30_000 });
+  const { data, loading, error, refusal } = useQuery("schedules", undefined, { pollMs: 30_000 });
 
   const schedules = data?.schedules ?? [];
   const runs = data?.recent_runs ?? [];
@@ -646,6 +646,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
         truncated={Boolean(one.data?.truncated)}
         loading={one.loading}
         error={one.error}
+        refusal={one.refusal}
         now={now}
       />
     );
@@ -699,6 +700,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
       )}
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         empty={
           schedules.length
@@ -975,6 +977,7 @@ function OneSchedule({
   truncated,
   loading,
   error,
+  refusal,
   now,
 }: {
   scopeType: string;
@@ -987,6 +990,7 @@ function OneSchedule({
   truncated: boolean;
   loading: boolean;
   error: string | null;
+  refusal: QueryRefusal | LogRefusal | null;
   now: number;
 }) {
   usePageLabels({ [[scopeType, scopeId, name].join("/")]: name });
@@ -1031,6 +1035,7 @@ function OneSchedule({
 
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         empty={
           runs.length
@@ -1161,6 +1166,8 @@ export function SchedulePeek({ scope }: { scope: string }) {
   const runs = history.data?.runs ?? [];
   const loading = defined.loading || history.loading;
   const answered = Boolean(defined.data) && Boolean(history.data);
+  // The read whose failure the banner shows, its code and refusal together.
+  const failed = defined.error ? defined : history;
 
   return (
     <>
@@ -1180,7 +1187,8 @@ export function SchedulePeek({ scope }: { scope: string }) {
       <div className="col gap-3">
         {loading && !answered && <Skeleton variant="text" rows={6} label="Loading the schedule" />}
         <QueryState
-          error={defined.error || history.error}
+          error={failed.error}
+          refusal={failed.refusal}
           loading={loading}
           empty={
             answered && !row && runs.length === 0

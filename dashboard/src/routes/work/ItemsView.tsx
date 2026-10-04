@@ -491,7 +491,7 @@ export function ItemsView({
   // Twenty seconds: a board is read, not watched, and a tracker's own pace is
   // a person typing a comment.
   const paged = usePagedItems(params, { pollMs: ITEMS_POLL_MS });
-  const { data, loading, error } = paged;
+  const { data, loading, error, refusal } = paged;
 
   // A TRASH LISTING IS THE ONE VIEW WHOSE ROWS DO NOT CARRY THEIR OWN STORY.
   // The row says a task is removed; WHO removed it, WHEN, and whether the
@@ -953,7 +953,7 @@ export function ItemsView({
               used to describe one — and that prop takes a title and a hint. A
               refusal and a pending read still come first: they are the two
               states an empty list must never be confused with. */}
-          <QueryState error={error} loading={loading}>
+          <QueryState error={error} refusal={refusal} loading={loading}>
             {nothingShown ? (
               <EmptyList
                 narrowed={filtered}

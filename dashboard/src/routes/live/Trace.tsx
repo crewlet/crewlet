@@ -137,7 +137,7 @@ export function arrange(events: readonly EventRecord[]): TraceRow[] {
 export function TraceScreen({ traceId }: { traceId: string }) {
   const nav = useNavigator();
   const now = useNow();
-  const { data, loading, error } = useQuery("trace", { trace_id: traceId });
+  const { data, loading, error, refusal } = useQuery("trace", { trace_id: traceId });
 
   // `.events`, not the answer itself.
   const events = data?.events ?? [];
@@ -248,6 +248,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
       <CoverageNote coverage={[data?.coverage]} what="this trace" />
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         empty={
           events.length

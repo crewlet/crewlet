@@ -29,6 +29,7 @@ import { href } from "~/app/router.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { reachOf, SERVER_STATE_WORDS } from "~/lib/mcpServers.ts";
 import type { Seat } from "~/lib/seats.ts";
+import type { LogRefusal, QueryRefusal } from "~/protocol/index.ts";
 import type {
   McpServerState,
   McpServerNode,
@@ -70,16 +71,21 @@ export function McpServers({
   data,
   loading,
   error,
+  refusal,
   seats,
 }: {
   data: McpServersStatusAnswer | null;
   loading: boolean;
   error: string | null;
+  /** What the refusal said beyond its code — the grant that would admit. */
+  refusal: QueryRefusal | LogRefusal | null;
   seats: Seat[];
 }) {
   const servers = useMemo(() => data?.servers ?? [], [data]);
 
-  if (error || (loading && !data)) return <QueryState error={error} loading={loading && !data} />;
+  if (error || (loading && !data)) {
+    return <QueryState error={error} refusal={refusal} loading={loading && !data} />;
+  }
   if (servers.length === 0) {
     return (
       <EmptyState

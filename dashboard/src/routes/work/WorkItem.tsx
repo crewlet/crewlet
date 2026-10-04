@@ -319,6 +319,7 @@ export function WorkItem({ id }: { id: string }) {
                   <Subtasks
                     rows={children.data?.items ?? []}
                     error={children.error}
+                    refusal={children.refusal}
                     chrome={chrome}
                     parent={item.removed ? undefined : item}
                     ringOf={ringFor}
@@ -400,6 +401,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
                 <Subtasks
                   rows={children.data?.items ?? []}
                   error={children.error}
+                  refusal={children.refusal}
                   chrome={chrome}
                 />
                 <Activity

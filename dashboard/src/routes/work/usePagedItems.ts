@@ -32,7 +32,13 @@
 import { useCallback, useMemo, useState } from "react";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
-import { queryErrorCode, type WorkItemsAnswer, type WorkSummary } from "~/protocol/index.ts";
+import {
+  queryErrorCode,
+  type LogRefusal,
+  type QueryRefusal,
+  type WorkItemsAnswer,
+  type WorkSummary,
+} from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 
 export interface PagedItems {
@@ -40,6 +46,8 @@ export interface PagedItems {
   data: WorkItemsAnswer | null;
   loading: boolean;
   error: QueryErrorCode | null;
+  /** What the first page's refusal said beyond its code — see `useQuery`. */
+  refusal: QueryRefusal | LogRefusal | null;
   /** Every row loaded, the first page's and every page after it, drawn once. */
   rows: WorkSummary[];
   /** Where the next page starts, or "" when the list is whole. */
@@ -117,6 +125,7 @@ export function usePagedItems(
     data: first.data,
     loading: first.loading,
     error: first.error,
+    refusal: first.refusal,
     rows,
     next,
     more: () => void more(),

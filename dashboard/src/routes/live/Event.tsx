@@ -179,7 +179,7 @@ function eventStatus(event: EventRecord) {
 export function EventScreen({ eventId }: { eventId: string }) {
   const nav = useNavigator();
   const now = useNow();
-  const { data, loading, error } = useQuery("event", { id: eventId });
+  const { data, loading, error, refusal } = useQuery("event", { id: eventId });
   const engine = useEngineHealth();
   const agents = useAgents();
   const handle = data ? seatHandleOf(data, agents) : "";
@@ -259,6 +259,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
 
       <QueryState
         error={error === "not_found" ? null : error}
+        refusal={refusal}
         loading={loading}
         empty={
           !loading && !data
@@ -379,7 +380,11 @@ export function EventScreen({ eventId }: { eventId: string }) {
  */
 export function EventPeek({ eventId }: { eventId: string }) {
   const now = useNow();
-  const { data, loading, error } = useQuery("event", { id: eventId }, { enabled: eventId !== "" });
+  const { data, loading, error, refusal } = useQuery(
+    "event",
+    { id: eventId },
+    { enabled: eventId !== "" },
+  );
   const engine = useEngineHealth();
   const agents = useAgents();
   const handle = data ? seatHandleOf(data, agents) : "";
@@ -410,6 +415,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
           // reached and has no such row, which the empty state below states
           // precisely. Every other code is the engine failing to answer.
           error={error === "not_found" ? null : error}
+          refusal={refusal}
           loading={loading}
           empty={
             missing

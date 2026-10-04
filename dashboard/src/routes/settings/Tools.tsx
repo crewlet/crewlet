@@ -760,6 +760,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
           data={status.data}
           loading={status.loading}
           error={status.error}
+          refusal={status.refusal}
           seats={seats}
         />
       </Section>

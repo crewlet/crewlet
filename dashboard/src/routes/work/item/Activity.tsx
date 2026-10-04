@@ -197,7 +197,7 @@ export function Activity({
   const shown: readonly Source[] =
     tab === "all" ? ["changes", "comments", "turns"] : [tab === "turns" ? "turns" : tab];
   const loading = shown.some((source) => paged[source].loading && paged[source].items.length === 0);
-  const errors = shown.map((source) => paged[source].error).filter(Boolean);
+  const failed = shown.map((source) => paged[source]).filter((read) => read.error !== null);
   const paging = shown.some((source) => paged[source].paging);
   const pageError = shown.map((source) => paged[source].pageError).find(Boolean) ?? null;
   const runningHere = live && (tab === "all" || tab === "turns") ? live : null;
@@ -232,8 +232,8 @@ export function Activity({
         />
       </div>
 
-      {errors.map((error, i) => (
-        <QueryState key={i} error={error ?? null} loading={false} />
+      {failed.map((read, i) => (
+        <QueryState key={i} error={read.error} refusal={read.refusal} loading={false} />
       ))}
       {drawn.earlier.length > 0 && (
         <div className="task-earlier">
@@ -251,7 +251,7 @@ export function Activity({
           >
             Earlier activity
           </Button>
-          {pageError && <QueryState error={pageError} loading={false} />}
+          {pageError && <QueryState error={pageError} refusal={null} loading={false} />}
         </div>
       )}
       {loading ? (

@@ -472,7 +472,7 @@ export function HistoryView({
       {(more || paging || pageError || head) && (
         <footer className="panel-foot">
           {pageError ? (
-            <QueryState error={pageError} loading={false} />
+            <QueryState error={pageError} refusal={null} loading={false} />
           ) : (
             <>
               {more ? (

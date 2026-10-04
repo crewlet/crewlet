@@ -2985,6 +2985,7 @@ export function Integrations({ kind }: { kind?: string }) {
     data,
     loading,
     error,
+    refusal,
     refetch: reread,
   } = useQuery("integrations", undefined, {
     pollMs: settling ? 4_000 : 60_000,
@@ -3227,7 +3228,7 @@ export function Integrations({ kind }: { kind?: string }) {
       {((loading && !data) || setup.loading) && (
         <Skeleton variant="text" rows={6} label="Loading" />
       )}
-      <QueryState error={error} loading={loading} empty={undefined}>
+      <QueryState error={error} refusal={refusal} loading={loading} empty={undefined}>
         {/* NOTHING CONNECTED IS A FACT ABOUT THE LIST, SAID ABOVE IT. A page
             holding eight tiles is not empty, and what the sentence adds —
             that only a schedule can wake a seat until then — is worth reading

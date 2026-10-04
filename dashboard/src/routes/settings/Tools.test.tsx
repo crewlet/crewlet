@@ -255,7 +255,12 @@ function mount(
   const query = vi.fn((what: string) => {
     if (what === "viewer") return Promise.resolve(viewer);
     if (what === "mcp_servers_status") {
-      return refuse ? Promise.reject(new QueryError("unauthorized")) : Promise.resolve(answer);
+      // REFUSED AS THE ENGINE REFUSES IT: the rule and the grant that would admit.
+      return refuse
+        ? Promise.reject(
+            new QueryError("unauthorized", { reason: "no_grant", grants: ["config:read"] }),
+          )
+        : Promise.resolve(answer);
     }
     return new Promise(() => {});
   });
@@ -455,6 +460,8 @@ test("a refused reader sees the refusal where the servers were, and every tool",
   mount(<Tools />, { viewer: READER, refuse: true });
   await settle();
   expect(screen.queryByText("Partly failing")).toBeNull();
+  // THE REFUSAL NAMES THE GRANT the engine said would admit the reader.
+  expect(screen.getByText("config:read")).toBeDefined();
   expect(screen.getByText("Open an issue on a repository")).toBeDefined();
   // The add is drawn, and disabled with the reason.
   const add = screen.getByRole("button", { name: /Add an MCP server/ });

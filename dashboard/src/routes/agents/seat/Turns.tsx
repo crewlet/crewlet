@@ -253,7 +253,11 @@ export function Turns({
         >
           <Card.Title as="h3">Turns</Card.Title>
         </Card.Header>
-        <QueryState error={list.error} loading={list.loading && list.answers.length === 0}>
+        <QueryState
+          error={list.error}
+          refusal={list.refusal}
+          loading={list.loading && list.answers.length === 0}
+        >
           <DataGrid
             name="prof-turns"
             rows={list.items}
@@ -361,7 +365,7 @@ export function Turns({
         {(list.more || list.paging || list.pageError) && (
           <footer className="panel-foot">
             {list.pageError ? (
-              <QueryState error={list.pageError} loading={false} />
+              <QueryState error={list.pageError} refusal={null} loading={false} />
             ) : (
               <Button size="small" variant="secondary" onClick={list.older} disabled={list.paging}>
                 {list.paging ? "Loading…" : "Load older turns"}
