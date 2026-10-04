@@ -21,10 +21,6 @@ import (
 // written: a field only a newer build knows, and a delegate template naming a
 // model provider the company does not configure, which this build's validator
 // refuses.
-//
-// A SETTINGS DOCUMENT, with no org chart in it: a revision this build APPLIES
-// carries none, so a fixture that held one would exercise the chart refusal
-// rather than the rule each case here is about.
 const storedRevisionDoc = `{"name":"Nimbus",` +
 	`"a_setting_from_a_newer_build":{"depth":3},` +
 	`"providers":{"llm":{"main":{"type":"anthropic","model":"claude-sonnet-5",` +
@@ -58,7 +54,7 @@ func activateStored(t *testing.T, cfg, payload string) string {
 	return id
 }
 
-// runnableRevisionDoc is a settings document this build runs.
+// runnableRevisionDoc is a company document this build runs.
 const runnableRevisionDoc = `{"name":"Nimbus",` +
 	`"providers":{"llm":{"main":{"type":"anthropic","model":"claude-sonnet-5",` +
 	`"api_keys":["${ANTHROPIC_API_KEY}"]}}}}`
@@ -170,47 +166,28 @@ units:
         roles: [{name: Engineer, handle: product-engineer, llm: main}]
 `
 
-// A REVISION CARRYING AN ORG CHART IS SHOWN AND EXPORTED, REFUSED AT BOOT,
-// AND A FILE WITH A DUPLICATE UNIT KEY IS NEITHER IMPORTED NOR VALIDATED.
+// A STORED COMPANY WITH A DUPLICATE UNIT KEY BOOTS AND EXPORTS, AND A FILE
+// WITH ONE IS NEITHER IMPORTED NOR VALIDATED.
 //
-// # Why the boot refuses it rather than running it
-//
-// The chart is a state-log domain of its own, and a node derives its seats
-// from that log. A stored revision holding the chart INSIDE it is a shape no
-// door writes, and applying one would mean choosing between two wrong
-// answers: run the chart from a document no other node reads, or drop it and
-// serve a company with no seats at all from bytes that decoded cleanly. It is
-// refused instead, naming where the chart lives and the import that divides a
-// company file between the two.
-//
-// # And why every READ still answers
-//
-// That revision is exactly the one an operator has to look at in order to
-// repair it. A read that refused it would leave them with a node that will not
-// start and no way to see what it is refusing.
-//
-// The two doors then meet a FILE differently again, which is the rest of this
-// case: the store holds what an older build admitted, and a file is somebody's
-// new submission, held to every admission rule.
-func TestARevisionCarryingAChartIsShownExportedAndRefusedAtBoot(t *testing.T) {
+// The two doors meet the same document differently on purpose: the store
+// holds what an older build admitted, and a file is somebody's new submission,
+// held to every admission rule. The rule is an admission rule and not a
+// runnable one, so a node whose fleet is already on such a revision boots on
+// it rather than refusing the company it was running yesterday.
+func TestADuplicateUnitKeyBootsFromTheStoreAndIsRefusedFromAFile(t *testing.T) {
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
-	id := activateStored(t, cfg, duplicateKeysRevision)
+	activateStored(t, cfg, duplicateKeysRevision)
 
-	company, err := companyFromStore(t.Context(), cfg)
-	if err == nil {
-		t.Fatalf("a node booted onto a revision that carries a chart: %+v", company)
+	company, _, err := companyFromStore(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("a node refused to boot on a stored company with a duplicate unit key: %v", err)
 	}
-	for _, want := range []string{"org chart", "crewlet config import"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the boot refusal does not mention %q: %v", want, err)
-		}
-	}
-	if !strings.Contains(err.Error(), id) && !strings.Contains(err.Error(), "active revision") {
-		t.Errorf("the boot refusal names neither the revision nor which one it is: %v", err)
+	if company == nil || len(company.Units) != 2 {
+		t.Fatalf("the booted company is not the stored one: %+v", company)
 	}
 	if out, errs, err := configCmd(t, cfg, "export"); err != nil {
-		t.Errorf("export refused a revision carrying a chart: %v (%s)", err, errs)
+		t.Errorf("export refused a stored company with a duplicate unit key: %v (%s)", err, errs)
 	} else if !strings.Contains(out, "product-engineer") {
 		t.Errorf("export did not print the stored company:\n%s", out)
 	}
@@ -239,7 +216,7 @@ func TestBootingOnARevisionThisBuildCannotRunNamesTheRevision(t *testing.T) {
 	cfg := bootstrapForStore(t, dir)
 	id := activateStored(t, cfg, storedRevisionDoc)
 
-	company, err := companyFromStore(t.Context(), cfg)
+	company, _, err := companyFromStore(t.Context(), cfg)
 	if err == nil {
 		t.Fatalf("a node booted onto a revision this build cannot run: %+v", company)
 	}

@@ -79,10 +79,6 @@ func (seatless) Seat(context.Context, string) (session.Seat, bool, error) {
 	return session.Seat{}, false, nil
 }
 
-func (seatless) Position(context.Context) (uint64, time.Duration, error) {
-	return 1, 0, nil
-}
-
 // guarded is the sign-in surface and two ordinary routes, all behind a real
 // request guard whose session arm reads the rig's own estate — the node this
 // package serves on, in miniature.

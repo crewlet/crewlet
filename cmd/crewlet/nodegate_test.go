@@ -13,7 +13,6 @@ import (
 	"github.com/nats-io/nats.go"
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -68,8 +67,7 @@ func TestAnEvictionIsWrittenAsWhoPressedItOnEveryLog(t *testing.T) {
 
 	// EVERY IDENTITY-CLAIMING LOG, named: a log this build adds has to be
 	// added here too, or the gesture answering for it goes unchecked.
-	logs := []evictionLog{tracker.Domain{}, pages.Domain{}, chart.Domain{},
-		iamdomain.Domain{}}
+	logs := []evictionLog{tracker.Domain{}, pages.Domain{}, iamdomain.Domain{}}
 	var answered, want []string
 	for _, d := range res.Domains {
 		answered = append(answered, d.Domain)
@@ -138,7 +136,7 @@ func TestAnEvictionIsWrittenAsWhoPressedItOnEveryLog(t *testing.T) {
 // credential from the facts, and the record names the node.
 func TestAReanchorIsPublishedAsWhoRanIt(t *testing.T) {
 	t.Parallel()
-	e := bootedEngine(t)
+	e := bootedEngineAt(t, reanchorCompanyYAML, time.Now())
 	stream := tracker.Domain{}.Stream().Name
 	before := cursorGenerations(t, e)
 	view := rebuiltLog(t, e, tracker.Domain{}.Stream())
@@ -265,12 +263,30 @@ func gateRecord(t *testing.T, e *engine.Engine, stream, opID string) []byte {
 // embedded broker.
 func bootedEngine(t *testing.T) *engine.Engine {
 	t.Helper()
-	company, err := config.ParseCompany([]byte(companyYAML))
+	return bootedEngineAt(t, companyYAML, time.Time{})
+}
+
+// reanchorCompanyYAML is companyYAML with a unit whose project and knowledge
+// space a boot at an activation files on the tracker's and the knowledge
+// base's logs — so more than one log holds a cursor before anything else
+// writes, and a reanchor moving a log it did not name could be seen.
+const reanchorCompanyYAML = companyYAML + `units:
+  - name: Engineering
+    id: engineering
+    project: ENG
+    space: ENG
+`
+
+// bootedEngineAt is [bootedEngine] over doc, booted at the activation instant
+// activatedAt — zero for a company no activation has named.
+func bootedEngineAt(t *testing.T, doc string, activatedAt time.Time) *engine.Engine {
+	t.Helper()
+	company, err := config.ParseCompany([]byte(doc))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	e, err := engine.New(t.Context(), engine.Options{Bootstrap: bootstrapFor(t, 0),
-		Company: company})
+		Company: company, ActivatedAt: activatedAt})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}

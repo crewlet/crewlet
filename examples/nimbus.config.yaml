@@ -69,8 +69,8 @@ logging:
 #
 # store_dir is NOT optional, and not merely inadvisable: leaving it empty
 # selects an in-memory server, and this company's own records live on that
-# stream.  Its org chart does whatever backends it names — a company's
-# units and seats are a state-log domain — and its work items and its
+# stream.  The people who sign in to it do whatever backends it names —
+# the identity estate is a state-log domain — and its work items and its
 # pages do too, because it runs the engine's own tracker and knowledge
 # base (see tracker.backend and knowledge.backend in the company
 # document).  A restart would recreate those logs empty and this node
@@ -249,12 +249,11 @@ api:
 # without one.
 #
 # It SEALS the Tier B company config at rest: every write stores the
-# whole settings document as one opaque AES-256-GCM blob
-# (`{"__encrypted__": "enc:v1:…"}`) — policies, model choices,
-# integrations and every secret as ciphertext. The seal is also what
-# says a node of this fleet wrote it, so a node refuses a revision stored
-# unsealed. (The org chart is not in that document: it is a state log of
-# its own, signed like the rest.)
+# whole company document as one opaque AES-256-GCM blob
+# (`{"__encrypted__": "enc:v1:…"}`) — the org chart, policies, model
+# choices, integrations and every secret as ciphertext. The seal is also
+# what says a node of this fleet wrote it, so a node refuses a revision
+# stored unsealed.
 #
 # Set it up:
 #   1. Mint a key + snippet:   crewlet secrets keygen -key-id 2026-01

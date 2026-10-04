@@ -1,8 +1,6 @@
-# Configure Nimbus over the API
+# Configure Nimbus via the `/config/*` API
 
-End-to-end recipe for bootstrapping the [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) company against a running engine — first the one-shot import of the whole file (recommended), then the per-entity settings edits and the [org chart's own routes](#evolving-the-org-chart) you'd run afterwards to evolve the company live.
-
-A running company is **two things**: a settings revision (`/config`) and an org chart (`/chart`). They have different lifetimes, different write paths and different authority, and this guide covers both.
+End-to-end recipe for bootstrapping the [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) company against a running engine — first the one-shot import of the whole file (recommended), then the per-entity edits you'd run afterwards to evolve the company live, its org chart included.
 
 Every request below assumes:
 
@@ -20,43 +18,15 @@ curl -s $CREWLET_URL/health
 
 See the [Configuration concept doc](../concepts/configuration.md) for the two-tier split and the rationale behind live config management, and the [API endpoints reference](../reference/api-endpoints.md) for status codes.
 
-> **This surface writes the company's settings, not its org chart.** A stored
-> revision holds the providers, the integrations, the turn engine and the
-> scheduling defaults. The **units and the seats** are a domain of their own,
-> with their own records, their own per-object arbitration and their own
-> history — see [The org chart domain](../concepts/chart-domain.md). A `PUT` or
-> a `PATCH` here carrying a top-level `roles:` or `units:` is refused in full
-> with `400 chart_not_writable_here`, and there is no `/config/roles/{handle}`
-> or `/config/units/{key}`: a seat and a unit are not collections of the
-> settings, so both paths are `404 no_route`.
->
-> The chart has its own routes: `GET`/`PATCH /chart/units/{key}` and
-> `/chart/seats/{handle}` for content, `POST /chart/batch` for structure, and
-> `POST /chart/import` for a whole revision's authored placement. See
-> [Evolving the org chart](#evolving-the-org-chart) below and the
-> [`/chart/*` reference](../reference/api-endpoints.md#chart--the-org-chart-auth-gated).
-> A node's first chart is also seeded from the company file at boot — `crewlet
-> run -company company.yaml`, which seeds only while the chart is empty.
->
-> It is refused rather than ignored on purpose. A write that quietly kept half
-> of what you sent would answer `201`, activate, and leave the new seat
-> nowhere — with your own document saying it exists.
->
-> The **authoring file keeps both halves.** You write one `company.yaml`
-> describing a company, `crewlet validate` reads it whole, and `crewlet config
-> import` is what divides it: the settings to a revision, the chart to its log.
-
 ---
 
 ## Option 1 — Import the whole file (recommended for bootstrap)
 
-The simplest path. `crewlet config import` validates the whole `company.yaml`,
-divides it, and writes both halves through the running node: the settings as a
-new revision, which the engine persists, activates and every node converges on
-(see [Control Plane](../concepts/control-plane.md)), then the org chart — its
-complete structure as one record (`POST /chart/import`) and each unit's and
-seat's content on its own. It authenticates the way every command that talks
-to a node does, with `CREWLET_API_TOKEN`:
+The simplest path. `crewlet config import` validates the whole `company.yaml`
+and sends it to the running node's `PUT /config`, which persists it as a new
+revision and activates it; every node converges on that epoch and spawns the
+company (see [Control Plane](../concepts/control-plane.md)). It authenticates
+the way every command that talks to a node does, with `CREWLET_API_TOKEN`:
 
 ```bash
 export CREWLET_API_TOKEN="$TOKEN"
@@ -71,24 +41,20 @@ Verify:
 curl -s $CREWLET_URL/health                                       # configured: true
 curl -s $CREWLET_URL/config -H "$AUTH" | jq '.name'               # "Nimbus"
 curl -s $CREWLET_URL/config/revisions -H "$AUTH" | jq '.[0]'      # newest first
-curl -s $CREWLET_URL/chart -H "$AUTH" | jq '.seats | length'      # every seat in the file
 curl -s $CREWLET_URL/agents -H "$AUTH" | jq 'length'              # 7 agent seats spawned
 ```
 
-### The settings half, over the API alone
+### The same write, over the API alone
 
-`PUT /config` takes the **settings half** — everything in `company.yaml`
-except `roles:` and `units:`. A body carrying either is refused in full with
-`400 chart_not_writable_here`, so a script driving the API directly sends the
-file with those two keys removed (here `nimbus.settings.yaml`), then writes the
-chart through [its own routes](#evolving-the-org-chart):
+The command is a `PUT /config` of the whole file, and a script can send it
+itself:
 
 ```bash
 curl -X PUT $CREWLET_URL/config \
   -H "$AUTH" \
   -H "Content-Type: application/yaml" \
   -H "X-Summary: bootstrap Nimbus" \
-  --data-binary @nimbus.settings.yaml
+  --data-binary @examples/nimbus.company.yaml
 ```
 
 A revision summary is required on every write. It travels in the `X-Summary`
@@ -98,7 +64,7 @@ header, or as a top-level `_summary` key in the body:
 curl -X PUT http://localhost:8000/config \
   -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   -H "Content-Type: application/yaml" \
-  --data-binary $'_summary: bootstrap Nimbus\n'"$(cat nimbus.settings.yaml)"
+  --data-binary $'_summary: bootstrap Nimbus\n'"$(cat nimbus.company.yaml)"
 ```
 
 The body key exists because the body is often the only thing a caller
@@ -109,26 +75,30 @@ that Tier B applies deliberately. When both are present the **header wins**:
 it is the more explicit channel, and a `_summary` can survive in a document
 somebody keeps in version control long after it stopped describing the write.
 
-Response is `201 Created` with the new `revision_id`, `epoch` and the
-`warnings` the engine has about the document. See
+Response is `201 Created` with the new `revision_id` and `epoch`, the
+`warnings` the engine has about the document (a lead or a `manages` entry that
+names nobody, for example) and the `derived` hierarchy it will run. See
 [What a write answers](../reference/api-endpoints.md#what-a-write-answers).
 
-There is **no `derived` hierarchy in the answer** any more, and that is
-deliberate rather than an omission: the hierarchy came from `roles:` and
-`units:`, so a settings write answering one would answer an *empty* org chart
-for every company — which reads as "your chart is gone" rather than as "that
-field moved". Read the chart from the chart.
+**Every seat's handle and every unit's key is written into the stored
+document.** A seat that declares no `handle` gets the one its `name` derives,
+and a unit with no `id` gets one minted from its name, before the revision is
+stored — so a correction to a name made by editing the stored document (`GET`
+then `PUT`, `PATCH`, the per-entity routes below) keeps the identity, and the
+seat its agent id, mailbox and memory. A file you import is minted afresh each
+time: correct a name in one that leaves the `handle` or `id` out and the import
+replaces that seat or unit. Declare both in any file you keep, or start it
+from `crewlet config export`, which writes every one of them.
 
 To check a document without writing it, send the same request with
 `?dry_run=true`. Nothing is stored or activated, no summary is needed, and the
-answer is `200 {"valid": true, "base_revision_id", "warnings"}`, or the
-refusal the write would get — including the chart refusal, so a check tells
-you what the save will do:
+answer is `200 {"valid": true, "base_revision_id", "warnings", "derived"}`, or
+the refusal the write would get:
 
 ```bash
 curl -X PUT "$CREWLET_URL/config?dry_run=true" \
   -H "$AUTH" \
-  --data-binary @nimbus.settings.yaml
+  --data-binary @examples/nimbus.company.yaml
 ```
 
 A refusal names each failure in `detail` and again in `problems`, one located,
@@ -147,7 +117,7 @@ curl -X PUT $CREWLET_URL/config \
   -H "$AUTH" \
   -H "Content-Type: application/json" \
   -H "X-Summary: bootstrap Nimbus" \
-  --data-binary @nimbus.settings.json
+  --data-binary @nimbus.company.json
 ```
 
 If anything else has touched `/config` since you last read it, supply `If-Match`:
@@ -158,7 +128,7 @@ curl -X PUT $CREWLET_URL/config \
   -H "$AUTH" -H "If-Match: $REV" \
   -H "Content-Type: application/yaml" \
   -H "X-Summary: bootstrap Nimbus" \
-  --data-binary @nimbus.settings.yaml
+  --data-binary @examples/nimbus.company.yaml
 # 409 revision_advanced if the active revision moved past $REV between read + write
 ```
 
@@ -166,29 +136,27 @@ curl -X PUT $CREWLET_URL/config \
 
 ## Option 2 — Evolve a live company one entity at a time
 
-Two collections are **writable** here: **llm-providers** and **mcp-servers**.
-Use these to change one thing about an already-active company; use Option 1 to
-bootstrap it, and for anything they do not cover (the identity block,
-integrations, the turn engine, the knowledge scope).
+Four collections are addressable on their own: **roles**, **units**,
+**llm-providers** and **mcp-servers**. Use these to change one thing about an
+already-active company; use Option 1 to bootstrap it, and for anything the
+four do not cover (the identity block, integrations, the turn engine, the
+knowledge scope).
 
 ```
+PUT /config/roles/{handle}
+PUT /config/units/{id}
 PUT /config/llm-providers/{key}
 PUT /config/mcp-servers/{name}
 ```
 
-There is no `/config/roles/{handle}` or `/config/units/{key}`: no revision
-carries a seat or a unit, so neither is a collection here, and both paths are
-`404 no_route`. Seats and units are read and written through the chart's own
-surface, [below](#evolving-the-org-chart).
-
 Each is addressed by the thing the *document* resolves it by, never by its
-display name: a provider by its key under `providers.llm`, a server by its
-`name`. `GET` on the collection lists exactly those, which is the list to
-address from.
+display name: a seat by its handle, a unit by its key (`id`), a provider by its
+key under `providers.llm`, a server by its `name`. `GET` on the collection
+lists exactly those, which is the list to address from.
 
 Why bother, when `PUT /config` already works? Because that write makes every
-edit a company-wide one. Changing one server's endpoint means sending back a
-document carrying every other server, every provider and every integration — and
+edit a company-wide one. Changing one seat's goal means sending back a
+document carrying every other seat, every provider and every integration — and
 a concurrent edit anywhere in it is yours to lose. A per-entity write narrows
 what you are claiming to have changed, which is what makes the revision
 summary in the history mean something.
@@ -200,26 +168,26 @@ document `GET /config` serves, sliced:
 
 ```bash
 # What the collection holds
-curl -s "$CREWLET_URL/query/config_entities?kind=mcp-servers" -H "$AUTH" | jq
+curl -s "$CREWLET_URL/query/config_entities?kind=roles" -H "$AUTH" | jq
 
 # One entity. The response IS the entity, so it goes straight back.
-curl -s -D headers.txt "$CREWLET_URL/config/mcp-servers/tracker" -H "$AUTH" > tracker.json
+curl -s -D headers.txt "$CREWLET_URL/config/roles/ceo" -H "$AUTH" > ceo.json
 
-# Edit tracker.json, then send it back — quoting the ETag the read returned,
-# so a concurrent activation is refused rather than silently overwritten.
-curl -X PUT $CREWLET_URL/config/mcp-servers/tracker \
+# Edit ceo.json, then send it back — quoting the ETag the read returned, so a
+# concurrent activation is refused rather than silently overwritten.
+curl -X PUT $CREWLET_URL/config/roles/ceo \
   -H "$AUTH" -H "Content-Type: application/json" \
   -H "If-Match: $(awk -F'"' '/^[Ee][Tt]ag:/ {print $2}' headers.txt)" \
-  -H "X-Summary: point the tracker server at the new endpoint" \
-  -d @tracker.json
+  -H "X-Summary: give the CEO a quarterly goal" \
+  -d @ceo.json
 ```
 
 The `config_entities` query still lists a collection and still answers a
 `{kind, id, entity}` envelope — it is what the dashboard reads. For one entity
 prefer `GET /config/{kind}/{id}`, whose body is exactly what `PUT` takes.
 
-The response is `201 Created` with the new `revision_id`, `epoch` and
-`warnings`, exactly as a full PUT would be: the write changed one entity and
+The response is `201 Created` with the new `revision_id`, `epoch`, `warnings`
+and `derived` hierarchy, exactly as a full PUT would be: the write changed one entity and
 created one revision.
 
 ### What a write actually does
@@ -229,10 +197,10 @@ entity in, restores the credential masks the read showed you against that same
 revision, **validates the whole document**, and stores the result. Three
 consequences worth knowing before you script against it:
 
-- **The whole company is validated, not just your entity.** A delegate
-  template naming an `llm` provider that no longer exists is fine on its own
-  and breaks the company; you get `400 validation_error` naming the field,
-  even though nothing in the body you sent is about it. This is the point of
+- **The whole company is validated, not just your entity.** A seat naming an
+  `llm` provider that no longer exists is fine on its own and breaks the
+  company; you get `400 validation_error` naming the field, even though
+  nothing in the body you sent is about it. This is the point of
   validating whole — you never see the rest of the document, so it is the one
   place that break can be caught.
 - **An unknown field is refused, not dropped.** A body carrying `heders`
@@ -251,10 +219,10 @@ consequences worth knowing before you script against it:
   `412 entity_exists` rather than a replacement of a server you never saw. Do
   not send `If-Match` beside it (`400 conflicting_preconditions`): the create
   lands on the revision active when it commits, compare-and-set. A seat and a
-  unit are not created here at all — there is no `/config/roles` or
-  `/config/units` — so hire a seat or open a unit through the
-  [org chart's own routes](#evolving-the-org-chart), where each has the place
-  in the chart this path cannot name.
+  unit are not created by address (`400 not_creatable`) — each has a place in
+  the chart the path does not name — so add one by replacing the unit it sits
+  in, or through `PUT /config`; see
+  [Adding, moving and removing seats and units](#adding-moving-and-removing-seats-and-units).
 
   ```bash
   curl -X PUT http://localhost:8000/config/mcp-servers/linear \
@@ -265,30 +233,27 @@ consequences worth knowing before you script against it:
          "headers":{"Authorization":"${LINEAR_TOKEN}"}}'
   ```
 - **The path is the identity, and a `PUT` never renames.** `PUT
-  /config/mcp-servers/tracker` replaces whatever is at `tracker`; a body
-  carrying a different `name` is `400 identity_mismatch` rather than a move.
-  A server's name is the key every seat declares its credentials under and the
-  prefix its tools carry, so a rename here silently unhooks everything that
-  named it, and nothing that references the old name travels with the splice.
-  Keep the identity in the body and change whatever else you like. To rename
-  one, rename it in the company file together with everything that names it,
-  and `crewlet config import` that — the next point says why `/config` cannot.
+  /config/roles/ceo` replaces whatever is at `ceo`; a body carrying a
+  different handle is `400 identity_mismatch` rather than a move. A seat's
+  handle and a unit's key are permanent — the seat's durable id derives from
+  its handle, so a different handle is a different seat with an empty mailbox
+  and no memory — and a server's name is the key every seat declares its
+  credentials under, so nothing that references the old name travels with the
+  splice. A body that leaves `handle` (or a unit's `id`) out keeps the one the
+  path names, so editing a display name is never a rename. Keep the identity
+  and change whatever else you like.
 - **`PUT` is the only verb.** There is no `DELETE /config/mcp-servers/tracker`;
-  the path answers `405`. Removal is a whole-company edit, unlike a create:
+  the path answers `405`. Removal is a whole-document edit, unlike a create:
   adding a server or a provider changes nothing that already names one, while
   deleting a provider silently repoints every seat whose model chain named it,
   and deleting a server leaves every `mcp_env` block keyed on it read by
-  nothing. Those chains and blocks are the org chart's, so no write to
-  `/config` can see them — a whole-document `PUT /config` included. If that is
-  going to happen, it should happen in a document you looked at: edit the
-  company file, settings and chart together, and `crewlet config import` it,
-  which validates the two halves as one company and refuses anything still
-  naming what you removed before it writes either.
+  nothing. If that is going to happen, it should happen in a document you
+  looked at, and land as one reviewable revision: export, edit, `PUT /config`.
 
 A write keeps what the node's own build cannot represent. During a rolling
 upgrade a node may hold a document a newer node wrote, with settings its
 `GET` cannot show you; whatever you send back through it, those settings
-survive on every member of a list matched by its identity. See
+survive on every seat, unit and MCP server matched by its identity. See
 [Fields a newer build wrote survive every write](../reference/api-endpoints.md#fields-a-newer-build-wrote-survive-every-write).
 
 ### `X-Summary` and `If-Match`
@@ -301,159 +266,24 @@ is nothing to splice into.
 
 ---
 
-## Evolving the org chart
+### Adding, moving and removing seats and units
 
-The chart is a domain of its own, so it has its own verbs. What decides them is
-**which fields your write changes**: an object's prose — a name, a purpose, a
-goal — is whoever leads that object; the relations authority is derived from —
-a seat's `project`, `space` and `email`, a unit's `project`, `space` and
-`channel` — and anything under `runtime` — a seat's model chain, its
-credentials, its sandbox cell, its `mcp_env` — are the company's own
-`config:write` grant, because a lead who could write the first could take over
-another team's project and a stdio MCP server is `exec.Command` with the
-config's command. Sending back what you read changes nothing, so a lead's
-`PATCH` of a goal carries the seat's relations unchanged and lands — and a
-relation the body leaves out is a **change**: refused to a lead, naming the
-field, and applied for an administrator. Whom a seat **manages** is none of
-these: it is structure, a batch's `set_manages` (below), because a rename moves
-the entries naming its object and only a write ordered against the rename can
-never put the old address back.
+A seat or a unit has a **place** — the unit it sits in — and the entity path
+names none, so neither is created or moved by address. Each is a change to the
+unit that holds it: read that unit with `GET /config/units/{id}`, add, move or
+drop the seat in its `roles`, or the unit in its `children`, and `PUT` it back
+— or make the change in the whole document with `PUT` or `PATCH /config`. A
+seat at the company root is added through the whole document. The answer's
+`derived` hierarchy shows where everything landed.
 
-### Edit one seat's goal
-
-Read it, edit it, send it back. Reads are **stripped by default**: ask for the
-runtime half with `?runtime=true`, and you get it only if you also hold
-`config:read` — with its credentials masked. The `email` comes back as the
-`${CHART_…}` reference the address was sealed under, or `__redacted__`, and
-sending either back keeps the address as it is.
-
-```bash
-curl -s "$CREWLET_URL/chart/seats/sre" -H "$AUTH" > sre.json
-
-# The seat as it will be: every field the read served, with the one you mean
-# to change changed.
-jq '.seat
-    | {unit, name, email, backstory, goal, responsibilities,
-       behavioral_guidelines, project, space}
-    | with_entries(select(.value != null))
-    | .goal = "keep the platform boring"' sre.json > sre-edit.json
-
-curl -X PATCH $CREWLET_URL/chart/seats/sre \
-  -H "$AUTH" -H "Content-Type: application/json" \
-  -d @sre-edit.json
-```
-
-A content write is **full post-state**, like the record it becomes: a field you
-leave out is a field you set to empty — with one exception, `runtime`. That is
-why the body is built from the whole read rather than typed out. A body naming
-only the field you meant to change leaves out the seat's `email`, `project` and
-`space`, and each of those is then a change: a lead is refused `403` naming
-them, and an administrator holding `config:write` is **granted** it — the
-seat's address, its project and its space are cleared under a `200`.
-
-**The read serves every field a content write takes** — a seat's
-`backstory`, `responsibilities` and `behavioral_guidelines` as much as its
-goal, and a unit's `knowledge_refs` as much as its purpose — so a body built
-from it changes only the field you changed.
-
-Leaving `runtime` out keeps the runtime half the seat has, which is what lets
-somebody who leads the seat correct its goal without holding, or seeing, its
-model chain and credentials; removing the half is `"clear_runtime": true`,
-which takes `config:write` like any runtime write. It carries no **kind** and
-no **`manages`**: whether a person or an agent holds the seat, and whom it
-manages, are structure — set by the batch that creates the seat and changed by
-a `set_kind` or a `set_manages` operation — and a content body naming either is
-refused `400` — which is why the `jq` above picks the fields it sends rather
-than sending `.seat` whole, whose `handle`, `kind` and `former_handles` no
-content body reads.
-
-### Hire, move, dissolve
-
-Structure goes through one batch, and **one batch is one record**. A caller
-that means to move three seats sends three operations in one request:
-
-```bash
-curl -X POST $CREWLET_URL/chart/batch \
-  -H "$AUTH" -H "Content-Type: application/json" \
-  -d '{"operations":[
-        {"kind":"create_unit","object":{"kind":"unit","id":"platform"},"lead":"sre"},
-        {"kind":"move","object":{"kind":"seat","id":"sre"},"parent":"platform"}
-      ]}'
-```
-
-A hire is **two** writes, in this order: the batch that creates the seat —
-stating what holds it, `{"kind":"create_seat","object":{"kind":"seat","id":"sre"},"parent":"platform","seat_kind":"agent"}`
-— then a `PATCH` with its content. Until the content lands the seat is in the
-chart and **incomplete**: no node runs an agent seat with no content, so a hire
-whose second write never arrives never gets a mailbox. A content write never creates its object — a
-`PATCH` naming a seat the chart does not hold is refused, pointing here — and
-it waits for a `202` batch this node has not applied yet, so the second write
-can follow the first straight away.
-
-Whom a seat manages is a `set_manages` in a batch, stating the **whole** list —
-seat handles and unit keys; an empty one clears it:
-
-```bash
-curl -X POST $CREWLET_URL/chart/batch \
-  -H "$AUTH" -H "Content-Type: application/json" \
-  -d '{"operations":[
-        {"kind":"set_manages","object":{"kind":"seat","id":"cto"},
-         "manages":["platform","sre"]}
-      ]}'
-```
-
-It takes `config:write` like every structural write, because it decides who the
-listed seats' manager is.
-
-Removals go in a batch of their own and carry a `reason`, which rides into the
-tombstone so somebody asking where their team went reads "merged into
-infrastructure" rather than an absence. A removal takes `fleet:operate` as well
-as `config:write`: it is the one structural change nothing undoes — the address
-is tombstoned for ever and the seat's mailbox goes with it — so a pipeline token
-that applies configuration cannot dissolve a team.
-
-### Rename
-
-```bash
-curl -X POST $CREWLET_URL/chart/units/engineering/rename \
-  -H "$AUTH" -d '{"to":"platform"}'
-```
-
-The former address goes on resolving: a key is an ADDRESS and the row is the
-identity, so a reference somebody typed last year still finds what it named.
-Reads carry `former_keys` / `former_handles` so a client can say why a stale
-reference still works, and a renamed object's `origin_key` / `origin_handle` —
-the address it was created under, which is its identity and is never issued
-again — so a client matching objects across renames matches on that rather than
-on an address a new object may one day take. The `manages:` entries naming the object move to its new
-address in the same record, so they never depend on the old one.
-
-A rename is structure — the route publishes a one-operation batch — so it can
-also ride in a `POST /chart/batch` beside the moves it goes with, as
-`{"kind":"rename","object":{"kind":"unit","id":"engineering"},"to":"platform"}`.
-Operations after it name the unit by its new key.
-
-### What a `200` means, and what a `202` does not
-
-`200` means the record is durable **and this node has applied it**, so your next
-read here sees it. `202` means durable but not yet applied here — read at the
-position in the body. `503` with an `op_id` means this node cannot say what
-happened: retry with `Idempotency-Key: <that op_id>`, never a fresh one, or a
-change that did land is written twice.
-
-### Check the two halves agree
-
-Nothing refuses a settings edit that strands a seat, because the two halves are
-written by different people at different times. `GET /chart/check` is the
-report over the pair, and it takes `audit:read`:
-
-```bash
-curl -s "$CREWLET_URL/chart/check" -H "$AUTH" | jq '.report.findings'
-```
-
-The same evaluation is summarised on `/health` under `consistency`. Check
-`evaluated` before the count — `findings: 0` from a node holding no chart is
-not a clean bill.
+**A human seat somebody is bound to cannot be taken away.** A write that
+removes one — or turns it into an agent seat — while the
+[identity directory](../concepts/identity-and-access.md) binds a person to it,
+at any stage short of their removal, is refused `409 seat_held` naming them under `held`;
+unbind or remove them first. A node that cannot read the directory refuses
+such a write `503 identity_unavailable` rather than allowing it. An offline `crewlet config import`
+has no directory to ask, so the binding it strands is reported by
+`crewlet iam check` and the `iam_binding_dangling` alarm.
 
 ## Read paths
 
@@ -501,9 +331,9 @@ classified, beside the `detail` that renders them.
 | `400` | `validation_error` | The whole resulting document failed validation; `detail` carries the message and `problems` locates each failure |
 | `400` | `summary_required` | Any write with neither an `X-Summary` header nor a top-level `_summary` key in the body |
 | `400` | `invalid_query` | `dry_run` given as anything but `true` or `false` |
-| `400` | `chart_not_writable_here` | A `PUT` or `PATCH /config` body carrying a chart key (`roles`, `units`, …): the org chart is written through [its own routes](#evolving-the-org-chart), and `fields` names what was refused |
 | `400` | `conflicting_preconditions` | A per-entity `PUT` carrying both `If-None-Match: *` and `If-Match`; send one |
-| `400` | `identity_mismatch` | A per-entity `PUT` whose body names another id than its path: this route never renames — rename in the company file, with everything that names it, and `crewlet config import` it |
+| `400` | `identity_mismatch` | A per-entity `PUT` whose body names another id than its path: this route never renames — a seat's handle and a unit's key are permanent, and a server or provider is renamed in the whole document, with everything that names it |
+| `400` | `not_creatable` | A create-only `PUT` (`If-None-Match: *`) of a seat or a unit: each has a place the path cannot name, so add it by replacing the unit it sits in, or through `PUT /config` |
 | `401` | `invalid_token` | Bearer missing / wrong / wrong scheme |
 | `404` | `no_active_revision` | Reading `/config` before the first PUT |
 | `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — a plain `PUT` never creates; send `If-None-Match: *` to add an MCP server or an LLM provider |
@@ -511,10 +341,12 @@ classified, beside the `detail` that renders them.
 | `405` | `method_not_allowed` | A `/config` path under a method it does not take; `Allow` names the ones it does |
 | `409` | `no_active_revision` | A per-entity write before the first PUT: there is nothing to splice into |
 | `409` | `revision_advanced` | Stale `If-Match`, a concurrent writer won the race, or the write was built on an empty store while the fleet is running a company |
+| `409` | `seat_held` | A write that removes a human seat, or makes it an agent's, while the identity directory binds somebody to it; the answer names them. Unbind or remove them first |
 | `412` | `no_active_revision` | `If-Match: <revision>` sent while the node has no active revision; retry without `If-Match`, or send `If-None-Match: *` |
 | `412` | `already_configured` | `If-None-Match: *` on `PUT /config` sent while a revision is active on this node or anywhere in the fleet |
 | `412` | `entity_exists` | A per-entity create (`If-None-Match: *`) naming an MCP server or LLM provider the active revision already has |
 | `415` | `unsupported_patch_media_type` | A `PATCH` in a patch format other than a JSON Merge Patch, such as `application/json-patch+json` |
 | `503` | `draining` | The node has been told to stop. Nothing was written; `Retry-After` says when to try again, against a peer or against this node once it has restarted — see [During a drain](../reference/api-endpoints.md#during-a-drain) |
+| `503` | `identity_unavailable` | A write that removes a human seat, on a node that could not read the identity directory to see whether anybody holds it. Nothing was written; retry after `Retry-After` |
 
 The full reference is in [API endpoints](../reference/api-endpoints.md).

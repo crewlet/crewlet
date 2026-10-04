@@ -49,7 +49,7 @@ var alarmMeaning = map[Kind]string{
 	KindLogHeadroom: "The log is within a tenth of the byte ceiling its " +
 		"ordinary writes are held to. A full log refuses writes rather than " +
 		"dropping records; on every log that claims identity — the tracker's, " +
-		"the knowledge base's, the chart's and the identity estate's — an " +
+		"the knowledge base's and the identity estate's — an " +
 		"eviction still lands in the gate reserve above that ceiling.",
 	KindBackupAge: "No verified backup has been recorded, or the newest is " +
 		"older than the policy asks for. The trim does not advance either way.",
@@ -62,7 +62,7 @@ var alarmMeaning = map[Kind]string{
 	KindDeferredOld: "This node has been holding a record it cannot apply on " +
 		"one log for longer than the thirty-minute deferral grace, and it is " +
 		"raised once for each log that is. Where that log gates seat admission " +
-		"— the tracker's, the knowledge base's and the chart's do — this node's " +
+		"— the tracker's and the knowledge base's do — this node's " +
 		"seats have moved to a peer.",
 	KindFloorUnknown: "This node has been unable to read one log's trim floor " +
 		"for four heartbeats, so every read of that log here refuses; it is " +
@@ -100,9 +100,9 @@ var alarmMeaning = map[Kind]string{
 		"keeps, so it will fill and refuse writes with every trim term " +
 		"satisfied.",
 	KindBindingDangling: "A person has been bound for longer than a minute " +
-		"to a seat this node's org chart does not hold as a human seat — " +
-		"removed, turned into an agent seat, or not applied here yet — so " +
-		"every request they make is refused or held off.",
+		"to a seat the company this node applied does not hold as a human " +
+		"seat — removed, turned into an agent seat, or not applied here yet " +
+		"— so every request they make is refused or held off.",
 }
 
 const alarmHeader = `# Alarms

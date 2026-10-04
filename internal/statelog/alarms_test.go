@@ -292,9 +292,9 @@ func TestANodeThatHasNeverMeasuredItsRateDoesNotAlarm(t *testing.T) {
 
 // A DANGLING BINDING YOUNGER THAN THE STALL GRACE DOES NOT FIRE.
 //
-// The residue is legal and it is usually brief: a bind and a seat's removal
-// racing on two logs, or a hire this node's chart applier has not reached
-// yet, is a dangling binding for seconds and then is not. Alarming on its
+// The residue is legal and it is usually brief: a bind and a revision removing
+// its seat racing, or a hire in a revision this node has not applied yet, is a
+// dangling binding for seconds and then is not. Alarming on its
 // first sighting would page somebody for a state that was already clearing —
 // so the rule fires at the grace that already separates a node catching up
 // from one that has stopped (ADR-0015), and not a second before.

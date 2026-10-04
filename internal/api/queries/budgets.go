@@ -45,11 +45,11 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 		return out, nil
 	}
 	out["timezone"] = company.Location().String()
-	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
-	// than re-resolved from the document: a stored revision carries no
-	// seats at all, and a seat's ceilings are the chart's runtime half.
+	// THE COMPANY'S OWN ORG, the one this node built when it applied the
+	// epoch, rather than one re-derived from the document per read: both
+	// come from ONE read of the epoch, so they never describe two revisions.
 	if roster == nil {
-		// A node with no chart view has no seats and no ceilings to state;
+		// A node with no organization has no seats and no ceilings to state;
 		// empty windows with durable:false say exactly that.
 		return out, nil
 	}

@@ -242,7 +242,7 @@ const RetryIdentitySeconds = 2
 // IT TAKES THE CAUSE because the identity surfaces answered every state-log
 // refusal with the constant: an identity write refused `record_too_large` or
 // `log_full` told a client to come back in two seconds for a write that could
-// never land, which the same refusal on /chart or /work did not. /iam and
+// never land, which the same refusal on /work did not. /iam and
 // /auth are held to naming the cause at every 503 by a gate in each package,
 // which refuses the constant there — a site with nothing in hand passes nil,
 // so the absence of a cause is written down rather than defaulted.
@@ -324,9 +324,9 @@ type SessionsDeps struct {
 	// iam token -login`'s mint is exactly that — is a 503 on every node.
 	Applier Applier
 
-	// Chart resolves a bound person's seat. REQUIRED, and the zero value
-	// of the engine's adapter is what a node with no chart domain passes:
-	// it answers UNKNOWN to every seat question, which is 503 — never the
+	// Chart resolves a bound person's seat. REQUIRED, and the engine's
+	// adapter on a node running no company yet answers UNKNOWN to every
+	// seat question, which is 503 — never the
 	// seatless arm, which would hand somebody bound to a lead's seat an
 	// empty handle and serve the request.
 	Chart session.Chart
@@ -537,10 +537,10 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		// anything that would use a seat; [ActsAsThemselves] is the
 		// one surface it does not cover, and nothing there reads one.
 		//
-		// [iam.Principal.SeatAt] IS KEPT while Seat is empty, which is
-		// the pair that says "a binding was decided and this node will
-		// not honour it" — a principal with neither is a genuinely
-		// seatless person, and the two must never read alike.
+		// THE REFUSAL IS WHAT SAYS a binding was decided and this node
+		// will not honour it: the principal's seat is empty either way,
+		// and a genuinely seatless person carries no refusal, so the two
+		// never read alike.
 		//
 		// THE COOKIE IS NOT CLEARED, unlike a refused session: the
 		// bearer is live and works the moment somebody rebinds them,
@@ -781,7 +781,6 @@ func (s *Sessions) principal(v session.Validation, binding session.Binding,
 		// taking the row would write audit rows under a handle nothing
 		// answers to.
 		Seat:     binding.Handle(),
-		SeatAt:   person.SeatAt,
 		Position: binding.Seat.Unit,
 		// WHAT THE PERSON WAS GIVEN HERE, clamped to this node's
 		// ceiling. A session carries no authority of its own: the grants

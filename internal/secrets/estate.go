@@ -13,10 +13,7 @@ import (
 // credentials — a provider's API key, a vendor token — are named by the
 // environment-variable grammar, because a `${VAR}` in the company document is
 // how they are used: listed, revealed, rotated and resolved into a provider or
-// a child process — and that includes every literal the org chart seals for a
-// seat or a unit, which is stored under a `CHART_<KIND>_<ID>_<FIELD>` name and
-// referenced from the row, because it is a value the operator typed. And the
-// ENGINE's key material: the blind-index key the identity directory matches an
+// a child process. And the ENGINE's key material: the blind-index key the identity directory matches an
 // address under. It lives in the same store because every node must derive
 // under the same key, and this is the one store every node reads.
 //
@@ -50,10 +47,6 @@ var ErrReservedName = errors.New(
 
 // estateOwners are the subsystems that keep key material in the store, each
 // under its own first path segment. There is one: the identity estate (`iam/`).
-// The org chart was reserved as a second, for a human seat's own data key and
-// an address index nothing ever wrote, and was withdrawn with them — a seat's
-// name is plain chart content and its address is sealed as an operator row
-// like any literal, so the chart keeps no key material of its own.
 //
 // A CLOSED SET, so a name is reserved by its first segment rather than by
 // whatever a caller happened to put a slash in. An owner joins it BEFORE it

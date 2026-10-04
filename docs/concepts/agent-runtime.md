@@ -198,7 +198,7 @@ The engine ships these tools (`internal/agent/builtin`, registered in the epoch'
 
 | Tool | Registered when | Purpose |
 |------|-----------------|---------|
-| `lookup_colleague` | always | Resolve any colleague identifier (handle, role name, a human's contact ID) to one seat, case-insensitively, with partial and fuzzy fallbacks; a handle a seat **used to** answer to resolves too, ranked below every live match and above every approximate one; returns the candidate list when more than one seat matches. A seat whose holder the identity directory withholds (suspended, retired or removed) is found by name and handle but shows no accounts, and an id copied from one of them names nobody — see [Humans in the Org Chart](humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-chart-record) |
+| `lookup_colleague` | always | Resolve any colleague identifier (handle, role name, a human's contact ID) to one seat, case-insensitively, with partial and fuzzy fallbacks; a handle a seat **used to** answer to resolves too, ranked below every live match and above every approximate one; returns the candidate list when more than one seat matches. A seat whose holder the identity directory withholds (suspended, retired or removed) is found by name and handle but shows no accounts, and an id copied from one of them names nobody — see [Humans in the Org Chart](humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-configuration-change) |
 | `a2a_ask` | the node has a stream and a coordination store | Ask one AI colleague one question. The colleague is woken on its own inbox and answers in its own turn, so the call returns as soon as the question is sent |
 | `use_skill` | a learning store | Load one of the seat's own [synthesized skills](agent-learning.md#5-synthesizer-skill-induction) on demand |
 | `refine_skill` | a learning store | Replace a synthesized skill's body with a corrected procedure; the previous version is kept |
@@ -310,9 +310,7 @@ stateDiagram-v2
   figures and the reset.
 - **Released.** At the reset, or at once when a published company changes the
   ceilings of either scope or the company's clock (which moves every window's
-  end) — a settings apply for the company's ceilings and its clock, a chart
-  write for a seat's, since a seat's ceilings are its [runtime
-  half](chart-domain.md) and a chart write moves no settings revision — the hold
+  end) — the apply of the revision that changed them — the hold
   is lifted, `seat_budget_park_released` is logged, and the held mail is
   delivered again in order and asked again. A change that lowers a ceiling
   parks it again at the cost of one delivery.
@@ -375,9 +373,8 @@ stateDiagram-v2
   derived from the handle it was created under — never by the handle it
   answers to, so a rename keeps the pause and a seat hired later under a freed
   handle is never born paused. It has no age: it ends when somebody resumes
-  the seat, or when the seat leaves the company — the published company that
-  removes a seat, an apply or a chart write, clears its pause, and only a node
-  whose company holds every hire may say a seat is gone. It is written by
+  the seat, or when the seat leaves the company — the apply that
+  removes a seat clears its pause. It is written by
   compare-and-set, so two people pausing one seat at once make one change: the
   second is told it was already paused. The writer whose change won publishes
   `seat_paused` or `seat_resumed`, naming the person as every write does

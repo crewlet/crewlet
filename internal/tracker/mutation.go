@@ -51,7 +51,7 @@ import (
 // account of what the segment did: [TurnRecord.Summary], [TurnRecord.Review],
 // [TurnRecord.Tools] and [TurnRecord.FailedIn]. Version 11 is the
 // cross-project move's marker on a task patch: [TaskPatch.Moving]. Version 12
-// is a project's chart stamp as a LOG POSITION: [Project.ChartPosition].
+// is a project's chart stamp: [Project.ChartEpoch].
 // Version 13 is a wake that says its key opens another task:
 // [Snapshot.KeyCollision].
 const RecordVersion = 13
@@ -221,18 +221,18 @@ var versionedFields = statelog.RecordFields{
 	// carry, and neither is a task.
 	{Name: "TaskPatch.Moving", Since: 11, Op: string(OpPatch),
 		Path: []string{"mutation", "moving"}},
-	// A PROJECT'S CHART STAMP AS A LOG POSITION, at version 12. The chart
-	// apply stamps a project with the packed position on the org chart's
-	// log its name, purpose and unit were derived from, and the position
-	// guard in [Writer.ApplyChart] compares it: a build reading 11 has no
-	// field for it, so it would decode the project document around the
+	// A PROJECT'S CHART STAMP, at version 12. The chart apply stamps a
+	// project with the instant the fleet activated the revision its name,
+	// purpose and unit were derived from, and the guard in
+	// [Writer.ApplyChart] compares it: a build reading 11 has no field for
+	// it, so it would decode the project document around the
 	// stamp, write a row with none and admit every later chart apply as
 	// newer — its copy of the project would follow whichever derivation
 	// reached it last, where every upgraded node follows the newest. EVERY
 	// OP, for [Project.TargetDate]'s reason: a project document is written
 	// whole by the chart apply and by a lead's edit alike.
-	{Name: "Project.ChartPosition", Since: 12,
-		Path: []string{"mutation", "chart_position"}},
+	{Name: "Project.ChartEpoch", Since: 12,
+		Path: []string{"mutation", "chart_epoch"}},
 	// A WAKE WHOSE KEY OPENS ANOTHER TASK, at version 13. The applier
 	// stores no row from it — the inbox derives its own collision from the
 	// key directory at read — but a wake is RENDERED from the record by

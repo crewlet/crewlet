@@ -18,7 +18,7 @@ import (
 // Crossing the ceiling must never drop a day: the stream is created to refuse
 // rather than discard, the publisher reports the refusal as a full log rather
 // than as a transient failure, and the alarm that tells an operator names THIS
-// domain — a node with six logs is told which one is full, not that something
+// domain — a node with five logs is told which one is full, not that something
 // is.
 func TestAFullUsageLogRefusesTheAppendAndAlarms(t *testing.T) {
 	t.Parallel()

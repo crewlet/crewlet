@@ -30,13 +30,7 @@ func TestTheEnginesNamespaceAndTheOperatorsNeverOverlap(t *testing.T) {
 		{"GITLAB_TOKEN", false, false},
 		{"IAM_PERSON_X_DEK", false, false},
 		{"other/thing", false, false},
-		{"CHART_SEAT_X_EMAIL", false, false},
-		// AND AN OWNER THAT WAS WITHDRAWN: the org chart keeps no key
-		// material here, so its old names are nobody's — refused by the
-		// operator's grammar and the engine's alike.
-		{"chart/seat/018f3a9c-0000-7000-8000-000000000002/dek", false, false},
-		{"chart/blind-index-key", false, false},
-		{"chartx/thing", false, false},
+		{"seat/018f3a9c-0000-7000-8000-000000000002/dek", false, false},
 		{"iamx/thing", false, false},
 	} {
 		if got := secrets.Reserved(tc.name); got != tc.reserved {

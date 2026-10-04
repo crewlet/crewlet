@@ -59,30 +59,6 @@ type Revision struct {
 
 	Active      bool
 	ActivatedAt time.Time
-
-	// ScrubbedAt is when this revision's personal fields were erased, and
-	// the zero time means they were not.
-	//
-	// It narrows the "immutable snapshot" this table's own comment states,
-	// which is why it is a stamp rather than a silent rewrite: a diff
-	// across a scrub boundary shows a tombstone, and the next reader has
-	// to be able to tell that from corruption. See
-	// `0038_a_superseded_revision_can_be_scrubbed.sql`.
-	ScrubbedAt time.Time
-
-	// ChartPosition is the org chart position THIS NODE composed its epoch
-	// at when it activated this revision, packed, and nil where it has
-	// none.
-	//
-	// A POINTER because zero is a real answer and absence is a different
-	// one: a revision activated on an empty chart ran at position 0, and a
-	// revision activated by a build before the column existed has no
-	// recorded position at all. A plain int64 would report every historical
-	// activation as having run on an empty company.
-	//
-	// See `0039_an_activation_records_the_chart_it_ran.sql` for why the
-	// company needs both halves to be answerable.
-	ChartPosition *int64
 }
 
 // Configs is the versioned Tier B store.
@@ -97,7 +73,7 @@ func (d *DB) Configs() *Configs { return &Configs{db: d} }
 
 const revisionColumns = `revision_id, parent_revision_id, created_at, created_by,
 	created_by_kind, operator_id, source, summary, payload, is_active,
-	activated_at, scrubbed_at, chart_position`
+	activated_at`
 
 // InsertActive writes a new revision and makes it the active one, returning
 // its id.
@@ -417,16 +393,13 @@ func scanRevision(rows *sql.Rows) (Revision, error) {
 	var parent sql.NullString
 	var payload string
 	var createdAt int64
-	var activatedAt, scrubbedAt, chartPosition sql.NullInt64
+	var activatedAt sql.NullInt64
 	var active int64
 	var kind string
 	if err := rows.Scan(&r.ID, &parent, &createdAt, &r.CreatedBy,
 		&kind, &r.OperatorID, &r.Source, &r.Summary, &payload,
-		&active, &activatedAt, &scrubbedAt, &chartPosition); err != nil {
+		&active, &activatedAt); err != nil {
 		return Revision{}, fmt.Errorf("store: read config revision: %w", err)
-	}
-	if chartPosition.Valid {
-		r.ChartPosition = &chartPosition.Int64
 	}
 	r.ParentID = Text(parent)
 	r.CreatedByKind = iam.ActorKind(kind)
@@ -434,62 +407,7 @@ func scanRevision(rows *sql.Rows) (Revision, error) {
 	r.Payload = json.RawMessage(payload)
 	r.Active = active != 0
 	r.ActivatedAt = TimeAt(activatedAt)
-	r.ScrubbedAt = TimeAt(scrubbedAt)
 	return r, nil
-}
-
-// ErrRevisionIsActive reports a scrub aimed at the revision the fleet serves.
-var ErrRevisionIsActive = errors.New(
-	"store: the active revision cannot be scrubbed")
-
-// Scrub replaces one SUPERSEDED revision's payload and stamps scrubbed_at.
-//
-// # The one write that edits a revision, and what bounds it
-//
-// Every other write here appends: importing writes a new row, activating
-// appends to the pointer, and that is what makes the history a record rather
-// than a claim. This one rewrites a row in place, because appending cannot
-// erase anything — a new revision with the address removed leaves the old row
-// holding it, which is the whole problem.
-//
-// So it is bounded twice. It reaches only what `crewlet config scrub` names —
-// personal fields, never a setting — and it REFUSES THE ACTIVE REVISION,
-// which is enforced by the statement rather than by the caller remembering
-// to: the fleet is serving that document, every node is holding it, and a
-// rewrite underneath them would be a config change nothing activated. An
-// operator who wants the address out of the live company edits the company.
-//
-// `0038_a_superseded_revision_can_be_scrubbed.sql` is where the narrowed
-// immutability is written down.
-func (c *Configs) Scrub(ctx context.Context, revisionID string, payload json.RawMessage, at time.Time) error {
-	result, err := c.db.sql.ExecContext(ctx,
-		`UPDATE company_config SET payload = ?, scrubbed_at = ?
-		 WHERE revision_id = ? AND is_active = 0`,
-		string(payload), EncodeTime(at), revisionID)
-	if err != nil {
-		return fmt.Errorf("store: scrub config revision %s: %w", revisionID, err)
-	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("store: scrub config revision %s: %w", revisionID, err)
-	}
-	if n == 0 {
-		// TWO CAUSES, ONE STATEMENT, and they are told apart by a read
-		// rather than by a second guarded write: asking first and updating
-		// after would be a race with an activation, and the clause above
-		// is what actually holds.
-		_, found, err := c.Get(ctx, revisionID)
-		switch {
-		case err != nil:
-			return err
-		case !found:
-			return fmt.Errorf("%w: %s", ErrNoRevision, revisionID)
-		default:
-			return fmt.Errorf("%w: %s", ErrRevisionIsActive, revisionID)
-		}
-	}
-	log.InfoContext(ctx, "config_revision_scrubbed", "revision", revisionID)
-	return nil
 }
 
 // Chain is the active revision and every ancestor it reaches through
@@ -543,10 +461,8 @@ func (c *Configs) Chain(ctx context.Context) ([]Revision, error) {
 // Every node keeps its OWN copy of every revision it ever met, in an
 // append-only table, and nothing deleted from it — so a company that edits
 // its configuration daily accumulates a row per edit per node for the life of
-// the deployment, and each row is a copy of the whole document. It is also
-// where a pre-split revision's `roles[].email` lives, which is why this ships
-// beside `crewlet config scrub`: the scrub erases what is inside a row it
-// keeps, and this is what eventually removes the row.
+// the deployment, and each row is a copy of the whole document — every seat's
+// address among it, which this is what eventually removes.
 //
 // # The chain is kept whatever its age
 //
@@ -613,52 +529,4 @@ func (c *Configs) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
 		return 0, fmt.Errorf("store: purge config revisions: %w", err)
 	}
 	return n, nil
-}
-
-// RecordChartPosition stamps the chart position this node composed its epoch
-// at when it activated a revision.
-//
-// # Why it is a write of its own rather than a column of the activation
-//
-// The two happen at different moments and the order matters. A node activates
-// a revision by flipping `is_active`, and it composes the epoch AFTER that —
-// against whatever chart position its applier has reached, which may itself
-// move while the settings are being installed. Writing the position inside
-// [Configs.Activate] would record the position at the flip, which is the one
-// instant the epoch has not been composed at yet.
-//
-// # It is BEST EFFORT at the caller, and that is a property of the value
-//
-// The pair (revision, position) is how a reader answers "what was this
-// company"; it is not what the node RUNS on. An epoch composes from the
-// settings and the live view whether or not this row was written, so a failure
-// here is a gap in the history rather than a company that stops. The caller
-// logs it and carries on — refusing the activation over an audit column would
-// take a healthy company down to protect a record of it.
-//
-// IDEMPOTENT, because re-activating an unchanged revision is the ordinary
-// credential-rotation gesture: it re-stamps with the position that
-// re-activation ran at, which is the true answer for the activation that just
-// happened.
-func (c *Configs) RecordChartPosition(ctx context.Context, revisionID string, packed int64) error {
-	result, err := c.db.sql.ExecContext(ctx,
-		`UPDATE company_config SET chart_position = ? WHERE revision_id = ?`,
-		packed, revisionID)
-	if err != nil {
-		return fmt.Errorf("store: record the chart position of revision %s: %w",
-			revisionID, err)
-	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("store: record the chart position of revision %s: %w",
-			revisionID, err)
-	}
-	if n == 0 {
-		// A REVISION THIS NODE DOES NOT HOLD, which is an ordinary state
-		// rather than a fault: the local copy is best effort, so a node
-		// whose disk was full when the pointer moved applies the epoch
-		// from the fleet's bytes and has no row to stamp.
-		return fmt.Errorf("%w: %s", ErrNoRevision, revisionID)
-	}
-	return nil
 }

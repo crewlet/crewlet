@@ -1,8 +1,6 @@
 package config
 
 import (
-	"strings"
-
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -83,97 +81,36 @@ func (c *Company) DanglingRefs() []org.DanglingRef {
 // document, which is what a dangling key reports as its source.
 const AccessLevelsSetting = "integrations.gitlab.provisioning.access_levels"
 
-// RouteToSetting is where Datadog's fallback seat lives in the document.
-const RouteToSetting = "integrations.datadog.route_to"
-
-// SeatReference is one SETTING that names a seat by a handle, and what an org
-// chart makes of it.
+// DanglingSettingsRefs reports each GitLab access level override whose key is
+// no seat's handle in o, in sorted key order.
 //
-// # Why the settings name a seat at all, and what that costs
+// A stale key is worse than inert. The override is looked up by handle when
+// a seat's service account is provisioned ([GitLabProvisioning.OverrideFor]),
+// so the entry left behind by a removed seat silently grants its level
+// (maintainer, typically) to the next seat given the same handle. The
+// document is checked whether or not GitLab is enabled, because re-enabling
+// it is exactly when the stale grant would take effect.
 //
-// Two settings route by a seat's handle: a GitLab access level override, keyed
-// by the seat it grades, and Datadog's fallback seat. They live in the
-// SETTINGS half, and the seat they name lives in the org chart — a log of its
-// own, written per object. A rename there moves every reference the chart
-// holds (a lead, a `manages:` entry) in its own record, and cannot move one in
-// a document it does not own. So a setting names a seat by an address a
-// rename can retire, and the seat is found the way every reference to a seat
-// is: through [org.Organization.Role], its live handle first, then the handle
-// it was created under, then the ones it has answered to since. A reference
-// through a retired address therefore still reaches the seat — until a later
-// hire is given that address (only the one a seat was CREATED under is never
-// issued twice), when it silently re-points to the newcomer. That is what
-// [SeatReference.Retired] exists to say before it happens.
-type SeatReference struct {
-	// Setting is the setting's path in the document: the access level map
-	// for an override, `integrations.datadog.route_to` for the fallback.
-	Setting string
-
-	// Handle is the address as the setting wrote it.
-	Handle string
-
-	// Seat is the seat the handle names in the chart it was resolved
-	// against, nil when nothing answers to it.
-	Seat *org.Role
-}
-
-// Retired reports a reference that reaches its seat only through an address
-// the seat no longer answers to: it works today, and names whoever the chart
-// next gives a retired alias to.
-func (r SeatReference) Retired() bool {
-	return r.Seat != nil && r.Seat.Handle() != r.Handle
-}
-
-// SeatReferences resolves every seat this document's settings name against o:
-// each GitLab access level override in key order — whether or not GitLab is
-// enabled, because re-enabling it is exactly when a stale grant takes effect —
-// then Datadog's fallback seat while the integration is enabled, unless it
-// dismisses on purpose (`none`) or is not a handle at all (refused by
-// validation, and nothing a chart can make name a seat).
-//
-// AGAINST THE CHART IT IS HANDED, which is what makes it the one reading for
-// both halves' owners: a company file resolves against its own chart, and the
-// continuous report against the chart a node is running.
-func (c *Company) SeatReferences(o *org.Organization) []SeatReference {
-	var out []SeatReference
-	if gitlab := c.Integrations.GitLab; gitlab != nil && gitlab.Provisioning != nil {
-		for _, handle := range sortedKeys(gitlab.Provisioning.AccessLevels) {
-			out = append(out, SeatReference{
-				Setting: AccessLevelsSetting, Handle: handle, Seat: o.Role(handle),
-			})
-		}
-	}
-	if dd := c.Integrations.Datadog; dd != nil && dd.Enabled {
-		fallback := strings.TrimSpace(dd.RouteTo)
-		if fallback != "" && fallback != DatadogIgnore && org.ValidHandle(fallback) {
-			out = append(out, SeatReference{
-				Setting: RouteToSetting, Handle: fallback, Seat: o.Role(fallback),
-			})
-		}
-	}
-	return out
-}
-
-// DanglingSettingsRefs reports each GitLab access level override whose key
-// names no seat, in sorted key order, resolved against o.
-//
-// A stale key is worse than inert. An override follows the seat its key names
-// ([GitLabProvisioning.OverrideFor]), so the entry left behind by a removed
-// seat silently grants its level (maintainer, typically) to the next seat
-// given that handle. Any seat counts, human seats included: a key naming a
-// human seat does nothing while the seat is human (provisioning creates
-// accounts for agent seats only), but it names a seat the operator can see in
-// the chart. The grant this check exists to catch is the one waiting on a
-// handle NOBODY answers to.
-//
-// Datadog's fallback is not here: a company file is REFUSED for one naming no
-// agent seat, and the running pair reports it as an alert nobody receives.
+// Any seat counts, human seats included. A key naming a human seat does
+// nothing while the seat is human (provisioning creates accounts for agent
+// seats only), but it names a seat the operator can see in the document, and
+// a handle that is held cannot be taken by a new seat, since handles are
+// unique. The grant this check exists to catch is the one waiting on a
+// handle NOBODY holds.
 func (c *Company) DanglingSettingsRefs(o *org.Organization) []org.DanglingRef {
+	gitlab := c.Integrations.GitLab
+	if gitlab == nil || gitlab.Provisioning == nil || len(gitlab.Provisioning.AccessLevels) == 0 {
+		return nil
+	}
+	handles := make(map[string]struct{})
+	for r := range o.AllRoles() {
+		handles[r.Handle()] = struct{}{}
+	}
 	var out []org.DanglingRef
-	for _, ref := range c.SeatReferences(o) {
-		if ref.Setting == AccessLevelsSetting && ref.Seat == nil {
+	for _, handle := range sortedKeys(gitlab.Provisioning.AccessLevels) {
+		if _, found := handles[handle]; !found {
 			out = append(out, org.DanglingRef{
-				Kind: org.RefGitLabAccessLevel, From: AccessLevelsSetting, To: ref.Handle,
+				Kind: org.RefGitLabAccessLevel, From: AccessLevelsSetting, To: handle,
 			})
 		}
 	}
@@ -183,27 +120,13 @@ func (c *Company) DanglingSettingsRefs(o *org.Organization) []org.DanglingRef {
 // OverrideFor is the access level integrations.gitlab.provisioning's
 // `access_levels` gives seat, reporting false when no key names it.
 //
-// A KEY NAMES THE SEAT IT RESOLVES TO ([org.Organization.Role]), not the seat
-// whose handle it happens to equal. Compared with the handle in hand, an
-// override stopped applying the moment the seat was renamed, and whoever was
-// later given the old handle inherited the grant; followed through the chart,
-// it stays with the seat — and a key that is another seat's live handle is
-// that seat's, never this one's, however this one used to be called.
-//
-// THE STRONGEST ADDRESS WINS where several keys name one seat: its live
-// handle, then the handle it was created under, then the ones it has answered
-// to since, newest first — the order the chart resolves them in, so an
-// operator who writes the current handle beside a stale one is the one heard.
-func (p *GitLabProvisioning) OverrideFor(o *org.Organization, seat *org.Role) (GitLabAccessLevel, bool) {
-	if p == nil || o == nil || seat == nil || len(p.AccessLevels) == 0 {
+// BY THE SEAT'S HANDLE, which is its identity: a handle is minted when the
+// seat is first written and no edit moves it, so a key that names a seat goes
+// on naming that seat.
+func (p *GitLabProvisioning) OverrideFor(seat *org.Role) (GitLabAccessLevel, bool) {
+	if p == nil || seat == nil {
 		return "", false
 	}
-	addresses := append([]string{seat.Handle(), seat.Origin()}, seat.FormerHandles...)
-	for _, address := range addresses {
-		level, keyed := p.AccessLevels[address]
-		if keyed && o.Role(address) == seat {
-			return level, true
-		}
-	}
-	return "", false
+	level, keyed := p.AccessLevels[seat.Handle()]
+	return level, keyed
 }

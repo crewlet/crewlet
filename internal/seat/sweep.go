@@ -503,18 +503,12 @@ func (h *Host) claimOrder(ctx context.Context, byHandle map[string]placement.Sea
 }
 
 // protocolBlock reports the fleet's protocol floor when it is what stopped
-// this node claiming, and zero otherwise.
+// this node claiming, and zero otherwise. The decision is [coord.Lagging]'s;
+// what is left here is what to SAY about the answer.
 //
-// THE DECISION IS [coord.Lagging]'s, not this function's: a whole-company
-// import turns on the same question, and two spellings of it would let the
-// fleet start claiming under a rule the import did not know about. What is
-// left here is what to SAY about the answer.
-//
-// AN UNREADABLE STORE IS NOT A BLOCK HERE, and the asymmetry with the import
-// is deliberate: this runs every five seconds and reports a hint, so a
-// transient read failure that stopped every claim would turn a store blip
-// into a fleet-wide stall. An import runs once, at an operator's hand, and
-// refusing it on "cannot tell" costs them a retry.
+// AN UNREADABLE STORE IS NOT A BLOCK HERE: this runs every five seconds and
+// reports a hint, so a transient read failure that stopped every claim would
+// turn a store blip into a fleet-wide stall.
 func (h *Host) protocolBlock(ctx context.Context) int {
 	floor, lagging, err := coord.Lagging(ctx, h.backend, h.protocol)
 	if err != nil || !lagging {

@@ -849,21 +849,6 @@ func (f *Fleet) UpdateSecret(_ context.Context, rec coord.SecretRecord, version 
 	return true, nil
 }
 
-// DeleteSecretAt removes a value only while it is still at version.
-func (f *Fleet) DeleteSecretAt(_ context.Context, name string, version uint64) (bool, error) {
-	if name == "" {
-		return false, errors.New("coord/memory: a secret needs a name")
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	held, ok := f.secrets[name]
-	if !ok || version == 0 || held.Version != version {
-		return false, nil
-	}
-	delete(f.secrets, name)
-	return true, nil
-}
-
 // DeleteSecret removes a value, reporting whether it was there.
 func (f *Fleet) DeleteSecret(_ context.Context, name string) (bool, error) {
 	if name == "" {

@@ -54,26 +54,11 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// every recall scanned, forever.
 		"agent_diary",
 		"agent_diary_long",
-		// THE CHART'S TWO, on the same terms as every other domain's:
-		// the anchor table a strict domain writes one row per arbitrated
-		// subject into, and the operation ledger a retrying writer asks
-		// "did mine land" of. Both answer "recently" rather than "ever".
-		"chart_anchors",
-		"chart_ops",
-		// AND THE VALUES THE CHART SEALED THAT NOTHING NAMES ANY MORE: a
-		// cleared address, a replaced token, a removed seat's
-		// credentials. The secret store has no retention of its own, so
-		// until this ran every one of them outlived the company. A FLEET
-		// job, over the one shared bucket, proved from rows that hold the
-		// whole chart log.
-		"chart_sealed_values",
 		// THE CONFIGURATION ARCHIVE, which had no horizon at all: every
 		// node adopts its own copy of every revision it has ever met,
 		// one row per config write holding the whole document, and
-		// nothing deleted from it. It is also where a pre-split
-		// revision's roles[].email sits, which is the half `crewlet
-		// config scrub` reaches — the scrub erases what is inside a row
-		// this keeps, and this is what eventually removes the row.
+		// nothing deleted from it — every seat's address among it,
+		// which this is what eventually removes.
 		//
 		// PER NODE for the reason the ops ledgers below are: each node
 		// holds its own copy, so a singleton would tidy the node with

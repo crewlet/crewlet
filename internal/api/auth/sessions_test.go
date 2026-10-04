@@ -3,6 +3,7 @@ package auth_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -18,7 +19,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/runtoken"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // --- the rig ------------------------------------------------------------ //
@@ -77,11 +77,11 @@ func newSignedIn(t *testing.T) *signedIn {
 				ProvedAt: at.Add(-10 * time.Minute)},
 			Person: session.PersonRow{
 				Found: true, Epoch: 3, Stage: iam.StageActive,
-				Login: "sarah.chen", Seat: sessionSeat, SeatAt: 900,
+				Login: "sarah.chen", Seat: sessionSeat,
 				Grants: []iam.Grant{iam.GrantStateRead, iam.GrantConfigRead},
 			},
 		}},
-		chart: &fakeChart{position: 1000, seats: map[string]session.Seat{
+		chart: &fakeChart{seats: map[string]session.Seat{
 			sessionSeat: {Handle: sessionSeat, Kind: "human", Unit: "platform"},
 		}},
 	}
@@ -196,10 +196,8 @@ func (d *fakeDirectory) Resolve(context.Context, string, string) (
 }
 
 type fakeChart struct {
-	position uint64
-	lag      time.Duration
-	seats    map[string]session.Seat
-	err      error
+	seats map[string]session.Seat
+	err   error
 }
 
 func (c *fakeChart) Seat(_ context.Context, ref string) (session.Seat, bool, error) {
@@ -208,13 +206,6 @@ func (c *fakeChart) Seat(_ context.Context, ref string) (session.Seat, bool, err
 	}
 	seat, found := c.seats[ref]
 	return seat, found, nil
-}
-
-func (c *fakeChart) Position(context.Context) (uint64, time.Duration, error) {
-	if c.err != nil {
-		return 0, 0, c.err
-	}
-	return c.position, c.lag, nil
 }
 
 // --- what a cookie buys ------------------------------------------------- //
@@ -559,11 +550,9 @@ func TestAPersonWhoseSeatIsGoneIsRefusedNamingIt(t *testing.T) {
 			t.Errorf("the cookie was cleared by a seat refusal: %v", c)
 		}
 	}
-	// AND THEY ARE STILL THE PERSON, with an EMPTY handle beside a
-	// non-zero binding position — the pair that says "a binding was
-	// decided and this node will not honour it". Read on the one surface
-	// the refusal does not cover, since everywhere else the handler
-	// never runs.
+	// AND THEY ARE STILL THE PERSON, with an EMPTY handle. Read on the
+	// one surface the refusal does not cover, since everywhere else the
+	// handler never runs.
 	own := rig.call(rig.guard(), http.MethodPost, "/auth/session", rig.withCookie)
 	if own.how != iam.Resolved {
 		t.Fatalf("resolution %v on /auth/session, want resolved", own.how)
@@ -573,40 +562,20 @@ func TestAPersonWhoseSeatIsGoneIsRefusedNamingIt(t *testing.T) {
 			"is the silent fall-through this refusal exists to prevent",
 			own.principal.Seat)
 	}
-	if own.principal.SeatAt == 0 {
-		t.Errorf("SeatAt 0 beside an empty seat reads as a genuinely " +
-			"seatless person, which this one is not")
-	}
 	if own.principal.Login != "sarah.chen" {
 		t.Errorf("login %q, want sarah.chen", own.principal.Login)
 	}
 }
 
-// A NODE BEHIND ON THE CHART IS 503, NOT 403.
+// A NODE THAT CANNOT READ THE ORGANISATION IT RUNS IS 503, NOT 403.
 //
-// The control for the case above: absent from the view is the SAME
-// observation whether the seat was removed or the hire has not arrived, and
-// only the position tells them apart. Collapsed, a fleet mid-apply refuses
-// everybody who was just hired.
-func TestANodeBehindOnTheChartIsUnavailableRatherThanForbidden(t *testing.T) {
+// The control for the case above: a seat this node cannot look up is not a seat
+// that is gone, and refused as one it would tell somebody their seat was
+// removed because this node runs no company yet.
+func TestAnUnreadableOrganisationIsUnavailableRatherThanForbidden(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
-	delete(rig.chart.seats, sessionSeat)
-	rig.chart.position = 899 // below the binding's 900
-	got := rig.call(rig.guard(), http.MethodGet, "/agents", rig.withCookie)
-	if got.status != http.StatusServiceUnavailable {
-		t.Fatalf("status %d, want 503 (body %v)", got.status, got.body)
-	}
-}
-
-// A CHART APPLIER PAST THE STALL GRACE IS UNAVAILABLE, which is only
-// reachable because the engine now measures a DURATION lag and hands it to
-// the reader: with the lag hardcoded at zero this arm could never fire, and a
-// node an hour behind answered as a caught-up one.
-func TestAChartPastTheStallGraceIsUnavailable(t *testing.T) {
-	t.Parallel()
-	rig := newSignedIn(t)
-	rig.chart.lag = statelog.StallGrace + time.Second
+	rig.chart.err = errors.New("this node runs no company yet")
 	got := rig.call(rig.guard(), http.MethodGet, "/agents", rig.withCookie)
 	if got.status != http.StatusServiceUnavailable {
 		t.Fatalf("status %d, want 503 (body %v)", got.status, got.body)

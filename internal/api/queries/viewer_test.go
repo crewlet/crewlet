@@ -202,9 +202,9 @@ func TestTheViewerNamesWhatItMayAct(t *testing.T) {
 
 	// AND A TABLE THAT CANNOT DECIDE IS NOT "MAY DO NOTHING": answered as an
 	// empty list, a screen would lock every control a person holds the
-	// authority for while this node is behind its chart.
+	// authority for while this node cannot read its org.
 	sources.Acts = func(context.Context, iam.Principal) ([]string, error) {
-		return nil, errors.New("this node cannot read its chart")
+		return nil, errors.New("this node runs no company yet")
 	}
 	if _, err := askAsSeat(t, sources, "ana", "viewer", nil); !errors.Is(err,
 		queries.ErrUnavailable) {

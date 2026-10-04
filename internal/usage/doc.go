@@ -1,5 +1,5 @@
 // Package usage is what each node's seats and schedules did each company day,
-// replicated to every node — the state-log framework's SIXTH domain, and its
+// replicated to every node — the state-log framework's FIFTH domain, and its
 // second COMPACTED one.
 //
 // # The question it answers, and who has to agree on it

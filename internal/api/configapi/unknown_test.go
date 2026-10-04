@@ -19,13 +19,11 @@ import (
 // operator or the dashboard does, and reads the stored bytes back, because the
 // struct is exactly what cannot show the loss.
 //
-// THE LEVELS ARE THE ONES A SETTINGS REVISION HAS. They were a seat, a unit
-// and a seat inside a unit as well — the three deepest, and the ones a
-// positional match got wrong — and those are the org chart's own domain now,
-// with its own records and its own write path. What makes `mcp_servers` the
-// right stand-in is the property that mattered: its members are matched by
-// IDENTITY rather than by position, so a reordered list is still the test it
-// was.
+// A SEAT AND A UNIT are matched the same way, anywhere in the document, and
+// [config.CarryUnknown]'s own suite holds those levels — a seat moved into a
+// unit, a unit moved under another. `mcp_servers` stands in for them here
+// because the property that matters is the same: its members are matched by
+// IDENTITY rather than by position, so a reordered list is still the test.
 
 // newerPeerDoc is the fixture every case extends: two providers and two MCP
 // servers, so a reorder has something to get wrong.
@@ -155,16 +153,13 @@ func TestAPatchNamingNoArrayKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 // stored document, which replaced every list in it whatever the patch named,
 // and the carry could bring back only what it could match.
 //
-// # The list this is shown on, and the limit that used to be shown beside it
+// # The limit, and where it is held
 //
-// The pair of cases used to be a seat's `schedules` — a list whose members
-// have NO identity, so a replacement genuinely loses what a newer build wrote
-// on each, which the API reference states. Every list of that shape sat on a
-// seat or a unit, and those are the org chart's own domain now; the settings a
-// revision still holds have no unidentified list left to show it on. The rule
-// itself did not move, and [TestAPatchWritesBackOnlyWhatItNamed] is where it
-// is held, against a schema written for the purpose rather than against
-// whichever fields this build happens to have today.
+// A list whose members have NO identity — a seat's `schedules` — genuinely
+// loses what a newer build wrote on each when a patch replaces it, which the
+// API reference states. [TestAPatchWritesBackOnlyWhatItNamed] holds that rule
+// against a schema written for the purpose rather than against whichever
+// fields this build happens to have today.
 //
 // What is shown here is the half that is about the MERGE rather than about
 // matching: a patch naming one key of one block must leave every list it never

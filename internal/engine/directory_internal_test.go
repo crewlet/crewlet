@@ -23,7 +23,7 @@ import (
 )
 
 // A SUSPENSION WITHDRAWS A SEAT'S CONTACT IDENTITIES WITHIN ONE APPLY, with no
-// org-chart record anywhere.
+// configuration change anywhere.
 //
 // The whole path, from the identity applier the register builds to the
 // registry every inbound delivery resolves through: one status record is
@@ -66,7 +66,7 @@ func TestASuspensionWithdrawsContactIdentitiesWithinOneApply(t *testing.T) {
 }
 
 // REINSTATING THEM RESTORES THEIR IDENTITIES, through the same trigger and
-// again with no chart record: the withdrawal is a reading of the directory,
+// again with no configuration change: the withdrawal is a reading of the directory,
 // not a state the registry was left in.
 func TestUnsuspendingRestoresThem(t *testing.T) {
 	t.Parallel()
@@ -154,7 +154,7 @@ func TestAnEngineWithNoNativeRuntimeIsChartOnly(t *testing.T) {
 // THE TWO REBUILD TRIGGERS SWAP WHOLE REGISTRIES, never a half-built one and
 // never a diff, however they interleave.
 //
-// A published company (the chart view's trigger) and a directory signal both
+// A published company (an apply's trigger) and a directory signal both
 // rebuild one pointer, and the second rebuilds for the SAME company the first
 // built for. Run together under the race detector, with a reader resolving the
 // seat the directory never touches on every registry it can see: that seat

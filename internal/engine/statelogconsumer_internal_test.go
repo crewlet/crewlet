@@ -48,11 +48,12 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 
 	// THE FIRST RUN applies everything its own boot wrote, which is what
 	// leaves each consumer acknowledged through the head of its log.
-	// A COMPANY WITH A CHART, so its boot seeds the chart and converges on
-	// it — its projects and its knowledge spaces: those are the records this
+	// A COMPANY WITH UNITS, booted at an activation, so its boot applies
+	// their projects and their knowledge spaces: those are the records this
 	// case needs on every log it can.
+	activated := time.Now().UTC()
 	first, err := New(t.Context(), Options{
-		Bootstrap: &b, Company: cfg, Backends: back,
+		Bootstrap: &b, Company: cfg, Backends: back, ActivatedAt: activated,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -102,7 +103,8 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 	}
 
 	// THE SECOND RUN, the same node on the same broker.
-	second, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back})
+	second, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back,
+		ActivatedAt: activated})
 	if err != nil {
 		t.Fatalf("New again: %v", err)
 	}

@@ -31,7 +31,7 @@ about.
 **One call is made by one principal.** The principal is resolved once, by the
 guard, and is a value on the request's context; the dispatch, the tool's actor
 and the `operator_acted` record all read that one value. A directory rebind or
-a chart rename landing while a call runs changes the next request, never this
+a revision applied while a call runs changes the next request, never this
 one, so a call cannot be admitted as one person, written as another and
 audited as a third.
 

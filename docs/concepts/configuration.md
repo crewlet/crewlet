@@ -9,46 +9,38 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 | Tier | Storage | Owner | Update model | Contents |
 |------|---------|-------|--------------|----------|
 | **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, logging (level, shape and an optional rotating log file) |
-| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | The company's **settings**: name, mission, vision, policies, the company's one clock (`timezone`), providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), token budgets |
-| **The chart** | The state log (`CREWLET_CHART_LOG`) + rows on every node | Whoever is hiring | Live, per object, one record per change | The **org chart**: the units, the seats, who reports to whom — see [The org chart domain](chart-domain.md) |
+| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, the company's one clock (`timezone`), providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), the org chart (`roles:` and `units:`), token budgets |
 
 **Tier A** controls *how the engine boots*. **Tier B** is *what the company is*.
 
-The company's clock is Tier B for that reason: *where* a company keeps its hours is a fact about the company, not about the hosts running it, and every node must cut the same day from it. So it is one top-level `timezone` in the settings rather than a host's own clock — `Local` is refused — and rather than a zone per subsystem: the tracker's "today", a person's day and the hour a schedule fires on are one calendar. See [The company's clock](../getting-started/configuration.md#the-companys-clock).
+The company's clock is Tier B for that reason: *where* a company keeps its hours is a fact about the company, not about the hosts running it, and every node must cut the same day from it. So it is one top-level `timezone` in the company document rather than a host's own clock — `Local` is refused — and rather than a zone per subsystem: the tracker's "today", a person's day and the hour a schedule fires on are one calendar. See [The company's clock](../getting-started/configuration.md#the-companys-clock).
 
-### Tier B is two halves now
+### The org chart is part of the document
 
-The org chart used to be two keys of the Tier B document — `roles:` and
-`units:` — and it is a domain of its own. The difference is not tidiness. A
-settings document is edited by an operator a few times a month and read whole;
-a chart is edited per object by whoever is hiring, and every write contends
-with every other. Keeping them in one document put both on one revision
-counter, so adding a seat and rotating a token were the same kind of write,
-colliding on the same version, and the loser was refused in full.
+`roles:` and `units:` are two keys of the Tier B document like any other, so a
+hire, a move and a provider change are the same kind of write: a new revision,
+activated fleet-wide through [the control plane](control-plane.md), and turned
+into the running organization once per applied epoch on every node. Edit it
+whole (`PUT` / `PATCH /config`) or one seat or unit at a time
+(`PUT /config/roles/{handle}`, `PUT /config/units/{id}`) — see
+[Per-entity read and write](../reference/api-endpoints.md#per-entity-read-and-write).
 
-**The authoring FILE still carries both**, and always will: an operator writes
-one `company.yaml` describing a company, and `crewlet validate` reads it whole.
-What divides it is where each half is written — `crewlet config import` and
-`PUT /config` store the settings as a revision, and a node's first chart is
-seeded from the same file at boot (`crewlet run -company company.yaml`, which
-seeds only while the chart is empty).
+**A seat's handle and a unit's key are its identity, and they never change.**
+Every write mints the ones a document leaves out — a seat's `handle` from its
+`name`, a unit's `id` from its name — before the revision is stored. An edit
+that starts from the stored document (the org builder, `GET` then `PUT
+/config`, `PATCH /config`, the per-entity routes) carries them, so correcting a
+name there changes what people read and nothing else: the seat keeps its agent
+id, its mailbox and its memory. A **file** is minted afresh on every import, so
+correcting a name in one that leaves the `handle` or `id` out replaces that
+seat or unit — declare both in any file you keep. A different handle is a
+different seat. See [Handles and keys](organization-model.md#handle-based-identity).
 
-What changed is where a WRITE lands.
-
-| You want to… | Send it to… |
-|---|---|
-| Change a provider, an integration, the turn engine, a policy | `PUT` / `PATCH /config` |
-| Give a fresh deployment its first chart | `crewlet run -company company.yaml` — it seeds one while the chart is empty |
-| Load a whole authored file's settings | `crewlet config import` |
-
-A `PUT` or a `PATCH /config` carrying a top-level `roles:` or `units:` is
-refused in full with `400 chart_not_writable_here`, and there is no
-`/config/roles/{handle}` or `/config/units/{key}`: a seat and a unit are not
-collections of the settings, so both paths are `404 no_route`. A body naming
-the chart is refused rather than ignored because ignoring it is the shape that
-hurts: a founder sends a whole document with a new seat in it, the write
-succeeds, the revision activates — and the seat is nowhere, with their own
-document saying it exists.
+**Removing a human seat somebody holds is refused.** A revision that takes a
+human seat out of the company — or turns it into an agent seat — while the
+[identity directory](identity-and-access.md) binds a person to it is refused
+`409 seat_held` naming them, at any stage short of their removal: unbind or
+remove them first.
 
 ### Tier A example (`crewlet.yaml`)
 
@@ -186,7 +178,7 @@ The engine boots in this order:
    record of it, `logging.stderr` notwithstanding
 4. Open the store file and start or dial the stream
 5. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
-6. Start the **core runtime** — on every node, with a company or without one: the [state log](../guides/consistency.md) for **every** registered domain, the node gate over every identity-claiming log, the [org chart](chart-domain.md) and the [identity estate](identity-and-access.md) with the loops that keep this node's views of both, and — on a node that publishes — the log's own trim and the identity duties. None of it depends on a company, and a node with none is exactly the one its first person has to be invited to and sign in on, and whose company the org builder writes into the chart before any settings revision exists. It is **every** domain rather than those two because a join replaces the whole replicated file and a snapshot names every registered domain, and because the trim counts nodes per log: a node that applied part of the register could neither adopt nor donate, and would pin the rest of the logs' trims for as long as it was up
+6. Start the **core runtime** — on every node, with a company or without one: the [state log](../guides/consistency.md) for **every** registered domain, the node gate over every identity-claiming log, the [identity estate](identity-and-access.md) with the loops that keep this node's view of it, and — on a node that publishes — the log's own trim and the identity duties. None of it depends on a company, and a node with none is exactly the one its first person has to be invited to and sign in on. It is **every** domain rather than the identity estate alone because a join replaces the whole replicated file and a snapshot names every registered domain, and because the trim counts nodes per log: a node that applied part of the register could neither adopt nor donate, and would pin the rest of the logs' trims for as long as it was up
 7. Start the API inside this process, bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
 8. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
 9. `SELECT payload FROM company_config WHERE is_active <> 0`
@@ -257,7 +249,7 @@ Until the first active row exists, the engine holds an empty `Organization` (no 
 **What stays running:**
 
 - The Tier A resources — the stream, the store file, the API socket — all up.
-- The **core runtime** ([Bootstrap Sequence](#bootstrap-sequence) step 6): every domain's state log, the node gate, the org chart and the identity estate, and on a node that publishes the trim and the identity duties. So an unconfigured node **signs people in and invites them** — its first person is invited under a Tier A token exactly as everybody after them is (`crewlet iam invite`) — serves `/chart`, where the org builder writes the company's units and seats before any settings revision exists, and can be evicted from and readmitted to the logs it is counted on.
+- The **core runtime** ([Bootstrap Sequence](#bootstrap-sequence) step 6): every domain's state log, the node gate and the identity estate, and on a node that publishes the trim and the identity duties. So an unconfigured node **signs people in and invites them** — its first person is invited under a Tier A token exactly as everybody after them is (`crewlet iam invite`) — and can be evicted from and readmitted to the logs it is counted on.
 - The API's `/config/*` routes and the node's [reconcile loop](control-plane.md) — which is exactly what wakes an unconfigured node when the first revision lands.
 - A structured log line carrying `state=unconfigured`, so the unconfigured posture is obvious in logs and on the dashboard.
 
@@ -271,9 +263,9 @@ Until the first active row exists, the engine holds an empty `Organization` (no 
 | `GET /config/revisions` | `200 []` |
 | `PUT /config` | Accepted, and creates the first active revision, as long as the FLEET has no activation either: a node that has not caught up with its fleet answers `412 already_configured` (with `If-None-Match: *`) or `409 revision_advanced`, naming the revision the fleet is on. Send no precondition, or `If-None-Match: *` to insist nothing is configured yet; an `If-Match` names a revision to match, so it answers `412 no_active_revision` |
 | `POST /config/revisions/{id}/revert` | `404` — no revisions exist yet |
-| Per-entity routes (`PUT /config/llm-providers/{key}`, `/config/mcp-servers/{name}`) and `PATCH /config` | `409 Conflict` — they edit a document, and there is none; initialise via `PUT /config` first |
+| Per-entity routes (`PUT /config/roles/{handle}`, `/config/units/{id}`, `/config/llm-providers/{key}`, `/config/mcp-servers/{name}`) and `PATCH /config` | `409 Conflict` — they edit a document, and there is none; initialise via `PUT /config` first |
 | `GET /agents`, `GET /tokens/breakdown` | `200` with empty lists / zero counters |
-| `/auth/*`, `/iam/*`, `/chart/*` | Served exactly as on a configured node — they are the core runtime's |
+| `/auth/*`, `/iam/*` | Served exactly as on a configured node — they are the core runtime's. `GET /iam/seats` alone answers `409 no_active_revision`: it lists the running company's human seats, and there are none |
 | `/work/*`, `/pages/*`, `/operator/mcp`, and the work, page and search questions | `503 no_active_revision` with a 15-second `Retry-After` — over the socket, an `unavailable` frame naming the same `refusal` with the same `retry_after` and words: the routes are **mounted** and say why they cannot serve rather than answering the `404` of a route that does not exist. They read the tracker's and the knowledge base's halves **per request**, so the first company's apply brings them up under the same API with no restart; a company that keeps its tracker or wiki on a vendor answers the `404` a route with nothing behind it answers from then on |
 | `POST /webhooks/...` | Answered **before** the signature check — a node with no revision has no secrets to check against, and verifying first would answer every delivery with the no-secret refusal and its five-minute wait — as `503 no_active_revision` with a 15-second `Retry-After`, so the sender **retries**; `webhook_rejected_unconfigured` is logged at WARNING with the source and the event. A 200 here would tell the sender the delivery was accepted while discarding it — silent, unrecoverable loss the moment one process of several has simply not caught up yet. See [Webhook refusals](../reference/api-endpoints.md#webhook-refusals) |
 
@@ -324,48 +316,6 @@ retried pointlessly and then lost.
 
 ---
 
-## The continuous report: what nothing can refuse at a write
-
-A running company is **two things with two lifetimes**: a settings revision,
-and an [org chart](chart-domain.md) that is a state-log domain of its own. Each
-is validated on its own terms — the chart domain refuses a record that breaks
-its rules, `crewlet validate` refuses a document that breaks the settings' —
-and **neither validates the pair**.
-
-That pair is where the expensive failures live, and every one of them is
-reachable through two writes that were each correct when they were made:
-
-| What is wrong | What it costs |
-|---|---|
-| a seat's model chain names a provider the settings no longer declare | the seat falls back to `default` (else the first provider declared) and bills against a model nobody chose for it |
-| a seat's `workers:` narrowing names a template that is gone | the grant is a filter rather than a definition, so it narrows the seat to fewer workers than the list suggests |
-| a seat's code gate is open on a company with no sandbox backend | a coding run cannot start, and the seat learns it as a tool error inside a turn |
-| a `manages:` entry, a unit's lead or a seat's unit resolves to nothing | the edge manages nobody, or the seat sits at the org root above every team |
-| a setting names a seat — a GitLab access level's key, Datadog's `route_to` — by a handle no seat answers to, or by one the seat has given up | a key naming nobody grants its level to whichever seat is next given that handle; a fallback naming nobody, or a person, sends every unlabelled alert nowhere; one naming a seat's old handle still reaches it, until a later seat is given that handle — a rename in the chart cannot rewrite a setting |
-| a human seat carries no contact identity | no agent can @-mention the person — legitimate for somebody who works only through the dashboard, which is why it is reported and never refused |
-| two seats declare one address or one chat identity | routing reaches one of them, so the other never hears what is addressed to it — two content writes on two seats, each arbitrated on its own object, and the address sealed under two different names |
-| an enabled schedule has nothing that can run it — a unit's `each` with no direct agent member, a unit's `lead` whose effective lead is a person or nobody, a schedule on a human seat | the scheduler skips it on every tick, so the standup or the report it describes never happens — the schedule and the member or lead that would run it are written on different objects, and a company file is the only place that refuses the pair |
-
-Refusing the second write is not an option: a revision that removes a provider
-is a perfectly valid revision, and refusing it would refuse an operator's edit
-over a seat they have never heard of. So the engine **reports** rather than
-refuses, continuously, over what is actually running.
-
-One evaluation feeds every surface that renders it — `GET /chart/check` in
-full, and `/health`'s `consistency` block as counts — so a gauge, a probe and a
-screen can never disagree about whether something is wrong. It deliberately
-does **not** move `/health`'s `status`: a company referencing a provider
-somebody deleted is a company with a problem rather than a node with one, and
-taking a node out of rotation over a configuration typo would turn one broken
-seat into an outage.
-
-`evaluated: false` is the answer from a node that holds no chart view or has
-applied no settings epoch, and it is the field to read first. Zero findings
-from a node that read nothing is the most misleading answer the surface could
-give.
-
----
-
 ## Live Propagation
 
 When a new revision is activated (via `PUT /config`, `PATCH /config`, a per-entity write, a revert, or `crewlet config import`), the revision is stored and the fleet's **activation pointer** is then moved to it; the pointer's own KV sequence *is* the epoch, so the append and the flip cannot come apart. Every node polls that pointer and converges onto it; a broadcast `crewlet.config.revision_activated` event wakes the poll early but carries no work.
@@ -386,19 +336,18 @@ in a fixed order, and names each stage it got through.
 1. **`secrets`** — re-read the secret store and install a fresh resolver snapshot. **First**, because re-activating an unchanged revision is the documented [rotation gesture](secret-store.md): the payload has not moved, so the only thing that can have is what its `${VAR}` references resolve to.
 2. **`company`** — validate and build the new epoch, resolving `${VAR}` where each provider is *constructed*. A refusal here changes nothing: this node keeps serving the previous epoch.
    A company with no `providers.llm` is not refused: it builds with no model registry (see [A Company With No Model Provider](#a-company-with-no-model-provider)).
-   The revision carries the **settings** only — the [org chart](chart-domain.md) is a log of its own — so the company it builds is composed with this node's view of the chart before any stage below runs, and every one of them wires against a roster.
    The revision's sandbox catalogue (`providers.sandbox`) is built straight after, and one that cannot be built refuses the apply there — reporting `secrets, company` and nothing else, since nothing below has touched the node yet. On **every** node, whether or not it runs a sandbox yet: the alternative publishes a company whose sandbox-enabled seats plan around a box nobody can mint.
 3. **`native`** — bring up the native tracker's and knowledge base's **halves** on a node running neither, for its first company on them: their read and write sides, the lexical index, and — on a node that publishes — the embedding duty and the change feeds. Not their logs: every node has applied every domain's log since boot, company or none ([Bootstrap Sequence](#bootstrap-sequence) step 6), so what the first company brings up is the writers and readers over logs the node already holds. **Before** `tools`, because the native tools are registered only where the halves exist, and before `integrations`, whose inbound edge includes the native parsers. A start that fails refuses the apply. **Conditional:** reported only on the apply that started it — once per process, and never at all on a node that met its company at boot. The halves follow the fleet's logs rather than a revision, so a later refusal of the same apply does not take them down, and which halves run are the ones that first company declared: changing `tracker.backend` or `knowledge.backend` after that still takes a restart.
 4. **`sandbox_runtime`** — bring up the [code sandbox](code-sandbox.md)'s coordinator and completion poll on a node running neither, for the first revision whose `providers.sandbox` reaches a cell, and prepare the seats this node **already** holds: each was taken before there was anything to prepare, so each now attaches its completion topic and recovers the runs recorded on it, as a seat taken afterwards does on its way in. A seat whose preparation fails is handed back (a voluntary `unprepared` release), so its next acquisition, here or on a peer, runs the whole of it. **Before** `tools` for the reason `native` is: `run_sandbox` and an agent-mode executor are offered only where the runtime exists. A start that fails refuses the apply. **Conditional:** reported only on the apply that started it — once per process, and never at all on a node that met a sandbox company at boot. Like the native halves it is a fact about the process rather than a revision, so a later refusal of the same apply does not take it down.
 5. **`tools`** — equip the new epoch with this node's builtins. An epoch is published, never mutated, so each one gets its own registry; a node that equipped only its first would serve a company whose agents silently lost every builtin at the first config change.
 6. **`learning`**: rebuild the reflection workers against the new org. Deliberately cannot fail the apply: reflecting against a stale org is a far smaller wrong than not reflecting. The one exception is a node's **first** company: a node that booted with none has no reflect dispatcher to swap workers into, so this stage attaches it, and an attach that fails refuses the apply for the reason it fails a boot (a company served without it learns nothing while looking healthy).
 7. **`sandbox`** — swap the sandbox *manager* only. The coordinator and waiter hold this process's busy set and poll loop; rebuilding them would forget which seats are mid-run and start a second loop over the same rows. The swap carries the backend of any cell the revision dropped as *retired*, for the runs still on it, and a revision with no `providers.sandbox` keeps the last manager for the runs in flight (see [Code Sandbox](code-sandbox.md#engine-provider--providerssandbox)). It cannot fail — the catalogue was built at `company` — and it runs after every stage that can refuse a node already serving a company, so a refused apply never leaves this node launching through a catalogue its current epoch does not have. **Conditional:** only where this node runs a sandbox runtime, from its boot or from a `sandbox_runtime` start.
-8. **`integrations`**: rebuild the inbound surfaces against the new epoch (Confluence, Datadog, Jira, GitLab, GitHub, and the two chat transports, Slack on every apply and Mattermost when a value it is built from moved), so work items route by the new chart rather than the boot-time one. A third-party app the revision **retires** (its block removed, or `enabled: false` for GitHub and GitLab) has its parser unregistered, so its deliveries route to no seat; GitHub's and GitLab's webhook routes then answer `503` rather than verifying and ingesting a delivery the routing half would drop. Confluence additionally loses its searcher, or every seat would go on searching a wiki the company has removed, with the credential it revoked. Confluence and Jira re-derive a **lead map** from the org (space and project key to unit lead), which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
+8. **`integrations`**: rebuild the inbound surfaces against the new epoch (Confluence, Datadog, Jira, GitLab, GitHub, and the two chat transports, Slack on every apply and Mattermost when a value it is built from moved), so work items route by the new org chart rather than the boot-time one. A third-party app the revision **retires** (its block removed, or `enabled: false` for GitHub and GitLab) has its parser unregistered, so its deliveries route to no seat; GitHub's and GitLab's webhook routes then answer `503` rather than verifying and ingesting a delivery the routing half would drop. Confluence additionally loses its searcher, or every seat would go on searching a wiki the company has removed, with the credential it revoked. Confluence and Jira re-derive a **lead map** from the org (space and project key to unit lead), which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
    On a node that booted with **no company** there is no inbound edge to rebuild: boot starts one only for a company it already has, because the inbound consumer group is fleet-wide and a node with no parsers would take deliveries its peers can route. So the node's first apply **starts** the edge here, through the same function boot runs, and every later apply reconciles it. A start that fails (the broker refuses the subscription) refuses the apply like a refused build, before the epoch is published, and takes down whatever it had brought up, so the retry starts from nothing.
 9. **`epoch`** — publish the new epoch. This is the swap; everything before it built, everything after it reads the now-current company.
-10. **`maintenance`** — rebuild the retention sweep, on a node's **first** company (or the apply that started the native halves). Its job list is read once, and on a node that booted unconfigured it was read before there were native halves to contribute the tracker's repairs and the inbox sweep, or a company to state the conversation horizon — so it swept none of those until a restart. Every operation ledger and the org chart's sealed values are swept from boot either way: they are the core runtime's. **After** the swap, because it reads those horizons off the current company. The old sweep stops, its in-flight tick waited out, before the new one starts. **Conditional:** only on that first apply, and only on a node that publishes.
+10. **`maintenance`** — rebuild the retention sweep, on a node's **first** company (or the apply that started the native halves). Its job list is read once, and on a node that booted unconfigured it was read before there were native halves to contribute the tracker's repairs and the inbox sweep, or a company to state the conversation horizon — so it swept none of those until a restart. Every operation ledger is swept from boot either way: the ledgers are the core runtime's. **After** the swap, because it reads those horizons off the current company. The old sweep stops, its in-flight tick waited out, before the new one starts. **Conditional:** only on that first apply, and only on a node that publishes.
 11. **`learning_passes`**: hand the background learning loops (episode compaction, the skill curator, clustered synthesis and promotion) the passes this revision turns on, built from its models, credentials and knobs. **After** the swap, because the loops walk the current company's seats: handed over earlier they would run the new revision's passes over the previous company's roster, and a refusal later in the same apply would leave them there for a revision this node never served. The loops themselves are armed once per process and keep their clocks across an apply (see [Agent Learning](agent-learning.md#trigger-threshold-gated-on-a-slow-loop)), so this is also where a node that booted with no company, or a company that gained its first provider, starts running them. Reported on every apply, including one on a node with no store or no worker role, which has no loops to hand anything to. Not part of the convergence below, because nothing it builds is derived from the org chart.
-12. — 19. **the convergence**: everything derived from the *published company itself*, brought up to it. These are not the apply's own stages: they are the same list a **chart write** runs, through the same function, because a hire publishes a company exactly as an activation does. They are described under [What follows a published company](#what-follows-a-published-company) below, and an apply names each of them in `applied_subsystems` in that order: `parties`, `seat_identities`, `seat_tools`, `tracker_projects`, `knowledge_containers`, `mailboxes`, `scheduler`, `published`. `mailboxes` is where a company that gained its first model provider lets through the mail every seat inbox held while it had none — after the seat tools, because the first thing a released inbox does is run a turn.
+12. — 19. **the convergence**: everything derived from the *published company itself*, brought up to it. These are not the apply's own stages: they are the same list a node's boot runs, through the same function, because a boot publishes a company exactly as an activation does. They are described under [What follows a published company](#what-follows-a-published-company) below, and an apply names each of them in `applied_subsystems` in that order: `parties`, `seat_identities`, `seat_tools`, `tracker_projects`, `knowledge_containers`, `mailboxes`, `scheduler`, `published`. `mailboxes` is where a company that gained its first model provider lets through the mail every seat inbox held while it had none — after the seat tools, because the first thing a released inbox does is run a turn.
 
 Then a `config_revision_applied` event is published on
 `crewlet.config.revision_applied` with `status`, the `applied_subsystems` list
@@ -513,81 +462,70 @@ published before the replacement files its own. Taking a leaking integration
 offline by deleting its `mcp_servers` entry therefore takes effect on the next
 turn, which is what the rest of this section already promised.
 
-**Per-role children are not on this path, and they are not on an apply's
-path at all.** They belong to a seat's *lease* rather than to the epoch: the
-apply-time reconcile above skips every non-shared server, and a role's
-`mcp_env` — which carries the per-agent Slack/GitHub credentials — is **org
-chart** content, so an apply never sees it move. Such a child is spawned when
+**Per-role children are not on this path.** They belong to a seat's *lease*
+rather than to the epoch: the apply-time reconcile above skips every non-shared
+server, and a role's `mcp_env` — which carries the per-agent Slack/GitHub
+credentials — is never part of a spec it compares. Such a child is spawned when
 its seat is claimed, and it is reconciled by the `seat_tools` step of
-[the convergence](#what-follows-a-published-company): a chart write that adds,
+[the convergence](#what-follows-a-published-company): an apply that adds,
 removes or re-credentials a server for a seat this node holds retires the
 children that are gone and starts the ones that arrived, in place, without
-releasing the seat and without touching the children the chart still names.
+releasing the seat and without touching the children the revision still names.
 
-Two things go stale here and they go stale on different publishes, which is
-why the step does both. The **registry** is a clone of the epoch's surface, so
-it goes stale on a settings apply; the **children** are `mcp_env` and the
-seat's name, so they go stale on a chart write. A child the chart still names
-is neither stopped nor restarted — it never learns anything was published — so
-the credential re-handshake a restart would cost is paid only by the servers
-that actually changed.
+The step rebuilds both halves because both go stale on an apply: the
+**registry** is a clone of the epoch's surface, and the **children** are the
+seat's `mcp_env` and its name. A child the revision still names is neither
+stopped nor restarted — it never learns anything was published — so the
+credential re-handshake a restart would cost is paid only by the servers that
+actually changed.
 
 ### What follows a published company
 
-A company is **published by two different gestures**. A config apply publishes
-one — an operator activated a revision. A chart write publishes one too —
-somebody was hired, moved, renamed, given a schedule or handed a credential —
-and that one arrives from an [ordered log](chart-domain.md) rather than from a
-document, on a completely different rhythm and with no activation anywhere in
-it.
+A company is **published by two different paths**: a node's boot publishes the
+company it starts on, and a config apply publishes the revision an operator
+activated. Everything derived from a company has to follow **both**. Written as
+two lists it followed one, and the failure was silent in a particular way: a
+seat a revision added was in the org tree and nowhere else — not addressable,
+holding no vendor account, with no tool children of its own, no project, no
+mailbox, on no dashboard and firing no schedule — until something unrelated ran
+the missing step, at which point all of it corrected itself at once, which is
+the shape that makes a cause impossible to find.
 
-Everything derived from a company has to follow **both**. Written as two lists
-it followed one, and the failure was silent in a particular way: a seat hired
-this morning was in the org tree and nowhere else — not addressable, holding no
-vendor account, with no tool children of its own, no project, no mailbox, on no
-dashboard and firing no schedule — and then all of it corrected itself at once
-when somebody happened to change a provider, which is the shape that makes a
-cause impossible to find.
+So there is **one list**, and both paths run it. In order:
 
-So there is **one list**, and all three paths that publish a company run it:
-the apply, the chart view's rebuild, and the last step of boot. In order:
-
-| Step | What it brings up | Why a chart write needs it |
+| Step | What it brings up | Why every published company needs it |
 |---|---|---|
-| `parties` | The party index every routing decision resolves a name through | A registry is derived from one org and answers for it permanently. Rebuilt only on an apply, every lookup of a new seat answers "nobody matches" — the same answer a stranger gets, so nothing fails and nothing is logged |
-| `seat_identities` | The vendor **account** each seat holds, re-resolved for Jira, GitLab and GitHub | A code host names a seat by an account, and which account a seat holds is read from the seat's own credential — which rides the chart. The lookups are keyed on the token and cached, so a company whose credentials did not move spends no requests |
+| `parties` | The party index every routing decision resolves a name through | A registry is derived from one org and answers for it permanently. Left behind, every lookup of a new seat answers "nobody matches" — the same answer a stranger gets, so nothing fails and nothing is logged |
+| `seat_identities` | The vendor **account** each seat holds, re-resolved for Jira, GitLab and GitHub | A code host names a seat by an account, and which account a seat holds is read from the seat's own credential. The lookups are keyed on the token and cached, so a company whose credentials did not move spends no requests |
 | `seat_tools` | Each held seat's registry, and its per-role MCP children | Both halves are described under [Shared MCP servers](#live-propagation) above |
-| `tracker_projects` | The projects the chart names, as objects | A project belongs to a **unit**, so the publish that first names one is usually a chart write. A create takes its key from the project's own counter, so a project that is not an object refuses every task filed into it |
+| `tracker_projects` | The projects the org chart names, as objects, stamped with the revision's activation instant | A project belongs to a **unit**, so the revision that first names one is usually the one that adds the unit. A create takes its key from the project's own counter, so a project that is not an object refuses every task filed into it |
 | `knowledge_containers` | The containers each unit's and seat's `space:` names | Same reason, one subsystem along |
-| `mailboxes` | A durable subscription per seat; the release of every inbox held while the company had no model; a fresh judgement of every seat [parked on its token budget](agent-runtime.md#the-budget-park) against the ceilings now current; and the end of every [pause](agent-runtime.md#pausing-a-seat) whose seat the chart removed | Until a mailbox exists, every event published to that seat is **dropped** rather than retained. A convergence rather than a walk: it asks the broker what is missing and writes only that, so a company whose mailboxes all exist costs a comparison and no consumer proposals at all. A seat's ceilings are chart runtime and a removal is a chart write, so neither moves a settings revision — run from the apply alone, a raised ceiling left its seat parked and a removed seat's pause outlived it until somebody next applied settings. A pause is keyed by the seat's id, so a seat hired under a freed handle never inherits the leaver's, and it is cleared only by a company that holds every hire, so a node behind the chart log never mistakes a new seat's pause for a removed one's |
-| `scheduler` | The cron loop, armed or disarmed | A seat's `schedules:` ride the chart, so a founder giving somebody their first standup is a chart write — and a loop armed only on an apply fires nothing until the next one, which on a company nobody is reconfiguring is never |
-| `published` | The socket push that re-sends the roster, org tree, tool catalogue and schedules **whole** | The dashboard's company-derived screens come from the company, so no event will ever correct them and an overlay merge cannot express a seat going away. Wired to the apply alone, a founder hiring somebody watched the screen not change |
-| *the directory* — not a step of this list | The party index again, rebuilt **for the same company** when the [identity directory](identity-and-access.md#what-a-suspension-reaches-and-how-fast) moved | Not a chart write at all, which is the point: suspending, reinstating, binding or removing the person who holds a seat is a record on the identity log, and a registry rebuilt only on a published company went on attributing a suspended person's Slack messages to their seat until somebody edited the chart. See below |
+| `mailboxes` | A durable subscription per seat; the release of every inbox held while the company had no model; a fresh judgement of every seat [parked on its token budget](agent-runtime.md#the-budget-park) against the ceilings now current; and the end of every [pause](agent-runtime.md#pausing-a-seat) whose seat the revision removed | Until a mailbox exists, every event published to that seat is **dropped** rather than retained. A convergence rather than a walk: it asks the broker what is missing and writes only that, so a company whose mailboxes all exist costs a comparison and no consumer proposals at all — and it runs unconditionally, because a mailbox lost under a company nobody edited is a fact about the broker that no comparison of two companies would notice. A pause is keyed by the seat's id, so it is cleared only when the seat itself is gone |
+| `scheduler` | The cron loop, armed or disarmed | It reads its schedules off the current company, so it is armed after the pointer moves: armed earlier, it would fire the outgoing company's crons |
+| `published` | The socket push that re-sends the roster, org tree, tool catalogue and schedules **whole** | The dashboard's company-derived screens come from the company, so no event will ever correct them and an overlay merge cannot express a seat going away |
+| *the directory* — not a step of this list | The party index again, rebuilt **for the same company** when the [identity directory](identity-and-access.md#what-a-suspension-reaches-and-how-fast) moved | Not a configuration change at all, which is the point: suspending, reinstating, binding or removing the person who holds a seat is a record on the identity log, and a registry rebuilt only on a published company went on attributing a suspended person's Slack messages to their seat until somebody next activated a revision. See below |
 
 **Every step notices for itself that there is nothing to do**, which is what
-makes running the list cheap enough to do on every committed chart record and
-on the view's own thirty-second timer: the registry compares the company it was
-built from, the identity lookups are token-keyed and cached, the mailbox pass
-compares its own set against the broker's, the tracker and the containers
-compare the row against what the chart says, and the scheduler arms or disarms
-rather than rebuilding. A gate in front of the whole list skips it outright
-when this exact company has already been through it, so a refresh that finds
-the view current costs one comparison.
+makes running the list on every apply cheap — re-activating an unchanged
+revision is the credential-rotation gesture: the registry compares the company
+it was built from, the identity lookups are token-keyed and cached, the mailbox
+pass compares its own set against the broker's, the tracker and the containers
+compare the row against what the company says, and the scheduler arms or
+disarms rather than rebuilding.
 
 **The party index has a second trigger, and it follows the same rule.** Who
 holds a seat, and at what stage, is the identity directory's answer rather than
 the company's: a seat whose holder is suspended, retired or removed registers
 no contact identity (see [Humans in the Org
-Chart](humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-chart-record)).
+Chart](humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-configuration-change)).
 So the identity applier signals after every committed batch that moved a seat's
 standing, and the node reads the directory once and — if the answer moved —
 builds a whole new registry for the company it already serves and swaps it in,
 exactly as `parties` does. Both triggers take one lock, so they cannot swap a
 half-built registry past each other, and neither is ever a diff against the
 live one. It is within one apply on every node, whatever its roles, with a
-thirty-second re-read as the net — the chart view's own figure, for the chart
-view's own reasons — and it never appears in `applied_subsystems`, because no
-apply ran.
+thirty-second re-read as the net, and it never appears in `applied_subsystems`,
+because no apply ran.
 
 **The order is not arbitrary.** A released inbox runs a turn immediately, and
 that turn resolves parties, loads its tool surface and files work into a
@@ -622,7 +560,7 @@ correctly-serving node out of a load balancer's rotation for being behind.
 ## Versioned Revisions
 
 `company_config` is an append-only table — every change is a new revision. It
-is swept and it can be scrubbed; both are described under [what a revision is
+is swept; that is described under [what a revision is
 not](#a-revision-is-immutable-as-a-configuration-not-as-an-archive-of-people)
 below. The schema:
 
@@ -645,12 +583,7 @@ CREATE TABLE company_config (
     payload            TEXT    NOT NULL,          -- the whole document, sealed under
                                                   -- the keyring every node holds
     is_active          INTEGER NOT NULL DEFAULT 0,
-    activated_at       INTEGER,
-    scrubbed_at        INTEGER,                   -- when `crewlet config scrub`
-                                                  -- erased this revision's
-                                                  -- personal fields
-    chart_position     INTEGER                    -- where the org chart's log stood
-                                                  -- when this node applied it
+    activated_at       INTEGER
 );
 
 -- At most one active revision, enforced by the database rather than by the
@@ -670,7 +603,7 @@ A revert creates a *new* revision whose payload equals a prior one — the audit
 
 ### A revision is immutable as a configuration, not as an archive of people
 
-Two things narrow "append-only", and both are deliberate.
+One thing narrows "append-only", and it is deliberate.
 
 **It is swept.** Every node keeps its own copy of every revision it has ever
 met, and nothing deleted from it — one row per config write, per node, each
@@ -683,49 +616,27 @@ walks it, so a swept ancestor turns both into an error naming a row that used
 to exist. See [Retention](../guides/retention.md#the-configuration-archive-and-the-one-thing-a-purge-cannot-reach)
 for where 400 days comes from and what its floor is.
 
-**It can be scrubbed.** The org chart used to live inside this document, so a
-human seat's `email` and `contact` account ids are inside every revision that
-carried them — on every node, in every backup, in a table nothing deleted
-from, and removing the seat never reached them because the removal writes a
-*new* revision. Revisions written after the chart moved onto its own log carry
-no chart at all, so nothing new enters the archive; `crewlet config scrub` is
-the one-time erasure for what is already there.
-
-```
-crewlet config scrub -dry-run     # which revisions hold personal data
-crewlet config scrub              # erase it from every superseded revision
-```
-
-It **refuses the active revision** — the fleet is serving that document and
-every node is holding it, so rewriting it underneath them would be a
-configuration change nothing activated, with no epoch, no apply and no event.
-To take an address out of the live company, edit the company: that writes a
-revision the scrub can then reach. It reaches **this node's copy only**, and
-backups taken before the run still hold the originals.
-
-The erased field reads as `__scrubbed__`, which is deliberately **not** the
-`__redacted__` a config read writes over a credential: that one means the
-value exists and is being withheld, and is restored from the row behind it by
-every write path; this one means the value is gone, and there is nothing
-behind it. So a `crewlet config diff` across a scrub **shows the tombstone** —
-that is a change, not damage. The row carries `scrubbed_at` and the run writes
-a `config_revision_scrubbed` audit event naming the revision and how many
-fields went, never which and never what they held.
+**A revision is an archive of the org chart it ran.** A human seat's `email`
+and `contact` account ids are inside every revision that carried them — on
+every node, in every backup — and removing the seat writes a *new* revision
+rather than reaching the old ones. They leave the store when the sweep takes
+their revision, and a backup when the backup is deleted.
 
 ### What a stored revision is held to
 
 A stored revision is not a document somebody just submitted. It passed the validation of the build that wrote it, which is not necessarily the build reading it: a later build can add a rule, and during a rolling upgrade an older peer keeps activating documents that break it. So reading a revision and running one are held to different standards.
 
 - **Reading holds a revision to no rule.** `GET /config`, a revision read, the diff, the reference index, the entity reads, `crewlet config show`, `export` and `diff`, and the prior a write restores its masks from or merges onto all decode the stored document as it is. A revision this build would refuse is exactly the one an operator needs to see and replace, so none of these may refuse it.
-- **Applying holds a revision to the runnable rules, and to one rule about its SHAPE.** It must carry no org chart: a revision holding `roles:` or `units:` is refused before any rule is checked, because applying it would mean either running a chart no other node reads or dropping it and serving a company with no seats. No write stores one — `PUT` and `PATCH /config` refuse a chart by name, and `crewlet config import` and the boot seed divide the file — so the refusal is the settings reader's own guarantee rather than a state an operator meets. Past that, a node's reconcile tick validates a revision before anything on the node changes, so a refused revision leaves the previous epoch serving untouched. Booting from the store validates the active revision and names it when it cannot run, with `crewlet config import` as the way out because the node's API is not up yet. A company file named with `-company` or `-import-company` is held to the runnable rules while the node only runs it, because most boots write nothing from it: it is already the active revision, or a bootstrap the store's own company outranks. `POST /config/reload` and a revert validate what they re-activate.
+- **Applying holds a revision to the runnable rules.** A node's reconcile tick validates a revision before anything on the node changes, so a refused revision leaves the previous epoch serving untouched. Booting from the store validates the active revision and names it when it cannot run, with `crewlet config import` as the way out because the node's API is not up yet. A company file named with `-company` or `-import-company` is held to the runnable rules while the node only runs it, because most boots write nothing from it: it is already the active revision, or a bootstrap the store's own company outranks. `POST /config/reload` and a revert validate what they re-activate.
 - **A written document is held to every rule.** `PUT`, `PATCH`, a per-entity write, a `/setup` submission that changes the document, `crewlet config import`, `crewlet validate` and a company file `crewlet run` imports as a new revision (`-company` into an empty store, `-import-company` over a different company) validate the entire document the write produces, after its masks are restored. A write over a revision this build refuses therefore succeeds exactly when it corrects it.
 
-The difference between the last two is the **admission rules**: rules added after companies already existed, which a stored company can break and still run exactly as it did before them. Today they are [unique unit keys](organization-model.md#handles-and-keys-are-unique-names-are-not) — a display name, a seat's or a unit's, is prose and never held unique — and unique sandbox setup step names within one `setup` list (`providers.sandbox.setup`, or one seat's `sandbox.setup`): a step's `env` and `files` are credentials restored by the step's name, so two steps of one name would leave every write carrying that list refused on masks nobody edited. So is a `unit:` reference on a seat declared inside a unit it does not name: the reference places only a root seat, so there it moves nothing and reads as a placement (see [the organization model](organization-model.md#a-seats-unit-reference)). A seat's own GitHub App (`integrations.github`) on a [human seat](humans-in-the-org.md) is one too: an app is the identity an agent acts as on GitHub, a person acts as their own `contact.github_login`, and nothing creates or reconciles an app for a person, so the block would read as a setting and do nothing. Four more are **whole-document** rules, and they are admission rules for the same reason plus one of their own. Each compares one half of the document against the other, one seat against every other seat, or the file against what the chart it is about to become will accept, so a per-object [chart](organization-model.md) write cannot check them first — it sees one seat and its own snapshot of the structure, never the settings half and never what a second writer is doing on a second subject at the same moment. An authored file, whole, is the one place they are sound:
+The difference between the last two is the **admission rules**: rules added after companies already existed, which a stored company can break and still run exactly as it did before them. Today they are [unique unit keys](organization-model.md#handles-and-keys-are-unique-names-are-not) — a display name, a seat's or a unit's, is prose and never held unique — and unique sandbox setup step names within one `setup` list (`providers.sandbox.setup`, or one seat's `sandbox.setup`): a step's `env` and `files` are credentials restored by the step's name, so two steps of one name would leave every write carrying that list refused on masks nobody edited. So is a `unit:` reference on a seat declared inside a unit it does not name: the reference places only a root seat, so there it moves nothing and reads as a placement (see [the organization model](organization-model.md#a-seats-unit-reference)). A seat's own GitHub App (`integrations.github`) on a [human seat](humans-in-the-org.md) is one too: an app is the identity an agent acts as on GitHub, a person acts as their own `contact.github_login`, and nothing creates or reconciles an app for a person, so the block would read as a setting and do nothing. Three more are **whole-document** rules: each compares one part of the document against another, or one seat against every other seat.
 
 - **An `mcp_env` key must name a tool server.** The engine looks a seat's credentials up per *server*, so a block keyed on a name `mcp_servers` does not declare is never read by anything: it sits in the document looking configured while the server it was meant for starts with none. Six names need no server, because the engine reads those blocks itself — `github`, `gitlab`, `datadog`, and Atlassian's `atlassian`, `jira` and `confluence`.
 - **Two seats may not declare one email.** The party registry keys on the address and the first seat wins, so all but one silently stop being findable and mail meant for one person resolves to another. The same rule already covered every [external account id](humans-in-the-org.md).
-- **`lead:`, `unit:` and `manages:` must be shaped like what they name** — a seat's handle, a unit's key, or (for `manages:`) either. Those fields took a seat's display name once and do not any more, so `lead: QA Lead` can never resolve under any chart. Only the *shape* is refused: a well-formed reference that resolves to nothing stays a warning, because a chart is assembled in pieces and a lead naming a seat nobody has hired yet must still apply.
-- **A unit key or a seat handle the chart reserves is refused** — `root`, `tree` and `barrier` for either, and `none` for a seat, which is what `integrations.datadog.route_to` means by nobody. The [org chart](organization-model.md#what-a-structural-change-is-and-what-it-refuses) refuses the same words on every path that gives an object an address, but an import decides nothing up front: without this rule the file would validate, its chart would land, and each reserved object would be declined one at a time with only a log line to say so.
+- **`lead:`, `unit:` and `manages:` must be shaped like what they name** — a seat's handle, a unit's key, or (for `manages:`) either. Those fields took a seat's display name once and do not any more, so `lead: QA Lead` can never resolve under any chart. Only the *shape* is refused: a well-formed reference that resolves to nothing stays a warning, because an organization is assembled in pieces and a lead naming a seat nobody has hired yet must still apply.
+
+A seat may not be called `none` either — what `integrations.datadog.route_to` means by nobody, so a seat of that name would be silenced by its own handle. That one is a runnable rule.
 
 A written document is refused for breaking one. A stored revision that breaks one is applied, booted on, reloaded and reverted to like any other, and each node logs `org_admission_warning` once per violation when it applies the epoch. Every other rule is a **runnable** rule, and nothing applies a revision that breaks one.
 
@@ -842,7 +753,7 @@ presenting nothing is refused before the upgrade, which the dashboard learns by
 re-asking over plain HTTP: `401` means the credential is the problem, `426`
 means the engine is fine and the protocol was wrong. A node that cannot read
 its identity estate answers `503` rather than `401`, and a person whose seat
-the chart no longer holds gets the guard's `403` naming the seat.
+the running company no longer holds gets the guard's `403` naming the seat.
 
 **The guard is mounted whether or not `api.auth` is configured, and it decides
 who is asking — never what they may do.** Every request leaves its middleware
@@ -972,7 +883,7 @@ secrets:
       material: "${CREWLET_SECRET_KEY_2026_01}"   # base64(32 bytes); crewlet secrets keygen
 ```
 
-The whole document is stored as `{"__encrypted__": "enc:v1:<key_id>:<base64>"}` — nothing about the settings' structure (policies, model choices, integrations, or secrets) is visible in the database. The org chart is not in this document: it is a state log of its own, whose structure is plaintext and whose credentials are sealed one value at a time — see [What the org chart puts here](secret-store.md#what-the-org-chart-puts-here-and-what-it-deliberately-does-not).
+The whole document is stored as `{"__encrypted__": "enc:v1:<key_id>:<base64>"}` — nothing about the company's structure (its org chart, policies, model choices, integrations, or secrets) is visible in the database.
 
 - **Encrypt on write.** Every write path (`PUT /config`, per-entity `PUT`, `crewlet config import`, `crewlet run -company` / `-import-company`) encrypts the whole document before the payload reaches the DB.
 - **Decrypt at the read boundary.** The engine and the API it serves, migrations, and the CLI each decrypt the blob (`secrets.Open`, then `config.DecodeCompany`) into the plaintext structure before use, so the Tier A key is required for **every** config read. `${VAR}` references *inside* the config are kept verbatim in the blob and still resolve from the environment at construction time.
@@ -992,7 +903,7 @@ Every write path seals, so the only plaintext revision a store can hold is one a
 crewlet config seal                          # re-stores the active revision sealed
 ```
 
-`crewlet config seal` writes a new revision holding the encrypted document — the one read of a plaintext revision the engine allows, because it is the operator vouching for the revision their own node was running. It's idempotent: a second run on an already-sealed revision is a no-op. Superseded plaintext revisions stay unreadable to every other reader, which says so and names importing the document again as the way to have it back; `crewlet config scrub` still reaches them, and writes back sealed what it erases.
+`crewlet config seal` writes a new revision holding the encrypted document — the one read of a plaintext revision the engine allows, because it is the operator vouching for the revision their own node was running. It's idempotent: a second run on an already-sealed revision is a no-op. Superseded plaintext revisions stay unreadable to every other reader, which says so and names importing the document again as the way to have it back.
 
 ### Rotation
 
@@ -1014,7 +925,7 @@ If you also use the [secret store](secret-store.md), run `crewlet secrets rekey`
 
 ### Reads and export
 
-Every configuration read **redacts** credentials: `GET /config` (JSON and `?format=yaml`), `GET /config/revisions/{id}`, the revision diff, the entity reads (`GET /config/llm-providers/{key}`, `/config/mcp-servers/{name}`), the dashboard's `config` and `config_entities` queries, `crewlet config show` and `crewlet config diff`. The read path opens the whole document, then replaces every credential value with the literal marker `"__redacted__"`, so the caller sees the config's shape and never a credential. The `/org` view — read by every holder of `state:read` — needs no masking because it carries no credential field at all: it is an explicit projection of the charter and the organization tree (see [API endpoints](../reference/api-endpoints.md#get-org)). A revision sealed under a key the node does not hold is refused rather than served.
+Every configuration read **redacts** credentials: `GET /config` (JSON and `?format=yaml`), `GET /config/revisions/{id}`, the revision diff, the entity reads (`GET /config/roles/{handle}`, `/config/units/{id}`, `/config/llm-providers/{key}`, `/config/mcp-servers/{name}`), the dashboard's `config` and `config_entities` queries, `crewlet config show` and `crewlet config diff`. The read path opens the whole document, then replaces every credential value with the literal marker `"__redacted__"`, so the caller sees the config's shape and never a credential. The `/org` view — read by every holder of `state:read` — needs no masking because it carries no credential field at all: it is an explicit projection of the charter and the organization tree (see [API endpoints](../reference/api-endpoints.md#get-org)). A revision sealed under a key the node does not hold is refused rather than served.
 
 **What counts as a credential is structural.** A field is a credential because its Go type carries a `secret` tag (`secret:"true"`, or `secret:"content"` for a file's body, which is read whole — see [setup steps](code-sandbox.md#setup-steps--provisioning-the-box)), never because of how its value or its key reads, and a tag on a list or a map covers every element. The tagged fields today: LLM `api_keys`, the embeddings and sandbox `api_key`, a `cli-agent` provider's `cli.auth.token`, `cli.auth.credential_bundle` and `cli.env`, the integration tokens, admin tokens, API and app keys, webhook and signing secrets, a seat's `integrations.slack` bot token and signing secret, `integrations.mattermost.bot_token` and GitHub App private key and webhook secret, every `mcp_env` value on a seat or a unit, `mcp_servers[].env` and `mcp_servers[].headers`, `role.sandbox.env`, and each sandbox setup step's `env` and `files` (under `providers.sandbox.setup` and `role.sandbox.setup`). Everything else (URLs, hosts, flags, model names, the org chart) is served exactly as stored, including every toggle an operator set explicitly: a schedule kept with `enabled: false` reads as disabled, so sending the read back never re-enables it. A test fails the build when a field whose name reads like a credential, or a `map[string]string` named `env`, `headers` or `files`, is added without the tag, so a new credential field is masked by declaring it rather than by remembering to.
 
@@ -1022,23 +933,13 @@ Every configuration read **redacts** credentials: `GET /config` (JSON and `?form
 
 A redacted `GET`, an edited field and a full-document `PUT` round-trip safely: the write path swaps each marker back to the currently stored value before validating, so a round trip never clobbers or exposes a credential. To *change* one, supply the new value (or a `${VAR}`) at that field.
 
-**Where each rule is checked now that the chart is a log.** The masking rule is one rule and it applies to both halves of a company's configuration, but the two check it in different places because one is a document and the other is not:
+**Members are matched by identity, not by position.** Matching by position meant a pure reorder handed each member its neighbour's credentials, silently, since the lengths still agreed and no marker was left standing to refuse. So every member that can name itself is matched by that name:
 
-| | The **settings** document | The **org chart** |
-|---|---|---|
-| What holds it | One sealed revision in the store | An ordered log, one record per object |
-| Where a mask is restored | On the write path, against the currently stored revision, before validation | Inside the **decide's own snapshot**, against the row the write patches |
-| Why there | The document has one version, so "the prior" is one thing | The row has its own writers. A restore taken before the snapshot pairs a value read at one instant with an expectation formed at another, and the broker accepts exactly that pair — so a colleague who rotated the credential between the two would have their rotation silently undone |
-| A mask with no prior value | Left standing, and the write is refused naming the field | Refused naming the field |
-
-Both refuse rather than store the marker, and for one reason: a credential replaced by the eight characters `__redacted__` fails hours later, at a vendor, naming nothing.
-
-**Members are matched by identity, not by position.** Matching by position meant a pure reorder handed each member its neighbour's credentials, silently, since the lengths still agreed and no marker was left standing to refuse. So every member of the settings document that can name itself is matched by that name — a seat and a unit are not among them, because they are the chart's, whose masks are restored against the row each write patches (the table above):
-
+- **A seat by its handle, and a unit by its key, anywhere in the document.** One index covers the whole stored revision, so a seat moved from the root into a unit, from one unit to another, or back to the root keeps its credentials, and so does a unit moved under another unit. Reordering the roster, or adding a seat, restores every other member's credentials.
 - **An MCP server, and a sandbox setup step, by name within its own list.** Both names are unique within their list: two MCP servers of one name are refused outright, and two setup steps of one name are refused on every write (an [admission rule](#what-a-stored-revision-is-held-to)). Reordering a list, or adding a member, restores every other member's credentials.
 - **A list of bare credentials (`api_keys`) by position**, because it has no identity to match on. Change its length and the masks in it are refused rather than guessed.
 
-**An identity that does not name exactly one member matches nothing.** An MCP server or a setup step given a new name carries no prior value of its own. An identity that is empty, or that the stored revision holds twice, is left out of the match entirely: picking either member, or falling back to position, would hand one member's credentials to another. In every one of these cases the mask stays standing and the write is refused with a validation error naming the field, so the caller writes the real value, or a `${VAR}`, there.
+**An identity that does not name exactly one member matches nothing.** A seat with a new handle, a unit with a new key, and an MCP server or a setup step given a new name carry no prior value of their own. An identity that is empty, or that the stored revision holds twice, is left out of the match entirely: picking either member, or falling back to position, would hand one member's credentials to another. In every one of these cases the mask stays standing and the write is refused with a validation error naming the field, so the caller writes the real value, or a `${VAR}`, there.
 
 The untyped maps (`mcp_servers[].env` and `.headers`, `cli.env`, a sandbox step's `env` and `files`) are masked whole, every value in them, whatever its key is called. A host or a region set beside a token in one of those maps is masked with it; write it as a separate, untagged setting where one exists, or as a `${VAR}`.
 

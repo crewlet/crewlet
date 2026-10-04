@@ -205,8 +205,6 @@ func TestEveryOperatorWriteAsksForAProofOrSaysWhyNot(t *testing.T) {
 	unproved := map[authz.Action]string{
 		authz.ActionFleetRead: "a read of the deployment's own controls " +
 			"changes nothing",
-		authz.ActionChartImportRead: "a read of the import ledger, which a " +
-			"client polls after an import and which changes nothing",
 		authz.ActionCatalogueWrite: "a tool, asked through the operator MCP " +
 			"and a seat's registry, neither of which is a step-up surface",
 		authz.ActionSkillPageWrite: "asked from inside the page tools, on the " +

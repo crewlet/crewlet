@@ -2,6 +2,7 @@ package configapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -20,19 +21,19 @@ import (
 // # Why per entity at all, when PUT /config exists
 //
 // The whole-document write is the honest primitive and it stays. But it makes
-// every edit a company-wide one: a founder changing one provider's model sends
-// back a document carrying every other provider, every MCP server and every
-// integration, and a concurrent edit anywhere in it is theirs to lose. Editing
-// one entity narrows what a write claims to have changed, which is what makes
-// the revision summary mean something and what makes two people editing
-// different parts of the company safe.
+// every edit a company-wide one: a founder renaming one seat's goal sends back
+// a document carrying every other seat, every provider and every integration,
+// and a concurrent edit anywhere in it is theirs to lose. Editing one entity
+// narrows what a write claims to have changed, which is what makes the
+// revision summary mean something and what makes two people editing different
+// parts of the company safe.
 //
 // Why not a patch format that addresses list members instead — RFC 6902, or a
 // merge key — is the question this shape invites, and the answer is worth
 // stating rather than leaving to be re-derived: a patch addresses by
-// STRUCTURE, and a name is deliberately not structural. A server's position in
-// `mcp_servers` is not its identity, so a patch that named it by index would
-// rewrite a different server the moment one above it was removed.
+// STRUCTURE, and a handle is deliberately not structural. A role's position in
+// a unit's list is not its identity, so a patch that named it by index would
+// rewrite a different seat the moment anything above it moved.
 //
 // # It is the same write underneath
 //
@@ -40,23 +41,21 @@ import (
 // SPLICES the entity in, restores masks against that same revision, validates
 // the WHOLE document and stores a new revision — identical to PUT /config
 // from that line on. A change that would leave the company invalid is refused
-// even when the entity itself is fine, because a worker template naming a
-// provider that no longer exists is exactly the kind of break a per-entity
-// surface invites. What the revision does not hold it cannot check: a seat's
-// model chain is the org chart's, and only `crewlet config import`, which
-// holds both halves of the company file, validates the two together — see
-// [ErrIdentityMismatch].
+// even when the entity itself is fine, because a seat naming a provider that
+// no longer exists is exactly the kind of break a per-entity surface invites.
 //
-// # The org chart is not addressed here at all
+// # A seat is addressed by its handle and a unit by its key
 //
-// A seat and a unit are the org chart's: a domain of its own, with its own
-// records, its own per-object arbitration and its own routes (`/chart/*`),
-// and no revision carries either — the import divides the company file, and
-// the whole-document door refuses a body naming them (chartdoor.go). So there
-// is no `roles` or `units` collection to list, read or write, and a path
-// naming one is a route this surface does not serve, answered by the mux's
-// own `404 no_route` like any other.
+// Both are IMMUTABLE: a seat's agent id, its mailbox and its memory derive
+// from its handle, and every `manages:` entry, unit `lead:` and root seat
+// `unit:` names a seat or a unit by them. A display name is only ever an edit
+// of a name — every seat's handle and every unit's key is written into the
+// document on every write ([config.MintIdentities]), so nothing derives either
+// from a name a body changed. Changing a handle or a
+// key is a removal and a creation, made through the whole document.
 const (
+	EntityRoles        = "roles"
+	EntityUnits        = "units"
 	EntityLLMProviders = "llm-providers"
 	EntityMCPServers   = "mcp-servers"
 )
@@ -76,23 +75,28 @@ var ErrNoSuchEntity = errors.New("configapi: no such entity")
 // command and credentials without ever having seen them.
 var ErrEntityExists = errors.New("configapi: entity already exists")
 
+// ErrNotCreatable reports a create-only write to a collection whose members
+// cannot be created by address alone.
+//
+// A seat and a unit have a PLACE — the unit they sit in, the position among
+// their siblings — and the path names neither, so "create the seat called X"
+// is a question this route cannot answer without inventing one. A seat or a
+// unit is added through the whole document, or by replacing the unit it sits
+// in, where the place is visible.
+var ErrNotCreatable = errors.New("configapi: this collection is not created by id")
+
 // ErrIdentityMismatch reports a body whose own identity disagrees with the id
 // in the path — a rename, arriving dressed as a replacement.
 //
-// Refused rather than applied, because an identity here is not a label: it is
-// what the rest of the company refers to the entity by. An MCP server's name
-// keys every `mcp_env` block that names it, a seat's or a unit's, and prefixes
-// every tool it serves; a provider's key is what every model chain naming it
-// holds — a seat's, and a worker template's `model`. None of that moves with
-// a splice, so a rename here would unhook everything that named the old
-// identity, and leave the URL naming something that no longer exists.
-//
-// AND THIS ROUTE CANNOT MOVE IT. Most of what names a server or a provider is
-// the org chart's — a seat's and a unit's runtime half — which a revision does
-// not carry, so not even a whole-document `PUT /config` can see it. The one
-// write that holds both halves at once is the authored company file: renamed
-// there, together with everything that names it, `crewlet config import`
-// validates the two as one company before it writes either.
+// Refused rather than applied, because an identity here is not a label. A
+// seat's durable id is a UUIDv5 over (company name, handle), so a handle that
+// changes under an operator strands that seat's diary, its onboarding marker
+// and its counterparty profiles behind an id nothing derives any more, and
+// its inbox subject with them. A unit's key is referenced by every `manages:`
+// entry and root seat `unit:` that names it, and an MCP server's name by every
+// `mcp_env` block, a seat's or a unit's, keyed on it; a provider's key is what
+// every model chain naming it holds. None of that moves with a splice, and the
+// URL is left naming something that no longer exists.
 var ErrIdentityMismatch = errors.New("configapi: identity mismatch")
 
 // identityMismatch names both halves, because the caller has to be able to
@@ -112,14 +116,12 @@ func identityMismatch(field, pathID, bodyID string) error {
 // be a second description of the config's shape, free to drift from the Go
 // types the loader and the validator actually use.
 //
-// EVERY MEMBER IS REQUIRED, for every collection: a collection is addressed
-// here only if a member of it can be read, replaced and added BY ITS ADDRESS
-// alone — a provider by its key, a server by its name. A collection whose
-// members have a PLACE the path cannot name (the unit a seat sits in, its
-// position among its siblings) is the org chart's, which this surface does
-// not address at all. A table test holds every entry to every member, so a
+// EVERY MEMBER IS REQUIRED but the two a create needs, which are nil exactly
+// for a collection whose members have a PLACE the path cannot name — the unit
+// a seat sits in, its position among its siblings — and which answers a create
+// with [ErrNotCreatable]. A table test holds every entry to that, so a
 // collection cannot join the table without saying how a member of it is
-// written — the nil it would otherwise carry is a panic inside a request.
+// written — a nil anywhere else is a panic inside a request.
 type entityAccess struct {
 	// ids lists the identities in the document, in a stable order.
 	ids func(*config.Company) []string
@@ -141,7 +143,8 @@ type entityAccess struct {
 	// create adds a decoded entity under an id the collection does not
 	// carry — the create-only write, `If-None-Match: *` — or reports why
 	// not: [ErrEntityExists] for an id already there, [ErrIdentityMismatch]
-	// for a body naming another.
+	// for a body naming another. Nil for a collection whose members have a
+	// place the path cannot name ([ErrNotCreatable]).
 	create func(*config.Company, string, submitted) error
 	// place puts a new element into a STORED document tree where create
 	// put its entity in the struct, so the two stay in the order find and
@@ -153,6 +156,115 @@ type entityAccess struct {
 // room addresses — held against the client's own list by
 // entities_client_test.go.
 var entityKinds = map[string]entityAccess{
+	EntityRoles: {
+		ids: func(c *config.Company) []string {
+			var out []string
+			for r := range c.EachRole() {
+				out = append(out, roleID(r))
+			}
+			return sorted(out)
+		},
+		find: func(c *config.Company, id string) (any, bool) {
+			for r := range c.EachRole() {
+				if roleID(r) == id {
+					return r, true
+				}
+			}
+			return nil, false
+		},
+		replace: func(c *config.Company, id string, raw submitted) error {
+			// FOUND FIRST, judged second. Both orders refuse the same
+			// requests, but they answer a PUT to an id nothing carries
+			// differently: identity-first calls that a rename and blames
+			// the body, when the entity the caller addressed is simply not
+			// there and the URL is what they got wrong. And the place it
+			// was found is where a body that cannot be read is refused.
+			var target *config.Role
+			var at config.Path
+			for r, p := range c.EachRole() {
+				if roleID(r) == id {
+					target, at = r, p
+					break
+				}
+			}
+			if target == nil {
+				return ErrNoSuchEntity
+			}
+			incoming, err := decodeEntity[config.Role](raw, at)
+			if err != nil {
+				return err
+			}
+			// THE HANDLE IS THE ADDRESS, and a body that leaves it out
+			// keeps the one the path names rather than deriving another
+			// from its name: editing a seat's display name is the edit this
+			// route is most often sent, and it is never a rename. A body
+			// that DECLARES another handle is one, and is refused rather
+			// than silently moved — the caller asked to replace the entity
+			// at this id, and honouring a rename here would leave the URL
+			// naming something that no longer exists.
+			if strings.TrimSpace(incoming.Handle) == "" {
+				incoming.Handle = id
+			}
+			if got := roleID(&incoming); got != id {
+				return identityMismatch("handle", id, got)
+			}
+			*target = incoming
+			return nil
+		},
+		stored: func(root map[string]any, id string) (map[string]any, bool) {
+			return firstElement(root, false, id)
+		},
+	},
+	EntityUnits: {
+		ids: func(c *config.Company) []string {
+			var out []string
+			for u := range c.EachUnit() {
+				out = append(out, u.IdentityKey())
+			}
+			return sorted(out)
+		},
+		find: func(c *config.Company, id string) (any, bool) {
+			for u := range c.EachUnit() {
+				if u.IdentityKey() == id {
+					return u, true
+				}
+			}
+			return nil, false
+		},
+		replace: func(c *config.Company, id string, raw submitted) error {
+			var target *config.Unit
+			var at config.Path
+			for u, p := range c.EachUnit() {
+				if u.IdentityKey() == id {
+					target, at = u, p
+					break
+				}
+			}
+			if target == nil {
+				return ErrNoSuchEntity
+			}
+			incoming, err := decodeEntity[config.Unit](raw, at)
+			if err != nil {
+				return err
+			}
+			// THE SEAT'S RULE, by the unit's KEY and never its name: a
+			// unit is referenced by its key from every `manages:` entry
+			// that expands to it and every root seat whose `unit:` names
+			// it, so renaming the team is an edit of its name and moving
+			// the key is a rename this route refuses.
+			if strings.TrimSpace(incoming.ID) == "" {
+				incoming.ID = id
+			}
+			if got := incoming.IdentityKey(); got != id {
+				return identityMismatch("id", id, got)
+			}
+			*target = incoming
+			return nil
+		},
+		stored: func(root map[string]any, id string) (map[string]any, bool) {
+			return firstElement(root, true, id)
+		},
+	},
 	EntityLLMProviders: {
 		ids: func(c *config.Company) []string {
 			out := slices.Collect(maps.Keys(c.Providers.LLM))
@@ -516,6 +628,13 @@ func (s *Service) refuseEntity(w http.ResponseWriter, kind, id string, err error
 					"added, and the active revision already has one: pick another " +
 					"name, or edit that one under If-Match",
 			})
+	case errors.Is(err, ErrNotCreatable):
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeNotCreatable,
+			map[string]string{
+				"hint": "a member of " + kind + " has a place in the company the " +
+					"path cannot name; add it through PUT /config, or by " +
+					"replacing the unit it sits in, where the place is visible",
+			})
 	case errors.Is(err, ErrIdentityMismatch):
 		// A RENAME, REFUSED. Not coerced back to the path's id either:
 		// silently keeping the old identity would land every other edit in
@@ -524,13 +643,12 @@ func (s *Service) refuseEntity(w http.ResponseWriter, kind, id string, err error
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeIdentityMismatch, map[string]string{
 			"detail": entityErr.Err.Error(),
 			"hint": "the path is the address: send " + kind + "/" + id +
-				" back under the id it already has. A rename has to move " +
-				"everything that names it — an MCP server's name keys every " +
-				"mcp_env block and prefixes its tools, and every model chain " +
-				"names a provider by its key — and most of that is the org " +
-				"chart's, which no write to /config can see: rename it in the " +
-				"company file, with everything that names it, and import that " +
-				"with crewlet config import, which validates both halves together",
+				" back under the id it already has. A seat's handle and a " +
+				"unit's key are permanent — a seat's durable id derives from " +
+				"its handle — and an MCP server's name or a provider's key is " +
+				"named by everything that uses it, so a rename is a removal " +
+				"and a creation made through PUT /config, where everything " +
+				"that names it is visible",
 		})
 	default:
 		// A BODY THIS KIND CANNOT READ, which is the same refusal the
@@ -538,6 +656,60 @@ func (s *Service) refuseEntity(w http.ResponseWriter, kind, id string, err error
 		refuseDocument(w, httpjson.CodeInvalidBody, entityErr.Err.Error(), "",
 			&DocumentError{Err: entityErr.Err})
 	}
+}
+
+// firstElement is the first seat, or unit, of a stored document tree whose
+// identity is id, visited in the order [config.Company.EachRole] and
+// [config.Company.EachUnit] visit the struct, so it is the element find
+// returned.
+func firstElement(root map[string]any, isUnit bool, id string) (map[string]any, bool) {
+	var found map[string]any
+	consider := func(element map[string]any, unit bool) {
+		if found != nil || unit != isUnit {
+			return
+		}
+		if identityOfElement(element, unit) == id {
+			found = element
+		}
+	}
+	for _, seat := range objects(root["roles"]) {
+		consider(seat, false)
+	}
+	var visit func(map[string]any)
+	visit = func(unit map[string]any) {
+		consider(unit, true)
+		for _, seat := range objects(unit["roles"]) {
+			consider(seat, false)
+		}
+		for _, child := range objects(unit["children"]) {
+			visit(child)
+		}
+	}
+	for _, unit := range objects(root["units"]) {
+		visit(unit)
+	}
+	return found, found != nil
+}
+
+// identityOfElement is a stored seat's or unit's identity as the config model
+// derives it, and empty for an element this build cannot read as one.
+func identityOfElement(element map[string]any, isUnit bool) string {
+	raw, err := json.Marshal(element)
+	if err != nil {
+		return ""
+	}
+	if isUnit {
+		var unit config.Unit
+		if json.Unmarshal(raw, &unit) != nil {
+			return ""
+		}
+		return unit.IdentityKey()
+	}
+	var role config.Role
+	if json.Unmarshal(raw, &role) != nil {
+		return ""
+	}
+	return role.IdentityKey()
 }
 
 // objects is the object elements of a list, and nothing for anything else.
@@ -551,6 +723,11 @@ func objects(value any) []map[string]any {
 	}
 	return out
 }
+
+// roleID is a seat's address here: its handle — declared, since every stored
+// seat carries one ([config.MintIdentities]) — so the id in this URL is the
+// handle every other surface shows.
+func roleID(r *config.Role) string { return r.Seat().Handle() }
 
 func sorted(in []string) []string {
 	slices.Sort(in)

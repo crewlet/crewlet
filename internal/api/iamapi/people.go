@@ -19,8 +19,7 @@ import (
 
 // MaxBodyBytes bounds one directory write.
 //
-// 32 KiB, an order of magnitude below /chart's, because nothing here is
-// prose: a person is a name, an address, a login, a seat and two short lists.
+// 32 KiB, because nothing here is prose: a person is a name, an address, a login, a seat and two short lists.
 // The largest legitimate body is an enrolment carrying every grant the
 // vocabulary has, which is a few hundred bytes — so the bound is generous by
 // two orders of magnitude and still refuses a body that is being used as a
@@ -59,10 +58,8 @@ type personView struct {
 
 	// Seat is the bound seat's IDENTITY — the handle it was created under,
 	// which is what a binding records (ADR-0027) and which always resolves to
-	// the seat however it has been renamed — and SeatAt the chart position
-	// the bind was decided at.
-	Seat   string `json:"seat,omitempty"`
-	SeatAt uint64 `json:"seat_at,omitempty"`
+	// the seat however it has been renamed.
+	Seat string `json:"seat,omitempty"`
 
 	Grants []iam.Grant `json:"grants,omitempty"`
 
@@ -77,7 +74,7 @@ type personView struct {
 func (s *Service) viewOf(ctx context.Context, row iamdomain.PersonRow) personView {
 	out := personView{
 		ID: row.ID, Kind: row.Kind, Stage: row.Stage, Login: row.Login,
-		Seat: row.Seat, SeatAt: row.SeatAt, Grants: row.Grants,
+		Seat: row.Seat, Grants: row.Grants,
 		Epoch:     row.Epoch,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		Version: row.Version, Reserved: row.Reserved,

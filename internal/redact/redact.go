@@ -31,46 +31,20 @@ const Marker = "[REDACTED:"
 //
 // # Why it is here rather than beside the config document
 //
-// It started in [internal/config], where the masking pass lives, and that was
-// right while a company was one document. It is not any more: the org chart is
-// a log with its own write path, and that path has to recognise the marker to
-// RESTORE it — a write that stored it would replace a working credential with
-// these twelve characters, silently, and the failure would surface hours later
-// at a vendor naming nothing.
-//
-// So two packages compare against it, and `config` cannot be one of their
-// shared imports: the chart is read by the organization model, which the
-// config layer is built on. A constant spelled twice is one that drifts, and
-// the drift here is exactly the outage above — so it lives in the leaf that
-// already owns what redaction looks like on the wire.
+// Two packages need it and neither can import the other's copy: the config
+// layer's masking pass writes it through [internal/secrets], which config is
+// built on, and config's own restore has to recognise it — a write that stored
+// it would replace a working credential with these twelve characters,
+// silently, and the failure would surface hours later at a vendor naming
+// nothing. A constant spelled twice is one that drifts, and the drift here is
+// exactly that outage — so it lives in the leaf that already owns what
+// redaction looks like on the wire.
 //
 // A DISTINCTIVE LITERAL rather than an empty string, because the two mean
 // opposite things: an operator who deliberately stored an EMPTY credential has
 // said something, and a round trip that erased the difference would turn "no
 // credential" into "the credential I could not see".
 const FieldMask = "__redacted__"
-
-// ScrubMask is what a personal field reads as once it has been ERASED from a
-// stored revision.
-//
-// # Why it is not [FieldMask]
-//
-// The two look alike and mean opposite things, and confusing them loses data
-// in the one direction nothing can undo. [FieldMask] means "this value exists
-// and you may not see it": every surface that serves configuration writes it,
-// and every write path RESTORES the real value from the row it patches, so a
-// document carrying it round-trips without loss. This one means "this value
-// is gone" — `crewlet config scrub` wrote it over somebody's email address in
-// a superseded revision, and there is nothing behind it to restore.
-//
-// A write path that read them as one marker would restore a scrubbed field
-// from a row that no longer holds it, which is a write that fails closed at
-// best; the other direction is worse, because a restore that found the value
-// would put the address back into the archive the scrub was run to clear.
-//
-// DISTINCT AND DISTINCTIVE, for [FieldMask]'s own reason doubled: it has to
-// be tellable from a real value, from an empty one, and from a mask.
-const ScrubMask = "__scrubbed__"
 
 type rule struct {
 	pattern *regexp.Regexp

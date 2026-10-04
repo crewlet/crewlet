@@ -324,7 +324,7 @@ func TestAChartApplyReconcilesEveryProjectItCan(t *testing.T) {
 	lossy, log := r.lossyWriter(t)
 	log.refuse("AAA")
 
-	wrote, err := lossy.ApplyChart(t.Context(), 100, []tracker.ChartProject{
+	wrote, err := lossy.ApplyChart(t.Context(), activatedAt(100), []tracker.ChartProject{
 		{Key: "AAA", Name: "Refused", Unit: "Eng"},
 		{Key: "BBB", Name: "Written", Unit: "Eng"},
 	})

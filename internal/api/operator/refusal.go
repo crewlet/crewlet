@@ -170,8 +170,8 @@ func Fail(w http.ResponseWriter, cause error, sentence, key string, about httpjs
 		httpjson.FailWithFields(w, http.StatusInternalServerError,
 			httpjson.CodeInternalError, about)
 	case errors.Is(cause, builtin.ErrUndecidable):
-		// THIS NODE COULD NOT DECIDE — its chart view or the caller's
-		// identity could not be read — so waiting can clear it.
+		// THIS NODE COULD NOT DECIDE — the organisation it runs or the
+		// caller's identity could not be read — so waiting can clear it.
 		detail["op_id"] = key
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
 			authz.RetryUndecidedSeconds, detail)

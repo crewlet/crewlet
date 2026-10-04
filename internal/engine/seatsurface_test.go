@@ -13,17 +13,15 @@ import (
 //
 // # What these are guarding
 //
-// A company's seats are the org chart's own log now, and a stored revision
-// carries no `roles:` and no `units:` at all. Every reader that walked the
-// document for a per-seat fact therefore walked an EMPTY list — with no error
-// and no symptom, because the bytes it walked were perfectly correct.
+// The running organisation is what every per-seat reader asks, ONE model of a
+// seat rather than the document beside it: a reader that walked the document
+// for one fact and the org for another could disagree about which seats exist.
 //
 // Three of those facts were not on the runtime seat at all: a seat's GitHub
 // App, its sandbox round cap and its own provisioning steps. The conversion
 // from the authored document simply dropped them, and the engine read them
-// off the document instead. So the walk had to be moved AND the seat had to
-// gain them, and a case that only checked the walk would pass over a seat
-// whose app was silently nil.
+// off the document instead. So the seat had to gain them, and a case that
+// only checked the walk would pass over a seat whose app was silently nil.
 
 // A SEAT'S GITHUB APP RIDES THE SEAT.
 //
@@ -33,11 +31,10 @@ import (
 func TestASeatsGitHubAppIsOnTheRuntimeSeat(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, seatSurfaceDoc)})
-	readChart(t, e)
 
 	seat := e.Company().Org.Role("dev")
 	if seat == nil {
-		t.Fatal("the company file's seat never reached this node's chart view")
+		t.Fatal("the company file's seat is not in the running company")
 	}
 	if seat.GitHub == nil {
 		t.Fatal("the seat carries no GitHub App, so every reader of one is " +
@@ -61,7 +58,6 @@ func TestASeatsGitHubAppIsOnTheRuntimeSeat(t *testing.T) {
 func TestASeatsSandboxCapAndSetupAreOnTheRuntimeSeat(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, seatSurfaceDoc)})
-	readChart(t, e)
 
 	seat := e.Company().Org.Role("dev")
 	if seat == nil || seat.Sandbox == nil {
@@ -93,7 +89,6 @@ func TestTheWebhookSecretIndexCarriesEachSeatsOwnApp(t *testing.T) {
 	// seat's ${VAR} has to resolve through on this node.
 	t.Setenv("DEV_HOOK", "whsec_dev")
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, seatSurfaceDoc)})
-	readChart(t, e)
 
 	secrets := e.WebhookSecrets()
 	if got := secrets.GitHubSeat["dev"]; got != "whsec_dev" {

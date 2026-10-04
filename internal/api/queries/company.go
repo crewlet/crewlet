@@ -65,12 +65,11 @@ func (s Sources) ConfiguredSchedules() []schedule.Row {
 	if company == nil {
 		return []schedule.Row{}
 	}
-	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
-	// than re-resolved from the document: a stored revision carries no
-	// seats at all, so the derivation this replaced answered an EMPTY
-	// organization for every running company.
+	// THE COMPANY'S OWN ORG, the one this node built when it applied the
+	// epoch, rather than one re-derived from the document per read: both
+	// come from ONE read of the epoch, so they never describe two revisions.
 	if roster == nil {
-		// A node with no chart view has no seats to describe. Empty is
+		// A node running no company has no seats to describe. Empty is
 		// the honest answer and the screen says so.
 		return []schedule.Row{}
 	}

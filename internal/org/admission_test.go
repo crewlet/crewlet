@@ -36,11 +36,9 @@ func violations(err, sentinel error) []error {
 // A NAME IS PROSE, AND TWO THINGS MAY SHARE ONE — two seats on distinct
 // handles, two units on distinct ids, anywhere in the tree.
 //
-// That is the org chart's own rule: a name is content arbitrated on its own
-// object's subject, so no chart write can refuse a second "Engineer", and a
-// document rule the chart cannot hold made the chart a running company
-// exported one its own import refused. Nothing references a seat or a unit by
-// its name, so the pair is two addresses and nothing more.
+// Nothing references a seat or a unit by its name, so the pair is two
+// addresses and nothing more, and refusing it would refuse a company for a
+// collision nothing reads.
 func TestAnyNameMayBeSharedOnDistinctAddresses(t *testing.T) {
 	t.Parallel()
 	o := normalized(&Organization{Name: "T", Units: []*Unit{
@@ -128,7 +126,7 @@ func TestAMissingIdentityIsNeverReportedAsADuplicate(t *testing.T) {
 // A UNIT KEY IS FOLDED EXACTLY AS THE CHART FOLDS AN ADDRESS.
 //
 // The file is checked so its import is not declined, and the chart's
-// [chart.NormalizeKey] lower-cases a key and turns its whitespace into a
+// [NormalizeKey] lower-cases a key and turns its whitespace into a
 // hyphen: `Product Team` and `product-team` are one address there, so they are
 // one key here, and so are two cases of one name on units that declare no id.
 // The fold is ToLower's, which is why "İstanbul" and "Istanbul" are one key.

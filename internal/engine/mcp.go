@@ -321,8 +321,8 @@ func (e *Engine) seatRegistry(c *Company, handle string) *tools.Registry {
 // servers leaves every held seat serving the previous revision's catalogue to
 // turns running under the new one.
 //
-// THE CHILDREN go stale on a CHART write, because which ones a seat runs is
-// [seatSpecs] over `role.mcp_servers` and the seat's NAME — all chart-owned.
+// THE CHILDREN go stale on an apply that changes a seat, because which ones a
+// seat runs is [seatSpecs] over `role.mcp_servers` and the seat's NAME.
 // Nothing but a lease acquisition ever recomputed them, so giving a seat a
 // tool server was a change that took effect when somebody restarted the
 // process or the seat happened to move to another node. Which looked exactly

@@ -277,7 +277,7 @@ func TestAChartApplyCarriesTheTargetThrough(t *testing.T) {
 		t.Fatalf("set the target: %v", err)
 	}
 	r.drain()
-	if _, err := r.writer.ApplyChart(t.Context(), 100, []tracker.ChartProject{{
+	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(100), []tracker.ChartProject{{
 		Key: "ENG", Name: "Engineering, renamed",
 	}}); err != nil {
 		t.Fatalf("apply a chart: %v", err)

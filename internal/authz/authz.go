@@ -52,7 +52,7 @@
 // change what a company IS ask for a proof taken minutes ago rather than on
 // Monday: that is the STEP-UP, and every row states whether it asks for one
 // ([iam.Recency]) — none, or `step_up` (an hour by default): the company's
-// configuration, chart, integrations and credential store, the identity
+// configuration, integrations and credential store, the identity
 // directory's writes, how somebody proves who they are — whichever surface the
 // change comes through — and the deployment's own controls, ending every
 // session in the company among them. ONE WINDOW, for internal/config's reason:
@@ -112,10 +112,9 @@
 // it names, every arm only a person-present grant opens states one, and every
 // such arm about anybody else admits nobody without that grant.
 //
-// A ROW MAY ASK FOR TWO GRANTS AT ONCE ([rule.also]), and two do: ending every
-// session in the company is the deployment's to run and the directory's to
-// decide, and taking an object out of the org chart is the company's shape to
-// change and the deployment's to make irreversible, so each takes both.
+// A ROW MAY ASK FOR TWO GRANTS AT ONCE ([rule.also]): ending every session in
+// the company is the deployment's to run and the directory's to decide, so it
+// takes both.
 // No TOOL asks for a proof (a walk holds that too): a seat has no keyboard, and
 // the operator's MCP surface is not a step-up surface.
 //
@@ -129,11 +128,9 @@
 // agent on the engine host itself, and a seat's worker grants decide which of
 // its tools a worker runs with. So holding it IS running code on every engine
 // host, and whatever a process there can read — the keyring included — is
-// reachable through it. No row in this table narrows that: the chart's runtime
-// half, a structural write and the settings document all ask for the same
-// grant, and the one split this package has (a removal also asking
-// `fleet:operate`) is about an irreversible gesture, not about bounding it.
-// The grant is conferred like host access.
+// reachable through it. No row in this table narrows that: a seat, a unit and
+// every setting are one document written under that one grant, a removal
+// included. The grant is conferred like host access.
 package authz
 
 import (
@@ -412,8 +409,8 @@ const adminGrant = iam.GrantFleetOperate
 // project's policy, a remark — and whoever runs the deployment is the right
 // party to unstick it. The chart is the company's own structure and the text
 // every seat's prompt is built from, which is what `config:write` already
-// governs: that grant writes the runtime half, every relation leadership is
-// derived from, and every structural change. Its admin path was
+// governs: that grant writes every seat's runtime settings, every relation
+// leadership is derived from, and every structural change. Its admin path was
 // `fleet:operate`, which was wrong in both directions — an SRE holding only
 // the deployment's grant could rewrite what any seat is told to do, while an
 // administrator holding the company's grant and leading nobody could not

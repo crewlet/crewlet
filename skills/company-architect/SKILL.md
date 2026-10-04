@@ -195,16 +195,20 @@ reinvent them:
 Get these wrong and the fix is expensive or lossy. The schema cannot
 catch most of them.
 
-**The company `name` is permanent; a handle is not.** An agent's durable
-id is `uuid5(ns, f"{org.name}:{origin handle}")`, where the origin handle
-is the one the seat was **created** under and is frozen on its chart row.
-So renaming a seat later moves its address and nothing else: its mailbox,
-its lease, its diary, its onboarding markers and its scheduled work all
-stay where they are, and the handle it used to answer to goes on
-resolving for references somebody already wrote down. Changing the
-company `name` is the edit that does mint a new id for every agent and
-orphan every one of those things — settle it before the company runs, and
-warn the founder explicitly if they later ask to change it.
+**The company `name` and every handle are permanent.** An agent's durable
+id is `uuid5(ns, f"{org.name}:{handle}")`, and a document that gives a seat
+a different handle removes that seat and adds a new one with an empty
+mailbox and no memory. Every write stores the handle a seat leaves out —
+derived from its name — so correcting a seat's `name` by editing the STORED
+company (the org builder, `PATCH /config`, the per-entity routes) keeps its
+handle, its mailbox, its lease, its diary, its onboarding markers and its
+scheduled work. A FILE is minted afresh on every import: correct a `name` in
+a file that leaves the `handle` out, import it, and the seat is replaced —
+an agent seat with no warning. So every file you write declares `handle`
+on every seat and `id` on every unit. Changing the company `name` mints a
+new id for every agent and orphans every one of those things — settle it
+before the company runs, and warn the founder explicitly if they later ask
+to change it.
 
 **Nothing is referenced by a display name.** A `lead` and a `manages`
 entry name a seat by its **handle**; a `manages` entry and a root seat's
@@ -214,30 +218,29 @@ writing one into a reference is how a chart comes apart on the first
 rename. Write handles and keys, and set both explicitly.
 
 **Every unit needs an `id`, and it is minted from the name if you leave
-it out.** The id is the unit's key — lowercase letters, digits, `-` and
-`_`, starting with a letter — chosen once and read by nobody, so it can be
-short and dull (`engineering`, `platform`). Write it yourself when the
-name is long or likely to change.
+it out — afresh on every import of a file.** The id is the unit's key —
+lowercase letters, digits, `-` and `_`, starting with a letter — chosen
+once and read by nobody, so it can be short and dull (`engineering`,
+`platform`). Write it yourself, on every unit, so renaming a team in the
+file moves nothing.
 
 **Handles and unit keys are unique across the whole company; names are
 not.** Each reference resolves to the first match anywhere in the tree, so
 two units answering to one key silently share one team's work, routing and
 pages, and two seats on one handle share one inbox — `crewlet validate`
-refuses both, and so does the org chart. A `name` is prose and may repeat:
+refuses both, and so does every write. A `name` is prose and may repeat:
 two seats called `Software Engineer` are fine on two handles, but two that
 declare no `handle` derive the same one and are refused for that. Prefer
 names a reader can tell apart anyway (`Software Engineer 2`), since a
 colleague asked for by a shared name is offered every seat that carries it,
 and give every seat an explicit `handle` and every unit its own `id`.
 
-**Set a unit `id` when the team's name may be rewritten.** A unit's name is
-prose and gets renamed; `id` (lowercase, starting with a letter, e.g.
-`id: eng`) is chosen once and read by nobody, and it is what work filed into
-that team is keyed on — so a rename moves nothing. It is optional, and a unit
-without one is keyed by its name, which is why adding one later is safe:
-filters match a team by its id *or* its name, so work filed under either is
-still found. An `id` must not collide with another unit's name — that pair is
-refused as one key, exactly like two units of the same name.
+**A unit's `id` is what work filed into that team is keyed on.** A unit's
+name is prose and gets renamed; its `id` (lowercase, starting with a letter,
+e.g. `id: eng`) is chosen once and read by nobody, so renaming the team moves
+nothing while the `id` stays. Two units on one key are refused, a minted key
+included: a unit that leaves `id` out collides with any unit whose `id` is
+the key its name mints.
 
 **Secrets are `${VAR}` references, never literals.** Every string field
 supports `${ENV_VAR}`. Put the reference in the YAML and the value in
@@ -298,6 +301,7 @@ their activity in chat / the tracker / the code host:
 ```yaml
 roles:
   - name: Jane Founder
+    handle: jane-founder    # declared: an import mints a missing one from the name
     kind: human
     manages: [ceo]          # the CEO seat's handle, never its display name
     contact: { mattermost_user_id: "${MATTERMOST_FOUNDER_USERNAME}" }
@@ -306,8 +310,8 @@ roles:
 `kind: human` seats are addressable but never spawned: no runtime, no
 inbox, no LLM. They reject the runtime-only fields, and `contact` is
 optional: a person with none works through the dashboard only, agents
-cannot @-mention them, and `crewlet chart check` reports the seat as
-`seat_unreachable`. Scope their `manages` to the top roles — a
+cannot @-mention them, and `crewlet validate` warns about the seat at its
+`contact`. Scope their `manages` to the top roles — a
 founder managing every seat floods them. See
 [Humans in the org chart](https://docs.crewlet.ai/concepts/humans-in-the-org/).
 

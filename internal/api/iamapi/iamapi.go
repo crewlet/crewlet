@@ -76,6 +76,10 @@ type Directory interface {
 	// Claims is the claim duty's own reading, which the report shows on
 	// demand: a duplicate or an orphan the duty warns about.
 	Claims(ctx context.Context, now time.Time) (iamdomain.ClaimReport, error)
+
+	// SeatBindings is everybody bound to a seat, in one snapshot, which
+	// the seat listing joins to the running company's human seats.
+	SeatBindings(ctx context.Context) ([]iamdomain.SeatBinding, error)
 }
 
 // Writer is one party's authority to change the identity estate, as this
@@ -193,10 +197,15 @@ type Options struct {
 	// Bindings classifies one person's seat binding for the
 	// dangling-binding arm of the report. See [Bindings].
 	//
-	// NIL-ABLE, AND THE ABSENCE IS THE THIRD VALUE — the same shape
-	// internal/api/chartapi's `Held` takes, one estate the other way
-	// round: a node that cannot ask skips the arm rather than guessing.
+	// NIL-ABLE, AND THE ABSENCE IS THE THIRD VALUE: a node that cannot
+	// ask skips the arm rather than guessing.
 	Bindings Bindings
+
+	// Seats is the company this node runs, which `GET /iam/seats` lists
+	// the human seats of. REQUIRED: every node that serves this surface
+	// applies the company it runs, and a listing with no company to read
+	// would answer an empty list that reads as a company with no seats.
+	Seats Seats
 
 	// Ceiling is this node's own `api.auth.max_grants`, which the report
 	// compares a person's declared grants against. Empty means this node
@@ -229,6 +238,7 @@ type Service struct {
 	opener    Opener
 	external  string
 	bindings  Bindings
+	seats     Seats
 	ceiling   []iam.Grant
 	tokens    func() []string
 	audit     Audit
@@ -259,11 +269,15 @@ func New(opts Options) (*Service, error) {
 			"token labels — /iam/node-tokens answers which directory row each " +
 			"one acts through, and an empty list would read as a node with no " +
 			"token to bind")
+	case opts.Seats == nil:
+		return nil, errors.New("iamapi: this surface needs the company this " +
+			"node runs — /iam/seats lists its human seats, and an empty list " +
+			"would read as a company with none")
 	}
 	s := &Service{
 		directory: opts.Directory, authority: opts.Authority,
 		opener:   opts.Opener,
-		external: opts.ExternalBase, bindings: opts.Bindings,
+		external: opts.ExternalBase, bindings: opts.Bindings, seats: opts.Seats,
 		ceiling: slices.Clone(opts.Ceiling), tokens: opts.TokenIDs,
 		audit: opts.Audit,
 		now:   opts.Now,

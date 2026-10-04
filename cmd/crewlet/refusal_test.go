@@ -54,9 +54,9 @@ func TestARefusalWithNothingBesideTheCodeIsLeftAlone(t *testing.T) {
 // The node client answered a 401 and a 403 alike with "the node refused the
 // token: check it against the api.auth.tokens entry you meant to use", so an
 // operator whose token works and lacks `fleet:operate` went looking for a typo
-// in it; the other four rendered the 403 as a bare code or a bare reason, with
-// the grants — the one fact that says whom to ask for what — dropped. Each
-// client is asked, so a sixth renderer that skipped the shared one would have
+// in it; the other three rendered the 403 as a bare code or a bare reason,
+// with the grants — the one fact that says whom to ask for what — dropped. Each
+// client is asked, so a fifth renderer that skipped the shared one would have
 // to be added here to escape it.
 func TestEveryClientNamesTheGrantANodeRefusedATokenFor(t *testing.T) {
 	t.Parallel()
@@ -72,9 +72,6 @@ func TestEveryClientNamesTheGrantANodeRefusedATokenFor(t *testing.T) {
 		},
 		"secrets": func(status int, raw []byte) error {
 			return secrets.refusal(status, "/secrets/X", raw)
-		},
-		"chart": func(status int, raw []byte) error {
-			return chartRefusal("PATCH /chart/units/x", status, raw)
 		},
 		"iam": func(status int, raw []byte) error {
 			return iamRefusal(status, map[string]any{"error": "unauthorized"}, raw, true)

@@ -294,7 +294,7 @@ const (
 	CodeUnknownKind Code = "unknown_kind"
 	// CodeSeatRequired is a per-seat gesture that named no seat.
 	CodeSeatRequired Code = "seat_required"
-	// CodeNoSuchSeat is a seat the org chart does not hold.
+	// CodeNoSuchSeat is a seat the company does not hold.
 	CodeNoSuchSeat Code = "no_such_seat"
 	// CodeLiteralInConfig is a credential the company document carries as a
 	// literal where a ${VAR} pointer belongs, which the setup surface will
@@ -352,10 +352,6 @@ const (
 	// not serve. The detail carries the Accept-Patch it does.
 	CodeUnsupportedPatchMediaType Code = "unsupported_patch_media_type"
 
-	// CodeChartNotWritableHere is a settings write that carried the org
-	// chart, which lives on its own routes now.
-	CodeChartNotWritableHere Code = "chart_not_writable_here"
-
 	// CodeNoSuchEntity is an entity route naming something the active
 	// document does not hold.
 	CodeNoSuchEntity Code = "no_such_entity"
@@ -367,6 +363,15 @@ const (
 	// CodeEntityExists is a create-only entity write (If-None-Match: *)
 	// naming an id the active document already holds.
 	CodeEntityExists Code = "entity_exists"
+
+	// CodeNotCreatable is a create-only entity write to a collection whose
+	// members have a place the path cannot name — a seat, a unit.
+	CodeNotCreatable Code = "not_creatable"
+
+	// CodeSeatHeld is a write that would take a human seat out of the
+	// company while the identity directory binds somebody to it. The
+	// refusal names every such seat and who holds it.
+	CodeSeatHeld Code = "seat_held"
 
 	// CodeConflictingPreconditions is a write carrying both
 	// `If-None-Match: *` and `If-Match`, which describe two different
@@ -519,12 +524,6 @@ const (
 	// many times. The one refusal whose remedy is "read it again".
 	CodeStale Code = "stale"
 
-	// CodeRefused is a write the DOMAIN refused on its own rules — a status
-	// that does not exist, a field its declaration does not allow, a label
-	// the project never declared. The detail is the domain's own sentence,
-	// because it is the only thing that says what to change.
-	CodeRefused Code = "refused"
-
 	// THE TOOL REFUSAL CLASSES, beside [CodeNotFound], [CodeForbidden] and
 	// [CodeUnavailable], which are classes as well and declared above with
 	// the meaning the class has. internal/mcp's Refusal is what a
@@ -617,8 +616,8 @@ const (
 	// attempt as on every retry.
 	//
 	// ONE CODE WHEREVER THE ID ARRIVED — the node gate's `?op_id=` and
-	// every surface's `Idempotency-Key` (`/work`, `/pages`, `/chart`,
-	// `/iam`) — so a client branches on one spelling for one mistake. A
+	// every surface's `Idempotency-Key` (`/work`, `/pages`, `/iam`) — so a
+	// client branches on one spelling for one mistake. A
 	// refusal of a header also carries `field`, naming it.
 	CodeOpIDInvalid Code = "op_id_invalid"
 	// CodeInvalidGate is an eviction or readmission naming a node id no
@@ -661,13 +660,6 @@ const (
 	// CodeMaintenanceUnreadable is a capacity window whose state could not
 	// be read.
 	CodeMaintenanceUnreadable Code = "maintenance_unreadable"
-
-	// CodeFleetMixedVersion is a whole-chart import refused while a rolling
-	// upgrade is in progress: every node applies the import, the older one
-	// included, under its own reading of what a placement means. 409 rather
-	// than 503, because the remedy is finishing the upgrade and not waiting.
-	// The detail names the node still on the older protocol.
-	CodeFleetMixedVersion Code = "fleet_mixed_version"
 
 	// THE WEBHOOK EDGE. A delivery's sender is a vendor that reads the
 	// status and the Retry-After and nothing else, so what these buy is the
@@ -797,8 +789,6 @@ var codes = map[Code]string{
 		"written. The detail says whose it is.",
 	CodeStale: "Somebody changed this after you read it, so nothing was " +
 		"written. Read it again and decide from what it says now.",
-	CodeRefused: "That change was refused and nothing was written. The detail " +
-		"says why.",
 	CodeInvalid: "That change was refused and nothing was written. The detail " +
 		"names what to send differently.",
 	CodeStaleVersion: "Somebody changed this after you read it, so nothing was " +
@@ -865,9 +855,6 @@ var codes = map[Code]string{
 		"and names the operation already open when there is one.",
 	CodeMaintenanceUnreadable: "The maintenance window's state could not be " +
 		"read. The detail says why.",
-	CodeFleetMixedVersion: "An upgrade is still rolling through the fleet, and " +
-		"an import is applied by every node, the older ones included. Finish " +
-		"the upgrade and import again.",
 
 	CodeInvalidSignature: "This delivery's signature or token did not match " +
 		"what this route checks, so it was not accepted. Make the secret at the " +
@@ -883,7 +870,7 @@ var codes = map[Code]string{
 	CodeUnknownKind: "This build does not know that integration.",
 	CodeSeatRequired: "Name the seat this is for. The detail says why one is " +
 		"needed.",
-	CodeNoSuchSeat: "The org chart has no seat by that name.",
+	CodeNoSuchSeat: "The company has no seat by that name.",
 	CodeLiteralInConfig: "The configuration holds this credential written out " +
 		"rather than as a reference, so it was not overwritten. Move it into " +
 		"the secret store first — the detail says which field.",
@@ -911,15 +898,18 @@ var codes = map[Code]string{
 	CodeUnsupportedPatchMediaType: "This endpoint takes a JSON Merge Patch: an " +
 		"object shaped like the document. The detail lists the formats it " +
 		"accepts.",
-	CodeChartNotWritableHere: "The org chart is no longer part of the " +
-		"configuration, so nothing in this request was written. The detail " +
-		"names the chart's own routes.",
 	CodeNoSuchEntity: "The active configuration holds nothing by that name.",
 	CodeIdentityMismatch: "The body renames what the path names, and this " +
 		"route does not rename. Send it back under the name it already has.",
 	CodeEntityExists: "Something by that name is already in the " +
 		"configuration, so nothing was added. Pick another name, or edit " +
 		"the one that is there.",
+	CodeNotCreatable: "A seat or a unit has a place in the company that this " +
+		"address cannot name, so it is not added here. Add it through the " +
+		"whole configuration, or the unit it belongs in.",
+	CodeSeatHeld: "This change removes a person's seat, or makes it an agent's, " +
+		"while somebody is still bound to it, so nothing was changed. Unbind " +
+		"or remove them first — the detail says who.",
 	CodeConflictingPreconditions: "A create (If-None-Match: *) and an edit " +
 		"(If-Match) were both asked for. Send one of them.",
 	CodeValidationError: "The configuration this change would produce is not " +
@@ -1263,8 +1253,8 @@ const (
 // they send a client opposite ways: the first is retried under the same
 // operation and never under a fresh one, which would make a second change if
 // the first landed; the second wrote nothing. Every surface wrote the unknown
-// for itself, and they had drifted — `/chart` and `/iam` said it only in a
-// sentence, `/work` said it on some routes because the tool's receipt happened
+// for itself, and they had drifted — `/iam` said it only in a sentence,
+// `/work` said it on some routes because the tool's receipt happened
 // to carry an `outcome` and not on others — so `crewlet work purge`, which
 // branches on the field, told an operator whose purge may have destroyed the
 // item that the attempt "wrote nothing". One writer, and the three keys are

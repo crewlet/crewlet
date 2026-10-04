@@ -75,12 +75,12 @@ import (
 //
 // DERIVED, from what a gesture waits on, and never written down as a number.
 // It is one write per identity-claiming log — counted off the register
-// ([identityLogCount]), four in this build: the tracker, the knowledge base, the
-// org chart and the identity estate — and every wait inside a write is the
+// ([identityLogCount]), three in this build: the tracker, the knowledge base
+// and the identity estate — and every wait inside a write is the
 // publisher's own, each bounded by [statelog.DefaultResolveBudget]: a wait for
 // this node's applier to reach a peer's record, and the resolution of its own
-// ([gateWaitsPerLog]). At a margin of three ([gateBudgetMargin]) that is two
-// minutes today.
+// ([gateWaitsPerLog]). At a margin of three ([gateBudgetMargin]) that is
+// ninety seconds today.
 //
 // IT WAS A LITERAL MINUTE, sized when two logs claimed identity: a margin of
 // three over twenty seconds. The register grew to four and the literal did
@@ -175,8 +175,8 @@ type GateRequest struct {
 	// name, and a bare name recorded every gesture as an operator acting
 	// through a credential named after themselves: a person bound to a
 	// seat, or a machine token acting as its owner, read as a Tier A token
-	// of that name. And the org chart's and the identity estate's writers
-	// judge `fleet:operate` on the party's OWN grants at the record
+	// of that name. And the identity estate's writer judges
+	// `fleet:operate` on the party's OWN grants at the record
 	// ([registration.NewGate]), which a name cannot carry.
 	By iam.Principal
 

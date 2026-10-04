@@ -5,22 +5,11 @@ import (
 	"fmt"
 )
 
-// IS A ROLLING UPGRADE STILL IN PROGRESS, asked once.
+// IS A ROLLING UPGRADE STILL IN PROGRESS.
 //
-// # Why it is a function and not a comparison each caller writes
-//
-// Two decisions turn on it and they must not disagree. A seat host refuses to
-// CLAIM while an older peer holds a live lease, because two nodes that
-// disagree about what holding a lease MEANS are each individually correct and
-// jointly wrong. And a whole-company import refuses to LAND while one does,
-// for the same reason one level up: an import rewrites every placement in the
-// chart, and a node applying that under an older reading of ownership would
-// move seats it must not touch.
-//
-// Written as two comparisons, the day one of them changed — a `>` for a `>=`,
-// an error read as "no" rather than as "cannot tell" — the fleet would start
-// claiming under a rule the import did not know about, and neither side would
-// report anything.
+// A seat host refuses to CLAIM while an older peer holds a live lease, because
+// two nodes that disagree about what holding a lease MEANS are each
+// individually correct and jointly wrong.
 //
 // # The rule, and why it is asymmetric
 //
@@ -32,9 +21,9 @@ import (
 //
 // # An unreadable store is NOT "uniform"
 //
-// It is an error, and it travels as one. A caller that read a failure as "no
-// older peer" would do exactly what the check exists to prevent, at the one
-// moment it cannot tell.
+// It is an error, and it travels as one: what not knowing costs is the
+// caller's to decide, and an answer of "no older peer" would have decided it
+// for them.
 
 // ProtocolFloorReader is the one method this question needs.
 //
@@ -66,26 +55,4 @@ func Lagging(ctx context.Context, r ProtocolFloorReader, protocol int) (
 		return 0, false, nil
 	}
 	return got, true, nil
-}
-
-// LaggingOwner names a live node holding a lease at floor, for a message.
-//
-// A COURTESY RATHER THAN THE DECISION. [Lagging] is what decides, over the
-// floor alone; this is a second read that may fail or find nothing, and an
-// empty name never means "uniform". Reporting it changes an operator's next
-// step from reading every node's version to restarting one.
-func LaggingOwner(ctx context.Context, b Backend, floor int) string {
-	if b == nil {
-		return ""
-	}
-	leases, err := b.ListLive(ctx, ClassNode)
-	if err != nil {
-		return ""
-	}
-	for _, lease := range leases {
-		if StoredProtocol(lease.Protocol) == floor {
-			return lease.Owner
-		}
-	}
-	return ""
 }

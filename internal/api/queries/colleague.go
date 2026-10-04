@@ -56,10 +56,10 @@ type colleagueAnswer struct {
 // does not guess (`agent/colleague`'s rule).
 //
 // THE CHAT-ID TIER NEEDS THE CONFIGURATION READ. A seat's contact identities
-// are read only through the grant the company document and the chart's runtime
-// half are read under (organization-model.md, "What anyone can read about a
-// seat"), and an exact-id tier answered to anybody holding the board's read
-// would be an oracle for them: paste an id, learn whose it is. So a caller
+// are read only through the grant the company document is read under
+// (organization-model.md, "What a signed-in reader can see about a seat"),
+// and an exact-id tier answered to anybody holding the board's read would be
+// an oracle for them: paste an id, learn whose it is. So a caller
 // without `config:read` resolves over handles and names alone, and one holding
 // it over everything the agent's lookup reads.
 //

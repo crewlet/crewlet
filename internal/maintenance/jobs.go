@@ -93,10 +93,8 @@ const (
 	// append-only table, and nothing deleted from it — so a company that
 	// edits its configuration daily accumulates a row per edit per node
 	// for the life of the deployment, each row a copy of the whole
-	// document. It is also where a pre-split revision's `roles[].email`
-	// sits, which is why the sweep ships beside `crewlet config scrub`:
-	// the scrub erases what is inside a row it keeps, and this is what
-	// eventually removes the row.
+	// document — every seat's address among it, which this sweep is
+	// what eventually removes.
 	//
 	// # The floor, which is a relation rather than a number
 	//

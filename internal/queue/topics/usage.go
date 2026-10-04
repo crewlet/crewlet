@@ -1,9 +1,9 @@
 package topics
 
 // The usage domain's log: what each node's seats and schedules did each company
-// day, and why its grammar sits beside the other five domains'.
+// day, and why its grammar sits beside the other four domains'.
 //
-// The usage domain is the state-log framework's SIXTH, and its second
+// The usage domain is the state-log framework's FIFTH, and its second
 // COMPACTED one: one message per subject, so the stream is a keyed table of
 // node-days rather than a history. The subject is not an arbitration unit here
 // — exactly one writer, the node the day belongs to, ever publishes on it — but

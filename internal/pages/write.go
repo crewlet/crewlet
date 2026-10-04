@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -639,8 +640,7 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 }
 
 // EnsureContainer creates a space if it is not there, or updates its settings,
-// from the org chart as it stood at chartAt — a packed position on the chart's
-// own log.
+// from the configuration activated at activatedAt.
 //
 // THE SECOND VALUE IS WHETHER ANYTHING WAS WRITTEN, not whether the call
 // succeeded. This runs on every boot for every unit's space, so the ordinary
@@ -648,48 +648,48 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 // that could not tell that from a create would log "applied" on every restart
 // for a company nobody had edited.
 //
-// # Stamped with the chart's position, and never walked back
+// # Stamped with the activation, and never walked back
 //
-// A container's name and purpose are the chart's, and every node derives them
-// from its own rows separately — at its reconcile tick and again at every
-// boot. So the settings carry the POSITION on the chart's log they were
-// derived from, and a write whose position is OLDER than the one the row
-// already holds decides nothing: a node whose chart applier is behind leaves
-// the newer names alone, where it used to rewrite every container back to its
-// own. One at the SAME position with the same settings decides nothing either,
-// which is what makes the call free after the first node; one at the same
-// position with DIFFERENT settings is written, because that is a row an
-// equal-position race left wrong and the chart that is actually current is
-// what sets it right. A POSITION AND NOT A CLOCK, for the reason
-// [tracker.Project.ChartPosition] gives: two nodes derive the same settings
-// from the same rows, and what tells the one that is behind is its cursor,
-// never which of them wrote last. A zero position is refused
-// ([ErrNoChartPosition]): there is no honest default, and a caller that has
-// applied no chart has none to derive from.
+// A container's name and purpose are the chart's, and every node applies one
+// activation separately — at its reconcile tick and again at every boot. So
+// the settings carry the ACTIVATION they came from
+// ([configplane.ActivationStamp]), and a write whose activation is OLDER than
+// the one the row already holds decides nothing: a node applying a revision
+// the fleet has since replaced leaves the newer names alone, where it used to
+// rewrite every container back to its own. One at the SAME activation with the
+// same settings decides nothing either, which is what makes the call free
+// after the first node; one at the same activation with DIFFERENT settings is
+// written, because that is a row an equal-epoch race left wrong and the
+// activation that is actually current is what sets it right. The ACTIVATION's
+// instant and never the applying node's own clock, for the reason
+// [tracker.Writer.ApplyChart] gives. A zero instant is refused
+// ([ErrNoActivation]): there is no honest default, and a caller holding no
+// activation has no chart to derive from.
 //
-// A LATER POSITION OVER UNCHANGED SETTINGS IS WRITTEN TOO — a re-stamp —
-// because a row left at the older position is open to any chart between the
-// two. It carries the stamp, so it goes out at the version that reads it like
-// every container record ([versionedFields] says why a re-stamp is not
+// A LATER ACTIVATION OVER UNCHANGED SETTINGS IS WRITTEN TOO — a re-stamp —
+// because a row left at the older activation is open to any activation between
+// the two. It carries the stamp, so it goes out at the version that reads it
+// like every container record ([versionedFields] says why a re-stamp is not
 // exempt): a node that cannot read the stamp holds the record back, with the
 // page writes in that space, rather than applying the settings without it.
 //
 // A FRESH OPERATION PER CALL, on the reasoning [tracker.Writer.ApplyChart]
 // gives for its own: this is a reconcile decided from the row, so a second
 // call — on another node, at the next boot, after a lost acknowledgement —
-// finds its value there, and N nodes racing one chart position are settled by the
+// finds its value there, and N nodes racing one activation are settled by the
 // broker's arbitration. An outcome that is `unknown` is an error, because the
 // next apply is what retries it and the caller is the one that says so.
-func (s *Store) EnsureContainer(ctx context.Context, chartAt int64,
+func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
 	key, name, purpose string) (Container, bool, error) {
 
 	key = ContainerKey(key)
 	switch {
 	case key == "":
 		return Container{}, false, invalid("container", "a container needs a key")
-	case chartAt <= 0:
-		return Container{}, false, fmt.Errorf("%w (container %s)", ErrNoChartPosition, key)
+	case activatedAt.IsZero():
+		return Container{}, false, fmt.Errorf("%w (container %s)", ErrNoActivation, key)
 	}
+	epoch := configplane.ActivationStamp(activatedAt)
 	at := s.now()
 	opID := s.newSeqID()
 	subject := ContainerSubject(key)
@@ -710,7 +710,7 @@ func (s *Store) EnsureContainer(ctx context.Context, chartAt int64,
 			// round says what this call did.
 			changed = false
 			out = Container{V: DocumentVersion, Key: key, Name: name,
-				Purpose: purpose, ChartPosition: chartAt, CreatedAt: at}
+				Purpose: purpose, ChartEpoch: epoch, CreatedAt: at}
 			var document []byte
 			err := tx.QueryRowContext(ctx,
 				`SELECT document FROM pages_containers WHERE key = ?`, key).
@@ -726,15 +726,14 @@ func (s *Store) EnsureContainer(ctx context.Context, chartAt int64,
 					return statelog.Decision{}, err
 				}
 				switch {
-				case held.ChartPosition > chartAt:
-					// A LATER CHART ALREADY WON. Two nodes at two
-					// positions on the chart's log is ordinary — one
-					// applier is behind the other — and the newer one
-					// must not be walked back by the older node's own
-					// apply arriving second.
+				case held.ChartEpoch > epoch:
+					// A LATER CHART ALREADY WON. Two nodes applying
+					// two revisions is ordinary during a rollout, and
+					// the newer one must not be walked back by the
+					// older node's own apply arriving second.
 					out = held
 					return statelog.Decision{}, nil
-				case held.ChartPosition == chartAt && held.Name == name &&
+				case held.ChartEpoch == epoch && held.Name == name &&
 					held.Purpose == purpose:
 					// UNCHANGED IS A NO-OP. This runs on every boot
 					// for every unit's space, and a record per boot
@@ -746,7 +745,7 @@ func (s *Store) EnsureContainer(ctx context.Context, chartAt int64,
 				out.CreatedAt = held.CreatedAt
 			}
 			changed = true
-			// A LATER POSITION OVER THE SAME SETTINGS IS STILL WRITTEN,
+			// A LATER ACTIVATION OVER THE SAME SETTINGS IS STILL WRITTEN,
 			// stamp and all — a re-stamp — and it goes out at the version
 			// that carries the stamp like every other container record
 			// ([versionedFields]): a node that applied it without the
@@ -755,7 +754,7 @@ func (s *Store) EnsureContainer(ctx context.Context, chartAt int64,
 				subject, OpPatch, ScopeSet{Subject: true}, opID,
 				ContainerPayload{
 					V: DocumentVersion, Key: key, Name: name, Purpose: purpose,
-					ChartPosition: chartAt,
+					ChartEpoch: epoch,
 				}, nil, at)
 		},
 	})
@@ -770,11 +769,10 @@ func (s *Store) EnsureContainer(ctx context.Context, chartAt int64,
 	return out, changed, nil
 }
 
-// ErrNoChartPosition refuses a container write that does not name the
-// position on the org chart's log its settings were derived from. See
-// [Store.EnsureContainer].
-var ErrNoChartPosition = errors.New("pages: a container's settings must name the " +
-	"position on the org chart's log they were derived from")
+// ErrNoActivation refuses a container write that does not name the activation
+// its settings came from. See [Store.EnsureContainer].
+var ErrNoActivation = errors.New("pages: a container's settings must name the " +
+	"instant their configuration was activated")
 
 // patchOf turns a save into a record's payload and reports what changed.
 //

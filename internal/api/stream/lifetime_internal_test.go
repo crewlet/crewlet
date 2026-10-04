@@ -556,10 +556,10 @@ func TestAnEndTheGuardStillServesIsDecidedAgain(t *testing.T) {
 //
 // The org chart a seat binding resolves through may have moved — a seat
 // removed under the person bound to it, turned over to an agent, renamed — and
-// nothing on the identity log says so. Every hire, chart edit and apply
-// publishes a company, so deciding every socket by the guard there would be an
-// identity read per open tab on each: the socket is decided against the
-// company just published instead. A seat this socket saw that company hold and
+// nothing on the identity log says so. Every apply — a hire or any other edit
+// of the org chart among them — publishes a company, so deciding every socket
+// by the guard there would be an identity read per open tab on each: the
+// socket is decided against the company just published instead. A seat this socket saw that company hold and
 // no longer a human seat is what the guard refuses `seat_unavailable` (4403);
 // a seat that answers to another handle now, or one the socket never saw the
 // published company hold, is the handshake's to resolve (1013). The control is

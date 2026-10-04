@@ -448,13 +448,11 @@ finishes on the tool surface it started with, and its next turn renders the new
 one, the same next-turn promise [tool skills](../concepts/tool-skills.md),
 embeddings and the org chart make.
 
-**A per-role `mcp_env` edit takes effect on the next turn too, and it is not a
-config apply at all.** A seat's `mcp_env` is content on the
-[org chart's own log](../concepts/chart-domain.md), so changing one publishes a
-company without any revision in it — and the node holding that seat reconciles
-its children in place, as the `seat_tools` step of
+**A per-role `mcp_env` edit takes effect on the next turn too.** Changing a
+seat's `mcp_env` is a configuration write like any other, and the node holding
+that seat reconciles its children in place on the apply, as the `seat_tools` step of
 [the convergence](../concepts/configuration.md#what-follows-a-published-company):
-a server the chart no longer declares for the seat is retired, one it now
+a server the revision no longer declares for the seat is retired, one it now
 declares is started, and one it still declares is neither stopped nor
 restarted, so the credential re-handshake a restart would cost is paid only by
 what actually changed. The seat keeps its lease throughout. A change to a

@@ -5,20 +5,20 @@
 //
 // # Why one package, and not a copy per surface
 //
-// Three surfaces take a key — `/chart`, `/iam` and the human write surface
-// (`/work`, `/pages`) — and a script retrying a write on this engine is one
+// Two surfaces take a key — `/iam` and the human write surface (`/work`,
+// `/pages`) — and a script retrying a write on this engine is one
 // script whichever of them it wrote to: an `unknown` answer carries the key,
 // and the route accepts it back under the same header, held to the same
 // grammar and refused with the same code. Each surface carried its own copy of
-// all three, and of the request digest `/chart` and `/iam` bind a key to, and
-// the copies said in their comments that they matched one another, which
-// nothing checked. A rule a retry depends on is one rule.
+// all three, and of the request digest `/iam` binds a key to, and the copies
+// said in their comments that they matched one another, which nothing
+// checked. A rule a retry depends on is one rule.
 //
 // # What it is not
 //
 // It decides nothing about WHICH id a write is published under beyond the
-// binding: that is each surface's — `/chart` and `/iam` step the key by the
-// verb and [Digest] ([statelog.StepOpID]); the human write surface and the
+// binding: that is each surface's — `/iam` steps the key by the verb and
+// [Digest] ([statelog.StepOpID]); the human write surface and the
 // operator surface's act route derive one id per write they make from the
 // key, the verb, the object and the arguments — because what a write is about
 // is the surface's own vocabulary.
@@ -195,7 +195,7 @@ func Refuse(w http.ResponseWriter, err error) {
 // first landed.
 //
 // THE RETRY IS PART OF THE KEY'S RULE, so it is said here rather than by each
-// surface: /chart, /iam and the human write surface each wrote both sentences
+// surface: /iam and the human write surface each wrote both sentences
 // for themselves, and the copies had drifted — "the SAME operation id" beside
 // "the SAME key", and one surface putting the unvouched sentence after the
 // ordinary one as though both were true. The field that tells an unknown from

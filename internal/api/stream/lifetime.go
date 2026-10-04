@@ -238,8 +238,7 @@ func (a *asking) context(ctx context.Context) context.Context {
 
 // SeatState is what a published company says about a seat.
 type SeatState struct {
-	// Origin is the handle the seat was created under — its identity,
-	// which the chart never issues to another seat.
+	// Origin is the handle the seat was created under — its identity.
 	Origin string
 
 	// Handle is the handle it answers to now.

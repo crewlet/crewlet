@@ -476,8 +476,8 @@ type APISession struct {
 	//
 	// ONE WINDOW OVER EVERY SENSITIVE GESTURE — revealing a secret,
 	// changing somebody's authority or how they prove who they are, ending
-	// every session in the company, writing the configuration, the chart
-	// or the credential store — as GitHub's sudo mode applies one window
+	// every session in the company, writing the configuration or the
+	// credential store — as GitHub's sudo mode applies one window
 	// to all of its sensitive actions. An hour keeps the stricter end of
 	// that practice. A second, shorter window for some of the gestures was
 	// tried and went: it sent an administrator who had proved half an hour

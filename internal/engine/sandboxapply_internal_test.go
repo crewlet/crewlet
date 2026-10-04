@@ -63,7 +63,7 @@ func TestAFirstCompanyWithASandboxBringsTheCoordinatorUpWithoutARestart(t *testi
 	// company at all: its recovery is part of what the apply has to bring.
 	seedRunningRun(t, e, "wk-before", "box-1")
 
-	status, applied, err := e.Apply(t.Context(), parseCompany(t, sandboxDoc("")))
+	status, applied, err := e.Apply(t.Context(), parseCompany(t, sandboxDoc("")), time.Now())
 	if err != nil || status != configplane.StatusOK {
 		t.Fatalf("Apply = (%s, %v, %v), want ok", status, applied, err)
 	}
@@ -297,7 +297,7 @@ roles:
       enabled: true
       run_in: e2b
 `
-	status, applied, err := e.Apply(t.Context(), parseCompany(t, broken))
+	status, applied, err := e.Apply(t.Context(), parseCompany(t, broken), time.Now())
 	if err == nil || status != configplane.StatusError {
 		t.Fatalf("Apply = (%s, %v, %v), want a refusal", status, applied, err)
 	}
@@ -417,7 +417,7 @@ func parseCompany(t *testing.T, doc string) *config.Company {
 // went through.
 func applyOK(t *testing.T, e *Engine, doc string) []string {
 	t.Helper()
-	status, applied, err := e.Apply(t.Context(), parseCompany(t, doc))
+	status, applied, err := e.Apply(t.Context(), parseCompany(t, doc), time.Now())
 	if err != nil || status != configplane.StatusOK {
 		t.Fatalf("Apply = (%s, %v, %v), want ok", status, applied, err)
 	}

@@ -51,8 +51,7 @@ var errNoDirectory = errors.New("engine: this engine holds no identity " +
 //
 // # Three answers
 //
-//   - A row the credential ACTS THROUGH: `Found`, with the seat handle and the
-//     chart position the binding was decided at.
+//   - A row the credential ACTS THROUGH: `Found`, with the seat handle.
 //   - NO SUCH BINDING, which is the zero row and no error — the ordinary state
 //     of every Tier A token on a fresh estate: an operator rather than a
 //     colleague.
@@ -153,7 +152,7 @@ func boundRowOf(ctx context.Context, dir bindingDirectory, login string) (
 	// credential the configuration pinned.
 	return session.PersonRow{
 		Found: true, Stage: seen.Stage, Login: seen.Login,
-		Seat: seen.Seat, SeatAt: seen.SeatAt,
+		Seat: seen.Seat,
 	}, nil
 }
 

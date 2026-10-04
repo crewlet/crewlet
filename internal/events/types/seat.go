@@ -20,7 +20,7 @@ import (
 // `…_by_kind` (iam.ActorKind's vocabulary: agent, human, operator, system) and
 // the `operator_id` the gesture came through (`pat:<id>`, `session:<lineage>`,
 // or the login where the principal is its own credential). The same three
-// facts every tracker, page and chart record carries, under the same names, so
+// facts every tracker and page record carries, under the same names, so
 // a feed row about a pause and the history row of the work it held up cannot
 // name two different people.
 

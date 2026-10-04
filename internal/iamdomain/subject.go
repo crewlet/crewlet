@@ -1,7 +1,7 @@
 // Package iamdomain is the company's own identity estate — people, the
 // addresses and logins they are known by, the credentials they hold, the
 // invitations that enrolled them and the sessions they are signed in with — as
-// the state-log framework's FIFTH domain and its fourth STRICT one.
+// the state-log framework's FOURTH domain and its third STRICT one.
 //
 // internal/iam stays the VALUES LEAF it was built as: a principal, its kind
 // and the grants it carries, importable from config, the tool layer and the
@@ -63,14 +63,13 @@
 // and every reading of them ([Reader.SeatHolders], [Reader.SeatBindings], the
 // notify registry's standing, the request path's seat table, the
 // dangling-binding rule) — names the seat by the handle it was
-// CREATED under: `chart.Seat.Origin`, the same anchor ADR-0026 derives the
-// agent id from, which no rename moves and the chart never issues twice.
+// CREATED under: [org.Role.Origin], the same anchor ADR-0026 derives the
+// agent id from, which no rename moves.
 //
-// An administrator names a seat by any address it answers to; the bind
-// resolves that address through the chart's own resolution and claims the
-// identity it names ([Writer.seatIdentity]). Every reader turns the identity
-// back into a seat through the chart's IDENTITY lookup and never by comparing
-// it to a handle. Keyed on the handle typed at the time, a rename made one seat
+// An administrator names a seat by its handle; the bind resolves it through
+// the running organisation and claims the identity it names
+// ([Writer.seatOf]). Every reader turns the identity back into a seat through
+// [org.Role.Origin] and never by comparing it to a handle. Keyed on the handle typed at the time, a rename made one seat
 // claimable twice (two subjects that never contend), a removal's tombstone
 // under the old handle withheld the seat's next holder for ever, and a new seat
 // that took the freed handle inherited somebody else's suspension.
@@ -88,10 +87,9 @@ import (
 // ObjectKind is what a subject on the iam log addresses.
 //
 // A NAMED STRING TYPE whose Valid is false for a kind this build has never
-// heard of — and the literal is RETAINED either way, for the reason
-// [chart.ObjectKind] gives: a newer peer publishes a kind this build does not
-// know, and the deferral this build files it under is reported to an operator
-// with that literal in it.
+// heard of — and the literal is RETAINED either way: a newer peer publishes a
+// kind this build does not know, and the deferral this build files it under is
+// reported to an operator with that literal in it.
 type ObjectKind string
 
 // The ten kinds.
@@ -145,24 +143,16 @@ const (
 	KindLogin ObjectKind = "login"
 
 	// KindSeat is a claim binding one person to one SEAT, by the seat's
-	// HANDLE.
-	//
-	// BY THE HANDLE because there is nothing else to bind to: `chart_seats`
-	// is keyed on it and stores no derived id, so a binding to a UUIDv5 the
-	// chart never wrote down would resolve to nothing on every node. A
-	// rename is survived the way every other written-down reference to a
-	// seat survives one — through the chart's `former_keys_json`, whose own
-	// doc states the residue: a former handle goes on resolving until
-	// something else claims it, and then the claimant wins.
+	// identity — see the package doc.
 	//
 	// The claim is on the SEAT rather than on the person because that is
 	// the side that must be exclusive: one seat is held by at most one
 	// person, and two administrators binding two people to one seat have
 	// to contend. A person holding no seat is ordinary, and a person
-	// holding a seat that the chart has since removed is a LEGAL named
-	// state the session layer answers with a 403 naming the seat — not a
-	// state this domain can prevent, because the chart is a different log
-	// and a read of it guarantees nothing.
+	// holding a seat that the running company has since removed is a LEGAL
+	// named state the session layer answers with a 403 naming the seat —
+	// not a state this domain can prevent, because the company document is
+	// applied apart from this log and a read of it guarantees nothing.
 	KindSeat ObjectKind = "seat"
 
 	// KindSession is one signed-in session's whole life, by its LINEAGE:

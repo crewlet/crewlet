@@ -129,12 +129,11 @@ var errNoCore = errors.New("engine: the native tracker and knowledge base run " 
 // without waiting for hydration: seat acquisition is what waits, through
 // [Engine.StateLogHydrated].
 //
-// IT DOES NOT APPLY THE CHART. The projects and containers a chart names
-// follow a PUBLISHED company, at the position on the chart's log its view was
-// composed at ([Company.ChartAt]), through [Engine.convergeOn] — which both
-// callers reach once they have composed one. Applying it here as well would
-// write every project and container twice on a node's first company, and
-// from a chart no view has read yet.
+// IT DOES NOT APPLY THE CHART. The projects and containers a company's org
+// names follow a PUBLISHED company, stamped with the instant its revision was
+// activated, through [Engine.followCompany] — which both callers reach once
+// they have installed one. Applying it here as well would write every project
+// and container twice on a node's first company.
 //
 // The store and the fleet are not nil-checked: [New] refuses a Backends
 // without either, so every engine that reaches this holds both.
@@ -716,10 +715,10 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 	}
 	// THE PROJECTS AND THE CONTAINERS ARE NOT RECONCILED HERE. They are
 	// derived from the org CHART rather than from the parsers this function
-	// swaps, so they follow every published company and not just an
-	// activation — [Engine.convergeOn] is where they run, after the pointer
-	// moves. Running them here as well would write them twice per apply and
-	// once against a company that is not current yet.
+	// swaps, so they follow the published company — [Engine.followCompany]
+	// is where they run, after the publish. Running them here as well would
+	// write them twice per apply and once against a company that is not
+	// current yet.
 }
 
 // applyContainers makes the knowledge containers this company names exist.
@@ -750,20 +749,17 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 // writes into them itself, and a container the engine writes into and cannot
 // list is the same defect one layer in.
 //
-// # Stamped with the CHART'S POSITION, on the chart's terms
+// # Stamped with the ACTIVATION, on the chart's terms
 //
-// c.ChartAt is the position on the org chart's own log this company was
-// composed at, and every container is stamped with it exactly as
+// c.ActivatedAt is the instant the revision this company was applied from was
+// activated, and every container is stamped with it exactly as
 // [Engine.applyChart] stamps a project — for the same two reasons: a node
-// whose chart applier is behind must not rewrite the containers' names and
-// purposes back to its own older view, and a reapply at one position must
-// write nothing. A POSITION AND NOT A CLOCK, because two nodes derive the same
-// settings from the same rows and what tells the one that is behind is its
-// cursor, never which of them wrote last. A company composed at no position —
-// one no chart record has reached yet — has nothing to stamp, and the store
-// refuses a zero ([pages.ErrNoChartPosition]); so it is not applied here, and
-// the publish that first carries a chart position is. See
-// [pages.Store.EnsureContainer].
+// applying an older revision late must not rewrite the containers' names and
+// purposes back to its own older view, and a reapply of one activation must
+// write nothing. A company no activation has named yet has nothing to stamp,
+// and the store refuses a zero ([pages.ErrNoActivation]); so it is not applied
+// here, and the reconciler's first apply — which carries the pointer's instant
+// — is. See [pages.Store.EnsureContainer].
 //
 // # Best effort, and idempotent
 //
@@ -771,16 +767,16 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 // explains: this is one clause of a convergence and the rest of it stands
 // without it. Running on every published company is free after the first,
 // because EnsureContainer decides nothing when the row it finds already says
-// what the chart says at this position — which is the guard its own doc was
-// written around.
+// what the company says at this activation — which is the guard its own doc
+// was written around.
 func (e *Engine) applyContainers(ctx context.Context, c *Company) {
 	store := e.PagesStore()
-	if store == nil || c == nil || c.ChartAt <= 0 {
+	if store == nil || c == nil || c.ActivatedAt.IsZero() {
 		return
 	}
 	var wrote []string
 	for _, want := range chartContainers(c) {
-		_, changed, err := store.EnsureContainer(ctx, c.ChartAt,
+		_, changed, err := store.EnsureContainer(ctx, c.ActivatedAt,
 			want.Key, want.Name, want.Purpose)
 		if err != nil {
 			// EVERY CONTAINER IS ATTEMPTED. One key's refusal must not
@@ -878,24 +874,25 @@ func chartContainers(c *Company) []chartContainer {
 // filing immediately. A reconcile that only ran at boot would leave every one
 // of those refused with "project X is not on this node" until somebody
 // restarted the fleet — a failure whose remedy is invisible from the message.
-// A unit is a CHART object, so the publish that carries a new one is usually a
-// chart write and not an apply at all: this runs from the convergence every
-// published company goes through ([Engine.convergeOn]).
+// This runs from the steps every published company goes through
+// ([Engine.followCompany]), at boot and on every apply.
 //
 // After the first node has done it every later pass is one local read per
 // project: the decide compares the three chart-owned fields against the row
 // and says nothing when they match, so the losers of the broker's arbitration
-// and every later publish of the same chart state write nothing.
+// and every later publish of the same company write nothing.
 //
-// # Stamped with the CHART'S POSITION
+// # Stamped with the ACTIVATION
 //
-// c.ChartAt is the position on the org chart's own log this company was
-// composed at, and it is what every project is stamped with
-// ([tracker.Project.ChartPosition]): a node whose chart applier is behind
-// derives an older view, and its pass must not walk the fleet's newer project
-// names back to its own. A position orders the chart without a clock — two
-// nodes deriving from the same rows derive the same values, and only the
-// cursor says which of them is behind.
+// c.ActivatedAt is the instant the revision this company was applied from was
+// activated, and it is what every project is stamped with
+// ([tracker.Project.ChartEpoch]): a node applying an older revision late must
+// not walk the fleet's newer project names back to its own. The activation's
+// instant and never this node's clock, because every node applies one
+// activation separately and only the instant on the pointer is the same on all
+// of them. A company no activation has named yet — a Tier B file a node booted
+// with — applies nothing here; the reconciler's first apply carries the
+// pointer's instant and applies it then.
 //
 // # Best effort, and what that costs
 //
@@ -905,14 +902,14 @@ func chartContainers(c *Company) []chartContainer {
 // did not land, and the next apply or the next boot retries them.
 func (e *Engine) applyChart(ctx context.Context, c *Company) {
 	writer := e.TrackerWriter()
-	if writer == nil || c == nil || c.Org == nil {
+	if writer == nil || c == nil || c.Org == nil || c.ActivatedAt.IsZero() {
 		return
 	}
 	chart := chartProjects(c.Org)
 	if len(chart) == 0 {
 		return
 	}
-	wrote, err := writer.ApplyChart(ctx, c.ChartAt, chart)
+	wrote, err := writer.ApplyChart(ctx, c.ActivatedAt, chart)
 	if err != nil {
 		log.ErrorContext(ctx, "tracker_chart_not_applied",
 			"error", err.Error(), "wrote", wrote,

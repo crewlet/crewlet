@@ -339,7 +339,7 @@ func TestAStoppedEngineAppliesNothing(t *testing.T) {
 	}
 	e.Stop(context.Background())
 
-	if _, _, err := e.Apply(t.Context(), scheduledCompany(t)); err == nil {
+	if _, _, err := e.Apply(t.Context(), scheduledCompany(t), time.Now()); err == nil {
 		t.Fatal("a stopped engine applied a revision")
 	}
 	if e.Company() != nil {
@@ -628,7 +628,7 @@ func TestADrainRefusesAnApplyBeforeTheTeardownDoes(t *testing.T) {
 	}
 	// SERVING FIRST, so the refusal below is the drain's and not a node
 	// that was never able to apply.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc), time.Now()); err != nil {
 		t.Fatalf("an apply on a serving node was refused: %v", err)
 	}
 
@@ -641,7 +641,7 @@ func TestADrainRefusesAnApplyBeforeTheTeardownDoes(t *testing.T) {
 		t.Fatalf("the drain closed the broker, so this case is not testing "+
 			"what it claims: %v", err)
 	}
-	if _, _, err := e.Apply(context.Background(), parsedCompany(t, companyDoc)); err == nil {
+	if _, _, err := e.Apply(context.Background(), parsedCompany(t, companyDoc), time.Now()); err == nil {
 		t.Error("a drained node applied a revision: the apply gate is on the " +
 			"teardown rather than on the drain, so the reconcile tick can " +
 			"re-arm everything the drain is handing back")
@@ -787,7 +787,7 @@ func TestAnEngineRunsUnconfigured(t *testing.T) {
 func TestAnUnconfiguredEngineTakesItsFirstEpoch(t *testing.T) {
 	t.Parallel()
 	e := unconfiguredEngine(t)
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc), time.Now()); err != nil {
 		t.Fatalf("the first apply onto an unconfigured node failed: %v", err)
 	}
 	company := e.Company()
@@ -813,10 +813,10 @@ func TestAnUnconfiguredEngineTakesItsFirstEpoch(t *testing.T) {
 //
 // The rule was a cross-tier one, asked of the company a node booted with or
 // was handed — so a node started with NONE passed it, and it runs the core
-// runtime from boot: the org chart the builder writes and the identity estate
-// its first person is invited into, on logs its first restart emptied. The
-// vendor pairing is the second row because it is the case the rule before that
-// one missed: a company on Jira and Confluence still has an org chart.
+// runtime from boot: the identity estate its first person is invited into, on
+// a log its first restart emptied. The vendor pairing is the second row
+// because it is the case the rule before that one missed: a company on Jira
+// and Confluence keeps no tracker or pages log, and still keeps its people.
 //
 // Mutation: ask the stream only when there is a company, and the first row
 // builds an engine; move the question below OpenBackends, and the store file
@@ -844,7 +844,7 @@ func TestANodeOnAnInMemoryStreamIsRefusedAtBoot(t *testing.T) {
 				t.Fatal("a node booted on an in-memory stream — its first " +
 					"restart recreates every log it runs empty")
 			}
-			for _, want := range []string{"stream.store_dir", "org chart", "identity estate"} {
+			for _, want := range []string{"stream.store_dir", "identity estate"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the refusal does not say %q: %v", want, err)
 				}

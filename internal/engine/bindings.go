@@ -17,31 +17,24 @@ import (
 
 // A SEAT BINDING THAT DANGLES, and the one rule that says so.
 //
-// # Two logs, and the residue they leave
+// # The residue a bind leaves
 //
-// A person's binding lives on the IDENTITY log and the seat it names on the
-// CHART's. Two streams, two appliers, two arbitration anchors — so a bind and a
-// seat's removal can each pass their own decide and both land, and a node can
-// apply a bind before the hire it names. The design states the residue rather
-// than claiming the boundary does the work, and it names two:
-//
-//   - SETTLED: the seat is tombstoned, is not a human seat, or is absent from a
-//     chart that has seen everything the bind saw. Nothing clears it but a
-//     record — an unbind, or a bind to another seat.
-//   - NOT YET: the seat is absent from a chart that has not applied as far as
-//     the binding. It clears when this node's chart applier catches up.
-//
-// Both are LEGAL — neither is corruption — and both are reported: by `crewlet
-// iam check` and `GET /iam/check` (`binding_dangling`, with the seat and which
-// residue it is), and, once one has outlived the race that makes it, by the
-// `iam_binding_dangling` alarm.
+// A person's binding lives on the IDENTITY log and the seat it names in the
+// company this node is running. A bind checks the seat against the running org
+// when it is made, and that check is ADVISORY: the org can drop the seat
+// afterwards, and a revision applied elsewhere first is one this node has not
+// seen. The residue — a binding to a seat the running company does not hold as
+// a human seat — is LEGAL rather than corruption, and nothing clears it but a
+// record: an unbind, or a bind to another seat. It is reported by `crewlet iam
+// check` and `GET /iam/check` (`binding_dangling`, naming the seat) and, once
+// it has outlived the race that makes it, by the `iam_binding_dangling` alarm.
 //
 // # Why the rule is the REQUEST PATH's own table
 //
 // [session.ResolveSeat] is what decides, per request, whether a signed-in
 // person is served, refused 403 naming their seat, or held off 503 — and a
-// binding is dangling exactly when that table would refuse or hold them for
-// want of the seat. A second predicate written here ("does the chart hold this
+// binding is dangling exactly when that table would refuse them for want of the
+// seat. A second predicate written here ("does the chart hold this
 // handle") is how the report came to miss a binding to an AGENT seat: it asked
 // whether the row existed, the request path asks whether it is a human seat,
 // and a person the request path refused on every call was one the report said
@@ -64,30 +57,24 @@ import (
 // # Why a heartbeat can afford it
 //
 // An observation reads nothing that has not moved. A residue is a function of
-// this node's identity rows and its chart rows and nothing else, and each has
-// an applier position that moves whenever a row does — so a beat on which
-// neither position moved re-reads nothing and extends what the last one found.
-// When one did move, the bindings are one read over the bound people rather
-// than a walk of the directory, and a binding is re-classified against the
-// chart only when it, or the chart, changed since it was last classified.
-// The chart moving is the rare case — an org-chart edit — and the identity
-// log moving is the common one, since every sign-in is a record on it: that
-// arm costs one indexed read and no chart read at all.
+// this node's identity rows and the organisation it runs and nothing else: the
+// first has an applier position that moves whenever a row does and the second
+// a version that moves whenever an epoch is published — so a beat on which
+// neither moved re-reads nothing and extends what the last one found. When one
+// did move, the bindings are one read over the bound people rather than a walk
+// of the directory, and a binding is re-classified only when it, or the
+// organisation, changed since it was last classified. The organisation moving
+// is the rare case — an applied revision — and the identity log moving is the
+// common one, since every sign-in is a record on it: that arm costs one indexed
+// read and no seat lookup at all.
 
-// BindingResidue is one person whose seat binding this node's chart view does
-// not hold as a human seat.
+// BindingResidue is one person whose seat binding the company this node runs
+// does not hold as a human seat.
 type BindingResidue struct {
 	// Person is the directory id, Login the name the dashboard prints and
 	// Seat the seat their row names, by its IDENTITY — the handle it was
 	// created under (ADR-0027).
 	Person, Login, Seat string
-
-	// Settled is the first residue — removed, tombstoned or not a human
-	// seat, on a chart that has seen everything the bind saw — against the
-	// second, a chart this node has not applied as far as the binding.
-	// Two arms because they have two remedies: somebody has to write the
-	// first one's record, and the second clears itself.
-	Settled bool
 
 	// Detail is the sentence every surface prints: which seat, why, and
 	// what to do.
@@ -108,26 +95,25 @@ func (r BindingResidue) key() string { return r.Person + "\x00" + r.Seat }
 const bindingProbeBudget = 2 * time.Second
 
 // errSeatUnknown is the unknown arm when the resolver has no read failure of
-// its own to name: a chart applier past the stall grace, or a node with no
-// chart view at all.
-var errSeatUnknown = errors.New("engine: this node's org chart cannot say " +
-	"whether that seat exists")
+// its own to name: a node running no company at all.
+var errSeatUnknown = errors.New("engine: this node runs no company, so it " +
+	"cannot say whether that seat exists")
 
-// DanglingBinding classifies one person's seat binding against this node's
-// own chart view.
+// DanglingBinding classifies one person's seat binding against the company this
+// node runs.
 //
 // THREE-VALUED: dangling, not dangling, or an error when this node cannot tell
-// — a chart applier past the stall grace, an unreadable view, a node running
-// no chart domain. Every caller skips the third rather than guessing, because
-// reporting a binding as dangling on a node that could not read the chart
-// sends an administrator to unbind somebody whose seat is perfectly there.
+// — it runs no company yet, or the lookup failed. Every caller skips the third
+// rather than guessing, because reporting a binding as dangling on a node that
+// could not say sends an administrator to unbind somebody whose seat is
+// perfectly there.
 func (e *Engine) DanglingBinding(ctx context.Context, row iamdomain.PersonRow) (
 	BindingResidue, bool, error) {
 
 	return danglingBinding(ctx, SeatViewOf(e), row.Binding())
 }
 
-// danglingBinding is the rule, over any chart view.
+// danglingBinding is the rule, over any organisation.
 func danglingBinding(ctx context.Context, chart session.Chart, b iamdomain.SeatBinding) (
 	BindingResidue, bool, error) {
 
@@ -140,18 +126,12 @@ func danglingBinding(ctx context.Context, chart session.Chart, b iamdomain.SeatB
 	ctx, cancel := context.WithTimeout(ctx, bindingProbeBudget)
 	defer cancel()
 	binding := session.ResolveSeat(ctx, chart, session.PersonRow{
-		Found: true, Stage: b.Stage, Seat: b.Seat, SeatAt: b.SeatAt,
+		Found: true, Stage: b.Stage, Seat: b.Seat,
 	})
 	switch binding.Row {
 	case session.SeatRowGone:
-		residue.Settled = true
 		residue.Detail = binding.Detail + "; unbind them, or bind them to " +
 			"another seat"
-		return residue, true, nil
-	case session.SeatRowBehind:
-		residue.Detail = binding.Detail + "; it clears when this node's chart " +
-			"applier reaches the binding, and if it does not, that applier " +
-			"is what to look at"
 		return residue, true, nil
 	case session.SeatRowStalled:
 		cause := binding.Err
@@ -178,34 +158,48 @@ type bindingSighting struct {
 
 	// unknown are the residues' keys this classification could not settle.
 	// They are neither dangling nor clear, and the clock treats them as
-	// neither: a residue that was dangling before a chart stall is still
+	// neither: a residue that was dangling before a failed lookup is still
 	// dangling after it unless something said otherwise.
 	unknown map[string]bool
 }
 
 // classified is one binding's last classification, and what it was taken
 // against — so an observation re-classifies a binding only when the binding or
-// the chart moved.
+// the organisation moved.
 type classified struct {
 	binding  iamdomain.SeatBinding
-	chartAt  uint64
+	orgAt    uint64
 	residue  BindingResidue
 	dangling bool
+}
+
+// seatOrg is what the watch classifies against: the session seam over the
+// organisation this node runs, and which organisation that is.
+//
+// THE VERSION IS THE WATCH'S OWN NEED, so it is declared here rather than
+// widening [session.Chart], whose only caller per request has no use for it.
+type seatOrg interface {
+	session.Chart
+
+	// Version names the organisation Seat answers from: two equal
+	// versions answer every seat alike, so a classification taken at one
+	// still holds at the other. An error is a node that cannot say.
+	Version(ctx context.Context) (uint64, error)
 }
 
 // bindingWatch is how long each dangling binding has persisted on this node.
 //
 // PER NODE AND IN MEMORY, which is the honest answer to "who has to agree on
-// it": the chart half of a residue is this node's own applier's position, so
-// two nodes legitimately disagree about a hire one of them has not applied,
-// and the age is this node's observation of its own state. Losing it at a
+// it": the seat half of a residue is the organisation this node has applied,
+// so two nodes legitimately disagree about a revision one of them has not
+// applied yet, and the age is this node's observation of its own state. Losing it at a
 // restart costs one grace of re-observation, which is the price of never
 // claiming a persistence this process did not see.
 type bindingWatch struct {
-	// dir and chart are this node's directory and chart view. A nil dir
-	// is an engine with no core runtime, which observes nothing.
-	dir   bindingSource
-	chart session.Chart
+	// dir and org are this node's directory and the organisation it runs.
+	// A nil dir is an engine with no core runtime, which observes nothing.
+	dir bindingSource
+	org seatOrg
 
 	mu sync.Mutex
 	// first is when each residue was first found, carried across
@@ -217,12 +211,11 @@ type bindingWatch struct {
 	seen  []BindingResidue
 	known bool
 
-	// dirAt and chartAt are the two positions the latest classification
-	// was taken at, and unsettled marks one that could not classify
-	// every binding — which the next beat re-reads whether or not
-	// anything moved.
+	// dirAt and orgAt are what the latest classification was taken at,
+	// and unsettled marks one that could not classify every binding —
+	// which the next beat re-reads whether or not anything moved.
 	dirAt     statelog.Position
-	chartAt   uint64
+	orgAt     uint64
 	unsettled bool
 	// classes is each binding's last classification, by person.
 	classes map[string]classified
@@ -249,29 +242,29 @@ func newBindingWatch(e *Engine) *bindingWatch {
 	return newWatchOver(dir, SeatViewOf(e))
 }
 
-// newWatchOver is a watch over any directory and chart view.
-func newWatchOver(dir bindingSource, chart session.Chart) *bindingWatch {
-	return &bindingWatch{dir: dir, chart: chart, first: map[string]time.Time{},
+// newWatchOver is a watch over any directory and organisation.
+func newWatchOver(dir bindingSource, org seatOrg) *bindingWatch {
+	return &bindingWatch{dir: dir, org: org, first: map[string]time.Time{},
 		classes: map[string]classified{}, logger: log}
 }
 
 // observe takes one observation of this node's bindings at now.
 //
-// NOTHING MOVED IS NOTHING TO READ: when neither the identity applier nor the
-// chart applier has committed since the last classification, and that one
-// settled every binding, the residues are exactly what they were, and the
-// observation extends them to now. The positions are read BEFORE the bindings,
-// so they are a floor under what the read saw: a record landing between the
-// two is one the next beat re-reads for.
+// NOTHING MOVED IS NOTHING TO READ: when the identity applier has committed
+// nothing and no epoch was published since the last classification, and that
+// one settled every binding, the residues are exactly what they were, and the
+// observation extends them to now. The two are read BEFORE the bindings, so
+// they are a floor under what the read saw: a record landing between the two is
+// one the next beat re-reads for.
 func (w *bindingWatch) observe(ctx context.Context, now time.Time) {
 	if w == nil || w.dir == nil {
 		return
 	}
 	dirAt := w.dir.At()
-	chartAt, _, chartErr := w.chart.Position(ctx)
+	orgAt, orgErr := w.org.Version(ctx)
 	w.mu.Lock()
-	quiet := w.known && !w.unsettled && chartErr == nil &&
-		dirAt == w.dirAt && chartAt == w.chartAt
+	quiet := w.known && !w.unsettled && orgErr == nil &&
+		dirAt == w.dirAt && orgAt == w.orgAt
 	if quiet {
 		w.at = now
 		w.mu.Unlock()
@@ -297,25 +290,25 @@ func (w *bindingWatch) observe(ctx context.Context, now time.Time) {
 		return
 	}
 	w.walkRecovered(ctx, now)
-	sighting, classes, settled := classify(ctx, w.chart, bindings, previous,
-		chartAt, chartErr == nil)
-	w.record(now, sighting, classes, dirAt, chartAt, !settled || chartErr != nil)
+	sighting, classes, settled := classify(ctx, w.org, bindings, previous,
+		orgAt, orgErr == nil)
+	w.record(now, sighting, classes, dirAt, orgAt, !settled || orgErr != nil)
 }
 
 // classify settles every binding, re-using a classification whose binding and
-// chart position have not moved since it was taken.
+// organisation have not moved since it was taken.
 //
-// A binding whose seat the chart cannot judge is left out of the cache, so the
+// A binding whose seat could not be judged is left out of the cache, so the
 // next observation asks again; settled reports whether there was none.
 func classify(ctx context.Context, chart session.Chart, bindings []iamdomain.SeatBinding,
-	previous map[string]classified, chartAt uint64, chartKnown bool) (
+	previous map[string]classified, orgAt uint64, orgKnown bool) (
 	bindingSighting, map[string]classified, bool) {
 
 	out := bindingSighting{unknown: map[string]bool{}}
 	classes := make(map[string]classified, len(bindings))
 	settled := true
 	for _, b := range bindings {
-		if c, ok := previous[b.Person]; ok && chartKnown && c.chartAt == chartAt &&
+		if c, ok := previous[b.Person]; ok && orgKnown && c.orgAt == orgAt &&
 			c.binding == b {
 			classes[b.Person] = c
 			if c.dangling {
@@ -329,8 +322,8 @@ func classify(ctx context.Context, chart session.Chart, bindings []iamdomain.Sea
 			settled = false
 			continue
 		}
-		if chartKnown {
-			classes[b.Person] = classified{binding: b, chartAt: chartAt,
+		if orgKnown {
+			classes[b.Person] = classified{binding: b, orgAt: orgAt,
 				residue: residue, dangling: dangling}
 		}
 		if dangling {
@@ -342,13 +335,13 @@ func classify(ctx context.Context, chart session.Chart, bindings []iamdomain.Sea
 
 // record folds one classification into the clocks.
 //
-// A RESIDUE THE CHART COULD NOT JUDGE THIS TIME STAYS A RESIDUE if it was one
-// before: the chart stalling says nothing about the binding, and dropping it
-// would clear a firing alarm on the stall and raise it again a beat after the
-// applier recovered — two transitions on every surface for a state that never
+// A RESIDUE THAT COULD NOT BE JUDGED THIS TIME STAYS A RESIDUE if it was one
+// before: a failed lookup says nothing about the binding, and dropping it would
+// clear a firing alarm on the failure and raise it again a beat after the
+// lookup recovered — two transitions on every surface for a state that never
 // changed.
 func (w *bindingWatch) record(now time.Time, s bindingSighting,
-	classes map[string]classified, dirAt statelog.Position, chartAt uint64,
+	classes map[string]classified, dirAt statelog.Position, orgAt uint64,
 	unsettled bool) {
 
 	w.mu.Lock()
@@ -377,7 +370,7 @@ func (w *bindingWatch) record(now time.Time, s bindingSighting,
 	// starts a new clock rather than firing at once on an age it did not
 	// have.
 	w.first, w.at, w.seen, w.known = next, now, residues, true
-	w.classes, w.dirAt, w.chartAt, w.unsettled = classes, dirAt, chartAt, unsettled
+	w.classes, w.dirAt, w.orgAt, w.unsettled = classes, dirAt, orgAt, unsettled
 }
 
 // walkFailed notes a beat whose read of the bindings failed, and says so only

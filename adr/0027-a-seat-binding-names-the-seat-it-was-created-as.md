@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/iamdomain`
-- **Enforced-by:** `internal/iamdomain.TestASeatIsBoundByTheHandleItWasCreatedUnder`, `internal/notify.TestABindingFollowsItsSeatAndNeverTheAddressItWasMadeWith`
+- **Enforced-by:** `internal/notify.TestABindingFollowsItsSeatAndNeverTheAddressItWasMadeWith`
 - **Cost-when-tried:** keyed on the handle typed at the bind, a rename made one seat claimable a second time under its new handle (two subjects that never contend, so two people acted as one seat); a removal's tombstone under the handle the leaver held withheld the seat's next holder for ever, because the bind that should have ended its say stamped only tombstones naming the new handle; and a new seat created on the freed handle inherited a suspended stranger's withholding while the renamed seat routed its suspended holder's accounts.
 - **Tag-status:** unreleased
 

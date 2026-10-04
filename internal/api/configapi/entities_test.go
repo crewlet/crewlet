@@ -28,20 +28,28 @@ func entityOf(t *testing.T, s *surface, kind, id string) map[string]any {
 }
 
 // EVERY ADDRESSABLE COLLECTION IS LISTABLE, in a stable order, so a client
-// can discover what is there rather than carrying its own copy of the list.
+// can discover what is there rather than carrying its own copy of the list —
+// and a seat inside a unit is a seat: an operator editing "the CTO" does not
+// think about which list it happens to live in, and a surface that only saw
+// root-level roles would make every real org chart's seats unreachable.
 func TestEveryEntityCollectionListsWhatTheDocumentCarries(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	s.seed(t, entityDoc)
+	org := newSurface(t)
+	org.seed(t, orgDoc)
 
 	for _, tc := range []struct {
+		on   *surface
 		kind string
 		want []string
 	}{
-		{configapi.EntityLLMProviders, []string{"yankee", "zulu"}},
-		{configapi.EntityMCPServers, []string{"notion", "tracker"}},
+		{s, configapi.EntityLLMProviders, []string{"yankee", "zulu"}},
+		{s, configapi.EntityMCPServers, []string{"notion", "tracker"}},
+		{org, configapi.EntityRoles, []string{"ceo", "cto", "staff-eng"}},
+		{org, configapi.EntityUnits, []string{"engineering", "platform-team"}},
 	} {
-		got, err := s.service().Entities(t.Context(), tc.kind)
+		got, err := tc.on.service().Entities(t.Context(), tc.kind)
 		if err != nil {
 			t.Fatalf("Entities(%s): %v", tc.kind, err)
 		}
@@ -190,11 +198,8 @@ func TestAnEntityWriteRestoresWhatTheReadMasked(t *testing.T) {
 // A per-entity surface exists so that an operator does not have to send back
 // the rest of the document. That is also what makes this rule load bearing:
 // they cannot see the rest, so nothing in what they sent tells them the write
-// will leave the company unrunnable. It used to be shown with a SEAT naming a
-// missing provider, which is the same rule one field along — but every
-// cross-block reference this document still has runs through a seat, and seats
-// are the chart's now. So the break is seeded instead, in the half a revision
-// still holds: a delegate template naming a provider nobody configures.
+// will leave the company unrunnable. The break is seeded where the write never
+// looks: a delegate template naming a provider nobody configures.
 func TestAnEntityWriteThatBreaksTheCompanyIsRefused(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -226,8 +231,9 @@ func TestAnEntityWriteThatBreaksTheCompanyIsRefused(t *testing.T) {
 
 // AN ID NOBODY CARRIES IS NOT CREATED BY A PLAIN PUT. One naming an entity
 // that is not there is far more often a typo than an intent to add one; the
-// intent is said with `If-None-Match: *` (entity_create_test.go). A seat is
-// the org chart's and is not addressed here at all.
+// intent is said with `If-None-Match: *` (entity_create_test.go). A seat or a
+// unit has no create by address at all: its place is not something its path
+// can name, so it is `not_creatable`.
 func TestAnEntityWriteNeverCreates(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -274,12 +280,11 @@ func TestAnEntityWriteNeedsASummary(t *testing.T) {
 // — a *routing* answer rather than a handler that 404s or, worse, one that
 // quietly succeeds having done nothing.
 //
-// Removal is not an entity verb on purpose: deleting a provider silently
-// repoints every seat whose model chain named it, and deleting a server leaves
-// every `mcp_env` block keyed on it read by nothing — and those chains and
-// blocks are the org chart's, which no write here can see. It belongs in the
-// company file, where both halves are edited and validated together; a seat or
-// a unit is removed through the chart's own routes.
+// Removal is a full-document edit on purpose: deleting a seat strands its
+// mailbox and its in-flight work, deleting a provider silently repoints every
+// seat whose model chain named it, and deleting a server leaves every
+// `mcp_env` block keyed on it read by nothing. Each belongs in a document
+// somebody looked at.
 // docs/guides/configure-via-api.md states this status code, which is why it is
 // asserted rather than assumed.
 func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
@@ -317,8 +322,8 @@ func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
 // member and leave its neighbour exactly as it was, and a fixture with one of
 // each cannot tell "edited the right one" from "edited the only one".
 //
-// NO ROLES AND NO UNITS: they are the org chart's, and this surface does not
-// address them at all (see chartdoor_test.go).
+// NO ROLES AND NO UNITS: seats and units have their own fixture (orgDoc, in
+// seatentity_test.go).
 const entityDoc = `
 name: Acme
 providers:
@@ -388,11 +393,10 @@ func TestAnEntityWriteNeverRenames(t *testing.T) {
 			if !strings.Contains(res.Body.String(), tc.id) {
 				t.Errorf("the refusal does not name %q: %s", tc.id, res.Body.String())
 			}
-			// AND IT SAYS WHERE A RENAME CAN BE MADE. Most of what names a
-			// server is the org chart's, which no write to /config can see,
-			// so a refusal pointing at PUT /config would send the caller to
-			// a rename that strands every `mcp_env` block just the same.
-			if !strings.Contains(res.Body.String(), "crewlet config import") {
+			// AND IT SAYS WHERE A RENAME CAN BE MADE: the whole document,
+			// where everything that names the entity — a seat's `mcp_env`
+			// block, a model chain — is visible and moves with it.
+			if !strings.Contains(res.Body.String(), "PUT /config") {
 				t.Errorf("the refusal does not say where a rename can be made: %s",
 					res.Body.String())
 			}

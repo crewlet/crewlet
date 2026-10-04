@@ -96,8 +96,8 @@ const (
 	// name and purpose, a seat's goal and responsibilities. Whoever leads
 	// that object, or the COMPANY's grant, which is this class's admin
 	// path rather than the deployment's ([chartAdminGrant]). The
-	// relations authority is derived from and the runtime half are the
-	// company's grant, whoever leads it, and are asked separately
+	// relations authority is derived from and a seat's runtime settings
+	// are the company's grant, whoever leads it, and are asked separately
 	// ([ActionChartContent]).
 	//
 	// ITS OWN CLASS RATHER THAN [ClassContainer], because the chart holds
@@ -110,7 +110,7 @@ const (
 	// else, refusing the lead of that very unit with no error to notice.
 	//
 	// It reads the object's KIND to pick the relation, which is why a
-	// chart route states one: a unit names itself in [Object.Container]
+	// caller states one: a unit names itself in [Object.Container]
 	// and a seat in [Object.Owner].
 	ClassChartObject Class = "chart_object"
 

@@ -1163,17 +1163,11 @@ type Project struct {
 	Purpose string `json:"purpose,omitempty"`
 	Unit    string `json:"unit,omitempty"`
 
-	// ChartPosition is the packed position on the ORG CHART's log of the
-	// state the three fields above were last derived from.
-	//
-	// A POSITION AND NOT A CLOCK. Its only job is to let the node that is
-	// BEHIND recognise that it is behind: two nodes derive the same chart
-	// from the same rows, so when their derivations disagree the one with
-	// the lower cursor is the one holding the older chart, and this is the
-	// number that says which. A wall clock cannot answer that — it says
-	// which node wrote last, which during a rollout is routinely the node
-	// with the older view.
-	ChartPosition int64 `json:"chart_position,omitempty"`
+	// ChartEpoch is the activation the chart-owned fields were last
+	// written from ([configplane.ActivationStamp]) — the guard that stops
+	// an older configuration, applied late on another node, walking a
+	// newer one back.
+	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 
 	Fields          []FieldDef `json:"fields,omitempty"`
 	DefaultAssignee string     `json:"default_assignee,omitempty" person:"seat"`

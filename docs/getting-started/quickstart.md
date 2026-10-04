@@ -51,11 +51,12 @@ stream:
                           #   listener, no port, no service to operate
   store_dir: "./acme-data/stream"   # REQUIRED. Leave it empty and the
                           #   stream is in-memory, so nothing published
-                          #   survives a restart — including this company's
-                          #   own org chart, which every company keeps on a
-                          #   state log whatever backends it names, and its
-                          #   items and pages, which are on the engine's own
-                          #   tracker and knowledge base here. The engine
+                          #   survives a restart — including the people
+                          #   who sign in, whom every node keeps on a
+                          #   state log whatever backends the company
+                          #   names, and its items and pages, which are on
+                          #   the engine's own tracker and knowledge base
+                          #   here. The engine
                           #   REFUSES to boot without one rather than lose
                           #   them at the first restart
 
@@ -153,6 +154,7 @@ roles:
   # reached through the dashboard only, and agents cannot @-mention you on
   # chat; scope `manages` to the top seat so you aren't copied on everything.
   - name: Your Name
+    handle: founder             # see the note under this block — set these now
     kind: human
     manages: [ceo]              # BY HANDLE. A `manages:` entry names a seat by
                                 # its handle and a unit by its key — never by a
@@ -163,7 +165,7 @@ roles:
       mattermost_user_id: "${MATTERMOST_FOUNDER_USERNAME}"   # your chat username
 
   - name: CEO
-    handle: ceo                 # see the note under this block — set these now
+    handle: ceo
     goal: "Set product vision, prioritize initiatives, and make final calls"
     backstory: "Experienced founder who balances speed with quality"
     manages: [cto, pm]
@@ -228,9 +230,16 @@ units:
 > the chart above resolves. So changing a handle, *or the company `name`*,
 > mints a new id and orphans that seat's diary, onboarding markers and
 > counterparty profiles. It keeps working, but it has lost its memory.
-> Leaving `handle` unset auto-derives it from the role name, which ties the id
-> to a label you may well rename later. A seat's `name` is display and is
-> referenced by nothing, so renaming one is free. See
+> A seat that leaves `handle` unset gets one derived from its `name`, and
+> every write stores it — so an edit of the *stored* company (the org
+> builder, `PATCH /config`, the per-entity routes) keeps it when a name is
+> corrected. A *file* does not: every import of one (`crewlet config import`,
+> `crewlet run -import-company`) mints a missing handle afresh from the name
+> the file holds, so correcting a name in a file
+> that leaves the handle out replaces the seat. Declare `handle` on every
+> seat, and `id` on every unit, in any file you keep. With its handle
+> declared, a seat's `name` is display and referenced by nothing, so renaming
+> one is free. See
 > [Agent Runtime](../concepts/agent-runtime.md#seat-definition-and-the-runner).
 
 ### LLM options
@@ -341,9 +350,8 @@ crewlet budgets show     # every scope's day, week and month, spent and capped
 ```
 
 There is no reset: a window's allowance comes back when it turns over, and
-room before then is made by raising its ceiling — the company's through
-`/config`, a seat's through its org chart runtime, which is where
-`crewlet config import` puts a seat's `token_budget` (see
+room before then is made by raising its ceiling through `/config` — a seat's
+with `PUT /config/roles/{handle}` (see
 [Budgets and spend](../guides/budgets-and-spend.md#budget-windows)).
 
 ## 3. Run it
@@ -382,17 +390,6 @@ When you do want the file to win, that is a different flag:
 whatever the fleet is running. And to change a **running** fleet with no
 restart at all, use `crewlet config import company.yaml` — it goes through the
 node's API and every node converges on it.
-
-The two `run` flags write the file's **settings**. A company file also carries
-the org chart — its `roles:` and `units:` — and that is a domain of its own,
-with its own records and its own history (see
-[The org chart domain](../concepts/chart-domain.md)). A node seeds its chart
-from the file only while the chart is empty; after that the chart belongs to
-whoever edits it, and a restart leaves it alone, `-import-company` included.
-`crewlet config import` is the one gesture that writes **both** halves:
-through a running node it stores the settings as a new revision and publishes
-the file's whole org chart over the one there, and against a stopped node's
-store it stages the chart for that node's next start.
 
 A running node always serves the store, not the file.
 
@@ -469,13 +466,12 @@ how it is drawn: a board, a table, a calendar or a timeline over the same rows.
 **Bind your token to your seat** and the personal screens become yours. The
 binding lives in the engine's identity directory rather than in either config
 file: your token acts under the login `token:founder`, so enrol that login as a
-machine and bind it to the human seat above (`your-name`, the handle derived
-from `name: Your Name`):
+machine and bind it to the human seat above by its handle, `founder`:
 
 ```bash
 export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"   # what `crewlet iam` authenticates with
 crewlet iam create -kind machine -login token:founder   # prints the new row's id
-crewlet iam bind <that id> your-name
+crewlet iam bind <that id> founder
 ```
 
 Both commands take `people:manage`, which is why the token above carries it.
@@ -525,7 +521,7 @@ carries `people:manage`, which issuing takes — and prints its link **once**:
 
 ```bash
 export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
-crewlet iam invite you@example.com -seat your-name \
+crewlet iam invite you@example.com -seat founder \
   -grants state:read,audit:read,config:read,config:write,work:write,knowledge:write,people:manage
 ```
 
@@ -633,10 +629,9 @@ that posture and why it could not simply be defaulted the other way.
 
 If you skipped the import, `crewlet run` boots in the **unconfigured** state
 with the API still serving — you can then bootstrap live without restarting.
-An unconfigured node is not an idle one: its org chart and its identity
-estate run from boot, so the invitation above works before any company
-exists, you can sign in on it, and the dashboard's builder can write the
-company's units and seats. The work tracker's and the knowledge base's routes
+An unconfigured node is not an idle one: its identity estate runs from boot,
+so the invitation above works before any company exists and you can sign in
+on it. The work tracker's and the knowledge base's routes
 answer `503 no_active_revision` until the first revision arrives. That
 revision brings up everything the company needs, the engine's own tracker and
 knowledge base included, with their projects and spaces, and the
@@ -648,22 +643,18 @@ export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
 crewlet config import company.yaml
 ```
 
-The engine holds its store, so the command goes through the node's API and
-divides the file there: the settings as the company's first revision, then the
-org chart through `/chart`. A `PUT /config` of the file itself is refused with
-`400 chart_not_writable_here`, because that surface writes the settings alone;
-a script driving the API directly sends it the file without `roles:` and
-`units:`, and writes the chart through the chart's own routes
-([Configure via the API](../guides/configure-via-api.md)).
+The engine holds its store, so the command goes through the node's API: a
+`PUT /config` of the whole file, which stores it as the company's first
+revision and activates it fleet-wide — exactly what a script driving the API
+directly sends ([Configure via the API](../guides/configure-via-api.md)).
 
 Or create the company from the dashboard: open **Agents** and its **Edit
 org** button (`#/agents/edit`). With no configuration active it opens on a
 form that starts the company from a template, has the engine check it, and
-creates it: the settings with `PUT /config`, then the org chart through
-`/chart`. The builder reads and writes both, so it needs a session whose grants
-reach them: the one you signed in with using `$CREWLET_API_TOKEN_FOUNDER`
-carries the `state:read`, `config:read` and `config:write` it uses, and the
-`fleet:operate` a removal takes as well, and a person you invite needs them
+creates it with `PUT /config`. The builder reads and writes the company
+document, so it needs a session whose grants reach it: the one you signed in
+with using `$CREWLET_API_TOKEN_FOUNDER` carries the `state:read`,
+`config:read` and `config:write` it uses, and a person you invite needs them
 among their grants. The dashboard adds no model provider — Settings › Models &
 keys edits one the configuration already declares — so one step stays outside
 it. Until it is done the company runs and no agent seat takes a turn; whatever
@@ -704,7 +695,7 @@ Automating a deployment means driving `crewlet` and the REST API:
 
 ```bash
 crewlet validate                       # check both tiers in CI
-crewlet config import company.yaml     # write the settings and the org chart
+crewlet config import company.yaml     # store and activate the company
 crewlet run                            # start the node
 ```
 

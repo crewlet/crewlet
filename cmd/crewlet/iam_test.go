@@ -228,8 +228,8 @@ func TestStrippingGrantsIsSpeltAndNotImplied(t *testing.T) {
 
 // A DIRECTORY NOBODY COULD CHECK IS NOT A CLEAN ONE.
 //
-// A node whose chart applier has stalled cannot say whether a bound person's
-// seat exists, and the report counts those rather than guessing. Printing
+// A node running no company yet cannot say whether a bound person's seat
+// exists, and the report counts those rather than guessing. Printing
 // "nothing to report" over that count would tell an operator the directory is
 // clean during exactly the stall that hides a dangling binding.
 func TestAnUncheckedBindingIsSaidBeforeNothingToReport(t *testing.T) {

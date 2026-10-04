@@ -33,11 +33,11 @@ import (
 // # What it is for
 //
 // The authority rules are each tested where they live — the registry's grant
-// check, the guard's resolution, the chart surface's own split. What no one of
-// them covers is the COMPOSITION: a request travels the CORS gate, the guard,
-// the CSRF gate, the drain gate and the route's own rule, and a hole is
-// something that opens between two of them rather than inside either. Every
-// case here goes through api.App, the way a caller does.
+// check, the guard's resolution, the configuration surface's own grants. What
+// no one of them covers is the COMPOSITION: a request travels the CORS gate,
+// the guard, the CSRF gate, the drain gate and the route's own rule, and a
+// hole is something that opens between two of them rather than inside
+// either. Every case here goes through api.App, the way a caller does.
 //
 // And the hole this matrix did not see is the reason it grew. The deployment's
 // own controls — the budget reset, the backup, the retention and capacity
@@ -211,7 +211,7 @@ func TestThePostureMatrix(t *testing.T) {
 	//
 	// THE QUESTION SURFACE carries one route per read grant, because it is
 	// the one place every read class is reachable through one mount.
-	// `/config`, `/setup` and `/chart` have their own suites for their own
+	// `/config` and `/setup` have their own suites for their own
 	// rules; /secrets is here whole because it is cheap to stand up for
 	// real, and the deployment's controls are here whole because nothing
 	// else composes them.
@@ -400,10 +400,6 @@ type postureNoSeats struct{}
 
 func (postureNoSeats) Seat(context.Context, string) (session.Seat, bool, error) {
 	return session.Seat{}, false, nil
-}
-
-func (postureNoSeats) Position(context.Context) (uint64, time.Duration, error) {
-	return 1, 0, nil
 }
 
 // postureSecrets is the real /secrets surface over a memory fleet, so the

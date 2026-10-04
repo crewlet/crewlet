@@ -115,9 +115,9 @@ type Part struct {
 // Concatenating every part's Text gives the value back byte for byte, and no
 // two literal runs are adjacent: what is between two references is ONE run.
 // It is the grammar [Expand] substitutes by, so a caller that rewrites the
-// literal half of a value — the org chart sealing it into the secret store —
-// leaves every reference exactly where the resolver will find it, and
-// expanding the rewritten value gives what expanding the original gave.
+// literal half of a value leaves every reference exactly where the resolver
+// will find it, and expanding the rewritten value gives what expanding the
+// original gave.
 func Split(value string) []Part {
 	var out []Part
 	at := 0

@@ -108,11 +108,9 @@ type PersonRow struct {
 	Login  string
 	Grants []iam.Grant
 
-	// Seat is the seat handle this person is bound to, and SeatAt the
-	// chart position that binding was decided at. seat.go is what they
-	// are for.
-	Seat   string
-	SeatAt uint64
+	// Seat is the seat handle this person is bound to. seat.go is what it
+	// is for.
+	Seat string
 }
 
 // Row is which row of the session table a bearer landed on.
@@ -201,8 +199,8 @@ const (
 	// NeedWrite is anything that changes state.
 	NeedWrite Need = "write"
 
-	// NeedStepUp is a step-up surface: /config, /chart's writes, /setup,
-	// /secrets, /iam and the fleet write routes.
+	// NeedStepUp is a step-up surface: /config, /setup, /secrets, /iam and
+	// the fleet write routes.
 	NeedStepUp Need = "step_up"
 )
 

@@ -10,11 +10,11 @@ import (
 
 // companySource is the company seam over an AUTHORED document.
 //
-// A running node composes its org from the chart's own rows; a test holds a
-// file, so the org a fixture answers with is the one that document describes.
-// BOTH HALVES COME FROM ONE CALL, which is the contract the seam states: they
-// move on different rhythms in production, so a fixture that read them
-// separately would not be exercising the shape the engine has.
+// The org a fixture answers with is the one that document describes, built as
+// a running node builds it when it applies a revision. BOTH COME FROM ONE
+// CALL, which is the contract the seam states: two reads in production can
+// straddle a publish, so a fixture that read them separately would not be
+// exercising the shape the engine has.
 func companySource(t *testing.T, c *config.Company) func() (*config.Company, *org.Organization) {
 	t.Helper()
 	return func() (*config.Company, *org.Organization) {

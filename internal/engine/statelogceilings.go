@@ -67,8 +67,7 @@ type domainCeiling struct {
 	// to a smaller ceiling" can reach. Declared by the register entry
 	// beside Field, because the floor is the FIELD's (Tier A validates
 	// it) and not the budget's: [MinDomainCeiling] is where scaling stops,
-	// and the org chart's, the identity log's and the usage log's fields go
-	// well below it.
+	// and the identity log's and the usage log's fields go well below it.
 	// A refusal that offered a smaller ceiling only above that gibibyte
 	// never offered one for a 512 MiB ask whose field takes 64 MiB.
 	Floor int64
@@ -99,8 +98,8 @@ const StreamBudgetShare = 0.5
 // CORPUS-SIZED logs' fields — the tracker's, the vector changelog's and the
 // knowledge base's — because below it a log that grows with a corpus is not a
 // log, it is a window that refuses appends within a week of a company starting
-// work. It is where SCALING stops and it is nobody's floor but theirs: the org
-// chart's, the identity estate's and the usage log's fields go down to 64 MiB,
+// work. It is where SCALING stops and it is nobody's floor but theirs: the
+// identity estate's and the usage log's fields go down to 64 MiB,
 // a log that asks for less than this keeps what it asked for because scaling
 // never raises, and the capacity verb holds a target to the floor of the log's
 // own field ([capacityBounds]), never to this.
@@ -548,8 +547,8 @@ func (s *stateLog) ceilingFor(domain statelog.Domain) (domainCeiling, error) {
 // smaller one costs. A set ceiling is the operator's. A derived one followed
 // the volume's free space and was scaled into the logs' share of the broker,
 // and scaling stops at [MinDomainCeiling]. A fixed one is the log's own
-// default — the org chart's and the identity estate's, which follow neither
-// the volume nor the gibibyte and sit below it. Reading every unset ceiling as
+// default — the identity estate's and the usage log's, which do not follow the
+// volume and whose fields go below the gibibyte. Reading every unset ceiling as
 // derived told an operator refused a 512 MiB identity log that it went no
 // lower than a gibibyte, and withheld the smaller ceiling its field accepts.
 //

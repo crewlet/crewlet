@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -62,12 +61,11 @@ const (
 // PUBLIC on /health, like every probe — an orchestrator has no credential, so
 // the route is on the guard's exemption list — while the push goes only to a
 // socket whose principal holds `state:read` (stream.KindHealth's grant). The
-// probe is the wider audience and this body is shaped for it: the fleet, the
-// alarm table and the continuous report appear here as COUNTS — how many
-// nodes, how many alarms and the one longest unanswered, how many findings of
-// each kind — and never as their rows: which nodes hold what, what each alarm
-// measured and what each finding says are the `fleet`, `work_retention` and
-// `/chart/check` answers, each behind its own grant.
+// probe is the wider audience and this body is shaped for it: the fleet and
+// the alarm table appear here as COUNTS — how many nodes, how many alarms and
+// the one longest unanswered — and never as their rows: which nodes hold what
+// and what each alarm measured are the `fleet` and `work_retention` answers,
+// each behind its own grant.
 type Health struct {
 	Status string `json:"status"`
 
@@ -133,20 +131,6 @@ type Health struct {
 	// restart rather than only afterwards in the exit code.
 	StallLagSeconds *float64 `json:"stall_lag_seconds,omitempty"`
 
-	// Consistency is the continuous report over the two halves of a
-	// running company: the chart this node holds and the settings epoch it
-	// has applied. See internal/api/chartapi's report.go for what it
-	// evaluates and why nothing can refuse these at a write.
-	//
-	// IT DOES NOT MOVE Status, and that is a decision rather than an
-	// omission. Status answers "should this process be serving", which a
-	// load balancer reads; a company referencing a provider somebody
-	// deleted is a company with a problem and not a node with one, and
-	// taking a node out of rotation over a configuration typo would turn
-	// one broken seat into an outage. The number is here to be watched,
-	// and /chart/check is where it is read.
-	Consistency Consistency `json:"consistency"`
-
 	// UnprovenSeconds maps each seat stranded by a teardown that could not
 	// be proven to how long it has been stranded, present only when one is.
 	// It is the number an alert reads: see [RuntimeState.Unproven]. It was
@@ -162,10 +146,9 @@ type Health struct {
 	// ABSENT where the API was given no [Identity] seam — a suite about
 	// something else. `crewlet run` always wires it, over the identity
 	// estate every node applies from boot, company or none, so a node with
-	// no company answers for the fleet's estate. Like
-	// [Health.Consistency], IT DOES NOT MOVE Status — a company
-	// waiting for its first person is not a node that should leave
-	// rotation.
+	// no company answers for the fleet's estate. IT DOES NOT MOVE Status
+	// — a company waiting for its first person is not a node that should
+	// leave rotation.
 	Identity string `json:"identity,omitempty"`
 
 	// Nodes is how many nodes hold a presence lease: the fleet this node's
@@ -187,39 +170,6 @@ type Health struct {
 	// that missed a node started those screens a node short, and this is
 	// the only place that says so after the log line scrolled away.
 	SeededFrom *eventfan.Coverage `json:"seeded_from,omitempty"`
-}
-
-// Consistency is the continuous report, summarised for a body that is read
-// every few seconds.
-//
-// THE COUNTS AND NOT THE FINDINGS. A health body is polled by probes, pushed
-// to every connected dashboard on a timer, and kept in logs; the findings
-// carry a sentence and a remedy each and belong on the one surface somebody
-// opened to read them. What a gauge needs is a number that moves and a name
-// for what moved.
-type Consistency struct {
-	// Evaluated is false when this node could not evaluate — it holds no
-	// chart view, or has applied no settings epoch. ABSENT EVIDENCE IS NOT
-	// A CLEAN BILL: `findings: 0` from a node that read nothing is the
-	// most misleading answer this body could carry, so a reader checks
-	// this before the count.
-	Evaluated bool `json:"evaluated"`
-
-	// Findings is how many things are wrong, and Worst the highest
-	// severity among them — absent when nothing is.
-	Findings int    `json:"findings"`
-	Worst    string `json:"worst,omitempty"`
-
-	// Counts is how many of each kind, so a reader watching the number
-	// climb can say WHICH class grew without opening another surface.
-	Counts map[string]int `json:"counts,omitempty"`
-
-	// Unchecked is how many human seats this node could not ask the
-	// identity directory about, so `seat_unheld` was left undecided for
-	// them — [chartapi.Report.Unchecked], carried here for the reason
-	// Evaluated is: a count of findings that silently excluded them would
-	// read as a clean bill. Absent at zero.
-	Unchecked int `json:"unchecked,omitempty"`
 }
 
 // HealthAlarms is the alarm table as a public health body can carry it: how
@@ -327,7 +277,6 @@ func (a *App) health(ctx context.Context) Health {
 	for name, every := range state.IdentityDuties {
 		body.IdentityDutySeconds[name] = every.Seconds()
 	}
-	body.Consistency = consistencyOf(a.report(ctx))
 	a.identityOf(ctx, &body)
 	if state.StallLag > 0 {
 		// Only when there is something to say. A field that is always
@@ -388,42 +337,6 @@ func (a *App) identityOf(ctx context.Context, body *Health) {
 	default:
 		body.Identity = IdentityUnclaimed
 	}
-}
-
-// consistencyOf summarises one evaluation for the health body.
-func consistencyOf(got chartapi.Report) Consistency {
-	out := Consistency{
-		Evaluated: got.Evaluated,
-		Findings:  len(got.Findings),
-		Worst:     string(got.Worst()),
-		Unchecked: got.Unchecked,
-	}
-	if len(got.Counts) > 0 {
-		out.Counts = make(map[string]int, len(got.Counts))
-		for kind, n := range got.Counts {
-			out.Counts[string(kind)] = n
-		}
-	}
-	return out
-}
-
-// report is the ONE evaluation every surface here renders.
-//
-// A METHOD ON THE APP rather than a value computed at boot, because both
-// halves change while the process runs: a chart record lands and a settings
-// epoch is applied, independently. A cached report would be a claim about a
-// company that no longer exists, and the evaluation is a walk over rows this
-// node already holds in memory.
-func (a *App) report(ctx context.Context) chartapi.Report {
-	if a.company == nil {
-		return chartapi.Report{}
-	}
-	settings, view := a.company()
-	// THE SAME SEAM THE /chart/check ROUTE USES, so a gauge on /health and
-	// the screen that renders the report can never disagree about whether
-	// a seat is held — which is the whole reason one evaluation feeds
-	// every surface.
-	return chartapi.Evaluate(ctx, view, settings, a.seatHeld, a.resolve)
 }
 
 // tickReadBudget bounds a read done for a push tick rather than a request.

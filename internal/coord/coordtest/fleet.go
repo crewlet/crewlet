@@ -2260,9 +2260,6 @@ var secretCases = []fleetCase{{
 		if _, err := h.f.DeleteSecret(h.ctx, ""); err == nil {
 			h.t.Fatal("deleting an empty name was accepted")
 		}
-		if _, err := h.f.DeleteSecretAt(h.ctx, "", 1); err == nil {
-			h.t.Fatal("a conditional delete of an empty name was accepted")
-		}
 	},
 }, {
 	// A CREATE IS THE FIRST WRITER'S. Two nodes minting the company's
@@ -2384,44 +2381,6 @@ var secretCases = []fleetCase{{
 		}
 		if _, found := h.secret("GITLAB_TOKEN"); found {
 			h.t.Fatal("an update at version zero created the row")
-		}
-	},
-}, {
-	// A CONDITIONAL DELETE SPARES A ROW WRITTEN AFTER IT WAS JUDGED. The
-	// org chart's sweep deletes a sealed value nothing names on the
-	// strength of a census, and a chart write that re-sealed the same field
-	// since has written it again: deleted anyway, a row that names it
-	// resolves to nothing.
-	name: "a conditional delete removes only the version it was given",
-	fn: func(h *fleetHarness) {
-		h.putSecret("CHART_SEAT_ANA_EMAIL_0123456789", "v1:minted", "key-1")
-		judged, _ := h.secret("CHART_SEAT_ANA_EMAIL_0123456789")
-		h.putSecret("CHART_SEAT_ANA_EMAIL_0123456789", "v1:minted", "key-1")
-		removed, err := h.f.DeleteSecretAt(h.ctx, "CHART_SEAT_ANA_EMAIL_0123456789", judged.Version)
-		if err != nil || removed {
-			h.t.Fatalf("a delete at a version the row moved past = (%v, %v), "+
-				"want it refused", removed, err)
-		}
-		if _, found := h.secret("CHART_SEAT_ANA_EMAIL_0123456789"); !found {
-			h.t.Fatal("a refused conditional delete removed the row")
-		}
-		if removed, err = h.f.DeleteSecretAt(h.ctx, "CHART_SEAT_ANA_EMAIL_0123456789", 0); err != nil || removed {
-			h.t.Fatalf("a delete at version zero = (%v, %v), want nothing removed",
-				removed, err)
-		}
-		current, _ := h.secret("CHART_SEAT_ANA_EMAIL_0123456789")
-		removed, err = h.f.DeleteSecretAt(h.ctx, "CHART_SEAT_ANA_EMAIL_0123456789", current.Version)
-		if err != nil || !removed {
-			h.t.Fatalf("a delete at the current version = (%v, %v), want it "+
-				"removed", removed, err)
-		}
-		if _, found := h.secret("CHART_SEAT_ANA_EMAIL_0123456789"); found {
-			h.t.Fatal("the conditional delete reported success and the row survived")
-		}
-		again, err := h.f.DeleteSecretAt(h.ctx, "CHART_SEAT_ANA_EMAIL_0123456789", current.Version)
-		if err != nil || again {
-			h.t.Fatalf("a second conditional delete = (%v, %v), want nothing "+
-				"there", again, err)
 		}
 	},
 }}

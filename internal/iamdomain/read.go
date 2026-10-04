@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -61,10 +60,9 @@ type ReaderOptions struct {
 	// DB is the replicated estate. REQUIRED.
 	DB *store.DB
 
-	// Log is this domain's read authority. REQUIRED, for the reason
-	// internal/chart's reader states: without it every read level is a
-	// label rather than a guarantee, and a degradation invisible in the
-	// answer is worse than a refusal.
+	// Log is this domain's read authority. REQUIRED: without it every read
+	// level is a label rather than a guarantee, and a degradation invisible
+	// in the answer is worse than a refusal.
 	Log *statelog.Reader
 
 	// Committed is this node's applied position and Lag how far behind the
@@ -330,13 +328,12 @@ func readPersonRow(ctx context.Context, tx *sql.Tx, person string,
 	}
 	var (
 		kind, stage, login, seat string
-		chartPosition            int64
 		document                 []byte
 	)
 	err := tx.QueryRowContext(ctx, `
-		SELECT kind, stage, login, seat_id, chart_position, document
+		SELECT kind, stage, login, seat_id, document
 		  FROM iam_people WHERE id = ?`, person).
-		Scan(&kind, &stage, &login, &seat, &chartPosition, &document)
+		Scan(&kind, &stage, &login, &seat, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
@@ -371,7 +368,6 @@ func readPersonRow(ctx context.Context, tx *sql.Tx, person string,
 	out.Login = login
 	out.Grants = doc.Grants
 	out.Seat = seat
-	out.SeatAt = uint64(chartPosition)
 	return nil
 }
 
@@ -485,13 +481,12 @@ func readTokenOwner(ctx context.Context, tx *sql.Tx, id string,
 
 	var (
 		stage, login, seat string
-		chartPosition      int64
 		document           []byte
 	)
 	err := tx.QueryRowContext(ctx, `
-		SELECT stage, login, seat_id, chart_position, document
+		SELECT stage, login, seat_id, document
 		  FROM iam_people WHERE id = ?`, id).
-		Scan(&stage, &login, &seat, &chartPosition, &document)
+		Scan(&stage, &login, &seat, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
@@ -511,7 +506,6 @@ func readTokenOwner(ctx context.Context, tx *sql.Tx, id string,
 	out.Login = login
 	out.Grants = doc.Grants
 	out.Seat = seat
-	out.SeatAt = uint64(chartPosition)
 	return readEpoch(ctx, tx, id, &out.Epoch)
 }
 
@@ -548,7 +542,6 @@ type Sighting struct {
 	Credentials []Credential
 	Grants      []iam.Grant
 	Seat        string
-	SeatAt      uint64
 
 	// Reserved reports a RESERVATION: the row an enrolment's claims leave
 	// before its content record fills it in — see [reservation]. It holds
@@ -588,7 +581,7 @@ func (r *Reader) PersonByLogin(ctx context.Context, login string) (Sighting, err
 // THE BLIND AND NOT THE ADDRESS, because this read runs before anybody is
 // authenticated and an address is personal data. iam.NormalizeEmail and this
 // domain's blind are what a surface computes it with — and they must agree
-// with the chart's own derivation or one address would reach a seat and a
+// with the party registry's fold or one address would reach a seat and a
 // different person.
 func (r *Reader) PersonByEmailBlind(ctx context.Context, blind string) (Sighting, error) {
 	return r.sighting(ctx, "email_blind", blind)
@@ -619,13 +612,12 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 
 	var (
 		kind, stage, login, seat string
-		chartPosition            int64
 		document                 []byte
 	)
 	err := tx.QueryRowContext(ctx, `
-		SELECT id, kind, stage, login, seat_id, chart_position, document
+		SELECT id, kind, stage, login, seat_id, document
 		  FROM iam_people WHERE `+column+` = ?`, token).
-		Scan(&out.ID, &kind, &stage, &login, &seat, &chartPosition, &document)
+		Scan(&out.ID, &kind, &stage, &login, &seat, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		// NOBODY, and the zero value is the answer. See the doc on
@@ -639,8 +631,7 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 		// claimed columns are the row's; everything a caller would
 		// decide with is absent, which is what makes a reservation act
 		// as nobody without every caller having to know the shape.
-		*out = Sighting{ID: out.ID, Login: login, Seat: seat,
-			SeatAt: uint64(chartPosition), Reserved: true}
+		*out = Sighting{ID: out.ID, Login: login, Seat: seat, Reserved: true}
 		return nil
 	}
 	doc, err := DecodePerson(document)
@@ -655,7 +646,6 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 	out.Credentials = doc.Credentials
 	out.Grants = doc.Grants
 	out.Seat = seat
-	out.SeatAt = uint64(chartPosition)
 	return nil
 }
 
@@ -885,17 +875,8 @@ type InvitationRow struct {
 	// against, and empty for an invitation nothing can redeem.
 	Verifier string
 
-	// Seat is the IDENTITY of the seat redeeming this binds, or empty —
-	// [Invitation.Seat]. SeatHandle and SeatName are that seat as THIS
-	// node's chart holds it now, read in the same snapshot, for the page a
-	// redeemer is shown: the identity is a handle the seat may have been
-	// renamed away from, and the person should see the seat they are
-	// joining as the company calls it today. Both are empty for a seat
-	// this node's chart no longer holds, which the redemption then refuses
-	// ([Writer.Enrol]).
-	Seat       string
-	SeatHandle string
-	SeatName   string
+	// Seat is the seat redeeming this binds, or empty — [Invitation.Seat].
+	Seat string
 }
 
 // Admits reports whether a secret presented with this invitation's id is the
@@ -967,21 +948,6 @@ func (r *Reader) InvitationByID(ctx context.Context, id string) (InvitationRow, 
 		out.Seat = doc.Seat
 		out.ExpiresAt = fromMillis(expires)
 		out.RedeemedAt = fromMillis(redeemed)
-		if doc.Seat == "" {
-			return nil
-		}
-		// THE SEAT AS THE CHART CALLS IT NOW, in this snapshot. An
-		// unreadable chart is this read's unknown arm like any other:
-		// a page that showed no seat would read as an invitation that
-		// binds none.
-		seat, found, err := chart.SeatByIdentityIn(ctx, tx, doc.Seat)
-		switch {
-		case err != nil:
-			return fmt.Errorf("iamdomain: read the seat invitation %q "+
-				"binds: %w", id, err)
-		case found:
-			out.SeatHandle, out.SeatName = seat.Handle, seat.Name
-		}
 		return nil
 	})
 	if err != nil {
@@ -1103,105 +1069,6 @@ func readInvalidated(ctx context.Context, tx *sql.Tx) (uint64, error) {
 	return uint64(invalidated), nil
 }
 
-// HeldSeats is every seat an ACTIVE person in this estate is bound to, each
-// named by its IDENTITY — the handle it was created under (ADR-0027) — read
-// in ONE snapshot.
-//
-// # One snapshot, because it answers a whole report
-//
-// The chart's continuous check and the seat listing's `unheld` filter each ask
-// about every human seat in the company at once. Asked a seat at a time it was
-// a transaction per seat — every `/health` a load balancer polled paid for all
-// of them — and the answers were taken at different instants, so one report
-// could combine bindings that never coexisted.
-//
-// # An error is never "nobody", here either
-//
-// It used to answer a read it could not perform as NOT HELD, on the reasoning
-// that one unreadable row should not fail a page that is otherwise correct.
-// What that bought was the report naming every human seat in the company as
-// held by nobody during a store fault, and the filter listing all of them
-// under a parameter that promised the vacancies: the false answer is the exact
-// one the caller acts on. So the error travels, and each caller decides what
-// it costs — the report leaves the finding undecided and counts it, the
-// filter refuses.
-func (r *Reader) HeldSeats(ctx context.Context) (map[string]bool, error) {
-	held := map[string]bool{}
-	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		clear(held)
-		rows, err := tx.QueryContext(ctx, `
-			SELECT seat_id FROM iam_people
-			 WHERE seat_id != '' AND stage = ?`, string(iam.StageActive))
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var seat string
-			if err := rows.Scan(&seat); err != nil {
-				return err
-			}
-			held[seat] = true
-		}
-		return rows.Err()
-	})
-	if err != nil {
-		return nil, fmt.Errorf("iamdomain: read which seats are held: %w", err)
-	}
-	return held, nil
-}
-
-// HolderOf names the person bound to a seat — by its IDENTITY, the handle it
-// was created under, which is what a binding names (ADR-0027) — read INSIDE a
-// transaction the caller supplies.
-//
-// # The transaction is the caller's, and that is the point
-//
-// It satisfies the chart domain's [chart.Holders], which is consulted inside
-// that domain's own decide — so this read has to join the snapshot the
-// decision is being made in rather than open one of its own. A second
-// transaction would see a different instant, which is the specific failure
-// the write authority's "take ONE snapshot" rule exists to prevent.
-//
-// # What it can and cannot promise
-//
-// It is ADVISORY across the domain boundary and the chart's own seam says so
-// at length: two logs, two appliers, two anchors, so a bind and a removal can
-// each pass their decide and both land. What it establishes is what THIS
-// node's copy of the directory says at this instant, which is the strongest
-// honest claim available and is enough for the case it exists for — somebody
-// removing a seat a colleague is still using.
-//
-// # An error is never "nobody"
-//
-// It answers a WRITE: a removal decided on an unreadable directory is one that
-// silently orphans whoever holds the seat. So the error travels, and the chart
-// refuses.
-func (r *Reader) HolderOf(ctx context.Context, tx *sql.Tx, seat string) (string, error) {
-	if seat == "" {
-		return "", nil
-	}
-	var login string
-	err := tx.QueryRowContext(ctx, `
-		SELECT login FROM iam_people
-		 WHERE seat_id = ? AND stage = ?
-		 LIMIT 1`, seat, string(iam.StageActive)).Scan(&login)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		// NOBODY, and it is a finding rather than a failure: a seat the
-		// chart holds that no person is bound to is the ordinary state
-		// of every agent seat in the company.
-		return "", nil
-	case err != nil:
-		return "", fmt.Errorf("iamdomain: read who holds seat %q: %w", seat, err)
-	}
-	// THE LOGIN IS ALWAYS THERE. The query reads active people only — a
-	// reservation, the half-enrolled row a claim leaves, has no stage and
-	// is not one — and every enrolled principal holds a login, which is
-	// renamed and never released on its own.
-	return login, nil
-}
-
 // SeatHolder is one seat binding, as contact routing reads the directory.
 //
 // A FACT AND NOT A VERDICT. Which stages may be reached through a seat's
@@ -1210,12 +1077,11 @@ func (r *Reader) HolderOf(ctx context.Context, tx *sql.Tx, seat string) (string,
 // and nothing about what that means for a Slack mention.
 type SeatHolder struct {
 	// Seat is the seat's IDENTITY — the handle it was created under, which
-	// no rename moves and the chart never issues twice (ADR-0027) — and
-	// never the handle it answers to now. A reader turns it into a seat by
-	// the chart's identity lookup ([chart.Reader.SeatByIdentity], or
-	// [org.Role.Origin] over a built tree), never by comparing it to a
-	// handle: after a rename the two differ, and after the old handle is
-	// reused they name different seats.
+	// no rename moves (ADR-0027) — and never the handle it answers to now.
+	// A reader turns it into a seat by [org.Role.Origin] over the running
+	// organisation, never by comparing it to a handle: after a rename the
+	// two differ, and after the old handle is reused they name different
+	// seats.
 	Seat string
 
 	// Person is who holds it, or who last held it before a removal.

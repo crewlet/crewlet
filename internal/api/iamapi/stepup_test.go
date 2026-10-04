@@ -52,6 +52,7 @@ func TestEveryDirectoryWriteAsksForAProof(t *testing.T) {
 		"DELETE /iam/credentials/{id}":     iam.RecencyStepUp,
 		"POST /iam/invalidate-all":         iam.RecencyStepUp,
 		"GET /iam/check":                   iam.RecencyAny,
+		"GET /iam/seats":                   iam.RecencyAny,
 		"GET /iam/node-tokens":             iam.RecencyAny,
 		"GET /iam/audit":                   iam.RecencyAny,
 	}

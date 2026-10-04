@@ -710,8 +710,8 @@ func TestOnlyARefusalWaitingCanClearCarriesAHint(t *testing.T) {
 // or the write side, and one that can is told when.
 //
 // [statelog.RetryAfter] is the one rule every surface answering a refusal in a
-// status code reads its Retry-After from. Each surface wrote its own, and /chart
-// and the work surface both turned a node holding a record it cannot decode —
+// status code reads its Retry-After from. Each surface wrote its own, and two
+// of them both turned a node holding a record it cannot decode —
 // or an evicted one — into "retry in two seconds", which a client obeys for as
 // long as nobody upgrades or readmits the node.
 func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
@@ -769,7 +769,7 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 		if c.retryable {
 			want = otherwise
 		}
-		refused := fmt.Errorf("chart: publish: %w",
+		refused := fmt.Errorf("tracker: publish: %w",
 			&statelog.Unavailable{Reason: c.reason, Detail: "a detail"})
 		if got := statelog.RetryAfter(refused, otherwise); got != want {
 			t.Errorf("write refusal %q says come back in %s, want %s", c.reason,
@@ -846,7 +846,7 @@ func TestAWriteRefusalAndItsReadTwinAgreeOnWaiting(t *testing.T) {
 // WORDS, NEVER THE STORE'S.
 //
 // Every surface that answers a refusal sends its detail to the caller — the
-// query registry in a REST body and a socket frame, `/chart` in its own — so a
+// query registry in a REST body and a socket frame, `/work` in its own — so a
 // detail built from the probe's error handed a driver's message or a database
 // path to anybody holding the question's grant. The refusal says what could
 // not be read and where the reason is; the reason goes to the log. The

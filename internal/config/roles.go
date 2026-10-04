@@ -32,7 +32,7 @@ type Role struct {
 
 	// Kind is agent (the default, a spawned runtime seat) or human (an
 	// addressable-only seat that is never spawned; its contact identities
-	// are optional, and the chart check reports one that has none).
+	// are optional, and [Company.Warnings] names one that has none).
 	Kind org.RoleKind `yaml:"kind,omitempty" json:"kind,omitempty" js:"enum=agent|human" desc:"agent (default) or human."`
 
 	// Contact is a HUMAN seat's external identities — how agents mention
@@ -44,14 +44,19 @@ type Role struct {
 	// ~4h".
 	Availability string `yaml:"availability,omitempty" json:"availability,omitempty" desc:"Human seats: free-text availability shown in rosters."`
 
-	// Handle is the canonical identity slug, derived from Name when empty,
-	// and WHAT EVERY REFERENCE TO THIS SEAT RESOLVES: a unit's `lead:` and
-	// every `manages:` entry.
+	// Handle is the canonical identity slug, and WHAT EVERY REFERENCE TO
+	// THIS SEAT RESOLVES: a unit's `lead:` and every `manages:` entry. A
+	// document that declares none has one written in when it is read
+	// ([MintIdentities]), derived from Name, so every stored revision carries
+	// it and an edit of the stored document's name never moves it. A FILE is
+	// read afresh on every import, so one that leaves it out is minted from
+	// whatever name it holds that time.
 	//
-	// EFFECTIVELY PERMANENT: the seat's durable id is derived from the
-	// company name and this handle, so changing either orphans that seat's
-	// diary, onboarding markers and counterparty profiles.
-	Handle string `yaml:"handle,omitempty" json:"handle,omitempty" js:"pattern=^[a-z0-9][a-z0-9-]*$" desc:"Canonical slug, and how lead and manages name this seat. Effectively permanent: it derives the seat's durable id."`
+	// IMMUTABLE: the seat's durable id is derived from the company name and
+	// this handle, so changing it is a removal and a creation — the old
+	// seat's diary, onboarding markers and counterparty profiles stay with
+	// the old handle.
+	Handle string `yaml:"handle,omitempty" json:"handle,omitempty" js:"pattern=^[a-z0-9][a-z0-9-]*$" desc:"Canonical slug, and how lead and manages name this seat. Immutable: it derives the seat's durable id, so changing it removes the seat and creates another."`
 
 	Email string `yaml:"email,omitempty" json:"email,omitempty" desc:"Seat email; plus-addressing derives from the handle."`
 
@@ -596,11 +601,10 @@ func (r *Role) Seat() *org.Role {
 		}
 	}
 	// AND THE CODE HOST'S, which this conversion used to DROP. Everything
-	// that needed a seat's app read it off the company document instead —
-	// and a stored revision carries no seats at all, so each of those walks
-	// silently became a walk of nothing. A seat is its chart rows plus this
-	// runtime document now, so a fact about a seat that is in neither is a
-	// fact the running company cannot see.
+	// that needed a seat's app then read it off the document beside the
+	// running organisation, which is a second walk that can disagree with
+	// the first — a fact about a seat that the running seat does not carry
+	// is a fact the running company cannot see.
 	if g := r.Integrations.GitHub; g != nil {
 		seat.GitHub = &org.GitHubApp{
 			Tier: g.Tier, Repos: append([]string(nil), g.Repos...),
@@ -635,10 +639,8 @@ func (r *Role) Seat() *org.Role {
 	return seat
 }
 
-// IdentityKey is the seat's address inside its list — the derived handle, so
-// it is the same identity `PATCH /chart/seats/{handle}` writes. It is NOT what
-// the agent id is built from: that is the handle a seat was CREATED under
-// (ADR-0026), which a rename leaves behind and a file cannot state.
+// IdentityKey is the seat's address inside its list — its handle, which
+// `PUT /config/roles/{handle}` addresses and the agent id is derived from.
 //
 // A VALUE receiver, because the redaction walker holds the prior document by
 // value and cannot take an address inside it.
@@ -826,9 +828,8 @@ func MintUnitID(name string) string {
 // not happen is a NEW document leaving a team keyed on prose somebody will
 // rename, so a submitted one is refused.
 //
-// Unreachable from any document read through [ParseCompanyNode], which mints
-// one from the name. What it catches is a unit assembled in Go, a name that
-// yields no id at all, and a stored revision a write is trying to keep.
+// Unreachable from any document a write stores, every one of which is minted
+// ([MintIdentities]). What it catches is a unit assembled in Go.
 // Skipped where the unit has no NAME either: the org model already reports
 // that, and reporting both puts one mistake in front of an operator twice.
 func (u *Unit) requireIDs(path Path) error {
@@ -847,19 +848,40 @@ func (u *Unit) requireIDs(path Path) error {
 	return p.err()
 }
 
-// MintUnitIDs gives every unit in the tree, at any depth, an id minted from
-// its name where it declares none.
+// MintIdentities writes every unit's key and every seat's handle into the
+// document, at any depth, where it declares none: a unit's key minted from its
+// name ([MintUnitID]) and a seat's the handle its name derives ([org.Slugify]),
+// so a unit or a seat whose name is later corrected IN THE STORED DOCUMENT
+// keeps the identity it was created under. A file is minted afresh on every
+// import, from the names it holds then, which is why a file somebody keeps
+// should state both.
 //
-// Applied at the ONE place a Tier B document is decoded ([ParseCompanyNode]),
-// so every document the engine reads carries a key for every unit whatever
-// door it came in by — a file, the config write surface, a per-entity splice.
-// Idempotent: a unit that already has an id keeps it.
-func MintUnitIDs(units []Unit) {
+// EVERY WRITE CALLS IT BEFORE THE DOCUMENT IS STORED: [ParseCompanyNode] for a
+// file and a whole-document write, and the config surface for a per-entity
+// splice and a merge patch, which decode the stored form ([DecodeCompany]) and
+// a member sent on its own ([ParseMember]), neither of which mints. A seat
+// stored without its handle takes whatever its name derives the next time the
+// document is read, and after a correction to that name that is a new handle —
+// a new agent id, an empty mailbox and an empty memory. Deterministic and
+// idempotent: a unit or a seat that declares its identity keeps it, and a
+// second read of the same file mints the same ones.
+func MintIdentities(c *Company) {
+	mintUnitIDs(c.Units)
+	for role := range c.EachRole() {
+		if strings.TrimSpace(role.Handle) == "" {
+			role.Handle = role.Seat().Handle()
+		}
+	}
+}
+
+// mintUnitIDs is [MintIdentities] for the units of one level and every level
+// beneath it.
+func mintUnitIDs(units []Unit) {
 	for i := range units {
 		if strings.TrimSpace(units[i].ID) == "" {
 			units[i].ID = MintUnitID(units[i].Name)
 		}
-		MintUnitIDs(units[i].Children)
+		mintUnitIDs(units[i].Children)
 	}
 }
 

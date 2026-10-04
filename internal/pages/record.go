@@ -29,15 +29,14 @@ import (
 // # What each version added
 //
 //   - 1: every shape this domain has.
-//   - 2: RETIRED. The field it carried — `chart_epoch`, a container's stamp
-//     of the configuration activation its settings were written from — does
-//     not exist in this build: a container is stamped by the org chart's log
-//     position instead, at 3. The position does not take the number over,
-//     because a version is a statement about which fields a record may
-//     carry, and one number naming two different fields is two builds
-//     disagreeing about what a record at it holds.
-//   - 3: a container's settings carry the position on the org chart's log
-//     they were derived from ([ContainerPayload.ChartPosition]).
+//   - 2: RETIRED, and not reused. A version is a statement about which
+//     fields a record may carry, and once two builds have read one number as
+//     two different fields the number means nothing either can trust: 2 once
+//     named a container's activation stamp, a later build stamped containers
+//     with a log position at 3 instead, and the stamp is the activation's
+//     again at 3.
+//   - 3: a container's settings carry the activation they were derived
+//     from ([ContainerPayload.ChartEpoch]).
 const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format: what every build there has
@@ -67,20 +66,21 @@ const baseRecordVersion = 1
 // VERSION 2 HAS NO ROW: it is retired (see [RecordVersion]), and a row naming
 // a field this build does not have would stamp nothing and certify nothing.
 var versionedFields = statelog.RecordFields{
-	// A CONTAINER'S CHART POSITION, at version 3. A build that cannot
-	// read it decodes a container's settings around it and applies the
-	// rest: its row then says nothing about which chart wrote it, so on
-	// that node the position guard ([Store.EnsureContainer]) has nothing
-	// to refuse an older chart with — the walk-back the stamp exists to
+	// A CONTAINER'S CHART STAMP, at version 3: the instant the fleet
+	// activated the revision its settings were derived from. A build that
+	// cannot read it decodes a container's settings around it and applies
+	// the rest: its row then says nothing about which revision wrote it, so
+	// on that node the stamp guard ([Store.EnsureContainer]) has nothing to
+	// refuse an older revision with — the walk-back the stamp exists to
 	// stop, open on the very node that could not read it — and its
 	// document differs from every other node's.
 	//
-	// EVERY RECORD THAT CARRIES ONE, A RE-STAMP INCLUDED. A later chart
-	// position over the settings a row already holds carries nothing new
+	// EVERY RECORD THAT CARRIES ONE, A RE-STAMP INCLUDED. A later
+	// activation over the settings a row already holds carries nothing new
 	// but the stamp, and writing it at a version an older build applies
 	// whole — so as not to hold back the page writes in that space — leaves
 	// the row unstamped on that node while every peer holds the stamp: the
-	// first stale chart that node applies before re-stamping then walks
+	// first stale revision that node applies before re-stamping then walks
 	// the settings back for the whole fleet, because appliers apply what a
 	// writer decided. Retained, it is applied with its stamp the moment the
 	// node reads version 3. The price is the one every row here states: a
@@ -88,9 +88,9 @@ var versionedFields = statelog.RecordFields{
 	// writes nested in it, until it is upgraded.
 	//
 	// Scoped to the patch op, which is the one a container's settings ride;
-	// no page patch carries `chart_position`.
-	{Name: "ContainerPayload.ChartPosition", Since: 3, Op: string(OpPatch),
-		Path: []string{"mutation", "chart_position"}},
+	// no page patch carries `chart_epoch`.
+	{Name: "ContainerPayload.ChartEpoch", Since: 3, Op: string(OpPatch),
+		Path: []string{"mutation", "chart_epoch"}},
 }
 
 // VersionedFields is the table, for the conformance suite.

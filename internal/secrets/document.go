@@ -9,26 +9,9 @@ import (
 // EnvelopeKey is the single field a sealed document is wrapped in.
 //
 // The WHOLE document is sealed as one opaque blob rather than field by field.
-// Per-field sealing looks tidier and leaks the shape: which integrations an
-// operator runs, what their settings are, and how much of the surface they
-// have configured are all structure, and structure is what a config document
-// mostly is.
-//
-// # What this argument no longer covers, and why
-//
-// It used to say "their org chart, their role names and how many seats they
-// have" too, and that half left with the chart. The chart is a LOG now — one
-// record per object, arbitrated at the broker on a subject that IS a unit key
-// or a seat handle — so its shape is on the wire whatever this package does,
-// and sealing it as a document would have put every writer back on one lock
-// and undone the reason the domain exists.
-//
-// The trade it makes instead is stated where it is made, in
-// [internal/chart]'s own sealing: the STRUCTURE is plaintext and a
-// secret-tagged VALUE — a seat's address among them — is never plaintext, the
-// row carrying a `${VAR}` reference to a value sealed in the store. A person's
-// own fields live in the identity directory, not in the chart. What is left
-// here is the settings document, for which this argument holds unchanged.
+// Per-field sealing looks tidier and leaks the shape: an operator's org chart,
+// their role names, which integrations they run and how many seats they have
+// are all structure, and structure is what a config document mostly is.
 const EnvelopeKey = "__encrypted__"
 
 // ErrUnsealedWithKey reports a payload that is NOT sealed, read by a caller
@@ -47,8 +30,7 @@ const EnvelopeKey = "__encrypted__"
 // is sealed by `crewlet config seal`, which seals the active revision and
 // nothing else; a SUPERSEDED revision is sealed in place by nothing, and comes
 // back only by importing its document again; a body a PEER published is fixed
-// on that peer; a STAGED CHART is fixed by re-running the import against a
-// running node. It used to name `crewlet config seal` for all of them, so
+// on that peer. It used to name `crewlet config seal` for all of them, so
 // every reader but the first carried a remedy that did nothing.
 var ErrUnsealedWithKey = errors.New("secrets: this document is stored unsealed, " +
 	"and a node holding a keyring reads only sealed ones — a plaintext payload is " +
@@ -162,10 +144,9 @@ func Open(cipher Cipher, payload []byte) ([]byte, error) {
 // sealed or not.
 //
 // THE MIGRATION'S READ, and nothing else's. A store written before the
-// keyring was required can hold plaintext revisions, and the commands that
-// rewrite them sealed (`crewlet config seal`, and `crewlet config scrub`,
-// whose erasure must reach a plaintext revision as surely as a sealed one)
-// have to be able to read what they are replacing. Every other reader goes
+// keyring was required can hold plaintext revisions, and the command that
+// rewrites them sealed (`crewlet config seal`) has to be able to read what it
+// is replacing. Every other reader goes
 // through [Open], which refuses a plaintext payload; a caller that used this
 // to READ a document would be accepting exactly the unauthenticated body
 // [ErrUnsealedWithKey] exists to refuse, which is why it takes the keyring it

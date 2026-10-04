@@ -352,7 +352,7 @@ type Request struct {
 	// # What it is for, and why it is not an optimisation
 	//
 	// A caller has no use for the wait when it holds the write's RESULT
-	// independently of the rows, and there are two.
+	// independently of the rows, and there is one.
 	//
 	// A SIGN-IN is the case it exists for. The session-start record is
 	// durable the moment the broker acknowledges it, the cookie minted from
@@ -361,13 +361,6 @@ type Request struct {
 	// row nothing in the answer reads. What the wait costs there is
 	// 250-500 ms of parked browser fetch against a 50 ms credential verify,
 	// on the one request a person judges the whole product by.
-	//
-	// A RUN OF RECORDS whose publisher waits for them ONCE, at the highest
-	// position they landed at, is the other: the chart seed publishes one
-	// record per object, none decides from the one before, and a wait
-	// after each spent a sixty-seat company's boot budget (the chart's
-	// `Writer.Unwaited`, internal/chart — a domain this package cannot
-	// import).
 	//
 	// # What it does NOT skip
 	//
@@ -1942,32 +1935,6 @@ func (p *Publisher) waitBehind(ctx context.Context, req Request, at Position) er
 // table helper on both sides — which is the pairing that has to agree.
 func (p *Publisher) subjectOf(s Subject) string {
 	return p.prefix + "." + s.String()
-}
-
-// SubjectEnd is the position of the last record ONE subject holds on the log,
-// or false where it holds none — the broker's own answer, read without an
-// append.
-//
-// # What it is for, which a subject's anchor cannot give
-//
-// A write decides from this node's snapshot, and the broker refuses it only
-// where the SUBJECT IT PUBLISHES ON moved underneath that snapshot. A gesture
-// whose decision turns on ANOTHER object's state therefore meets no refusal
-// when this node is behind on that object: it decides from a row the log has
-// already superseded and lands. Setting the gesture's session mark to this
-// position makes every step decide from a state holding everything the object
-// had been written by the moment it began — the same wait a caller's own
-// previous write gets, pointed at somebody else's.
-//
-// NOT A READ INDEX. It proves nothing about the log as a whole and costs no
-// barrier; it is the one subject a caller names, which is all a decision about
-// one object needs.
-func (p *Publisher) SubjectEnd(ctx context.Context, s Subject) (Position, bool, error) {
-	seq, found, err := p.log.LastSeq(ctx, p.subjectOf(s))
-	if err != nil || !found {
-		return Position{}, false, err
-	}
-	return Position{Stream: p.stream, Generation: p.generation(), Seq: seq}, true, nil
 }
 
 // observe records the write path's own instruments.

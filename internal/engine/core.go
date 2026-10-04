@@ -7,11 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -28,29 +26,28 @@ import (
 // has to leave through — its first person is invited under a Tier A token like
 // everybody after them — so the one node that most needed a way in had none,
 // and the dashboard's own "create the company" path needed a session nothing
-// could mint. Nor was the chart open, so a company could not be built from the
-// org builder before a settings revision existed to start the runtime.
+// could mint.
 //
 // # Split by what depends on a company, never by domain
 //
 // The CORE is everything whose meaning does not depend on a company: the state
 // log for EVERY registered domain, the node gate over every identity log, the
-// org chart's and the identity estate's two sides, and the loops that derive
-// this node's views of both. It is published once, by [New], on every node and
-// in every mode. The [native] half is what only a company can say anything
+// identity estate's two sides, and the loop that derives this node's party
+// registry from its directory. It is published once, by [New], on every node
+// and in every mode. The [native] half is what only a company can say anything
 // about — whether the engine keeps its tracker and knowledge base at all,
 // their read and write sides, the lexical index, the change feeds and the
 // embedding duty — and it still waits for the first company.
 //
-// # Why the core runs EVERY domain, and not the chart and the identity estate
+// # Why the core runs EVERY domain, and not only the identity estate
 //
-// Starting only the two a node with no company can use would be the obvious
+// Starting only the one a node with no company can use would be the obvious
 // cut, and it is wrong four ways:
 //
 //   - A JOIN REPLACES THE WHOLE REPLICATED FILE and must run before any applier
 //     does ([Engine.startStateLog]'s "every domain or none"). Starting the rest
-//     of the register later would take a second join over a file whose chart
-//     and identity rows are already being applied — a rejoin that halts both.
+//     of the register later would take a second join over a file whose
+//     identity rows are already being applied — a rejoin that halts it.
 //   - A SNAPSHOT NAMES EVERY REGISTERED DOMAIN, or every joiner refuses it: a
 //     node running part of the register could donate nothing.
 //   - THE TRIM COUNTS NODES PER LOG from their position heartbeats, so a node
@@ -69,7 +66,7 @@ import (
 // EVERY FIELD IS WRITTEN ONCE, by [Engine.startCore], before the struct is
 // published to [Engine.core] — which is why there is no mutex here. What the
 // running node mutates afterwards carries its own synchronisation: the wait
-// group the view triggers are joined through.
+// group the directory trigger is joined through.
 type core struct {
 	// nodeID is who this node is: the name its own domain consumers take,
 	// the writer stamped on every record it publishes, and what the
@@ -89,25 +86,16 @@ type core struct {
 	// node that has met no company still has logs the trim counts it on.
 	gate *NodeGate
 
-	// chartWriter and chartReader are the org chart's two sides.
-	//
-	// BUILT ON EVERY NODE, with or without a company: there is no backend
-	// setting for the chart and nowhere else to keep one, and a company is
-	// BUILT through it — the org builder writes units and seats before any
-	// settings revision exists. A node whose chart domain failed to come up
-	// is a boot failure naming the domain rather than a nil to branch on.
-	chartWriter *chart.Writer
-	chartReader *chart.Reader
-
-	// iamReader and iamWriter are the identity estate's two sides, on the
-	// chart's terms: every node runs the domain, and a node with nobody in
-	// its company is precisely the node that must be able to enrol its
-	// first person.
+	// iamReader and iamWriter are the identity estate's two sides. BUILT
+	// ON EVERY NODE, with or without a company: a node with nobody in its
+	// company is precisely the node that must be able to enrol its first
+	// person, and one whose identity domain failed to come up is a boot
+	// failure naming the domain rather than a nil to branch on.
 	iamReader *iamdomain.Reader
 	iamWriter *iamdomain.Writer
 
-	// run is the context the view triggers run under, and stop is what
-	// ends them.
+	// run is the context the directory trigger runs under, and stop is
+	// what ends it.
 	//
 	// HELD, not re-derived: a trigger started under the CALLER's context
 	// would be one [core.shutdown] could never end, and its wait would
@@ -124,8 +112,8 @@ type core struct {
 // a node in a maintenance mode, a node on a vendor's tracker and wiki. What a
 // maintenance node does not start is the duties that PUBLISH, which
 // [Engine.startCoreDuties] arms behind New's publishing gate; the appliers
-// and the view triggers run everywhere, because applying records and serving
-// reads is exactly what a maintenance node still does.
+// and the directory trigger run everywhere, because applying records and
+// serving reads is exactly what a maintenance node still does.
 //
 // It returns without waiting for hydration: the reconcile is O(keys) and a
 // node that blocked here would not serve its dashboard, answer a probe or run
@@ -181,15 +169,10 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 	if c.gate, err = newNodeGate(sl, e.backends.Coord); err != nil {
 		return err
 	}
-	// THE IDENTITY ESTATE AND THE CHART, which every node runs. There is no
-	// backend setting for either and no second place to keep one, so each
-	// one's absence is a boot failure naming the domain rather than a reader
-	// that answers nil. The identity estate goes first because the chart's
-	// writer consults it before a seat removal.
+	// THE IDENTITY ESTATE, which every node runs. There is no backend
+	// setting for it and no second place to keep one, so its absence is a
+	// boot failure naming the domain rather than a reader that answers nil.
 	if err = c.openIAM(e, sl, nodeID); err != nil {
-		return err
-	}
-	if err = c.openChart(e, sl, nodeID); err != nil {
 		return err
 	}
 
@@ -197,29 +180,15 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 	// is what lets every reader load it without a lock.
 	e.core.Store(c)
 
-	// THE CHART VIEW'S TWO TRIGGERS, started AFTER the runtime is published
-	// because both reach the chart reader through it — a goroutine that
-	// raced the publish would read a nil runtime and derive nothing.
+	// THE PARTY REGISTRY'S DIRECTORY TRIGGER, reading this node's own
+	// identity rows — started AFTER the runtime is published, because it
+	// reaches the reader through it. Handed over BEFORE the loop starts, so
+	// the first rebuild it runs already reads the directory — and before
+	// the boot publish, so the first registry does too.
 	//
-	// NEITHER IS A DUTY. A node's view is a derivation of its OWN rows, so
+	// NOT A DUTY. A node's registry is a derivation of its OWN rows, so
 	// tying it to a fleet lease would mean a lease flap stopped a node
-	// tracking its own state. They run on a node with no company too, where
-	// a rebuild reads the rows and publishes nothing — there are no settings
-	// to compose them with — so the company that arrives next is composed
-	// with a view that is already current.
-	c.done.Add(2)
-	go func() {
-		defer c.done.Done()
-		e.watchChartNudges(runCtx)
-	}()
-	go func() {
-		defer c.done.Done()
-		e.watchChart(runCtx)
-	}()
-	// AND THE PARTY REGISTRY'S DIRECTORY TRIGGER, reading this node's own
-	// identity rows. Handed over BEFORE the loop starts, so the first
-	// rebuild it runs already reads the directory — and before the boot
-	// publish, so the first registry does too.
+	// tracking its own state.
 	e.useDirectory(iamDirectory{reader: c.iamReader}, c.iamReader.At)
 	c.done.Add(1)
 	go func() {
@@ -251,7 +220,7 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 //
 // ON EVERY NODE THAT PUBLISHES, company or not: a fleet nobody has configured
 // yet still writes its identity log — the first person's invitation and
-// sign-in — and its chart log, and without the trim those logs only grow.
+// sign-in — and without the trim that log only grows.
 //
 // THE USAGE PUBLISHER IS THE CORE'S TOO, and not a native duty, although it
 // is no singleton: every node publishes its own days, from its own event log,
@@ -269,30 +238,28 @@ func (e *Engine) startCoreDuties(ctx context.Context) {
 	e.startUsage(ctx, c.log)
 }
 
-// stopViewTriggers ends the core's view triggers — the chart view's two, the
-// party registry's directory trigger and the identity vouch watch — and waits
-// for a rebuild in flight.
+// stopViewTriggers ends the core's view triggers — the party registry's
+// directory trigger and the identity vouch watch — and waits for a rebuild in
+// flight.
 //
 // SEPARATE FROM [Engine.stopCore], and called at the very top of the teardown,
-// because a trigger is not a reader of the log so much as a WRITER of
-// everything derived from it: a rebuild ends in [Engine.convergeOn], which
-// re-arms the scheduler, re-ensures the mailboxes and rebuilds the party
-// registry. Ended with the log at the bottom of the teardown, a chart record
-// landing after the scheduler had been stopped re-armed a loop nothing would
-// ever stop again, ticking against a store and a broker the teardown then
-// closed.
+// because a trigger is not a reader of the log so much as a WRITER of what is
+// derived from it: the directory trigger rebuilds the party registry and the
+// vouch watch closes sockets. Ended with the log at the bottom of the teardown,
+// an identity record landing during it would rebuild a registry over vendor
+// wiring the teardown had already stopped.
 func (e *Engine) stopViewTriggers() {
 	if c := e.core.Load(); c != nil {
 		c.stopTriggers()
 	}
 }
 
-// stopCore ends this node's core runtime: its view triggers, if the teardown
-// has not already, and then every domain's apply loop. Nil-safe, which is an
+// stopCore ends this node's core runtime: its directory trigger, if the
+// teardown has not already, and then every domain's apply loop. Nil-safe, which is an
 // engine built by hand.
 func (e *Engine) stopCore() { e.core.Load().shutdown() }
 
-// stopTriggers ends the view triggers and waits for them. Idempotent: a second
+// stopTriggers ends the directory trigger and waits for it. Idempotent: a second
 // call finds the context cancelled and the group drained.
 func (c *core) stopTriggers() {
 	if c == nil || c.stop == nil {
@@ -310,7 +277,7 @@ func (c *core) stopTriggers() {
 // booting. Nil-safe throughout, because the failure path can reach it with the
 // log not yet built.
 //
-// THE APPLY LOOPS LAST, after the triggers that read what they write. A loop
+// THE APPLY LOOPS LAST, after the trigger that reads what they write. A loop
 // stopped first leaves a trigger deriving from a log nothing is applying,
 // which is not wrong so much as a shutdown that looks like a stall in every
 // log line it produces on the way out.
@@ -326,15 +293,15 @@ func (c *core) shutdown() {
 //
 // EVERY NODE RUNS IT, whatever its roles and whether or not it has a company,
 // so a node whose identity domain did not come up is a boot failure naming the
-// domain — exactly as the chart's is — rather than a node that quietly serves
-// no sign-in surface.
+// domain rather than a node that quietly serves no sign-in surface.
 //
 // # The writer acts as THE NODE, and every surface narrows it
 //
-// Exactly as the chart's does. What is left acting as the node is what the
-// node itself does: redeeming an invitation into a person who does not exist
-// yet, the duty that sweeps, and the re-seal a keyring rotation moves every
-// person's values with. A person's own sign-in acts as that person.
+// Every surface derives its own with [iamdomain.Writer.As]. What is left
+// acting as the node is what the node itself does: redeeming an invitation
+// into a person who does not exist yet, the duty that sweeps, and the re-seal
+// a keyring rotation moves every person's values with. A person's own sign-in
+// acts as that person.
 func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 	running := sl.Domain(iamdomain.Domain{}.Name())
 	if running == nil {
@@ -371,6 +338,11 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		// there too.
 		Blinds: e.PersonBlinder(),
 		Sealer: e.PersonSealer(),
+		// THE ORGANISATION THIS NODE RUNS, which a seat bind and an
+		// invitation naming a seat are checked against — read per call,
+		// so a node with no company yet refuses a seat bind as unknown
+		// rather than binding unchecked.
+		Seats: SeatViewOf(e),
 		// WHAT A LANDED RECORD DECIDED — a grant delta, a session
 		// generation — goes on the node's audit feed from here, since
 		// only the decide holds it. Every surface's [Writer.As] keeps it.
@@ -406,64 +378,6 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 // the failure when they drift is that nobody can redeem an invitation — the
 // company's first person included, since they are invited like anybody else.
 var nodeWriterGrants = []iam.Grant{iam.GrantFleetOperate, iamdomain.AdminGrant}
-
-// openChart builds the org chart's two sides over its running domain.
-//
-// THE WRITER ACTS AS THE NODE ITSELF, and every surface derives its own from
-// it with [chart.Writer.As]: an operator's session acts as that credential, a
-// founder's as that person. What is left acting as the node is what the node
-// itself does — an import applying a config revision, a duty tidying a
-// tombstone — and attributing those to a person would make a machine's
-// housekeeping indistinguishable from somebody's decision.
-func (c *core) openChart(e *Engine, sl *stateLog, nodeID string) error {
-	running := sl.Domain(chart.Domain{}.Name())
-	if running == nil {
-		return fmt.Errorf("engine: this node runs no chart domain, so it " +
-			"cannot say who reports to whom — the domain is in the register " +
-			"and its stream failed to come up")
-	}
-	writer, err := chart.NewWriter(chart.WriterDeps{
-		Publisher: running.publisher, DB: e.backends.Store,
-		// THE COMPANY'S OWN SECRET STORE, so a literal credential
-		// written to a seat is sealed rather than put on a log every
-		// node applies. Nil is a real configuration — a company with no
-		// store — and a write that needs one is then refused by name.
-		Seal: e.chartSealer(),
-		// AND WHERE A RUNTIME HALF KEEPS ITS CREDENTIALS, which the
-		// chart cannot read: the organization model's own types, whose
-		// tags say which of a seat's or a unit's values are sealed.
-		Runtime:   org.RuntimeShape{},
-		Actor:     nodeID,
-		ActorKind: chart.AuthorOperator,
-		// THE NODE ITSELF IS THE DEPLOYMENT, so it authors every class
-		// the chart has: the seeding import, the structural tidying a
-		// duty does, the runtime half of every seat a revision
-		// describes — and a removal, which takes the deployment's grant
-		// beside the company's. Every surface then narrows it with
-		// [chart.Writer.As], which REPLACES these rather than adding to
-		// them — a caller's party is never this one.
-		Grants: []iam.Grant{iam.GrantConfigWrite, iam.GrantFleetOperate},
-	})
-	if err != nil {
-		return fmt.Errorf("engine: chart writer: %w", err)
-	}
-	// THE DIRECTORY THE SEAT REMOVAL CONSULTS — this node's own identity
-	// rows, which openIAM has just established. See [chart.Holders].
-	c.chartWriter = writer.WithHolders(c.iamReader)
-	// THROUGH THE DOMAIN'S OWN READ AUTHORITY, so a level asked for is a
-	// level served: the refusal ladder, the coverage probe and the barrier
-	// a linearizable read waits through.
-	if c.chartReader, err = chart.NewReader(chart.ReaderOptions{
-		DB: e.backends.Store, Log: running.reader,
-		Committed: running.runner.Committed,
-		// FOR THE SEAT BINDING, which compares it against the stall
-		// grace before it reads a row: see [SeatView].
-		Lag: running.Lag,
-	}); err != nil {
-		return fmt.Errorf("engine: chart reader: %w", err)
-	}
-	return nil
-}
 
 // errNoCoreRuntime is what a reader of the core refuses with on an engine that
 // has none — one built by hand, since [New] starts it on every node.
@@ -534,26 +448,6 @@ func (e *Engine) IAMWriter() *iamdomain.Writer {
 		return nil
 	}
 	return c.iamWriter
-}
-
-// Chart is this node's org chart read side, or nil on an engine with no core
-// runtime.
-func (e *Engine) Chart() *chart.Reader {
-	c := e.core.Load()
-	if c == nil {
-		return nil
-	}
-	return c.chartReader
-}
-
-// ChartWriter is this node's org chart write side, or nil on an engine with no
-// core runtime.
-func (e *Engine) ChartWriter() *chart.Writer {
-	c := e.core.Load()
-	if c == nil {
-		return nil
-	}
-	return c.chartWriter
 }
 
 // NodeGate is eviction and readmission over every identity-claiming log, or

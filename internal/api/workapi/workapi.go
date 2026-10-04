@@ -462,7 +462,7 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request,
 // node holding a record it cannot decode answers the same however often it is
 // asked. A refusal that derived a hint says that; anything else is
 // [authz.RetryUndecidedSeconds], the scale of this node applying one more batch
-// or its chart view catching up.
+// or one more activation.
 func unavailableFor(w http.ResponseWriter, cause error, detail string) {
 	httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
 		httpjson.RetrySeconds(statelog.RetryAfter(cause,
@@ -778,8 +778,7 @@ func outcomeOf(receipt map[string]any) statelog.Outcome {
 
 // answer writes a write that was MADE, under its outcome.
 //
-// THE THREE SUCCESSES ARE THREE ANSWERS, for chartapi's reason: only
-// `applied` means the next read on this node sees the write, so only it is a
+// THE THREE SUCCESSES ARE THREE ANSWERS: only `applied` means the next read on this node sees the write, so only it is a
 // 200. `pending` is durable and not yet here — 202 with the position to read
 // at. `unknown` is a write this node cannot account for —
 // [operator.UnknownOutcome].

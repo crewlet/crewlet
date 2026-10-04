@@ -12,16 +12,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/crewlet/crewlet/internal/api/configapi"
-	"github.com/crewlet/crewlet/internal/api/stream"
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -58,12 +52,10 @@ Usage:
   crewlet config activate ID       Mark a revision active here; published at the next start
   crewlet config seal              Encrypt a plaintext active revision under the keyring
   crewlet config rekey [-dry-run]  Re-seal the active revision under the active key
-  crewlet config scrub [ID] [-dry-run]
-                                   Erase personal data from superseded revisions
 
 Flags:
   -config PATH   Tier A config naming the store and its keyring (default %q)
-  -dry-run       Report what a rekey or a scrub would do without writing
+  -dry-run       Report what a rekey would do without writing
 
 A keyring rotation needs BOTH halves: "crewlet config rekey" moves the company
 document and "crewlet secrets rekey" moves the secret store. Run both before
@@ -79,7 +71,6 @@ becomes unreadable.
 // connects them.
 var configSubcommands = []string{
 	"import", "show", "export", "revisions", "diff", "activate", "seal", "rekey",
-	"scrub",
 }
 
 // defaultRevisionLimit is how many revisions `crewlet config revisions` lists.
@@ -160,9 +151,6 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	case "rekey":
 		fs.BoolVar(&dryRun, "dry-run", false,
 			"report what would be re-sealed without writing")
-	case "scrub":
-		fs.BoolVar(&dryRun, "dry-run", false,
-			"report which revisions hold personal data without erasing it")
 	}
 	if err := fs.Parse(rest); err != nil {
 		return err
@@ -208,8 +196,6 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		return sealConfig(ctx, cs, stdout)
 	case "rekey":
 		return rekeyConfig(ctx, cs, dryRun, stdout)
-	case "scrub":
-		return scrubConfig(ctx, cs, subject, dryRun, stdout)
 	default:
 		// Unreachable: the guard above admits only configSubcommands,
 		// `import` returned before the store was opened, and a test
@@ -228,10 +214,6 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 type configStore struct {
 	configs *store.Configs
 	cipher  secrets.Cipher
-
-	// staged is where an offline import leaves the chart half for the
-	// next boot to publish. See [stageTheChart].
-	staged *store.StagedCharts
 
 	// events is where an erasure records that it happened.
 	//
@@ -280,7 +262,6 @@ func openConfigStore(ctx context.Context, bootstrapPath, remedy string) (*config
 	}
 	return &configStore{
 		configs: db.Configs(), cipher: cipher, events: db.Events(),
-		staged:      db.StagedCharts(),
 		activeKeyID: boot.Secrets.ActiveKeyID,
 	}, func() { _ = db.Close() }, nil
 }
@@ -294,10 +275,7 @@ func openConfigStore(ctx context.Context, bootstrapPath, remedy string) (*config
 func importConfig(ctx context.Context, cs *configStore, path string,
 	company *config.Company, summary string, stdout io.Writer,
 ) error {
-	// THE SETTINGS HALF, because that is what a revision holds. Storing the
-	// whole file would store a revision every node then refuses to apply
-	// ([config.DecodeSettings]).
-	document, err := json.Marshal(config.SettingsOf(company).Company())
+	document, err := json.Marshal(company)
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", path, err)
 	}
@@ -338,9 +316,6 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 	// printed `true` on every import, since nothing is stored unsealed.
 	sealedUnder, _ := secrets.EnvelopeKeyIDOf(payload)
 	fmt.Fprintf(stdout, "imported %s as revision %s (sealed under %s)\n", path, id, sealedUnder)
-	if err := stageTheChart(ctx, cs, path, company, stdout); err != nil {
-		return err
-	}
 	fmt.Fprintln(stdout, importPublishNote)
 	return nil
 }
@@ -359,19 +334,18 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 // failed, and the fix — restart, or reach a running node — is not guessable.
 //
 // WHAT REACHES A RUNNING FLEET IS EACH COMMAND'S OWN, which is why the notes
-// below are four rather than one. There was one, and it sent every command to
-// `PUT /config` — which refuses a whole company file by name (it carries the
-// org chart, a log of its own), activates nothing that is already stored, and
-// re-seals nothing.
+// below are several rather than one: `PUT /config` stores and activates a
+// document, but it activates nothing that is already stored and re-seals
+// nothing.
 const offlinePublish = "This node will publish it to the fleet at its next start."
 
 // importPublishNote is an offline import's: the route to a running fleet is
-// this same command against a running node, which divides the file between
-// the settings and the chart — the one thing `PUT /config` cannot do.
+// `PUT /config` on a node that is up, which this same command takes while a
+// node holds the store.
 const importPublishNote = offlinePublish + " To make the file the running " +
-	"fleet's company without a restart, run `crewlet config import` again " +
-	"while a node is up: with the engine holding this store it goes through " +
-	"that node's API, and -api names any node."
+	"fleet's company without a restart, PUT /config to a node that is up, or " +
+	"run `crewlet config import` while a node is up: with the engine holding " +
+	"this store it goes through that node's API, and -api names any node."
 
 // activatePublishNote is an offline activation's: a running node activates a
 // stored revision by storing its document again as a new one, which is the
@@ -417,9 +391,8 @@ func lockedStoreRemedy(sub string) string {
 			"/config/reload stores the active document again under that " +
 			"node's active key — or " + stop
 	default:
-		// seal and scrub rewrite the store's own rows and have no route
-		// through the API: a running node refuses a plaintext revision,
-		// and an erasure is this command's alone.
+		// seal rewrites the store's own rows and has no route through the
+		// API: a running node refuses a plaintext revision.
 		return "This rewrites the store's own rows and has no route through " +
 			"the API: " + stop
 	}
@@ -752,7 +725,7 @@ func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error 
 		return err
 	}
 	if strings.TrimSpace(t.apiURL) != "" {
-		return importThroughNode(ctx, boot, t, company, summary, stdout)
+		return importThroughNode(ctx, boot, t, summary, stdout)
 	}
 
 	cs, closeStore, err := openConfigStore(ctx, t.bootstrapPath, "")
@@ -762,318 +735,33 @@ func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error 
 		}
 		// The engine holds its database, so this is the live case rather
 		// than a failure: go through the node that is holding it.
-		return importThroughNode(ctx, boot, t, company, summary, stdout)
+		return importThroughNode(ctx, boot, t, summary, stdout)
 	}
 	defer closeStore()
 	return importConfig(ctx, cs, t.path, company, summary, stdout)
 }
 
-// importThroughNode divides one file between the two surfaces that own its
-// halves, and writes both.
-//
-// # One file, two estates, and this is the only place that knows
-//
-// A company file carries the settings and the org chart, and always will: an
-// operator authors one document describing a company. The engine keeps them
-// apart — a revision is a stored document, a chart is an ordered log — and
-// `PUT /config` refuses a body carrying `roles:` or `units:` by name. So
-// somebody has to divide the file, and it is this command: the last place
-// that holds both halves and knows they arrived together.
-//
-// # THE SETTINGS TRAVEL AS THE OPERATOR'S OWN BYTES, MINUS TWO KEYS
-//
-// The file is parsed ONCE into a YAML node tree and the two chart keys are
-// DELETED from its root mapping. What is sent is what is left — comments,
-// anchors, `${VAR}` pointers and all — rather than a re-encoding of the
-// parsed Go value, because Tier B's secrets are pointers stored verbatim and
-// a round trip through the types would be a second opinion about a document
-// the node is about to form its own.
-//
-// # THE ORDER IS LOAD-BEARING, AND IT IS STRUCTURE FIRST
-//
-// The placement lands as ONE record on the chart's structure subject, and
-// each object's content follows on its own. That order is not a preference: a
-// content write STATES the unit it believes a seat sits in, and the domain
-// refuses a value that disagrees with the row — so content written before the
-// placement names a unit no row has yet.
-//
-// The SETTINGS go first of all, because a seat whose model chain names a
-// provider is only valid once that provider exists: the other order leaves a
-// window in which every seat the chart just created resolves to no model.
+// importThroughNode PUTs the document at a running node.
 func importThroughNode(ctx context.Context, boot *config.Bootstrap, t importTarget,
-	company *config.Company, summary string, stdout io.Writer,
+	summary string, stdout io.Writer,
 ) error {
-	settings, err := settingsHalfOf(t.path)
-	if err != nil {
-		return err
-	}
 	client, err := newConfigClient(boot, t.apiURL)
 	if err != nil {
 		return err
 	}
-	id, epoch, err := client.Import(ctx, settings, summary)
+	// THE FILE'S OWN BYTES travel, not a re-encoding of the parsed
+	// document: Tier B's secrets are `${VAR}` pointers stored verbatim, and
+	// the node forms its own opinion of the document anyway.
+	doc, err := os.ReadFile(t.path)
+	if err != nil {
+		return fmt.Errorf("company config %s: %w", t.path, err)
+	}
+	id, epoch, err := client.Import(ctx, doc, summary)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "imported %s as revision %s, active on epoch %d\n",
 		t.path, id, epoch)
 	fmt.Fprintf(stdout, "wrote to %s\n", client.Describe())
-
-	authored := config.AuthoredChart(company)
-	if len(authored.Edges()) == 0 {
-		// A COMPANY WITH NO UNITS AND NO SEATS is a real authoring state,
-		// and importing nothing would write a ledger row saying an empty
-		// structure had landed — which the next edited file would then
-		// have to be told apart from.
-		return nil
-	}
-	return publishChart(ctx, boot, t, authored, stdout)
-}
-
-// publishChart writes the chart half: the structure, then each object.
-func publishChart(ctx context.Context, boot *config.Bootstrap, t importTarget,
-	authored chart.Authored, stdout io.Writer,
-) error {
-	client, err := newChartClient(boot, t.apiURL)
-	if err != nil {
-		return err
-	}
-	// THE DOMAIN'S OWN KEY, which the boot seed computes the same way: two
-	// importers of one file must agree, or each rewrites every row the
-	// other already wrote and wakes everybody a second time.
-	revision := chart.ImportKey(authored)
-	at, err := client.ImportStructure(ctx, revision, authored.Edges())
-	if err != nil {
-		return fmt.Errorf("publish the org chart from %s: %w", t.path, err)
-	}
-	fmt.Fprintf(stdout, "published %d unit(s) and %d seat(s) at %s\n",
-		len(authored.Units), len(authored.Seats), at)
-
-	// EACH OBJECT'S CONTENT, on its own subject. The import record
-	// deliberately carries none: a chart of five hundred seats at this
-	// domain's prose bound is megabytes, past the chart log's declared
-	// largest record (chart.ChartMaxRecordBytes) — so an import that carried
-	// content would be refused on exactly the companies large enough to need
-	// it.
-	writes := make([]contentWrite, 0, len(authored.Units)+len(authored.Seats))
-	for _, unit := range authored.Units {
-		writes = append(writes, contentWrite{what: "the unit " + unit.Key,
-			write: func(ctx context.Context) error { return client.WriteUnit(ctx, unit) }})
-	}
-	for _, seat := range authored.Seats {
-		writes = append(writes, contentWrite{what: "the seat " + seat.Handle,
-			write: func(ctx context.Context) error { return client.WriteSeat(ctx, seat) }})
-	}
-	if err := writeContent(ctx, writes, chartContentWriters); err != nil {
-		return err
-	}
-	fmt.Fprintf(stdout, "wrote to %s\n", client.Describe())
 	return nil
-}
-
-// chartContentWriters is how many of an import's content writes are in flight
-// at once.
-//
-// NOT ONE, because each write is answered only once the node has APPLIED it
-// (a 200 means the next read there sees it), so one at a time the import paid
-// a round trip plus a wait on the node's applier per object, in series — on
-// the order of half a minute for sixty seats. The writes are independent:
-// every one arbitrates on its own object's subject, and the structure they
-// state was placed by the import record before the first of them went out.
-//
-// ONE DASHBOARD TAB'S QUERY ALLOWANCE, and not more: an import is one caller
-// against one node, and internal/store sizes that node's reader pool for two
-// tabs' worth of stream.MaxInFlightQueries. Each write takes one snapshot to
-// decide in, so at this bound an import occupies one tab's share of the pool
-// and leaves the other for whoever is watching while it runs. What a
-// wider bound would buy is shorter imports of very large companies; what it
-// would cost is the dashboard queueing behind the import on a small host.
-const chartContentWriters = stream.MaxInFlightQueries
-
-// contentWrite is one object's content write in an import.
-type contentWrite struct {
-	what  string
-	write func(context.Context) error
-}
-
-// writeContent runs writes with at most limit in flight, in the order given,
-// and reports the first failure in that order.
-//
-// A FAILURE STOPS WHAT HAS NOT STARTED and lets what has started finish, which
-// is the sequential loop's behaviour widened to limit: nothing is sent after
-// the import is known to have failed, and nothing already sent is abandoned
-// half-answered. Every write before the failing one was STARTED, since they
-// are started in order, so the one reported is the first failure in the file's
-// own order however the in-flight writes happened to interleave — the same
-// file against the same node reports the same object.
-func writeContent(ctx context.Context, writes []contentWrite, limit int) error {
-	failures := make([]error, len(writes))
-	var (
-		wg     sync.WaitGroup
-		failed atomic.Bool
-	)
-	slots := make(chan struct{}, max(limit, 1))
-	for i, w := range writes {
-		slots <- struct{}{}
-		if failed.Load() {
-			<-slots
-			break
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() { <-slots }()
-			if err := w.write(ctx); err != nil {
-				failures[i] = fmt.Errorf("write %s: %w", w.what, err)
-				failed.Store(true)
-			}
-		}()
-	}
-	wg.Wait()
-	var first error
-	more := 0
-	for _, err := range failures {
-		switch {
-		case err == nil:
-		case first == nil:
-			first = err
-		default:
-			more++
-		}
-	}
-	if more > 0 {
-		return fmt.Errorf("%w\n\n(%d more content write(s) failed beside it)",
-			first, more)
-	}
-	return first
-}
-
-// settingsHalfOf is the file with its two chart keys removed.
-//
-// THE NODE TREE RATHER THAN THE PARSED VALUE, for the reason
-// [importThroughNode] gives: what travels is what the operator wrote. A
-// re-encoding would drop every comment, resolve every anchor and re-quote
-// every scalar, and the diff an operator reads afterwards would be of a
-// document nobody authored.
-func settingsHalfOf(path string) ([]byte, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("company config %s: %w", path, err)
-	}
-	var doc yaml.Node
-	if err = yaml.Unmarshal(raw, &doc); err != nil {
-		// THE PARSE FAILURE IS THE LOADER'S TO REPORT, with its own line
-		// numbers: the caller has already read this file into a company,
-		// so reaching here at all means something changed underneath.
-		return nil, fmt.Errorf("company config %s: %w", path, err)
-	}
-	root := &doc
-	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
-		root = root.Content[0]
-	}
-	if root.Kind != yaml.MappingNode {
-		return raw, nil
-	}
-	kept := make([]*yaml.Node, 0, len(root.Content))
-	// A MAPPING'S CONTENT IS KEY, VALUE, KEY, VALUE, so the step is two.
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if slices.Contains(config.ChartKeys(), root.Content[i].Value) {
-			continue
-		}
-		kept = append(kept, root.Content[i], root.Content[i+1])
-	}
-	root.Content = kept
-	out, err := yaml.Marshal(&doc)
-	if err != nil {
-		return nil, fmt.Errorf("company config %s: %w", path, err)
-	}
-	return out, nil
-}
-
-// stageTheChart leaves the file's org chart for this node's next boot to
-// publish.
-//
-// # Why this command cannot publish it here
-//
-// A company file carries both halves, and this route runs OFFLINE, against
-// the node's own store file with no broker open. The settings are a row it
-// can write; the chart is a record on an ordered log, which needs the stream
-// this process did not open.
-//
-// # And why saying so is not enough on its own
-//
-// It used to say so and stop, which is the right half of the answer and not
-// the whole of it. The gesture an operator is performing is "make this file
-// the company", and half of it silently did not happen until they went and
-// found a second, different command — on a node they had deliberately
-// stopped.
-//
-// So the chart is STAGED: written to this node's own database, sealed with
-// the same keyring the revision beside it uses, and published by the next
-// boot. Nothing is lost if the node never starts, and nothing is published
-// twice if it starts more than once — the import ledger is keyed on the
-// chart's own content, so a second landing is a no-op every node reaches the
-// same way.
-//
-// A COMPANY WITH NO CHART STAGES NOTHING, and that is not the same as staging
-// an empty one: an operator who wrote providers and no people has not asked
-// for every seat to be removed.
-func stageTheChart(ctx context.Context, cs *configStore, path string,
-	company *config.Company, stdout io.Writer) error {
-
-	if company == nil || !company.CarriesChart() {
-		return nil
-	}
-	authored := config.AuthoredChart(company)
-	if len(authored.Edges()) == 0 {
-		return nil
-	}
-	body, err := json.Marshal(authored)
-	if err != nil {
-		return fmt.Errorf("encode the org chart in %s: %w", path, err)
-	}
-	// SEALED, for the reason the revision beside it is: an authored chart
-	// carries every seat's runtime half, and an offline import has NOT been
-	// through the chart writer — which is what turns a literal credential
-	// into a sealed reference. A file holding one would otherwise put it in
-	// this table in plaintext, where a backup copies it.
-	payload, err := secrets.Seal(cs.cipher, body)
-	if err != nil {
-		return fmt.Errorf("seal the org chart in %s: %w", path, err)
-	}
-	if err := cs.staged.Stage(ctx, store.StagedChart{
-		ID: chart.ImportKey(authored), Payload: payload,
-		SourcePath: path, StagedBy: currentOperator(),
-	}); err != nil {
-		return err
-	}
-	units, seats := countChart(company)
-	fmt.Fprintf(stdout,
-		"staged %d unit(s) and %d seat(s) for this node to publish at its next "+
-			"start — an org chart is a log of its own and this command has no "+
-			"broker open. The chart this company runs is unchanged until then; "+
-			"to publish it now, run the same command against a running node "+
-			"(`-api`).\n", units, seats)
-	return nil
-}
-
-// countChart is how many units and seats a file declares, AT ANY DEPTH.
-//
-// Both walk, because both nest: a company's units are a tree and its seats sit
-// at the root and inside any unit of it. Counting only the top level would
-// report "1 unit and 1 seat" for a document holding forty of each, which is
-// the one number an operator reads to decide whether the note is about
-// anything.
-func countChart(company *config.Company) (units, seats int) {
-	seats = len(company.Roles)
-	var walk func([]config.Unit)
-	walk = func(in []config.Unit) {
-		for i := range in {
-			units++
-			seats += len(in[i].Roles)
-			walk(in[i].Children)
-		}
-	}
-	walk(company.Units)
-	return units, seats
 }

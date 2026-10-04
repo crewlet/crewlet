@@ -131,11 +131,11 @@ func TestACreateOnlyWriteKeepsThePathAsTheName(t *testing.T) {
 	}
 }
 
-// EVERY COLLECTION THIS SURFACE ADDRESSES, IT CREATES BY ADDRESS. A collection
-// whose members have a place the path cannot name is the chart's, which is not
-// addressed here at all; one added to the table without saying how a member of
-// it is added would reach a create with nothing to call. Mutation: drop one
-// collection's create and this fails.
+// EVERY COLLECTION THIS SURFACE ADDRESSES, IT CREATES BY ADDRESS — but for a
+// seat and a unit, whose members have a place in the company the path cannot
+// name. One added to the table without saying how a member of it is added
+// would reach a create with nothing to call. Mutation: drop one collection's
+// create and this fails.
 func TestEveryCollectionIsCreatable(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -145,6 +145,9 @@ func TestEveryCollectionIsCreatable(t *testing.T) {
 		configapi.EntityMCPServers:   `{"name":"fresh","command":"fresh-mcp"}`,
 	}
 	for _, kind := range configapi.EntityKinds() {
+		if kind == configapi.EntityRoles || kind == configapi.EntityUnits {
+			continue
+		}
 		body, known := bodies[kind]
 		if !known {
 			t.Errorf("%s is addressed here and this case has no member to add to it: "+
@@ -155,6 +158,24 @@ func TestEveryCollectionIsCreatable(t *testing.T) {
 			map[string]string{"If-None-Match": "*"})
 		if res.Code != http.StatusOK {
 			t.Errorf("a create-only check of %s = %d, want 200: %s", kind, res.Code, res.Body.String())
+		}
+	}
+}
+
+// A SEAT AND A UNIT ARE NOT CREATED BY ADDRESS. Each has a place in the
+// company — the unit it sits in, its position — that the path does not name,
+// and inventing one would put somebody's new seat where nobody chose. Added
+// through the whole document, or the unit it belongs in.
+func TestASeatIsNotCreatedByAddress(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, serversDoc)
+
+	for _, kind := range []string{configapi.EntityRoles, configapi.EntityUnits} {
+		res := s.do(t, http.MethodPut, "/config/"+kind+"/newcomer",
+			`{"name":"newcomer"}`, createOnly("add one"))
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "not_creatable") {
+			t.Errorf("create-only %s = %d, want 400 not_creatable: %s", kind, res.Code, res.Body.String())
 		}
 	}
 }

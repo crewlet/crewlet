@@ -136,7 +136,7 @@ func (w refusingRevoke) Revoke(context.Context, string, string, string) (statelo
 // AND A SIGN-OUT EVERYWHERE THE LOG REFUSED FOR GOOD SAYS SO BY CARRYING NO
 // HINT. A full log or a record too large answers the same retry the same, and
 // the identity hint told a browser to come back in two seconds for ever; the
-// refusal's own rule answers it with no Retry-After, as /chart and /work do.
+// refusal's own rule answers it with no Retry-After, as /work does.
 // A node that is behind is the control, and keeps the hint.
 func TestASignOutEverywhereTheLogRefusedSaysWhetherToRetry(t *testing.T) {
 	t.Parallel()

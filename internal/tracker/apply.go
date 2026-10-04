@@ -54,9 +54,9 @@ type Applier struct {
 // NewApplier builds the applier for one node.
 //
 // inbox is called after a COMMITTED batch with every inbox that batch moved.
-// After the commit and never inside the transaction, for internal/chart's
-// reason: the store re-runs the body of an attempt that failed transiently, and
-// a movement announced from inside it would announce a notice no row holds.
+// After the commit and never inside the transaction: the store re-runs the
+// body of an attempt that failed transiently, and a movement announced from
+// inside it would announce a notice no row holds.
 func NewApplier(nodeID string, inbox func([]InboxMovement)) *Applier {
 	return &Applier{NodeID: nodeID, inbox: inbox}
 }

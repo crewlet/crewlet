@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -22,9 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -39,34 +36,13 @@ var pinnedNow = time.Date(2026, 8, 23, 14, 0, 0, 0, time.UTC)
 // non-empty deliberately: a company with no models at all is a supported
 // authoring state, and an empty one would not be refused at all (see
 // nomodels_test.go).
-//
-// A SETTINGS RULE, because a revision carries settings: it used to be a SEAT
-// naming a missing provider, which is the same rule one field along on a half
-// a revision no longer holds.
 var brokenRevision = json.RawMessage(`{"name":"Acme",
   "providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["k"]}}},
   "workers":{"researcher":{"description":"reads sources and reports findings",
     "system_prompt":"You research.","model":"nonexistent"}}}`)
 
-// A second company, differing from companyDoc in the one way a reconcile has
-// to be visible through.
-//
-// THAT WAY USED TO BE ITS SEAT SET, and it is not any more: the org chart is a
-// state-log domain, so a stored revision carries the SETTINGS and a hire is a
-// record on the chart's own log. A fixture that differed by a seat would now
-// differ in nothing an apply can see — the apply would report success and
-// every assertion after it would be reading the boot company's chart, which
-// is exactly the shape of a test that has quietly stopped asserting.
-//
-// So it differs by its PROVIDERS and its token budget: both are settings, both
-// are things a revision owns, and both are visible on the epoch this apply
-// publishes.
-//
-// AND IT CARRIES NO CHART AT ALL, which is what a stored revision holds. One
-// that did would be refused by the apply itself
-// ([config.DecodeSettingsAsCompany]) before a single assertion here ran. The
-// seats these cases read are the engine's own, seeded from companyDoc onto the
-// chart's log at boot and untouched by every apply below.
+// A second company, differing from companyDoc in the ways a reconcile has to
+// be visible through: one more seat, and a token budget.
 const grownCompanyDoc = `
 name: Acme
 token_budget:
@@ -77,6 +53,16 @@ providers:
       type: anthropic
       model: claude-sonnet-5
       api_keys: ["${K}"]
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+  - name: CTO
+    handle: cto
+    llm: zulu
+  - name: Designer
+    handle: designer
+    llm: zulu
 `
 
 // plane is one engine, one store, and the reconciler between them.
@@ -224,24 +210,13 @@ func (p *plane) activatePayload(t *testing.T, summary string, payload json.RawMe
 // yamlToJSON stores a company the way an import does: parse the authored
 // document once, and store its JSON form, which is what the payload column
 // holds and what every node reads from then on.
-// yamlToJSON is one authored document as the bytes a revision stores.
-//
-// THE SETTINGS HALF, which is what every writer in the tree stores now:
-// `crewlet run -company`, `crewlet config import` and `PUT /config` all take
-// an authored document and keep the eighteen fields a revision holds. A
-// fixture that stored the whole file would be activating a revision this
-// build refuses to apply, so every case using it would assert the refusal
-// rather than its own subject.
-//
-// The seats these cases read come from the CHART, seeded onto its log from
-// the engine's own boot company.
 func yamlToJSON(t *testing.T, doc string) json.RawMessage {
 	t.Helper()
 	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	raw, err := json.Marshal(config.SettingsOf(cfg).Company())
+	raw, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -311,73 +286,16 @@ func TestANewRevisionReplacesTheEpoch(t *testing.T) {
 	if got := dayCeiling(before); got != 0 {
 		t.Errorf("the previous epoch changed under the apply: budget %d", got)
 	}
+	if got := len(before.Seats()); got != 2 {
+		t.Errorf("the previous epoch changed under the apply: %d seats", got)
+	}
 	if got := dayCeiling(p.engine.Company()); got != 4242 {
 		t.Errorf("token budget = %d, want the new revision's", got)
 	}
-	// AND THE CHART DID NOT MOVE, which is the split this engine now runs
-	// on: a revision carries settings, and the seats come from the chart's
-	// own log. An apply that changed the seat set would mean a config
-	// write was a second writer of the company's structure.
-	if got := p.seats(t); !slices.Equal(got, []string{"ceo", "cto"}) {
-		t.Errorf("seats = %v, want the chart's own, untouched by the apply", got)
-	}
-}
-
-// AN APPLY RECORDS THE CHART POSITION IT RAN AT.
-//
-// # What the pair is for
-//
-// A company used to be ONE document, so "what was this company at 14:02" had
-// one answer: the revision that was active. It has two halves now, and neither
-// names the other — so a revert to revision N restores the settings somebody
-// had and says nothing about the chart they had, which is usually the half a
-// reader is asking about: who was in which team.
-//
-// # And why NULL and zero are not the same answer
-//
-// A revision activated by a build before the column existed has no recorded
-// position; one activated on an empty chart ran at 0. Collapsing them would
-// report every historical activation as having run on an empty company, so the
-// column is a pointer and the absence is asserted as well as the value.
-func TestAnActivationRecordsTheChartPositionItAppliedAt(t *testing.T) {
-	t.Parallel()
-	p := newPlane(t)
-
-	// BEFORE: a revision this node never applied has no position at all.
-	p.activate(t.Context(), t, grownCompanyDoc)
-	before, found, err := p.store.Configs().Active(t.Context())
-	if err != nil || !found {
-		t.Fatalf("active: %v (found=%v)", err, found)
-	}
-	if before.ChartPosition != nil {
-		t.Errorf("a revision nothing has applied carries a position: %d",
-			*before.ChartPosition)
-	}
-
-	if err := p.recon.Tick(t.Context()); err != nil {
-		t.Fatalf("tick: %v", err)
-	}
-
-	after, found, err := p.store.Configs().Active(t.Context())
-	if err != nil || !found {
-		t.Fatalf("active: %v (found=%v)", err, found)
-	}
-	if after.ChartPosition == nil {
-		t.Fatal("an applied revision records no chart position, so its history " +
-			"cannot say which org chart it ran on")
-	}
-	// THE POSITION THE EPOCH WAS COMPOSED AT, compared against what the
-	// view actually carries rather than against a constant: a stamp that
-	// wrote any number at all would pass a non-nil check.
-	at, ok := p.engine.ViewPosition()
-	if !ok {
-		t.Fatal("the engine published no chart view to compare against")
-	}
-	want := statelog.Position{Generation: at.Generation, Seq: at.Seq}.Packed()
-	if *after.ChartPosition != want {
-		t.Errorf("recorded %d, want %d — the pair (revision, position) is what "+
-			"says which chart this revision ran on",
-			*after.ChartPosition, want)
+	// AND THE ORG IS THE REVISION'S: the seats are part of the document an
+	// apply installs.
+	if got := p.seats(t); !slices.Equal(got, []string{"ceo", "cto", "designer"}) {
+		t.Errorf("seats = %v, want the three the new revision names", got)
 	}
 }
 
@@ -751,10 +669,12 @@ func TestOneEpochIsRetriedABoundedNumberOfTimes(t *testing.T) {
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("the fixed revision was refused: %v", err)
 	}
-	// THE SETTINGS, which is what a revision carries: the seats come from
-	// the chart's own log and a config apply never moves them.
+	// The fixed revision's settings AND its seats: a revision carries both.
 	if got := dayCeiling(p.engine.Company()); got != 4242 {
 		t.Errorf("token budget = %d, want the fixed revision's", got)
+	}
+	if got := p.seats(t); len(got) != 3 {
+		t.Errorf("seats = %v, want the fixed revision's three", got)
 	}
 }
 
@@ -1080,90 +1000,31 @@ func TestTheLoopStopsWithItsContext(t *testing.T) {
 	}
 }
 
-// THE SEAT SET THE HOST READS FOLLOWS THE CHART, not the company this engine
-// booted on.
-//
-// A method value captured at construction keeps claiming seats a removed one
-// no longer has and never claims a new one — and the failure is invisible,
-// because a node reading a stale seat set looks exactly like a node losing
-// every race.
-//
-// # It is driven by a HIRE rather than by a config activation
-//
-// It used to activate a revision with an extra seat in it, and that revision
-// no longer carries one: the chart is a state-log domain, so a stored
-// revision holds the settings and a hire is a record on the chart's own log.
-// The old shape would now assert nothing at all — the apply would succeed and
-// the seat set would be the boot company's, which is what a passing test and
-// a broken one both look like.
-//
-// So this writes the seat where a hire writes it, and waits for the view.
-// That is also the stronger version of the same question: the capture this
-// guards against is now between the host and a view that moves on its own
-// rhythm, rather than between the host and an apply it is part of.
 func TestTheNodeSeesTheNewEpochsSeats(t *testing.T) {
 	t.Parallel()
+	// The seat set the HOST reads must follow the epoch, not the company
+	// this engine booted on. A method value captured at construction keeps
+	// claiming seats a deleted role no longer has and never claims a new
+	// one — and the failure is invisible, because a node reading a stale
+	// seat set looks exactly like a node losing every race.
 	p := newPlane(t)
 	host := p.engine.Node().Host()
 	if got := len(host.CompanySeats()); got != 2 {
 		t.Fatalf("the host starts with %d seats, want the boot company's 2", got)
 	}
-
-	writer := p.engine.ChartWriter()
-	if writer == nil {
-		t.Fatal("this engine runs no chart, so a hire has nowhere to land")
+	p.activate(t.Context(), t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := writer.WriteBatch(t.Context(), "hire-designer", chart.Batch{
-		Operations: []chart.Operation{{
-			Kind:     chart.OpCreateSeat,
-			Object:   chart.ObjectRef{Kind: chart.KindSeat, ID: "designer"},
-			SeatKind: chart.SeatAgent,
-		}},
-	}); err != nil {
-		t.Fatalf("hire: %v", err)
-	}
-	if _, err := writer.WriteSeat(t.Context(), "hire-designer-content",
-		chart.SeatContent{
-			Handle: "designer", Name: "Designer",
-		}); err != nil {
-		t.Fatalf("the new seat's content: %v", err)
-	}
-
-	// THE VIEW IS REBUILT BY A LOOP, so this waits for it rather than
-	// assuming the write and the derivation are one step. What it must not
-	// do is wait for ever: a view that never carries the hire is the
-	// failure, not a slow machine.
-	handles := waitForSeats(t, host, 3)
-	if !slices.Equal(handles, []string{"ceo", "cto", "designer"}) {
-		t.Errorf("seats = %v, want the two it booted with and the hire", handles)
-	}
-}
-
-// seatHost is the one method this file asks the seat host for, declared here
-// by the consumer like every other seam in this tree.
-type seatHost interface {
-	CompanySeats() []placement.Seat
-}
-
-// waitForSeats polls the host until it sees n seats, and reports what it saw.
-func waitForSeats(t *testing.T, host seatHost, n int) []string {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
 	var handles []string
-	for {
-		handles = handles[:0]
-		for _, seat := range host.CompanySeats() {
-			handles = append(handles, seat.Handle)
-		}
-		if len(handles) >= n {
-			return handles
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the host sees %v and the chart holds %d seats — the "+
-				"view never carried the write, so every seat decision this "+
-				"node makes is against a chart that has moved", handles, n)
-		}
-		time.Sleep(20 * time.Millisecond)
+	for _, seat := range host.CompanySeats() {
+		handles = append(handles, seat.Handle)
+	}
+	if len(handles) != 3 {
+		t.Fatalf("the host sees %v, want the new epoch's three seats", handles)
+	}
+	if !slices.Equal(handles, []string{"ceo", "cto", "designer"}) {
+		t.Errorf("seats = %v, want the new epoch's three, sorted", handles)
 	}
 }
 
@@ -1274,7 +1135,7 @@ func TestARefusedApplySaysHowFarItGot(t *testing.T) {
 func TestApplyReportsHowFarItGotBeforeARefusal(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
-	status, applied, err := e.Apply(t.Context(), &config.Company{})
+	status, applied, err := e.Apply(t.Context(), &config.Company{}, time.Now())
 	if err == nil {
 		t.Fatal("a company with no name was applied")
 	}
@@ -1378,12 +1239,14 @@ func TestAPeerConvergesOnARevisionItHasNeverSeen(t *testing.T) {
 			"%s/human/%s from the fleet", adopted.CreatedBy, adopted.CreatedByKind,
 			adopted.OperatorID, adopted.Source, revisionAuthor, revisionCredential)
 	}
-	// The SETTINGS of the revision it converged on, not the one it booted
-	// with. Not its seats: those come from the chart's own log, which a
-	// config apply does not carry and never moves.
+	// The settings and the seats of the revision it converged on, not the
+	// one it booted with.
 	if got := dayCeiling(peer.engine.Company()); got != 4242 {
 		t.Errorf("the peer's token budget is %d, want the revision it "+
 			"converged on", got)
+	}
+	if seats := peer.seats(t); !slices.Contains(seats, "designer") {
+		t.Errorf("the peer's seats are %v, want the revision it converged on", seats)
 	}
 }
 

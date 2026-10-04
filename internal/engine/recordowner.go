@@ -20,8 +20,8 @@ import (
 // theirs resolves to. So the question "whose record is `jane.doe`'s?" has the
 // SAME answer as "what would a request from jane.doe act as?", and it is asked
 // through the SAME tables: the directory's row for the login, and
-// [session.ResolveSeat] over this node's chart view for the seat it binds —
-// followed through a rename, refused once the seat is gone. A second
+// [session.ResolveSeat] over the organisation this node runs for the seat it
+// binds — followed through a rename, refused once the seat is gone. A second
 // resolution written here would be the place the two drifted, and the one it
 // replaced had no directory in it at all: the login was read literally, so a
 // bound person's record was looked for, and written, where nothing of theirs
@@ -124,7 +124,7 @@ func holderRecordOf(ctx context.Context, dir bindingDirectory, chart session.Cha
 	}
 	return recordThrough(ctx, chart, login, session.PersonRow{
 		Found: true, Stage: seen.Stage, Login: seen.Login,
-		Seat: seen.Seat, SeatAt: seen.SeatAt,
+		Seat: seen.Seat,
 	})
 }
 

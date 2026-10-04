@@ -3,129 +3,101 @@ package engine
 import (
 	"context"
 	"errors"
-	"fmt"
-	"time"
 
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iam/session"
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // SeatView answers [session.Chart] — which seat a signed-in person acts as —
-// against the org chart this node has applied.
+// against the organisation this node runs: the org chart of the configuration
+// epoch it applied.
 //
-// # Why it reads the chart domain and not the running company
-//
-// [ChartAuthority] asks the RUNNING company's org (`e.Company().Org`), because
-// what it needs is the tree with lead inheritance and manages-expansion
-// applied, which is a derivation the chart rows do not hold. This needs
-// something else entirely, and the difference is a spurious 403.
-//
-// The running org is composed at an EPOCH. It is rebuilt when a revision is
-// applied, not when a chart record lands, so a seat created a second ago is
-// absent from it while the chart applier has long since committed the row —
-// and `e.Company().ChartAt` names the position that composition read, which is
-// BEHIND the chart's own checkpoint by however long it has been since the last
-// apply. A person hired between two epochs would be told their seat is gone,
-// on a node that has the seat, for as long as nothing else triggered a
-// recompose.
-//
-// So this reads the chart domain directly, at [statelog.ReadStale] — this
-// node's own committed rows — and takes its position from the same reader.
-// The two then come from ONE source with nothing between them, which is what
-// makes [session.Chart]'s central distinction sound: a seat absent from a
-// view whose position covers the binding is GONE, and one absent from a view
-// below it is a node that has not seen the hire. Reading rows from one place
-// and a position from another is how those two answers swap.
-type SeatView struct{ reader *chart.Reader }
+// THE RUNNING COMPANY, read per call, and nothing beside it. The org changes
+// only when a revision is activated, and every node applies the activation
+// pointer within seconds of it moving, so the seat a request is resolved
+// against is the seat every surface on this node routes, attributes and
+// authorizes by — never a second copy of the org that could disagree with it.
+type SeatView struct{ engine *Engine }
 
 var _ session.Chart = SeatView{}
 
-// SeatViewOf is the seam over one engine, or the zero value over an engine with
-// no core runtime, which holds no chart rows.
+// SeatViewOf is the seam over one engine, or the zero value over none.
 //
-// THE ZERO VALUE IS NOT NIL, and the difference is what such an engine
-// answers. A nil [session.Chart] would make every bound person seatless — the
-// one arm [session.Binding.Handle] is documented never to be reached by a
-// fall-through — so a view with no reader answers UNKNOWN to every seat
+// THE ZERO VALUE IS NOT NIL, and the difference is what such a view answers. A
+// nil [session.Chart] would make every bound person seatless — the one arm
+// [session.Binding.Handle] is documented never to be reached by a
+// fall-through — so a view with no engine answers UNKNOWN to every seat
 // question instead, which is 503 and says come back to a node that can tell.
-func SeatViewOf(e *Engine) SeatView {
-	if e == nil {
-		return SeatView{}
-	}
-	return SeatView{reader: e.Chart()}
-}
+func SeatViewOf(e *Engine) SeatView { return SeatView{engine: e} }
 
-// errNoChartDomain is what a view with no chart reader answers.
-var errNoChartDomain = errors.New("engine: this engine holds no org chart, so " +
-	"it cannot say which seat anybody holds")
+// errNoOrg is what a view answers on a node that runs no company yet.
+var errNoOrg = errors.New("engine: this node runs no company yet, so it " +
+	"cannot say which seat anybody holds")
 
-// Seat resolves a binding's seat — by its IDENTITY, the handle it was created
-// under — to the seat as it is known now.
+// Seat finds a seat in the running organisation by its handle.
 //
-// AN IDENTITY LOOKUP AND NOT AN ADDRESS ONE ([chart.Reader.SeatByIdentity]),
-// because a binding names the seat by its identity (ADR-0027). Resolved as an
-// address — the live handle first, a retired one after — a person bound before
-// a rename signed in as whichever seat later took the old handle, and a
-// suspended one's standing landed on that stranger. The ROW and nothing else:
-// this runs on every signed-in request and on every binding the
-// dangling-binding alarm classifies, and neither reads the seats it manages or
-// its history.
-//
-// AN ABSENT SEAT IS PROBED FOR A TOMBSTONE, because a tombstone is CONCLUSIVE
-// where an absence is not. [session.ResolveSeat] can answer 403 from one
-// without first establishing that this node has caught up with the binding,
-// and that is the difference between refusing a leaver immediately and making
-// them wait out a grace that will never change the answer. The chart writes
-// one on a removed seat's identity as well as on the handle it last held, so
-// the probe by identity finds a seat renamed before it was removed.
-func (v SeatView) Seat(ctx context.Context, identity string) (session.Seat, bool, error) {
-	if v.reader == nil {
-		return session.Seat{}, false, errNoChartDomain
+// A SEAT THE ORGANISATION DOES NOT HOLD is not found, with no error: a removed
+// seat is simply absent, and that is conclusive, because the organisation is
+// the company this node serves rather than a log it may be behind on.
+func (v SeatView) Seat(_ context.Context, handle string) (session.Seat, bool, error) {
+	company := v.company()
+	if company == nil {
+		return session.Seat{}, false, errNoOrg
 	}
-	fresh := statelog.Freshness{Level: statelog.ReadStale}
-	seat, err := v.reader.SeatByIdentity(ctx, identity, fresh)
-	switch {
-	case err == nil:
-		return session.Seat{
-			Handle: seat.Handle,
-			Kind:   string(seat.Kind),
-			Unit:   seat.UnitKey,
-		}, true, nil
-	case !errors.Is(err, chart.ErrNotFound):
-		// THE UNKNOWN ARM, never "no such seat": an unreadable estate
-		// and an absent row are 503 and 403, and the sentinel above is
-		// the only thing that tells them apart.
-		return session.Seat{}, false, fmt.Errorf(
-			"engine: read the seat created under %q: %w", identity, err)
-	}
-	removal, found, _, err := v.reader.Removed(ctx,
-		chart.ObjectRef{Kind: chart.KindSeat, ID: identity}, fresh)
-	if err != nil {
-		return session.Seat{}, false, fmt.Errorf(
-			"engine: read the removal of the seat created under %q: %w",
-			identity, err)
-	}
-	if !found {
-		// ABSENT AND NOT TOMBSTONED. Reported as not found with no
-		// error, which is what sends the caller to the position
-		// comparison: this is either a seat that never existed or a
-		// hire this node has not applied, and only the position can
-		// say which.
+	role := company.Org.Role(handle)
+	if role == nil {
 		return session.Seat{}, false, nil
 	}
-	return session.Seat{
-		Handle:     removal.Object.ID,
-		Tombstoned: true,
-	}, true, nil
+	seat := session.Seat{Handle: role.Handle(), Name: role.Name,
+		Kind: string(role.EffectiveKind())}
+	if unit := company.Org.UnitFor(role); unit != nil {
+		seat.Unit = unit.Key()
+	}
+	return seat, true, nil
 }
 
-// Position is how far this node's chart applier has committed, and how far
-// behind the log it is.
-func (v SeatView) Position(context.Context) (uint64, time.Duration, error) {
-	if v.reader == nil {
-		return 0, 0, errNoChartDomain
+// HumanSeats is every human seat of the running organisation, in the order the
+// company declares them, and false on a node that runs no company yet.
+func (v SeatView) HumanSeats() ([]session.Seat, bool) {
+	company := v.company()
+	if company == nil {
+		return nil, false
 	}
-	at := v.reader.At()
-	return uint64(at.Packed()), v.reader.Lag(), nil
+	var seats []session.Seat
+	for role := range company.Org.AllRoles() {
+		if role.EffectiveKind() != org.KindHuman {
+			continue
+		}
+		seat := session.Seat{Handle: role.Handle(), Name: role.Name,
+			Kind: string(role.EffectiveKind())}
+		if unit := company.Org.UnitFor(role); unit != nil {
+			seat.Unit = unit.Key()
+		}
+		seats = append(seats, seat)
+	}
+	return seats, true
+}
+
+// Version names the organisation [SeatView.Seat] answers from: it moves on
+// every epoch this node publishes, so two equal readings answer every seat
+// alike — which is what lets the dangling-binding watch skip a beat on which
+// nothing moved.
+func (v SeatView) Version(context.Context) (uint64, error) {
+	if v.company() == nil {
+		return 0, errNoOrg
+	}
+	return v.engine.epoch.installed.Load(), nil
+}
+
+// company is the epoch this view answers from, or nil with no engine or no
+// company.
+func (v SeatView) company() *Company {
+	if v.engine == nil {
+		return nil
+	}
+	c := v.engine.Company()
+	if c == nil || c.Org == nil {
+		return nil
+	}
+	return c
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -73,6 +74,11 @@ type Writer struct {
 	// see [Blinds] for what holding it cost.
 	blinds Blinds
 	sealer *Sealer
+
+	// seats is the organisation this node runs, which a seat bind is
+	// checked against. Nil refuses every seat bind as unavailable: see
+	// [Writer.seatOf].
+	seats SeatLookup
 
 	// Actor and ActorKind are who this writer acts as. ActorKind is the
 	// PRINCIPAL's kind — person, machine, engine — because that is what
@@ -181,6 +187,17 @@ type Events interface {
 	Emit(ctx context.Context, payload events.Payload)
 }
 
+// SeatLookup is the organisation this node runs, as narrowly as a seat bind
+// asks it: whether it holds a seat at a handle, and what kind of seat that is.
+//
+// DECLARED HERE, by the consumer, in the shape the session layer's own seam
+// takes ([session.Chart]), so the engine's one view of its running org
+// satisfies both. An error is the unknown arm — a node running no company yet
+// — and never "no such seat".
+type SeatLookup interface {
+	Seat(ctx context.Context, handle string) (session.Seat, bool, error)
+}
+
 // WriterDeps is what a writer is built from.
 type WriterDeps struct {
 	Publisher *statelog.Publisher
@@ -190,6 +207,12 @@ type WriterDeps struct {
 	// belong to somebody. Both optional: see [Writer.blinds].
 	Blinds Blinds
 	Sealer *Sealer
+
+	// Seats is the organisation this node runs — the org chart of the
+	// configuration epoch it applied — which a seat bind and an invitation
+	// binding a seat are checked against. Optional: a writer handed none
+	// refuses every seat bind as unavailable rather than binding unchecked.
+	Seats SeatLookup
 
 	Actor     string
 	ActorKind iam.Kind
@@ -233,7 +256,7 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 	// next and the writer is safe for concurrent use. See [Writer.seq].
 	return &Writer{
 		publisher: deps.Publisher, db: deps.DB,
-		blinds: deps.Blinds, sealer: deps.Sealer,
+		blinds: deps.Blinds, sealer: deps.Sealer, seats: deps.Seats,
 		Actor: deps.Actor, ActorKind: deps.ActorKind,
 		Grants: deps.Grants, Now: now, events: deps.Events,
 	}, nil

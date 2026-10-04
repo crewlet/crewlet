@@ -8,7 +8,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
@@ -16,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -142,21 +141,13 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per
 			// registered domain — the CORE's, so they are swept from
 			// boot on every node, a node with no company included: its
-			// identity and chart logs are written from the first
-			// invitation. Every `<domain>_ops` migration says the table
+			// identity log is written from the first invitation. Every `<domain>_ops` migration says the table
 			// is swept and ships the index a range delete needs, and
 			// nothing swept them: a row per applied record, kept for
 			// ever, on every node. PER NODE rather than under the
 			// singleton, because each node owns its own copy — see
 			// [maintenance.StatelogJobs].
 			jobs = append(jobs, maintenance.StatelogJobs(core.log.opsLedgers())...)
-			// THE ORG CHART'S SEALED VALUES THAT NOTHING NAMES ANY MORE
-			// — a cleared address, a token replaced by the operator's
-			// own reference, a removed seat's credentials. A FLEET job:
-			// the store is one shared bucket, and the judgement is
-			// proved from this node's rows against the chart log before
-			// anything is deleted. See chartsweep.go.
-			jobs = append(jobs, e.chartSealJob())
 			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its absence
 			// is a consequence rather than an omission. Its three passes
 			// were a change retention, a revision prune and an orphan
@@ -209,8 +200,7 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 // reads its job list once, and on a node that booted unconfigured "once" was
 // before there were native halves to contribute the tracker's repairs and the
 // inbox sweep, or a company to state the conversation horizon. The operation
-// ledgers and the chart's sealed values are the core's, and were in the list
-// from boot. The old worker stops — its in-flight tick waited out
+// ledgers are the core's, and were in the list from boot. The old worker stops — its in-flight tick waited out
 // — before the new one is built, so two sweeps never run at once.
 //
 // A node that does not publish never started a sweep, and does not start one
@@ -338,26 +328,36 @@ func (e *Engine) mailboxRegistry() node.MailboxRegistry {
 // older revision) answers unknown, and the tick stamps and retires nothing. The
 // next holder of the duty, or this node once it catches up, judges instead.
 //
-// The three reads are ordered so the roster can only be NEWER than the epoch it
-// is checked against, never older. The pointer is read first; the applied epoch
-// next; the company last. An apply installs its company before the reconciler
-// records its epoch, so a company read after a matching epoch is that
-// revision's or a later one, and a later revision is only ever a truer roster.
-//
-// # And only when this node's CHART holds every hire
-//
-// The settings epoch is not where the seats come from any more: they are the
-// org chart's own log, which moves on every hire with no revision anywhere in
-// it, and a node's chart view is its own rows at whatever position its applier
-// has reached. Gated on the epoch alone, a duty holder behind the chart log —
-// lagging, or holding a hire's record it could not apply, which on a rolling
-// upgrade it holds until it is upgraded — stamped a seat hired on another node
-// absent, and after the grace retired its mail. So the chart log's END is read
-// before anything is derived from it, the rows are proved in their own
-// snapshot to hold every record up to it ([chart.Reader.Covers]), and the
-// company this node publishes must have been composed from rows that far
-// along; anything short of that is unknown, never absent.
+// The reads are ordered so the company judged is EXACTLY the pointer's: the
+// pointer is read first, and the company this node publishes is accepted only
+// when it was applied from that very activation ([Engine.fleetCompany]).
 func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
+	company, err := e.fleetCompany(ctx, e.Company())
+	if err != nil {
+		return nil, err
+	}
+	return company.Seats(), nil
+}
+
+// fleetCompany is c when it is the company of the activation the fleet is
+// pointed at, or an error saying why that is unknown.
+//
+// THE RULE EVERY CALLER THAT JUDGES A SEAT ABSENT AND ACTS ON IT FOLLOWS — the
+// mailbox sweep, and the clearing of a removed seat's pause
+// ([Engine.clearRemovedSeatPauses]) — because both act on something no undo
+// restores: a retired mailbox's mail, a pause a person placed. A node applying
+// a revision the fleet has since replaced does not have a seat the newer one
+// added, and would judge it absent.
+//
+// COMPARED ON THE ACTIVATION'S INSTANT, which the pointer publishes strictly
+// later on every activation ([coord.ActivationAt]) and which a company carries
+// from the apply that built it ([Company.ActivatedAt]) — so a re-activation of
+// an unchanged revision, the rotation gesture, is a different activation here
+// too, and a company applied from the pointer's own activation is accepted
+// even while the reconciler is still inside the apply that publishes it. A
+// company no activation has named yet — a Tier B file a node booted with — is
+// unknown until the reconciler's first apply.
+func (e *Engine) fleetCompany(ctx context.Context, c *Company) (*Company, error) {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return nil, fmt.Errorf("engine: this node has no fleet store to read the activation pointer from")
 	}
@@ -368,71 +368,17 @@ func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
 	if !found {
 		return nil, maintenance.ErrNoActiveRevision
 	}
-	r := e.reconciler.Load()
-	if r == nil {
-		return nil, fmt.Errorf("engine: this node runs no reconciler, so it cannot tell whether it "+
-			"serves activation epoch %d", target.Epoch)
-	}
-	applied := r.Applied()
-	if applied != target.Epoch {
-		return nil, fmt.Errorf("engine: this node serves activation epoch %d and the fleet is on %d; "+
-			"seats are judged once this node has applied it", applied, target.Epoch)
-	}
-	return e.chartRoster(ctx)
-}
-
-// chartRoster is the agent seats of the company this node publishes, known
-// only once that company holds every record the org chart's log holds — see
-// [Engine.activeSeats].
-//
-// THE CHART'S END BEFORE THE ROWS, and the rows before the company: a hire
-// landing between any two reads can only make the answer unknown. The rows
-// alone are not enough, because the company a node publishes is composed from
-// them AFTER they commit, so the one it serves can still be the one from
-// before the hire. A node with no chart runtime serves the settings document's
-// own tree, which the settings epoch already covers.
-func (e *Engine) chartRoster(ctx context.Context) ([]placement.Seat, error) {
-	company, err := e.wholeRoster(ctx, e.Company)
-	if err != nil {
-		return nil, err
-	}
-	return company.Seats(), nil
-}
-
-// wholeRoster is the company current reads, known only once it holds every
-// record the org chart's log holds: the rule [Engine.chartRoster] states, for
-// every caller that judges a seat ABSENT and acts on it — the mailbox sweep,
-// and the clearing of a removed seat's pause ([Engine.clearRemovedSeatPauses]).
-//
-// THE CHART'S END BEFORE THE ROWS, and the rows before the company, for the
-// order chartRoster gives. current is read last, so a caller converging on a
-// company it already holds hands that one in.
-func (e *Engine) wholeRoster(ctx context.Context, current func() *Company) (*Company, error) {
-	reader := e.Chart()
-	var end uint64
-	if reader != nil {
-		var err error
-		if end, err = e.chartLogEnd(ctx); err != nil {
-			return nil, err
-		}
-		if err := reader.Covers(ctx, end); err != nil {
-			return nil, fmt.Errorf("engine: seats are judged once this node's chart rows "+
-				"hold every hire: %w", err)
-		}
-	}
-	company := current()
-	if company == nil {
+	switch {
+	case c == nil:
 		return nil, errors.New("engine: this node publishes no company yet; seats are " +
 			"judged once it does")
+	case store.EncodeTime(c.ActivatedAt) != store.EncodeTime(target.At):
+		return nil, fmt.Errorf("engine: this node serves the activation of %s and the "+
+			"fleet is on activation epoch %d of %s; seats are judged once this node "+
+			"has applied it", c.ActivatedAt.Format(time.RFC3339Nano), target.Epoch,
+			target.At.Format(time.RFC3339Nano))
 	}
-	if reader != nil {
-		if at := statelog.Unpack(chart.Domain{}.Stream().Name, company.ChartAt); at.Seq < end {
-			return nil, fmt.Errorf("engine: this node's company was composed from chart "+
-				"position %d and the log holds %d; seats are judged once the view "+
-				"that carries every hire is published", at.Seq, end)
-		}
-	}
-	return company, nil
+	return c, nil
 }
 
 // Maintenance exposes the retention sweep.

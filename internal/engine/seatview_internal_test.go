@@ -5,34 +5,38 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/chart"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A NODE WITH NO CHART DOMAIN ANSWERS UNKNOWN, NEVER SEATLESS.
+// A NODE RUNNING NO COMPANY ANSWERS UNKNOWN, NEVER SEATLESS.
 //
-// The zero [SeatView] is what an engine with no core runtime passes, and the
-// one answer it must not give is "no seat" — [session.ResolveSeat] reads that as
-// the seatless arm and hands somebody bound to a lead's seat an empty handle,
+// The zero [SeatView] is what a view over no engine is, and the one answer it
+// must not give is "no seat" — [session.ResolveSeat] reads that as the
+// seatless arm and hands somebody bound to a lead's seat an empty handle,
 // which is the silent fall-through the whole three-valued shape exists to
 // prevent. Both methods error, and a person is then 503 rather than served.
-func TestASeatViewWithNoChartRefusesRatherThanAnsweringSeatless(t *testing.T) {
+func TestASeatViewWithNoCompanyRefusesRatherThanAnsweringSeatless(t *testing.T) {
 	t.Parallel()
 	var view SeatView
 	if _, found, err := view.Seat(t.Context(), "platform-lead"); err == nil {
-		t.Errorf("Seat answered found=%v with no error, so a view with no chart "+
-			"would report every seat in the company as gone", found)
+		t.Errorf("Seat answered found=%v with no error, so a view with no "+
+			"company would report every seat in the company as gone", found)
 	}
-	if _, _, err := view.Position(t.Context()); err == nil {
-		t.Error("Position answered with no error, so a view with no chart " +
-			"would read as a node that has applied everything")
+	if _, err := view.Version(t.Context()); err == nil {
+		t.Error("Version answered with no error, so a view with no company " +
+			"would read as one the binding watch may classify against")
+	}
+	if seats, running := view.HumanSeats(); running {
+		t.Errorf("HumanSeats answered %v as a running company's seats, so a "+
+			"node with none would list a company with no people", seats)
 	}
 	// AND THROUGH THE RESOLVER, which is where it matters: the row must
 	// be `stalled` rather than `seatless`.
 	binding := session.ResolveSeat(t.Context(), view,
-		session.PersonRow{Found: true, Seat: "platform-lead", SeatAt: 900})
+		session.PersonRow{Found: true, Seat: "platform-lead"})
 	if binding.Row != session.SeatRowStalled {
 		t.Errorf("row %q, want %q", binding.Row, session.SeatRowStalled)
 	}
@@ -41,57 +45,88 @@ func TestASeatViewWithNoChartRefusesRatherThanAnsweringSeatless(t *testing.T) {
 	}
 }
 
-// A BINDING'S SEAT IS FOUND BY THE HANDLE IT WAS CREATED UNDER, on a running
-// node, through a rename and through a removal.
+// A BINDING'S SEAT IS THE SEAT THE RUNNING COMPANY HOLDS UNDER ITS HANDLE, and
+// it is gone the moment an applied revision no longer holds it.
 //
-// A binding names its seat by that identity (ADR-0027), and this is the one
-// place the request path and the dangling-binding rule turn it back into a
-// seat. Looked up as an ADDRESS, the seat's new handle would answer for the
-// identity too — which is how a person bound before a rename came to sign in
-// as whichever seat took the old handle next — and a seat renamed and then
-// removed would read as merely absent rather than conclusively gone.
-func TestTheSeatViewFindsABindingsSeatByItsIdentity(t *testing.T) {
+// The running company is what every surface on this node routes, attributes
+// and authorizes by, so a seat it does not hold is conclusively absent — not
+// "not yet": there is no log this node can be behind on. The version moves
+// with the epoch, which is what lets the dangling-binding watch skip a beat on
+// which nothing moved.
+//
+// The control is the seat before the apply: found, and human.
+func TestTheSeatViewAnswersFromTheRunningCompany(t *testing.T) {
 	t.Parallel()
 	e := bootDirectoryNode(t, nil)
-	view, writer := SeatViewOf(e), e.ChartWriter()
-	if _, err := writer.WriteBatch(t.Context(), "test:rename", chart.Batch{
-		Operations: []chart.Operation{{Kind: chart.OpRename,
-			Object: chart.ObjectRef{Kind: chart.KindSeat, ID: founderSeat},
-			To:     "dana"}},
-	}); err != nil {
-		t.Fatalf("rename the founder's seat: %v", err)
-	}
+	view := SeatViewOf(e)
 
 	seat, found, err := view.Seat(t.Context(), founderSeat)
-	if err != nil || !found || seat.Handle != "dana" || seat.Kind != session.SeatKindHuman {
-		t.Errorf("the identity reads %+v (found %v, %v), want the renamed human "+
-			"seat", seat, found, err)
+	if err != nil || !found || seat.Handle != founderSeat ||
+		seat.Kind != session.SeatKindHuman || seat.Name != "Dana Founder" {
+		t.Fatalf("the founder's seat reads %+v (found %v, %v), want the human "+
+			"seat the company holds", seat, found, err)
 	}
-	if seat, found, err := view.Seat(t.Context(), "dana"); err != nil || found {
-		t.Errorf("the seat's current handle answered as an identity: %+v, %v, %v",
-			seat, found, err)
+	if seat, found, err := view.Seat(t.Context(), "ceo"); err != nil || !found ||
+		seat.Kind == session.SeatKindHuman {
+		t.Errorf("the CEO reads %+v (found %v, %v), want an agent seat", seat, found, err)
+	}
+	before, err := view.Version(t.Context())
+	if err != nil {
+		t.Fatalf("Version: %v", err)
+	}
+	if handles := humanHandles(t, view); !slices.Contains(handles, founderSeat) ||
+		slices.Contains(handles, "ceo") {
+		t.Errorf("the human seats are %v, want the founder's and no agent's", handles)
 	}
 
-	if _, err := writer.WriteRemoval(t.Context(), "test:remove", chart.Batch{
-		Reason: "left", Operations: []chart.Operation{{Kind: chart.OpRemoveObject,
-			Object: chart.ObjectRef{Kind: chart.KindSeat, ID: "dana"}}},
-	}); err != nil {
-		t.Fatalf("remove the seat: %v", err)
+	// THE FOUNDER'S SEAT LEAVES THE COMPANY in one apply.
+	without := directoryConfig(t)
+	var roles []config.Role
+	for _, role := range without.Roles {
+		if role.Handle != founderSeat {
+			roles = append(roles, role)
+		}
 	}
-	seat, found, err = view.Seat(t.Context(), founderSeat)
-	if err != nil || !found || !seat.Tombstoned {
-		t.Errorf("the removed seat's identity reads %+v (found %v, %v), want a "+
-			"tombstone — conclusive, so a leaver is refused without waiting "+
-			"out a grace", seat, found, err)
+	without.Roles = roles
+	if _, _, err := e.Apply(t.Context(), without, time.Now()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if seat, found, err := view.Seat(t.Context(), founderSeat); err != nil || found {
+		t.Errorf("the removed seat reads %+v (found %v, %v), want it absent — a "+
+			"leaver's seat is refused at once", seat, found, err)
+	}
+	if after, err := view.Version(t.Context()); err != nil || after == before {
+		t.Errorf("the version reads %d (%v) after an apply, the same as before: "+
+			"the binding watch would skip the beat that changed every answer", after, err)
+	}
+	if handles := humanHandles(t, view); slices.Contains(handles, founderSeat) {
+		t.Errorf("the human seats are %v after the founder's seat left", handles)
 	}
 }
 
+// humanHandles is the running company's human seats, by handle.
+func humanHandles(t *testing.T, view SeatView) []string {
+	t.Helper()
+	seats, running := view.HumanSeats()
+	if !running {
+		t.Fatal("HumanSeats: the node runs no company")
+	}
+	handles := make([]string, 0, len(seats))
+	for _, seat := range seats {
+		if seat.Kind != session.SeatKindHuman {
+			t.Errorf("HumanSeats listed %+v, which is not a human seat", seat)
+		}
+		handles = append(handles, seat.Handle)
+	}
+	return handles
+}
+
 // SeatViewOf OVER A NIL ENGINE IS THE ZERO VALUE, not a panic: the wiring
-// builds it before it knows whether this node runs a chart domain.
+// builds it before it knows whether this node runs a company.
 func TestSeatViewOfANilEngineIsTheZeroValue(t *testing.T) {
 	t.Parallel()
-	if view := SeatViewOf(nil); view.reader != nil {
-		t.Errorf("SeatViewOf(nil) carries a reader: %+v", view)
+	if view := SeatViewOf(nil); view.engine != nil {
+		t.Errorf("SeatViewOf(nil) carries an engine: %+v", view)
 	}
 }
 

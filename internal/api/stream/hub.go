@@ -248,7 +248,7 @@ func (a Audience) Holds(grant iam.Grant) bool {
 // The grant table ([needs]) decides WHETHER an audience receives a kind; a
 // shaped payload decides WHAT of it. The org tree is a `state:read` push, and a
 // seat's resolved model chain and tool sources inside it are derived from the
-// chart's runtime half, which only a `config:read` holder reads — so one kind
+// seat's runtime settings, which only a `config:read` holder reads — so one kind
 // carries two shapes, and a reader is handed the one its grants describe.
 //
 // The decision travels WITH THE PAYLOAD rather than being a second table here,

@@ -1,6 +1,7 @@
 package authapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/credential"
+	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -89,11 +91,9 @@ type inviteView struct {
 
 // inviteSeat is the seat an invitation binds, as its view shows it.
 type inviteSeat struct {
-	// Handle is the seat's handle as the chart holds it now, which may be
-	// one it was renamed to since the invitation was issued — the binding
-	// follows the seat, not the name. Empty when this node's chart no
-	// longer holds the seat, which the redemption then refuses as a link
-	// that no longer works.
+	// Handle is the seat the invitation binds. Empty when the company this
+	// node runs no longer holds it as a human seat, which the redemption
+	// then refuses as a link that no longer works.
 	Handle string `json:"handle,omitempty"`
 
 	// Name is the seat's display name, or empty.
@@ -137,9 +137,28 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 		MinPasswordLength: s.passwordFloor(),
 	}
 	if held.Seat != "" {
-		view.Seat = &inviteSeat{Handle: held.SeatHandle, Name: held.SeatName}
+		view.Seat = s.inviteSeatOf(r.Context(), held.Seat)
 	}
 	httpjson.Write(w, http.StatusOK, view)
+}
+
+// inviteSeatOf is the seat an invitation binds, as the company this node runs
+// holds it now: named, when it is still a human seat there, and with no handle
+// when it is not — the redemption refuses that link, and the page says so
+// before anybody types a password. A lookup that fails shows the stored handle
+// alone: the page is a courtesy, and the redemption asks again.
+func (s *Service) inviteSeatOf(ctx context.Context, handle string) *inviteSeat {
+	if s.seats == nil {
+		return &inviteSeat{Handle: handle}
+	}
+	seat, found, err := s.seats.Seat(ctx, handle)
+	switch {
+	case err != nil:
+		return &inviteSeat{Handle: handle}
+	case !found || seat.Kind != session.SeatKindHuman:
+		return &inviteSeat{}
+	}
+	return &inviteSeat{Handle: seat.Handle, Name: seat.Name}
 }
 
 // RedeemInvite creates the person an invitation was issued for — and binds the

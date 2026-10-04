@@ -382,17 +382,12 @@ func TestToggleKeepsItsThirdState(t *testing.T) {
 	}
 }
 
-// A SETTING NAMES THE SEAT ITS HANDLE RESOLVES TO IN THE CHART IT IS ASKED
-// AGAINST — and says when that is only through an address the seat gave up.
+// A GITLAB ACCESS LEVEL NAMES A SEAT BY ITS HANDLE.
 //
-// The settings are a document and the seats a log, so a rename there cannot
-// rewrite a key here. Resolved as every reference to a seat is (live handle,
-// then the handle it was created under, then the ones since), a key naming a
-// renamed seat still reaches it, and Retired is what says so before a later
-// hire given that handle makes it reach somebody else. A key naming nothing
-// is the one DanglingSettingsRefs reports; the fallback that dismisses, or is
-// not a handle at all, names no seat to resolve.
-func TestSeatReferencesResolveThroughTheChartTheyAreAskedAgainst(t *testing.T) {
+// The override follows the seat whose handle keys it, and a key naming no
+// seat is the one DanglingSettingsRefs reports, because it is the grant
+// waiting for whoever is next given that handle.
+func TestAnAccessLevelNamesTheSeatWhoseHandleKeysIt(t *testing.T) {
 	t.Parallel()
 	cfg := mustCompany(t, `
 name: Acme
@@ -406,57 +401,25 @@ integrations:
       access_levels:
         ghost: developer
         head: maintainer
-        swe: maintainer
-  datadog:
-    enabled: true
-    webhook_token: "EXAMPLEDATADOGTOKEN0000000"
-    route_to: oncall-old
-    provisioning:
-      site: datadoghq.com
-      api_key: "${DD_API_KEY}"
-      app_key: "${DD_APP_KEY}"
+roles:
+  - {name: Head, handle: head}
+  - {name: SWE, handle: swe}
 `)
-	chart := &org.Organization{Name: "Acme", Roles: []*org.Role{
-		{Name: "Head", DeclaredHandle: "head"},
-		{Name: "SWE", DeclaredHandle: "platform-swe", OriginHandle: "swe",
-			FormerHandles: []string{"swe"}},
-		{Name: "Oncall", DeclaredHandle: "oncall", OriginHandle: "oncall-old"},
-	}}
-	chart.Normalize()
-
-	type read struct {
-		setting, handle, seat string
-		retired               bool
+	o, err := cfg.Organization()
+	if err != nil {
+		t.Fatal(err)
 	}
-	var got []read
-	for _, ref := range cfg.SeatReferences(chart) {
-		seat := ""
-		if ref.Seat != nil {
-			seat = ref.Seat.Handle()
-		}
-		got = append(got, read{ref.Setting, ref.Handle, seat, ref.Retired()})
+	provisioning := cfg.Integrations.GitLab.Provisioning
+	if level, found := provisioning.OverrideFor(o.Role("head")); !found || level != "maintainer" {
+		t.Errorf("head's override = %q, %v; want maintainer", level, found)
 	}
-	want := []read{
-		{AccessLevelsSetting, "ghost", "", false},
-		{AccessLevelsSetting, "head", "head", false},
-		{AccessLevelsSetting, "swe", "platform-swe", true},
-		{RouteToSetting, "oncall-old", "oncall", true},
+	// THE CONTROL: a seat no key names has no override.
+	if level, found := provisioning.OverrideFor(o.Role("swe")); found {
+		t.Errorf("swe's override = %q; no key names it", level)
 	}
-	if !slices.Equal(got, want) {
-		t.Errorf("SeatReferences =\n%+v\nwant\n%+v", got, want)
-	}
-
-	dangling := cfg.DanglingSettingsRefs(chart)
+	dangling := cfg.DanglingSettingsRefs(o)
 	if len(dangling) != 1 || dangling[0].To != "ghost" || dangling[0].Kind != org.RefGitLabAccessLevel {
 		t.Errorf("DanglingSettingsRefs = %+v, want only the key naming nobody", dangling)
-	}
-
-	// AND A FALLBACK THAT DISMISSES NAMES NOBODY TO RESOLVE.
-	cfg.Integrations.Datadog.RouteTo = DatadogIgnore
-	for _, ref := range cfg.SeatReferences(chart) {
-		if ref.Setting == RouteToSetting {
-			t.Errorf("route_to: none was resolved as a seat reference: %+v", ref)
-		}
 	}
 }
 
@@ -465,8 +428,7 @@ integrations:
 // Organization builds a seat from the authored role and normalises it in
 // place. The contact rode along as the SAME pointer, so every read rewrote the
 // document's contact — padded and mixed-case ids trimmed and lowercased under
-// the reader — and two reads at once raced on it. The chart view holds the
-// same rule over its rows ([org.FromRows]).
+// the reader — and two reads at once raced on it.
 func TestReadingTheOrgLeavesTheAuthoredContactAlone(t *testing.T) {
 	t.Parallel()
 	c, err := ParseCompany([]byte("name: Acme\nroles:\n  - name: Sarah\n    kind: human\n" +

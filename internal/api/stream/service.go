@@ -513,9 +513,8 @@ func (s *Service) currentTools() []map[string]any { return s.tools() }
 // screen that got a delta and lost it to backpressure would render a removed
 // seat until it reloaded.
 //
-// ON EVERY PUBLISHED COMPANY, not only an activation: a hire is a chart
-// record and moves no settings revision, so a re-send hung on the apply alone
-// left a new seat off every open screen.
+// ON EVERY PUBLISHED COMPANY, at boot as well as on every apply
+// ([engine.Engine.SetOnCompanyPublished]).
 //
 // ONE METHOD NAMING ITS OWN KINDS, where there could be an exported
 // Broadcast(kind, data) and a caller in another package spelling each kind:

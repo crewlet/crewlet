@@ -15,8 +15,8 @@ import (
 //
 // So the applier also says, after a committed batch, whose inbox moved. It is
 // the second consequence of a tracker record that is not a row, and it is
-// derived HERE rather than by the change feed for the reason the chart view's
-// trigger is: the feed relays a record to ONE node, while every node applies
+// derived HERE rather than by the change feed for the reason the identity
+// directory's rebuild signal is: the feed relays a record to ONE node, while every node applies
 // every record and every node has its own sockets open. Each node tells its
 // own sockets, from its own apply, and nothing crosses between nodes.
 //

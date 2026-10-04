@@ -25,7 +25,7 @@ import (
 // guards its listing.
 const Prefix = "/iam/"
 
-// Routes registers the sixteen on a mux.
+// Routes registers the seventeen on a mux.
 //
 // EVERY ROUTE CARRIES ITS OWN POLICY, stated where it is mounted, through
 // [authz.Router] — which is the only reader of the matched pattern, because a
@@ -114,6 +114,9 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("POST /iam/invalidate-all",
 		at(authz.ActionSessionInvalidate), s.PostInvalidateAll)
 	mount("GET /iam/check", at(authz.ActionDirectoryRead), s.GetCheck)
+	// WHO SITS WHERE: every human seat of the running company and who
+	// holds it. A listing, read like the directory — see seats.go.
+	mount("GET /iam/seats", at(authz.ActionDirectoryRead), s.GetSeats)
 	// THIS NODE'S Tier A labels, joined to the rows their logins name: the
 	// one binding question no directory read can reach, since the labels
 	// are a node's configuration. See nodetokens.go.
@@ -387,10 +390,10 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 // landed answers — `200`, or `201` for one that hands the caller something it
 // created.
 //
-// # Six answers, the same six /chart gives
+// # Six answers
 //
-// THREE ARE FAILURES and [chartapi.Service.answerWrite] states why each is a
-// different thing to do next. What is particular here is [iamdomain.ErrRefused]
+// THREE ARE FAILURES, each a different thing to do next. What is particular
+// here is [iamdomain.ErrRefused]
 // and [iamdomain.ErrClaimed]: the first is authority (403, and it will never
 // land however often it is retried) and the second is a lost race on an
 // address, a login or a seat (409, naming who holds it). An estate that could

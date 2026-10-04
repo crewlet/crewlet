@@ -30,9 +30,8 @@ func pathsOf(changes []configapi.Change) map[string]configapi.Change {
 	return out
 }
 
-// serverDoc is companyDoc with a LIST in it: `mcp_servers`, which is what a
-// settings revision still carries and what every case here about list
-// positions needs.
+// serverDoc is companyDoc with a LIST in it: `mcp_servers`, which is what
+// every case here about list positions needs.
 const serverDoc = companyDoc + `
 mcp_servers:
   - {name: tracker, transport: http, url: "https://mcp.example.com"}

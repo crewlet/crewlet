@@ -119,9 +119,7 @@ func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (
 // ten times the field it is about — a mistyped provider key is a few bytes and
 // its problem a few hundred. It still bounds a node that answers with far
 // more than any document could produce, and the client's own timeout bounds
-// one that never stops. The chart client reads its answers under the same
-// bound, which no chart answer — one record's outcome, or one refusal —
-// approaches.
+// one that never stops.
 const maxConfigResponseBytes = 16 * configapi.MaxBodyBytes
 
 // refusal turns a status code into something an operator can act on.

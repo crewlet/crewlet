@@ -71,27 +71,21 @@ type Company struct {
 	// wholesale by every apply. See the seatTools field in run.go.
 	Tools *tools.Registry
 
-	// ChartAt is the position on the org chart's log that [Company.Org]
-	// was derived from, PACKED — zero on a company whose chart came from
-	// the document rather than from rows.
+	// ActivatedAt is the instant the revision this epoch was applied from
+	// was activated — the activation pointer's own ([coord.Activation.At]),
+	// or a boot's reading of the active revision's `activated_at` — and
+	// zero for a company no activation has named yet: a Tier B file a node
+	// booted with, which its reconciler publishes and applies with the
+	// pointer's instant before a seat is claimed.
 	//
-	// # Why the value carries it rather than the engine answering
-	//
-	// It is a property of THIS company and not of the node: an apply and a
-	// chart write each publish a new value, and a caller holding one of
-	// them has to be able to say which chart it is looking at without a
-	// second read that a later publish can land between. Everything
-	// derived from the chart and written somewhere durable is stamped with
-	// it — the tracker's chart-owned project fields are what needed it
-	// first — so that a node running BEHIND its peers can recognise that
-	// its own derivation is the older one rather than the newer.
-	//
-	// ZERO IS A REAL ANSWER and means "no rows were read": the
-	// `crewlet validate` engine, and the boot window before the first
-	// read. It loses to every real position, which is the correct
-	// direction — a derivation from the document is the one a derivation
-	// from rows should overwrite.
-	ChartAt int64
+	// IT IS WHAT EVERY ROW DERIVED FROM THE CONFIGURATION IS STAMPED WITH
+	// ([configplane.ActivationStamp]) — the tracker's chart-owned project
+	// fields and the knowledge containers — so that an older configuration
+	// applied late on another node cannot walk a newer one back. Never the
+	// applying node's own clock: every node applies one activation
+	// separately, at its reconcile tick and again at every boot. See
+	// [Engine.applyChart].
+	ActivatedAt time.Time
 }
 
 // NewCompany builds an epoch from a validated config.
@@ -176,14 +170,6 @@ func (c *Company) Seats() []placement.Seat {
 		// have excluded every role that did not name its kind — which is
 		// most of them, and produces a company with no seats at all.
 		if !role.IsAgent() {
-			continue
-		}
-		// A SEAT NO CONTENT HAS FILLED IS NOT RUN: it has a place and a
-		// kind and no backstory, no model chain and no name, so a node
-		// that claimed it would attach a mailbox to a turn loop with
-		// nothing to run — for good, if the hire's second write never
-		// lands. It is listed the moment its content does.
-		if role.Incomplete {
 			continue
 		}
 		// No empty-handle guard: validation refuses any role whose name

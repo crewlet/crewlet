@@ -46,16 +46,11 @@ var (
 	//
 	// A unit's key is what work, routing and pages are filed under and what
 	// a `manages:` entry and a root seat's `unit:` resolve, so a collision
-	// sends one team's work to whichever unit a reader resolved first, and
-	// the org chart gives one address to one object: an import of the pair
-	// lands the first and declines the second.
+	// sends one team's work to whichever unit a reader resolved first.
 	//
 	// There is deliberately NO duplicate NAME rule, for a seat or a unit. A
-	// name is prose — nothing references a seat or a unit by it — and the
-	// chart cannot refuse one anyway: a name is CONTENT, arbitrated on its
-	// own object's subject, so two writers naming two teams alike never
-	// contend. A file refusing what every chart write accepts made a chart
-	// exported from a running company one its own import could refuse.
+	// name is prose — nothing references a seat or a unit by it — and what
+	// reads one answers a shared name with an honest list.
 	//
 	// An ADMISSION rule (see [Organization.ValidateAdmission]).
 	ErrDuplicateUnit = errors.New("duplicate unit key")
@@ -212,7 +207,7 @@ type DuplicateError struct {
 	Kind DuplicateKind
 	// Key is the shared handle, unit key or contact identity, and for a
 	// unit it is the spelling the key was first met in: a unit key is
-	// matched as the chart folds an address ([chart.NormalizeKey]), and an
+	// matched folded ([NormalizeKey]), and an
 	// operator searches their document for what they wrote rather than for
 	// a form nothing in it contains. An identity is the value as it sits
 	// after [Organization.Normalize], which is the text every consumer

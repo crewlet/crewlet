@@ -62,7 +62,7 @@ import (
 // the state carries them: the author, their kind and the credential they began
 // through, which is what both writes record. They used to record `setup`, a
 // name that is nobody, so "who gave this agent its GitHub identity" had no
-// answer in the chart's history or on the key's row.
+// answer in the company's revisions or on the key's row.
 //
 // SEALED AND NOT SIGNED: the state goes to GitHub and comes back in a URL —
 // through GitHub's logs, a browser history and every ingress access log — and
@@ -429,17 +429,11 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	return handle, nil
 }
 
-// recordSeatApp writes the app onto the seat, through the ORG CHART.
+// recordSeatApp writes the app onto the seat, through the entity route.
 //
-// THE CHART, not a merge patch over the settings: a patch replaces an array
-// wholesale, so patching `roles` to change one seat would delete every other
-// one — and a seat is not in the settings at all any more. On the chart the
-// handle IS the subject a change is arbitrated on, so two passes recording
-// two seats' apps never contend.
-//
-// THE BLOCK IS `github` RATHER THAN `integrations.github`, because this is
-// the RUNTIME seat — the shape the chart's own blob holds — rather than the
-// authored document. See [engine.Engine.SeatDocument].
+// THE ENTITY ROUTE, not a merge patch: a patch replaces an array wholesale,
+// so patching `roles` to change one seat would delete every other one. The
+// entity route addresses a seat by its handle.
 func (s *Service) recordSeatApp(
 	ctx context.Context, handle string, app *github.CreatedApp, keyVar, hookRef string,
 	by iam.Actor,
@@ -452,7 +446,11 @@ func (s *Service) recordSeatApp(
 	if decodeErr := json.Unmarshal(body, &role); decodeErr != nil {
 		return fmt.Errorf("setupapi: decode the seat %s: %w", handle, decodeErr)
 	}
-	block, _ := role["github"].(map[string]any)
+	integrations, _ := role["integrations"].(map[string]any)
+	if integrations == nil {
+		integrations = map[string]any{}
+	}
+	block, _ := integrations["github"].(map[string]any)
 	if block == nil {
 		block = map[string]any{}
 	}
@@ -470,13 +468,14 @@ func (s *Service) recordSeatApp(
 	// be a day after the first. Zero is the state the screen reports as
 	// "installed nowhere yet", which is a thing an operator can act on.
 	block["installation_id"] = 0
-	role["github"] = block
+	integrations["github"] = block
+	role["integrations"] = integrations
 
 	updated, err := json.Marshal(role)
 	if err != nil {
 		return fmt.Errorf("setupapi: encode the seat %s: %w", handle, err)
 	}
-	_, err = s.writer.Config.SetSeat(ctx, handle, updated,
+	_, _, err = s.writer.Config.SetSeat(ctx, handle, updated,
 		"give "+handle+" its own GitHub App", by, "")
 	if err != nil {
 		return fmt.Errorf("setupapi: record the app for %s: %w", handle, err)

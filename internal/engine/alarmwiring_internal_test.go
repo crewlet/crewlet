@@ -28,7 +28,7 @@ import (
 // every fresh fleet.
 
 // A BINDING TO AN AGENT'S SEAT FIRES `iam_binding_dangling` — through the real
-// directory, the real chart view and the real alarm tracker.
+// directory, the real seat view and the real alarm tracker.
 func TestTheDanglingBindingAlarmFiresOnARunningNode(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -150,6 +150,13 @@ func TestTheTrimBlockedAlarmFiresOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 	ctx := t.Context()
 	e := bootDirectoryNode(t, nil)
 	r := quietRetention(t, e)
+	// A RECORD ON A LOG, because a fresh node's boot writes none: the org
+	// is part of the company document, so nothing lands on a log until
+	// somebody acts — and a trim blocked over an empty log keeps nothing.
+	if _, err := e.IAMWriter().InvalidateAll(ctx,
+		statelog.NewOpID(time.Now(), "trim-blocked"), "a record to keep"); err != nil {
+		t.Fatalf("write a record to the identity log: %v", err)
+	}
 
 	r.tick(ctx)
 	report := r.Report(ctx)

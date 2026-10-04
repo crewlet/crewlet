@@ -48,19 +48,19 @@ func TestTheSameRequestIsTheSameDigest(t *testing.T) {
 		}
 		return got
 	}
-	base := digest("/chart/units/eng?runtime=true", `{"name":"Eng","goal":"ship"}`)
+	base := digest("/iam/people/eng?view=full", `{"name":"Eng","goal":"ship"}`)
 	if len(base) != 16 {
 		t.Errorf("the digest is %q, want sixteen hex digits", base)
 	}
-	if again := digest("/chart/units/eng?runtime=true",
+	if again := digest("/iam/people/eng?view=full",
 		`{ "goal": "ship",  "name": "Eng" }`); again != base {
 		t.Errorf("the same fields in another order digest to %q, want %q — a "+
 			"client's retry would be a second operation", again, base)
 	}
 	for _, c := range []struct{ name, target, body string }{
-		{"another object", "/chart/units/ops?runtime=true", `{"name":"Eng","goal":"ship"}`},
-		{"another query", "/chart/units/eng", `{"name":"Eng","goal":"ship"}`},
-		{"another body", "/chart/units/eng?runtime=true", `{"name":"Eng","goal":"stop"}`},
+		{"another object", "/iam/people/ops?view=full", `{"name":"Eng","goal":"ship"}`},
+		{"another query", "/iam/people/eng", `{"name":"Eng","goal":"ship"}`},
+		{"another body", "/iam/people/eng?view=full", `{"name":"Eng","goal":"stop"}`},
 	} {
 		if got := digest(c.target, c.body); got == base {
 			t.Errorf("%s digests the same as the first request, so a key sent "+
@@ -235,8 +235,8 @@ func assertRefusedNamingTheHeader(t *testing.T, rec *httptest.ResponseRecorder) 
 
 // THE HEADER IS DECLARED HERE AND NOWHERE ELSE.
 //
-// `/chart`, `/iam`, the human write surface and the CLI each declared their
-// own "Idempotency-Key", each commenting that it was "the same spelling" as
+// `/iam`, the human write surface and the CLI each declared their own
+// "Idempotency-Key", each commenting that it was "the same spelling" as
 // the others, which nothing compared. A retry is one script whichever surface
 // it wrote to, so a fifth copy is where a spelling drifts — the walk refuses
 // the literal in any non-test file of the module outside this package.
@@ -285,8 +285,8 @@ func TestTheHeaderIsDeclaredOnce(t *testing.T) {
 // AN UNKNOWN IS RETRIED UNDER THE SAME KEY, AND AN UNVOUCHED ONE ELSEWHERE.
 //
 // The sentence beside an unknown outcome's 503 is the one place a client
-// reading prose is told what to do, and /chart, /iam and the human write
-// surface each wrote it until their copies drifted. Both say to send the same
+// reading prose is told what to do, and /iam and the human write surface each
+// wrote it until their copies drifted. Both say to send the same
 // operation back under the header; only the unvouched one sends it to another
 // node, since asked here again it answers the same way until the change
 // arrives. Mutation: swap the two sentences and both rows go red.

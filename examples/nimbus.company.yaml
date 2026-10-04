@@ -585,6 +585,10 @@ mcp_servers:
 # See docs/concepts/humans-in-the-org.md § The founder seat.
 roles:
   - name: Jane Founder
+    handle: jane-founder                       # the seat's IDENTITY, stated rather than
+                                               #   left to be minted: an import mints a
+                                               #   missing one from the name, so a name
+                                               #   corrected in this file would be a new seat
     kind: human
     goal: "Own Nimbus's direction and make the final call on what ships"
     backstory: "Founder of Nimbus."
@@ -592,8 +596,8 @@ roles:
       - "Final approval on strategy, roadmap trade-offs, and high-impact bets"
       - "Unblock anything the Agent CEO escalates"
     manages: [agent-ceo]                       # BY HANDLE: `manages:` names seats by their
-                                               #   handle and units by their key, so the
-                                               #   chart survives every rename
+                                               #   handle and units by their key, so a
+                                               #   changed display name moves no reference
     contact:
       # Mattermost identifies people by username, not an opaque ID — this
       # is the account you sign in as.  `founder` is what
@@ -602,8 +606,8 @@ roles:
       gitlab_username: jane-founder
       # WHO SHE IS ON THE DASHBOARD is not written here.  She signs in as
       # a person in the identity directory (`crewlet iam invite`, then
-      # `crewlet iam bind <id> jane-founder` — the SEAT's handle, which
-      # the name derives; `founder` above is her Mattermost username), and
+      # `crewlet iam bind <id> jane-founder` — the SEAT's handle, declared
+      # above; `founder` above is her Mattermost username), and
       # the directory binds her to this seat — so what she files there is
       # filed by her.  A contact
       # block is how to REACH a person; a credential is something they
@@ -617,8 +621,9 @@ units:
     id: leadership                             # the unit's KEY: what `manages:` and a
                                                #   root seat's `unit:` resolve.  The name
                                                #   above is display, so renaming the team
-                                               #   moves nothing that points at it.  Minted
-                                               #   from the name at import when unset
+                                               #   moves nothing that points at it.  Stated,
+                                               #   because a missing one is minted from the
+                                               #   name on every import of this file
     type: department
     lead: agent-ceo                            # the LEAD'S HANDLE, never its display name
     children:
@@ -640,6 +645,7 @@ units:
         space: "LEAD"
         roles:
           - name: Agent CEO
+            handle: agent-ceo
             goal: "Define Nimbus's product vision and strategic direction, prioritize high-impact initiatives across product and engineering, make final calls on roadmap trade-offs, and ensure the team stays aligned on building an open, composable infrastructure control plane that wins in the AI/ML and enterprise market"
             backstory: >
               Founder-minded CEO with deep roots in cloud infrastructure and platform engineering.
@@ -690,6 +696,7 @@ units:
                   high-priority unassigned work items. Flag anything that needs a decision
                   and leave a comment on the relevant work items.
           - name: Agent CTO
+            handle: agent-cto
             goal: "Own Nimbus's technical architecture and engineering execution — make architecture decisions, break down epics into actionable engineering tasks, assign and sequence work across the SWE team, and ensure the platform is built with the right patterns for scale, observability, and extensibility"
             backstory: >
               Seasoned CTO and principal architect with deep expertise in building cloud-native
@@ -747,6 +754,7 @@ units:
         space: "PROD"
         roles:
           - name: Agent PM
+            handle: agent-pm
             manages: [agent-devrel]
             goal: "Drive Nimbus's product strategy by researching the composable infrastructure and AI-framework markets, proposing high-impact user stories across both the control plane and the Phase-2 framework, and maintaining a prioritized backlog aligned with Nimbus's two-phase vision"
             backstory: >
@@ -799,6 +807,7 @@ units:
         space: "PROD"
         roles:
           - name: Agent DevRel
+            handle: agent-devrel
             goal: "Make the Nimbus platform — both the control plane and the Phase-2 AI framework — discoverable, learnable, and adoptable.  Own developer-facing documentation, tutorials, runnable examples, and the public narrative on the website blog so an external developer can go from ``never heard of Nimbus`` to ``running a distributed job in 10 minutes``"
             backstory: >
               Veteran developer-advocate / technical writer with deep credibility in
@@ -895,6 +904,7 @@ units:
               Follow the "Manager 1:1" playbook page (LEAD project).
         roles:
           - name: Agent SWE
+            handle: agent-swe
             goal: "Pick up the assigned work items and implement production-grade Go features for Nimbus's control plane (nimbuscore, nimbusk0s), write comprehensive tests, and ship clean, reviewable code that meets acceptance criteria — while keeping work-item status, worklogs, and comments up to date throughout the lifecycle of every task"
             backstory: >
               Senior backend engineer with many years building cloud-native infrastructure
@@ -998,6 +1008,7 @@ units:
                 bot_token: "${MATTERMOST_TOKEN_SWE}"
 
           - name: Agent Frontend SWE
+            handle: agent-frontend-swe
             goal: "Build and evolve the Nimbus Console and the marketing website — deliver the AI-services management UI (models, fine-tuning, datasets, jobs) the README promises today, and keep the console in lock-step with new nimbuscore endpoints"
             backstory: >
               Senior frontend engineer who has shipped enterprise developer-tooling UIs
@@ -1073,6 +1084,7 @@ units:
                 bot_token: "${MATTERMOST_TOKEN_FE}"
 
           - name: Agent AI Systems Engineer
+            handle: agent-ai-systems-engineer
             goal: "Design and build the Phase-2 Nimbus AI framework — a Python-first, open-source framework that runs on Nimbus clusters and unifies distributed training, fine-tuning, batch inference, and online serving for AI/ML teams.  Own the framework's runtime, SDK, CLI, and cluster-side integration with nimbuscore"
             backstory: >
               Distributed-systems engineer who has built large-scale AI workload runtimes

@@ -104,11 +104,9 @@ func danglingLines(t *testing.T, logs *bytes.Buffer) []danglingLine {
 func TestDanglingReferencesAreLoggedOncePerAppliedEpoch(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
-	// THE REFERENCES ARE ON THE CHART, which is where they live: a lead and
-	// a `manages:` entry name a seat, and seats are the chart's. So the
-	// engine boots on this document and its seed puts the dangling ones on
-	// the log — the revisions activated below carry the SETTINGS, and a
-	// settings document has nothing to resolve.
+	// The engine boots on the document the revisions below activate, and
+	// each apply resolves the references in it: a lead and a `manages:`
+	// entry name a seat in the same document.
 	p := planeFor(t, newEngine(t, engine.Options{
 		Company: parsedCompany(t, danglingCompanyDoc),
 	}), func(o *engine.ReconcilerOptions) {
@@ -158,11 +156,10 @@ func TestDanglingReferencesAreLoggedOncePerAppliedEpoch(t *testing.T) {
 // A GITLAB ACCESS LEVEL NAMING NO SEAT IS LOGGED WITH THE REST, and one
 // naming a seat — by its current handle — is not.
 //
-// The key is in the SETTINGS and the seat it names in the CHART, so read from
-// either half alone it was never logged at all, while the documentation
-// promised a line per applied epoch. It is asked of the composed pair, like
-// every reference here.
-func TestADanglingAccessLevelIsLoggedWithTheChartsReferences(t *testing.T) {
+// The key is under `integrations` and the seat it names is in the org, both in
+// the one document an apply resolves, so it is logged beside the lead and
+// `manages:` references, once per applied epoch as the documentation promises.
+func TestADanglingAccessLevelIsLoggedWithTheOrgsReferences(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
 	doc := danglingCompanyDoc + `integrations:

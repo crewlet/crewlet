@@ -17,17 +17,15 @@ import (
 // not see". It is also what [RestoreRedacted] looks for, so the marker is a
 // contract rather than decoration.
 //
-// IT IS AN ALIAS NOW, and the value lives in [redact.FieldMask]. The org
-// chart's own write path has to recognise the marker to restore it, and that
-// path cannot import this package: the chart is read by the organization
-// model, which this layer is built on. Spelled twice it would drift, and the
-// drift is a working credential replaced by twelve characters.
+// IT IS AN ALIAS, and the value lives in [redact.FieldMask], because
+// [secrets.Mask] writes it from below this package. Spelled twice it would
+// drift, and the drift is a working credential replaced by twelve characters.
 const Redacted = redact.FieldMask
 
 // WHICH FIELDS ARE CREDENTIALS is the `secret:"true"` tag, read through
-// [secrets.Field] and nothing else — the one definition this document's mask,
-// the org chart's seal and the chart surface's mask all share, so they cannot
-// come to disagree about which values are secret. A tag rather than a list of
+// [secrets.Field] and nothing else — the one definition this document's mask
+// and its restore share, so they cannot come to disagree about which values
+// are secret. A tag rather than a list of
 // paths, because a path list is maintained by whoever remembers it exists, and
 // [TestEveryCredentialFieldIsTagged] fails the build when a field that looks
 // like a credential does not carry one.

@@ -28,13 +28,13 @@ const (
 	// or an enrolment an administrator created and nobody completed.
 	KindNoCredential FindingKind = "person_without_credential"
 
-	// KindDanglingBinding is a person bound to a seat this node's chart
-	// does not hold as a human seat: removed, tombstoned, turned into an
-	// agent seat, or — on a node whose chart applier is behind — a hire
-	// this node has not applied yet. A LEGAL RESIDUE rather than
-	// corruption — two logs, two appliers, two anchors, so a bind and a
-	// seat removal can both win — and the repair is an unbind or a
-	// rebind, which is one record. The same evaluation raises the
+	// KindDanglingBinding is a person bound to a seat the company this
+	// node runs does not hold as a human seat: removed, turned into an
+	// agent seat, or — on a node that has not applied the revision yet — a
+	// hire. A LEGAL RESIDUE rather than corruption — the directory and the
+	// company are written apart, so a bind and a revision removing its
+	// seat can both land — and the repair is an unbind or a rebind, which
+	// is one record. The same evaluation raises the
 	// `iam_binding_dangling` alarm once one has persisted past the stall
 	// grace.
 	KindDanglingBinding FindingKind = "binding_dangling"
@@ -93,14 +93,13 @@ type Finding struct {
 // an AGENT seat, refused on every request they made, was one this report said
 // nothing about.
 //
-// THREE-VALUED: an error is a node that cannot tell — a chart applier past the
-// stall grace, an unreadable view — and the report counts it as unchecked
+// THREE-VALUED: an error is a node that cannot tell — one running no company
+// yet — and the report counts it as unchecked
 // rather than reporting a dangling binding it could not establish, which
 // would send an administrator to unbind somebody whose seat is there.
 //
-// NIL-ABLE, AND THE ABSENCE IS THE THIRD VALUE too — the same shape
-// internal/api/chartapi's `Held` takes, one estate the other way round. A node
-// that cannot ask skips the arm rather than guessing.
+// NIL-ABLE, AND THE ABSENCE IS THE THIRD VALUE too: a node that cannot ask
+// skips the arm rather than guessing.
 type Bindings func(ctx context.Context, row iamdomain.PersonRow) (
 	dangling bool, detail string, err error)
 
@@ -166,10 +165,10 @@ func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 		"position":                  position,
 		"people_with_people_manage": manage,
 		// SAID RATHER THAN SILENT: "no dangling binding" and "this
-		// node's chart could not say" are different answers, and a
+		// node's org could not say" are different answers, and a
 		// report that folded the second into the first would print
-		// "nothing to report" during exactly the chart stall that
-		// hides a residue.
+		// "nothing to report" during exactly the outage that hides a
+		// residue.
 		"bindings_unchecked": unchecked,
 	})
 }

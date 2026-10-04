@@ -63,9 +63,9 @@ type TokensDeps struct {
 	// Directory reads one token and its owner. REQUIRED.
 	Directory TokenDirectory
 
-	// Chart resolves a bound owner's seat. REQUIRED, and the ZERO VALUE of
-	// the engine's adapter is what a node with no chart domain passes: it
-	// answers every seat question UNKNOWN, never the seatless arm.
+	// Chart resolves a bound owner's seat. REQUIRED, and the engine's
+	// adapter on a node running no company yet answers every seat question
+	// UNKNOWN, never the seatless arm.
 	Chart session.Chart
 
 	// Now is the clock. Nil takes UTC wall time.
@@ -205,7 +205,7 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 	// cannot say.
 	binding := session.ResolveSeat(ctx, g.machine.chart, session.PersonRow{
 		Found: true, Stage: owner.Stage, Login: owner.Login,
-		Seat: owner.Seat, SeatAt: owner.SeatAt,
+		Seat: owner.Seat,
 	})
 	switch binding.Answer() {
 	case session.AnswerUnavailable:
@@ -219,9 +219,8 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 		// no such split, so a write from a bound credential lands under
 		// the seat.
 		p.Kind, p.Seat = iam.KindPerson, binding.Handle()
-		p.SeatAt, p.Position = owner.SeatAt, binding.Seat.Unit
+		p.Position = binding.Seat.Unit
 		return r.WithContext(iam.WithPrincipal(ctx, p)), nil
 	}
-	p.SeatAt = owner.SeatAt
 	return r.WithContext(iam.WithPrincipal(ctx, p)), seatRefusal(binding)
 }

@@ -209,17 +209,16 @@ func ParseCompanyNode(doc *yaml.Node) (*Company, error) {
 	if err := decodeDocument(doc, &cfg); err != nil {
 		return nil, err
 	}
-	// EVERY UNIT GETS A KEY, minted from its name where the document
-	// declares none. A unit is referenced by its key — a `manages:` entry
-	// and a seat's `unit:` both resolve it — so a document with a unit that
-	// has none has a team nothing can point at, and a founder should not
-	// have to invent an identifier to write an org chart. Here, because this
-	// is the ONE place a Tier B document is decoded: a file, a PUT body, a
-	// per-entity splice and a stored revision all arrive through it, so
-	// there is no door a unit can come in by without a key. Deterministic
-	// and idempotent, so re-importing the same file mints the same keys
-	// rather than a second identity per team.
-	MintUnitIDs(cfg.Units)
+	// EVERY UNIT GETS A KEY AND EVERY SEAT ITS HANDLE, written into the
+	// document where it declares none. A unit is referenced by its key and
+	// a seat by its handle — a `manages:` entry, a unit's `lead:`, a seat's
+	// `unit:` — and a seat's agent id, mailbox and memory derive from its
+	// handle, so one left to be derived from the display name moves the day
+	// somebody corrects a typo in that name: a removal and a creation nobody
+	// asked for. Written down here, every revision a file or a whole-document
+	// write stores carries both, and the config surface mints the same way
+	// on the two writes that read the stored form instead ([MintIdentities]).
+	MintIdentities(&cfg)
 	// The declaration order of providers.llm exists only in the document —
 	// a Go map has none — and per-phase resolution's last resort is "the
 	// first provider configured". Read here, against the whole document,
@@ -321,10 +320,7 @@ func ParseMemberNode(doc *yaml.Node, out any) error {
 //     restores its masks from or merges onto: no rules at all. Those readers
 //     never run the company, and refusing them is what locks it out.
 //   - Applying a revision (engine apply, boot, reload, revert): the rules a
-//     running company depends on, before anything is built. Those callers do
-//     not come through here at all any more — they read a revision as
-//     [DecodeSettings] does, which refuses one carrying an org chart rather
-//     than applying it with the chart dropped.
+//     running company depends on, before anything is built.
 //   - A document a person submits: every rule, after its masks are restored.
 func DecodeCompany(payload []byte) (*Company, error) {
 	// Onto the DEFAULTS, not onto a zero value. A field the payload omits

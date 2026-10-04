@@ -188,8 +188,8 @@ func (shapedOrg) For(a Audience) (string, any) {
 //
 // The grant table decides whether a reader receives a kind at all; one kind can
 // still carry a field its readers may not all see — a seat's resolved model
-// chain on the `state:read` org tree is derived from the chart's runtime half,
-// which only `config:read` reads. Handed the payload whole, every reader of
+// chain on the `state:read` org tree is derived from the seat's runtime
+// settings, which only `config:read` reads. Handed the payload whole, every reader of
 // the tree would read it.
 //
 // Mutation: encode the broadcast once per posture, ignoring the variant, and

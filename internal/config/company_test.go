@@ -532,9 +532,8 @@ roles:
 			"  - {name: Edge, children: [{name: Platform}]}\n", "duplicate unit key")
 	})
 
-	// A NAME IS PROSE, the org chart's own rule: two seats or two units may
-	// share one on distinct addresses, which is what every chart write
-	// already accepts and an exported chart can carry.
+	// A NAME IS PROSE: two seats or two units may share one on distinct
+	// addresses, since nothing references either by its name.
 	t.Run("two seats and two units sharing names on distinct addresses", func(t *testing.T) {
 		t.Parallel()
 		c, err := ParseCompany([]byte("name: Acme\n" +
@@ -569,16 +568,32 @@ roles:
 // A HUMAN SEAT WITH NO CONTACT IDENTITY IS A COMPANY THE CONFIG ACCEPTS, on
 // both classes of rule. A person who works through the dashboard is bound to
 // the seat in the identity directory and has no chat account to write down.
-// Refusing the document refused them — and the chart's own writes never asked
-// for a contact, so a company holding such a seat ran, and was refused the
-// moment it went back through a document (`crewlet config import` of its own
-// export). That nobody can be MESSAGED at the seat is the chart check's to
-// say (`seat_unreachable`).
+// Refusing the document refused them. That nobody can be MESSAGED at the seat is a warning, at the seat's
+// `contact` — and the control is the same seat with an identity, which warns
+// about nothing.
 func TestAHumanSeatWithNoContactIsAValidCompany(t *testing.T) {
 	t.Parallel()
 	cfg := mustCompany(t, "name: Acme\nroles:\n  - name: Founder\n    kind: human\n")
 	if err := cfg.ValidateAdmission(); err != nil {
 		t.Fatalf("ValidateAdmission() = %v, want nil", err)
+	}
+	var unreachable []Warning
+	for _, w := range cfg.AdvisoryWarnings() {
+		if w.Seat == "founder" {
+			unreachable = append(unreachable, w)
+		}
+	}
+	if len(unreachable) != 1 || unreachable[0].Path != "roles[0].contact" ||
+		unreachable[0].Kind != WarningAdvisory {
+		t.Errorf("the founder's warnings = %+v, want one advisory at "+
+			"roles[0].contact saying nobody can be messaged there", unreachable)
+	}
+	reachable := mustCompany(t, "name: Acme\nroles:\n  - name: Founder\n"+
+		"    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n")
+	for _, w := range reachable.AdvisoryWarnings() {
+		if w.Seat == "founder" {
+			t.Errorf("a seat with a contact identity is warned about: %+v", w)
+		}
 	}
 	o, err := cfg.Organization()
 	if err != nil {
@@ -699,21 +714,16 @@ func TestTheCoalescingCeilingsAreTheOnesTheContractEnforces(t *testing.T) {
 	}
 }
 
-// THIS ANSWERS FOR THE SETTINGS, AND A SEAT'S OWN SLACK APP IS NOT IN THEM.
+// A COMPANY USING SLACK PER SEAT STILL DECLARES SLACK.
 //
-// Every agent carries its own app under `role.integrations.slack`, and a seat
-// is ORG CHART content — a state-log domain a stored revision does not hold.
-// So the settings half answers only for the company-level block, and the
-// ENGINE composes the seat half over the company it is running.
-//
-// It used to walk `roles:` and `units:` here, which is the shape that went
-// silently false for every company on earth the moment a revision stopped
-// carrying a chart. The only caller deletes the surface's fleet status row on
-// false, and Slack's row is where the engine records the public base its
-// Request URLs were set against — Slack serves no way to read that URL back,
-// so that row is the only warning an operator ever gets that a moved address
-// has stranded every agent's app.
-func TestASeatsOwnSlackAppIsNotPartOfTheSettings(t *testing.T) {
+// Every agent carries its own Slack app under `role.integrations.slack`, and
+// the company-level `slack:` block is working-indicator settings a company may
+// never write. Asked of the block alone the answer is "no" — and the one
+// caller of this deletes the surface's fleet status row on "no", which is where
+// the engine records the public base Slack's Request URLs were set against.
+// Slack serves no way to read that URL back, so that row is the only warning an
+// operator ever gets that a moved address has stranded every agent's app.
+func TestSlackIsDeclaredByASeatWithNoCompanyBlock(t *testing.T) {
 	t.Parallel()
 	company := &Company{
 		Name: "Acme",
@@ -725,25 +735,20 @@ func TestASeatsOwnSlackAppIsNotPartOfTheSettings(t *testing.T) {
 			}},
 		}},
 	}
-	if company.DeclaresIntegration("slack") {
-		t.Fatal("the settings answered for a seat's own app; the walk that " +
-			"does that has to be over the company's CHART, or it is a walk " +
-			"of the empty `roles:` every stored revision carries")
+	if !company.DeclaresIntegration("slack") {
+		t.Fatal("a company whose seats hold Slack apps was reported as not " +
+			"declaring Slack, which deletes the only record of the address " +
+			"those apps deliver to")
 	}
 }
 
-// AND THE COMPANY-LEVEL BLOCK IS WHAT THIS ANSWERS FOR, in both directions:
-// present declares it, absent does not — or the row would never be cleaned up
-// and a later reconnect would inherit an address from the company before it.
-func TestSlackIsDeclaredByTheCompanyBlock(t *testing.T) {
+// AND A COMPANY USING IT NOWHERE DOES NOT, or the row would never be cleaned
+// up and a later reconnect would inherit an address from the company before it.
+func TestSlackIsNotDeclaredWithoutABlockOrASeat(t *testing.T) {
 	t.Parallel()
 	company := &Company{Name: "Acme", Roles: []Role{{Name: "SRE Lead"}}}
 	if company.DeclaresIntegration("slack") {
 		t.Fatal("a company using Slack nowhere was reported as declaring it")
-	}
-	company.Integrations.Slack = &Slack{}
-	if !company.DeclaresIntegration("slack") {
-		t.Fatal("a company-level slack: block was not reported as declaring it")
 	}
 }
 

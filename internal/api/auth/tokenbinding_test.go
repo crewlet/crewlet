@@ -7,14 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // --- a bound Tier A token ------------------------------------------------ //
@@ -40,13 +38,13 @@ func (f fakeBinding) BoundSeat(_ context.Context, login string) (session.PersonR
 	return f.row, nil
 }
 
-// boundOps is the `ops` token bound to platform-lead at chart position 900,
-// on a chart at 1000 that holds that seat.
+// boundOps is the `ops` token bound to platform-lead, on an organisation that
+// holds that seat.
 func boundOps() (fakeBinding, *fakeChart) {
 	return fakeBinding{row: session.PersonRow{
 		Found: true, Stage: iam.StageActive, Login: opsLogin,
-		Seat: sessionSeat, SeatAt: 900,
-	}}, &fakeChart{position: 1000, seats: map[string]session.Seat{
+		Seat: sessionSeat,
+	}}, &fakeChart{seats: map[string]session.Seat{
 		sessionSeat: {Handle: sessionSeat, Kind: "human", Unit: "platform"},
 	}}
 }
@@ -85,7 +83,7 @@ func asOps(t *testing.T, g *auth.Guard, method, path string) answered {
 //
 // The control for every case below: bound, and the seat is there, human and
 // current, so the token acts as that seat's holder — a person, under the
-// seat's handle, carrying the unit and the binding's position — with the
+// seat's handle, carrying the unit — with the
 // grants TIER A declared, never the directory's.
 func TestABoundTokenActsAsTheSeatTheChartHolds(t *testing.T) {
 	t.Parallel()
@@ -100,8 +98,8 @@ func TestABoundTokenActsAsTheSeatTheChartHolds(t *testing.T) {
 	if p.Kind != iam.KindPerson || p.Seat != sessionSeat {
 		t.Errorf("acts as %s %q, want a person at %q", p.Kind, p.Seat, sessionSeat)
 	}
-	if p.Position != "platform" || p.SeatAt != 900 {
-		t.Errorf("position %q seat-at %d, want platform at 900", p.Position, p.SeatAt)
+	if p.Position != "platform" {
+		t.Errorf("position %q, want platform", p.Position)
 	}
 	if p.Login != opsLogin {
 		t.Errorf("login %q, want the token's own %q", p.Login, opsLogin)
@@ -138,23 +136,19 @@ func TestABoundTokenFollowsItsSeatThroughARename(t *testing.T) {
 // A TOKEN BOUND TO A SEAT THE CHART WILL NOT LET IT ACT AS IS REFUSED, NAMING
 // IT — exactly as a signed-in person bound there is.
 //
-// Removed, tombstoned, or an agent's seat: the lookup this replaced returned
-// the row's handle regardless, so the token went on acting as a seat that no
-// longer existed, or as an agent. It is 403 `seat_unavailable` naming the
-// seat, and on `/auth/` — the one surface that never reads a seat — the
-// credential is still resolved as itself, with the binding's position beside
-// an empty seat.
+// Removed, or an agent's seat: the lookup this replaced returned the row's
+// handle regardless, so the token went on acting as a seat that no longer
+// existed, or as an agent. It is 403 `seat_unavailable` naming the seat, and on
+// `/auth/` — the one surface that never reads a seat — the credential is still
+// resolved as itself, with an empty seat.
 func TestABoundTokenIsRefusedASeatTheChartWillNotLetItActAs(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		chart func(*fakeChart)
 	}{
-		{"removed, on a chart that covers the binding", func(c *fakeChart) {
+		{"removed", func(c *fakeChart) {
 			delete(c.seats, sessionSeat)
-		}},
-		{"tombstoned", func(c *fakeChart) {
-			c.seats[sessionSeat] = session.Seat{Handle: sessionSeat, Tombstoned: true}
 		}},
 		{"an agent's seat", func(c *fakeChart) {
 			c.seats[sessionSeat] = session.Seat{Handle: sessionSeat, Kind: "agent"}
@@ -184,10 +178,6 @@ func TestABoundTokenIsRefusedASeatTheChartWillNotLetItActAs(t *testing.T) {
 				t.Errorf("acts as %s %q, want the bare machine", own.principal.Kind,
 					own.principal.Seat)
 			}
-			if own.principal.SeatAt != 900 {
-				t.Errorf("SeatAt %d beside an empty seat, want 900: zero reads "+
-					"as a credential nobody ever bound", own.principal.SeatAt)
-			}
 		})
 	}
 }
@@ -206,16 +196,8 @@ func TestABoundTokenThisNodeCannotResolveIsUnavailable(t *testing.T) {
 		name  string
 		setup func(*fakeBinding, *fakeChart)
 	}{
-		{"a chart this node has not applied as far as the binding",
-			func(_ *fakeBinding, c *fakeChart) {
-				delete(c.seats, sessionSeat)
-				c.position = 899
-			}},
-		{"a chart past the stall grace", func(_ *fakeBinding, c *fakeChart) {
-			c.lag = statelog.StallGrace + time.Second
-		}},
-		{"a chart view that cannot be read", func(_ *fakeBinding, c *fakeChart) {
-			c.err = errors.New("the view is not built")
+		{"an organisation that cannot be read", func(_ *fakeBinding, c *fakeChart) {
+			c.err = errors.New("this node runs no company yet")
 		}},
 		{"a directory that cannot be read", func(d *fakeBinding, _ *fakeChart) {
 			d.err = errors.New("the replicated estate is not open")

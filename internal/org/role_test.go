@@ -1,9 +1,7 @@
 package org
 
 import (
-	"encoding/json"
 	"errors"
-	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -195,9 +193,9 @@ func TestHumanSeatKeepsItsDescriptiveFields(t *testing.T) {
 // A person who works through the dashboard — bound to the seat in the identity
 // directory, and never on the company's chat — has no account to write into a
 // contact block, so a rule refusing the seat refused the person. Whether
-// anybody can be MESSAGED there is a different question, and it is the chart
-// check's (`seat_unreachable`), which names the seat without refusing the
-// company that holds it.
+// anybody can be MESSAGED there is a different question, and it is the
+// company's warnings' (an `advisory` at the seat's `contact`), which name the
+// seat without refusing the company that holds it.
 func TestAHumanSeatNeedsNoContactIdentity(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -222,8 +220,8 @@ func TestAHumanSeatNeedsNoContactIdentity(t *testing.T) {
 
 // A ${VAR} REFERENCE IS A DECLARED IDENTITY. The id is instance specific and
 // lives in the environment rather than in a committed file, so a seat whose
-// ids are all references is reachable — which is what keeps the chart check
-// from reporting it unreachable before the variable is even read.
+// ids are all references is reachable — which is what keeps the company's
+// warnings from reporting it unreachable before the variable is even read.
 func TestAReferenceIsADeclaredContactIdentity(t *testing.T) {
 	t.Parallel()
 	c := &HumanContact{GitLabUsername: "${GL_FOUNDER_USERNAME}"}
@@ -463,52 +461,14 @@ func TestContactFieldTableIsConsistent(t *testing.T) {
 	}
 }
 
-// A SEAT'S CEILINGS TRAVEL IN ITS RUNTIME HALF, AS AN OBJECT.
-//
-// A token budget is engine-only content the chart carries as bytes, so it is
-// what [SeatRuntime] writes and [ApplySeatRuntime] reads back — one key per
-// capped window, and no key for a window left open. A bare number is the
-// lifetime ceiling this build does not have, and it does not decode into a
-// window it would only be guessing at.
-func TestASeatsCeilingsTravelInItsRuntimeHalfAsAnObject(t *testing.T) {
-	t.Parallel()
-
-	ceilings := TokenCeilings{period.Day: 1000, period.Month: 20000}
-	body, err := SeatRuntime(&Role{Name: "Ada", TokenBudget: ceilings})
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	var doc map[string]json.RawMessage
-	if err := json.Unmarshal(body, &doc); err != nil {
-		t.Fatalf("the runtime half is not an object: %v", err)
-	}
-	if got := string(doc["token_budget"]); got != `{"day":1000,"month":20000}` {
-		t.Errorf("token_budget in the runtime half = %s, want one key per capped window", got)
-	}
-
-	var back Role
-	if err := ApplySeatRuntime(&back, body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if !maps.Equal(back.TokenBudget, ceilings) {
-		t.Errorf("the ceilings came back as %v, want %v", back.TokenBudget, ceilings)
-	}
-
-	if err := ApplySeatRuntime(&Role{}, json.RawMessage(`{"token_budget":1000}`)); err == nil {
-		t.Error("a bare number decoded as a seat's ceilings, which no window means")
-	}
-}
-
 // A SEAT'S CEILING IS ONE TOKEN OR MORE, UNDER A CALENDAR WINDOW.
 //
-// The configuration refuses `token_budget: {day: 0}` in a company file, but a
-// seat's budget also reaches the engine as its chart runtime half, which no
-// company file passes through — and a `{"year": 5}` there decodes into a key
-// the budget's counters have no window for. So the rule is the seat's own, in
-// the sentence a company file's author reads, at the key to change. A human
-// seat's budget is refused whole, and its ceilings are not reported again
-// inside a key that has to go. Mutation: drop the check from the runtime
-// faults, or let a 0 through Faults, and a case here fails.
+// A `{"year": 5}` decodes into a key the budget's counters have no window
+// for, and a ceiling of 0 is a seat that may never spend. So the rule is the
+// seat's own, in the sentence a company file's author reads, at the key to
+// change. A human seat's budget is refused whole, and its ceilings are not
+// reported again inside a key that has to go. Mutation: drop the check from the
+// field faults, or let a 0 through Faults, and a case here fails.
 func TestASeatsCeilingIsOneTokenOrMoreUnderAWindow(t *testing.T) {
 	t.Parallel()
 	agent := func(ceilings TokenCeilings) *Role {
@@ -533,9 +493,6 @@ func TestASeatsCeilingIsOneTokenOrMoreUnderAWindow(t *testing.T) {
 			t.Parallel()
 			for verb, err := range map[string]error{
 				"Validate": agent(tc.ceilings).Validate(),
-				// THE CHART'S DOOR: the same rule over the runtime half
-				// alone, which carries no name of its own here.
-				"ValidateRuntime": agent(tc.ceilings).ValidateRuntime(),
 			} {
 				var seatErr *SeatError
 				if !errors.As(err, &seatErr) || !errors.Is(err, tc.rule) {
@@ -556,7 +513,7 @@ func TestASeatsCeilingIsOneTokenOrMoreUnderAWindow(t *testing.T) {
 	if err := agent(TokenCeilings{period.Day: 1}).Validate(); err != nil {
 		t.Errorf("a ceiling of one token was refused: %v", err)
 	}
-	if err := agent(nil).ValidateRuntime(); err != nil {
+	if err := agent(nil).Validate(); err != nil {
 		t.Errorf("a seat with no budget was refused: %v", err)
 	}
 	// A HUMAN SEAT'S BUDGET IS REFUSED WHOLE, once.

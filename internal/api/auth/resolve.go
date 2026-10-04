@@ -48,21 +48,17 @@ var TokenNamespace = uuid.MustParse("6f1c2d5e-9a34-5b7c-8e10-4d2f6a8b3c91")
 // # Two halves, and the second is the SESSION's
 //
 // Directory answers what the identity directory says about the token's login:
-// the seat its row is bound to and the chart position that binding was decided
-// at. Chart answers whether that seat is one the credential may act as NOW —
-// and it is the same [session.Chart] a signed-in person's binding is resolved
-// through, by the same [session.ResolveSeat], so a token and a cookie bound to
-// one seat are told the same thing about it: served under the handle the chart
-// answers to after a rename, refused 403 `seat_unavailable` NAMING the seat
-// once it is removed, tombstoned or not a human seat, and 503 while this node
-// has not applied the chart as far as the binding or has stalled past the
-// grace.
+// the seat its row is bound to. Chart answers whether that seat is one the
+// credential may act as NOW — and it is the same [session.Chart] a signed-in
+// person's binding is resolved through, by the same [session.ResolveSeat], so
+// a token and a cookie bound to one seat are told the same thing about it:
+// served while the running org holds it as a human seat, refused 403
+// `seat_unavailable` NAMING the seat once it does not, and 503 while this node
+// runs no company or cannot read the one it runs.
 //
 // That is the whole reason this is not a lookup returning a handle. The one it
 // replaced was, and a token then went on acting as whatever handle a row
-// held: a seat the chart had removed, a seat renamed out from under it, an
-// agent's seat, and — since a key is not an identity — a handle the chart had
-// since given to somebody else, whose lead relations the token then carried.
+// held: a seat the company had removed, or an agent's seat.
 //
 // # Zero means no binding source
 //
@@ -76,7 +72,7 @@ type SeatBindings struct {
 	// nothing.
 	Directory BindingDirectory
 
-	// Chart is the org chart view a binding is resolved in.
+	// Chart is the running org a binding is resolved in.
 	Chart session.Chart
 }
 
@@ -85,9 +81,8 @@ type SeatBindings struct {
 // DEFINED HERE, by the caller, and one method wide.
 type BindingDirectory interface {
 	// BoundSeat answers the row a machine credential's login binds through,
-	// as the seat table reads a holder: `Found` with a seat and the chart
-	// position it was decided at, or the zero row for a credential nobody
-	// binds. AN ERROR IS THE UNKNOWN ARM — this node could not say — and
+	// as the seat table reads a holder: `Found` with a seat, or the zero row
+	// for a credential nobody binds. AN ERROR IS THE UNKNOWN ARM — this node could not say — and
 	// never "not bound", which would have a bound credential act as itself
 	// here and as its seat on the next node: one actor under two names in
 	// one audit trail.
@@ -168,16 +163,15 @@ func (g *Guard) principalFor(ctx context.Context, entry config.APIToken,
 		return iam.Principal{}, iam.Unknown, nil
 	case session.AnswerServe:
 		p.Kind, p.Seat = iam.KindPerson, binding.Handle()
-		p.SeatAt, p.Position = row.SeatAt, binding.Seat.Unit
+		p.Position = binding.Seat.Unit
 		return p, iam.Resolved, nil
 	}
 	// RESOLVED AND REFUSED, as a signed-in person bound to a gone seat is:
 	// this node knows exactly which credential this is and will not say
-	// what it acts as. It stays the MACHINE it is, with SeatAt beside an
-	// empty seat — the pair that says "a binding was decided and this node
-	// will not honour it" — and the guard writes the 403 everywhere but
-	// the one surface that never reads a seat.
-	p.SeatAt = row.SeatAt
+	// what it acts as. It stays the MACHINE it is, with an empty seat, and
+	// the refusal beside it is what says a binding was decided and this
+	// node will not honour it: the guard writes the 403 everywhere but the
+	// one surface that never reads a seat.
 	return p, iam.Resolved, seatRefusal(binding)
 }
 

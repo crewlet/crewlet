@@ -21,11 +21,6 @@ mcp_servers:
 // send it back. A restore that matched by POSITION would hand one server's
 // credential to the other — which is not a refusal but a silent swap, so every
 // assertion here is on the STORED bytes rather than on the status.
-//
-// This used to be a seat moved from the root into a unit, which is the same
-// match one shape up; a seat is the org chart's own now, and
-// [config.Company.RestoreRedacted]'s own suite is where the document-wide
-// version of this rule is held.
 func TestAMovedListMemberKeepsItsCredentialThroughAPut(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -69,6 +64,60 @@ func TestAMovedListMemberKeepsItsCredentialThroughAPut(t *testing.T) {
 			t.Errorf("%s holds %v, want %q — the restore matched by position",
 				name, env["TOKEN"], want)
 		}
+	}
+}
+
+// A SEAT MOVED THROUGH THE WRITE SURFACE KEEPS ITS CREDENTIAL.
+//
+// The same loop one shape up: read the redacted document, move a seat from the
+// root into a unit, send it back. The restore used to match a seat only within
+// the list it now sat in, so the move was refused with a redaction error on a
+// credential the caller never touched.
+//
+// Mutation: restore without the document-wide index and the PUT is refused.
+func TestAMovedSeatKeepsItsCredentialThroughAPut(t *testing.T) {
+	t.Parallel()
+	const literal = "ceo-tracker-literal"
+	doc := strings.Replace(orgDoc, "    handle: ceo\n    llm: zulu\n",
+		"    handle: ceo\n    llm: zulu\n    mcp_env: {tracker: {TOKEN: "+literal+"}}\n", 1) +
+		"mcp_servers:\n  - {name: tracker, command: tracker-mcp, shared: false}\n"
+	s := newSurface(t)
+	s.seed(t, doc)
+
+	read := s.do(t, http.MethodGet, "/config", "", nil)
+	if read.Code != http.StatusOK {
+		t.Fatalf("GET /config = %d: %s", read.Code, read.Body)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(read.Body.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	roles, _ := document["roles"].([]any)
+	if len(roles) != 1 {
+		t.Fatalf("the fixture's root holds %d seats, want the CEO alone", len(roles))
+	}
+	ceo := roles[0]
+	document["roles"] = []any{}
+	units, _ := document["units"].([]any)
+	engineering, _ := units[0].(map[string]any)
+	members, _ := engineering["roles"].([]any)
+	engineering["roles"] = append(members, ceo)
+	body, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "__redacted__") {
+		t.Fatalf("the moved seat carries no mask, so this proves nothing: %s", body)
+	}
+
+	res := s.do(t, http.MethodPut, "/config", string(body),
+		map[string]string{"X-Summary": "move the CEO"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("PUT = %d, want 201: %s", res.Code, res.Body)
+	}
+	stored := s.activeDocument(t)
+	if !strings.Contains(stored, literal) || strings.Contains(stored, "__redacted__") {
+		t.Errorf("the moved seat's credential was not restored: %s", stored)
 	}
 }
 

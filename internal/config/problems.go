@@ -310,10 +310,13 @@ func (x *identityIndex) place(leaf error) *located {
 	case errors.As(leaf, &dup):
 		l := &located{err: leaf, text: text}
 		for _, r := range dup.Seats {
+			// A HANDLE IS PLACED AT THE HANDLE, which is its identity in
+			// every document this reads — one is written in from the name
+			// where none was declared ([MintIdentities]) — and the field the
+			// message tells an operator to change, as a unit is placed at
+			// its id below.
 			field := "name"
-			if dup.Kind == org.DuplicateHandle && r.DeclaredHandle != "" {
-				// The handle is written, so that is the line to change; a
-				// derived one is changed by renaming the seat.
+			if dup.Kind == org.DuplicateHandle {
 				field = "handle"
 			}
 			l.problems = append(l.problems,
@@ -479,37 +482,7 @@ func (c *Company) AdmissionWarnings() []Warning {
 // ([Company.DanglingRefs]), located in the document: a unit's lead at its
 // `lead`, a root seat's unit at its `unit`, a manages entry at the index it
 // was written at, and a GitLab access level at its key.
-//
-// # A document with no chart in it resolves nothing, and says nothing
-//
-// Every reference here is answered by the ORG CHART: "is this handle real" is
-// a question about the seats, and the seats are a state-log domain now. An
-// authored FILE still carries both halves, so `crewlet validate` gets the
-// report it always got. A stored SETTINGS revision does not — and asked the
-// same question it would answer that every reference it holds is dangling,
-// because the half that resolves them is not in the bytes.
-//
-// That is not a conservative answer, it is a wrong one, and it is wrong on
-// every company at once: a GitLab access level naming a live seat would be
-// reported as pointing at nobody on every write, on every node, for ever. So
-// a document holding no chart at all reports no references — it has nothing to
-// resolve them against, and saying nothing is the only answer that invents
-// nothing.
-//
-// The cost is a file that genuinely declares an access level for a seat it
-// does not declare, and declares no unit or seat either: that one loses its
-// warning here. It is the price of the two halves being tellable apart at all,
-// and every file that declares a chart — which is every file a founder
-// authors — still gets the whole report.
 func (c *Company) ReferenceWarnings() []Warning {
-	if !c.CarriesChart() {
-		// EMPTY, NEVER NIL, like every other exit here: the answer is
-		// "no references to report", and [Company.Warnings] appends onto
-		// this — so a nil would make a company with no findings answer
-		// `null` where a surface renders an empty list as "nothing to
-		// say" and a null as a failure.
-		return []Warning{}
-	}
 	o, x := c.organization()
 	refs := append(o.DanglingRefs(), c.DanglingSettingsRefs(o)...)
 	out := make([]Warning, 0, len(refs))
@@ -574,7 +547,35 @@ func (c *Company) AdvisoryWarnings() []Warning {
 					"host's value on", unsupplied.name)))
 		}
 	}
+	out = append(out, c.unreachableWarnings()...)
 	return append(out, c.budgetWarnings()...)
+}
+
+// unreachableWarnings is every human seat that declares no contact identity:
+// nothing addressed to it on a chat surface reaches anybody.
+//
+// A WARNING AND NOT A RULE, because the state is legitimate: a person who
+// works only through the dashboard has no chat account to declare, and
+// refusing the seat refused them. So this is the one signal an operator gets
+// that nobody can be @-mentioned there — agents hand such a person work by
+// assigning it in the tracker instead.
+//
+// AT THE SEAT'S `contact`, which is where the remedy is written.
+func (c *Company) unreachableWarnings() []Warning {
+	var out []Warning
+	for role, path := range c.EachRole() {
+		if role.Kind != org.KindHuman || !role.Contact.IsEmpty() {
+			continue
+		}
+		handle := role.IdentityKey()
+		w := advisory(at(path, "contact"), fmt.Sprintf("%s is a human seat with "+
+			"no contact identity, so nothing addressed to it on a chat surface "+
+			"reaches anybody. Give it one for the surface this company runs, or "+
+			"leave it for a person who works only through the dashboard", handle))
+		w.Seat = handle
+		out = append(out, w)
+	}
+	return out
 }
 
 // Warnings is everything valid about this bootstrap that its author should

@@ -212,62 +212,33 @@ func TestThePagesCeilingIsAQuarterOfTheMutationLogs(t *testing.T) {
 	}
 }
 
-// THE ORG CHART'S LOG IS THE ONE THAT IS NOT DERIVED FROM THE DISK.
-//
-// Every other state log grows with a corpus the operator's volume has something
-// to say about. A chart is hundreds of objects and changes when somebody is
-// hired, moved or promoted, so a fraction of a storage array would reserve disk
-// for records no company will ever write and a fraction of a laptop would land
-// on the same number by coincidence. The default is therefore flat — and the
-// accessor takes no free-space argument at all, because a parameter it ignored
-// would be a signature claiming a relationship that does not exist.
-func TestTheChartCeilingIsFlatAndNotDerivedFromTheDisk(t *testing.T) {
-	t.Parallel()
-	const gib = int64(1) << 30
-
-	got, derived := config.Stream{}.ChartMaxBytes()
-	if got != config.DefaultChartLogMaxBytes || !derived {
-		t.Errorf("unset = (%d, derived %v), want (%d, true)",
-			got, derived, config.DefaultChartLogMaxBytes)
-	}
-	// NEVER BELOW WHAT TIER A WOULD ACCEPT AS A VALUE, or a node could
-	// derive a ceiling its own validation refuses to be told.
-	if got < config.ChartLogMaxBytesFloor {
-		t.Errorf("the default %d is under the floor %d", got, config.ChartLogMaxBytesFloor)
-	}
-
-	s := config.Stream{ChartLogMaxBytes: 3 * gib}
-	if got, derived := s.ChartMaxBytes(); got != 3*gib || derived {
-		t.Errorf("set = (%d, derived %v), want the configured value", got, derived)
-	}
-}
-
-// AND IT IS WELL UNDER EVERY OTHER LOG'S FLOOR, which is a decision rather
-// than an accident.
+// A LOG THAT GROWS WITH NO CORPUS TAKES A FLOOR WELL UNDER ONE THAT DOES, and
+// that is a decision rather than an accident.
 //
 // # What a ceiling costs before a byte is written
 //
 // The broker grants a stream its WHOLE ceiling when it creates it, so a
-// domain's ceiling is free space a node must have before it can boot at all.
-// This one took a gibibyte first, on the reasoning that a gibibyte is the
-// framework's minimum domain ceiling and there was no smaller number worth
-// having — and a fourth domain at that floor raised the disk a node needs by a
-// gibibyte, for a log that will not fill one this century. On a 3.4 GiB volume
-// where three domains fitted, the fourth made the node refuse to start.
+// domain's floor is free space a node must have before it can boot at all. The
+// identity log grows with headcount and sign-ins and the usage log with a
+// census of seats and schedules — neither with a corpus the operator's volume
+// has anything to say about — and a ten-person company writes a few megabytes
+// to either. Held to the gibibyte the corpus-sized logs take, each would raise
+// the disk the smallest deployment needs by a gibibyte for a log it will never
+// fill.
 //
-// The floor it borrowed belongs to the logs it was written for: a mutation log
-// under a gibibyte really is a window that refuses appends within a week of a
-// company starting work. A chart's records are a few thousand a year.
+// The floor the corpus-sized logs take belongs to them: a mutation log under a
+// gibibyte really is a window that refuses appends within a week of a company
+// starting work.
 //
-// SO THE ASSERTION IS THE RELATION, not the number: this log must stay well
-// under the floor the corpus-sized logs take, because that is the property
-// that keeps adding a domain from raising what a deployment needs. The margin
-// is deliberately loose — what would be wrong is this creeping back up to the
-// others' floor, not its exact value.
-func TestTheChartLogCostsFarLessDiskThanACorpusSizedLog(t *testing.T) {
+// SO THE ASSERTION IS THE RELATION, not the number: these floors must stay well
+// under the corpus floor, because that is the property that keeps adding a
+// domain from raising what a deployment needs. The margin is deliberately
+// loose — what would be wrong is either creeping back up to the others' floor,
+// not its exact value.
+func TestALogThatGrowsWithNoCorpusTakesAFloorFarUnderOneThatDoes(t *testing.T) {
 	t.Parallel()
 
-	// THE THREE CORPUS-SIZED FLOORS, read through a slice rather than
+	// THE THREE CORPUS-SIZED FLOORS, read through a map rather than
 	// compared as constants: they are equal today, and `go vet` reads a
 	// constant comparison that cannot be false as a mistake.
 	corpus := map[string]int64{
@@ -280,26 +251,22 @@ func TestTheChartLogCostsFarLessDiskThanACorpusSizedLog(t *testing.T) {
 		if floor != corpusFloor {
 			t.Fatalf("%s's floor is %d and the others take %d, so the "+
 				"corpus-sized logs no longer share one floor and this "+
-				"comparison has nothing to hold the chart against",
+				"comparison has nothing to hold the others against",
 				name, floor, corpusFloor)
 		}
 	}
-	if config.DefaultChartLogMaxBytes*4 > corpusFloor {
-		t.Errorf("the chart's log reserves %d bytes and a corpus-sized log's "+
-			"floor is %d.\n"+
-			"A ceiling is granted in full at create time, so this is free space "+
-			"every node must have before it boots — and a chart is a few "+
-			"thousand records a year, not a corpus. Keep it well under the "+
-			"floor the corpus logs take, or adding a domain raises what a "+
-			"deployment needs by a gibibyte apiece.",
-			config.DefaultChartLogMaxBytes, corpusFloor)
-	}
-	// AND THE FLOOR AN OPERATOR MAY SET IS THE DEFAULT, because there is no
-	// deployment a smaller chart log serves and the failure of one that is
-	// too small is severe: appends refused, so nobody can be hired.
-	if config.ChartLogMaxBytesFloor != config.DefaultChartLogMaxBytes {
-		t.Errorf("the floor %d and the default %d have come apart",
-			config.ChartLogMaxBytesFloor, config.DefaultChartLogMaxBytes)
+	for name, floor := range map[string]int64{
+		"iam_log_max_bytes":   config.IamLogMaxBytesFloor,
+		"usage_log_max_bytes": config.UsageLogMaxBytesFloor,
+	} {
+		if floor*4 > corpusFloor {
+			t.Errorf("%s's floor is %d bytes and a corpus-sized log's is %d.\n"+
+				"A ceiling is granted in full at create time, so a floor is "+
+				"free space every node must have before it boots — and this "+
+				"log grows with no corpus. Keep it well under the floor the "+
+				"corpus logs take, or the smallest deployment pays a "+
+				"gibibyte for a log it never fills.", name, floor, corpusFloor)
+		}
 	}
 }
 
@@ -375,19 +342,11 @@ func TestTheByteCeilingsAreBounded(t *testing.T) {
 		"pages at a gibibyte":      {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib }, true, ""},
 		"pages at 256 GiB":         {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256 * gib }, true, ""},
 		"pages past 256 GiB":       {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256*gib + 1 }, false, "pages_log_max_bytes"},
-		// THE CHART'S FLOOR IS ITS OWN, well under the gibibyte the
-		// corpus-sized logs take: a ceiling is granted in full at
-		// create time, so a domain's floor is free space every node
-		// must have before it boots, and a chart is a few thousand
-		// records a year. See TestTheChartLogCostsFarLessDiskThanACorpusSizedLog.
-		"the chart below its floor": {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = mib*64 - 1 }, false, "chart_log_max_bytes"},
-		"the chart at its floor":    {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = mib * 64 }, true, ""},
-		"the chart at a gibibyte":   {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = gib }, true, ""},
-		"the chart at 16 GiB":       {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = 16 * gib }, true, ""},
-		"the chart past 16 GiB":     {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = 16*gib + 1 }, false, "chart_log_max_bytes"},
-		// THE IDENTITY LOG AND THE USAGE LOG TAKE THE CHART'S FLOOR, for
-		// the chart's reason: neither grows with a corpus, and a floor is
-		// free space every node must have before it boots.
+		// THE IDENTITY LOG AND THE USAGE LOG TAKE A FLOOR OF THEIR OWN,
+		// well under the gibibyte the corpus-sized logs take: neither
+		// grows with a corpus, and a floor is free space every node must
+		// have before it boots. See
+		// TestALogThatGrowsWithNoCorpusTakesAFloorFarUnderOneThatDoes.
 		"identity below its floor": {func(b *config.Bootstrap) { b.Stream.IamLogMaxBytes = mib*64 - 1 }, false, "iam_log_max_bytes"},
 		"identity at its floor":    {func(b *config.Bootstrap) { b.Stream.IamLogMaxBytes = mib * 64 }, true, ""},
 		"identity at 16 GiB":       {func(b *config.Bootstrap) { b.Stream.IamLogMaxBytes = 16 * gib }, true, ""},
@@ -465,39 +424,39 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 		says   string
 	}{
 		"unset": {func(*config.Bootstrap) {}, true, ""},
-		// SIX: what six state logs reserve at their smallest unset
-		// ceilings (4.5625 GiB), and about 1.44 GiB for every stream that
+		// SIX: what five state logs reserve at their smallest unset
+		// ceilings (4.5 GiB), and about 1.5 GiB for every stream that
 		// reserves nothing.
 		"below six gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 6*gib - 1 }, false, "store_max_bytes"},
 		"at six gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 6 * gib }, true, ""},
 		"at 64 TiB":           {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
 		"past 64 TiB":         {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
-		// THE FLOOR IS WHY THE FLOOR MOVED. Six state-log domains at the
-		// ceilings they take unset come to 4.5625 GiB, which fits the old
+		// THE FLOOR IS WHY THE FLOOR MOVED. Five state-log domains at the
+		// ceilings they take unset come to 4.5 GiB, which fits the old
 		// five-gibibyte limit — and the cross-field rule below refuses
 		// only a sum GREATER than the limit, so at five this document
-		// validated and the node was left 0.44 GiB for every mailbox, the
-		// event stream and every coordination bucket. The floor is what
-		// moves that refusal forward to `crewlet validate`.
+		// validated and the node was left half a gibibyte for every
+		// mailbox, the event stream and every coordination bucket. The
+		// floor is what moves that refusal forward to `crewlet validate`.
 		"every domain at its unset size inside the floor": {func(b *config.Bootstrap) {
 			b.Stream.StoreMaxBytes = 6 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = gib, gib
 			b.Stream.PagesLogMaxBytes, b.Stream.UsageLogMaxBytes = gib, gib
-			b.Stream.ChartLogMaxBytes, b.Stream.IamLogMaxBytes = 64*mib, 512*mib
+			b.Stream.IamLogMaxBytes = 512 * mib
 		}, true, ""},
 		"every domain at its unset size inside the old limit": {func(b *config.Bootstrap) {
 			b.Stream.StoreMaxBytes = 5 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = gib, gib
 			b.Stream.PagesLogMaxBytes, b.Stream.UsageLogMaxBytes = gib, gib
-			b.Stream.ChartLogMaxBytes, b.Stream.IamLogMaxBytes = 64*mib, 512*mib
+			b.Stream.IamLogMaxBytes = 512 * mib
 		}, false, "store_max_bytes"},
-		// EACH OF THE SIX IS IN THE SUM: ceilings that fit exactly, and
+		// EACH OF THE FIVE IS IN THE SUM: ceilings that fit exactly, and
 		// the one log that tips them past the limit.
-		"tipped past it by the chart's log": {func(b *config.Bootstrap) {
+		"tipped past it by the knowledge base's log": {func(b *config.Bootstrap) {
 			b.Stream.StoreMaxBytes = 16 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 8*gib, 4*gib
-			b.Stream.PagesLogMaxBytes, b.Stream.ChartLogMaxBytes = 4*gib, 4*gib
-		}, false, "chart_log_max_bytes"},
+			b.Stream.PagesLogMaxBytes = 4*gib + 1
+		}, false, "pages_log_max_bytes"},
 		"tipped past it by the identity log": {func(b *config.Bootstrap) {
 			b.Stream.StoreMaxBytes = 48 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib

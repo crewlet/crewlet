@@ -150,16 +150,16 @@ A few things worth knowing when deploying Crewlet:
   engine starts as its own user on every node that runs seats; a `cli-agent`
   provider names a binary it runs, and a seat on one with `run_in: self` does
   its code work inside it; a `run_in: direct` sandbox cell runs a coding agent,
-  and its setup steps, as that same user; and a seat's runtime half — its model
-  chain, credentials, sandbox cell and `mcp_env`, written through `/chart` —
-  takes the same grant. Whoever holds it can therefore run anything on every
+  and its setup steps, as that same user; and a seat's model chain,
+  credentials, sandbox cell and `mcp_env` are part of the same document.
+  Whoever holds it can therefore run anything on every
   engine host and read whatever the engine's user can: the Tier A file, the
   keyring that signs every session, and every credential the store holds. Give
   it to the people and pipelines you would give a shell on those hosts. A
   machine token can carry it — a deploy job applying configuration is what one
   is for — so minting one with it hands that job the same reach. Every write
-  under it that can start a process — the company document, the chart's
-  runtime half, connecting an integration — asks for a recent step-up, so a
+  under it that can start a process — the company document, connecting an
+  integration — asks for a recent step-up, so a
   stolen session cookie alone does not reach it. `people:manage` is a separate
   grant so a directory change stays a reviewable gesture of its own, not as a
   bound on a `config:write` holder.
@@ -210,20 +210,6 @@ A few things worth knowing when deploying Crewlet:
   alone. The keyring is the root of trust: keep it out of the store's backup
   domain. See
   [Encrypted at rest, and authenticated](docs/concepts/configuration.md#encrypted-at-rest-and-authenticated).
-- **The org chart's credentials are sealed one value at a time, and served
-  masked.** The chart is an ordered log whose records every node applies,
-  snapshots and backs up, so it cannot be sealed whole: its structure — keys,
-  handles, parents, leads — is plaintext by necessity. Every credential in a
-  seat's or a unit's runtime half, and a seat's address, is sealed into the
-  secret store before a record is published, and every read serves it masked
-  as `GET /config` does. **Builds before this change sealed only the address**,
-  so a literal credential written into a seat's or a unit's runtime half
-  (`mcp_env`, sandbox `env` and setup files, a seat's own chat and GitHub App
-  credentials) through `/chart`, an import or a first-chart seed is on the
-  chart log, in every node's rows and in every snapshot and backup taken since.
-  Treat those values as disclosed and rotate them: writing the seat again seals
-  the new value, and re-sealing the old one would leave the copies already
-  written readable.
 - **Removing a person erases their values from every node's rows — and not
   from the identity log or a backup until those let go of them.** A person's
   name, address and second-factor seed are sealed under the fleet keyring,
@@ -260,21 +246,17 @@ A few things worth knowing when deploying Crewlet:
   readable. If a person's login has to be erasable, do not derive it from a
   personal address: give them one that names nothing about them. See
   [Removing somebody erases what is theirs from every node's rows](docs/concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows).
-- **Personal data in configuration revisions written before this release.**
-  Every node keeps its own copy of every company-config revision it has ever
-  met, in an append-only table that nothing deleted from and that is in every
-  backup of that node. The org chart used to live inside that document, so a
-  human seat's `email` and `contact` account ids are archived in every
-  revision that carried them — and removing the seat never reached them,
-  because the removal writes a *new* revision. Revisions written after the
-  chart moved onto its own log carry no chart at all, so nothing new enters
-  the archive. Run `crewlet config scrub` **on every node** to erase what is
-  already there; it refuses the active revision, which is edited instead. It
-  does not reach backups taken before the run, so treat those as still
-  holding the original revisions and apply your own retention to them. Going
-  forward the revision table is also swept: 400 days, plus the active
-  revision and its parent chain (see
-  `docs/guides/retention.md#the-configuration-archive-and-the-one-thing-a-purge-cannot-reach`).
+- **Personal data in configuration revisions.** Every node keeps its own copy
+  of every company-config revision it has ever met, in an append-only table
+  that is in every backup of that node. A human seat's `email` and `contact`
+  account ids are part of the org chart in that document, so they are
+  archived in every revision that carried them — and removing the seat does
+  not reach them, because the removal writes a *new* revision. The revision
+  table is swept: 400 days, plus the active revision and its parent chain
+  (see
+  `docs/guides/retention.md#the-configuration-archive-and-the-one-thing-a-purge-cannot-reach`),
+  and backups hold what they held until you delete them, so apply your own
+  retention to those.
 - **Sandbox isolation depends on the cell a seat runs in.** A coding agent
   runs fully permissioned — the sandbox boundary, not the agent's own
   permission prompts, is the isolation model — so where it runs is the

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
@@ -27,13 +26,13 @@ import (
 //
 // # Why this lives in internal/store rather than beside each domain
 //
-// Four of the six registered domains reach it through [statelogtest.Run],
-// which runs the same check as one of its four suites. The CHART and the IAM
-// domain cannot: that suite also runs the apply cases, and a domain has no
-// applier on the change that declares it — the engine's boot check refuses a
-// register entry with a nil applier, so a registration cannot land before its
-// applier. The check itself needs only a migrated estate and a declaration,
-// and the migrated estate is this package's. Running all six here also makes
+// Four of the five registered domains reach it through [statelogtest.Run],
+// which runs the same check as one of its four suites. The IAM domain cannot:
+// that suite also runs the apply cases, and a domain has no applier on the
+// change that declares it — the engine's boot check refuses a register entry
+// with a nil applier, so a registration cannot land before its applier. The
+// check itself needs only a migrated estate and a declaration, and the
+// migrated estate is this package's. Running all five here also makes
 // the walk two-sided: a domain whose tables stopped being created at all would
 // fail here rather than quietly stop being certified — the two COMPACTED
 // domains (the vectors and each node's usage) included, whose ledgerless
@@ -42,7 +41,7 @@ func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 	t.Parallel()
 
 	for _, domain := range []statelog.Domain{
-		tracker.Domain{}, pages.Domain{}, chart.Domain{}, iamdomain.Domain{},
+		tracker.Domain{}, pages.Domain{}, iamdomain.Domain{},
 		search.Domain{}, usage.Domain{},
 	} {
 		t.Run(domain.Name(), func(t *testing.T) {
@@ -56,105 +55,33 @@ func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 	}
 }
 
-// THE CHART'S OPS LEDGER TAKES THE FRAMEWORK'S FIVE COLUMNS AND NOTHING ELSE.
-//
-// `0001_the_state_log_lands.sql` documents the first four, `0021` added
-// `stored_at` (the applying record's broker instant) to every ledger the
-// framework carried then, and `0044` to this one and the identity estate's.
-// The framework writes the statements, so a sixth column is not a compile
-// error and not a migration failure — it is a column nothing ever populates, and an index over it is an
-// index nothing ever uses. The one that would be tempting is `kind`, with an
-// index on (kind, applied_at) so a structural record's op id could be swept on
-// a different schedule from a content record's. That is a SECOND OPS HORIZON,
-// and this domain declares one: two horizons on one ledger is a retry that
-// resolves against a history half of which has been deleted.
-//
-// The `applied_at` index is asserted in the same case rather than a separate
-// one, because its absence is the mirror failure: the sweep is a range delete
-// over the age, and without the index a node returning from a month away scans
-// the whole table on every tick and deletes its whole month in one statement
-// holding this store's only writer.
-func TestTheChartOpsLedgerCarriesTheFrameworksFiveColumns(t *testing.T) {
-	t.Parallel()
-
-	db := openReplicated(t)
-	got := columnsOf(t, db, chart.Domain{}.OpsTable())
-	want := []string{"applied_at", "op_id", "position", "stored_at", "subject"}
-	if !slices.Equal(got, want) {
-		t.Errorf("%s has columns %v, want exactly %v — the framework writes the "+
-			"statements that fill this table, so a column it does not know is "+
-			"one nothing ever populates",
-			chart.Domain{}.OpsTable(), got, want)
-	}
-
-	// The index, read from the estate's own DDL rather than from a
-	// PRAGMA: the assertion is about what the migration SHIPS, and a
-	// deployment that had somehow acquired the index another way would
-	// still leave the next fresh database without it.
-	ddl := replicatedDDL(t)
-	if !strings.Contains(ddl, "ON chart_ops (applied_at)") {
-		t.Error("no index over chart_ops (applied_at) is shipped — the ops sweep " +
-			"is a range delete over the age, and a range delete ships its index")
-	}
-	if strings.Contains(ddl, "chart_ops (kind") || strings.Contains(ddl, "chart_ops(kind") {
-		t.Error("an index over chart_ops keyed on a kind is shipped — this domain " +
-			"declares ONE ops horizon, and an index implying a second is how the " +
-			"second gets written")
-	}
-}
-
-// AND THE TWO COLUMNS A LATER CHANGE CANNOT ADD ARE HERE NOW.
+// A PROJECT CARRIES THE ACTIVATION ITS CHART-OWNED FIELDS CAME FROM, AND NO LOG
+// POSITION.
 //
 // schema_migrations keys on the FILENAME, so editing a migration that has
 // already run silently never re-runs it: every database that applied it keeps
-// the old shape while the code assumes the new one. `former_keys_json` is a
-// column the applier fills from the first record it ever writes, so it has to
-// ship in the migration that creates the table rather than in the one that
-// starts using it.
-func TestTheChartTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
+// the old shape while the code assumes the new one. `chart_epoch` is the
+// guard the tracker's applier compares before any chart-owned field of a
+// project, so it has to be in the shipped estate rather than in a later file
+// a database might never run.
+func TestAProjectCarriesItsActivationStampAndNoLogPosition(t *testing.T) {
 	t.Parallel()
 
 	db := openReplicated(t)
-	for table, column := range map[string]string{
-		"chart_units": "former_keys_json",
-		// And the additive column on a table this domain does not own,
-		// which is the tracker's chart guard now that the writer has
-		// moved onto it.
-		"tracker_projects": "chart_position",
-	} {
-		if cols := columnsOf(t, db, table); !slices.Contains(cols, column) {
-			t.Errorf("%s does not carry %s — an applied migration is history, "+
-				"not source, so no later file can add it to a database that has "+
-				"already run this one", table, column)
-		}
+	cols := columnsOf(t, db, "tracker_projects")
+	if !slices.Contains(cols, "chart_epoch") {
+		t.Error("tracker_projects does not carry chart_epoch — an applied " +
+			"migration is history, not source, so no later file can add it to a " +
+			"database that has already run this one")
 	}
 	// AND THE ONE IT REPLACED IS GONE. A guard column with no writer is
 	// worse than an absent one: it reads as a fact about the row, a later
-	// reconcile is tempted to compare it, and what it actually holds is a
-	// wall-clock reading from whichever node last ran the old build.
-	if cols := columnsOf(t, db, "tracker_projects"); slices.Contains(cols, "chart_epoch") {
-		t.Error("tracker_projects still carries chart_epoch — nothing writes it " +
-			"since the chart guard moved onto chart_position, and a column no " +
-			"writer fills is a value every reader is entitled to misread")
-	}
-	// AND SO IS THE ADDRESS INDEX nobody read. It held a sealed address's
-	// `${VAR}` reference folded, which matches no payload, while the party
-	// registry resolves the reference and matches in memory — a column
-	// beside that is a second, wrong answer to "which seat is this address".
-	if cols := columnsOf(t, db, "chart_seats"); slices.Contains(cols, "email_index") {
-		t.Error("chart_seats still carries email_index — nothing reads it, and " +
-			"what the applier wrote there was a reference, not an address")
-	}
-	var indexes int
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM sqlite_master
-			WHERE type = 'index' AND name = 'chart_seats_email_idx'`).Scan(&indexes)
-	}); err != nil {
-		t.Fatalf("read the estate's indexes: %v", err)
-	}
-	if indexes != 0 {
-		t.Error("chart_seats_email_idx is still in the estate, over a column " +
-			"nothing reads")
+	// reconcile is tempted to compare it, and what it held was a log
+	// position in a number space no activation stamp shares.
+	if slices.Contains(cols, "chart_position") {
+		t.Error("tracker_projects still carries chart_position — nothing writes " +
+			"it, and a column no writer fills is a value every reader is " +
+			"entitled to misread")
 	}
 }
 
@@ -179,7 +106,6 @@ func TestEachDomainDeclaresExactlyTheTablesItShips(t *testing.T) {
 		prefix string
 		domain statelog.Domain
 	}{
-		{"chart_", chart.Domain{}},
 		{"iam_", iamdomain.Domain{}},
 	} {
 		t.Run(tc.domain.Name(), func(t *testing.T) {
@@ -263,8 +189,7 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 
 	db := openReplicated(t)
 	for table, columns := range map[string][]string{
-		"iam_people": {"login", "email_blind", "seat_id", "chart_position",
-			"bucket"},
+		"iam_people":             {"login", "email_blind", "seat_id", "bucket"},
 		"iam_credentials":        {"bucket"},
 		"iam_invites":            {"bucket"},
 		"iam_sessions":           {"bucket"},
@@ -280,6 +205,14 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 					"database that has already run this one", table, column)
 			}
 		}
+	}
+	// AND A BINDING CARRIES NO CHART POSITION. Nothing writes the column
+	// once a seat is resolved against the running organisation, and a
+	// column no writer fills is a value every reader is entitled to misread
+	// as the position a bind was decided at.
+	if cols := columnsOf(t, db, "iam_people"); slices.Contains(cols, "chart_position") {
+		t.Error("iam_people still carries chart_position — nothing writes it " +
+			"since a seat binding stopped recording the chart's position")
 	}
 }
 
@@ -373,4 +306,59 @@ func replicatedDDL(t *testing.T) string {
 		all.WriteByte('\n')
 	}
 	return all.String()
+}
+
+// THE CHART'S LOG LEAVES NOTHING BEHIND: no table of its domain in the
+// replicated estate, no staged chart in the node's, and no column a revision
+// kept about it.
+//
+// The chart is the company document's again, so these are tables no applier
+// writes and columns no writer fills — and the estate is derived, so a table
+// left behind is one a snapshot carries to every node that joins. The
+// controls are the tracker's own table and the revision's payload, which a
+// migration that dropped too much would take with it.
+func TestTheChartLeavesNoTableAndNoColumnBehind(t *testing.T) {
+	t.Parallel()
+	db := openReplicated(t)
+	names := func(estate *store.DB, query string) []string {
+		var out []string
+		if err := estate.Read(t.Context(), func(tx *sql.Tx) error {
+			rows, err := tx.QueryContext(t.Context(), query)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var name string
+				if err := rows.Scan(&name); err != nil {
+					return err
+				}
+				out = append(out, name)
+			}
+			return rows.Err()
+		}); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		return out
+	}
+	const tables = `SELECT name FROM sqlite_schema WHERE type = 'table'`
+	replicated, node := names(db.Replicated(), tables), names(db, tables)
+	if !slices.Contains(replicated, "tracker_projects") {
+		t.Fatalf("the replicated estate lists %v, without the tracker's projects", replicated)
+	}
+	for _, name := range append(slices.Clone(replicated), node...) {
+		if strings.HasPrefix(name, "chart_") {
+			t.Errorf("%s is still shipped — nothing writes or reads it since the "+
+				"chart went back into the company document", name)
+		}
+	}
+	cols := names(db, `SELECT name FROM pragma_table_info('company_config')`)
+	if !slices.Contains(cols, "payload") {
+		t.Fatalf("company_config has columns %v, without its payload", cols)
+	}
+	for _, gone := range []string{"chart_position", "scrubbed_at"} {
+		if slices.Contains(cols, gone) {
+			t.Errorf("company_config still carries %s, which nothing writes", gone)
+		}
+	}
 }

@@ -37,7 +37,7 @@ func TestADecidedWatchIsWithdrawnOnlyByARefusal(t *testing.T) {
 		"a lead's watch of their report never reached the index")
 
 	// UNKNOWN KEEPS IT, across a published company it was decided on.
-	chart.set(false, errors.New("the chart view is behind"))
+	chart.set(false, errors.New("the running org could not be read"))
 	asked := chart.asked.Load()
 	svc.CompanyPublished()
 	waitUntil(t, func() bool { return chart.asked.Load() > asked },

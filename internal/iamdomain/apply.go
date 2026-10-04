@@ -49,11 +49,12 @@ var applyLog = logging.Get("iam.apply")
 //
 // WHAT A BATCH MOVED IS SAID POST-COMMIT, because it is a consequence of a
 // record here that is not a row. A suspension withdraws the seat's contact
-// identities from this node's notify registry with no org-chart record at all,
-// and closes every dashboard socket the person holds open; the apply is the
-// only thing that sees either happen on EVERY node — the change feed relays a
-// record to one. So a committed batch hands the engine a [Moved] saying whose
-// standing it moved, and each listener re-reads the rows it needs.
+// identities from this node's notify registry with no configuration change at
+// all, and closes every dashboard socket the person holds open; the apply is
+// the only thing that sees either happen on EVERY node — the change feed
+// relays a record to one. So a committed batch hands the engine a [Moved]
+// saying whose standing it moved, and each listener re-reads the rows it
+// needs.
 
 // Applier writes this node's copy of the identity estate.
 type Applier struct {
@@ -78,10 +79,10 @@ type Applier struct {
 // NewApplier builds the identity estate's applier for one node.
 //
 // committed is called after a committed batch that moved anything — see
-// [Moved]. AFTER the commit and never inside the transaction, for the reason
-// internal/chart's view trigger gives: the store re-runs the body of an
-// attempt that failed transiently, and a listener told about rows that then
-// rolled back would re-decide from rows no node holds.
+// [Moved]. AFTER the commit and never inside the transaction, because the
+// store re-runs the body of an attempt that failed transiently, and a listener
+// told about rows that then rolled back would re-decide from rows no node
+// holds.
 func NewApplier(nodeID string, committed func(Moved)) *Applier {
 	return &Applier{NodeID: nodeID, committed: committed}
 }

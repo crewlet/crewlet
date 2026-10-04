@@ -356,17 +356,13 @@ func (s *surface) convertOneApp(t *testing.T, handle string, app map[string]any)
 }
 
 // seatDoc reads one seat back through the entity route the flow writes it on.
-// seatDoc is one seat's own document, read from THE CHART's half rather than
-// from the settings revision: a seat is not in the stored configuration any
-// more, and reading it there would answer a document this surface no longer
-// writes.
 func (s *surface) seatDoc(t *testing.T, handle string) []byte {
 	t.Helper()
-	body, err := s.seats.SeatDocument(t.Context(), handle)
-	if err != nil {
-		t.Fatalf("read the seat %s: %v", handle, err)
+	res := s.do(t, http.MethodGet, "/config/roles/"+handle, "", nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("read the seat %s = %d: %s", handle, res.Code, res.Body)
 	}
-	return body
+	return res.Body.Bytes()
 }
 
 // AN APP'S OWN WEBHOOK SECRET IS SEALED AND POINTED AT.
@@ -393,18 +389,18 @@ func TestAnAppsWebhookSecretIsSealedAndReachable(t *testing.T) {
 	}
 	// AND POINTED AT from the seat, which is the half that was missing.
 	body := s.seatDoc(t, "sre-lead")
-	// THE RUNTIME SEAT'S SHAPE: `github` at the top level rather than
-	// under `integrations`, which is what the chart's own blob holds.
 	var seat struct {
-		GitHub struct {
-			WebhookSecret string `json:"webhook_secret"`
-			PrivateKey    string `json:"private_key"`
-		} `json:"github"`
+		Integrations struct {
+			GitHub struct {
+				WebhookSecret string `json:"webhook_secret"`
+				PrivateKey    string `json:"private_key"`
+			} `json:"github"`
+		} `json:"integrations"`
 	}
 	if err := json.Unmarshal(body, &seat); err != nil {
 		t.Fatalf("decode the seat: %v", err)
 	}
-	if got := seat.GitHub.WebhookSecret; got != "${GITHUB_APP_WEBHOOK_SECRET_SRE_LEAD}" {
+	if got := seat.Integrations.GitHub.WebhookSecret; got != "${GITHUB_APP_WEBHOOK_SECRET_SRE_LEAD}" {
 		t.Errorf("the seat points at %q, so nothing can verify this app's deliveries", got)
 	}
 	// THE POINTER, NEVER THE VALUE. A secret in the document is one the
@@ -417,9 +413,9 @@ func TestAnAppsWebhookSecretIsSealedAndReachable(t *testing.T) {
 	}
 }
 
-// AN APP IS ITS BEGINNER'S: the key's row, the webhook secret's and the seat's
-// chart record name the person who began the creation, with the credential
-// they began it through beside them.
+// AN APP IS ITS BEGINNER'S: the key's row, the webhook secret's and the
+// revision that records the app on the seat name the person who began the
+// creation, with the credential they began it through beside them.
 //
 // The callback carries no credential of ours, so its writes recorded `setup` —
 // a name that is nobody — and "who gave this agent its GitHub identity" had no
@@ -448,8 +444,8 @@ func TestAnAppIsRecordedAsWhoBeganIt(t *testing.T) {
 				name, got, authorOf(want))
 		}
 	}
-	if got := s.seats.by["sre-lead"]; got != want {
-		t.Errorf("the seat's chart record is written as %+v, want %+v", got, want)
+	if got := s.activeAuthor(t); got != want {
+		t.Errorf("the seat's revision is written as %+v, want %+v", got, want)
 	}
 }
 

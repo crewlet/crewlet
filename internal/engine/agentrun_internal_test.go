@@ -382,8 +382,8 @@ func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 // composed is the runtime company a document describes: its settings and the
 // org derived from them.
 //
-// A RUNNING NODE derives its org from the chart's own rows; a fixture holds a
-// document, so this is what its seats are. A document that will not build is
+// A RUNNING NODE builds its org from the document it applied, and so does
+// this: it is what a fixture's seats are. A document that will not build is
 // a fixture with no seats, and a case about a seat would then pass over an
 // empty company — so it fails loudly here instead.
 func composed(t *testing.T, cfg *config.Company) *Company {

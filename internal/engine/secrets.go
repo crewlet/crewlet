@@ -2,12 +2,10 @@ package engine
 
 import (
 	"context"
-	"crypto/subtle"
 	"fmt"
 	"maps"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -105,10 +103,10 @@ func (e *Engine) installSecrets(values map[string]string) {
 // can tell "this node has no secret store" from "the store answered with
 // nothing in it", which the resolver renders identically.
 func (e *Engine) refreshSecrets(ctx context.Context) bool {
-	// SERIALISED WITH THE CHART'S RE-READ, which merges into the snapshot
-	// this replaces: the store is read under the same lock the snapshot is
-	// installed under, so whichever of the two runs later read the store
-	// later, and neither installs a snapshot older than the other's.
+	// SERIALISED WITH EVERY OTHER REFRESH: the store is read under the
+	// same lock the snapshot is installed under, so whichever of two runs
+	// later read the store later, and neither installs a snapshot older
+	// than the other's.
 	e.secretsMu.Lock()
 	defer e.secretsMu.Unlock()
 	values, err := e.secretSnapshot(ctx)
@@ -244,105 +242,6 @@ func openCipher(boot *config.Bootstrap) (secrets.Cipher, error) {
 		return nil, fmt.Errorf("engine: secrets keyring: %w", err)
 	}
 	return cipher, nil
-}
-
-// chartSealer is the chart's sealing seam over the company's secret store.
-//
-// # Why an adapter rather than the store itself
-//
-// [chart.Sealer] is one verb — seal one value — and the store's surface is
-// eleven. A consumer-defined interface is what keeps the chart from importing
-// a rekey, a listing and a migration it has no business with, and what lets a
-// test satisfy it without a coordination backend.
-//
-// # It had a second verb, a blind-index key, and nothing derived a value under it
-//
-// A keyed blind of a seat's address was designed for a chart column the
-// applier filled and nothing read, and the only reader of its key was a writer
-// method nothing called — so the key was minted on demand, without the guard
-// the identity estate's has against minting over a deleted one, for an index
-// no row held. Both are gone: a seat's address is SEALED here like any other
-// literal (the row carries its `${VAR}`), and the party registry resolves that
-// reference and matches the address in memory with iam.NormalizeEmail, the
-// fold the identity estate blinds under. A person's own name and address live
-// in the identity directory, sealed under the fleet keyring and erased from
-// every row when they are removed — not in the chart.
-//
-// NIL ONLY ON AN ENGINE WITH NO STORE — one built by hand in a test, since
-// [New] refuses a node without a keyring or a fleet backend — and the chart's
-// own write path then REFUSES a literal credential by name rather than putting
-// one on a log every node applies. What nil must never mean is "store it in
-// the clear".
-func (e *Engine) chartSealer() chart.Sealer {
-	if e.backends == nil || e.backends.Fleet == nil || e.cipher == nil {
-		return nil
-	}
-	return &chartSealer{
-		store: fleetsecrets.New(e.backends.Fleet, e.cipher),
-		now:   time.Now,
-	}
-}
-
-// chartSealer adapts the company's secret store to [chart.Sealer].
-type chartSealer struct {
-	store *fleetsecrets.Store
-	now   func() time.Time
-}
-
-// sealAttempts bounds how many times a seal re-tries a name that was there when
-// it tried to create it and gone when it went to confirm it.
-//
-// TWO, because only the orphan sweep deletes a chart name, and it deletes one
-// only after a grace of seeing nothing name it: a seal that meets that delete
-// once creates the name afresh on the next attempt, and one that meets it
-// twice is meeting something that is not the sweep.
-const sealAttempts = 2
-
-// Seal stores one value under the name the chart derived, recording the party
-// writing the seat as its author — creating it, or confirming the value the
-// same write already stored there, and never replacing another ([chart.Sealer]).
-func (c *chartSealer) Seal(ctx context.Context, name, value string,
-	by secrets.Author) error {
-
-	for range sealAttempts {
-		// SOURCE "chart", which is what an operator listing their secrets
-		// reads to tell a credential a founder typed into a seat from one a
-		// provisioner minted. The two have different remedies when they
-		// stop working, and a listing that called both "api" would send
-		// somebody to the wrong place. It is also what the orphan sweep
-		// asks before it deletes a value nothing names
-		// ([chart.OrphanedSeals]), so it is the chart's own constant rather
-		// than a literal here.
-		created, err := c.store.Create(ctx, name, value, by, chart.SealSource, c.now())
-		if err != nil || created {
-			return err
-		}
-		// THE NAME IS THIS WRITE'S — a round the broker sent back, or the
-		// retry an unknown outcome asked for — or a reused operation id's.
-		// HELD rather than read, so a sweep that judged the value before
-		// this write names it again loses its delete.
-		held, found, err := c.store.Hold(ctx, name)
-		if err != nil {
-			return err
-		}
-		if !found {
-			continue
-		}
-		if subtle.ConstantTimeCompare([]byte(held), []byte(value)) != 1 {
-			return fmt.Errorf("engine: seal %s: %w", name, chart.ErrSealTaken)
-		}
-		return nil
-	}
-	return fmt.Errorf("engine: seal %s: the name was there to create and gone "+
-		"to confirm %d times over; write the field again", name, sealAttempts)
-}
-
-// Hold confirms a value the chart sealed is still stored, moving its row's
-// version so an orphan sweep that judged it nobody's loses its delete
-// ([chart.Sealer]).
-func (c *chartSealer) Hold(ctx context.Context, name string) (bool, error) {
-	_, held, err := c.store.Hold(ctx, name)
-	return held, err
 }
 
 // PersonSealer is what this node seals and opens a person's own values with:

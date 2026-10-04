@@ -5,21 +5,17 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
-// The registry is DERIVED from one org and answers for it permanently, so a
-// new company must build a new one — a node that indexed only its first
-// company would resolve every party against an org that is no longer running,
-// and a seat hired afterwards would be permanently unreachable with nothing
+// The registry is DERIVED from one org and answers for it permanently, so an
+// apply must build a new one — a node that indexed only its first company
+// would resolve every party against an org that is no longer running, and a
+// seat added by an apply would be permanently unreachable with nothing
 // failing.
-//
-// THE SEAT IS HIRED ON THE CHART, because that is where a seat comes from. A
-// config apply carries settings and no roster, so adding one to the applied
-// document would change nothing about who exists — and this case would pass
-// for a registry that never followed anything.
-func TestThePartyRegistryFollowsTheCompany(t *testing.T) {
+func TestThePartyRegistryFollowsTheAppliedCompany(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
 
@@ -41,18 +37,23 @@ func TestThePartyRegistryFollowsTheCompany(t *testing.T) {
 		t.Fatal("the founder is not marked human")
 	}
 
-	// THE HIRE. A new seat must become addressable without a restart.
-	if err := hire(t, e, "staff"); err != nil {
-		t.Fatal(err)
+	// THE APPLY. A new seat must become addressable without a restart.
+	grown := parsedCompany(t, companyDoc+`
+  - name: Staff Engineer
+    handle: staff
+    llm: alpha
+`)
+	if _, _, err := e.Apply(t.Context(), grown, time.Now()); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 
 	if _, ok := e.Registry().ByHandle("staff"); !ok {
-		t.Fatal("a seat hired onto the chart is not addressable")
+		t.Fatal("a seat added by an apply is not addressable")
 	}
 	// And the registry is a NEW one: the old org's answer must not
 	// survive into a company that no longer has that seat.
 	if e.Registry() == reg {
-		t.Fatal("the new company reused the previous registry")
+		t.Fatal("the apply reused the previous registry")
 	}
 }
 
@@ -141,7 +142,7 @@ func TestTheValveIsOffWithoutAStore(t *testing.T) {
 
 	limited := parsedCompany(t, strings.Replace(companyDoc,
 		"name: Acme", "name: Acme\nnotification_rate_limit: 5", 1))
-	if _, _, err := e.Apply(t.Context(), limited); err != nil {
+	if _, _, err := e.Apply(t.Context(), limited, time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if got := e.Company().Config.NotificationRateLimit; got != 5 {
@@ -514,7 +515,7 @@ integrations:
 	}
 
 	// The same company with the block removed.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc), time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -555,7 +556,7 @@ integrations:
     enabled: false
     webhook_secret: gh-secret
 `
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, disabled)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, disabled), time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if got := e.WebhookSecrets().GitHub; got != "" {
@@ -599,7 +600,7 @@ integrations:
 	}
 
 	// Disconnected: the parser goes, which has always worked.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc), time.Now()); err != nil {
 		t.Fatalf("Apply without confluence: %v", err)
 	}
 	if slices.Contains(e.RoutedSources(), "confluence") {
@@ -608,7 +609,7 @@ integrations:
 
 	// Connected again: the parser has to come back, and this is the half
 	// that did not.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, with)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, with), time.Now()); err != nil {
 		t.Fatalf("Apply with confluence: %v", err)
 	}
 	if !slices.Contains(e.RoutedSources(), "confluence") {
@@ -698,7 +699,7 @@ func TestEveryIntegrationRoutesWhenAddedAfterBoot(t *testing.T) {
 				t.Fatalf("%s routes before it is configured: %v", tc.source, e.RoutedSources())
 			}
 
-			if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc+tc.block)); err != nil {
+			if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc+tc.block), time.Now()); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
 			if !slices.Contains(e.RoutedSources(), tc.source) {
@@ -730,7 +731,7 @@ func TestTheFirstCompanyOnAnUnconfiguredNodeRoutesItsIntegrations(t *testing.T) 
 				t.Fatalf("an unconfigured node reports routed sources %v", got)
 			}
 
-			if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc+tc.block)); err != nil {
+			if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc+tc.block), time.Now()); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
 			if !slices.Contains(e.RoutedSources(), tc.source) {
@@ -772,7 +773,7 @@ integrations:
 	}
 
 	// Turned off, which is the gesture after a leaked webhook token.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc), time.Now()); err != nil {
 		t.Fatalf("Apply without datadog: %v", err)
 	}
 	if slices.Contains(e.RoutedSources(), "datadog") {
@@ -780,7 +781,7 @@ integrations:
 	}
 
 	// And back, which is what a reconnect is.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, with("ceo"))); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, with("ceo")), time.Now()); err != nil {
 		t.Fatalf("Apply with datadog: %v", err)
 	}
 	if !slices.Contains(e.RoutedSources(), "datadog") {

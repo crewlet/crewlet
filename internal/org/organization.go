@@ -9,8 +9,6 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-
-	"github.com/crewlet/crewlet/internal/chart"
 )
 
 // Organization is the whole company: a flexible hierarchy of units, the
@@ -184,6 +182,24 @@ func (o *Organization) Unit(key string) *Unit {
 	return nil
 }
 
+// NormalizeKey is the canonical form of a unit key: the fold every unit
+// reference is resolved and every pair of keys is compared under.
+//
+// FOLDED, because a key arrives from places nobody spells carefully — a model
+// typing `unit: Engineering`, a query string a person wrote, a URL somebody
+// pasted — and a reader who cannot tell two teams apart files one team's work
+// under the other.
+//
+// AND WHITESPACE BECOMES A HYPHEN, which is the half a case fold alone does not
+// cover: a unit's key is minted from its display name when the document
+// declares no `id:` ([config.MintIdentities]), so `Product Team` is a key a
+// company can be running on, and `product-team` is how it is typed as an
+// address. What it costs is that the two are one key, which the admission rule
+// refuses a document for when two units carry them ([Organization.validateUnitKeys]).
+func NormalizeKey(key string) string {
+	return strings.ToLower(strings.Join(strings.Fields(key), "-"))
+}
+
 // UnitByRef resolves a DURABLE unit reference — a value read back out of a
 // row, carried on a record, or typed into a filter or a tool argument — to the
 // unit it names.
@@ -191,7 +207,7 @@ func (o *Organization) Unit(key string) *Unit {
 // THE KEY FIRST, in [Organization.Unit]'s order — the live key, the key the
 // unit was created under, a former key — because a key is what every stored
 // row holds and the chart never gives one address to two units. Then the same
-// three under [chart.NormalizeKey], the fold the admission rule claims a key
+// three under [NormalizeKey], the fold the admission rule claims a key
 // under, never [strings.EqualFold], which is a different fold: a reference
 // arrives from places nobody spells carefully — a model typing
 // `unit: Engineering`, a query string a person wrote, a URL somebody pasted.
@@ -211,28 +227,28 @@ func (o *Organization) UnitByRef(ref string) *Unit {
 	if u := o.Unit(ref); u != nil {
 		return u
 	}
-	folded := chart.NormalizeKey(ref)
+	folded := NormalizeKey(ref)
 	if folded == "" {
 		return nil
 	}
-	if u := o.unitByKey(func(k string) bool { return chart.NormalizeKey(k) == folded }); u != nil {
+	if u := o.unitByKey(func(k string) bool { return NormalizeKey(k) == folded }); u != nil {
 		return u
 	}
 	for u := range o.AllUnits() {
-		if u.OriginKey != "" && chart.NormalizeKey(u.OriginKey) == folded {
+		if u.OriginKey != "" && NormalizeKey(u.OriginKey) == folded {
 			return u
 		}
 	}
 	for u := range o.AllUnits() {
 		for _, former := range u.FormerKeys {
-			if chart.NormalizeKey(former) == folded {
+			if NormalizeKey(former) == folded {
 				return u
 			}
 		}
 	}
 	var named *Unit
 	for u := range o.AllUnits() {
-		if chart.NormalizeKey(u.Name) != folded {
+		if NormalizeKey(u.Name) != folded {
 			continue
 		}
 		if named != nil {
@@ -904,15 +920,12 @@ func (o *Organization) Validate() error {
 // [Organization.Validate]. It assumes [Organization.Normalize] has run, so a
 // root seat moved into its unit is counted once, where it now sits.
 //
-// NO NAME IS HELD UNIQUE, a seat's or a unit's, and that is the org chart's
-// own rule rather than a leniency here. A name is prose: nothing references a
-// seat or a unit by it — a `lead:`, a `manages:` entry and a `unit:` name a
-// handle or a key — and the chart could not refuse a duplicate if it wanted
-// to, because a name is CONTENT, arbitrated on its own object's subject, so
-// two leads naming two teams alike never contend. A document rule the chart
-// cannot hold made a chart exported from a running company one its own import
-// could refuse. What reads a name — a colleague lookup, a roster — answers a
-// shared one with an honest list naming each seat's handle.
+// NO NAME IS HELD UNIQUE, a seat's or a unit's, and that is a rule rather
+// than a leniency. A name is prose: nothing references a seat or a unit by it
+// — a `lead:`, a `manages:` entry and a `unit:` name a handle or a key — so
+// two teams named alike are two teams, and what reads a name — a colleague
+// lookup, a roster — answers a shared one with an honest list naming each
+// seat's handle.
 func (o *Organization) ValidateAdmission() error {
 	return errors.Join(o.validateUnitKeys(), o.validateUnitRefs())
 }
@@ -979,24 +992,22 @@ func (o *Organization) validateHandles() error {
 // [Unit.Key] is what work, routing and pages are filed under, and
 // [Organization.Unit] resolves a key to the FIRST unit answering to it. So two
 // units on one key do not conflict loudly: one of them simply receives the
-// other's work, for ever, and the chart looks correct. The org chart gives
-// one address to one object, so an import of the pair lands the first and
-// declines the second.
+// other's work, for ever, and the chart looks correct.
 //
-// # Folded as the CHART folds an address
+// # Folded as a unit reference is resolved
 //
-// [chart.NormalizeKey] is what a unit's key becomes the moment the file is
-// imported — lower-cased, whitespace a hyphen — so `Product Team` and
-// `product-team` are one address there, and they are one key here. A second
-// fold would be a second answer to "which object is this", and the one that
-// disagreed with the chart would admit a file whose import then declines a
-// unit, one log line per node, after the rest of it has landed.
+// [NormalizeKey] is the fold [Organization.UnitByRef] resolves a reference
+// under — lower-cased, whitespace a hyphen — so `Product Team` and
+// `product-team` are one key here as they are one unit there. A second fold
+// would be a second answer to "which unit is this", and two units that
+// collided under the resolver's fold and not under this one would each be
+// admitted while every reference resolved to whichever was walked first.
 //
 // # A NAME IS NOT A KEY
 //
 // Only [Unit.Key] is compared. Two units NAMED alike on distinct ids are two
-// addresses, which is the chart's own rule — a name is prose, and see
-// [Organization.ValidateAdmission] for why no name is held unique — and an id
+// addresses — a name is prose, and see [Organization.ValidateAdmission] for
+// why no name is held unique — and an id
 // that happens to spell another unit's name collides with nothing, since
 // nothing resolves a unit that declares an id by its name.
 //
@@ -1007,7 +1018,7 @@ func (o *Organization) validateHandles() error {
 // An ADMISSION rule (see the class note above [Organization.Validate]).
 func (o *Organization) validateUnitKeys() error {
 	groups := groupBy(o.placedUnits(), func(u placedUnit) string {
-		return chart.NormalizeKey(u.unit.Key())
+		return NormalizeKey(u.unit.Key())
 	})
 	var errs []error
 	for _, g := range groups {

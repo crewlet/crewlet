@@ -96,7 +96,7 @@ func (f *fakeRuntime) Fleet(ctx context.Context) api.FleetState {
 func (f *fakeRuntime) ShuttingDown() bool { return f.state.ShuttingDown }
 
 // noRoutes is a surface that mounts nothing, for the cases that are not about
-// /config, /secrets, /setup or /chart. Its Routes RETURNS AN ERROR because the
+// /config, /secrets or /setup. Its Routes RETURNS AN ERROR because the
 // real ones refuse at mount: a route carries its authority with its
 // registration, and one mounted with none is a hole that ships looking
 // correct.
@@ -219,9 +219,6 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	if opts.Setup == nil {
 		opts.Setup = noRoutes{}
 	}
-	if opts.Chart == nil {
-		opts.Chart = noRoutes{}
-	}
 	if opts.Retention == nil {
 		opts.Retention = fleet
 	}
@@ -273,7 +270,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"Runtime", "EventLog", "Sources.Company", "Sources.Events", "Sources.NodeID",
 		"Sources.Chart", "Sources.Holders", "Sources.WithheldContacts", "Sources.Coord",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
-		"Config", "Secrets", "Setup", "Chart", "Retention", "Capacity", "Backup",
+		"Config", "Secrets", "Setup", "Retention", "Capacity", "Backup",
 		"AuthEvents", "Inbox", "Credentials", "Nodes", "Audit",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {

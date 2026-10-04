@@ -15,27 +15,37 @@ and a unit of the org chart that owns it. Every task filed into it gets a key
 of the form `ENG-412`, minted from the project's own counter.
 
 **Projects come from the org chart.** Declaring a unit with a project key in
-the [org chart](../concepts/chart-domain.md) creates the project on every node
-as soon as that node applies the chart write, with no gesture from anybody.
-That is what lets a fresh company file its first task in its first minute.
+the company config creates the project on the next apply, on every node, with
+no gesture from anybody. That is what lets a fresh company file its first task
+in its first minute.
 
-A project's name, purpose and unit follow the **latest chart**, whichever node
-applies what when. Each project is stamped with the **position on the chart's
-own log** that the node applying it had reached (`chart_position`), and a
-node whose view of the chart is older never overwrites what a newer one wrote —
-so a node that is behind on the chart log, or one restarting before it has
-caught up, leaves the newer names alone. A position orders two views without a
-clock: both are points on the same ordered log, so no node's clock can make an
-older chart look newer. And a row that already says what the chart says is
-never written again, whatever position said so — the engine brings its
-projects up to the chart on every boot, every settings apply and every chart
-write, so the log grows with edits to the chart rather than with restarts.
-**Every project is attempted on every pass**: one the node could not write — a
-full stream, a write whose outcome is unknown — does not stop the rest of the
-company's projects from being brought up, and a pass that left any behind logs
-`tracker_chart_not_applied` naming each project that failed and the ones it did
-write, and is retried by the next apply or restart. Until then a project the
-chart names but no node has written yet refuses work filed into it.
+A project's name, purpose and unit follow the configuration that was
+**activated last**, whichever node applies what when: each project is stamped
+with the instant its configuration was activated (`chart_epoch`), and a chart
+activated earlier never overwrites one activated later — so a node restarting
+on a revision the fleet has since replaced, or applying an older one late
+during a rollout, leaves the newer names alone. Re-applying an activation that
+has already landed writes nothing, which is every restart of every node on a
+company nobody has edited; when several nodes apply one activation at once,
+they contend per project and exactly one of them writes it. A row whose
+fields already match but whose stamp is older is re-stamped, because left at
+the older activation it is open to one a slow node applies late; so
+re-activating an unchanged revision (the
+[credential-rotation gesture](../concepts/secret-store.md)) records one quiet
+"org chart re-applied" change per project. The instant is the activating
+node's clock, except that an activation is never published at an instant no
+later (to the millisecond) than the one it replaces: the activation pointer
+moves it to a millisecond after, so an activation made on a node whose clock
+runs behind the last activator's is still applied to every project. A node
+that boots on a company file it has not imported yet applies no chart until
+the control plane activates that file, which happens before the node claims
+any seat. **Every project is attempted on every pass**: one the node could not
+write — a full stream, a write whose outcome is unknown — does not stop the
+rest of the company's projects from being brought up, and a pass that left any
+behind logs `tracker_chart_not_applied` naming each project that failed and
+the ones it did write, and is retried by the next apply or restart. Until then
+a project the chart names but no node has written yet refuses work filed into
+it.
 
 A numbering **gap** is normal and permanent. `ENG-7` exists, `ENG-8` never did,
 `ENG-9` is next: the counter moves before the task lands, so a crash between
@@ -1478,10 +1488,10 @@ screens rather than one:
   narrowed from one bar — the window, then **Kind**, **By** and **Project**
   pickers whose options are what the pages loaded hold, with how many of each
   (said once: the counts are over the changes loaded) — and it says "Showing
-  the latest N" beside **Load older**. Every row is a change: a chart write
-  that leaves a project's name, purpose and unit as they were writes nothing,
-  and the chart position a project is stamped with is never recorded as one,
-  so no row on this log is bookkeeping.
+  the latest N" beside **Load older**. Every row is a change: re-applying an
+  activation that already landed writes nothing, and a new activation that
+  leaves a project's name, purpose and unit as they were is one quiet "org
+  chart re-applied" row per project, naming the activation it moved to.
   The window bounds what the engine is asked for and a page bounds what one ask
   answers, so the two are different limits: **Load older changes** fetches the
   next page back rather than asking you to move the window, and the pages you
@@ -1618,8 +1628,8 @@ for a person — anybody above them in the management chain.
 | Purge a task | `fleet:operate`, and **never an agent** — see [below](#removing-deleting-and-purging) |
 
 **A node that cannot read its chart does not say no.** Every relation above is
-asked of the chart this node is running, and a node that is booting, applying a
-revision or behind the chart log cannot answer it. That is reported as
+asked of the org chart this node is running, and a node that is booting or runs
+no company yet cannot answer it. That is reported as
 *cannot tell* — a tool's refusal says this node could not decide, and a route
 answers `503` — rather than "you do not lead this", which would send a lead
 off to ask for an authority they already hold. `fleet:operate` is checked before the chart is

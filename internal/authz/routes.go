@@ -148,10 +148,10 @@ func (t *Router) Refusing(render Refusal) *Router {
 // decide, in seconds.
 //
 // TWO, the value the identity surface gives its own 503s — and the one the work
-// surface and /chart take from here rather than keeping a copy — and for its
-// reason: what the caller waits for is this node's chart
-// view catching up by one apply, or its identity read coming back — the scale
-// of one batch, not of an outage. Longer leaves a person staring at a screen
+// surface takes from here rather than keeping a copy — and for its reason: what
+// the caller waits for is this node applying the company it is one activation
+// behind, or its identity read coming back — the scale of one batch, not of an
+// outage. Longer leaves a person staring at a screen
 // that could already answer; shorter turns a lagging node's every open tab
 // into a retry storm against the node least able to take it.
 const RetryUndecidedSeconds = 2
@@ -162,10 +162,10 @@ const RetryUndecidedSeconds = 2
 //
 // NOT [net/http.Error], which is what it was. That writes `text/plain` and
 // `nosniff` — the pairing that stops a strict client parsing the answer at
-// all — and a sentence rather than a code, so the /iam and /chart surfaces
-// refused a request in a shape no client of the rest of this API could read:
-// no `error` to branch on, no grant to name, and a 503 with no `Retry-After`,
-// which a client cannot tell from a node that is down for good.
+// all — and a sentence rather than a code, so the /iam surface refused a
+// request in a shape no client of the rest of this API could read: no `error`
+// to branch on, no grant to name, and a 503 with no `Retry-After`, which a
+// client cannot tell from a node that is down for good.
 //
 //   - UNKNOWN IS NOT A REFUSAL. This node could not decide — it is behind, or
 //     it holds no company yet — so it is `503 unavailable` with a

@@ -25,8 +25,8 @@ import (
 const gateAnswerGolden = "testdata/gate_answer.json"
 
 // gateAnswerScenarios is one gesture per shape a log's answer can take, each
-// over two of the four identity-claiming logs a real node runs — the tracker's
-// and the knowledge base's, standing for all four: every log's entry has the
+// over two of the three identity-claiming logs a real node runs — the tracker's
+// and the knowledge base's, standing for all three: every log's entry has the
 // one shape, and what the file pins is that shape, not how many logs there are.
 //
 // The ids are the engine's own grammar and DERIVED, so the file is stable: a

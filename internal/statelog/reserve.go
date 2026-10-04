@@ -81,10 +81,10 @@ import (
 // IT WAS A SIXTEENTH ALONE, argued at one ceiling: a gibibyte, called Tier A's
 // floor for every domain, where a sixteenth is 64 MiB — seven records at the
 // transport's eight mebibytes, and room to spare. It was not every domain's
-// floor. The org chart's and the identity estate's Tier A floors are 64 MiB,
-// where a sixteenth is 4 MiB — less than ONE record at the size the budget
-// admitted — so on exactly the two smallest logs an eviction on a log full for
-// ordinary writes could find the reserve spent by appends it was kept against.
+// floor. The identity estate's Tier A floor is 64 MiB, where a sixteenth is
+// 4 MiB — less than ONE record at the size the budget admitted — so on exactly
+// the smallest log an eviction on a log full for ordinary writes could find the
+// reserve spent by appends it was kept against.
 // Stated per log, from the log's own largest record, the fleet term holds at
 // every ceiling a log may have, whatever its floor.
 //
@@ -93,11 +93,9 @@ import (
 // It GROWS WITH THE CEILING while the fleet term does not, so a larger log
 // absorbs a larger fleet. On the corpus-sized logs — a gibibyte floor, records
 // up to the transport's eight mebibytes — it is the larger term from the floor
-// up: 64 MiB against 57. On the org chart's — a 64 MiB floor, two-mebibyte
-// records — the fleet term is the larger at the floor, 15 MiB against 4, and
-// the sixteenth takes over as its ceiling grows past 240 MiB. The identity
-// estate's records are small enough that the sixteenth is the larger from its
-// floor up.
+// up: 64 MiB against 57. The identity estate's — a 64 MiB floor, records of at
+// most 128 KiB — are small enough that the sixteenth is the larger from its
+// floor up, 4 MiB against under 2.
 //
 // # What it costs
 //

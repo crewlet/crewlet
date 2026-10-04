@@ -34,12 +34,12 @@ func (f fakeBindings) PersonByLoginVouched(_ context.Context, login string) (
 }
 
 // boundMachine is an active machine under a Tier A token's login, bound to a
-// seat at chart position 900.
+// seat.
 func boundMachine() iamdomain.Sighting {
 	return iamdomain.Sighting{
 		ID: "018f3a9c-0000-7000-8000-0000000000c1", Kind: iam.KindMachine,
 		Stage: iam.StageActive, Login: "token:ops",
-		Seat: "platform-lead", SeatAt: 900,
+		Seat: "platform-lead",
 		// A ROW'S GRANTS ARE NOT THE TOKEN'S, and a case below holds
 		// that they never travel.
 		Grants: []iam.Grant{iam.GrantPeopleManage},
@@ -79,10 +79,10 @@ func TestOnlyAnActiveMachineBindsATierAToken(t *testing.T) {
 		// an error, so this token got 503 on every guarded route.
 		{"a reservation nobody finished enrolling", func(s iamdomain.Sighting) iamdomain.Sighting {
 			return iamdomain.Sighting{ID: s.ID, Login: s.Login, Seat: s.Seat,
-				SeatAt: s.SeatAt, Reserved: true}
+				Reserved: true}
 		}, false},
 		{"an active machine bound to nothing", func(s iamdomain.Sighting) iamdomain.Sighting {
-			s.Seat, s.SeatAt = "", 0
+			s.Seat = ""
 			return s
 		}, false},
 	} {
@@ -104,8 +104,8 @@ func TestOnlyAnActiveMachineBindsATierAToken(t *testing.T) {
 				}
 				return
 			}
-			if row.Seat != "platform-lead" || row.SeatAt != 900 {
-				t.Errorf("row %+v, want platform-lead at 900", row)
+			if row.Seat != "platform-lead" {
+				t.Errorf("row %+v, want platform-lead", row)
 			}
 			if len(row.Grants) != 0 {
 				t.Errorf("the directory row's authority travelled with the "+

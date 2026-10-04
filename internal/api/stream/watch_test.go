@@ -82,14 +82,14 @@ func TestAWatchIsDecidedLikeTheInboxQuestion(t *testing.T) {
 
 // A WATCH THIS NODE CANNOT DECIDE IS NOT INSTALLED, AND THE SOCKET STAYS OPEN.
 //
-// The chart could not be read — a node booting, applying, or behind the chart
-// log. Installing would hand a seat's frames to somebody this node could not
+// The org could not be read — a node booting, or running no company yet.
+// Installing would hand a seat's frames to somebody this node could not
 // show was allowed them; refusing would tell a lead they lead nobody because
-// the NODE is behind. So neither: `unavailable`, which the client retries, and
+// the NODE cannot tell. So neither: `unavailable`, which the client retries, and
 // the socket carries on serving everything else.
 func TestAWatchThisNodeCannotDecideIsNotInstalled(t *testing.T) {
 	t.Parallel()
-	chart := &leadChart{err: errors.New("the chart view is not built yet")}
+	chart := &leadChart{err: errors.New("the running org is not built yet")}
 	f := newWatchSocket(t, chart, map[string]string{"token:lead": "platform-lead"})
 	conn := f.open(t, "lead-token-long-enough-to-pass")
 
@@ -116,7 +116,7 @@ func TestAWatchThisNodeCannotDecideIsNotInstalled(t *testing.T) {
 // The watch's refusal went out as a bare `unavailable` — the frame a node too
 // old to say sends — so the dashboard re-asked it at its own fixed interval
 // whatever the node could have told it: every five seconds for as long as the
-// tab stayed open against a chart whose log was full, which no wait clears,
+// tab stayed open against a log that was full, which no wait clears,
 // and sooner than a node draining a long backlog had said it could answer. So
 // the frame carries `retry_after` by the state log's own rule over what could
 // not be read, ZERO where waiting will not change it — and the hint ALONE:
@@ -125,7 +125,7 @@ func TestAWatchThisNodeCannotDecideIsNotInstalled(t *testing.T) {
 //
 // AND IT IS A QUERY'S HINT OVER THE SAME CAUSE ([stream.UnavailableOf]), never
 // one the watch works out for itself: one tab told two different times to come
-// back about one unreadable chart is the disagreement that reading exists to
+// back about one unreadable cause is the disagreement that reading exists to
 // make impossible. The last case is the one that holds that rather than the
 // three values: [stream.ErrNoCompany] is a cause the reading answers with a
 // hint of its own, which the state log's rule alone reads as the health tick.
@@ -136,11 +136,11 @@ func TestAnUndecidableWatchSaysWhenToAskAgain(t *testing.T) {
 		cause error
 		want  float64
 	}{
-		{"a chart this node could not read", errors.New("the chart view is not built yet"),
+		{"an org this node could not read", errors.New("the running org is not built yet"),
 			stream.HealthInterval.Seconds()},
-		{"a chart log this node is behind", &statelog.Refused{Code: statelog.RefuseBehind,
+		{"a state log this node is behind", &statelog.Refused{Code: statelog.RefuseBehind,
 			Detail: "40 000 records behind", RetryAfter: 12 * time.Second}, 12},
-		{"a chart log waiting will not clear", &statelog.Refused{Code: statelog.RefuseLogFull,
+		{"a state log waiting will not clear", &statelog.Refused{Code: statelog.RefuseLogFull,
 			Detail: "raise the stream's byte ceiling"}, 0},
 		{"a cause the shared reading has a hint of its own for", stream.ErrNoCompany,
 			httpjson.NoActiveRevisionRetry.Seconds()},
@@ -313,7 +313,7 @@ func (f *watchFixture) assertOpen(t *testing.T, conn *websocket.Conn) {
 }
 
 // watchBindings binds each Tier A token's login to its seat, as an active
-// machine row decided at chart position 1.
+// machine row.
 type watchBindings map[string]string
 
 func (b watchBindings) BoundSeat(_ context.Context, login string) (session.PersonRow, error) {
@@ -322,7 +322,7 @@ func (b watchBindings) BoundSeat(_ context.Context, login string) (session.Perso
 		return session.PersonRow{}, nil
 	}
 	return session.PersonRow{Found: true, Stage: iam.StageActive, Login: login,
-		Seat: seat, SeatAt: 1}, nil
+		Seat: seat}, nil
 }
 
 // watchSeats holds every bound seat as a human seat, at a position covering
@@ -336,10 +336,6 @@ func (c watchSeats) Seat(_ context.Context, ref string) (session.Seat, bool, err
 		}
 	}
 	return session.Seat{}, false, nil
-}
-
-func (watchSeats) Position(context.Context) (uint64, time.Duration, error) {
-	return 1, 0, nil
 }
 
 // watchDirectory is the identity directory a watched login resolves through:

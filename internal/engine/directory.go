@@ -17,8 +17,8 @@ import (
 // company was published and at no other moment. Whether a human seat's contact
 // identities may route now also depends on the person holding it (see
 // internal/notify's directory.go) — and suspending that person is ONE record
-// on the identity log, with no org-chart record and no config apply anywhere
-// near it. Nothing on the publish path would ever see it.
+// on the identity log, with no config apply anywhere near it. Nothing on the
+// publish path would ever see it.
 //
 // So the identity applier signals after a committed batch that moved a seat's
 // standing, and this file turns the signal into a rebuild: read the directory
@@ -32,9 +32,9 @@ import (
 //
 // Every node applies every identity record — the domain runs on every node,
 // whatever its roles — so each one rebuilds its OWN registry from its OWN rows
-// within its own apply. The change feed would be the wrong carrier for the same
-// reason it is for the chart view: it relays a record to one node, and the rest
-// would go on attributing a suspended person's messages to their seat. The
+// within its own apply. The change feed would be the wrong carrier: it relays a
+// record to one node, and the rest would go on attributing a suspended
+// person's messages to their seat. The
 // chart-only reading is left to an engine with no core runtime at all, which
 // is `crewlet validate` and a test — every engine [New] builds opens the
 // directory at boot, a node with no company included.
@@ -250,11 +250,11 @@ func (e *Engine) intoRegistryOf(c *Company, register func(*notify.Registry) int)
 // nudgeDirectory is what the identity applier calls after a committed batch
 // that moved a seat's standing.
 //
-// A NON-BLOCKING SIGNAL into one slot, never the rebuild itself, on
-// [Engine.nudgeChart]'s terms: it runs on the apply loop's own goroutine with
-// the next batch waiting, and a burst of suspensions collapses into the one
-// rebuild that follows it — which reads the directory when it starts, so it
-// sees everything committed before the last signal.
+// A NON-BLOCKING SIGNAL into one slot, never the rebuild itself: it runs on
+// the apply loop's own goroutine with the next batch waiting, and a burst of
+// suspensions collapses into the one rebuild that follows it — which reads the
+// directory when it starts, so it sees everything committed before the last
+// signal.
 func (e *Engine) nudgeDirectory() {
 	select {
 	case e.directoryNudge <- struct{}{}:
@@ -265,25 +265,23 @@ func (e *Engine) nudgeDirectory() {
 // DirectoryRefresh is how often a node re-reads its directory with nothing
 // having signalled.
 //
-// THE SAFETY NET RATHER THAN THE MECHANISM, and the chart view's own figure
-// for the chart view's own reasons ([ViewRefresh]): the committed hook is what
-// makes a suspension reach contact routing within one apply, an adoption or a
-// reopened estate signals the same way ([stateLog.estateReplaced]), and this
-// covers a reading that failed and anything else that moves the rows with no
-// signal at all. Thirty
-// seconds, because that is what the alarm table already calls a stall: a
-// registry behind its own directory for longer than that is a fault an
-// operator is being told about, so a slower net would report what it was not
-// fixing. It costs nothing when idle — the identity applier's position is
+// THE SAFETY NET RATHER THAN THE MECHANISM: the committed hook is what makes a
+// suspension reach contact routing within one apply, an adoption or a reopened
+// estate signals the same way ([stateLog.estateReplaced]), and this covers a
+// reading that failed and anything else that moves the rows with no signal at
+// all. Thirty seconds, because that is what the alarm table already calls a
+// stall: a registry behind its own directory for longer than that is a fault
+// an operator is being told about, so a slower net would report what it was
+// not fixing. It costs nothing when idle — the identity applier's position is
 // compared first, and the directory is read only when it moved.
-const DirectoryRefresh = ViewRefresh
+const DirectoryRefresh = 30 * time.Second
 
 // watchDirectory is the directory trigger's loop: the committed hook's signal,
 // and the periodic net behind it.
 //
-// NOT A DUTY, for [Engine.watchChart]'s reason: a node's registry is a
-// derivation of its OWN rows, and tying it to a fleet lease would mean a lease
-// flap stopped a node withdrawing a suspended person's identities.
+// NOT A DUTY: a node's registry is a derivation of its OWN rows, and tying it
+// to a fleet lease would mean a lease flap stopped a node withdrawing a
+// suspended person's identities.
 func (e *Engine) watchDirectory(ctx context.Context) {
 	ticker := time.NewTicker(DirectoryRefresh)
 	defer ticker.Stop()

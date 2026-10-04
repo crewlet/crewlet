@@ -101,9 +101,6 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	// own residue — so the apply is what makes the column single-holder,
 	// deterministically, on every node.
 	stale := column + ` = ''`
-	if kind == KindSeat {
-		stale += ", chart_position = 0"
-	}
 	if kind != KindEmail {
 		// A LOGIN OR A SEAT TAKEN OFF SOMEBODY THIS RECORD DOES NOT NAME,
 		// so whoever it was is read before it is taken: a credential
@@ -145,11 +142,6 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	// can find, holding an address somebody else may then take, which is
 	// the failure this estate has no index to refuse.
 	//
-	// A SEAT CLAIM ALSO WRITES THE CHART POSITION it was decided at, and
-	// the two move together for a reason: the position is only meaningful
-	// as a statement about the seat in the same row. A claim that set the
-	// handle and left a stale position behind would tell every reader that
-	// this node's view covers a decision it does not.
 	// THE LOGIN THE PERSON HELD BEFORE, for a login claim: the claim takes
 	// it off them, and a credential bound through it is bound through
 	// nothing once it lands.
@@ -160,15 +152,12 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 		}
 	}
 	assign := column + " = excluded." + column
-	if kind == KindSeat {
-		assign += ", chart_position = excluded.chart_position"
-	}
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO iam_people
-			(id, kind, stage, login, email_blind, seat_id, chart_position,
+			(id, kind, stage, login, email_blind, seat_id,
 			 name_sealed, email_sealed, bucket,
 			 created_at, updated_at, version, scoped_through, document)
-		VALUES (?, '', '', ?, ?, ?, ?, x'', x'', ?, ?, ?, 0, ?, x'')
+		VALUES (?, '', '', ?, ?, ?, x'', x'', ?, ?, ?, 0, ?, x'')
 		ON CONFLICT(id) DO UPDATE SET
 			`+assign+`,
 			updated_at     = excluded.updated_at,
@@ -178,7 +167,6 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 		claimColumn(KindLogin, kind, at.record.Subject.ID),
 		claimColumn(KindEmail, kind, at.record.Subject.ID),
 		claimColumn(KindSeat, kind, at.record.Subject.ID),
-		int64(claim.ChartPosition),
 		at.bucket(), at.unix(), at.unix(), at.packed)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: bind the %s claim on %s to %s: %w",
@@ -255,9 +243,6 @@ func (a *Applier) releaseToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	kind ObjectKind, column string) (int, error) {
 
 	clear := column + ` = ''`
-	if kind == KindSeat {
-		clear += ", chart_position = 0"
-	}
 	if kind != KindEmail {
 		// THE HOLDER, read before the column is cleared on them: a
 		// credential acting for them acts as this login or seat no

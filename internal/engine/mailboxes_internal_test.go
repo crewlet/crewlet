@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/maintenance"
-	qmem "github.com/crewlet/crewlet/internal/queue/memory"
 )
 
 // rosterFleet is the fleet store the roster reads the activation pointer from,
@@ -70,10 +69,7 @@ roles:
 	}
 
 	fleet := &rosterFleet{memoryFleet: coordmem.NewFleet()}
-	// A KEYRING, because a reconciler reads the engine's own and refuses
-	// an engine that holds none.
-	_, cipher := testKeyring(t)
-	e := &Engine{backends: &Backends{Fleet: fleet}, cipher: cipher}
+	e := &Engine{backends: &Backends{Fleet: fleet}}
 	e.epoch.current.Store(company)
 
 	// Nothing activated: not a fault, and not a roster of nobody either.
@@ -81,33 +77,35 @@ roles:
 		t.Fatalf("roster with no activation = %v, want ErrNoActiveRevision", err)
 	}
 
-	activation, err := fleet.Activate(t.Context(), coord.ActivationRequest{RevisionID: "rev-1", Payload: []byte("{}"), At: time.Now()})
+	earlier, err := fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-1", Payload: []byte("{}"), At: time.Now()})
+	if err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	activation, err := fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-2", Payload: []byte("{}"), At: time.Now()})
 	if err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
 
-	// A node with no reconciler cannot say which activation it serves.
+	// A company no activation has named — the file a node booted with —
+	// cannot say it is the fleet's.
 	if handles, err := e.activeSeats(t.Context()); err == nil {
-		t.Fatalf("a node with no reconciler produced a roster %v", handles)
+		t.Fatalf("a company no activation named produced a roster %v", handles)
 	}
 
-	// THE RECONCILER THE ENGINE BUILDS is the one the roster reads, or the
-	// sweep could never judge a seat on a real node.
-	r, err := e.NewReconciler(ReconcilerOptions{
-		Store: refinementStore(t), Fleet: fleet, Queue: qmem.New(), NodeID: "node-a",
-	})
-	if err != nil {
-		t.Fatalf("NewReconciler: %v", err)
-	}
-	r.publish(applyProgress{applied: activation.Epoch - 1, target: activation.Epoch})
+	// A company applied from an EARLIER activation is behind the fleet:
+	// its seats may be stale.
+	company.ActivatedAt = earlier.At
 	if handles, err := e.activeSeats(t.Context()); err == nil {
-		t.Fatalf("a node behind the fleet's epoch produced a roster %v; its seats may be stale", handles)
+		t.Fatalf("a node behind the fleet's activation produced a roster %v; its "+
+			"seats may be stale", handles)
 	}
 
-	r.publish(applyProgress{applied: activation.Epoch, target: activation.Epoch})
+	company.ActivatedAt = activation.At
 	handles, err := e.activeSeats(t.Context())
 	if err != nil {
-		t.Fatalf("a node serving the fleet's epoch: %v", err)
+		t.Fatalf("a node serving the fleet's activation: %v", err)
 	}
 	// Agent seats only: a human seat has no mailbox to retire or keep. And
 	// each carries the ID its mailbox is named by, because the sweep builds

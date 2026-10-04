@@ -15,9 +15,9 @@ import (
 )
 
 // THE IDENTITY ESTATE IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE, and it is the
-// FIFTH domain to run it — the fourth STRICT one.
+// FOURTH domain to run it — the third STRICT one.
 //
-// What the four before it could not exercise is the case this one is: a domain
+// What the three before it could not exercise is the case this one is: a domain
 // whose ROWS ARE CIPHERTEXT. The suite's determinism half compares table
 // CONTENT rather than counting rows, which it has to here — two nodes writing
 // different ciphertext for one record would pass a count and fail the claim

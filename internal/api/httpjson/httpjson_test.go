@@ -515,8 +515,8 @@ func TestAnUnavailableAnswerWithADetailCarriesBoth(t *testing.T) {
 //
 // An unknown outcome and a refusal are both 503s and send a client opposite
 // ways — the first is retried under the same operation, the second wrote
-// nothing — and each surface wrote the unknown for itself: `/chart` and `/iam`
-// said it only in prose, so a client that branched on `outcome` (the CLI's
+// nothing — and each surface wrote the unknown for itself: `/iam` said it
+// only in prose, so a client that branched on `outcome` (the CLI's
 // purge does) read a write that may have destroyed an item as one that wrote
 // nothing. The three keys are the writer's and win over a route's detail; an
 // unvouched unknown carries no Retry-After whatever the caller passed, since

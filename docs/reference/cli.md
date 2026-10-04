@@ -17,7 +17,7 @@ subcommand below is served by it.
 | `crewlet retention status [config]` | Every `retention` command that talks to a node takes `fleet:operate`, the reads included. What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
-| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's, the knowledge base's, the org chart's and the identity estate's — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
+| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's, the knowledge base's and the identity estate's — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
 | `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse commit, on the same logs. Refused while the node has not applied every record up to the one just before the higher of the trim floor and the first surviving sequence of any one of those logs, and the refusal prints the numbers. Nothing is written to any log on a refusal; a partial readmission is finished like an eviction |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with. A raise the broker has no room for is refused **before** the window opens, and one it refuses at the apply is reported as a refusal rather than as an unknown outcome |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
@@ -27,12 +27,8 @@ subcommand below is served by it.
 | `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. Taken by the seat's holder, whoever leads it, or a `fleet:operate` holder, and recorded under the caller's own name, kind and credential |
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
-| `crewlet config import <company.yaml>` | Load a company file and write **both halves**: the settings as a new `company_config` revision, and — through a running node — the `roles:` and `units:` to the [org chart](../concepts/chart-domain.md)'s own log. Offline it writes the settings and **stages** the chart, which the next `crewlet run` publishes; the line it prints says which it did |
+| `crewlet config import <company.yaml>` | Load a company file as a new active `company_config` revision — through a running node's `PUT /config`, which activates it fleet-wide, or offline into this node's store, which the node publishes at its next start; the line it prints says which it did |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
-| `crewlet chart show` | The company's units and seats, with the log position the answer was read at |
-| `crewlet chart check` | Every way the chart and the applied settings disagree. **Exits non-zero on an error-class finding**, so a deploy can gate on it |
-| `crewlet chart history` | The company-wide reorganisation feed: who moved, who was hired, which team was dissolved |
-| `crewlet chart export [-out PATH]` | The chart as an authored document, whole and unstripped, for a round trip through a file |
 | `crewlet iam <command>` | The company's people, credentials and sessions through a running node: invite, create, grant, bind, suspend, remove, revoke, mint a machine token, check and audit — see [`crewlet iam`](#crewlet-iam) |
 | `crewlet config show` | One-line summary of the active revision |
 | `crewlet config revisions [--limit N]` | List recent revisions (newest first) |
@@ -40,7 +36,6 @@ subcommand below is served by it.
 | `crewlet config activate <UUID>` | Mark a revision active in this node's store, published to the fleet at its next start; re-activating the current one mints a new epoch, which is how a rotated secret takes effect. A running fleet does the same through `POST /config/revisions/<UUID>/revert` or `POST /config/reload` |
 | `crewlet config seal` | Encrypt a plaintext active revision an older build left as one document under the Tier A keyring — every other reader refuses it — see [Secrets](../concepts/configuration.md#secrets) |
 | `crewlet config rekey [-dry-run]` | Re-encrypt the active revision's config document under the active key (master-key rotation) |
-| `crewlet config scrub [<UUID>] [-dry-run]` | Erase personal data from superseded revisions — the one-time cleanup of an archive written before the org chart left the document |
 | `crewlet secrets keygen [-key-id ID]` | Generate a fresh encryption-keyring key + the `crewlet.yaml` snippet to install it |
 | `crewlet secrets set <NAME>` | Store an encrypted secret in the [secret store](../concepts/secret-store.md); the engine resolves `${NAME}` from it ahead of the environment. Takes `secrets:write` |
 | `crewlet secrets list` | List stored secret names + metadata (never values). Takes `config:read` |
@@ -235,51 +230,10 @@ crewlet config import <company.yaml> [-config PATH] [-api URL] [-summary STR]
 Validates the Tier B YAML and writes it as a new active revision, recording the
 previously-active revision as its `parent_revision_id`.
 
-**It writes both halves, and it is the only place that knows they came from
-one file.** A company file carries the settings and the org chart, and always
-will — you author one document describing a company. The engine keeps them
-apart, because they are two things with two lifetimes, and `PUT /config`
-refuses a body carrying `roles:` or `units:` by name. So this command divides
-the file:
-
-1. the **settings**, as the file's own bytes minus those two keys — comments,
-   anchors and `${VAR}` pointers intact — to `PUT /config`;
-2. the **structure**, as one record on the chart's own subject, to
-   `POST /chart/import`;
-3. each unit's and each seat's **content**, one record per object, four at a
-   time.
-
-The order is load-bearing rather than tidy. The settings go first because a
-seat whose model chain names a provider is only valid once that provider
-exists. The structure goes before the content because a content write states
-the unit it believes a seat sits in, and the domain refuses a value that
-disagrees with the row. The content writes themselves are independent — each
-is arbitrated on its own object — so up to four are in flight at once, the
-same allowance one person's dashboard has against a node, which keeps a large
-import from queueing everybody watching it. If one is refused, nothing further
-is sent, the writes already in flight finish, and the import reports the first
-refusal in the file's own order.
-
-The chart import is **keyed on the chart's own content hash**, the same key
-the [boot seed](#crewlet-run) computes, so re-importing an unchanged file is a
-no-op every node reaches the same way rather than a rewrite of every row.
-
-**A chart write the node could not account for is not reported as refused.**
-It answers `503` with `outcome: "unknown"` beside the operation it ran under,
-and the command fails saying the write may or may not have landed, naming that
-operation. Running the same import again is the retry: the structure's key is
-its content, and each object's content is written whole, so a second run
-restates whatever the first may have written rather than adding to it.
-
-It is **refused while a rolling upgrade is in progress** — `409
-fleet_mixed_version`, naming the node still running the older protocol. An
-import rewrites every placement in the chart and every node applies it,
-including that one, under its own reading of what a placement means.
-
 **It reaches a running node.** The store is exclusive to one process, so
 against a live engine this cannot open the database — and it no longer needs
-to: it detects the held store and goes through that node's API instead, which
-stores the revision **and activates it fleet-wide**, so every node converges
+to: it detects the held store and goes through that node's `PUT /config`
+instead, which stores the revision **and activates it fleet-wide**, so every node converges
 with no restart. `-api URL` names a node explicitly, which is
 also how this works from a machine that is not the node at all. This is the
 same routing [`crewlet secrets`](#crewlet-secrets) does for the fleet's secret
@@ -293,26 +247,9 @@ what is live and make it live (`GET /config/revisions/<UUID>/diff` and
 `POST /config/revisions/<UUID>/revert`), because `crewlet config diff` and
 `crewlet config activate` open the store the running engine holds.
 
-With the engine **stopped** it writes the SETTINGS to this node's own store
-and marks the revision active there, which the node publishes to the fleet at
-its next start. It cannot *publish* the chart offline — that is a record on an
-ordered log, and no command-line process opens a broker — so it **stages** it:
-the authored chart is written into this node's own database, sealed with the
-same keyring the revision beside it uses, and published by the next
-`crewlet run`. The line it prints says which of the two routes it took and how
-many units and seats are waiting.
-
-A stage is a **pending intent**, not a history: importing twice offline keeps
-only the second, because the first is a structure you changed your mind about.
-It is redeemed once — the boot takes it in one transaction before publishing —
-and a re-publish would be a no-op anyway, since the chart import is keyed on
-the chart's own content.
-
-A stage is also **not the boot seed**, and the difference matters: the seed
-runs only while the chart is EMPTY, because a file that re-seeded a live
-company would revert every hire made through the API since. A stage is your
-explicit "this file is the chart again", so it publishes over whatever the
-chart currently holds — exactly as the `-api` route would have.
+With the engine **stopped** it writes to this node's own store and marks the
+revision active there, which the node publishes to the fleet at its next start.
+The line it prints says which of the two happened.
 
 `-summary` is the audit note recorded with the revision (default
 `imported from <path>`). The revision history is the record of who changed what
@@ -340,9 +277,7 @@ you and none is settable from the command line. (`PUT /config` takes an
 
 Like `seal` and `activate`, this writes the revision to **this node's** store;
 the note it prints says what publishes it to a running fleet — for an import,
-the same command run again while a node is up. (`PUT /config` takes the
-settings half alone and refuses a file carrying `roles:` or `units:`, so it is
-not a way to import a company file.)
+the same command run again while a node is up.
 
 ### `crewlet config export`
 
@@ -449,98 +384,7 @@ Workflow: `crewlet secrets keygen -key-id <new>` → add the new key to `secrets
 
 `-dry-run` reports what would move by reading the key id off the envelope, decrypting nothing. Idempotent: a document already under the active key is skipped and says so. A **plaintext** revision is refused rather than silently sealed — "rotate the key this is under" and "start encrypting this at all" are different decisions, and the refusal points at `config seal`. Fails clearly, naming the key, if the document is sealed under one no longer in the keyring.
 
-### `crewlet config scrub`
-
-```
-crewlet config scrub [<UUID>] [-dry-run] [-config PATH]
-```
-
-Replaces every seat's `email` and `contact` account ids with `__scrubbed__` in **superseded** revisions — all of them by default, or the one named.
-
-The org chart used to live inside the company document, so a human seat's personal data is inside every revision that carried it: on every node, in every backup, in an append-only table nothing deleted from. Removing the seat never reached it, because the removal writes a *new* revision and every older one still holds them. Revisions written after the chart moved onto its own log carry no chart at all, so this is a **one-time** cleanup of what is already there; the [revision sweep](../guides/retention.md#the-configuration-archive-and-the-one-thing-a-purge-cannot-reach) is what eventually removes the rows.
-
-**It refuses the active revision.** The fleet is serving that document and every node is holding it, so rewriting it underneath them would be a configuration change nothing activated — no epoch, no apply, no event. To take an address out of the live company, edit the company; that writes a revision this can then reach.
-
-**It reaches this node's copy only.** Run it on every node. Backups taken before the run still hold the original revisions, and nothing here reaches them.
-
-**It is not reversible,** and `__scrubbed__` is deliberately not the `__redacted__` a config read writes over a credential: that one means the value exists and is being withheld, and every write path restores it from the row behind it; this one means the value is gone. So a [`crewlet config diff`](#crewlet-config-diff) across a scrub **shows the tombstone** — a change, not damage. The row carries a `scrubbed_at` stamp and the run writes a `config_revision_scrubbed` audit event naming the revision and how many fields went, never which and never what they held.
-
-`-dry-run` reports which revisions hold personal data and how much, writing nothing. Running it twice is a no-op and says so.
-
 ---
-
----
-
-## `crewlet chart`
-
-```
-crewlet chart show|check|history|export [<config.yaml>] [-url URL] [-out PATH]
-```
-
-The company's [org chart](../concepts/chart-domain.md), from the command line.
-
-**Every one of these goes through a running node**, and that is not a
-limitation to route around. The chart is a LOG: a node's rows are derived from
-it by an applier the engine runs, and the store file is exclusive to whichever
-process holds it — so an offline read would be a second applier, and an
-offline write would be a record nothing published. `crewlet config` opens the
-store directly because a revision *is* a row; this cannot, and that difference
-is the whole shape of the command. It reaches that node with the credential
-in `CREWLET_API_TOKEN` and [nothing else](#crewlet-budgets): there is no token
-flag, and `-token` is refused as an unknown one.
-
-**The editing gestures are deliberately not here.** Hiring, moving and
-renaming are the dashboard's and the [API](api-endpoints.md#chart--the-org-chart-auth-gated)'s,
-because each is a decision somebody makes about a person and none of them is
-improved by being typed. What the command line adds is the three reads a
-person wants in a terminal, and the export that makes a cold break a round
-trip.
-
-### `crewlet chart check`
-
-The [continuous report](../concepts/configuration.md#the-continuous-report-what-nothing-can-refuse-at-a-write):
-every way the chart and the applied settings disagree. Nothing refuses these
-at a write — the two halves are written by different people at different
-times — so this is where they surface.
-
-It **exits non-zero on an error-class finding**, which is what makes it usable
-in a deploy: a seat silently running and billing on a model nobody chose is a
-company that does not work as written, and
-a command that reported one and exited 0 would be read as a pass by every
-pipeline that ran it. A warning-class finding is printed and exits 0.
-
-A node that evaluated **nothing** — no chart view, or no settings epoch — is
-an error rather than a pass, because no findings from a node that read nothing
-is the most misleading answer this command could print.
-
-It needs `audit:read` on the credential in `CREWLET_API_TOKEN`, and so does
-`crewlet chart history`: the report names every human seat nobody in the
-identity directory holds, and the feed is who moved whom across the whole
-company — the record of what happened rather than the board. A deploy pipeline
-gating on the report carries that grant; the finding **counts** are on `/health`
-for any reader.
-
-### `crewlet chart export`
-
-The chart as an authored document, whole and **unstripped**, which is why it
-needs the grant that reads the company configuration: this is a round trip —
-the file you edit and import back — so a stripped export would be one that
-silently deletes half of every seat the moment somebody uses it. It carries
-every unit, every seat with its runtime half, and every seat's `manages:` list
-under `manages`, keyed by handle — the list is structure, so it sits beside the
-seats rather than on them. Its credentials are **masked** as every read of the
-runtime half is: a sealed one exports as the `${CHART_…}` reference it is
-stored under, and anything else as `__redacted__`, which an import back into
-this deployment restores from the row and an import into one holding no such
-row refuses, naming the field. A `${CHART_…}` reference is good for **as long
-as a row of the chart names it**: once a field is cleared or its credential
-rotated, the value it named is collected an hour later, so importing an older
-file that names it is **refused**, naming the field, rather than accepted as a
-credential that resolves to nothing — send the credential itself, or store the
-name first with `crewlet secrets set`. Another deployment holds no value under
-that name until you store it there, and is refused the same way.
-`-out PATH` writes it at `0600`, because it carries the names of every
-credential the company holds.
 
 ## `crewlet iam`
 
@@ -551,10 +395,12 @@ crewlet iam <command> [SUBJECT] [-config PATH] [-api URL] [-json] [-reason TEXT]
 The company's [people, credentials and sessions](../concepts/identity-and-access.md),
 from the command line.
 
-**Every one of these goes through a running node**, for `crewlet chart`'s
-reason: the directory is a state-log domain, a change is a RECORD arbitrated
-at the broker, and the broker is embedded in the engine's own process with no
-listener. A second process cannot publish one.
+**Every one of these goes through a running node**, and that is not a
+limitation to route around: the directory is a state-log domain, a change is a
+RECORD arbitrated at the broker, and the broker is embedded in the engine's
+own process with no listener. A second process cannot publish one, and the
+store file is exclusive to whichever process holds it, so an offline read
+would be a second applier.
 
 **Authentication is `CREWLET_API_TOKEN` and nothing else.** The Tier A
 `api.auth.tokens` list is what a node *accepts*; it is not a wallet this
@@ -583,7 +429,7 @@ variable at all.
 | `revoke-credential ID` | Withdraw one credential, naming its owner with `-person`. Run with a machine token, it withdraws machine tokens only |
 | `reset-mfa ID` | Clear the second factor **and** end every session, because clearing alone leaves the ones opened with it live |
 | `invalidate-all` | Invalidate every session and every machine token in the company. The restore runbook's last step — it ends bearers and nothing else, so a removal, a suspension, a withdrawn credential or a reduced grant the restore rolled back is re-applied by hand before it ([Backups & Restore](../guides/backup.md#the-last-step-is-crewlet-iam-invalidate-all)) — and the token takes `fleet:operate` **and** `people:manage`; the Tier A tokens in the config file are untouched |
-| `check` | What is wrong with this company's access: no administrator, people with no credential, dangling bindings (a seat removed, tombstoned, turned into an agent seat, or not yet applied on this node), grants this node's ceiling clamps, duplicated and orphaned claims. A binding this node's chart cannot judge — its applier past the 60-second stall grace — is counted and said first rather than reported either way. See [below](#crewlet-iam-check) |
+| `check` | What is wrong with this company's access: no administrator, people with no credential, dangling bindings (a seat the running company no longer holds as a human seat), grants this node's ceiling clamps, duplicated and orphaned claims. A binding a node that runs no company yet cannot judge is counted and said first rather than reported either way. See [below](#crewlet-iam-check) |
 | `audit` | The identity estate's own trail. `-person`, `-event`, `-since POSITION`, `-at TIME`, `-limit`. The actor column names the credential beside them where the entry records one — `ana.admin (through pat:…)` for something their machine token did |
 
 ### Flags
@@ -746,8 +592,8 @@ unit keys, bad cron expressions, invalid timezones, two seats declaring one
 contact identity, and a knowledge scope with no backend behind it all fail here
 rather than at run time. A human seat with **no** contact identity is not among
 them: a person who works only through the dashboard has no chat account to
-name, so validation admits the seat and the chart check reports it as
-`seat_unreachable` (see [`crewlet chart check`](#crewlet-chart)). It reads
+name, so validation admits the seat and prints a warning at its `contact`
+instead. It reads
 **no environment**: Tier B keeps `${VAR}` references verbatim, so a config
 validates fully before any secret exists.
 For the same reason a company with no `providers.llm` at all validates, and
@@ -881,7 +727,7 @@ crewlet budgets show                       # usage per scope
 
 **The credential is `CREWLET_API_TOKEN` and nothing else**, here and on every
 command that talks to a running node — `backup`, `retention`, `work`,
-`seats`, `secrets`, `config`, `chart` and `iam` too. Every guarded route needs one,
+`seats`, `secrets`, `config` and `iam` too. Every guarded route needs one,
 reads included. It is never a flag: a token typed as an argument is in the
 shell history, in `ps`, and in any CI log that echoes the command, so
 `-token` is refused as an unknown flag. And it is never read out of the
@@ -892,10 +738,9 @@ your own and so signs in as you for that request instead — a person's token is
 theirs alone to mint. A `401` therefore has one thing to check — the value exported in
 `CREWLET_API_TOKEN`.
 
-The **ceilings** are not stored here: the company's is the settings'
-`token_budget`, and a seat's is the `token_budget` in its runtime half on the
-[org chart](../concepts/chart-domain.md), so every process derives the same
-numbers without coordinating. Only the usage is shared.
+The **ceilings** are not stored here: they are the company document's
+`token_budget`s — the company's and each seat's — so every process derives the
+same numbers without coordinating. Only the usage is shared.
 
 `show` names the company clock the windows are cut on, then prints **one row
 per window**: the company's day, week and month, then each seat's.
@@ -931,8 +776,8 @@ reverse: three permanent zero rows per seat bury the seats that matter.
 **There is no `reset`.** A window's allowance comes back when the window
 turns over — at local midnight, on Monday, on the 1st — rolled inside the
 charge that crosses the boundary, and room before then is made by raising the
-ceiling — the company's through `/config`, a seat's through its org chart
-runtime (`PATCH /chart/seats/{handle}`) — which is a write with an author,
+ceiling through `/config` — a seat's with `PUT /config/roles/{handle}` — which
+is a write with an author,
 where a counter zeroed by hand left no record of who made the room or why.
 
 ---
@@ -1131,15 +976,15 @@ generation (`GEN`), and a position from a generation the log has left prints
 `left gen N` (or `ahead gen N`) in place of a lag, since its sequence compares
 with nothing the log holds now; a node that reported its log diverged at its
 checkpoint is marked `LOG DIVERGED`. `RESERVE` is the top of the ceiling every
-identity-claiming log — the tracker's, the knowledge base's, the org chart's
-and the identity estate's — keeps for gate records ([the gate
+identity-claiming log — the tracker's, the knowledge base's and the identity
+estate's — keeps for gate records ([the gate
 reserve](../guides/retention.md#the-gate-reserve)), `-` on the vector
 changelog, which keeps none; `HEADROOM` is what is left of the rest, the
 ceiling ordinary writes are refused at — so a log at `0%` still takes an
 eviction.
 
 A term that does not apply to a domain prints `n/a` rather than `0`: the
-vector log, the org chart's and the identity estate's have no wake feed, and an
+vector log and the identity estate's have no wake feed, and an
 absent term is a different fact from one that permits nothing. Where a log does
 have one, its `feed_ack_floor` is that log's own feed — never another domain's.
 `PER DAY` prints `-` for the same reason where nothing was measured — a
@@ -1189,8 +1034,8 @@ coming back; eviction is the gesture for one that is not.
 
 `-confirm` repeats the node id, the same shape the other destructive gestures
 use. The trim counts nodes per log, so the eviction is a record on every log it
-counts nodes on — the tracker's, the knowledge base's, the org chart's and the
-identity estate's — and each answers on its
+counts nodes on — the tracker's, the knowledge base's and the identity
+estate's — and each answers on its
 own line with its [three-valued outcome](../guides/replication.md#a-write-has-three-outcomes),
 or `not written` and the reason that stopped it:
 
@@ -1199,12 +1044,10 @@ $ crewlet retention evict node-4 -confirm node-4
 evict node-4 (operation 01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4)
   tracker: applied at CREWLET_TRACKER_LOG 918280002
   pages: applied at CREWLET_PAGES_LOG 4410
-  chart: applied at CREWLET_CHART_LOG 4127
   iam: applied at CREWLET_IAM_LOG 58311
   node-4 stays COUNTED for about a minute, so a live node is certain to have read its own tombstone before the trim passes it.
   tracker trim floor 918100000 → 918100000
   pages trim floor 4100 → 4100
-  chart trim floor 3900 → 3900
   iam trim floor 57000 → 57000
 ```
 
@@ -1258,8 +1101,8 @@ ordinary writes still takes them — needs
 Not the same command now — it is refused the same way until the ceiling moves
 — and **not a fresh one afterwards**: once there is room, this gesture's own
 `-op-id` is what finishes it, because a fresh id is a second eviction that
-writes every log already holding the record again — here the tracker's, the
-org chart's and the identity estate's — and re-dates the eviction there. A node that is
+writes every log already holding the record again — here the tracker's and the
+identity estate's — and re-dates the eviction there. A node that is
 itself `evicted` cannot write, so it prints `-url <that node>` with the same
 `-op-id`; a `wrong_stream` log needs a [reanchor](#crewlet-retention-reanchor)
 first, and then the same `-op-id`; and a `superseded` operation — an eviction
@@ -1298,7 +1141,7 @@ crewlet: the node answered 409: readmission_refused
 
 The comparison is the one the node's own write fence makes: its **last
 published position** in each log that claims identity — the tracker's, the
-knowledge base's, the org chart's and the identity estate's — against the **higher of the published floor and the log's first
+knowledge base's and the identity estate's — against the **higher of the published floor and the log's first
 surviving sequence**, and the node must have applied every record up to the
 one just before it. A node that has never published a position is judged as
 holding nothing; one whose position is from a generation the log has since
@@ -1336,7 +1179,7 @@ crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 -confirm 858993459
 
 Changes a log's byte ceiling, raising or lowering it. A log's Tier A ceiling
 (`stream.tracker_log_max_bytes`, `stream.tracker_vectors_max_bytes`,
-`stream.pages_log_max_bytes`, `stream.chart_log_max_bytes`,
+`stream.pages_log_max_bytes`,
 `stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`) is not a live
 setting, only the value its stream is created with. A resize is decided
 against the usage the log is at, and a
@@ -1368,13 +1211,13 @@ check that quietly proves nothing.
 A target whose ordinary ceiling is at or below what the log already holds is
 refused before the window opens, naming both numbers and the least target that
 would do: that ceiling would refuse every ordinary append the moment it
-applied. On the four identity logs the ordinary ceiling is the target less
+applied. On the three identity logs the ordinary ceiling is the target less
 its [gate reserve](../guides/retention.md#the-gate-reserve) — the larger of a
 sixteenth of it and seven of the log's largest records with a mebibyte beside
 them; on the vector changelog and the usage log, which hold no gate, it is the
 whole target. A target under the floor Tier A holds the log's own field to is
 refused too, naming the field — a gibibyte on the tracker's, the knowledge
-base's and the vector changelog's, 64 MiB on the org chart's, the identity
+base's and the vector changelog's, 64 MiB on the identity
 estate's and the usage log's. A target under the
 current ceiling and above the usage is accepted, and is how a log gives a
 reservation back. A raise the broker cannot
@@ -1469,7 +1312,7 @@ used, an evicted peer's included — every other domain's stays where it is, and
 the domain's applier resumes on the node with no restart.
 
 For every log that keeps a generation record — the tracker's, the knowledge
-base's, the org chart's and the identity estate's — it refuses while any peer
+base's and the identity estate's — it refuses while any peer
 has already re-anchored the stream, **naming the peer** — that peer's rows are the fleet's
 history in the new generation, and this node adopts its snapshot instead. A
 peer that is gone for good is released by evicting it first

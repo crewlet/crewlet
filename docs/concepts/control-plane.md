@@ -63,20 +63,19 @@ The origin is **additive on the wire**. An older build reading a pointer this bu
 **Its revision is the epoch.** The coordination store assigns every key write a monotonic revision, so publishing the pointer appends and flips in a single write — there is no instant where a node can read an epoch whose target has not been published, and two operators activating at once get two different epochs rather than racing over a counter the engine keeps. It also gives the counter the property a plain revision-id pointer could never have: it moves on every activation *including re-activation of an unchanged revision*, which is the documented gesture for picking up a rotated credential (see [Secret Store § Propagation](secret-store.md#propagation)).
 
 **Every activation carries a later instant than the one it replaces.** The
-pointer records the instant a revision was activated, and the instant is the
-activating node's own clock; so inside the same compare-and-set that replaces
-the pointer, an activation whose instant is no later, to the millisecond, than
-the pointer's is published at one millisecond after it, and the fleet's
-history of activations is in the order the fleet made them whichever node's
-clock ran behind. Even an unconditional publish is a compare-and-set
-underneath for this reason. `Activate` returns the instant it published, and a
-node keeps that instant on its own copy of the revision (`activated_at`).
-**Nothing derived from the org chart is stamped with it.** The tracker
-projects and knowledge containers the chart's units declare are stamped with
-the position on the [chart's own log](chart-domain.md) the applying node had
-reached, and a node whose view is older never overwrites a row a newer one
-wrote: two positions on one ordered log compare without a clock, and a chart
-write moves no activation at all.
+pointer records the instant a revision was activated, and every row a
+configuration derives — a tracker project, a knowledge container — is stamped
+with it and refuses an older stamp, so an older configuration applied late
+cannot walk a newer one back. That guard needs a later activation to carry a
+later instant, and the instant is the activating node's own clock; so inside
+the same compare-and-set that replaces the pointer, an activation whose
+instant is no later, to the millisecond, than the pointer's is published at
+one millisecond after it, and the fleet's history of activations is in the
+order the fleet made them whichever node's clock ran behind. Even an
+unconditional publish is a compare-and-set underneath for this reason.
+`Activate` returns the instant it published, and a node keeps that instant on
+its own copy of the revision (`activated_at`), because it is what the node
+boots its company with next time.
 
 The pointer's bucket has **no retention at all**. Everything else the fleet shares ages out; a pointer that expired would restart the epoch, and a fencing sequence that restarts is not a fence.
 
@@ -209,10 +208,10 @@ A config revision and the *values* its `${VAR}` references resolve to are two di
 | LLM providers | **Yes** — the epoch's providers are constructed from the fresh resolver. |
 | Jira / Confluence / GitLab / GitHub | **Yes** — each tracker is reconciled against the new epoch and re-resolves the engine credential. |
 | Shared MCP children | **Yes, selectively** — see below. |
-| Per-role MCP children | **No.** They belong to a seat's *lease*, not to the epoch: spawned when a seat is claimed and torn down when it is released, so a rotated `mcp_env` value reaches one only when its seat next changes hands. |
+| Per-role MCP children | **Yes, selectively.** They belong to a seat's *lease* rather than to the epoch, and the apply's `seat_tools` step recomputes each held seat's specs over resolved values, so a rotated `mcp_env` value restarts that seat's one child and leaves the rest running — the shared children's comparison, below. |
 | Slack transport | **Yes.** It is rebuilt on every apply (`Engine.reconcileSlack`); what is replaced is an HTTP client and the working-status driver, with no socket to drop. |
 | Mattermost transport | **Yes, when a value it is built from moved.** It holds a websocket per seat, so `Engine.reconcileMattermost` rebuilds only when a fingerprint over the resolved URL, team, status and every seat's resolved bot token, username and channel changes, and a rotated bot token is such a change. |
-| Native tracker projects | **Nothing to rotate, but they are re-stamped.** The chart apply stamps each project with the activation's own instant, and a re-activation is a new activation. It therefore records one "org chart re-applied" change per project, once, however many nodes apply it. Re-applying the *same* activation, which is what every restart does, writes nothing. |
+| Native tracker projects | **Nothing to rotate, but they are re-stamped.** The apply stamps each project with the activation's own instant, and a re-activation is a new activation. It therefore records one "org chart re-applied" change per project, once, however many nodes apply it. Re-applying the *same* activation, which is what every restart does, writes nothing. |
 
 The shared MCP children, and the Mattermost transport above, are the places a comparison does happen, and it is deliberate: a child is a *process*, and restarting every one on every apply would tear down working servers to arrive back where they started. So `Bridge.Reconcile` compares the spec it is handed against the one the child is already running and leaves an unchanged server alone. What makes that safe for a rotation is *what* it compares: the spec's `env`, `headers` and `url` are resolved at the edge before the comparison, so a moved credential reads as a changed spec and restarts that one child. Comparing the stored config entry, where `${VAR}` stays verbatim, would silently stop rotation from reaching MCP children at all; two tests hold that line by re-applying the same document and asserting which children survive it.
 
@@ -222,59 +221,13 @@ That is the whole of the comparison, and it is over resolved values rather than 
 
 ---
 
-## The company is two halves, composed into one value
+## What runs before the first revision
 
-**A revision carries the SETTINGS and the org chart is a log of its own.** The two move on completely different rhythms, and that is the whole reason they are apart:
-
-| | The settings epoch | The chart |
-|---|---|---|
-| **What it is** | The providers, the integrations, the turn engine, the scheduling defaults — the nineteen fields a revision holds | The units and the seats: who exists, where they sit, who reports to whom |
-| **Where it lives** | One versioned document per revision, activated fleet-wide through the pointer below | The [chart domain](chart-domain.md) on the state log — one ordered stream, N identical SQL copies |
-| **How often it moves** | An operator activates one a few times a month | Whenever somebody is hired, moved or promoted |
-| **Who agrees on it** | Every node, identically, on the epoch the pointer names | Every node, eventually, at its own applied position — so two nodes legitimately differ while one is behind |
-
-Keeping them in one pointer would mean one of two wrong things: rebuilding every provider and every tool server because a seat's goal was reworded, or leaving the chart stale until the next config activation, which may be weeks.
-
-**A read still gets ONE value.** `Engine.Company()` is a single atomic load, exactly as it was — the composition happens on the WRITE side, so whichever half moves republishes the pair. Two pointers would have put the straddling hazard back one layer down, where a reader that loaded the settings and then the chart could catch either swap.
-
-**The view is DERIVED inside that composition, from the rows and the settings together.** A company view carries the name, the mission and the token budget, all of which are settings, and the units and seats, which are rows. Deriving it where the rows arrive would pair them with whichever settings epoch happened to be current then — and the first such pairing at boot has no settings epoch at all, which would derive every seat's agent id from an empty company name. So the derivation runs where both halves are in hand. It costs re-deriving the tree when the settings move (44 ms at twenty thousand seats, a few times a month) and nothing when the chart does, which is the cheaper side by a wide margin.
-
-**Four things rebuild it**, all through one function that is a no-op when the applier's cursor has not moved:
-
-1. **The chart applier's committed hook**, on every batch. Not the change feed: that relays a record to *one* node, so every other node's view would go on serving a chart it had already applied and could not see it had. The signal is one slot deep, which is the coalescing window — an import of a thousand records costs two derivations rather than a thousand.
-2. **Boot**, after the [seed](#the-boot-seed) and before the first epoch is installed.
-3. **A rejoin's adoption branch**, after the consumer reset and before the appliers relaunch. An adoption replaces the replicated file wholesale, so this node's rows are now a donor's with no apply call to say so.
-4. **A 30-second comparison** of the applier's cursor against the view's, as the net under all three.
-
-### What runs before the first revision
-
-A node started with no active revision is not an idle one. Its **core runtime** is started at boot on every node, company or not: every domain's state log, the node gate over every identity-claiming log, the chart and the [identity estate](identity-and-access.md) with the triggers that keep this node's views of both, and — on a node that publishes — the log's trim and the identity duties. That is what lets the [org builder](../guides/org-builder.md) write a company's units and seats into the chart before any settings revision exists, and what lets the company's first person be invited under a Tier A token and sign in on a node that has nothing else yet.
+A node started with no active revision is not an idle one. Its **core runtime** is started at boot on every node, company or not: every domain's state log, the node gate over every identity-claiming log, the [identity estate](identity-and-access.md) with the triggers that keep this node's view of it, and — on a node that publishes — the log's trim and the identity duties. That is what lets the company's first person be invited under a Tier A token and sign in on a node that has nothing else yet.
 
 What waits for the first revision is what only a company can say anything about: whether the engine keeps its own tracker and knowledge base at all, and so the writers and readers over those two logs, their lexical index, their change feeds and the embedding duty. The apply's `native` stage brings them up under the API already serving, and the surfaces over them — `/work`, `/pages`, `/operator/mcp` and the socket's work questions — read them per request, so they answer `503 no_active_revision` until then and serve from then on with no restart. The logs themselves have been applied all along: a join replaces the whole replicated file and a snapshot names every registered domain, so a node applying part of the register could neither adopt nor donate, and the trim, which counts nodes per log, would be pinned by it.
 
-A node's seats are admitted on the **core** log's hydration, so a node waiting for its first company is already caught up the moment it gets one. At a stop the order is the reverse of what depends on what: the chart's and the directory's view triggers first — a rebuild ends by re-arming the scheduler and the mailboxes, so a trigger still running after those stopped would start them again — then the fleet duties, the native half's embedding writer before the core's trim and identity duties because it publishes into a log the trim is deciding how far to purge, and every duty before the node gives its duty leases back; then the native halves — their change feeds, lexical index and search answerer, each of which reads what the logs write — and the logs last.
-
-### The boot seed
-
-A company has to start somewhere, and what an operator has on a first run is a file. `crewlet run -company acme.yaml` publishes that file's units and seats to the chart log — **only when the chart is empty**, and never again.
-
-That gate is the whole of it. Seeding on every boot and letting the import ledger make it a no-op would be wrong in the expensive direction: an operator who still passes `-company` restarts a node, and every object the file names is re-placed, so a seat moved to another team last week silently moves back. A chart edited after the seed belongs to whoever edited it; changing it from a file afterwards is `crewlet config import`, which diffs and asks.
-
-The seed publishes both halves — one import record for the structure, because it is one graph and has to be arbitrated whole, then each object's own content on its own subject. A seeded chart without the second half is a company of empty seats: every handle in the right unit, with no model, no credentials and no name.
-
-### An activation records the chart it ran on
-
-A company used to be one document, so "what was this company at 14:02" had one answer: the revision that was active. It has two halves now, and neither one names the other — so a revert to revision N restores the settings somebody had and says nothing about the chart they had, which is usually the half a reader is asking about: who was in which team.
-
-So a node that applies a revision stamps the **chart position it composed the epoch at** onto its own copy of that revision (`company_config.chart_position`). The pair `(revision, position)` is the company.
-
-Three things about it are worth stating, because each is a decision:
-
-- **It is written after the apply, not inside the activation.** A node flips `is_active` and composes the epoch afterwards, against whatever position its applier has reached. Recording at the flip would record the one instant the epoch has not been composed at yet.
-- **It is this NODE's own answer**, which is why it is in the node estate rather than the replicated one. One pointer flip activates a revision fleet-wide and each node reaches it at its own position: a node still replaying applies the same settings over fewer chart records. Recording one node's position as the fleet's would be a claim about peers its database never sees.
-- **A failure to write it is a log line, never a status.** The epoch is already published and serving. Reporting an error would turn a gap in the history into a revision this node reports as unapplied, and the control plane would retry an apply that has already happened.
-
-`NULL` is not zero here: a revision activated by a build before the column existed has no recorded position, and one activated on an empty chart has the answer `0`.
+A node's seats are admitted on the **core** log's hydration, so a node waiting for its first company is already caught up the moment it gets one. At a stop the order is the reverse of what depends on what: the directory's view trigger first — a registry rebuild must not outlive what it serves — then the fleet duties, the native half's embedding writer before the core's trim and identity duties because it publishes into a log the trim is deciding how far to purge, and every duty before the node gives its duty leases back; then the native halves — their change feeds, lexical index and search answerer, each of which reads what the logs write — and the logs last.
 
 ---
 

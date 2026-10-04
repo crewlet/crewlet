@@ -5,7 +5,7 @@ import "strings"
 // The identity estate's own log, and why its grammar is the strictest of the
 // five.
 //
-// The iam domain is the state-log framework's FIFTH, and its fourth strictly
+// The iam domain is the state-log framework's FOURTH, and its third strictly
 // ordered one. What is particular to it is that ONE SUBJECT PER CLAIM is the
 // whole design rather than a routing convenience: an email address, a login, a
 // seat binding and a session lineage each arbitrate on THEMSELVES, so two

@@ -35,8 +35,8 @@ func (e *Engine) SetOnInboxMoved(fn func([]tracker.InboxMovement)) {
 // notice under the recipient's IDENTITY — the handle the seat was created
 // under, which is what a record carries (internal/tracker's people.go) — and a
 // socket watches a seat by the handle it answers to, so a renamed seat's
-// screen heard nothing of its own inbox. The applier may not read a chart;
-// this is the first frame after it that can.
+// screen heard nothing of its own inbox. The applier may not read the
+// organisation; this is the first frame after it that can.
 func (e *Engine) inboxMoved(moved []tracker.InboxMovement) {
 	fn := e.onInbox.Load()
 	if fn == nil || *fn == nil {

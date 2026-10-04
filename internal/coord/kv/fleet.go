@@ -2328,11 +2328,11 @@ func (f *FleetStore) CreateSecret(ctx context.Context, rec coord.SecretRecord) (
 
 // UpdateSecret replaces a sealed value only while it is still at version.
 //
-// A ZERO VERSION NAMES NO ROW and writes nothing, for [FleetStore.DeleteSecretAt]'s
-// reason — and here it would be worse than a no-op: the client reads an
-// expected revision of zero as "this key has never been written", which is a
-// create wearing an update's name, and the one row it could resurrect is one
-// somebody deleted.
+// A ZERO VERSION NAMES NO ROW and writes nothing, because a caller that never
+// read one has judged nothing — and here it would be worse than a no-op: the
+// client reads an expected revision of zero as "this key has never been
+// written", which is a create wearing an update's name, and the one row it
+// could resurrect is one somebody deleted.
 func (f *FleetStore) UpdateSecret(ctx context.Context, rec coord.SecretRecord, version uint64) (bool, error) {
 	raw, err := encodeSecret(rec)
 	if err != nil {
@@ -2350,31 +2350,6 @@ func (f *FleetStore) UpdateSecret(ctx context.Context, rec coord.SecretRecord, v
 		return false, nil
 	default:
 		return false, unavailable("update the secret", err)
-	}
-}
-
-// DeleteSecretAt removes a value only while it is still at version.
-//
-// PURGED, like [FleetStore.DeleteSecret], and conditioned the way
-// [FleetStore.DeleteSandboxRun] is: the client drops a LastRevision of zero and
-// purges unconditionally, so a zero version is refused here rather than handed
-// over as a delete of whatever is there.
-func (f *FleetStore) DeleteSecretAt(ctx context.Context, name string, version uint64) (bool, error) {
-	if name == "" {
-		return false, errors.New("coord/kv: a secret needs a name")
-	}
-	if version == 0 {
-		return false, nil
-	}
-	err := f.secrets.Purge(ctx, encodeKey(name), jetstream.LastRevision(version))
-	switch {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, jetstream.ErrKeyRevisionMismatch), errors.Is(err, jetstream.ErrKeyNotFound),
-		isWrongLastSequence(err):
-		return false, nil
-	default:
-		return false, unavailable("delete the secret", err)
 	}
 }
 

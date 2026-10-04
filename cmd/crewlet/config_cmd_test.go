@@ -373,9 +373,10 @@ func TestDiffingARevisionAgainstItselfSaysSo(t *testing.T) {
 // remedy (restart, or the running node's own route) is guessable.
 //
 // EACH COMMAND NAMES ITS OWN ROUTE to a running fleet. One note served them
-// all and named `PUT /config`, which refuses a whole company file by name,
-// moves no pointer to a stored revision and re-seals nothing — so it was the
-// wrong answer for every command that printed it.
+// all and named `PUT /config`, which moves no pointer to a stored revision and
+// re-seals nothing — so it was the wrong answer for an activation. For an
+// import it is the right one: a whole company file is what it stores and
+// activates.
 //
 // That the pointer then MOVES on the next start is asserted where it happens:
 // TestANodeWithNoPointerPublishesItsActiveRevision in reconcile_test.go.
@@ -398,7 +399,8 @@ func TestAnOfflineActivationSaysWhatItDidAndDidNot(t *testing.T) {
 		command, out string
 		want         []string
 	}{
-		{"import", imported, []string{"next start", "run `crewlet config import` again"}},
+		{"import", imported, []string{"next start", "PUT /config to a node that is up",
+			"run `crewlet config import` while a node is up"}},
 		{"activate", activated, []string{"next start", "POST /config/revisions/" + id + "/revert"}},
 	} {
 		for _, want := range c.want {
@@ -407,10 +409,13 @@ func TestAnOfflineActivationSaysWhatItDidAndDidNot(t *testing.T) {
 					"tell how to reach a running fleet: %q", c.command, want, c.out)
 			}
 		}
-		if strings.Contains(c.out, "PUT /config") {
-			t.Errorf("config %s sends an operator to PUT /config, which cannot "+
-				"do what it did: %q", c.command, c.out)
-		}
+	}
+	// AN ACTIVATION IS NOT SENT TO PUT /config, which would store the
+	// document again as a new revision rather than point the fleet at
+	// the one this command activated.
+	if strings.Contains(activated, "PUT /config") {
+		t.Errorf("config activate sends an operator to PUT /config, which cannot "+
+			"do what it did: %q", activated)
 	}
 }
 
@@ -430,7 +435,6 @@ func TestALockedConfigStoreNamesEachSubcommandsOwnRoute(t *testing.T) {
 		"activate":  "/revert",
 		"rekey":     "POST /config/reload",
 		"seal":      "no route through the API",
-		"scrub":     "no route through the API",
 	} {
 		remedy := lockedStoreRemedy(sub)
 		if !strings.Contains(remedy, want) {

@@ -300,7 +300,7 @@ func TestANodeWithNoPointerPublishesItsActiveRevision(t *testing.T) {
 // Mutation: drop the open before the publish and the pointer moves.
 func TestABootPublishesNoRevisionItHoldsInTheClear(t *testing.T) {
 	t.Parallel()
-	document, err := json.Marshal(config.SettingsOf(parse(t, companyYAML)).Company())
+	document, err := json.Marshal(parse(t, companyYAML))
 	if err != nil {
 		t.Fatal(err)
 	}

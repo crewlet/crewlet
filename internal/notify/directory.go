@@ -20,13 +20,14 @@ import (
 // view and nothing else. So suspending somebody changed nothing here: their
 // messages on every vendor surface went on being attributed to a colleague
 // seat, a suspended lead's Slack DM to an agent was annotated "your lead says",
-// and the only way to stop it was a chart record rewriting the seat's contact
-// map — which is a second gesture, by a different person, on a different log,
-// that an offboarding can forget.
+// and the only way to stop it was a configuration change rewriting the seat's
+// contact map — which is a second gesture, by a different person, that an
+// offboarding can forget.
 //
 // The identity directory is the other half of the answer: WHO holds the seat,
 // and at what stage. A seat bound to somebody who may not act routes nowhere,
-// with no chart record at all. That is what [Directory] and [Standing] carry.
+// with no configuration change at all. That is what [Directory] and [Standing]
+// carry.
 //
 // # A reading, not a live view
 //

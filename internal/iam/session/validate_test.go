@@ -479,12 +479,10 @@ func lineageAt(t *testing.T, at time.Time) uuid.UUID {
 
 // THE FULL SEAT TABLE, EVERY ROW, AND THE 403 NAMES THE SEAT.
 //
-// It is the session table's shape at one remove, because a seat is a row in a
-// domain that lags INDEPENDENTLY: a node can be current on identity and a
-// minute behind on the chart, so a missing seat is three answers rather than
-// one. The arm that must never exist is a silent fall-through to an empty
-// handle — that principal writes audit rows under nobody's name and reads
-// every person-scoped query as empty.
+// A seat is a seat of the company this node runs, so a missing one is GONE —
+// unless this node cannot say, which is 503. The arm that must never exist is a
+// silent fall-through to an empty handle — that principal writes audit rows
+// under nobody's name and reads every person-scoped query as empty.
 func TestTheFullSeatTable(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -499,26 +497,14 @@ func TestTheFullSeatTable(t *testing.T) {
 		row:    session.SeatRowSeatless,
 		answer: session.AnswerServe,
 	}, {
-		name:   "the seat is in the view, human, not tombstoned",
+		name:   "the running organisation holds it as a human seat",
 		world:  func(*signedIn) {},
 		row:    session.SeatRowHeld,
 		answer: session.AnswerServe,
 		handle: "platform-lead",
 	}, {
-		name: "the seat is gone and this node covers the binding",
-		world: func(s *signedIn) {
-			delete(s.chart.seats, "platform-lead")
-			s.chart.position = 1000
-		},
-		row:    session.SeatRowGone,
-		answer: session.AnswerRefuse,
-	}, {
-		name: "the seat is tombstoned",
-		world: func(s *signedIn) {
-			s.chart.seats["platform-lead"] = session.Seat{
-				Handle: "platform-lead", Kind: "human", Tombstoned: true,
-			}
-		},
+		name:   "the running organisation does not hold the seat",
+		world:  func(s *signedIn) { delete(s.chart.seats, "platform-lead") },
 		row:    session.SeatRowGone,
 		answer: session.AnswerRefuse,
 	}, {
@@ -531,22 +517,7 @@ func TestTheFullSeatTable(t *testing.T) {
 		row:    session.SeatRowGone,
 		answer: session.AnswerRefuse,
 	}, {
-		name: "the seat is absent and this node is below the binding",
-		world: func(s *signedIn) {
-			delete(s.chart.seats, "platform-lead")
-			s.chart.position = 899
-		},
-		row:    session.SeatRowBehind,
-		answer: session.AnswerUnavailable,
-	}, {
-		name: "the chart applier has stalled",
-		world: func(s *signedIn) {
-			s.chart.lag = statelog.StallGrace + time.Second
-		},
-		row:    session.SeatRowStalled,
-		answer: session.AnswerUnavailable,
-	}, {
-		name:   "the chart view cannot be read",
+		name:   "the organisation cannot be read",
 		world:  func(s *signedIn) { s.chart.err = errors.New("no view") },
 		row:    session.SeatRowStalled,
 		answer: session.AnswerUnavailable,
@@ -617,13 +588,13 @@ func TestOnlyTheSeatlessArmEverAnswersWithNoHandle(t *testing.T) {
 			t.Errorf("%q serves with the handle %q", row, b.Handle())
 		}
 	}
-	// And a node with no chart seam at all is the unknown arm rather than
+	// And a node with no org seam at all is the unknown arm rather than
 	// the seatless one.
 	got := session.ResolveSeat(t.Context(), nil, session.PersonRow{
 		Found: true, Seat: "platform-lead",
 	})
 	if got.Row != session.SeatRowStalled {
-		t.Errorf("a node with no chart view landed on %q, want %q", got.Row,
+		t.Errorf("a node with no org seam landed on %q, want %q", got.Row,
 			session.SeatRowStalled)
 	}
 }

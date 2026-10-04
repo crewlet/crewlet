@@ -94,9 +94,8 @@ func (a *Applier) writePerson(ctx context.Context, tx *sql.Tx, at applyContext,
 	// THE CLAIM COLUMNS ARE NOT TOUCHED HERE, and that is the one thing
 	// this statement deliberately leaves out. A claim arrives on its own
 	// subject, so a content record that wrote one would be a record
-	// overwriting a decision another record arbitrated — the same rule the
-	// org chart states as "a content apply must never touch the structure
-	// columns", in a domain where the columns are somebody's identity.
+	// overwriting a decision another record arbitrated, in a domain where
+	// the columns are somebody's identity.
 
 	credentials, err := a.writeCredentials(ctx, tx, at, id, person.Credentials)
 	if err != nil {

@@ -430,34 +430,26 @@ type applyHooks struct {
 	// arrival and a departure. Nil nudges nobody.
 	nudgeSkills func()
 
-	// nudgeChart is what the CHART APPLIER calls after a committed batch,
-	// threaded down for the same reason nudgeSkills is: the apply is the
-	// only thing that sees every change on EVERY node, and the company
-	// view is derived from those rows.
-	//
-	// The change feed is deliberately not what notices. It relays a record
-	// to ONE node, so every other node's view would go on serving a chart
-	// it had already applied and could not see it had.
-	//
-	// IT MUST NOT BLOCK. This runs on the apply loop's own goroutine with
-	// the next batch waiting behind it, and the derivation reads the
-	// estate — so what it does is signal, and the rebuild happens
-	// elsewhere. Nil answers "nobody is listening", which is a build with
-	// no engine behind the log.
-	nudgeChart func()
-
 	// identityMoved is what the IDENTITY APPLIER calls after a committed
 	// batch, with what it moved ([iamdomain.Moved]) — a seat's standing
 	// for the party registry, whose credentials for whatever holds one
-	// open — threaded down for nudgeChart's reason: the apply is the only
-	// thing that sees it on every node, and a suspension moves nothing a
-	// published company would ever carry. It must not block either. See
+	// open — threaded down for nudgeSkills's reason: the apply is the only
+	// thing that sees it on EVERY node, and a suspension moves nothing a
+	// published company would ever carry. The change feed is deliberately
+	// not what notices: it relays a record to ONE node, so every other
+	// node's registry would go on routing a seat it could not see had been
+	// withdrawn.
+	//
+	// IT MUST NOT BLOCK. This runs on the apply loop's own goroutine with
+	// the next batch waiting behind it, so what it does is signal, and the
+	// rebuild happens elsewhere. Nil answers "nobody is listening", which
+	// is a build with no engine behind the log. See
 	// [Engine.identityMoved].
 	identityMoved func(iamdomain.Moved)
 
 	// inboxMoved is what the TRACKER APPLIER calls after a committed
 	// batch that wrote somebody a notice — see [Engine.SetOnInboxMoved].
-	// Threaded down for nudgeChart's reason: every node applies every
+	// Threaded down for identityMoved's reason: every node applies every
 	// record, so every node tells its own sockets, and the apply is the
 	// only thing that sees it on each. It must not block.
 	inboxMoved func([]tracker.InboxMovement)
@@ -467,7 +459,6 @@ type applyHooks struct {
 func (e *Engine) applyHooks() applyHooks {
 	return applyHooks{
 		nudgeSkills:   e.nudgeSkills,
-		nudgeChart:    e.nudgeChart,
 		identityMoved: e.identityMoved,
 		inboxMoved:    e.inboxMoved,
 	}
@@ -2159,23 +2150,7 @@ const (
 //  4. THE APPLIERS START AGAIN, whatever happened: a join that found no
 //     donor leaves the node as it was, below the floor and refusing, and a
 //     node with no appliers at all would be worse than that.
-//
-//  5. AND THE CHART VIEW IS REBUILT AFTER THEY DO. An adoption REPLACES the
-//     replicated file wholesale, so this node's chart rows are now a donor's
-//     and no apply happened to say so: a node that waited for the next
-//     committed record would serve a view over rows it abandoned, for
-//     however long nobody is hired, while reporting itself caught up —
-//     because it IS caught up, its cursor having moved without its view.
-//     The periodic trigger would find it within its interval; doing it here
-//     means the node rejoins with a correct view rather than a wrong one for
-//     up to that long.
-//
-//     AFTER THE RELAUNCH AND NOT BEFORE IT, which is what makes it safe to
-//     do at all: rebuilding the view publishes a company, and everything
-//     that converges on a published company includes writes of its own — the
-//     tracker's projects, the knowledge containers. A write published while
-//     this node's appliers are halted waits out its budget for an apply that
-//     cannot happen, which would turn every rejoin into a stall.
+
 func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	// ONE RECOVERY AT A TIME: a reanchor moving a checkpoint in the file
 	// this is about to replace would be writing into a file with no name.
@@ -2197,17 +2172,9 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	// the boot launch gave them rather than a heartbeat tick's.
 	//
 	// ON EVERY EXIT, the failures included: a rejoin that found no donor
-	// changed no rows, so the rebuild finds its cursor where it left it and
-	// costs one comparison.
+	// changed no rows, and its appliers resume from the cursors they left.
 	defer func() {
 		s.launchAppliers(ctx)
-		if _, err := e.refreshChart(ctx); err != nil {
-			log.WarnContext(ctx, "chart_view_unbuilt_after_rejoin",
-				"node", s.nodeID, "error", err.Error(),
-				"detail", "this node adopted a peer's rows and is still "+
-					"serving the view it built from its own; the periodic "+
-					"rebuild retries")
-		}
 		if replaced {
 			s.estateReplaced()
 		}

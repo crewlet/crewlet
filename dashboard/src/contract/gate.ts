@@ -57,7 +57,7 @@ export const GATE_ACTIONS_KEEPING_OPERATION = [
  * The command line waits it too: the engine bounds a gesture from its first
  * record to its last answer at `engine.GateBudget` — one gate record per
  * identity-claiming log, two five-second resolutions each, at a margin of
- * three, so two minutes for this build's four logs — and a client waits one
+ * three, so ninety seconds for this build's three logs — and a client waits one
  * more resolution at that margin for the judgement before the first record and
  * the round trip around the gesture. Waiting past the node's own bound is what
  * makes its answer — every log's outcome — reach the operator rather than a
@@ -68,4 +68,4 @@ export const GATE_ACTIONS_KEEPING_OPERATION = [
  * from the register: a copy that was only larger went on passing the day a new
  * identity log raised the budget past it.
  */
-export const GATE_REQUEST_TIMEOUT_MS = 135_000;
+export const GATE_REQUEST_TIMEOUT_MS = 105_000;

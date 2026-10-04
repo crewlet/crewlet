@@ -17,16 +17,12 @@ import (
 // `crewlet validate` checks one file, on a laptop, with no broker, no
 // coordination store and no database — that is the whole of what makes it
 // usable before a deployment exists. Nothing in the type system says so: a
-// validation rule that wanted to check a handle against the chart's rows would
-// compile perfectly, pass every test written against a running engine, and
+// validation rule that wanted to check a handle against a running node's
+// directory would compile perfectly, pass every test written against a running engine, and
 // turn the one command an operator runs BEFORE they have an engine into one
 // that needs one.
 //
-// The chart's split makes that temptation concrete rather than theoretical.
-// Every reference this document carries — a unit's lead, a seat's `manages`, a
-// root seat's `unit:` — now resolves against rows that live somewhere else, so
-// "is this handle real" is a question with a database answer. The rule stays
-// what it was: this layer checks the document's own shape and its internal
+// The rule is that this layer checks the document's own shape and its internal
 // consistency, and a reference that resolves to nothing is REPORTED by
 // [Company.DanglingRefs] rather than refused.
 //

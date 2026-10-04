@@ -29,7 +29,7 @@ import (
 
 // chart is who leads what: `cto` leads the ENG project, the ENG space and the
 // person in the seat `bo`, and nobody leads anything else. err makes every
-// relation unanswerable, which is a node behind the chart log.
+// relation unanswerable, which is a node running no company yet.
 type chart struct{ err error }
 
 func (c chart) Leads(_ context.Context, actor, subject string) (bool, error) {

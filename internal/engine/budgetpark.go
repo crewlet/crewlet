@@ -286,9 +286,9 @@ func (e *Engine) releaseBudgetParking(ctx context.Context, seat uuid.UUID, parki
 // reconcileBudgetParks releases every park the company next decides
 // differently.
 //
-// Run on every published company ([Engine.convergeOn]) — an apply and a chart
-// write alike, since a seat's ceiling is chart runtime — AFTER next is
-// current, so a released inbox's first delivery is judged under it. A park whose basis is unchanged stays for its alarm: the
+// Run on every published company ([Engine.followCompany]) — at boot and on
+// every apply — AFTER next is current, so a released inbox's first delivery
+// is judged under it. A park whose basis is unchanged stays for its alarm: the
 // counters have not moved in its favour and the ceiling it waits on is the
 // same. One whose ceilings moved — raised, lowered, removed, or the seat gone
 // from the company — is released at once, and the redelivery asks the

@@ -371,7 +371,9 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	// case asserting a peer sees it would be asserting timing.
 	boot.Stream.Replicas = n
 
-	e, err := engine.New(ctx, engine.Options{Bootstrap: &boot, Company: cfg})
+	e, err := engine.New(ctx, engine.Options{
+		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
+	})
 	if err != nil {
 		return fail(fmt.Errorf("engine.New: %w", err))
 	}
@@ -1090,7 +1092,7 @@ func TestAFleetAgreesAboutOneCompany(t *testing.T) {
 // table name beside it is what sends somebody to the right applier.
 //
 // The domain list comes from the ENGINE rather than from a copy here, because
-// a second list is how a fourth domain is silently left uncompared.
+// a second list is how a new domain is silently left uncompared.
 func replicatedDigest(t *testing.T, n *node) map[string]string {
 	t.Helper()
 	out := map[string]string{}

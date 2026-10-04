@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -108,7 +109,12 @@ func TestTheEnginesConfigWriterRecordsTheActorItIsHanded(t *testing.T) {
 		fixtureCipher, testNode, quiet()); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	surface, err := configapi.New(configapi.Options{Store: db, Plane: fleet, Cipher: fixtureCipher})
+	surface, err := configapi.New(configapi.Options{
+		Store: db, Plane: fleet, Cipher: fixtureCipher,
+		Holders: func(context.Context, []string) (map[string][]configapi.SeatHolder, error) {
+			return nil, nil
+		},
+	})
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)
 	}

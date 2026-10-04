@@ -159,18 +159,16 @@ func TestASubAddressReachesTheSeatDeclaringItsBase(t *testing.T) {
 
 // A DECLARED ADDRESS IS RESOLVED BEFORE IT IS INDEXED.
 //
-// The org chart seals a literal address into the secret store and its row
-// carries the `${VAR}` naming it, so a view derived from the rows holds a
-// reference for every seat with an address. Indexed as written, the reference
-// was the key — a string no payload carries — and every seat derived from the
-// chart was unreachable by address.
+// A company document may declare a seat's address as a `${VAR}` reference.
+// Indexed as written, the reference was the key — a string no payload carries
+// — and every seat declared that way was unreachable by address.
 func TestADeclaredAddressIsResolvedBeforeItIsIndexed(t *testing.T) {
 	o := company()
-	o.Roles[2].Email = "${CHART_SEAT_DANA_FOUNDER_EMAIL}"
+	o.Roles[2].Email = "${DANA_FOUNDER_EMAIL}"
 	o.Roles[0].Email = "${NOBODY_SET_THIS}"
 	o.Normalize()
 	lookup := func(name string) (string, bool) {
-		if name == "CHART_SEAT_DANA_FOUNDER_EMAIL" {
+		if name == "DANA_FOUNDER_EMAIL" {
 			return " Dana@Example.com ", true
 		}
 		return "", false
@@ -185,7 +183,7 @@ func TestADeclaredAddressIsResolvedBeforeItIsIndexed(t *testing.T) {
 	// is a seat with no address rather than one whose address is the
 	// reference's text.
 	for _, ref := range []string{
-		"${CHART_SEAT_DANA_FOUNDER_EMAIL}", "${NOBODY_SET_THIS}",
+		"${DANA_FOUNDER_EMAIL}", "${NOBODY_SET_THIS}",
 	} {
 		if p, ok := r.ByEmail(ref); ok {
 			t.Errorf("the reference %s resolved to %q", ref, p.Handle)

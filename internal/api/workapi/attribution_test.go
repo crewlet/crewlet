@@ -35,10 +35,6 @@ func (c oneSeat) Seat(_ context.Context, ref string) (session.Seat, bool, error)
 	return session.Seat{Handle: string(c), Kind: "human", Unit: "exec"}, true, nil
 }
 
-func (oneSeat) Position(context.Context) (uint64, time.Duration, error) {
-	return 1 << 40, 0, nil
-}
-
 // A WRITE MADE THROUGH SOMEBODY'S MACHINE TOKEN SAYS SO.
 //
 // Through the REAL guard's machine-token arm, so the credential on the record
@@ -71,7 +67,7 @@ func TestAWriteThroughAMachineTokenIsRecordedAsTheToken(t *testing.T) {
 				Found: true, ID: uuid.Must(uuid.NewV7()).String(),
 				Kind: iam.KindPerson, Stage: iam.StageActive,
 				Login: "cto.person", Grants: carried,
-				Seat: "cto", SeatAt: 5,
+				Seat: "cto",
 			},
 		}},
 		Chart: oneSeat("cto"),

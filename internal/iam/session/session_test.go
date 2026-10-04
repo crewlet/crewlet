@@ -81,11 +81,10 @@ func newSignedIn(t *testing.T) *signedIn {
 			Session:    session.LineageRow{Found: true, Epoch: 3},
 			Person: session.PersonRow{
 				Found: true, Epoch: 3, Stage: iam.StageActive,
-				Login: "sarah.chen", Seat: "platform-lead", SeatAt: 900,
+				Login: "sarah.chen", Seat: "platform-lead",
 			},
 		}},
 		chart: &chartView{
-			position: 1000,
 			seats: map[string]session.Seat{
 				"platform-lead": {Handle: "platform-lead", Kind: "human"},
 			},
@@ -133,10 +132,8 @@ func (d *directory) Resolve(context.Context, string, string) (session.Identity, 
 }
 
 type chartView struct {
-	position uint64
-	lag      time.Duration
-	seats    map[string]session.Seat
-	err      error
+	seats map[string]session.Seat
+	err   error
 }
 
 func (c *chartView) Seat(_ context.Context, ref string) (session.Seat, bool, error) {
@@ -145,13 +142,6 @@ func (c *chartView) Seat(_ context.Context, ref string) (session.Seat, bool, err
 	}
 	seat, found := c.seats[ref]
 	return seat, found, nil
-}
-
-func (c *chartView) Position(context.Context) (uint64, time.Duration, error) {
-	if c.err != nil {
-		return 0, 0, c.err
-	}
-	return c.position, c.lag, nil
 }
 
 // --- the keyring ------------------------------------------------------------- //

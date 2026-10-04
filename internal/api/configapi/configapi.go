@@ -4,9 +4,9 @@
 // EVERY ROUTE HERE TAKES A GRANT, reads included: `config:read` for every
 // read (`config.read`) and `config:write` for every write (`config.write`),
 // mounted through [authz.Router] so a route with no policy fails the boot.
-// Reading this surface exposes the whole company document — its integrations
-// and the name of every credential it holds — and writing it changes the
-// company.
+// Reading this surface exposes the whole company document — its org chart,
+// integrations and the name of every credential it holds — and writing it
+// changes the company.
 //
 // THE ROUTES USED TO DECIDE NOTHING, which was sound while the only credential
 // was an operator token and stopped being sound the day a person could sign in
@@ -51,8 +51,8 @@ var log = logging.Get("api.config")
 
 // MaxBodyBytes bounds a config upload.
 //
-// The document is the company's settings — its providers, integrations, MCP
-// servers and worker templates: the largest real one in this repository is
+// The document is the whole company — its org chart, providers, integrations,
+// MCP servers and worker templates: the largest real one in this repository is
 // tens of kilobytes, so 4 MiB is two orders of magnitude of headroom and still
 // finite. The route is guarded, so this is a bound on a
 // mistake rather than on an attacker.
@@ -80,6 +80,7 @@ type Service struct {
 	plane   coord.Plane
 	queue   queue.Publisher
 	cipher  secrets.Cipher
+	holders Holders
 	now     func() time.Time
 }
 
@@ -100,6 +101,13 @@ type Options struct {
 	// which the reconciler authenticates a peer's revision under.
 	// Required: [New] refuses to build without it.
 	Cipher secrets.Cipher
+
+	// Holders reads who the identity directory binds to a seat, so a write
+	// that takes a human seat away while somebody holds it is refused
+	// naming them (seatheld.go). Required: every node runs the identity
+	// domain from boot, and a surface that skipped the check would remove
+	// a colleague's seat from under them with nothing said.
+	Holders Holders
 
 	// Queue publishes the activation NUDGE, so an operator's change lands
 	// on every node in milliseconds instead of at the next reconcile poll.
@@ -136,6 +144,10 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("configapi: Options.Cipher is required: every " +
 			"revision is sealed under the keyring (secrets.keys) every node holds, " +
 			"and one written without it is a revision no node applies")
+	case opts.Holders == nil:
+		return nil, errors.New("configapi: Options.Holders is required: a write " +
+			"that removes a human seat is refused while the identity directory " +
+			"binds somebody to it, and that needs the directory")
 	}
 	now := opts.Now
 	if now == nil {
@@ -143,7 +155,7 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{
 		configs: opts.Store.Configs(), plane: opts.Plane,
-		cipher: opts.Cipher, queue: opts.Queue, now: now,
+		cipher: opts.Cipher, holders: opts.Holders, queue: opts.Queue, now: now,
 	}, nil
 }
 
@@ -194,10 +206,8 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// THE ENTITY ROUTES, one pair per addressable collection rather than a
 	// single {kind} wildcard: a wildcard would also match
 	// /config/revisions/{id}, and a route that answers for a path it was
-	// never meant to serve is worse than a line per collection. The org
-	// chart's seats and units are not among them — see entities.go — so a
-	// path naming one is the mux's own 404. See entities.go for what a
-	// write does.
+	// never meant to serve is worse than a line per collection. See
+	// entities.go for what a write does.
 	for _, kind := range EntityKinds() {
 		// THE READ AND THE WRITE ON ONE URI. The entity was addressable
 		// for writing long before it was readable here, so the documented
@@ -409,10 +419,9 @@ func (s *Service) checkPatchMediaType(w http.ResponseWriter, r *http.Request) bo
 			"hint": "PATCH /config takes a JSON Merge Patch (RFC 7396): an object " +
 				"shaped like the document. A JSON Patch (RFC 6902) list of " +
 				"operations is a different format this surface does not serve. " +
-				"Editing one list member is its own route: " + ChartRoutes.SeatContent +
-				" or " + ChartRoutes.UnitContent + " for a seat or a unit, " +
-				"PUT /config/{kind}/{id} for one member of " +
-				strings.Join(EntityKinds(), " or "),
+				"Editing one list member is its own route: editing one seat is " +
+				"PUT /config/roles/{handle}, and PUT /config/{kind}/{id} " +
+				"edits one member of " + strings.Join(EntityKinds(), " or "),
 		})
 	return false
 }
@@ -555,12 +564,6 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// BEFORE THE DOCUMENT IS PARSED, because the parser's answer to a
-	// chart is "unknown field" and that sends an operator hunting a typo
-	// they did not make. See chartdoor.go.
-	if refuseChartIn(w, sent, http.MethodPut) {
-		return
-	}
 	incoming, err := sent.company()
 	if err != nil {
 		refuseDocument(w, httpjson.CodeInvalidBody, err.Error(), "", &DocumentError{Err: err})
@@ -654,13 +657,6 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.checkPrecondition(w, r, active, found); !ok {
 		return
 	}
-	// ON WHAT THE CALLER SENT, never on the merge: `{"units": null}`
-	// names the chart and merges onto a settings revision as nothing, so
-	// judging the merge would answer success for a write that did nothing.
-	// See chartdoor.go.
-	if refuseChartIn(w, sent, http.MethodPatch) {
-		return
-	}
 
 	prepared, err := s.prepare(r.Context(), patchDraft(ApplyRequest{
 		Patch: sent.text, Summary: summary, By: attributionOf(r), Expect: active.ID,
@@ -691,7 +687,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 func writeChecked(w http.ResponseWriter, p *prepared) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"valid": true, "base_revision_id": p.base,
-		"warnings": p.warnings,
+		"warnings": p.warnings, "derived": p.derived,
 	})
 }
 
@@ -699,7 +695,7 @@ func writeChecked(w http.ResponseWriter, p *prepared) {
 func writeApplied(w http.ResponseWriter, applied Applied) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"revision_id": applied.RevisionID, "epoch": applied.Epoch,
-		"warnings": applied.Warnings,
+		"warnings": applied.Warnings, "derived": applied.Derived,
 	})
 }
 
@@ -742,6 +738,8 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 	var raced *RacedError
 	var patchErr *PatchError
 	var invalid *ValidationError
+	var held *SeatHeldError
+	var unknown *HoldersUnavailableError
 	switch {
 	case errors.Is(err, ErrNoActiveRevision):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
@@ -775,6 +773,25 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 			"the WHOLE document a write produces is validated, not only "+
 				"the part it changed, so a section that is fine on its own is "+
 				"still refused when the company it leaves is invalid", err)
+	case errors.As(err, &held):
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeSeatHeld,
+			httpjson.Detail{
+				"detail": held.Error(),
+				"held":   held.Held,
+				"hint": "unbind each person from the seat (PATCH " +
+					"/iam/people/{person} with no seat) or remove them, then " +
+					"send the write again",
+			})
+	case errors.As(err, &unknown):
+		log.Warn("config_seat_holders_unreadable",
+			"seats", unknown.Seats, "error", unknown.Err)
+		httpjson.UnavailableWith(w, httpjson.CodeIdentityUnavailable,
+			auth.RetryIdentity(unknown.Err), httpjson.Detail{
+				"seats": unknown.Seats,
+				"hint": "this write removes a human seat, and this node could not " +
+					"read the identity directory to see whether anybody holds it; " +
+					"nothing was written",
+			})
 	default:
 		s.fail(w, "apply the config", err)
 	}

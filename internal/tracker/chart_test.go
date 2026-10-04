@@ -2,10 +2,12 @@ package tracker_test
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -34,7 +36,7 @@ func TestTheChartIsWhatMakesAProjectExist(t *testing.T) {
 		t.Fatal("a task was filed into a project that does not exist")
 	}
 
-	wrote, err := r.writer.ApplyChart(t.Context(), 100, []tracker.ChartProject{
+	wrote, err := r.writer.ApplyChart(t.Context(), activatedAt(100), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Purpose: "builds it", Unit: "Engineering"},
 	})
 	if err != nil {
@@ -66,12 +68,12 @@ func TestReapplyingOneChartWritesNothing(t *testing.T) {
 	r := newRoundTripWithoutProject(t)
 	chart := []tracker.ChartProject{{Key: "ENG", Name: "Engineering", Unit: "Eng"}}
 
-	if _, err := r.writer.ApplyChart(t.Context(), 100, chart); err != nil {
+	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(100), chart); err != nil {
 		t.Fatalf("first apply: %v", err)
 	}
 	r.drain()
 	end := r.logEnd(t)
-	wrote, err := r.writer.ApplyChart(t.Context(), 100, chart)
+	wrote, err := r.writer.ApplyChart(t.Context(), activatedAt(100), chart)
 	if err != nil {
 		t.Fatalf("second apply: %v", err)
 	}
@@ -85,7 +87,7 @@ func TestReapplyingOneChartWritesNothing(t *testing.T) {
 
 	// A LATER REVISION THAT CHANGES SOMETHING DOES write.
 	changed := []tracker.ChartProject{{Key: "ENG", Name: "Engineering & Ops", Unit: "Eng"}}
-	if wrote, err = r.writer.ApplyChart(t.Context(), 101, changed); err != nil {
+	if wrote, err = r.writer.ApplyChart(t.Context(), activatedAt(101), changed); err != nil {
 		t.Fatalf("third apply: %v", err)
 	}
 	if len(wrote) != 1 {
@@ -96,7 +98,7 @@ func TestReapplyingOneChartWritesNothing(t *testing.T) {
 	// AND AN OLDER REVISION ARRIVING LATE DOES NOT WALK IT BACK. Two
 	// nodes applying two revisions is ordinary during a rollout, and the
 	// node that is behind must not undo the one that is ahead.
-	if wrote, err = r.writer.ApplyChart(t.Context(), 100, chart); err != nil {
+	if wrote, err = r.writer.ApplyChart(t.Context(), activatedAt(100), chart); err != nil {
 		t.Fatalf("stale apply: %v", err)
 	}
 	if len(wrote) != 0 {
@@ -109,15 +111,15 @@ func TestReapplyingOneChartWritesNothing(t *testing.T) {
 	}
 }
 
-// A REAPPLY AT ONE POSITION SETS RIGHT WHAT AN EQUAL POSITION WALKED BACK —
+// A REAPPLY OF ONE ACTIVATION SETS RIGHT WHAT AN EQUAL ONE WALKED BACK —
 // which is why a chart apply decides from the project's rows rather than
 // letting the operation ledger answer it.
 //
-// The guard lets an EQUAL position through, so a stale write that lands at the
-// same number as the current one stands until the next apply puts it back. An
-// operation id derived from the position is one the ledger already holds from
-// that position's first write, so it answered the reapply as done and the
-// stale names stood until the chart moved again.
+// The guard lets an EQUAL stamp through, so a stale write that lands at the
+// same activation as the current one stands until the next apply puts it back.
+// An operation id derived from the activation is one the ledger already holds
+// from that activation's first write, so it answered the reapply as done and
+// the stale names stood until the configuration moved again.
 func TestAReapplySetsRightWhatAnEqualPositionWalkedBack(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
@@ -125,11 +127,11 @@ func TestAReapplySetsRightWhatAnEqualPositionWalkedBack(t *testing.T) {
 	current := []tracker.ChartProject{{Key: "ENG", Name: "Engineering & Ops", Unit: "Eng"}}
 	stale := []tracker.ChartProject{{Key: "ENG", Name: "Engineering", Unit: "Eng"}}
 
-	if _, err := r.writer.ApplyChart(t.Context(), at, current); err != nil {
+	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(at), current); err != nil {
 		t.Fatalf("the current chart's apply: %v", err)
 	}
 	r.drain()
-	if _, err := r.writer.ApplyChart(t.Context(), at, stale); err != nil {
+	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(at), stale); err != nil {
 		t.Fatalf("the equal-position stale apply: %v", err)
 	}
 	r.drain()
@@ -138,7 +140,7 @@ func TestAReapplySetsRightWhatAnEqualPositionWalkedBack(t *testing.T) {
 			"position the guard lets through", name)
 	}
 
-	wrote, err := r.writer.ApplyChart(t.Context(), at, current)
+	wrote, err := r.writer.ApplyChart(t.Context(), activatedAt(at), current)
 	if err != nil {
 		t.Fatalf("the reapply: %v", err)
 	}
@@ -171,7 +173,7 @@ func TestAChartApplyIsDecidedWhateverTheLedgerLost(t *testing.T) {
 		tracker.Domain{}, time.Now().Add(-time.Minute)); err != nil {
 		t.Fatalf("record the ledger's watermark: %v", err)
 	}
-	wrote, err := r.writer.ApplyChart(t.Context(), 100, []tracker.ChartProject{
+	wrote, err := r.writer.ApplyChart(t.Context(), activatedAt(100), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Unit: "Eng"},
 	})
 	if err != nil {
@@ -206,7 +208,7 @@ func TestTwoNodesApplyingOneChartWriteOnce(t *testing.T) {
 	b.applyWhileWriting()
 	chart := []tracker.ChartProject{{Key: "ENG", Name: "Engineering", Unit: "Eng"}}
 
-	wroteA, err := a.writer.ApplyChart(t.Context(), 100, chart)
+	wroteA, err := a.writer.ApplyChart(t.Context(), activatedAt(100), chart)
 	if err != nil || len(wroteA) != 1 {
 		t.Fatalf("node a's apply = (%v, %v), want [ENG]", wroteA, err)
 	}
@@ -214,7 +216,7 @@ func TestTwoNodesApplyingOneChartWriteOnce(t *testing.T) {
 
 	// NODE B HAS NOT APPLIED NODE A'S RECORD: it decides a create on rows
 	// with no project in them.
-	wroteB, err := b.writer.ApplyChart(t.Context(), 100, chart)
+	wroteB, err := b.writer.ApplyChart(t.Context(), activatedAt(100), chart)
 	if err != nil {
 		t.Fatalf("node b's apply: %v — losing the arbitration to an identical "+
 			"write is not a failure", err)
@@ -244,7 +246,7 @@ func TestAnUnknownChartWriteIsAnError(t *testing.T) {
 		tracker.Domain{}, time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("record the ledger's watermark: %v", err)
 	}
-	wrote, err := r.writer.ApplyChart(t.Context(), 100, []tracker.ChartProject{
+	wrote, err := r.writer.ApplyChart(t.Context(), activatedAt(100), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Unit: "Eng"},
 	})
 	if err == nil {
@@ -266,76 +268,69 @@ func (r *roundTrip) projectName(key string) string {
 	return name
 }
 
-// A RECONCILE AT A LATER POSITION WRITES NOTHING WHEN THE ROWS ALREADY MATCH.
+// A LATER ACTIVATION OVER UNCHANGED FIELDS RE-STAMPS THE ROW, so an older one
+// applied late cannot walk it back.
 //
-// # The bug this pins
-//
-// The guard used to be "the row is stamped at exactly this number AND the
-// three fields match", over a stamp that was the applying node's own wall
-// clock. Every pass took a fresh reading, so the first clause was false on
-// every pass after the first — and the reconcile rewrote every project the
-// chart names, on every apply, on every boot, on every node, for ever. Two
-// nodes seconds apart each held a stamp higher than the other's and rewrote
-// the whole catalogue back and forth between them.
-//
-// It is worse now than it was then, which is why it is a case: the reconcile
-// follows every published company, and a company is published by a chart write
-// as well as by an activation — so the number moves when somebody edits a
-// seat's job title in a unit that has no project at all.
-//
-// The fix is the order. The fields are compared FIRST, and a row that already
-// says what the chart says has nothing for a position to arbitrate.
-func TestAReconcileAtALaterPositionWritesNothingWhenTheRowsAlreadyMatch(t *testing.T) {
+// The stamp is compared BEFORE the fields. A row left at the older activation
+// because its three fields happened to match the newer one is open to every
+// activation between the two: one nobody applied before it was superseded,
+// arriving late from a slow node, finds a row stamped below it and writes its
+// own older names over the newer ones. Re-stamping costs one record per
+// project per activation; reapplying ONE activation still costs nothing, which
+// is what [TestReapplyingOneChartWritesNothing] holds.
+func TestALaterActivationReStampsSoAnOlderOneCannotWalkItBack(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
 	chart := []tracker.ChartProject{{Key: "ENG", Name: "Engineering", Unit: "Eng"}}
 
-	if _, err := r.writer.ApplyChart(t.Context(), 100, chart); err != nil {
-		t.Fatalf("first apply: %v", err)
+	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(100), chart); err != nil {
+		t.Fatalf("the first activation: %v", err)
 	}
 	r.drain()
+	wrote, err := r.writer.ApplyChart(t.Context(), activatedAt(300), chart)
+	if err != nil {
+		t.Fatalf("a later activation over the same fields: %v", err)
+	}
+	r.drain()
+	if len(wrote) != 1 || r.projectChartEpoch("ENG") != 300 {
+		t.Fatalf("a later activation over unchanged fields wrote %v and left the "+
+			"row stamped %d, want it re-stamped at 300", wrote,
+			r.projectChartEpoch("ENG"))
+	}
 
-	// EVERY LATER POSITION, which is what a company that is being used
-	// looks like: each of these stands for a chart record that changed
-	// something else entirely.
-	for _, at := range []int64{101, 500, 1 << 40} {
-		wrote, err := r.writer.ApplyChart(t.Context(), at, chart)
-		if err != nil {
-			t.Fatalf("reconcile at %d: %v", at, err)
-		}
-		if len(wrote) != 0 {
-			t.Fatalf("a reconcile at position %d rewrote %v although the rows "+
-				"already said it — every chart write in the company would put "+
-				"one record per project on the log", at, wrote)
-		}
-		r.drain()
+	late := []tracker.ChartProject{{Key: "ENG", Name: "Engineering (old)", Unit: "Eng"}}
+	if wrote, err = r.writer.ApplyChart(t.Context(), activatedAt(200), late); err != nil {
+		t.Fatalf("the late activation: %v", err)
+	}
+	r.drain()
+	if len(wrote) != 0 || r.projectName("ENG") != "Engineering" {
+		t.Errorf("an activation older than the row's applied late wrote %v and "+
+			"left the project named %q — it walked a newer configuration back",
+			wrote, r.projectName("ENG"))
 	}
 }
 
-// AND THE POSITION IS STILL WHAT ARBITRATES A REAL DISAGREEMENT.
+// AND THE STAMP ARBITRATES A REAL DISAGREEMENT.
 //
-// Two nodes derive the same chart from the same rows, so when their
-// derivations disagree the one with the LOWER cursor is the one holding the
-// older chart. That is the whole job of the number, and it is the half the
-// case above must not have removed: comparing the fields first is only safe
-// because a row that matches has nothing to walk back.
+// Two nodes applying two revisions is ordinary during a rollout, and the node
+// still on the older one must not walk back what the newer one wrote.
 func TestABehindNodesReconcileDoesNotWalkBackAnAheadOnes(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
 
 	ahead := []tracker.ChartProject{{Key: "ENG", Name: "Engineering & Ops", Unit: "Eng"}}
-	if _, err := r.writer.ApplyChart(t.Context(), 900, ahead); err != nil {
+	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(900), ahead); err != nil {
 		t.Fatalf("the ahead node's reconcile: %v", err)
 	}
 	r.drain()
 
 	behind := []tracker.ChartProject{{Key: "ENG", Name: "Engineering", Unit: "Eng"}}
-	wrote, err := r.writer.ApplyChart(t.Context(), 100, behind)
+	wrote, err := r.writer.ApplyChart(t.Context(), activatedAt(100), behind)
 	if err != nil {
 		t.Fatalf("the behind node's reconcile: %v", err)
 	}
 	if len(wrote) != 0 {
-		t.Errorf("a node at position 100 overwrote what position 900 wrote: %v", wrote)
+		t.Errorf("a node on activation 100 overwrote what activation 900 wrote: %v", wrote)
 	}
 	r.drain()
 	if name := r.projectName("ENG"); name != "Engineering & Ops" {
@@ -343,19 +338,32 @@ func TestABehindNodesReconcileDoesNotWalkBackAnAheadOnes(t *testing.T) {
 	}
 }
 
-// THE POSITION IS ON THE ROW, and the column it replaced is not there at all.
+// AN APPLY WITH NO ACTIVATION IS REFUSED: there is no honest default, and a
+// caller holding no activation has no chart to apply.
+func TestAChartApplyWithNoActivationIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTripWithoutProject(t)
+	_, err := r.writer.ApplyChart(t.Context(), time.Time{},
+		[]tracker.ChartProject{{Key: "ENG", Name: "Engineering", Unit: "Eng"}})
+	if !errors.Is(err, tracker.ErrNoChartActivation) {
+		t.Fatalf("an apply with no activation = %v, want ErrNoChartActivation", err)
+	}
+}
+
+// THE STAMP IS ON THE ROW, and the column the log-position guard used is not
+// there at all.
 //
 // The guard is only worth having if a reader can see it: the reconcile compares
-// the stored number against the chart it is applying, so a column the applier
-// never filled would make every node's comparison read zero and every
-// reconcile a write. And the column it replaced — a wall-clock reading with no
-// writer since — is gone, because a guard column nothing fills reads as a fact
-// about the row and is exactly the kind of value a later reader compares.
-func TestTheChartPositionIsWrittenOntoTheProjectRow(t *testing.T) {
+// the stored number against the activation it is applying, so a column the
+// applier never filled would make every node's comparison read zero and every
+// reconcile a write. And the column it replaced — a log position nothing
+// writes any more — is gone, because a guard column nothing fills reads as a
+// fact about the row and is exactly the kind of value a later reader compares.
+func TestTheChartEpochIsWrittenOntoTheProjectRow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
 
-	const at = int64(1)<<40 | 7
+	at := time.Date(2026, 3, 2, 10, 0, 0, 123_000_000, time.UTC)
 	if _, err := r.writer.ApplyChart(t.Context(), at, []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Unit: "Eng"},
 	}); err != nil {
@@ -363,34 +371,38 @@ func TestTheChartPositionIsWrittenOntoTheProjectRow(t *testing.T) {
 	}
 	r.drain()
 
-	if got := r.projectChartPosition("ENG"); got != at {
-		t.Errorf("tracker_projects.chart_position = %d, want %d — the guard "+
-			"the next reconcile compares is not on the row", got, at)
+	if got, want := r.projectChartEpoch("ENG"), configplane.ActivationStamp(at); got != want {
+		t.Errorf("tracker_projects.chart_epoch = %d, want %d — the guard "+
+			"the next reconcile compares is not on the row", got, want)
 	}
 	var count int
 	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(r.t.Context(),
 			`SELECT count(*) FROM pragma_table_info('tracker_projects')
-			 WHERE name = 'chart_epoch'`).Scan(&count)
+			 WHERE name = 'chart_position'`).Scan(&count)
 	}); err != nil {
 		t.Fatalf("read the project table's columns: %v", err)
 	}
 	if count != 0 {
-		t.Error("tracker_projects still carries chart_epoch, which nothing " +
+		t.Error("tracker_projects still carries chart_position, which nothing " +
 			"writes: a guard column with no writer is a value every reader " +
 			"is entitled to misread")
 	}
 }
 
-// projectChartPosition reads one project's chart guard straight out of the row.
-func (r *roundTrip) projectChartPosition(key string) int64 {
+// projectChartEpoch reads one project's chart guard straight out of the row.
+func (r *roundTrip) projectChartEpoch(key string) int64 {
 	r.t.Helper()
 	var at int64
 	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(r.t.Context(),
-			`SELECT chart_position FROM tracker_projects WHERE key = ?`, key).Scan(&at)
+			`SELECT chart_epoch FROM tracker_projects WHERE key = ?`, key).Scan(&at)
 	}); err != nil {
 		r.t.Fatalf("read project %s: %v", key, err)
 	}
 	return at
 }
+
+// activatedAt is the activation instant whose stamp is the given number of
+// Unix milliseconds — so a case reads in stamps, the unit the guard compares.
+func activatedAt(stamp int64) time.Time { return time.UnixMilli(stamp).UTC() }

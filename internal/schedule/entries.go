@@ -109,11 +109,11 @@ func CountSchedules(o *org.Organization) int { return len(Entries(o)) }
 //     company.
 //
 // Human seats never appear. They are addressable but run no turns, so a fire
-// addressed to one would sit in an inbox nothing consumes. A company file is
-// refused for either human combination; the org chart, written per object,
-// cannot refuse one, so this filter is what keeps a stranded schedule from
-// firing, the tick's `schedule_no_runners` warning says so when one is due,
-// and [StrandedIn] is what the chart's continuous report names all along.
+// addressed to one would sit in an inbox nothing consumes. The company
+// document is refused for either human combination ([org.ErrUnrunnableSchedule]);
+// what it admits — a `lead` schedule on a unit nothing leads — this filter keeps
+// from firing, and the tick's `schedule_no_runners` warning says so when one is
+// due.
 func (e Entry) Runners(o *org.Organization) []string {
 	if o == nil {
 		return nil
@@ -140,102 +140,6 @@ func (e Entry) Runners(o *org.Organization) []string {
 		if r.IsAgent() {
 			out = append(out, r.Handle())
 		}
-	}
-	return out
-}
-
-// Stranded is one ENABLED schedule nothing can run, and why.
-//
-// # Why it is a reading and not a refusal
-//
-// A company FILE is refused for one ([org.ErrUnrunnableSchedule]), because a
-// file is one document read whole. The org chart cannot refuse one: a
-// schedule lives on its unit's or its seat's own content, while what makes it
-// runnable is somebody else's — a member's kind, the lead a unit inherits
-// from an ancestor — each written on its own subject. Two writes that were
-// each correct (a schedule added while the team had an agent, the agent later
-// made a person's seat) strand it with nobody to refuse. So the tick skips it
-// (`schedule_no_runners`, and only when it is due) and the chart's continuous
-// report names it the whole time, from this one reading.
-type Stranded struct {
-	Scope types.ScheduleScope
-	// ScopeName is the seat's handle or the unit's key: what a person
-	// looks the scope up by.
-	ScopeName string
-	Schedule  org.Schedule
-	Reason    StrandedReason
-}
-
-// StrandedReason is why nothing can run a [Stranded] schedule.
-type StrandedReason string
-
-const (
-	// StrandedHumanSeat is a schedule declared on a HUMAN seat. A person
-	// has no agent id and runs no turns, so [Entries] never lists it.
-	StrandedHumanSeat StrandedReason = "human_seat"
-	// StrandedNoAgentMember is a unit's `each` schedule on a unit with no
-	// DIRECT agent member — descendants and human seats are never runners.
-	StrandedNoAgentMember StrandedReason = "no_agent_member"
-	// StrandedLeadHuman is a unit's `lead` schedule whose effective lead is
-	// a human seat.
-	StrandedLeadHuman StrandedReason = "lead_human"
-	// StrandedNoLead is a unit's `lead` schedule on a unit nothing leads,
-	// its own lead or an inherited one.
-	StrandedNoLead StrandedReason = "no_lead"
-)
-
-// Valid reports whether r is one of the reasons this build reports.
-func (r StrandedReason) Valid() bool {
-	switch r {
-	case StrandedHumanSeat, StrandedNoAgentMember, StrandedLeadHuman, StrandedNoLead:
-		return true
-	}
-	return false
-}
-
-// StrandedIn reports every ENABLED schedule in o that nothing can run: each
-// seat's first, then each unit's, in [Entries] order.
-//
-// THROUGH [Entry.Runners], which is what the tick dispatches to, so a schedule
-// this names is exactly one the scheduler will skip and never one it would
-// fire. The reason is read beside it, never instead of it. A disabled schedule
-// is an operator holding config, and is not stranded.
-func StrandedIn(o *org.Organization) []Stranded {
-	if o == nil {
-		return nil
-	}
-	var out []Stranded
-	for r := range o.AllRoles() {
-		// THE SEATS [Entries] DROPS: a human seat has no agent id, so its
-		// schedules never become entries at all.
-		if !r.IsHuman() {
-			continue
-		}
-		for _, s := range r.Schedules {
-			if s.IsEnabled() {
-				out = append(out, Stranded{Scope: types.ScheduleScopeRole,
-					ScopeName: r.Handle(), Schedule: s, Reason: StrandedHumanSeat})
-			}
-		}
-	}
-	for _, e := range Entries(o) {
-		if !e.Schedule.IsEnabled() || len(e.Runners(o)) > 0 {
-			continue
-		}
-		stranded := Stranded{Scope: e.Scope, ScopeName: e.ScopeName, Schedule: e.Schedule}
-		switch {
-		case e.Unit == nil:
-			// A seat schedule an agent declares always has its runner, so
-			// nothing reaches here; skipped rather than guessed at.
-			continue
-		case !e.Schedule.TargetsLead():
-			stranded.Reason = StrandedNoAgentMember
-		case o.EffectiveLead(e.Unit) == nil:
-			stranded.Reason = StrandedNoLead
-		default:
-			stranded.Reason = StrandedLeadHuman
-		}
-		out = append(out, stranded)
 	}
 	return out
 }

@@ -238,12 +238,12 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 			Kind: tracker.ChangeProjectUpdated, Mutation: body,
 			Actor: "lead", ActorKind: tracker.AuthorAgent,
 		}.Encode()
-	case "Project.ChartPosition":
+	case "Project.ChartEpoch":
 		// THE CHART APPLY STAMPING A PROJECT: the whole document, with the
-		// position on the org chart's log its chart fields came from.
+		// activation its chart fields came from.
 		body, err := json.Marshal(tracker.Project{
 			V: tracker.DocumentVersion, Key: "SUITE", Name: "Suite",
-			Unit: "eng", ChartPosition: 7, CreatedAt: at, UpdatedAt: at,
+			Unit: "eng", ChartEpoch: 7, CreatedAt: at, UpdatedAt: at,
 		})
 		if err != nil {
 			return nil, err

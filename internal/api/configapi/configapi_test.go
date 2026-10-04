@@ -48,11 +48,9 @@ const (
 // GitLab because its signing secret has a SHAPE the validator checks, which
 // makes it the one whose redaction cannot be faked by a fixture.
 //
-// IT HAS NO ORG CHART, and that is what a company this surface writes looks
-// like now: `roles:` and `units:` are the chart's own domain, and a body
-// carrying either is refused at the door (see chartdoor.go). A fixture that
-// kept them would exercise that refusal on every case rather than the write
-// each case is about.
+// IT HAS NO ORG CHART: the cases written over it are about the settings
+// around one, and the seats and units have a fixture of their own (orgDoc, in
+// seatentity_test.go).
 const companyDoc = `
 name: Acme
 providers:
@@ -85,6 +83,30 @@ type surface struct {
 	// caller replaces the Tier A token [surface.do] attaches, for a case
 	// about who a write is recorded as.
 	caller *iam.Principal
+
+	// held is who the directory this surface asks binds to each seat, and
+	// directoryDown makes every read of it fail; asked is every list of
+	// seats the surface asked about, in order.
+	held          map[string][]configapi.SeatHolder
+	directoryDown error
+	asked         [][]string
+}
+
+// holders is the directory a case's surface asks, answering from s.held.
+func (s *surface) holders(_ context.Context, seats []string) (
+	map[string][]configapi.SeatHolder, error) {
+
+	s.asked = append(s.asked, slices.Clone(seats))
+	if s.directoryDown != nil {
+		return nil, s.directoryDown
+	}
+	out := map[string][]configapi.SeatHolder{}
+	for _, seat := range seats {
+		if held := s.held[seat]; len(held) > 0 {
+			out[seat] = held
+		}
+	}
+	return out, nil
 }
 
 // newSurface is the service over a store, a plane and a KEYRING of the case's
@@ -124,7 +146,8 @@ func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 	}
 	opts := configapi.Options{
 		Store: db, Plane: s.plane, Cipher: testCipher(t),
-		Now: func() time.Time { return pinned },
+		Holders: s.holders,
+		Now:     func() time.Time { return pinned },
 	}
 	if mutate != nil {
 		mutate(&opts)
@@ -150,11 +173,6 @@ func (s *surface) service() *configapi.Service { return s.svc }
 // resolved rather than stored.
 // companyJSONDoc is the smallest document PUT /config accepts, for the cases
 // that write to a node with nothing on it yet.
-//
-// NO CHART IN IT, like every body this surface takes: `roles:` and `units:`
-// are the org chart's own domain and the door refuses a body carrying either
-// (see chartdoor.go), so a fixture that carried one would be testing the
-// refusal rather than the write.
 const companyJSONDoc = `{"name":"Acme","providers":{"llm":{"zulu":` +
 	`{"type":"anthropic","model":"claude-sonnet-5","api_keys":["k"]}}}}`
 
@@ -1240,10 +1258,14 @@ func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	fleet, cipher := coordmemory.NewFleet(), testCipher(t)
 
+	nobody := func(context.Context, []string) (map[string][]configapi.SeatHolder, error) {
+		return nil, nil
+	}
 	for field, opts := range map[string]configapi.Options{
-		"Store":  {Plane: fleet, Cipher: cipher},
-		"Plane":  {Store: db, Cipher: cipher},
-		"Cipher": {Store: db, Plane: fleet},
+		"Store":   {Plane: fleet, Cipher: cipher, Holders: nobody},
+		"Plane":   {Store: db, Cipher: cipher, Holders: nobody},
+		"Cipher":  {Store: db, Plane: fleet, Holders: nobody},
+		"Holders": {Store: db, Plane: fleet, Cipher: cipher},
 	} {
 		svc, err := configapi.New(opts)
 		if err == nil {
@@ -1254,8 +1276,9 @@ func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)
 		}
 	}
-	if _, err := configapi.New(configapi.Options{Store: db, Plane: fleet, Cipher: cipher}); err != nil {
-		t.Errorf("a store, a plane and a keyring were refused: %v", err)
+	if _, err := configapi.New(configapi.Options{Store: db, Plane: fleet,
+		Cipher: cipher, Holders: nobody}); err != nil {
+		t.Errorf("a store, a plane, a keyring and a directory were refused: %v", err)
 	}
 }
 
@@ -1536,12 +1559,10 @@ func TestAnUnsupportedPatchFormatIsRefusedWithAcceptPatch(t *testing.T) {
 	if got := res.Header().Get("Accept-Patch"); got != "application/merge-patch+json" {
 		t.Errorf("Accept-Patch = %q, which does not name what would have worked", got)
 	}
-	// AND THE HINT NAMES A ROUTE THAT TAKES THE WRITE. It named
-	// PUT /config/roles/{handle}, a route this surface does not serve, so a
-	// caller following it met a second refusal.
-	if body := res.Body.String(); !strings.Contains(body, "PATCH /chart/seats/{handle}") ||
-		strings.Contains(body, "/config/roles") {
-		t.Errorf("the 415 hint does not send a seat edit to the chart: %s", body)
+	// AND THE HINT NAMES A ROUTE THAT TAKES THE WRITE: one seat is edited at
+	// its own address, because a merge patch replaces a list whole.
+	if body := res.Body.String(); !strings.Contains(body, "PUT /config/roles/{handle}") {
+		t.Errorf("the 415 hint does not send a seat edit to its entity route: %s", body)
 	}
 	// AND THE ONES IT DOES SPEAK STILL WORK, including the registered type
 	// and the bare application/json every published example sends.

@@ -166,15 +166,15 @@ func scopeRowsAt(ctx context.Context, t *testing.T, rec Record, limit int) []str
 //
 // A scope's roots are one per OBJECT an operation writes, so an import carries
 // as many as its batch has members. That put the ceiling at about fifty
-// objects — measured as a company file with sixty seats failing its own boot
-// seed, the whole chart lost, and the node serving a company of nobody. It is
-// the worst shape a limit can have: invisible on every fixture small enough to
-// write by hand, and reached by the first real company.
+// objects — measured as a sixty-object batch failing its own apply, the whole
+// batch lost. It is the worst shape a limit can have: invisible on every
+// fixture small enough to write by hand, and reached by the first real
+// company.
 //
 // # What this asserts
 //
-// Five hundred roots, which is the largest batch the org chart accepts, and a
-// thousand, which is past anything this engine publishes. Both have to return
+// Five hundred roots and a thousand, each far past the fifty a chained `OR`
+// held. Both have to return
 // an ANSWER rather than an error — the answer itself is what the cases above
 // are about.
 func TestAScopeWithHundredsOfRootsIsProbedRatherThanRefused(t *testing.T) {

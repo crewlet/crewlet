@@ -21,8 +21,8 @@ var idleDocs = []string{
 }
 
 // THE WARNINGS A FILE IS GIVEN DID NOT MOVE when the seat-against-company rule
-// became [config.TokenBudget.IdleUnder], the one judgement the org chart's
-// continuous report asks of a running company too.
+// became [config.TokenBudget.IdleUnder], the one judgement every warning about
+// an idle seat ceiling reads.
 //
 // THE GOLDEN WAS TAKEN FROM THE CODE BEFORE THE REFACTOR, byte for byte, over
 // the boundaries the rule is about: an equal ceiling, a day under the company's
@@ -81,8 +81,8 @@ func TestBudgetWarningsAreUnchangedByTheIdleJudgement(t *testing.T) {
 	}
 }
 
-// IDLEUNDER ANSWERS THE SAME PAIR WITHOUT A FILE: a seat's ceilings as the org
-// chart's runtime half carries them, against the company's settings. Each
+// IDLEUNDER ANSWERS THE SAME PAIR WITHOUT A FILE: a seat's ceilings as the
+// running organisation carries them, against the company's. Each
 // idle ceiling is named once, at the smallest company ceiling that idles it,
 // and a ceiling one token under is not idle.
 func TestIdleUnderJudgesASeatAgainstTheCompany(t *testing.T) {

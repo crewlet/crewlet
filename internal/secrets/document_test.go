@@ -193,10 +193,8 @@ func TestWithNoKeyringNothingIsSealedOrRead(t *testing.T) {
 // THE MIGRATION READS BOTH, and only with the keyring it will seal under.
 //
 // `crewlet config seal` rewrites an older build's plaintext revision sealed,
-// and `crewlet config scrub` must reach a plaintext revision's personal data as
-// surely as a sealed one's — both write back sealed, so both must read what
-// they replace. Without a keyring there is nothing to seal under, so the read
-// is refused before it happens.
+// so it must read what it replaces, sealed or not. Without a keyring there is
+// nothing to seal under, so the read is refused before it happens.
 func TestTheMigrationOpensEitherAndOnlyWithAKeyring(t *testing.T) {
 	t.Parallel()
 	cipher, err := NewCipher(testRing(t))

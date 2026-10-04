@@ -304,11 +304,11 @@ func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
 //
 // It was one — `CheckTiers`, which asked the company too — while a node's
 // logs waited for its first company: only a company started one. Every node
-// runs the core runtime from boot now, the org chart and the identity estate
-// on every domain's log, so the pair's check let through exactly the node it
-// should have refused: one started with no company, whose first person's
-// invitation and the chart the org builder wrote would be gone at its first
-// restart. So there is no company in these cases at all.
+// runs the core runtime from boot now, every domain's log and the identity
+// estate on it, so the pair's check let through exactly the node it should
+// have refused: one started with no company, whose first person's invitation
+// would be gone at its first restart. So there is no company in these cases at
+// all.
 //
 // Mutation: let `Durable` pass an embedded stream with a blank directory and
 // the first rows are accepted; drop the call from the stream's validator and
@@ -351,8 +351,7 @@ func TestEveryNodeNeedsAStreamThatSurvivesARestart(t *testing.T) {
 						"first restart and then refuse to serve", door)
 				}
 				for _, want := range []string{
-					"stream.store_dir", "refuses to serve", "org chart",
-					"identity estate",
+					"stream.store_dir", "refuses to serve", "identity estate",
 				} {
 					if !strings.Contains(err.Error(), want) {
 						t.Errorf("%s's refusal = %q, want it to say %q", door, err, want)

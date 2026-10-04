@@ -70,7 +70,7 @@ func newMachineRig(t *testing.T) *machineRig {
 				Epoch: 2,
 			},
 		},
-		chart: &fakeChart{position: 1000, seats: map[string]session.Seat{
+		chart: &fakeChart{seats: map[string]session.Seat{
 			sessionSeat: {Handle: sessionSeat, Kind: "human", Unit: "platform"},
 		}},
 	}
@@ -183,7 +183,7 @@ func TestATokenActsAsItsOwnerWithTheNarrowestOfThreeGrantSets(t *testing.T) {
 // REFUSED EVERY GESTURE THAT NEEDS A PERSON PRESENT.
 //
 // A token has nobody at a keyboard, so presenting it is its whole proof for
-// what an automation does — a configuration, a chart or a credential write —
+// what an automation does — a configuration or a credential write —
 // and it is composed fresh for `step_up`. That makes the principal's CLOCK no
 // help in keeping it off the gestures that need a person present, so what
 // does is carried beside it: the principal names the token it came through
@@ -354,7 +354,7 @@ func TestATokenThisNodeCannotCheckIsUnavailable(t *testing.T) {
 func TestABoundOwnersTokenActsAsTheirSeat(t *testing.T) {
 	t.Parallel()
 	m := newMachineRig(t)
-	m.row.Owner.Seat, m.row.Owner.SeatAt = sessionSeat, 900
+	m.row.Owner.Seat = sessionSeat
 	m.chart.seats[sessionSeat] = session.Seat{
 		Handle: "platform-director", Kind: "human", Unit: "platform",
 	}
@@ -368,15 +368,15 @@ func TestABoundOwnersTokenActsAsTheirSeat(t *testing.T) {
 		t.Errorf("acts as %s %q, want a person at the seat's current handle",
 			p.Kind, p.Seat)
 	}
-	if p.Position != "platform" || p.SeatAt != 900 {
-		t.Errorf("position %q seat-at %d, want platform at 900", p.Position, p.SeatAt)
+	if p.Position != "platform" {
+		t.Errorf("position %q, want platform", p.Position)
 	}
 
 	// A SERVICE ACCOUNT bound to a seat is a machine acting as it, and the
 	// kind follows the seat for Tier A's reason.
 	svc := newMachineRig(t)
 	svc.row.Owner.Kind, svc.row.Owner.Login = iam.KindMachine, "svc:deploy"
-	svc.row.Owner.Seat, svc.row.Owner.SeatAt = sessionSeat, 900
+	svc.row.Owner.Seat = sessionSeat
 	got, _ = present(t, svc.guard(nil), http.MethodGet, "/agents",
 		svc.presented.Value())
 	if got.principal.Kind != iam.KindPerson || got.principal.Seat != sessionSeat {
@@ -412,7 +412,7 @@ func TestATokensWriteIsAttributedToTheToken(t *testing.T) {
 		want := iam.MachineTokenName(m.presented.ID)
 		author := "sarah.chen"
 		if bound {
-			m.row.Owner.Seat, m.row.Owner.SeatAt = sessionSeat, 900
+			m.row.Owner.Seat = sessionSeat
 			author = sessionSeat
 		}
 		got, _ := present(t, m.guard(nil), http.MethodPost, "/work/items",
@@ -457,7 +457,7 @@ func TestATokensWriteIsAttributedToTheToken(t *testing.T) {
 func TestABoundOwnersTokenIsHeldToTheirSeatsStanding(t *testing.T) {
 	t.Parallel()
 	gone := newMachineRig(t)
-	gone.row.Owner.Seat, gone.row.Owner.SeatAt = sessionSeat, 900
+	gone.row.Owner.Seat = sessionSeat
 	delete(gone.chart.seats, sessionSeat)
 	got, _ := present(t, gone.guard(nil), http.MethodGet, "/agents",
 		gone.presented.Value())
@@ -467,14 +467,14 @@ func TestABoundOwnersTokenIsHeldToTheirSeatsStanding(t *testing.T) {
 			got.body["error"], httpjson.CodeSeatUnavailable)
 	}
 
-	behind := newMachineRig(t)
-	behind.row.Owner.Seat, behind.row.Owner.SeatAt = sessionSeat, 900
-	delete(behind.chart.seats, sessionSeat)
-	behind.chart.position = 899
-	got, _ = present(t, behind.guard(nil), http.MethodGet, "/agents",
-		behind.presented.Value())
+	unreadable := newMachineRig(t)
+	unreadable.row.Owner.Seat = sessionSeat
+	unreadable.chart.err = errors.New("this node runs no company yet")
+	got, _ = present(t, unreadable.guard(nil), http.MethodGet, "/agents",
+		unreadable.presented.Value())
 	if got.status != http.StatusServiceUnavailable {
-		t.Errorf("a chart below the binding answered %d, want 503", got.status)
+		t.Errorf("an organisation this node cannot read answered %d, want 503",
+			got.status)
 	}
 }
 

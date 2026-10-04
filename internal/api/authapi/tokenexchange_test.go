@@ -76,7 +76,7 @@ func newExchangeRig(t *testing.T) *exchangeRig {
 	}
 	r.estate.bindings[iam.TokenLogin("lead")] = session.PersonRow{
 		Found: true, Stage: iam.StageActive, Login: iam.TokenLogin("lead"),
-		Seat: boundSeat, SeatAt: 1,
+		Seat: boundSeat,
 	}
 	r.rebuild(r.boot)
 	return r
@@ -665,14 +665,10 @@ func (d sessionDirectory) SessionStanding(_ context.Context, lineage string,
 	return row.person, !row.ended && row.epoch >= d.estate.epochs[row.person], nil
 }
 
-// seatChart is a chart view holding a fixed set of seats.
+// seatChart is an organisation holding a fixed set of seats.
 type seatChart struct{ seats map[string]session.Seat }
 
 func (c *seatChart) Seat(_ context.Context, ref string) (session.Seat, bool, error) {
 	seat, ok := c.seats[ref]
 	return seat, ok, nil
-}
-
-func (c *seatChart) Position(context.Context) (uint64, time.Duration, error) {
-	return 1 << 40, 0, nil
 }

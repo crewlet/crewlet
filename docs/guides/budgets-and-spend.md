@@ -32,48 +32,15 @@ Monday, a month runs from the 1st. Every model round is charged in all three
 windows it falls in at once, against the company and against its seat, and it
 runs only while every capped window of both has room.
 
-The two ceilings live in the two halves of a running company, and each is
-changed where its half is written. The **company's** `token_budget` is a
-setting: a revision through [`/config`](configure-via-api.md) (`config:write`),
-which every node enforces once it has applied that epoch. A **seat's** is part
-of its org chart runtime: a `PATCH /chart/seats/{handle}` whose `runtime` —
-read back with `?runtime=true` — carries the new `token_budget`
-(`config:write`, the grant every runtime write takes), which moves no settings
-epoch at all — each node enforces it once its own copy of the chart has
-applied the record. The write says how far it got: `200` once the node that
-took it has applied it, `202` with the position to read at when it has not
-yet, and `503` with the operation id when nobody can say whether it landed —
-retried under that id, never a new one. A company file
-carries both, and `crewlet config import` writes each to its half. Either
-write refuses a ceiling below one token and a key that is not a window (a
-`year`), naming the key to change.
-
-A window's allowance comes back when the window turns over, rolled inside the
-first charge after the boundary — nothing has to run at midnight. That turnover
-is the **only** reset: there is no verb that zeroes a counter mid-window,
-because one would re-arm a company that had spent its day. To make room before
-a window turns over, raise its ceiling. The engine judges each window's
-`state` — `ok`, `near` at 90% of the ceiling, or `refusing`
-— and every screen draws the engine's word rather than dividing for itself. See
-[Deployment § Token budgets](deployment.md#token-budgets) for the park a seat out
-of room waits in, and [Coordination § Token budgets are windows](../concepts/coordination.md#token-budgets-are-windows)
-for how the counter is kept.
-
-### Raising a ceiling from the dashboard
-
-**Spend › Budgets** (`#/spend/budgets`) draws every scope's day, week and month
-with what it has spent and its ceiling, and a person holding `config:write`
-raises a ceiling there in place: the pencil beside it takes `50M`, `2.5M` or the
-digits, and an empty field removes the ceiling. Home and the Inbox offer the
-same change as **Raise budget** on a seat the engine stopped, opened on the
-scope that is actually refusing it. Each save is the write its scope takes —
-the company's a `/config` revision recorded with a summary such as "Raise the
-company's daily token ceiling from 2M to 5M", a seat's a chart runtime write
-recorded on the seat's own history — and a seat's that this node has not yet
-applied is drawn as pending rather than as stored. A seat ceiling the company's
-own ceiling makes unable to refuse a turn — a seat's day at or above the
-company's day, say — is reported by the chart check as `budget_idle`, because
-the two halves are written separately and no single write sees both. See
+Both ceilings are part of the company document. The **company's**
+`token_budget` and a **seat's** are written through
+[`/config`](configure-via-api.md) (`config:write`) — a seat's on its own with
+`PUT /config/roles/{handle}` — and every node enforces them once it has applied
+that epoch. The write is a revision recorded with a summary such as "Raise the
+company's daily token ceiling from 2M to 5M". A seat ceiling the company's own
+ceiling makes unable to refuse a turn — a seat's day at or above the company's
+day, say — is reported as a warning at the seat's ceiling by `crewlet validate` and on
+every `/config` write's answer. See
 [Dashboard design § Spend › Budgets](../reference/dashboard-design.md#spend--budgets-raised-in-place).
 
 ## The spend rollup, and why it has two sources

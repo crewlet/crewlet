@@ -264,10 +264,10 @@ const (
 	// OpUpdate is a person's own content, as FULL POST-STATE: their name,
 	// their contacts, their grants, their credential set.
 	//
-	// FULL POST-STATE AND NOT A PATCH, for the chart's reason rather than
-	// the tracker's: a person is authored as a form and submitted whole, so
-	// the writer always holds the complete new value and a patch would be a
-	// diff it computed in order to be reassembled by every node.
+	// FULL POST-STATE AND NOT A PATCH, unlike the tracker: a person is
+	// authored as a form and submitted whole, so the writer always holds the
+	// complete new value and a patch would be a diff it computed in order to
+	// be reassembled by every node.
 	OpUpdate OpKind = "update"
 
 	// OpStatus moves a person between the enrolment and suspension stages
@@ -461,10 +461,10 @@ type RecordEnvelope struct {
 // that cannot decode the payload: it is what turns an unknown version into a
 // STOP rather than a deferral.
 //
-// ON THE OP AND NOT ON A KIND, for the chart's reason: a removal rides the
-// ORDINARY PERSON SUBJECT, so a reader that keyed on the kind would defer it —
-// and a deferred removal here is a person the company off-boarded still
-// signing in on one node. An eviction has a kind of its own and could have
+// ON THE OP AND NOT ON A KIND, because a removal rides the ORDINARY PERSON
+// SUBJECT, so a reader that keyed on the kind would defer it — and a deferred
+// removal here is a person the company off-boarded still signing in on one
+// node. An eviction has a kind of its own and could have
 // been read either way; it is read here so the question is asked once, in one
 // place, for both — and so does an invalidation.
 func (e RecordEnvelope) InstallsGate() bool {
@@ -566,8 +566,7 @@ type MutationRecord struct {
 // lie about — so it reaches the applier as an argument rather than as a key in
 // the format.
 //
-// A NOTIFY BLOCK. The chart carries one because a chart change wakes the seats
-// it moved. An identity change wakes nobody: a person being suspended, a
+// A NOTIFY BLOCK. An identity change wakes nobody: a person being suspended, a
 // session ending or an address being claimed is not work for an agent, and the
 // contact updates that DO follow a status change are derived by a duty from
 // the rows rather than routed from the record. A field with no producer is a

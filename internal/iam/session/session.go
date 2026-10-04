@@ -16,7 +16,7 @@
 // # There is no validation cache, anywhere
 //
 // Not an omission — there is nothing to cache. The lookup is a local read of a
-// replicated row and a map lookup on a pinned chart view, and the store is
+// replicated row and a map lookup on the running organisation, and the store is
 // never on a network path from the request. A cache here would add a second
 // idea of who is signed in, with its own staleness, in front of a read that is
 // already local — and the thing it would be caching is exactly the thing a
