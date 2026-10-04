@@ -539,8 +539,7 @@ func livePresences(ctx context.Context, leases liveLeases) ([]statelog.Presence,
 // the gesture's mint instant: the ledger's vouching reads it off the id, and
 // one spelled here in a shape that grammar did not recognise would be read as
 // minted at the zero instant — answered `unknown` on any node whose ledger
-// ever lost a row, to its sweep or to a snapshot from a donor that scrubbed
-// it. The sign is one step, and the log and the node together the last.
+// ever lost a row to its sweep. The sign is one step, and the log and the node together the last.
 //
 // INJECTIVE, which a plain join of four steps is not: a gesture id may carry
 // a tail of its own and a node id may hold dots, so gesture `x` on node
