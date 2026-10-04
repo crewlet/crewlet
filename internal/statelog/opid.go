@@ -96,20 +96,17 @@ import (
 // # Whose clock
 //
 // The instant is read off the clock of whichever node minted the id, and the
-// watermark off the clock of whichever node lost the rows — the sweeping node
-// for the sweep, the joining one for an adoption from a donor that scrubbed —
-// so a retry that crosses nodes compares two clocks. The comparison errs
-// safely in one direction only. A minting clock BEHIND the other makes an
-// operation look older, and answers `unknown` where the ledger could have
-// vouched. A minting clock AHEAD of it by δ can make an operation whose row
-// was lost up to δ before the watermark look minted after it, and that one is
-// re-decided. So the fleet's wall clocks are assumed to agree to within the
-// margin each loss leaves: the sweep's is its whole thirty days, and an
-// adoption's is the time between a donor finishing the artefact it offers and
-// the join stamping its start — which the offer window makes seconds in the
-// ordinary case and which nothing enforces. It is the same kind of assumption
-// the trim's age term already rests on (see the package doc), and it is
-// stated here because this is where it is spent.
+// watermark off the clock of the node whose sweep lost the rows — which an
+// adopter inherits with the donor's ledger — so a retry that crosses nodes
+// compares two clocks. The comparison errs safely in one direction only. A
+// minting clock BEHIND the other makes an operation look older, and answers
+// `unknown` where the ledger could have vouched. A minting clock AHEAD of it
+// by δ can make an operation whose row was lost up to δ before the watermark
+// look minted after it, and that one is re-decided. So the fleet's wall
+// clocks are assumed to agree to within the margin each loss leaves: the
+// sweep's is its whole thirty days. It is the same kind of assumption the
+// trim's age term already rests on (see the package doc), and it is stated
+// here because this is where it is spent.
 
 // opIDLength is the length of the UUID an operation id starts with.
 const opIDLength = 36

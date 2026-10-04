@@ -127,8 +127,8 @@ type Result struct {
 
 	// Unvouched says an `unknown` was answered because THIS NODE'S
 	// operation ledger cannot vouch for the operation — it was minted
-	// before the instant the ledger may have lost rows from (its sweep, or
-	// a snapshot adopted from a donor that scrubbed it) and the ledger holds
+	// before the instant the ledger may have lost rows from (its sweep,
+	// inherited with a donor's ledger on an adoption) and the ledger holds
 	// no row for it — rather than because an acknowledgement was lost.
 	//
 	// # Why a caller has to be able to tell the two apart

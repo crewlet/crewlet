@@ -1659,9 +1659,7 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 // donor applied and inherits the donor's own watermark besides — and a turn
 // woken by a trigger from before the join, which derives its operation ids
 // from that trigger's instant, has its FIRST attempts decided and published
-// like anyone's. With the ledger scrubbed, those first attempts were answered
-// `unknown` and never published: the recovering node refusing its own
-// backlog.
+// like anyone's.
 //
 // That is why this runs BEFORE A DECISION IS PUBLISHED and not only in the
 // resolution of an ambiguous one. A retry — a turn re-run after a crash, a
