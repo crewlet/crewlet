@@ -40,6 +40,23 @@ import (
 // FROM THE TWO DOCUMENTS, NEVER THE RUNNING COMPANY, so a node behind on its
 // applies decides a write exactly as a current one does.
 //
+// # What a refusal says
+//
+// A refused READ of one seat or unit says nothing about it: one in a team the
+// caller does not lead, one at the root and an id the revision does not hold
+// are refused in the same bytes, because a missing id is decided at the root
+// before it is looked for and the root is refused as another team's unit is.
+// A write naming a missing id is refused the same way, before it is called
+// missing. Only the company's grant is told an id is not there.
+//
+// A refused WRITE says more, and that is the price of the rule rather than an
+// oversight: each refused part names the place it reaches — the unit a named
+// seat sits in, the team already claiming a key — because that place is what
+// the caller is refused on, and whether a claim or a reference is refused at
+// all already depends on what sits outside their subtree. So anybody bound to
+// a seat can learn the chart's SHAPE by naming things in a write of their own;
+// never a seat's or a unit's fields, which only a read serves.
+//
 // # Before validation, and before the seat-holder check
 //
 // A write its caller may not make is refused before the document is validated,
@@ -182,18 +199,28 @@ func (s *Service) mayRead(w http.ResponseWriter, r *http.Request,
 		s.fail(w, "build the organization the read is decided on", err)
 		return false
 	}
-	d := authz.Decide(r.Context(), *principalOf(r), authz.ActionOrgRead,
-		authz.Object{Kind: authz.KindUnit, ID: id, Container: placeOf(o, kind, id)},
+	return mayAt(w, r, authz.ActionOrgRead, o, id, placeOf(o, kind, id))
+}
+
+// mayAt decides a on one place of the org chart o — container empty for the
+// root, which is decided without a tree — answering the refusal itself; ok is
+// false when the request has been answered.
+func mayAt(w http.ResponseWriter, r *http.Request, a authz.Action,
+	o *org.Organization, id, container string) (ok bool) {
+
+	d := authz.Decide(r.Context(), *principalOf(r), a,
+		authz.Object{Kind: authz.KindUnit, ID: id, Container: container},
 		orgchart.Of(o), time.Now())
 	if d.Unknown() || !d.Allowed {
-		authz.EnvelopeRefusal(w, r, authz.Policy{Action: authz.ActionOrgRead}, d)
+		authz.EnvelopeRefusal(w, r, authz.Policy{Action: a}, d)
 		return false
 	}
 	return true
 }
 
 // placeOf is the unit a read of one seat or unit is decided on: the unit a
-// seat sits in, or a unit itself; empty for a seat at the root.
+// seat sits in, or a unit itself; empty for a seat at the root and for an id
+// the revision does not hold, which is decided as the root is.
 func placeOf(o *org.Organization, kind, id string) string {
 	if kind == EntityUnits {
 		if unit := o.Unit(id); unit != nil {

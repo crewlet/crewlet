@@ -338,10 +338,12 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 			authz.Object{Kind: authz.KindUnit, Container: "PLATFORM"},
 			false, authz.ReasonNotLead},
 		// THE ROOT IS NO UNIT'S, so it is in nobody's subtree: a seat or a
-		// unit at the top of the company is the company grant's alone.
+		// unit at the top of the company is the company grant's alone —
+		// refused as a unit somebody else leads is, so a refusal never
+		// says whether an id is at the root or nowhere at all.
 		{"the company root is nobody's subtree", personLeading("cto"),
 			authz.ActionOrgWrite, authz.Object{Kind: authz.KindUnit},
-			false, authz.ReasonRoot},
+			false, authz.ReasonNotLead},
 		{"the company's grant writes anywhere",
 			person("jane.doe", iam.GrantConfigWrite), authz.ActionOrgWrite,
 			authz.Object{Kind: authz.KindUnit},

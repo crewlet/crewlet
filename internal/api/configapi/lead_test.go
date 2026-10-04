@@ -273,13 +273,13 @@ func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 			"seat/sre/after/design/manages/not_lead"},
 		{"a seat made to manage the CEO", configapi.EntityRoles, "sre",
 			func(_ *testing.T, e map[string]any) { e["manages"] = []any{"ceo"} }, false,
-			"seat/sre/after//manages/root"},
+			"seat/sre/after//manages/not_lead"},
 		{"another team's project claimed", configapi.EntityUnits, "tooling",
 			func(_ *testing.T, e map[string]any) { e["project"] = "DSN" }, false,
 			"unit/tooling/before/design/project/not_lead"},
 		{"a seat at the root", configapi.EntityRoles, "ceo",
 			func(_ *testing.T, e map[string]any) { e["goal"] = "grow" }, false,
-			"seat/ceo/before//place/root"},
+			"seat/ceo/before//place/not_lead"},
 		{"a credential changed inside their team", configapi.EntityRoles, "staff-eng",
 			func(_ *testing.T, e map[string]any) {
 				e["mcp_env"] = map[string]any{"github": map[string]any{
@@ -588,6 +588,59 @@ func TestALeadReadsOnlyTheirSubtree(t *testing.T) {
 	res := doAs(t, s, platformLead(), http.MethodGet, "/config/roles/staff-eng", "", nil)
 	if strings.Contains(res.Body.String(), "ghp-literal-token") {
 		t.Errorf("a lead's read carried a credential in the clear: %s", res.Body.String())
+	}
+}
+
+// THE ENTITY ROUTES ARE NO ROSTER.
+//
+// A person bound to a seat who leads nothing is refused a seat in another
+// team, a seat at the root, a unit, and an id the company does not have, in
+// the same bytes: an id the revision does not hold is decided at the root
+// before it is looked for, and the root is refused as another team's unit is.
+// A write to a missing id is refused before it is called missing too. The
+// control is the company's grant, which is told the id is not there.
+//
+// Mutation: look the id up before deciding, or give the root a refusal reason
+// of its own, and the missing id answers differently from the seat in Design.
+func TestTheEntityRoutesAreNoRoster(t *testing.T) {
+	t.Parallel()
+	s := leadSurface(t)
+	colleague := platformLead()
+	colleague.Seat = "toolsmith"
+	var first string
+	for _, path := range []string{"/config/roles/designer", "/config/roles/ceo",
+		"/config/roles/nosuch", "/config/units/design", "/config/units/nosuch"} {
+		res := doAs(t, s, colleague, http.MethodGet, path, "", nil)
+		if res.Code != http.StatusForbidden {
+			t.Errorf("GET %s = %d, want 403: %s", path, res.Code, res.Body.String())
+			continue
+		}
+		if first == "" {
+			first = res.Body.String()
+		} else if res.Body.String() != first {
+			t.Errorf("GET %s answered %s, unlike %s", path, res.Body.String(), first)
+		}
+	}
+	headers := map[string]string{"X-Summary": "probe"}
+	res := doAs(t, s, colleague, http.MethodPut, "/config/roles/nosuch",
+		`{"name": "Nosuch", "llm": "zulu"}`, headers)
+	if res.Code != http.StatusForbidden ||
+		decode(t, res)[authz.DetailReason] != string(authz.ReasonNotLead) {
+		t.Errorf("PUT of a missing seat = %d %s, want 403 not_lead",
+			res.Code, res.Body.String())
+	}
+	admin := iam.Principal{ID: uuid.New(), Login: "ops.admin", Kind: iam.KindPerson,
+		Stage:    iam.StageActive,
+		Grants:   []iam.Grant{iam.GrantConfigRead, iam.GrantConfigWrite},
+		ReauthAt: time.Now().Add(time.Hour)}
+	if res := doAs(t, s, admin, http.MethodGet, "/config/roles/nosuch", "", nil); res.Code != http.StatusNotFound {
+		t.Errorf("config:read reading a missing seat = %d, want 404: %s",
+			res.Code, res.Body.String())
+	}
+	if res := doAs(t, s, admin, http.MethodPut, "/config/roles/nosuch",
+		`{"name": "Nosuch", "llm": "zulu"}`, headers); res.Code != http.StatusNotFound {
+		t.Errorf("config:write writing a missing seat = %d, want 404: %s",
+			res.Code, res.Body.String())
 	}
 }
 

@@ -1743,10 +1743,16 @@ caller's, each with the place it reaches; a dry run (`?dry_run=true`) answers
 the same, so a lead learns before saving. A lead reads what they may write the
 same way: `GET /config/roles/{handle}` and `GET /config/units/{id}` serve a seat
 or unit of their subtree, masked as every read of the document is, while the
-whole document stays `config:read`'s. The route admits anybody bound to a seat
-before the body is read, and nobody else; an agent never writes the chart,
-and a lead's write asks for the same recent proof of identity every other
-configuration write does.
+whole document stays `config:read`'s. Outside their subtree a seat, a unit, a
+seat at the root and a name the company does not have are all refused in the
+same words, so the entity routes are no roster of the company. A refused
+write's `refused` list does name the place each part reaches — which unit a
+seat they named sits in, which team already claims a project — because that
+place is what they are refused on; anybody bound to a seat can learn the
+chart's shape that way, and nothing more of it. The route admits anybody
+bound to a seat before the body is read, and nobody else; an agent never
+writes the chart, and a lead's write asks for the same recent proof of
+identity every other configuration write does.
 
 ### Every tool call goes through it
 

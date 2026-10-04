@@ -1191,13 +1191,19 @@ stored.
 | `side` | `before` (the revision replaced) or `after` (the one proposed): which document the place was read in |
 | `place` | The key of the unit the change reaches; `""` is the company root, which is nobody's subtree |
 | `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), a claimed key (`project`, `space`, `channel`, `email`, `contact`, with the key in `value`), `named` (another object's `lead:` or `manages:` entry that already states the id an added seat or unit takes, with the id in `value`), `duplicate` (two objects on one id, which only the company grant may write), `credential` (a credential field, or a `${VAR}` in any field, with the field's path in `value`), or `unchanged` (the `document` itself) |
-| `reason` | The authority table's reason: `not_lead`, `root`, or `no_grant` for a credential or a setting |
+| `reason` | The authority table's reason: `not_lead` for a place outside the caller's subtree, the company root included, or `no_grant` for a credential, a setting or an unchanged document |
 
 A lead reads what they may write the same way: `GET /config/roles/{handle}`
 and `GET /config/units/{id}` serve a seat or a unit of their subtree, masked
-like every read here, and refuse one outside it `403 unauthorized`. The whole
-document, its history and its references stay `config:read`'s, so a lead edits
-through the entity routes.
+like every read here, and refuse one outside it `403 unauthorized`. An id the
+company does not have is refused in the same bytes as a seat in another team —
+it is decided at the company root before it is looked for — and so is a write
+to one, so neither route is a roster: only `config:read` is told a seat or a
+unit is missing, and only `config:write` on a write. A refused write is more
+forthcoming by design: each refused part names the place it reaches, which is
+where something outside the caller's subtree sits. The whole document, its
+history and its references stay `config:read`'s, so a lead edits through the
+entity routes.
 
 #### Dry runs
 
@@ -1313,8 +1319,9 @@ Four rules follow from that:
   placed where the seat sits in the document (`roles[1].gaol`), with its line in
   the body. A decoder that ignored what it did not recognise would answer `201`
   and store the seat with its goal silently gone.
-- **A plain `PUT` never creates.** An id nothing carries is `404 no_such_entity`,
-  not a new entity: naming one that is not there is far more often a typo than
+- **A plain `PUT` never creates.** An id nothing carries is `404 no_such_entity`
+  (on `roles` and `units`, to the holder of `config:write` alone — anybody else
+  is refused `403` as for a seat outside their team), not a new entity: naming one that is not there is far more often a typo than
   an intent to add one. The intent is SAID with `If-None-Match: *` — the
   create-only write, for the two flat collections (`mcp-servers`,
   `llm-providers`): a taken id is `412 entity_exists` rather than a
@@ -1443,7 +1450,7 @@ On a `409`, re-read `/config` and send the edit again.
 - `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
 - `401 Unauthorized`: missing or invalid bearer token — `invalid_token`, in the same [refusal envelope](#every-refusal-is-one-envelope) every route answers with, written by the guard itself before any route runs
 - `403 Forbidden`: `unauthorized` when the credential holds neither the grant nor, on the org chart, the lead relation — with a `refused` list for [a lead's write](#a-lead-edits-their-own-team) — and `step_up_required` for a write whose proof of identity is older than `step_up`
-- `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity write naming an id the active revision does not carry, or `no_route` for a path under `/config` this surface does not serve
+- `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity write naming an id the active revision does not carry (a seat or a unit only to `config:read` on a read and `config:write` on a write), or `no_route` for a path under `/config` this surface does not serve
 - `405 Method Not Allowed`: `method_not_allowed` for a `/config` path under a method it does not take, with `Allow`
 - `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)
 - `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, or `no_active_revision` when `If-Match` names a revision and none is active

@@ -98,7 +98,8 @@ const (
 	// is in a principal's SUBTREE when they are the effective lead of it or
 	// of any unit above it ([Chart.LeadsUnit]), and [Object.Container]
 	// names the unit a change reaches — empty for the company root, which no
-	// unit holds and so is nobody's subtree ([ReasonRoot]).
+	// unit holds and so is nobody's subtree, refused [ReasonNotLead] like a
+	// unit somebody else leads.
 	//
 	// ONE QUESTION PER PLACE, AND THE SURFACE ASKS IT OF EVERY PLACE A
 	// WRITE REACHES, on both sides of it (internal/api/configapi): where a
@@ -400,7 +401,13 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 			return consulting(Decision{Allowed: true, Reason: ReasonLead}, r.grant)
 		}
 		if o.Container == "" {
-			return consulting(Decision{Reason: ReasonRoot}, r.grant)
+			// THE ROOT IS REFUSED AS A UNIT SOMEBODY ELSE LEADS IS, with
+			// no chart asked: the remedy is the same grant, and a reason
+			// of its own told a seat in another team apart from a seat or
+			// unit the company does not have — the surface decides an id
+			// it cannot find at the root — so the entity routes listed the
+			// company's handles to anybody bound to a seat.
+			return consulting(Decision{Reason: ReasonNotLead}, r.grant)
 		}
 		return consulting(leadsUnit(ctx, chart, actorOf(p), o.Container), r.grant)
 

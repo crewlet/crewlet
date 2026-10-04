@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -474,17 +475,21 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 			s.fail(w, "read the active revision", err)
 			return
 		}
+		// A SEAT OR A UNIT IS READ BY ITS LEAD as well as by the grant
+		// that reads the whole document, decided on where it sits — and
+		// BEFORE it is looked for: an id the revision does not hold is
+		// decided at the root, so somebody who may not read it is refused
+		// exactly as for a seat in another team rather than told it is
+		// missing, which would make this route a roster.
+		if inOrgChart(kind) && !s.mayRead(w, r, company, kind, id) {
+			return
+		}
 		entity, found := entityKinds[kind].find(company, id)
 		if !found {
 			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchEntity,
 				map[string]string{
 					"hint": "no " + kind + " called " + id + " in the active revision",
 				})
-			return
-		}
-		// A SEAT OR A UNIT IS READ BY ITS LEAD as well as by the grant
-		// that reads the whole document, decided on where it sits.
-		if inOrgChart(kind) && !s.mayRead(w, r, company, kind, id) {
 			return
 		}
 		// THE DOCUMENT'S TAG, because an entity is a slice of it: the
@@ -563,6 +568,13 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		}
 		d.principal = principalOf(r)
 		prepared, err := s.prepare(r.Context(), d)
+		// AN ID THE REVISION DOES NOT HOLD IS DECIDED AT THE ROOT before it
+		// is called missing, as a read of it is: only the company's grant
+		// learns that it is not there.
+		if inOrgChart(kind) && errors.Is(err, ErrNoSuchEntity) &&
+			!mayAt(w, r, authz.ActionOrgWrite, nil, id, "") {
+			return
+		}
 		if err != nil {
 			s.refuseEntity(w, kind, id, err)
 			return

@@ -382,11 +382,6 @@ const (
 	// window the verb asks for ([Decision.Recency]). Confirming who they
 	// are and asking again is the whole remedy — no grant would change it.
 	ReasonStepUp Reason = "step_up"
-	// ReasonRoot is a refusal: what an org chart write reaches is no
-	// unit's — a seat or unit at the company root, or a reference that
-	// names nothing — so it is in nobody's subtree, and only the row's own
-	// grant writes it. See [ClassSubtree].
-	ReasonRoot Reason = "root"
 )
 
 // Reasons are every one, in declaration order.
@@ -394,7 +389,7 @@ var Reasons = []Reason{
 	ReasonGrant, ReasonSelf, ReasonAuthor, ReasonLead,
 	ReasonNoGrant, ReasonNotSelf, ReasonNotLead, ReasonNotAuthor,
 	ReasonSeatRefused, ReasonTokenRefused, ReasonStage, ReasonUnnamed,
-	ReasonUnknownAction, ReasonStepUp, ReasonRoot,
+	ReasonUnknownAction, ReasonStepUp,
 }
 
 // Valid reports whether a reason is one this build knows.
