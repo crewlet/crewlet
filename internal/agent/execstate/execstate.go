@@ -23,10 +23,10 @@
 //
 // Evolution is additive WITHIN a version — new fields get defaults, nothing is
 // removed or repurposed — and a shape that cannot be read that way takes a new
-// version plus a permanent reader for the old one (compat_v1.go). Permanent,
-// not a migration window: nothing rewrites a parked row, and the layer that
-// holds the blob cannot decode it, so the only thing that can ever read an old
-// row is a build that still knows how.
+// version plus a permanent reader for the old one. Permanent, not a migration
+// window: nothing rewrites a parked row, and the layer that holds the blob
+// cannot decode it, so the only thing that can ever read an old row is a build
+// that still knows how.
 package execstate
 
 import (
@@ -43,14 +43,9 @@ import (
 //
 // Bumped only for a change a previous build could MISREAD. An added field a
 // reader can default is not a bump; a changed meaning for an existing field
-// is.
-//
-// v2 is the two-stage turn: `iteration_history` holds one call list per round
-// where v1 held a plan list and an execute list, because one phase now makes
-// the calls. A v1 reader handed a v2 blob would find both of its lists empty
-// and resume a turn believing no round before the suspend had done anything —
-// so it refuses instead, and this build reads v1 through [upgradeV1].
-const Version = 2
+// is. Version 1 is every shape there has been: no build that parked a run in
+// another was ever released.
+const Version = 1
 
 // State is a suspended Execute loop, whole.
 //
@@ -108,9 +103,6 @@ type State struct {
 	// event store. So the resumed phase's record is the only durable account
 	// this phase will ever have, and without these it began at round 1 with
 	// the pre-suspend half, the `run_sandbox` call included, gone for good.
-	//
-	// Additive within v2: a row written before these existed decodes to zero
-	// and resumes exactly as that build intended.
 	RoundsUsed     int                    `json:"rounds_used,omitempty"`
 	RoundNarration []types.RoundNarration `json:"round_narration,omitempty"`
 
@@ -120,9 +112,6 @@ type State struct {
 	// durable account of this phase, and a record whose timeline began at
 	// the resume would report the rounds before it as having taken no time
 	// and the cache as having served nothing.
-	//
-	// Additive within v2: a row written before these existed decodes to
-	// none, and the resumed record states only what it measured.
 	Rounds           []types.PhaseRound `json:"rounds,omitempty"`
 	CacheReadTokens  int                `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int                `json:"cache_write_tokens,omitempty"`
@@ -137,9 +126,6 @@ type State struct {
 	// segment would judge "exactly one" over only what it wrote itself: a
 	// turn that filed its task before launching a coding run would end
 	// having written nothing, and be charged to nothing.
-	//
-	// Additive within v2: a row written before these existed decodes to
-	// none, and resumes judging only what its second half writes.
 	Written     []types.WorkItem `json:"written,omitempty"`
 	WrittenMany bool             `json:"written_many,omitempty"`
 
@@ -155,10 +141,6 @@ type State struct {
 	// counted as a turn at all, since only the first segment counts one.
 	// When the finishing segment is charged, it pays this as well; when it
 	// is not, nothing ever is, which is what an unattributed turn is.
-	//
-	// Additive within v2: a row written before this existed decodes to nil,
-	// and resumes charging only what its second half spent — which is what
-	// that build's first half was charged, too.
 	Uncharged *Uncharged `json:"uncharged,omitempty"`
 
 	// ElapsedMS is how long this phase had already been running when it
@@ -176,10 +158,6 @@ type State struct {
 	// Milliseconds because that is the resolution the event carries, and it
 	// is a wire field: a time.Duration would serialize as a nanosecond count
 	// nothing else here speaks.
-	//
-	// Additive within v2: a row written before this existed decodes to zero,
-	// which resumes as a phase whose prior half was not measured — exactly
-	// what it was.
 	ElapsedMS int `json:"elapsed_ms,omitempty"`
 
 	// Iterations is the closed-round ledger of the suspended TURN. The
@@ -204,9 +182,6 @@ type State struct {
 	// the seat's provider at resume — resumes an agent run into a native
 	// tool loop with no messages, which rescues a turn that in fact
 	// delivered.
-	//
-	// A false value is what every earlier row decodes to and is exactly
-	// right for them: they are all native suspensions.
 	AgentRun bool `json:"agent_run,omitempty"`
 
 	// Steered is every person's note the turn had read when it suspended,
@@ -219,9 +194,6 @@ type State struct {
 	// the reviewer and any later executor iteration open fresh
 	// conversations, and without this they would be handed the task the
 	// person had corrected. See internal/agent/steer.
-	//
-	// Additive within v2: a row written before these existed decodes to
-	// none, which is what that build's turn carried.
 	Steered []string           `json:"steered,omitempty"`
 	Steers  []types.PhaseSteer `json:"steers,omitempty"`
 }
@@ -351,38 +323,25 @@ func Decode(blob map[string]any) (State, bool, error) {
 	}
 	// The version FIRST, off the raw blob, because which shape to decode
 	// into is exactly what it answers. Decoding into the current State and
-	// checking afterwards would silently zero every field an older format
-	// spells differently, and the check would then pass on a v1 blob that
-	// happened to carry a `version` this build writes.
-	version, _ := blob["version"].(float64)
-	switch int(version) {
-	case Version:
-		var s State
-		if err := json.Unmarshal(raw, &s); err != nil {
-			return State{}, false, fmt.Errorf("execstate: decode: %w", err)
-		}
-		if err := s.Validate(); err != nil {
-			return State{}, false, err
-		}
-		return s, true, nil
-	case versionV1:
-		s, err := upgradeV1(raw)
-		if err != nil {
-			return State{}, false, err
-		}
-		if err := s.Validate(); err != nil {
-			return State{}, false, err
-		}
-		return s, true, nil
-	default:
-		// LOUD, and the row is left alone. A resume that guessed at a
-		// format it does not know would act on a half-understood
-		// conversation; refusing leaves the run for a node that
-		// understands it, which in a rolling upgrade is a node that
-		// exists.
-		return State{}, false, fmt.Errorf("%w: %d (this build reads %d and %d)",
-			ErrUnknownVersion, int(version), versionV1, Version)
+	// checking afterwards would silently zero every field another format
+	// spells differently.
+	//
+	// AN UNKNOWN ONE IS LOUD, and the row is left alone. A resume that
+	// guessed at a format it does not know would act on a half-understood
+	// conversation; refusing leaves the run for a node that understands
+	// it, which in a rolling upgrade is a node that exists.
+	if version, _ := blob["version"].(float64); int(version) != Version {
+		return State{}, false, fmt.Errorf("%w: %d (this build reads %d)",
+			ErrUnknownVersion, int(version), Version)
 	}
+	var s State
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return State{}, false, fmt.Errorf("execstate: decode: %w", err)
+	}
+	if err := s.Validate(); err != nil {
+		return State{}, false, err
+	}
+	return s, true, nil
 }
 
 // Answer appends the tool result that answers the pending call, returning the
