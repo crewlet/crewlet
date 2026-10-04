@@ -19,7 +19,7 @@ import { fixtureCompany } from "./model/testkit.ts";
 import type { AddKind } from "./BuilderContext.tsx";
 import type { BuilderState } from "./model/reducer.ts";
 import { renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
-import { keyedState } from "./testState.ts";
+import { keyedState, scopedState } from "./testState.ts";
 import { pick } from "~/testing.tsx";
 
 afterEach(cleanup);
@@ -143,6 +143,20 @@ test("a human seat is added with no contact when none is typed", () => {
     handle: "new-human-seat",
     kind: "human",
   });
+});
+
+// A CONTACT IDENTITY IS HOW ANOTHER SYSTEM FINDS A PERSON, which the engine
+// refuses a lead to set on any seat, one they add included.
+test("a lead adds a person with no contact identity, and is told why none is asked for", () => {
+  const view = open(scopedState(fixtureCompany(), "engineering"), "unit:engineering", "human");
+  expect(screen.queryByLabelText("Contact")).toBeNull();
+  expect(screen.getByText(/adding one takes the config:write grant/)).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Add human seat" }));
+  expect(view.state().log.ops[0]).toMatchObject({ type: "addSeat", data: { kind: "human" } });
+  cleanup();
+
+  open(keyedState(fixtureCompany()), "unit:engineering", "human");
+  expect(screen.getByLabelText("Contact")).toBeDefined();
 });
 
 // A KEY COMES FROM THE BUILDER'S ONE SOURCE, the same that mints every write

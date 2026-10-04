@@ -6416,8 +6416,9 @@ while the screen binds the real chart, table, editor and dialogs, and
   derivation places the unit, and a problem outside the unit is said about
   the draft rather than put on whichever node sits at that path. What reaches
   outside the unit — the charter, the top level, the unit's own lead and
-  place — is refused at the reducer's recording door and drawn disabled with
-  the reason, and a refusal the engine names part by part (`403` with
+  place, and on every node the keys another system finds it by (a project, a
+  space, a channel, an email, a contact identity) — is refused at the
+  reducer's recording door and drawn disabled with the reason, and a refusal the engine names part by part (`403` with
   `refused`) is a problem on each part, not a refusal of the person. Until
   the viewer has answered, and what a reader who might lead leads is known,
   nothing is read, so a lead is never shown a refusal of the company and

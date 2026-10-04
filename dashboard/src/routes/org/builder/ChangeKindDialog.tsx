@@ -48,6 +48,7 @@ import { allSeats, handleOf, locate } from "./model/draft.ts";
 import { isMintedKey, type NodeKey } from "./model/keys.ts";
 import { fieldName, isCredentialField, kindOf, type Intent } from "./model/operations.ts";
 import { recordIntent } from "./model/reducer.ts";
+import { scopeLimit } from "./model/scope.ts";
 import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
@@ -87,6 +88,9 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
   const seat = found.node;
   const name = seat.data.name;
   const becoming = kindOf(seat.data) === "human" ? "agent" : "human";
+  // A LEAD'S DRAFT sets no contact identity (`model/scope.ts`), so it asks
+  // for none.
+  const keyLimit = scopeLimit(state.scope, state.draft, nodeKey, "key");
   const handle = handleOf(seat);
   const isFallback = becoming === "human" && datadogFallback(state.draft.company) === handle;
   const replacements = [...allSeats(state.draft)]
@@ -98,7 +102,7 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
     type: "changeKind",
     target: nodeKey,
     kind: becoming,
-    ...(becoming === "human" && contact.trim() !== ""
+    ...(becoming === "human" && keyLimit === null && contact.trim() !== ""
       ? { contact: { [identity]: contact.trim() } }
       : {}),
     ...(isFallback && routeTo !== "" ? { routeTo } : {}),
@@ -200,14 +204,16 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
       {becoming === "human" && (
         <EditorSection
           title="Contact identity"
-          hint="Optional. Without one, no agent can mention this person and they are reached through the dashboard only."
+          hint={`Optional. Without one, no agent can mention this person and they are reached through the dashboard only.${keyLimit ? ` ${keyLimit}` : ""}`}
         >
-          <ContactField
-            identity={identity}
-            value={contact}
-            onIdentity={setIdentity}
-            onValue={setContact}
-          />
+          {keyLimit === null && (
+            <ContactField
+              identity={identity}
+              value={contact}
+              onIdentity={setIdentity}
+              onValue={setContact}
+            />
+          )}
         </EditorSection>
       )}
 

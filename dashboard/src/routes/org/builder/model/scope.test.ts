@@ -8,8 +8,9 @@
  * about the whole company is moved into the draft's coordinates, and what
  * lies outside the unit is never placed on whichever node of the draft sits
  * at that path; and the parts of the draft that reach outside the unit — the
- * company's charter and top level, the unit's own place and lead — are
- * refused at the recording door with the reason, while everything inside it
+ * company's charter and top level, the unit's own place and lead, and the
+ * keys another system finds any of its nodes by — are refused at the
+ * recording door with the reason, while everything inside it
  * is recorded as for the whole company.
  */
 
@@ -241,6 +242,58 @@ describe("what a lead's draft refuses", () => {
     ]);
   });
 
+  // THE KEYS ANOTHER SYSTEM FINDS A SEAT OR UNIT BY are the company grant's
+  // on every node, one the draft adds included, since the engine judges every
+  // field an addition carries.
+  test("a key another system finds a seat or unit by, on any node", () => {
+    const KEY =
+      "Another system finds a seat or unit by this, so setting or changing it takes the config:write grant.";
+    const withKeys = builderReducer(INITIAL_BUILDER, {
+      type: "load",
+      mode: "edit",
+      document: scopedDocument("Acme", {
+        ...ENGINEERING,
+        roles: [...ENGINEERING.roles!, { name: "Ops", handle: "ops", project: "OPS" }],
+      } as unknown as Record<string, unknown>),
+      revision: "r1",
+      scope: "eng",
+    });
+    for (const intent of [
+      { type: "updateSeat", target: seatKey("qa"), set: [{ path: ["email"], value: "q@x.io" }] },
+      { type: "updateSeat", target: seatKey("qa"), set: [{ path: ["project"], value: "QA" }] },
+      { type: "updateUnit", target: unitKey("tools"), set: [{ path: ["channel"], value: "t" }] },
+      { type: "updateUnit", target: top, set: [{ path: ["space"] }] },
+      {
+        type: "addSeat",
+        key: "new:p",
+        placement: { parent: top, after: null },
+        data: { name: "Pat", handle: "pat", kind: "human", contact: { github_login: "pat" } },
+      },
+      {
+        type: "addUnit",
+        key: "new:u",
+        placement: { parent: top, after: null },
+        data: { name: "Infra", id: "infra", project: "INF" },
+      },
+      { type: "changeKind", target: seatKey("qa"), kind: "human", contact: { github_login: "q" } },
+      { type: "replaceSeat", target: seatKey("ops"), key: "new:o", handle: "operations" },
+    ] as const) {
+      const answer = recordIntent(withKeys, intent);
+      expect(answer.ok ? null : [answer.refusal, answer.message], intent.type).toEqual([
+        "scope",
+        KEY,
+      ]);
+    }
+    // The control: the same gestures without a key are a lead's.
+    for (const intent of [
+      { type: "updateSeat", target: seatKey("qa"), set: [{ path: ["goal"], value: "Test" }] },
+      { type: "changeKind", target: seatKey("qa"), kind: "human" },
+      { type: "replaceSeat", target: seatKey("qa"), key: "new:q", handle: "quality" },
+    ] as const) {
+      expect(recordIntent(withKeys, intent), intent.type).toMatchObject({ ok: true });
+    }
+  });
+
   test("everything inside the unit is recorded as for the whole company", () => {
     for (const intent of [
       { type: "updateSeat", target: seatKey("qa"), set: [{ path: ["goal"], value: "Test" }] },
@@ -260,5 +313,6 @@ describe("what a lead's draft refuses", () => {
   test("a whole company's draft has no such limit", () => {
     expect(scopeLimit(null, state.draft, COMPANY_KEY, "edit")).toBeNull();
     expect(scopeLimit(null, state.draft, top, "lead")).toBeNull();
+    expect(scopeLimit(null, state.draft, top, "key")).toBeNull();
   });
 });

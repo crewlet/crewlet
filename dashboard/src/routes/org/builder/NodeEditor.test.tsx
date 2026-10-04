@@ -241,6 +241,33 @@ describe("a lead's draft of one unit", () => {
     edit(scopedState(fixtureCompany(), "engineering"), "unit:platform");
     expect(disabled(field("Lead"))).toBe(false);
   });
+
+  // THE KEYS ANOTHER SYSTEM FINDS A NODE BY are the company grant's on every
+  // node of the draft, so they are drawn and never edited, with the reason.
+  test("a key another system finds a seat or unit by is fixed, with the reason", () => {
+    const reason =
+      /Another system finds a seat or unit by this, so setting or changing it takes the config:write grant\./;
+    edit(scopedState(fixtureCompany(), "engineering"), "unit:platform");
+    for (const label of ["Channel", "Tracker project", "Knowledge space"]) {
+      expect(disabled(field(label)), label).toBe(true);
+    }
+    expect(screen.getAllByText(reason).length).toBeGreaterThan(0);
+    expect(disabled(field("Purpose"))).toBe(false);
+    cleanup();
+
+    edit(scopedState(fixtureCompany(), "engineering"), "seat:dev");
+    for (const label of ["Email", "Tracker project", "Knowledge space"]) {
+      expect(disabled(field(label)), label).toBe(true);
+    }
+    expect(disabled(field("Goal"))).toBe(false);
+    cleanup();
+
+    edit(keyedState(fixtureCompany()), "seat:dev");
+    for (const label of ["Email", "Tracker project", "Knowledge space"]) {
+      expect(disabled(field(label)), label).toBe(false);
+    }
+    expect(screen.queryByText(reason)).toBeNull();
+  });
 });
 
 /*

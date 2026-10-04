@@ -23,15 +23,16 @@
  * AND WHAT REACHES OUTSIDE IT IS REFUSED HERE FIRST ([scopeLimit]). The
  * engine refuses a lead every change outside what they lead; the parts of the
  * draft that are outside are few and known — the company's charter and
- * settings, its top level, and the unit's own place and lead, which decide who
- * leads it — so the builder disables those controls with the reason and
- * refuses the operation at its recording door, rather than letting a lead
- * build a draft the engine will only refuse.
+ * settings, its top level, the unit's own place and lead, which decide who
+ * leads it, and the KEYS another system finds a seat or unit by ([KEYED]),
+ * which no two documents can say who else holds — so the builder disables
+ * those controls with the reason and refuses the operation at its recording
+ * door, rather than letting a lead build a draft the engine will only refuse.
  */
 
 import type { CompanyDocument, ConfigUnit, Derived } from "~/protocol/index.ts";
 import { pathOfSegments, type Segment } from "./document.ts";
-import type { Draft } from "./draft.ts";
+import { locate, type Draft } from "./draft.ts";
 import { isRecord } from "./json.ts";
 import { COMPANY_KEY, type NodeKey } from "./keys.ts";
 import type { Intent } from "./operations.ts";
@@ -148,10 +149,32 @@ export function scopedTransport(
 /**
  * What about a node a lead's draft may not change: the company's own charter
  * and settings (`edit` of the company), anything at its top level (`add`
- * under the company), and the unit's own place and lead (`place` and `lead`
- * of the draft's one top-level unit).
+ * under the company), the unit's own place and lead (`place` and `lead`
+ * of the draft's one top-level unit), and any node's [KEYED] fields (`key`).
  */
-export type ScopedChange = "edit" | "add" | "place" | "lead";
+export type ScopedChange = "edit" | "add" | "place" | "lead" | "key";
+
+/**
+ * The fields another system finds a seat or a unit by, which the engine
+ * refuses a lead to set, clear or change on any node, an added one included
+ * (`config.DiffOrg`'s `keyed`): a tracker project and a knowledge space
+ * outlive the unit declaring them, a channel routes to its unit, and a vendor
+ * attributes by an address or an account id.
+ */
+export const KEYED = {
+  seat: ["contact", "email", "project", "space"],
+  unit: ["channel", "project", "space"],
+} as const;
+
+/** Whether `data` holds any of `kind`'s [KEYED] fields. */
+function holdsKeyed(data: Readonly<Record<string, unknown>>, kind: "seat" | "unit"): boolean {
+  return KEYED[kind].some((field) => data[field] !== undefined);
+}
+
+/** Whether a field set writes one of `kind`'s [KEYED] fields. */
+function writesKeyed(set: readonly { readonly path: readonly string[] }[], kind: "seat" | "unit") {
+  return set.some((f) => (KEYED[kind] as readonly string[]).includes(f.path[0] ?? ""));
+}
 
 /**
  * Why a draft scoped to one unit may not make `change` to `key`, or `null`
@@ -178,6 +201,9 @@ export function scopeLimit(
   if (top !== undefined && key === top.key && change === "lead") {
     return `${name}'s own lead decides who may change it, so changing it takes the config:write grant.`;
   }
+  if (change === "key") {
+    return "Another system finds a seat or unit by this, so setting or changing it takes the config:write grant.";
+  }
   return null;
 }
 
@@ -191,8 +217,29 @@ export function outsideScope(scope: string | null, draft: Draft, intent: Intent)
     case "applyTemplate":
       return limit(COMPANY_KEY, "edit");
     case "addSeat":
+      return (
+        limit(intent.placement.parent, "add") ??
+        (holdsKeyed(intent.data, "seat") ? limit(intent.key, "key") : null)
+      );
     case "addUnit":
-      return limit(intent.placement.parent, "add");
+      return (
+        limit(intent.placement.parent, "add") ??
+        (holdsKeyed(intent.data, "unit") ? limit(intent.key, "key") : null)
+      );
+    case "updateSeat":
+      return writesKeyed(intent.set, "seat") ? limit(intent.target, "key") : null;
+    case "updateUnit":
+      return writesKeyed(intent.set, "unit") ? limit(intent.target, "key") : null;
+    case "changeKind":
+      return intent.contact !== undefined ? limit(intent.target, "key") : null;
+    // The new seat is an ADDITION carrying the old one's fields, its keys
+    // included, and the engine judges every field an addition carries.
+    case "replaceSeat": {
+      const found = locate(draft, intent.target);
+      return found?.kind === "seat" && holdsKeyed(found.node.data, "seat")
+        ? limit(intent.target, "key")
+        : null;
+    }
     case "remove":
     case "reorder":
       return limit(intent.target, "place");

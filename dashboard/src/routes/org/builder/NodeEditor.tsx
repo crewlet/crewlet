@@ -475,6 +475,7 @@ function Owns({
   onSpace,
   errorFor,
   disabled,
+  keyLimit,
 }: {
   who: "seat" | "unit";
   project: string;
@@ -483,23 +484,22 @@ function Owns({
   onSpace: (next: string) => void;
   errorFor: (path: readonly Segment[]) => string | undefined;
   disabled: boolean;
+  /** Why a lead's draft may not change either (`model/scope.ts`), or `null`. */
+  keyLimit: string | null;
 }) {
+  const meaning =
+    who === "unit"
+      ? "Where unrouted work for this unit goes and where it files its pages. Not a permission."
+      : "Where unrouted work for this seat goes and where it files its pages, for a seat at the top level. A seat inside a unit takes its unit's. Not a permission.";
   return (
-    <EditorSection
-      title="Owns"
-      hint={
-        who === "unit"
-          ? "Where unrouted work for this unit goes and where it files its pages. Not a permission."
-          : "Where unrouted work for this seat goes and where it files its pages, for a seat at the top level. A seat inside a unit takes its unit's. Not a permission."
-      }
-    >
+    <EditorSection title="Owns" hint={keyLimit ? `${meaning} ${keyLimit}` : meaning}>
       <ConfigField
         label="Tracker project"
         kind="id"
         value={project}
         onChange={onProject}
         required={false}
-        disabled={disabled}
+        disabled={disabled || keyLimit !== null}
         error={errorFor(PROJECT)}
       />
       <ConfigField
@@ -508,7 +508,7 @@ function Owns({
         value={space}
         onChange={onSpace}
         required={false}
-        disabled={disabled}
+        disabled={disabled || keyLimit !== null}
         error={errorFor(SPACE)}
       />
     </EditorSection>
@@ -664,9 +664,11 @@ function UnitEditor({
   const { refusal, apply } = useApply(api, key, onClose);
   const { errorFor, rest } = placeOnFields(placedOn(api, key), unitFieldPaths(unit.data));
   const disabled = api.readOnly;
-  // A LEAD'S OWN UNIT keeps its lead, which decides who may change the unit
+  // A LEAD'S OWN UNIT keeps its lead, which decides who may change the unit,
+  // and every unit keeps the keys another system finds it by
   // (`model/scope.ts`); every other field stays theirs to edit.
   const leadLimit = scopeLimit(state.scope, state.draft, key, "lead");
+  const keyLimit = scopeLimit(state.scope, state.draft, key, "key");
 
   // What the unit inherits when it declares nothing: the lead and channel the
   // unit above it resolved to, as the last check reported them.
@@ -782,12 +784,13 @@ function UnitEditor({
           value={form.channel}
           onChange={(channel) => set({ channel })}
           required={false}
-          disabled={disabled}
+          disabled={disabled || keyLimit !== null}
           placeholder={inheritedChannel}
           help={
-            inheritedChannel && parent
+            keyLimit ??
+            (inheritedChannel && parent
               ? `Empty inherits ${inheritedChannel} from ${parent.data.name}.`
-              : "A unit below that names no channel inherits this one."
+              : "A unit below that names no channel inherits this one.")
           }
           error={errorFor(["channel"])}
         />
@@ -812,6 +815,7 @@ function UnitEditor({
         onSpace={(space) => set({ space })}
         errorFor={errorFor}
         disabled={disabled}
+        keyLimit={keyLimit}
       />
 
       <ScheduleToggles
@@ -910,6 +914,9 @@ function SeatEditor({
     seatFieldPaths(company, data, { human, minted }),
   );
   const disabled = api.readOnly;
+  // A LEAD'S DRAFT keeps the keys another system finds a seat by
+  // (`model/scope.ts`), on a seat it added as on a saved one.
+  const keyLimit = scopeLimit(state.scope, state.draft, key, "key");
   const handleProblem = minted
     ? identityProblemOf(takenIdentities(state, api.identities), "seat", form.handle, initial.handle)
     : null;
@@ -965,7 +972,8 @@ function SeatEditor({
         value={form.email}
         onChange={(email) => set({ email })}
         required={false}
-        disabled={disabled}
+        disabled={disabled || keyLimit !== null}
+        help={keyLimit ?? undefined}
         error={errorFor(["email"])}
       />
       <ConfigField
@@ -1021,7 +1029,7 @@ function SeatEditor({
       {human ? (
         <EditorSection
           title="Contact"
-          hint="How agents mention and reach the person, and how their activity is attributed. Optional: with none, the person is reached through the dashboard only."
+          hint={`How agents mention and reach the person, and how their activity is attributed. Optional: with none, the person is reached through the dashboard only.${keyLimit ? ` ${keyLimit}` : ""}`}
         >
           {CONTACT_IDENTITIES.map(({ key: identity, label }) => (
             <ConfigField
@@ -1031,7 +1039,7 @@ function SeatEditor({
               value={form.contact[identity]}
               onChange={(value) => set({ contact: { ...form.contact, [identity]: value } })}
               required={false}
-              disabled={disabled}
+              disabled={disabled || keyLimit !== null}
             />
           ))}
           {errorFor(["contact"]) && (
@@ -1101,6 +1109,7 @@ function SeatEditor({
           onSpace={(space) => set({ space })}
           errorFor={errorFor}
           disabled={disabled}
+          keyLimit={keyLimit}
         />
       )}
       {!human && <DocumentFacts data={data} handle={handle} />}

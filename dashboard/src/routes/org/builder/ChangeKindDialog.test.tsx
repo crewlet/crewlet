@@ -19,7 +19,7 @@ import { builderReducer, type BuilderState } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import { toDocument } from "./model/document.ts";
 import { renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
-import { keyedState } from "./testState.ts";
+import { keyedState, scopedState } from "./testState.ts";
 import { pick } from "~/testing.tsx";
 
 afterEach(cleanup);
@@ -133,6 +133,18 @@ test("a human seat is made with no contact identity, or with the one typed, in o
     contact: { github_login: "dev" },
   });
   expect(view.onClose).toHaveBeenCalledTimes(1);
+});
+
+// A CONTACT IDENTITY IS HOW ANOTHER SYSTEM FINDS A PERSON, which the engine
+// refuses a lead to set.
+test("a lead's draft asks for no contact identity, and says why", () => {
+  open(scopedState(fixtureCompany(), "engineering"), "seat:dev");
+  expect(screen.queryByLabelText("Contact")).toBeNull();
+  expect(
+    screen.getByText(
+      /Another system finds a seat or unit by this, so setting or changing it takes the config:write grant\./,
+    ),
+  ).toBeDefined();
 });
 
 test("the Datadog fallback cannot become a human seat without a replacement", () => {

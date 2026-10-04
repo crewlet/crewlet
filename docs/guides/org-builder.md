@@ -814,9 +814,12 @@ naming each part, and the builder marks each on the seat or unit it is about:
   unit inside it stays the lead's to change;
 - a lead or a `manages` entry naming a seat outside the units the caller leads;
 - a value another system finds a seat or a unit by — a project, a knowledge
-  space, a channel, a contact identity — and every credential, a `${VAR}`
+  space, a channel, an email address, a contact identity — on any seat or
+  unit, one the draft adds included, and every credential, a `${VAR}`
   anywhere and a tool server's `mcp_env` block included. These take
-  `config:write`.
+  `config:write`. The builder draws the first kind disabled with the reason,
+  asks for no contact identity when a lead adds a person or makes a seat
+  human, and refuses to replace a seat that holds one.
 
 A lead reads no revision history, which takes `config:read`. A save whose
 answer is lost is settled by reading the unit back: still on the base

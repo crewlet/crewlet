@@ -45,6 +45,7 @@ import { handleProblem, mintHandle, mintUnitKey, unitKeyProblem } from "./model/
 import { COMPANY_KEY, mintKey, type NodeKey } from "./model/keys.ts";
 import type { Intent } from "./model/operations.ts";
 import { recordIntent } from "./model/reducer.ts";
+import { scopeLimit } from "./model/scope.ts";
 import { PlusGlyph } from "@crewlethq/icons/glyphs";
 import { Button, Modal, SegmentedControl } from "@crewlethq/ui";
 
@@ -134,6 +135,8 @@ interface AddForm {
   setIdentity: (next: HumanContactKey) => void;
   contact: string;
   setContact: (next: string) => void;
+  /** Why a lead's draft asks for no contact identity (`model/scope.ts`), or `null`. */
+  contactLimit: string | null;
   refusal: string | null;
   /** The reason nothing can be recorded, drawn wherever the form is drawn. */
   missingParent: boolean;
@@ -166,6 +169,7 @@ function useAddNode({ parent, kind: initialKind = "agent", onClose }: AddProps):
   const [identity, setIdentity] = useState<HumanContactKey>("slack_user_id");
   const [contact, setContact] = useState("");
   const [refusal, setRefusal] = useState<string | null>(null);
+  const contactLimit = scopeLimit(state.scope, state.draft, parentKey, "key");
 
   const trimmed = name.trim();
   const address =
@@ -192,7 +196,7 @@ function useAddNode({ parent, kind: initialKind = "agent", onClose }: AddProps):
       const data: ConfigRole = { name: trimmed, handle: address };
       if (kind === "human") {
         data.kind = "human";
-        if (contact.trim()) data.contact = { [identity]: contact.trim() };
+        if (contactLimit === null && contact.trim()) data.contact = { [identity]: contact.trim() };
       }
       intent = { type: "addSeat", key, placement, data };
     }
@@ -234,6 +238,7 @@ function useAddNode({ parent, kind: initialKind = "agent", onClose }: AddProps):
     setIdentity,
     contact,
     setContact,
+    contactLimit,
     refusal,
     missingParent,
     readOnly: api.readOnly,
@@ -280,20 +285,26 @@ function AddNodeFields({ form }: { form: AddForm }) {
         error={form.addressProblem ?? undefined}
       />
       {form.kind === "unit" && <UnitTypeField value={form.type} onChange={form.setType} />}
-      {form.kind === "human" && (
-        <>
-          <ContactField
-            identity={form.identity}
-            value={form.contact}
-            onIdentity={form.setIdentity}
-            onValue={form.setContact}
-          />
+      {form.kind === "human" &&
+        (form.contactLimit === null ? (
+          <>
+            <ContactField
+              identity={form.identity}
+              value={form.contact}
+              onIdentity={form.setIdentity}
+              onValue={form.setContact}
+            />
+            <p className="t-caption">
+              Optional. Without one, no agent can mention this person and they are reached through
+              the dashboard only. It can be added here or later in the seat's editor.
+            </p>
+          </>
+        ) : (
           <p className="t-caption">
-            Optional. Without one, no agent can mention this person and they are reached through the
-            dashboard only. It can be added here or later in the seat's editor.
+            The person is reached through the dashboard only. A contact identity is how another
+            system finds them, so adding one takes the config:write grant.
           </p>
-        </>
-      )}
+        ))}
     </>
   );
 }
