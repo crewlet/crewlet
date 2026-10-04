@@ -20,9 +20,8 @@ import (
 // publishes a decision, and when it resolves an append whose answer was lost —
 // and both times the question is the same: can this node's operation ledger
 // vouch for it? It cannot for an operation minted before the ledger's own
-// watermark — the instant before which it may have lost rows, to its
-// retention sweep or to a snapshot adopted from a donor that scrubbed its
-// ledger ([Rows.LostBefore]) — see [Publisher.vouches]. An operation id is
+// watermark — the instant before which it may have lost rows to its
+// retention sweep ([Rows.LostBefore]) — see [Publisher.vouches]. An operation id is
 // minted ONCE and
 // reused by every retry of the operation, including retries in another call,
 // another run of the same turn and another process on another node. So "when
@@ -245,8 +244,8 @@ func OpMintedAt(opID string) (time.Time, bool) {
 // the publisher reads it to decide whether its ledger can vouch for the retry
 // ([OpMintedAt]). One with no instant is read as older than every loss the
 // ledger has had — a retention sweep that deleted anything, which every
-// deployment older than the ledger's retention has had, or a snapshot adopted
-// from a donor that scrubbed its ledger — and such a write is answered
+// deployment older than the ledger's retention has had — and such a write is
+// answered
 // `unknown` without being published, on the first attempt as on every retry:
 // an operation that can never run and never says why. A client that mints its
 // own — the command line, the dashboard — mints through this grammar's layout,

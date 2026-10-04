@@ -488,14 +488,7 @@ below the published floor whose missing records the log still holds reports
 **An adoption carries the operation ledger with it.** The ledger — the table
 that says which operations have already been applied — travels inside the
 snapshot, so the adopted node answers a retry of anything its donor applied
-from it, and files work that was queued before the join like any other. The one
-exception is a donor on an **older build**, which scrubbed its ledger out of the
-snapshot: the joining node records the join as the point before which its
-ledger may have lost rows, so a retry of older work there — a turn re-run
-whose work began before the join, an operator repeating an older `-op-id` —
-answers `unknown` (and logs `statelog_write_unvouched`) rather than risk
-applying it twice, until it is retried on a node that did not adopt from the
-older peer. Upgrading the fleet ends it. See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted).
+from it, and files work that was queued before the join like any other. See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted).
 
 ### A node a peer re-anchored past
 

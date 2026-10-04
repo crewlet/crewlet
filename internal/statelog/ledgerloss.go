@@ -21,21 +21,9 @@ import (
 // THE SWEEP deletes rows applied more than [OpsRetention] ago and records its
 // cutoff in the transaction that deletes them ([tables.purgeOps]).
 //
-// AN ADOPTION NORMALLY LOSES NOTHING. The ledger TRAVELS inside a snapshot
+// AN ADOPTION LOSES NOTHING. The ledger TRAVELS inside a snapshot
 // ([Domain.OpsTable]) and so does the watermark, so the adopter holds the
-// donor's rows and inherits how far back the donor had lost any. The exception
-// is a donor that SCRUBBED its ledger, which is what every build did before
-// the ledger travelled and what an older peer still does during a rolling
-// upgrade: its manifest names the ledger among what it scrubbed, and the
-// adopter writes the join's own start into the ARTEFACT before installing it
-// ([Adopter.Join]) — so the loss and the file that has it are one rename, and
-// a join interrupted on either side of that rename leaves a watermark that
-// describes whichever file is live.
-//
-// A NODE THAT ADOPTED UNDER SUCH A BUILD, and has been upgraded since, holds a
-// ledger that lost rows and a watermark that does not say so. Its adoption
-// history does, in the node estate; [FoldLegacyAdoptions] carries it into the
-// watermark once, at boot, before anything publishes.
+// donor's rows and inherits how far back the donor had lost any.
 
 // ledgerWriter is the one thing [RecordLedgerLoss] needs of an estate.
 type ledgerWriter interface {

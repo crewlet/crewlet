@@ -229,15 +229,6 @@ hour ago is answered `unknown`, while every other identity operation — an
 invitation's redemption, a create retried under its key, a token's mint — is
 still vouched for over the whole thirty days.
 
-During a rolling upgrade a node can adopt from a **peer on an older build**,
-whose snapshot arrives without its ledger — older builds scrubbed it. The
-joining node then records the join itself as the watermark, before it installs
-the file: on that node, an operation minted before the join is answered
-`unknown` until it is retried on a node that did not adopt from the older peer,
-and anything minted after it is unaffected. A node upgraded in place after
-adopting under an older build carries that adoption into its watermark once,
-when it first boots.
-
 What decides it is the instant the operation was **minted**, and that instant
 travels inside the operation id itself: every id the engine mints is a
 time-ordered one whose leading bits are its mint time, followed by a name
@@ -795,7 +786,7 @@ replication:
 | `statelog_record_gated` | `WARN` | A durable record applied nowhere, naming the gate — `abandoned` for a record written in a generation a reanchor skipped because only an evicted peer held it ([retention](retention.md#a-node-a-peer-re-anchored-past)), and `overtaken` for one a node wrote in the old generation after a restored reanchor's own record, before it learned of the move ([retention](retention.md#re-anchoring-a-recreated-or-restored-log)). |
 | `statelog_write_gated` | `WARN` | The same, seen by the write that published it. |
 | `statelog_publish_unknown` | `WARN` | A write could not tell whether its record landed. The operation id is in the line; retry under that id, never a fresh one. |
-| `statelog_write_unvouched` | `WARN` | A write was answered `unknown` rather than published or refused (a `refusal` field says what the decision refused), because its operation was minted (`minted_at`) before this node's operation ledger may have lost rows — to the ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older build, which arrives without its ledger — and the ledger holds no row to say whether it already landed. Retrying on this node answers the same; a node whose ledger lost nothing that far back can answer it, and the operation's own record — if it landed — is on the log. |
+| `statelog_write_unvouched` | `WARN` | A write was answered `unknown` rather than published or refused (a `refusal` field says what the decision refused), because its operation was minted (`minted_at`) before this node's operation ledger may have lost rows to its thirty-day sweep, and the ledger holds no row to say whether it already landed. Retrying on this node answers the same; a node whose ledger lost nothing that far back can answer it, and the operation's own record — if it landed — is on the log. |
 | `statelog_reanchor_started`, `statelog_reanchored` | `WARN` | A generation transition of ONE domain. Both name the domain (`domain`), the one stream it moved (`stream`), the new generation, the stream's live creation instant (`stream_created_at`), the case (`case`: `recreated`, followed from its first surviving record; `restored`, followed from its end; or `abandoned`, followed from this node's own checkpoint with the records of the generation an evicted peer held void) and the new checkpoint (`cursor`); the start also names the instant the rows were keyed to before (`keyed_to`), this node's checkpoint (`position`) and where the log ends (`last_seq`) and the generation its rows stood at (`from_generation` — every generation strictly between it and the new one is abandoned), and the completion gives the stream's high-water mark before the reanchor (`prev_last_seq_seen`). A restored reanchor the operator ran with `-discard` names, on the start as `discarding` and on the completion as `discarded`, the sequence of the newest record written after the restore that it applied on no node (0 when it discarded none). No other domain's checkpoint moves, and the domain's applier resumes without a restart. |
 
 The snapshotter, the donor and the adopter write under the same component. The

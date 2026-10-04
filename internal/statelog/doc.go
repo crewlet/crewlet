@@ -105,10 +105,8 @@
 // # An operation id carries the instant it was minted
 //
 // Layer 1 has a hole the other two cannot fill: the ops table can LOSE ROWS.
-// The retention sweep deletes every row applied more than [OpsRetention] ago,
-// and a snapshot adopted from a donor that scrubbed its ledger — every build
-// before the ledger travelled — arrives with none of the donor's. A retry of
-// such an operation — a turn re-run under its derived id, a caller repeating
+// The retention sweep deletes every row applied more than [OpsRetention] ago.
+// A retry of such an operation — a turn re-run under its derived id, a caller repeating
 // an `unknown` — finds no row, decides again on rows that already hold the
 // first application, and publishes a second copy the broker has no reason to
 // refuse: the expectation is current and the duplicate window long past.
