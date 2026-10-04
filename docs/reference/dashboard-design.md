@@ -706,9 +706,8 @@ factor, new recovery codes and both sign-outs; see
 dashboard keeps in browser storage is declared in one table
 (`lib/storage.ts`), and a key no build reads any more is listed there as
 retired and removed at boot, so a stale value does not sit in a reader's
-profile for ever — a bearer token an earlier build kept there
-(`crewlet_api_token`) among them, since the session cookie is now the only
-credential the dashboard has. The zone is the one every timestamp is drawn in AND the one a day is
+profile for ever. The session cookie is the only credential the dashboard
+has, and nothing of it is in browser storage. The zone is the one every timestamp is drawn in AND the one a day is
 filed in — a calendar cell and a timeline column are the chosen zone's date, so
 a task stamped "Sep 23" is never in the cell for the 22nd — while a day's
 arithmetic (the grid, the span between two dates) is civil and moves with no
@@ -766,7 +765,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs | `window=7d\|30d\|90d\|<from>/<to>` |
 | `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by a `config:write` holder), and what is refusing. ONE address: Settings lists it as a cross-link | |
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
-| `#/settings/people` | **People & access** — the identity directory read-only: every person with their stage, login, grants and the seat they are bound to, their credentials and sessions, the directory's own report (`/iam/check`), the human seats nobody holds or no agent can reach (`/chart/check`, the one card that takes `audit:read` alone), and this node's API token labels joined to the rows that bind them (`/iam/node-tokens`). Never a value *(needs `people:manage` or `audit:read`)*. No tail: a person's page is their seat | |
+| `#/settings/people` | **People & access** — the identity directory read-only: every person with their stage, login, grants and the seat they are bound to, their credentials and sessions, the directory's own report (`/iam/check`), every human seat with whoever holds it (`/iam/seats`), and this node's API token labels joined to the rows that bind them (`/iam/node-tokens`). Never a value *(needs `people:manage` or `audit:read`)*. No tail: a person's page is their seat | |
 | `#/settings/integrations` · `#/settings/integrations/{kind}` | **Integrations** *(needs `config:read`)* | |
 | `#/settings/tools` · `#/settings/tools/{tool}` · `#/settings/tools/servers/{name}` | **Tools & MCP** — every MCP server with what each node did with it, and every tool a seat can call, by origin. Not guarded: the registry is a push every reader gets. Two things on it take `config:read`, and each says so in its own place: the servers' status (`mcp_servers_status`), and which seats hold a server's tools, which is the pushed org's `tool_sources` and reaches only a reader holding that grant. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` · `add=server` (the add form) |
 | `#/settings/models` · `#/settings/models/{id}` | **Models & keys** — every `providers.llm` entry, the keys it rotates through by variable name, which a vendor is refusing and when each comes back (`credential_pool`), and the seats whose chain names it; one model's keys whole and its seats, and its **Edit** *(needs `config:read`; the edit `config:write`)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
@@ -839,29 +838,24 @@ unless flagged or empty, and then the id — and every link, peek, `[`/`]` step,
 `itemPath` for the route and an adapter per row shape (`subjectItem`,
 `noticeItem`, `checklistTask`, `linkedItem`, `detailItem`) so no screen pairs
 an id with the wrong flag. A project's route is `projectPath` for the same reason: no route
-into the tracker is spelled at the call site. `app/source.test.ts` fails a
-screen that builds an item's route, its `{ kind: "item", id }` reference, its
-selection or a tool call's `item:` out of a key field, because every one of
-those was written that way on every tracker screen and each opened the claimant
-from both of a pair. The key is still what a row SHOWS — the address decides
-where it goes, never what it is called — and the item page marks a flagged task
-**Key shared**, so a reader holding two tabs headed `ENG-7` can tell which is
-which and why one of their addresses is a uuid.
+into the tracker is spelled at the call site. `routes/work/collision.test.tsx`
+clicks each of a pair in every shape the work list draws and reads where it
+went, because every shape built its link, its peek, its stepper and its "this
+is the open one" check out of the key, and each opened the claimant from both
+of a pair. The key is still what a row SHOWS — the address decides
+where it goes, never what it is called.
 
 **A turn's task is asked for by its id.** A turn's work item
 (`work_item{backend, id, key, project}`) is what the turn was charged to, not a
 tracker row, so it carries no `key_collision` — and a turn on the task that did
-NOT claim its key, asked for by the key, was numbered, titled and opened as its
-neighbour. So a native task is ASKED for by its id (`work_item`,
-`work_item_turns`), NUMBERED only from an answer about that id (an answer still
-held for the task the seat was on a moment ago names the wrong task while the
-seat moves), and OPENED through `itemAddress` once a read of it has carried the
-flag, by its id until then; a vendor's item, whose id is the vendor's, keeps
-its key. The rule is written once — `taskAsked`, `answersFor` and `taskPath`
-in `routes/live/trace/useTurnOrdinal.ts` — and the seat profile's **Current
-turn** card, the seat peek's "Turn N", and the turn page's ordinal and its
-**Open task** (which reads nothing that carries the flag, so it opens by the id)
-all follow it.
+NOT claim its key, asked for by the key, was titled, numbered and opened as its
+neighbour. So a native task is asked for and opened by its id (`turnItem` in
+`lib/work.ts`), an answer about it is matched to the question by either name
+(`answersAddress`), and once an answer has carried the flag the task is opened
+through `itemAddress`; a vendor's item, whose id is the vendor's, keeps its
+key. The seat profile's **Current turn** card, the seat peek's "Turn N", the
+turn page's ordinal and its **Open task**, and an Inbox decision about a
+parked run or a stopped seat all follow it.
 
 ### `window=` — one vocabulary for every time range
 
@@ -914,41 +908,11 @@ pressed Back means the narrower one.
 The two edges reach the engine as the half-open `since`/`until` pair every
 windowed question takes — except on Spend, whose named windows are whole
 company days the engine cuts on the company's clock, so the screen sends
-`days` and offers no interval of two instants. Everywhere else the edges of a
-named range are a function of WHEN they are read — so where they are read is
-the whole design:
-
-- **A chart's are its column's.** They are rounded **up to the bucket it
-  draws**, so the hour in progress is on the chart while it is still being
-  spent, and the chart reads the clock AS that edge (`useTimeRange`): it
-  renders, and its question changes, when a column rolls and at no other time.
-- **A list's are its ask's.** A list holds the window as CHOSEN (`useWindow`
-  — `7d`, or a reader's two instants, and no clock at all), and `useQuery`'s
-  `window` option computes the edges at the instant it asks — the first ask,
-  every poll, a refetch, a reconnect — so its newest row is the newest as of
-  the ask and the question is keyed on `7d`, not on its edges. Read at render
-  off the one-second clock they were a new pair of instants every second: the
-  audit asked the tracker for its feed once a second where its poll said once
-  a minute and drew every row it held again each time, and a test that moved
-  its clock a minute in one step re-keyed the question sixty times in a row,
-  which React refuses as "Maximum update depth exceeded". What else a list
-  narrows in the browser is cut from below to where the engine was last asked
-  to begin (`asked`), so the two halves cannot disagree about where the window
-  starts — and from above only where the window has an end of its own, a
-  reader's two instants. A named range ends now: the top edge of an ask is
-  only the instant it was made, and a row another source answers with after
-  it is inside the window. Cut there, the audit hid every revision, page
-  change and credential written after the tracker's last ask until the
-  tracker was asked again, and for ever once a refusal no wait clears had
-  stopped its poll.
-- **A list drawn under its own axis takes the axis's.** The event log's rows
-  and its bars are one window on the bars' bucket: run to the second against
-  an axis run to the column, the oldest bar counted rows the list had already
-  cut. The top edge rounded up asks the store for rows that are not there
-  yet, which is no row at all.
-
-An interval never moves at all — it is the one window that is stable to link
-to.
+`days` and offers no interval of two instants. A chart's edges are rounded **up to the bucket it
+draws**, so the hour in progress is on the chart while it is still being spent
+and the query changes once per column rather than once per second; a list's are
+not. An interval never moves at all — it is the one window that is stable to
+link to.
 
 ### Every list is one grid
 
@@ -1037,131 +1001,6 @@ link to a sorted screen would mean something different depending on which table
 the reader had touched. A name rather than an index, because an index is a fact
 about the source order and inserting a grid above would move every link's
 meaning by one.
-
-**A row is drawn when something it draws has changed, and at no other time.**
-Each row is a memoised component handed only values it draws — its object, the
-column list, an element id made from its KEY, whether it is the cursor,
-selected or failed, its link — and one click handler the grid keeps stable
-through a ref, since every screen hands `onRowActivate` a fresh closure. So a
-`j` draws the row it leaves and the row it lands on, and a screen rendering for
-a reason of its own draws no row. The rows were built inline in the grid's
-render, which drew all of them for anything at all: a `j` on a hundred-row grid
-drew a hundred rows, and a screen's own render drew every row of every grid on
-it — 169–268 ms for two hundred-row grids under the development build. It pays
-only where a caller's column list stays the same between renders, because a
-list built inline is rightly a new value to every row on every render and
-draws every row exactly as before — which is what twenty-seven grids on twenty
-screens did: the turns list drew its two hundred rows whenever a seat's live
-state moved (62–100 ms) and whenever a poll changed one turn (106–140 ms).
-
-**So every grid's columns hold still, and a source gate says so.** A list that
-closes over nothing on its screen is a module constant; one that does is a
-`useMemo` on exactly what it reads — the chart's answer about a seat, a
-reference index, whether a pass list spans several surfaces — and never on an
-answer that every poll replaces: the fleet's node table reads the node this is
-and the activated epoch as two values rather than the answer they came in, and
-the schedules table carries each schedule's last fire ON ITS ROW rather than
-reading it from a map beside it. A value a list closes over that is derived
-afresh from rows — the re-run counts the turns, cost and seat-cost tables
-mark (`lib/reruns.ts`, which keeps only the triggers that ran more than once,
-since every new turn is otherwise a new key), the phases the spend bars are
-split into, the work grid's id-to-key lookup — goes through `useShared`, so it
-moves only when its content does. The work list's own context was a
-`useMemo` that held nothing: built from the screen's `chrome`, an object
-literal made every render, so every row of the list drew on every render and
-every poll (80–147 ms for a hundred rows) and now draws the one that changed.
-`app/source.test.ts` refuses a grid handed anything but a name its file
-declares at module scope or with `useMemo`; a `useMemo` whose dependencies
-move on every render passes it and is the same defect, which the turns, audit
-and work list suites catch by counting the rows a poll draws.
-
-**A row is never told its place.** A feed is newest first, so one new row at
-the top moves every other row down a place — and a row handed its index, as
-this one was for a `data-row-index` attribute and an element id, was drawn
-again for that alone, every row of the list for the one that arrived. Its id
-is its grid's and its SLOT's — the keys of the bands it stands in and its own,
-each encoded, because an id list is split on whitespace and a key is whatever
-a screen's `rowKey` returns — and a cursor step finds the row it scrolls to by
-that id. The bands are part of it because one row may stand in two: a label
-board groups on a multi-valued axis, so a task with two tags is under both,
-and keyed on the row's key alone the two copies carried one id.
-
-**The cursor is a row, not a place.** `j` and `k` land on a row and the grid
-holds that row's slot: held as an index, a poll that brought one new row slid
-the highlight onto the row above the one the reader had walked to, and Enter
-opened that one. Held as the key alone, a row standing in two bands lit in
-both, and a step from the second copy went on from the first, so the cursor
-could never pass it. A row that leaves the list takes the cursor with it, and
-the next step goes on from the gap it left — `j` to the row that took its
-place.
-
-**An answer that did not change keeps its objects.** A row's memo is on its
-OBJECT, and every answer is parsed afresh off the wire, so a poll that brought
-back exactly what the screen held handed every grid all-new rows: the turns
-list drew its two hundred rows on every twenty-second poll and the audit its
-three hundred and fifty on every minute's, whatever the answer said —
-179–220 ms and 103–375 ms of render under the development build, to change no
-pixel. So every answer is SHARED with the one it replaces before a screen
-reads it (`protocol/share.ts`): a part deep-equal to a part of the old answer
-is replaced by the old part — matched by its content, not only its place, so
-the rows a new row at the top pushed down are still the rows that were drawn —
-and an answer that changed nothing is the very object already held. That
-covers every way an answer arrives: a question (`useQuery`), a REST read
-(`useRestRead`), the shared engine-health poll, and every push the store
-replaces a slice with, where a push that said nothing new moves no version and
-wakes nobody. An unchanged poll now renders nothing at all, and a poll that
-moved one row draws that row. A screen that BUILDS its rows from an answer —
-the audit's four sources folded into one shape, a domain's positions, the
-model page's phase records, a run list's live boxes — passes them through
-`useShared` (`lib/share.ts`), or its derivation would make every row new again
-whenever anything moved: the audit drew 350 rows for one changed tracker
-commit, and draws one. Only data is walked — an array or an object literal; a
-`Map`, a `Date` or a React element is kept only where it is the same value.
-
-**A seat's turn cards are rows too.** The Turns tab draws a seat's turns as
-cards rather than grid rows, grouped from the phases afresh whenever any phase
-arrives — and the store's phase slice is the whole company's, so another seat
-finishing a phase regrouped this seat's turns. The cards were not memoised and
-a group held its nested calls in a `Map`, which the walk does not read, so
-every card drew again on every render of the page (twelve of twelve for a
-phase that belonged to somebody else; every card twice for a review landing on
-one). A card is now memoised (`components/TurnCard.tsx`), a group holds its
-nested calls and a screen its attempts in plain records (`nestedUnder`,
-`attemptOf` in `lib/phases.ts`), and the page keeps both through `useShared`:
-another seat's phase draws no card, and a phase landing on a turn draws that
-turn's.
-
-**An org push is an event as well as a state.** The store shares an org
-projection like any other push, so one deep-equal to the last moves nothing —
-and a chart write that changed only what the projection leaves out (a seat's
-model chain, its credentials, a unit's knowledge space) is pushed as exactly
-that. The chart reads that hold the runtime half (`useChartRead`) are asked
-again on the COUNT of org pushes (`useOrgPushes`), never on the projection's
-identity, or they would go on showing the settings from before the write. The
-org builder checks its draft again on the same count, because the engine
-pushes the org after every apply and a settings revision that moved nothing
-the projection carries — the mission, a provider — is exactly such a push:
-keyed on the projection, an untouched draft went on standing on the replaced
-revision and its next dry run was refused as a conflict nobody made. It also
-checks again when the socket comes back, since a push sent while it was down
-is never sent again.
-
-**Which grid the keyboard drives is asked at the keystroke.** `j`, `k` and
-Enter go to the grid the reader last pressed a pointer in, else the first one
-mounted, and nothing a grid draws depends on which that is — so the question
-is a `when` that is a function (`lib/keys.ts`), evaluated when a key is
-pressed, rather than a value every grid held and had to render to refresh.
-It was a store every grid subscribed to: each grid's mount drew every row of
-every grid a second time, and every pointer press that moved the keyboard did
-the same, 143–197 ms on two hundred-row grids to change no pixel.
-
-**The order is worked out once per change.** A grid sorts when its rows, its
-columns or `sort=` change, reads each row's `sortValue` once to do it, and
-draws from that one sorted answer. It sorted twice a render — once for the
-cursor's walk, once to draw — read both values on every comparison, and did
-it on every render, because the parsed `sort=` was a new object each time:
-8,356 reads of a column's value for a three-hundred-row grid on each render,
-where it is now 300 when the order changes and none otherwise.
 
 **A `shrink` column is capped, because `max-content` is not "shrink to
 content" — it is *grow* to content, with no ceiling.** Grid resolves an
@@ -1624,7 +1463,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star and Copy link, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a lock naming the grant on a section the reader holds none of the grants for (drawn only once the viewer has answered) and an arrow on a cross-link, and Knowledge draws a TREE there — its search, the search's mode and every space's pages (`KnowledgeTree`, out of the Knowledge chunk) |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
-| `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
+| `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied. The two positions that last one compares (`applied_through` against `log_seq`) are PACKED on the wire — (generation × 2^40) + sequence, so they compare with a plain `<` across a re-anchor — and are printed unpacked (`positionWords` in `components/work.tsx`): the bare sequence in a log's first generation and `generation:sequence` past it. The stride is the engine's `statelog.GenerationStride`, and a gate in internal/api holds the dashboard's copy (`GENERATION_STRIDE`) to it |
 | `ObjectHeader` | an object's eyebrow, title (a level-two heading in every frame: on a page the last crumb is the `h1` and already names the object, and a peek sits inside a page that has one), state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from, for the facts a reader can reasonably doubt, and only those. A fact that is one token (an id, a build) or a set of chips (a node's roles) takes two tracks, so it is never broken mid-token or stacked chip over chip. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
 | `useTab` | which OBJECT tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has six — so the hook resolves the parameter against the tabs this object HAS. It binds `1`–`9`; the strip itself is `@crewlethq/ui`'s `Tabs` |
 | `ObjectTabs` + `tabFit` | an object's own tabs as the kit's underline row, drawing the tabs that FIT and folding the rest into a "More" menu at its end — the tab the reader is on always drawn — by the same arithmetic (`foldTabs`) the section strip folds with; the widths are read off a hidden, inert twin of the row |
@@ -2072,7 +1911,8 @@ company did.** Top to bottom:
   stopped and idle, and a sub-line naming only the states somebody is in);
   *Waiting on your decision* (the engine's `decisions` count plus the seats
   stopped on their budget that THIS reader can act on — raise the ceiling, a
-  chart runtime write a `config:write` holder may make, or hand the item on with
+  `/config` write a `config:write` holder may make and so may the lead of the
+  seat's unit, or hand the item on with
   `update_work_item` — the oldest wait in the warning ink, and **Review**
   into the Inbox's decisions view; a stopped seat the reader can do neither
   about is one of the conditions that "need a look" instead — an em dash and "Not bound to a person" for a reader who is
@@ -2607,8 +2447,8 @@ no zero fraction: `60M`, never `60.0M`. The **current turn** card shows where th
 ("round 7 of 25", against the cap the phase was granted), Review; there is no
 delivery step, because whether a turn reached anybody is decided as it
 closes — the turn's number on its task and the task's title (read by the
-task the turn is charged to, by its id — see [An item's
-address](#an-items-address) — never looked up in the card beside it), its
+turn's own task, by its id — see [An item's address](#an-items-address) —
+never looked up in the card beside it), its
 elapsed time and, for a reader holding `audit:read` (a seat's `turns` are its
 trail), tokens so far, and the phase's calls, each with the engine's own start time and
 duration, the running one last. A call reads as words, never JSON: the tool's
@@ -2623,13 +2463,14 @@ that cut anything — a charter is the seat's prompt text and is never
 summarised), **Setup**
 (the model chain and tool grants from the org projection, which carries both
 only to a reader holding `config:read`, because both are derived from the
-seat's runtime half; a reader without it is told which grant shows them rather
-than that the seat has none; the sandbox, placement and workers from the ORG CHART's
-runtime half — the seat's own row and its home unit's, read with `config:read`
-— and where that half cannot be read the card says which of the reasons it
-is: the grant the engine named in its refusal, a row the chart served without
-its runtime half, no seat by this handle in the chart, a node that could not
-answer, or a reader nobody has signed in as, who is never asked; the node
+seat's configuration; a reader without it is told which grant shows them rather
+than that the seat has none; the sandbox, placement and workers from the
+company document, read with `config:read` — or, for the lead of the seat's
+unit, from the seat's own entity and its home unit's
+(`GET /config/roles/{handle}`, `GET /config/units/{key}`), which the engine
+admits a lead to — and said as unread with the grant that reads them for
+anybody else, who is never asked, or as absent when the active revision names
+no seat by this handle; the node
 holding the seat now — the fleet's lease, asked only of a `fleet:operate`
 holder, and for anybody else what the health push says, this node by name or
 "another node", which the seat's peek says too; and Edit), **Memory** (the
@@ -2679,14 +2520,14 @@ thread shows it: beside the list (a wide column) the list scrolls inside a
 viewport-high box and the thread's turns stick under the page's top; stacked
 on a phone, the turns are scrolled to and their heading takes focus. Each
 turn's trigger reads as plain words, its markdown stripped. A seat no
-node holds says why it shows nothing. **Settings** is the seat's RUNTIME half
-on the org chart, read by its handle from the seat's own row (and its home
-unit's, whose `mcp_env` a seat inherits per variable) — never from the company
-document, which holds no seats now that the chart has a log of its own. The
-chart serves that half only to a reader holding `config:read`, and every other
-outcome of the one read the profile makes — still out, refused naming the
-grants, served without its runtime half, absent, a node that could not
-answer — has its own sentence rather than an empty value. What it draws is
+node holds says why it shows nothing. **Settings** is the seat's half of the
+company document, read by its handle — the seat and its home unit, whose
+`mcp_env` a seat inherits per variable — through the same one read the Setup
+card makes (`useSeatSetup`): the company document for a reader holding
+`config:read`, the seat's and its unit's own entities for the lead of its
+unit, and nothing asked for anybody else, whose tab names the grant; every
+other outcome — still out, refused naming the grants, absent — has its own
+sentence rather than an empty value. What it draws is
 identity and contacts, the model and budget with each capped window's live
 meter, and a seat's tool credentials by server and **variable name only**: no
 value the engine sent for a credential reaches the page, not the reference,
@@ -3068,7 +2909,7 @@ four, and each tells you something different:
 
 **The re-read waits for your write.** An `applied` or `pending` answer carries
 the position its record landed at in its domain's log, and the tab keeps it as
-a **read floor** for that domain (`protocol/floors.ts`) — a per-tab value that
+a **read floor** for that domain (`protocol/session.ts`) — a per-tab value that
 only rises. From then on every question that reads that log
 (`contract/domains.ts`, held against the engine by
 `TestEverySessionQueryTakesAFreshnessFloor`) asks with
@@ -3147,13 +2988,17 @@ revision, and every screen that makes one goes through
 `protocol/configWrite.ts` (read the document and its entity tag, or one entity
 and the same tag; dry-run a merge patch or an entity replacement; save either
 with its audit summary), always conditional on the revision it edited. A seat,
-a unit and a seat's own ceiling are the **org chart's**, written through
-`/chart` — the builder's batch and content writes, and a seat's runtime half
-(`lib/useCeilingWrite.ts` for a ceiling raised in place). Both are decided by
-the `config:write` GRANT rather than by the act catalogue or a seat binding,
-so their controls ask `useConfigWriteAccess()`, which reads `viewer.grants`,
-and are disabled for anybody without it with a sentence naming the grant and
-who can give it. A write the engine answers `403 step_up_required` is not
+a unit and a seat's own ceiling are part of that document too, and the org
+builder writes them through it (`lib/useCeilingWrite.ts` writes a ceiling
+raised in place as the seat's own entity). They are decided by the
+`config:write` GRANT rather than by the act catalogue or a seat binding — or,
+for a seat or a unit inside a unit the reader leads, by that LEAD, whom the
+engine admits to `/config/roles/{handle}` and `/config/units/{key}`
+(`lib/leadScope.ts`) — so their controls ask `useConfigWriteAccess()`, or
+`useOrgWriteAccess(target)` for one part of the org chart, which read
+`viewer.grants` and the reader's scope, and are disabled for anybody else
+with a sentence naming the grant and who can give it, or the units the
+reader leads. A write the engine answers `403 step_up_required` is not
 refused on screen: the transport asks the person to confirm who they are and
 replays it (see [Signing in](#signing-in-is-a-screen-outside-the-frame)).
 `protocol/configAnswer.ts` is the one reading of a `/config` refusal — a
@@ -3171,101 +3016,25 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   list and completely different problems. `QueryState` renders the engine's own
   code (`unknown_query`, `unauthorized`, `not_found`, `unavailable`,
   `bad_params`, `query_failed`) and the client's own — the socket's `timeout`
-  and `closed`, a REST read's `unanswered` — as a sentence saying which.
+  and `closed` — as a sentence saying which.
   `bad_params` is the one that names the SCREEN as the fault: the engine
   understood the question and refused it, so retrying sends the same bad
   request again. `unavailable` is the opposite: the node will answer in a
   moment, so `useQuery` asks again on its own rather than leaving a person to
-  reload — WHEN the engine's frame says. Its `retry_after` is waited out in
-  place of the screen's next poll tick, sooner or later than the poll,
-  because a node that said twenty seconds refuses every five-second tick
-  before it and a minute-long poll holds a recovered node for the minute. A
-  hint is bounded at thirty seconds (`RETRY_AFTER_MAX_MS` in
-  `contract/retry.ts`), which cuts only the one hint the engine DERIVES — a
-  backlog over a drain rate, which runs to minutes on a node that has just
-  joined a busy log; every hint it fixes (two, three, four, five, fifteen and
-  thirty seconds) is waited out exactly, and a Go gate in `internal/api` fails the
-  day one grows past the bound. An answer carrying no hint at all waits five
-  seconds, the engine's own health tick, which is what it says when it has
-  nothing better. And a `retry_after` of `0` means waiting will not change
-  the answer (a state-log refusal such as a full log or a record the node
-  cannot decode): then NOTHING re-asks on a timer, the screen's own poll
-  included — a reconnect, a write the screen makes or a reload asks again —
-  and `QueryState` says the node refused the read, what the refusal names,
-  and to reload once somebody has acted, rather than that it is catching up;
-  re-asks of a read an operator has to unblock are a loop, not a retry. The
-  same reading governs the shared health read, the snapshot the page polls
-  while its socket is down, the next dial after a handshake the engine
-  refused `503` (whose zero alone keeps the reconnect backoff — see the live
-  socket below), a seat watch the engine could not decide, the org
-  builder's check — which waits out a `503`'s `Retry-After` in place of its
-  own backoff and stops retrying a `503` the engine wrote with none — and the
-  disconnect dialog, whose wait on a `surface_busy` surface is that refusal's
-  `Retry-After` and nothing of its own. So does every screen that reads over
-  REST, and they read through ONE hook: `useRestRead` (`lib/restRead.ts`),
-  `useQuery`'s twin for the answers no socket question gives — the
-  Integrations screen's setup listing, its pass history (a four-second tick
-  while a pass runs, a minute otherwise) and one pass while it runs, the
-  credential listing with its reference index, and the org chart's guarded
-  reads (`useChartRead`, `lib/chartReads.ts`: a seat's runtime half on its
-  page, the chart behind the tool and knowledge pages), which also ask again
-  on every org push — counted, not compared, since one deep-equal to the last
-  still follows a write — the Audit screen's credential listing, on the minute its
-  other three sources poll at, and the user block's `GET /auth/session`. It
-  replaced seven hand-written loaders, each with its own generation counter,
-  failure mapping and idea of when to ask again, and each wrong about a
-  different case — the chart's read a request nobody answered as `failed` and
-  asked again only on the next push, under a panel promising to fill in "when
-  it does", and a gateway's `404` as a seat the chart does not hold (its
-  `failed` now carries which failure it met, and the panel draws that through
-  `QueryState`); the audit's read the credentials once, at mount, and dropped
-  every failure in silence under a header saying the rows covered them (the
-  header now says what is missing and why); and the user block's read the
-  session once, so a person the socket refuses, for whom that read is the only
-  way to the sign-outs, lost the menu to one request lost on the way. It keeps
-  the last answer through any failure but a refusal on authority (a reader
-  refused is shown nothing they were refused), starts from nothing when its
-  question changes — in the very render that carries the new question, since
-  each answer is stamped with the question it answers, where a reset written
-  by an effect left one render drawing the last question's answer as finished
-  — and arms every next ask where the answer lands (`lib/reread.ts`), at the
-  wait `restRetryMs` decides: a `503` the engine wrote is drawn as
-  `unavailable` (the credential listing drew it as a fault on the node, and
-  the pass history as "No pass has run on this node") and asked again when it
-  says, never at its zero; a failure with no hint keeps the cadence of the
-  answer the screen holds; and a read NO ANSWER FROM THE ENGINE CAME BACK TO —
-  status 0, a request past its thirty-second deadline or dropped on the way,
-  or a gateway's page in the engine's place — is drawn as its own client code,
-  `unanswered`, and asked again on a backoff from one second to thirty (the
-  same `unansweredRetryMs` the org builder's check backs off on). That one was
-  drawn as `closed`, whose banner says the socket went away and the screen
-  reads again once it is back: true only of a socket nobody had seen go, and
-  with the socket up — the ordinary case for one slow request — nothing read
-  the credential listing or an unfollowed pass again until a reload. The
-  socket coming back still asks every such read at once
-  (`useRereadOnReconnect`), as `useQuery` does, ahead of the backoff. Every
-  failure of those reads is drawn through ONE mapping (`restFailure`, the
-  REST twin of `queryFailure`) — a refusal on authority, the engine's `503` as
-  `unavailable`, a read nobody answered as `unanswered`, any other answer the
-  engine wrote as a fault — because each screen that mapped its own forgot a
-  different case: the setup listing drew nothing for a `500`, one pass drew
-  nothing under its row, and a FIRST read of the pass history that failed was
-  drawn as "No pass has run on this node". The table is keyed on
-  `ReadErrorCode` — the protocol's `QueryErrorCode` union and the one code a
-  REST read adds — so a code added to either without a sentence here is a
-  compile error, and a Go test in `internal/api/stream` pins `QueryErrorCode`
-  to the codes the engine sends plus the socket's own `timeout` and `closed` —
-  and a second one pins those codes to the engine's own
-  [refusal vocabulary](api-endpoints.md#every-refusal-is-one-envelope), so a
-  query error and the HTTP refusal of the same question can never be two
-  different words. Every screen hands `QueryState` the read's REFUSAL beside
-  its code — `useQuery`'s own `refusal`, a page of older rows' through
-  `queryFailure`, a REST read's through `RestError.refusal` — because the
-  refusal is what names the grant that would admit the reader, or that the
-  state log will not lift it; a screen that passed the code alone drew the
-  generic banner where the engine had said exactly what would change the
-  answer. A source gate (`app/source.test.ts`) refuses a `QueryState` handed
-  an error and not its refusal.
+  reload — WHEN the engine's frame says (`retry_after`, read through
+  `protocol/retry.ts`), never after a constant of the client's. A hint is
+  bounded at thirty seconds (`RETRY_AFTER_MAX_MS` in `contract/retry.ts`),
+  which cuts only the one hint the engine DERIVES — a backlog over a drain
+  rate, which runs to minutes on a node that has just joined a busy log — and
+  a `retry_after` of `0` means waiting will not change the answer (a state-log
+  refusal such as a full log or a record the node cannot decode): then nothing
+  re-asks on a timer, and a reconnect, a write the screen makes or a reload
+  asks again, because re-asking a read an operator has to unblock is a loop,
+  not a retry. Every REST read goes through one hook, `lib/useRest.ts`, which
+  reads a `503`'s `Retry-After` the same way and reads again when the socket
+  comes back. The table is keyed on the contract's `QueryErrorCode` union, so a
+  code added to the union without a sentence here is a compile error, and a Go
+  test in `internal/api/stream` pins that union to the codes the engine sends.
 - **Zero** vs **unknown.** The integrations answer's `skipped` and `coalesced`
   are three-valued, and a count this node could not read comes back `null`,
   never `0`; `inbound` is a plain count whose unknown-ness rides on the
@@ -3278,40 +3047,10 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   whole answer. **Audit** is the case that made this a rule: it composes four
   subsystems and only one of them — the tracker's feed — takes a wall-clock
   window, so the other three are asked for their newest page and narrowed on
-  the client — from where the tracker's feed was last asked to begin, so the
-  four agree about where the window starts, and at the top only where a reader
-  named an end, since "the last seven days" ends now and a write after the
-  tracker's last ask is inside it. A page that fills up before it reaches the
-  start of the window is older rows the screen never saw, and a caption
-  reading "some of this may be missing" is one nobody can act on where
-  "Knowledge answered one page" says where to look. The tracker's own feed is
-  a page as well — the engine windows it, but answers two hundred commits at
-  most — and it is named the same way when the engine returns a cursor, which
-  it does only when more rows match. **And a source whose answer could not
-  account for everything, or whose node is behind its log, is named the same
-  way.** The tracker's feed and the knowledge base's each carry their own
-  coverage — `complete`, the records this build cannot read, `applied_through`
-  against `log_seq` — and the audit read none of it, so a node holding tracker
-  records it could not decode served an audit missing their writes under a
-  header claiming every write across the tracker. Each shortfall is now a
-  sentence naming its source ("Work: This node holds records it has not
-  applied yet (applied through 40 of 52).") in the words the state bar and
-  History say the same facts in, which live once in `components/work.tsx`
-  (`INCOMPLETE`, `HOLDS_UNAPPLIED`, `appliedThrough`, `affected`,
-  `unreadableRemedy`, …) — an incomplete answer WHOLE, with the objects its
-  unread records are about and the remedy (a build that can read them, not a
-  refresh), because cut to its lead it told an operator that writes were
-  missing and neither where nor what would bring them back; and an answer of
-  unknown age by its read level, as the chip says it. Never as the page's
-  coverage: the two feeds are two logs, and one being behind says nothing about
-  the other, the configuration or the credentials. The two positions are
-  PACKED on the wire — (generation × 2^40) + sequence, so they compare with a
-  plain `<` across a re-anchor — and `appliedThrough` unpacks them to print
-  (`positionWords`): the bare sequence in a log's first generation, and
-  `generation:sequence` past it, because printed raw every position after a
-  re-anchor was a thirteen-digit number naming neither. The stride is the
-  engine's `statelog.GenerationStride`, and a gate in internal/api holds the
-  dashboard's copy (`GENERATION_STRIDE`) to it.
+  the client. A page that fills up before it reaches the start of the window is
+  older rows the screen never saw, and a caption reading "some of this may be
+  missing" is one nobody can act on where "Knowledge answered one page" says
+  where to look.
 - **Not recorded** vs **the engine.** An empty actor on a tracker or wiki
   commit is the engine's own write, and the Audit screen draws it as "the
   engine". A configuration revision is different: the revision states WHAT
@@ -5249,8 +4988,8 @@ about it, and its body is four tabs (`tab=timeline|transcript|context|tools`).
   under the waterfall and at the round that read it — *delivered*, or
   *expired — the turn finished before it read your note*. *Pause* is the seat's
   (with *Also stop the current turn*), *Open task* its item — by the task's
-  id, since nothing this page reads says whether its key is one another task
-  claimed first — and one menu
+  id, since a turn's item carries no word on whether its key is one another
+  task claimed first — and one menu
   (*More on this turn*) holds the other attempts, the traces, and the turn as
   JSON — *Copy turn as JSON* and *Download turn as JSON*, each saying what it
   did in a toast. A bare *Copy* beside the frame's *Copy link* was a second
@@ -5688,24 +5427,22 @@ counter nobody could read (`durable: false`) says so and draws no figures.
 **Every ceiling is editable in place by a `config:write` holder.** The pencil beside it
 turns the figure into a field that takes the spelling the screen draws — `40M`,
 `2.5M`, `750k`, or the digits — and **empty for no ceiling**; a 0 is refused
-before anything is sent, in the engine's terms (empty is the only "none").
-The two scopes are two surfaces (`lib/ceilings.ts`, `lib/useCeilingWrite.ts`).
-The **company's** ceilings are a `/config` merge patch of the windows that
-changed (`null` removes one), **checked first** against the revision they were
-read from, and only the warnings the change *introduces* are shown, with
-**Save anyway** to store it regardless; the revision's summary says which
-window, from what to what. A **seat's** are its org chart runtime half,
-written by the seat's content write (`PATCH /chart/seats/{handle}`) — the chart
-has no dry run, so it refuses a ceiling it will not hold outright (`422`, in
-its rule's own words), and a seat ceiling the company's leaves idle — one at or
-above it, which can never refuse a turn — is what `/chart/check` reports as
-`budget_idle` once it is there. A chart write that answered `unknown` keeps
-its operation id, and sending again resends the very same operation. After a
-save the figure shows the new ceiling marked **applying…** until this node has
-applied it, and then re-reads. A conflict saves nothing and offers
-**Reload**; so does a request that may have landed. The pencils are drawn for
-every reader and disabled, with the reason said once above the page, for a
-reader without `config:write`.
+before anything is sent, in the engine's terms (empty is the only "none"). A
+save is **checked first**, against the revision it was read from, and only the
+warnings the change *introduces* are shown — a seat ceiling at or above the
+company's, which can never refuse a turn, is the one this screen exists to
+catch — with **Save anyway** to store it regardless. The company's ceilings are
+written as a merge patch of the windows that changed (`null` removes one); a
+seat's by replacing that seat (`PUT /config/roles/{handle}`, its check the same
+request with `dry_run=true`), because a patch cannot address one seat in a
+roster. The revision's summary says whose ceiling, which window, and from what
+to what. After a save the figure shows the new ceiling marked **applying…**
+until this node reports the saved epoch, and then re-reads. A conflict saves
+nothing and offers **Reload**; so does a request that may have landed. The
+pencils are drawn for every reader and disabled, with the reason said once
+above the page, for a reader without `config:write` — except a seat's, for
+the lead of the unit it sits in, whom the engine admits to that seat's write
+(`useOrgWriteAccess`, `lib/leadScope.ts`).
 
 **There is no reset.** A window's `used` is what it spent; the room comes back
 when it turns over, or now by raising its ceiling. Home's and the Inbox's
@@ -5775,25 +5512,19 @@ edited in the org builder (**Edit in org**).
 is every person in the directory (`/iam/people`) — their login, stage and
 grants, and the seat the directory binds them to — with their
 credentials (`/iam/credentials`) and sessions beside them; a sealed value this
-node's keyring cannot open reads *sealed*, never blank. **API tokens** is this
-node's Tier A labels joined to the directory rows holding their logins
+node's keyring cannot open reads *sealed*, never blank. **Human seats** is
+every human seat of the running company with whoever holds it (`/iam/seats`)
+and where agents reach it — its contact identities, read from the company
+document, which takes `config:read`, and said so to a reader without it
+rather than drawn as seats nobody can reach. **API tokens** is this node's
+Tier A labels joined to the directory rows holding their logins
 (`/iam/node-tokens`): a token whose login nobody holds acts as itself, unbound,
 and the row says so — a label mistyped on either side otherwise looks bound
 until the token presses something. The directory's own report (`/iam/check`)
-names a binding whose seat is gone, a claim held twice and a person nobody can
-sign in as. The org chart's report (`/chart/check`) gives the two findings
-about people, under their own kinds because they have different remedies:
-`seat_unheld`, a human seat nobody in the directory holds, and
-`seat_unreachable`, one with no contact identity, which no agent can reach.
-That card is the one exception to the screen's grant: the chart's report is
-an AUDIT read, `audit:read` alone, so a reader holding `people:manage` and not
-`audit:read` sees every other card and, in that one, the engine's refusal
-naming the grant — never an absent report read as a chart with nothing wrong
-in it. The Findings tile then counts the directory's report alone, and where
-that finds nothing it says the chart's needs `audit:read` rather than
-"nothing reported".
-The screen edits nothing: a person is invited, changed and removed through
-`/iam` (or `crewlet iam`), and a token is declared in Tier A
+names a company nobody can administer, an active person with no credential, a
+binding whose seat is gone, a grant this node's ceiling withholds, a claim held
+twice and a reservation left behind. The screen edits nothing: a person is invited, changed and removed
+through `/iam` (or `crewlet iam`), and a token is declared in Tier A
 (`api.auth.tokens`) and changes at a restart. **It never holds a value** —
 not a token's, not a password's, not a second factor's.
 
@@ -5872,7 +5603,7 @@ any warning the add introduces — not one the company already carried — and
 places a refusal beside its field; then it stores the revision. A tool's own
 panel names the seats **granted** its server from the same pushed
 `tool_sources`, so opening a tool, or stepping through them with `[`/`]`,
-asks the engine nothing. That list is derived from each seat's runtime half
+asks the engine nothing. That list is derived from each seat's configuration
 (the credentials it declares under `mcp_env`), so the engine pushes it only to
 a reader holding `config:read`, and for anybody else the panel names that
 grant — never "a node older than the field", which is what the same absence
@@ -6304,8 +6035,8 @@ brings that carries a design-system rule.
   alone (`protocol/store.ts`), dropping one for a seat the roster does not
   carry. A seat of the org index pairs with its roster row by HANDLE
   (`lib/seats.ts`' `liveRowFor`), since the two are cut from one chart view
-  and a handle is unique; a URL or a filter names a seat by handle and asks
-  the engine by the agent id that handle pairs with (`seatFilter`). Every one
+  and a handle is unique; a URL or a filter names a seat by handle, and so
+  does the question it asks the engine. Every one
   of these used to match on the name, so the second "Engineer" in a company
   wore the first one's state, live call, sandbox, turns and spend.
 - **A link kept before a rename still opens what it named.** A seat is
@@ -6348,9 +6079,9 @@ brings that carries a design-system rule.
   caller's abort cover reading the body as well as waiting for the headers,
   and a body that breaks part way through is status 0 (an answer never fully
   heard, so a write's outcome is unknown) rather than an empty success. A
-  screen that reads a REST answer uses `useRestRead` (`lib/restRead.ts`) — the
-  Secrets, Integrations, Setup and Audit screens each carried a loader of their
-  own, each wrong about a different case. The one reader outside it is the
+  screen that reads a REST answer uses `lib/useRest.ts` — the Secrets,
+  Integrations, Setup and Audit screens each carried a loader of their own,
+  each wrong about a different case. The one reader outside it is the
   org builder's session over the `/config` document, which is not a screen's
   read but half of a conditional write: it holds the `ETag` a save sends back
   as `If-Match`. It aborts a
@@ -6480,44 +6211,6 @@ brings that carries a design-system rule.
   and then, or its session idles out under it however busy the screen is.
 - **One clock.** Every relative time on screen advances together and none of
   them is baked at render.
-- **The clock reaches the words, not the screen.** It ticks once a second, and
-  whatever subscribes to the second renders once a second — so the element
-  that shows a time reads the clock itself, as a READING that changes less
-  often than the clock does: a cell's "4m ago" (`DateCell`, `ClockText`), a due
-  date's year, a calendar's today, a chart's column in progress
-  (`useClockReading`, `useToday` in `lib/clock.ts`). React renders a reader
-  when its reading changes, so "3h ago" is drawn once an hour and a due date
-  once a year. Nothing hands `now` down to rows: a grid's column definitions
-  never take it, because a screen that held the second and built its columns
-  from it drew every row again on every tick — measured at 58–69 ms a second
-  for a hundred-row grid under the development build, against no render at
-  all once the cells read the clock themselves. A screen holds `useNow` only
-  for what is genuinely about the second — a live strip, a countdown — and
-  where one component on it is, that component reads it rather than the
-  screen (the schedules' hour-ahead tile, a parked run's hold). A stopwatch
-  is read in the element that shows it, never at the top of the card it sits
-  on: a running phase's and a running turn's count read it there, and read at
-  the card they drew it once a second — every round, tool call and prompt
-  document of the phase, and every phase card open under the turn. A value a
-  screen DERIVES from the clock is a reading too, compared by value: the
-  inbox's attention queue (a round goes stale at two minutes, a parked run
-  counts down its pause window) is worked out on every tick and draws the
-  screen only on the tick an item changes — it held the second, and drew the
-  pulse strip, both bands and every notice once a second, 18–44 ms a tick
-  for fifty notices.
-- **A formatter is built once and kept.** `d.toLocaleString(locale,
-  options)` builds an `Intl.DateTimeFormat` per call — that is how ECMA-402
-  defines it — and building one is the expensive half of writing a date:
-  about 200 µs a date under the development build, against 5 µs through a
-  kept one. Every date goes through `dateFormatter` in `lib/format.ts`, which
-  keeps one per locale and options (the reader's zone and date shape are
-  options, so changing either is a new key) and holds sixty-four, and the
-  browser's zone is asked once a minute rather than once a date
-  (`ZONE_REREAD_MS` in `lib/prefs.ts`), since asking builds a formatter too.
-  Numbers go through one `Intl.NumberFormat` and a grid's text order through
-  one `Intl.Collator` (`naturalCompare`), where `localeCompare` with options
-  built one per comparison. `app/source.test.ts` refuses a `toLocale…String`,
-  an `Intl` constructor or a `localeCompare` with options anywhere else.
 
 ### The components come from the design system
 
@@ -6696,10 +6389,8 @@ Every surface is required: a Builder suite stands a view in with a fake,
 while the screen binds the real chart, table, editor and dialogs, and
 `surfaces.test.tsx` mounts the builder with exactly those.
 
-- **The company is two reads, and the posture is what the engine answers.**
-  `GET /config` (the settings) and `GET /chart?runtime=true` (the org chart,
-  with each object's runtime half where the reader may have it) are read on
-  mount and whenever the reader changes, and the answers decide edit mode,
+- **The posture is what the engine answers.** `GET /config` is read on
+  mount and whenever the reader changes, and its answer decides edit mode,
   create mode, a node that has not caught up, a request to sign in, a process
   that does not serve the configuration, or an unreachable engine
   ([the guide](../guides/org-builder.md#opening-the-builder) has the table).
@@ -6708,19 +6399,32 @@ while the screen binds the real chart, table, editor and dialogs, and
   the engine. The reader changes when the viewer's login does — another tab
   signing in as somebody else, because the cookie is the browser's — and a
   change mid-edit keeps the draft on screen, forgets the kept copy and checks
-  it again. A runtime half the chart withheld (`runtime: false`) is never
-  drawn as an empty one: the fields that live there are left out with a
-  sentence saying why, and a save states none, which keeps what each object
-  has.
-- **A check asks what can be asked without writing.** The chart has no dry
-  run, so `model/scheduler.ts` reads the chart and compares its rows with the
-  draft's base (a content write is full post-state with no precondition, so
-  this is where a colleague's change is caught), sends the settings write as
-  a dry run when the draft changes the settings and otherwise reads them and
-  compares the revision with the base, and adds `problems.preflight` — the
-  rules a chart write refuses on before it reads a row, restated at that
-  boundary. A draft that changes moves its generation, and an answer for an
-  older generation is dropped.
+  it again.
+- **Every draft is a dry run of the write a save would send.** The same
+  `PATCH` with `If-Match` (or `PUT` with `If-None-Match: *` in create mode),
+  plus `dry_run=true` and without the audit summary; a draft that changes
+  nothing is read instead. A draft that changes moves its generation, and an
+  answer for an older generation is dropped.
+- **A lead edits one unit as a document of its own.** A reader without
+  `config:write` who leads a unit (`lib/leadScope.ts`) is opened on it
+  rather than refused: `model/scope.ts` reads `GET /config/units/{key}` as
+  `{name, units: [that unit]}`, and the request is that unit's —
+  `PUT /config/units/{key}` with `If-Match`, the unit whole — so nothing else
+  in the model knows it is a lead's. The engine answers about the WHOLE
+  company, so its paths are moved into the draft's coordinates by where its
+  derivation places the unit, and a problem outside the unit is said about
+  the draft rather than put on whichever node sits at that path. What reaches
+  outside the unit — the charter, the top level, the unit's own lead and
+  place — is refused at the reducer's recording door and drawn disabled with
+  the reason, and a refusal the engine names part by part (`403` with
+  `refused`) is a problem on each part, not a refusal of the person. Until
+  the viewer has answered, and what a reader who might lead leads is known,
+  nothing is read, so a lead is never shown a refusal of the company and
+  their kept draft is never forgotten over one. A lead of several units edits
+  one per draft, chosen in the toolbar, and a kept draft is offered only for
+  the unit it was made of. Their lost save is settled by reading the unit
+  back, and their update stands on the unit the node serves: the revision
+  history is `config:read`'s.
 - **The canvas is handed the chart it draws.** `chart=structure|reporting` is
   the Builder's own section param, chosen in its toolbar, so the canvas is
   given the answer as a prop rather than reading the URL a second time.
@@ -6780,103 +6484,97 @@ while the screen binds the real chart, table, editor and dialogs, and
   (`useBuilderView`).
 - **Undo and redo are Ctrl or Command with Z**, and Shift with it, anywhere in
   the builder except a text field, and never under a modal.
-- **A moved company is an update, never an overwrite.** A check that finds
-  the chart's rows moved, or a newer settings revision, halts checking and
-  offers Update my draft; a draft holding no work is updated at once instead,
-  an update of nothing confirmed as it lands. The settings are read only from
-  a node serving the conflict's revision or a descendant of it, and
-  `UpdateDraftDialog.tsx` shows what still applies, what the company already
-  holds, what is dropped and every conflict with its three values; confirming
-  waits for a choice on each. A value is shown as a person reads it: the
-  model tags a conflict over its own structures with their shape, so a node
-  key reads as the node's name, a removed node as the fields that changed, a
-  kind change's stripped fields by name only, and a credential's mask as "A
-  literal value is set (hidden)", never as the marker or as JSON.
+- **A newer revision is an update, never an overwrite.** A check answering
+  `409` (or a dry run validated against another base) halts checking and
+  offers Update my draft. A draft holding no work is updated at once instead,
+  an update of nothing confirmed as it lands, and never by reading the
+  configuration again: a plain read replaces the draft whole, so an open
+  editor lost its node, typed form and all, and the selection was cleared.
+  The update is read only from a node serving the conflict's revision or a
+  descendant of it, with the engine's description of it — a lead's from the
+  unit the node serves, with no description, since a lead reads no history
+  and the engine refuses a dry run of an unchanged unit — and
+  `UpdateDraftDialog.tsx` shows what still applies, what is dropped and every
+  conflict with its three values; confirming waits for a choice on each. A
+  value is shown as a person reads it: the model tags a conflict over its own
+  structures with their shape, so a node key reads as the node's name, a
+  removed node as the fields that changed, a kind change's stripped fields by
+  name only, and a credential's mask as "A literal value is set (hidden)",
+  never as the marker or as JSON.
 - **Only the operation log is kept, and nothing is written before it is
-  decided.** `useDraftKeeping.ts` reads the kept draft once the company is
-  loaded, offers Keep or Discard for the same company (the same settings
-  revision and chart rows; read-only until answered), restores through the
-  update flow for a company that moved, and discards one kept for the other
-  mode. It writes nothing before that decision, because the plan for an empty
-  log is to clear. A change of reader or a refused credential clears it and
-  withdraws an offer — but not a step-up the reader declined, which is the
-  same person choosing not to confirm yet — and a sign-out empties the tab's
-  storage before it reloads. A kept draft carries the principal it was kept for (the tab's
-  reader), the decision waits until the tab knows its reader, and a draft kept
-  for anybody else is discarded without being offered or mentioned — the
-  builder's own change-of-reader check lives in a component, and a builder the
-  next person opened fresh after a lapsed session had no earlier reader to
-  compare. A draft with changes asks the browser's prompt before the tab goes
-  (session storage does not outlive the tab), and one that storage cannot keep
-  at all asks before the builder is left, since that loses it too; a move
-  within the builder keeps it and asks nothing.
-- **A save is a plan of writes, each named before it is sent.** `model/save.ts`
-  turns the draft into steps — in create mode the settings first (`PUT` with
-  `If-None-Match: *`), then the chart's structure as `POST /chart/batch`
-  batches of at most 500 operations, the removals in batches of their own,
-  one content `PATCH` per changed unit and seat, and in edit mode the settings
-  last — and `useSave.ts` sends them in order after reading the chart once
-  more to confirm the base. Every step's id derives from a write id minted
-  when the review opens, and a chart step sends it as `Idempotency-Key`, so a
-  RETRY of a step whose outcome is unknown resends the same operation and the
-  chart's ledger answers the first arrival's outcome rather than writing
-  twice; the settings step signs its audit summary with it, and a lost
-  settings answer is settled from the revision history. The run stops at the
-  first step that does not land and pauses editing while one is unknown; what
-  landed stays landed, so the company is read back and the rest of the draft
-  carried onto it through the update flow. A write in flight is never
-  aborted. Before the first write the kept log is marked with the write id
-  and the nodes the save creates, so a reload mid-save carries the log onto
-  whatever landed rather than creating those nodes twice, and a page that
-  mounts while a run of its own is still out waits for it
-  (`useSave.saveInFlight`), editing paused, before deciding anything about the
-  kept log. `ReviewSaveDialog.tsx` states every change and consequence, lists
-  every step with the engine's answer as it arrives, and gates the
+  decided.** `useDraftKeeping.ts` reads the kept draft once the base is loaded,
+  offers Keep or Discard for the same revision (and, for a lead, the same
+  unit; read-only until answered), restores through the update flow for
+  another, and discards one kept for the other mode or another unit. It
+  writes nothing before that decision, because the plan for an empty log is to
+  clear. A change of reader or a refused credential clears it and withdraws
+  an offer — but not a step-up the reader declined, which is the same person
+  choosing not to confirm yet — and a sign-out empties the tab's storage
+  before it reloads. A draft with changes asks the browser's prompt before
+  the tab goes (session storage does not outlive the tab), and one that
+  storage cannot keep at all asks before the builder is left, since that loses
+  it too; a move within the builder keeps it and asks nothing.
+- **A save is the checked write, signed, and never believed blindly.**
+  `useSave.ts` sends the model's save request with the audit summary signed by
+  a write id minted when the review opens and kept for as long as the draft
+  does not change, so a second press after a lost answer carries the same id.
+  A lost answer is settled from the revision history before anything else
+  happens — a lead's by reading the unit back, since the history is
+  `config:read`'s — and while it is unknown the builder records nothing. A
+  write in flight is never aborted, and a save that lands after the builder
+  was left still records the revision and clears the kept draft. The kept log
+  is marked with the write id before the save is sent and unmarked once the
+  save is known not to have landed, so an answer lost after the builder was
+  left, or across a reload, is settled on the next visit (`useSave.resume`)
+  before the kept log is offered: replayed onto its own revision it would
+  apply every change twice. A save this page still has out when the builder
+  opens again is waited for first, because the engine may not have stored it
+  yet and settling it then would read as not landed. Such a save is not the
+  draft on screen, so the revision it stored is read like any newer revision
+  rather than made the base. A save of the draft on screen makes that draft
+  the base, keyed by the save's answer, and the stored document is then read
+  back, never over an edit made while that read is out: such an edit already
+  stands on the saved revision.
+  `ReviewSaveDialog.tsx` states every change and consequence and gates the
   irreversible ones on an acknowledgement, whose sentences (`dialogParts`'s
   `ACKNOWLEDGEMENT_TEXT`) the editor's company rename shares.
 - **Create mode is a form, one template operation, and a create-only write.**
   `CreateCompany.tsx` collects the charter, the starting shape and an optional
   seat for the operator, and records the model's `applyTemplate` (refused
   outside create mode), so the start is a single undo and is checked like any
-  other draft. The save is `PUT` with `If-None-Match: *`, then the chart; a
-  company that appeared meanwhile — a settings revision, or seats and units in
-  the chart — is offered instead, and the draft is discarded rather than
-  replayed onto it.
+  other draft. The save is `PUT` with `If-None-Match: *`; a company that
+  appeared meanwhile is offered instead, and the draft is discarded rather
+  than replayed onto it.
 - **A save is not an apply, and the screen says so.** `AfterSaveStrip.tsx`
-  keeps what the save wrote — the settings' `{revision_id, epoch}` and the
-  chart's furthest position — in a tab-lived store outside any screen
-  (`savedChanges.ts`). It follows the settings on this node's
-  `applied_epoch` off the health push (which carries the whole envelope every
-  five seconds, so there is nothing to poll and no two surfaces showing the
-  engine's own facts can disagree about one engine) and the `fleet` query,
-  resolving to Applied, Applied on N of M nodes, or the node that refused it
-  with a link to Settings › Nodes, and the chart on the `retention` report's
-  per-node applied positions for the chart's log, which only a
-  `fleet:operate` holder is shown — for anybody else it says what this node's
-  own answer said — all on `recheck.ts`'s cadence. Its View changes opens the
-  saved settings revision against its parent (`against=`), since against the
-  active revision a save that is active now differs from nothing; the
-  conflict banner's Show what changed is the newer revision against the
-  draft's base for the same reason. Copy the chart reads `/company/export`,
-  the document `crewlet chart export` writes. Until this node applies both,
-  the org chart and Teams carry a note that they draw the previous
-  organization.
+  keeps `{revision_id, epoch}` in a tab-lived store outside any screen
+  (`savedRevision.ts`), reads this node's `applied_epoch` off the health push
+  (which carries it every five seconds, so there is nothing to poll) and the
+  `fleet` query on `recheck.ts`'s cadence, and resolves to Applied, Applied on
+  N of M nodes, or the node that refused it with a link to Settings › Nodes.
+  Its View changes opens the saved revision against its parent
+  (`against=`), since against the active revision a save that is active now
+  differs from nothing; the conflict banner's Show what changed is the newer
+  revision against the draft's base for the same reason. Both, and Copy as
+  YAML, read the company document, so none is offered to a reader without
+  `config:read`. Until this node applies it, the org chart and Teams carry a
+  note that they draw the previous revision.
 - **The status is the last answer about the current draft**, whoever asked:
   a save's refusal is placed on the nodes like a check's, and the check
   machine decides the status only while a check is out or before any answer.
-- **A read-only builder records nothing.** The guarded and read-only
-  postures, a conflict, a kept draft waiting for Keep or Discard, a save being
-  written or read back, a save whose outcome is unknown and a save from this
-  page still out all refuse operations at the one door every view goes
-  through, and say why in the live region. The actions themselves are
-  DISABLED rather than hidden, so a reader without `config:write` still reads
-  what the builder does; Edit and Open seat change no draft and stay
-  available. A refused check or save is worded by the refusal's code, in the
-  sentence every writer of the company document uses (`configGuardedReason`):
-  only a grant the reader lacks names `config:write`, and a step-up they
-  declined — a configuration write asks for one, so it is the refusal an
-  hour-old session meets — says so and offers Check again, which sends the
-  check again and so asks them to confirm who they are again.
+- **A read-only builder records nothing.** The guarded posture, a conflict,
+  a kept draft waiting for Keep or Discard, and a save whose outcome is
+  unknown or that this page still has out all refuse operations at the one
+  door every view goes through, and say why in the live region; so does a
+  lead's draft, for each operation that reaches outside its unit. The actions
+  themselves are DISABLED rather than hidden, so a reader without
+  `config:write` still reads what the builder does; Edit and Open seat change
+  no draft and stay available. A refused check or save is worded by the
+  refusal's code, in the sentence every writer of the company document uses
+  (`configGuardedReason`): only a grant the reader lacks names
+  `config:write`, and a step-up they declined — a configuration write asks
+  for one, so it is the refusal an hour-old session meets — says so and
+  offers Check again, which sends the check again and so asks them to confirm
+  who they are again.
 
 ### The org builder draws the engine's organization
 
@@ -6885,24 +6583,30 @@ read one module (`routes/org/builder/chartModel.ts`), so they can never
 disagree about where a seat is drawn, who leads a unit or who a seat reports
 to.
 
-- **The draft gives the shape, the engine gives the meaning.** Units, their
-  seats and their children are drawn as the draft holds them, because that is
-  what an operation edits, and the chart's rows state where every seat sits,
-  so there is no placement to derive. One rule is restated, because a unit's
-  card cannot do without it: a unit that declares no lead or channel takes the
-  one its parent resolved to (`org.propagateDownward`), read off the draft
-  after every edit (`chartModel.effectiveLeads`). What follows from the whole
-  organization — a seat's primary manager and the reporting forest — is the
-  engine's, from the org push's `derived` block, and that block describes
-  the SAVED chart: the chart has no dry run. So it is placed on the base
-  draft's nodes and used only while the draft's chart is still the saved one;
-  past that, the outline's manager reads "Not derived yet" and the reporting
-  chart carries a note over the canvas that it draws the saved company's
-  lines, rather than showing a line the engine has not given. Before the node
-  has pushed a description at all, the reporting chart says it appears once
-  the engine describes the company. The Datadog fallback is read from the
-  settings the same way for every surface, so a card and the dialog it opens
-  never name the seat two ways.
+- **The document gives the shape, the engine gives the meaning.** Units,
+  their seats and their children are drawn as the draft holds them, because
+  that is what an operation edits. Every derived fact comes from the last
+  check's `derived` block, read through the document that check was sent: a
+  root seat the engine placed in a unit by its `unit:` reference is drawn in
+  that unit and marked "Declared at the root with a unit reference", a reference that names no
+  unit stays at the root marked with the engine's warning, a unit with no lead
+  of its own shows the lead it inherits, and a seat shows its primary manager.
+  A derived fact is shown only while the draft still holds the values the
+  check saw (for an inherited lead, that includes where each unit above sits);
+  after an edit the chart says it is waiting for the check rather than showing
+  a placement or a lead the engine has not confirmed. A seat's primary
+  manager follows from the whole organization, so no single field says it
+  still holds: it is shown only from a check of the draft as it stands. A
+  value the engine has not given yet reads "Lead after the check" or "Manager
+  after the check", never that a check is running: whether one is on its way,
+  or the engine cannot be reached at all, is the toolbar's check status to
+  say, and a card cannot know. A seat's handle and a unit's key are written in
+  the document — every stored seat and unit carries the ones the engine
+  minted, and a node this draft adds carries the one typed into its form — so
+  nothing waits on a check to name one, and the editor, the dialogs and
+  `chartModel.ts` read the same address. The reporting chart, drawn from the
+  last check while the draft has moved past it, says so in a note over the
+  canvas.
 - **The canvas is a tree of nodes.** The structure chart has the company at
   the root, and the root seats and the units hang off it; every seat is a node
   of its own, hanging off its unit like the unit's child units, joined by the
@@ -6944,13 +6648,13 @@ to.
   `StateBadge` every other screen draws, in a slot that neither shrinks nor
   wraps while the name truncates, so a push changes a word and never a row's
   height; the table's Problems column and the toolbar's status count the
-  problems. A caution for a reference that names nothing (a lead, or a
-  `manages` entry) is read off the draft itself (`problems.referenceWarnings`),
-  so it holds for exactly as long as the node writes the reference, rather
-  than leaving with each check and coming back with its answer.
+  problems. A mark the engine gave (a lead or a unit reference that names
+  nothing) is held by the chart like a placement, while the node still writes
+  what the check warned about, rather than leaving with each check and coming
+  back with its answer.
 - **The table is a treegrid of rows.** The same structure as rows with
-  navigable cells: Name (with what the row is written under it), Address,
-  Lead or reports to, Problems and the row's actions. A row's keys are a card's keys; Right opens a row or
+  navigable cells: Name (the kind or type under it), Handle or key, Lead or
+  reports to, Problems and the row's actions. A row's keys are a card's keys; Right opens a row or
   steps into its cells, Left steps back out, Up and Down keep the column, and
   a cell holding a control (the lead choice, the actions menu, an add button)
   focuses the control, which becomes the grid's one tab stop. A press that
@@ -6967,10 +6671,13 @@ to.
   `.popup-layer` over the grid, placed from their trigger, and follow a
   sideways scroll (or close once their trigger has left the frame) rather than
   being cut off under the last rows. The company's row and each unit's carry
-  the design system's split add pill, for the three kinds, while the draft can
-  change. Rows are in the chart's own order, by address: the chart keeps no
-  other order among siblings, so a row offers no move among them, and where a
-  node sits is its unit, which Move to changes.
+  the Add that splits into the three kinds. Alt+Up and Alt+Down move a row
+  among its siblings of the same kind, past the row drawn beside it: a root
+  seat the engine placed in a unit by its reference is drawn in that unit, so
+  the root seats around it step over it rather than make a move nobody can
+  see. Because the engine's primary manager is the first seat that lists a
+  seat, the reporting lines the next check reports are compared with the ones
+  before, and a changed primary manager is announced.
 
 ---
 
@@ -7018,8 +6725,7 @@ to.
    (`protocol/act.ts`) from `useAct` (`lib/useAct.ts`) and nowhere else —
    `app/writeGate.test.tsx` holds that, and renders every write control for an
    anonymous, an unbound and a bound reader — and a change to the company's
-   configuration through `protocol/configWrite.ts` or the org builder's
-   `/chart` writes. Nothing outside `src/protocol/` reaches the network
+   configuration through `protocol/configWrite.ts`. Nothing outside `src/protocol/` reaches the network
    (`protocol/transport.test.ts`). Every write reports its outcome: a toast
    when it landed, a persistent notice with Retry when nobody can say, and the
    engine's refusal beside the control that caused it. A write control is
