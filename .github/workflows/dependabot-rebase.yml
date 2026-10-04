@@ -1,0 +1,452 @@
+name: dependabot-rebase
+
+# Asks Dependabot to REBASE a bump that has stayed in conflict with `main` after
+# Dependabot has had its chance to do it itself. Dependabot rebases a conflicted
+# bump on its own, minutes after the push that conflicted it, for as long as
+# every commit on the branch is its own or marked `[dependabot skip]` (the
+# bundle commit dependabot-dashboard.yml adds is) and the pull request is under
+# 30 days old, which is where GitHub documents that it stops. What is left for
+# this workflow is a bump that is still conflicting well after that: one
+# Dependabot missed, or one past the 30 days, where it still obeys a manual
+# `@dependabot rebase`. A bump holding a commit of a person's is not one of
+# them: Dependabot refuses it, and it is named in the run's summary and left to
+# its author.
+#
+# IT WAITS BEFORE IT ASKS. Asking within seconds of a merge would race
+# Dependabot's own rebase and put a second command, and a second force-push,
+# on every bump it was already about to fix. Dependabot's rebases after a merge
+# have taken about 20 seconds to about four and a half minutes in this
+# repository's history (#153 then #152, #161 then #163), so a run does nothing
+# until `main`'s tip is GRACE_SECONDS old, a little over six times the slowest.
+# The tip is read again after every sleep, because the merges that matter most
+# are the bumps' own, which start no workflow (see below) and so cannot cancel a
+# run that is already waiting: if `main` has moved while it slept, it sleeps
+# again, up to WAIT_LIMIT_SECONDS in all, and then leaves the bumps to the next
+# run.
+#
+# IT COMMENTS `rebase` AND NOT `recreate`, and that is the safer of the two. A
+# recreate throws away every commit on the branch, and a decision to send one
+# made here would rest on a list read before Dependabot acts on it: a commit
+# pushed in that gap is gone. A rebase makes Dependabot look at the branch when
+# it acts, and it refuses (with "edited by someone other than Dependabot")
+# rather than overwrite a commit that is neither its own nor marked. The filter
+# below is therefore not what protects anyone's work; it only stops a command
+# Dependabot would refuse from being posted over and over.
+#
+# THE COMMENT HAS TO BE A PERSON'S. Dependabot ignores commands written by
+# `github-actions[bot]` and by GitHub Apps (dependabot-core#9147) and obeys a
+# user account with write access, which is why this needs a secret nothing else
+# in the repository does: DEPENDABOT_REBASE_TOKEN, a fine-grained personal
+# access token for this repository with **Pull requests: read and write** and
+# nothing else, owned by an account with Write access. It is not Issues, though
+# a pull request is an issue to the comments API and GitHub lists both
+# permissions for that route: the check is made against what is being commented
+# on, and a comment on a pull request has been reported refused to a token that
+# held only Issues. The cost is plain and worth reading twice. That scope can
+# also approve a pull request, and an approval from an account with write access
+# counts toward `main`'s required review; dismiss anyone's review; edit, close or
+# retarget any pull request (its title is the release note); and have GitHub
+# merge `main` into any pull request's branch. It cannot push content of its
+# own. The scope does not contain a leaked token, so these do:
+#
+#   - THE SECRET LIVES IN AN ENVIRONMENT, `dependabot-rebase`, whose deployment
+#     branches are limited to `main`, and only the `ask` job below declares it.
+#     An ordinary Actions secret can be read by anyone who can push a branch and
+#     run a workflow from it, which is every writer; an environment secret is
+#     released only to a run on `main`. That keeps it from a branch that has not
+#     been merged. It does NOT keep it from a workflow that reaches `main`
+#     unreviewed, which `main`'s ruleset allows today (anything pushed onto an
+#     approved Dependabot branch merges once CI is green); turning on approval of
+#     the most recent push is what closes that, and CONTRIBUTING.md says so.
+#   - THE RESTRICTION IS CHECKED, not remembered. A workflow that names an
+#     environment which does not exist creates it, with no protection and no
+#     secret, so without a check the first run would leave it open to every
+#     branch and the setup would then put the token into it. The `find` job reads
+#     the environment's deployment-branch policy first and fails by name unless
+#     it is exactly the selected branch `main`; `ask` runs only after it has
+#     passed. (The mode that looks right, "Protected branches only", does not do
+#     this here: `main` is protected by a ruleset, and that mode counts classic
+#     branch protection.)
+#   - THE JOB THAT HOLDS THE SECRET RUNS NOTHING BUT A PROBE OF THE TOKEN, READS
+#     OF PULL REQUESTS AND A FIXED COMMENT. The `find` job reads with the
+#     workflow's own token and holds no secret; it hands `ask` a list of numbers
+#     and commit SHAs and nothing else.
+#
+# It is not DASHBOARD_BUNDLE_TOKEN either. That one can push, lives among the
+# Dependabot secrets so that only Dependabot's own runs see it, and has to stay
+# out of anything a branch can reach.
+#
+# WHEN IT RUNS. On every push to `main` and every six hours. The schedule is
+# not decoration, and it is not a guarantee either: a bump merges itself
+# through `GITHUB_TOKEN`, and GitHub starts no workflow for an event that token
+# caused (the merge commits of #167, #170, #171 and #173 have no push-event
+# run), so the push trigger sees what a person merges and is blind to what the
+# bumps merge. The schedule is what covers those, on a best-effort basis:
+# GitHub may delay or drop a scheduled run under load, and turns scheduled
+# workflows off after 60 days without repository activity in a public
+# repository (Actions -> this workflow -> Enable puts it back).
+#
+# ASKING IS ONCE PER HEAD. A request from an owner, member or collaborator,
+# newer than the head commit, means the question has been put (a maintainer's
+# own comment included); a stranger's does not, because Dependabot ignores it
+# and it must not switch this off. That is judged by the `ask` job and with the
+# PERSONAL token, not the workflow's: GitHub works out `author_association` from
+# what the reader can see, and the workflow's token cannot see a private
+# organisation member, so it would read this very account's comment as a
+# stranger's and ask again on every run. (A read-only collaborator's comment
+# counts too, though Dependabot ignores it; the unanswered-request failure below
+# is what names that.) When Dependabot rebases the branch the head is new and
+# the bump is eligible again. A request that stands unanswered for
+# UNANSWERED_HOURS fails the run, by name: a warning on a run that passes
+# notifies nobody, and the one thing only a live run shows is whether Dependabot
+# acts on this account.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Off the hour, where scheduled workflows queue.
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+# Nothing by default; each job asks for what it uses.
+permissions: {}
+
+# One run at a time, the newest winning: a newer merge by a person restarts the
+# wait from its own tip, and two runs would each see "not yet asked" and both
+# comment. A run that is cancelled loses nothing; the next one reads the same
+# state from GitHub and finishes what it began.
+concurrency:
+  group: dependabot-rebase
+  cancel-in-progress: true
+
+jobs:
+  find:
+    name: find the bumps Dependabot has not rebased
+    runs-on: ubuntu-latest
+
+    # A fork has none of the secrets and would fail on every push to its own
+    # `main`. Asked of the event rather than spelled as `crewlet/crewlet`, so a
+    # transfer or a rename does not switch this off with nothing to say so.
+    if: ${{ !github.event.repository.fork }}
+
+    # Reading the environment's settings (that is `actions`, not
+    # `deployments`), pull requests, their commits and `main`'s tip. No
+    # checkout, no secret, and no part of a pull request (its title, its branch
+    # name, its body) reaches a shell: only numbers, SHAs, logins and
+    # timestamps do.
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+
+    # A hang detector, sized to the work: the wait for a quiet `main` (at most
+    # WAIT_LIMIT_SECONDS), the mergeability rounds (POLL_TRIES x POLL_SECONDS)
+    # and a few API reads per open bump.
+    timeout-minutes: 90
+
+    outputs:
+      candidates: ${{ steps.scan.outputs.candidates }}
+
+    steps:
+      # Before anything waits, and before `ask` can run: `ask` declares the
+      # environment, and a run that names one that does not exist creates it
+      # open to every branch. What it must be is "Selected branches and tags"
+      # with the one branch rule `main`.
+      - name: the environment is restricted to main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          repo="$GITHUB_REPOSITORY"
+          env_name=dependabot-rebase
+          fix="Settings -> Environments -> $env_name: Deployment branches and tags -> Selected branches and tags -> one Branch rule, main (not 'Protected branches only': main is protected by a ruleset, which that mode does not count). Create it BEFORE this workflow reaches main, then add DEPENDABOT_REBASE_TOKEN to it as an environment secret."
+          if ! environment="$(gh api "repos/$repo/environments/$env_name" 2>&1)"; then
+            if grep -q 'HTTP 404' <<<"$environment"; then
+              echo "::error::The environment $env_name does not exist, and the ask job would create it open to every branch. $fix"
+            else
+              echo "::error::Could not read the environment $env_name: $(tr '\n' ' ' <<<"$environment")"
+            fi
+            exit 1
+          fi
+          if [ "$(jq -r '(.deployment_branch_policy.custom_branch_policies == true) and (.deployment_branch_policy.protected_branches == false)' <<<"$environment")" != true ]; then
+            echo "::error::The environment $env_name is not limited to selected branches. $fix"
+            exit 1
+          fi
+          if ! policies="$(gh api "repos/$repo/environments/$env_name/deployment-branch-policies" \
+            --jq '[.branch_policies[] | {name, type: (.type // "branch")}]' 2>&1)"; then
+            echo "::error::Could not read the deployment branch rules of $env_name: $(tr '\n' ' ' <<<"$policies")"
+            exit 1
+          fi
+          if [ "$(jq -c '.' <<<"$policies")" != '[{"name":"main","type":"branch"}]' ]; then
+            echo "::error::The environment $env_name releases its secret to $(jq -c '.' <<<"$policies"), not to main alone. $fix"
+            exit 1
+          fi
+
+      - name: scan the open bumps
+        id: scan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Thirty minutes: a little over six times the slowest rebase
+          # Dependabot has been seen to make after a merge here (four and a
+          # half minutes).
+          GRACE_SECONDS: "1800"
+          # An hour: bumps merge in runs of three or four ten to forty minutes
+          # apart, so a tip that is fresh when a run wakes is usually followed
+          # by a quiet half hour within the next one. Past it the run gives up
+          # and the next one looks; it is not worth holding a runner longer.
+          WAIT_LIMIT_SECONDS: "3600"
+          # GitHub computes mergeability when it is first asked and answers
+          # null until it has, and asking again is what finds the result. The
+          # rounds cover every bump at once, so the wait is POLL_TRIES - 1
+          # sleeps of POLL_SECONDS however many are open: fifteen seconds is
+          # long enough for it to be ready more often than not, and eight
+          # rounds is about two minutes, several times what a computation was
+          # observed to take. A bump still unknown after that is left to the
+          # next run, and said so.
+          POLL_SECONDS: "15"
+          POLL_TRIES: "8"
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          note() { echo "- $*" >> "$GITHUB_STEP_SUMMARY"; }
+          candidates=()
+          finish() { echo "candidates=${candidates[*]:-}" >> "$GITHUB_OUTPUT"; }
+          list_bumps() {
+            gh api --paginate "repos/$repo/pulls?state=open&base=main&per_page=100" \
+              --jq '.[] | select(.user.login == "dependabot[bot]") | .number'
+          }
+
+          numbers="$(list_bumps)"
+          if [ -z "$numbers" ]; then
+            note "No open Dependabot pull requests."
+            finish
+            exit 0
+          fi
+
+          # Give Dependabot its chance. Nothing is judged until main's tip is
+          # GRACE_SECONDS old, and it is read AGAIN after every sleep: a merge
+          # that a bump makes starts no workflow, so nothing else restarts a
+          # wait that is already running. A tip dated in the future counts as
+          # brand new rather than as a reason to sleep past the limit.
+          waited=0
+          while true; do
+            tip_date="$(gh api "repos/$repo/commits/main" --jq '.commit.committer.date')"
+            tip_age=$(( $(date +%s) - $(date -d "$tip_date" +%s) ))
+            [ "$tip_age" -ge 0 ] || tip_age=0
+            [ "$tip_age" -lt "$GRACE_SECONDS" ] || break
+            need=$((GRACE_SECONDS - tip_age))
+            if [ $((waited + need)) -gt "$WAIT_LIMIT_SECONDS" ]; then
+              note "main is still moving (its tip is ${tip_age}s old after waiting ${waited}s); the next run will look."
+              finish
+              exit 0
+            fi
+            note "main's tip is ${tip_age}s old; waiting ${need}s for Dependabot to rebase on its own."
+            sleep "$need"
+            waited=$((waited + need))
+          done
+          # Dependabot will have merged, closed or rebased some of the list by
+          # now, so it is read again.
+          numbers="$(list_bumps)"
+          if [ -z "$numbers" ]; then
+            note "No open Dependabot pull requests are left."
+            finish
+            exit 0
+          fi
+
+          declare -A state mergeable head
+          fetch() {
+            local pr
+            pr="$(gh api "repos/$repo/pulls/$1")"
+            state[$1]="$(jq -r '.state' <<<"$pr")"
+            mergeable[$1]="$(jq -r '.mergeable' <<<"$pr")"
+            head[$1]="$(jq -r '.head.sha' <<<"$pr")"
+          }
+
+          # The first request is what starts GitHub computing, so make it for
+          # all of them before waiting on any.
+          for n in $numbers; do fetch "$n"; done
+          for ((round = 1; round < POLL_TRIES; round++)); do
+            pending=""
+            for n in $numbers; do
+              if [ "${state[$n]}" = open ] && [ "${mergeable[$n]}" = null ]; then
+                pending="$pending $n"
+              fi
+            done
+            [ -n "$pending" ] || break
+            sleep "$POLL_SECONDS"
+            for n in $pending; do fetch "$n"; done
+          done
+
+          for n in $numbers; do
+            # The list is a snapshot and a bump can close while this waits; a
+            # closed pull request still reports itself as conflicting.
+            if [ "${state[$n]}" != open ]; then
+              note "#$n: no longer open."
+              continue
+            fi
+            case "${mergeable[$n]}" in
+              true)
+                note "#$n: mergeable."
+                continue
+                ;;
+              false) ;;
+              *)
+                note "#$n: GitHub had not computed whether it conflicts; the next run will look again."
+                continue
+                ;;
+            esac
+
+            # A commit that is neither Dependabot's nor marked as disposable
+            # (any of the four spellings Dependabot reads) makes Dependabot
+            # refuse a rebase, so asking is pointless and is not done. A
+            # commit with no resolvable author has a null login, which is not
+            # Dependabot's either.
+            foreign="$(gh api --paginate "repos/$repo/pulls/$n/commits?per_page=100" \
+              --jq '.[] | select(.author.login != "dependabot[bot]" and ((.commit.message | test("\\[(dependabot[ -]skip|skip[ -]dependabot)\\]"; "i")) | not)) | .sha[0:7]')"
+            if [ -n "$foreign" ]; then
+              note "#$n: conflicts with main, but carries commits that are neither Dependabot's nor marked [dependabot skip] ($(tr '\n' ' ' <<<"$foreign")); Dependabot would refuse to rebase it, so it is left for whoever added them."
+              echo "::warning::#$n conflicts with main and carries a person's commits; Dependabot will not rebase it."
+              continue
+            fi
+
+            candidates+=("$n:${head[$n]}")
+            note "#$n: conflicts, and Dependabot has not rebased it."
+          done
+          finish
+
+  ask:
+    name: ask Dependabot to rebase
+    needs: find
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.repository.fork }}
+
+    # The one place the secret is released, and only to a run on `main`: the
+    # environment's deployment branches are checked by the `find` job this one
+    # needs (see the header). The job runs on every run, even with nothing to
+    # ask, so that an empty or expired token is met by name at the next run and
+    # not on the day a bump needs asking. That puts a deployment on the
+    # environment each time.
+    environment: dependabot-rebase
+
+    # The workflow's own token is not used here at all.
+    permissions: {}
+    timeout-minutes: 15
+
+    steps:
+      - name: the token is configured and accepted
+        env:
+          GH_TOKEN: ${{ secrets.DEPENDABOT_REBASE_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::DEPENDABOT_REBASE_TOKEN must be a secret of the dependabot-rebase ENVIRONMENT."
+            echo "Settings -> Environments -> dependabot-rebase -> Environment secrets, with deployment branches limited to main."
+            echo "It is not a Dependabot secret: this workflow is started by a merge or the schedule, not by Dependabot."
+            echo "The token is a fine-grained personal access token for this repository only, with Pull requests: read and write and nothing else, owned by an account with Write access."
+            echo "See the header of .github/workflows/dependabot-rebase.yml."
+            exit 1
+          fi
+          # This repository is public, so any token that is still valid can
+          # read it, whatever it was granted: a 401 is the one thing this can
+          # tell, and a missing scope or Write role shows at the comment.
+          if ! err="$(gh api "repos/$GITHUB_REPOSITORY" --silent 2>&1)"; then
+            if grep -q 'HTTP 401' <<<"$err"; then
+              echo "::error::GitHub refused DEPENDABOT_REBASE_TOKEN: it is expired, revoked or mistyped. Create a new fine-grained token (see the header of .github/workflows/dependabot-rebase.yml) and replace the environment secret."
+            else
+              echo "::error::Could not check DEPENDABOT_REBASE_TOKEN against $GITHUB_REPOSITORY: $(tr '\n' ' ' <<<"$err")"
+            fi
+            exit 1
+          fi
+
+      - name: ask for the rebase
+        id: ask
+        env:
+          GH_TOKEN: ${{ secrets.DEPENDABOT_REBASE_TOKEN }}
+          CANDIDATES: ${{ needs.find.outputs.candidates }}
+          # Twelve hours: two full passes of the schedule over one unanswered
+          # request, against a Dependabot that answers in minutes.
+          UNANSWERED_HOURS: "12"
+        run: |
+          set -uo pipefail
+          repo="$GITHUB_REPOSITORY"
+          failed=0
+          unanswered=()
+          note() { echo "- $*" >> "$GITHUB_STEP_SUMMARY"; }
+
+          for item in $CANDIDATES; do
+            # Numbers and SHAs, from the job before; checked anyway, because
+            # this is the job that holds the token.
+            if [[ ! "$item" =~ ^[0-9]+:[0-9a-f]{40}$ ]]; then
+              echo "::error::unexpected entry in the list to ask: $item"
+              failed=1
+              continue
+            fi
+            n="${item%%:*}"
+            sha="${item#*:}"
+
+            # The list is minutes old by now. Ask only if the bump is still
+            # open, still on the commit that was judged, and still conflicting.
+            if ! pr="$(gh api "repos/$repo/pulls/$n")"; then
+              echo "::error::could not read #$n"
+              failed=1
+              continue
+            fi
+            if [ "$(jq -r '.state' <<<"$pr")" != open ] \
+              || [ "$(jq -r '.head.sha' <<<"$pr")" != "$sha" ] \
+              || [ "$(jq -r '.mergeable' <<<"$pr")" != false ]; then
+              note "#$n: changed since it was judged; not asked."
+              continue
+            fi
+
+            # Asking is once per head commit. Only a request from somebody who
+            # can be a maintainer counts, and it is judged HERE, with the
+            # personal token: the workflow's own cannot see a private
+            # organisation member and would read this account's own comment as
+            # a stranger's. Both timestamps are UTC ISO-8601 with a trailing Z,
+            # which sorts as text.
+            if ! head_date="$(gh api "repos/$repo/commits/$sha" --jq '.commit.committer.date')" \
+              || ! asked="$(gh api --paginate "repos/$repo/issues/$n/comments?per_page=100" \
+                --jq '.[] | select((.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") and (.body | test("^@dependabot (rebase|recreate)\\b"))) | .created_at' \
+                | sort | tail -n 1)"; then
+              echo "::error::could not read the history of #$n"
+              failed=1
+              continue
+            fi
+            if [ -n "$asked" ] && [[ "$asked" > "$head_date" ]]; then
+              age=$(( $(date +%s) - $(date -d "$asked" +%s) ))
+              if [ "$age" -gt $((UNANSWERED_HOURS * 3600)) ]; then
+                unanswered+=("#$n:$((age / 3600))h")
+              fi
+              note "#$n: conflicts; already asked at $asked."
+              continue
+            fi
+
+            if err="$(gh api "repos/$repo/issues/$n/comments" -f body='@dependabot rebase' --silent 2>&1)"; then
+              note "#$n: conflicts; asked Dependabot to rebase it."
+            elif grep -q 'HTTP 401' <<<"$err"; then
+              echo "::error::GitHub refused DEPENDABOT_REBASE_TOKEN (expired, revoked or mistyped) when commenting on #$n."
+              failed=1
+            elif grep -qE 'HTTP (403|404)' <<<"$err"; then
+              echo "::error::DEPENDABOT_REBASE_TOKEN may not comment on #$n ($(tr '\n' ' ' <<<"$err")). It needs Pull requests: read and write on this repository, the organisation's approval where it asks for one, and an account with Write access."
+              failed=1
+            else
+              echo "::error::commenting on #$n failed: $(tr '\n' ' ' <<<"$err")"
+              failed=1
+            fi
+          done
+          echo "unanswered=${unanswered[*]:-}" >> "$GITHUB_OUTPUT"
+          exit "$failed"
+
+      # Last, so that everything that could be asked has been. A warning on a
+      # run that passes tells nobody, and a request nobody acted on is the one
+      # thing this workflow cannot repair.
+      - name: requests nobody has acted on
+        if: ${{ !cancelled() }}
+        env:
+          UNANSWERED: ${{ steps.ask.outputs.unanswered }}
+          UNANSWERED_HOURS: "12"
+        run: |
+          if [ -n "$UNANSWERED" ]; then
+            echo "::error::Still conflicting after a rebase was asked for more than ${UNANSWERED_HOURS}h ago: $UNANSWERED. Either Dependabot is not acting on a request from this account (it needs the Write role on this repository; a comment from an account without it counts as a request here and is ignored there) or the bump needs a person."
+            exit 1
+          fi

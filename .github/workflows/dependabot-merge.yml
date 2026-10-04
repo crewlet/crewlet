@@ -25,7 +25,8 @@ name: dependabot-merge
 on:
   pull_request:
     # `synchronize` earns its place as much as `opened` does. Dependabot
-    # force-pushes a rebase whenever `main` moves under an open bump, and a
+    # force-pushes a rebase when a bump conflicts with `main` after a push
+    # there, when its schedule runs, and on `@dependabot rebase`, and a
     # protection rule that dismisses stale approvals throws the approval away
     # with the old head — so without this the rebased pull request sits
     # approved by nobody, forever, and the auto-merge it is queued for never
@@ -58,9 +59,12 @@ jobs:
     # hands that commit the approval branch protection is asking for, which is
     # a way to have your own change approved by the repository itself.
     #
-    # The cost is that a maintainer's own "Update branch" click leaves the pull
-    # request unapproved, because the run it triggers is skipped. `@dependabot
-    # rebase` re-pushes as Dependabot and recovers it.
+    # The cost, under a rule that dismisses stale approvals, is that a
+    # maintainer's own "Update branch" click can leave the pull request
+    # unapproved, because the run it triggers is skipped. `@dependabot recreate`
+    # from a person with push access re-pushes as Dependabot and recovers it.
+    # Not `rebase`: the merge commit that click made is one Dependabot did not
+    # write, and it refuses to rebase a branch that holds one.
     if: >-
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.actor == 'dependabot[bot]'
@@ -72,18 +76,75 @@ jobs:
       # the same suites for a patch as for a major, so the update type is not
       # what decides whether this lands. A step whose outputs nothing reads is
       # a gate that is not there, and it reads like one that is.
-      - name: approve
-        run: gh pr review --approve "$PR_URL"
+
+      # APPROVE ONLY WHILE GITHUB STILL SAYS ONE IS NEEDED. The guard above lets
+      # through only what Dependabot itself does to the pull request: it opens
+      # it, and then rebases or recreates it each time a push to `main` puts it
+      # in conflict (the bundle commit dependabot-dashboard.yml pushes is made by another
+      # account, so the run it triggers is skipped and never gets here). Under a
+      # rule that keeps approvals across pushes, which `main` has today, every
+      # one of those after the first finds the pull request already approved:
+      # approving again stacks a review on the timeline for each rebase and
+      # changes nothing about whether it merges.
+      #
+      # `reviewDecision` is GitHub's own answer, computed against the rule that
+      # governs the base branch, so it covers what counting APPROVED reviews
+      # cannot: how many approvals are required, an approval that does not
+      # count because of who pushed last, a required reviewer. An approval a
+      # rule has since dismissed reads as REVIEW_REQUIRED, and this approves
+      # again. Two values skip. APPROVED is the point of the check.
+      # CHANGES_REQUESTED is somebody's standing objection, which this account's
+      # approval does not clear.
+      #
+      # Everything else approves, and that includes an EMPTY decision, on
+      # purpose. GitHub leaves it empty when nothing requires a review, and it
+      # has been reported to stay empty while a requirement that comes from a
+      # ruleset still blocks the merge (radius-project/radius#13111); whether
+      # `main`'s own ruleset does has not been observed here. In the first case
+      # an approval is harmless; in the second it is what unblocks the merge.
+      # Skipping on anything but a positive APPROVED would let a doubt stall
+      # every bump with nothing red to show for it, where a redundant review
+      # costs one line on the timeline.
+      #
+      # The commit THIS run was started for is named, and that is what makes
+      # the approval mean anything. `gh pr review --approve` sends no commit,
+      # and GitHub then attaches the review to whatever the head is at that
+      # moment. So a run whose approve step executes after a push has landed
+      # (dependabot-dashboard.yml pushes a rebuilt bundle a minute or two after
+      # `opened`), or a maintainer re-running an old run (a re-run keeps
+      # `github.actor`, so it passes the guard above), would approve a commit
+      # no event named: the bundle commit, or one a person pushed onto the
+      # branch. Named explicitly, an approval of a commit that is no longer the
+      # head is stale from the moment it is made, which is how a protection
+      # rule that dismisses stale approvals is meant to see it.
+      - name: approve, if one is still needed
+        run: |
+          decision="$(gh pr view "$PR_URL" --json reviewDecision --jq .reviewDecision)"
+          case "$decision" in
+            APPROVED | CHANGES_REQUESTED)
+              echo "Review decision is ${decision}: nothing to approve."
+              exit 0
+              ;;
+          esac
+          echo "Review decision is '${decision}': approving ${HEAD_SHA}."
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
+            -f event=APPROVE -f commit_id="$HEAD_SHA"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # --squash, not --merge: a pull request lands as ONE commit whose subject
       # is the pull request title (CONTRIBUTING.md), and that same title is the
       # line the generated release notes carry.
       #
-      # --auto is the whole safety property. Drop it and this merges on the
-      # spot, before a single check has reported.
+      # --auto queues the merge behind the checks `main` requires. Drop it and,
+      # while that rule stands, this step goes red and nothing merges, because
+      # the hold is the rule's and `gh pr merge` refuses a pull request it
+      # blocks; with no such rule it would merge on the spot, before a single
+      # check has reported, which is the case the header warns about.
       - name: queue auto-merge
         run: gh pr merge --auto --squash "$PR_URL"
         env:

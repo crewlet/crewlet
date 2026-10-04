@@ -155,7 +155,10 @@ jobs:
       # The cost is real and worth knowing: a new Node major lands here with
       # no commit, so this job can go red on a day nobody changed anything.
       # When that happens the fix is `lts/*` (the current LTS, which lags a
-      # major behind), not a hand-maintained number.
+      # major behind), not a hand-maintained number. Make it in
+      # dependabot-dashboard.yml's `build` job in the same commit: that job
+      # rebuilds the bundle this one diffs, and is only worth anything if it
+      # runs on the same node.
       - uses: actions/setup-node@v7
         with:
           node-version: latest
@@ -353,10 +356,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      # `latest` is deliberate, and it is one of the three floating versions
-      # in this repository: the other two are the `node-version: latest` in
-      # the `dashboard` and `end-to-end gates` jobs above, each held that way
-      # for its own reason stated at its own line.
+      # `latest` is deliberate, and it is one of the four floating versions
+      # in this repository: the other three are the `node-version: latest` in
+      # the `dashboard` and `end-to-end gates` jobs above and in
+      # dependabot-dashboard.yml's `build` job, each held that way for its own
+      # reason stated at its own line.
       #
       # Here the reason is that Dependabot bumps the ACTION ref
       # (`golangci-lint-action@v9`) and never a `with:` input, so a pinned
