@@ -227,9 +227,9 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 		// this node has not applied yet waits on — the sign-in above
 		// answers before it does.
 		Applier: reader,
-		// THE CHART VIEW, and the ZERO VALUE on a node with no chart
-		// domain — never nil, which internal/iam/session reads as the
-		// seatless arm. See [engine.SeatViewOf].
+		// THE SEAT VIEW over the company this node runs — never nil, which
+		// internal/iam/session reads as the seatless arm; a node running no
+		// company yet answers UNKNOWN. See [engine.SeatViewOf].
 		Chart:    engine.SeatViewOf(e),
 		External: boot.API.ExternalBase(),
 		// The same trail, whose once-per-lineage claim is what keeps a

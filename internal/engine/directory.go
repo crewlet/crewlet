@@ -17,8 +17,8 @@ import (
 // company was published and at no other moment. Whether a human seat's contact
 // identities may route now also depends on the person holding it (see
 // internal/notify's directory.go) — and suspending that person is ONE record
-// on the identity log, with no org-chart record and no config apply anywhere
-// near it. Nothing on the publish path would ever see it.
+// on the identity log, with no config apply anywhere near it. Nothing on the
+// publish path would ever see it.
 //
 // So the identity applier signals after a committed batch that moved a seat's
 // standing, and this file turns the signal into a rebuild: read the directory
@@ -32,9 +32,9 @@ import (
 //
 // Every node applies every identity record — the domain runs on every node,
 // whatever its roles — so each one rebuilds its OWN registry from its OWN rows
-// within its own apply. The change feed would be the wrong carrier for the same
-// reason it is for the chart view: it relays a record to one node, and the rest
-// would go on attributing a suspended person's messages to their seat. The
+// within its own apply. The change feed would be the wrong carrier: it relays a
+// record to one node, and the rest would go on attributing a suspended
+// person's messages to their seat. The
 // chart-only reading is left to an engine with no core runtime at all, which
 // is `crewlet validate` and a test — every engine [New] builds opens the
 // directory at boot, a node with no company included.
