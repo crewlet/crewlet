@@ -561,8 +561,8 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		// another handle 400 naming where the seat sits, a well-formed one
 		// admission's 403 naming its unit, and a missing id 404.
 		if inOrgChart(kind) {
-			company, err := s.open(active)
-			if err != nil {
+			var company *config.Company
+			if company, err = s.open(active); err != nil {
 				s.fail(w, "open the active revision", err)
 				return
 			}
