@@ -33,11 +33,11 @@ import (
 // # What it is for
 //
 // The authority rules are each tested where they live — the registry's grant
-// check, the guard's resolution, the chart surface's own split. What no one of
-// them covers is the COMPOSITION: a request travels the CORS gate, the guard,
-// the CSRF gate, the drain gate and the route's own rule, and a hole is
-// something that opens between two of them rather than inside either. Every
-// case here goes through api.App, the way a caller does.
+// check, the guard's resolution, the configuration surface's own grants. What
+// no one of them covers is the COMPOSITION: a request travels the CORS gate,
+// the guard, the CSRF gate, the drain gate and the route's own rule, and a
+// hole is something that opens between two of them rather than inside
+// either. Every case here goes through api.App, the way a caller does.
 //
 // And the hole this matrix did not see is the reason it grew. The deployment's
 // own controls — the budget reset, the backup, the retention and capacity
