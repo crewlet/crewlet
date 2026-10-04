@@ -562,8 +562,6 @@ const (
 	// CodeBudgetExhausted is a call that would spend tokens refused because
 	// a window of the company's budget has no room left; nothing was spent.
 	CodeBudgetExhausted Code = "budget_exhausted"
-	// CodePeerUpgrading is a gesture the fleet has a node too old to carry.
-	CodePeerUpgrading Code = "peer_upgrading"
 
 	// THE ACT ROUTE'S OWN — `POST /operator/act/{tool}`, the dashboard's
 	// write transport — about the request rather than the tool.
@@ -807,8 +805,6 @@ var codes = map[Code]string{
 	CodeBudgetExhausted: "The token budget for this window is spent, so " +
 		"nothing was spent on this. Raise it, or wait for the window to turn " +
 		"over.",
-	CodePeerUpgrading: "The node that would carry this out is mid-upgrade. " +
-		"Try again once the fleet has finished.",
 	CodeUnknownTool: "This engine does not make that change. It may be running " +
 		"a different version from the client — reload.",
 	CodeReadOnlyTool: "That is a read, and this route only makes changes. Ask " +

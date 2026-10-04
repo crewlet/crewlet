@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -39,7 +38,6 @@ func (e *Engine) armSandboxTails(ctx context.Context) error {
 		return nil
 	}
 	e.sandboxTails.Queue = e.backends.Queue
-	e.sandboxTails.Features = coord.FeatureReader{Leases: e.backends.Coord}
 	stop, err := sandbox.ServeTail(ctx, e.backends.Queue, owner, pending, e.sandboxManager, nil)
 	if err != nil {
 		return err

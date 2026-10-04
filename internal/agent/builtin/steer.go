@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -92,14 +91,10 @@ type SteerDeps struct {
 //
 // What it refuses is what the running node said: `not_running` for a turn that
 // has ended, `conflict` for one already holding as many unread notes as it
-// takes, `steer_unsupported` for one whose executor runs as a coding CLI's own
-// loop — and, before asking anybody, `peer_upgrading` while any live node runs
-// a build that cannot take a note at all. That last one is the fleet, not the
-// seat: the note names a turn, and which node runs it is not known until one
-// answers, so every node that could be the one has to be able to.
+// takes, and `steer_unsupported` for one whose executor runs as a coding CLI's
+// own loop.
 type steerTurn struct {
 	deps      SteerDeps
-	fleet     Fleet
 	authorize Authorizer
 
 	// org resolves the seat a probe names by its id, per call because a
@@ -171,9 +166,6 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				long.Runes, steer.MaxNoteRunes)), nil
 		}
 		return failed("steer_turn needs a `note` — what the running turn should take into account."), nil
-	}
-	if refusal := fleetCanCarry(ctx, t.fleet, SteerTurnTool, coord.FeatureSteer); refusal != nil {
-		return *refusal, nil
 	}
 	if refusal := t.maySteer(ctx, turnID); refusal != nil {
 		return *refusal, nil

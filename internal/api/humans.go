@@ -15,7 +15,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
@@ -360,11 +359,6 @@ func operatorSurface(e *engine.Engine, authority authz.Chart) (*operator.Server,
 		// registry is built with — one table, one function, every surface.
 		// It reads the chart per call, because an apply replaces it.
 		Authorize: builtin.Decide(authority),
-		// WHAT EACH NODE CAN CARRY OUT, read off the same lease table the
-		// seat host heartbeats into, so a verb the node holding a seat has
-		// not been upgraded to carry is refused rather than accepted and
-		// never done.
-		Fleet: coord.FeatureReader{Leases: e.Backends().Coord},
 		Runs: builtin.RunDeps{Desk: sandbox.AnswerDesk{
 			Pending: sandbox.NewCoordStore(e.Backends().Fleet),
 			Queue:   e.Backends().Queue,

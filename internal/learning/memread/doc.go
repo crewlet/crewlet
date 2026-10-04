@@ -31,10 +31,6 @@
 //   - a peer — asked, on an ephemeral scatter ([topics.HeldRead]) that only
 //     the named incarnation answers. Silence past [DefaultBudget] is an
 //     UNKNOWN, never an empty memory: the holder was named and did not say.
-//     Before asking, the asker reads what that incarnation's build
-//     advertises ([coord.FeatureHeldRead]): a holder on a build that serves
-//     no such subject is unavailable AT ONCE and says so, rather than
-//     waited on for the whole budget on every poll of a rolling upgrade.
 //
 // A node with no broker has no peer, and its store is the only copy there is:
 // it answers every read itself.

@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/queue"
 	queuemem "github.com/crewlet/crewlet/internal/queue/memory"
@@ -29,17 +28,6 @@ const (
 	askerOwner = "n1:asker"
 	boxOwner   = "n2:owner"
 )
-
-// everyBuildServes is a fleet whose every node answers a tail request.
-type everyBuildServes map[string]bool
-
-func (f everyBuildServes) OwnerFeature(_ context.Context, owner string, feature coord.Feature) (bool, error) {
-	if feature != coord.FeatureSandboxTail {
-		return false, nil
-	}
-	serves, known := f[owner]
-	return !known || serves, nil
-}
 
 func newTailRig(t *testing.T) *tailRig {
 	t.Helper()
@@ -105,10 +93,10 @@ func (rig *tailRig) serve(t *testing.T, owner string) {
 }
 
 // reader is the asking node's reader.
-func (rig *tailRig) reader(t *testing.T, features TailFeatures) *TailReader {
+func (rig *tailRig) reader(t *testing.T) *TailReader {
 	return &TailReader{
 		Owner: askerOwner, Pending: rig.pending, Queue: rig.client(t),
-		Features: features, Budget: 200 * time.Millisecond,
+		Budget: 200 * time.Millisecond,
 		// The ASKER has no sandbox backend of its own: an answer that
 		// came from here instead of from the owner would fail loudly.
 		Manager: func() *Manager { return nil },
@@ -139,7 +127,7 @@ func TestOnlyTheOwnerAnswersATailRequest(t *testing.T) {
 	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
 	rig.serve(t, boxOwner)
 
-	got, err := rig.reader(t, everyBuildServes{}).Tail(t.Context(), "t1", rig.launch)
+	got, err := rig.reader(t).Tail(t.Context(), "t1", rig.launch)
 	if err != nil {
 		t.Fatalf("Tail: %v", err)
 	}
@@ -191,30 +179,12 @@ func TestASilentOwnerIsNamedNotEmpty(t *testing.T) {
 	rig := newTailRig(t)
 	rig.runner.SetOutput(Output{Text: "never read", Source: SourceTranscript})
 
-	got, err := rig.reader(t, everyBuildServes{}).Tail(t.Context(), "t1", rig.launch)
+	got, err := rig.reader(t).Tail(t.Context(), "t1", rig.launch)
 	if err != nil {
 		t.Fatalf("Tail: %v", err)
 	}
 	if got.Outcome != TailOwnerSilent || got.Node != "n2" || got.Output != nil {
 		t.Errorf("answer = %+v; want owner_silent naming n2 and no output", got)
-	}
-}
-
-// AN OWNER ON AN OLDER BUILD IS NOT ASKED, and is not called silent: asking
-// would wait out the budget on every poll for a reply that can never come.
-func TestAnOwnerThatCannotAnswerIsNotAsked(t *testing.T) {
-	t.Parallel()
-	rig := newTailRig(t)
-	rig.serve(t, boxOwner)
-	got, err := rig.reader(t, everyBuildServes{boxOwner: false}).Tail(t.Context(), "t1", rig.launch)
-	if err != nil {
-		t.Fatalf("Tail: %v", err)
-	}
-	if got.Outcome != TailOwnerUpgrading || got.Node != "n2" {
-		t.Errorf("answer = %+v; want owner_upgrading naming n2", got)
-	}
-	if rig.runner.Peeks() != 0 {
-		t.Errorf("an owner that serves no tail was asked anyway (%d peeks)", rig.runner.Peeks())
 	}
 }
 
@@ -224,14 +194,14 @@ func TestATailOfAJobThatIsNotRunningSaysWhy(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	rig.serve(t, boxOwner)
-	got, err := rig.reader(t, everyBuildServes{}).Tail(t.Context(), "t1", "an-earlier-job")
+	got, err := rig.reader(t).Tail(t.Context(), "t1", "an-earlier-job")
 	if err != nil {
 		t.Fatalf("Tail: %v", err)
 	}
 	if got.Outcome != TailNotRunning || got.Status != StatusReplaced {
 		t.Errorf("answer = %+v; want not_running, replaced", got)
 	}
-	gone, err := rig.reader(t, everyBuildServes{}).Tail(t.Context(), "no-such-run", "x")
+	gone, err := rig.reader(t).Tail(t.Context(), "no-such-run", "x")
 	if err != nil || gone.Outcome != TailNotRunning || gone.Status != "" {
 		t.Errorf("a run with no record = %+v, %v; want not_running with no status", gone, err)
 	}
@@ -247,7 +217,7 @@ func TestAnOwnerThatCannotReadTheBoxSaysSo(t *testing.T) {
 	rig := newTailRig(t)
 	rig.runner.PeekErr = errFakeBox
 	rig.serve(t, boxOwner)
-	_, err := rig.reader(t, everyBuildServes{}).Tail(t.Context(), "t1", rig.launch)
+	_, err := rig.reader(t).Tail(t.Context(), "t1", rig.launch)
 	if err == nil || !strings.Contains(err.Error(), "n2 owns run t1") ||
 		!strings.Contains(err.Error(), errFakeBox.Error()) {
 		t.Errorf("Tail err = %v; want the owner's own failure, naming it", err)
@@ -261,7 +231,7 @@ func TestTheOwnerReadsItsOwnBoxDirectly(t *testing.T) {
 	rig.runner.SetOutput(Output{Text: "local", Source: SourceStderr})
 	reader := &TailReader{
 		Owner: boxOwner, Pending: rig.pending, Queue: rig.client(t),
-		Features: everyBuildServes{}, Manager: func() *Manager { return rig.manager },
+		Manager: func() *Manager { return rig.manager },
 	}
 	got, err := reader.Tail(t.Context(), "t1", rig.launch)
 	if err != nil || got.Outcome != TailRunning || got.Output.Text != "local" || got.Output.AsOf.IsZero() {

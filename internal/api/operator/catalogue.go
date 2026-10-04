@@ -163,12 +163,6 @@ type Options struct {
 	// refusal [builtin.OperatorTools] makes of a nil one on every call.
 	Authorize builtin.Authorizer
 
-	// Fleet reads what each node's build can carry out, off the presence
-	// heartbeat, so a verb carried out by the node holding a seat is
-	// refused `peer_upgrading` while that node cannot. Nil refuses those
-	// verbs as unavailable.
-	Fleet builtin.Fleet
-
 	// Runs answers a parked coding run by its turn (`answer_run`). A zero
 	// value serves no such tool. Its Actor is set per call.
 	Runs builtin.RunDeps
@@ -204,7 +198,6 @@ type Server struct {
 	halves    func() (Halves, bool)
 	org       func() *org.Organization
 	authorize builtin.Authorizer
-	fleet     builtin.Fleet
 	runs      builtin.RunDeps
 	pauses    builtin.SeatPauseDeps
 	steer     builtin.SteerDeps
@@ -244,7 +237,7 @@ func New(opts Options) (*Server, error) {
 	}
 	return &Server{
 		halves: opts.Halves, org: opts.Org, authorize: opts.Authorize,
-		fleet: opts.Fleet, runs: opts.Runs, pauses: opts.Pauses,
+		runs: opts.Runs, pauses: opts.Pauses,
 		steer: opts.Steer, answer: opts.Answer, audit: opts.Audit,
 	}, nil
 }
@@ -293,7 +286,7 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 		workActor, workActor, workActor, workActor
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: work, Pages: kb, Knowledge: halves.Knowledge, Org: s.org,
-		Authorize: s.authorize, Fleet: s.fleet, Runs: runs, Pauses: pauses,
+		Authorize: s.authorize, Runs: runs, Pauses: pauses,
 		Steer: steer, Answer: answer,
 	})
 	c := catalogue{

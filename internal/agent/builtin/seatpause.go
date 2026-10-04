@@ -104,12 +104,6 @@ func (d SeatPauseDeps) wired() bool {
 // second; nothing here waits for it, because the record IS the pause and a
 // node that has not heard yet holds its mail the moment it does.
 //
-// # Every node has to be able to carry it
-//
-// Any live node may be the next to hold the seat, and an older build would run
-// its mail as if nothing had happened. So the gate asks all of them, and a
-// fleet mid-upgrade refuses `peer_upgrading` until every node has the build.
-//
 // # Whose decision it is
 //
 // The seat's lead's, or the deployment's ([authz.ActionSeatPause]) — decided
@@ -124,7 +118,6 @@ func (d SeatPauseDeps) wired() bool {
 // who asked for the stop.
 type pauseSeat struct {
 	deps      SeatPauseDeps
-	fleet     Fleet
 	authorize Authorizer
 }
 
@@ -182,9 +175,6 @@ func (t *pauseSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			n, MaxPauseReasonRunes)), nil
 	}
 	stop := argBool(args, "stop_running")
-	if refusal := fleetCanCarry(ctx, t.fleet, PauseSeatTool, coord.FeatureSeatPause); refusal != nil {
-		return *refusal, nil
-	}
 
 	for range pauseAttempts {
 		current, paused, err := t.deps.Pauses.SeatPause(ctx, seat.id)
@@ -241,7 +231,6 @@ func (t *pauseSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // state asked for. Decided as a pause is ([authz.ActionSeatResume]).
 type resumeSeat struct {
 	deps      SeatPauseDeps
-	fleet     Fleet
 	authorize Authorizer
 }
 
@@ -278,9 +267,6 @@ func (t *resumeSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, seat, refusal := resolvePauseCall(ctx, t.deps, t.authorize, turn,
 		ResumeSeatTool, args)
 	if refusal != nil {
-		return *refusal, nil
-	}
-	if refusal := fleetCanCarry(ctx, t.fleet, ResumeSeatTool, coord.FeatureSeatPause); refusal != nil {
 		return *refusal, nil
 	}
 	for range pauseAttempts {

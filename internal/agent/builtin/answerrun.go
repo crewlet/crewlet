@@ -11,7 +11,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -89,13 +88,9 @@ type runParties struct {
 // can, and it may be paused, restarting or mid-upgrade. What the answer became
 // is announced there as `sandbox_run_answered` (`resumed`, `not_awaiting` or
 // `gone`). What it refuses up front is what this node can know: a run that is
-// not waiting for an answer (`not_running`), and a fleet whose node holding the
-// seat runs a build that cannot route the answer (`peer_upgrading`) — an older
-// build would read it as an ordinary wake and run a turn about nothing while
-// the run waited on.
+// not waiting for an answer (`not_running`).
 type answerRun struct {
 	deps      RunDeps
-	fleet     Fleet
 	authorize Authorizer
 }
 
@@ -185,10 +180,6 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	if refusal := t.mayAnswer(ctx, actor, parties); refusal != nil {
-		return *refusal, nil
-	}
-	if refusal := seatCanCarry(ctx, t.fleet, AnswerRunTool, parties.seat, parties.handle,
-		coord.FeatureAnswerRunByTurn); refusal != nil {
 		return *refusal, nil
 	}
 

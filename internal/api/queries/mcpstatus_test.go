@@ -46,7 +46,7 @@ mcp_servers:
 `
 
 // presentNode puts one node on the lease table with the heartbeat a node
-// running this build publishes, or — with no status — an older build's.
+// publishes, or — with no status — one whose heartbeat carried none.
 func presentNode(t *testing.T, backend coord.Backend, id string, status *coord.NodeStatus) {
 	t.Helper()
 	meta := map[string]any{"roles": []string{"seats"}}
@@ -91,19 +91,17 @@ func mcpFleet(t *testing.T) coord.Backend {
 	}
 	backend := coordmemory.New()
 	presentNode(t, backend, "node-a", &coord.NodeStatus{
-		Features: []coord.Feature{coord.FeatureMCPStatus},
 		MCP: []coord.MCPServerStatus{
 			{Server: "docs", Shared: true, Started: 1, Tools: 4},
 			{Server: "github", Started: 2, Tools: 26},
 		},
 	})
 	presentNode(t, backend, "node-b", &coord.NodeStatus{
-		Features: []coord.Feature{coord.FeatureMCPStatus},
 		MCP: []coord.MCPServerStatus{
 			{Server: "github", Started: 1, Failed: 1, Tools: 25, Error: "401 Bad credentials", ErrorSeat: backendDev},
 		},
 	})
-	presentNode(t, backend, "node-c", &coord.NodeStatus{InFlight: 1})
+	presentNode(t, backend, "node-c", nil)
 	return backend
 }
 
@@ -161,9 +159,10 @@ func TestEachServerIsJudgedAcrossEveryNodesReport(t *testing.T) {
 	}
 }
 
-// AN OLDER NODE'S CELLS ARE UNKNOWN, NEVER ZERO. It publishes no report, and a
-// row of zeros under its name would read as "started nothing here" — the
-// confident zero the fleet answer is written to avoid.
+// A NODE THAT PUBLISHED NO STATUS HAS CELLS THAT ARE UNKNOWN, NEVER ZERO. A row
+// of zeros under its name would read as "started nothing here" — the confident
+// zero the fleet answer is written to avoid. A node that published a status
+// naming no server DID say: it started none.
 func TestANodeThatDoesNotReportIsUnknownNotIdle(t *testing.T) {
 	t.Parallel()
 	got := askMCPStatus(t, mcpSources(t, mcpFleet(t)))
@@ -176,11 +175,21 @@ func TestANodeThatDoesNotReportIsUnknownNotIdle(t *testing.T) {
 
 	// And a fleet where NOBODY reports says so, rather than "not started".
 	backend := coordmemory.New()
-	presentNode(t, backend, "node-c", &coord.NodeStatus{InFlight: 1})
+	presentNode(t, backend, "node-c", nil)
 	presentNode(t, backend, "node-d", nil)
 	for _, row := range askMCPStatus(t, mcpSources(t, backend)).Servers {
 		if row.State != queries.MCPUnreported {
 			t.Errorf("%s = %s in a fleet with no report, want unreported", row.Name, row.State)
+		}
+	}
+
+	// THE CONTROL: a status naming no server is a node that started none.
+	backend = coordmemory.New()
+	presentNode(t, backend, "node-c", &coord.NodeStatus{InFlight: 1})
+	for _, row := range askMCPStatus(t, mcpSources(t, backend)).Servers {
+		if row.State != queries.MCPNotStarted {
+			t.Errorf("%s = %s beside a node that reported starting nothing, want not_started",
+				row.Name, row.State)
 		}
 	}
 }
@@ -191,8 +200,7 @@ func TestAServerThatStartedNowhereIsFailing(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
 	presentNode(t, backend, "node-a", &coord.NodeStatus{
-		Features: []coord.Feature{coord.FeatureMCPStatus},
-		MCP:      []coord.MCPServerStatus{{Server: "docs", Shared: true, Failed: 1, Error: "exec: docs-mcp: not found"}},
+		MCP: []coord.MCPServerStatus{{Server: "docs", Shared: true, Failed: 1, Error: "exec: docs-mcp: not found"}},
 	})
 	if docs := serverRow(t, askMCPStatus(t, mcpSources(t, backend)), "docs"); docs.State != queries.MCPFailing {
 		t.Errorf("docs = %s, want failing", docs.State)
@@ -206,8 +214,7 @@ func TestAServerOnlyANodeReportsIsListedAsUnconfigured(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
 	presentNode(t, backend, "node-a", &coord.NodeStatus{
-		Features: []coord.Feature{coord.FeatureMCPStatus},
-		MCP:      []coord.MCPServerStatus{{Server: "retired", Shared: true, Started: 1, Tools: 3}},
+		MCP: []coord.MCPServerStatus{{Server: "retired", Shared: true, Started: 1, Tools: 3}},
 	})
 	row := serverRow(t, askMCPStatus(t, mcpSources(t, backend)), "retired")
 	if row.Configured || row.State != queries.MCPRunning || !row.Shared {

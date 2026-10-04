@@ -357,14 +357,6 @@ The consequences worth stating plainly:
 - **Rolling *back* across a protocol bump needs a full stop.** An older
   build has no protocol check at all, so it will happily take over a
   newer node's expired leases. Nothing in the table can stop it.
-- **A gesture a newer build carries out for a person is refused
-  `peer_upgrading` until the node that would carry it out has that
-  build.** Each node advertises what its build can do on its heartbeat,
-  and a gesture another node carries out asks first — so mid-rollout it is
-  refused by name rather than accepted by an older node that never acts on
-  it. A read that cannot conclude (a store blip, a node mid-drain) refuses
-  `unavailable` instead, which a retry clears. See
-  [Coordination](../concepts/coordination.md#why-a-gesture-asks-the-fleet-first).
 - **A node that leaves takes its turn-level history with it.** Every node's
   event store holds the events it published, and the dashboard's turns,
   traces and event log are read from every live node at query time. A node

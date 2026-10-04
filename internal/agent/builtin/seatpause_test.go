@@ -43,23 +43,6 @@ func (a *announced) types() []string {
 	return out
 }
 
-// everyNode answers the all-nodes gate, and the seat gate never.
-type everyNode struct {
-	has bool
-	err error
-}
-
-func (f everyNode) SeatFeature(context.Context, uuid.UUID, coord.Feature) (bool, error) {
-	return false, errors.New("the pause tools ask every node, never one")
-}
-
-func (f everyNode) AllLiveHave(_ context.Context, feature coord.Feature) (bool, error) {
-	if f.err != nil {
-		return false, f.err
-	}
-	return f.has && feature == coord.FeatureSeatPause, nil
-}
-
 // leadPairs is a chart whose one relation is "this handle leads that one", by
 // the exact strings, and nothing else: which is what makes a rule that asked
 // about the wrong name — a typed alias, a role — visible.
@@ -112,8 +95,7 @@ type pauseRig struct {
 
 // newPauseRig is the operator catalogue's pause tools over one store, called
 // as caller and decided by the real authority table over [seatLeads].
-func newPauseRig(t *testing.T, store builtin.SeatPauseStore, fleet builtin.Fleet,
-	caller iam.Principal) *pauseRig {
+func newPauseRig(t *testing.T, store builtin.SeatPauseStore, caller iam.Principal) *pauseRig {
 
 	t.Helper()
 	o := organization(t)
@@ -128,7 +110,6 @@ func newPauseRig(t *testing.T, store builtin.SeatPauseStore, fleet builtin.Fleet
 		rig.store = s
 	}
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
-		Fleet: fleet,
 		Pauses: builtin.SeatPauseDeps{
 			Pauses: store, Announce: pub,
 			Org:   func() *org.Organization { return o },
@@ -170,7 +151,7 @@ func (r *pauseRig) call(t *testing.T, name string, args map[string]any) (tools.R
 // (the seat is in the state asked for) and changes and announces nothing.
 func TestAPauseIsOneChangeAndASecondPauseIsNone(t *testing.T) {
 	t.Parallel()
-	rig := newPauseRig(t, coordmem.NewFleet(), everyNode{has: true}, boundTo("jane"))
+	rig := newPauseRig(t, coordmem.NewFleet(), boundTo("jane"))
 
 	_, got := rig.call(t, builtin.PauseSeatTool, map[string]any{
 		"handle": "agent-cto", "reason": "looping on one ticket",
@@ -209,7 +190,7 @@ func TestAPauseIsOneChangeAndASecondPauseIsNone(t *testing.T) {
 func TestAPauseAddsAStopToThePauseInPlace(t *testing.T) {
 	t.Parallel()
 	store := coordmem.NewFleet()
-	rig := newPauseRig(t, store, everyNode{has: true}, boundTo("omar"))
+	rig := newPauseRig(t, store, boundTo("omar"))
 	if _, _, err := store.CreateSeatPause(context.Background(), coord.SeatPause{
 		Seat: rig.cto, By: "jane", ByKind: iam.ActorHuman, Reason: "looping", At: time.Now(),
 	}); err != nil {
@@ -231,7 +212,7 @@ func TestAPauseAddsAStopToThePauseInPlace(t *testing.T) {
 // no-op, announced by nobody.
 func TestAResumeLiftsThePauseAndAnnouncesOnce(t *testing.T) {
 	t.Parallel()
-	rig := newPauseRig(t, coordmem.NewFleet(), everyNode{has: true}, boundTo("jane"))
+	rig := newPauseRig(t, coordmem.NewFleet(), boundTo("jane"))
 	rig.call(t, builtin.PauseSeatTool, map[string]any{"handle": "agent-cto"})
 	_, got := rig.call(t, builtin.ResumeSeatTool, map[string]any{"handle": "agent-cto"})
 	if got["outcome"] != "applied" || got["changed"] != true {
@@ -255,43 +236,12 @@ func TestAResumeLiftsThePauseAndAnnouncesOnce(t *testing.T) {
 	}
 }
 
-// A FLEET THAT CANNOT CARRY A PAUSE REFUSES IT, AND WRITES NOTHING.
-//
-// Any live node may be the next to hold the seat, and one on an older build
-// would run its mail as if it were not paused. `peer_upgrading` when a node
-// definitively lacks the build, `unavailable` when the fleet could not be read.
-func TestAPauseRefusesAFleetThatCannotCarryIt(t *testing.T) {
-	t.Parallel()
-	for name, tc := range map[string]struct {
-		fleet builtin.Fleet
-		want  tools.Refusal
-	}{
-		"a node on an older build": {everyNode{has: false}, tools.RefusalPeerUpgrading},
-		"an unreadable fleet":      {everyNode{err: coord.ErrUnavailable}, tools.RefusalUnavailable},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			rig := newPauseRig(t, coordmem.NewFleet(), tc.fleet, boundTo("jane"))
-			for _, tool := range []string{builtin.PauseSeatTool, builtin.ResumeSeatTool} {
-				res, _ := rig.call(t, tool, map[string]any{"handle": "agent-cto"})
-				if !res.Failed || tools.RefusalOf(res) != tc.want {
-					t.Errorf("%s = %+v, want refused %s", tool, res, tc.want)
-				}
-			}
-			if _, found, _ := rig.store.SeatPause(context.Background(), rig.cto); found {
-				t.Error("a refused pause was recorded anyway")
-			}
-		})
-	}
-}
-
 // ONLY AN AGENT SEAT IS PAUSED, and a reason is one line. Asked by the
 // deployment's grant, which is admitted on any name — so what refuses each of
 // these is the tool, not the authority.
 func TestAPauseNamesAnAgentSeatAndALine(t *testing.T) {
 	t.Parallel()
-	rig := newPauseRig(t, coordmem.NewFleet(), everyNode{has: true},
-		boundTo("ops", iam.GrantFleetOperate))
+	rig := newPauseRig(t, coordmem.NewFleet(), boundTo("ops", iam.GrantFleetOperate))
 	for name, tc := range map[string]struct {
 		args map[string]any
 		want tools.Refusal
@@ -323,8 +273,7 @@ func (unreadablePauses) SeatPause(context.Context, uuid.UUID) (coord.SeatPause, 
 // written over a read that failed could overwrite one somebody just took.
 func TestAnUnreadablePauseRecordIsUnavailable(t *testing.T) {
 	t.Parallel()
-	rig := newPauseRig(t, unreadablePauses{coordmem.NewFleet()}, everyNode{has: true},
-		boundTo("jane"))
+	rig := newPauseRig(t, unreadablePauses{coordmem.NewFleet()}, boundTo("jane"))
 	for _, tool := range []string{builtin.PauseSeatTool, builtin.ResumeSeatTool} {
 		res, _ := rig.call(t, tool, map[string]any{"handle": "agent-cto"})
 		if !res.Failed || tools.RefusalOf(res) != tools.RefusalUnavailable {
@@ -359,7 +308,7 @@ func TestAPauseIsTheSeatsLeadsOrTheDeployments(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rig := newPauseRig(t, coordmem.NewFleet(), everyNode{has: true}, tc.caller)
+			rig := newPauseRig(t, coordmem.NewFleet(), tc.caller)
 			for _, tool := range []string{builtin.PauseSeatTool, builtin.ResumeSeatTool} {
 				res, _ := rig.call(t, tool, map[string]any{"handle": tc.handle})
 				switch {
@@ -388,7 +337,7 @@ func TestAPauseIsTheSeatsLeadsOrTheDeployments(t *testing.T) {
 // authority's refusal, the same as on a seat they do not lead.
 func TestAPauseOfANameNobodyHoldsIsRefusedAsTheAuthorityRefuses(t *testing.T) {
 	t.Parallel()
-	rig := newPauseRig(t, coordmem.NewFleet(), everyNode{has: true}, boundTo("jane"))
+	rig := newPauseRig(t, coordmem.NewFleet(), boundTo("jane"))
 	res, _ := rig.call(t, builtin.PauseSeatTool, map[string]any{"handle": "nobody"})
 	if !res.Failed || !errors.Is(res.Cause, builtin.ErrRefused) {
 		t.Errorf("a lead pausing a handle nobody holds was answered %+v, want the "+

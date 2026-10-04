@@ -934,8 +934,6 @@ without it the command mints one, `<uuidv7>.pause` or `<uuidv7>.resume`. An
 `-op-id` so the retry is the same operation rather than a second one. Pass it
 exactly as printed: it carries the instant it was minted, which a node reads
 to decide whether it can still vouch for a retry.
-A fleet mid-upgrade refuses both `peer_upgrading` until every live node runs a
-build that can carry a pause.
 
 ## `crewlet retention`
 
