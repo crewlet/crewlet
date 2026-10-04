@@ -121,7 +121,7 @@ export type CheckOutcome =
       readonly reason: ConflictReason;
       readonly currentRevisionId: string | null;
     }
-  | { readonly status: "guarded" }
+  | { readonly status: "guarded"; readonly code: string }
   | { readonly status: "unreachable"; readonly detail: string };
 
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
@@ -166,7 +166,7 @@ export function classifyCheck(
   const refusal = classifyConfigRefusal(answer);
   switch (refusal.kind) {
     case "guarded":
-      return { status: "guarded" };
+      return { status: "guarded", code: refusal.code };
     case "conflict":
       return {
         status: "conflict",

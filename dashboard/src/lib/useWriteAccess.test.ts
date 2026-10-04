@@ -8,9 +8,11 @@ import { describe, expect, test } from "vitest";
 import {
   CONFIG_WRITE_REASONS,
   WRITE_REASONS,
+  configGuardedReason,
   configWriteAccess,
   writeAccess,
 } from "./useWriteAccess.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
 import type { ViewerState } from "./viewer.ts";
 
 const BOUND: ViewerState = {
@@ -147,5 +149,29 @@ describe("changing the company's configuration", () => {
       block: "held",
       reason: "these are Rui's",
     });
+  });
+});
+
+// A REFUSED /config WRITE IS SAID BY ITS CODE. The browser holds no token, so
+// "the engine did not take this token" sent a person looking for one; and a
+// 403 is not always the grant — a step-up they declined, or a write from
+// another site, sent to an administrator for a grant would never be cured.
+describe("a configuration write refused on authority", () => {
+  test("is the grant the gate names when the engine refused on the grant", () => {
+    expect(configGuardedReason("unauthorized")).toBe(CONFIG_WRITE_REASONS.no_grant);
+    // AN ANSWER WITH NO CODE is a refusal on authority all the same.
+    expect(configGuardedReason("")).toBe(CONFIG_WRITE_REASONS.no_grant);
+  });
+
+  test("is the guard's own refusal when the engine named another", () => {
+    expect(configGuardedReason("step_up_required")).toBe(ACT_ERRORS.step_up_required);
+    expect(configGuardedReason("csrf_origin")).toBe(ACT_ERRORS.csrf_origin);
+    expect(configGuardedReason("invalid_token")).toBe(ACT_ERRORS.invalid_token);
+  });
+
+  test("never speaks of a token", () => {
+    for (const code of ["unauthorized", "", "step_up_required", "csrf_origin", "invalid_token"]) {
+      expect(configGuardedReason(code)).not.toMatch(/token/i);
+    }
   });
 });

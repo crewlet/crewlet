@@ -38,6 +38,7 @@ import type { KeySource } from "./model/keys.ts";
 import type { BuilderState } from "./model/reducer.ts";
 import type { CheckOutcome, ConflictReason, SettledCheck } from "./model/scheduler.ts";
 import { saveRequest, type BuilderMode, type ConfigTransport } from "./model/transport.ts";
+import { configGuardedReason } from "~/lib/useWriteAccess.ts";
 import {
   classifySave,
   newWriteId,
@@ -124,7 +125,7 @@ function refusalMessage(outcome: CheckOutcome): string {
     case "problems":
       return "The engine refused the save. The problems it found are marked on the chart; fix them, then save again.";
     case "guarded":
-      return "The engine refused this browser's token. Set a token it accepts, then save again.";
+      return configGuardedReason(outcome.code);
     default:
       return "The engine refused the save.";
   }

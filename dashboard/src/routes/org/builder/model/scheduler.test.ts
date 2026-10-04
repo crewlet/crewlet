@@ -133,8 +133,14 @@ describe("classifyCheck", () => {
 
   test("refusals map to the states that halt, and failures to unreachable", () => {
     const cases: [HttpAnswer, unknown][] = [
-      [{ status: 401, body: { error: "unauthorized" } }, { status: "guarded" }],
-      [{ status: 403, body: {} }, { status: "guarded" }],
+      [
+        { status: 401, body: { error: "unauthorized" } },
+        { status: "guarded", code: "unauthorized" },
+      ],
+      [
+        { status: 403, body: {} },
+        { status: "guarded", code: "" },
+      ],
       [
         { status: 503, body: { error: "draining", detail: "restarting" } },
         { status: "unreachable", detail: "restarting" },

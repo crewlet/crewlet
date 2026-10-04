@@ -50,7 +50,7 @@ import {
   type ModelForm,
 } from "~/lib/models.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
-import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { configGuardedReason, useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import { introducedWarnings, type ConfigRefusal } from "~/protocol/configAnswer.ts";
 import { dryRunEntity, getEntity, putEntity } from "~/protocol/configWrite.ts";
 import { isAbort } from "~/protocol/rest.ts";
@@ -80,7 +80,7 @@ type SaveState =
 function refusalWords(refusal: ConfigRefusal, id: string): string {
   switch (refusal.kind) {
     case "guarded":
-      return "The engine did not take this token as an operator's, so nothing was changed.";
+      return configGuardedReason(refusal.code);
     case "conflict":
       return refusal.reason === "no_active_revision"
         ? "No company is configured any more, so there is no model to edit."

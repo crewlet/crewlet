@@ -28,6 +28,7 @@ import type { ConfigRefusal } from "~/protocol/configAnswer.ts";
 import type { TokenBudget } from "~/protocol/types.ts";
 import { PERIOD_ADJECTIVE, readCeiling } from "./budget.ts";
 import { fmtCount } from "./format.ts";
+import { configGuardedReason } from "./useWriteAccess.ts";
 
 export type Period = (typeof BUDGET_WINDOWS)[number]["period"];
 
@@ -183,11 +184,7 @@ export function refusalWords(
 ): { message: string; reload: boolean } {
   switch (refusal.kind) {
     case "guarded":
-      return {
-        message:
-          "The engine did not take this token as an operator's, so the ceiling was not changed.",
-        reload: false,
-      };
+      return { message: configGuardedReason(refusal.code), reload: false };
     case "conflict":
       return {
         message:

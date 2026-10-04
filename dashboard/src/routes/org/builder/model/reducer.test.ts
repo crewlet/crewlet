@@ -270,7 +270,7 @@ describe("keying the base", () => {
         generation: state.generation - 1,
         sent: toDocument(state.draft),
         baseRevision: "rev-1",
-        outcome: { status: "guarded" },
+        outcome: { status: "guarded", code: "unauthorized" },
       },
     };
     expect(run(state, stale)).toBe(state);
@@ -562,7 +562,7 @@ describe("keeping the log", () => {
   test("a refusal or a change of reader stops keeping it, and the next operation resumes", () => {
     const state = keyedEdit();
     const edited = run(state, { type: "record", intent: { type: "remove", target: "unit:Sales" } });
-    const refused = run(edited, checked(edited, { status: "guarded" }));
+    const refused = run(edited, checked(edited, { status: "guarded", code: "unauthorized" }));
     expect(refused.keep).toBe(false);
     expect(refused.log).toBe(edited.log);
     expect(run(edited, { type: "readerChanged" }).keep).toBe(false);

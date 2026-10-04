@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "vitest";
 import { readCeiling } from "./budget.ts";
+import { CONFIG_WRITE_REASONS } from "./useWriteAccess.ts";
 import {
   ceilingSummary,
   ceilingText,
@@ -120,6 +121,12 @@ describe("what the engine's answer means", () => {
       message:
         "The engine did not answer, so the change may or may not have landed. Reload before trying again.",
       reload: true,
+    });
+    // A REFUSAL ON AUTHORITY names the grant, never a token this browser
+    // does not hold.
+    expect(refusalWords({ kind: "guarded", code: "unauthorized" }, scope)).toEqual({
+      message: CONFIG_WRITE_REASONS.no_grant,
+      reload: false,
     });
     expect(refusalWords({ kind: "missing" }, scope).message).toBe(
       "PM is no longer in the company's configuration.",

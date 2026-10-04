@@ -217,8 +217,9 @@ describe("the warnings a change introduces", () => {
 
 describe("one reading of a /config refusal", () => {
   test.each([
-    [401, { error: "invalid_token" }, { kind: "guarded" }],
-    [403, {}, { kind: "guarded" }],
+    [401, { error: "invalid_token" }, { kind: "guarded", code: "invalid_token" }],
+    [403, {}, { kind: "guarded", code: "" }],
+    [403, { error: "step_up_required" }, { kind: "guarded", code: "step_up_required" }],
     [
       409,
       { error: "revision_advanced", current_revision_id: "r9" },

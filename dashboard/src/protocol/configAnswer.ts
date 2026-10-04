@@ -38,8 +38,14 @@ export type ConfigConflictReason =
 
 /** What a refusal from the configuration surface means. */
 export type ConfigRefusal =
-  /** The credential was refused: this surface is guarded in full. */
-  | { readonly kind: "guarded" }
+  /**
+   * The engine refused the caller on AUTHORITY: this surface is guarded in
+   * full. `code` is the refusal's own — `unauthorized` for a grant the caller
+   * does not hold, `step_up_required` for a confirmation they declined,
+   * `csrf_origin`, `invalid_token` — because each sends a person somewhere
+   * different, and only the first is a grant to ask an administrator for.
+   */
+  | { readonly kind: "guarded"; readonly code: string }
   | {
       readonly kind: "conflict";
       readonly reason: ConfigConflictReason;
@@ -84,7 +90,7 @@ const text = (value: unknown): string => (typeof value === "string" ? value : ""
 export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
   const body = isRecord(answer.body) ? answer.body : {};
   const code = text(body.error);
-  if (answer.status === 401 || answer.status === 403) return { kind: "guarded" };
+  if (answer.status === 401 || answer.status === 403) return { kind: "guarded", code };
   if (answer.status === 409 || answer.status === 412) {
     const reason: ConfigConflictReason =
       code === "no_active_revision"
