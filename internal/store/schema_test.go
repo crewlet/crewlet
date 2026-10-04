@@ -232,34 +232,44 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 // give — each a query with a BOUND value. 0034's indexes over those two columns
 // were PARTIAL, over the rows whose value is not empty, which a bound value
 // cannot be proved to satisfy: measured on this driver, both lookups were a
-// SCAN of every person. 0053 replaced them with plain indexes. The plan is read as the driver
-// reports it, for the shapes the directory runs — its uniqueness check and the
-// sign-in's sighting.
+// SCAN of every person. 0053 replaced them with plain indexes. The plan is
+// read as the driver reports it, for the shapes the directory runs — its
+// uniqueness check and the sign-in's sighting.
+//
+// The listing of every binding is the other direction: `WHERE seat_id != ''`
+// IS the seat's partial index's predicate, so it walks that index — the bound
+// people, in seat order — where without it the read is every person plus a
+// sort, on every alarm heartbeat and every party-registry rebuild.
 //
 // Mutation: take 0053 out and the login and address rows read
-// `SCAN iam_people`.
+// `SCAN iam_people`; drop `iam_people_seat_claim_idx` in it and the listing
+// does.
 func TestTheDirectoryLookupsSearchAnIndex(t *testing.T) {
 	t.Parallel()
 	db := openReplicated(t)
 	for _, tc := range []struct {
 		query string
 		args  []any
-		index string
+		want  string
 	}{
 		{`SELECT id FROM iam_people WHERE login = ? AND id <> ? LIMIT 1`,
-			[]any{"jane.doe", "p1"}, "iam_people_login_idx"},
+			[]any{"jane.doe", "p1"}, "SEARCH iam_people USING INDEX iam_people_login_idx"},
 		{`SELECT id FROM iam_people WHERE email_blind = ? AND id <> ? LIMIT 1`,
-			[]any{"blind", "p1"}, "iam_people_email_idx"},
+			[]any{"blind", "p1"}, "SEARCH iam_people USING INDEX iam_people_email_idx"},
 		{`SELECT id FROM iam_people WHERE seat_id = ? AND id <> ? LIMIT 1`,
-			[]any{"founder", "p1"}, "iam_people_seat_lookup_idx"},
+			[]any{"founder", "p1"}, "SEARCH iam_people USING INDEX iam_people_seat_lookup_idx"},
 		{`SELECT id, stage, login, seat_id, document FROM iam_people
 		   WHERE login = ? LIMIT 2`,
-			[]any{"jane.doe"}, "iam_people_login_idx"},
+			[]any{"jane.doe"}, "SEARCH iam_people USING INDEX iam_people_login_idx"},
+		// SeatBindings' and SeatHolders' shape: every bound person, by seat.
+		{`SELECT id, login, stage, seat_id FROM iam_people
+		   WHERE seat_id != '' ORDER BY seat_id, id`,
+			nil, "SCAN iam_people USING INDEX iam_people_seat_claim_idx"},
 	} {
 		plan := planOf(t, db, tc.query, tc.args...)
-		if want := "SEARCH iam_people USING INDEX " + tc.index; !strings.Contains(plan, want) {
-			t.Errorf("%s\nplans as %q, want %q — a lookup that scans reads "+
-				"every person in the company on every sign-in", tc.query, plan, want)
+		if !strings.Contains(plan, tc.want) {
+			t.Errorf("%s\nplans as %q, want %q — a directory read that scans "+
+				"reads every person in the company", tc.query, plan, tc.want)
 		}
 	}
 }
