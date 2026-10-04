@@ -524,12 +524,6 @@ const (
 	// many times. The one refusal whose remedy is "read it again".
 	CodeStale Code = "stale"
 
-	// CodeRefused is a write the DOMAIN refused on its own rules — a status
-	// that does not exist, a field its declaration does not allow, a label
-	// the project never declared. The detail is the domain's own sentence,
-	// because it is the only thing that says what to change.
-	CodeRefused Code = "refused"
-
 	// THE TOOL REFUSAL CLASSES, beside [CodeNotFound], [CodeForbidden] and
 	// [CodeUnavailable], which are classes as well and declared above with
 	// the meaning the class has. internal/mcp's Refusal is what a
@@ -795,8 +789,6 @@ var codes = map[Code]string{
 		"written. The detail says whose it is.",
 	CodeStale: "Somebody changed this after you read it, so nothing was " +
 		"written. Read it again and decide from what it says now.",
-	CodeRefused: "That change was refused and nothing was written. The detail " +
-		"says why.",
 	CodeInvalid: "That change was refused and nothing was written. The detail " +
 		"names what to send differently.",
 	CodeStaleVersion: "Somebody changed this after you read it, so nothing was " +
