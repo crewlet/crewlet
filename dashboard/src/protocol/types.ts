@@ -3188,10 +3188,10 @@ export interface SandboxOutput {
  * One `sandbox_tail{turn_id, launch_id}` answer (`sandbox.TailAnswer`): the
  * tail of that job while it runs, `not_running` with the record's own status
  * once it is not, or the owning node NAMED where it did not answer
- * (`owner_silent`) or runs a build that cannot (`owner_upgrading`).
+ * (`owner_silent`).
  */
 export interface SandboxTailAnswer {
-  outcome: "tail" | "not_running" | "owner_silent" | "owner_upgrading";
+  outcome: "tail" | "not_running" | "owner_silent";
   turn_id: string;
   launch_id: string;
   /** The node that owns the run — the one that answered, or did not. */
