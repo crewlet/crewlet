@@ -175,7 +175,6 @@ var categories = map[string]placement{
 	"org_stopped":               {"lifecycle", RateEngine},
 	"config_revision_activated": {"lifecycle", RateAuthenticated},
 	"config_revision_applied":   {"lifecycle", RateAuthenticated},
-	"config_revision_scrubbed":  {"lifecycle", RateAuthenticated},
 	"operator_acted":            {"lifecycle", RateAuthenticated},
 	"backup_requested":          {"lifecycle", RateAuthenticated},
 	// A person pausing and resuming a seat — the change itself, published

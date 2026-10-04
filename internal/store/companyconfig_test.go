@@ -2,7 +2,6 @@ package store_test
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -51,83 +50,6 @@ func write(t *testing.T, c *store.Configs, parent, body string, age time.Duratio
 		t.Fatalf("write %s: %v", body, err)
 	}
 	return id
-}
-
-// THE ACTIVE REVISION CANNOT BE SCRUBBED, AND THE STATEMENT IS WHAT REFUSES.
-//
-// The fleet is serving that document and every node is holding it. Rewriting
-// it underneath them would be a configuration change nothing activated — no
-// epoch, no apply, no event — so the company would run on a document its
-// operator never wrote. The clause is in the UPDATE rather than in a check
-// before it, because asking first and writing after is a race with an
-// activation and the clause is what actually holds.
-func TestTheScrubIsRefusedOnTheActiveRevision(t *testing.T) {
-	t.Parallel()
-	c := configsFor(t)
-
-	old := write(t, c, "", "first", 2*time.Hour, false)
-	live := write(t, c, old, "second", time.Hour, true)
-
-	err := c.Scrub(t.Context(), live, json.RawMessage(`{"name":"rewritten"}`), time.Now().UTC())
-	if !errors.Is(err, store.ErrRevisionIsActive) {
-		t.Fatalf("scrubbing the active revision answered %v, want the refusal", err)
-	}
-	// AND IT WROTE NOTHING. A refusal that had already rewritten the row
-	// would be the worse half of the failure it is here to prevent.
-	rev, found, err := c.Get(t.Context(), live)
-	if err != nil || !found {
-		t.Fatalf("read back: %v (found=%v)", err, found)
-	}
-	if string(rev.Payload) != `{"name":"second"}` {
-		t.Errorf("the active payload is %s, want the original", rev.Payload)
-	}
-	if !rev.ScrubbedAt.IsZero() {
-		t.Error("a refused scrub stamped scrubbed_at")
-	}
-}
-
-// A SUPERSEDED REVISION IS REWRITTEN AND STAMPED.
-//
-// The stamp is what tells the next reader that a diff showing a tombstone is
-// a scrub rather than corruption — which is the whole reason the narrowed
-// immutability is recorded in a column instead of happening quietly.
-func TestASupersededRevisionIsScrubbedAndStamped(t *testing.T) {
-	t.Parallel()
-	c := configsFor(t)
-
-	old := write(t, c, "", "first", 2*time.Hour, false)
-	write(t, c, old, "second", time.Hour, true)
-
-	at := time.Now().UTC().Truncate(time.Millisecond)
-	if err := c.Scrub(t.Context(), old, json.RawMessage(`{"name":"__scrubbed__"}`), at); err != nil {
-		t.Fatalf("scrub: %v", err)
-	}
-	rev, found, err := c.Get(t.Context(), old)
-	if err != nil || !found {
-		t.Fatalf("read back: %v (found=%v)", err, found)
-	}
-	if string(rev.Payload) != `{"name":"__scrubbed__"}` {
-		t.Errorf("payload = %s", rev.Payload)
-	}
-	if rev.ScrubbedAt.IsZero() {
-		t.Error("the row carries no scrub time, so a diff across it reads as " +
-			"corruption rather than as an erasure somebody ran")
-	}
-}
-
-// AND A REVISION THAT IS NOT THERE IS SAID SO, not reported as active.
-//
-// Both causes answer with the same zero rows affected, and telling them apart
-// is what makes the message actionable: one is a typo in an id, the other is
-// a refusal with a procedure behind it.
-func TestScrubbingARevisionThatIsNotThere(t *testing.T) {
-	t.Parallel()
-	c := configsFor(t)
-
-	err := c.Scrub(t.Context(), "no-such-revision", json.RawMessage(`{}`), time.Now().UTC())
-	if !errors.Is(err, store.ErrNoRevision) {
-		t.Fatalf("answered %v, want the missing-revision error", err)
-	}
 }
 
 // THE ACTIVE REVISION AND ITS WHOLE ANCESTRY SURVIVE THE SWEEP, HOWEVER OLD.

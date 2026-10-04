@@ -59,16 +59,6 @@ type Revision struct {
 
 	Active      bool
 	ActivatedAt time.Time
-
-	// ScrubbedAt is when this revision's personal fields were erased, and
-	// the zero time means they were not.
-	//
-	// It narrows the "immutable snapshot" this table's own comment states,
-	// which is why it is a stamp rather than a silent rewrite: a diff
-	// across a scrub boundary shows a tombstone, and the next reader has
-	// to be able to tell that from corruption. See
-	// `0038_a_superseded_revision_can_be_scrubbed.sql`.
-	ScrubbedAt time.Time
 }
 
 // Configs is the versioned Tier B store.
@@ -83,7 +73,7 @@ func (d *DB) Configs() *Configs { return &Configs{db: d} }
 
 const revisionColumns = `revision_id, parent_revision_id, created_at, created_by,
 	created_by_kind, operator_id, source, summary, payload, is_active,
-	activated_at, scrubbed_at`
+	activated_at`
 
 // InsertActive writes a new revision and makes it the active one, returning
 // its id.
@@ -403,12 +393,12 @@ func scanRevision(rows *sql.Rows) (Revision, error) {
 	var parent sql.NullString
 	var payload string
 	var createdAt int64
-	var activatedAt, scrubbedAt sql.NullInt64
+	var activatedAt sql.NullInt64
 	var active int64
 	var kind string
 	if err := rows.Scan(&r.ID, &parent, &createdAt, &r.CreatedBy,
 		&kind, &r.OperatorID, &r.Source, &r.Summary, &payload,
-		&active, &activatedAt, &scrubbedAt); err != nil {
+		&active, &activatedAt); err != nil {
 		return Revision{}, fmt.Errorf("store: read config revision: %w", err)
 	}
 	r.ParentID = Text(parent)
@@ -417,62 +407,7 @@ func scanRevision(rows *sql.Rows) (Revision, error) {
 	r.Payload = json.RawMessage(payload)
 	r.Active = active != 0
 	r.ActivatedAt = TimeAt(activatedAt)
-	r.ScrubbedAt = TimeAt(scrubbedAt)
 	return r, nil
-}
-
-// ErrRevisionIsActive reports a scrub aimed at the revision the fleet serves.
-var ErrRevisionIsActive = errors.New(
-	"store: the active revision cannot be scrubbed")
-
-// Scrub replaces one SUPERSEDED revision's payload and stamps scrubbed_at.
-//
-// # The one write that edits a revision, and what bounds it
-//
-// Every other write here appends: importing writes a new row, activating
-// appends to the pointer, and that is what makes the history a record rather
-// than a claim. This one rewrites a row in place, because appending cannot
-// erase anything — a new revision with the address removed leaves the old row
-// holding it, which is the whole problem.
-//
-// So it is bounded twice. It reaches only what `crewlet config scrub` names —
-// personal fields, never a setting — and it REFUSES THE ACTIVE REVISION,
-// which is enforced by the statement rather than by the caller remembering
-// to: the fleet is serving that document, every node is holding it, and a
-// rewrite underneath them would be a config change nothing activated. An
-// operator who wants the address out of the live company edits the company.
-//
-// `0038_a_superseded_revision_can_be_scrubbed.sql` is where the narrowed
-// immutability is written down.
-func (c *Configs) Scrub(ctx context.Context, revisionID string, payload json.RawMessage, at time.Time) error {
-	result, err := c.db.sql.ExecContext(ctx,
-		`UPDATE company_config SET payload = ?, scrubbed_at = ?
-		 WHERE revision_id = ? AND is_active = 0`,
-		string(payload), EncodeTime(at), revisionID)
-	if err != nil {
-		return fmt.Errorf("store: scrub config revision %s: %w", revisionID, err)
-	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("store: scrub config revision %s: %w", revisionID, err)
-	}
-	if n == 0 {
-		// TWO CAUSES, ONE STATEMENT, and they are told apart by a read
-		// rather than by a second guarded write: asking first and updating
-		// after would be a race with an activation, and the clause above
-		// is what actually holds.
-		_, found, err := c.Get(ctx, revisionID)
-		switch {
-		case err != nil:
-			return err
-		case !found:
-			return fmt.Errorf("%w: %s", ErrNoRevision, revisionID)
-		default:
-			return fmt.Errorf("%w: %s", ErrRevisionIsActive, revisionID)
-		}
-	}
-	log.InfoContext(ctx, "config_revision_scrubbed", "revision", revisionID)
-	return nil
 }
 
 // Chain is the active revision and every ancestor it reaches through

@@ -52,12 +52,10 @@ Usage:
   crewlet config activate ID       Mark a revision active here; published at the next start
   crewlet config seal              Encrypt a plaintext active revision under the keyring
   crewlet config rekey [-dry-run]  Re-seal the active revision under the active key
-  crewlet config scrub [ID] [-dry-run]
-                                   Erase personal data from superseded revisions
 
 Flags:
   -config PATH   Tier A config naming the store and its keyring (default %q)
-  -dry-run       Report what a rekey or a scrub would do without writing
+  -dry-run       Report what a rekey would do without writing
 
 A keyring rotation needs BOTH halves: "crewlet config rekey" moves the company
 document and "crewlet secrets rekey" moves the secret store. Run both before
@@ -73,7 +71,6 @@ becomes unreadable.
 // connects them.
 var configSubcommands = []string{
 	"import", "show", "export", "revisions", "diff", "activate", "seal", "rekey",
-	"scrub",
 }
 
 // defaultRevisionLimit is how many revisions `crewlet config revisions` lists.
@@ -154,9 +151,6 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	case "rekey":
 		fs.BoolVar(&dryRun, "dry-run", false,
 			"report what would be re-sealed without writing")
-	case "scrub":
-		fs.BoolVar(&dryRun, "dry-run", false,
-			"report which revisions hold personal data without erasing it")
 	}
 	if err := fs.Parse(rest); err != nil {
 		return err
@@ -202,8 +196,6 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		return sealConfig(ctx, cs, stdout)
 	case "rekey":
 		return rekeyConfig(ctx, cs, dryRun, stdout)
-	case "scrub":
-		return scrubConfig(ctx, cs, subject, dryRun, stdout)
 	default:
 		// Unreachable: the guard above admits only configSubcommands,
 		// `import` returned before the store was opened, and a test
@@ -399,9 +391,8 @@ func lockedStoreRemedy(sub string) string {
 			"/config/reload stores the active document again under that " +
 			"node's active key — or " + stop
 	default:
-		// seal and scrub rewrite the store's own rows and have no route
-		// through the API: a running node refuses a plaintext revision,
-		// and an erasure is this command's alone.
+		// seal rewrites the store's own rows and has no route through the
+		// API: a running node refuses a plaintext revision.
 		return "This rewrites the store's own rows and has no route through " +
 			"the API: " + stop
 	}
