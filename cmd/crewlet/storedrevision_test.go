@@ -21,10 +21,6 @@ import (
 // written: a field only a newer build knows, and a delegate template naming a
 // model provider the company does not configure, which this build's validator
 // refuses.
-//
-// A SETTINGS DOCUMENT, with no org chart in it: a revision this build APPLIES
-// carries none, so a fixture that held one would exercise the chart refusal
-// rather than the rule each case here is about.
 const storedRevisionDoc = `{"name":"Nimbus",` +
 	`"a_setting_from_a_newer_build":{"depth":3},` +
 	`"providers":{"llm":{"main":{"type":"anthropic","model":"claude-sonnet-5",` +
@@ -58,7 +54,7 @@ func activateStored(t *testing.T, cfg, payload string) string {
 	return id
 }
 
-// runnableRevisionDoc is a settings document this build runs.
+// runnableRevisionDoc is a company document this build runs.
 const runnableRevisionDoc = `{"name":"Nimbus",` +
 	`"providers":{"llm":{"main":{"type":"anthropic","model":"claude-sonnet-5",` +
 	`"api_keys":["${ANTHROPIC_API_KEY}"]}}}}`

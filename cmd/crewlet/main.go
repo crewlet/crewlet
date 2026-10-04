@@ -2111,11 +2111,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// this an open dashboard renders the company it connected to until
 	// someone reloads.
 	//
-	// A hire is one of those changes and is not a config apply at all —
-	// the org chart is a log of its own — so this fires on every company
-	// publish rather than on activation. WHOLE PAYLOADS, each replacing
-	// its predecessor: the hub drops the oldest queued envelope without
-	// telling the client, so a delta it dropped would be unrecoverable.
+	// So this fires on every company the engine publishes, at boot and on
+	// every apply. WHOLE PAYLOADS, each replacing its predecessor: the hub
+	// drops the oldest queued envelope without telling the client, so a
+	// delta it dropped would be unrecoverable.
 	//
 	// Registered after the app exists, which is the whole reason it is a
 	// setter — see Engine.SetOnCompanyPublished.
