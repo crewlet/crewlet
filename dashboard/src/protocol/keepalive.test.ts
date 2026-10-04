@@ -13,6 +13,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { SESSION_KEEPALIVE_MS, SessionKeepAlive } from "./keepalive.ts";
 import { rest } from "./rest.ts";
+import { currentSessionNeed, sessionRestored } from "./signin.ts";
 
 /** Every path the engine was asked, in order. */
 let asked: string[] = [];
@@ -33,6 +34,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  sessionRestored();
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
 });
 
@@ -81,4 +83,22 @@ test("ticks once per re-issue interval while started, and not after stop", () =>
   } finally {
     vi.useRealTimers();
   }
+});
+
+// A SESSION THAT ENDED WHILE THE TAB ONLY LISTENED is learned here first, and
+// noted where every refusal is, so the person is sent to sign in.
+test("a keepalive answered 401 notes that the session needs a sign-in", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: "unauthenticated" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        }),
+    ),
+  );
+  new SessionKeepAlive({ connected: true }).tick(later());
+  await settle();
+  expect(currentSessionNeed()).toBe("sign_in");
 });

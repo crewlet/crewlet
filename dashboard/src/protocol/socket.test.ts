@@ -1,16 +1,19 @@
 /**
- * How the live socket answers the engine's two close codes and a refused
- * handshake — the half of revalidation that runs in the browser.
+ * How the live socket answers the engine's two close codes, a refused
+ * handshake and every other close — the half of revalidation that runs in the
+ * browser.
  *
- * The engine re-checks an open socket every minute and closes it 4401 when its
- * credential names nobody any more, 4403 when it names somebody who may not
- * have this surface. The repairs are opposite: a 4401 is the ordinary
- * reconnect (the browser may hold a newer cookie), a 4403 is not repaired by
- * anything this tab can do, so the socket must STOP rather than dial the same
- * refusal every thirty seconds under a "reconnecting" banner.
+ * The engine closes an open socket when the identity estate moves under it:
+ * 4401 when its session ended, 4403 when its credential names somebody who may
+ * not have this surface. The repairs are opposite: a 4401 is a reconnect once
+ * this tab's own requests have landed (the browser may hold a newer cookie,
+ * and after a step-up it is about to), a 4403 is not repaired by anything this
+ * tab can do, so the socket must STOP rather than dial the same refusal every
+ * thirty seconds under a "reconnecting" banner. Anything else is the backoff.
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { rest } from "./rest.ts";
 import { currentSessionNeed, sessionRestored } from "./signin.ts";
 import { LiveSocket } from "./socket.ts";
 import { Store } from "./store.ts";
@@ -84,6 +87,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   sessionRestored();
 });
 
@@ -124,6 +128,49 @@ describe("the engine's close codes", () => {
     expect(ScriptedWebSocket.dials.length).toBeGreaterThan(1);
     expect(store.state.accessRefused).toBeNull();
     expect(store.state.authRejected).toBe(false);
+    expect(fetches.filter((u) => u.endsWith("/ws/stream"))).toHaveLength(0);
+  });
+
+  // A STEP-UP REPLACES THE SESSION IT WAS MADE FROM, so the engine closes
+  // every socket the old one opened — and the answer that sets the new cookie
+  // may still be on its way. A dial before it lands carries the ended cookie,
+  // and its refusal would send somebody who just proved who they are to the
+  // sign-in form.
+  test("4401 dials again once this tab's own requests have landed, not before", async () => {
+    let land!: () => void;
+    snapshotAnswer = () =>
+      new Promise<Response>((resolve) => {
+        land = () => resolve(new Response(JSON.stringify({ status: "ok" }), { status: 200 }));
+      });
+    started();
+    dial(0).open();
+    const stepUp = rest.post("/auth/step-up", { password: "correct horse battery" });
+    await vi.advanceTimersByTimeAsync(0);
+    dial(0).closeWith(4401, "session replaced");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(ScriptedWebSocket.dials).toHaveLength(1);
+
+    land();
+    await stepUp;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ScriptedWebSocket.dials).toHaveLength(2);
+  });
+
+  // 1013 IS "TRY AGAIN LATER": an ordinary reconnect on the backoff, which
+  // asks nobody to sign in and withdraws nothing.
+  test("1013 dials again on the backoff and asks nobody to sign in", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const { store } = started();
+    dial(0).open();
+    dial(0).closeWith(1013, "node restarting");
+    await vi.advanceTimersByTimeAsync(499);
+    expect(ScriptedWebSocket.dials).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ScriptedWebSocket.dials).toHaveLength(2);
+    expect(store.state.authRejected).toBe(false);
+    expect(store.state.accessRefused).toBeNull();
+    expect(currentSessionNeed()).toBeNull();
+    // A HANDSHAKE THAT COMPLETED is not re-asked over HTTP: it was no refusal.
     expect(fetches.filter((u) => u.endsWith("/ws/stream"))).toHaveLength(0);
   });
 
@@ -355,5 +402,34 @@ describe("the degraded-mode poll", () => {
     reconnected.open();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(snapshotReads()).toBe(2);
+  });
+});
+
+// FULL JITTER: a node that closes every socket at once brings every tab back
+// spread over the whole of the backoff's window, never in lockstep at its top.
+describe("the backoff", () => {
+  const dials = () => ScriptedWebSocket.dials.length;
+
+  test("draws a dial at zero when the draw is zero", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    started();
+    dial(0).closeWith(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dials()).toBe(2);
+  });
+
+  // AT THE TOP OF THE DRAW, each wait is just short of a ceiling that doubles
+  // from a second and stops at thirty.
+  test("waits no longer than a ceiling that doubles to thirty seconds", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.999);
+    started();
+    const ceilings = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
+    for (const [n, ceiling] of ceilings.entries()) {
+      dial(n).closeWith(1006);
+      await vi.advanceTimersByTimeAsync(Math.floor(ceiling * 0.999) - 1);
+      expect(dials()).toBe(n + 1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(dials()).toBe(n + 2);
+    }
   });
 });
