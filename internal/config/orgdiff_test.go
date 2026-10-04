@@ -213,6 +213,63 @@ units:
 	}
 }
 
+// A REORDER REACHES WHERE IT HAPPENS, and only a reorder does.
+//
+// Order is part of the chart — a seat's own manager is the first in document
+// order that manages it — so swapping Engineering and Design changes both,
+// placed at the root they sit in, and swapping Platform's two seats changes
+// both, placed in Platform; nothing inside a swapped unit changes with it. The
+// control is a seat removed from in front of another: the one left behind
+// sits where it sat among the siblings both documents hold, so the removal is
+// the one change.
+//
+// Mutation: compare nothing but place and fields, as before, and both swaps
+// diff to nothing.
+func TestAReorderReachesWhereItHappens(t *testing.T) {
+	t.Parallel()
+	base := parse(t, diffBase)
+	swap := func(t *testing.T, first, second string) *config.Company {
+		t.Helper()
+		if !strings.Contains(diffBase, first+second) {
+			t.Fatalf("the fixture has no %q followed by %q", first, second)
+		}
+		return parse(t, strings.Replace(diffBase, first+second, second+first, 1))
+	}
+	top := diffBase[strings.Index(diffBase, "  - name: Engineering\n"):]
+	design := top[strings.Index(top, "  - name: Design\n"):]
+	staff := "          - name: Staff Engineer\n            handle: staff-eng\n" +
+		"            llm: zulu\n            mcp_env:\n              github:\n" +
+		"                GITHUB_TOKEN: ${PLATFORM_GITHUB}\n"
+	sre := "          - name: SRE\n            handle: sre\n            llm: zulu\n"
+	for _, c := range []struct {
+		name  string
+		after *config.Company
+		want  []string
+	}{
+		{"two teams at the top level", swap(t, strings.TrimSuffix(top, design), design),
+			[]string{"unit/design/changed/before//place/,after//place/",
+				"unit/engineering/changed/before//place/,after//place/"}},
+		{"two seats in a team", swap(t, staff, sre),
+			[]string{"seat/sre/changed/before/platform/place/,after/platform/place/",
+				"seat/staff-eng/changed/before/platform/place/,after/platform/place/"}},
+		{"a seat removed from in front of another", edit(t, staff, ""),
+			[]string{"seat/staff-eng/removed/before/platform/place/"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			var got []string
+			for _, ch := range config.DiffOrg(base, c.after).Changes {
+				got = append(got, string(ch.Kind)+"/"+ch.ID+"/"+string(ch.Op)+"/"+
+					strings.Join(touches(ch), ","))
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, c.want) {
+				t.Errorf("diffed to %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 // A UNIT'S SEATS AND CHILD UNITS ARE NOT ITS FIELDS, and a seat's display name
 // is a field like any other rather than its identity.
 //

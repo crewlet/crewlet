@@ -784,7 +784,7 @@ banner offers **Discard and reload**.
 
 The lead of a unit edits that unit and everything inside it without
 `config:write`: its own fields, its seats, the units inside it and theirs,
-seats added, moved between its teams or removed. A lead is the seat a unit
+seats added, moved between its teams, reordered or removed. A lead is the seat a unit
 names as its lead, or inherits from the unit above it when it names none, so
 leading a unit is leading every unit inside it, a sub-unit with a lead of its
 own included. The person needs a seat binding in the identity directory and
