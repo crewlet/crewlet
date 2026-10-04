@@ -303,7 +303,6 @@ func TestAnEvictionIsEffectiveExactlyWhenTheGateSaysSo(t *testing.T) {
 func TestALiveNodeWithNoPositionIsCountedAndRendered(t *testing.T) {
 	t.Parallel()
 	d := healthyDomain("tracker", true)
-	d.Holders = []statelog.Presence{{NodeID: "node-7"}}
 	rep := statelog.NewReport(statelog.ReportInputs{
 		NodeID:           "node-1",
 		At:               reportAt,
@@ -326,43 +325,14 @@ func TestALiveNodeWithNoPositionIsCountedAndRendered(t *testing.T) {
 	}
 }
 
-// A LIVE NODE HOLDING NO PARTITION IS LIVE AND NOT COUNTED; A HOLDER THAT IS
-// NOT LIVE IS COUNTED.
-//
-// The counted mark is the trim's counted set, whose holder half is who holds
-// the log's partition — not who is running. A live node holding nothing is
-// waited for on no log, and a holder whose lease flickered mid-join is exactly
-// the node whose tail must be kept; marked the other way round, the screen
-// named a fleet the trim was not waiting for.
-func TestTheCountedMarkIsTheHoldersNotTheLiveNodes(t *testing.T) {
-	t.Parallel()
-	d := healthyDomain("tracker", true)
-	d.Holders = []statelog.Presence{{NodeID: "joining"}}
-	rep := statelog.NewReport(statelog.ReportInputs{
-		NodeID:           "node-1",
-		At:               reportAt,
-		RegisterReadable: true,
-		Live:             []statelog.Presence{{NodeID: "stateless"}},
-		Domains:          []statelog.DomainInputs{d},
-	})
-	marks := map[string][2]bool{}
-	for _, n := range rep.Nodes {
-		marks[n.NodeID] = [2]bool{n.Counted, n.Live}
-	}
-	want := map[string][2]bool{"stateless": {false, true}, "joining": {true, false}}
-	if !maps.Equal(marks, want) {
-		t.Errorf("the node block marks (counted, live) %v, want %v", marks, want)
-	}
-}
-
 // THE COUNTED MARK IS THE TRIM'S SET, LOG BY LOG.
 //
 // A node is marked counted where some log's counted set holds it, each set over
-// that log's own rows, holders and tombstones: a node evicted past the window
-// on the only log its row names is counted nowhere, and one evicted on one log
-// and still reporting another is counted — on the other. Folded into one set
-// over every row, the first was marked counted while the trim waited for it on
-// no log.
+// that log's own rows and tombstones and the live data nodes: a node evicted
+// past the window on the only log its row names is counted nowhere, and one
+// evicted on one log and still reporting another is counted — on the other.
+// Folded into one set over every row, the first was marked counted while the
+// trim waited for it on no log.
 func TestTheCountedMarkIsTheTrimsSetLogByLog(t *testing.T) {
 	t.Parallel()
 	tracker := healthyDomain("tracker", true)

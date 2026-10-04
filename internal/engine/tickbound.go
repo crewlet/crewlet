@@ -27,13 +27,14 @@ var errTickOverran = errors.New("engine: the tick went its budget without progre
 // progress, and a deadline measures something else: how long the tick has
 // been alive. The two differ exactly where a node is slow rather than stuck.
 // On a node allowed one core, shared with the searches it answers, a training
-// at the largest partition an index serves is seven and a half minutes of
-// k-means and filing, and three and a half more of reading every code and
-// making the exact pass — every stretch of it progress — and a deadline of
-// five minutes cut off every training such a node began, publishing nothing,
-// so the next tick began it again: five minutes of the node's only core spent
-// every tick, for ever, on an index that never arrived. Measured against progress, that node finishes the training
-// once, while a step that stops advancing is cut off as soon as it ever was.
+// at the largest corpus an index serves is seven and a half minutes of k-means
+// and filing, and three and a half more of reading every code and making the
+// exact pass — every stretch of it progress — and a deadline of five minutes
+// cut off every training such a node began, publishing nothing, so the next
+// tick began it again: five minutes of the node's only core spent every tick,
+// for ever, on an index that never arrived. Measured against progress, that
+// node finishes the training once, while a step that stops advancing is cut
+// off as soon as it ever was.
 //
 // # Exempt, and advancing
 //

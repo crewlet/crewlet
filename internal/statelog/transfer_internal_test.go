@@ -50,7 +50,7 @@ func TestEveryTransferWaitSaysWhoseEndItReached(t *testing.T) {
 		{
 			name: "the ask's flush", production: OfferWindow,
 			run: func(ctx context.Context, nc *nats.Conn, bound time.Duration, _ string) error {
-				_, err := CollectOffers(ctx, nc, OfferRequest{NodeID: "joiner", Partition: EstatePartition.String()}, bound)
+				_, err := CollectOffers(ctx, nc, OfferRequest{NodeID: "joiner"}, bound)
 				return err
 			},
 			step: "flush the offer request", own: "did not confirm the offer request",

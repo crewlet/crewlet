@@ -11,57 +11,49 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A LOG COUNTS ITS OWN PARTITION'S HOLDERS, AND A HOLDER THAT HAS NOT REPORTED
-// COUNTS AT ZERO.
+// EVERY LOG COUNTS THE LIVE DATA NODES, AND ONE THAT HAS NOT REPORTED COUNTS AT
+// ZERO.
 //
 // The trim may not remove a record a node that applies the log has not
-// applied, and the nodes that apply a log are its partition's holders. So a
-// holder still joining — no position yet — counts at zero on that partition's
-// logs and blocks them, and on no other partition's: counted there, a node
-// offline on one partition would pin every log in the company.
-func TestALogCountsItsOwnPartitionsHolders(t *testing.T) {
+// applied, and every data node applies every log from boot. So a data node
+// still joining — no position yet — counts at zero on every log and blocks it:
+// the tail it is about to replay is exactly what the trim must keep.
+func TestEveryLogCountsTheLiveDataNodes(t *testing.T) {
 	t.Parallel()
-	e, s, _ := aPartitionedStateLog(t)
-	tracker0 := statelog.PartitionID{Space: statelog.SpaceTracker}
-	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: "node-p",
-		holders: fixedHolders{
-			tracker0: {{NodeID: "node-p"}, {NodeID: "node-joining"}},
-		}}
-	for _, p := range partitionedTestLayout().Partitions() {
-		if p != tracker0 {
-			r.holders.(fixedHolders)[p] = []statelog.Presence{{NodeID: "node-p"}}
-		}
-	}
+	e, _ := aRunningNode(t)
+	s := e.native.Load().log
+	e.stopRetention()
+	s.publishPositions(t.Context())
+	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: e.id,
+		holders: fixedHolders{{NodeID: e.id}, {NodeID: "node-joining"}}}
 	shared, err := r.read(t.Context())
 	if err != nil {
 		t.Fatalf("read the tick's inputs: %v", err)
 	}
+	if len(s.running()) == 0 {
+		t.Fatal("the premise: the node runs no log")
+	}
 	for _, running := range s.running() {
-		counted := shared.counted(running, nil)
 		var ids []string
-		for _, n := range counted {
+		for _, n := range shared.counted(running, nil) {
 			ids = append(ids, n.NodeID)
 			if n.NodeID == "node-joining" && (n.Seq != 0 || n.Generation != 0) {
-				t.Errorf("%s counts the joining holder at %d@%d, want zero — it has "+
-					"reported nothing, and the tail it is about to replay is what the "+
-					"trim must keep", running.key, n.Seq, n.Generation)
+				t.Errorf("%s counts the joining data node at %d@%d, want zero — it "+
+					"has reported nothing, and the tail it is about to replay is what "+
+					"the trim must keep", running.key, n.Seq, n.Generation)
 			}
 		}
-		want := []string{"node-p"}
-		if running.id.Partition == tracker0 {
-			want = []string{"node-joining", "node-p"}
-		}
-		if !slices.Equal(ids, want) {
-			t.Errorf("%s counts %v, want its partition's holders %v", running.key, ids, want)
+		if want := slices.Sorted(slices.Values([]string{e.id, "node-joining"})); !slices.Equal(ids, want) {
+			t.Errorf("%s counts %v, want every live data node %v", running.key, ids, want)
 		}
 	}
 }
 
-// LAYOUT 0's HOLDERS ARE THE LIVE DATA NODES: the estate is one partition,
-// which every data node holds whole, so its counted set's holder half is the
-// presence the trim has always counted — the answer the layout's routing reads
-// too, and no estate map is asked.
-func TestLayoutZerosHoldersAreTheLiveDataNodes(t *testing.T) {
+// THE HOLDERS ARE THE LIVE DATA NODES, LISTED AFRESH: the estate is held whole
+// by every data node and by nothing else, so the counted set's live half is the
+// presence the trim has always counted — data nodes only, since a node without
+// `data` applies no log — the same nodes the router asks.
+func TestTheHoldersAreTheLiveDataNodes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	backend := coordmem.New()
@@ -71,14 +63,14 @@ func TestLayoutZerosHoldersAreTheLiveDataNodes(t *testing.T) {
 	e := &Engine{backends: &Backends{Coord: backend}}
 	holders := e.holdersOf()
 	if _, byPresence := holders.(presenceHolders); !byPresence {
-		t.Fatalf("layout 0's holders are answered by %T, want the presence roster", holders)
+		t.Fatalf("the holders are answered by %T, want a fresh presence listing", holders)
 	}
-	held, err := holders.Holders(ctx, LayoutZero().Partitions())
+	live, err := holders.LiveData(ctx)
 	if err != nil {
-		t.Fatalf("Holders: %v", err)
+		t.Fatalf("LiveData: %v", err)
 	}
-	if got := held[statelog.EstatePartition]; len(got) != 1 || got[0].NodeID != "data-a" {
-		t.Errorf("estate.000 is held by %v, want the one live data node", got)
+	if len(live) != 1 || live[0].NodeID != "data-a" {
+		t.Errorf("the estate is held by %v, want the one live data node", live)
 	}
 }
 
@@ -94,15 +86,9 @@ func claimPresences(t *testing.T, backend coord.Backend, roles map[string][]stri
 	}
 }
 
-// fixedHolders answers who holds each partition from a table a case wrote.
-type fixedHolders map[statelog.PartitionID][]statelog.Presence
+// fixedHolders answers the live data nodes from a list a case wrote.
+type fixedHolders []statelog.Presence
 
-func (f fixedHolders) Holders(_ context.Context,
-	partitions []statelog.PartitionID) (map[statelog.PartitionID][]statelog.Presence, error) {
-
-	out := make(map[statelog.PartitionID][]statelog.Presence, len(partitions))
-	for _, p := range partitions {
-		out[p] = f[p]
-	}
-	return out, nil
+func (f fixedHolders) LiveData(context.Context) ([]statelog.Presence, error) {
+	return slices.Clone(f), nil
 }

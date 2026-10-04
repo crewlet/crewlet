@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"os"
 	"sort"
 	"time"
@@ -50,26 +49,26 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	// as empty: an empty node block is a fleet with no nodes, which cannot
 	// happen, and it is exactly the rendering somebody gets during the
 	// outage they are running this command in.
-	if positions, err := layoutPositions(ctx, r.fleet, r.state.layout.Number); err == nil {
+	if positions, err := r.fleet.Positions(ctx); err == nil {
 		in.Register, in.RegisterReadable = positions, true
 	}
-	var live []statelog.Presence
-	liveErr := errors.New("engine: this node reads no presence leases")
-	if r.leases != nil {
-		if live, liveErr = livePresences(ctx, r.leases); liveErr == nil {
+	// THE LIVE DATA NODES, LISTED ONCE and from the trim's own source: they
+	// are both who the node block marks live and the half of every log's
+	// counted set that is not the register ([statelog.ReportInputs.Live]).
+	// Listed once for each question, every node's every tick paid a second
+	// certified listing a round trip after the first, and the two could
+	// disagree about who is there. Unread, each log's mark counts its rows
+	// alone.
+	if r.holders != nil {
+		if live, err := r.holders.LiveData(ctx); err == nil {
 			in.Live = live
 		}
 	}
-	// THE HOLDERS THE TRIM COUNTS, every partition's at once — the counted
-	// set's holder half, which is who holds a partition rather than who is
-	// running ([statelog.DomainInputs.Holders]) — each log handed its own
-	// partition's below. Unread, each log's mark counts its rows alone.
-	holders, _ := r.reportHolders(ctx, live, liveErr)
 	// AN UNREADABLE FLOOR REGISTER IS NOT AN EMPTY ONE: every domain then
 	// reports its trim as unreadable rather than as a trim that has
 	// concluded nothing, which is a different thing to go and look at.
 	floors := map[string]coord.TrimFloor{}
-	rows, floorsErr := layoutFloors(ctx, r.fleet, r.state.layout.Number)
+	rows, floorsErr := r.fleet.Floors(ctx)
 	for _, row := range rows {
 		floors[row.Domain] = row
 	}
@@ -170,7 +169,6 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			d.EvictionsUnreadable = !read
 			d.Tombstones = tombs
 		}
-		d.Holders = holders[running.id.Partition]
 		d.SnapshotSkip = r.skipFor(in.Register, running)
 		in.Domains = append(in.Domains, d)
 	}
@@ -179,29 +177,6 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	in.Reading = r.reading(ctx, now, newest, haveBackup, healths)
 	in.Maintenance = r.openMaintenance(ctx)
 	return statelog.NewReport(in)
-}
-
-// reportHolders is who holds each partition of the layout, for the report.
-//
-// UNDER LAYOUT 0, THE LIVE DATA NODES THE REPORT ALREADY LISTED: that is what
-// [presenceHolders] answers there, and asking it would list the presence leases
-// a second time, a round trip after the first — two readings of one question
-// that could disagree about who is there, and a second certified listing on
-// every node's every tick for nothing. Under any other layout, the holders' own
-// answer.
-func (r *retention) reportHolders(ctx context.Context, live []statelog.Presence,
-	liveErr error) (map[statelog.PartitionID][]statelog.Presence, error) {
-
-	switch r.holders.(type) {
-	case nil:
-		return nil, nil
-	case presenceHolders:
-		if liveErr != nil {
-			return nil, liveErr
-		}
-		return heldByEvery(live, r.state.layout.Partitions()), nil
-	}
-	return r.holders.Holders(ctx, r.state.layout.Partitions())
 }
 
 // fleetTombstones folds each identity-claiming log's own tombstones into the
@@ -350,18 +325,17 @@ func decisionOf(floor coord.TrimFloor) statelog.TrimDecision {
 	return d
 }
 
-// skipFor is this node's own snapshot skip reason for one log — its
-// partition's, since an artefact is a copy of the partition's file — read back
-// off the register it published rather than held in memory, so the answer is
-// the same one every peer can see.
+// skipFor is this node's own snapshot skip reason for one log — the estate's,
+// since an artefact is a copy of the estate's file and covers every log — read
+// back off the register it published rather than held in memory, so the
+// answer is the same one every peer can see.
 func (r *retention) skipFor(register []coord.NodePositions, running *runningLog) statelog.SkipReason {
 	for _, row := range register {
 		if row.NodeID != r.nodeID {
 			continue
 		}
 		if _, runs := row.Domains[running.key]; runs {
-			report, _ := row.Report(running.id.Partition.String())
-			return statelog.SkipReason(report.SnapshotSkip)
+			return statelog.SkipReason(row.SnapshotSkip)
 		}
 	}
 	return ""
@@ -588,8 +562,8 @@ func (r *retention) observed(out *statelog.Reading) {
 }
 
 // census fills the reading's census half: of every log this node applies, the
-// one whose read rate is furthest past its share of the census, with that rate
-// and that share.
+// one whose read rate is furthest past its census, with that rate and that
+// census.
 //
 // # The rate is the LOG'S, read where it is applied
 //
@@ -602,13 +576,13 @@ func (r *retention) observed(out *statelog.Reading) {
 // it, and the alarm could not fire until the company was six times past what
 // its logs were sized for.
 //
-// # The share is the census's, per seat and per log, plus the engine's own
+// # The census is per seat, plus the engine's own
 //
 // Declared rather than configured — it is a term in the log's own sizing, so
 // an operator who could set it would be silencing the alarm rather than
-// resizing the deployment it is about — scaled by the company's own seats and
-// divided across the domain's logs, plus what the engine's own periodic reads
-// put on the log whatever the seats do ([statelog.Census]).
+// resizing the deployment it is about — scaled by the company's own seats,
+// plus what the engine's own periodic reads put on the log whatever the seats
+// do ([statelog.Census]).
 func (r *retention) census(reading []metrics.Snapshot, out *statelog.Reading) {
 	received := map[string]int{}
 	for _, snapshot := range reading {
@@ -634,12 +608,8 @@ func (r *retention) census(reading []metrics.Snapshot, out *statelog.Reading) {
 		}
 		expected := statelog.Census{
 			Seats:      seats,
-			Logs:       len(r.state.layout.LogsOf(running.id.Domain)),
-			Background: background(running.id.Domain),
+			Background: background(running.domain.Name()),
 		}.Expected()
-		if expected <= 0 {
-			continue
-		}
 		got := received[running.spec.Name]
 		if ratio := float64(got) / float64(expected); ratio > worst {
 			worst = ratio

@@ -120,10 +120,10 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 	}
 	name := running.key
 
-	// ONE RECOVERY AT A TIME ON THIS LOG'S PARTITION, with a runtime
-	// adoption: that replaces the partition's file whole, and this writes a
-	// checkpoint in it.
-	defer s.recovering.lock(running.id.Partition)()
+	// ONE RECOVERY AT A TIME, with a runtime adoption: that replaces the
+	// replicated file whole, and this writes a checkpoint in it.
+	s.recovering.Lock()
+	defer s.recovering.Unlock()
 
 	wasRunning := s.haltApplier(name)
 	completed := false
@@ -152,7 +152,7 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 		Consumer: running.consumer,
 		Runner:   running.runner,
 		Evicted:  running.evicted,
-		DB:       s.estate(running.id.Partition),
+		DB:       s.estate(),
 		By:       req.By,
 		NodeID:   e.native.Load().nodeID,
 		// THE BRING-UP BUDGET OF THIS BROKER, for the steps after the
@@ -282,8 +282,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	// THE CHECKPOINT ROW, not the runner's memory of it: the generation the
 	// transition derives from and the instant the rows are keyed to are the
 	// durable ones, and the loop that would move them is halted.
-	checkpoint, _, err := statelog.CheckpointOf(ctx,
-		e.backends.Store.PartitionHandle(running.id.Partition.String()).Reader(), stream)
+	checkpoint, _, err := statelog.CheckpointOf(ctx, e.domainEstate(), stream)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, err
 	}
@@ -326,10 +325,10 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	// the outage during which re-anchoring is most tempting and least
 	// justified, so RegisterReadable stays false and the permission refuses
 	// on it — which is why the read's error goes no further than this.
-	rows, readErr := n.log.positions(ctx)
+	rows, readErr := n.log.fleet.Positions(ctx)
 	// A FLOOR IS ONLY EVER A SOURCE OF AN ABANDONED GENERATION here, and one
 	// that cannot be read leaves that number to the log's own records.
-	floors, _ := n.log.floors(ctx)
+	floors, _ := n.log.fleet.Floors(ctx)
 	through := in.Generation
 	var candidates []string
 	if readErr == nil {
@@ -364,7 +363,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 			candidates = append(candidates, writer)
 		}
 	}
-	evicted, err := n.log.evictedOn(ctx, running.domain, running.id.Partition, running.spec, running.log, candidates)
+	evicted, err := n.log.evictedOn(ctx, running.domain, running.spec, running.log, candidates)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: whether the peers ahead "+
 			"of this node on %s are evicted could not be read, and an evicted "+
@@ -475,7 +474,7 @@ func (e *Engine) restoredTail(ctx context.Context, running *runningLog, n *nativ
 		in.Opened, bound = opened, opened-1
 	}
 	in.Unheld, err = statelog.UnheldTail(ctx, running.domain, running.spec,
-		n.log.estate(running.id.Partition).Reader(), running.log, in.Generation, in.FirstSeq, bound)
+		n.log.estate().Reader(), running.log, in.Generation, in.FirstSeq, bound)
 	if err != nil {
 		return fmt.Errorf("%w: whether %s holds records written after the restore "+
 			"that this node's rows do not could not be read, and a restored reanchor "+

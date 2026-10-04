@@ -282,10 +282,10 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	recorder.Add(metrics.TrackerFeedUnreadable, 3, metrics.Attrs{"source": "tracker"})
 	trackerLog := estateLog(tracker.Domain{})
 	recorder.Add(metrics.StatelogBarriersApplied,
-		uint64(3*statelog.Census{Seats: 100, Logs: 1}.Expected()),
+		uint64(3*statelog.Census{Seats: 100}.Expected()),
 		metrics.Attrs{"domain": "tracker", "stream": estateSpec(tracker.Domain{}).Name})
 
-	r := &retention{metrics: recorder, state: censusLogs(LayoutZero(), trackerLog),
+	r := &retention{metrics: recorder, state: censusLogs(trackerLog),
 		seats: func() int { return 100 }}
 	var reading statelog.Reading
 	r.observed(&reading)
@@ -301,7 +301,7 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 		t.Errorf("three untranslatable records reached the reading as %d",
 			reading.FeedUnreadable)
 	}
-	if reading.LinearizableReadsExpected != (statelog.Census{Seats: 100, Logs: 1}).Expected() ||
+	if reading.LinearizableReadsExpected != (statelog.Census{Seats: 100}).Expected() ||
 		reading.CensusLog != trackerLog.String() {
 		t.Errorf("the declared read rate reached the reading as %d on %q, so "+
 			"`census_drift` compares against nothing",
@@ -391,7 +391,8 @@ func TestTheAlarmTableIsEvaluatedOnANodeThatHoldsNoDuty(t *testing.T) {
 
 // censusLogs is a state log running the given logs of layout, with nothing
 // behind them but what the census reads: which log each is, and its stream.
-func censusLogs(layout statelog.Layout, ids ...statelog.LogID) *stateLog {
+func censusLogs(ids ...statelog.LogID) *stateLog {
+	layout := LayoutZero()
 	s := &stateLog{layout: layout}
 	var running []*runningLog
 	for _, id := range ids {
@@ -405,34 +406,28 @@ func censusLogs(layout statelog.Layout, ids ...statelog.LogID) *stateLog {
 	return runsLogs(s, running...)
 }
 
-// A LOG IS HELD TO ITS OWN SHARE OF THE CENSUS, AT THE RATE IT RECEIVES.
+// A LOG IS HELD TO ITS OWN CENSUS, AT THE RATE IT RECEIVES.
 //
-// Three things the fixed, node-local figure got wrong. It was one number for
+// Two things the fixed, node-local figure got wrong. It was one number for
 // every company, so a two-hundred-seat company doing the reference company's
-// work per seat read as drifting. It was compared with the barriers THIS NODE
-// appended, which on a fleet is only this node's share of the reads — the
+// work per seat read as drifting. And it was compared with the barriers THIS
+// NODE appended, which on a fleet is only this node's share of the reads — the
 // rate the log receives, from every node, is what its sizing is about, and it
-// is what every node's applier sees. And it was one figure for the estate,
-// where a partitioned domain divides its census across its logs as it divides
-// its ceiling. The vector log, which no read appends to, is held to nothing.
+// is what every node's applier sees. The vector log, which no read appends to,
+// is held to nothing.
 //
 // AND THE ENGINE'S OWN READS ARE PART OF WHAT A LOG TAKES. The object store's
 // collector pins the tracker's estate on a fixed cadence, whatever the seats
 // do, so a small company doing exactly its census would put more barriers on
 // its log than its seats' share allowed — and fire the alarm, louder the
 // smaller it was.
-func TestALogIsHeldToItsOwnShareOfTheCensus(t *testing.T) {
+func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 	t.Parallel()
-	zero := LayoutZero()
 	trackerLog, vectorLog := estateLog(tracker.Domain{}), estateLog(search.Domain{})
-	partitioned := partitionedTestLayout()
-	second := statelog.LogID{Domain: "tracker",
-		Partition: statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}}
-	stream := func(l statelog.Layout, id statelog.LogID) string { name, _ := l.Stream(id); return name }
+	stream := func(id statelog.LogID) string { name, _ := LayoutZero().Stream(id); return name }
 
 	for _, tc := range []struct {
 		name       string
-		layout     statelog.Layout
 		logs       []statelog.LogID
 		seats      int
 		background map[string]int
@@ -448,14 +443,14 @@ func TestALogIsHeldToItsOwnShareOfTheCensus(t *testing.T) {
 			// beside it: counted in the census, so the seat's own
 			// reads are measured against what the log really
 			// carries.
-			layout: zero, logs: []statelog.LogID{trackerLog}, seats: 1,
+			logs: []statelog.LogID{trackerLog}, seats: 1,
 			background: map[string]int{"tracker": collect.PinsPerDay},
 			applied:    map[statelog.LogID]int{trackerLog: 125 + collect.PinsPerDay},
 			fires:      false, log: "tracker", expected: 125 + collect.PinsPerDay,
 		},
 		{
-			name:   "the collector is no cover past twice the whole census",
-			layout: zero, logs: []statelog.LogID{trackerLog}, seats: 1,
+			name: "the collector is no cover past twice the whole census",
+			logs: []statelog.LogID{trackerLog}, seats: 1,
 			background: map[string]int{"tracker": collect.PinsPerDay},
 			applied:    map[statelog.LogID]int{trackerLog: 2*(125+collect.PinsPerDay) + 1},
 			fires:      true, log: "tracker", expected: 125 + collect.PinsPerDay,
@@ -464,47 +459,31 @@ func TestALogIsHeldToItsOwnShareOfTheCensus(t *testing.T) {
 			name: "a 200-seat company at 1.2 times its per-seat census",
 			// 30 000 a day: past twice the fixed 12 500, inside twice
 			// this company's 25 000.
-			layout: zero, logs: []statelog.LogID{trackerLog}, seats: 200,
+			logs: []statelog.LogID{trackerLog}, seats: 200,
 			applied: map[statelog.LogID]int{trackerLog: 30_000},
 			fires:   false, log: "tracker", expected: 25_000,
 		},
 		{
-			name:   "a 100-seat company at three times its census",
-			layout: zero, logs: []statelog.LogID{trackerLog}, seats: 100,
+			name: "a 100-seat company at three times its census",
+			logs: []statelog.LogID{trackerLog}, seats: 100,
 			applied: map[statelog.LogID]int{trackerLog: 37_501},
 			fires:   true, log: "tracker", expected: 12_500,
 		},
 		{
-			name:   "this node's own appends, however many, are not the log's rate",
-			layout: zero, logs: []statelog.LogID{trackerLog}, seats: 100,
+			name: "this node's own appends, however many, are not the log's rate",
+			logs: []statelog.LogID{trackerLog}, seats: 100,
 			appended: 100_000,
 			fires:    false, log: "tracker", expected: 12_500,
 		},
 		{
-			name:   "the log's rate, from every node, past this node's own appends",
-			layout: zero, logs: []statelog.LogID{trackerLog}, seats: 100,
+			name: "the log's rate, from every node, past this node's own appends",
+			logs: []statelog.LogID{trackerLog}, seats: 100,
 			applied: map[statelog.LogID]int{trackerLog: 30_000}, appended: 10_000,
 			fires: true, log: "tracker", expected: 12_500,
 		},
 		{
-			name: "a partition past its share while its domain's other log is idle",
-			// Three seats: 375 a day, 188 per tracker partition (rounded
-			// up) and all 375 for the pages log. tracker.001 at 377 is
-			// past twice its 188; pages at 700 is inside twice its 375.
-			layout: partitioned,
-			logs: []statelog.LogID{
-				{Domain: "pages", Partition: statelog.PartitionID{Space: statelog.SpacePages}},
-				{Domain: "tracker", Partition: statelog.PartitionID{Space: statelog.SpaceTracker}},
-				second,
-			},
-			seats: 3,
-			applied: map[statelog.LogID]int{second: 377,
-				{Domain: "pages", Partition: statelog.PartitionID{Space: statelog.SpacePages}}: 700},
-			fires: true, log: second.String(), expected: 188,
-		},
-		{
-			name:   "the vector log, which no read appends to",
-			layout: zero, logs: []statelog.LogID{vectorLog, trackerLog}, seats: 1,
+			name: "the vector log, which no read appends to",
+			logs: []statelog.LogID{vectorLog, trackerLog}, seats: 1,
 			applied: map[statelog.LogID]int{vectorLog: 1_000_000},
 			fires:   false, log: "tracker", expected: 125,
 		},
@@ -517,13 +496,13 @@ func TestALogIsHeldToItsOwnShareOfTheCensus(t *testing.T) {
 			}
 			for id, n := range tc.applied {
 				recorder.Add(metrics.StatelogBarriersApplied, uint64(n),
-					metrics.Attrs{"domain": id.Domain, "stream": stream(tc.layout, id)})
+					metrics.Attrs{"domain": id.Domain, "stream": stream(id)})
 			}
 			if tc.appended > 0 {
 				recorder.Add(metrics.StatelogBarrierAppends, uint64(tc.appended),
 					metrics.Attrs{"domain": "tracker"})
 			}
-			r := &retention{metrics: recorder, state: censusLogs(tc.layout, tc.logs...),
+			r := &retention{metrics: recorder, state: censusLogs(tc.logs...),
 				seats:      func() int { return tc.seats },
 				background: func(domain string) int { return tc.background[domain] }}
 			var reading statelog.Reading
@@ -546,11 +525,11 @@ func TestALogIsHeldToItsOwnShareOfTheCensus(t *testing.T) {
 
 // THE CENSUS COUNTS THE RUNNING COMPANY'S AGENT SEATS.
 //
-// A log's share of the census is per seat, so the trim's reading has to be
-// handed the company this node is running — and a wiring that handed it none
-// would still produce a number, the one seat an empty company is counted as,
-// and hold a company of any size to that: an alarm firing on every company past
-// two seats' worth of reads.
+// A log's census is per seat, so the trim's reading has to be handed the
+// company this node is running — and a wiring that handed it none would still
+// produce a number, the one seat an empty company is counted as, and hold a
+// company of any size to that: an alarm firing on every company past two
+// seats' worth of reads.
 func TestTheCensusCountsTheRunningCompanysSeats(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNodeOf(t, `

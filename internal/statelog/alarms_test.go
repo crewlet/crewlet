@@ -70,7 +70,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"a deferral past the grace": {
 			statelog.KindDeferredOld,
 			statelog.Reading{DeferredAge: 31 * time.Minute},
-			"stops serving the partition",
+			"stops serving its copy of the estate",
 		},
 		"a floor nobody can read": {
 			statelog.KindFloorUnknown,
@@ -217,8 +217,8 @@ func TestAZeroReadingRaisesNothing(t *testing.T) {
 // The floor is the curve `crewlet search eval` judges a corpus against, at the
 // size the training measured, handed in by the engine because the curve is the
 // search package's. A recall AT the floor passes that evaluation, so it must
-// not alarm; a partition whose index nobody trained measured nothing and must
-// not alarm either — zero recall is the alarm, not the absence.
+// not alarm; an index nobody trained measured nothing and must not alarm
+// either — zero recall is the alarm, not the absence.
 func TestTheIndexRecallAlarmFiresAtTheEvaluationsFloor(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -476,38 +476,33 @@ func gauge(t *testing.T, rec *metrics.Recorder, kind statelog.Kind) float64 {
 	return -1
 }
 
-// A LOG'S SHARE OF THE CENSUS IS PER SEAT, PER DOMAIN LOG, NEVER ZERO — AND
-// PLUS WHAT THE ENGINE READS ON ITS OWN, WHOLE.
+// A LOG'S CENSUS IS PER SEAT, NEVER ZERO — AND PLUS WHAT THE ENGINE READS ON
+// ITS OWN.
 //
 // The reference company — 100 seats, one tracker log — is the 12 500 the
 // sizing was derived from, so that is what its log is expected to take. A
 // company twice the size doing the same work per seat takes twice it, which
-// the fixed figure read as drift. A partitioned domain divides its figure
-// across its own logs, ROUNDING UP, so no partition of a small company is told
-// to expect nothing; and a company with no agent seat is still one seat's
-// worth, since its operators read too and an expectation of zero is an alarm
-// that cannot fire. The engine's own periodic reads are added after the
-// division and not divided, since each of them is a barrier on every log it
-// reads: without them a one-seat company on one data node reading exactly its
-// census put 293 barriers a day on a log expected to take 125.
-func TestALogsCensusIsPerSeatAndPerDomainLog(t *testing.T) {
+// the fixed figure read as drift. A company with no agent seat is still one
+// seat's worth, since its operators read too and an expectation of zero is an
+// alarm that cannot fire. The engine's own periodic reads are added to it,
+// since each of them is a barrier on every log it reads: without them a
+// one-seat company on one data node reading exactly its census put 293
+// barriers a day on a log expected to take 125.
+func TestALogsCensusIsPerSeat(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		census statelog.Census
 		want   int
 	}{
-		{"the reference company on layout 0", statelog.Census{Seats: 100, Logs: 1}, 12_500},
-		{"twice the company", statelog.Census{Seats: 200, Logs: 1}, 25_000},
-		{"no agent seat", statelog.Census{Logs: 1}, 125},
-		{"a small company on two partitions", statelog.Census{Seats: 3, Logs: 2}, 188},
-		{"the reference company on 256 partitions", statelog.Census{Seats: 100, Logs: 256}, 49},
-		{"no log to share it across", statelog.Census{Seats: 5, Background: 168}, 0},
+		{"the reference company", statelog.Census{Seats: 100}, 12_500},
+		{"twice the company", statelog.Census{Seats: 200}, 25_000},
+		{"no agent seat", statelog.Census{}, 125},
 		{"one seat beside one data node's passes",
-			statelog.Census{Seats: 1, Logs: 1, Background: 168}, 293},
-		{"the engine's own reads are not divided across partitions",
-			statelog.Census{Seats: 3, Logs: 2, Background: 504}, 692},
-		{"a negative background adds nothing", statelog.Census{Seats: 1, Logs: 1, Background: -5}, 125},
+			statelog.Census{Seats: 1, Background: 168}, 293},
+		{"a small company beside the engine's own reads",
+			statelog.Census{Seats: 3, Background: 504}, 879},
+		{"a negative background adds nothing", statelog.Census{Seats: 1, Background: -5}, 125},
 	} {
 		if got := tc.census.Expected(); got != tc.want {
 			t.Errorf("%s: %+v expects %d a day, want %d", tc.name, tc.census, got, tc.want)

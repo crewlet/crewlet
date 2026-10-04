@@ -292,8 +292,8 @@ func (e *Engine) objectsReading(_ time.Time, out *statelog.Reading) {
 }
 
 // backgroundBarriers is the barrier records a day the object store's collector
-// puts on each log of domain, whatever the company's seats do:
-// [collect.PinsPerDay] on every log of a domain a declared table names
+// puts on the domain's log, whatever the company's seats do:
+// [collect.PinsPerDay] on the log of a domain a declared table names
 // ([references.All]) and on no other. ONE collector runs in the fleet, so it is
 // the count, never a count per node.
 func (e *Engine) backgroundBarriers(domain string) int {

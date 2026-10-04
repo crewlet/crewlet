@@ -1912,8 +1912,8 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 
 	// WHAT WOKE THIS TURN IS WHAT ITS READS ARE NO OLDER THAN: every
 	// constituent's committing record goes into this node's floors before
-	// the first read, so a list read across partitions — at `session`,
-	// floored at those floors — shows the change the seat was woken for.
+	// the first read, so a list read — at `session`, floored at those
+	// floors — shows the change the seat was woken for.
 	e.observeTriggers(ctx, req.Events)
 
 	// THE WORKING INDICATOR, up before this turn does anything slow. Here

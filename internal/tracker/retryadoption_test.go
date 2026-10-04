@@ -169,7 +169,6 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 	lag := uint64(0)
 	dir := t.TempDir()
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
-		Layout: statelog.EstateLayout(declared.Name()), Partition: statelog.EstatePartition,
 		Domains: []statelog.Registered{{
 			Domain: declared, Spec: statelog.EstateStream(declared),
 			Log: statelog.LogID{Domain: declared.Name(), Partition: statelog.EstatePartition},
@@ -189,12 +188,11 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 		t.Fatalf("the donor's snapshot: %v", err)
 	}
 	server, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: "node-a", Layout: statelog.EstateLayout(declared.Name()),
-		Keeps: statelog.KeepsOnly(statelog.EstatePartition).Keeps,
+		NodeID: "node-a",
 		Dial: func(context.Context) (*nats.Conn, error) {
 			return donor.broker.Conn(), nil
 		},
-		Newest: func(statelog.PartitionID) (statelog.Manifest, bool) { return manifest, true },
+		Newest: func() (statelog.Manifest, bool) { return manifest, true },
 		Path:   func(statelog.Manifest) string { return filepath.Join(dir, manifest.Artifact) },
 	})
 	if err != nil {
@@ -217,8 +215,7 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 		NodeID:   "node-b",
 		Conn:     donor.broker.Conn(),
 		Need: func(context.Context) (statelog.OfferRequest, error) {
-			return statelog.OfferRequest{Partition: statelog.EstatePartition.String(),
-				Need: map[string]uint64{"tracker": at.Seq}}, nil
+			return statelog.OfferRequest{Need: map[string]uint64{"tracker": at.Seq}}, nil
 		},
 		Hold: func(context.Context, map[string]uint64) (func(), error) {
 			return func() {}, nil

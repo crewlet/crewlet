@@ -362,29 +362,21 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
         <Card.Header
           icon={<PackageGlyph size="sm" />}
           count={data?.snapshots?.length}
-          subtitle={donorsSubtitle(data?.snapshots ?? [])}
+          subtitle={`${donorsCounted(data?.snapshots ?? [])} of ${SNAPSHOT_DONORS_REQUIRED} donors — the trim's sixth term`}
         >
           Snapshots
         </Card.Header>
         <DataGrid<RetentionSnapshot>
           name="snapshots"
           rows={data?.snapshots ?? []}
-          rowKey={snapshotKey}
+          rowKey={(s) => s.node_id}
           defaultSort="node"
           columns={[
             {
               key: "node",
               header: "Node",
-              // THE PARTITION BESIDE THE NODE, on a divided layout's rows: a
-              // node donates each partition it holds separately, and two rows
-              // naming only the node read as one artefact listed twice.
-              sortValue: snapshotKey,
-              cell: (s) => (
-                <span className="row wrap gap-1 baseline">
-                  <KeyCell value={s.node_id} path={["settings", "nodes", s.node_id]} />
-                  {s.partition && <Tag appearance="outline">{s.partition}</Tag>}
-                </span>
-              ),
+              sortValue: (s) => s.node_id,
+              cell: (s) => <KeyCell value={s.node_id} path={["settings", "nodes", s.node_id]} />,
             },
             {
               key: "at",
@@ -710,40 +702,12 @@ function firstDomain(n: RetentionNode) {
 }
 
 /**
- * snapshotKey is one artefact row's identity: its node, and the partition it
- * copies on a divided layout — where one node has a row per partition it holds,
- * so the node alone names two rows at once.
- */
-export function snapshotKey(s: RetentionSnapshot): string {
-  return s.partition ? `${s.node_id} ${s.partition}` : s.node_id;
-}
-
-/**
- * donorsCounted is how many nodes hold an artefact of the partition FEWEST
- * nodes hold one of — the whole estate's under layout 0, whose rows name no
- * partition — because the trim's sixth term is per log, and a partition's logs
- * wait on that partition's donors alone: two donors of one partition and none
- * of another is a fleet whose second partition cannot be rejoined.
- *
- * On a divided layout a node that reports no partition has a row of its own and
- * donates none, so it is no partition's donor rather than a partition nobody
- * holds.
+ * donorsCounted is how many nodes hold a snapshot at all: one row per node,
+ * since every data node keeps the one estate and an artefact is a copy of all
+ * of it.
  */
 export function donorsCounted(snapshots: RetentionSnapshot[]): number {
-  const divided = snapshots.some((s) => s.partition);
-  const per = new Map<string, number>();
-  for (const s of snapshots) {
-    if (divided && !s.partition) continue;
-    const key = s.partition ?? "";
-    per.set(key, (per.get(key) ?? 0) + (s.at && s.domains ? 1 : 0));
-  }
-  return per.size ? Math.min(...per.values()) : 0;
-}
-
-/** donorsSubtitle says how many donors the trim's sixth term has. */
-function donorsSubtitle(snapshots: RetentionSnapshot[]): string {
-  const where = snapshots.some((s) => s.partition) ? " on the partition with fewest" : "";
-  return `${donorsCounted(snapshots)} of ${SNAPSHOT_DONORS_REQUIRED} donors${where} — the trim's sixth term`;
+  return snapshots.filter((s) => s.at && s.domains).length;
 }
 
 /**

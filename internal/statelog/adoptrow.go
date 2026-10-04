@@ -45,9 +45,9 @@ import (
 // lost into the artefact itself before it recorded anything here, so there is
 // nothing for [FoldLegacyAdoptions] to carry.
 //
-// IN THE NODE ESTATE. The partition is the thing being replaced, so a row
-// written there would be renamed away between the second phase and the third
-// — and the phase that matters most is the one that would vanish.
+// IN THE NODE ESTATE. The replicated estate is the thing being replaced, so a
+// row written there would be renamed away between the second phase and the
+// third — and the phase that matters most is the one that would vanish.
 func RecordAdoption(ctx context.Context, db *store.DB, startedAt time.Time,
 	donor string, m Manifest, phase AdoptionPhase) error {
 
@@ -107,8 +107,8 @@ func RecordAdoption(ctx context.Context, db *store.DB, startedAt time.Time,
 // no-op. The other order would mark rows whose loss was never recorded.
 //
 // db is the node's own estate, where the adoption history is kept, and estate
-// the partition whose ledgers the history is folded into — the one partition a
-// build from before the ledger travelled ever held.
+// the replicated estate whose ledgers the history is folded into — the one
+// file every adoption has ever installed.
 func FoldLegacyAdoptions(ctx context.Context, db *store.DB, estate Estate, domains []Domain) error {
 	if db == nil {
 		return fmt.Errorf("statelog: no store to fold an adoption history in")

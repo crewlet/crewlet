@@ -3,10 +3,13 @@ package statelog_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -111,8 +114,6 @@ func (h *snapHarness) cursor(seq uint64) {
 func (h *snapHarness) rebuild(interval time.Duration) {
 	h.t.Helper()
 	s, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
-		Layout:    statelog.EstateLayout(probeDomain{}.Name()),
-		Partition: statelog.EstatePartition,
 		Domains: []statelog.Registered{{
 			Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{}),
 			Health: func() statelog.Health { return h.health },
@@ -675,7 +676,7 @@ func TestASnapshotNamesTheStreamItsFileWasApplying(t *testing.T) {
 func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 	t.Parallel()
 	offer := statelog.Offer{Manifest: statelog.Manifest{
-		V: statelog.ManifestVersion, Partition: statelog.EstatePartition.String(),
+		V: statelog.ManifestVersion,
 		Domains: map[string]statelog.DomainPosition{"probe": {
 			Stream:          probeStream,
 			Generation:      1,
@@ -688,7 +689,6 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{})}}
 
 	req := statelog.OfferRequest{
-		Partition:       statelog.EstatePartition.String(),
 		Need:            map[string]uint64{"probe": 1},
 		Generations:     map[string]uint32{"probe": 1},
 		StreamCreatedAt: map[string]time.Time{"probe": liveStreamCreatedAt},
@@ -803,94 +803,85 @@ func TestASecondTakeAtTheSamePositionDoesNotPublishOverTheFirst(t *testing.T) {
 	}
 }
 
-// A SNAPSHOT IS A COPY OF ONE PARTITION, AND ITS MANIFEST SAYS WHICH.
+// A TAKE WRITES THE MANIFEST EVERY BUILD READS, AND NAMES EVERY LOG.
 //
-// The recipient installs the file as the partition the manifest names, of the
-// layout it names, so the snapshotter is built only over exactly one
-// partition's logs — none missing, none of another partition — and its file,
-// and every artefact it takes names both.
-func TestASnapshotIsACopyOfOnePartitionAndSaysWhich(t *testing.T) {
+// The manifest is a peer's payload as much as this node's file: a donor offers
+// it to a joiner of whichever build shares the fleet through a rolling upgrade,
+// and a node upgraded in place offers the one it wrote before. So what a take
+// writes is pinned field for field — the ten keys of the artefact's claim and
+// the position fields of each log — rather than whatever the struct happens to
+// hold, because a field added here is one every reader of an earlier shape
+// meets, and one removed is a refusal a recipient could no longer make. And a
+// snapshotter over no estate file has nothing to copy, so it is refused.
+func TestATakeWritesTheManifestEveryBuildReads(t *testing.T) {
 	t.Parallel()
 	h := newSnapHarness(t)
 	m, err := h.snap.Take(t.Context())
 	if err != nil {
 		t.Fatalf("Take: %v", err)
 	}
-	if m.Partition != statelog.EstatePartition.String() || m.Layout != 0 {
-		t.Errorf("the manifest names partition %q of layout %d, want estate.000 of 0",
-			m.Partition, m.Layout)
+	raw, err := os.ReadFile(filepath.Join(h.dir, strings.TrimSuffix(m.Artifact, ".db")+".json"))
+	if err != nil {
+		t.Fatalf("read the manifest: %v", err)
 	}
-	back, err := statelog.ReadManifest(filepath.Join(h.dir, strings.TrimSuffix(m.Artifact, ".db")+".json"))
-	if err != nil || back.Partition != m.Partition {
-		t.Fatalf("the manifest on disk reads (%+v, %v)", back, err)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("decode the manifest: %v", err)
+	}
+	want := []string{"artifact", "bytes", "domains", "engine_version", "migrations",
+		"node_id", "scrubbed", "sha256", "taken_at", "v"}
+	if got := slices.Sorted(maps.Keys(fields)); !slices.Equal(got, want) {
+		t.Errorf("a take writes the manifest keys %v, want exactly %v", got, want)
+	}
+	var domains map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(fields["domains"], &domains); err != nil {
+		t.Fatalf("decode the manifest's logs: %v", err)
+	}
+	if got := slices.Sorted(maps.Keys(domains)); !slices.Equal(got, []string{"probe"}) {
+		t.Fatalf("the manifest names the logs %v, want every registered one: [probe]", got)
+	}
+	wantPos := []string{"first_seq_at_take", "generation", "last_seq_at_take",
+		"record_version", "replay", "seq", "stream", "stream_created_at"}
+	if got := slices.Sorted(maps.Keys(domains["probe"])); !slices.Equal(got, wantPos) {
+		t.Errorf("a log's position is written as %v, want exactly %v", got, wantPos)
 	}
 
 	reg := statelog.Registered{Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{}),
 		Health: func() statelog.Health { return h.health }}
-	two := statelog.EstateLayout(probeDomain{}.Name(), "pages")
-	for name, deps := range map[string]statelog.SnapshotDeps{
-		"a log of the partition missing": {Layout: two, Partition: statelog.EstatePartition,
-			Domains: []statelog.Registered{reg}, File: h.estate},
-		"no partition": {Layout: statelog.EstateLayout(probeDomain{}.Name()),
-			Domains: []statelog.Registered{reg}, File: h.estate},
-		"another partition's file": {Layout: statelog.EstateLayout(probeDomain{}.Name()),
-			Partition: statelog.EstatePartition, Domains: []statelog.Registered{reg},
-			File: (&store.DB{}).PartitionHandle("tracker.007")},
-	} {
-		deps.Dir, deps.NodeID, deps.Interval = h.dir, "node-a", time.Hour
-		deps.Recipients = func(context.Context) (int, error) { return 2, nil }
-		if _, err := statelog.NewSnapshotter(deps); err == nil {
-			t.Errorf("a snapshotter over %s was built", name)
-		}
+	if _, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
+		Domains: []statelog.Registered{reg}, Dir: h.dir, NodeID: "node-a", Interval: time.Hour,
+		Recipients: func(context.Context) (int, error) { return 2, nil },
+	}); err == nil {
+		t.Error("a snapshotter over no estate file was built")
 	}
 }
 
-// A MANIFEST THAT NAMES NO PARTITION OF A DIVIDED LAYOUT IS NOBODY'S ARTEFACT.
+// A MANIFEST IS READ ONLY AT THE VERSION THIS BUILD READS.
 //
-// One naming no partition at all is what every build before partitions wrote,
-// and it is layout 0's `estate.000` — the one file such a build held. But one
-// naming a divided layout and no partition, a version this build does not
-// write, or a partition that is no partition's name cannot be installed as any
-// file: it is refused on read, so no donor offers it and no loop counts it as a
-// partition's current artefact.
-func TestAManifestNamingNoPartitionIsRefused(t *testing.T) {
+// The version is what a reader must refuse, so one of another version is
+// nobody's artefact here — no donor offers it and no loop counts it as this
+// node's current one — and so is one that does not decode. One at this
+// version is read whatever else it carries: an earlier build wrote exactly
+// this shape, and a node upgraded in place still offers what it took before.
+func TestAManifestIsReadOnlyAtTheVersionThisBuildReads(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	for name, body := range map[string]string{
-		"a divided layout":  `{"v":2,"layout":1,"artifact":"snapshot-1-1.db","domains":{}}`,
-		"version 3":         `{"v":3,"layout":0,"partition":"estate.000","domains":{}}`,
-		"a negative layout": `{"v":2,"layout":-1,"partition":"estate.000","domains":{}}`,
-		"not a partition":   `{"v":2,"layout":0,"partition":"estate","domains":{}}`,
+	for name, tc := range map[string]struct {
+		body string
+		read bool
+	}{
+		"this version": {read: true,
+			body: `{"v":2,"artifact":"snapshot-1-1.db","domains":{"probe":{"seq":1}}}`},
+		"version 1": {body: `{"v":1,"domains":{}}`},
+		"version 3": {body: `{"v":3,"artifact":"snapshot-1-1.db","domains":{}}`},
+		"no JSON":   {body: `snapshot`},
 	} {
 		path := filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+".json")
-		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := statelog.ReadManifest(path); err == nil {
-			t.Errorf("a manifest of %s was read", name)
+		if _, err := statelog.ReadManifest(path); (err == nil) != tc.read {
+			t.Errorf("a manifest of %s was read %v (%v), want %v", name, err == nil, err, tc.read)
 		}
-	}
-}
-
-// EACH PARTITION'S ARTEFACTS ARE KEPT APART.
-//
-// SnapshotsKept and the rotation are per partition, so an artefact of one
-// partition never rotates another's away: layout 0's one partition keeps its
-// artefacts where they have always been, and every other partition has a
-// directory of its own, named as its file is.
-func TestEachPartitionsArtefactsAreKeptApart(t *testing.T) {
-	t.Parallel()
-	root := filepath.Join("var", "snap")
-	if got := statelog.SnapshotDir(root, 0, statelog.EstatePartition); got != root {
-		t.Errorf("layout 0's artefacts are kept in %q, want %q", got, root)
-	}
-	seven := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 7}
-	eight := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 8}
-	if got, want := statelog.SnapshotDir(root, 1, seven), filepath.Join(root, "l1-tracker.007"); got != want {
-		t.Errorf("tracker.007's artefacts are kept in %q, want %q", got, want)
-	}
-	if statelog.SnapshotDir(root, 1, seven) == statelog.SnapshotDir(root, 1, eight) ||
-		statelog.SnapshotDir(root, 1, seven) == statelog.SnapshotDir(root, 2, seven) {
-		t.Error("two partitions' artefacts share a directory")
 	}
 }

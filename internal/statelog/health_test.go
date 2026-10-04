@@ -119,7 +119,7 @@ func TestACheckpointOneBelowTheFirstRecordHasMissedNothing(t *testing.T) {
 // outage the retain rule exists to prevent, arriving through the applier
 // instead of the codec. Past the grace the honest reading changes: "this node
 // cannot run this company's records" is worth sending its readers to another
-// holder for, and a copy that fails every call about a growing set of objects
+// data node for, and a copy that fails every call about a growing set of objects
 // while it goes on serving is the same outage in a slower form.
 func TestADeferralTakesACopyOutOfServiceOnlyPastTheGrace(t *testing.T) {
 	t.Parallel()
@@ -655,7 +655,7 @@ func TestALaggingCopyKeepsServingAndAStalledOneDoesNot(t *testing.T) {
 	fresh.Drained = false
 	if !fresh.Healthy(now, statelog.DeferredSince{}) {
 		t.Error("a node that has not finished hydrating reports its copy WRONG, " +
-			"so it stops serving a partition whose only fault is that it is " +
+			"so it stops serving a copy whose only fault is that it is " +
 			"still catching up")
 	}
 

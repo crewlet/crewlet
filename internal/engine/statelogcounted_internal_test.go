@@ -29,9 +29,9 @@ func TestTheSnapshotLoopCountsWhatTheTrimCounts(t *testing.T) {
 	now := time.Now()
 	count := func(at time.Time) int {
 		t.Helper()
-		n, err := e.countedOn(ctx, s, statelog.EstatePartition, at)
+		n, err := e.counted(ctx, s, at)
 		if err != nil {
-			t.Fatalf("countedOn: %v", err)
+			t.Fatalf("counted: %v", err)
 		}
 		return len(n)
 	}
@@ -95,8 +95,8 @@ func TestAnUnansweredPresenceViewCountsTheRegisterAlone(t *testing.T) {
 
 	fleet := newCountedFleet(t, "node-a", "node-b")
 	e := &Engine{dataView: view}
-	s := &stateLog{layout: LayoutZero(), fleet: fleet}
-	n, err := e.countedOn(t.Context(), s, statelog.EstatePartition, time.Now())
+	s := &stateLog{fleet: fleet}
+	n, err := e.counted(t.Context(), s, time.Now())
 	if err != nil {
 		t.Fatalf("an unanswered presence view failed the count: %v", err)
 	}

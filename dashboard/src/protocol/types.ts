@@ -1684,12 +1684,6 @@ export interface RetentionEviction {
 
 export interface RetentionSnapshot {
   node_id: string;
-  /**
-   * The partition the artefact is a copy of, on a divided layout's row — a
-   * node donates each partition it holds separately — and ABSENT under
-   * layout 0, whose one artefact is the whole estate.
-   */
-  partition?: string;
   /** Absent when the node holds none, in which case `skip` says why. */
   domains?: Record<string, number>;
   at?: string;

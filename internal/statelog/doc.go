@@ -465,33 +465,21 @@
 //
 // ONE RULE, for every record the fleet shares about a log — a node's row in
 // the positions register, a published trim floor, a trim hold, a backup point,
-// a capacity operation and its lease: a record names its log by something that
-// CARRIES THE LAYOUT. There are two such names, and each record keeps the one
-// it has always had:
+// a capacity operation and its lease: a record names its log by one of the two
+// names the log has, and each record keeps the one it has always had:
 //
-//   - the log's STREAM NAME, which the partition grammar builds from the layout
-//     number ([Layout.Stream]) — what a hold, a backup point and a capacity
+//   - the log's STREAM NAME — what a hold, a backup point and a capacity
 //     operation are keyed by, since each is a statement about one stream's
 //     number space;
-//   - the log's KEY ([LogID.String]) WITH THE LAYOUT NUMBER BESIDE IT IN THE
-//     SAME RECORD — what the positions register's rows and the published
-//     floors are keyed by, since the key is what an operator reads and a row
-//     describes every log a node runs at once.
-//
-// What is never a record's identity is the key ALONE: layout 1's
-// `tracker@tracker.007` and a repartitioned layout 2's are one string. So a
-// reader takes a key-named record only through the filter that drops every
-// other layout's (coord.PositionsIn, coord.FloorsIn), and a record of another
-// layout reads as absent — which for a floor is what a floor at another
-// generation already reads as, the log's own first sequence covering what it
-// cannot see. Under layout 0 the layout field is omitted, so every record is
-// the one a running fleet already holds, byte for byte, and every key is the
-// domain's own name.
+//   - the log's KEY, which is its domain's name — what the positions
+//     register's rows and the published floors are keyed by, since the key is
+//     what an operator reads and a row describes every log a node runs at
+//     once.
 //
 // An EVICTION is not a coordination record at all, and needs no such name: it
-// is a record on the very log it gates, applied into that log's rows in its
-// partition's own file, so it is about that log by construction — the same way
-// a checkpoint, an anchor and a generation are.
+// is a record on the very log it gates, applied into that log's rows in the
+// replicated estate, so it is about that log by construction — the same way a
+// checkpoint, an anchor and a generation are.
 //
 // # The alarm table borrows every threshold it fires at
 //
@@ -500,8 +488,7 @@
 // above it asks the same question. The rule is ADR-0015 and alarms.go is where
 // it is carried out: an alarm never invents a number, it fires at the one some
 // OTHER decision already made — the grace that takes a copy out of service,
-// the grace that stops a node serving a partition it cannot decode, the budget
-// a caller was promised — and ONE evaluation feeds
-// every surface, so a gauge, a log line and a screen cannot disagree about
-// whether something is wrong.
+// the grace that stops a node serving a copy it cannot decode, the budget a
+// caller was promised — and ONE evaluation feeds every surface, so a gauge, a
+// log line and a screen cannot disagree about whether something is wrong.
 package statelog

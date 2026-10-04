@@ -117,16 +117,15 @@ type embedDuty struct {
 
 	// log is the vector log this duty embeds into, whose runner and stream
 	// the index step's standing is read from, and register and holders the
-	// positions register — as this node's layout reads it — and who holds
-	// the log's partition, which its counted set is.
+	// positions register and the live data nodes, which its counted set is.
 	log      *runningLog
 	register func(context.Context) ([]coord.NodePositions, error)
-	holders  partitionHolders
+	holders  liveData
 
 	// identity is every log whose domain claims identity, whose eviction
 	// records are how the fleet says a node is gone — the vector log
 	// carries none of its own ([embedDuty.evicted]) — and db the node whose
-	// partitions they are read from, each log's from its own.
+	// replicated estate they are read from.
 	identity []*runningLog
 	db       *store.DB
 
@@ -186,18 +185,20 @@ func (e *Engine) newEmbedDuty(s *stateLog) *embedDuty {
 	if running == nil || running.publisher == nil {
 		return nil
 	}
-	corpora := e.corpora(s.estate(running.id.Partition).Reader())
+	corpora := e.corpora(s.estate().Reader())
 	if len(corpora) == 0 {
 		return nil
 	}
 	return &embedDuty{
-		engine:     e,
-		publisher:  running.publisher,
-		corpora:    corpora,
-		claim:      e.workerDuty(embedDutyName, embedDutyTTL),
-		metrics:    e.metrics,
-		log:        running,
-		register:   s.positions,
+		engine:    e,
+		publisher: running.publisher,
+		corpora:   corpora,
+		claim:     e.workerDuty(embedDutyName, embedDutyTTL),
+		metrics:   e.metrics,
+		log:       running,
+		register: func(ctx context.Context) ([]coord.NodePositions, error) {
+			return s.fleet.Positions(ctx)
+		},
 		holders:    e.holdersOf(),
 		identity:   s.identityDomains(),
 		db:         e.backends.Store,
@@ -217,7 +218,7 @@ func (e *Engine) stopEmbedding() {
 	e.embedding = nil
 }
 
-// corpora is every source kind this node can embed out of one partition.
+// corpora is every source kind this node can embed out of the replicated estate.
 //
 // ONE CONSTRUCTION SITE, because the coverage gauge and the duty must be
 // counting and filling the same set: a corpus the duty embeds and the gauge
@@ -339,10 +340,9 @@ func (d *embedDuty) tick(ctx context.Context) tickReport {
 	defer release()
 	duty, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: d.publisher,
-		// THE PARTITION'S OWN FILE AND LOG, for the semantic index the
-		// duty keeps beside its vectors (ADR-0028): the partition the
-		// vector log it publishes onto is in.
-		Estate:   d.db.PartitionHandle(d.log.id.Partition.String()).Reader(),
+		// THE REPLICATED ESTATE AND THE VECTOR LOG, for the semantic
+		// index the duty keeps beside its vectors (ADR-0028).
+		Estate:   d.db.PartitionHandle(statelog.EstatePartition.String()).Reader(),
 		Log:      d.log.spec.Name,
 		Standing: d.standing,
 		Embedder: provider,
@@ -438,8 +438,8 @@ func (d *embedDuty) keepClaimed(ctx context.Context, cancel context.CancelFunc) 
 // current either: its rows are the log's minus that record.
 //
 // THE READERS ARE THE COUNTED SET — the positions register's rows for this
-// log, and every holder of its partition that has not reported yet — because
-// that is every node that applies the log, less every node the fleet has EVICTED
+// log, and every live data node that has not reported yet — because that is
+// every node that applies the log, less every node the fleet has EVICTED
 // ([embedDuty.evicted]): an operator's word that a node is not coming back,
 // and without it an old build's row on a machine nobody will start again would
 // hold the index back for the life of the deployment.
@@ -456,21 +456,18 @@ func (d *embedDuty) standing(ctx context.Context) (search.LogStanding, error) {
 	if err != nil {
 		return out, fmt.Errorf("read the positions register: %w", err)
 	}
-	var holders []statelog.Presence
+	var live []statelog.Presence
 	if d.holders != nil {
-		partition := d.log.id.Partition
-		held, heldErr := d.holders.Holders(ctx, []statelog.PartitionID{partition})
-		if heldErr != nil {
-			return out, fmt.Errorf("read who holds %s: %w", partition, heldErr)
+		if live, err = d.holders.LiveData(ctx); err != nil {
+			return out, fmt.Errorf("read the live data nodes: %w", err)
 		}
-		holders = held[partition]
 	}
 	tombs, err := d.evicted(ctx)
 	if err != nil {
 		return out, err
 	}
 	out.Readers = statelog.Readers(statelog.CountedSet(time.Now().UTC(),
-		reportedPositions(rows, d.log.key), holders, tombs))
+		reportedPositions(rows, d.log.key), live, tombs))
 	return out, nil
 }
 
@@ -500,7 +497,7 @@ func (d *embedDuty) evicted(ctx context.Context) ([]statelog.Tombstone, error) {
 		if !ok {
 			return nil, fmt.Errorf("the %s log lists no evictions", running.domain.Name())
 		}
-		rows, err := lister.Evictions(ctx, d.db.PartitionHandle(running.id.Partition.String()).Reader())
+		rows, err := lister.Evictions(ctx, d.db.PartitionHandle(statelog.EstatePartition.String()).Reader())
 		if err != nil {
 			return nil, fmt.Errorf("read the %s log's evictions: %w",
 				running.domain.Name(), err)
@@ -545,7 +542,7 @@ func (e *Engine) vectorCoverage(ctx context.Context) (float64, bool, error) {
 }
 
 // indexReading is the semantic index's alarm input (ADR-0028): the latest
-// measurement of the partition's index against the exact scan — the worst
+// measurement of the index against the exact scan — the worst
 // query shape's recall and the floor its training judged it against, the
 // evaluation's own curve borrowed rather than restated (ADR-0015).
 //

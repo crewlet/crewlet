@@ -28,8 +28,8 @@ import (
 //
 // Every one of them is a number some OTHER decision already made — a stall
 // grace is what takes a copy out of service, a deferral grace is what stops
-// a node serving a partition it cannot decode, a read budget is what a caller
-// was promised. An alarm that invented its own
+// a node serving a copy it cannot decode, a read budget is what a caller was
+// promised. An alarm that invented its own
 // threshold would be a second opinion about the same event, and the two would
 // drift: the plan this replaces tinted a dashboard row `caution` past one
 // apply linger (250 ms) on a position refreshed every 15 seconds, so every row
@@ -47,8 +47,8 @@ const (
 	StallGrace = 60 * time.Second
 
 	// DeferralGrace is how long a node may hold records it could not
-	// apply before it stops serving the partition they are on — its seats
-	// stay, and read the partition from its other holders. The alarm and
+	// apply before it stops serving its copy of the estate — its seats
+	// stay, and read the estate from the other data nodes. The alarm and
 	// that step share the number deliberately: an operator who sees this
 	// alarm has thirty minutes, and one who sees a different number has no
 	// idea how long they have.
@@ -140,20 +140,17 @@ const (
 	LinearizableReadsPerSeatDay = 125
 )
 
-// Census is what one log's share of the census is derived from.
+// Census is what one log's expected read rate is derived from.
 type Census struct {
 	// Seats is the running company's agent seats.
 	Seats int
 
-	// Logs is how many logs the layout divides the log's domain into.
-	Logs int
-
 	// Background is the barrier records a day the ENGINE'S OWN periodic
 	// reads put on this log, whatever the company's seats do — the object
 	// store's collector, which pins the estate on a fixed cadence from one
-	// data node at a time (the engine's figure is collect.PinsPerDay). NOT
-	// DIVIDED across the domain's logs: each pin is a barrier on every log
-	// it reads, so each log takes all of them.
+	// data node at a time (the engine's figure is collect.PinsPerDay).
+	// Each pin is a barrier on every log it reads, so each log takes all
+	// of them.
 	//
 	// It exists because the seats' term alone is not what a log receives,
 	// and the engine's own reads do not shrink with the company: when every
@@ -164,8 +161,8 @@ type Census struct {
 	Background int
 }
 
-// Expected is the log's share of the census: the linearizable reads a day it
-// was sized to take.
+// Expected is the log's census: the linearizable reads a day it was sized to
+// take.
 //
 // # Per seat, and at least one
 //
@@ -175,31 +172,21 @@ type Census struct {
 // operator MCP, and an expectation of zero would be an alarm that could never
 // fire, on exactly the company whose first seat has not been hired yet.
 //
-// # Divided across the DOMAIN's logs, not across every log
+// # The whole company's figure on every log, not a share of it
 //
 // The census says how many reads a company makes and not how they split
-// between the tracker and the knowledge base, so each domain's logs are sized
-// for all of them — which is how their ceilings are sized too: each domain has
-// its own budget, divided evenly across that domain's logs
-// ([Layout.LogShare]). A partition's share is its domain's figure over its
-// domain's partitions, rounded UP so a small company on many partitions is not
-// told to expect zero reads on a log that takes one. Divided across every log
-// of the layout instead, a layout-0 tracker log would be expected to take half
-// the census, and the reference company, whose reads are mostly the
-// tracker's, would fire the alarm doing exactly the work it was sized for.
+// between the tracker and the knowledge base, so each log is sized for all of
+// them — which is how their ceilings are sized too: each domain's log has its
+// own budget. Divided across the logs instead, the tracker's log would be
+// expected to take a fraction of the census, and the reference company, whose
+// reads are mostly the tracker's, would fire the alarm doing exactly the work
+// it was sized for.
 //
-// # Plus what the engine reads on its own, whole
+// # Plus what the engine reads on its own
 //
-// [Census.Background] is added after the division, for the reason it gives.
-//
-// Zero where there is nothing to share it across (Logs below one), which the
-// alarm reads as "no expectation" rather than as one exceeded.
+// [Census.Background] is added to it, for the reason it gives.
 func (c Census) Expected() int {
-	if c.Logs < 1 {
-		return 0
-	}
-	company := LinearizableReadsPerSeatDay * max(c.Seats, 1)
-	return (company+c.Logs-1)/c.Logs + max(c.Background, 0)
+	return LinearizableReadsPerSeatDay*max(c.Seats, 1) + max(c.Background, 0)
 }
 
 // Kind names one alarm.
@@ -326,18 +313,18 @@ type Reading struct {
 	// alarm rather than the absence.
 	SemanticCoverage *float64
 
-	// IVFRecall is the recall the latest measurement of this node's
-	// partition's semantic index found against the exact scan (ADR-0028) —
-	// its training's, or the duty's later re-measurement's — in the query
-	// shape nearest its floor, IVFShape; IVFRecallFloor is that shape's
-	// floor, and IVFMeasuredOn how many sources the partition held.
+	// IVFRecall is the recall the latest measurement of the semantic index
+	// found against the exact scan (ADR-0028) — its training's, or the
+	// duty's later re-measurement's — in the query shape nearest its floor,
+	// IVFShape; IVFRecallFloor is that shape's floor, and IVFMeasuredOn how
+	// many sources the corpus held.
 	//
 	// THE FLOOR IS SUPPLIED rather than named here, because the curve is
 	// internal/search's — its FloorAt, the same curve `crewlet search eval`
 	// judges against, at the size of the corpus each shape searches — and
 	// that package imports this one. A POINTER, for SemanticCoverage's
-	// reason: a partition whose index was never trained, or was retired for
-	// its size, measured nothing, and zero recall is the alarm rather than
+	// reason: an index that was never trained, or was retired for the
+	// corpus's size, measured nothing, and zero recall is the alarm rather than
 	// the absence.
 	IVFRecall      *float64
 	IVFRecallFloor float64
@@ -375,11 +362,11 @@ type Reading struct {
 
 	// LinearizableReads and LinearizableReadsExpected are one log's
 	// observed and designed-for daily read rates — the barrier records
-	// committed to the log in the last day, from every node, and its share
-	// of the census ([Census.Expected]) — and CensusLog names that log: of every
-	// log this node applies, the one furthest past its share, since the
-	// reading describes one node and a log over its share is over it
-	// however quiet the others are.
+	// committed to the log in the last day, from every node, and its census
+	// ([Census.Expected]) — and CensusLog names that log: of every log this
+	// node applies, the one furthest past its census, since the reading
+	// describes one node and a log over its census is over it however quiet
+	// the others are.
 	LinearizableReads, LinearizableReadsExpected int
 	CensusLog                                    string
 
@@ -455,8 +442,8 @@ var table = []rule{
 			"holds and claims no new ones. Only if its position stops moving for " +
 			"the stall grace, or it holds a record it cannot decode past the " +
 			"deferral grace, is its copy wrong rather than behind: it then stops " +
-			"serving that partition, and its seats stay and read it from the " +
-			"partition's other holders until the copy recovers.",
+			"serving its copy of the estate, and its seats stay and read the " +
+			"estate from the other data nodes until the copy recovers.",
 	},
 	{
 		kind: KindReadRefusals,
@@ -544,13 +531,13 @@ var table = []rule{
 		kind: KindDeferredOld,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("the oldest record this node cannot apply is %s old, "+
-					"and it stops serving the partition at %s", spoken(r.DeferredAge),
+					"and it stops serving its copy of the estate at %s", spoken(r.DeferredAge),
 					spoken(DeferralGrace)),
 				r.DeferredAge > DeferralGrace
 		},
 		remedy: "This node is running a build that cannot decode records its peers " +
-			"are writing. Upgrade it; it has already stopped serving the partition, " +
-			"and its seats read it from the partition's other holders.",
+			"are writing. Upgrade it; it has already stopped serving its copy of " +
+			"the estate, and its seats read the estate from the other data nodes.",
 	},
 	{
 		kind: KindFloorUnknown,
@@ -660,7 +647,7 @@ var table = []rule{
 				*r.IVFRecall < r.IVFRecallFloor
 		},
 		remedy: "The 1-bit first stage is failing this corpus, index or not: " +
-			"`crewlet search eval` against a backup's copy of the partition " +
+			"`crewlet search eval` against a backup's copy of the estate " +
 			"measures the full scan beside the index in every query shape and " +
 			"will say the same. The remedy is the evaluation's — raise " +
 			"BinaryOversample, then an int8 first stage, both code changes (see " +

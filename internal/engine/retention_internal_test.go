@@ -1297,11 +1297,11 @@ func (c *countingLister) ListLive(ctx context.Context, class coord.Class) ([]coo
 	return c.Backend.ListLive(ctx, class)
 }
 
-// THE REPORT LISTS THE PRESENCE LEASES ONCE, and under layout 0 its counted mark
-// is taken from that listing: the live data nodes are both who is live and who
-// holds the one partition. Listed twice — once for each question — every
-// node's every tick paid a second certified listing, a round trip after the
-// first, and the two could disagree about who is there.
+// THE REPORT LISTS THE PRESENCE LEASES ONCE, and its counted mark is taken from
+// that listing: the live data nodes are both who is live and who every log's
+// counted set counts. Listed twice — once for each question — every node's
+// every tick paid a second certified listing, a round trip after the first, and
+// the two could disagree about who is there.
 func TestTheReportListsPresenceOnce(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -1314,7 +1314,7 @@ func TestTheReportListsPresenceOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: "node-a",
-		leases: lister, holders: presenceHolders{leases: lister}}
+		holders: presenceHolders{leases: lister}}
 	report := r.Report(t.Context())
 	if n := lister.calls.Load(); n != 1 {
 		t.Errorf("one report listed the presence leases %d times, want once", n)

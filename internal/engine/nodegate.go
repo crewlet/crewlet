@@ -708,7 +708,7 @@ func newNodeGate(s *stateLog, leases liveLeases, nodeID string,
 			continue
 		}
 		gl, err := gateLogFor(running, running.publisher,
-			s.estate(running.id.Partition).Reader(), nodeID, rec)
+			s.estate().Reader(), nodeID, rec)
 		if err != nil {
 			return nil, err
 		}

@@ -99,14 +99,13 @@ const retentionDutyTTL = 3 * RetentionInterval
 
 // retention is the trim loop.
 type retention struct {
-	fleet  coord.Fleet
-	leases coord.Backend
-	state  *stateLog
+	fleet coord.Fleet
+	state *stateLog
 
-	// holders is who holds each partition, the half of every log's counted
-	// set that is not the positions register ([partitionHolders]). Nil
-	// counts nobody beyond the register.
-	holders partitionHolders
+	// holders is the live data nodes, the half of every log's counted set
+	// that is not the positions register ([liveData]). Nil counts nobody
+	// beyond the register.
+	holders liveData
 
 	db  *store.DB
 	cfg config.TrackerRetention
@@ -170,7 +169,7 @@ type retention struct {
 	seats func() int
 
 	// background is the barrier records a day the engine's OWN periodic
-	// reads put on each log of a domain, whatever the seats do
+	// reads put on the domain's log, whatever the seats do
 	// ([statelog.Census.Background], [Engine.backgroundBarriers]). Read at
 	// every evaluation too, because the data nodes that make them join and
 	// leave. Nil puts none.
@@ -222,7 +221,6 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 	}
 	r := &retention{
 		fleet:       e.backends.Fleet,
-		leases:      e.backends.Coord,
 		holders:     e.holdersOf(),
 		state:       s,
 		db:          e.backends.Store,
@@ -403,10 +401,6 @@ func (r *retention) evaluate(ctx context.Context) {
 
 // fleetInputs is what one tick reads once and every log shares.
 type fleetInputs struct {
-	// layout is the number of the layout the tick's logs are in, which
-	// every floor it publishes carries beside its key.
-	layout int
-
 	at        time.Time
 	positions []coord.NodePositions
 	readable  bool
@@ -414,11 +408,11 @@ type fleetInputs struct {
 	backups   []coord.BackupPoint
 	previous  map[string]coord.TrimFloor
 
-	// holders is who holds each partition of the layout, read once for
-	// every log the tick evaluates — and holdersUnknown why that could not
-	// be read, which leaves every log's counted set UNKNOWN: its trim
-	// blocks, and says so on the floor it publishes.
-	holders        map[statelog.PartitionID][]statelog.Presence
+	// holders is the live data nodes, read once for every log the tick
+	// evaluates — and holdersUnknown why they could not be listed, which
+	// leaves every log's counted set UNKNOWN: its trim blocks, and says so
+	// on the floor it publishes.
+	holders        []statelog.Presence
 	holdersUnknown string
 }
 
@@ -429,12 +423,9 @@ type fleetInputs struct {
 // register can disagree about who is counted, so one domain's floor would be
 // published against a fleet the other's was not.
 func (r *retention) read(ctx context.Context) (fleetInputs, error) {
-	in := fleetInputs{
-		layout: r.state.layout.Number,
-		at:     time.Now().UTC(), previous: map[string]coord.TrimFloor{},
-	}
+	in := fleetInputs{at: time.Now().UTC(), previous: map[string]coord.TrimFloor{}}
 
-	positions, err := layoutPositions(ctx, r.fleet, r.state.layout.Number)
+	positions, err := r.fleet.Positions(ctx)
 	if err != nil {
 		return in, fmt.Errorf("read the positions register: %w", err)
 	}
@@ -446,14 +437,14 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	if in.backups, err = r.fleet.BackupPoints(ctx); err != nil {
 		return in, fmt.Errorf("read the backup points: %w", err)
 	}
-	floors, err := layoutFloors(ctx, r.fleet, r.state.layout.Number)
+	floors, err := r.fleet.Floors(ctx)
 	if err != nil {
 		return in, fmt.Errorf("read the published floors: %w", err)
 	}
 	for _, f := range floors {
 		in.previous[f.Domain] = f
 	}
-	// THE HOLDERS ARE WHAT CATCH A NODE BETWEEN BOOT AND ITS FIRST
+	// THE LIVE DATA NODES ARE WHAT CATCH A NODE BETWEEN BOOT AND ITS FIRST
 	// HEARTBEAT — which is exactly a node adopting a snapshot. It counts at
 	// position zero and blocks, which is correct: trimming past a node that
 	// is joining is deleting what it is about to replay.
@@ -464,21 +455,19 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	// presence listing that did not answer, say — rather than left standing
 	// unexplained.
 	if r.holders != nil {
-		if in.holders, err = r.holders.Holders(ctx, r.state.layout.Partitions()); err != nil {
-			in.holdersUnknown = fmt.Sprintf("who holds the log's partition is unknown (%v)", err)
+		if in.holders, err = r.holders.LiveData(ctx); err != nil {
+			in.holdersUnknown = fmt.Sprintf("the live data nodes could not be listed (%v)", err)
 		}
 	}
 	return in, nil
 }
 
 // counted is who the trim counts on one log: the positions register's rows
-// naming it, every holder of its partition, less the tombstones past their
-// window ([statelog.CountedSet]) — the partition's holders and no other
-// partition's, so a node offline on one partition pins that partition's logs
-// and nobody else's.
+// naming it, every live data node, less the log's own tombstones past their
+// window ([statelog.CountedSet]).
 func (shared fleetInputs) counted(running *runningLog, tombs []statelog.Tombstone) []statelog.NodePosition {
 	return statelog.CountedSet(shared.at, reportedPositions(shared.positions, running.key),
-		shared.holders[running.id.Partition], tombs)
+		shared.holders, tombs)
 }
 
 // domain evaluates and applies one log's trim.
@@ -625,10 +614,7 @@ func (r *retention) publish(ctx context.Context, name string, generation uint32,
 		return err
 	}
 	row := coord.TrimFloor{
-		Domain: name,
-		// THE LAYOUT BESIDE THE KEY, for the positions row's reason: a
-		// log's key does not carry it. Layout 0 omits it on the wire.
-		Layout:     shared.layout,
+		Domain:     name,
 		Generation: generation,
 		TrimTo:     decision.To,
 		Floor:      floor,
@@ -858,15 +844,15 @@ var (
 func (r *retention) tombstones(ctx context.Context, running *runningLog,
 	generation uint32) (tombs []statelog.Tombstone, read bool) {
 
-	return logTombstones(ctx, r.db, running.domain, running.id.Partition, generation)
+	return logTombstones(ctx, r.db, running.domain, generation)
 }
 
-// logTombstones is every eviction this node has applied on domain's log in
-// partition p, each stamped with generation — see [retention.tombstones],
-// which the snapshot loop's count reads through too ([Engine.countedOn]), so
-// the two subtract one set of tombstones.
+// logTombstones is every eviction this node has applied on domain's log, each
+// stamped with generation — see [retention.tombstones], which the snapshot
+// loop's count reads through too ([Engine.counted]), so the two subtract one
+// set of tombstones.
 func logTombstones(ctx context.Context, db *store.DB, domain statelog.Domain,
-	p statelog.PartitionID, generation uint32) (tombs []statelog.Tombstone, read bool) {
+	generation uint32) (tombs []statelog.Tombstone, read bool) {
 
 	if !domain.ClaimsIdentity() {
 		// ONLY AN IDENTITY-CLAIMING DOMAIN CARRIES EVICTIONS. A domain
@@ -886,12 +872,12 @@ func logTombstones(ctx context.Context, db *store.DB, domain statelog.Domain,
 			"domain", domain.Name())
 		return nil, false
 	}
-	rows, err := lister.Evictions(ctx, db.PartitionHandle(p.String()).Reader())
+	rows, err := lister.Evictions(ctx, db.PartitionHandle(statelog.EstatePartition.String()).Reader())
 	switch {
 	case errors.Is(err, store.ErrNoEstate) || errors.Is(err, context.Canceled):
-		// A STOP THIS PROCESS ASKED FOR IS NOT AN UNREADABLE TABLE. A
-		// partition closes during shutdown and during an adoption's
-		// rename, and a tick already in flight reaches it —
+		// A STOP THIS PROCESS ASKED FOR IS NOT AN UNREADABLE TABLE. The
+		// replicated estate closes during shutdown and during an
+		// adoption's rename, and a tick already in flight reaches it —
 		// which is the honest answer rather than a fault, and logging
 		// it at WARN would put a line in every clean shutdown. It is
 		// still not a read.

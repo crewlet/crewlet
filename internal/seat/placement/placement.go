@@ -273,10 +273,9 @@ func (p SeatPlacement) String() string {
 // none.
 //
 // NOTHING ABOUT THE OBJECT STORE rides here, deliberately. A data node's share
-// of it was once a field of this profile, and presence is the seat host's
-// lease: a shutdown drain gives it back first, while the node still serves
-// every chunk it holds. The object store's membership is its own lease
-// (coord.ClassObjects), claimed and released by the store itself.
+// of it was once a field of this profile; the store is now one the whole fleet
+// shares — the broker's own bucket or an S3 bucket — so no node holds a share
+// of it to advertise.
 //
 // THE BROKER DOES, because it is a fact about the PROCESS rather than about a
 // disk: the broker starts and stops with the node, so the lease that says the

@@ -16,8 +16,7 @@
 //
 //   - crewlet_leases, created with KeyValueConfig.TTL = the seat lease TTL
 //     this node asks for, and ADOPTED at whatever a peer created it with.
-//     It holds `seat:`, `node:`, `objects:` and `estate:` leases — every
-//     class renewed on the seat heartbeat. That age is the STREAM's MaxAge,
+//     It holds `seat:` and `node:` leases. That age is the STREAM's MaxAge,
 //     which is the renewable one: every write refreshes the entry's age, so
 //     Update at the current revision IS the renew, an unrenewed key expires
 //     SERVER-SIDE, and a peer's Create then succeeds. The store's own expiry

@@ -42,8 +42,7 @@ import (
 // lets a live peer's generation be abandoned, so the caller decides nothing on
 // an answer it could not get.
 func (s *stateLog) evictedOn(ctx context.Context, domain statelog.Domain,
-	partition statelog.PartitionID, spec statelog.StreamSpec, log statelog.StandingLog,
-	nodes []string) (map[string]bool, error) {
+	spec statelog.StreamSpec, log statelog.StandingLog, nodes []string) (map[string]bool, error) {
 
 	out := make(map[string]bool, len(nodes))
 	if len(nodes) == 0 || !domain.ClaimsIdentity() {
@@ -55,7 +54,7 @@ func (s *stateLog) evictedOn(ctx context.Context, domain statelog.Domain,
 	var rows []statelog.EvictionRow
 	if lister, ok := domain.(evictionLister); ok {
 		var err error
-		if rows, err = lister.Evictions(ctx, s.estate(partition).Reader()); err != nil {
+		if rows, err = lister.Evictions(ctx, s.estate().Reader()); err != nil {
 			return nil, fmt.Errorf("engine: read the evictions on %s's rows: %w",
 				domain.Name(), err)
 		}
@@ -107,7 +106,7 @@ func (s *stateLog) evictedOn(ctx context.Context, domain statelog.Domain,
 func (s *stateLog) fleetGenerations(ctx context.Context, rows []coord.NodePositions,
 	logs map[string]*jetstream.DomainLog, above map[string]uint32) (map[string]uint32, error) {
 
-	floors, err := s.floors(ctx)
+	floors, err := s.fleet.Floors(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("engine: read the fleet's published trim floors to "+
 			"establish which generation each domain is on: %w", err)
@@ -139,7 +138,7 @@ func (s *stateLog) fleetGenerations(ctx context.Context, rows []coord.NodePositi
 				return nil, fmt.Errorf("engine: %s's log is not open, so whether the "+
 					"nodes ahead of this one on it are evicted cannot be read", name)
 			}
-			if evicted, err = s.evictedOn(ctx, domain, id.Partition, s.layout.StreamSpec(domain, id),
+			if evicted, err = s.evictedOn(ctx, domain, s.layout.StreamSpec(domain, id),
 				log, candidates); err != nil {
 				return nil, err
 			}

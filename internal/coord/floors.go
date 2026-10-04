@@ -82,27 +82,10 @@ type TrimTerm struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-// TrimFloor is one log's published floor.
+// TrimFloor is one domain's published floor.
 type TrimFloor struct {
-	// Domain is which log this is about — the log's key, under layout 0 its
-	// domain's name — and the key.
+	// Domain is which log this is about, and the key.
 	Domain string `json:"domain"`
-
-	// Layout is the number of the layout that log is in, for
-	// [NodePositions.Layout]'s reason: a log's key does not carry it, so a
-	// floor says which log it licenses removal on only with the layout
-	// beside it. Read through [FloorsIn]. OMITTED AT ZERO, so a layout-0
-	// floor is the record every build before the field wrote.
-	//
-	// ONE KEY PER LOG KEY, NOT PER LAYOUT: two layouts' floors for logs
-	// spelled alike share a key, and the later one written replaces the
-	// earlier. That is safe because every reader filters by layout — a
-	// floor of another layout reads as none, which is what a floor at
-	// another generation already reads as, and the log's own first sequence
-	// covers what it cannot see — and because a repartition seals the old
-	// layout's logs before the new one's trim runs, so nothing is written
-	// to a log whose floor was replaced.
-	Layout int `json:"layout,omitempty"`
 
 	// Generation is the domain's generation at the tick that wrote this —
 	// each log has its own. A floor at a generation the reader is not on
@@ -152,19 +135,6 @@ type TrimFloor struct {
 	By string    `json:"by,omitempty"`
 }
 
-// FloorsIn is the published floors as a reader running layout reads them:
-// the floors of its layout, and none of another's — the one place the layout
-// is read, for [PositionsIn]'s reason.
-func FloorsIn(floors []TrimFloor, layout int) []TrimFloor {
-	out := make([]TrimFloor, 0, len(floors))
-	for _, f := range floors {
-		if f.Layout == layout {
-			out = append(out, f)
-		}
-	}
-	return out
-}
-
 // FloorRegister is the fleet's record of what its trim concluded.
 //
 // It is a key class in the positions bucket, beside the node rows, the holds
@@ -201,10 +171,6 @@ func (f TrimFloor) Validate() error {
 		return fmt.Errorf("coord: a trim floor names no domain — it is the key, " +
 			"so a floor without one would be written over another domain's " +
 			"conclusion and read as that domain's")
-	}
-	if f.Layout < 0 {
-		return fmt.Errorf("coord: the trim floor for %s names layout %d, and a "+
-			"layout number counts repartitions from 0", f.Domain, f.Layout)
 	}
 	if f.BlockedBy == "" && f.TrimTo == 0 && len(f.Terms) > 0 {
 		return fmt.Errorf("coord: the trim floor for %s permits removing up to 0 "+

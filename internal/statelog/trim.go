@@ -260,13 +260,13 @@ type TrimInputs struct {
 	Counted []NodePosition
 
 	// CountedReadable reports whether the counted set could be read at all:
-	// the register listed, and who holds the log's partition known.
+	// the register listed, and the live data nodes listed.
 	CountedReadable bool
 
 	// CountedUnknown is WHY it could not, which a blocked term names: empty
 	// is the register not listing, which is the cause this term always had,
-	// and a caller whose register listed says what else was unknown — an
-	// estate map too stale to decide from, say.
+	// and a caller whose register listed says what else was unknown — the
+	// live data nodes it could not list.
 	CountedUnknown string
 
 	// Holds are the live pins. One older than the stale bound is ignored,

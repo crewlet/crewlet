@@ -50,7 +50,6 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 		t.Fatalf("NewPublisher: %v", err)
 	}
 	snapshotter, err := NewSnapshotter(SnapshotDeps{
-		Layout: EstateLayout(loggerProbe{}.Name()), Partition: EstatePartition,
 		Domains: []Registered{{Domain: loggerProbe{}, Log: loggerProbeLog, Spec: loggerProbeSpec()}},
 		File:    (&store.DB{}).PartitionHandle("estate.000"),
 		Dir:     t.TempDir(), NodeID: "node-a",
@@ -61,10 +60,9 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 		t.Fatalf("NewSnapshotter: %v", err)
 	}
 	donor, err := NewDonor(DonorDeps{
-		NodeID: "node-a", Layout: EstateLayout(loggerProbe{}.Name()),
-		Keeps:  KeepsOnly(EstatePartition).Keeps,
+		NodeID: "node-a",
 		Dial:   func(context.Context) (*nats.Conn, error) { return nil, nil },
-		Newest: func(PartitionID) (Manifest, bool) { return Manifest{}, false },
+		Newest: func() (Manifest, bool) { return Manifest{}, false },
 		Path:   func(Manifest) string { return "" },
 	})
 	if err != nil {

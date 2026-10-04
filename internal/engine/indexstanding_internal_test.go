@@ -31,7 +31,7 @@ func TestTheIndexDutyAsksEveryNodeTheVectorLogCounts(t *testing.T) {
 	s.publishPositions(t.Context())
 
 	vectors := s.Domain(search.Domain{}.Name())
-	duty := &embedDuty{engine: e, log: vectors, register: s.positions,
+	duty := &embedDuty{engine: e, log: vectors, register: e.backends.Fleet.Positions,
 		holders:  presenceHolders{leases: e.backends.Coord},
 		identity: s.identityDomains(), db: e.backends.Store}
 	standing, err := duty.standing(t.Context())
@@ -115,7 +115,7 @@ func TestTheIndexDutyAsksEveryNodeTheVectorLogCounts(t *testing.T) {
 
 // A TICK KEEPS ITS LEASE WHILE IT RUNS, AND STOPS THE MOMENT IT CANNOT.
 //
-// A training at a large partition runs longer than the interval the lease is
+// A training on a large corpus runs longer than the interval the lease is
 // claimed on, so the tick renews it as it goes; a renewal that is refused —
 // or that cannot be answered, since a node that cannot say it holds the duty
 // must not publish as its holder — cancels the tick, so the singleton never has

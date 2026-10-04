@@ -176,8 +176,8 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 				// tracker.Jobs because that list runs under the
 				// duty and this one must not.
 				//
-				// OVER EVERY TRACKER PARTITION THIS NODE RUNS: each
-				// file holds its own projects' inbox.
+				// OVER THE REPLICATED ESTATE, wherever this node runs
+				// the tracker's log.
 				//
 				// Its horizon is the company's and is read at
 				// every sweep, for the conversation ledger's

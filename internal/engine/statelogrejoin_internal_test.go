@@ -63,7 +63,6 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	}
 	snapDir := filepath.Join(donorDir, "snapshots")
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
-		Layout: LayoutZero(), Partition: statelog.EstatePartition,
 		Domains: registered, File: storetest.EstateOf(donorNode), Dir: snapDir, NodeID: "donor",
 		EngineVersion: "v0.0.0-test",
 		Recipients:    func(context.Context) (int, error) { return 1, nil },
@@ -81,10 +80,9 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	// offers, so the latest one the adoption's bound may precede.
 	var answered atomic.Int64
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: "donor", Layout: LayoutZero(),
-		Keeps: statelog.KeepsOnly(statelog.EstatePartition).Keeps,
-		Dial:  func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
-		Newest: func(statelog.PartitionID) (statelog.Manifest, bool) {
+		NodeID: "donor",
+		Dial:   func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
+		Newest: func() (statelog.Manifest, bool) {
 			answered.CompareAndSwap(0, time.Now().UnixNano())
 			return manifest, true
 		},
@@ -814,9 +812,10 @@ func TestARestoreWaitsForARecoveryInProgress(t *testing.T) {
 		t.Fatalf("close the replicated estate: %v", err)
 	}
 
-	// A RECOVERY OF ONE PARTITION holds the restore off, since the file
-	// the restore reopens holds every partition's rows.
-	unlock := s.recovering.lock(statelog.EstatePartition)
+	// A RECOVERY IN PROGRESS holds the restore off, since the file the
+	// restore reopens holds every log's rows.
+	s.recovering.Lock()
+	unlock := s.recovering.Unlock
 	done := make(chan error, 1)
 	go func() { done <- s.restoreEstate(s.run) }()
 	select {

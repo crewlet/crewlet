@@ -267,19 +267,15 @@ peer's snapshot of the replicated estate, verify it, and adopt it wholesale. (A
 node that is only below the published trim floor, while the log still holds
 what it lacks, replays it instead and needs none of this.)
 
-**A snapshot is a copy of the replicated estate's file** — the estate's one
-partition, `estate.000` — and never of the node's own. It is taken on
-`snapshot_interval` and judged against the file's size for free space. A copy
-is kept whether or not the node may write the estate: an evicted machine,
-back with its files, keeps applying its logs and may hold
-the only copy a joiner can fetch. At every boot, until its copy is established,
-a node looks again every thirty seconds rather than an interval later. Its
-manifest names the partition and every log it carries: a joiner refuses an
-artefact naming another partition, or a log the estate does not carry, before
-a byte moves. A request that names no partition — from a build that predates
-the field — is answered as a request for the whole estate, which is the only
-thing that build can mean, so the two builds donate to each other through a
-rolling upgrade. Artefacts live in `store.snapshot_dir` itself.
+**A snapshot is a copy of the replicated estate's file**, never of the node's
+own. It is taken on `snapshot_interval` and judged against the file's size for
+free space. Every data node takes its own and offers it, whether or not it may
+write the estate: an evicted machine, back with its files, keeps applying its
+logs and may hold the only copy a joiner can fetch. A take the node declines —
+at boot, before it has caught up — is retried every thirty seconds rather than
+an interval later. Its manifest names every log it carries: a joiner refuses an
+artefact naming a log it does not run, or missing one it does, before a byte
+moves. Artefacts live in `store.snapshot_dir` itself.
 
 ```
 crewlet retention snapshots
@@ -292,7 +288,7 @@ disk question, and it is the one you ask when a join has failed.
 **`SnapshotsKept = 1`.** With N donors the fleet is the redundancy — one per
 data node across at least two — and a recipient that fails a verification asks
 the next donor. The trim's `snapshot_floor` asks for two of a log's counted
-nodes to hold an artefact; an estate held by one node is satisfied by
+nodes to hold an artefact; a fleet of one data node is satisfied by
 construction, its recovery artefact being a backup.
 
 **The manifest names the position the file keeps.** The checkpoint commits with
@@ -1509,10 +1505,11 @@ the log's own size, so it is printed with its derivation rather than assumed:
 it comes from an assumed 125 linearizable reads a day per agent seat, which is
 12 500 for the reference company's 100 seats. The
 [`census_drift`](../reference/alarms.md) alarm holds every log to that
-assumption: a log is expected to take 125 reads a day per seat, divided across
-its domain's logs, plus what the engine reads on its own — the object store's
-collector, one in the fleet, pins the tracker's log 25 times a day (24
-collections and one audit), on each of its logs — and the alarm fires on the one furthest past twice its share.
+assumption: each log is expected to take 125 reads a day per agent seat (a
+company with none is counted as one), plus what the engine reads on its own —
+the object store's collector, one in the fleet, pins the tracker's log 25 times
+a day (24 collections and one audit) — and the alarm fires on the log furthest
+past twice its census.
 The rate is the log's, counted where every node applies it, and each barrier is
 counted in the hour it was **committed**: a node back from days away, or
 adopting a snapshot a day old, replays days of barriers in minutes, and they

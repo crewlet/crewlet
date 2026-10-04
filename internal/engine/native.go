@@ -240,7 +240,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// floor a nil reader falls back to — which reported a node
 			// two thousand records behind as half an hour behind.
 			Drain:  running.runner.Drain,
-			DB:     sl.estate(running.id.Partition).Reader(),
+			DB:     sl.estate().Reader(),
 			Claims: e.backends.Coord,
 			NodeID: nodeID,
 			// THE CHART, read PER CALL. A project's lead is the one
@@ -285,7 +285,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// the runner rather than here, because the health it refuses on
 		// is the same one seat admission reads.
 		if n.trackerReader, err = tracker.NewReader(
-			sl.estate(running.id.Partition).Reader(), running.reader); err != nil {
+			sl.estate().Reader(), running.reader); err != nil {
 			return fmt.Errorf("engine: tracker reader: %w", err)
 		}
 	}
@@ -350,12 +350,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}
 		var err error
 		if n.pages, err = pages.NewStore(pages.Options{
-			Publisher: running.publisher, DB: sl.estate(running.id.Partition).Reader(),
+			Publisher: running.publisher, DB: sl.estate().Reader(),
 		}); err != nil {
 			return fmt.Errorf("engine: pages store: %w", err)
 		}
 		if n.pageReader, err = pages.NewReader(pages.ReaderOptions{
-			DB: sl.estate(running.id.Partition).Reader(), Log: running.reader,
+			DB: sl.estate().Reader(), Log: running.reader,
 			Committed: running.runner.Committed,
 		}); err != nil {
 			return fmt.Errorf("engine: pages reader: %w", err)
