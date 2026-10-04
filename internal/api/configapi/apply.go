@@ -233,6 +233,10 @@ type draft struct {
 	// changes (admission.go); nil for the engine's own writes, which no
 	// request made.
 	principal *iam.Principal
+	// addressedCheck is a dry run of one seat or unit at an address
+	// [Service.mayReach] admitted the caller to, which is answered even when
+	// it changes nothing (admission.go).
+	addressedCheck bool
 }
 
 // prepared is a write built and checked, and not yet stored: everything a dry
@@ -307,7 +311,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	// the caller may not change, rather than what is wrong with parts of the
 	// company they cannot read.
 	if d.principal != nil {
-		if err := admit(ctx, *d.principal, b.prior, company); err != nil {
+		if err := admit(ctx, *d.principal, b.prior, company, d.addressedCheck); err != nil {
 			return nil, err
 		}
 	}

@@ -244,6 +244,19 @@ describe("the figures", () => {
       mine: [],
       others: [onItem, between],
     });
+    // A LEAD RAISES THEIR OWN SEAT'S CEILING, and not the company's: a seat
+    // stopped by its own window is the lead's decision, one stopped by the
+    // company's is not.
+    const own = {
+      row: { role: "SWE", handle: "swe" } as never,
+      window: { period: "day", state: "refusing" } as never,
+    };
+    const company = { row: { role: "SWE", handle: "swe" } as never, window: undefined };
+    const elsewhere = { ...own, row: { role: "PM", handle: "pm" } as never };
+    expect(seatDecisionsFor([own, company, elsewhere], neither, new Set(["swe"]))).toEqual({
+      mine: [own],
+      others: [company, elsewhere],
+    });
   });
 
   test("what waits is the engine's count plus the stopped seats, oldest of all", () => {

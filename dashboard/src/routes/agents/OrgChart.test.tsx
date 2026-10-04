@@ -215,6 +215,20 @@ test("an operator's Add seat goes to the builder, adding an agent", async () => 
   expect(add.getAttribute("href")).toBe("#/agents/edit?add=agent");
 });
 
+// A LEAD ADDS TO THE UNIT THEY LEAD: nothing at the company's top level is
+// theirs, so their Add seat opens the builder on their unit.
+test("a lead's Add seat goes to the builder, adding to the unit they lead", async () => {
+  await mount({
+    login: "cto.person",
+    grants: ["state:read", "work:write"],
+    handle: "cto",
+    owner: "cto",
+    acts: [],
+  });
+  const add = screen.getByRole("link", { name: /Add seat/ });
+  expect(add.getAttribute("href")).toBe("#/agents/edit?unit=core&add=agent");
+});
+
 // FIND A SEAT matches what a reader remembers somebody by — name, handle,
 // unit — and a name that starts with the term comes before one that only
 // contains it.

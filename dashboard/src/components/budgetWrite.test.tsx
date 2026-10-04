@@ -12,7 +12,8 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import type { BudgetWindow, BudgetsAnswer } from "~/protocol/index.ts";
+import type { BudgetWindow, BudgetsAnswer, OrgProjection } from "~/protocol/index.ts";
+import { CHART_ORG } from "~/test/orgchart.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -51,10 +52,31 @@ const BUDGETS: BudgetsAnswer = {
   seats: [{ agent_id: "a", role: "DevRel", handle: "devrel", windows: [day()] }],
 };
 
-function mount(own: BudgetWindow | undefined, orgRefusing: boolean) {
+/** An administrator, who holds every grant. */
+const ADMIN = {
+  login: "U0",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
+  handle: "jane",
+  owner: "jane",
+  name: "Jane",
+  kind: "human",
+};
+
+function mount(own: BudgetWindow | undefined, orgRefusing: boolean, viewer: unknown = ADMIN) {
   const store = new Store();
   store.applyHealth({ status: "healthy" });
   store.setConnected(true);
+  store.applyOrg(CHART_ORG as OrgProjection);
   store.applyBudget({
     meter_id: "n:1",
     seq: 1,
@@ -66,24 +88,7 @@ function mount(own: BudgetWindow | undefined, orgRefusing: boolean) {
     what === "budgets"
       ? Promise.resolve(BUDGETS)
       : what === "viewer"
-        ? Promise.resolve({
-            login: "U0",
-            grants: [
-              "config:read",
-              "config:write",
-              "secrets:write",
-              "fleet:operate",
-              "people:manage",
-              "audit:read",
-              "state:read",
-              "work:write",
-              "knowledge:write",
-            ],
-            handle: "jane",
-            owner: "jane",
-            name: "Jane",
-            kind: "human",
-          })
+        ? Promise.resolve(viewer)
         : new Promise(() => {});
   render(
     <ClientContext.Provider value={{ store, socket }}>
@@ -121,6 +126,77 @@ test("it raises the seat's own ceiling when the seat's window is the one refusin
   await open();
   expect(screen.getByRole("dialog", { name: "Raise DevRel's budget" })).toBeTruthy();
   expect(document.activeElement).toBe(screen.getByLabelText(/Daily ceiling/));
+});
+
+// A LEAD RAISES THE SEATS THEY LEAD, and never the company's ceiling: a
+// seat's ceiling is no credential, and the engine admits a lead's write of a
+// seat inside the units they lead.
+test("a lead raises a seat they lead, and is told the company's ceiling is not theirs", async () => {
+  const pm = { ...ADMIN, login: "pm.person", grants: ["state:read"], handle: "pm", owner: "pm" };
+  mount(day(), true, pm);
+  await settle();
+  const seat = screen.getByRole("button", { name: "Raise budget" });
+  expect(seat.getAttribute("title")).toBeNull();
+  cleanup();
+
+  mount(undefined, true, pm);
+  await settle();
+  expect(screen.getByRole("button", { name: "Raise budget" }).getAttribute("title")).toBe(
+    "You lead Management and Developer Relations, and this is outside them: changing it takes the config:write grant.",
+  );
+});
+
+// A LEAD'S RAISE IS COMPARED WITH THE COMPANY AS IT STANDS. The engine answers
+// a lead's check of their seat unchanged, so a warning the company already
+// carries — here a seat with no contact, which no ceiling caused — is the
+// baseline's too, and the raise saves without asking the lead to confirm it.
+test("a lead's raise saves without confirming a warning the company already had", async () => {
+  const pm = { ...ADMIN, login: "pm.person", grants: ["state:read"], handle: "pm", owner: "pm" };
+  const seat = { name: "DevRel", handle: "devrel", token_budget: { day: 100 } };
+  const unreachable = {
+    kind: "advisory",
+    path: "roles[0].contact",
+    seat: "ceo",
+    message: "ceo is a human seat with no contact identity",
+  };
+  const calls: { method: string; url: string; body: unknown }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit = {}) => {
+      calls.push({
+        method: init.method ?? "GET",
+        url,
+        body: init.body ? JSON.parse(init.body as string) : undefined,
+      });
+      const reply = (payload: unknown, status: number, headers: Record<string, string> = {}) =>
+        new Response(JSON.stringify(payload), {
+          status,
+          headers: { "Content-Type": "application/json", ...headers },
+        });
+      if ((init.method ?? "GET") === "GET") return reply(seat, 200, { ETag: '"r1"' });
+      if (url.includes("dry_run=true"))
+        return reply({ valid: true, base_revision_id: "r1", warnings: [unreachable] }, 200);
+      return reply({ revision_id: "r2", epoch: 2, warnings: [] }, 201);
+    }),
+  );
+  mount(day(), true, pm);
+  await open();
+  fireEvent.change(screen.getByLabelText(/Daily ceiling/), { target: { value: "200" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  });
+  await settle();
+  expect(calls.map((c) => `${c.method} ${c.url.includes("dry_run") ? "check" : "write"}`)).toEqual([
+    "GET write",
+    "PUT check",
+    "PUT check",
+    "PUT write",
+  ]);
+  // The baseline was the seat as read, the second check the raise.
+  expect(calls[1]!.body).toEqual(seat);
+  expect(calls.at(-1)!.body).toMatchObject({ token_budget: { day: 200 } });
+  expect(screen.queryByText(/no contact identity/)).toBeNull();
+  expect(screen.queryByRole("dialog")).toBeNull();
 });
 
 test("it raises the company's when only the company's window is refusing", async () => {

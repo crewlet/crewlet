@@ -18,9 +18,9 @@ import (
 // The org chart is written by its LEADS as well as by whoever holds
 // `config:write` (internal/authz's subtree rule): a lead may change what sits
 // inside a unit they lead, and nothing else. So a write is not judged as a
-// document but as the seats and units it adds, removes, moves and edits, and
-// for each one the PLACES it reaches — every unit that must be inside the
-// writer's subtree for the change to be theirs. [DiffOrg] states those places;
+// document but as the seats and units it adds, removes, moves, reorders and
+// edits, and for each one the PLACES it reaches — every unit that must be
+// inside the writer's subtree for the change to be theirs. [DiffOrg] states those places;
 // whether they ARE inside somebody's subtree is the authority table's to
 // decide (internal/api/configapi asks it).
 //
@@ -30,6 +30,18 @@ import (
 //     holds it, a unit in its parent — so a lead adds, removes and moves
 //     objects only within their subtree, and cannot remove or move the top
 //     unit they lead, whose parent is not theirs.
+//   - WHERE AN OBJECT IS AMONG ITS SIBLINGS, which is placed the same way.
+//     Order is part of the chart: [org.Organization.Manager] answers with the
+//     first seat in document order that manages a seat, so swapping two
+//     teams decides which of a seat's two managers is its own, and with it
+//     who authority treats as leading that person. So a reorder reaches the
+//     unit the reordered objects sit in — a lead orders what is inside the
+//     units they lead, and never the top level or another team. It is read
+//     among the siblings both documents hold there, so a seat added or
+//     removed beside another moves nothing; and as with a removal, a lead
+//     reordering their own seats may change which of them is the first to
+//     manage a seat outside, through a `manages:` entry somebody with the
+//     company's grant already gave both.
 //   - A UNIT ITSELF, before and after, when its own fields change. A lead
 //     edits their own team's name and purpose, while handing the unit to
 //     another `lead:` fails the AFTER side unless they also lead the unit
@@ -112,7 +124,8 @@ const (
 	// OrgMoved is an object whose place changed — a seat's unit, a unit's
 	// parent — and perhaps its fields with it.
 	OrgMoved OrgOp = "moved"
-	// OrgChanged is an object that stayed where it was and changed.
+	// OrgChanged is an object that stayed in its place and changed: its
+	// fields, or where it sits among its siblings.
 	OrgChanged OrgOp = "changed"
 )
 
@@ -194,6 +207,8 @@ func DiffOrg(before, after *Company) OrgDiff {
 		after = &Company{}
 	}
 	b, a := survey(before), survey(after)
+	b.rankAgainst(a)
+	a.rankAgainst(b)
 	diff := OrgDiff{Settings: settingsChanged(before, after), Before: b.org, After: a.org}
 
 	for _, kind := range []OrgKind{OrgSeat, OrgUnit} {
@@ -246,14 +261,15 @@ func diffObject(kind OrgKind, id string, b, a *surveyed) (OrgChange, bool) {
 	default:
 		change.Fields = fieldsChanged(was.document, is.document)
 		moved := was.place != is.place
-		if !moved && len(change.Fields) == 0 {
+		reordered := !moved && b.rank[kind][id] != a.rank[kind][id]
+		if !moved && !reordered && len(change.Fields) == 0 {
 			return change, false
 		}
 		change.Op = OrgChanged
 		if moved {
 			change.Op = OrgMoved
 		}
-		if kind == OrgSeat || moved {
+		if kind == OrgSeat || moved || reordered {
 			change.Touches = append(change.Touches,
 				OrgTouch{Side: OrgBefore, Unit: was.place, Why: "place"},
 				OrgTouch{Side: OrgAfter, Unit: is.place, Why: "place"})
@@ -298,6 +314,12 @@ type surveyed struct {
 	referrers map[string][]referrer
 	// seatPlaces is the unit holding each seat, by handle; "" for the root.
 	seatPlaces map[string]string
+	// siblings is every place's seats and child units, by id, in document
+	// order; "" for the root.
+	siblings map[OrgKind]map[string][]string
+	// rank is where each object sits among the siblings the other document
+	// also holds at its place ([surveyed.rankAgainst]).
+	rank map[OrgKind]map[string]int
 }
 
 // object is one seat or unit as a diff reads it.
@@ -339,29 +361,31 @@ func survey(c *Company) *surveyed {
 		objects:    map[OrgKind]map[string]object{OrgSeat: {}, OrgUnit: {}},
 		referrers:  map[string][]referrer{},
 		seatPlaces: map[string]string{},
+		siblings:   map[OrgKind]map[string][]string{OrgSeat: {}, OrgUnit: {}},
 	}
 	unitParents := map[string]string{}
+	placeSeats := func(roles []*org.Role, place string) {
+		for _, r := range roles {
+			if _, seen := s.seatPlaces[r.Handle()]; !seen {
+				s.seatPlaces[r.Handle()] = place
+				s.siblings[OrgSeat][place] = append(s.siblings[OrgSeat][place], r.Handle())
+			}
+		}
+	}
 	var walk func(units []*org.Unit, parent string)
 	walk = func(units []*org.Unit, parent string) {
 		for _, u := range units {
 			key := u.Key()
 			if _, seen := unitParents[key]; !seen {
 				unitParents[key] = parent
+				s.siblings[OrgUnit][parent] = append(s.siblings[OrgUnit][parent], key)
 			}
-			for _, r := range u.Roles {
-				if _, seen := s.seatPlaces[r.Handle()]; !seen {
-					s.seatPlaces[r.Handle()] = key
-				}
-			}
+			placeSeats(u.Roles, key)
 			walk(u.Children, key)
 		}
 	}
 	walk(o.Units, "")
-	for _, r := range o.Roles {
-		if _, seen := s.seatPlaces[r.Handle()]; !seen {
-			s.seatPlaces[r.Handle()] = ""
-		}
-	}
+	placeSeats(o.Roles, "")
 
 	for role := range c.EachRole() {
 		handle := role.IdentityKey()
@@ -405,6 +429,25 @@ func survey(c *Company) *surveyed {
 		}
 	}
 	return s
+}
+
+// rankAgainst sets where each object sits among the siblings of its kind that
+// other holds at the same place: a sibling only one document holds there — an
+// addition, a removal, a move in or out — is not counted, so the ranks of the
+// rest differ between the two documents only where their order does.
+func (s *surveyed) rankAgainst(other *surveyed) {
+	s.rank = map[OrgKind]map[string]int{OrgSeat: {}, OrgUnit: {}}
+	for kind, places := range s.siblings {
+		for place, ids := range places {
+			n := 0
+			for _, id := range ids {
+				if there, held := other.objects[kind][id]; held && there.place == place {
+					s.rank[kind][id] = n
+					n++
+				}
+			}
+		}
+	}
 }
 
 // placeOfRef is the unit a reference reaches: the unit a named seat sits in,

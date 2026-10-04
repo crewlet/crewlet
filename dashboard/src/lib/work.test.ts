@@ -69,6 +69,9 @@ import {
   pageNote,
   targetLabel,
   unfinished,
+  answersAddress,
+  itemAddress,
+  turnItem,
 } from "./work.ts";
 import type {
   WorkActivityRecord,
@@ -1812,4 +1815,20 @@ test("a saved view's change is named by the view, not by its storage", () => {
   expect(describeChange(renamed, {})).toBe("Renamed the view “A” to “B”");
   const changed = record({ kind: "view_saved", fields: { params: { from: "a", to: "b" } } });
   expect(describeChange(changed, {})).toBe("Changed a saved view");
+});
+
+// A TURN'S TASK CARRIES NO COLLISION FLAG: it is the turn's record, not a
+// tracker row, so its key may be one another task claimed first. A native
+// task is therefore addressed by its id, which every question about a task
+// takes, and a vendor item — whose id is the vendor's — by its key.
+test("a turn's task is addressed by its id where it is native, and by its key elsewhere", () => {
+  const native = { backend: "native", id: "t-dup", key: "ENG-7", project: "ENG" };
+  expect(itemAddress(turnItem(native))).toBe("t-dup");
+  const jira = { backend: "jira", id: "10042", key: "OPS-3", project: "OPS" };
+  expect(itemAddress(turnItem(jira))).toBe("OPS-3");
+  // An answer about the task is the answer to the question either way.
+  expect(answersAddress("t-dup", "t-dup", "ENG-7")).toBe(true);
+  expect(answersAddress("OPS-3", "", "OPS-3")).toBe(true);
+  expect(answersAddress("t-dup", "t-claimant", "ENG-7")).toBe(false);
+  expect(answersAddress("", "", "")).toBe(false);
 });

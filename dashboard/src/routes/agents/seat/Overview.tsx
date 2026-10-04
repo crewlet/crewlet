@@ -101,7 +101,7 @@ import {
   type SeatTab,
 } from "./profile.ts";
 import { ModelChain } from "./shared.tsx";
-import { itemPath } from "~/lib/work.ts";
+import { answersAddress, detailItem, itemAddress, itemPath, turnItem } from "~/lib/work.ts";
 
 /** The window the tiles count: a week of company days, and the week before. */
 export const ACTIVITY_DAYS = 7;
@@ -327,20 +327,24 @@ function CurrentTurn({
   const turn = agent?.turn ?? null;
   const call = agent?.live_call ?? null;
   const turnId = turn?.turn_id ?? call?.turn_id ?? "";
-  const key = call?.work_item?.key || turn?.work_item?.key || "";
+  const ref = call?.work_item?.key ? call.work_item : (turn?.work_item ?? null);
+  const key = ref?.key ?? "";
+  // ASKED FOR BY ITS ADDRESS, shown by its key ([turnItem]): a key another
+  // task claimed first would answer about the claimant.
+  const asked = ref && key ? itemAddress(turnItem(ref)) : "";
   const onTurn = turnId !== "" && !!agent;
   // WHICH TURN ON THE TASK, from the task's own turn list — the same reading
   // the seat's peek makes.
   const itemTurns = useQuery(
     "work_item_turns",
-    { id: key, limit: 1 },
-    { enabled: onTurn && key !== "" },
+    { id: asked, limit: 1 },
+    { enabled: onTurn && asked !== "" },
   );
-  // WHAT THE TASK IS CALLED, read by its key — the turn's own item, never a
-  // lookup in the Assigned-work card's top five: a turn on a task outside
-  // those five (one just asked of it, with no priority) read "On ENG-35" with
-  // no title at all.
-  const item = useQuery("work_item", { id: key }, { enabled: onTurn && key !== "" });
+  // WHAT THE TASK IS CALLED, read by the turn's own item — never a lookup in
+  // the Assigned-work card's top five: a turn on a task outside those five
+  // (one just asked of it, with no priority) read "On ENG-35" with no title at
+  // all.
+  const item = useQuery("work_item", { id: asked }, { enabled: onTurn && asked !== "" });
   // THE PHASES THIS TURN HAS RECORDED, for its tokens: the seat's newest
   // turn row is this turn's once any phase of it has completed.
   const newest = useQuery(
@@ -384,18 +388,22 @@ function CurrentTurn({
       </Card>
     );
   }
-  const ordinal = key
+  const ordinal = asked
     ? turnOrdinal(
         turnId,
         itemTurns.data?.turns?.[0],
-        !!itemTurns.data && itemTurns.data.key === key,
+        !!itemTurns.data && answersAddress(asked, itemTurns.data.item, itemTurns.data.key),
       )
     : null;
-  // THE ANSWER FOR THIS KEY ONLY: while a turn moves to another task the last
-  // read is still the previous one's, and its title under the new key would
-  // name the wrong task.
+  // THE ANSWER FOR THIS TASK ONLY: while a turn moves to another task the last
+  // read is still the previous one's, and its title under the new task would
+  // name the wrong one.
   const task = item.data?.task;
-  const title = key && task && task.key === key ? task.title : undefined;
+  const answered = task && answersAddress(asked, task.id, task.key) ? item.data : null;
+  const title = answered?.task.title;
+  // OPENED BY THE ADDRESS THE ANSWER GIVES, which is the key unless another
+  // task claimed it; until then by the address it was asked for by.
+  const opens = answered ? itemAddress(detailItem(answered)) : asked;
   // ON A PHONE THE ROUND IS SAID BESIDE THE STEPS rather than inside one:
   // "Execute · round 7 of 25" left the row no room for Review, which wrapped
   // onto a line of its own behind a dangling connector.
@@ -422,7 +430,7 @@ function CurrentTurn({
           key ? (
             <span className="prof-turn-about">
               {ordinal ? `Turn ${ordinal} on ` : "On "}
-              <a className="work-key mono" href={href(["work", key])}>
+              <a className="work-key mono" href={href(["work", opens])}>
                 {key}
               </a>
               {title && ` · ${title}`}

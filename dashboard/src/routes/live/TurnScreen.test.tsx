@@ -920,3 +920,27 @@ test("the turn as JSON is in the page bar's menu, and only Steer stays on a phon
   expect(await screen.findByRole("menuitem", { name: /Download turn as JSON/ })).toBeTruthy();
   expect(screen.getByRole("menuitem", { name: /Copy turn as JSON/ })).toBeTruthy();
 });
+
+// A TURN ON THE TASK THAT DID NOT CLAIM ITS KEY opens that task. A turn's work
+// item carries no collision flag, so its key may be one another task claimed
+// first; Open task goes by the native task's id, which opens it whoever holds
+// the key, and never by the key, which opened the claimant.
+test("Open task opens the task the turn is charged to by its id", async () => {
+  mount({
+    events: [
+      event({
+        type: "agent_turn_started",
+        payload: {
+          turn_id: TURN,
+          role: "CEO",
+          agent_handle: "ceo",
+          work_item: { backend: "native", id: "t-dup", key: "ENG-7", project: "ENG" },
+          started_at: "2026-09-13T10:00:00Z",
+          resumed: false,
+        },
+      }),
+    ],
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Open task" }));
+  expect(location.hash).toBe("#/work/t-dup");
+});

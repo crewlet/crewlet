@@ -26,8 +26,18 @@ import {
   type SaveAttempt,
 } from "./writes.ts";
 
-const EDIT: SaveAttempt = { writeId: "w1234567", mode: "edit", baseRevision: "base" };
-const CREATE: SaveAttempt = { writeId: "w7654321", mode: "create", baseRevision: null };
+const EDIT: SaveAttempt = {
+  writeId: "w1234567",
+  mode: "edit",
+  baseRevision: "base",
+  scope: null,
+};
+const CREATE: SaveAttempt = {
+  writeId: "w7654321",
+  mode: "create",
+  baseRevision: null,
+  scope: null,
+};
 const signal = new AbortController().signal;
 
 /** Answers `GET /config`, each revision by id, and dry runs, from a script; records every call. */
@@ -402,5 +412,82 @@ describe("readyToUpdate", () => {
       kind: "unknown",
       detail: expect.stringContaining("changed again"),
     });
+  });
+});
+
+// A LEAD READS NO REVISION HISTORY: their save is settled, and their draft
+// updated, from the unit they edit alone (see the module doc).
+describe("a lead's draft", () => {
+  const LEAD: SaveAttempt = { ...EDIT, scope: "eng" };
+  const unit = (goal: string) => ({
+    name: "Engineering",
+    id: "eng",
+    roles: [{ name: "Dev", goal }],
+  });
+  const sent = { name: "Acme", units: [unit("Ship")] };
+  const read = (etag: string, goal: string): HttpAnswer => ({
+    status: 200,
+    body: { name: "Acme", units: [unit(goal)] },
+    etag: `"${etag}"`,
+  });
+
+  test("a save is settled by reading its unit back, and never by the revision history", async () => {
+    const still = new Engine({ current: read("base", "Build") });
+    expect(await settleUnknownWrite(still, LEAD, null, signal, sent)).toEqual({
+      kind: "not_landed",
+      currentRevisionId: "base",
+    });
+    const mine = new Engine({ current: read("r2", "Ship") });
+    expect(await settleUnknownWrite(mine, LEAD, "r2", signal, sent)).toEqual({
+      kind: "landed",
+      revisionId: "r2",
+      activeRevisionId: "r2",
+    });
+    const theirs = new Engine({ current: read("r2", "Grow") });
+    expect(await settleUnknownWrite(theirs, LEAD, "r2", signal, sent)).toEqual({
+      kind: "not_landed",
+      currentRevisionId: "r2",
+    });
+    // A save a previous visit sent has no draft to compare: a newer company is
+    // offered as an update rather than taken for the save.
+    const resumed = new Engine({ current: read("r2", "Ship") });
+    expect(await settleUnknownWrite(resumed, LEAD, null, signal)).toEqual({
+      kind: "not_landed",
+      currentRevisionId: "r2",
+    });
+    for (const engine of [still, mine, theirs, resumed]) {
+      expect(engine.calls).toEqual(["current"]);
+    }
+  });
+
+  test("an update stands on the unit the node serves, described by its dry run and walked by nothing", async () => {
+    const derived = fixtureDerived({ name: "Acme", units: [unit("Grow")] });
+    const engine = new Engine({
+      current: read("r3", "Grow"),
+      send: { status: 200, body: { valid: true, base_revision_id: "r3", derived } },
+    });
+    expect(
+      await readyToUpdate(
+        engine,
+        { baseRevision: "base", conflictRevisionId: "r2" },
+        signal,
+        "eng",
+      ),
+    ).toEqual({
+      kind: "ready",
+      revisionId: "r3",
+      document: { name: "Acme", units: [unit("Grow")] },
+      derived,
+    });
+    expect(engine.calls).toEqual(["current", 'PUT {"dry_run":"true"} {"If-Match":"\\"r3\\""}']);
+    const behind = new Engine({ current: read("base", "Build") });
+    expect(
+      await readyToUpdate(
+        behind,
+        { baseRevision: "base", conflictRevisionId: "r2" },
+        signal,
+        "eng",
+      ),
+    ).toEqual({ kind: "behind" });
   });
 });

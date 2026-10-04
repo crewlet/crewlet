@@ -10,9 +10,12 @@ import {
   WRITE_REASONS,
   configGuardedReason,
   configWriteAccess,
+  orgWriteAccess,
   writeAccess,
 } from "./useWriteAccess.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
+import { CHART_ORG } from "~/test/orgchart.ts";
+import { leadScope, NO_SCOPE } from "./leadScope.ts";
 import type { ViewerState } from "./viewer.ts";
 
 const BOUND: ViewerState = {
@@ -149,6 +152,51 @@ describe("changing the company's configuration", () => {
       block: "held",
       reason: "these are Rui's",
     });
+  });
+});
+
+// THE COMPANY'S GRANT, OR A LEAD INSIDE THEIR SUBTREE: the engine admits a
+// write by a person without config:write when everything it changes is inside
+// a unit they lead, so a control about one of their seats or units is open to
+// them, and one outside says which units they do lead rather than that a
+// grant is missing.
+describe("changing one part of the org chart", () => {
+  const lead: ViewerState = {
+    ...BOUND,
+    login: "cto.person",
+    handle: "cto",
+    owner: "cto",
+    grants: ["work:write"],
+  };
+  const scope = leadScope(CHART_ORG, "cto");
+
+  test("a lead may change a seat or unit they lead, and nothing else", () => {
+    expect(orgWriteAccess(lead, true, scope, { seat: "swe" })).toEqual({ can: true });
+    expect(orgWriteAccess(lead, true, scope, { unit: "core" })).toEqual({ can: true });
+    expect(orgWriteAccess(lead, true, scope, "anywhere")).toEqual({ can: true });
+    expect(orgWriteAccess(lead, true, scope, { seat: "pm" })).toEqual({
+      can: false,
+      block: "outside_scope",
+      reason: "You lead Core, and this is outside it: changing it takes the config:write grant.",
+    });
+    expect(orgWriteAccess(lead, true, leadScope(CHART_ORG, "pm"), { unit: "core" })).toMatchObject({
+      reason: expect.stringContaining("You lead Management and Developer Relations"),
+    });
+  });
+
+  test("a person who leads nothing is told about the grant, and every earlier reason still ranks first", () => {
+    expect(orgWriteAccess(lead, true, NO_SCOPE, { seat: "swe" })).toMatchObject({
+      block: "no_grant",
+    });
+    expect(orgWriteAccess(lead, false, scope, { seat: "swe" })).toMatchObject({
+      block: "offline",
+    });
+    expect(orgWriteAccess(lead, true, scope, { seat: "swe" }, "these are Rui's")).toMatchObject({
+      block: "held",
+    });
+    // The grant reaches everything, a lead's scope or not.
+    const admin = { ...lead, grants: ["config:read", "config:write"] };
+    expect(orgWriteAccess(admin, true, scope, { seat: "pm" })).toEqual({ can: true });
   });
 });
 

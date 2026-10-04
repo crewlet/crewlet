@@ -17,7 +17,14 @@ import { Mark } from "~/ui/glyph.tsx";
 import { Segmented } from "~/ui/primitives.tsx";
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
 import { plainText } from "~/lib/markdown.ts";
-import { ENGINE_SENTENCES, authorOf, nameAuthor, noticeItem, type ItemRef } from "~/lib/work.ts";
+import {
+  ENGINE_SENTENCES,
+  authorOf,
+  nameAuthor,
+  noticeItem,
+  turnItem,
+  type ItemRef,
+} from "~/lib/work.ts";
 import { fmtDateTime, humanize } from "~/lib/format.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
@@ -108,11 +115,15 @@ export function rowItem(row: InboxRow): ItemRef | null {
       switch (row.subject.kind) {
         case "ask":
           return row.subject.ask;
-        case "run":
-          return row.subject.run.work_item ?? null;
+        // A TURN'S TASK: by its id where it is native ([turnItem]).
+        case "run": {
+          const ref = row.subject.run.work_item;
+          return ref ? turnItem(ref) : null;
+        }
         case "seat": {
           const r = row.subject.seat.row;
-          return r.turn?.work_item ?? r.live_call?.work_item ?? null;
+          const ref = r.turn?.work_item ?? r.live_call?.work_item;
+          return ref ? turnItem(ref) : null;
         }
       }
       break;

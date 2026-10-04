@@ -60,9 +60,9 @@ test("the table view draws a row per node, and a row's Edit opens the node edito
 /**
  * The table row whose NAME cell says `name`.
  *
- * The name cell rather than the row, because a unit's lead is a seat's name in
- * another cell: "Dev" matches Engineering's row too, on the column that says
- * who leads it.
+ * The name cell rather than the row, because a unit's lead is shown by its
+ * seat's name in another cell: "Dev" matches Engineering's row too, on the
+ * column that says who leads it.
  */
 async function tableRow(name: string): Promise<HTMLElement> {
   const rows = await screen.findAllByRole("row");
@@ -398,7 +398,7 @@ test("a unit says the same word and wears the same mark on the chart and in the 
   await screen.findByText("No problems");
   const node = orgNodeParts();
   const table = orgTableParts();
-  const card = view.container.querySelector<HTMLElement>('[data-tree-id="unit:Engineering"]')!;
+  const card = view.container.querySelector<HTMLElement>('[data-tree-id="unit:engineering"]')!;
   const onChart = {
     // The caption under the name, which is where both surfaces write the type.
     caption: drawnPart(card, node.caption)?.textContent,
@@ -408,7 +408,7 @@ test("a unit says the same word and wears the same mark on the chart and in the 
   fireEvent.click(screen.getByRole("tab", { name: "Table" }));
   const row = await waitFor(() => {
     const found = view.container.querySelector<HTMLElement>(
-      '[role="row"][data-tree-id="unit:Engineering"]',
+      '[role="row"][data-tree-id="unit:engineering"]',
     );
     if (!found) throw new Error("no row for the unit");
     return found;

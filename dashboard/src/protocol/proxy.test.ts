@@ -83,6 +83,11 @@ const FORWARDS: readonly { path: string; call: string; why: string }[] = [
     call: "fetch",
     why: "the REST transport's one request: every path it sends is a caller's, read at that caller",
   },
+  {
+    path: "protocol/configWrite.ts",
+    call: "rest.request",
+    why: "the configuration transport's send: its path is the request's, `/config` or a lead's unit at `/config/units/{key}` (`routes/org/builder/model/transport.ts`), both under the `/config` entry",
+  },
 ];
 
 /** One URL the dashboard reaches, or a call whose URL cannot be read. */

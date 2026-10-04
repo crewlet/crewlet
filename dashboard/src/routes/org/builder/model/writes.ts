@@ -38,6 +38,14 @@
  * lose the very change the conflict was about. [readyToUpdate] reads the
  * active document and accepts it only when it is the conflict's revision or a
  * descendant of it.
+ *
+ * A LEAD READS NO REVISION HISTORY. `GET /config/revisions/{id}` is
+ * `config:read`'s, which a lead editing their unit (`scope.ts`) does not
+ * hold, so neither walk is open to them. Their lost answer is settled by
+ * reading the unit back ([settleUnknownWrite]), and their update accepts the
+ * unit the node serves now, which a node that is behind can only make an
+ * older one — and an update onto an older revision ends at the save, whose
+ * `If-Match` the engine refuses, rather than in a lost change.
  */
 
 import type {
@@ -48,13 +56,14 @@ import type {
   WriteResult,
 } from "~/protocol/index.ts";
 import { classifyConfigRefusal } from "~/protocol/configAnswer.ts";
-import { isRecord } from "./json.ts";
+import { isRecord, jsonEqual } from "./json.ts";
 import type { KeySource } from "./keys.ts";
 import { fromDocument, toDocument } from "./document.ts";
 import { classifyCheck, type CheckOutcome } from "./scheduler.ts";
 import {
   checkRequest,
   revisionOfEtag,
+  scopedUnit,
   type BuilderMode,
   type ConfigTransport,
   type HttpAnswer,
@@ -98,6 +107,8 @@ export interface SaveAttempt {
   readonly mode: BuilderMode;
   /** The revision the draft was built on; `null` in create mode. */
   readonly baseRevision: string | null;
+  /** The unit a lead's draft is about; `null` for the whole company. */
+  readonly scope: string | null;
 }
 
 /** What a save's answer means. */
@@ -161,7 +172,10 @@ export function classifySave(
   if (afterUnknown && refusal.kind === "conflict") {
     return { kind: "unknown", currentRevisionId: refusal.currentRevisionId, detail };
   }
-  return { kind: "refused", outcome: classifyCheck(answer, attempt.mode, attempt.baseRevision) };
+  return {
+    kind: "refused",
+    outcome: classifyCheck(answer, attempt.mode, attempt.baseRevision, attempt.scope),
+  };
 }
 
 /** Whether a revision is the one a save wrote. */
@@ -198,13 +212,36 @@ export type Settlement =
  * stops at the first revision whose parent is the draft's base (in create
  * mode, the first revision of all), which is the only place this write can
  * sit, and gives up as unknown past [UPDATE_ANCESTRY_LIMIT].
+ *
+ * A LEAD'S SAVE is settled by reading the unit back instead (see the module
+ * doc): the base revision still active did not take it; the unit as `sent`
+ * at a newer revision is this save; anything else is a newer company, which
+ * the update flow rebases onto — finding each change of this save already
+ * there, if it landed under a colleague's. A save a previous visit sent comes
+ * with no `sent` and is always that newer company: its kept log is offered as
+ * an update rather than settled by a guess.
  */
 export async function settleUnknownWrite(
   transport: ConfigTransport,
   attempt: SaveAttempt,
   currentRevisionId: string | null,
   signal: AbortSignal,
+  /** The document the save sent, for a lead's save; unread otherwise. */
+  sent: CompanyDocument | null = null,
 ): Promise<Settlement> {
+  if (attempt.scope !== null) {
+    const answer = await transport.current(signal);
+    if (answer.status !== 200 || !isRecord(answer.body))
+      return { kind: "unknown", detail: unanswered(answer) };
+    const current = revisionOfEtag(answer.etag);
+    if (current === null)
+      return { kind: "unknown", detail: "The engine did not name its active revision." };
+    if (current === attempt.baseRevision) return { kind: "not_landed", currentRevisionId: current };
+    const read = scopedUnit(answer.body as CompanyDocument);
+    return sent !== null && jsonEqual(read, scopedUnit(sent))
+      ? { kind: "landed", revisionId: current, activeRevisionId: current }
+      : { kind: "not_landed", currentRevisionId: current };
+  }
   let current = currentRevisionId;
   if (current === null) {
     const answer = await transport.current(signal);
@@ -279,9 +316,7 @@ export type UpdateReadiness =
       readonly document: CompanyDocument;
       /**
        * The engine's derivation of that document, from a dry run of it with no
-       * changes. The draft is rebased onto nodes keyed by the engine's handles,
-       * and without it a seat declaring no handle could only be keyed by its
-       * path, which names nothing the log recorded.
+       * changes, kept as the base's own for the review to compare against.
        */
       readonly derived: Derived;
     }
@@ -298,6 +333,8 @@ export async function readyToUpdate(
   transport: ConfigTransport,
   conflict: { readonly baseRevision: string; readonly conflictRevisionId: string | null },
   signal: AbortSignal,
+  /** The unit a lead's draft is about; `null` for the whole company. */
+  scope: string | null = null,
 ): Promise<UpdateReadiness> {
   const answer = await transport.current(signal);
   if (answer.status !== 200 || !isRecord(answer.body))
@@ -307,28 +344,32 @@ export async function readyToUpdate(
     return { kind: "unknown", detail: "The engine did not name its active revision." };
   const document = answer.body as CompanyDocument;
   if (active === conflict.baseRevision) return { kind: "behind" };
-  const target = conflict.conflictRevisionId;
-  let descends = target === null || active === target;
-
-  let at: string | null = active;
-  for (let step = 0; !descends && step < UPDATE_ANCESTRY_LIMIT && at !== null; step++) {
-    const revision = await transport.revision(at, signal);
-    if (revision.status !== 200 || !isRecord(revision.body))
-      return { kind: "unknown", detail: unanswered(revision) };
-    const parent = revision.body.parent_revision_id;
-    at = typeof parent === "string" && parent !== "" ? parent : null;
-    if (at === target) descends = true;
-    else if (at === conflict.baseRevision) return { kind: "behind" };
+  // A lead reads no history, so the unit the node serves now is the one (see
+  // the module doc).
+  if (scope === null) {
+    const target = conflict.conflictRevisionId;
+    let descends = target === null || active === target;
+    let at: string | null = active;
+    for (let step = 0; !descends && step < UPDATE_ANCESTRY_LIMIT && at !== null; step++) {
+      const revision = await transport.revision(at, signal);
+      if (revision.status !== 200 || !isRecord(revision.body))
+        return { kind: "unknown", detail: unanswered(revision) };
+      const parent = revision.body.parent_revision_id;
+      at = typeof parent === "string" && parent !== "" ? parent : null;
+      if (at === target) descends = true;
+      else if (at === conflict.baseRevision) return { kind: "behind" };
+    }
+    if (!descends) return { kind: "behind" };
   }
-  if (!descends) return { kind: "behind" };
 
   const request = checkRequest({
     mode: "edit",
     baseRevision: active,
     base: document,
-    sent: toDocument(fromDocument(document, null)),
+    sent: toDocument(fromDocument(document)),
+    scope,
   });
-  const checked = classifyCheck(await transport.send(request, signal), "edit", active);
+  const checked = classifyCheck(await transport.send(request, signal), "edit", active, scope);
   if ((checked.status === "clean" || checked.status === "problems") && checked.derived) {
     return { kind: "ready", revisionId: active, document, derived: checked.derived };
   }

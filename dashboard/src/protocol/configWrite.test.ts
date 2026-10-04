@@ -51,6 +51,7 @@ test("a refusal resolves with the engine's status and body", async () => {
   const answer = await configTransport.send(
     {
       method: "PATCH",
+      path: "/config",
       query: { dry_run: "true" },
       contentType: "application/merge-patch+json",
       headers: { "If-Match": '"r1"' },
@@ -102,6 +103,7 @@ test("the dry run and the save carry exactly the request the model built", async
   await configTransport.send(
     {
       method: "PUT",
+      path: "/config",
       query: { dry_run: "true" },
       contentType: "application/json",
       headers: { "If-None-Match": "*" },
@@ -262,6 +264,145 @@ describe("one reading of a /config refusal", () => {
     expect(classifyConfigRefusal({ status: 503, body: { error: "unavailable" } }).kind).toBe(
       "unreachable",
     );
+  });
+
+  // A 409 THAT NO NEWER REVISION CLEARS. A write taking a human seat out of
+  // the company while somebody is bound to it is refused `seat_held`; read
+  // as a revision race it offered to update the draft onto the revision it
+  // was built on, for ever. It is a problem per seat, which unbinding clears.
+  test("a held seat is a problem on that seat naming who holds it and how to unbind them", () => {
+    const refusal = classifyConfigRefusal({
+      status: 409,
+      body: {
+        error: "seat_held",
+        detail: "configapi: this write removes a human seat somebody is bound to",
+        held: {
+          sre: [{ person: "p-2", login: "sam", stage: "active" }],
+          dev: [
+            { person: "p-1", login: "ada", stage: "active" },
+            { person: "p-3", login: "", stage: "invited" },
+          ],
+        },
+        hint: "unbind each person",
+      },
+    });
+    expect(refusal).toMatchObject({ kind: "problems", code: "seat_held", derived: null });
+    if (refusal.kind !== "problems") throw new Error(refusal.kind);
+    expect(refusal.problems.map((p) => [p.kind, p.seat, p.message])).toEqual([
+      [
+        "seat_held",
+        "dev",
+        "@dev is held by ada, p-3: unbind them first (crewlet iam unbind p-1; crewlet iam unbind p-3), then save again. People & access shows who holds each seat.",
+      ],
+      [
+        "seat_held",
+        "sre",
+        "@sre is held by sam: unbind them first (crewlet iam unbind p-2), then save again. People & access shows who holds each seat.",
+      ],
+    ]);
+    // A body naming no seat still refuses, in the engine's own sentence.
+    const bare = classifyConfigRefusal({
+      status: 409,
+      body: { error: "seat_held", detail: "held" },
+    });
+    expect(bare).toMatchObject({
+      kind: "problems",
+      problems: [{ kind: "seat_held", message: "held" }],
+    });
+  });
+
+  // A LEAD'S WRITE IS REFUSED PART BY PART. The engine names each part that
+  // reaches outside what the caller leads (`refused`), and the caller holds
+  // what they need for the rest: a problem per part, on the seat or unit it
+  // is, not a refusal of the person.
+  test("a write refused part by part is a problem on each seat and unit it names", () => {
+    const refusal = classifyConfigRefusal({
+      status: 403,
+      body: {
+        error: "unauthorized",
+        refused: [
+          {
+            kind: "seat",
+            id: "qa",
+            side: "after",
+            place: "sales",
+            why: "manages",
+            value: "seller",
+          },
+          { kind: "unit", id: "platform", side: "after", place: "platform", why: "self" },
+          { kind: "unit", id: "tooling", why: "key", value: "project" },
+          { kind: "setting", id: "mission" },
+          {
+            kind: "seat",
+            id: "ghost",
+            op: "added",
+            side: "before",
+            place: "sales",
+            why: "named",
+            value: "ghost",
+          },
+          { kind: "unit", id: "ops", side: "after", why: "duplicate", value: "ops" },
+          { kind: "unit", id: "tooling", side: "after", why: "lead", value: "nobody" },
+          { kind: "seat", id: "qa", side: "after", why: "manages", value: "ceo" },
+        ],
+      },
+    });
+    expect(refusal).toMatchObject({ kind: "problems", code: "unauthorized", derived: null });
+    if (refusal.kind !== "problems") throw new Error(refusal.kind);
+    expect(refusal.problems.map((p) => [p.kind, p.seat, p.unit, p.message])).toEqual([
+      [
+        "refused",
+        "qa",
+        undefined,
+        "@qa would manage seller, in sales, outside the units you lead.",
+      ],
+      [
+        "refused",
+        undefined,
+        "platform",
+        "Unit platform's own lead and place decide who may change it, so changing them takes the config:write grant.",
+      ],
+      [
+        "refused",
+        undefined,
+        "tooling",
+        "Unit tooling: project is how another system finds it, and changing it takes the config:write grant.",
+      ],
+      [
+        "refused",
+        undefined,
+        undefined,
+        "The company's mission setting takes the config:write grant.",
+      ],
+      [
+        "refused",
+        "ghost",
+        undefined,
+        "@ghost: a lead or manages entry in sales already names ghost, outside the units you lead, so adding it takes the config:write grant.",
+      ],
+      [
+        "refused",
+        undefined,
+        "ops",
+        "ops answers to two seats or units, and only the config:write grant can change them.",
+      ],
+      [
+        "refused",
+        undefined,
+        "tooling",
+        "Unit tooling's lead would be nobody, which names no seat inside the units you lead.",
+      ],
+      [
+        "refused",
+        "qa",
+        undefined,
+        "@qa would manage ceo, which names nothing inside the units you lead.",
+      ],
+    ]);
+    // A 403 naming no part is a refusal of the person, as before.
+    expect(
+      classifyConfigRefusal({ status: 403, body: { error: "unauthorized", refused: [] } }),
+    ).toEqual({ kind: "guarded", code: "unauthorized" });
   });
 
   test("a refusal with no problems of its own gets one from its detail", () => {

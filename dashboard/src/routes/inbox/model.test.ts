@@ -16,7 +16,9 @@ import {
   type InboxRow,
 } from "./model.ts";
 import type { DecisionSubject } from "~/components/DecisionRow.tsx";
-import type { WorkInboxNotice } from "~/protocol/index.ts";
+import type { SandboxRun, WorkInboxNotice } from "~/protocol/index.ts";
+import { itemAddress } from "~/lib/work.ts";
+import { rowItem } from "./NoticeList.tsx";
 
 function notice(id: string, extra: Partial<WorkInboxNotice> = {}): WorkInboxNotice {
   return {
@@ -218,4 +220,21 @@ describe("the quiet sentences", () => {
       inboxQuiet({ ...base, bound: false, answer: null, scope: "unread", chip: "" })?.hint,
     ).toContain("every seat's own state");
   });
+});
+
+// A PARKED RUN'S TASK is a turn's: its work item carries no collision flag, so
+// the pane opens, threads and replies by the native task's id — a key another
+// task claimed first would read and write the claimant's conversation.
+test("a parked run's task is addressed by its id", () => {
+  const run = {
+    work_item: { backend: "native", id: "t-dup", key: "ENG-7", project: "ENG" },
+  } as unknown as SandboxRun;
+  const row: InboxRow = {
+    kind: "decision",
+    key: "run:1",
+    subject: { kind: "run", at: "2026-09-27T10:00:00Z", run },
+    notices: [],
+  };
+  const item = rowItem(row);
+  expect(item && itemAddress(item)).toBe("t-dup");
 });

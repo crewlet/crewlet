@@ -39,7 +39,7 @@ test("a move within the builder keeps it: the view, the chart and a selection", 
     "#/agents/edit?view=table",
     "#/agents/edit?view=visualization",
     "#/agents/edit?view=visualization&chart=reporting",
-    "#/agents/edit?view=table&unit=Engineering",
+    "#/agents/edit?view=table&unit=engineering",
     "#/agents/edit?view=table&seat=ceo",
     // The peek rail is a FILTER, so the router replaces and never asks at all
     // — but the route it produces still answers honestly here, because a

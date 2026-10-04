@@ -67,10 +67,18 @@ export function company(): CompanyDocument {
     name: "Acme",
     providers: { llm: { default: { type: "anthropic", model: "claude-sonnet-5" } } },
     roles: [
-      { name: "CEO", goal: "Lead", manages: ["Engineering"] },
-      { name: "Designer", goal: "Design" },
+      { name: "CEO", handle: "ceo", goal: "Lead", manages: ["engineering"] },
+      { name: "Designer", handle: "designer", goal: "Design" },
     ],
-    units: [{ name: "Engineering", type: "department", lead: "Dev", roles: [{ name: "Dev" }] }],
+    units: [
+      {
+        name: "Engineering",
+        id: "engineering",
+        type: "department",
+        lead: "dev",
+        roles: [{ name: "Dev", handle: "dev" }],
+      },
+    ],
   };
 }
 
@@ -89,6 +97,12 @@ export function mergePatch(target: unknown, patch: unknown): unknown {
     else out[key] = mergePatch(out[key], value);
   }
   return out;
+}
+
+/** The unit key a `/config/units/{key}` path addresses, or `null` for any other path. */
+function unitOfPath(path: string): string | null {
+  const match = /^\/config\/units\/([^/]+)$/.exec(path);
+  return match ? decodeURIComponent(match[1]!) : null;
 }
 
 /** The scripted engine: the active revision, and every request the page sent. */
@@ -115,10 +129,18 @@ export class Engine {
     return this.requests.filter((r) => r.query.get("dry_run") === "true");
   }
 
-  /** The document a write or dry run would produce. */
+  /**
+   * The document a write or dry run would produce. A unit's write replaces
+   * that top-level unit whole, as `PUT /config/units/{key}` splices it.
+   */
   result(request: SentRequest): CompanyDocument {
     const body = { ...(request.body as Record<string, unknown>) };
     delete body._summary;
+    const unit = unitOfPath(request.path);
+    if (unit !== null) {
+      const units = (this.document?.units ?? []).map((u) => (u.id === unit ? body : u));
+      return { ...this.document, units } as CompanyDocument;
+    }
     return (
       request.method === "PUT" ? body : mergePatch(this.document ?? {}, body)
     ) as CompanyDocument;
@@ -158,9 +180,19 @@ export class Engine {
           })
         : json({ error: "not_found" }, 404);
     }
-    if (request.path === "/config" && (request.method === "PATCH" || request.method === "PUT")) {
+    const unit = unitOfPath(request.path);
+    if (unit !== null && request.method === "GET") {
+      const found = this.document?.units?.find((u) => u.id === unit);
+      return found
+        ? json(found, 200, { ETag: `"${this.revision}"` })
+        : json({ error: "no_such_entity" }, 404);
+    }
+    if (
+      (request.path === "/config" || unit !== null) &&
+      (request.method === "PATCH" || request.method === "PUT")
+    ) {
       const expected = request.headers["If-Match"];
-      if (request.method === "PATCH" && expected !== `"${this.revision}"`) {
+      if ((request.method === "PATCH" || unit !== null) && expected !== `"${this.revision}"`) {
         return json({ error: "revision_advanced", current_revision_id: this.revision }, 409);
       }
       if (request.method === "PUT" && request.headers["If-None-Match"] === "*" && this.document) {
@@ -228,6 +260,7 @@ export function FakeView() {
   return (
     <div>
       <p>{api.readOnly ? "read only" : "editable"}</p>
+      <p data-testid="derivation">{api.state.check.derived ? "described" : "undescribed"}</p>
       <button type="button" onClick={() => api.selection.select(COMPANY_KEY)}>
         Select the company
       </button>
@@ -252,7 +285,7 @@ export function FakeView() {
               // Minted in the handler, as every view mints a new node's key.
               key: "new:analyst",
               placement: { parent: COMPANY_KEY, after: null },
-              data: { name: "Analyst", goal: "Analyse" },
+              data: { name: "Analyst", handle: "analyst", goal: "Analyse" },
             },
           })
         }
@@ -373,7 +406,7 @@ export const EDITOR = { login: "ops", owner: "ops", grants: ["config:read", "con
 
 export function mountBuilder({
   engine,
-  org = null,
+  org,
   connected = true,
   hash = "#/agents/edit?view=visualization",
   surfaces = fakeSurfaces,
@@ -384,6 +417,12 @@ export function mountBuilder({
   wrap = (tree) => tree,
 }: {
   engine: Engine;
+  /**
+   * The org the socket's snapshot delivered. Left out, a connected socket has
+   * delivered the snapshot of an engine running no company (`{}`) and a
+   * disconnected one none; `null` is a socket that opened and has not
+   * delivered it yet.
+   */
   org?: OrgProjection | null;
   connected?: boolean;
   hash?: string;
@@ -407,7 +446,8 @@ export function mountBuilder({
   engine.install();
   const store = new Store();
   if (connected) store.applyHealth({ status: "ok" });
-  if (org) store.applyOrg(org);
+  const snapshot = org === undefined ? (connected ? {} : null) : org;
+  if (snapshot) store.applyOrg(snapshot);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
     Promise.resolve(what === "viewer" ? viewer() : query(what));

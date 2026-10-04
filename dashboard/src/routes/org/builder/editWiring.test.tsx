@@ -147,7 +147,7 @@ test("a link that names a seat opens that seat's editor", async () => {
 });
 
 test("a link that names a unit opens that unit's editor", async () => {
-  mount("#/agents/edit?view=table&unit=Engineering");
+  mount("#/agents/edit?view=table&unit=engineering");
   expect(await screen.findByRole("dialog", { name: "Edit Engineering" })).toBeDefined();
 });
 
@@ -196,7 +196,7 @@ test("a link that asks for an add opens it once, on that kind, and leaves the ad
 
 /* And with `unit=`, under that unit — the unit's own editor is not what was asked. */
 test("an add with a unit opens under that unit, not the unit's editor", async () => {
-  mount("#/agents/edit?view=table&unit=Engineering&add=human");
+  mount("#/agents/edit?view=table&unit=engineering&add=human");
   const dialog = await screen.findByRole("dialog", { name: "Add to Engineering" });
   expect(
     within(dialog).getByRole("radio", { name: "Human seat" }).getAttribute("aria-checked"),

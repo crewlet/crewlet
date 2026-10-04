@@ -21,6 +21,7 @@ import {
   clearDraft,
   isOperation,
   keepDraft,
+  keptScope,
   markPendingWrite,
   parseKeptDraft,
   persistencePlan,
@@ -30,7 +31,7 @@ import {
   type KeptDraft,
 } from "./persistence.ts";
 import { templateIntent } from "./templates.ts";
-import { countingKeys, fixtureCompany, fixtureDerived } from "./testkit.ts";
+import { countingKeys, fixtureCompany } from "./testkit.ts";
 
 class MemoryStorage implements DraftStorage {
   readonly items = new Map<string, string>();
@@ -60,50 +61,50 @@ class RefusingStorage implements DraftStorage {
 /**
  * One operation of every type this build records, from the fixture company.
  * A renamed node keeps its key, so the later operations on `seat:dev` and
- * `unit:Sales` address the renamed seat and unit.
+ * `unit:sales` address the renamed seat and unit.
  */
 function everyOperation(): Operation[] {
   const doc = fixtureCompany();
-  let draft: Draft = fromDocument(doc, fixtureDerived(doc));
+  let draft: Draft = fromDocument(doc);
   const ops: Operation[] = [];
   const intents: Intent[] = [
     {
       type: "addUnit",
       key: "new:u1",
       placement: { parent: "company", after: null },
-      data: { name: "Legal" },
+      data: { name: "Legal", id: "legal" },
     },
     {
       type: "addSeat",
       key: "new:s1",
       placement: { parent: "new:u1", after: null },
-      data: { name: "Counsel" },
+      data: { name: "Counsel", handle: "counsel" },
     },
     { type: "renameSeat", target: "seat:dev", name: "Developer" },
-    { type: "renameUnit", target: "unit:Sales", name: "Revenue" },
+    { type: "renameUnit", target: "unit:sales", name: "Revenue" },
     {
       type: "move",
       target: "seat:designer",
-      to: { parent: "unit:Platform", after: null },
+      to: { parent: "unit:platform", after: null },
       clearLeads: [],
     },
-    { type: "reorder", target: "seat:dev", to: { parent: "unit:Engineering", after: null } },
+    { type: "reorder", target: "seat:dev", to: { parent: "unit:engineering", after: null } },
     {
       type: "updateSeat",
       target: "seat:sre",
       set: [{ path: ["goal"], value: "Automate" }],
       accessLevel: "developer",
     },
-    { type: "updateUnit", target: "unit:Platform", set: [{ path: ["purpose"], value: "Run it" }] },
-    { type: "setLead", target: "unit:Sales", lead: "Account Executive" },
-    { type: "setManages", target: "seat:ceo", manages: ["Engineering"] },
+    { type: "updateUnit", target: "unit:platform", set: [{ path: ["purpose"], value: "Run it" }] },
+    { type: "setLead", target: "unit:sales", lead: "account-executive" },
+    { type: "setManages", target: "seat:ceo", manages: ["engineering"] },
     {
       type: "changeKind",
       target: "seat:account-executive",
       kind: "human",
       contact: { slack_user_id: "U1" },
     },
-    { type: "setScheduleEnabled", target: "unit:Engineering", schedule: "standup", enabled: false },
+    { type: "setScheduleEnabled", target: "unit:engineering", schedule: "standup", enabled: false },
     { type: "setDatadogRouteTo", routeTo: "dev" },
     { type: "updateCompany", set: [{ path: ["vision"], value: "Everywhere" }] },
     {
@@ -114,7 +115,8 @@ function everyOperation(): Operation[] {
         { type: "updateSeat", target: "seat:sre", set: [{ path: ["goal"], value: "Automate it" }] },
       ],
     },
-    { type: "remove", target: "unit:Sales" },
+    { type: "remove", target: "unit:sales" },
+    { type: "replaceSeat", target: "seat:sre", key: "new:s2", handle: "reliability" },
   ];
   for (const intent of intents) {
     const result = record(draft, intent);
@@ -152,7 +154,7 @@ describe("isOperation", () => {
   test("accepts every operation type this build records, after a trip through JSON", () => {
     const ops = [...everyOperation(), templateOperation()];
     const types = new Set(ops.map((op) => op.type));
-    expect(types.size).toBe(17);
+    expect(types.size).toBe(18);
     for (const op of ops) expect(isOperation(JSON.parse(JSON.stringify(op))), op.type).toBe(true);
   });
 
@@ -248,28 +250,59 @@ describe("keeping and restoring", () => {
   });
 });
 
+// THE UNIT A KEPT DRAFT WAS MADE OF is read before the builder knows which
+// unit to open, and decides nothing: an unreadable draft stays stored for the
+// restore that discards it and says so.
+describe("keptScope", () => {
+  test("names a lead's unit, nothing for a company's, and leaves an unreadable draft alone", () => {
+    const storage = new MemoryStorage();
+    keepDraft(storage, kept({ scope: "ops" }));
+    expect(keptScope(storage)).toBe("ops");
+    keepDraft(storage, kept());
+    expect(keptScope(storage)).toBeNull();
+    storage.setItem(DRAFT_STORAGE_KEY, "{");
+    expect(keptScope(storage)).toBeNull();
+    expect(storage.items.get(DRAFT_STORAGE_KEY)).toBe("{");
+    expect(keptScope(new RefusingStorage())).toBeNull();
+    expect(keptScope(null)).toBeNull();
+  });
+});
+
 describe("restoreOffer", () => {
   test("keep or discard on the same revision, update when it moved, discard when the mode changed", () => {
-    expect(restoreOffer(kept(), { mode: "edit", revision: "rev-1" })).toEqual({
-      kind: "keep_or_discard",
-    });
-    expect(restoreOffer(kept(), { mode: "edit", revision: "rev-2" })).toEqual({
+    const edit = { mode: "edit" as const, revision: "rev-1", scope: null };
+    expect(restoreOffer(kept(), edit)).toEqual({ kind: "keep_or_discard" });
+    expect(restoreOffer(kept(), { ...edit, revision: "rev-2" })).toEqual({
       kind: "update",
       from: "rev-1",
       to: "rev-2",
     });
-    expect(restoreOffer(kept(), { mode: "create", revision: null })).toEqual({
+    expect(restoreOffer(kept(), { mode: "create", revision: null, scope: null })).toEqual({
       kind: "discard_mode_changed",
       kept: "edit",
       loaded: "create",
     });
-    expect(
-      restoreOffer(kept({ mode: "create", baseRevision: null }), {
-        mode: "edit",
-        revision: "rev-1",
-      }),
-    ).toMatchObject({
+    expect(restoreOffer(kept({ mode: "create", baseRevision: null }), edit)).toMatchObject({
       kind: "discard_mode_changed",
+    });
+  });
+
+  // A LEAD'S DRAFT IS ONE UNIT'S. Its log names that unit's nodes and was
+  // recorded against that unit's document, so it is never replayed onto the
+  // company's draft or another unit's.
+  test("a draft of one unit is offered only for that unit", () => {
+    const edit = { mode: "edit" as const, revision: "rev-1" };
+    expect(restoreOffer(kept({ scope: "platform" }), { ...edit, scope: "platform" })).toEqual({
+      kind: "keep_or_discard",
+    });
+    expect(restoreOffer(kept({ scope: "platform" }), { ...edit, scope: "tooling" })).toEqual({
+      kind: "discard_scope_changed",
+    });
+    expect(restoreOffer(kept({ scope: "platform" }), { ...edit, scope: null })).toEqual({
+      kind: "discard_scope_changed",
+    });
+    expect(restoreOffer(kept(), { ...edit, scope: "platform" })).toEqual({
+      kind: "discard_scope_changed",
     });
   });
 });
@@ -279,6 +312,7 @@ describe("persistencePlan", () => {
     const ops = everyOperation().slice(0, 2);
     const state = {
       mode: "edit" as const,
+      scope: null,
       baseRevision: "rev-1",
       log: { ops, undone: [] },
       keep: true,
@@ -294,6 +328,11 @@ describe("persistencePlan", () => {
     expect(persistencePlan({ ...state, write: "write-0001" }, 42)).toEqual({
       action: "keep",
       kept: kept({ ops, savedAt: 42, write: "write-0001" }),
+    });
+    // A lead's draft keeps the unit it is about.
+    expect(persistencePlan({ ...state, scope: "platform" }, 42)).toEqual({
+      action: "keep",
+      kept: kept({ ops, savedAt: 42, scope: "platform" }),
     });
   });
 });

@@ -90,7 +90,39 @@ const text = (value: unknown): string => (typeof value === "string" ? value : ""
 export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
   const body = isRecord(answer.body) ? answer.body : {};
   const code = text(body.error);
+  // A WRITE REFUSED PART BY PART. Without `config:write` the engine admits a
+  // write only where everything it changes is inside a unit the caller leads,
+  // and its refusal names each part that is not (`refused`,
+  // `configapi.RefusedChange`): the caller holds what they need for the rest,
+  // so it is a problem with the draft, placed on each seat and unit it names,
+  // and not a refusal of the person. A caller who leads no unit is refused
+  // every part the same way, and a writer that knows its draft is the whole
+  // company reads that as the grant they lack (the builder's `classifyCheck`).
+  const refused = Array.isArray(body.refused) ? body.refused.filter(isRecord) : [];
+  if (answer.status === 403 && refused.length > 0) {
+    return {
+      kind: "problems",
+      problems: refused.map(refusedProblem),
+      derived: null,
+      code,
+      hint: text(body.hint),
+    };
+  }
   if (answer.status === 401 || answer.status === 403) return { kind: "guarded", code };
+  // A 409 THAT IS NOT A RACE. `seat_held` refuses a write taking a human seat
+  // out of the company while somebody is bound to it: nothing about it moves
+  // with a newer revision, so reading it as one offered to update a draft
+  // onto the very revision it was built on, for ever. It is a problem with
+  // the draft, one per held seat, which unbinding the person clears.
+  if (answer.status === 409 && code === "seat_held") {
+    return {
+      kind: "problems",
+      problems: heldSeatProblems(body.held, text(body.detail) || code),
+      derived: null,
+      code,
+      hint: text(body.hint),
+    };
+  }
   if (answer.status === 409 || answer.status === 412) {
     const reason: ConfigConflictReason =
       code === "no_active_revision"
@@ -123,6 +155,99 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
     code,
     hint: text(body.hint),
   };
+}
+
+/**
+ * One part of a write the caller may not make, as a problem about the seat or
+ * the unit it is (`seat` by handle, `unit` by KEY — where a validation
+ * problem's `unit` is the unit's name, its kind `refused` says which) or
+ * about the company.
+ */
+function refusedProblem(entry: Record<string, unknown>): ConfigProblem {
+  const kind = text(entry.kind);
+  const id = text(entry.id);
+  return {
+    path: "",
+    segments: null,
+    kind: "refused",
+    ...(kind === "seat" ? { seat: id } : {}),
+    ...(kind === "unit" ? { unit: id } : {}),
+    message: refusedSentence(entry),
+  };
+}
+
+/** What a refused part says, by WHY the engine refused it. */
+export function refusedSentence(entry: Record<string, unknown>): string {
+  const kind = text(entry.kind);
+  const id = text(entry.id);
+  const value = text(entry.value);
+  const place = text(entry.place);
+  const op = text(entry.op) || "changed";
+  const grant = "takes the config:write grant";
+  const subject = kind === "seat" ? `@${id}` : `Unit ${id}`;
+  const where = place ? `in ${place}` : "at the company's top level";
+  if (kind === "document") {
+    return `This write changes nothing, and storing the company as it is ${grant}.`;
+  }
+  if (kind === "setting") return `The company's ${id} setting ${grant}.`;
+  switch (text(entry.why)) {
+    case "credential":
+      return `${subject}: ${value} is a credential, and setting, changing or clearing one ${grant}.`;
+    case "key":
+      return `${subject}: ${value} is how another system finds it, and changing it ${grant}.`;
+    case "self":
+      return `${subject}'s own lead and place decide who may change it, so changing them ${grant}.`;
+    // A REFERENCE AT THE ROOT names a root seat or nothing at all: the engine
+    // places both there, so neither is said to be a seat.
+    case "lead":
+      return place
+        ? `${subject}'s lead would be ${value}, in ${place}, outside the units you lead.`
+        : `${subject}'s lead would be ${value}, which names no seat inside the units you lead.`;
+    case "manages":
+      return place
+        ? `${subject} would manage ${value}, in ${place}, outside the units you lead.`
+        : `${subject} would manage ${value}, which names nothing inside the units you lead.`;
+    // The ADDED object, and where an entry already naming its id sits.
+    case "named":
+      return `${subject}: a lead or manages entry ${where} already names ${value}, outside the units you lead, so adding it ${grant}.`;
+    case "duplicate":
+      return `${value} answers to two seats or units, and only the config:write grant can change them.`;
+    default:
+      return text(entry.side) === "after"
+        ? `${subject} would sit ${where}, outside the units you lead.`
+        : `${subject} sits ${where}, outside the units you lead, so it cannot be ${op} here.`;
+  }
+}
+
+/**
+ * One problem per seat a `409 seat_held` names, each about that seat (by its
+ * handle) and naming everybody bound to it with the command that unbinds
+ * them, which takes the person's id. A body that names none is one problem at
+ * document level carrying the refusal's own sentence.
+ */
+function heldSeatProblems(held: unknown, detail: string): ConfigProblem[] {
+  const seats = isRecord(held) ? Object.entries(held).sort(([a], [b]) => a.localeCompare(b)) : [];
+  const problems = seats.map(([seat, holders]): ConfigProblem => {
+    const people = (Array.isArray(holders) ? holders : []).filter(isRecord);
+    const names = people.map((h) => text(h.login) || text(h.person)).filter((n) => n !== "");
+    const unbind = people
+      .map((h) => text(h.person))
+      .filter((id) => id !== "")
+      .map((id) => `crewlet iam unbind ${id}`);
+    return {
+      path: "",
+      segments: null,
+      kind: "seat_held",
+      seat,
+      message:
+        `@${seat} is held by ${names.join(", ") || "somebody"}: unbind them first` +
+        (unbind.length > 0 ? ` (${unbind.join("; ")})` : "") +
+        ", then save again. People & access shows who holds each seat.",
+    };
+  });
+  return problems.length > 0
+    ? problems
+    : [{ path: "", segments: null, kind: "seat_held", message: detail }];
 }
 
 /**

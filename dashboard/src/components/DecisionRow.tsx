@@ -110,8 +110,11 @@ export function seatConditionsOf(agents: readonly AgentRow[]): SeatCondition[] {
  * when they can take one of them:
  *
  *  - RAISE THE CEILING — a change to the company document, which `/config`
- *    takes only from a principal holding `config:write`, so the reader's
- *    GRANT decides it, never who they are bound to;
+ *    takes from a principal holding `config:write`, and a SEAT's ceiling
+ *    also from whoever leads it (`lib/leadScope.ts`) — so the reader's grant
+ *    or the units they lead decide it, never a binding of their own. The
+ *    company's ceiling, which stops a seat whose own window has room, is the
+ *    grant's alone;
  *  - HAND THE ITEM ON — `update_work_item` as the reader, which needs the
  *    engine to serve that write for them (`viewer.acts`) AND an item the seat
  *    was on: a seat stopped between turns has nothing to hand on.
@@ -121,14 +124,17 @@ export function seatConditionsOf(agents: readonly AgentRow[]): SeatCondition[] {
  * sentence telling a person a decision waits that they cannot make is the one
  * thing this screen must not say.
  */
-export function seatDecisionsFor<T extends { row: AgentRow }>(
+export function seatDecisionsFor<T extends { row: AgentRow; window?: BudgetWindow }>(
   conditions: readonly T[],
   viewer: { grants: readonly string[]; acts: readonly string[] },
+  /** The handles of the seats the reader leads ([LeadScope.seats]). */
+  leads: { has(handle: string): boolean } = new Set(),
 ): { mine: T[]; others: T[] } {
   const mine: T[] = [];
   const others: T[] = [];
-  const raises = viewer.grants.includes(CONFIG_WRITE_GRANT);
+  const grant = viewer.grants.includes(CONFIG_WRITE_GRANT);
   for (const c of conditions) {
+    const raises = grant || (c.window !== undefined && leads.has(c.row.handle ?? ""));
     const item = c.row.turn?.work_item ?? c.row.live_call?.work_item ?? null;
     const reassign = item !== null && viewer.acts.includes("update_work_item");
     (raises || reassign ? mine : others).push(c);

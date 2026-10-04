@@ -994,6 +994,39 @@ test("the memory card counts what the seat holds, never the page it was sent", a
   expect(askedFor("agent_memory")[0]?.params).toMatchObject({ id: "swe", limit: 1 });
 });
 
+// A TURN ON THE TASK THAT DID NOT CLAIM ITS KEY. Two tasks hold `ENG-412`, and
+// the turn is charged to the second: asked for and opened by the key, its card
+// titled and linked the claimant. It is asked for by its id, and opened by the
+// address the answer gives — its id, since its key is the claimant's.
+test("a turn on a task whose key another claimed names and opens that task, not the claimant", async () => {
+  const onDuplicate = structuredClone(WORKING);
+  const ref = { backend: "native", id: "t-dup", key: "ENG-412", project: "ENG" };
+  onDuplicate.turn!.work_item = ref;
+  onDuplicate.live_call!.work_item = ref;
+  mount("#/agents/seats/swe", {
+    agents: [onDuplicate],
+    answers: {
+      work_item: (p: Record<string, unknown>) =>
+        p.id === "t-dup"
+          ? { task: { id: "t-dup", key: "ENG-412", title: "The duplicate" }, key_collision: true }
+          : { task: { id: "t-claimant", key: "ENG-412", title: "The claimant" } },
+      work_item_turns: (p: Record<string, unknown>) => ({
+        item: p.id === "t-dup" ? "t-dup" : "t-claimant",
+        key: "ENG-412",
+        turns: [],
+        complete: true,
+      }),
+      turns: { turns: [], next: null },
+    },
+  });
+  await settle();
+  const card = document.querySelector(".prof-turn") as HTMLElement;
+  await waitFor(() => expect(card.textContent).toContain("The duplicate"));
+  expect(card.textContent).not.toContain("The claimant");
+  expect(card.querySelector("a.work-key")?.getAttribute("href")).toBe("#/work/t-dup");
+  expect(askedFor("work_item_turns").map((q) => q.params)).toEqual([{ id: "t-dup", limit: 1 }]);
+});
+
 test("the current turn names its round against the granted cap, its calls and the one running", async () => {
   mount("#/agents/seats/swe", {
     agents: [WORKING],
@@ -1005,8 +1038,10 @@ test("the current turn names its round against the granted cap, its calls and th
         items: [{ key: "ENG-7", title: "Something else entirely", status: "todo" }],
         total_hint: 1,
       },
+      // A NATIVE TASK IS ASKED FOR BY ITS ID: its key may be one another task
+      // claimed first, which would answer about the claimant.
       work_item: (p: Record<string, unknown>) =>
-        p.id === "ENG-412"
+        p.id === "i-412"
           ? { task: { id: "i-412", key: "ENG-412", title: "Retry PXE boot on DHCP timeout" } }
           : { task: { id: "x", key: String(p.id), title: "the wrong task" } },
       work_item_turns: { item: "i-412", key: "ENG-412", turns: [], complete: true },
@@ -1018,7 +1053,13 @@ test("the current turn names its round against the granted cap, its calls and th
   expect(card.textContent).toContain("Turn 1 on");
   expect(card.textContent).toContain("ENG-412");
   await waitFor(() => expect(card.textContent).toContain("Retry PXE boot on DHCP timeout"));
-  expect(askedFor("work_item").map((q) => q.params)).toContainEqual({ id: "ENG-412" });
+  expect(askedFor("work_item").map((q) => q.params)).toContainEqual({ id: "i-412" });
+  expect(askedFor("work_item_turns").map((q) => q.params)).toContainEqual({
+    id: "i-412",
+    limit: 1,
+  });
+  // And opened by the address the answer gives: the key, which it claimed.
+  expect(card.querySelector("a.work-key")?.getAttribute("href")).toBe("#/work/ENG-412");
   // THE ENGINE'S ROUND, one-based, against what the phase was GRANTED.
   expect(card.textContent).toContain("Execute · round 7 of 25");
   const rows = [...card.querySelectorAll(".prof-feed-row")];
@@ -1785,6 +1826,7 @@ test("a thread opened from the address does not scroll the page to it", async ()
 const schedule = (over: Partial<ScheduleRow>): ScheduleRow => ({
   scope_type: "role",
   scope_id: "swe",
+  scope_name: "swe",
   name: "daily-standup",
   cron: "0 9 * * 1-5",
   timezone: "UTC",
@@ -1801,7 +1843,13 @@ const schedule = (over: Partial<ScheduleRow>): ScheduleRow => ({
 test("the schedules tab lists a unit schedule this seat runs, and marks one that cannot fire", async () => {
   mount("#/agents/seats/swe?tab=schedules", {
     schedules: [
-      schedule({ scope_type: "unit", scope_id: "Core", name: "weekly-review", runners: ["swe"] }),
+      schedule({
+        scope_type: "unit",
+        scope_id: "Core",
+        scope_name: "Core",
+        name: "weekly-review",
+        runners: ["swe"],
+      }),
       schedule({
         name: "broken",
         timezone: "Mars/Olympus",
@@ -1809,7 +1857,7 @@ test("the schedules tab lists a unit schedule this seat runs, and marks one that
         problem: "unknown time zone Mars/Olympus",
       }),
       // Another seat's: not this one's day.
-      schedule({ scope_id: "cto", name: "board-prep", runners: ["cto"] }),
+      schedule({ scope_id: "cto", scope_name: "cto", name: "board-prep", runners: ["cto"] }),
     ],
   });
   await settle();
@@ -1856,6 +1904,19 @@ test("a person's settings carry their contacts and no model, budget or credentia
   // underscores swapped for spaces.
   expect(screen.getByText("Slack member id")).toBeTruthy();
   expect(screen.queryByText("slack user id")).toBeNull();
+});
+
+// A CONTACT IS OPTIONAL: a person with none is reached through the dashboard,
+// and the tab says that rather than that one is required.
+test("a person with no contact identity is said to be reached through the dashboard only", async () => {
+  const document = structuredClone(DOCUMENT);
+  delete document.roles![1]!.contact;
+  mount("#/agents/seats/jane?tab=settings", { answers: { viewer: OPERATOR, config: document } });
+  expect(
+    await screen.findByText(
+      "No contact identity is declared, so this person is reached through the dashboard only: activity on Slack, GitHub or the tracker is not attributed to them.",
+    ),
+  ).toBeTruthy();
 });
 
 test("a contact key is labelled by the table, and one a newer engine added in sentence case", () => {

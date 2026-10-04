@@ -143,8 +143,8 @@ func TestHumanSeatRejectsEveryRuntimeField(t *testing.T) {
 		}},
 		{"integrations.slack", func(r *Role) { r.Slack = SlackIdentity{BotToken: "xoxb-1"} }},
 		{"integrations.mattermost", func(r *Role) { r.Mattermost = MattermostIdentity{BotToken: "mm-1"} }},
-		{"integrations.jira", func(r *Role) { r.Project = "ENG" }},
-		{"integrations.confluence", func(r *Role) { r.Space = "ENG" }},
+		{"project", func(r *Role) { r.Project = "ENG" }},
+		{"space", func(r *Role) { r.Space = "ENG" }},
 		{"mcp_env", func(r *Role) { r.MCPEnv = MCPEnv{"atlassian": {"JIRA_USERNAME": "s"}} }},
 		{"behavioral_guidelines", func(r *Role) { r.BehavioralGuidelines = []string{"Reply fast"} }},
 	} {

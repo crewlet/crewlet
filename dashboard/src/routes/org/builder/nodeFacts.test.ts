@@ -10,17 +10,19 @@
  */
 
 import { describe, expect, test } from "vitest";
-import type { AgentRow, CompanyDocument, SandboxEntry } from "~/protocol/index.ts";
+import type { AgentRow, CompanyDocument, OrgProjection, SandboxEntry } from "~/protocol/index.ts";
 import type { SeatActivity } from "~/contract/wire.ts";
 import { locate } from "./model/draft.ts";
-import { builderReducer, handlesOf } from "./model/reducer.ts";
+import { builderReducer } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import {
+  companyIdentities,
   derivedSeatOf,
   derivedUnitOf,
   gitLabAccessLevel,
   hasGitLabProvisioning,
   homeUnitOf,
+  identityProblemOf,
   isConnected,
   isWholeReference,
   isWorking,
@@ -29,6 +31,8 @@ import {
   placementSummary,
   providerOrder,
   referenceNames,
+  seatLabels,
+  takenIdentities,
   toolCredentialNames,
   unitsLedBy,
   unpinnedProvider,
@@ -45,53 +49,99 @@ describe("the engine's answers about a node", () => {
       intent: {
         type: "addSeat",
         key: "new:qa",
-        placement: { parent: "unit:Sales", after: null },
-        data: { name: "Quality Lead" },
+        placement: { parent: "unit:sales", after: null },
+        data: { name: "Quality Lead", handle: "qa" },
       },
     });
     expect(derivedSeatOf(added, "new:qa")).toBeUndefined();
-    const checked = recheck(added, { seats: { "units[1].roles[0]": { handle: "qa-engine" } } });
-    expect(derivedSeatOf(checked, "new:qa")?.handle).toBe("qa-engine");
-    expect(nameOfHandle(checked, "qa-engine")).toBe("Quality Lead");
+    const checked = recheck(added);
+    expect(derivedSeatOf(checked, "new:qa")?.handle).toBe("qa");
+    expect(nameOfHandle(checked, "qa")).toBe("Quality Lead");
     expect(nameOfHandle(checked, "nobody")).toBe("nobody");
   });
 
   // A check of an older draft described a company the operator has since
   // changed, so a dialog reading its manager or lead would state an old
   // answer as the consequence of the next change. A seat's handle is another
-  // matter (see `document.knownHandles`): it holds while the name does.
+  // matter: the draft holds it, so nothing waits on a check to know it.
   test("a check of an older draft answers nothing about the draft as it stands", () => {
     const added = builderReducer(keyedState(fixtureCompany()), {
       type: "record",
       intent: {
         type: "addSeat",
         key: "new:qa",
-        placement: { parent: "unit:Sales", after: null },
-        data: { name: "Quality Lead" },
+        placement: { parent: "unit:sales", after: null },
+        data: { name: "Quality Lead", handle: "qa" },
       },
     });
-    const checked = recheck(added, { seats: { "units[1].roles[0]": { handle: "qa-engine" } } });
-    expect(derivedUnitOf(checked, "unit:Sales")).toBeDefined();
+    const checked = recheck(added);
+    expect(derivedUnitOf(checked, "unit:sales")).toBeDefined();
     const later = builderReducer(checked, {
       type: "record",
       intent: {
         type: "updateUnit",
-        target: "unit:Sales",
+        target: "unit:sales",
         set: [{ path: ["purpose"], value: "Sell" }],
       },
     });
     expect(derivedSeatOf(later, "new:qa")).toBeUndefined();
-    expect(derivedUnitOf(later, "unit:Sales")).toBeUndefined();
+    expect(derivedUnitOf(later, "unit:sales")).toBeUndefined();
     expect(homeUnitOf(later, "new:qa")).toBeUndefined();
-    expect(handlesOf(later).get("new:qa")).toBe("qa-engine");
   });
 
-  test("the units a seat leads are the ones that declare it", () => {
+  test("the units a seat leads are the ones that declare its handle", () => {
     const state = keyedState(fixtureCompany());
-    expect(unitsLedBy(state.draft, "VP Engineering").map((u) => u.data.name)).toEqual([
+    expect(unitsLedBy(state.draft, "vp-engineering").map((u) => u.data.name)).toEqual([
       "Engineering",
     ]);
-    expect(unitsLedBy(state.draft, "SRE")).toEqual([]);
+    expect(unitsLedBy(state.draft, "VP Engineering")).toEqual([]);
+    expect(unitsLedBy(state.draft, "sre")).toEqual([]);
+  });
+
+  // A pick is written as a handle, so two seats sharing a name must read
+  // apart in the list they are picked from, and a seat alone with its name
+  // reads as the name.
+  test("a seat is offered by its name, with its handle beside it only where the name is shared", () => {
+    const doc = fixtureCompany();
+    doc.roles!.push({ name: "CEO", handle: "ceo-2" });
+    const labels = seatLabels(keyedState(doc).draft);
+    expect(labels.get("ceo")).toBe("CEO (@ceo)");
+    expect(labels.get("ceo-2")).toBe("CEO (@ceo-2)");
+    expect(labels.get("designer")).toBe("Designer");
+  });
+
+  // A removed node's identity still answers for its memory and mailbox, so a
+  // created node may not take it until a save has made the removal the base.
+  test("an identity held by the draft or by the saved company is refused, except the node's own", () => {
+    const removed = builderReducer(keyedState(fixtureCompany()), {
+      type: "record",
+      intent: { type: "remove", target: "seat:sre" },
+    });
+    const taken = takenIdentities(removed, new Set());
+    expect(identityProblemOf(taken, "seat", "sre", "")).toMatch(/already names/);
+    expect(identityProblemOf(taken, "seat", "engineering", "")).toMatch(/already names/);
+    expect(identityProblemOf(taken, "seat", "ceo", "ceo")).toBeNull();
+    expect(identityProblemOf(taken, "seat", "quality", "")).toBeNull();
+    expect(identityProblemOf(taken, "unit", "Ops", "")).toMatch(/lowercase/);
+    expect(identityProblemOf(taken, "unit", "ops", "")).toBeNull();
+  });
+
+  // A LEAD'S DRAFT HOLDS ONE UNIT, and the engine counts every seat and unit
+  // of the company: what the org push says the running company holds is
+  // taken too, so a lead is never offered a handle another team answers to.
+  test("the running company's seats and units are taken beside the draft's", () => {
+    const company = companyIdentities({
+      name: "Acme",
+      derived: {
+        seats: [{ handle: "engineer", name: "Engineer", kind: "agent" }],
+        units: [{ id: "platform", name: "Platform" }],
+      },
+    } as OrgProjection);
+    expect([...company].sort()).toEqual(["engineer", "platform"]);
+    const taken = takenIdentities(keyedState(fixtureCompany()), company);
+    expect(identityProblemOf(taken, "seat", "engineer", "")).toMatch(/already names/);
+    expect(identityProblemOf(taken, "unit", "platform", "")).toMatch(/already names/);
+    expect(companyIdentities(null).size).toBe(0);
   });
 });
 
@@ -196,8 +246,8 @@ describe("credentials", () => {
       intent: {
         type: "addSeat",
         key: "new:qa",
-        placement: { parent: "unit:Sales", after: null },
-        data: { name: "QA", integrations: { slack: { channel: "C9" } } },
+        placement: { parent: "unit:sales", after: null },
+        data: { name: "QA", handle: "qa", integrations: { slack: { channel: "C9" } } },
       },
     });
     const qa = locate(added.draft, "new:qa");

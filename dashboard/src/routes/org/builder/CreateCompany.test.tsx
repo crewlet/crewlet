@@ -38,7 +38,9 @@ async function startCompany(options: { template?: string; seat?: boolean } = {})
   if (options.seat) {
     fireEvent.click(screen.getByRole("checkbox", { name: "Add a seat for yourself" }));
     fireEvent.change(screen.getByLabelText("Your seat's name"), { target: { value: "Founder" } });
-    fireEvent.change(screen.getByLabelText("Slack member ID"), { target: { value: "U0FOUNDER" } });
+    fireEvent.change(screen.getByLabelText(/^Slack member ID/), {
+      target: { value: "U0FOUNDER" },
+    });
   }
   fireEvent.click(screen.getByRole("button", { name: "Start the company" }));
 }
@@ -57,12 +59,15 @@ test("the form starts the company from a template, and the check is create-only"
   expect(sent.mission).toBe("Ship weather.");
   // The operator's own seat, with the one identity they gave, and the
   // template's neutral titles below it.
+  // Every node carries its identity from the start, minted from its name.
   expect(sent.roles?.[0]).toMatchObject({
     name: "Founder",
+    handle: "founder",
     kind: "human",
     contact: { slack_user_id: "U0FOUNDER" },
+    manages: ["chief-executive"],
   });
-  expect(sent.roles?.[1]?.name).toBe("Chief Executive");
+  expect(sent.roles?.[1]).toMatchObject({ name: "Chief Executive", handle: "chief-executive" });
   expect(sent.units?.map((u) => u.name)).toEqual(["Engineering", "Product", "Marketing"]);
   // And the whole start is one operation: undone, the form is back.
   fireEvent.keyDown(document.body, { key: "z", code: "KeyZ", ctrlKey: true });

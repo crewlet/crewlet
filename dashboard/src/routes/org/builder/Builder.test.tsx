@@ -32,6 +32,29 @@ const NOBODY = { login: "", owner: "", grants: [] };
 /** Somebody signed in who holds neither configuration grant. */
 const READER = { login: "reader", owner: "reader", grants: ["state:read"] };
 
+/**
+ * Somebody bound to a seat who may read the configuration, holds no
+ * `config:write` and leads no unit — so the builder drafts the whole company.
+ */
+const BOUND_READER = { ...READER, handle: "reader", grants: ["config:read"] };
+
+/**
+ * What the engine answers [BOUND_READER]'s check of the draft as it was read:
+ * the route admits anybody bound to a seat until it has read the write, and
+ * the admission then refuses every part of it, starting with the unchanged
+ * document.
+ */
+const refusedWhole = () =>
+  json(
+    {
+      error: "unauthorized",
+      reason: "no_grant",
+      grants: ["config:write"],
+      refused: [{ kind: "document", id: "", place: "", why: "unchanged", reason: "no_grant" }],
+    },
+    403,
+  );
+
 /** The socket comes back, which is when the frame asks who is reading again. */
 function reconnect(store: { setConnected: (up: boolean) => void }) {
   act(() => store.setConnected(false));
@@ -97,9 +120,11 @@ describe("the posture table", () => {
     expect(engine.checks()).toHaveLength(0);
   });
 
-  test("create mode waits for the org snapshot before deciding", async () => {
+  // THE SOCKET OPENING IS NOT THE SNAPSHOT: an answer that beats it would
+  // offer create mode on a node the fleet runs a company without.
+  test("create mode waits for the org snapshot, not the socket opening, before deciding", async () => {
     const engine = new Engine(null);
-    const { store } = mountBuilder({ engine, connected: false });
+    const { store } = mountBuilder({ engine, org: null });
     await new Promise((r) => setTimeout(r, 50));
     expect(engine.checks()).toHaveLength(0);
     act(() => store.applyOrg(named));
@@ -172,9 +197,8 @@ describe("the posture table", () => {
   // without the coordination store that refusal described.
   test("a halted builder marks the toolbar's add entries unavailable", async () => {
     const engine = new Engine(company());
-    engine.script = (r) =>
-      r.query.get("dry_run") === "true" ? json({ error: "forbidden" }, 403) : null;
-    mountBuilder({ engine, viewer: () => ({ ...READER, grants: ["config:read"] }) });
+    engine.script = (r) => (r.query.get("dry_run") === "true" ? refusedWhole() : null);
+    mountBuilder({ engine, viewer: () => BOUND_READER });
     expect(await screen.findByText("Needs config:write")).toBeDefined();
 
     // An edit is refused before it reaches the log, and says why.
@@ -460,7 +484,7 @@ describe("checking the draft", () => {
 describe("what an org push re-checks", () => {
   test("the snapshot's first org is not an apply, and the draft is checked once", async () => {
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine });
+    const { store } = mountBuilder({ engine, org: null });
     await screen.findByText("No problems");
     expect(engine.checks()).toHaveLength(1);
     act(() => store.applySnapshot({ org: named }));
@@ -504,16 +528,20 @@ test("a company with no model provider is told so, and one with a provider is no
 });
 
 describe("the selection in the URL", () => {
-  test("a selected unit is named in the URL, and a rename rewrites it", async () => {
+  // A LINK NAMES THE UNIT BY ITS KEY, which is its identity: a rename moves
+  // nothing a link was made from, so a link shared before it opens the same
+  // unit after.
+  test("a selected unit is named in the URL by its key, which a rename leaves alone", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Select Engineering" }));
-    await waitFor(() => expect(location.hash).toContain("unit=Engineering"));
+    await waitFor(() => expect(location.hash).toContain("unit=engineering"));
 
     fireEvent.click(screen.getByRole("button", { name: "Rename Engineering" }));
-    // The key is the unit's identity, so the name in the URL follows the draft.
-    await waitFor(() => expect(location.hash).toContain("unit=Engineering+Two"));
+    await screen.findByRole("button", { name: "Select Engineering Two" });
+    expect(location.hash).toContain("unit=engineering");
+    expect(location.hash).not.toContain("Engineering");
   });
 
   // THE COMPANY IS A NODE TOO, and the only one the draft's tree cannot
@@ -790,13 +818,16 @@ describe("a step-up the person declined", () => {
     expect(screen.getByText("editable")).toBeDefined();
   });
 
-  // THE CONTROL: a refusal of the grant itself still names it.
+  // THE CONTROL: a refusal of the grant itself still names it — for a reader
+  // bound to a seat, whose refusal the engine words part by part, as for one
+  // bound to none.
   test("a refusal of the grant still names config:write", async () => {
     const engine = new Engine(company());
-    engine.script = (r) =>
-      r.query.get("dry_run") === "true" ? json({ error: "unauthorized" }, 403) : null;
-    mountBuilder({ engine, viewer: () => ({ ...READER, grants: ["config:read"] }) });
+    engine.script = (r) => (r.query.get("dry_run") === "true" ? refusedWhole() : null);
+    mountBuilder({ engine, viewer: () => BOUND_READER });
     expect(await screen.findByText("Needs config:write")).toBeDefined();
+    expect(screen.queryByText("1 problem")).toBeNull();
+    expect(screen.getByText("read only")).toBeDefined();
     expect(screen.getByRole("button", { name: "Sign in as somebody else" })).toBeDefined();
     expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
   });

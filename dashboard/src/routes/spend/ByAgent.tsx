@@ -72,9 +72,8 @@ export function ByAgent({
   const agents = useAgents();
   const { open } = usePeekControls();
   const rows = useMemo(() => [...lines], [lines]);
-  // EACH SEAT'S LIVE ROW BY ITS AGENT ID, the key the spend row carries too:
-  // a rename moves a handle, and the usage domain's row named the seat by the
-  // one it had then.
+  // EACH SEAT'S LIVE ROW BY ITS AGENT ID, the key the spend row carries too
+  // (`agentLines`).
   const byAgent = useMemo(() => new Map(agents.map((a) => [a.agent_id, a])), [agents]);
   const top = Math.max(0, ...lines.map((l) => l.share));
   const turns = turnsLink(range);

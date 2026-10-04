@@ -30,7 +30,7 @@ import {
   undoOperation,
   ReplayError,
 } from "./history.ts";
-import { fixtureCompany, fixtureDerived, fixtureHandle } from "./testkit.ts";
+import { fixtureCompany, fixtureHandle } from "./testkit.ts";
 
 /** mulberry32: a seeded PRNG, so a failing property names the run that found it. */
 function prng(seed: number): () => number {
@@ -47,7 +47,7 @@ function prng(seed: number): () => number {
 const SEEDS = Array.from({ length: 150 }, (_, i) => i + 1);
 
 function keyed(doc: CompanyDocument): Draft {
-  return fromDocument(doc, fixtureDerived(doc));
+  return fromDocument(doc);
 }
 
 /** A random intent against a draft, from what the draft holds now. */
@@ -286,7 +286,7 @@ describe("replay", () => {
 
   test("an operation that does not apply is a defect and names its position", () => {
     const base = keyed(fixtureCompany());
-    const op = record(base, { type: "setLead", target: "unit:Sales", lead: "Account Executive" });
+    const op = record(base, { type: "setLead", target: "unit:sales", lead: "Account Executive" });
     if (!op.ok) throw new Error(op.message);
     expect(() => replay(base, [op.op, op.op])).toThrow(ReplayError);
     try {
@@ -325,8 +325,8 @@ describe("rebase", () => {
     const ops: Operation[] = [];
     for (const intent of [
       { type: "updateSeat", target: "seat:sre", set: [{ path: ["goal"], value: "Automate" }] },
-      { type: "setLead", target: "unit:Sales", lead: "Account Executive" },
-      { type: "move", target: "seat:dev", to: { parent: "unit:Platform", after: "seat:sre" } },
+      { type: "setLead", target: "unit:sales", lead: "account-executive" },
+      { type: "move", target: "seat:dev", to: { parent: "unit:platform", after: "seat:sre" } },
     ] as Intent[]) {
       const next = intentOk(draft, intent);
       ops.push(next.op);
@@ -343,7 +343,7 @@ describe("rebase", () => {
       ["SRE", "Automate"],
       ["Dev", "Build"],
     ]);
-    expect(out.units![2]!.lead).toBe("Account Executive");
+    expect(out.units![2]!.lead).toBe("account-executive");
   });
 
   test("a value changed upstream is held as a conflict with both values, then kept mine or theirs", () => {
@@ -385,14 +385,14 @@ describe("rebase", () => {
     for (const intent of [
       {
         type: "updateUnit",
-        target: "unit:Sales",
+        target: "unit:sales",
         set: [{ path: ["purpose"], value: "Sell more" }],
       },
       {
         type: "addSeat",
         key: "new:a",
-        placement: { parent: "unit:Engineering", after: "seat:dev" },
-        data: { name: "Tester" },
+        placement: { parent: "unit:engineering", after: "seat:dev" },
+        data: { name: "Tester", handle: "tester" },
       },
       { type: "updateSeat", target: "new:a", set: [{ path: ["goal"], value: "Test" }] },
     ] as Intent[]) {

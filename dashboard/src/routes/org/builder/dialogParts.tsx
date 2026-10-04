@@ -182,16 +182,33 @@ export function ReadOnlyFact({
 }
 
 /**
- * Why a name has to be free, said where one is typed.
+ * What a name is, said where one is typed.
  *
- * WHAT NAMES WHAT. A unit's lead and a `manages` entry name a seat, so a seat
- * name must pick out one seat; a `manages` entry and a root seat's `unit:`
- * reference name a unit, so a unit name must pick out one unit. A lead never
- * names a unit, so it is no reason for a unit's name to be unique.
+ * PROSE, NOT AN ADDRESS. A lead and a `manages` entry name a seat by its
+ * handle and a unit by its key (`model/identity.ts`), so two seats or two
+ * units may share a name, and renaming one moves nothing that points at it.
  */
-export const UNIQUE_NAME_HELP = {
-  seat: "Seat names are unique: a lead or a manages entry names exactly one seat.",
-  unit: "Unit names are unique: a manages entry or a unit reference names exactly one unit.",
+export const NAME_HELP = {
+  seat: "Shown to people. Two seats may share a name: everything that names this seat uses its handle.",
+  unit: "Shown to people. Two units may share a name: everything that names this unit uses its key.",
+} as const;
+
+/**
+ * What a handle or a key is, said where one is chosen and where one is shown.
+ *
+ * AN IDENTITY, CHOSEN ONCE. A seat's agent id, mailbox and memory derive from
+ * its handle, and a unit's schedules and work are filed under its key, so
+ * neither changes after a save: a seat given another handle is another seat.
+ */
+export const IDENTITY_HELP = {
+  seat: "The seat's identity: its mailbox, memory and agent id, and what every lead and manages entry names. It cannot change once saved.",
+  unit: "The unit's identity: what its schedules and work are filed under, and what every manages entry and seat placement names. It cannot change once saved.",
+} as const;
+
+/** Why an existing node's identity is shown and not edited. */
+export const IDENTITY_FIXED = {
+  seat: "A seat's handle is its identity: its mailbox, memory and agent id. To give the role another handle, replace the seat with a new one; this seat's work stays with this handle.",
+  unit: "A unit's key is its identity: what its schedules and work are filed under. To use another key, remove this unit and add a new one.",
 } as const;
 
 /**
@@ -205,13 +222,11 @@ export const UNIQUE_NAME_HELP = {
  * (`org.DeriveAgentID`): the diary and the onboarding marker are keyed by
  * that id, while the mailbox (`topics.AgentInbox`) and the episodes are keyed
  * by the handle. So a company rename orphans the first two and keeps the
- * rest, and a handle change loses all of them.
+ * rest. A handle never changes: a seat given another one is another seat.
  */
 export const ACKNOWLEDGEMENT_TEXT: Readonly<Record<Acknowledgement, string>> = {
   company_rename:
     "An agent seat's id is derived from the company name and its handle, so renaming the company gives every agent seat a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged.",
-  handle_change:
-    "A seat whose handle changes is a new identity to the engine: its memory, inbox and onboarding start over.",
   kind_change:
     "Changing a seat's kind removes the fields listed above, and a removed credential cannot be recovered from the dashboard.",
   credential_servers: "The tool credentials the seats listed above receive will change.",

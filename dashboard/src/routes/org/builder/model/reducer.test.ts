@@ -5,15 +5,15 @@
  * What these protect: a template can only start a company from nothing, never
  * replace one that exists; the draft is always its base with the log
  * replayed, whatever sequence of actions produced it; every change moves the
- * generation and a check for another generation is ignored; the first check
- * of a base keys it by the engine's handles; a refused token stops the log
- * being kept; and an update or a restore adopts a log only once every
- * conflict is resolved.
+ * generation and a check for another generation is ignored; a loaded base is
+ * keyed by the identities its document carries, with nothing to wait for; a
+ * refused credential stops the log being kept; and an update or a restore
+ * adopts a log only once every conflict is resolved.
  */
 
 import { describe, expect, test } from "vitest";
 import type { CompanyDocument } from "~/protocol/index.ts";
-import { COMPANY_KEY, seatPathKey } from "./keys.ts";
+import { COMPANY_KEY } from "./keys.ts";
 import { allSeats, locate } from "./draft.ts";
 import { toDocument } from "./document.ts";
 import { replay } from "./history.ts";
@@ -24,10 +24,8 @@ import { templateIntent } from "./templates.ts";
 import {
   builderReducer,
   checkTrigger,
-  handlesOf,
   hasChanges,
   INITIAL_BUILDER,
-  isBaseKeyed,
   recordIntent,
   type BuilderAction,
   type BuilderState,
@@ -65,7 +63,7 @@ function checked(
   };
 }
 
-/** A loaded edit-mode builder whose base the first check has keyed. */
+/** A loaded edit-mode builder whose base the first check has described. */
 function keyedEdit(doc: CompanyDocument = fixtureCompany()): BuilderState {
   const loaded = loadedEdit(doc);
   return run(
@@ -141,65 +139,62 @@ describe("mode guards", () => {
   });
 });
 
-describe("keying the base", () => {
-  test("the first check of the base keys it by the engine's handles, and places its answer on the new keys", () => {
+describe("loading the base", () => {
+  // EVERY SEAT THE ENGINE STORES DECLARES ITS HANDLE, every unit its key, so
+  // the base is keyed as it loads and an edit is taken at once. What the first
+  // check of the base adds is the engine's description of it, kept as the
+  // base's own for the review to compare the draft against.
+  test("a loaded base is keyed at once, and its first check is kept as the base's derivation", () => {
     const loaded = loadedEdit();
-    expect(isBaseKeyed(loaded)).toBe(false);
-    expect(loaded.draft.roles[0]!.key).toBe(seatPathKey("roles[0]"));
+    expect(loaded.draft.roles[0]!.key).toBe("seat:ceo");
+    expect(loaded.base.derived).toBeNull();
     const problem = {
       path: "roles[0].goal",
       segments: ["roles", 0, "goal"],
       kind: "invalid",
       message: "bad goal",
     };
-    const keyed = run(
+    const derived = fixtureDerived(fixtureCompany());
+    const described = run(
       loaded,
       checked(loaded, {
         status: "problems",
         problems: [problem],
-        derived: fixtureDerived(fixtureCompany()),
+        derived,
         code: "validation_error",
         hint: "",
       }),
     );
-    expect(isBaseKeyed(keyed)).toBe(true);
-    expect(keyed.draft.roles[0]!.key).toBe("seat:ceo");
-    expect(keyed.baseDraft).toBe(keyed.draft);
-    expect(keyed.check.problems.byNode.get("seat:ceo")?.[0]?.message).toBe("bad goal");
-    expect(keyed.generation).toBe(loaded.generation);
+    expect(described.base.derived).toBe(derived);
+    expect(described.draft).toBe(loaded.draft);
+    expect(described.check.problems.byNode.get("seat:ceo")?.[0]?.message).toBe("bad goal");
+    expect(described.generation).toBe(loaded.generation);
+    expect(described.rekeyed.size).toBe(0);
   });
 
-  // A dialog or a selection still holding the old key reads its node through
-  // this list in the very render the keys change, rather than finding no
-  // node there and drawing it as gone for that render.
-  test("keying the base lists every key it moved, and a load starts the list again", () => {
-    const loaded = loadedEdit();
-    const keyed = run(
-      loaded,
-      checked(loaded, { status: "clean", warnings: [], derived: fixtureDerived(fixtureCompany()) }),
-    );
-    expect(keyed.rekeyed.get(seatPathKey("roles[0]"))).toBe("seat:ceo");
-    // A unit is keyed by its name either way, and moves nowhere.
-    expect(keyed.rekeyed.has("unit:Sales")).toBe(false);
-    // A later check keys nothing, and leaves the list as it was.
-    const again = run(
-      keyed,
-      checked(keyed, { status: "clean", warnings: [], derived: fixtureDerived(fixtureCompany()) }),
-    );
-    expect(again.rekeyed).toBe(keyed.rekeyed);
-    expect(
-      run(keyed, { type: "load", mode: "edit", document: fixtureCompany(), revision: "rev-2" })
-        .rekeyed.size,
-    ).toBe(0);
+  test("an edit is recorded as soon as the base loads", () => {
+    const removed = run(loadedEdit(), {
+      type: "record",
+      intent: { type: "remove", target: "seat:sre" },
+    });
+    expect(removed.refusal).toBeNull();
+    expect(removed.log.ops[0]).toMatchObject({
+      target: "seat:sre",
+      accessLevels: [{ handle: "sre", before: "maintainer" }],
+    });
+  });
 
-    // A save keys the nodes it created by the engine's handles.
-    const added = run(keyed, {
+  // A dialog or a selection still holding a created node's minted key reads
+  // its node through this list in the very render the keys change, rather
+  // than finding no node there and drawing it as gone for that render.
+  test("a save lists every key it moved to an identity, and a load starts the list again", () => {
+    const added = run(keyedEdit(), {
       type: "record",
       intent: {
         type: "addSeat",
         key: "new:qa",
         placement: { parent: COMPANY_KEY, after: null },
-        data: { name: "Quality Lead" },
+        data: { name: "Quality Lead", handle: "quality-lead" },
       },
     });
     const saved = run(added, {
@@ -208,36 +203,11 @@ describe("keying the base", () => {
       derived: fixtureDerived(toDocument(added.draft).document),
     });
     expect(saved.rekeyed.get("new:qa")).toBe("seat:quality-lead");
-  });
-
-  test("nothing is recorded before the base is keyed, so no log ever names a path key", () => {
-    // A base is re-keyed only while its log is empty, so an operation
-    // recorded against a path key would keep that key for good: a reload or
-    // an update would then find its target gone, and a seat removed under a
-    // path key has no handle to clear its GitLab access level by.
-    const loaded = loadedEdit();
-    const intents: Intent[] = [
-      { type: "remove", target: seatPathKey("roles[1]") },
-      { type: "updateCompany", set: [{ path: ["vision"], value: "v" }] },
-    ];
-    for (const intent of intents) {
-      const refused = run(loaded, { type: "record", intent });
-      expect(refused.refusal, intent.type).toMatchObject({ reason: "not_keyed" });
-      expect(refused.log).toBe(loaded.log);
-      expect(refused.draft).toBe(loaded.draft);
-      expect(refused.generation).toBe(loaded.generation);
-    }
-
-    const keyed = run(
-      loaded,
-      checked(loaded, { status: "clean", warnings: [], derived: fixtureDerived(fixtureCompany()) }),
-    );
-    const removed = run(keyed, { type: "record", intent: { type: "remove", target: "seat:sre" } });
-    expect(removed.refusal).toBeNull();
-    expect(removed.log.ops[0]).toMatchObject({
-      target: "seat:sre",
-      accessLevels: [{ handle: "sre", before: "maintainer" }],
-    });
+    expect(saved.rekeyed.has("seat:ceo")).toBe(false);
+    expect(
+      run(saved, { type: "load", mode: "edit", document: fixtureCompany(), revision: "rev-3" })
+        .rekeyed.size,
+    ).toBe(0);
   });
 
   test("before anything is loaded, neither an edit nor a template is recorded", () => {
@@ -255,10 +225,10 @@ describe("keying the base", () => {
         type: "addUnit",
         key: "new:u",
         placement: { parent: COMPANY_KEY, after: null },
-        data: { name: "Ops" },
+        data: { name: "Ops", id: "ops" },
       },
     });
-    expect(added.refusal).toMatchObject({ reason: "not_keyed" });
+    expect(added.refusal).toMatchObject({ reason: "not_loaded" });
     expect(added.log.ops).toEqual([]);
   });
 
@@ -285,8 +255,8 @@ describe("editing", () => {
       intent: {
         type: "addSeat",
         key: "new:qa",
-        placement: { parent: "unit:Sales", after: null },
-        data: { name: "QA" },
+        placement: { parent: "unit:sales", after: null },
+        data: { name: "QA", handle: "qa" },
       },
     });
     expect(next.generation).toBe(state.generation + 1);
@@ -331,7 +301,7 @@ describe("editing", () => {
     const state = keyedEdit();
     const next = run(state, {
       type: "record",
-      intent: { type: "renameUnit", target: "unit:Nope", name: "X" },
+      intent: { type: "renameUnit", target: "unit:nope", name: "X" },
     });
     expect(next.refusal).toMatchObject({ reason: "missing_target" });
     expect({ ...next, refusal: null }).toEqual(state);
@@ -345,9 +315,9 @@ describe("editing", () => {
     expect(
       run(state, { type: "record", intent: { type: "remove", target: "seat:vp-engineering" } }).last
         ?.focus,
-    ).toBe("unit:Engineering");
+    ).toBe("unit:engineering");
     expect(
-      run(state, { type: "record", intent: { type: "remove", target: "unit:Engineering" } }).last
+      run(state, { type: "record", intent: { type: "remove", target: "unit:engineering" } }).last
         ?.focus,
     ).toBe(COMPANY_KEY);
   });
@@ -356,7 +326,7 @@ describe("editing", () => {
     const state = keyedEdit();
     const edited = run(state, {
       type: "record",
-      intent: { type: "move", target: "seat:dev", to: { parent: "unit:Sales", after: null } },
+      intent: { type: "move", target: "seat:dev", to: { parent: "unit:sales", after: null } },
     });
     const undone = run(edited, { type: "undo" });
     expect(undone.draft).toEqual(state.draft);
@@ -392,7 +362,7 @@ describe("editing", () => {
                         type: "addSeat",
                         key: `new:r${seed}x${++minted}`,
                         placement: { parent: COMPANY_KEY, after: null },
-                        data: { name: `S${minted}` },
+                        data: { name: `S${minted}`, handle: `s${seed}x${minted}` },
                       },
                     }
                   : roll < 0.6
@@ -444,7 +414,7 @@ describe("editing", () => {
 
   test("discard returns to the base", () => {
     const state = keyedEdit();
-    const edited = run(state, { type: "record", intent: { type: "remove", target: "unit:Sales" } });
+    const edited = run(state, { type: "record", intent: { type: "remove", target: "unit:sales" } });
     const discarded = run(edited, { type: "discard" });
     expect(discarded.draft).toBe(state.baseDraft);
     expect(discarded.log.ops).toEqual([]);
@@ -476,10 +446,11 @@ describe("an editor's edit", () => {
   });
 
   test("a dialog asking recordIntent hears exactly what the reducer would do", () => {
-    const loaded = loadedEdit();
-    const refusedEarly = recordIntent(loaded, edit);
-    expect(refusedEarly).toMatchObject({ ok: false, refusal: "not_keyed" });
-    expect(run(loaded, { type: "record", intent: edit }).refusal?.reason).toBe("not_keyed");
+    const refusedEarly = recordIntent(INITIAL_BUILDER, edit);
+    expect(refusedEarly).toMatchObject({ ok: false, refusal: "not_loaded" });
+    expect(run(INITIAL_BUILDER, { type: "record", intent: edit }).refusal?.reason).toBe(
+      "not_loaded",
+    );
 
     const state = keyedEdit();
     const answer = recordIntent(state, edit);
@@ -489,58 +460,8 @@ describe("an editor's edit", () => {
   });
 });
 
-describe("a created seat's handle", () => {
-  // THE REDUCER AND EVERY SCREEN READ ONE RULE (`document.knownHandles`). A
-  // screen offered a created seat's GitLab access level from a check that
-  // still saw its name while the reducer, reading only a check of the draft
-  // as it stands, refused the very operation the screen had offered.
-  test("is known to recording while the seat keeps the name a check saw, and not after a rename", () => {
-    const added = run(keyedEdit(), {
-      type: "record",
-      intent: {
-        type: "addSeat",
-        key: "new:qa",
-        placement: { parent: COMPANY_KEY, after: null },
-        data: { name: "Quality Lead" },
-      },
-    });
-    const rename = (state: BuilderState, name: string): Intent => ({
-      type: "renameSeat",
-      target: "new:qa",
-      name,
-    });
-    // The fixture holds GitLab access levels, so a rename must know the handle.
-    expect(recordIntent(added, rename(added, "QA"))).toMatchObject({
-      ok: false,
-      refusal: "unknown_handle",
-    });
-    const seen = run(
-      added,
-      checked(added, {
-        status: "clean",
-        warnings: [],
-        derived: fixtureDerived(toDocument(added.draft).document),
-      }),
-    );
-    // Another edit since: the check is of an older draft, and still saw the name.
-    const later = run(seen, {
-      type: "record",
-      intent: { type: "updateCompany", set: [{ path: ["mission"], value: "Make more." }] },
-    });
-    expect(handlesOf(later).get("new:qa")).toBe("quality-lead");
-    expect(recordIntent(later, rename(later, "QA")).ok).toBe(true);
-
-    const renamed = run(later, { type: "record", intent: rename(later, "QA") });
-    expect(handlesOf(renamed).has("new:qa")).toBe(false);
-    expect(recordIntent(renamed, rename(renamed, "QA Lead"))).toMatchObject({
-      ok: false,
-      refusal: "unknown_handle",
-    });
-  });
-});
-
 describe("checkTrigger", () => {
-  test("a new base resets the check, a moved draft changes it, and keying the base does neither", () => {
+  test("a new base resets the check, a moved draft changes it, and describing the base does neither", () => {
     const loaded = loadedEdit();
     expect(checkTrigger(INITIAL_BUILDER, loaded)).toBe("reset");
     const keyed = run(
@@ -561,7 +482,7 @@ describe("checkTrigger", () => {
 describe("keeping the log", () => {
   test("a refusal or a change of reader stops keeping it, and the next operation resumes", () => {
     const state = keyedEdit();
-    const edited = run(state, { type: "record", intent: { type: "remove", target: "unit:Sales" } });
+    const edited = run(state, { type: "record", intent: { type: "remove", target: "unit:sales" } });
     const refused = run(edited, checked(edited, { status: "guarded", code: "unauthorized" }));
     expect(refused.keep).toBe(false);
     expect(refused.log).toBe(edited.log);
@@ -576,7 +497,7 @@ describe("keeping the log", () => {
   // about to confirm and save was gone on the next reload.
   test("a step-up the person declined keeps it", () => {
     const state = keyedEdit();
-    const edited = run(state, { type: "record", intent: { type: "remove", target: "unit:Sales" } });
+    const edited = run(state, { type: "record", intent: { type: "remove", target: "unit:sales" } });
     const declined = run(edited, checked(edited, { status: "guarded", code: "step_up_required" }));
     expect(declined.keep).toBe(true);
     expect(declined.check.outcome).toEqual({ status: "guarded", code: "step_up_required" });
@@ -610,22 +531,20 @@ describe("keeping the log", () => {
     expect(saved.draft).toBe(saved.baseDraft);
     expect(toDocument(saved.draft).document).toEqual(sent);
     // The keys minted for the nodes the save created are gone: the seats it
-    // created are the engine's seats now, and are named as such.
+    // created are keyed by the handles they were given.
     const keys = [...allSeats(saved.draft)].map(({ seat }) => seat.key);
     expect(keys).toContain("seat:chief-executive");
     expect(keys.some((k) => k.startsWith("new:"))).toBe(false);
-    expect(isBaseKeyed(saved)).toBe(true);
 
-    // A write that answered with no derivation leaves a base to key, and
-    // nothing is recorded against it until a check does.
-    const unkeyed = run(edited, { type: "saved", revisionId: "rev-9", derived: null });
-    expect(isBaseKeyed(unkeyed)).toBe(false);
+    // A write that answered with no derivation still leaves a keyed base,
+    // and an edit is recorded against it at once.
+    const undescribed = run(edited, { type: "saved", revisionId: "rev-9", derived: null });
     expect(
-      run(unkeyed, {
+      run(undescribed, {
         type: "record",
         intent: { type: "updateCompany", set: [{ path: ["vision"], value: "v" }] },
       }).refusal,
-    ).toMatchObject({ reason: "not_keyed" });
+    ).toBeNull();
   });
 });
 
@@ -685,17 +604,17 @@ describe("restoring a kept draft", () => {
     savedAt: 0,
   });
 
-  test("waits for a keyed base", () => {
-    expect(run(loadedEdit(), { type: "restore", kept: kept(keyedEdit()) }).refusal).toMatchObject({
-      reason: "not_keyed",
-    });
+  test("waits for the company to load", () => {
+    expect(
+      run(INITIAL_BUILDER, { type: "restore", kept: kept(keyedEdit()) }).refusal,
+    ).toMatchObject({ reason: "not_loaded" });
   });
 
   test("on the same revision, with every operation applying, is the draft the operator left, redo stack included", () => {
     const left = run(
       keyedEdit(),
       { type: "record", intent: { type: "remove", target: "seat:dev" } },
-      { type: "record", intent: { type: "renameUnit", target: "unit:Sales", name: "Revenue" } },
+      { type: "record", intent: { type: "renameUnit", target: "unit:sales", name: "Revenue" } },
       { type: "undo" },
     );
     const restored = run(keyedEdit(), { type: "restore", kept: kept(left) });
@@ -740,7 +659,7 @@ describe("restoring a kept draft", () => {
     );
     const editing = run(keyedEdit(), {
       type: "record",
-      intent: { type: "renameUnit", target: "unit:Sales", name: "Revenue" },
+      intent: { type: "renameUnit", target: "unit:sales", name: "Revenue" },
     });
     const refused = run(editing, { type: "restore", kept: keptDraft });
     expect(refused.refusal).toMatchObject({ reason: "has_changes" });
@@ -760,7 +679,7 @@ describe("restoring a kept draft", () => {
     const left = run(
       keyedEdit(),
       { type: "record", intent: { type: "remove", target: "seat:dev" } },
-      { type: "record", intent: { type: "renameUnit", target: "unit:Sales", name: "Revenue" } },
+      { type: "record", intent: { type: "renameUnit", target: "unit:sales", name: "Revenue" } },
       { type: "undo" },
     );
     // Storage handed back an undone operation that names the removed seat,

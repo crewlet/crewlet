@@ -152,10 +152,13 @@ export function Settings({
         {state(
           <div className="col gap-3">
             <PropertiesRail groups={[{ properties: identity }]} />
+            {/* A CONTACT IS OPTIONAL — the engine admits a human seat with
+                none and warns at its `contact` — so this says what follows
+                rather than that one is required. */}
             {human && Object.keys(role?.contact ?? {}).length === 0 && (
               <Callout variant="warning">
-                A person needs at least one contact identity, so inbound activity on Slack, GitHub
-                or the tracker can be attributed to them.
+                No contact identity is declared, so this person is reached through the dashboard
+                only: activity on Slack, GitHub or the tracker is not attributed to them.
               </Callout>
             )}
           </div>,

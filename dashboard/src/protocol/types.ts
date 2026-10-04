@@ -466,12 +466,11 @@ export interface AgentRow extends Overlay {
   /** The seat's HANDLE — what every screen addresses it by. */
   id: string;
   /**
-   * The seat's AGENT ID: derived from the handle it was CREATED under, so a
-   * rename does not move it and no two seats share it (`adr/0026`). THE key
-   * a live overlay, a sandbox run, a spend row and a phase record pair with
-   * this row by — never `role`, which is prose two seats may share, and never
-   * `handle`, which a rename moves while the events already in flight still
-   * carry the old one.
+   * The seat's AGENT ID, which the engine derives from its handle (ADR-0013):
+   * a handle never changes, so neither does this, and no two seats share it.
+   * THE key a live overlay, a sandbox run, a spend row and a phase record
+   * carry and pair with this row by — never `role`, which is prose two seats
+   * may share.
    */
   agent_id: string;
   /** The seat's name. Display only: nothing pairs a row by it. */
@@ -686,9 +685,9 @@ export interface Rollup {
   from?: string;
   to?: string;
   days?: number;
-  /** The one seat this answer was narrowed to, by agent id — the identity it
-   *  was filtered by, which a rename does not move. Absent for the whole
-   *  company. */
+  /** The one seat this answer was narrowed to, by agent id — the identity
+   *  the usage domain records a seat under, and so the one it was filtered
+   *  by. Absent for the whole company. */
   agent_id?: string;
   /** That seat's handle NOW, read off the chart for a link to it — never the
    *  handle the request typed. Absent for the whole company and for a seat
@@ -923,6 +922,10 @@ export interface ConfigRole {
   sandbox?: Record<string, unknown>;
   placement?: Record<string, unknown>;
   integrations?: ConfigRoleIntegrations;
+  /** A root seat's own tracker project; a seat inside a unit takes its unit's. Guarded. */
+  project?: string;
+  /** A root seat's own knowledge container, as [project]. Guarded. */
+  space?: string;
   schedules?: ScheduleSpec[];
   [key: string]: unknown;
 }
@@ -952,10 +955,8 @@ export interface ConfigRoleIntegrations {
     webhook_secret?: string;
     [key: string]: unknown;
   };
-  slack?: { bot_token?: string; signing_secret?: string; channel?: string; [key: string]: unknown };
+  slack?: { bot_token?: string; signing_secret?: string; [key: string]: unknown };
   mattermost?: { bot_token?: string; username?: string; channel?: string; [key: string]: unknown };
-  jira?: { project?: string; [key: string]: unknown };
-  confluence?: { space?: string; [key: string]: unknown };
   [key: string]: unknown;
 }
 
@@ -981,7 +982,6 @@ export interface ConfigUnit {
   project?: string;
   /** The knowledge container this unit writes pages in. Guarded. */
   space?: string;
-  integrations?: { jira?: { project?: string }; confluence?: { space?: string } };
   roles?: ConfigRole[];
   children?: ConfigUnit[];
   schedules?: ScheduleSpec[];
@@ -1023,7 +1023,7 @@ export interface ConfigProblem {
   kind: ConfigProblemKind;
   /** The full line, exactly as the refusal's `detail` carries it. */
   message: string;
-  /** The engine-derived handle of the seat it is about. */
+  /** The handle of the seat it is about. */
   seat?: string;
   unit?: string;
   /** 1-based line in the submitted text, for parse failures only. */
@@ -1352,22 +1352,22 @@ export interface ToolRow {
 
 /** One declared schedule, as `schedule.Row` serialises it.
  *
- *  THE NAMES ARE THE SERVER'S. This type used to declare `scope`, `scope_name`,
- *  `last_run` and `last_outcome`; the server sends `scope_type` and `scope_id`
- *  and has no last-run field at all — the ledger is a separate answer — so
- *  four of its nine fields rendered as `undefined` on every row. */
+ *  THE NAMES ARE THE SERVER'S. This type used to declare `scope`,
+ *  `last_run` and `last_outcome`; the server sends `scope_type`, `scope_id`
+ *  and `scope_name` and has no last-run field at all — the ledger is a
+ *  separate answer — so three of its fields rendered as `undefined` on every
+ *  row. */
 export interface ScheduleRow {
   /** `role` or `unit`. */
   scope_type: string;
   /** The scope's IDENTITY, which is what the at-most-once ledger keys a fire
-   *  on: a seat's agent id, or a unit's origin key. Opaque — it survives a
-   *  rename, which is the whole reason it is not the handle. */
+   *  on: a seat's agent id, or a unit's key. Opaque; read `scope_name` to
+   *  show or link it. */
   scope_id: string;
   /** The same scope as a person reads it: the seat's handle, or the unit's
-   *  key. Display and links only; nothing is filed under it. Absent from a
-   *  build that predates the split, which is why every reader falls back to
-   *  `scope_id`. */
-  scope_name?: string;
+   *  key. Display and links only; nothing is filed under it. A seat the
+   *  company no longer holds has no handle, and the engine sends its id. */
+  scope_name: string;
   name: string;
   cron: string;
   /** The zone this schedule FIRES in, resolved by the engine: its own
@@ -1404,10 +1404,9 @@ export interface ScheduleRunRow {
   scope_type: string;
   /** See `ScheduleRow.scope_id`: the identity this fire is keyed on. */
   scope_id: string;
-  /** See `ScheduleRow.scope_name`. Resolved at read time from the company the
-   *  node is running, so a renamed scope reads under its CURRENT name on
-   *  every row of its history rather than under the one it fired as. */
-  scope_name?: string;
+  /** See `ScheduleRow.scope_name`, resolved at read time from the company the
+   *  node is running. */
+  scope_name: string;
   schedule_name: string;
   /** The tick this fire stands for, as the ledger's own at-most-once key. */
   fire_label: string;
@@ -1430,7 +1429,7 @@ export interface SchedulesAnswer {
 export interface ScheduleRunsAnswer {
   scope_type: string;
   scope_id: string;
-  scope_name?: string;
+  scope_name: string;
   schedule_name: string;
   runs: ScheduleRunRow[];
   /** The page filled, so older fires are past it. */

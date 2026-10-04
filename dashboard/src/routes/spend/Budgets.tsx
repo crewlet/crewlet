@@ -63,7 +63,7 @@ import { companyDateLabel, fmtCount, fmtExact, relTime } from "~/lib/format.ts";
 import { dayLabelIn } from "~/lib/range.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useOrgWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { BudgetWindow, BudgetsAnswer } from "~/protocol/types.ts";
 
 /** How often the counters are re-read: the gate's own report cadence is 15s,
@@ -236,7 +236,9 @@ function resetLine(answer: BudgetsAnswer): string {
 export function Budgets() {
   const seatBadge = useSeatBadgeOf();
   const budgets = useQuery("budgets", undefined, { pollMs: BUDGETS_POLL_MS });
-  const access = useConfigWriteAccess();
+  // ANYWHERE: a lead may raise the ceilings of the seats they lead, so the
+  // one blanket reason below is only for a reader who can change none.
+  const access = useOrgWriteAccess("anywhere");
   const now = useNow();
   const { open: openPeek } = usePeekControls();
   const answer = budgets.data;

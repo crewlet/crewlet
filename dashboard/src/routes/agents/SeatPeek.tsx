@@ -68,6 +68,7 @@ import {
   type Seat,
 } from "~/lib/seats.ts";
 import { unitPath } from "~/lib/orgchart.ts";
+import { answersAddress, itemAddress, turnItem } from "~/lib/work.ts";
 import type { AgentRow, BudgetWindow, LiveCall, LiveTurn } from "~/protocol/types.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -182,7 +183,10 @@ function SeatPeekBody({
   const ring = human ? undefined : ringOf(state);
   const turn = agent?.turn ?? null;
   const call = agent?.live_call ?? null;
-  const item = call?.work_item?.key || turn?.work_item?.key || "";
+  const ref = call?.work_item?.key ? call.work_item : (turn?.work_item ?? null);
+  // ASKED FOR BY ITS ADDRESS ([turnItem]): a key another task claimed first
+  // would number this turn on the claimant's list.
+  const item = ref?.key ? itemAddress(turnItem(ref)) : "";
 
   // THE THREE READS — see the file's doc.
   const workload = useQuery("work_workload", undefined, { pollMs: 60_000 });
@@ -198,7 +202,11 @@ function SeatPeekBody({
 
   const ordinal =
     turn && item
-      ? turnOrdinal(turn.turn_id, turns.data?.turns?.[0], !!turns.data && turns.data.key === item)
+      ? turnOrdinal(
+          turn.turn_id,
+          turns.data?.turns?.[0],
+          !!turns.data && answersAddress(item, turns.data.item, turns.data.key),
+        )
       : null;
   const started = turn?.started_at ?? call?.started_at;
   const elapsed = started ? now - Date.parse(started) : null;

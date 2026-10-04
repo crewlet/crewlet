@@ -44,10 +44,13 @@
 
 import { useMemo } from "react";
 import { parseUTC, plural } from "./format.ts";
+import { useLeadScope } from "./leadScope.ts";
 import { needsSentence } from "./refusal.ts";
 import { useQuery } from "./useQuery.ts";
+import { useRest } from "./useRest.ts";
 import { useOrg } from "./store-hooks.ts";
 import { useViewer } from "./viewer.ts";
+import { rest } from "~/protocol/rest.ts";
 import { DELEGATE_TASKS, DELEGATE_TOOL, type SeatActivity } from "~/contract/wire.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type {
@@ -832,11 +835,16 @@ export interface SeatSetup {
  * name for a seat the engine reported no handle for, which is how
  * [seatPath] addresses one.
  *
- * A reader without the grant is never asked: see the query below.
+ * A reader without the grant is never asked: see the query below. A LEAD of
+ * the seat's unit is, through the reads the engine admits them instead — the
+ * seat and its unit (`GET /config/roles/{handle}`, `GET /config/units/{key}`,
+ * `lib/leadScope.ts`) — composed into the small document [seatSettings]
+ * reads, so the seat's page shows a lead what the org builder lets them edit.
  */
 export function useSeatSetup(handle: string): SeatSetup {
   const org = useOrg();
   const viewer = useViewer();
+  const scope = useLeadScope();
   const index = useMemo(() => indexOrg(org), [org]);
   const seat = handle ? (index.byHandle.get(handle) ?? index.byName.get(handle)) : undefined;
   // NOT ASKED WITHOUT THE GRANT. The document takes `config:read`, so a reader
@@ -844,29 +852,62 @@ export function useSeatSetup(handle: string): SeatSetup {
   // question, and asking only puts a refusal on the wire and a `refused`
   // banner over a page that never had a chance. Such a reader stays `unread`,
   // which claims nothing; the screen names the grant instead.
-  const config = useQuery("config", undefined, {
-    enabled: !!seat && viewer.grants.includes(RUNTIME_GRANT),
-  });
+  const granted = viewer.grants.includes(RUNTIME_GRANT);
+  const config = useQuery("config", undefined, { enabled: !!seat && granted });
+  const led = !granted && !!seat?.handle && scope.seats.has(seat.handle) ? seat : null;
+  const lead = useRest(
+    led ? `/config/roles/${led.handle}+${led.unit?.id ?? ""}` : null,
+    (signal) => (led ? leadDocument(led, signal) : Promise.resolve(null)),
+  );
+  const read = led
+    ? {
+        data: lead.data,
+        loading: lead.loading,
+        error: lead.code,
+        refusal: lead.refusal,
+      }
+    : config;
   // NOTHING FROM THE DOCUMENT BESIDE A REFUSAL: `useQuery` keeps its last good
   // answer through a failed ask, which suits a poll and is wrong for a guarded
   // read.
   const settings = useMemo<SeatSettings | null>(
-    () => (seat && config.data && !config.error ? seatSettings(config.data, seat) : null),
-    [seat, config.data, config.error],
+    () => (seat && read.data && !read.error ? seatSettings(read.data, seat) : null),
+    [seat, read.data, read.error],
   );
-  const reading = useMemo(() => seatReading(settings, config.error), [settings, config.error]);
+  const reading = useMemo(() => seatReading(settings, read.error), [settings, read.error]);
   return {
     seat,
     settings,
     reading,
     config: {
-      doc: config.error ? null : (config.data ?? null),
-      loading: config.loading,
-      error: config.error,
-      refusal: config.refusal,
+      doc: read.error ? null : (read.data ?? null),
+      loading: read.loading,
+      error: read.error,
+      refusal: read.refusal,
     },
   };
 }
+
+/**
+ * The part of the company document a lead may read about one of their seats,
+ * as a document [seatSettings] reads: the seat, and its home unit's own fields
+ * (whose `mcp_env` the seat inherits) without the unit's members, so the seat
+ * is found once.
+ */
+async function leadDocument(seat: Seat, signal: AbortSignal): Promise<CompanyDocument> {
+  const [role, unit] = await Promise.all([
+    rest.get(`/config/roles/${encodeURIComponent(seat.handle)}`, signal),
+    seat.unit ? rest.get(`/config/units/${encodeURIComponent(seat.unit.id)}`, signal) : null,
+  ]);
+  const own = isRecordValue(unit) ? { ...unit, roles: undefined, children: undefined } : null;
+  return {
+    roles: [role as ConfigRole],
+    ...(own ? { units: [own as ConfigUnit] } : {}),
+  };
+}
+
+const isRecordValue = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Every unit in a company document, depth first, parents before children. */
 export function documentUnits(doc: CompanyDocument | null | undefined): ConfigUnit[] {

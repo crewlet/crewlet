@@ -12,7 +12,7 @@ import { EMPTY_DRAFT } from "./model/draft.ts";
 import { OPERATIONS_VERSION, record, type Intent, type Operation } from "./model/operations.ts";
 import { DRAFT_STORAGE_KEY, type DraftStorage, type KeptDraft } from "./model/persistence.ts";
 import { templateIntent } from "./model/templates.ts";
-import { countingKeys, fixtureDerived } from "./model/testkit.ts";
+import { countingKeys } from "./model/testkit.ts";
 import { company, EDITOR, Engine, json, mountBuilder } from "./testkit.tsx";
 
 /** Somebody else signs in, and the socket comes back — when the frame asks who. */
@@ -38,7 +38,7 @@ afterEach(() => {
 /** An operation recorded against the fixture company, as a kept draft holds it. */
 function recorded(intent: Intent): Operation {
   const doc = company();
-  const result = record(fromDocument(doc, fixtureDerived(doc)), intent);
+  const result = record(fromDocument(doc), intent);
   if (!result.ok) throw new Error(result.message);
   return result.op;
 }

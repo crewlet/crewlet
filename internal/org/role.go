@@ -811,10 +811,13 @@ func (r *Role) ResolvedEmail(lookup EnvLookup) string {
 // in the order an error reports it. Human seats are never spawned, so every
 // one of these would be config that looks live and does nothing.
 //
-// The names are the ones an operator WROTE (integrations.jira, not
-// jira_project), because the error's job is to point at a line in a file. A
-// seat's chat apps are written under `integrations:` too, and naming them
-// `slack` and `mattermost` sent an operator looking for a key no seat has.
+// The names are the ones an operator WROTE, because the error's job is to
+// point at a line in a file, and the problem a write answers is placed at
+// that path. A seat's chat apps are written under `integrations:`, and naming
+// them `slack` and `mattermost` sent an operator looking for a key no seat
+// has; the project and space it owns are its own `project` and `space`, and
+// naming them `integrations.jira` and `integrations.confluence` pointed at
+// keys a seat may not even carry (they are refused as retired).
 func (r *Role) humanForbidden() []string {
 	fields := []struct {
 		name string
@@ -833,8 +836,8 @@ func (r *Role) humanForbidden() []string {
 		{"schedules", len(r.Schedules) > 0},
 		{"integrations.slack", !r.Slack.IsZero()},
 		{"integrations.mattermost", !r.Mattermost.IsZero()},
-		{"integrations.jira", r.Project != ""},
-		{"integrations.confluence", r.Space != ""},
+		{"project", r.Project != ""},
+		{"space", r.Space != ""},
 		{"mcp_env", len(r.MCPEnv) > 0},
 		{"behavioral_guidelines", len(r.BehavioralGuidelines) > 0},
 	}

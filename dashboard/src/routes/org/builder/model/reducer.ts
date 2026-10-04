@@ -19,18 +19,13 @@
  * unit of a running company in one merge patch, and every seat's identity and
  * memory with them.
  *
- * THE BASE IS KEYED BY THE ENGINE, AND NOTHING IS RECORDED BEFORE IT IS. A
- * document read from `GET /config` carries no handles, so until the first
- * check answers, a seat that declares no handle can only be keyed by its
- * path. The first check runs on the base with an empty log, and its
- * derivation re-keys the base by handle, which is safe precisely because no
- * operation refers to the old keys yet. So an edit, a restore and an update
- * all wait for a keyed base (see [isBaseKeyed]): an operation recorded against
- * a path key would pin that key into the log for good, since a base is only
- * re-keyed while its log is empty. Such a log names nothing once the base is
- * read again (after a reload, or onto a newer revision, every one of its
- * operations reports its target gone), and a seat removed under a path key
- * has no handle to clear its GitLab access level by.
+ * THE BASE IS KEYED AS IT LOADS. Every seat the engine stores declares its
+ * handle and every unit its key, so the document `GET /config` serves is
+ * keyed by those identities at once (`document.fromDocument`) and an edit can
+ * be recorded before any check has answered. What the first check of the base
+ * adds is the engine's DERIVATION of it — who reports to whom, what each unit
+ * inherits — which is kept as the base's own (`BaseCompany.derived`) for the
+ * review to compare the draft against.
  */
 
 import type { CompanyDocument, Derived } from "~/protocol/index.ts";
@@ -38,7 +33,6 @@ import { allKeys, locate, type Draft, EMPTY_DRAFT } from "./draft.ts";
 import {
   buildPatch,
   fromDocument,
-  knownHandles,
   rekeying,
   toDocument,
   type CheckedDocument,
@@ -71,6 +65,7 @@ import {
 import { EMPTY_PROBLEMS, placeProblems, type ProblemIndex } from "./problems.ts";
 import { STEP_UP_REQUIRED, type CheckOutcome, type SettledCheck } from "./scheduler.ts";
 import type { KeptDraft } from "./persistence.ts";
+import { outsideScope } from "./scope.ts";
 import type { BuilderMode } from "./transport.ts";
 
 /** The company the draft was built on. */
@@ -122,6 +117,13 @@ export interface LastChange {
 
 export interface BuilderState {
   readonly mode: BuilderMode;
+  /**
+   * The unit a LEAD's draft is about, by key, or `null` for the whole company
+   * (`scope.ts`). Set by the load and kept until the next one: every request
+   * the draft makes is that unit's, and [recordIntent] refuses what reaches
+   * outside it before the engine has to.
+   */
+  readonly scope: string | null;
   readonly base: BaseCompany;
   readonly baseDraft: Draft;
   readonly draft: Draft;
@@ -137,17 +139,16 @@ export interface BuilderState {
   readonly last: LastChange | null;
   /** Why the last dispatched intent was not recorded. */
   readonly refusal: {
-    readonly reason: RecordRefusal | "mode" | "not_keyed" | "has_changes";
+    readonly reason: RecordRefusal | "mode" | "not_loaded" | "has_changes" | "scope";
     readonly message: string;
   } | null;
   /**
-   * The keys the last keying of the base moved, old key to new: the engine's
-   * first description of a loaded base moves a seat declaring no handle from
-   * its path key to its handle, and a save moves a created node from the key
-   * it was minted with. A surface still holding an old key (an open dialog,
-   * the selection) reads its node through this in the very render the keys
-   * change, where a key followed a render later would find no node there and
-   * draw it as gone.
+   * The keys the last save moved, old key to new: a save moves each node it
+   * created from the key it was minted with to its identity, the handle or
+   * unit key it was given. A surface still holding an old key (an open
+   * dialog, the selection) reads its node through this in the very render the
+   * keys change, where a key followed a render later would find no node there
+   * and draw it as gone.
    */
   readonly rekeyed: ReadonlyMap<NodeKey, NodeKey>;
 }
@@ -159,6 +160,8 @@ export type BuilderAction =
       readonly mode: BuilderMode;
       readonly document: CompanyDocument | null;
       readonly revision: string | null;
+      /** A lead's unit (see [BuilderState.scope]); absent for the whole company. */
+      readonly scope?: string;
     }
   | { readonly type: "record"; readonly intent: Intent }
   | { readonly type: "undo" }
@@ -179,7 +182,7 @@ export type BuilderAction =
       readonly type: "updateBegin";
       readonly document: CompanyDocument;
       readonly revision: string;
-      readonly derived: Derived;
+      readonly derived: Derived | null;
     }
   | { readonly type: "updateChoose"; readonly index: number; readonly choice: Choice | null }
   | { readonly type: "updateConfirm" }
@@ -198,14 +201,15 @@ const EMPTY_CHECK: CheckView = {
 /**
  * The state before anything is loaded.
  *
- * AN EDIT OF A COMPANY NOBODY HAS DESCRIBED YET, deliberately not create
- * mode. Before a load the builder knows neither whether a company exists nor
- * who its seats are, so the doors stay shut on both counts: an edit waits for
- * a keyed base, and a template, which only ever starts a company from
- * nothing, is refused.
+ * AN EDIT OF A COMPANY NOT LOADED YET, deliberately not create mode: before a
+ * load the builder knows neither whether a company exists nor who its seats
+ * are, so the doors stay shut on both counts: an edit waits for the load
+ * (which would drop it anyway), and a template, which only ever starts a
+ * company from nothing, is refused.
  */
 export const INITIAL_BUILDER: BuilderState = {
   mode: "edit",
+  scope: null,
   base: { document: null, revision: null, derived: null },
   baseDraft: EMPTY_DRAFT,
   draft: EMPTY_DRAFT,
@@ -221,20 +225,11 @@ export const INITIAL_BUILDER: BuilderState = {
 };
 
 /**
- * Whether the base is keyed by the engine's identities, so a log recorded
- * against handles can be replayed onto it. Create mode starts from nothing
- * and needs no derivation.
- */
-export function isBaseKeyed(state: BuilderState): boolean {
-  return state.mode === "create" || state.base.derived !== null;
-}
-
-/**
  * What the dry-run check should hear about a state change: `reset` when the
  * draft now stands on a different base (a load, a save, an adopted update),
  * which checks at once and lifts a halt; `changed` when only the draft moved;
- * `null` when neither did. Keying the base from a check's answer changes
- * neither the base document nor its revision, so it asks for nothing.
+ * `null` when neither did. Keeping the base's derivation from a check's answer
+ * changes neither the base document nor its revision, so it asks for nothing.
  *
  * A change of reader moves no generation and no base, and resets the check
  * all the same (every answer may differ): its owner calls the runner's
@@ -271,21 +266,20 @@ export function hasChanges(state: BuilderState): boolean {
 /**
  * The last check's document and derivation, when that check answered with
  * one. Any generation: what a derivation still says about the draft is the
- * reader's to decide (see `document.knownHandles`, `chartModel.ts`).
+ * reader's to decide (see `chartModel.ts`).
  */
 export function checkedDocument(check: CheckView): CheckedDocument | null {
   return check.sent && check.derived ? { sent: check.sent, derived: check.derived } : null;
 }
 
-/** The handle each seat of the draft runs under, where one is known (`document.knownHandles`). */
-export function handlesOf(state: Pick<BuilderState, "draft" | "check">): Map<NodeKey, string> {
-  return knownHandles(state.draft, checkedDocument(state.check));
-}
-
 /** What recording an intent against a state would answer, before anything is dispatched. */
 export type RecordAnswer =
   | Recorded
-  | { readonly ok: false; readonly refusal: "mode" | "not_keyed"; readonly message: string };
+  | {
+      readonly ok: false;
+      readonly refusal: "mode" | "not_loaded" | "scope";
+      readonly message: string;
+    };
 
 /**
  * Records an intent against the state's draft exactly as dispatching it would,
@@ -309,16 +303,19 @@ export function recordIntent(state: BuilderState, intent: Intent): RecordAnswer 
       message: "A template starts a new company. It cannot be applied to a company that exists.",
     };
   }
-  if (!isBaseKeyed(state)) {
-    return {
-      ok: false,
-      refusal: "not_keyed",
-      message:
-        "The engine has not described this company yet. Wait for the check to finish, then make the change.",
-    };
+  if (!isLoaded(state)) {
+    return { ok: false, refusal: "not_loaded", message: NOT_LOADED };
   }
-  const handles = handlesOf(state);
-  return record(state.draft, intent, { handleOf: (key) => handles.get(key) });
+  const outside = outsideScope(state.scope, state.draft, intent);
+  if (outside !== null) return { ok: false, refusal: "scope", message: outside };
+  return record(state.draft, intent);
+}
+
+const NOT_LOADED = "The company has not loaded yet. Make the change once it has.";
+
+/** Whether a company has been loaded to edit, or create mode was entered: the draft has a base. */
+function isLoaded(state: BuilderState): boolean {
+  return state.mode === "create" || state.base.document !== null;
 }
 
 /** Where focus goes after an operation that was just applied to `before`. */
@@ -348,10 +345,11 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
   switch (action.type) {
     case "load": {
       const document = action.mode === "edit" ? action.document : null;
-      const baseDraft = fromDocument(document, null);
+      const baseDraft = fromDocument(document);
       return {
         ...INITIAL_BUILDER,
         mode: action.mode,
+        scope: action.mode === "edit" ? (action.scope ?? null) : null,
         base: {
           document,
           revision: action.mode === "edit" ? action.revision : null,
@@ -441,10 +439,8 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
       if (settled.generation !== state.generation) return state;
       const outcome = settled.outcome;
       const derived =
-        outcome.status === "clean" || outcome.status === "problems"
-          ? outcome.derived
-          : state.check.derived;
-      let next: BuilderState = {
+        outcome.status === "clean" || outcome.status === "problems" ? outcome.derived : null;
+      const next: BuilderState = {
         ...state,
         // A REFUSAL MAY BE THE TAB CHANGING HANDS, so the log stops being
         // kept — except a step-up the person declined, which is the same
@@ -460,8 +456,10 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
             outcome.status === "clean" || outcome.status === "problems" ? outcome.derived : null,
         },
       };
-      // Key the base by handle the first time the engine describes it. Only
-      // while the log is empty: no operation refers to the path keys yet.
+      // The first check of the base itself describes the BASE: keep that
+      // derivation as the base's own, for the review to compare against.
+      // Only while the log is empty, when the draft that check was sent is
+      // the base.
       if (
         state.mode === "edit" &&
         state.base.derived === null &&
@@ -470,16 +468,7 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
         derived &&
         settled.baseRevision === state.base.revision
       ) {
-        const baseDraft = fromDocument(state.base.document, derived);
-        const sent = toDocument(baseDraft);
-        next = {
-          ...next,
-          base: { ...state.base, derived },
-          baseDraft,
-          draft: baseDraft,
-          check: { ...next.check, sent, problems: placed(sent, outcome), derived },
-          rekeyed: rekeying(state.draft, baseDraft),
-        };
+        return { ...next, base: { ...state.base, derived } };
       }
       return next;
     }
@@ -494,7 +483,7 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
       // minted for the nodes this save created into every later operation,
       // and those name nothing once the revision is read back.
       const document = toDocument(state.draft).document;
-      const baseDraft = fromDocument(document, action.derived);
+      const baseDraft = fromDocument(document);
       return {
         ...state,
         mode: "edit",
@@ -521,7 +510,7 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
         revision: action.revision,
         derived: action.derived,
       };
-      const baseDraft = fromDocument(action.document, action.derived);
+      const baseDraft = fromDocument(action.document);
       const choices = new Map<number, Choice>();
       return {
         ...state,
@@ -530,7 +519,7 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
           baseDraft,
           ops: state.log.ops,
           choices,
-          result: rebase(baseDraft, state.log.ops, choices, contextOf(baseDraft, action.derived)),
+          result: rebase(baseDraft, state.log.ops, choices),
           restoring: false,
         },
       };
@@ -541,13 +530,13 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
       const choices = new Map(state.update.choices);
       if (action.choice === null) choices.delete(action.index);
       else choices.set(action.index, action.choice);
-      const { baseDraft, base } = state.update;
+      const { baseDraft } = state.update;
       return {
         ...state,
         update: {
           ...state.update,
           choices,
-          result: rebase(baseDraft, state.update.ops, choices, contextOf(baseDraft, base.derived)),
+          result: rebase(baseDraft, state.update.ops, choices),
         },
       };
     }
@@ -593,13 +582,7 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
           "This draft was made for a different mode and cannot be restored here.",
         );
       }
-      if (!isBaseKeyed(state)) {
-        return refused(
-          state,
-          "not_keyed",
-          "The engine has not described this company yet. Restore the draft once the check finishes.",
-        );
-      }
+      if (!isLoaded(state)) return refused(state, "not_loaded", NOT_LOADED);
       if (
         kept.ops.some((op) => op.type === "applyTemplate") &&
         (state.mode !== "create" || state.base.document !== null)
@@ -611,12 +594,7 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
         );
       }
       const choices = new Map<number, Choice>();
-      const result = rebase(
-        state.baseDraft,
-        kept.ops,
-        choices,
-        contextOf(state.baseDraft, state.base.derived),
-      );
+      const result = rebase(state.baseDraft, kept.ops, choices);
       const clean = result.entries.every((e) => e.outcome === "applies");
       if (clean && kept.baseRevision === state.base.revision) {
         // Recorded on this very revision and every operation still applies:
@@ -663,12 +641,6 @@ function redoes(draft: Draft, undone: readonly Operation[]): boolean {
     at = apply(at, op).draft;
   }
   return true;
-}
-
-/** The recording context of a base: the handles its derivation reports. */
-function contextOf(baseDraft: Draft, derived: Derived | null) {
-  const handles = knownHandles(baseDraft, derived && { sent: toDocument(baseDraft), derived });
-  return { handleOf: (key: NodeKey) => handles.get(key) };
 }
 
 function placed(sent: IndexedDocument, outcome: CheckOutcome): ProblemIndex {

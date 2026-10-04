@@ -91,8 +91,8 @@ export function Spend() {
   // and nothing is drawn that is not this window's.
   const refused = tokens.error === "bad_params";
   const rollup = refused ? null : tokens.data;
-  // EACH SEAT'S DAY BY ITS AGENT ID, the key the spend row carries too: a
-  // rename moves a handle, never an agent id (`agentLines`).
+  // EACH SEAT'S DAY BY ITS AGENT ID, the key the spend row carries too
+  // (`agentLines`).
   const dayOf = useMemo(() => {
     const byAgent = new Map<string, BudgetWindow | undefined>();
     for (const a of agents) {

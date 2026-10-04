@@ -112,8 +112,8 @@ export function NodeGlyph({ kind, size }: { kind: NodeGlyphKind; size?: GlyphSiz
 }
 
 /** A seat's handle as written beside its name, or what stands in for one not reported yet. */
-export function handleLabel(handle: string | undefined): string {
-  return handle ? `@${handle}` : "Handle after the check";
+export function handleLabel(handle: string): string {
+  return `@${handle}`;
 }
 
 /** A seat's primary manager, "No manager", or what stands in while no check of this draft has said. */

@@ -253,7 +253,8 @@ func takeSeat(t *testing.T, list []any, handle string) ([]any, any) {
 // the channel and the contact id are admitted; list only credential fields and the contact id and the
 // address naming a variable are admitted; compare a credential field's
 // strings alone and the empty server blocks are admitted; list only what the
-// proposed document holds and the emptied and removed credentials are.
+// proposed document holds and the emptied and removed credentials are;
+// compare no order and both reorders outside their team are admitted.
 func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -285,6 +286,12 @@ func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 			}, true, ""},
 		{"a seat's masked credential sent back as it was read", configapi.EntityRoles,
 			"staff-eng", func(_ *testing.T, e map[string]any) { e["goal"] = "ship" }, true, ""},
+		{"their team's seats reordered", configapi.EntityUnits, "platform",
+			func(_ *testing.T, e map[string]any) {
+				roles := slices.Clone(rolesOf(e))
+				slices.Reverse(roles)
+				e["roles"] = roles
+			}, true, ""},
 
 		{"their own team handed to an outsider", configapi.EntityUnits, "platform",
 			func(_ *testing.T, e map[string]any) { e["lead"] = "data-lead" }, false,
@@ -300,6 +307,19 @@ func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 				e := topUnit(t, doc, "engineering")
 				children, _ := e["children"].([]any)
 				e["children"] = []any{children[1]} // Data stays
+			}, false, "unit/platform/before/engineering/place/not_lead"},
+		{"the top level reordered beside an edit of their own", "", "",
+			func(t *testing.T, doc map[string]any) {
+				platform := childOf(t, topUnit(t, doc, "engineering"), "platform")
+				platform["purpose"] = "ship the platform"
+				units, _ := doc["units"].([]any)
+				doc["units"] = []any{units[1], units[0]}
+			}, false, "unit/engineering/before//place/not_lead"},
+		{"their own team reordered among its siblings", "", "",
+			func(t *testing.T, doc map[string]any) {
+				e := topUnit(t, doc, "engineering")
+				children, _ := e["children"].([]any)
+				e["children"] = []any{children[1], children[0]}
 			}, false, "unit/platform/before/engineering/place/not_lead"},
 		{"a seat moved out of their team", "", "",
 			func(t *testing.T, doc map[string]any) {
@@ -581,6 +601,86 @@ func TestAWriteThatChangesNothingIsTheCompanyGrants(t *testing.T) {
 	if res := doAs(t, s, admin, http.MethodPatch, "/config", `{"vision": null}`,
 		headers); res.Code != http.StatusCreated {
 		t.Errorf("config:write re-publishing the document = %d: %s", res.Code, res.Body.String())
+	}
+}
+
+// A LEAD'S CHECK OF AN UNCHANGED SEAT OR UNIT IS ANSWERED.
+//
+// The write is refused only because storing it re-publishes the company. A
+// dry run stores nothing, and it is how a lead reads what the engine derives
+// of their unit as it stands, and the warnings a ceiling they raise is
+// compared against — so the lead's own seat and unit, sent back as read with
+// `dry_run=true`, answer 200 valid with the derivation, and the revision does
+// not move. The control is the same lead's check of the whole document, which
+// no address decided and which stays refused, so `{}` hands nobody the
+// company's hierarchy and warnings.
+//
+// Mutation: drop the exemption and both entity checks are refused 403
+// unchanged; take it for every dry run and the whole-document check answers.
+func TestALeadsCheckOfAnUnchangedSeatOrUnitIsAnswered(t *testing.T) {
+	t.Parallel()
+	s := leadSurface(t)
+	before := activeRevision(t, s)
+	for _, at := range [][2]string{
+		{configapi.EntityRoles, "sre"},
+		{configapi.EntityUnits, "platform"},
+	} {
+		res := putEntityAs(t, s, platformLead(), at[0], at[1], func(map[string]any) {},
+			"?dry_run=true")
+		if res.Code != http.StatusOK {
+			t.Fatalf("a lead's check of %s/%s unchanged = %d: %s", at[0], at[1],
+				res.Code, res.Body.String())
+		}
+		body := decode(t, res)
+		derived, _ := body["derived"].(map[string]any)
+		if body["valid"] != true || len(derived) == 0 {
+			t.Errorf("a lead's check of %s/%s unchanged answered %v, want valid "+
+				"with the derivation", at[0], at[1], body)
+		}
+	}
+	if parts := refusedParts(t, doAs(t, s, platformLead(), http.MethodPatch,
+		"/config?dry_run=true", `{"vision": null}`, nil)); !slices.Equal(parts,
+		[]string{"document////unchanged/no_grant"}) {
+		t.Errorf("a lead's check of the whole document unchanged refused %v, "+
+			"want the unchanged document named", parts)
+	}
+	if after := activeRevision(t, s); after != before {
+		t.Errorf("a check moved the active revision to %s", after)
+	}
+}
+
+// A LEAD'S REORDER IS CHECKED AND SAVED ALIKE.
+//
+// Reordering the seats of a team they lead changes the company — which of two
+// managers is a seat's own is decided by order — so it is a change of theirs
+// like any other: its check answers valid and its save lands as a revision.
+// The exemption for an unchanged seat or unit answers only one that is
+// unchanged, so a check can never pass a draft its save then refuses as
+// changing nothing.
+//
+// Mutation: compare no order and the check still answers valid while the save
+// is refused 403 unchanged.
+func TestALeadsReorderIsCheckedAndSavedAlike(t *testing.T) {
+	t.Parallel()
+	s := leadSurface(t)
+	before := activeRevision(t, s)
+	reverse := func(e map[string]any) {
+		roles := slices.Clone(rolesOf(e))
+		slices.Reverse(roles)
+		e["roles"] = roles
+	}
+	check := putEntityAs(t, s, platformLead(), configapi.EntityUnits, "platform", reverse,
+		"?dry_run=true")
+	if check.Code != http.StatusOK || decode(t, check)["valid"] != true {
+		t.Fatalf("a lead's check of their reordered team = %d: %s", check.Code,
+			check.Body.String())
+	}
+	if res := putEntityAs(t, s, platformLead(), configapi.EntityUnits, "platform", reverse,
+		""); res.Code != http.StatusCreated {
+		t.Fatalf("the save the check passed = %d: %s", res.Code, res.Body.String())
+	}
+	if after := activeRevision(t, s); after == before {
+		t.Error("the reorder landed no revision")
 	}
 }
 

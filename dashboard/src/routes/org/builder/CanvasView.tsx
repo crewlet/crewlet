@@ -119,6 +119,7 @@ import {
   isDeletable,
   leadChipLabel,
   leadMenu,
+  refusedEntry,
   leadSentence,
   moveKey,
   reportingMenu,
@@ -1105,11 +1106,14 @@ function LeadChip({
   // nowhere else, rather than drawn everywhere and refusing on two thirds of
   // the units in the chart.
   const declared = unit.lead !== null && unit.lead !== undefined && !unit.lead.inherited;
+  // A LEAD'S OWN UNIT keeps its lead: it decides who may change the unit, so
+  // the pill says the lead and offers no change (`model/scope.ts`).
+  const fixed = refusedEntry(api, unit.key, "lead").disabled;
   return (
     <div aria-hidden="true" {...card.press(unit.key)}>
       <OrgNodeLead
         empty={none}
-        {...(declared && !api.readOnly
+        {...(declared && !fixed
           ? {
               clear: (
                 <IconButton
@@ -1131,7 +1135,7 @@ function LeadChip({
             }
           : {})}
       >
-        {api.readOnly ? (
+        {fixed ? (
           <span className="truncate">{leadChipLabel(unit)}</span>
         ) : (
           <Menu

@@ -76,9 +76,9 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
               row.scope_type === "role" ? (
                 <span className="muted">theirs</span>
               ) : (
-                <TextCell icon="building-complex">{row.scope_name || row.scope_id}</TextCell>
+                <TextCell icon="building-complex">{row.scope_name}</TextCell>
               ),
-            sortValue: (row) => `${row.scope_type}/${row.scope_name || row.scope_id}`,
+            sortValue: (row) => `${row.scope_type}/${row.scope_name}`,
           },
           {
             // THE ENGINE'S OWN ANSWER, and the REASON where it has none: a
