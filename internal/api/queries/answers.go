@@ -171,11 +171,10 @@ type Sources struct {
 	// node served the request described the seat as of the last time that
 	// node ran it.
 	//
-	// HANDED THE SEAT WHOLE ([memread.Seat]: its agent id, the handle it
-	// was created under, and the one it answers to now), resolved here
-	// from the one chart reading the answer is made of — the reader never
+	// HANDED THE SEAT WHOLE ([memread.Seat]: its agent id and its handle),
+	// resolved here from the org the answer is made of — the reader never
 	// resolves a handle itself, because the node that answers may hold a
-	// different chart from the node that asked. Nil leaves `agent_memory`,
+	// different org from the node that asked. Nil leaves `agent_memory`,
 	// `memory_overview` and `conversations` unregistered.
 	Memory SeatMemory
 
@@ -744,9 +743,7 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	// It used to accept a ROLE NAME as well and answer by name, from a
 	// projection keyed by name and a history matched on `agent_role`. A
 	// name is prose two seats may share, so two "Engineer"s answered each
-	// other's live call and read each other's transcript. A retired handle
-	// still resolves, through the chart's own aliases, so a link somebody
-	// kept names the seat it named when they kept it.
+	// other's live call and read each other's transcript.
 	handle := p.String("id")
 	if handle == "" {
 		return nil, fmt.Errorf("%w: agent needs the seat's handle as id", ErrBadParams)
@@ -802,8 +799,8 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	return answer, nil
 }
 
-// agentSeat resolves a handle — current, created-under or retired — to the
-// AGENT seat answering to it in the company this node runs, and that seat's
+// agentSeat resolves a handle to the AGENT seat answering to it in the
+// company this node runs, and that seat's
 // agent id. Nil for a handle no agent seat answers to, and on a node running
 // no company.
 func (s Sources) agentSeat(handle string) (*org.Role, string) {
@@ -845,9 +842,9 @@ func (s Sources) agentSeat(handle string) (*org.Role, string) {
 // row is the record as stored, and the dashboard reads none of it (rule 19 in
 // docs/reference/dashboard-design.md).
 //
-// BY THE SEAT'S AGENT ID, the one identifier every phase row carries that
-// neither a rename nor a namesake moves — never its role name, which a unit
-// template stamps onto every seat it makes.
+// BY THE SEAT'S AGENT ID, the one identifier every phase row carries for its
+// seat — never its role name, which a unit template stamps onto every seat it
+// makes.
 func (s Sources) phaseHistory(ctx context.Context, agentID string, p Params) ([]store.EventRecord, string, *eventfan.Coverage) {
 	if s.Events == nil {
 		return []store.EventRecord{}, "", nil
@@ -914,8 +911,8 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	// THE RELATED FILTER IS KEYED ON AGENT IDS, and `agent` is the seat's
-	// HANDLE — any handle it answers to — resolved through the chart this
-	// node holds, exactly as the event log resolved the handles each event
+	// HANDLE, resolved through the org this node holds, exactly as the
+	// event log resolved the handles each event
 	// named when it was written (see store.DB.SetEventSeats). A handle no
 	// agent seat answers to is refused rather than compared: there is no
 	// id it could match, and an empty page reads as an agent that has done
@@ -1127,18 +1124,13 @@ func (s Sources) seatParam(p Params) (string, error) {
 //
 // A SEAT IS NAMED BY ITS HANDLE on every surface that takes one — the handle is
 // a seat's address in the dashboard's URLs and on its roster row — and it is
-// RESOLVED HERE, server-side, through the chart this node holds: the handle it
-// answers to now, the one it was created under, or one a rename retired. The
-// id is derived from the handle the seat was CREATED under (ADR-0026), so
-// deriving it from whatever was typed — which the alternative did — named a
-// different seat, or none, the moment a seat had been renamed. Neither
-// alternative a caller had was a seat's identity either: a role name is shared
-// by every seat a unit template stamps out and changes with a rename, and a raw
-// agent id is a derivation every client would have to repeat.
+// RESOLVED HERE, server-side, through the org this node holds, to the id
+// derived from the handle (ADR-0013). Neither alternative a caller had was a
+// seat's identity: a role name is shared by every seat a unit template stamps
+// out, and a raw agent id is a derivation every client would have to repeat.
 //
-// A HANDLE THE CHART NO LONGER HOLDS still names the history its seat left, by
-// the handle that seat was created under — which the chart never issues to
-// anybody else — so it is derived as every node derived it while the seat ran.
+// A HANDLE THE ORG NO LONGER HOLDS still names the history its seat left, so
+// it is derived as every node derived it while the seat ran.
 //
 // Refused rather than matched when it is not a handle, or names a PERSON's
 // seat, because either would match nothing and an empty answer reads as a seat

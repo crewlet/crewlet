@@ -34,11 +34,8 @@ import (
 //
 // # Keyed on the seat's IDENTITY
 //
-// The record is filed under the seat's id, never its handle (ADR-0026). A
-// handle is an address a founder edits: keyed on one, a rename would resume a
-// seat nobody resumed — its pause filed under an address it no longer answers
-// to — and the next seat given the freed handle would start its first day
-// paused by somebody who never saw it.
+// The record is filed under the seat's agent id, derived from its handle
+// (ADR-0013), as the inbox the hold sits on is.
 //
 // # Compare-and-set
 //

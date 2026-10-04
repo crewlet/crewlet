@@ -205,8 +205,7 @@ type DailyOptions struct {
 // (which the live window cannot count).
 //
 // A seat is keyed on its AGENT ID — the identity every node derives alike from
-// the org name and the handle the seat was created under — and named from the
-// chart ([DailyOptions.Seats]), or, for a seat the chart no longer holds, by the
+// the org name and the seat's handle — and named from the org ([DailyOptions.Seats]), or, for a seat the chart no longer holds, by the
 // newest day that named it, whatever order the rows arrive in.
 func FoldDaily(cells []Cell, seats []SeatDay, opts DailyOptions) Rollup {
 	h := opts.Horizon

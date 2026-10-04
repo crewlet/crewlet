@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -37,7 +36,7 @@ type ThreadQuery struct {
 	ReplyTo string
 
 	// Ask is the handle this comment asks, as the caller stated it.
-	Ask string `person:"seat"`
+	Ask string
 
 	// Answers is the comment this one answers, as the caller stated it —
 	// or empty, in which case [Reader.Thread] INFERS it when exactly one
@@ -46,7 +45,7 @@ type ThreadQuery struct {
 
 	// Author is who is writing, which the inference needs: an ask is
 	// answered by the person it was addressed to.
-	Author string `person:"seat"`
+	Author string
 
 	// Comment is the id the comment being written will carry, so that an
 	// ask this very comment already answered — a retried write whose
@@ -124,13 +123,13 @@ func (e *AlreadyAnsweredError) Unwrap() error { return ErrAlreadyAnswered }
 type ErrAmbiguousAnswer struct {
 	Task  string
 	Asks  []AskCandidate
-	Actor string `person:"seat"`
+	Actor string
 }
 
 // AskCandidate is one open ask, as a refusal names it.
 type AskCandidate struct {
 	Comment string
-	Author  string `person:"seat"`
+	Author  string
 	Excerpt string
 }
 
@@ -148,22 +147,6 @@ func (e *ErrAmbiguousAnswer) Error() string {
 // resolved to the wrong comment closes somebody else's question. So a read
 // failure empties the first and refuses the second.
 func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
-	fresh statelog.Freshness) (ResolvedThread, error) {
-	call := r.pinned()
-	got, err := call.thread(ctx, identified(call.chart, q), fresh)
-	// THE REFUSAL NAMES PEOPLE TOO, and the caller reads it to choose which
-	// question it is answering — so it names them as they are called now.
-	var ambiguous *ErrAmbiguousAnswer
-	if errors.As(err, &ambiguous) {
-		named := shown(call.chart, *ambiguous)
-		err = &named
-	}
-	return shown(call.chart, got), err
-}
-
-// thread is [Reader.Thread] once every person the question names is their seat's
-// identity — see people.go.
-func (r *Reader) thread(ctx context.Context, q ThreadQuery,
 	fresh statelog.Freshness) (ResolvedThread, error) {
 
 	if q.Task == "" {
@@ -201,7 +184,7 @@ func (r *Reader) thread(ctx context.Context, q ThreadQuery,
 		if err != nil {
 			return err
 		}
-		if err := ask.answerableBy(r.chart, q.Author, q.Comment); err != nil {
+		if err := ask.answerableBy(q.Author, q.Comment); err != nil {
 			return err
 		}
 		if err := checkChoice(q.Task, ask.id, ask.decision, q.Choice); err != nil {
@@ -383,11 +366,9 @@ func readAsk(ctx context.Context, tx *sql.Tx, task, comment string) (openAsk, er
 // answered is a retried write whose first attempt landed, not a second
 // answer.
 //
-// The rows and the author are seat IDENTITIES, compared as such; every
-// refusal NAMES them as they are called now, through chart — the one reading
-// the caller's call holds — because the caller reads the refusal to find the
-// person, and a renamed seat's identity is an address nobody answers to.
-func (a openAsk) answerableBy(chart seatnames.Chart, author, self string) error {
+// The rows and the author are seat handles, compared as such, and every
+// refusal NAMES them, because the caller reads the refusal to find the person.
+func (a openAsk) answerableBy(author, self string) error {
 	switch {
 	case a.asked == "":
 		return invalid("comment %s on task %s asked nobody a "+
@@ -396,8 +377,8 @@ func (a openAsk) answerableBy(chart seatnames.Chart, author, self string) error 
 	case author != "" && a.asked != author:
 		return forbidden("comment %s on task %s asked %s rather than %s, and "+
 			"answering it would close somebody else's question",
-			a.id, a.task, seatnames.CurrentOf(chart, a.asked),
-			seatnames.CurrentOf(chart, author))
+			a.id, a.task, a.asked,
+			author)
 	case a.removed:
 		return invalid("comment %s on task %s was removed",
 			a.id, a.task)
@@ -405,10 +386,10 @@ func (a openAsk) answerableBy(chart seatnames.Chart, author, self string) error 
 		return nil
 	case a.answeredBy != "":
 		return &AlreadyAnsweredError{Task: a.task, Comment: a.id,
-			By: seatnames.CurrentOf(chart, a.answerAuthor), At: a.answeredAt}
+			By: a.answerAuthor, At: a.answeredAt}
 	case a.resolved:
 		return &AlreadyAnsweredError{Task: a.task, Comment: a.id,
-			By: seatnames.CurrentOf(chart, a.resolvedBy), At: a.resolvedAt,
+			By: a.resolvedBy, At: a.resolvedAt,
 			Resolved: true}
 	}
 	return nil

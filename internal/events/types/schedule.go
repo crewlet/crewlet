@@ -43,13 +43,12 @@ type ScheduledTaskFired struct {
 	ScopeType ScheduleScope `json:"scope_type"`
 
 	// ScopeID is the identity the at-most-once ledger keys this fire on —
-	// a seat's agent id, or a unit's origin key. ScopeName is the same
-	// scope as a person reads it: the seat's handle, or the unit's key.
+	// a seat's agent id, or a unit's key. ScopeName is the same scope as a
+	// person reads it: the seat's handle, or the unit's key.
 	//
 	// BOTH, because they answer different questions. A reader following
 	// this event back to the schedule's own history needs the id, and a
-	// reader of the summary below needs a name — and a renamed seat's id
-	// is the one that still reaches its history.
+	// reader of the summary below needs a name.
 	ScopeID   string `json:"scope_id"`
 	ScopeName string `json:"scope_name,omitempty"`
 

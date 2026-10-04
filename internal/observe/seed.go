@@ -185,8 +185,7 @@ func Seed(ctx context.Context, history FleetHistory, organization *org.Organizat
 // the projection states and the turns are asked for.
 //
 // BY AGENT ID, the one identity a turn row carries for its seat — never the
-// role name, which two seats may share, and which a rename changes while the
-// seat's turns stay its own.
+// role name, which two seats may share.
 func agentSeats(organization *org.Organization) []string {
 	if organization == nil {
 		return nil

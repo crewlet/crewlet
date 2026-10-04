@@ -181,11 +181,10 @@ type MCPServerStatus struct {
 	// so two beats with the same failures publish the same row.
 	//
 	// THE ID RATHER THAN THE HANDLE, because this row is published on a
-	// lease every peer reads, and a peer reads it against its OWN chart: a
-	// handle is an address a rename moves, so a row naming one would point
-	// a reader at whoever answers to it now, while the id names the seat
-	// the instance was launched for and the reader resolves it to the
-	// handle that seat answers to (ADR-0026).
+	// lease every peer reads, and a peer reads it against its OWN org: the
+	// id names the seat the instance was launched for — the agent id
+	// derived from its handle (ADR-0013) — and the reader resolves it to
+	// that handle.
 	Error     string
 	ErrorSeat uuid.UUID
 }

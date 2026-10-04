@@ -11,12 +11,9 @@
 //
 // # THE TOKEN IS THE SEAT'S ID, NEVER ITS HANDLE
 //
-// The handle used to be the routing key, and a handle is an ADDRESS somebody
-// types: renaming a seat published its mail to a subject no consumer was
-// attached to and left the old mailbox holding whatever had arrived before
-// the edit. The id is [org.Organization.AgentIDFor]'s, derived from the
-// handle the seat was CREATED under — see ADR-0026 — so it is the one name
-// for a seat that a rename cannot move.
+// The id is [org.Organization.AgentIDFor]'s, derived from the seat's handle
+// (ADR-0013): a fixed-width token every node computes alike, which carries no
+// byte a subject cannot.
 //
 // The parameter is a [uuid.UUID] rather than a string on purpose. Every one
 // of these names is a wire name that has to match exactly, and the failure
@@ -176,8 +173,8 @@ const (
 
 // AgentInbox returns the inbox subject for the seat with this id.
 //
-// The id is the SEAT's, which every process derives from the org — never a
-// process-local instance id, and never the handle, which a rename moves. A
+// The id is the SEAT's, which every process derives from the org (ADR-0013)
+// — never a process-local instance id, and never the handle itself. A
 // nil id returns an empty subject rather than a topic named after nothing:
 // callers must treat that as "not routable" instead of publishing to
 // crewlet.agent..inbox, a real topic that no consumer subscribes to and that

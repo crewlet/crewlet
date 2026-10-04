@@ -182,10 +182,10 @@ func TestANodeWithNoGrantCeilingPublishesNone(t *testing.T) {
 }
 
 // AN MCP FAILURE NAMES ITS SEAT BY ID, and a value that is not one names no
-// seat. The row is read by every peer against its own chart, so a handle on
-// the wire would point a reader at whoever answers to it after a rename; and a
-// value no build of this one wrote — a handle, a mis-cased id — is decoded as
-// "did not say" rather than as a seat a reader would then go looking for.
+// seat. The row is read by every peer against its own chart, which keys a seat
+// by its id, so a value no build of this one wrote — a handle, a mis-cased id
+// — is decoded as "did not say" rather than as a seat a reader would then go
+// looking for.
 func TestAnMCPFailureNamesItsSeatByIDOrNotAtAll(t *testing.T) {
 	t.Parallel()
 	seat := uuid.MustParse("0b6f2c1e-9a4d-5c3b-8e7f-1a2b3c4d5e6f")

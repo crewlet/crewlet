@@ -73,9 +73,8 @@ func (e OrgStopped) SummaryFor(actor string) string {
 //
 // Agent is the seat's AGENT ID — what every other seat-level event carries
 // under `agent_id`, and the key the live projection holds a seat's state
-// under. AgentHandle and RoleName are what a reader calls the seat, and
-// neither identifies it: a name is prose two seats may share, and a handle
-// moves on a rename.
+// under, derived from the seat's handle (ADR-0013). AgentHandle and RoleName
+// are what a reader calls the seat; a name is prose two seats may share.
 type AgentSpawned struct {
 	Agent       string `json:"agent_id"`
 	AgentHandle string `json:"agent_handle"`

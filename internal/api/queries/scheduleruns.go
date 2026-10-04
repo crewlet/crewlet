@@ -58,11 +58,8 @@ func (s Sources) scheduleRuns(ctx context.Context, p Params) (any, error) {
 			// THE FIRE LABEL IS THE IDENTITY of one fire — the minute it
 			// was scheduled for — which is what tells a catchup fire from
 			// the tick that should have run it.
-			"fire_label": run.FireLabel,
-			// THE HANDLE THE RUNNER ANSWERS TO NOW: the ledger records
-			// the one the fire was dispatched to, which a rename since
-			// has retired.
-			"target_handle": currentHandle(names.organization, run.TargetHandle),
+			"fire_label":    run.FireLabel,
+			"target_handle": run.TargetHandle,
 			"scheduled_at":  isoOrEmpty(run.ScheduledAt),
 			"fired_at":      isoOrEmpty(run.FiredAt),
 			"outcome":       string(run.Outcome),

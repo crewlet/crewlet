@@ -55,10 +55,9 @@ func PlanFor(o *org.Organization, cfg *config.Mattermost) (*provision.Plan, erro
 				handle, provision.Shape(seat.Mattermost.BotToken))
 			continue
 		}
-		origin := provision.Origin(seat.Origin())
 		plan.Add(provision.Seat{
-			Handle: handle, Origin: origin, Role: seat.Name, TokenVar: name,
-			Email: BotEmail(cfg.Provisioning, origin),
+			Handle: handle, Role: seat.Name, TokenVar: name,
+			Email: BotEmail(cfg.Provisioning, handle),
 		})
 	}
 	return plan, nil
@@ -66,24 +65,23 @@ func PlanFor(o *org.Organization, cfg *config.Mattermost) (*provision.Plan, erro
 
 // BotUsername is a seat's bot username.
 //
-// FROM THE ORIGIN HANDLE, never the live one: this is the name the next pass
-// looks the account up by, so a rename that moved it would leave the running
-// bot unmatched and make a second. See [provision.Origin].
+// FROM THE HANDLE, which is immutable (ADR-0013): this is the name the next
+// pass looks the account up by.
 //
 // LOWERCASED, because Mattermost usernames are and a mixed-case handle would
 // be created as one thing and looked up as another on the next run — which
 // reads as "the bot is missing" and creates a second.
-func BotUsername(p *config.MattermostProvisioning, origin provision.Origin) string {
+func BotUsername(p *config.MattermostProvisioning, handle string) string {
 	prefix := ""
 	if p != nil {
 		prefix = strings.TrimSpace(p.UsernamePrefix)
 	}
-	return strings.ToLower(prefix + string(origin))
+	return strings.ToLower(prefix + handle)
 }
 
 // BotEmail is the address a bot account is created with.
-func BotEmail(p *config.MattermostProvisioning, origin provision.Origin) string {
-	return BotUsername(p, origin) + "@noreply.crewlet.invalid"
+func BotEmail(p *config.MattermostProvisioning, handle string) string {
+	return BotUsername(p, handle) + "@noreply.crewlet.invalid"
 }
 
 // BotDisplayName is what a person sees beside the bot's posts.
@@ -240,9 +238,9 @@ func (c *Client) RevokeTokens(ctx context.Context, userID string) error {
 // an administrator's own token or leave a live one behind, silently either
 // way.
 //
-// FOLDED, because the description is built from an origin handle a person
-// wrote (see [TokenDescription]) and a decommission recovers that origin from
-// the LOWERCASED username Mattermost stores. Comparing exactly there would
+// FOLDED, because the description is built from a handle a person wrote (see
+// [TokenDescription]) and a decommission recovers that handle from the
+// LOWERCASED username Mattermost stores. Comparing exactly there would
 // leave a mixed-case seat's credential live on an account this engine had
 // just disabled.
 func (c *Client) RevokeMinted(ctx context.Context, userID, description, keep string) (int, error) {

@@ -348,15 +348,14 @@ func TestATokenThisNodeCannotCheckIsUnavailable(t *testing.T) {
 // every other credential's binding goes through.
 //
 // A person's own token is them, and a person bound to a seat writes AS the
-// seat — so the token does too, with the kind following the seat and the
-// chart's current handle. Mutation: skip the binding and it acts as a bare
-// person nobody seated; take the row's handle raw and a rename is lost.
+// seat — so the token does too, with the kind following the seat. Mutation:
+// skip the binding and it acts as a bare person nobody seated.
 func TestABoundOwnersTokenActsAsTheirSeat(t *testing.T) {
 	t.Parallel()
 	m := newMachineRig(t)
 	m.row.Owner.Seat = sessionSeat
 	m.chart.seats[sessionSeat] = session.Seat{
-		Handle: "platform-director", Kind: "human", Unit: "platform",
+		Handle: sessionSeat, Kind: "human", Unit: "platform",
 	}
 	got, _ := present(t, m.guard(nil), http.MethodGet, "/agents",
 		m.presented.Value())
@@ -364,9 +363,8 @@ func TestABoundOwnersTokenActsAsTheirSeat(t *testing.T) {
 		t.Fatalf("status %d, want 200 (body %v)", got.status, got.body)
 	}
 	p := got.principal
-	if p.Kind != iam.KindPerson || p.Seat != "platform-director" {
-		t.Errorf("acts as %s %q, want a person at the seat's current handle",
-			p.Kind, p.Seat)
+	if p.Kind != iam.KindPerson || p.Seat != sessionSeat {
+		t.Errorf("acts as %s %q, want a person at %q", p.Kind, p.Seat, sessionSeat)
 	}
 	if p.Position != "platform" {
 		t.Errorf("position %q, want platform", p.Position)

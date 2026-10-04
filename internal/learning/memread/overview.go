@@ -43,8 +43,8 @@ import (
 
 // OverviewSeat is one seat's row of the overview.
 type OverviewSeat struct {
-	// ID is the seat's agent id, which a row is matched by; Handle the
-	// handle it answers to now, which a list draws.
+	// ID is the seat's agent id, which a row is matched by; Handle its
+	// handle, which a list draws.
 	ID     string `json:"agent_id"`
 	Handle string `json:"handle"`
 
@@ -314,14 +314,14 @@ func (s *Stores) Overview(ctx context.Context, seats []Seat) ([]OverviewSeat, er
 			}
 		}
 		if s.Episodes != nil {
-			n, err := s.Episodes.Count(ctx, seat.Origin)
+			n, err := s.Episodes.Count(ctx, seat.Handle)
 			if err != nil {
 				return nil, err
 			}
 			row.EpisodesTotal = n
 		}
 		if s.Skills != nil {
-			n, err := s.Skills.Count(ctx, seat.Origin, learning.ListOptions{})
+			n, err := s.Skills.Count(ctx, seat.Handle, learning.ListOptions{})
 			if err != nil {
 				return nil, err
 			}

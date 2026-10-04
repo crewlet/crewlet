@@ -36,11 +36,9 @@ func TestASeatThisNodeHoldsHasItsMemoryReadHere(t *testing.T) {
 	}
 	company := e.Company()
 	for _, placed := range company.Seats() {
-		// THE SEAT AS THE ASKER RESOLVES IT: its id, the handle it was
-		// created under and the one it answers to — memread re-resolves
-		// nothing.
-		seat := memread.Seat{ID: placed.ID, Handle: placed.Handle,
-			Origin: company.Org.AgentSeatByID(placed.ID).Origin()}
+		// THE SEAT AS THE ASKER RESOLVES IT: its id and its handle —
+		// memread re-resolves nothing.
+		seat := memread.Seat{ID: placed.ID, Handle: placed.Handle}
 		got, err := reads.Memory(t.Context(), seat, 1)
 		if err != nil {
 			t.Fatalf("reading %s's memory on the node holding it: %v", seat.Handle, err)

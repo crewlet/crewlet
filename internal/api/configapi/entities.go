@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -394,6 +395,10 @@ var entityKinds = map[string]entityAccess{
 	},
 }
 
+// inOrgChart reports whether a collection is part of the org chart, whose
+// routes its leads may take as well as the company's grant.
+func inOrgChart(kind string) bool { return kind == EntityRoles || kind == EntityUnits }
+
 // EntityKinds names every addressable collection, sorted — so a caller can
 // discover the surface rather than carrying its own copy of this list.
 func EntityKinds() []string {
@@ -470,6 +475,13 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 			s.fail(w, "read the active revision", err)
 			return
 		}
+		// A SEAT OR A UNIT IS READ BY ITS LEAD as well as by the grant
+		// that reads the whole document, decided on where it sits — and
+		// BEFORE it is looked for: an id the revision does not hold is
+		// decided at the root, so only the grant is told it is missing.
+		if inOrgChart(kind) && !s.mayReach(w, r, authz.ActionOrgRead, company, kind, id) {
+			return
+		}
 		entity, found := entityKinds[kind].find(company, id)
 		if !found {
 			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchEntity,
@@ -541,6 +553,23 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 				})
 			return
 		}
+		// A SEAT OR A UNIT IS WRITTEN BY ITS LEAD as well as by the
+		// company's grant, and decided as a read of it is: where it sits,
+		// BEFORE the id is looked up or the body decoded, so an id outside
+		// the caller's subtree and one the revision does not hold are
+		// refused in the same bytes. Building first answered a body with
+		// another handle 400 naming where the seat sits, a well-formed one
+		// admission's 403 naming its unit, and a missing id 404.
+		if inOrgChart(kind) {
+			company, err := s.open(active)
+			if err != nil {
+				s.fail(w, "open the active revision", err)
+				return
+			}
+			if !s.mayReach(w, r, authz.ActionOrgWrite, company, kind, id) {
+				return
+			}
+		}
 		create, ok := s.entityPrecondition(w, r, active, found)
 		if !ok {
 			return
@@ -552,6 +581,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			s.refuseEntity(w, kind, id, err)
 			return
 		}
+		d.principal = principalOf(r)
 		prepared, err := s.prepare(r.Context(), d)
 		if err != nil {
 			s.refuseEntity(w, kind, id, err)

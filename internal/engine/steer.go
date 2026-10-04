@@ -242,9 +242,9 @@ func (e *Engine) openSteer(runID, handle string, box *steer.Box,
 		}
 	}
 	// THE SEAT BY ITS ID beside its handle: who may steer the turn is
-	// decided on the seat, and the id is what a rename does not move. A
-	// handle the running company resolves to no agent seat files an empty
-	// id, which a decision reads as a seat it cannot name.
+	// decided on the seat. A handle the running company resolves to no
+	// agent seat files an empty id, which a decision reads as a seat it
+	// cannot name.
 	seat := steerSeat{handle: handle}
 	if id, err := e.seatID(handle); err == nil {
 		seat.agent = id.String()

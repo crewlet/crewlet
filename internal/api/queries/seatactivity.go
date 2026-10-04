@@ -206,10 +206,8 @@ type chartSeat struct {
 // by the engine, so it has no turns to count and no row here — a zero beside a
 // person would read as a person who did nothing.
 //
-// EACH BY THE ID ITS DAYS ARE FILED UNDER, which is derived from the handle the
-// seat was CREATED under ([org.Organization.AgentIDFor]) — never from the one it
-// answers to now, which named a different seat's days, or nobody's, the moment
-// a seat had been renamed.
+// EACH BY THE ID ITS DAYS ARE FILED UNDER, derived from the seat's handle
+// ([org.Organization.AgentIDFor]).
 func chartSeats(organization *org.Organization) []chartSeat {
 	if organization == nil {
 		return nil
@@ -240,9 +238,8 @@ type seatActivityFold struct {
 //
 // PURE over its inputs, so the arithmetic — the sums across nodes, the
 // reviewed-only denominator, the merged quantiles — is testable without a
-// database. A seat is keyed on its AGENT ID, which every node derives alike
-// and which survives a rename; the handle and role shown are the chart's, or
-// else the newest day's.
+// database. A seat is keyed on its AGENT ID, which every node derives alike;
+// the handle and role shown are the org's, or else the newest day's.
 func foldSeatActivity(rows []usage.SeatDay, f seatActivityFold) []SeatActivity {
 	inWindow := func(day string) bool {
 		return day >= f.window.First.Label && day <= f.window.Last.Label

@@ -64,10 +64,8 @@ import (
 // released.
 //
 // KEYED ON THE SEAT'S ID, like every hold on a mailbox: the inbox the hold is
-// taken on is named by the id (ADR-0026), so a park recorded under the handle
-// would be released, after a rename, by resuming a topic built from the new
-// handle — leaving the real one held for the rest of the window. The handle
-// rides along for the log lines.
+// taken on is named by the agent id derived from the handle (ADR-0013). The
+// handle rides along for the log lines.
 //
 // WHO HAS TO AGREE ON IT: this node alone. A park is a pause hold in this
 // process's queue client and an alarm in its memory. It is derived from the
@@ -103,8 +101,7 @@ type budgetParks struct {
 }
 
 // budgetParking is one parked seat: what the park was decided under, when the
-// refusing window turns over, and the handle the seat answered to then, for the
-// log lines.
+// refusing window turns over, and the seat's handle, for the log lines.
 type budgetParking struct {
 	handle   string
 	basis    budgetBasis

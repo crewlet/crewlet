@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -97,39 +96,14 @@ func (o *Organization) AllUnits() iter.Seq[*Unit] {
 // org model already addresses the seat by. A seat's NAME is prose a founder
 // edits, so resolving one by name made every reference to it break on a
 // rename, and made two derivations of "which seat is this" that disagreed
-// wherever an operator declared a handle.
-//
-// A RETIRED HANDLE RESOLVES TOO, and only after every live one has missed.
-// The chart moves what a rename touches by key — a seat's unit, a unit's
-// children, who leads what and the `manages:` entries that named it — but not
-// every reference to a seat is one it can reach: a unit's `lead:` typed with a
-// handle the seat had given up, an entry a version-1 rekey left as typed, a
-// handle pasted into chat. The alias is what keeps each of those pointing at
-// the person it named. The order is the rule rather than an optimisation: a
-// live handle must never lose to some other seat's retired one, which is
-// exactly what one merged pass over both would allow.
-//
-// AND THE HANDLE A SEAT WAS CREATED UNDER NEVER STOPS, ahead of any alias.
-// It is the seat's IDENTITY ([Role.Origin]): the chart never issues it to
-// another seat, so it cannot be anybody else's alias, and it resolves after
-// the capped alias list has let it go — the chart's own resolution rule, so the
-// runtime tree and the chart never disagree about what an address names.
+// wherever an operator declared a handle. A handle is IMMUTABLE (ADR-0013),
+// so a handle no seat answers to names nobody: there are no aliases.
 func (o *Organization) Role(handle string) *Role {
 	if handle == "" {
 		return nil
 	}
 	for r := range o.AllRoles() {
 		if r.Handle() == handle {
-			return r
-		}
-	}
-	for r := range o.AllRoles() {
-		if r.OriginHandle == handle {
-			return r
-		}
-	}
-	for r := range o.AllRoles() {
-		if slices.Contains(r.FormerHandles, handle) {
 			return r
 		}
 	}
@@ -161,25 +135,7 @@ func (o *Organization) Unit(key string) *Unit {
 	if key == "" {
 		return nil
 	}
-	if u := o.unitByKey(func(k string) bool { return k == key }); u != nil {
-		return u
-	}
-	// A RETIRED KEY, after every live one has missed — see
-	// [Organization.Role], and here it is what keeps a root seat's `unit:`
-	// and a `manages:` entry naming a renamed team resolving to that team
-	// rather than silently placing the seat at the root. The key the unit was
-	// created under first, for the reason Role gives.
-	for u := range o.AllUnits() {
-		if u.OriginKey == key {
-			return u
-		}
-	}
-	for u := range o.AllUnits() {
-		if slices.Contains(u.FormerKeys, key) {
-			return u
-		}
-	}
-	return nil
+	return o.unitByKey(func(k string) bool { return k == key })
 }
 
 // NormalizeKey is the canonical form of a unit key: the fold every unit
@@ -204,16 +160,15 @@ func NormalizeKey(key string) string {
 // row, carried on a record, or typed into a filter or a tool argument — to the
 // unit it names.
 //
-// THE KEY FIRST, in [Organization.Unit]'s order — the live key, the key the
-// unit was created under, a former key — because a key is what every stored
-// row holds and the chart never gives one address to two units. Then the same
-// three under [NormalizeKey], the fold the admission rule claims a key
-// under, never [strings.EqualFold], which is a different fold: a reference
-// arrives from places nobody spells carefully — a model typing
-// `unit: Engineering`, a query string a person wrote, a URL somebody pasted.
+// THE KEY FIRST, exactly ([Organization.Unit]), because a key is what every
+// stored row holds and is immutable (ADR-0013). Then under [NormalizeKey], the
+// fold the admission rule claims a key under, never [strings.EqualFold], which
+// is a different fold: a reference arrives from places nobody spells
+// carefully — a model typing `unit: Engineering`, a query string a person
+// wrote, a URL somebody pasted.
 //
 // A NAME ONLY WHEN IT IS ONE UNIT'S. A name is prose, and two units may carry
-// the same one — the chart addresses a unit by its key and admits a repeated
+// the same one — the document addresses a unit by its key and admits a repeated
 // name — so a name two units share names neither of them, rather than
 // whichever the walk reached first. Every key is tried before any name, so a
 // reference that is one unit's key and another unit's name resolves to the
@@ -233,18 +188,6 @@ func (o *Organization) UnitByRef(ref string) *Unit {
 	}
 	if u := o.unitByKey(func(k string) bool { return NormalizeKey(k) == folded }); u != nil {
 		return u
-	}
-	for u := range o.AllUnits() {
-		if u.OriginKey != "" && NormalizeKey(u.OriginKey) == folded {
-			return u
-		}
-	}
-	for u := range o.AllUnits() {
-		for _, former := range u.FormerKeys {
-			if NormalizeKey(former) == folded {
-				return u
-			}
-		}
 	}
 	var named *Unit
 	for u := range o.AllUnits() {
@@ -278,9 +221,8 @@ func (o *Organization) unitByKey(match func(key string) bool) *Unit {
 // ---- seat identity -------------------------------------------------- //
 //
 // An agent seat's runtime identity is DERIVED from the org, never looked up
-// in a process: a UUIDv5 over (org name, the handle the seat was created
-// under), so every node computes the same id for the same seat with no
-// database and no running instance.
+// in a process: a UUIDv5 over (org name, handle), so every node computes the
+// same id for the same seat with no database and no running instance.
 // These three are that derivation and its inverse, in one place, so routing
 // can answer "which seat is this event for?" without asking whether the
 // seat happens to be running locally.
@@ -295,14 +237,7 @@ func (o *Organization) AgentIDFor(r *Role) (uuid.UUID, bool) {
 	if r == nil || !r.IsAgent() {
 		return uuid.Nil, false
 	}
-	// FROM THE ORIGIN HANDLE, NEVER THE CURRENT ONE. Everything durable a
-	// seat owns is keyed on this id or on the origin itself — its mailbox
-	// and consumer group, its seat lease, its diary and its schedule ledger
-	// on the id, its episodes, skills, profiles and thread history on the
-	// origin — so deriving it from an address a founder retypes made every
-	// rename a brand-new seat standing in an empty office. See
-	// [Role.Origin].
-	return DeriveAgentID(o.Name, r.Origin())
+	return DeriveAgentID(o.Name, r.Handle())
 }
 
 // AgentSeatByHandle returns the AGENT seat with this handle, or nil.
@@ -311,10 +246,6 @@ func (o *Organization) AgentIDFor(r *Role) (uuid.UUID, bool) {
 // kinds: this lookup's callers publish to an inbox, and a human seat has
 // none.
 func (o *Organization) AgentSeatByHandle(handle string) *Role {
-	// THROUGH [Organization.Role], so a retired handle resolves here on the
-	// same terms it resolves everywhere else. A second walk with its own
-	// alias rule is how one lookup starts answering a question differently
-	// from the lookup beside it.
 	if r := o.Role(handle); r != nil && r.IsAgent() {
 		return r
 	}
@@ -483,60 +414,32 @@ func (o *Organization) inheritMCPEnv() {
 // because neither step moves a seat between units, so the membership it
 // captures is the membership both of them see.
 type managesIndex struct {
-	// seats maps every address a seat answers to — its handle, the handle it
-	// was created under and each of its retired ones — to the handle it
-	// answers to NOW, in [Organization.Role]'s order.
-	//
-	// THE VALUE IS THE CURRENT HANDLE, not a presence marker, and that is
-	// what makes a rename keep a roster intact. [Organization.expandManages]
-	// rewrites every entry through this map, so a `manages:` list naming
-	// somebody by the handle they had last quarter lands as the handle they
-	// have today — which is what [Organization.Manager] reads, and it
-	// compares against a live handle rather than resolving anything.
-	//
-	// A LIVE HANDLE ALWAYS WINS over another seat's retired one, for
-	// [Organization.Role]'s reason: the live pass is written first and the
-	// later passes may not overwrite it. THE ORIGIN COMES BEFORE AN ALIAS
-	// and outlives the capped alias list, again as Role reads it: an entry
-	// naming the handle a seat was created under, sixteen renames ago, was
-	// read as naming nobody here while every lookup resolved it — so the
-	// manager managed nobody, or a team keyed on that spelling.
-	seats map[string]string
+	// seats is every seat handle in the company.
+	seats map[string]struct{}
 	// unitSeats is each unit KEY's seat handles, descendants included, in
-	// [Unit.AllRoles] order, under the unit's current key and each retired
-	// one. The FIRST unit answering to a key owns it, the same answer
-	// [Organization.Unit] gives: a stored revision can still hold two units
-	// on one key, and an expansion that read the last one while every lookup
-	// read the first would manage one team while reporting another.
+	// [Unit.AllRoles] order. The FIRST unit answering to a key owns it, the
+	// same answer [Organization.Unit] gives: a stored revision can still hold
+	// two units on one key, and an expansion that read the last one while
+	// every lookup read the first would manage one team while reporting
+	// another.
 	unitSeats map[string][]string
 }
 
 func (o *Organization) managesIndex() managesIndex {
 	index := managesIndex{
-		seats:     make(map[string]string),
+		seats:     make(map[string]struct{}),
 		unitSeats: make(map[string][]string),
 	}
 	for r := range o.AllRoles() {
-		index.seats[r.Handle()] = r.Handle()
+		index.seats[r.Handle()] = struct{}{}
 	}
-	for r := range o.AllRoles() {
-		if _, taken := index.seats[r.Origin()]; !taken {
-			index.seats[r.Origin()] = r.Handle()
-		}
-	}
-	for r := range o.AllRoles() {
-		for _, was := range r.FormerHandles {
-			if _, taken := index.seats[was]; !taken {
-				index.seats[was] = r.Handle()
-			}
-		}
-	}
-	claim := func(key string, u *Unit) {
+	for u := range o.AllUnits() {
+		key := u.Key()
 		if key == "" {
-			return
+			continue
 		}
 		if _, claimed := index.unitSeats[key]; claimed {
-			return
+			continue
 		}
 		handles := make([]string, 0, len(u.Roles))
 		for r := range u.AllRoles() {
@@ -544,26 +447,11 @@ func (o *Organization) managesIndex() managesIndex {
 		}
 		index.unitSeats[key] = handles
 	}
-	for u := range o.AllUnits() {
-		claim(u.Key(), u)
-	}
-	for u := range o.AllUnits() {
-		claim(u.Origin(), u)
-	}
-	for u := range o.AllUnits() {
-		for _, was := range u.FormerKeys {
-			claim(was, u)
-		}
-	}
 	return index
 }
 
 // resolve returns the HANDLES one manages entry of manager stands for.
 // manager is the managing seat's own handle.
-//
-// A SEAT REFERENCE IS ANSWERED WITH THE SEAT'S CURRENT HANDLE, which is how
-// an entry naming a renamed colleague keeps managing them: every reader of a
-// normalised manages list compares against live handles.
 //
 // A token that is BOTH a seat handle and a unit key stays a seat reference.
 // The seat is the more specific reading, and an operator who named a person
@@ -578,8 +466,8 @@ func (o *Organization) managesIndex() managesIndex {
 // rewrite the chart the operator wrote. [Organization.DanglingRefs] is what
 // reports it.
 func (x managesIndex) resolve(manager, entry string) []string {
-	if handle, isSeat := x.seats[entry]; isSeat {
-		return []string{handle}
+	if _, isSeat := x.seats[entry]; isSeat {
+		return []string{entry}
 	}
 	members, isUnit := x.unitSeats[entry]
 	if !isUnit {
@@ -813,33 +701,12 @@ func (d DanglingRef) Message() string {
 // nobody, but it is not a misspelling, so it is not reported.
 //
 // EVERY REFERENCE IS RESOLVED THE WAY THE ENGINE RESOLVES IT: seats by
-// handle, units by key, each including the addresses it used to answer to.
-// Checking a different identity here would report a misspelling the engine
-// does not have, or miss the one it does.
+// handle, units by key. Checking a different identity here would report a
+// misspelling the engine does not have, or miss the one it does.
 func (o *Organization) DanglingRefs() []DanglingRef {
-	// A SEAT ANSWERS TO ITS RETIRED HANDLES TOO, because
-	// [Organization.Role] does and this report may not disagree with it: a
-	// unit whose `lead:` names somebody by the handle they had last quarter
-	// HAS that lead, so calling it a misspelling would send an operator to
-	// fix a reference that works.
-	//
-	// THE UNIT SET CARRIES NO ALIASES, and the asymmetry is not an
-	// oversight. Only two references name a unit and neither can reach this
-	// report holding a retired key: a `unit:` that resolves — an alias
-	// included — has already moved its seat into that unit, so the seat is
-	// no longer among the root seats this checks; and a `manages:` entry is
-	// read after [Organization.expandManages] has rewritten it, which
-	// resolves aliases into member handles. Adding them would be a second
-	// rule nothing exercises.
 	seats := make(map[string]struct{})
 	for r := range o.AllRoles() {
 		seats[r.Handle()] = struct{}{}
-		// AND THE HANDLE IT WAS CREATED UNDER, which Role resolves after
-		// the capped alias list has let it go.
-		seats[r.Origin()] = struct{}{}
-		for _, was := range r.FormerHandles {
-			seats[was] = struct{}{}
-		}
 	}
 	units := make(map[string]struct{})
 	for u := range o.AllUnits() {

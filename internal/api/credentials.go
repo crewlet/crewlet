@@ -36,21 +36,19 @@ func (a *App) pushIdentityMoved(moved iamdomain.Moved) {
 	})
 }
 
-// seatOf is what the company this node has published says about the seat name
-// addresses — by [org.Organization.Role]'s rule, which resolves a live handle,
-// the handle a seat was created under and a handle it gave up — read from the
-// roster in memory. No published company holds no seat.
+// seatOf is what the company this node has published says about the seat a
+// handle names, read from the roster in memory. No published company holds no
+// seat.
 func seatOf(company func() (*config.Company, *org.Organization),
-	name string) (stream.SeatState, bool) {
+	handle string) (stream.SeatState, bool) {
 
 	_, roster := company()
 	if roster == nil {
 		return stream.SeatState{}, false
 	}
-	role := roster.Role(name)
+	role := roster.Role(handle)
 	if role == nil {
 		return stream.SeatState{}, false
 	}
-	return stream.SeatState{Origin: role.Origin(), Handle: role.Handle(),
-		Human: role.IsHuman()}, true
+	return stream.SeatState{Human: role.IsHuman()}, true
 }

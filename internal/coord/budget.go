@@ -56,12 +56,8 @@ const OrgScope = "org"
 
 // AgentScope is one seat's counter key.
 //
-// Keyed on the seat's DERIVED agent id — the uuid over the handle it was
-// CREATED under (ADR-0026) — rather than on the handle it answers to now, as
-// its lease, its mailbox and its diary are: a rename keeps the seat's spend in
-// every window, where a key on the handle handed the renamed seat a fresh
-// allowance mid-month, and a hire given a freed handle starts its own counter
-// rather than inheriting the spend of whoever answered to it before.
+// Keyed on the seat's DERIVED agent id — the uuid over its handle (ADR-0013) —
+// as its lease, its mailbox and its diary are.
 func AgentScope(agentID string) string { return "agent:" + agentID }
 
 // Windows is the window of each period a charge is counted in, or a read is

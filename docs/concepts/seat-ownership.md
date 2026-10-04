@@ -1,8 +1,8 @@
 # Seat Ownership
 
-A **seat** is a role in the org chart, addressed by its handle and identified by its id. **Seat ownership** is how a fleet of Crewlet nodes decides which node runs which seat — and, more importantly, how it guarantees that no two of them run the same one.
+A **seat** is a role in the org chart, addressed by its handle and identified by the id derived from it. **Seat ownership** is how a fleet of Crewlet nodes decides which node runs which seat — and, more importantly, how it guarantees that no two of them run the same one.
 
-The handle and the id are not the same thing, and the difference decides every name below. A handle is an **address**: what a founder types, what a `manages:` entry points at, what a screen shows. An id is an **identity**: a UUIDv5 over the company name and the handle the seat was *created* under, so a rename moves the address and never the id. Everything durable a seat owns is named by the id — because a rename that moved a mailbox would silently deliver its mail to a subject nobody is attached to, and a rename that moved a lease would let two nodes each hold "the seat" and both run it.
+A handle is what a founder types, what a `manages:` entry points at and what a screen shows, and it is immutable: a document that changes one removes the seat and creates another ([ADR-0013](https://github.com/crewlet/crewlet/blob/main/adr/0013-a-seats-identity-is-derived.md)). The id is a UUIDv5 over the company name and the handle, and the seat's lease, mailbox and memory changelog are named by it.
 
 The rule the whole design serves is one sentence: **a seat is not a thing you can half-own.** A node either holds a seat's lease, runs its agent, consumes its inbox and answers its sandbox completions, or it does none of those things.
 
@@ -229,25 +229,13 @@ hands over the rest as it applies them; one that has not within the
 hydration's fifteen seconds fails the hydration, which refuses the seat rather
 than admitting it without its newest memory.
 
-The subject carries the seat's **id**, not its handle. Compaction is why:
-because the stream keeps one message per subject, a subject IS a row's durable
-address — so while the handle was in it, renaming a seat moved every one of its
-subjects at once. The node that took the seat next replayed an empty prefix,
-reported a successful hydration of nothing, and everything the seat had learned
-sat on the stream under an address nothing would ask for again.
+The subject carries the seat's **id**, as its lease and its mailbox do.
 
-Five of the tables name a seat by a handle inside the row rather than by the id
-(`episodes`, `counterparty_profiles`, the two skill tables and the conversation
-ledger), and that handle is the one the seat was **created** under — the same
-origin the id is derived from, which the chart never issues to another seat —
-never the one it answers to now. Every writer and every reader uses it, so the
-rows travel under the id's subjects, land under the origin, and are read under
-the origin by the seat whatever it has been renamed to since. The column is
-still called `agent_handle` (`observer_handle` for a profile), because its value
-is still a handle: for a seat never renamed it is the handle it answers to, so
-no row written before needed re-keying — and a carried row travels by column
-name, so renaming the column would have changed the wire contract between peers
-in the middle of an upgrade.
+Five of the tables name a seat by its handle inside the row rather than by the
+id (`episodes`, `counterparty_profiles`, the two skill tables and the
+conversation ledger), in a column called `agent_handle` (`observer_handle` for
+a profile). The rows travel under the id's subjects and land under the handle,
+and a carried row travels by column name.
 
 What travels: the diary, episodes, counterparty profiles, synthesized skills
 and their versions, onboarding markers, and the conversation ledger. What does
@@ -317,7 +305,7 @@ It is deliberately **not** a claim, and the absences are the design:
 - **No `in_progress` state.** The seat lease is already the mutual exclusion — one consuming node, serial within it — so a claim's only honest disposition for a stale in-progress row is "supersede and re-run", which is exactly what you do with no row at all. An earlier design had one; five of five reviewers rejected it, because every other defect they found existed only to service that state.
 - **No expiry, no supersede rule.** A record means the work is done, and done does not lapse. Records age out on the bucket's own seven-day retention — garbage collection, not semantics, and its floor is the scheduler's catchup ceiling rather than a round number: forgetting a completion a tick could still evaluate lets that fire run twice.
 - **Keyed on *constituent* event ids.** A multi-event partition is merged into one digest before the turn runs, and that digest is minted fresh on every coalesce, so a key taken from it would differ on every redelivery and match nothing. Recording constituents also means a redelivery that overlaps a previous partition only partially — A+B ran, then A+B+C arrives — skips A and B and runs C.
-- **Filed under the seat's identity, never its address.** A seat is named by the handle it was *created* under (see [ADR-0026](https://github.com/crewlet/crewlet/blob/main/adr/0026-a-seats-identity-is-derived-from-the-handle-it-was-created-under.md)), and its mailbox follows it through a rename — so a trigger it worked as `cto` is redelivered, after a rename to `chief`, under the new handle. Keyed on the address a delivery came in on, the ledger found nothing there and the turn ran a second time. For a seat never renamed the two are the same handle, so every record already written is keyed correctly.
+- **Filed under the seat's handle**, as the delivery names it.
 
 **Both directions fail open, and that is the whole failure policy.** An unreadable ledger cannot tell you whether work was done, and the only safe answer to that is the one the engine gave before the table existed: run it. Failing closed would park real work during a database blip — and the seat's own admission gate already refuses new turns within one heartbeat of a store it cannot reach. The write happens *after* the side effects shipped, so failing to record them cannot un-ship them.
 
@@ -414,7 +402,7 @@ It does, because the **durable subscription** is what retains messages, and the 
 
 ## The removed seat
 
-A seat that leaves the company's agent seats — removed from the chart, or made a human seat — leaves its mailbox behind. (A **rename** does not: the mailbox is named by the seat's id, so it moves with the seat rather than being left for the sweep.) Nothing consumes it again, and an interest-retained subscription keeps every event still addressed to the seat. Left alone, that mail is retained for the life of the deployment. No other seat ever attaches to it: the mailbox is named by an id derived from the handle the seat was created under, and the chart never gives that handle to another seat, so a new seat for the same role is a new mailbox.
+A seat that leaves the company's agent seats — removed from the company, its handle changed (a removal and a creation), or made a human seat — leaves its mailbox behind. Nothing consumes it again, and an interest-retained subscription keeps every event still addressed to the seat. Left alone, that mail is retained for the life of the deployment, and a seat later added under the same handle derives the same id, attaches to the old backlog and works it under a role definition that never wrote it.
 
 So the mailbox is **retired**: once the seat has been absent from the active revision for **24 hours**, the maintenance duty deletes its inbox and its sandbox control subscription, and the mail they hold with them.
 
@@ -422,10 +410,10 @@ So the mailbox is **retired**: once the seat has been absent from the active rev
 |---|---|
 | Its mailbox (the inbox and the sandbox control subscription) | Kept, with its mail, for 24 hours after a sweep first sees the seat missing, then deleted |
 | Its [coding runs](code-sandbox.md) (running, parked on a question, re-seeding, or mid-resume) | Kept for the same 24 hours, then ended as part of the retirement and before the mailbox is deleted: each box is reclaimed, each loss is announced as a `sandbox_run_failed` event with reason `seat_removed`, and each run's record is deleted |
-| Its memory (diary, episodes, counterparty profiles, onboarding markers) | Kept, not deleted. The half keyed by the agent id (the diary, onboarding markers) is reachable by no other seat, since the id is never derived again; the half keyed by the handle the seat was created under (episodes, synthesized skills, counterparty profiles, thread history) stays under that handle, which the chart never issues to another seat, so no later seat reads it either. A seat made a person's and an agent's again is the same seat and finds it where it left it |
+| Its memory (diary, episodes, counterparty profiles, onboarding markers) | Kept. Memory is keyed by the handle or by the agent id derived from the company name and the handle, so a seat added again under the same handle reattaches to it |
 | Its seat lease | Released by the node that held it, on that node's next placement sweep after it applies the revision (`seat_released_role_gone`) |
 
-**Why a grace period rather than deleting on the apply.** A delete is the one change here that cannot be undone, and one departure from the agent seats can be: a seat made a person's by mistake is made an agent's again, and it is the same seat, with the same id and the same mailbox. (A removal from the chart cannot be undone at all — its address and identity are retired for good — so for a removed seat the grace only delays a cleanup.) Twenty-four hours is long enough for a seat made an agent's again within a working day to come back to the mail it was sent while it was gone, and short enough that mail for a seat nobody runs is not kept for more than a day. The clock starts when a sweep first observes the absence, so a retirement is never early: at worst it is one maintenance tick (15 minutes) late, and later still while no node that runs worker duties has applied the current revision.
+**Why a grace period rather than deleting on the apply.** A delete is the one change here that cannot be undone, and seats are removed by mistake: an edit that is reverted, an import of an older file, a seat made a person's and then an agent's again. Twenty-four hours is long enough for a seat restored within a working day to come back to the mail it was sent while it was gone, and short enough that mail for a seat nobody runs is not kept for more than a day. The clock starts when a sweep first observes the absence, so a retirement is never early: at worst it is one maintenance tick (15 minutes) late, and later still while no node that runs worker duties has applied the current revision.
 
 **How the fleet knows a mailbox exists.** A mailbox's name is derived from the seat's id, so nothing needs to remember it while the seat is in the company. A removed seat is gone from the org, though, so every node records each seat in the coordination store's `mailboxes` bucket **before** it creates the subscription — filed under the seat's id, which is what the subscription is named by, with the handle beside it as the label a retirement log line reads. That record carries what the retirement runs on: when the seat was first seen missing, whether a retirement is in flight, and the version every write is conditional on. A registration that fails is logged as `seat_mailbox_unregistered` and the mailbox is created anyway, because a seat in the company losing mail is worse than a mailbox the next sweep registers.
 
@@ -544,7 +532,7 @@ The current protocol is **5**, and it has moved four times — each time because
 - **v2 — the completion ledger.** Holding a seat lease now means consulting and settling the completion ledger. A v1 node cannot: it takes a seat over, never reads the record, and re-runs a turn whose effects already shipped.
 - **v3 — placement.** Holding a seat lease now means "and this node satisfies the seat's `role.placement`". A v2 node has no such concept, so it claims a seat pinned to a node id or a label it does not carry — and *succeeds*, because the lease is only a mutex and knows nothing about where a seat belongs. The operator's pin is silently violated: the seat runs, on the wrong node, with nothing to see.
 - **v4 — windowed token counters.** Holding a seat lease now means charging the seat's rounds to the [windowed token counters](coordination.md#token-budgets-are-windows) — a slot per day, week and month on the company's clock. A v3 node has only the lifetime counter, so beside a v4 node the two builds charge different records: each admits against a figure that is missing what the other build spent, and every cap binds late by exactly that much, with nothing refused to show it.
-- **v5 — a seat's resources are named by its id.** Holding a seat lease now means holding `seat:{seat-id}` and consuming the mailbox named by that same id — the uuid derived from the handle the seat was created under, which a rename does not move ([ADR-0026](https://github.com/crewlet/crewlet/blob/main/adr/0026-a-seats-identity-is-derived-from-the-handle-it-was-created-under.md)). A v4 node names both by the seat's current handle, so beside a v5 node the two builds claim *different* leases for one seat and attach different mailboxes, and each runs it — the very double attachment the lease exists to make impossible, with neither node able to see the other's claim.
+- **v5 — a seat's resources are named by its id.** Holding a seat lease now means holding `seat:{seat-id}` and consuming the mailbox named by that same id — the uuid derived from the seat's handle ([ADR-0013](https://github.com/crewlet/crewlet/blob/main/adr/0013-a-seats-identity-is-derived.md)). A v4 node names both by the handle itself, so beside a v5 node the two builds claim *different* leases for one seat and attach different mailboxes, and each runs it — the very double attachment the lease exists to make impossible, with neither node able to see the other's claim.
 
 ## What ownership looks like from outside
 

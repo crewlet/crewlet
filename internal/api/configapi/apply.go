@@ -229,6 +229,10 @@ type draft struct {
 	build func(base) (*config.Company, []byte, error)
 	// rules is what the proposed company is held to.
 	rules func(*config.Company) error
+	// principal is who asked for the write, which is admitted on what it
+	// changes (admission.go); nil for the engine's own writes, which no
+	// request made.
+	principal *iam.Principal
 }
 
 // prepared is a write built and checked, and not yet stored: everything a dry
@@ -255,6 +259,8 @@ type prepared struct {
 //     and the prior masks are restored from, and a revision this build
 //     would refuse must stay replaceable by the write that corrects it.
 //   - The proposal, built by the draft.
+//   - Whether the caller may make it: the company's grant, or a lead inside
+//     their own subtree (admission.go). The engine's own writes are not asked.
 //   - Its hierarchy, DERIVED BEFORE IT IS JUDGED, because a refusal carries
 //     it too.
 //   - Its rules, and what an answer reports about it.
@@ -296,6 +302,14 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	company, document, err := d.build(b)
 	if err != nil {
 		return nil, err
+	}
+	// WHO MAY MAKE IT, BEFORE ANYTHING IS SAID ABOUT IT: a refusal names what
+	// the caller may not change, rather than what is wrong with parts of the
+	// company they cannot read.
+	if d.principal != nil {
+		if err := admit(ctx, *d.principal, b.prior, company); err != nil {
+			return nil, err
+		}
 	}
 	derived := config.Derive(company)
 	if invalid := d.rules(company); invalid != nil {

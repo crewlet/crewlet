@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -53,8 +54,8 @@ func TestPromotionUnitsCarryTheirSeatsAndContainer(t *testing.T) {
 	if units[0].ID != "platform" || units[0].Container != "ENG" {
 		t.Fatalf("unit = %+v", units[0])
 	}
-	if len(units[0].Seats) != 2 {
-		t.Fatalf("seats = %v, want both of the unit's seats", units[0].Seats)
+	if !slices.Equal(units[0].Handles, []string{"eng", "sre"}) {
+		t.Fatalf("handles = %v, want both of the unit's seats", units[0].Handles)
 	}
 }
 
@@ -107,14 +108,21 @@ func TestAParentUnitDoesNotPoolItsChildrensSeats(t *testing.T) {
             llm: gateway
 `))
 	wireConfluence(e)
+	// BY THE UNIT'S KEY, which is what PromotionUnit.ID carries: matched on
+	// the display name, the loop skipped every unit and asserted nothing.
+	var found bool
 	for _, unit := range e.promotionUnits() {
-		if unit.ID != "Engineering" {
+		if unit.ID != "engineering" {
 			continue
 		}
-		if len(unit.Seats) != 1 || unit.Seats[0].Handle() != "vp" {
+		found = true
+		if !slices.Equal(unit.Handles, []string{"vp"}) {
 			t.Fatalf("the parent pooled %v, want only its own direct seat",
-				unit.Seats)
+				unit.Handles)
 		}
+	}
+	if !found {
+		t.Fatal("the parent unit is not among the promotion units")
 	}
 }
 

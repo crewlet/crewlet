@@ -242,15 +242,11 @@ func (s *Synthesizer) Skip(t Turn) string {
 
 // Reflect drafts one skill, or reports why it did not.
 func (s *Synthesizer) Reflect(ctx context.Context, t Turn) ([]events.Payload, error) {
-	// TWO NAMES FOR ONE SEAT, and they answer different readers: the
-	// catalogue is keyed on the handle the seat was created under, so a
-	// rename leaves every skill it drafted where its next turn looks, and
-	// the log and the event name it by the address the turn ran under.
-	seat, handle := t.Seat(), t.Event.AgentHandle
+	handle := t.Seat()
 
 	// THE CAP FIRST, because it is a cheap count and the alternative is
 	// paying for an auxiliary call whose result is thrown away.
-	count, err := s.skills.Count(ctx, seat, ListOptions{})
+	count, err := s.skills.Count(ctx, handle, ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("learning: counting %s's skills: %w", handle, err)
 	}
@@ -263,7 +259,7 @@ func (s *Synthesizer) Reflect(ctx context.Context, t Turn) ([]events.Payload, er
 	// THE DUPLICATE CHECK ALSO BEFORE THE CALL, for the same reason. The
 	// seat's existing sequences are what Skills.ToolSequences was written
 	// to serve.
-	existing, err := s.skills.ToolSequences(ctx, seat, ListOptions{})
+	existing, err := s.skills.ToolSequences(ctx, handle, ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("learning: reading %s's tool sequences: %w", handle, err)
 	}
@@ -303,7 +299,7 @@ func (s *Synthesizer) Reflect(ctx context.Context, t Turn) ([]events.Payload, er
 	at := s.now()
 	skill := Skill{
 		ID:               uuid.NewString(),
-		AgentHandle:      seat,
+		AgentHandle:      handle,
 		Name:             draft.Name,
 		Description:      draft.Description,
 		Content:          draft.Content,

@@ -75,7 +75,7 @@ type AskRow struct {
 	// Comment is the ask itself — the id an answer replies to, and the
 	// body, so a model can decide without a second read.
 	Comment string    `json:"comment"`
-	AskedBy string    `json:"asked_by" person:"seat"`
+	AskedBy string    `json:"asked_by"`
 	AskedAt time.Time `json:"asked_at"`
 	Body    string    `json:"body"`
 
@@ -147,7 +147,7 @@ type MyWorkTotals struct {
 
 // MyWork is the compound answer.
 type MyWork struct {
-	Handle string `json:"handle" person:"seat"`
+	Handle string `json:"handle"`
 
 	// Priorities is in the STORED ORDER, not re-sorted: the order is the
 	// content — it is what somebody decided — and sorting it by anything
@@ -180,7 +180,7 @@ type MyWorkQuery struct {
 	// hold. Required — "mine" is resolved by the surface from its own
 	// credential, never by this reader, because a reader that defaulted it
 	// would answer about whoever it happened to pick.
-	Handle string `person:"seat"`
+	Handle string
 
 	Level       statelog.ReadLevel
 	Session     statelog.Position
@@ -201,15 +201,6 @@ type MyWorkQuery struct {
 // here is derived from where the company's day began, so it agrees with the
 // mark the same task carries on a board.
 func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time,
-	loc *time.Location) (MyWork, error) {
-	call := r.pinned()
-	got, err := call.myWork(ctx, identified(call.chart, q), now, loc)
-	return shown(call.chart, got), err
-}
-
-// myWork is [Reader.MyWork] once every person the question names is their
-// seat's identity — see people.go.
-func (r *Reader) myWork(ctx context.Context, q MyWorkQuery, now time.Time,
 	loc *time.Location) (MyWork, error) {
 
 	if q.Level == "" {

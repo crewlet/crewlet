@@ -337,10 +337,7 @@ dialog. A name is prose, and two seats or two units may share one: every
 reference names a seat by its **handle** and a unit by its **key**, and the
 form asks for that address beside the name. It follows the name until you
 type one, and it is never an address a node of the saved chart or the draft
-holds — one this draft removes included — nor the one a renamed node was
-created under, which stays that node's identity. The chart never gives out the
-address of a node removed earlier either, and a save that asks for one is
-refused, naming it. A human seat's contact identity is optional: the form
+holds — one this draft removes included. A human seat's contact identity is optional: the form
 offers it (to a reader shown the runtime half), it can be added later in the
 seat's editor, and without one the person is reached through the dashboard
 only.
@@ -452,8 +449,8 @@ credential is ever shown.
   `${NAME}` reference, so for such a seat the bot username is read-only:
   changing it would make the provisioner find or create a second bot. A seat
   whose token is a literal is a bot somebody manages by hand, and its username
-  stays editable. Empty means the provisioning username prefix and the handle
-  the seat was created under, lowercased.
+  stays editable. Empty means the provisioning username prefix and the seat's
+  handle, lowercased.
 - **GitLab:** the access level (developer or maintainer) the seat's account
   joins with, when GitLab provisioning is set up. Access levels are kept in
   the settings by handle, so a new handle carries its level with it.
@@ -575,10 +572,9 @@ would do before it does it:
 - **What changes:** the units and seats added, removed, renamed, moved and
   edited, and the charter fields.
 - **What follows:** the consequences a reader can work out from the chart's
-  own rows: a new address for a seat or a unit (which keeps its identity, and
-  whose old address goes on reaching it), seats that onboard again and why,
-  where onboarding pages are looked up after a unit is renamed, the tool
-  credentials a seat gains or loses (names only), fields a kind change
+  own rows: a changed handle or unit key (which removes the seat or unit and
+  creates another, carrying nothing over), seats that onboard again and why,
+  the tool credentials a seat gains or loses (names only), fields a kind change
   removes, references a removal clears, the Datadog fallback seat and GitLab
   access levels. Who reports to whom, the lead and channel a unit inherits
   and where unrouted work goes are derived by the engine once the chart is
@@ -763,11 +759,9 @@ now, and sorts every change into one of four outcomes:
   fields it would remove by name; a credential is never shown, only that a
   literal value is set.
 
-"The same seat" means what it means to the engine: a seat or a unit is the
-address it was **created** under, which no rename moves and the chart never
-gives to anything else — that is what its memory, mailbox and schedules are
-keyed on. A seat renamed by somebody else is still the seat your change was
-about, and the change follows it to its new handle.
+"The same seat" means what it means to the engine: a seat is its handle and
+a unit is its key, neither of which an edit moves — that is what its memory,
+mailbox and schedules are keyed on.
 
 If this node still serves the older settings revision (it has not applied the
 newer one yet, or a load balancer sent the read to a node that has not), the

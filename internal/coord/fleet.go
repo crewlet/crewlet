@@ -1212,15 +1212,11 @@ type Fleet interface {
 // migration 0012 moved `a2a_channels` out for and the one node migration 0010
 // moved four tables out for before that. See ADR-0003.
 //
-// # The seat is named by its identity
+// # The seat is named by its handle
 //
-// Every method's seat is the handle the seat was CREATED under (ADR-0026) —
-// what internal/notify's FollowStore hands in — and never the one it answers
-// to now: a follow is the seat's own memory of a conversation, and keyed on
-// its address a rename made it deaf to every thread it had been following.
-// This store resolves nothing; it keys on the name it is given, which is still
-// a handle, so every follow written before a seat was first renamed is keyed
-// correctly.
+// Every method's seat is the seat's handle, which is immutable (ADR-0013) —
+// what internal/notify's FollowStore hands in. This store resolves nothing; it
+// keys on the name it is given.
 //
 // # Three methods, and no purge
 //

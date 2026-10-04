@@ -303,11 +303,9 @@ func TagsSubject(key string) Subject { return Subject{Kind: KindTags, ID: key} }
 func ViewSubject(id string) Subject { return Subject{Kind: KindView, ID: id} }
 
 // PersonSubject names one person's inbox, priorities and pins — keyed on the
-// seat's IDENTITY, the handle it was CREATED under (people.go), rather than on
-// a uuid: every caller that reaches this record holds a handle the seat answers
-// to, and the writer resolves it to the identity before it names the subject,
-// so a rename moves no person's record to a subject nothing reads. A name no
-// seat answers to — a person's login — is its own identity.
+// seat's handle (ADR-0013) rather than on a uuid: every caller that reaches
+// this record holds that handle. A name no seat answers to — a person's login —
+// is its own key.
 func PersonSubject(handle string) Subject {
 	return Subject{Kind: KindPerson, ID: handle}
 }

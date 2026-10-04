@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -254,15 +253,6 @@ type Writer struct {
 	// filters against nobody.
 	World FieldWorld
 
-	// Identities is what every person this writer records is written as:
-	// the seat's IDENTITY, whichever handle the caller had for it — see
-	// people.go. The actor included, which is what makes "is this their
-	// own comment, their own record" a comparison that survives a rename.
-	//
-	// ON THE WRITER for [Writer.Leads]'s reason, and nil for a build with
-	// no chart, which records every value as it was given.
-	Identities Identities
-
 	// Now is the clock the AUTHORED instants are stamped from. An
 	// argument rather than a package call, so a test can pin it and so
 	// nothing on the write path reads a clock the applier is forbidden.
@@ -285,11 +275,6 @@ type Writer struct {
 	// [Writer.After].
 	after statelog.Position
 
-	// pin is the ONE reading of Identities this write holds — see
-	// [Writer.pinned]. Nil on every writer a surface holds, and set only on
-	// the copy one write works on.
-	pin seatnames.Chart
-
 	// written is [Provenance.Written], carried per party like the rest of
 	// the provenance. See [Writer.publish] for what reaches it.
 	written WriteLog
@@ -311,10 +296,6 @@ type WriterDeps struct {
 	// World is the chart seam the custom-field coercion needs for the one
 	// field type whose value is a colleague — see [Writer.World].
 	World FieldWorld
-
-	// Identities is the chart seam every person is recorded through — see
-	// [Writer.Identities].
-	Identities Identities
 
 	Metrics   *metrics.Recorder
 	Drain     func() float64
@@ -362,11 +343,7 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 		clone.refusal = fmt.Errorf("tracker: a writer cannot act as %q of "+
 			"kind %q — every record carries who wrote it", actor, kind)
 	}
-	// THE SEAT'S IDENTITY, whichever handle the surface had for it: every
-	// row this writer stamps with its actor — an author, a reporter, a
-	// tombstone — and every comparison of a stored author with the caller
-	// is in the one spelling a rename does not move. See people.go.
-	clone.Actor = seatnames.IdentityOf(pinOf(w.Identities), actor)
+	clone.Actor = actor
 	clone.ActorKind = kind
 	clone.OperatorID = provenance.OperatorID
 	clone.TurnID = provenance.TurnID
@@ -511,9 +488,9 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 	}
 	return &Writer{
 		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
-		metrics: d.Metrics, Actor: seatnames.IdentityOf(pinOf(d.Identities), d.Actor),
+		metrics: d.Metrics, Actor: d.Actor,
 		ActorKind: d.ActorKind, Drain: d.Drain, Leads: d.Leads, World: d.World,
-		Identities: d.Identities, Now: now, Zone: d.Zone,
+		Now: now, Zone: d.Zone,
 	}, nil
 }
 
@@ -596,9 +573,6 @@ var ErrNotAuthor = errors.New("tracker: only its author may edit a comment")
 func (w *Writer) EditComment(ctx context.Context, opID, taskID, project,
 	commentID, body string, notify *Notify) (WriteResult, error) {
 
-	// ONE READING OF THE CHART for every name this write resolves and
-	// every name it is worded with — see [Writer.pinned].
-	w = w.pinned()
 	body = strings.TrimSpace(body)
 	switch {
 	case strings.TrimSpace(commentID) == "":
@@ -627,7 +601,7 @@ func (w *Writer) EditComment(ctx context.Context, opID, taskID, project,
 			case stored.Author != w.Actor:
 				return TaskPatch{}, fmt.Errorf("%w: comment %s was written by "+
 					"%s — reply to it instead of rewriting it", ErrNotAuthor,
-					commentID, seatnames.CurrentOf(w.chart(), stored.Author))
+					commentID, stored.Author)
 			}
 			// THE STORED COMMENT WITH ITS BODY REPLACED, whole, because
 			// the apply is an upsert of the row the record carries: a
@@ -646,9 +620,6 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 	ifMatch uint64, patch TaskPatch, kind ChangeKind,
 	notify *Notify, amend amendment) (WriteResult, error) {
 
-	// ONE READING OF THE CHART for every name this write resolves and
-	// every name it is worded with — see [Writer.pinned].
-	w = w.pinned()
 	switch {
 	case id == "":
 		return WriteResult{}, invalid("an update names no task")
@@ -657,11 +628,6 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 			"names no project — the caller resolved a key to reach this task "+
 			"and therefore holds one", id)
 	}
-	// EVERY PERSON THE PATCH NAMES, BY THEIR IDENTITY, before the decide
-	// compares any of them with the rows — "is this person already
-	// watching" asked across two spellings of one seat is answered no.
-	// A copy: the caller's patch is untouched. See people.go.
-	patch = identified(w.chart(), patch)
 	// THE COMMENT'S BODY IS CHECKED HERE TOO, because a comment rides a
 	// task write rather than having a write of its own — so this is the
 	// one place every comment in the engine passes through.
@@ -754,7 +720,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 				// because it is the answer whatever the parent is.
 				return statelog.Decision{}, invalid("task %s was "+
 					"removed by %s at %s; restore it first",
-					id, seatnames.CurrentOf(w.chart(), current.Removed.By),
+					id, current.Removed.By,
 					current.Removed.At.Format(time.RFC3339))
 			}
 			if patch.Parent != nil {
@@ -831,7 +797,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 			asks := ""
 			if patch.Comment != nil {
 				//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-				fresh, err := settleComment(ctx, tx, w.chart(), id, patch.Comment)
+				fresh, err := settleComment(ctx, tx, id, patch.Comment)
 				if err != nil {
 					return statelog.Decision{}, err
 				}
@@ -873,7 +839,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 				// the next create of the same shape would refuse.
 				//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 				coerced, warned, err := settleFields(ctx, tx, current.Project,
-					current.Type, *charged.Fields, w.fieldWorld(), w.zone())
+					current.Type, *charged.Fields, w.World, w.zone())
 				if err != nil {
 					return statelog.Decision{}, err
 				}
@@ -938,10 +904,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 // question asks somebody only when it is written: an edit re-sends the whole
 // comment, `ask` included, and must not put the person asked back on a
 // watcher list they have since left.
-//
-// chart is the write's one reading, which a refusal names the asked and the
-// answerer by — the rows hold their identities.
-func settleComment(ctx context.Context, tx *sql.Tx, chart seatnames.Chart, task string,
+func settleComment(ctx context.Context, tx *sql.Tx, task string,
 	comment *Comment) (bool, error) {
 	var document []byte
 	fresh := false
@@ -977,7 +940,7 @@ func settleComment(ctx context.Context, tx *sql.Tx, chart seatnames.Chart, task 
 	if err != nil {
 		return false, err
 	}
-	if err = ask.answerableBy(chart, "", comment.ID); err != nil {
+	if err = ask.answerableBy("", comment.ID); err != nil {
 		return false, err
 	}
 	return fresh, checkChoice(task, ask.id, ask.decision, comment.Choice)
@@ -1260,16 +1223,9 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 	container string, document any, kind ChangeKind,
 	notify *Notify) (WriteResult, error) {
 
-	// ONE READING OF THE CHART for every name this write resolves and
-	// every name it is worded with — see [Writer.pinned].
-	w = w.pinned()
 	if _, _, err := documentTable(subject); err != nil {
 		return WriteResult{}, err
 	}
-	// WHOEVER THE DOCUMENT NAMES, BY THEIR IDENTITY — a view's owner, a
-	// person record's handle — as every other write path records them.
-	// See people.go.
-	document = identified(w.chart(), document)
 	// THE CONTAINER IS TAKEN AND CHECKED RATHER THAN ASSUMED. Most kinds
 	// carry their own home in their subject and must not be given a second
 	// one; a view chooses its own. Accepting one where it means nothing
@@ -1304,10 +1260,8 @@ type TurnRecord struct {
 	// Task is the task id the turn is charged to, never its key: a key
 	// moves with the task and an id does not.
 	Task string `json:"task"`
-	// Seat is the seat whose turn it was, recorded by its IDENTITY — the
-	// handle it was created under — and shown by the handle it answers to
-	// now ([Writer.RecordTurn], people.go).
-	Seat string `json:"seat" person:"seat"`
+	// Seat is the seat whose turn it was, by its handle.
+	Seat string `json:"seat"`
 	// TurnID is the run the segment belongs to (ADR-0017), which a task's
 	// turn list groups segments by.
 	TurnID string `json:"turn_id"`
@@ -1437,11 +1391,6 @@ var errTurnTaskMoved = errors.New("tracker: the task moved project while its tur
 // project the task now lives in would not see it. So the project is read off
 // the task's own row, and the decide confirms it inside its snapshot.
 func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (WriteResult, error) {
-	// THE SEAT BY ITS IDENTITY, by one reading of the chart — see
-	// people.go. A turn row is filed under whoever's turn it was for as
-	// long as the task keeps it, and a rename moves only the handle.
-	w = w.pinned()
-	turn = identified(w.chart(), turn)
 	switch {
 	case opID == "":
 		return WriteResult{}, invalid("a turn on task %s names no "+
@@ -1616,13 +1565,7 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 	if err := checkChangeKind(subject, op, kind, notify); err != nil {
 		return statelog.Decision{}, err
 	}
-	// EVERY WAKE NAMES SEATS BY THEIR IDENTITY, here and not where each
-	// path builds one: a notification is built by a caller from tasks it
-	// read, which a reader shows under current handles, and from leads a
-	// chart resolves the same way — and this is the one place every record
-	// passes through. See people.go.
-	notify = identified(w.chart(), notify)
-	// AND EVERY WAKE SAYS WHETHER ITS KEY OPENS ITS TASK, here for the same
+	// EVERY WAKE SAYS WHETHER ITS KEY OPENS ITS TASK, here for the same
 	// reason: a caller builds the wake from a task it read OUTSIDE this
 	// snapshot, or — on a create or a move — before the key it carries
 	// existed at all, and a wake that left it to each path would be one path

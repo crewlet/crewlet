@@ -187,9 +187,8 @@ type Options struct {
 	// its derived agent id, so its fire is recorded [OutcomeSkippedPaused]
 	// instead of dispatched. Nil pauses nothing.
 	//
-	// BY THE SEAT'S ID and never its handle, because a pause is kept on the
-	// seat's identity (ADR-0026): asked by handle, a rename read as a resume
-	// and a hire on the freed handle inherited somebody else's pause.
+	// BY THE SEAT'S ID, because a pause is kept on the agent id derived from
+	// the seat's handle (ADR-0013).
 	//
 	// SKIPPED, not dispatched into the held inbox, because a fire parked
 	// behind a pause is a standup that runs whenever somebody resumes the
@@ -443,9 +442,9 @@ func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, clo
 // canonical, unshifted fire time is what forms the identity, so dedupe is
 // unaffected and two nodes with the same config compute the same offset.
 func (s *Scheduler) due(cron Expr, loc *time.Location, e Entry, at, windowStart time.Time, first bool) (toFire, toSkip []time.Time) {
-	// ON THE IDENTITY, so a seat's jitter does not move when it is renamed:
-	// the whole point of spreading fires deterministically is that one
-	// schedule lands at the same offset on every node and every tick.
+	// ON THE IDENTITY: the whole point of spreading fires deterministically
+	// is that one schedule lands at the same offset on every node and every
+	// tick.
 	jitter := s.jitterFor(e.ScopeID, e.Schedule.Name)
 	effNow := at.Add(-jitter)
 

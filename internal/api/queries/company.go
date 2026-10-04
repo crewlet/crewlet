@@ -106,10 +106,7 @@ func (s Sources) recentRuns(ctx context.Context) []map[string]any {
 			"scope_name":    names.of(run.Scope, run.ScopeID),
 			"schedule_name": run.ScheduleName,
 			"fire_label":    run.FireLabel,
-			// THE HANDLE THE RUNNER ANSWERS TO NOW: the ledger records
-			// the one the fire was dispatched to, which a rename since
-			// has retired.
-			"target_handle": currentHandle(names.organization, run.TargetHandle),
+			"target_handle": run.TargetHandle,
 			"scheduled_at":  isoOrEmpty(run.ScheduledAt),
 			"fired_at":      isoOrEmpty(run.FiredAt),
 			"outcome":       string(run.Outcome),
@@ -777,17 +774,10 @@ func (s Sources) agentSeatID(handle string) (string, bool) {
 	return id.String(), true
 }
 
-// memorySeat is the AGENT seat a handle names — any handle it answers to — as
-// the memory reader is handed it: its agent id, which its lease, diary and
-// onboarding are keyed by; the handle it was CREATED under, which its episodes,
-// skills, counterparty profiles and conversation ledger are filed under; and
-// the handle it answers to NOW, which is what the answer shows.
-//
-// RESOLVED HERE, through the one chart reading the answer is made of, and never
-// by the reader: the node holding the seat may answer from a chart a rename
-// has not reached yet. Asked with the handle straight, a renamed seat's page
-// showed none of what it learned before the rename, while the diary beside it,
-// keyed on the id derived from the same origin, showed everything.
+// memorySeat is the AGENT seat a handle names, as the memory reader is handed
+// it: its agent id, which its lease, diary and onboarding are keyed by, and its
+// handle, which its episodes, skills, counterparty profiles and conversation
+// ledger are filed under.
 //
 // False for a human seat — a person keeps no memory here — for a handle no
 // seat answers to, and on a node with no company to resolve against.
@@ -800,7 +790,7 @@ func memorySeat(organization *org.Organization, handle string) (memread.Seat, bo
 	if !ok {
 		return memread.Seat{}, false
 	}
-	return memread.Seat{ID: id, Origin: role.Origin(), Handle: role.Handle()}, true
+	return memread.Seat{ID: id, Handle: role.Handle()}, true
 }
 
 // trailSeat resolves the seat a question about a SEAT'S TRAIL — what it
@@ -820,31 +810,29 @@ func memorySeat(organization *org.Organization, handle string) (memread.Seat, bo
 // THE CALLER'S OWN IS THEIR SEAT and nothing else: an unbound caller has no
 // trail, and naming nobody is [errNoSeat], whose remedy is a binding rather
 // than a credential.
-func (s Sources) trailSeat(ctx context.Context, asked string) (memread.Seat,
-	*org.Organization, error) {
+func (s Sources) trailSeat(ctx context.Context, asked string) (memread.Seat, error) {
 
 	principal, how := iam.From(ctx)
 	if how == iam.Unknown {
-		return memread.Seat{}, nil, unresolved(ctx, "seat trail")
+		return memread.Seat{}, unresolved(ctx, "seat trail")
 	}
 	if asked == "" {
 		if principal.Seat == "" {
-			return memread.Seat{}, nil, errNoSeat
+			return memread.Seat{}, errNoSeat
 		}
 		asked = principal.Seat
 	}
 	handle, err := s.recordHandle(ctx, authz.ActionSeatTrailRead, asked)
 	if err != nil {
-		return memread.Seat{}, nil, err
+		return memread.Seat{}, err
 	}
-	organization := s.organization()
-	seat, ok := memorySeat(organization, handle)
+	seat, ok := memorySeat(s.organization(), handle)
 	if !ok {
-		return memread.Seat{}, nil, fmt.Errorf("%w: no agent seat answers to %q — "+
+		return memread.Seat{}, fmt.Errorf("%w: no agent seat answers to %q — "+
 			"a seat's trail is an agent's, and a person keeps none here",
 			ErrNotFound, asked)
 	}
-	return seat, organization, nil
+	return seat, nil
 }
 
 // agentMemory answers a seat's memory: its diary, its episodes, the skills it
@@ -852,7 +840,7 @@ func (s Sources) trailSeat(ctx context.Context, asked string) (memread.Seat,
 // onboarded — each with its total — ANSWERED BY THE SEAT'S HOLDER, which the
 // answer names (`held_by`). See [Sources.Memory] for why.
 //
-// `id` is any handle the seat answers to, or a person's login; `limit` pages
+// `id` is the seat's handle, or a person's login; `limit` pages
 // every collection (at most [memread.PageLimit]); a profile's summary asks for
 // one, since the totals and the latest reflection travel whatever the page.
 func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
@@ -860,27 +848,13 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: agent_memory needs an id", ErrBadParams)
 	}
-	seat, organization, err := s.trailSeat(ctx, id)
+	seat, err := s.trailSeat(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	memory, err := s.Memory.Memory(ctx, seat, p.Int("limit", 0))
 	if err != nil {
 		return nil, err
-	}
-	// A COLLEAGUE IS FILED UNDER THE HANDLE THEY WERE CREATED UNDER, which
-	// is what the holder's store keeps, and shown by the one they answer to
-	// now — from this answer's own chart reading, because the holder may
-	// answer from a chart a rename has not reached. A subject the chart no
-	// longer holds keeps the handle it was filed under: nobody else can have
-	// been given it.
-	for i, profile := range memory.Counterparties {
-		if profile.Subject.Handle == "" || organization == nil {
-			continue
-		}
-		if role := organization.Role(profile.Subject.Handle); role != nil {
-			memory.Counterparties[i].Subject.Handle = role.Handle()
-		}
 	}
 	return memory, nil
 }

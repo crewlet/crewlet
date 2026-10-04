@@ -14,7 +14,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -70,24 +69,8 @@ type Store struct {
 	// page to. See [Options.Reserved].
 	reserved func() Reserved
 
-	// identities is the chart seam every person is written and read
-	// through, and chart the ONE reading of it a call holds — see
-	// people.go and [Store.pinned]. chart is nil on the store every surface
-	// shares and set only on the copy one call works on.
-	identities Identities
-	chart      seatnames.Chart
-
 	now      func() time.Time
 	newSeqID func() string
-}
-
-// pinned is this store holding one reading of the chart for the length of one
-// call: the actor, what it names, every refusal naming somebody, and the
-// answer. A COPY, because the store itself is shared by every surface at once.
-func (s *Store) pinned() *Store {
-	call := *s
-	call.chart = pinOf(s.identities)
-	return &call
 }
 
 // Options configure a store.
@@ -129,13 +112,6 @@ type Options struct {
 	// and `knowledge.root_space` move on an apply, and this store is built
 	// once per node.
 	Reserved func() Reserved
-
-	// Identities is what every person a write names is recorded as — the
-	// seat's identity, whichever handle the caller had for it — and every
-	// person an answer names is shown as: the handle the seat answers to
-	// now. Nil records and shows every value as it was given, which is a
-	// build holding no chart. See people.go.
-	Identities Identities
 }
 
 // Reserved is what a company holds back from an AGENT's writes.
@@ -179,7 +155,7 @@ func NewStore(opts Options) (*Store, error) {
 	}
 	s := &Store{
 		publisher: opts.Publisher, db: opts.DB, now: opts.Now,
-		reserved: opts.Reserved, identities: opts.Identities,
+		reserved: opts.Reserved,
 		newSeqID: newTimeOrderedID,
 	}
 	if s.now == nil {
@@ -345,7 +321,7 @@ var (
 // travels per CALL here rather than on the store, because one node's knowledge
 // base serves every seat and every operator through one write path.
 type Actor struct {
-	Handle     string `person:"seat"`
+	Handle     string
 	Kind       AuthorKind
 	OperatorID string
 	TurnID     string

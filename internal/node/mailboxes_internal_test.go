@@ -67,7 +67,7 @@ func TestAMissingMailboxIsAlarmedOnlyOnceItOutlivesALease(t *testing.T) {
 // rule rather than a memory one.
 //
 // A removed seat's mailbox is retired 24 hours later by the maintenance duty,
-// so a handle that comes back — a role re-added, a rename undone — may have no
+// so a handle that comes back — a role removed and re-added — may have no
 // mailbox at all. A node that remembered ensuring it would never make it
 // another one, and the returning seat would drop every event addressed to it
 // while every screen showed it healthy. The bounded maps are the side effect.

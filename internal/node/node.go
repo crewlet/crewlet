@@ -109,8 +109,8 @@ type Config struct {
 	// rather than on an attachment, which is what lets it be taken first.
 	//
 	// ASKED BY THE SEAT'S ID, the name the held mailbox is built from and
-	// the key every hold is kept under (ADR-0026): asked by handle, a seat
-	// renamed while paused was attached without its hold.
+	// the key every hold is kept under: the agent id derived from the
+	// seat's handle (ADR-0013).
 	AttachHolds func(seat uuid.UUID) []string
 
 	// SeatsAdmitted reports whether this node may take on NEW seats right
@@ -206,12 +206,8 @@ type Node struct {
 	// release detaches exactly what an acquire attached. Guarded because
 	// the seat host calls hooks from its own goroutines.
 	//
-	// KEYED ON THE SEAT'S ID, with the handle it was attached under beside
-	// it for the diagnostics: the release names the seat by whatever handle
-	// it answers to by then, and keyed on the handle a seat renamed while
-	// attached was never forgotten — still listed as consumed after its
-	// release, which every reader of [Node.AttachedSeats] would take as
-	// this node's current copy of its memory.
+	// KEYED ON THE SEAT'S ID, as its lease and its mailbox are, with its
+	// handle beside it for the diagnostics.
 	mu       sync.Mutex
 	attached map[uuid.UUID]string
 

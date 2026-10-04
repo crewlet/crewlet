@@ -128,7 +128,7 @@ type InboxNotice struct {
 	// Actor is who made the change, joined from the history row. A notice
 	// whose history row has been reanchored away carries none rather than
 	// dropping the notice: what was said outlives who said it.
-	Actor     string     `json:"actor,omitempty" person:"seat"`
+	Actor     string     `json:"actor,omitempty"`
 	ActorKind AuthorKind `json:"actor_kind,omitempty"`
 
 	// CommentID is the comment this change wrote, and TurnID the agent
@@ -152,7 +152,7 @@ type InboxNotice struct {
 
 // InboxAnswer is a page of one person's inbox.
 type InboxAnswer struct {
-	Handle  string        `json:"handle" person:"seat"`
+	Handle  string        `json:"handle"`
 	Notices []InboxNotice `json:"notices"`
 
 	// PrimaryReasons is the split that was APPLIED, defaulted, so a
@@ -246,7 +246,7 @@ type InboxQuery struct {
 	// Handle is whose inbox this is. Required: an inbox with no person is
 	// not a company-wide feed, it is a mistake — [Reader.Activity] is the
 	// company-wide feed.
-	Handle string `person:"seat"`
+	Handle string
 
 	// Since is a lower bound as a log position, which is what a caller
 	// resumes from after marking a page read.
@@ -287,15 +287,6 @@ type InboxQuery struct {
 
 // Inbox answers a page of one person's notices.
 func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
-	InboxAnswer, error) {
-	call := r.pinned()
-	got, err := call.inbox(ctx, identified(call.chart, q), now)
-	return shown(call.chart, got), err
-}
-
-// inbox is [Reader.Inbox] once every person the question names is their seat's
-// identity — see people.go.
-func (r *Reader) inbox(ctx context.Context, q InboxQuery, now time.Time) (
 	InboxAnswer, error) {
 
 	handle := strings.TrimSpace(q.Handle)

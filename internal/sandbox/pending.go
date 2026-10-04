@@ -495,10 +495,9 @@ type PendingRun struct {
 	// Requester is the seat whose message, notice or ask woke the turn
 	// that launched this run — the person a question addressed to
 	// "requester" means — and empty when nothing a seat said woke it (a
-	// schedule, a sender this company's chart does not know). BY THE
-	// HANDLE THAT SEAT WAS CREATED UNDER, its identity (ADR-0026): the row
-	// waits for as long as the run is parked, and a requester renamed in
-	// the meantime is still the same seat.
+	// schedule, a sender this company's org does not know). By the seat's
+	// handle, which is immutable (ADR-0013), so the row names the same
+	// seat for as long as the run is parked.
 	//
 	// ON THE ROW because the park that resolves the audience is not the
 	// frame that saw the trigger: it runs when the job finishes, possibly

@@ -261,8 +261,7 @@ type Reconciliation struct {
 // holder is suspended, retired or removed has its declared identities left out
 // — so on this registry an inbound message from them resolves to an outside
 // party, and nothing attributes their word to the seat. The reading is applied
-// to o through [Standing.Seats], so a binding made before the seat was renamed
-// still finds it. The zero Standing is chart-only and withholds nothing. The
+// to o through [Standing.Seats]. The zero Standing is chart-only and withholds nothing. The
 // registry remembers which reading it was built from ([Registry.Standing]),
 // because that reading is half of what it answers for.
 func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLookup,

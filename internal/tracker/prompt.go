@@ -514,7 +514,7 @@ func promptHeader(b *strings.Builder, n notify.Inbound, parties notify.Parties) 
 		b.WriteString("\n**Status:** " + status)
 	}
 	if assignee := meta[MetaAssignee]; assignee != "" {
-		b.WriteString("\n**Assignee:** " + promptHandle(assignee, parties))
+		b.WriteString("\n**Assignee:** " + assignee)
 	}
 	if meta[MetaLate] == "true" {
 		// WHY THEY ARE HEARING THIS NOW. A repair reaches somebody hours
@@ -823,21 +823,6 @@ func promptHandling(b *strings.Builder, meta map[string]string, reason Reason) {
 	b.WriteString("\n\n**Never** post internal thinking, status" +
 		` acknowledgements, or "I agree with X" as comments. Substance only,` +
 		" and stay on this task.\n")
-}
-
-// promptHandle is a seat named on a record, as the seat is called NOW.
-//
-// A RECORD NAMES A SEAT BY ITS IDENTITY — the handle it was created under, see
-// people.go — and the party registry answers that as well as its current
-// handle, so a renamed assignee is told to a seat by the handle it would type
-// back. A name no seat answers to is shown as it came.
-func promptHandle(handle string, parties notify.Parties) string {
-	if parties != nil {
-		if party, ok := parties.ByHandle(handle); ok && party.Handle != "" {
-			return party.Handle
-		}
-	}
-	return handle
 }
 
 // promptSender renders the actor as a colleague.

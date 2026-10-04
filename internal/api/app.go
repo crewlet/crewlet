@@ -552,7 +552,7 @@ func New(opts Options) (*App, error) {
 		// Read through the SOURCES rather than captured, for the same
 		// reason every other read here is: a config apply replaces the
 		// company, and a directory captured at boot would keep linking a
-		// renamed seat to the handle it used to have.
+		// removed seat and miss every seat added since.
 		Seats: opts.Sources.Seats,
 		// The three config-derived surfaces, read live for the same
 		// reason Seats is: an apply replaces the company. The roster is

@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -53,7 +52,7 @@ type RunDeps struct {
 }
 
 // The run's identity on its row, as a decision and the answer read it: the
-// seat that holds it, by id and by its CURRENT handle, and the seat whose
+// seat that holds it, by id and by its handle, and the seat whose
 // wake started the turn that launched it.
 type runParties struct {
 	seat      uuid.UUID
@@ -98,11 +97,6 @@ type answerRun struct {
 	deps      RunDeps
 	fleet     Fleet
 	authorize Authorizer
-
-	// org is the company the run's seat and requester are resolved in,
-	// per call because a config apply replaces it. Nil decides on the
-	// handles the row recorded, as typed.
-	org func() *org.Organization
 }
 
 var _ tools.SeatCallable = (*answerRun)(nil)
@@ -227,15 +221,14 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // id on it is not one: absent, the nil id, or not a uuid at all.
 var errUnreadableSeatID = errors.New("builtin: a pending run's seat id is unreadable")
 
-// parties resolves the run's seat and requester through the running chart.
+// parties is the run's seat and requester as its row records them: the seat by
+// its id and its handle, the requester by handle. A handle is immutable
+// (ADR-0013), so the row names the same seats for as long as they exist.
 //
-// THE SEAT BY ITS ID, the one thing on the row no rename moves; its handle is
-// the chart's current one where the chart still holds it, and the row's own
-// where it does not, so a run whose seat a reorganisation removed is still
-// named by something. A row with no seat id this build can read names no seat
-// a gate can ask about, and is refused rather than answered on a guess — as a
-// FAULT ([faulted]): the row is this node's own and stays unreadable however
-// long anybody waits, so "try again" would be a promise nothing keeps.
+// A row with no seat id this build can read names no seat a gate can ask
+// about, and is refused rather than answered on a guess — as a FAULT
+// ([faulted]): the row is this node's own and stays unreadable however long
+// anybody waits, so "try again" would be a promise nothing keeps.
 func (t *answerRun) parties(ctx context.Context, run sandbox.PendingRun) (runParties, *tools.Result) {
 	id, err := uuid.Parse(run.AgentID)
 	if err != nil || id == uuid.Nil {
@@ -245,53 +238,21 @@ func (t *answerRun) parties(ctx context.Context, run sandbox.PendingRun) (runPar
 				"record names no seat id this build can read, so the seat it would wake "+
 				"cannot be named — %s.", clip(run.TurnID), faultSaid)))
 	}
-	parties := runParties{seat: id, handle: run.AgentHandle, requester: run.Requester}
-	var company *org.Organization
-	if t.org != nil {
-		company = t.org()
-	}
-	if company == nil {
-		return parties, nil
-	}
-	if seat := company.AgentSeatByID(id); seat != nil {
-		parties.handle = seat.Handle()
-	}
-	if requester := company.Role(run.Requester); requester != nil {
-		parties.requester = requester.Handle()
-	}
-	return parties, nil
+	return runParties{seat: id, handle: run.AgentHandle, requester: run.Requester}, nil
 }
 
 // mayAnswer asks the authority about this run: about the REQUESTER's own seat
 // when the caller is that requester — the rule's self arm — and about the
 // run's seat otherwise, where its lead and the deployment's grant are admitted.
-//
-// THE CALLER IS COMPARED BY SEAT, through the chart, never by spelling: the
-// actor is named by [iam.ActorFor], whose name for a bound person is their
-// seat's current handle, and the requester was resolved to its current handle
-// from the origin the row recorded — so a person whose seat was renamed since
-// the launch is still the person the run asked.
+// The actor is named by [iam.ActorFor], whose name for a bound person is their
+// seat's handle.
 func (t *answerRun) mayAnswer(ctx context.Context, actor Actor,
 	parties runParties) *tools.Result {
 
 	owner := parties.handle
-	if parties.requester != "" && t.sameSeat(actor.Handle, parties.requester) {
+	if parties.requester != "" && actor.Handle == parties.requester {
 		owner = parties.requester
 	}
 	return askAuthority(ctx, t.authorize, authz.ActionRunAnswer,
 		authz.Object{Kind: authz.KindPerson, ID: parties.seat.String(), Owner: owner})
-}
-
-// sameSeat reports whether two names are one seat in the running chart, or —
-// with no chart to ask — one spelling.
-func (t *answerRun) sameSeat(a, b string) bool {
-	var company *org.Organization
-	if t.org != nil {
-		company = t.org()
-	}
-	if company == nil {
-		return a == b
-	}
-	seat := company.Role(a)
-	return seat != nil && seat == company.Role(b)
 }

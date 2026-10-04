@@ -7,7 +7,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -480,7 +479,7 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 			case current.Removed != nil && adding:
 				return invalid("task %s was removed by %s at %s, "+
 					"so nothing can be made to wait on it; restore it first",
-					id, seatnames.CurrentOf(w.chart(), current.Removed.By),
+					id, current.Removed.By,
 					current.Removed.At.Format(time.RFC3339))
 			case adding && len(current.Dependents) >= MaxDependents:
 				return invalid("%d tasks already wait on task %s "+

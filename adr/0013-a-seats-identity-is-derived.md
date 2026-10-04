@@ -1,7 +1,6 @@
 # ADR-0013 — A seat's identity is derived, never looked up
 
-- **Status:** superseded
-- **Superseded-by:** ADR-0026
+- **Status:** accepted
 - **Authority:** `internal/org`
 - **Enforced-by:** `internal/org.TestDeriveAgentIDIsStable`
 - **Measured:** a UUIDv5 over `(org name, handle)` — `uuid.NewSHA1`, one hash, no allocation that matters and no I/O at all, against a store read on a node that by construction holds none of that seat's rows.
@@ -12,6 +11,9 @@
 An agent seat's runtime id is a UUIDv5 over the organisation name and the
 seat's handle. Every node computes the same id from configuration alone — no
 database, no running instance, no lookup, and no agreement protocol.
+
+A handle is immutable in the company document: changing it is a removal and a
+creation, refused while a person is bound to the removed seat.
 
 That is what lets a node act on a seat it does not run. A delivery won by node
 A for a seat node B owns still has to be attributed, routed, budgeted and

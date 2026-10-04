@@ -24,9 +24,9 @@ import (
 // a seat that LEAVES the company's agent seats — removed from the chart, or
 // made a person's — is a leak: nothing consumes its mailbox again, nothing
 // deletes it, and every event still addressed to the seat is kept for the
-// life of the deployment. No other seat ever attaches to it: the mailbox is
-// named by an id derived from the handle the seat was created under, which
-// the chart never issues twice (ADR-0026).
+// life of the deployment. The mailbox is named by the agent id derived from
+// the seat's handle (ADR-0013), so a seat created again under the same handle
+// attaches to it, and one under any other handle never does.
 //
 // So a mailbox is retired once its seat has been absent from the active
 // revision for [MailboxRetirementGrace]. The pieces, and why each is shaped
@@ -400,13 +400,7 @@ func (m *Mailboxes) Register(ctx context.Context, seat placement.Seat) error {
 					"budget; the seat is in the active revision again, so its record is reclaimed "+
 					"and the mailbox created afresh")
 		}
-		// THE HANDLE IS REFRESHED with the registration, because it is a
-		// LABEL: a seat that was renamed while its record sat absent would
-		// otherwise keep answering to the name it had then, in every log
-		// line a later retirement writes.
-		returning := presentRecord(rec)
-		returning.Handle = handle
-		cleared, ok, err := m.records.UpdateMailbox(ctx, returning)
+		cleared, ok, err := m.records.UpdateMailbox(ctx, presentRecord(rec))
 		if err != nil {
 			return fmt.Errorf("maintenance: register the mailbox of seat %q: %w", handle, err)
 		}

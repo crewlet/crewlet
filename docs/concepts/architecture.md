@@ -642,10 +642,8 @@ decision, not the broker's.
 **A seat's memory follows the seat.** Memory is written to the *node's* store,
 and placement moves seats — so every memory row also rides
 `crewlet.memory.SEAT-ID.TABLE.DIGEST`, one subject per row, on a stream that
-retains exactly one message per subject. By the seat's **id** rather than its
-handle, because the stream is compacted: a subject IS a row's durable address,
-so a rename that moved one would leave everything the seat had learned under an
-address nothing would ask for again. A node acquiring a seat replays that
+retains exactly one message per subject. By the seat's **id**, as its lease
+and its mailbox are named. A node acquiring a seat replays that
 seat's rows in a single pass and hydrates them **before** the mailbox is
 attached. Deletes deliberately do not travel: the lifecycle re-converges, and a
 tombstone protocol would be a second thing to keep correct forever.

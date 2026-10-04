@@ -908,8 +908,7 @@ func TestJitterDelaysFiringDeterministically(t *testing.T) {
 	t.Parallel()
 	h := build(t, roleOrg(), func(o *Options) { o.Jitter = 45 * time.Second })
 	// ON THE SCOPE'S IDENTITY, which for a role is the seat's agent id: the
-	// offset has to be the same on every node and every tick, so it may not
-	// be derived from anything a rename moves.
+	// offset has to be the same on every node and every tick.
 	offset := h.s.jitterFor(seatScopeID("qa"), "smoke")
 	if offset <= 0 || offset > 45*time.Second {
 		t.Fatalf("jitter offset = %v, want it inside (0, 45s] for this fixture", offset)
@@ -1218,8 +1217,8 @@ func seatScopeID(handle string) string {
 //
 // THROUGH THE ORG, because the scheduler publishes to the subject a seat's ID
 // names rather than to one built from its handle. Every fixture here runs in
-// the company "Acme" and none of its seats has been renamed, so the id is the
-// one that company derives for that handle.
+// the company "Acme", so the id is the one that company derives for that
+// handle.
 func seatInbox(handle string) string {
 	id, _ := org.DeriveAgentID("Acme", handle)
 	return topics.AgentInbox(id)

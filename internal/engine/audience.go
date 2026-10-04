@@ -92,9 +92,8 @@ func namedAudience(o *org.Organization, withheld func(handle string) bool, seat 
 		return nil
 	case audienceRequester:
 		// WHO WOKE THE TURN, recorded at the launch — the one frame that
-		// saw the trigger — by the handle its seat was created under,
-		// which the chart resolves to the seat whatever it is called now.
-		// A seat the chart no longer has is nobody.
+		// saw the trigger — by its seat's handle. A seat the org no
+		// longer has is nobody.
 		if found := o.Role(run.Requester); found != nil {
 			return []string{found.Handle()}
 		}

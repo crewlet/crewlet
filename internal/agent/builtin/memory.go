@@ -24,11 +24,9 @@ import (
 // into another's diary would make the per-seat memory a shared one, and the
 // whole design of the learning subsystem rests on the boundary holding.
 //
-// The seat is named by its IDENTITY, never its address: the diary and the
-// onboarding marker by the agent id derived from the handle the seat was
-// CREATED under (ADR-0026), and the episodes and skills by that handle itself
-// ([turnctx.Turn.Origin]). A rename therefore moves none of it, and the chart
-// never issues that handle to another seat, so nobody inherits it either.
+// The seat is named by its IDENTITY: the diary and the onboarding marker by the
+// agent id derived from its handle (ADR-0013), and the episodes and skills by
+// the handle itself ([turnctx.Turn.Handle]).
 
 // The tool wire names.
 const (
@@ -128,10 +126,7 @@ func (t *useSkill) Call(ctx context.Context, args map[string]any) (tools.Result,
 }
 
 func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	// THE HANDLE THE SEAT WAS CREATED UNDER, which is what its catalogue
-	// is keyed on — see [turnctx.Turn.Origin]. Asked by the handle the seat
-	// answers to now, a renamed seat had no skills at all.
-	seat := turn.Origin()
+	seat := turn.Handle()
 	if seat == "" {
 		return refused(tools.RefusalForbidden, "use_skill can only be called during a turn, on behalf of a seat."), nil
 	}
@@ -295,10 +290,7 @@ func (t *queryEpisodes) Call(ctx context.Context, args map[string]any) (tools.Re
 }
 
 func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	// The seat's episodes are filed under the handle it was CREATED under
-	// — see [turnctx.Turn.Origin] — so a renamed seat still recalls the work
-	// it did before the rename.
-	seat := turn.Origin()
+	seat := turn.Handle()
 	if seat == "" {
 		return refused(tools.RefusalForbidden, "query_episodes can only be called during a turn, on behalf of a seat."), nil
 	}
@@ -674,10 +666,7 @@ func (t *markOnboarded) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 
 // seatAgentID resolves the DERIVED agent id for the acting seat.
 //
-// The derived id, never the handle: the diary keys on it, and it is derived
-// from the handle the seat was CREATED under (ADR-0026), so a rename leaves the
-// seat reading every entry it wrote before it — and a later seat given the
-// retired handle derives a different id, so it inherits none of them.
+// The derived id, never the handle: the diary keys on it (ADR-0013).
 func seatAgentID(turn *turnctx.Turn) (string, string) {
 	seat, err := turn.RequireSeat()
 	if err != nil {

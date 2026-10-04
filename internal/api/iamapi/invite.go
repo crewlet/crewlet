@@ -29,9 +29,7 @@ type inviteBody struct {
 	Grants []iam.Grant `json:"grants"`
 
 	// Seat is a seat redeeming the invitation BINDS the new person to, by
-	// any handle the chart answers to it by, or empty. It must be a HUMAN
-	// seat nobody is bound to; the invitation records the seat's identity,
-	// so a rename before the redemption binds the same seat.
+	// its handle, or empty. It must be a HUMAN seat nobody is bound to.
 	Seat   string `json:"seat"`
 	Reason string `json:"reason"`
 }

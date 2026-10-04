@@ -13,10 +13,9 @@ import (
 // # What this is guarding
 //
 // The per-agent spend rollup files a seat's records under its agent id — the
-// one identifier a phase record carries that neither a rename nor a namesake
-// can move — and every row links to that seat's page, which is addressed by
-// its HANDLE, under the name the chart gives it now. The directory from one to
-// the others is this.
+// one identifier a phase record carries that no namesake shares — and every
+// row links to that seat's page, which is addressed by its HANDLE. The
+// directory from one to the other is this.
 //
 // It was a map from role NAME to handle, which two seats sharing a name folded
 // into one entry. And before that it walked `company.Roles`, the seats

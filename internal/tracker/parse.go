@@ -9,7 +9,6 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
-	"github.com/crewlet/crewlet/internal/seatnames"
 )
 
 // The metadata keys the prompt reads back.
@@ -145,7 +144,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 		return nil, nil
 	}
 
-	base := p.inbound(record, reg)
+	base := p.inbound(record)
 	// FROM THE RECORD, exactly as the applier reads it — see
 	// [MutationRecord.Batched]. This used to read a field on the parser
 	// that nothing ever assigned, so the two surfaces agreed only by the
@@ -189,11 +188,11 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 
 // registryHas narrows the party registry to the one question routing asks.
 //
-// A HANDLE THAT IS NO LONGER A SEAT is somebody who left, or a watcher
-// recorded before a rename. It is dropped rather than routed, because a
-// notification addressed to nobody is one nothing reports. A nil registry
-// admits everybody, which is the honest answer for a deployment with no
-// organization loaded yet.
+// A HANDLE THAT IS NO LONGER A SEAT is somebody who left — a changed handle
+// included, which is a removed seat (ADR-0013). It is dropped rather than
+// routed, because a notification addressed to nobody is one nothing reports.
+// A nil registry admits everybody, which is the honest answer for a deployment
+// with no organization loaded yet.
 func registryHas(reg *notify.Registry) func(string) bool {
 	if reg == nil {
 		return nil
@@ -201,20 +200,6 @@ func registryHas(reg *notify.Registry) func(string) bool {
 	return func(handle string) bool {
 		_, ok := reg.ByHandle(handle)
 		return ok
-	}
-}
-
-// registryCurrent is the handle a seat answers to now, for any handle the
-// party registry knows it by, and the name itself for anything it does not.
-func registryCurrent(reg *notify.Registry) func(string) string {
-	return func(handle string) string {
-		if reg == nil {
-			return handle
-		}
-		if party, ok := reg.ByHandle(handle); ok && party.Handle != "" {
-			return party.Handle
-		}
-		return handle
 	}
 }
 
@@ -232,7 +217,7 @@ func registryCurrent(reg *notify.Registry) func(string) string {
 // the wake is genuinely about one: a `prioritised` wake names the task that
 // reached the top of somebody's list, and a person's own bookkeeping names
 // none.
-func (p *Parser) inbound(record MutationRecord, reg *notify.Registry) notify.Inbound {
+func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	snapshot := record.Notify.Snapshot
 	metadata := map[string]string{
 		MetaTaskKey:    snapshot.Key,
@@ -255,13 +240,7 @@ func (p *Parser) inbound(record MutationRecord, reg *notify.Registry) notify.Inb
 	// and had to spend a tool round to learn what it changed TO — and the
 	// side it moved FROM is not on the task at all, so that round could
 	// never recover it.
-	//
-	// A PERSON IN A DELTA IS NAMED AS THEY ARE CALLED NOW: the record
-	// carries each seat's identity (people.go), and "reassigned from cto"
-	// about a seat that answers to chief is a name the reader cannot type
-	// back.
-	if text := changedText(deltasOf(record.Notify.Fields,
-		seatnames.Name(registryCurrent(reg)))); text != "" {
+	if text := changedText(record.Notify.Fields); text != "" {
 		metadata[MetaDeltas] = text
 	}
 	if record.Notify.CommentID != "" {

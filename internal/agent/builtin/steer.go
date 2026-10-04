@@ -287,9 +287,9 @@ func (t *steerTurn) maySteer(ctx context.Context, turnID string) *tools.Result {
 }
 
 // seatOf is the handle the authority is asked about for the seat a reply
-// names: by its id through the running chart, which is what a rename does not
-// move, and the reply's own handle where this chart no longer holds the seat —
-// which nobody leads, so only the deployment's grant would have passed.
+// names: by its id through the running org, and the reply's own handle where
+// this org no longer holds the seat — which nobody leads, so only the
+// deployment's grant would have passed.
 // False when the reply names no seat at all.
 func (t *steerTurn) seatOf(reply steer.Reply) (string, bool) {
 	id, err := uuid.Parse(reply.Agent)

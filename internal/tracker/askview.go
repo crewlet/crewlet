@@ -39,10 +39,9 @@ type AskView struct {
 	// Comment is the ask's own id — what an answer names in `answers`.
 	Comment string `json:"comment"`
 
-	// AskedOf is the person the question was put to — stored as their
-	// seat's identity and shown, like every person in an answer, as the
-	// handle the seat answers to now (people.go).
-	AskedOf string `json:"asked_of" person:"seat"`
+	// AskedOf is the person the question was put to, by their seat's
+	// handle.
+	AskedOf string `json:"asked_of"`
 
 	// Open is true while nobody has answered or resolved it and it has not
 	// been removed.
@@ -51,7 +50,7 @@ type AskView struct {
 	// AnsweredBy and AnsweredAt are who closed it and when: the answering
 	// comment's author and instant, or — with Resolved — who resolved it
 	// without an answer. Both empty while it is open.
-	AnsweredBy string     `json:"answered_by,omitempty" person:"seat"`
+	AnsweredBy string     `json:"answered_by,omitempty"`
 	AnsweredAt *time.Time `json:"answered_at,omitempty"`
 
 	// Resolved says it was closed by a resolve rather than an answer, so a

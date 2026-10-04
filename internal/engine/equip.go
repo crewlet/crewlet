@@ -199,10 +199,8 @@ func (e *Engine) a2aService(c *Company) *a2a.Service {
 //
 // AGENT seats only, which is the whole question it exists to answer: a human
 // seat is addressable and never spawned, so a channel opened to one is a
-// channel no turn will ever answer. The id it returns is the seat's durable
-// one, so a colleague who has been renamed is still reached — and the
-// resolution goes through the org's own lookup, which answers a retired
-// handle too, because a model asks for the colleague it remembers.
+// channel no turn will ever answer. The id it returns is the one derived from
+// the seat's handle (ADR-0013), resolved through the org's own lookup.
 type agentSeats struct{ org *org.Organization }
 
 func (d agentSeats) SeatInbox(handle string) (uuid.UUID, bool) {

@@ -322,7 +322,7 @@ func TestAPrincipalTheRuleRefusesIsNotSentToStepUp(t *testing.T) {
 	}
 	// And the UNKNOWN arm is still unknown: a chart that cannot answer is
 	// "ask me again", which a proof would not change.
-	d = authz.Decide(t.Context(), personLeading("cto"), authz.ActionChartContent,
+	d = authz.Decide(t.Context(), personLeading("cto"), authz.ActionOrgWrite,
 		authz.Object{Kind: authz.KindUnit, Container: "sre"},
 		chart{err: authz.ErrNoChart}, decidedAt.Add(24*time.Hour))
 	if !d.Unknown() {

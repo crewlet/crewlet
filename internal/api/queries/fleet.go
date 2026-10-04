@@ -252,9 +252,8 @@ func (s Sources) activation(ctx context.Context) activationTarget {
 // seatHandles is every seat the running company has, by the ID its lease is
 // named under.
 //
-// A SEAT LEASE CARRIES NO HANDLE. It is named by the seat's id (ADR-0026),
-// because a handle is an address a rename moves and a lease is what stops two
-// nodes running one seat. What a fleet view is FOR, though, is a person
+// A SEAT LEASE CARRIES NO HANDLE. It is named by the seat's agent id
+// (ADR-0013), as its mailbox is. What a fleet view is FOR, though, is a person
 // reading it, so every row is resolved back through the company here rather
 // than showing a uuid — and this is the only place that resolution happens,
 // so the row an operator reads and the set `unplaceable` compares against can

@@ -27,13 +27,12 @@ import (
 // # This is half, and the other half is the SAME as a session's
 //
 // What this answers is the directory row. Whether the seat it names is one the
-// credential may act as NOW — present, human, not removed, followed through a
-// rename — is internal/api/auth's question, asked through [SeatView] and
+// credential may act as NOW — present, human, not removed — is
+// internal/api/auth's question, asked through [SeatView] and
 // [session.ResolveSeat], which is exactly what a signed-in person's binding
 // goes through. Two resolutions of "which seat is this" would be two answers
-// that drift, and the one that drifted here had no chart in it at all: a token
-// went on acting as a removed seat, a renamed one, and — through a handle the
-// chart had since given somebody else — a seat that was never its own.
+// that drift, and the one that drifted here had no org in it at all: a token
+// went on acting as a removed seat.
 
 // errNoDirectory is what an engine holding no identity directory answers — a
 // nil one, or one with no core runtime.

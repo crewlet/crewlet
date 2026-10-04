@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -50,21 +49,6 @@ type Reader struct {
 	// nil on a build that runs no applier. It is what a read's own answer
 	// is stamped with.
 	committed func() statelog.Position
-
-	// identities is what every person a question names is read as, and
-	// every person an answer names shown as; chart is the ONE reading of it
-	// a call holds — see people.go and [Reader.pinned]. chart is nil on the
-	// reader every surface shares and set only on one call's copy.
-	identities Identities
-	chart      seatnames.Chart
-}
-
-// pinned is this reader holding one reading of the chart for the length of one
-// call. A COPY, because the reader itself is shared by every surface at once.
-func (r *Reader) pinned() *Reader {
-	call := *r
-	call.chart = pinOf(r.identities)
-	return &call
 }
 
 // ReaderOptions configure a reader.
@@ -80,12 +64,6 @@ type ReaderOptions struct {
 	// position, which is what a test with no runner has and what a read
 	// then honestly reports.
 	Committed func() statelog.Position
-
-	// Identities is what every person a question names is read as — the
-	// seat's identity — and every person an answer names is shown as: the
-	// handle the seat answers to now. Nil reads and shows every value as it
-	// was given. See people.go.
-	Identities Identities
 }
 
 // NewReader builds the knowledge base's read side.
@@ -99,8 +77,7 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 			"a guarantee, and a degradation invisible in the answer is worse " +
 			"than a refusal")
 	}
-	r := &Reader{db: opts.DB, log: opts.Log, committed: opts.Committed,
-		identities: opts.Identities}
+	r := &Reader{db: opts.DB, log: opts.Log, committed: opts.Committed}
 	if r.committed == nil {
 		r.committed = func() statelog.Position { return statelog.Position{} }
 	}
@@ -124,7 +101,7 @@ type Filter struct {
 
 	Status  []Status
 	Label   string
-	Watcher string `person:"seat"`
+	Watcher string
 	Title   string
 
 	// Skills narrows to tool-skill pages, or excludes them. A POINTER
@@ -162,7 +139,7 @@ type Summary struct {
 	ParentID   string    `json:"parent_id,omitempty"`
 	Title      string    `json:"title"`
 	Status     Status    `json:"status"`
-	Author     string    `json:"author,omitempty" person:"seat"`
+	Author     string    `json:"author,omitempty"`
 	Version    int       `json:"version"`
 	Skill      bool      `json:"skill,omitempty"`
 	Onboarding bool      `json:"onboarding,omitempty"`
@@ -225,14 +202,6 @@ type Listing struct {
 // an absence with no local row — so it is served and says so. See
 // [Listing.Complete].
 func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (Listing, error) {
-	call := r.pinned()
-	got, err := call.listing(ctx, identified(call.chart, f), fresh)
-	return shown(call.chart, got), err
-}
-
-// listing is [Reader.List] once the watcher it filters on is their seat's
-// identity — see people.go.
-func (r *Reader) listing(ctx context.Context, f Filter, fresh statelog.Freshness) (Listing, error) {
 	if fresh.Level == "" {
 		return Listing{}, errors.New("pages: this read names no level — a " +
 			"surface resolves an absent read_level to its own default (a seat " +
@@ -536,7 +505,7 @@ type Detail struct {
 // revision's body is a coordination read, on demand.
 type RevisionSummary struct {
 	Version   int       `json:"version"`
-	Author    string    `json:"author,omitempty" person:"seat"`
+	Author    string    `json:"author,omitempty"`
 	Message   string    `json:"message,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -553,13 +522,6 @@ type RevisionSummary struct {
 // bare connection, so a page could answer with a comment thread from after the
 // revision it reported.
 func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) (Detail, error) {
-	call := r.pinned()
-	got, err := call.detail(ctx, ref, fresh)
-	return shown(call.chart, got), err
-}
-
-// detail is [Reader.Get] as the rows hold it.
-func (r *Reader) detail(ctx context.Context, ref string, fresh statelog.Freshness) (Detail, error) {
 	if fresh.Level == "" {
 		return Detail{}, errors.New("pages: this read names no level — a " +
 			"surface resolves an absent read_level to its own default before " +
@@ -1026,15 +988,6 @@ func placeholders(n int) string {
 // registry, and a walk that returned it would put it straight back — the
 // replace is wholesale, so what this returns IS the registry.
 func (r *Reader) SkillPages(ctx context.Context, container string,
-	fresh statelog.Freshness) ([]Page, error) {
-
-	call := r.pinned()
-	got, err := call.skills(ctx, container, fresh)
-	return shown(call.chart, got), err
-}
-
-// skills is [Reader.SkillPages] as the rows hold it.
-func (r *Reader) skills(ctx context.Context, container string,
 	fresh statelog.Freshness) ([]Page, error) {
 
 	if fresh.Level == "" {

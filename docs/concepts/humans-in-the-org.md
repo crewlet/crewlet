@@ -209,6 +209,15 @@ What the binding buys:
   a report's priorities, where an unbound credential reaches those only through
   `fleet:operate`. See [the authority
   table](identity-and-access.md#the-authority-table-one-function-decides).
+- **You edit your own team.** Holding a unit's lead seat, you may change the
+  seats and units inside it through `/config` — add a seat, edit a goal, move
+  somebody between two of your teams, remove a sub-team, restate your team's
+  purpose — without `config:write`, and read each of them with
+  `GET /config/roles/{handle}` and `GET /config/units/{id}`. Handing your team to
+  somebody else, reaching outside it, a project, space, channel, address or
+  contact id — your own seat's included — a credential, a `${VAR}` in any
+  field and a setting stay `config:write`'s. See [A lead edits their own
+  team](identity-and-access.md#a-lead-edits-their-own-team).
 
 - **Your writes are the seat's.** A write you make — through the `/work` and
   `/pages` HTTP routes or through your assistant — is recorded under the
@@ -641,15 +650,10 @@ A seat with two holders — a duplicate only a restore can produce — is withhe
 if either may not be reached, because one contact map cannot say which of them
 it belongs to.
 
-**A binding follows its seat through a rename.** The directory names the seat
-by the handle it was *created* under — its identity, which no rename moves —
-and every reading finds the seat by it, exactly
-as a sign-in finds the same binding's seat. So suspending somebody whose seat was
-renamed after they were bound still withdraws its contact identities, under the
-seat's current handle. A retired handle another seat has since taken as its own
-does NOT name the bound person's seat: the stranger's seat routes, and the
-suspended person's own seat stays withheld. And a removal's hold on a seat ends
-at the seat's next bind whatever the seat is called by then.
+**A binding names its seat by its handle.** Every reading finds the seat by
+it, exactly as a sign-in finds the same binding's seat, so suspending somebody
+withdraws their seat's contact identities. And a removal's hold on a seat ends
+at the seat's next bind.
 
 **Two triggers rebuild the registry, and both rebuild it whole.** A published
 company is the first; the second is the identity applier, which signals after

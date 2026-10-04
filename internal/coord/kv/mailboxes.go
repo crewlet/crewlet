@@ -23,8 +23,7 @@ import (
 // The HANDLE is in the payload, and it is the one field here that is not an
 // identity: it is what a person reading the registry, or a retirement log
 // line, needs in order to know whose mailbox this is. It rides the value
-// rather than the key for exactly that reason — a label that moved the key
-// would file one seat under two records the first time somebody renamed it.
+// rather than the key, which is the seat's id, as the mailbox's own name is.
 //
 // Both stamps are POINTERS, for the reason channelRecord.ClosedAt is one: the
 // zero instant is the "not absent" and "not retiring" value, and an absent

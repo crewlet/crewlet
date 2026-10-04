@@ -95,7 +95,7 @@ func newAnswerRunRig(t *testing.T, desk *deskFake, fleet builtin.Fleet,
 }
 
 // parked is a run of the CTO's seat a turn the founder's message woke
-// launched, by the handle the founder's seat was created under.
+// launched, naming the founder's seat by its handle.
 func parked(t *testing.T, turnID, status string) sandbox.PendingRun {
 	t.Helper()
 	return sandbox.PendingRun{TurnID: turnID, AgentHandle: "agent-cto",
@@ -218,7 +218,7 @@ func TestAnswerRunRefusesAnAnswerTooLongToSplice(t *testing.T) {
 
 // A RUN'S QUESTION IS ITS REQUESTER'S TO ANSWER, or its seat's lead's — and
 // nobody else's. The requester leads nobody and is admitted as themselves (the
-// run's row names their seat by the handle it was created under); the CTO's
+// run's row names their seat by its handle); the CTO's
 // lead is admitted as its lead; a reader who is neither is refused with the
 // authority's own answer, and nothing reaches the seat's inbox.
 func TestARunIsAnsweredByItsRequesterOrItsSeatsLead(t *testing.T) {

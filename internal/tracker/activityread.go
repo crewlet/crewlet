@@ -67,7 +67,7 @@ type ActivityRecord struct {
 	EffectiveAt time.Time `json:"effective_at"`
 
 	Kind       ChangeKind `json:"kind"`
-	Actor      string     `json:"actor,omitempty" person:"seat"`
+	Actor      string     `json:"actor,omitempty"`
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
 
@@ -209,7 +209,7 @@ type ActivityQuery struct {
 	To   time.Time
 
 	Kinds []ChangeKind
-	Actor string `person:"seat"`
+	Actor string
 
 	// ActorKinds narrows to who was WRITING rather than to which handle:
 	// every commit an operator token made, or every one the engine made
@@ -223,7 +223,7 @@ type ActivityQuery struct {
 	// of an audit built from it.
 	ActorKinds []AuthorKind
 
-	Assignee string `person:"seat"`
+	Assignee string
 
 	// Q is an escaped LIKE over the excerpt, and is GATED — see
 	// [ActivityQuerySpanDays].
@@ -253,15 +253,6 @@ type ActivityQuery struct {
 
 // Activity answers a slice of the company's own history.
 func (r *Reader) Activity(ctx context.Context, q ActivityQuery, now time.Time) (
-	ActivityAnswer, error) {
-	call := r.pinned()
-	got, err := call.activity(ctx, identified(call.chart, q), now)
-	return shown(call.chart, got), err
-}
-
-// activity is [Reader.Activity] once every person the question names is their seat's
-// identity — see people.go.
-func (r *Reader) activity(ctx context.Context, q ActivityQuery, now time.Time) (
 	ActivityAnswer, error) {
 
 	if q.Level == "" {

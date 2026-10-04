@@ -281,11 +281,9 @@ var subjectOf = map[string]subject{
 
 	// A SEAT'S WORK IS DECIDED ON THE SEAT, and the seat is never quite
 	// what the arguments state. A pause and a resume name it by a handle
-	// somebody typed — `@sre`, a retired alias, the handle it was created
-	// under — which the tool resolves through the chart and decides on the
-	// seat's CURRENT handle, the one the lead relation is asked about.
-	// Decided here on the raw argument, a lead who typed their report's
-	// old handle was refused as leading nobody called that. A note names a
+	// somebody typed — `@sre` — which the tool resolves through the org
+	// and decides on the seat's handle, the one the lead relation is asked
+	// about. A note names a
 	// TURN, whose seat only the node running it can say, so steer_turn
 	// asks that node first (a probe that offers nothing). And a run's
 	// answer is decided on the run's own row: its requester through the

@@ -22,7 +22,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/seat/placement"
-	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -198,11 +197,6 @@ func (e *Engine) startNative(ctx context.Context, c *Company) error {
 			// than to a row — so the write resolves it and the record
 			// carries the handle, and no applier ever reads an org.
 			World: liveSeats{engine: e},
-			// AND ONCE MORE for every person a record names: the seat's
-			// IDENTITY, whichever handle the caller had for it, so a
-			// rename moves nobody's work, inbox or queue — see
-			// internal/tracker's people.go.
-			Identities: livePeople{engine: e},
 			// AND THE COMPANY'S CLOCK, read per call like the chart: a
 			// date field or a project's target date given as an instant
 			// is stored as the day it falls on on this clock (ADR-0018),
@@ -234,9 +228,6 @@ func (e *Engine) startNative(ctx context.Context, c *Company) error {
 			e.backends.Store, running.reader); err != nil {
 			return fmt.Errorf("engine: tracker reader: %w", err)
 		}
-		// THE WRITER'S SEAM, read the other way: a question is asked by
-		// identity and every answer names people as they are called now.
-		n.trackerReader.Identities = livePeople{engine: e}
 	}
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER
 	// backend rather than under the wiki's.
@@ -288,9 +279,6 @@ func (e *Engine) startNative(ctx context.Context, c *Company) error {
 				Vectors: vectors,
 			},
 		})
-		// A HIT'S ASSIGNEE is shown as the reader shows one — see
-		// livePeople.
-		n.itemSearch.Identities = livePeople{engine: e}
 	}
 	// AND THIS NODE ANSWERS FOR ITS PEERS. Registered here rather than
 	// beside the coordinator because they are different jobs on one node:
@@ -324,19 +312,12 @@ func (e *Engine) startNative(ctx context.Context, c *Company) error {
 				}
 				return reservedContainers(current.Config)
 			},
-			// EVERY PERSON A PAGE NAMES, BY THEIR SEAT'S IDENTITY — its
-			// author, its watchers, a remark's author and whom it
-			// mentions — so a rename moves nobody's pages, watches or
-			// remarks. See internal/pages' people.go.
-			Identities: livePeople{engine: e},
 		}); err != nil {
 			return fmt.Errorf("engine: pages store: %w", err)
 		}
 		if n.pageReader, err = pages.NewReader(pages.ReaderOptions{
 			DB: e.backends.Store, Log: running.reader,
 			Committed: running.runner.Committed,
-			// THE STORE'S SEAM, read the other way.
-			Identities: livePeople{engine: e},
 		}); err != nil {
 			return fmt.Errorf("engine: pages reader: %w", err)
 		}
@@ -951,8 +932,8 @@ func chartProjects(o *org.Organization) []tracker.ChartProject {
 	// THE UNIT COLUMN IS THE UNIT'S KEY, never its name. The project's
 	// unit is what a task filed into it is filed under, and a task's filed
 	// unit is never rewritten — so writing the NAME here filed every item
-	// in the company under a spelling that moves the day somebody renames
-	// the team, which is exactly what `id:` exists to prevent. The name is
+	// in the company under a spelling that moves the day somebody corrects
+	// the team's name, which is exactly what `id:` exists to prevent. The name is
 	// the project's own display name beside it, and a reader resolves the
 	// key back to the team's current name through the chart.
 	for unit := range o.AllUnits() {
@@ -1215,18 +1196,16 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 //
 // THROUGH [org.Organization.UnitByRef], which is that answer: a stored unit
 // carries whichever spelling of a unit was its address when the row was
-// written — its key, the key it was created under or one it answered to before
-// a rename, or its name where the chart gave it no key — and every one of them
-// resolves, however it is cased. Resolving through [org.Organization.Unit]
+// written — its key, or its name where the document gave it no key — and both
+// resolve, however they are cased. Resolving through [org.Organization.Unit]
 // instead matched EXACTLY, so `unit: engineering` on a company with a unit
 // named "Engineering" was refused with "This company has no team".
 func ChartUnits(o *org.Organization) tracker.Units { return chartUnits{org: o} }
 
 type chartUnits struct{ org *org.Organization }
 
-// ResolveUnit answers the unit a stored or typed reference names: its current
-// key, the spellings it answered to before (the key it was created under and
-// each former key), its name and its effective lead.
+// ResolveUnit answers the unit a stored or typed reference names: its key, its
+// name and its effective lead.
 func (c chartUnits) ResolveUnit(ref string) (tracker.ChartUnit, bool) {
 	if c.org == nil {
 		return tracker.ChartUnit{}, false
@@ -1257,15 +1236,8 @@ func (c chartUnits) ResolveUnit(ref string) (tracker.ChartUnit, bool) {
 	}
 	// THE KEY AND THE NAME, because the callers ask in both directions:
 	// what a write stores is the key ([org.Unit.Key]) and what a screen
-	// reads is the name. AND EVERY KEY THE UNIT ANSWERED TO BEFORE A
-	// RENAME, because rows filed then still hold one and nothing rewrites
-	// a record: a filter or a board that knew only the current key drew a
-	// renamed team's history as somebody else's — see
-	// [tracker.ChartUnit.FormerKeys].
-	return tracker.ChartUnit{
-		Key: unit.Key(), Name: unit.Name, Lead: lead,
-		OriginKey: unit.OriginKey, FormerKeys: slices.Clone(unit.FormerKeys),
-	}, true
+	// reads is the name.
+	return tracker.ChartUnit{Key: unit.Key(), Name: unit.Name, Lead: lead}, true
 }
 
 // AllUnits is the whole chart, for the board — see [tracker.Units].
@@ -1302,20 +1274,13 @@ func (l liveUnits) AllUnits() []tracker.ChartUnit {
 }
 
 // liveSeats resolves a people field's value to exactly one seat, against the
-// CURRENT epoch, and answers the handle that seat was CREATED under — the
-// identity every person column is keyed on (ADR-0026).
+// CURRENT epoch, and answers its handle.
 //
 // EXACTLY ONE, and an ambiguous spelling is the same answer as an unknown one:
 // both mean "this does not name a person", which is the only thing a stored
 // value can be written from. A field holding a handle nobody has is a field
-// every filter on it misses, silently, for as long as the value is there.
-//
-// THE IDENTITY FROM THE READING THAT FOUND THE SEAT. It answered the handle the
-// seat answers to now and left the tracker to ask a second reading for its
-// identity ([livePeople]), so a rename landing between the two handed that
-// reading a handle it had never seen, which it keeps as given — and the field
-// was stored under the new handle, where no filter asking by identity looks.
-// And a node holding no company names nobody, rather than dereferencing one.
+// every filter on it misses, silently, for as long as the value is there. A
+// node holding no company names nobody, rather than dereferencing one.
 //
 // Per call for the reason every other live seam here is: the writer outlives a
 // revision, and a captured chart would admit a colleague who has left.
@@ -1331,73 +1296,7 @@ func (l liveSeats) ResolveSeat(ref string) (string, bool) {
 	if len(found) != 1 {
 		return "", false
 	}
-	if role := company.Org.Role(found[0].Seat.Handle); role != nil {
-		return role.Origin(), true
-	}
 	return found[0].Seat.Handle, true
-}
-
-// livePeople is the person seam of both domains that store people — the
-// tracker's and the knowledge base's — against the CURRENT epoch (ADR-0026).
-//
-// A READING PER CALL, never an answer per name: Pin loads the live company
-// ONCE and hands back [chartPeople] over it, which a call — a question and its
-// whole answer, one write — names every person by. Answering each name off the
-// live epoch let one answer take its column keys from one chart and its cards
-// from the next when a rename landed while it ran (internal/seatnames, "One
-// reading per call"). Per CALL rather than once for good for the reason every
-// other live seam here is: the writer and the reader outlive a revision, and a
-// rename is one.
-type livePeople struct{ engine *Engine }
-
-// Pin implements [tracker.Identities] and [pages.Identities].
-func (l livePeople) Pin() seatnames.Chart {
-	company := l.engine.Company()
-	if company == nil {
-		return chartPeople{}
-	}
-	return chartPeople{org: company.Org}
-}
-
-// chartPeople is ONE reading of the chart, answering both directions of a
-// seat's name: the handle it was created under for any handle it answers to,
-// and the handle it answers to now for that identity.
-//
-// THROUGH [org.Organization.Role], which resolves a current handle, a creation
-// handle and a retired alias alike — live handles first, so a retired alias
-// another seat has since taken names that seat. An identity is never issued
-// twice, so Current's lookup by one can only find the seat created under it.
-// Anything no seat answers to — a person's login, a Tier A token, a node id, a
-// seat since removed — is answered as given, both ways, and so is every name
-// on a node with no company.
-type chartPeople struct{ org *org.Organization }
-
-// Identity implements [seatnames.Chart].
-func (c chartPeople) Identity(handle string) string {
-	if role := c.role(handle); role != nil {
-		return role.Origin()
-	}
-	return handle
-}
-
-// Current implements [seatnames.Chart].
-func (c chartPeople) Current(identity string) string {
-	if role := c.role(identity); role != nil {
-		return role.Handle()
-	}
-	return identity
-}
-
-// role is the seat answering to a handle in this reading, or nil.
-//
-// TRIMMED, because a question may arrive with the handle as somebody typed it
-// and the reader trims it only after it has been asked by identity — a padded
-// `chief` would otherwise be asked for as itself and find none of its work.
-func (c chartPeople) role(handle string) *org.Role {
-	if c.org == nil {
-		return nil
-	}
-	return c.org.Role(strings.TrimSpace(handle))
 }
 
 // liveChannels is the chart's chat surfaces and unit channels, against the
@@ -1475,14 +1374,11 @@ func (l liveLeads) UnitLead(unit string) string {
 // a row may hold for it.
 //
 // EVERY SPELLING, because a routing unit is a record of what was true when it
-// was written: the unit's key then, which a rename has since retired — the key
-// it was created under or a former key — or its name, on a unit the chart gave
-// no key. A walk that compared the stored value against each unit's `id` FIELD
-// alone resolved a lead on no company that had not given its units ids, and
-// one that asked for the CURRENT key alone lost every unit's lead the day it
-// was renamed: the fallback that reaches a unit's lead when a change named
-// nobody else reached nobody, and looked exactly like a unit whose lead is
-// unset.
+// was written: the unit's key, or its name on a unit the document gave no key.
+// A walk that compared the stored value against each unit's `id` FIELD alone
+// resolved a lead on no company that had not given its units ids: the fallback
+// that reaches a unit's lead when a change named nobody else reached nobody,
+// and looked exactly like a unit whose lead is unset.
 //
 // THROUGH [org.Organization.UnitByRef] rather than a walk of its own, which is
 // what makes "every spelling" one rule rather than a claim each reader

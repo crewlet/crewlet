@@ -154,7 +154,7 @@ func TestDanglingReferencesAreLoggedOncePerAppliedEpoch(t *testing.T) {
 }
 
 // A GITLAB ACCESS LEVEL NAMING NO SEAT IS LOGGED WITH THE REST, and one
-// naming a seat — by its current handle — is not.
+// naming a seat by its handle is not.
 //
 // The key is under `integrations` and the seat it names is in the org, both in
 // the one document an apply resolves, so it is logged beside the lead and

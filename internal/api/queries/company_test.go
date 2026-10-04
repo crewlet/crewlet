@@ -634,9 +634,8 @@ func TestAgentMemoryNeedsASeat(t *testing.T) {
 }
 
 // A MEMORY QUESTION REACHES THE HOLDER WITH THE SEAT WHOLE, resolved from the
-// handle it was asked by — the seat's agent id (its lease and diary), the
-// handle it was created under (the rest of its memory) and the one it answers
-// to now. The derived agent id is NOT a name the question takes: a seat is
+// handle it was asked by — the seat's agent id (its lease and diary) and its
+// handle (the rest of its memory). The derived agent id is NOT a name the question takes: a seat is
 // named by its handle on every surface, and a uuid names no seat a person can
 // read.
 func TestAgentMemoryIsAskedOfTheHolderWithTheSeatWhole(t *testing.T) {
@@ -656,7 +655,7 @@ func TestAgentMemoryIsAskedOfTheHolderWithTheSeatWhole(t *testing.T) {
 		Memory:  memory,
 	}, "agent_memory", map[string]any{"id": "cto", "limit": 1})
 	if memory.seat.ID != agentID || memory.seat.Handle != "cto" ||
-		memory.seat.Origin != "cto" || memory.limit != 1 {
+		memory.limit != 1 {
 		t.Errorf("the holder was asked about %+v at %d, want cto whole at 1",
 			memory.seat, memory.limit)
 	}

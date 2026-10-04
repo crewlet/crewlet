@@ -425,12 +425,6 @@ type Actor struct {
 	// which every task it files states — see [tracker.Origin]. Nil outside
 	// a turn and for a turn no chat message woke: a person at the
 	// dashboard files from no thread.
-	//
-	// NOT NAMED Origin, although the tracker's field is: a turn's Origin
-	// ([turnctx.Turn.Origin]) is the handle its seat was CREATED under,
-	// and a field of that name on the identity a write is attributed to
-	// is one a later reader takes for the seat's identity rather than for
-	// where the conversation happened.
 	Thread *tracker.Origin
 
 	// Written is the turn's own record of the work items its writes

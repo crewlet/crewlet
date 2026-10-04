@@ -57,13 +57,6 @@ type Turn struct {
 	Role  *org.Role
 	Event types.TurnCompleted
 
-	// Org is the organization the role was resolved in, carried for the
-	// one thing a worker has to resolve beyond its own seat: a COLLEAGUE
-	// the turn interacted with, whom the profiler keys a profile on by the
-	// handle that colleague was created under. Resolved against the same
-	// epoch as Role, for the reason Role is resolved once.
-	Org *org.Organization
-
 	// Trace is the completed turn's trace context, carried so a worker
 	// publishing its own events links them to the turn that caused them.
 	// It lives on the envelope, never on the payload, so it has to be
@@ -71,32 +64,14 @@ type Turn struct {
 	Trace events.TraceContext
 }
 
-// Seat is what every row this turn writes names its seat by: the handle the
-// seat was CREATED under ([org.Role.Origin]), never the handle it had when the
-// turn ran. See the package doc.
-//
-// FROM THE RESOLVED ROLE rather than the event, because the event's handle is
-// an address: a turn that completed under a handle the seat has since retired
-// would otherwise file its episode, its skills and its profiles where no later
-// turn of that seat reads. Empty for a turn with no role, which no worker
-// writes for.
-func (t Turn) Seat() string { return t.Role.Origin() }
-
-// originOf is the handle the seat answering to handle was created under, for a
-// handle this turn's organization resolves — or the handle as given, for one it
-// does not.
-//
-// AS GIVEN, not dropped, for a colleague the epoch no longer has: there is no
-// identity left to find for them, and the handle they were known by is the
-// only name a profile of them could have.
-func (t Turn) originOf(handle string) string {
-	if handle == "" || t.Org == nil {
-		return handle
+// Seat is what every row this turn writes names its seat by: the seat's
+// handle, which is immutable (ADR-0013). Empty for a turn with no role, which
+// no worker writes for.
+func (t Turn) Seat() string {
+	if t.Role == nil {
+		return ""
 	}
-	if origin := t.Org.Role(handle).Origin(); origin != "" {
-		return origin
-	}
-	return handle
+	return t.Role.Handle()
 }
 
 // WorkKey is the unit of work this turn did, or "" when it did none that can
@@ -496,9 +471,7 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 	if role == nil {
 		// A turn from a seat this epoch no longer has. Learning about a
 		// seat that has been removed would write memory under an identity
-		// nothing can read back. A RENAMED seat is not in this class: its
-		// retired handle still resolves, and what it learns is filed under
-		// the handle it was created under (see [Turn.Seat]).
+		// nothing can read back.
 		log.DebugContext(ctx, "reflection_skipped_no_role",
 			"turn_id", tc.TurnID, "agent_handle", tc.AgentHandle, "role", tc.RoleName)
 		return Reflection{Skip: SkipNoRole}
@@ -541,7 +514,7 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 		}
 	}
 
-	turn := Turn{Role: role, Org: live.org, Event: tc, Trace: tr}
+	turn := Turn{Role: role, Event: tc, Trace: tr}
 
 	// Redelivery guard. Every backend may redeliver, and reflection is not
 	// idempotent: each pass is a fresh auxiliary-LLM call that can write a

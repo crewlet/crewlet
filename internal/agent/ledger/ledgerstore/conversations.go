@@ -16,15 +16,10 @@ import (
 
 // Conversations is what this seat already said in one thread, issue or channel.
 //
-// EVERY `handle` HERE IS THE HANDLE THE SEAT WAS CREATED UNDER
-// (org.Role.Origin) — never the address it answers to now — and it is what
-// `conversation_sessions.agent_handle` holds. Keyed on the address, a renamed
-// seat's next turn in a thread it had already answered read an empty history
-// and answered again. The column keeps its name, and keeps meaning a handle:
-// for a seat never renamed the two are the same value, so every row already
-// written is keyed correctly, and memory replication carries the row between
-// peers by that column's name. See internal/learning's package doc for the
-// rule every memory table follows.
+// EVERY `handle` HERE IS THE SEAT'S HANDLE, which is what
+// `conversation_sessions.agent_handle` holds, and memory replication carries
+// the row between peers by that column's name. See internal/learning's
+// package doc for the rule every memory table follows.
 type Conversations interface {
 	// Append records one turn's entry.
 	//

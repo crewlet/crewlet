@@ -14,7 +14,7 @@ import (
 // DERIVED rather than random, so a case can name the same seat twice and get
 // the same id, and so a case that publishes to a seat's inbox and a case that
 // subscribes one build the same subject. The engine's own derivation is a
-// UUIDv5 over (company name, origin handle); this is that shape with a
+// UUIDv5 over (company name, handle); this is that shape with a
 // namespace of its own, because what a case here needs is a stable id rather
 // than the value a particular company would mint.
 func seat(handle string) placement.Seat {

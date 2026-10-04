@@ -7,15 +7,14 @@
 -- a NAME: the event's actor, its `agent_role` tag — a seat's display name —
 -- and the `target`, `recipient` and `sender` tags as they came. A seat's name
 -- is prose two seats may share, so `GET /events?agent=` listed every
--- namesake's work as one seat's; a handle a seat had given up went on
--- answering for whichever seat the chart handed it to next; and an external
--- sender who happened to share a seat's handle was filed under that seat.
+-- namesake's work as one seat's; and an external sender who happened to share
+-- a seat's handle was filed under that seat.
 --
 -- # What a party is now
 --
--- An AGENT ID, which is one seat's for the life of the company (ADR-0026):
--- the event's own `agent_id`, and each seat a participant tag names, resolved
--- through the org chart by the process that writes the event — see
+-- An AGENT ID, derived from the seat's handle (ADR-0013): the event's own
+-- `agent_id`, and each seat a participant tag names, resolved through the
+-- organisation by the process that writes the event — see
 -- internal/store's `partiesOf`. The filter's `agent` parameter is resolved to
 -- an agent id the same way before it is compared.
 --

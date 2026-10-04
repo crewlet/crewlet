@@ -262,6 +262,12 @@ token — with `created_by_kind` saying which (`operator` or `human`) and
 invoking operator. Either way that author travels with the revision to every
 node in the fleet.
 
+Through the API it is decided as any `PUT /config` is: the company's grant
+writes anything, and a [unit's lead](api-endpoints.md#a-lead-edits-their-own-team)
+may import a file whose every change is inside the units they lead. Offline
+there is nobody to decide on: the store is written by whoever can open it on
+the host, which is already more than any grant.
+
 It does **not** refuse because a revision is already active, and there is no
 flag to force it past one: the pointer is append-only, so an import *chains* a
 revision rather than overwriting one, and `crewlet config activate` takes you
@@ -417,7 +423,7 @@ variable at all.
 | `show ID` | One person, in full, with their name and address opened |
 | `invite EMAIL` | Issue an invitation. Prints the link **once** — nothing stores it and no route reads one back. The link is the dashboard's invitation screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`. `-seat SEAT` binds the person it creates to a chart seat when they redeem it: a **human** seat nobody holds, by any handle it answers to — see [An invitation may bind a seat](../concepts/identity-and-access.md#everybody-arrives-by-invitation). Run under a Tier A token on an empty estate, it is how the company's **first person** arrives: give them `people:manage` — see [How the first person exists](../concepts/identity-and-access.md#how-the-first-person-exists) |
 | `create` | Create somebody directly, with `-login` (required), `-email`, `-name` and `-kind` (`person` or `machine`). **Every principal enrols with a login** — it is the name their changes are recorded under while they hold no seat — and it follows the kind: a person's is dotted (`jane.doe`) and a machine's coloned (`ci:release`, or `token:<id>` to bind a Tier A token), at most 64 characters either way, and anything else is refused. A person also needs `-email`, which is how they sign in; a machine needs none. No password: a person arrives with one by redeeming an invitation, and a machine gets a token from `iam token` |
-| `bind ID SEAT` | Bind a person to a chart seat, so they act as it on the engine's own surface — its inbox, its day, the lead relations it holds. `SEAT` is any handle the seat answers to, and the binding records the one it was *created* under, so it follows the seat through every rename. A Tier A token acts under the login `token:<id>`, so binding one is `create -kind machine -login token:<id>` and then `bind` on the id it prints. See [Humans in the Org Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api) |
+| `bind ID SEAT` | Bind a person to a chart seat, so they act as it on the engine's own surface — its inbox, its day, the lead relations it holds. `SEAT` is the seat's handle. A Tier A token acts under the login `token:<id>`, so binding one is `create -kind machine -login token:<id>` and then `bind` on the id it prints. See [Humans in the Org Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api) |
 | `unbind ID` | Take the binding back |
 | `grant ID` | Change what somebody carries: `-grants` |
 | `suspend ID` / `activate ID` | Stop somebody acting, or let them again. The row stays either way |

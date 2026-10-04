@@ -69,7 +69,7 @@ func TestADecidedWatchIsWithdrawnOnlyByARefusal(t *testing.T) {
 //
 // The re-check runs on the decision's goroutine and asks the authority table
 // with no lock held; the socket's own read loop installs watches meanwhile.
-// When a viewer's seat moves — a rebind, a rename — the read loop installs the
+// When a viewer's seat moves — a rebind — the read loop installs the
 // new seat's watch, allowed, at the very moment the old seat starts being
 // refused. The re-check that read the OLD seat then comes back refused, and an
 // unconditional clear withdrew the NEW watch and told the tab it was refused;

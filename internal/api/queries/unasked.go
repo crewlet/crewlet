@@ -40,10 +40,9 @@ type WorkSearcher interface {
 // shape is built where every node — not only one serving this API — can build
 // it.
 //
-// HANDED A [memread.Seat] WHOLE — its agent id, the handle it was created
-// under and the one it answers to now — resolved by this package from the one
-// chart reading its answer is made of, so the node that answers never resolves
-// a handle against a chart the asker's may differ from.
+// HANDED A [memread.Seat] WHOLE — its agent id and its handle — resolved by
+// this package from the org its answer is made of, so the node that answers
+// never resolves a handle against an org the asker's may differ from.
 type SeatMemory interface {
 	Memory(ctx context.Context, seat memread.Seat, limit int) (memread.Memory, error)
 	Threads(ctx context.Context, seat memread.Seat, conversation string, limit int) (memread.Threads, error)
@@ -126,12 +125,8 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 // listing carries the seat's whole count beside it.
 func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
 	// A SEAT'S TRAIL, and so the audit read whoever's seat it is — see
-	// [Sources.trailSeat]. An absent handle is still the caller's own seat,
-	// and the ledger is filed under the handle the seat was CREATED under,
-	// which the resolved seat carries: asked with the handle as given, a
-	// renamed seat's page showed none of the threads it carried before the
-	// rename.
-	seat, _, err := s.trailSeat(ctx, strings.TrimSpace(p.String("handle")))
+	// [Sources.trailSeat]. An absent handle is still the caller's own seat.
+	seat, err := s.trailSeat(ctx, strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}

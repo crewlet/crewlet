@@ -25,15 +25,12 @@
 // # A seat is its id, and is named from the chart
 //
 // Every per-seat row and band is keyed on the seat's AGENT ID — derived from
-// the handle the seat was created under (ADR-0026), so every node computes it
-// alike and no rename moves it — and a per-unit band on the unit's KEY. What a
-// row is CALLED comes from [Seats], the chart as the caller holds it now: a
-// record or a day's row names the seat as it was called when it spent, which
-// is a rename's worth out of date, and keyed on that name two seats sharing
-// one were one row while one seat renamed mid-window was two. A seat the chart
-// no longer holds keeps the newest name its rows carried and no handle,
-// because a handle a removed seat freed may already be somebody else's and a
-// wrong link is worse than none.
+// its handle (ADR-0013), so every node computes it alike — and a per-unit band
+// on the unit's KEY. What a row is CALLED comes from [Seats], the org as the
+// caller holds it now: keyed on a role name, two seats sharing one were one
+// row. A seat the org no longer holds keeps the newest name its rows carried
+// and no handle, because a handle a removed seat freed may already be somebody
+// else's and a wrong link is worse than none.
 //
 // A leaf in everything but the calendar: it imports [period] and nothing else
 // from Crewlet, because both ends need it — the live projection (which holds

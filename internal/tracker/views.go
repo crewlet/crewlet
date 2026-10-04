@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -75,7 +74,7 @@ type ViewPrior struct {
 	Held bool
 
 	// Owner and Container are that view's, and empty when none was held.
-	Owner     string `person:"seat"`
+	Owner     string
 	Container Container
 }
 
@@ -111,9 +110,8 @@ func (w *Writer) ViewPrior(ctx context.Context, id string) (ViewPrior, error) {
 }
 
 // matches reports whether a view read in a decide's snapshot is still the one
-// a prior describes, or the refusal naming what changed — its owner as the
-// seat is called now, through the write's one reading of the chart.
-func (p ViewPrior) matches(chart seatnames.Chart, id string, current View,
+// a prior describes, or the refusal naming what changed.
+func (p ViewPrior) matches(id string, current View,
 	held bool) error {
 
 	switch {
@@ -131,7 +129,7 @@ func (p ViewPrior) matches(chart seatnames.Chart, id string, current View,
 			"save was being decided (it is %s's on %s %s now), so the authority "+
 			"to replace it was decided on another view — read it again and "+
 			"decide again: %w", id,
-			ownerOrShared(seatnames.CurrentOf(chart, current.Owner)),
+			ownerOrShared(current.Owner),
 			current.Container.Kind, current.Container.ID, statelog.ErrConflict)
 	}
 	return nil
@@ -161,14 +159,7 @@ func ownerOrShared(owner string) string {
 func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 	prior ViewPrior) (WriteResult, error) {
 
-	// ONE READING OF THE CHART for every name this write resolves and
-	// every name it is worded with — see [Writer.pinned].
-	w = w.pinned()
-	// WHOSE IT IS, BY THEIR IDENTITY, and the prior's owner too, so the
-	// decide compares one spelling of a seat with the row's. See people.go.
-	chart := w.chart()
-	view, prior = identified(chart, view), identified(chart, prior)
-	if err := checkView(chart, &view); err != nil {
+	if err := checkView(&view); err != nil {
 		return WriteResult{}, err
 	}
 	subject := ViewSubject(view.ID)
@@ -225,7 +216,7 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 			// the one thing a record may never carry, and a save decided
 			// on somebody else's view is the takeover the prior exists to
 			// stop. The caller's retry re-reads.
-			if err := prior.matches(chart, view.ID, current, held); err != nil {
+			if err := prior.matches(view.ID, current, held); err != nil {
 				return statelog.Decision{}, err
 			}
 			post := view
@@ -256,7 +247,7 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 					return statelog.Decision{}, forbidden("view %s is "+
 						"protected and belongs to %s — ask them to change it, "+
 						"or save your own copy", view.ID,
-						seatnames.CurrentOf(chart, current.Owner))
+						current.Owner)
 				}
 				// THE CREATION FACTS ARE THE STORED ROW'S, never the
 				// caller's. A save that carried them would let a
@@ -275,10 +266,7 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 }
 
 // checkView refuses a view that could not be rendered or could not be run.
-//
-// The view's people are already identities; chart is the write's one reading,
-// through which a refusal names them as they are called now.
-func checkView(chart seatnames.Chart, view *View) error {
+func checkView(view *View) error {
 	view.Name = strings.TrimSpace(view.Name)
 	switch {
 	case view.ID == "":
@@ -321,7 +309,7 @@ func checkView(chart seatnames.Chart, view *View) error {
 			"its container's default: the default is the landing tab for "+
 			"everybody, and nobody else sees a personal view. Share it to "+
 			"make it the default, or pin it to put it first for its owner",
-			view.ID, seatnames.CurrentOf(chart, view.Owner))
+			view.ID, view.Owner)
 	case len(view.Params) > MaxViewParamKeys:
 		// A GUARD ON THE MAP'S SIZE. What refuses a key that is not a
 		// filter is [ParseQuery] below, which rejects an unknown

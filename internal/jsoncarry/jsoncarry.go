@@ -104,9 +104,8 @@ func Decode(data []byte, out any, known Fields) (map[string]json.RawMessage, err
 // hand: a name missing from the list is decoded into the struct AND carried as
 // unknown, so the next encode writes the stale carried copy back over what the
 // caller set — and it had been fallen into four times, silently (a field on a
-// person and on an invitation, a unit's `origin_key`, a seat's
-// `origin_handle`), each one a field that could never be cleared back to its
-// zero value. The tags already say every name; reading them is the only list
+// person, on an invitation, on a unit and on a seat), each one a field that
+// could never be cleared back to its zero value. The tags already say every name; reading them is the only list
 // nobody has to remember to update.
 //
 // THE RULES ARE encoding/json's OWN: an unexported field is skipped, a field

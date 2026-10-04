@@ -263,9 +263,10 @@ func TestAToolLessGestureIsAuditedAsItsWriterAnswered(t *testing.T) {
 	}
 }
 
-// renamingChart is a chart a config apply replaces on EVERY read: the seat
-// the founder is bound to is renamed, and another seat takes its old handle,
-// and round again — the worst case of an apply landing while one call runs.
+// renamingChart is a chart a config apply replaces on EVERY read: the two
+// human seats swap names, so each read's seat under the founder's handle is
+// another person's, and round again — the worst case of an apply landing while
+// one call runs.
 func renamingChart() func() *org.Organization {
 	var mu sync.Mutex
 	reads := 0

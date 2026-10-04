@@ -613,11 +613,8 @@ func ResourceSegments(resource string) []string {
 
 // SeatResource names the lease for an agent seat.
 //
-// BY THE SEAT'S ID, never its handle. A lease is what stops two nodes running
-// one seat, and a handle is an ADDRESS a founder edits: mid-rename one node
-// would hold `seat:sarah-chen` while another claimed `seat:sarah-okonkwo`,
-// each correctly, and the seat would be running twice. The id is the one name
-// for a seat a rename cannot move — see ADR-0026.
+// BY THE SEAT'S ID: the agent id derived from its handle (ADR-0013), which is
+// what its mailbox and its consumer group are named by too.
 func SeatResource(seat uuid.UUID) string { return ClassSeat.Resource(seat.String()) }
 
 // WorkerResource names the lease for a per-company singleton duty.

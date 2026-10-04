@@ -81,19 +81,6 @@ type DerivedSeat struct {
 	// marker is hashed from, so a change to any of them makes the seat
 	// onboard again.
 	OnboardingChain []string `json:"onboarding_chain"`
-
-	// OriginHandle is the handle the seat was CREATED under, present only
-	// once a rename has moved it off it, and FormerHandles every handle it
-	// has answered to since, newest first. Both are ADDRESSES that still
-	// resolve to this seat ([org.Organization.Role]'s own order: every live
-	// handle first, then origins, then former handles), and they are here
-	// because a link somebody kept names the address it had when they kept
-	// it: without them a client opening a renamed seat's old link found no
-	// seat at all, and one that fell back to the NAME opened whichever
-	// namesake came first. Absent for a seat never renamed, and for one
-	// built from a document, which has no rename history.
-	OriginHandle  string   `json:"origin_handle,omitempty"`
-	FormerHandles []string `json:"former_handles,omitempty"`
 }
 
 // DerivedUnit is one unit as the engine runs it.
@@ -137,13 +124,6 @@ type DerivedUnit struct {
 	// Seats is the handles of the unit's direct members once root seats are
 	// placed, in the order the engine holds them.
 	Seats []string `json:"seats"`
-
-	// OriginKey and FormerKeys are [DerivedSeat.OriginHandle] and
-	// [DerivedSeat.FormerHandles] for a unit: the keys a rename moved it off,
-	// which still resolve to it ([org.Organization.Unit]) and which a kept
-	// link to the unit's page still carries.
-	OriginKey  string   `json:"origin_key,omitempty"`
-	FormerKeys []string `json:"former_keys,omitempty"`
 }
 
 // Derive is the hierarchy the engine derives from c.
@@ -246,12 +226,6 @@ func deriveFrom(o *org.Organization, paths *identityIndex) Derived {
 		for _, u := range o.UnitChainFor(r) {
 			seat.OnboardingChain = append(seat.OnboardingChain, u.Name)
 		}
-		// AN ALIAS ONLY: a seat still answering to the handle it was created
-		// under has no second address to state.
-		if r.OriginHandle != r.Handle() {
-			seat.OriginHandle = r.OriginHandle
-		}
-		seat.FormerHandles = slices.Clone(r.FormerHandles)
 		out.Seats = append(out.Seats, seat)
 	}
 
@@ -271,10 +245,6 @@ func deriveFrom(o *org.Organization, paths *identityIndex) Derived {
 		for _, r := range u.Roles {
 			unit.Seats = append(unit.Seats, r.Handle())
 		}
-		if u.OriginKey != u.Key() {
-			unit.OriginKey = u.OriginKey
-		}
-		unit.FormerKeys = slices.Clone(u.FormerKeys)
 		out.Units = append(out.Units, unit)
 	}
 	return out

@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -234,9 +233,8 @@ type WriteResult struct {
 	// triage. Reported because only the create's own snapshot decides the
 	// second, so a caller answering from the task it SENT would tell
 	// somebody their work went to triage while it sat on a colleague's
-	// queue. Empty on every other path. Shown by the handle the seat
-	// answers to now, like every person a write reports — see people.go.
-	Assignee string `person:"seat"`
+	// queue. Empty on every other path.
+	Assignee string
 
 	// Applied and Failed are a bulk gesture's per-task outcome. A bulk
 	// write is NOT atomic and never was: Applied is every task whose change
@@ -328,9 +326,6 @@ func (w *Writer) CreateTaskAsking(ctx context.Context, opID string, task Task,
 func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 	ask *Comment, notify *Notify) (WriteResult, error) {
 
-	// ONE READING OF THE CHART for every name this write resolves and
-	// every name it is worded with — see [Writer.pinned].
-	w = w.pinned()
 	switch {
 	case task.ID == "":
 		return WriteResult{}, invalid("a create names no task id")
@@ -340,15 +335,11 @@ func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 			"project files its deferral where no project-scoped probe looks",
 			task.ID)
 	}
-	// EVERY PERSON THE TASK NAMES, BY THEIR IDENTITY — its reporter, its
-	// assignee, whoever watches it — so the rows are keyed where a rename
-	// cannot move them. See people.go.
-	task = identified(w.chart(), task)
 	if ask != nil {
-		// AND THE QUESTION'S, the person asked included: the ask is
-		// compared with the rows and routed exactly as a comment is.
-		identifiedAsk := identified(w.chart(), *ask)
-		ask = &identifiedAsk
+		// A COPY, so the instant this write stamps on the question does
+		// not reach the caller's value.
+		copied := *ask
+		ask = &copied
 	}
 	// BEFORE ANY READ, because a cap is a property of the value rather
 	// than of the database: a title past its cap is refused identically
@@ -507,7 +498,7 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task Task,
 		return w.landedTask(ctx, result.Result, task.ID)
 	}
 	result.Key, result.Rank = task.Key, task.Rank
-	result.Assignee = seatnames.CurrentOf(w.chart(), task.Assignee)
+	result.Assignee = task.Assignee
 	result.Warnings = append(result.Warnings, settled.warnings...)
 	return result, err
 }
@@ -606,11 +597,9 @@ func (w *Writer) landedTask(ctx context.Context, result statelog.Result,
 		return out, nil
 	}
 	// AND WHO HOLDS IT, as a create's own answer does ([WriteResult.Assignee]):
-	// the retry is told where the work sits, never the assignee it SENT —
-	// by the handle the seat answers to now, since the row holds its
-	// identity.
+	// the retry is told where the work sits, never the assignee it SENT.
 	out.Key, out.Rank, out.KeyCollision = task.Key, task.Rank, collision
-	out.Assignee = seatnames.CurrentOf(w.chart(), task.Assignee)
+	out.Assignee = task.Assignee
 	return out, nil
 }
 
@@ -699,17 +688,13 @@ func (w *Writer) landsOn(task Task, projectDefault string) landing {
 	if task.Assignee != "" || projectDefault == "" {
 		return landing{assignee: task.Assignee}
 	}
-	// ASKED BY IDENTITY: the stored default is the seat's identity (see
-	// people.go), and [Writer.fieldWorld] answers one, so a renamed seat
-	// still matches itself. The bare world answers the CURRENT handle, and
-	// compared with the identity it read every renamed default as gone.
-	if world := w.fieldWorld(); world != nil {
+	if world := w.World; world != nil {
 		if seat, found := world.ResolveSeat(projectDefault); !found || seat != projectDefault {
 			return landing{warning: fmt.Sprintf("%s's default assignee %q is not a seat on "+
 				"the org chart any more, so this task was filed to nobody and "+
 				"lands in triage. The project lead sets another with "+
 				"write_project `default_assignee`.", task.Project,
-				seatnames.CurrentOf(w.chart(), projectDefault))}
+				projectDefault)}
 		}
 	}
 	return landing{assignee: projectDefault}
@@ -1027,7 +1012,7 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		return settledCreate{}, err
 	}
 	fields, warnings, err := settleFields(ctx, tx, task.Project, task.Type,
-		task.Fields, w.fieldWorld(), w.zone())
+		task.Fields, w.World, w.zone())
 	if err != nil {
 		return settledCreate{}, err
 	}
@@ -1744,7 +1729,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		case current.Removed != nil:
 			return invalid("task %s was removed by %s at %s; "+
 				"restore it before moving it", taskID,
-				seatnames.CurrentOf(w.chart(), current.Removed.By),
+				current.Removed.By,
 				current.Removed.At.Format(time.RFC3339))
 		}
 		root = current
@@ -2502,7 +2487,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		case current.Removed != nil:
 			return invalid("task %s was removed by %s at %s; "+
 				"restore it before merging it", duplicate,
-				seatnames.CurrentOf(w.chart(), current.Removed.By),
+				current.Removed.By,
 				current.Removed.At.Format(time.RFC3339))
 		}
 		task = current
@@ -2523,7 +2508,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 			// Either way the survivor has to be live first.
 			return invalid("%s (%s) is in the trash — removed by %s at "+
 				"%s; restore it before merging anything into it",
-				survivor.Key, into, seatnames.CurrentOf(w.chart(), survivor.Removed.By),
+				survivor.Key, into, survivor.Removed.By,
 				survivor.Removed.At.Format(time.RFC3339))
 		case !reparent:
 			return nil

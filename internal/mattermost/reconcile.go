@@ -214,7 +214,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		if len(only) > 0 && !only[seat.Handle] {
 			continue
 		}
-		username := BotUsername(opts.Config.Provisioning, seat.Origin)
+		username := BotUsername(opts.Config.Provisioning, seat.Handle)
 		user, exists, err := opts.Client.BotByUsername(ctx, username)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted,
@@ -390,7 +390,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			continue
 		}
 
-		token, err := opts.Client.CreateAccessToken(ctx, user.ID, TokenDescription(seat.Origin))
+		token, err := opts.Client.CreateAccessToken(ctx, user.ID, TokenDescription(seat.Handle))
 		if err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("mattermost: %s: mint token: %w", seat.Handle, err))
@@ -410,7 +410,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		// RETIRED AFTER THE RECORD, and only this tool's own: an
 		// administrator may have minted a token on this bot by hand.
 		retired, err := opts.Client.RevokeMinted(ctx, user.ID,
-			TokenDescription(seat.Origin), token.ID)
+			TokenDescription(seat.Handle), token.ID)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("mattermost: %s: %w", seat.Handle, err))
@@ -583,7 +583,7 @@ func decommission(ctx context.Context, opts Options, managed map[string]Bot) ([]
 	}
 	keep := make(map[string]bool, len(opts.Plan.Seats))
 	for _, seat := range opts.Plan.Seats {
-		keep[strings.ToLower(BotUsername(opts.Config.Provisioning, seat.Origin))] = true
+		keep[strings.ToLower(BotUsername(opts.Config.Provisioning, seat.Handle))] = true
 	}
 	var disabled, notes []string
 	// SORTED, because managed is a MAP and this loop's output is what the
@@ -606,15 +606,14 @@ func decommission(ctx context.Context, opts Options, managed map[string]Bot) ([]
 		// disabled account keeps its username and its tokens, so a
 		// departed seat whose token was left live is an agent that
 		// starts working again the moment anybody re-enables the bot.
-		// Keyed on the ORIGIN inside the username, because that is what
+		// Keyed on the HANDLE inside the username, because that is what
 		// the token was minted under and the plan no longer names this
-		// seat at all. One of the two places a string legitimately becomes
-		// a [provision.Origin]: this name was built by a previous pass of
-		// this same function, so what is left after the prefix is exactly
-		// what it derived the account from.
-		origin := provision.Origin(strings.TrimPrefix(username, prefix))
+		// seat at all: this name was built by a previous pass of this same
+		// function, so what is left after the prefix is exactly what it
+		// derived the account from.
+		handle := strings.TrimPrefix(username, prefix)
 		if _, err := opts.Client.RevokeMinted(ctx, bot.UserID,
-			TokenDescription(origin), ""); err != nil {
+			TokenDescription(handle), ""); err != nil {
 			notes = append(notes, fmt.Sprintf(
 				"%s matches the managed prefix and its tokens could not be "+
 					"revoked, so it was left enabled rather than disabled "+
@@ -669,8 +668,8 @@ type mintedToken struct {
 // It is the ONLY thing distinguishing a token this tool owns from one an
 // administrator created by hand, and both the keep-or-mint decision and the
 // retire step key on it.
-func TokenDescription(origin provision.Origin) string {
-	return "crewlet-" + string(origin)
+func TokenDescription(handle string) string {
+	return "crewlet-" + handle
 }
 
 // credentialFor decides whether this bot already has a working token.

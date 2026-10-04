@@ -116,11 +116,6 @@ func (o *Organization) UnitChainFor(r *Role) []*Unit {
 // onboarding walks; "which units contain this team, itself included" is what
 // an authority check over a unit asks, and a caller with only a key has no
 // seat to ask the first with.
-//
-// THE KEY RESOLVES THROUGH A RETIRED ADDRESS, like every other unit lookup
-// here: a reference somebody wrote before a rename names the same team, and a
-// chain that answered nothing for it would refuse a lead their own unit
-// because somebody typed the name it had last quarter.
 func (o *Organization) UnitChainTo(key string) []*Unit {
 	target := o.Unit(key)
 	if target == nil {

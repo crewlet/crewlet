@@ -368,7 +368,8 @@ func labelsFromMeta(raw any) map[string]string {
 type Seat struct {
 	// ID is the seat's durable identity, and it is what every durable name
 	// for this seat is built from — its lease resource, its mailbox subject
-	// and its consumer group. See ADR-0026.
+	// and its consumer group: the agent id derived from its handle
+	// (ADR-0013).
 	//
 	// CARRIED RATHER THAN RESOLVED, which is the whole reason it is a field
 	// here. A host has to be able to RELEASE a seat, and releasing it means
@@ -379,8 +380,8 @@ type Seat struct {
 	ID uuid.UUID
 
 	// Handle is what the seat answers to, and it is what every log line,
-	// every hook and every screen names it by. An ADDRESS: a rename moves
-	// it, which is precisely why nothing durable is keyed on it.
+	// every hook and every screen names it by. ID is derived from it
+	// (ADR-0013), and the lease and the mailbox are named by the ID.
 	Handle string
 
 	Placement SeatPlacement

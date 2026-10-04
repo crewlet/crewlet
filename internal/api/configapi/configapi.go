@@ -8,6 +8,13 @@
 // integrations and the name of every credential it holds — and writing it
 // changes the company.
 //
+// THE ORG CHART IS ALSO ITS LEADS'. The routes that can change a seat or a
+// unit — the whole-document writes, a revert and the seat and unit entity
+// routes — are `config.org.write`, and the two entity reads
+// `config.org.read`: the company's grant as before, or a lead inside the
+// units they lead. What a lead's write changes is decided place by place
+// (admission.go), and a setting, a credential or a `${VAR}` is never theirs.
+//
 // THE ROUTES USED TO DECIDE NOTHING, which was sound while the only credential
 // was an operator token and stopped being sound the day a person could sign in
 // holding `state:read` alone: every one of them could rewrite the company
@@ -181,15 +188,28 @@ func (s *Service) Routes(mux authz.Mux) error {
 	write := func(pattern string, h http.HandlerFunc) {
 		mount(pattern, authz.ActionConfigWrite, h)
 	}
+	// THE ORG CHART'S ROUTES ARE ITS LEADS' TOO. The route admits whoever
+	// could lead some unit — the company's grant, or anybody bound to a
+	// seat — before the body is read, and what the write changes is then
+	// decided place by place against the two documents (admission.go), a
+	// read against where the seat or unit sits.
+	org := func(pattern string, a authz.Action, h http.HandlerFunc) {
+		policy := authz.Policy{Action: a, Object: func(*http.Request) authz.Object {
+			return authz.Object{Kind: authz.KindUnit, Unresolved: true}
+		}}
+		if err := router.Handle(pattern, policy, h); err != nil {
+			failures = append(failures, err)
+		}
+	}
 	read("GET /config", s.getActive)
-	write("PUT /config", s.put)
+	org("PUT /config", authz.ActionOrgWrite, s.put)
 	// WHAT THIS RESOURCE TAKES, asked rather than guessed. RFC 5789 §3.1:
 	// a patch format is negotiated, not assumed, and Accept-Patch is where
 	// a server says which ones it speaks.
 	read("OPTIONS /config", s.optionsDocument)
 	// THE NARROWER WRITE. See merge.go for why one patch route covers
 	// every section rather than one route per section.
-	write("PATCH /config", s.patch)
+	org("PATCH /config", authz.ActionOrgWrite, s.patch)
 	// RE-PUBLISH THE ACTIVE DOCUMENT UNCHANGED, which is the gesture a
 	// rotated SECRET needs and the one thing no other route on this
 	// surface performs: the pointer in the config is already correct, so
@@ -202,7 +222,9 @@ func (s *Service) Routes(mux authz.Mux) error {
 	read("GET /config/revisions", s.listRevisions)
 	read("GET /config/revisions/{id}", s.getRevision)
 	read("GET /config/revisions/{id}/diff", s.diff)
-	write("POST /config/revisions/{id}/revert", s.revert)
+	// A REVERT IS JUDGED ON ITS WHOLE DIFF, from the active revision to the
+	// one reverted to, like any other write.
+	org("POST /config/revisions/{id}/revert", authz.ActionOrgWrite, s.revert)
 	// THE ENTITY ROUTES, one pair per addressable collection rather than a
 	// single {kind} wildcard: a wildcard would also match
 	// /config/revisions/{id}, and a route that answers for a path it was
@@ -215,6 +237,11 @@ func (s *Service) Routes(mux authz.Mux) error {
 		// space, answering a {kind, id, entity} envelope that PUT does
 		// not accept. GET here answers the entity itself, so `GET | PUT`
 		// round-trips with nothing in between.
+		if inOrgChart(kind) {
+			org("GET /config/"+kind+"/{id}", authz.ActionOrgRead, s.getEntity(kind))
+			org("PUT /config/"+kind+"/{id}", authz.ActionOrgWrite, s.putEntity(kind))
+			continue
+		}
 		read("GET /config/"+kind+"/{id}", s.getEntity(kind))
 		write("PUT /config/"+kind+"/{id}", s.putEntity(kind))
 	}
@@ -583,7 +610,9 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	if found {
 		built = active.ID
 	}
-	prepared, err := s.prepare(r.Context(), replaceDraft(incoming, built))
+	d := replaceDraft(incoming, built)
+	d.principal = principalOf(r)
+	prepared, err := s.prepare(r.Context(), d)
 	if err != nil {
 		s.refuseWrite(w, err, createOnly)
 		return
@@ -658,9 +687,11 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prepared, err := s.prepare(r.Context(), patchDraft(ApplyRequest{
+	d := patchDraft(ApplyRequest{
 		Patch: sent.text, Summary: summary, By: attributionOf(r), Expect: active.ID,
-	}, sent.doc))
+	}, sent.doc)
+	d.principal = principalOf(r)
+	prepared, err := s.prepare(r.Context(), d)
 	if err != nil {
 		s.refuseApply(w, err)
 		return
@@ -740,7 +771,10 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 	var invalid *ValidationError
 	var held *SeatHeldError
 	var unknown *HoldersUnavailableError
+	var refused *AdmissionError
 	switch {
+	case errors.As(err, &refused):
+		refuseAdmission(w, refused)
 	case errors.Is(err, ErrNoActiveRevision):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
 			map[string]string{
@@ -868,6 +902,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 		build: func(base) (*config.Company, []byte, error) {
 			return company, document, nil
 		},
+		principal: principalOf(r),
 	})
 	var invalid *ValidationError
 	switch {

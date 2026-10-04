@@ -31,7 +31,7 @@ func seatInbox(t *testing.T, n *node, handle string) string {
 	// subject that seat's mailbox WOULD be on if it were an agent: nothing
 	// may ever publish there, and a case asserting silence on a subject
 	// that cannot be named would be asserting nothing at all.
-	id, ok := org.DeriveAgentID(c.Org.Name, seat.Origin())
+	id, ok := org.DeriveAgentID(c.Org.Name, seat.Handle())
 	if !ok {
 		t.Fatalf("seat %q derives no id at all, so this case can watch nothing", handle)
 	}

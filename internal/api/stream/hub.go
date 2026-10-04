@@ -731,8 +731,8 @@ func (h *Hub) Watching(c *Client) (seat string, watch uint64) {
 // goroutine: deciding a credential again reads the watch, asks the authority
 // table with no lock held, and by the time a refusal comes back the socket's
 // own read loop may have installed an allowed watch for a DIFFERENT seat —
-// which is exactly when the old one starts being refused, a rebind or a rename
-// moving the viewer's seat. An unconditional clear there withdrew the new, allowed
+// which is exactly when the old one starts being refused, a rebind moving the
+// viewer's seat. An unconditional clear there withdrew the new, allowed
 // watch and told the tab it was refused, and the dashboard retries only a
 // refusal that says "unavailable", so that tab heard nothing until its next
 // socket.

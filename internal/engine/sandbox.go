@@ -494,8 +494,7 @@ func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organ
 // It publishes the unhandled-exception guard itself because the frame that
 // would have, the resumed turn's own telemetry, is what did not run: without
 // it the seat renders as whatever it was last doing rather than its failure. The run's
-// own row names the seat, and the live epoch is preferred where it still does,
-// so a seat renamed since the run detached is addressed as it is now.
+// own row names the seat.
 func (e *Engine) guardResume(ctx context.Context, run sandbox.PendingRun, resume func() error) (err error) {
 	defer func() {
 		if panicked := turn.Recovered(recover()); panicked != nil {
@@ -1785,10 +1784,8 @@ func (e *Engine) prepareSeat(ctx context.Context, seat placement.Seat, epoch int
 // the seat's own acquisition, or the apply that brought the runtime up while
 // the seat was already held; the caller holds the seat's lock either way.
 //
-// THE CONTROL TOPIC IS NAMED BY THE SEAT'S ID (ADR-0026), never its handle: a
-// run outlives a rename, and a topic keyed on the handle the seat had when the
-// run launched would deliver its completion to an address the renamed seat no
-// longer listens on.
+// THE CONTROL TOPIC IS NAMED BY THE SEAT'S ID, the agent id derived from its
+// handle (ADR-0013), as its inbox is.
 func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 	seat placement.Seat, epoch int64, owner string) error {
 
@@ -1890,9 +1887,9 @@ func (e *Engine) prepareHeldSeats(ctx context.Context, rt *sandboxRuntime) {
 // carried the HANDLE, so the one field the projection reads its key from meant
 // a different thing on these two types than on every other: a seat's arrival
 // and its first turn landed under two identities. Neither a handle nor a name
-// can stand in for the id — a name is prose two seats may share, and a handle
-// moves on a rename while the id, derived from the handle the seat was created
-// under, does not (ADR-0026). The handle and the name ride along for a reader.
+// can stand in for the id — a name is prose two seats may share, and the
+// projection keys every other seat-level event on the id (ADR-0013). The
+// handle and the name ride along for a reader.
 func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 	payload events.Payload) {
 

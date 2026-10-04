@@ -340,46 +340,29 @@ func TestAChatMessageThatMatchedNoRunRecordsNothing(t *testing.T) {
 	}
 }
 
-// AN ANSWER IS ROUTED BY THE SEAT'S ID, never its handle. One that reaches a
-// seat that does not hold the run is dropped — resuming it would re-enter
-// another seat's conversation as this one — and one whose handle moved under a
-// rename between the answer and its consumption is still the run's own.
+// AN ANSWER IS ROUTED BY THE SEAT'S ID. One that reaches a seat that does not
+// hold the run is dropped — resuming it would re-enter another seat's
+// conversation as this one.
 func TestAnAnswerByTurnIsMatchedToItsRunBySeatID(t *testing.T) {
-	t.Run("another seat's", func(t *testing.T) {
-		rig := newCoordRig(t)
-		launchScheduled(t, rig, "t1")
-		parksOnAQuestion(t, rig, "t1")
+	rig := newCoordRig(t)
+	launchScheduled(t, rig, "t1")
+	parksOnAQuestion(t, rig, "t1")
 
-		given, ev := givenFor("t1")
-		given.Agent = "0198f3a4-0000-7000-8000-000000000002"
-		disposition, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev)
-		if err != nil || disposition != AnswerNotMine {
-			t.Fatalf("AnswerByTurn = %q, %v, want not_mine", disposition, err)
-		}
-		if n := len(rig.resumer.calls()); n != 0 {
-			t.Fatalf("an answer addressed to another seat resumed the run %d times", n)
-		}
-		if records := rig.answeredRecords(); len(records) != 0 {
-			t.Fatalf("a misrouted answer was recorded as %+v, want nothing", records)
-		}
-		if got := rig.get("t1"); got.Status != StatusAwaiting {
-			t.Errorf("the run is %q, want it still waiting for its own answer", got.Status)
-		}
-	})
-	t.Run("renamed since", func(t *testing.T) {
-		rig := newCoordRig(t)
-		launchScheduled(t, rig, "t1")
-		parksOnAQuestion(t, rig, "t1")
-
-		given, ev := givenFor("t1")
-		given.AgentHandle = "swe-renamed"
-		disposition, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev)
-		if err != nil || disposition != AnswerConsumed {
-			t.Fatalf("AnswerByTurn = %q, %v, want consumed: the seat is the same "+
-				"one under another handle", disposition, err)
-		}
-		rig.finished("t1")
-	})
+	given, ev := givenFor("t1")
+	given.Agent = "0198f3a4-0000-7000-8000-000000000002"
+	disposition, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev)
+	if err != nil || disposition != AnswerNotMine {
+		t.Fatalf("AnswerByTurn = %q, %v, want not_mine", disposition, err)
+	}
+	if n := len(rig.resumer.calls()); n != 0 {
+		t.Fatalf("an answer addressed to another seat resumed the run %d times", n)
+	}
+	if records := rig.answeredRecords(); len(records) != 0 {
+		t.Fatalf("a misrouted answer was recorded as %+v, want nothing", records)
+	}
+	if got := rig.get("t1"); got.Status != StatusAwaiting {
+		t.Errorf("the run is %q, want it still waiting for its own answer", got.Status)
+	}
 }
 
 // THE DESK ADDRESSES THE RUN'S OWN SEAT. Whatever the caller's copy of the run

@@ -614,39 +614,3 @@ func TestASaveExcerptIsItsMessageAndNothingElse(t *testing.T) {
 		t.Fatalf("save excerpts = %q, want %q", saves, want)
 	}
 }
-
-// THE FEED'S ACTOR FILTER FINDS A RENAMED SEAT'S OWN CHANGES by the handle it
-// answers to now.
-//
-// Every change records its actor as the seat's IDENTITY — the handle it was
-// created under — so a filter matched on the handle as typed found none of a
-// renamed seat's changes, and the company feed's `actor=` for that seat read
-// as a seat that had never written anything.
-//
-// Mutation: drop the filter's rewrite in Activity and the renamed seat's
-// changes are not found.
-func TestTheActivityActorFilterFindsARenamedSeatsChanges(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	chart := renamed{}
-	r.knowing(chart)
-	own := r.write(agent("cto"), pages.NewPage{Container: "ENG", Title: "Runbook", Body: "prose"})
-	r.write(author("jane"), pages.NewPage{Container: "ENG", Title: "Design", Body: "prose"})
-
-	// THE RENAME. Nothing is rewritten: the rows still say `cto`.
-	chart["chief"] = "cto"
-
-	changes := r.activity(pages.PageActivityQuery{Actor: " chief "}).Changes
-	if len(changes) == 0 {
-		t.Fatal("the feed finds no change by chief, which wrote a page as cto")
-	}
-	for _, change := range changes {
-		if change.PageID != own.Page.ID || change.Actor != "chief" {
-			t.Errorf("the feed for chief holds %s's change to %s, want only "+
-				"chief's own, shown as chief", change.Actor, change.PageID)
-		}
-	}
-	if got := r.activity(pages.PageActivityQuery{Actor: "jane"}).Changes; len(got) == 0 {
-		t.Error("the feed finds no change by jane, whom no rename touched")
-	}
-}

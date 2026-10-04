@@ -20,16 +20,14 @@ type Entry struct {
 	Scope types.ScheduleScope
 
 	// ScopeID is the declaring scope's IDENTITY: the seat's agent id for a
-	// role, the unit's origin key for a unit. Two different shapes,
-	// deliberately — a unit has no derived uuid and needs none.
+	// role, the unit's key for a unit. Two different shapes, deliberately —
+	// a unit has no derived uuid and needs none.
 	//
-	// AN IDENTITY AND NOT AN ADDRESS, because this is what the at-most-once
-	// ledger keys a fire on. It was the role's handle and the unit's NAME,
-	// and both were wrong in the same way: a rename split a schedule's
-	// history in two and reset its dedupe, and two units of one name shared
-	// a fire key outright — one team's standup suppressing the other's —
-	// while a name is prose the org chart lets any two units share. See
-	// ADR-0026.
+	// NEVER A NAME, because this is what the at-most-once ledger keys a fire
+	// on: two units of one name shared a fire key outright — one team's
+	// standup suppressing the other's — while a name is prose the document
+	// lets any two units share. A handle and a unit's key are immutable
+	// (ADR-0013).
 	ScopeID string
 
 	// ScopeName is the same scope as a person reads it: the seat's handle
@@ -79,7 +77,7 @@ func Entries(o *org.Organization) []Entry {
 	for u := range o.AllUnits() {
 		for _, s := range u.Schedules {
 			out = append(out, Entry{Scope: types.ScheduleScopeUnit,
-				ScopeID: u.Origin(), ScopeName: u.Key(), Unit: u, Schedule: s})
+				ScopeID: u.Key(), ScopeName: u.Key(), Unit: u, Schedule: s})
 		}
 	}
 	return out

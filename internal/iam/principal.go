@@ -105,9 +105,8 @@ type Principal struct {
 	// misconfiguration.
 	//
 	// Carried as the string the binding holds and NOT re-validated here:
-	// the grammar is [ValidSeatHandle], asked where a handle is created or
-	// renamed, and a principal only ever carries one the chart already
-	// holds.
+	// the grammar is [ValidSeatHandle], asked where a handle is created,
+	// and a principal only ever carries one the chart already holds.
 	Seat string
 
 	// Grants are the capabilities this principal carries. A slice rather

@@ -775,11 +775,9 @@ func (s *Sessions) principal(v session.Validation, binding session.Binding,
 		Login: person.Login,
 		Kind:  iam.KindPerson,
 		// THE SEAT COMES FROM THE BINDING AND NEVER FROM THE ROW,
-		// because the row's handle is what was written down and the
-		// binding's is what the chart answers to NOW — a renamed seat
-		// resolves through the chart's own former-handle trail, and
-		// taking the row would write audit rows under a handle nothing
-		// answers to.
+		// because the binding is the row's seat as the running
+		// organisation holds it — present and human — and the row
+		// alone says neither.
 		Seat:     binding.Handle(),
 		Position: binding.Seat.Unit,
 		// WHAT THE PERSON WAS GIVEN HERE, clamped to this node's

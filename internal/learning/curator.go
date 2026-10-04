@@ -45,14 +45,9 @@ const LifecycleInterval = time.Hour
 // holding the list it started with would keep compacting a seat the company
 // removed and never touch one it added.
 //
-// ROLES rather than handles, because every pass needs TWO names for a seat
-// and both have to come from one reading of the roster: the rows are keyed on
-// the handle the seat was CREATED under ([org.Role.Origin], see the package
-// doc) and every event and log line names it by the address it answers to now
-// ([org.Role.Handle]). A handle list gave the passes only the second, so a
-// renamed seat was compacted, clustered and announced under an address its
-// memory is not filed under — and a resolver consulted per pass could answer
-// about a seat an apply renamed between the listing and the lookup.
+// ROLES rather than handles, because the clustering pass needs the seat's
+// model chain and agent id as well as its handle, and all three have to come
+// from one reading of the roster.
 type Seats func() []*org.Role
 
 // Background runs the passes no turn drives.
@@ -139,7 +134,7 @@ type BackgroundOptions struct {
 	// It takes the ROLE the roster already carries rather than a handle,
 	// so the id and the role name on one event cannot name two seats: a
 	// second lookup would read the epoch again and could answer about a
-	// seat an apply renamed in between.
+	// seat an apply removed in between.
 	//
 	// Optional. Nil answers empty, which is the shape a caller with no org
 	// takes — the event still carries the handle and the role, and its
@@ -403,10 +398,8 @@ func (b *Background) holdsDuty(ctx context.Context, name string) bool {
 func (b *Background) compactPass(ctx context.Context, lifecycle *Lifecycle) {
 	now := b.now()
 	for _, seat := range b.roster() {
-		// The rows by the handle the seat was created under, everything
-		// said about them by the one it answers to — see [Seats].
-		origin, handle := seat.Origin(), seat.Handle()
-		due, ok, err := lifecycle.RawCount(ctx, origin)
+		handle := seat.Handle()
+		due, ok, err := lifecycle.RawCount(ctx, handle)
 		if err != nil {
 			log.WarnContext(ctx, "episode_lifecycle_count_failed", "seat", handle, "error", err.Error())
 			continue
@@ -428,7 +421,7 @@ func (b *Background) compactPass(ctx context.Context, lifecycle *Lifecycle) {
 				Threshold: lifecycle.Options().Threshold,
 			})
 		}
-		res, err := lifecycle.Pass(ctx, origin, now)
+		res, err := lifecycle.Pass(ctx, handle, now)
 		if err != nil {
 			// The partial result is still published: the deletes that
 			// committed are real, and reporting nothing would claim a
@@ -465,17 +458,8 @@ func (b *Background) curatePass(ctx context.Context, skills *Skills, policy Cura
 	if len(res.Applied) == 0 {
 		return
 	}
-	// ONE READING OF THE ROSTER for every change this pass announces. A
-	// skill row holds the handle its seat was created under, and an event
-	// names the seat by the address it answers to now — so a renamed seat's
-	// transitions are announced under its current handle rather than one it
-	// has retired.
-	current := map[string]string{}
-	for _, seat := range b.roster() {
-		current[seat.Origin()] = seat.Handle()
-	}
 	for _, change := range res.Applied {
-		b.announceChange(ctx, change, current)
+		b.announceChange(ctx, change)
 	}
 }
 
@@ -532,11 +516,7 @@ func (b *Background) announce(ctx context.Context, handle string, res PassResult
 // The state on the change is the state being LEFT — see [StateChange] — so
 // the destination decides the event and the snapshot supplies what it says
 // about where the row came from.
-//
-// current maps a seat's origin to the handle it answers to now. A skill whose
-// seat the roster does not hold — a seat the company removed — is announced
-// under the handle it is filed under, which is the only name left for it.
-func (b *Background) announceChange(ctx context.Context, c StateChange, current map[string]string) {
+func (b *Background) announceChange(ctx context.Context, c StateChange) {
 	if b.publish == nil {
 		return
 	}
@@ -546,9 +526,6 @@ func (b *Background) announceChange(ctx context.Context, c StateChange, current 
 		lastUsed = c.Skill.LastUsedAt.UTC().Format(time.RFC3339)
 	}
 	handle := c.Skill.AgentHandle
-	if now, ok := current[handle]; ok {
-		handle = now
-	}
 	switch c.To {
 	case SkillStale:
 		b.publish(ctx, handle, types.SkillStaled{

@@ -822,7 +822,7 @@ type MutationRecord struct {
 	// OPAQUE BYTES when the version is above this build's.
 	Mutation json.RawMessage `json:"mutation,omitempty"`
 
-	Actor      string     `json:"actor,omitempty" person:"seat"`
+	Actor      string     `json:"actor,omitempty"`
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
 
@@ -1216,7 +1216,7 @@ type Delta struct {
 type TaskParty struct {
 	Task     string `json:"task"`
 	Key      string `json:"key,omitempty"`
-	Assignee string `json:"assignee,omitempty" person:"seat"`
+	Assignee string `json:"assignee,omitempty"`
 }
 
 // Snapshot is the routing state of a task at the moment of a change.
@@ -1231,8 +1231,8 @@ type Snapshot struct {
 	Title       string      `json:"title"`
 	Status      Status      `json:"status"`
 	StatusGroup StatusGroup `json:"status_group,omitempty"`
-	Assignee    string      `json:"assignee,omitempty" person:"seat"`
-	Reporter    string      `json:"reporter,omitempty" person:"seat"`
+	Assignee    string      `json:"assignee,omitempty"`
+	Reporter    string      `json:"reporter,omitempty"`
 
 	// Watchers is the set MINUS the muted, so the feed never has to
 	// subtract and can never forget to. The MUTE ITSELF travels in the
@@ -1240,15 +1240,15 @@ type Snapshot struct {
 	// replay that saw only this list could not tell "not a watcher" from
 	// "watching but muted", and would silently re-add every unwatched
 	// person on the next mention.
-	Watchers      []string `json:"watchers,omitempty" person:"seat"`
-	Collaborators []string `json:"collaborators,omitempty" person:"seat"`
+	Watchers      []string `json:"watchers,omitempty"`
+	Collaborators []string `json:"collaborators,omitempty"`
 
 	// ProjectLead and RoutingUnitLead are BOTH carried, because they are
 	// two different fallbacks and which one applies depends on whether the
 	// task has a routing unit at the moment of the change — a fact the
 	// receiving node cannot reconstruct later.
-	ProjectLead     string `json:"project_lead,omitempty" person:"seat"`
-	RoutingUnitLead string `json:"routing_unit_lead,omitempty" person:"seat"`
+	ProjectLead     string `json:"project_lead,omitempty"`
+	RoutingUnitLead string `json:"routing_unit_lead,omitempty"`
 
 	// Unblocked names every dependent this change cleared, with its
 	// assignee. Stamped from the task's own dependents when it enters a
@@ -1268,7 +1268,7 @@ type Snapshot struct {
 	// TRANSITION and not on the destination: "entered or left a finished
 	// group" is what wakes a reporter and a parent's assignee, and a node
 	// deriving it later would be reading a row that has moved on.
-	PrevAssignee    string      `json:"prev_assignee,omitempty" person:"seat"`
+	PrevAssignee    string      `json:"prev_assignee,omitempty"`
 	PrevStatusGroup StatusGroup `json:"prev_status_group,omitempty"`
 
 	// CommentAuthorKind decides whether the assignee is ADDRESSED by a
@@ -1277,7 +1277,7 @@ type Snapshot struct {
 	CommentAuthorKind AuthorKind `json:"comment_author_kind,omitempty"`
 
 	// CommentAsk is the handle a comment asked, set only at creation.
-	CommentAsk string `json:"comment_ask,omitempty" person:"seat"`
+	CommentAsk string `json:"comment_ask,omitempty"`
 
 	// AnsweredAuthor is the author of the ASKED comment.
 	//
@@ -1285,22 +1285,22 @@ type Snapshot struct {
 	// comment author on a reply is the ANSWERER: routing off that handle
 	// would wake the seat that just answered and leave the person who
 	// asked unwoken.
-	AnsweredAuthor string `json:"answered_author,omitempty" person:"seat"`
+	AnsweredAuthor string `json:"answered_author,omitempty"`
 
 	// ThreadParticipants are the people already in a comment thread, set
 	// only on a reply.
-	ThreadParticipants []string `json:"thread_participants,omitempty" person:"seat"`
+	ThreadParticipants []string `json:"thread_participants,omitempty"`
 
 	// RemovedWatchers are the handles a watchers commit dropped. They go
 	// to the INBOX only: a human learns that a lead removed her watch, and
 	// an agent is not woken about a decision that was not its own.
-	RemovedWatchers []string `json:"removed_watchers,omitempty" person:"seat"`
+	RemovedWatchers []string `json:"removed_watchers,omitempty"`
 
 	// ParentAssignee hears when a child enters or leaves a finished group.
-	ParentAssignee string `json:"parent_assignee,omitempty" person:"seat"`
+	ParentAssignee string `json:"parent_assignee,omitempty"`
 
 	// ChecklistAssignees are the people whose checklist items changed.
-	ChecklistAssignees []string `json:"checklist_assignees,omitempty" person:"seat"`
+	ChecklistAssignees []string `json:"checklist_assignees,omitempty"`
 
 	// RoutedTo is the effective lead of a task's NEW routing unit, and it
 	// is an ORDINARY candidate rather than a fallback.
@@ -1310,17 +1310,17 @@ type Snapshot struct {
 	// only when no ordinary candidate did, so on any task that still has
 	// an assignee, a collaborator or a watcher the new lead would be
 	// dropped in silence.
-	RoutedTo string `json:"routed_to,omitempty" person:"seat"`
+	RoutedTo string `json:"routed_to,omitempty"`
 
 	// Person is whose object a person-scoped change was about — the
 	// handle whose priorities somebody else wrote.
-	Person string `json:"person,omitempty" person:"seat"`
+	Person string `json:"person,omitempty"`
 
 	// PrioritisedBy is who wrote somebody else's priority list, and
 	// Position is where in it the task named by Key now sits, ONE-BASED
 	// because that is how the excerpt reads it back: "put ENG-42 at
 	// position 2 of your priorities".
-	PrioritisedBy string `json:"prioritised_by,omitempty" person:"seat"`
+	PrioritisedBy string `json:"prioritised_by,omitempty"`
 	Position      int    `json:"position,omitempty"`
 
 	// Task is the task this wake POINTS AT when the record's own subject
@@ -1419,7 +1419,7 @@ type Notify struct {
 	// rune-safely.
 	Excerpt string `json:"excerpt,omitempty"`
 
-	Mentions []string `json:"mentions,omitempty" person:"seat"`
+	Mentions []string `json:"mentions,omitempty"`
 
 	// Late marks a wake the repair duty issued rather than the write
 	// itself — a one-sided relation whose blocker-side commit was never

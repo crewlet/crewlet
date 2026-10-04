@@ -24,7 +24,7 @@ A pass produces **findings**, and a finding is one observation that is not "fine
 | `unknown_tier` | The company document names something the third-party app does not have. |
 | `grant_short` | A seat holds less access than its role asks for. |
 | `grant_excess` | A seat holds **more** access than its role asks for. |
-| `registration_orphaned` | Something this engine registered at the third-party app that it no longer manages, because the name it is held under changed. Datadog's webhook definition is the case: it is addressed by NAME, that name is also the handle a monitor writes, and Datadog serves no listing — so the previous definition goes on delivering correctly for every monitor still naming it, and nothing could ever find it again. Reported rather than removed, because removing it would silence exactly those monitors. Datadog's [service accounts](../integrations/datadog.md#accounts-this-engine-made-and-no-longer-manages) are the second case and take the same verdict for the same reason: a renamed seat leaves an identity behind, and an account is a colleague with history attached rather than a row a timer deletes. Only the **enabled** ones are reported — a disabled account has already reached the state the advisory asks for, and reporting it asks for work somebody has done. That is the general shape of an advisory: it names what somebody might still want to act on, never what they already acted on, or it teaches them that the card does not respond to what it asks for. |
+| `registration_orphaned` | Something this engine registered at the third-party app that it no longer manages, because the name it is held under changed. Datadog's webhook definition is the case: it is addressed by NAME, that name is also the handle a monitor writes, and Datadog serves no listing — so the previous definition goes on delivering correctly for every monitor still naming it, and nothing could ever find it again. Reported rather than removed, because removing it would silence exactly those monitors. Datadog's [service accounts](../integrations/datadog.md#accounts-this-engine-made-and-no-longer-manages) are the second case and take the same verdict for the same reason: a seat whose handle changed is a removed seat whose account stays behind, and an account is a colleague with history attached rather than a row a timer deletes. Only the **enabled** ones are reported — a disabled account has already reached the state the advisory asks for, and reporting it asks for work somebody has done. That is the general shape of an advisory: it names what somebody might still want to act on, never what they already acted on, or it teaches them that the card does not respond to what it asks for. |
 | `coverage_partial` | An integration working exactly as it was asked to, over less than the whole of what it could reach — reported so nobody has to infer a decision from silence. GitHub is the case it was added for: a company whose agents each carry their own App hears about the repositories those Apps are installed on and nothing else in the organization, which is the arrangement its setup form recommends. The mildest of the three advisories, and ranked last: the other two are loose ends somebody may want to tidy, this is a decision already taken. Its actor is the **operator**, not an admin — widening it is a value in the company's own configuration rather than a grant somebody at the third-party app has to make. It exists because the alternatives were silence or a false alarm: reported as `ingress_blocked` it read as Action required over agents receiving events perfectly well, and reported as a note it reached nobody, because a pass returns findings and its notes are discarded. |
 
 Those findings fold into one **report**, which is what an operator reads:
@@ -147,30 +147,16 @@ flowchart LR
 
 ---
 
-## Renaming a seat
+## A seat's account is named after its handle
 
-**An agent's account at a third-party app is named after the handle the seat was *created* under, not the one it answers to now.** Renaming a seat in the org chart moves its address and nothing else — its account at Mattermost, GitLab, Datadog and Atlassian stays exactly where it is, under exactly the name it already has, and the next pass recognises it.
+**An agent's account at a third-party app is named after the seat's handle.** None of these apps stores a Crewlet seat id, and none of them lets the engine attach a field of its own that survives — Atlassian accepts a description on the create call, answers `200`, and keeps nothing. So the account's **own name is the only thing a later pass can match on**, and the handle is what makes it one: it is immutable ([ADR-0013](https://github.com/crewlet/crewlet/blob/main/adr/0013-a-seats-identity-is-derived.md)), and a document that changes it removes the seat and creates another. The new seat gets a new account; the old one is a departed seat's, which `-decommission` removes and Datadog's orphan sweep reports.
 
-That is worth stating because the obvious alternative reads better and is wrong. None of these apps stores a Crewlet seat id, and none of them lets the engine attach a field of its own that survives — Atlassian accepts a description on the create call, answers `200`, and keeps nothing. So the account's **own name is the only thing a later pass can match on**, which makes that name a durable address living in somebody else's system. A handle is not one: it is prose a founder retypes.
-
-Built from the live handle, a single rename did three things at once, silently, in a real workspace:
-
-- the next pass looked up a name nothing holds and **created a second account**, while the first stayed live, in the channels, holding a token the engine had already sealed and would never revoke;
-- `-decommission` read the first as a **departed seat** — and disabled, or at GitLab *deleted*, the account the agent was actually working as;
-- Datadog's orphan sweep reported it exactly right and could do nothing about it, because Datadog will not change an account's address at all.
-
-Where each app's name comes from:
-
-| App | The account's name | What follows the chart instead |
+| App | The account's name | What follows the document instead |
 |---|---|---|
-| Mattermost | `{username_prefix}{origin handle}`, and the token description `crewlet-<origin handle>` | the bot's **display name**, patched to `{role name}{display_name_suffix}` on every pass |
-| GitLab | `{username_prefix}-{origin handle}`, and the token name `crewlet-<origin handle>` | — |
-| Datadog | the account address, `crewlet-<origin handle>@{email_domain}` | — |
-| Atlassian | the marker inside the display name, `{role} (crewlet:<origin handle>)` | the `{role}` label in front of the marker |
-
-A seat that has never been renamed has an origin handle equal to its handle, byte for byte, so none of this changes anything at a company that has not used the gesture.
-
-**What still follows the rename is every reference a person wrote.** A Datadog monitor tagged `crewlet:sre-lead`, a channel topic, a runbook line: those resolve through the seat's [alias list](organization-model.md), so an alert tagged with a retired handle still wakes the seat. The alias list is capped and the origin is not, which is the difference between the two — an alias keeps a reference working, and the origin *is* the identity. See [ADR-0026](https://github.com/crewlet/crewlet/blob/main/adr/0026-a-seats-identity-is-derived-from-the-handle-it-was-created-under.md).
+| Mattermost | `{username_prefix}{handle}`, and the token description `crewlet-<handle>` | the bot's **display name**, patched to `{role name}{display_name_suffix}` on every pass |
+| GitLab | `{username_prefix}-{handle}`, and the token name `crewlet-<handle>` | — |
+| Datadog | the account address, `crewlet-<handle>@{email_domain}` | — |
+| Atlassian | the marker inside the display name, `{role} (crewlet:<handle>)` | the `{role}` label in front of the marker |
 
 ## What the loop does, and what it leaves alone
 

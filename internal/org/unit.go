@@ -43,8 +43,9 @@ type Unit struct {
 	// A unit's name is what people read — in a prompt, on a board, in a
 	// channel topic — so it is renamed for the reasons prose is renamed,
 	// and everything keyed on it moves when it does. An id is chosen once
-	// and never read by anybody, so what is keyed on it survives the
-	// rename.
+	// and IMMUTABLE (ADR-0013's rule for a seat's handle), so what is keyed
+	// on it survives the rename: a document that changes a unit's id has
+	// removed one unit and created another.
 	//
 	// IT IS WHAT REFERENCES IT. A `manages:` entry naming a unit and a root
 	// seat's `unit:` both resolve by [Unit.Key], which is this id, so
@@ -107,13 +108,6 @@ type Unit struct {
 	DeclaredLead    string `yaml:"-" json:"-"`
 	DeclaredChannel string `yaml:"-" json:"-"`
 
-	// OriginKey is the key this unit was CREATED under and FormerKeys the
-	// keys it has answered to since. See [Role.OriginHandle] for why a
-	// capped alias list and an uncapped identity are two different fields,
-	// and why neither is part of the wire form.
-	OriginKey  string   `yaml:"-" json:"-"`
-	FormerKeys []string `yaml:"-" json:"-"`
-
 	// declared reports that DeclaredLead and DeclaredChannel have been
 	// recorded. It is what keeps Normalize idempotent: after the cascade an
 	// inherited Lead and an authored one are the same string, so a second
@@ -169,19 +163,6 @@ func (u *Unit) Key() string {
 		return id
 	}
 	return strings.TrimSpace(u.Name)
-}
-
-// Origin is the key this unit was created under — its IDENTITY, where
-// [Unit.Key] is its address. See [Role.Origin]; a unit's schedule ledger keys
-// on this, so a renamed team's at-most-once history is still its own.
-func (u *Unit) Origin() string {
-	if u == nil {
-		return ""
-	}
-	if u.OriginKey != "" {
-		return u.OriginKey
-	}
-	return u.Key()
 }
 
 // Role returns the direct member with this HANDLE, or nil.

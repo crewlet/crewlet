@@ -275,9 +275,6 @@ func (r *Refiner) Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 // have archived one since. Refining an archived skill would resurrect a body
 // nobody will be shown.
 func (r *Refiner) candidates(ctx context.Context, t Turn) ([]Skill, error) {
-	// THE HANDLE THE SEAT WAS CREATED UNDER, which is what its catalogue is
-	// keyed on — see [Turn.Seat]. Listed under the address on the event, a
-	// renamed seat's turn found none of its skills and refined nothing.
 	live, err := r.skills.List(ctx, t.Seat(), ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("learning: listing %s's skills: %w", t.Event.AgentHandle, err)

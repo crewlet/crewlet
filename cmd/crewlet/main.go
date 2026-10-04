@@ -1476,11 +1476,9 @@ func seedPauses(ctx context.Context, e *engine.Engine, live *livestate.LiveState
 	}
 	seeds := make([]livestate.SeedPause, 0, len(pauses))
 	for _, p := range pauses {
-		// BY THE SEAT'S IDENTITY, which is what the record is keyed on:
-		// a pause names the seat it was taken on, never the handle it
-		// answered to then, so a rename keeps it and a hire on the freed
-		// handle inherits nothing. A seat the company no longer holds
-		// has no row to draw a pause on.
+		// BY THE SEAT'S ID, the agent id derived from its handle
+		// (ADR-0013), which is what the record is keyed on. A seat the
+		// company no longer holds has no row to draw a pause on.
 		if company.Org.AgentSeatByID(p.Seat) == nil {
 			continue
 		}
@@ -2109,7 +2107,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	//
 	// The roster, the org tree and the tool catalogue all come from the
 	// company, so no event will ever correct them: a change that adds,
-	// renames or removes a seat produces nothing a projection could learn
+	// edits or removes a seat produces nothing a projection could learn
 	// from, and an overlay merge cannot express a deletion at all. Without
 	// this an open dashboard renders the company it connected to until
 	// someone reloads.

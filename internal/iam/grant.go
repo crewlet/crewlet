@@ -117,9 +117,11 @@ const (
 
 	// GrantConfigWrite changes the company: PATCH /config and the epoch
 	// activation that follows, which rebuilds every seat's tools,
-	// providers and MCP children — the org chart included: its structure,
-	// every seat's runtime settings and the relations authority is derived
-	// from.
+	// providers and MCP children — the org chart included, all of it. A
+	// unit's LEAD may change the seats and units inside it without this
+	// grant (internal/authz's subtree rule), every field but a
+	// credential's; what lies outside every lead's subtree, every setting
+	// and every credential the chart names are this grant's alone.
 	//
 	// IT IS HOST ACCESS, and it is ONE grant by decision rather than by
 	// oversight. The configuration it writes runs code: an `mcp_servers`
@@ -162,17 +164,13 @@ const (
 	// radius and an audience — whoever runs the deployment — and
 	// splitting them would invite a gate that holds all of them but one.
 	//
-	// IT IS HALF OF TWO MORE, each asked beside a second grant because it
-	// is the deployment's reach over somebody else's subject: an object's
-	// REMOVAL from the org chart takes it with [GrantConfigWrite] — the
-	// one structural change nothing undoes, the address tombstoned for
-	// ever and a seat's mailbox, lease and diary gone with it, which is a
-	// purge's reach over the company's own structure — and ending every
+	// IT IS HALF OF ONE MORE, asked beside a second grant because it is
+	// the deployment's reach over somebody else's subject: ending every
 	// session in the company takes it with [GrantPeopleManage].
 	//
 	// AND IT IS THE ADMIN PATH over the relation classes internal/authz
 	// decides somebody's WORK by — a colleague's queue, a project's
-	// policy — though not over an org chart object's prose, which is
+	// policy — though not over the org chart, which is
 	// [GrantConfigWrite]'s.
 	GrantFleetOperate Grant = "fleet:operate"
 

@@ -111,7 +111,7 @@ type MCPServerNode struct {
 	Tools    int  `json:"tools"`
 	// Error is one failed instance's reason, bounded on the wire, and
 	// ErrorSeat the seat it was launched for ("" for a shared server), by
-	// the handle it answers to now. The whole text is the node's
+	// its handle. The whole text is the node's
 	// `mcp_server_failed` log line.
 	Error     string `json:"error"`
 	ErrorSeat string `json:"error_seat"`
@@ -210,14 +210,12 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	return out, nil
 }
 
-// failedSeat names the seat a failed instance was launched for by the handle
-// it answers to now.
+// failedSeat names the seat a failed instance was launched for by its handle.
 //
-// A NODE REPORTS THE SEAT'S ID, which no rename moves, and the screen reads a
-// handle; resolved here, on this answer's own chart reading, rather than by
-// the reporting node, whose chart a rename may not have reached. A seat this
-// chart no longer holds is named by its id — the honest fallback, as a lease's
-// is in `fleet` — and a shared server's failure names none.
+// A NODE REPORTS THE SEAT'S ID, as a lease names its seat, and the screen reads
+// a handle; resolved here, on this answer's own org. A seat this org no longer
+// holds is named by its id — the honest fallback, as a lease's is in `fleet`
+// — and a shared server's failure names none.
 func failedSeat(organization *org.Organization, id uuid.UUID) string {
 	if id == uuid.Nil {
 		return ""

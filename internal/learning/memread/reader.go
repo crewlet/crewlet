@@ -67,16 +67,12 @@ func (q Question) Valid() bool {
 // Seat is one seat a read is about, resolved by the asker from the company it
 // serves — memread never resolves a handle itself.
 //
-// THREE NAMES, because a seat's memory is keyed two ways and shown a third
-// (ADR-0026): ID is its derived agent id, which its lease and its diary and
-// onboarding marker are keyed by; Origin is the handle it was CREATED under,
-// which its episodes, skills, profiles and conversation ledger are keyed by;
-// Handle is the handle it answers to NOW, which is only ever shown. A read
-// keyed on the current handle found nothing for a renamed seat, and answered
-// a stranger hired on a freed handle with somebody else's memory.
+// TWO NAMES, because a seat's memory is keyed two ways: ID is its derived
+// agent id (ADR-0013), which its lease and its diary and onboarding marker are
+// keyed by; Handle is its handle, which its episodes, skills, profiles and
+// conversation ledger are keyed by.
 type Seat struct {
 	ID     uuid.UUID `json:"id"`
-	Origin string    `json:"origin"`
 	Handle string    `json:"handle"`
 }
 
@@ -302,7 +298,7 @@ func NodeOf(owner string) string {
 // about the seats listed under it.
 //
 // THE SEAT TRAVELS WHOLE, as the asker resolved it: the holder answers from
-// its store by the seat's id and origin and never re-resolves a handle against
+// its store by the seat's id and handle and never re-resolves a handle against
 // a chart of its own, which may be a different reading from the asker's.
 type request struct {
 	Version      int               `json:"v"`

@@ -53,8 +53,8 @@ import (
 //     is decided IN MEMORY against the company just published, with no
 //     identity read: a socket whose principal acts as a seat that company no
 //     longer holds as a human seat closes [CloseUnauthorized]; one whose seat
-//     now answers to another handle closes [CloseUndecided], so its handshake
-//     resolves the binding afresh; and every watch is decided again
+//     it has never seen that company hold closes [CloseUndecided], so its
+//     handshake resolves the binding afresh; and every watch is decided again
 //     ([watching.recheck]).
 //   - ITS CREDENTIAL ENDS ON ITS OWN ([auth.Lifetime]): a session's absolute
 //     deadline, a machine token's expiry. No record is written at that
@@ -101,16 +101,14 @@ import (
 // each reconnect is one handshake, which is the price of never reading on a
 // move that names nobody.
 //
-// The published-company decision finds the seat by the identity the company
-// gave it when this socket first saw it there. A socket opened on a seat the
-// published company did not yet hold (a hire inside the publish's coalescing
-// window) learns that identity at the next publish, by handle — so a seat
-// renamed and its old handle given to a new seat inside that one window would
-// be taken for the new seat. Every other path re-decides by the guard.
+// The published-company decision finds the seat by its handle, which is
+// immutable (ADR-0013). A socket opened on a seat the published company did not
+// yet hold (a hire inside the publish's coalescing window) is kept by the next
+// publish that holds it, and closed [CloseUndecided] by one that does not.
 
 // CloseUndecided ends a socket whose credential this node will not vouch for
 // now: a move that names nobody, a credential the guard could not decide, or a
-// seat that answers to another handle. It is the standard's 1013, "try again
+// seat the published company has never been seen to hold. It is the standard's 1013, "try again
 // later", rather than an application code, because what it asks of a client is
 // what any close outside the 4000 range asks: reconnect on a backoff. The
 // handshake that follows is what says why, over plain HTTP where the status is
@@ -238,22 +236,15 @@ func (a *asking) context(ctx context.Context) context.Context {
 
 // SeatState is what a published company says about a seat.
 type SeatState struct {
-	// Origin is the handle the seat was created under — its identity.
-	Origin string
-
-	// Handle is the handle it answers to now.
-	Handle string
-
 	// Human is whether it is a human seat, the only kind a person or a
 	// credential bound to one may act as.
 	Human bool
 }
 
 // SeatOfFunc answers what the company this node has published says about the
-// seat a name addresses — its live handle, the handle it was created under, or
-// a handle it gave up — and false for a seat it does not hold. In memory: it
+// seat a handle names, and false for a seat it does not hold. In memory: it
 // reads no identity row.
-type SeatOfFunc func(name string) (SeatState, bool)
+type SeatOfFunc func(handle string) (SeatState, bool)
 
 // listener is one open socket as the service's registry holds it: what it was
 // opened with, and the signals that reach it. Each holds at most one pending
@@ -369,16 +360,15 @@ func keepDecided(ctx context.Context, conn *websocket.Conn, client *Client,
 		defer timer.Stop()
 		expiry = timer.C
 	}
-	// THE IDENTITY OF THE SEAT the principal acts as, as the published
-	// company names it — what a published company is decided by.
+	// WHETHER THE PUBLISHED COMPANY HAS BEEN SEEN TO HOLD the seat the
+	// principal acts as — what tells a seat removed from one not yet in it.
 	//
-	// LEARNED AGAIN ONLY WHEN A DECISION MOVED THE SEAT: a seat that stayed
-	// the same cannot have a new identity, and re-learned after every
-	// decision it was read from whatever company was published as the
+	// LEARNED AGAIN ONLY WHEN A DECISION MOVED THE SEAT: re-learned after
+	// every decision it was read from whatever company was published as the
 	// decision ended — one that had just dropped the seat left this socket
-	// knowing no identity for it, and the publish that followed closed it
-	// [CloseUndecided] rather than `seat_unavailable`.
-	origin := identify(seatOf, cred.who.current().Seat)
+	// believing it had never been held, and the publish that followed
+	// closed it [CloseUndecided] rather than `seat_unavailable`.
+	seen := holds(seatOf, cred.who.current().Seat)
 	decide := func() bool {
 		seat := cred.who.current().Seat
 		r, refusal := cred.decide(ctx)
@@ -387,7 +377,7 @@ func keepDecided(ctx context.Context, conn *websocket.Conn, client *Client,
 			return false
 		}
 		if moved := cred.who.current().Seat; moved != seat {
-			origin = identify(seatOf, moved)
+			seen = holds(seatOf, moved)
 		}
 		return true
 	}
@@ -402,7 +392,7 @@ func keepDecided(ctx context.Context, conn *websocket.Conn, client *Client,
 			_ = conn.Close(CloseUndecided, "credential to be decided again")
 			return
 		case <-l.published:
-			if !keepSeated(ctx, conn, cred.who, seatOf, &origin) {
+			if !keepSeated(ctx, conn, cred.who, seatOf, &seen) {
 				return
 			}
 			if rewatch != nil {
@@ -431,47 +421,40 @@ func keepDecided(ctx context.Context, conn *websocket.Conn, client *Client,
 // its deadline a socket can be served to the same small figure.
 const expiryRetry = time.Second
 
-// identify is the identity the published company gives the seat handle answers
-// to now, or "" when it holds no seat under that live handle.
-func identify(seatOf SeatOfFunc, handle string) string {
+// holds reports whether the published company holds a seat under handle.
+func holds(seatOf SeatOfFunc, handle string) bool {
 	if handle == "" {
-		return ""
+		return false
 	}
-	if s, ok := seatOf(handle); ok && s.Handle == handle {
-		return s.Origin
-	}
-	return ""
+	_, ok := seatOf(handle)
+	return ok
 }
 
 // keepSeated decides an open socket against a company just published, in
-// memory, and reports whether it is still open — see the file head. origin is
-// the identity of the seat the principal acts as, learned here when it was
-// not known.
+// memory, and reports whether it is still open — see the file head. seen is
+// whether a published company has held the seat the principal acts as,
+// learned here when it was not.
 func keepSeated(ctx context.Context, conn *websocket.Conn, who *asking,
-	seatOf SeatOfFunc, origin *string) bool {
+	seatOf SeatOfFunc, seen *bool) bool {
 
 	p := who.current()
 	if p.Seat == "" {
 		return true
 	}
-	ref := *origin
-	if ref == "" {
-		ref = p.Seat
-	}
-	s, found := seatOf(ref)
+	s, found := seatOf(p.Seat)
 	switch {
-	case found && s.Human && s.Handle == p.Seat:
-		*origin = s.Origin
+	case found && s.Human:
+		*seen = true
 		return true
-	case *origin != "" && (!found || !s.Human):
+	case *seen:
 		// A SEAT THIS SOCKET SAW THE COMPANY HOLD, removed or no longer a
 		// human seat: what the guard refuses `seat_unavailable`.
 		log.InfoContext(ctx, "stream_closed_seat_gone", "seat", p.Seat)
 		_ = conn.Close(CloseUnauthorized, string(httpjson.CodeSeatUnavailable))
 		return false
 	}
-	// RENAMED, or a seat this socket has not yet seen the published company
-	// hold: the handshake resolves the binding by its identity.
+	// A SEAT THIS SOCKET HAS NOT YET SEEN THE PUBLISHED COMPANY HOLD: the
+	// handshake resolves the binding.
 	log.InfoContext(ctx, "stream_closed_seat_moved", "seat", p.Seat)
 	_ = conn.Close(CloseUndecided, "seat to be resolved again")
 	return false

@@ -230,15 +230,12 @@ escapes each one, so a delimiter inside a unit or schedule name cannot
 make two different fires claim one key.
 
 `scope_id` is the scope's **identity**, not the name you wrote: a seat's
-agent id for a role schedule, a unit's origin key for a unit one. Neither
-moves when somebody retypes a handle or relabels a team, so a rename keeps
-a schedule's history in one place and keeps its dedup intact — and two
-teams that happen to share a display name can no longer share a fire,
-which while the key was that name meant one team's standup claimed the
-other's minute and the other never ran. Every surface that shows a scope
-shows `scope_name` beside it: the handle, or the unit's key, resolved
-through the company the node is running, so a renamed scope reads under
-the name it answers to **now** on every row of its history.
+agent id for a role schedule, a unit's key for a unit one. Neither moves
+when somebody relabels a team, so two teams that happen to share a display
+name can no longer share a fire, which while the key was that name meant one
+team's standup claimed the other's minute and the other never ran. Every
+surface that shows a scope shows `scope_name` beside it: the handle, or the
+unit's key, resolved through the company the node is running.
 
 The claim **fails closed**: a coordination store that cannot be read
 yields no dispatch and the tick is retried on the next one. That is the

@@ -1076,12 +1076,8 @@ func readInvalidated(ctx context.Context, tx *sql.Tx) (uint64, error) {
 // registry it governs; this package says who holds the seat and at what stage,
 // and nothing about what that means for a Slack mention.
 type SeatHolder struct {
-	// Seat is the seat's IDENTITY — the handle it was created under, which
-	// no rename moves (ADR-0027) — and never the handle it answers to now.
-	// A reader turns it into a seat by [org.Role.Origin] over the running
-	// organisation, never by comparing it to a handle: after a rename the
-	// two differ, and after the old handle is reused they name different
-	// seats.
+	// Seat is the seat's handle, which is immutable (ADR-0013): a reader
+	// finds the seat by it in the running organisation.
 	Seat string
 
 	// Person is who holds it, or who last held it before a removal.
@@ -1111,10 +1107,7 @@ type SeatHolder struct {
 	// than back to the leaver's tombstone — which, read from the seat's
 	// current rows alone, withheld it again indefinitely whatever its
 	// contact map had since been pointed at. The tombstone, the successor's
-	// bind and the stamp all name the seat by its IDENTITY, so a bind under
-	// a handle the seat was renamed to after the removal still ends it: keyed
-	// on the handle typed at the time, the leaver's tombstone named an address
-	// nobody could bind again and withheld the new holder for ever.
+	// bind and the stamp all name the seat by its handle.
 	Removed bool
 }
 

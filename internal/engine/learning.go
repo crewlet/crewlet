@@ -338,16 +338,15 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 		Passes: e.learningPasses(ctx, e.Company()),
 		// Derived from the ROLE the roster listed, not looked up again by
 		// handle: the id and the role name land on one event, and a second
-		// epoch read could answer about a seat an apply renamed between
+		// epoch read could answer about a seat an apply removed between
 		// the two.
 		AgentIDFor: e.seatAgentID,
 		// READ FRESH through the epoch, never bound to the company this
 		// call sees: an apply replaces the roster, and a captured list
 		// would keep compacting a seat the revision removed and never
-		// touch one it added — and would charge a renamed seat's
-		// clustering to a chain the company has replaced. ROLES, because
-		// every pass keys a seat's rows on the handle it was created under
-		// and names it by the one it answers to now (see learning.Seats).
+		// touch one it added. ROLES, because the clustering pass needs a
+		// seat's model chain and agent id as well as its handle (see
+		// learning.Seats).
 		Seats:     e.seatRoles,
 		Publish:   e.publishLearning,
 		ClaimDuty: e.workerDuty(skillCuratorDutyName, learningDutyTTL),
@@ -534,7 +533,7 @@ func (e *Engine) seatRoles() []*org.Role {
 // seatRole resolves a seat handle against the CURRENT epoch.
 //
 // Read fresh, never captured: a caller holding the roster it started with
-// would charge a renamed seat's work to a chain the company has replaced, and
+// would charge a seat's work to a model chain the company has replaced, and
 // would answer nil for a seat an apply has just added.
 func (e *Engine) seatRole(handle string) *org.Role {
 	company := e.Company()
@@ -620,8 +619,7 @@ func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
 		// and on any company whose seats declare a handle it resolved
 		// nobody: every compaction failed with the refusal below, and
 		// the memory it was meant to fold stayed whole. The handle passed
-		// is the one the episodes are keyed on — the one the seat was
-		// CREATED under — which Role resolves for a renamed seat too.
+		// is the one the episodes are keyed on.
 		seat := c.Org.Role(handle)
 		if seat == nil {
 			return "", fmt.Errorf("engine: compaction for %q: this revision has "+

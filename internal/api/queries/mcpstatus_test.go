@@ -73,8 +73,8 @@ func mcpSources(t *testing.T, backend coord.Backend) queries.Sources {
 // upgraded nodes and failed for one seat on node-b; docs started on node-a
 // alone; linear started nowhere.
 //
-// A NODE REPORTS THE FAILING SEAT BY ITS ID, which no rename moves, and the
-// answer names it by the handle it answers to now.
+// A NODE REPORTS THE FAILING SEAT BY ITS ID, and the answer names it by its
+// handle.
 func mcpFleet(t *testing.T) coord.Backend {
 	t.Helper()
 	cfg, err := config.ParseCompany([]byte(mcpCompany))

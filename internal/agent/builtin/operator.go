@@ -150,8 +150,8 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// A SEAT IS NEVER GIVEN IT: a question a coding run asked is a
 		// person's to answer, and a seat that could answer its own run's
 		// question would be one guessing on its own behalf.
-		{&answerRun{deps: deps.Runs, fleet: deps.Fleet, authorize: deps.Authorize,
-			org: deps.Org}, deps.Runs.Desk != nil},
+		{&answerRun{deps: deps.Runs, fleet: deps.Fleet, authorize: deps.Authorize},
+			deps.Runs.Desk != nil},
 		// NOR THESE: whether a seat works is a person's decision about it,
 		// and a seat that could pause a colleague — or resume itself —
 		// would be one overruling the people who run the company.

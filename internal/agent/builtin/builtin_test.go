@@ -585,9 +585,8 @@ func (s *skillStore) Update(_ context.Context, id string, rev learning.Revision,
 func TestASkillLoadsOnlyForItsOwnSeat(t *testing.T) {
 	t.Parallel()
 	// A skill is one seat's distilled experience. Loading another's would
-	// make the per-seat store a shared one, and the whole design — a diary
-	// keyed on a DERIVED agent id so a renamed handle orphans its rows
-	// rather than inheriting somebody else's — rests on that holding.
+	// make the per-seat store a shared one, and the whole design — memory
+	// kept per seat — rests on that holding.
 	store := &skillStore{skills: []learning.Skill{
 		{ID: "s1", AgentHandle: "agent-cto", Name: "deploy", Content: "1. push"},
 	}}
@@ -681,9 +680,8 @@ func (d *diaryStore) Recent(_ context.Context, agentID string, _ time.Time, limi
 
 func TestANoteIsKeptAgainstTheDerivedAgentID(t *testing.T) {
 	t.Parallel()
-	// The DERIVED id, never the handle: renaming a handle then cleanly
-	// orphans the old rows rather than handing one seat's memory to
-	// whoever takes the name next.
+	// The DERIVED id, never the handle: a seat removed and created again
+	// under another handle is another seat, with a memory of its own.
 	d := &diaryStore{}
 	tool := registered(t, builtin.Deps{Diary: d}, builtin.ReflectAndPersistTool)
 	turn := turnFor(t, "agent-ceo")

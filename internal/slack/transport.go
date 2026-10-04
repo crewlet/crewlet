@@ -51,9 +51,6 @@ type Config struct {
 // SeatConfig is one agent's Slack app, as configured.
 type SeatConfig struct {
 	Handle string
-	// Origin is the handle the seat was CREATED under — what its thread
-	// follows are keyed on ([Seat.Identity]).
-	Origin string
 	// Token is the app's bot token (xoxb-…).
 	Token string
 }
@@ -243,7 +240,7 @@ func (t *Transport) Start(ctx context.Context) error {
 			}
 			found[i] = resolved{
 				seat: Seat{
-					Handle: cfg.Handle, Origin: cfg.Origin,
+					Handle:    cfg.Handle,
 					BotUserID: identity.UserID, AppID: identity.AppID,
 				},
 				client: client,
@@ -507,8 +504,7 @@ func SeatsFrom(o *org.Organization, lookup org.EnvLookup) []SeatConfig {
 			log.Warn("slack_seat_token_unresolved", "handle", role.Handle())
 			continue
 		}
-		out = append(out, SeatConfig{Handle: role.Handle(), Origin: role.Origin(),
-			Token: token})
+		out = append(out, SeatConfig{Handle: role.Handle(), Token: token})
 	}
 	return out
 }

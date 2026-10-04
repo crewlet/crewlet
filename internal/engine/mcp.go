@@ -177,7 +177,7 @@ func (e *Engine) startSeatServers(ctx context.Context, c *Company, handle string
 		return
 	}
 	// THE SEAT'S ID rides every outcome, which is what the heartbeat names
-	// a failing instance by: a handle is an address a rename moves.
+	// a failing instance by, as a lease names its seat.
 	id, _ := c.Org.AgentIDFor(seat)
 	specs, unconfigured := seatSpecs(c, seat, e.resolver())
 	if len(specs) == 0 {
@@ -236,8 +236,8 @@ func (e *Engine) setSeatOutcomes(handle string, seat uuid.UUID, outcomes []mcpOu
 // row per configured server, its instances counted.
 //
 // Sorted by server, and a server's reported error is its first failure by the
-// seat's agent id, so a beat that re-sends the same facts sends the same bytes
-// — and names the seat by what a rename does not move.
+// seat's agent id, so a beat that re-sends the same facts sends the same
+// bytes.
 func (e *Engine) mcpStatus() []coord.MCPServerStatus {
 	e.mcpMu.Lock()
 	all := slices.Clone(e.mcpShared)

@@ -16,8 +16,8 @@ import (
 )
 
 // ChainHash is the stable identity of where a seat sits in the org: the
-// company name, the ORIGIN KEY of every unit above the seat outermost-first,
-// then the seat's own ORIGIN HANDLE.
+// company name, the KEY of every unit above the seat outermost-first, then the
+// seat's own HANDLE.
 //
 // It is what an onboarding marker is stamped with, and it is the entire
 // re-onboarding trigger. A seat that moves between teams or gains an ancestor
@@ -27,13 +27,12 @@ import (
 // the seat's own business to re-read, and hashing page content would re-run a
 // full pass every time somebody fixed a typo.
 //
-// IDENTITIES AND NOT DISPLAY NAMES, which is ADR-0026 reaching one more thing
-// a rename used to cost. Hashing the names meant relabelling a division put
-// every seat under it through a full onboarding turn, and renaming one person
-// put that person through one, although nobody had moved and nothing about
-// the structure had changed. A restructure is a seat sitting somewhere else,
-// and an origin is exactly the address that does not move when somebody
-// retypes a label.
+// IDENTITIES AND NOT DISPLAY NAMES. Hashing the names meant relabelling a
+// division put every seat under it through a full onboarding turn, and
+// correcting one person's name put that person through one, although nobody
+// had moved and nothing about the structure had changed. A restructure is a
+// seat sitting somewhere else, and a unit's key and a seat's handle are
+// immutable (ADR-0013), so they do not move when somebody retypes a label.
 //
 // THE COMPANY NAME STAYS AS WRITTEN, because it is the one part that is an
 // identity here: it is an input to [org.Organization.AgentIDFor] as well, so
@@ -54,9 +53,9 @@ func ChainHash(o *org.Organization, r *org.Role) string {
 	parts := make([]string, 0, 4)
 	parts = append(parts, o.Name)
 	for _, u := range o.UnitChainFor(r) {
-		parts = append(parts, u.Origin())
+		parts = append(parts, u.Key())
 	}
-	parts = append(parts, r.Origin())
+	parts = append(parts, r.Handle())
 	return hashChain(parts)
 }
 
@@ -92,9 +91,8 @@ func hashChain(parts []string) string {
 // Marker is one seat's onboarding row: the org chain it has read itself
 // into, and the lease state of any pass running over it.
 type Marker struct {
-	// AgentID is the DERIVED uuid over (org name, the handle the seat was
-	// created under) — the same identity the diary keys on — so a rename
-	// leaves the marker where the seat looks for it.
+	// AgentID is the DERIVED uuid over (org name, handle) — the same
+	// identity the diary keys on.
 	AgentID string
 
 	// ChainHash is the chain the seat onboarded for, or empty on a row that
@@ -105,7 +103,8 @@ type Marker struct {
 
 	// Handle and Role are what the seat was called when it marked itself,
 	// for an operator reading the row. Nothing looks a marker up by them,
-	// which is why a rename that leaves them stale costs nothing.
+	// which is why a corrected role name that leaves Role stale costs
+	// nothing.
 	Handle string
 	Role   string
 

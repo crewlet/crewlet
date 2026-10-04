@@ -5,9 +5,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/authz/orgchart"
 )
 
 // ChartAuthority answers [authz.Chart] against the epoch this node is running.
@@ -35,7 +33,8 @@ import (
 //
 // PER CALL, which is the one thing the old seam got right: the writer outlives
 // a revision, and a chart captured once would answer for a company that has
-// since moved.
+// since moved. The relations themselves are internal/authz/orgchart's, over
+// whichever tree this node is running at the call.
 type ChartAuthority struct{ engine *Engine }
 
 var _ authz.Chart = ChartAuthority{}
@@ -43,243 +42,60 @@ var _ authz.Chart = ChartAuthority{}
 // ChartAuthorityOf is the seam over one engine.
 func ChartAuthorityOf(e *Engine) ChartAuthority { return ChartAuthority{engine: e} }
 
-// Leads reports whether actor is above subject in the chart.
-//
-// TWO RELATIONS, EITHER OF WHICH IS ENOUGH, because a company expresses the
-// same authority two ways: `manages:` on a seat, and `lead:` on a unit. A
-// check that read one would refuse half the leads in any company that uses
-// the other, and which half depends on how the founder wrote their chart.
-//
-// THE UNIT WALK IS UPWARD. A division's lead leads every team under it, which
-// is the same inheritance [org.Organization.EffectiveLead] already applies to
-// a unit that names nobody — refusing there would send somebody to look for an
-// authority nobody holds.
-func (c ChartAuthority) Leads(_ context.Context, actor, subject string) (bool, error) {
-	o, err := c.org()
+// Leads reports whether actor is above subject in the running chart.
+func (c ChartAuthority) Leads(ctx context.Context, actor, subject string) (bool, error) {
+	chart, err := c.chart()
 	if err != nil {
 		return false, err
 	}
-	return leadsInChart(o, actor, subject), nil
+	return chart.Leads(ctx, actor, subject)
 }
 
-// leadsInChart is [ChartAuthority.Leads] over a chart that is already in hand.
-//
-// SPLIT OUT because the two halves fail differently and only one of them
-// needs an engine: whether a node HAS a chart is a fact about the node, and
-// who leads whom is arithmetic over a tree. Kept together, the walk could
-// only ever be exercised through a running engine against whatever hierarchy
-// that fixture happened to have — which is how a walk comes to be asserted by
-// nothing. Measured: with the walk inside the method, deleting both loops
-// left this package's suite green.
-func leadsInChart(o *org.Organization, actor, subject string) bool {
-	if actor == "" || subject == "" || actor == subject {
-		// SELF IS NOT A LEAD RELATION. The own-or-lead class checks
-		// self first and reaches here only for somebody else, so
-		// answering true would make the two indistinguishable in the
-		// reason a refusal reports.
-		return false
-	}
-	seat := o.Role(subject)
-	if seat == nil {
-		// A SUBJECT THE CHART DOES NOT HOLD IS NOT AN ERROR. It is a
-		// handle somebody typed for a person who is not in this
-		// company, and "you do not lead them" is exactly true.
-		return false
-	}
-	for _, above := range o.Ancestors(seat) {
-		if above.Handle() == actor {
-			return true
-		}
-	}
-	// THE WHOLE CHAIN, innermost unit first, which is what
-	// [org.Organization.UnitChainFor] already walks for the prompt
-	// builder. Asking only the seat's own unit would refuse a division
-	// lead their own teams — the inheritance EffectiveLead applies within
-	// one unit is the same relation one level up.
-	for _, unit := range o.UnitChainFor(seat) {
-		if lead := o.EffectiveLead(unit); lead != nil && lead.Handle() == actor {
-			return true
-		}
-	}
-	return false
-}
-
-// LeadsAnyone reports whether actor leads any seat at all — the question a
-// decision asks about a record before anybody knows whose it is (see
-// [authz.Object.Unresolved]).
-//
-// THE SAME RELATION [ChartAuthority.Leads] ASKS, over every seat rather than
-// one, so the two can never disagree about somebody: a caller this lets have a
-// login looked up is one [ChartAuthority.Leads] admits on at least one seat,
-// and one it refuses is refused by [ChartAuthority.Leads] on every seat.
-func (c ChartAuthority) LeadsAnyone(_ context.Context, actor string) (bool, error) {
-	o, err := c.org()
+// LeadsAnyone reports whether actor leads any seat in the running chart.
+func (c ChartAuthority) LeadsAnyone(ctx context.Context, actor string) (bool, error) {
+	chart, err := c.chart()
 	if err != nil {
 		return false, err
 	}
-	return leadsAnyoneInChart(o, actor), nil
-}
-
-// leadsAnyoneInChart is the walk, split out for the reason [leadsInChart] is.
-//
-// IT ASKS [leadsInChart] OF EVERY SEAT rather than restating the relation — a
-// second statement of who leads whom is the copy that drifts — and answers the
-// common case without that walk: a seat that manages nobody and is no unit's
-// effective lead can be nobody's ancestor and nobody's unit lead, the only two
-// ways [leadsInChart] answers yes. Without it every caller who leads nobody,
-// naming a login, would cost a walk of every seat's management chain.
-func leadsAnyoneInChart(o *org.Organization, actor string) bool {
-	role := o.Role(actor)
-	if actor == "" || role == nil || role.Handle() != actor {
-		// NOT A SEAT TODAY — a login, or a handle a seat used to answer
-		// to, which [leadsInChart] never matches because it compares the
-		// handle every chain carries now.
-		return false
-	}
-	if len(role.Manages) == 0 && !leadsAUnit(o, role) {
-		return false
-	}
-	for seat := range o.AllRoles() {
-		if seat != role && leadsInChart(o, actor, seat.Handle()) {
-			return true
-		}
-	}
-	return false
-}
-
-// leadsAUnit reports whether role is some unit's effective lead, BY THE SEAT
-// [org.Organization.EffectiveLead] resolves rather than by the handle a unit
-// wrote — so a unit naming a handle the seat has since been renamed from still
-// counts, exactly as it does in [leadsInChart].
-func leadsAUnit(o *org.Organization, role *org.Role) bool {
-	for unit := range o.AllUnits() {
-		if o.EffectiveLead(unit) == role {
-			return true
-		}
-	}
-	return false
+	return chart.LeadsAnyone(ctx, actor)
 }
 
 // LeadsProject reports whether actor leads the unit that owns a project, or is
-// the seat whose own project it is.
-//
-// A PROJECT NO UNIT AND NO SEAT DECLARES ANSWERS FALSE rather than erroring:
-// the chart was read and holds no owner for it, which is a fact about the
-// company rather than about this node. Only an unreadable chart is unknown.
-func (c ChartAuthority) LeadsProject(_ context.Context, actor, project string) (bool, error) {
-	o, err := c.org()
+// the seat whose own project it is, in the running chart.
+func (c ChartAuthority) LeadsProject(ctx context.Context, actor, project string) (bool, error) {
+	chart, err := c.chart()
 	if err != nil {
 		return false, err
 	}
-	return leadsProjectInChart(o, actor, project), nil
-}
-
-// leadsProjectInChart is the walk, split out for the reason [leadsInChart] is.
-func leadsProjectInChart(o *org.Organization, actor, project string) bool {
-	key := tracker.ProjectKey(project)
-	if actor == "" || key == "" {
-		return false
-	}
-	for unit := range o.AllUnits() {
-		if tracker.ProjectKey(unit.Project) != key {
-			continue
-		}
-		if lead := o.EffectiveLead(unit); lead != nil && lead.Handle() == actor {
-			return true
-		}
-	}
-	// A ROLE'S OWN PROJECT IS LED BY THAT ROLE. A seat that names its own
-	// project decides how it is filed, which is the only reading of "the
-	// lead" a one-seat project has.
-	for role := range o.AllRoles() {
-		if tracker.ProjectKey(role.Project) == key && role.Handle() == actor {
-			return true
-		}
-	}
-	return false
+	return chart.LeadsProject(ctx, actor, project)
 }
 
 // LeadsContainer reports whether actor leads the unit that owns a page
-// container, or is the seat whose own container it is.
-//
-// THE WALK IS [leadsProjectInChart]'S over a different field, which is the
-// whole of why [authz.Chart] states a third method: a unit declares its
-// tracker project in `project:` and its page container in `space:`, and the
-// two keys are unrelated strings.
-//
-// A CONTAINER NO UNIT AND NO SEAT DECLARES ANSWERS FALSE rather than erroring,
-// for [LeadsProject]'s reason.
-func (c ChartAuthority) LeadsContainer(_ context.Context, actor, container string) (bool, error) {
-	o, err := c.org()
+// container, or is the seat whose own container it is, in the running chart.
+func (c ChartAuthority) LeadsContainer(ctx context.Context, actor, container string) (bool, error) {
+	chart, err := c.chart()
 	if err != nil {
 		return false, err
 	}
-	return leadsContainerInChart(o, actor, container), nil
-}
-
-// leadsContainerInChart is the walk, split out for the reason [leadsInChart] is.
-func leadsContainerInChart(o *org.Organization, actor, container string) bool {
-	key := pages.ContainerKey(container)
-	if actor == "" || key == "" {
-		return false
-	}
-	for unit := range o.AllUnits() {
-		if pages.ContainerKey(unit.Space) != key {
-			continue
-		}
-		if lead := o.EffectiveLead(unit); lead != nil && lead.Handle() == actor {
-			return true
-		}
-	}
-	// A SEAT'S OWN CONTAINER IS LED BY THAT SEAT, for the reason a role's
-	// own project is.
-	for role := range o.AllRoles() {
-		if pages.ContainerKey(role.Space) == key && role.Handle() == actor {
-			return true
-		}
-	}
-	return false
+	return chart.LeadsContainer(ctx, actor, container)
 }
 
 // LeadsUnit reports whether actor leads the unit key names, directly or from
-// anywhere above it.
-//
-// THE WHOLE CHAIN, itself included, which is the same reading [Leads] takes of
-// a seat's unit chain: a division lead leads the teams inside their division,
-// and the inheritance [org.Organization.EffectiveLead] applies within one unit
-// is the same relation one level up. A check that asked the unit alone would
-// refuse a division lead editing a team they are plainly responsible for.
-//
-// A KEY NAMING NO UNIT ANSWERS FALSE rather than erroring: the chart was read
-// and holds no such unit, which is a fact about the company rather than about
-// this node. Only an unreadable chart is unknown.
-func (c ChartAuthority) LeadsUnit(_ context.Context, actor, unitKey string) (bool, error) {
-	o, err := c.org()
+// anywhere above it, in the running chart.
+func (c ChartAuthority) LeadsUnit(ctx context.Context, actor, unitKey string) (bool, error) {
+	chart, err := c.chart()
 	if err != nil {
 		return false, err
 	}
-	return leadsUnitInChart(o, actor, unitKey), nil
+	return chart.LeadsUnit(ctx, actor, unitKey)
 }
 
-// leadsUnitInChart is the walk, split out for the reason [leadsInChart] is.
-func leadsUnitInChart(o *org.Organization, actor, unitKey string) bool {
-	if actor == "" || unitKey == "" {
-		return false
-	}
-	for _, unit := range o.UnitChainTo(unitKey) {
-		if lead := o.EffectiveLead(unit); lead != nil && lead.Handle() == actor {
-			return true
-		}
-	}
-	return false
-}
-
-// org is the running company's chart, or why this node cannot answer.
+// chart is the running company's chart, or why this node cannot answer.
 //
-// ONE PLACE, because both methods need it and the whole point of this type is
-// that "no chart" is never a `false` — written twice, one of them eventually
-// returns the zero value and the collapse is back.
-func (c ChartAuthority) org() (*org.Organization, error) {
+// ONE PLACE, because every method needs it and the whole point of this type is
+// that "no chart" is never a `false` — written once per method, one of them
+// eventually returns the zero value and the collapse is back.
+func (c ChartAuthority) chart() (authz.Chart, error) {
 	if c.engine == nil {
 		return nil, fmt.Errorf("engine: %w", authz.ErrNoChart)
 	}
@@ -288,5 +104,5 @@ func (c ChartAuthority) org() (*org.Organization, error) {
 		return nil, fmt.Errorf("engine: this node is not running a company yet, "+
 			"so it cannot say who leads whom: %w", authz.ErrNoChart)
 	}
-	return company.Org, nil
+	return orgchart.Of(company.Org), nil
 }

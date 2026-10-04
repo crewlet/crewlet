@@ -154,11 +154,6 @@ func Sender(event map[string]any) string {
 type Seat struct {
 	Handle string
 
-	// Origin is the handle the seat was CREATED under ([org.Role.Origin],
-	// ADR-0026), and what its thread follows are keyed on — see
-	// [Seat.Identity].
-	Origin string
-
 	// BotUserID is how a PAYLOAD names this seat: the `<@U…>` a mention
 	// resolves to, and the `user` on its own messages.
 	//
@@ -171,19 +166,6 @@ type Seat struct {
 	// half of own-message suppression: a `bot_message` echo of this seat's
 	// own post carries the app id and no user id at all.
 	AppID string
-}
-
-// Identity is the name this seat's thread follows are filed under: the handle
-// it was created under, never the one it answers to now. A follow is the
-// seat's own memory of a conversation, and keyed on its address a rename made
-// it deaf to every thread it had been following. A seat with no origin
-// recorded answers to the handle it was created under, which is the rule
-// [org.Role.Origin] states for the same empty value.
-func (s Seat) Identity() string {
-	if s.Origin != "" {
-		return s.Origin
-	}
-	return s.Handle
 }
 
 // Owns reports whether a message with these ids is this seat's own.
@@ -298,7 +280,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	// reply should subscribe it to what comes back.
 	if p.isOwn(seat, w.Body, event) {
 		if thread != "" && p.threads != nil {
-			if err := p.threads.Participated(ctx, seat.Identity(), channel, thread, p.now()); err != nil {
+			if err := p.threads.Participated(ctx, seat.Handle, channel, thread, p.now()); err != nil {
 				log.WarnContext(ctx, "slack_participation_not_recorded",
 					"handle", handle, "thread", thread, "error", err.Error())
 			}
@@ -318,7 +300,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	reach := notify.Delivery{Deliver: true}
 	if p.threads != nil {
 		var err error
-		reach, err = p.threads.Reaches(ctx, seat.Identity(), seat.BotUserID, msg, p.now())
+		reach, err = p.threads.Reaches(ctx, seat.Handle, seat.BotUserID, msg, p.now())
 		if err != nil {
 			log.WarnContext(ctx, "slack_thread_follow_unreadable",
 				"handle", handle, "thread", thread, "error", err.Error())
@@ -332,7 +314,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	// thread every reply carries — so a seat named in a channel hears the
 	// answers to what it was asked, without being named again.
 	if p.threads != nil && thread == "" && reach.Reason != "" {
-		if err := p.threads.Follow(ctx, seat.Identity(), channel, ts, p.now()); err != nil {
+		if err := p.threads.Follow(ctx, seat.Handle, channel, ts, p.now()); err != nil {
 			log.WarnContext(ctx, "slack_follow_not_recorded",
 				"handle", handle, "thread", ts, "error", err.Error())
 		}

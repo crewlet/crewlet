@@ -311,7 +311,7 @@ Custom types are welcome — use whatever fits your org. The type is information
 
 ### Role = Seat
 
-Each Role defines a unique **seat** with its own backstory, skills, personality, and domain expertise. A seat is held by an AI agent (`kind: agent`, the default) or a **human teammate** (`kind: human`). Each agent seat is one agent, identified by an id derived from the company name and the handle it was created under; human seats participate in the same hierarchy (manages, unit lead, rosters, escalation) but are addressable-only: no runtime, no inbox, no LLM. The founder defines each seat individually, and seats are not interchangeable. See [Humans in the Org Chart](humans-in-the-org.md).
+Each Role defines a unique **seat** with its own backstory, skills, personality, and domain expertise. A seat is held by an AI agent (`kind: agent`, the default) or a **human teammate** (`kind: human`). Each agent seat is one agent, identified by an id derived from the company name and its handle; human seats participate in the same hierarchy (manages, unit lead, rosters, escalation) but are addressable-only: no runtime, no inbox, no LLM. The founder defines each seat individually, and seats are not interchangeable. See [Humans in the Org Chart](humans-in-the-org.md).
 
 ### What a signed-in reader can see about a seat
 
@@ -371,7 +371,7 @@ Handle uniqueness is a **runnable** rule: a document breaking it is refused ever
 - **Applied with a warning.** A stored revision that breaks one is applied by every node and a node boots on it; each logs `org_admission_warning` once per violation when it applies the epoch. The vendor commands that act on a company file without storing it (`crewlet gitlab provision`, `crewlet slack provision` and their siblings, `crewlet llm status`) read one as it stands.
 - **Always readable.** `GET /config`, the revision reads, diffs, `crewlet config show` and `crewlet config export` serve the stored document as it is, so a violation can be seen and corrected.
 
-### A unit's key is what survives a rename
+### A unit's key is its identity
 
 A unit's **name** is what people read — in a prompt, on a board, in a channel
 topic — so it is renamed for the reasons prose is renamed. Its **key** (`id`)
@@ -583,13 +583,13 @@ The engine reports them rather than letting them pass silently. **Each node logs
 | `lead` | A unit's own `lead` is no seat's handle | The unit | The handle as written |
 | `unit` | A root seat's `unit` is no unit's key | The seat | The key as written |
 | `manages` | A `manages` entry is neither a seat's handle nor a unit's key | The seat | The entry as written |
-| `gitlab_access_level` | A key of `integrations.gitlab.provisioning.access_levels` names no seat — no seat answers to it, by its current handle or one it used to have | `integrations.gitlab.provisioning.access_levels` | The handle |
+| `gitlab_access_level` | A key of `integrations.gitlab.provisioning.access_levels` names no seat — no seat's handle is the key | `integrations.gitlab.provisioning.access_levels` | The handle |
 
 Each line also carries `epoch`, `revision` and a `detail` sentence saying what the engine does meanwhile and how to resolve it.
 
 **What was written is reported, once.** A dangling lead is reported on the unit that declares it, never on the child units that inherit it: they wrote nothing, and there is nothing to fix on them. A child unit that writes the same name itself is reported separately, because it is a second place to correct. A `manages` entry keying a unit that holds no seats resolves to nobody but is not a misspelling, so it is not reported.
 
-**A stale GitLab access level is worth removing promptly.** An override follows the seat its key names — through a rename, by the handles the seat used to answer to — so it is dangling only when no seat answers to the key at all, and then it grants its level to whichever seat is next given that handle. It is reported whether or not GitLab is currently enabled, since re-enabling it is exactly when the stale grant would take effect.
+**A stale GitLab access level is worth removing promptly.** An override names a seat by its handle, so it is dangling only when no seat holds the key, and then it grants its level to whichever seat is next given that handle. It is reported whether or not GitLab is currently enabled, since re-enabling it is exactly when the stale grant would take effect.
 
 ---
 
@@ -597,7 +597,7 @@ Each line also carries `epoch`, `revision` and a `detail` sentence saying what t
 
 Each unit (and the organisation root) is expected to publish a page titled exactly **`Onboarding`** in its container of the knowledge base, its Confluence space. On an agent seat's first turn for its current org chain, a dedicated onboarding pass runs before the executor, with a short `## First-turn onboarding` block listing the unit chain (org → ancestor units → own unit). The agent reads each `Onboarding` page using its knowledge backend's page-search and page-read MCP tools (`confluence_search` / `confluence_get_page`), captures the conventions that matter via `reflect_and_persist`, and calls `mark_onboarded` when done. After that, the hint disappears from subsequent prompts.
 
-Re-onboarding fires automatically when the org structure changes (the role moves between units, a new ancestor unit is inserted) — the engine recomputes a chain hash and the prior marker no longer matches. A **rename** is not a structural change: the hash is built from the company name and the chain of origin identities, so relabelling a division or a person moves nobody and re-onboards nobody.  Source-page content drift is **not** automatic: the agent re-reads at its own discretion, or in response to a page-update notification routed through the existing notification pipeline.
+Re-onboarding fires automatically when the org structure changes (the role moves between units, a new ancestor unit is inserted) — the engine recomputes a chain hash and the prior marker no longer matches. A **rename** is not a structural change: the hash is built from the company name, the keys of the units in the chain and the seat's handle, all of which are fixed, so relabelling a division or a person moves nobody and re-onboards nobody. A unit or seat given a different key or handle is a removal and a creation, and the seat it leaves in the chain onboards as a new one.  Source-page content drift is **not** automatic: the agent re-reads at its own discretion, or in response to a page-update notification routed through the existing notification pipeline.
 
 This mirrors how a real new hire learns.  A founder doesn't need YAML config for which onboarding doc to point at — they just maintain an `Onboarding` page per scope, the same way they would for human team members.  See [Agent Learning](agent-learning.md) for the full design.
 
@@ -606,6 +606,8 @@ This mirrors how a real new hire learns.  A founder doesn't need YAML config for
 ## Hot Reload
 
 The organization is part of the company configuration, so it changes without a restart. Activating a revision (`PUT /config`, `PATCH /config`, a per-entity write, a revert, or `crewlet config import`) moves the fleet's activation pointer, and each node's reconcile tick applies the revision it names. The stages of that apply, and what a refused one leaves behind, are in [Live Propagation](configuration.md#live-propagation).
+
+**Who may change it.** Whoever holds `config:write` may change any of the organization. A person who **leads** a unit may change the seats and units inside it — their team and every team beneath it — without that grant: add, edit, move and remove seats and sub-teams there, and edit their own unit's fields, but not hand it to another lead, move it or remove it, reach a seat or team outside it through a `lead:` or `manages:` entry — its own, or another team's that names a seat or team they add — or change a project, space, channel, address or contact id, a credential, a `${VAR}` in any field, or a setting. See [A lead edits their own team](identity-and-access.md#a-lead-edits-their-own-team).
 
 **A running organization is never edited in place.** The apply builds a new `Organization` from the revision, normalizes and validates it, and publishes it as part of a new epoch together with everything else built from the same document. Turns on many goroutines read the published tree at once, so editing it would be a data race with no owner. A turn pins the epoch it starts on and reads only that epoch until it ends, so an organization change reaches a seat at its next turn. A revision whose organization does not validate is refused before its epoch is published, and the node keeps serving the previous one.
 

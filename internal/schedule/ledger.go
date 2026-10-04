@@ -51,9 +51,9 @@ type FireKey struct {
 	// Scope is whether a role or a unit owns the schedule.
 	Scope types.ScheduleScope
 	// ScopeID is the owning scope's IDENTITY — see [Entry.ScopeID]. It is
-	// what the at-most-once guarantee is keyed on, so it must be a name
-	// nothing renames: a handle or a unit's display name would split a
-	// schedule's history and reset its dedupe the day somebody retyped one.
+	// what the at-most-once guarantee is keyed on, so it is never a display
+	// name, which would split a schedule's history and reset its dedupe the
+	// day somebody retyped one.
 	ScopeID string
 	// ScheduleName is the schedule's name within its scope. Renaming a
 	// schedule therefore lets a fire at the same minute run once more,

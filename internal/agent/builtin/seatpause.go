@@ -45,9 +45,8 @@ const pauseAttempts = 4
 // [coord.SeatPauses] less its watch, which only the nodes carrying a pause out
 // read.
 //
-// KEYED ON THE SEAT'S ID, never its handle: a handle is an address a founder
-// retypes, and a pause keyed on one was lifted by a rename and inherited by
-// whoever the chart later gave the freed handle to.
+// KEYED ON THE SEAT'S AGENT ID, derived from its handle (ADR-0013), as the
+// inbox the hold sits on is.
 type SeatPauseStore interface {
 	SeatPause(ctx context.Context, seat uuid.UUID) (coord.SeatPause, bool, error)
 	CreateSeatPause(ctx context.Context, p coord.SeatPause) (coord.SeatPause, bool, error)
@@ -331,12 +330,12 @@ type pauseTarget struct {
 // they may, and refuses in the class a person's surface acts on.
 //
 // DECIDED ON THE SEAT, NOT ON WHAT WAS TYPED. The handle resolves through the
-// chart first — `@sre`, a retired alias and the handle a seat was created under
-// all name it — and the authority is asked about the seat's current handle,
-// which is the one the lead relation is asked about. A handle that names no
-// agent seat is decided on the name AS TYPED, which nobody leads, so only the
-// deployment's grant passes — and only then refused as naming no seat, so the
-// refusal a caller reads never depends on whether the seat exists.
+// org first — `@sre` names it — and the authority is asked about the seat's
+// handle, which is the one the lead relation is asked about. A handle that
+// names no agent seat is decided on the name AS TYPED, which nobody leads, so
+// only the deployment's grant passes — and only then refused as naming no
+// seat, so the refusal a caller reads never depends on whether the seat
+// exists.
 func resolvePauseCall(ctx context.Context, deps SeatPauseDeps, authorize Authorizer,
 	turn *turnctx.Turn, tool string, args map[string]any) (Actor, pauseTarget, *tools.Result) {
 

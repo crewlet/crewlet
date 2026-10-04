@@ -99,30 +99,3 @@ func TestAnAskWrittenThroughAPersonsTokenNamesThePerson(t *testing.T) {
 		t.Errorf("the ask is %+v, want maya as its asker", got.Asks)
 	}
 }
-
-// WHAT WAITS ON A RENAMED SEAT IS STILL ITS OWN, and every person on the page
-// is drawn as the seat answers to now.
-//
-// The rows hold the seat's IDENTITY — the handle it was created under — so a
-// question naming the seat by its current handle reads the rows only once the
-// reader has resolved that handle, and an answer drawing the rows' names raw
-// draws a retired address. Mutation: drop the identified/shown pass from
-// [tracker.Reader.Decisions] and the page is empty, or names `cto`.
-func TestDecisionsOfARenamedSeatAreItsOwn(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	assign(t, r, "a", "bo")
-	askOn(t, r, "op-1", "a", tracker.Comment{ID: "c-1", Task: "a", Author: "cfo",
-		AuthorKind: tracker.AuthorAgent, Body: "ship?", Ask: "cto", CreatedAt: wednesday})
-	r.reader.Identities = renamed{"chief": "cto", "treasurer": "cfo"}
-
-	got := r.decisions("chief")
-	if len(got.Asks) != 1 || got.Total.Total != 1 {
-		t.Fatalf("chief has %d asks (total %+v), want the one put to the seat "+
-			"under the handle it was created with", len(got.Asks), got.Total)
-	}
-	if got.Asks[0].AskedBy != "treasurer" {
-		t.Errorf("the ask is drawn as asked by %q, want the asker as it is "+
-			"called now", got.Asks[0].AskedBy)
-	}
-}

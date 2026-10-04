@@ -68,8 +68,8 @@ func (e *Engine) promotionUnits() []learning.PromotionUnit {
 	wired := e.promotionWired()
 	var out []learning.PromotionUnit
 	for unit := range company.Org.AllUnits() {
-		seats := agentSeatsIn(unit)
-		if len(seats) == 0 {
+		handles := agentHandlesIn(unit)
+		if len(handles) == 0 {
 			continue
 		}
 		container, hint := promotionContainer(unit, wired)
@@ -81,27 +81,25 @@ func (e *Engine) promotionUnits() []learning.PromotionUnit {
 			// the `unit_id` on every skill_promoted event named something
 			// nothing could be filtered or joined on.
 			ID: unit.Key(), Lead: company.Org.EffectiveLead(unit),
-			Seats: seats, Container: container, Hint: hint,
+			Handles: handles, Container: container, Hint: hint,
 		})
 	}
 	return out
 }
 
-// agentSeatsIn is the unit's OWN agent seats, not its descendants'.
+// agentHandlesIn is the unit's OWN agent seats, not its descendants'.
 //
 // Direct members only, deliberately. A parent unit that pooled every
 // descendant's catalogue would find the same convergence its child already
 // promoted and draft it a second time, one level up — and the page a lead
 // reviews would name a team that never converged on anything.
-//
-// ROLES rather than handles, because the pass pools each seat's catalogue by
-// the handle it was CREATED under and credits it on the page by the one it
-// answers to now — see [learning.PromotionUnit.Seats].
-func agentSeatsIn(unit *org.Unit) []*org.Role {
-	var out []*org.Role
+func agentHandlesIn(unit *org.Unit) []string {
+	var out []string
 	for _, role := range unit.Roles {
-		if role.IsAgent() && role.Origin() != "" {
-			out = append(out, role)
+		if role.IsAgent() {
+			if handle := role.Handle(); handle != "" {
+				out = append(out, handle)
+			}
 		}
 	}
 	return out
