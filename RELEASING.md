@@ -197,12 +197,12 @@ release pipeline does when it runs:
 
 ### What nothing guards — check these by hand
 
-`internal/version` used to assert each of these against the file that carries
+`internal/version` used to assert most of these against the file that carries
 it. Those tests were dropped, and nothing replaced them: there is no actionlint,
 no yamllint and no schema validation anywhere in the tree, and GitHub accepts
-every one of these mistakes as valid configuration. Each fails **silently** —
-the pipeline stays green and simply stops doing the thing — so read the file
-when you touch it:
+every one of these mistakes as valid configuration. Each fails **silently**
+unless its bullet says it does not — the pipeline stays green and simply stops
+doing the thing, or starts doing more — so read the file when you touch it:
 
 - **`.github/release.yml` keeps its catch-all `*` category.** Without it an
   unlabelled pull request is omitted from the release body with no warning, and
@@ -241,23 +241,33 @@ when you touch it:
   a ruleset, so a skip on doubt would stall every bump with nothing red to show. Loosening the `if:`, the `commit_id` or `--auto` makes the
   workflow run *more*; narrowing the approval (skipping on an empty decision, or
   on anything but a positive `APPROVED`) makes it silently stop approving.
-- **`.github/workflows/dependabot-recreate.yml`'s filter, its token and its
-  triggers.** It comments `@dependabot recreate`, which throws away every commit
-  on the branch, so the `jq` filter that spares a branch holding anything that
-  is neither Dependabot's nor marked `[dependabot skip]` (a commit with no
-  resolvable author included) is what stands between a person's work and the
-  comment; weaken it and the workflow discards commits, quietly. The comment has
-  to be made by a user account (Dependabot ignores a bot or an App) with the
-  Actions secret `DEPENDABOT_RECREATE_TOKEN`, held by the one command that posts
-  and nothing else, and the token has to stay fine-grained, for this repository
-  alone, at **Issues: read and write**: add Pull requests and it can approve
-  them, which counts toward `main`'s required review, and never reuse the bundle
-  token, because an Actions secret is readable by every workflow that runs from
-  the repository and that one can push. The `schedule` trigger is load-bearing,
-  not a convenience: bumps merge with `GITHUB_TOKEN`, GitHub starts no `push`
-  workflow for that, and without the schedule a conflict a bump made is never
-  asked about. The token expires, so the date wants a calendar entry. Weakening
-  the filter makes it reach *more*; the rest fail loudly.
+- **`.github/workflows/dependabot-rebase.yml`'s grace, its token and its
+  environment.** It comments `@dependabot rebase` on a bump still in conflict
+  after Dependabot has had its chance, and it was built to ask `recreate` first:
+  `recreate` throws away every commit on the branch, `rebase` makes Dependabot
+  check the branch when it acts and refuse rather than overwrite, so the command
+  stays `rebase`. The `GRACE_SECONDS` wait is what stops it racing Dependabot's
+  own rebase (twenty seconds to four and a half minutes in this repository's
+  history, so thirty minutes); drop it and every conflicted bump is
+  force-pushed twice and builds twice, with nothing red. The comment has to be
+  made by a user account (Dependabot ignores a bot or an App) with
+  `DEPENDABOT_REBASE_TOKEN`, a fine-grained token for this repository alone at
+  **Pull requests: read and write** (Issues alone has been refused for a comment
+  on a pull request), and since that scope also approves pull requests, which
+  counts toward `main`'s required review, what contains it is that the secret is
+  a secret of the `dependabot-rebase` ENVIRONMENT restricted to deployment
+  branches `main` (an ordinary Actions secret is readable by every writer, and
+  that setting lives in Settings, where nothing in this tree asserts it), that
+  only the `ask` job declares the environment, and that the `find` job holds no
+  secret and hands over numbers and SHAs only. Never reuse the bundle token: it
+  can push. The `schedule` trigger is load-bearing, and still best effort: bumps
+  merge with `GITHUB_TOKEN`, GitHub starts no `push` workflow for that, and
+  GitHub may drop a scheduled run and disables scheduled workflows after 60
+  days without repository activity in a public repository. The `jq` filter that
+  spares a branch holding a person's commit only saves a refused command from
+  being posted. An empty or expired secret, a token too narrow to comment and a
+  request nobody acted on for twelve hours fail the run, by name; dropping the
+  schedule, the grace or the environment, or widening the token, leaves it green.
 - **`.github/workflows/dependabot-dashboard.yml`'s guard, its two-job split, its
   pins and the token's scope.** The `push` job holds a personal access token that
   can write to a branch, and its `if:` (author AND actor both Dependabot,
