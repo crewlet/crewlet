@@ -589,20 +589,26 @@ request unapproved, because the run your click triggered is skipped;
 and recovers it. (Not `rebase`: the merge commit your click made is one
 Dependabot did not write, and it will not rebase a branch that holds one.)
 
-The approval is given only while GitHub still says one is needed. The job runs
-on every push to a bump's branch, and under a rule that keeps approvals across
-pushes (the one `main` has today) every run after the first finds the pull
-request already approved: approving again stacks a review on the timeline for
-each rebase and each bundle push and changes nothing about whether it merges.
-The job reads `reviewDecision`, GitHub's own answer for the rule that governs
-the base branch, and skips on `APPROVED` and on `CHANGES_REQUESTED` (somebody's
-standing objection, which this account's approval would not clear). Everything
-else approves, an empty answer included, and on purpose: GitHub leaves the
-decision empty both when nothing requires a review and when its answer does not
-account for the rule at hand, and a redundant approval costs one line on the
-timeline where a skipped one could stall every bump with nothing red to show for
-it. An approval a rule has since dismissed reads as `REVIEW_REQUIRED`, so the
-next push is approved again, which is what `synchronize` is in the trigger for.
+The approval is given only while GitHub still says one is needed. The guard
+lets through only what Dependabot itself does to a pull request: it opens it,
+and then rebases or recreates it each time `main` moves under it. (The bundle
+commit [`dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml)
+pushes is made by another account, so the run it triggers is skipped.) Under a
+rule that keeps approvals across pushes, the one `main` has today, every one of
+those after the first finds the pull request already approved, and approving
+again stacks a review on the timeline for each rebase and changes nothing about
+whether it merges. The job reads `reviewDecision`, GitHub's own answer for the
+rule that governs the base branch, and skips on `APPROVED` and on
+`CHANGES_REQUESTED` (somebody's standing objection, which this account's
+approval would not clear). Everything else approves, an empty answer included,
+and on purpose: GitHub leaves the decision empty when nothing requires a review,
+and it has been reported to stay empty while a requirement that comes from a
+ruleset still blocks the merge (radius-project/radius#13111); whether `main`'s
+own ruleset does has not been observed here. A redundant approval costs one line
+on the timeline; a skip on doubt could stall every bump with nothing red to show
+for it. An approval a rule
+has since dismissed reads as `REVIEW_REQUIRED`, so the next push is approved
+again, which is what `synchronize` is in the trigger for.
 
 The approval names the commit the run was started for. `gh pr review --approve`
 sends no commit, and GitHub then attaches the review to whatever the head is at

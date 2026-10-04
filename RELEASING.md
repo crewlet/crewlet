@@ -236,10 +236,11 @@ when you touch it:
   (`gh pr review --approve` names none), and `--auto` is the only thing holding
   the merge until the checks `main` requires have reported. It approves only
   while `reviewDecision` is neither `APPROVED` nor `CHANGES_REQUESTED`, and an
-  EMPTY decision must keep approving: GitHub leaves it empty both when no review
-  is required and when its answer does not cover the rule in force, so a skip on
-  doubt would stall every bump with nothing red to show. Weakening any of them
-  makes the workflow run *more*, never fail.
+  EMPTY decision must keep approving: GitHub leaves it empty when no review is
+  required and has been reported to stay empty for a requirement that comes from
+  a ruleset, so a skip on doubt would stall every bump with nothing red to show. Loosening the `if:`, the `commit_id` or `--auto` makes the
+  workflow run *more*; narrowing the approval (skipping on an empty decision, or
+  on anything but a positive `APPROVED`) makes it silently stop approving.
 - **`.github/workflows/dependabot-recreate.yml`'s filter, its token and its
   triggers.** It comments `@dependabot recreate`, which throws away every commit
   on the branch, so the `jq` filter that spares a branch holding anything that

@@ -77,24 +77,31 @@ jobs:
       # what decides whether this lands. A step whose outputs nothing reads is
       # a gate that is not there, and it reads like one that is.
 
-      # APPROVE ONLY WHILE GITHUB STILL SAYS ONE IS NEEDED. This job runs on
-      # `opened`, `reopened` and every `synchronize`, and with a rule that keeps
-      # approvals across pushes (the one `main` has today) all but the first of
-      # those find the pull request already approved: approving again stacks a
-      # review on the timeline for every rebase and every bundle push and
+      # APPROVE ONLY WHILE GITHUB STILL SAYS ONE IS NEEDED. The guard above lets
+      # through only what Dependabot itself does to the pull request: it opens
+      # it, and then rebases or recreates it each time `main` moves under it
+      # (the bundle commit dependabot-dashboard.yml pushes is made by another
+      # account, so the run it triggers is skipped and never gets here). Under a
+      # rule that keeps approvals across pushes, which `main` has today, every
+      # one of those after the first finds the pull request already approved:
+      # approving again stacks a review on the timeline for each rebase and
       # changes nothing about whether it merges.
       #
       # `reviewDecision` is GitHub's own answer, computed against the rule that
-      # governs the base branch, so it also covers the cases a count of reviews
-      # cannot: an approval a protection rule has since dismissed reads as
-      # REVIEW_REQUIRED, and this approves again. Two values skip. APPROVED is
-      # the point of the check. CHANGES_REQUESTED is somebody's standing
-      # objection, which this account's approval does not clear.
+      # governs the base branch, so it covers what counting APPROVED reviews
+      # cannot: how many approvals are required, an approval that does not
+      # count because of who pushed last, a required reviewer. An approval a
+      # rule has since dismissed reads as REVIEW_REQUIRED, and this approves
+      # again. Two values skip. APPROVED is the point of the check.
+      # CHANGES_REQUESTED is somebody's standing objection, which this account's
+      # approval does not clear.
       #
       # Everything else approves, and that includes an EMPTY decision, on
-      # purpose. GitHub leaves it empty both when nothing requires a review and
-      # when its answer does not account for the rule at hand; in the first an
-      # approval is harmless and in the second it is what unblocks the merge.
+      # purpose. GitHub leaves it empty when nothing requires a review, and it
+      # has been reported to stay empty while a requirement that comes from a
+      # ruleset still blocks the merge (radius-project/radius#13111); whether
+      # `main`'s own ruleset does has not been observed here. In the first case
+      # an approval is harmless; in the second it is what unblocks the merge.
       # Skipping on anything but a positive APPROVED would let a doubt stall
       # every bump with nothing red to show for it, where a redundant review
       # costs one line on the timeline.
