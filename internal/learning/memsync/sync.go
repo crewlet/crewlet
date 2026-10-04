@@ -43,7 +43,10 @@ const consumerCleanupTimeout = 5 * time.Second
 const fetchBatch = 256
 
 // AgentIDFor derives a seat's stable id from its handle (ADR-0013), or ""
-// for a handle no agent seat answers to.
+// where there is nothing to derive it in. An empty id is no address on the
+// changelog: [Syncer.Publish] carries nothing for it rather than publish to a
+// subject with an empty seat token, which the broker refuses, and
+// [Syncer.Hydrate]'s filter over such a token matches nothing.
 //
 // Injected rather than imported, because the derivation belongs to the
 // organization model and this package needs exactly one function from it —
@@ -97,6 +100,9 @@ func (s *Syncer) Publish(ctx context.Context, handle string) (int, error) {
 		return 0, nil
 	}
 	ref := s.seat(handle)
+	if ref.AgentID == "" {
+		return 0, nil
+	}
 	published := 0
 	for _, spec := range tables {
 		mark := s.mark(handle, spec.name)

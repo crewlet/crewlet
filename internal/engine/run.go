@@ -1117,10 +1117,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// broker or no store: there is nowhere to carry memory to, and
 	// prepareSeat then skips the step rather than pretending it happened.
 	if e.memory, err = memsync.New(backends.Store, backends.CoordinationConn(),
-		func(handle string) string {
-			id, _ := seatAgentID(e.Company(), handle)
-			return id
-		}); err != nil {
+		func(handle string) string { return memoryAgentID(e.Company(), handle) }); err != nil {
 		return nil, fmt.Errorf("engine: seat memory: %w", err)
 	}
 	// ARMED HERE, STARTED IN Start. The watchdog stands down permanently

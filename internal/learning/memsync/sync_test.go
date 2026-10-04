@@ -503,3 +503,37 @@ func TestASeatWhoseIDMovedFindsNoneOfItsMemory(t *testing.T) {
 			"are not keyed on the id at all", carried)
 	}
 }
+
+// A SEAT WITH NO ID HAS NO ADDRESS, so neither half touches the changelog for
+// it. Published, its rows went to `crewlet.memory..<table>.<hash>` — an empty
+// seat token, which the broker refuses — so every flush failed, and the
+// failure read as a broker fault in the warning it logged.
+//
+// The control is the same seat with its id: its rows publish, so the empty
+// answer is what kept them off the stream.
+func TestASeatWithNoIDCarriesNothing(t *testing.T) {
+	t.Parallel()
+	conn := broker(t)
+	ctx := context.Background()
+	db := openStore(t)
+	seedMemory(t, db)
+
+	nobody, err := New(db, conn, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if published, err := nobody.Publish(ctx, seat.Handle); err != nil || published != 0 {
+		t.Fatalf("a seat with no id published %d rows (%v), want none and no error",
+			published, err)
+	}
+	if carried, err := nobody.Hydrate(ctx, seat.Handle); err != nil || carried != 0 {
+		t.Fatalf("a seat with no id hydrated %d rows (%v), want none and no error",
+			carried, err)
+	}
+
+	if published, err := syncerOn(t, db, conn).Publish(ctx, seat.Handle); err != nil ||
+		published != len(tables) {
+		t.Fatalf("the control published %d rows (%v), want one per table (%d)",
+			published, err, len(tables))
+	}
+}

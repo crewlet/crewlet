@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // memorySyncInterval is how often a node carries what its seats have just
@@ -35,6 +37,30 @@ const memorySyncInterval = 30 * time.Second
 // one. What is lost when it expires is the same bounded thing a crash loses —
 // whatever this node learned since its last cycle.
 const memoryFlushTimeout = 5 * time.Second
+
+// memoryAgentID is the id a seat's memory changelog is addressed by: the
+// UUIDv5 over (company name, handle) (ADR-0013), DERIVED rather than looked up
+// in the roster.
+//
+// The roster cannot answer for the seat the release flush exists for. A
+// revision that removes a seat is already installed when the node lets the
+// seat go, so a lookup found nobody and the flush published to a subject with
+// an empty seat token, which the broker refuses — every removed seat logged
+// `seat_memory_not_flushed` and its last cycle's rows never reached the
+// changelog that a seat re-added under the same handle hydrates from.
+//
+// Empty only with no company to derive it in, which the memory syncer reads as
+// a seat with no address and carries nothing for.
+func memoryAgentID(company *Company, handle string) string {
+	if company == nil || company.Org == nil {
+		return ""
+	}
+	id, ok := org.DeriveAgentID(company.Org.Name, handle)
+	if !ok {
+		return ""
+	}
+	return id.String()
+}
 
 // memorySync is the publish loop and the handle that stops it.
 type memorySync struct {
