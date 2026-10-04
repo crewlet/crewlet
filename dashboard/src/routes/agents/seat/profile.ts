@@ -419,8 +419,7 @@ export function seatSchedules(rows: readonly ScheduleRow[], handle: string): Sch
   return rows
     .filter(
       (row) =>
-        (row.scope_type === "role" && (row.scope_name || row.scope_id) === handle) ||
-        row.runners.includes(handle),
+        (row.scope_type === "role" && row.scope_name === handle) || row.runners.includes(handle),
     )
     .sort((a, b) => {
       const at = tsKey(a.next_run) || Infinity;

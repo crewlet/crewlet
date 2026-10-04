@@ -1785,6 +1785,7 @@ test("a thread opened from the address does not scroll the page to it", async ()
 const schedule = (over: Partial<ScheduleRow>): ScheduleRow => ({
   scope_type: "role",
   scope_id: "swe",
+  scope_name: "swe",
   name: "daily-standup",
   cron: "0 9 * * 1-5",
   timezone: "UTC",
@@ -1801,7 +1802,13 @@ const schedule = (over: Partial<ScheduleRow>): ScheduleRow => ({
 test("the schedules tab lists a unit schedule this seat runs, and marks one that cannot fire", async () => {
   mount("#/agents/seats/swe?tab=schedules", {
     schedules: [
-      schedule({ scope_type: "unit", scope_id: "Core", name: "weekly-review", runners: ["swe"] }),
+      schedule({
+        scope_type: "unit",
+        scope_id: "Core",
+        scope_name: "Core",
+        name: "weekly-review",
+        runners: ["swe"],
+      }),
       schedule({
         name: "broken",
         timezone: "Mars/Olympus",
@@ -1809,7 +1816,7 @@ test("the schedules tab lists a unit schedule this seat runs, and marks one that
         problem: "unknown time zone Mars/Olympus",
       }),
       // Another seat's: not this one's day.
-      schedule({ scope_id: "cto", name: "board-prep", runners: ["cto"] }),
+      schedule({ scope_id: "cto", scope_name: "cto", name: "board-prep", runners: ["cto"] }),
     ],
   });
   await settle();

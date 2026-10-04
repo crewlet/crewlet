@@ -207,12 +207,9 @@ function scopePath(scopeType: string, name: string): string[] {
   return scopeType === "role" ? seatPath({ handle: name, name }) : unitRoute({ id: name });
 }
 
-/**
- * What a person calls a scope — the seat's handle, the unit's key — or the
- * id where the answer carried no name.
- */
-function scopeName(row: { scope_name?: string; scope_id: string }): string {
-  return row.scope_name || row.scope_id;
+/** What a person calls a scope: the seat's handle, the unit's key. */
+function scopeName(row: { scope_name: string }): string {
+  return row.scope_name;
 }
 
 /**

@@ -187,6 +187,7 @@ describe("the recurring work", () => {
   const row = (over: Partial<ScheduleRow>): ScheduleRow => ({
     scope_type: "role",
     scope_id: "swe",
+    scope_name: "swe",
     name: "x",
     cron: "0 9 * * *",
     timezone: "UTC",
@@ -203,10 +204,17 @@ describe("the recurring work", () => {
     const rows = [
       row({ name: "later", next_run: "2026-09-22T09:00:00Z" }),
       row({ name: "broken", problem: "unknown zone" }),
-      row({ name: "unit", scope_type: "unit", scope_id: "Core", next_run: "2026-09-21T10:00:00Z" }),
+      row({
+        name: "unit",
+        scope_type: "unit",
+        scope_id: "Core",
+        scope_name: "Core",
+        next_run: "2026-09-21T10:00:00Z",
+      }),
       row({
         name: "not-ours",
         scope_id: "cto",
+        scope_name: "cto",
         runners: ["cto"],
         next_run: "2026-09-21T08:00:00Z",
       }),

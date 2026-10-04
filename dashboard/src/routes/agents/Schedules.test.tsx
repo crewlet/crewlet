@@ -51,7 +51,10 @@ const NOW = Date.parse("2026-06-15T00:30:00Z");
 function row(over: Partial<ScheduleRow> = {}): ScheduleRow {
   return {
     scope_type: "role",
-    scope_id: "ceo",
+    // The scope's IDENTITY is the seat's agent id, which nothing shows; a
+    // person reads its handle.
+    scope_id: "0b6f6c1e-5d1a-5c8e-9a51-2f0c3e7a9b10",
+    scope_name: "ceo",
     name: "standup",
     cron: "0 9 * * *",
     timezone: "Asia/Tokyo",
@@ -222,6 +225,7 @@ async function mountScreen(scope?: string[]) {
   const fire = {
     scope_type: "role",
     scope_id: "pm",
+    scope_name: "pm",
     schedule_name: "standup",
     fire_label: "2026-06-15T00:00:00Z",
     target_handle: "pm",
@@ -233,7 +237,10 @@ async function mountScreen(scope?: string[]) {
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
     Promise.resolve(
       what === "schedules"
-        ? { schedules: [row({ scope_id: "pm", runners: ["pm"] })], recent_runs: [fire] }
+        ? {
+            schedules: [row({ scope_id: "pm", scope_name: "pm", runners: ["pm"] })],
+            recent_runs: [fire],
+          }
         : what === "schedule_runs"
           ? { runs: [fire], truncated: false }
           : what === "viewer"
