@@ -715,10 +715,10 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 	}
 	// THE PROJECTS AND THE CONTAINERS ARE NOT RECONCILED HERE. They are
 	// derived from the org CHART rather than from the parsers this function
-	// swaps, so they follow every published company and not just an
-	// activation — [Engine.convergeOn] is where they run, after the pointer
-	// moves. Running them here as well would write them twice per apply and
-	// once against a company that is not current yet.
+	// swaps, so they follow the published company — [Engine.followCompany]
+	// is where they run, after the publish. Running them here as well would
+	// write them twice per apply and once against a company that is not
+	// current yet.
 }
 
 // applyContainers makes the knowledge containers this company names exist.
@@ -767,8 +767,8 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 // explains: this is one clause of a convergence and the rest of it stands
 // without it. Running on every published company is free after the first,
 // because EnsureContainer decides nothing when the row it finds already says
-// what the chart says at this position — which is the guard its own doc was
-// written around.
+// what the company says at this activation — which is the guard its own doc
+// was written around.
 func (e *Engine) applyContainers(ctx context.Context, c *Company) {
 	store := e.PagesStore()
 	if store == nil || c == nil || c.ActivatedAt.IsZero() {
@@ -874,14 +874,13 @@ func chartContainers(c *Company) []chartContainer {
 // filing immediately. A reconcile that only ran at boot would leave every one
 // of those refused with "project X is not on this node" until somebody
 // restarted the fleet — a failure whose remedy is invisible from the message.
-// A unit is a CHART object, so the publish that carries a new one is usually a
-// chart write and not an apply at all: this runs from the convergence every
-// published company goes through ([Engine.convergeOn]).
+// This runs from the steps every published company goes through
+// ([Engine.followCompany]), at boot and on every apply.
 //
 // After the first node has done it every later pass is one local read per
 // project: the decide compares the three chart-owned fields against the row
 // and says nothing when they match, so the losers of the broker's arbitration
-// and every later publish of the same chart state write nothing.
+// and every later publish of the same company write nothing.
 //
 // # Stamped with the ACTIVATION
 //

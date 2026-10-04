@@ -276,8 +276,7 @@ func (e *Engine) boxSetup(defaults []sandbox.SetupStep, seat string,
 		log.Warn("sandbox_setup_file_unresolved", "seat", seat, "files", missing,
 			"hint", "each of these files is exactly one ${VAR} reference "+
 				"that nothing answered for, so it is written empty; put the "+
-				"name in the secret store, or write the field again through "+
-				"the chart if it is one the chart sealed")
+				"name in the secret store")
 	}
 	return read
 }
@@ -295,10 +294,8 @@ func (e *Engine) boxSetup(defaults []sandbox.SetupStep, seat string,
 // does not run: a `${HOME}` in a script and a `${NPM_TOKEN}` in an .npmrc are
 // the box's own, expanded there from the run environment the step's env just
 // filled. Expanded here they were substituted from the engine HOST's
-// environment, or by nothing — and a seat's file the chart sealed whole is one
-// reference that has to become the body again before the box can read it,
-// which nothing on the way to the box did: it reached the box as the text
-// `${CHART_…}`.
+// environment, or by nothing — and a file whose body is one whole reference
+// has to become that value again before the box can read it.
 //
 // NEW MAPS, never the steps' own: the provider-wide steps are the manager's,
 // shared by every launch on this node, and a body resolved into them would be

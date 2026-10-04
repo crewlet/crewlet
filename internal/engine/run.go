@@ -322,9 +322,8 @@ type Engine struct {
 	reflector *learning.Reflector
 
 	// core is this node's always-on runtime: the state log for every
-	// registered domain, the node gate, and the org chart's and the
-	// identity estate's two sides with the loops that derive this node's
-	// views of them. See core.go.
+	// registered domain, the node gate, and the identity estate's two
+	// sides. See core.go.
 	//
 	// PUBLISHED ONCE, by [New], on EVERY node — with a company or without,
 	// in every mode — and never cleared, not even by the teardown. On the
@@ -2214,13 +2213,9 @@ func (e *Engine) SetAdmits(fn func() bool) {
 //
 // # A COMPANY publish, not an apply
 //
-// It used to run on the config apply alone, which was the only thing that
-// published a company. The org chart is a log now and a hire publishes one
-// too — so a founder hiring somebody watched the dashboard not change, and it
-// stayed not-changed until the next config activation, which on a company
-// nobody is reconfiguring is never. It is called from the convergence
-// ([Engine.convergeOn]) for that reason, and therefore LAST: everything the
-// payloads are cut from has been rebuilt by the time it runs.
+// It is called from the steps every published company goes through
+// ([Engine.followCompany]), at boot and on every apply, and therefore LAST:
+// everything the payloads are cut from has been rebuilt by the time it runs.
 //
 // A SETTER for the same reason SetPosture is one: the API half is built after
 // the engine, so there is no moment at construction when a real wiring could

@@ -64,7 +64,7 @@ import (
 // did move, the bindings are one read over the bound people rather than a walk
 // of the directory, and a binding is re-classified only when it, or the
 // organisation, changed since it was last classified. The organisation moving
-// is the rare case — an org-chart edit — and the identity log moving is the
+// is the rare case — an applied revision — and the identity log moving is the
 // common one, since every sign-in is a record on it: that arm costs one indexed
 // read and no seat lookup at all.
 

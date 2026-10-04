@@ -200,8 +200,7 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 // reads its job list once, and on a node that booted unconfigured "once" was
 // before there were native halves to contribute the tracker's repairs and the
 // inbox sweep, or a company to state the conversation horizon. The operation
-// ledgers and the chart's sealed values are the core's, and were in the list
-// from boot. The old worker stops — its in-flight tick waited out
+// ledgers are the core's, and were in the list from boot. The old worker stops — its in-flight tick waited out
 // — before the new one is built, so two sweeps never run at once.
 //
 // A node that does not publish never started a sweep, and does not start one
