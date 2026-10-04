@@ -57,7 +57,7 @@ func TestTheFirstCompanyOnAnUnconfiguredNodeReflects(t *testing.T) {
 // and never for one that is off, so a held duty is a pass this node ran.
 func learningDutyHeld(t *testing.T, e *engine.Engine) bool {
 	t.Helper()
-	held, err := e.Backends().Coord.Get(t.Context(), coord.WorkerResource("skill-curator"))
+	held, err := e.Backends().Coord.Get(t.Context(), coord.WorkerResource("learning"))
 	if err != nil {
 		t.Fatalf("read the learning duty: %v", err)
 	}

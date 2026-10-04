@@ -39,7 +39,7 @@ func TestEveryEngineDutyIsHonouredBesideTheProductionSeatTTL(t *testing.T) {
 		{"integration-reconcile", 4*time.Minute + 30*time.Second},
 		{"setup-provision-github", 5 * time.Minute},
 		{"maintenance", 45 * time.Minute},
-		{"skill-curator", coord.MaxDutyTTL},
+		{"learning", coord.MaxDutyTTL},
 	} {
 		resource := coord.WorkerResource(duty.name)
 		lease, err := s.TryAcquire(ctx, resource, coord.AcquireOptions{

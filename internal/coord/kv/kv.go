@@ -58,7 +58,7 @@
 // runs from ten seconds to an hour, so a duty TTL runs up to
 // coord.MaxDutyTTL. One bucket cannot serve both. Its age at the seat TTL
 // refused every duty longer than 45 seconds, which is how the retention sweep,
-// the integration reconcile, the skill curator and every integration pass
+// the integration reconcile, the learning passes and every integration pass
 // never ran on any fleet. Its age at the longest duty would put a clock read
 // under every seat renew, and a dead node's seats would sit claimable only by
 // deadline arithmetic rather than by the broker reaping them.

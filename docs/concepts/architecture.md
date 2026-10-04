@@ -191,7 +191,7 @@ back what it wrote.
 | `worker:sandbox-waiter` | Polls detached runs and resumes the turns waiting on them, over the stream. The same tick is the box keepalive. |
 | `worker:maintenance` | The retention sweep over the records that answer "recently" rather than "ever", and the retirement of a removed seat's mailbox and coding runs. |
 | `worker:integration-reconcile` | The [integration reconcile](integration-reconcile.md) loop: every connected third-party app's pass, on a cadence set by who has to act. |
-| `worker:skill-curator` | Every learning background pass: skill ageing, episode compaction, clustering and cross-agent promotion. |
+| `worker:learning` | Every learning background pass: skill ageing, episode compaction, clustering and cross-agent promotion. |
 
 **Six more services run on every node, whatever the roles say.**
 
