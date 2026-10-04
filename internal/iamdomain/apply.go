@@ -48,11 +48,12 @@ var applyLog = logging.Get("iam.apply")
 // has not yet reached would write different rows from one record.
 //
 // THE DIRECTORY SIGNAL IS POST-COMMIT, because it is a consequence of a record
-// here that is not a row. A suspension withdraws the seat's contact identities from this
-// node's notify registry with no org-chart record at all, and the apply is the
-// only thing that sees that happen on EVERY node — the change feed relays a
-// record to one. So a committed batch that moved a seat's standing tells the
-// engine, which re-reads the directory and rebuilds the registry whole.
+// here that is not a row. A suspension withdraws the seat's contact identities
+// from this node's notify registry with no configuration change at all, and the
+// apply is the only thing that sees that happen on EVERY node — the change feed
+// relays a record to one. So a committed batch that moved a seat's standing
+// tells the engine, which re-reads the directory and rebuilds the registry
+// whole.
 
 // Applier writes this node's copy of the identity estate.
 type Applier struct {

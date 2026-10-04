@@ -1,7 +1,7 @@
 // Package iamdomain is the company's own identity estate — people, the
 // addresses and logins they are known by, the credentials they hold, the
 // invitations that enrolled them and the sessions they are signed in with — as
-// the state-log framework's FIFTH domain and its fourth STRICT one.
+// the state-log framework's FOURTH domain and its third STRICT one.
 //
 // internal/iam stays the VALUES LEAF it was built as: a principal, its kind
 // and the grants it carries, importable from config, the tool layer and the
@@ -143,24 +143,16 @@ const (
 	KindLogin ObjectKind = "login"
 
 	// KindSeat is a claim binding one person to one SEAT, by the seat's
-	// HANDLE.
-	//
-	// BY THE HANDLE because there is nothing else to bind to: `chart_seats`
-	// is keyed on it and stores no derived id, so a binding to a UUIDv5 the
-	// chart never wrote down would resolve to nothing on every node. A
-	// rename is survived the way every other written-down reference to a
-	// seat survives one — through the chart's `former_keys_json`, whose own
-	// doc states the residue: a former handle goes on resolving until
-	// something else claims it, and then the claimant wins.
+	// identity — see the package doc.
 	//
 	// The claim is on the SEAT rather than on the person because that is
 	// the side that must be exclusive: one seat is held by at most one
 	// person, and two administrators binding two people to one seat have
 	// to contend. A person holding no seat is ordinary, and a person
-	// holding a seat that the chart has since removed is a LEGAL named
-	// state the session layer answers with a 403 naming the seat — not a
-	// state this domain can prevent, because the chart is a different log
-	// and a read of it guarantees nothing.
+	// holding a seat that the running company has since removed is a LEGAL
+	// named state the session layer answers with a 403 naming the seat —
+	// not a state this domain can prevent, because the company document is
+	// applied apart from this log and a read of it guarantees nothing.
 	KindSeat ObjectKind = "seat"
 
 	// KindSession is one signed-in session's whole life, by its LINEAGE:

@@ -12,7 +12,7 @@ import (
 
 // Domain is the usage domain as the state-log framework sees it.
 //
-// THE FRAMEWORK'S SIXTH DOMAIN, AND ITS SECOND COMPACTED ONE. It answers every
+// THE FRAMEWORK'S FIFTH DOMAIN, AND ITS SECOND COMPACTED ONE. It answers every
 // question the vector domain answers, the same way and for the same reasons —
 // a keyed table rather than a log, no arbitration, no operation ledger, no
 // identity claim, no seat gating, no generation record ([GenerationRecord]) —

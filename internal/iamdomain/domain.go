@@ -16,8 +16,8 @@ import (
 // decides where an anchor row is written; whether a record installs a gate
 // decides whether an unknown version stops the applier or is filed for later.
 //
-// THE FRAMEWORK'S FIFTH DOMAIN, and its fourth strictly-ordered one. What it
-// adds over the four before it is a domain whose ARBITRATION IS THE
+// THE FRAMEWORK'S FOURTH DOMAIN, and its third strictly-ordered one. What it
+// adds over the three before it is a domain whose ARBITRATION IS THE
 // CONSTRAINT: there is no unique index anywhere in this estate and there
 // cannot be one, so two people taking one address are kept apart by the
 // subject they contend on and by nothing else. `subject.go` argues it.
@@ -61,11 +61,11 @@ const SessionOpsRetention = time.Hour
 // is data loss with a tidy name — and here the history that would be shed is
 // the authentication trail.
 //
-// # HALF A GIBIBYTE, and why it is neither the chart's number nor the floor
+// # HALF A GIBIBYTE, and why it is not the floor
 //
 // It is sized from THIS domain's corpus, which is dominated by one thing:
 // SESSIONS. People, credentials and invitations are hundreds of records a year
-// at any company that fits on one broker — a chart's order of magnitude. A
+// at any company that fits on one broker — an org chart's order of magnitude. A
 // session is a record when it opens and a record when it closes, and nothing
 // in between, because a rotation id is DERIVED rather than recorded; so the
 // domain's write rate is roughly (people × sign-ins a day × 2).
@@ -82,17 +82,14 @@ const SessionOpsRetention = time.Hour
 // `min_age` and a tick while its log keeps records older than `min_age`,
 // months before a log this size could fill.
 //
-// IT IS NOT THE CHART'S 64 MiB, because the chart genuinely does not grow: it
-// changes when somebody is hired, moved or promoted. This one grows every
-// morning. At 64 MiB the pessimistic rate fills the log in under three months,
-// which is a window that could refuse an append before anybody got back from
-// leave.
+// IT IS NOT THE 64 MiB FLOOR, because this log grows every morning. At 64 MiB
+// the pessimistic rate fills it in under three months, which is a window that
+// could refuse an append before anybody got back from leave.
 //
-// IT IS NOT THE GIBIBYTE [engine.MinDomainCeiling] names either, and the chart
-// is why: the broker grants a stream its whole ceiling when it creates it, so
-// this number is free space a node must have BEFORE IT CAN BOOT AT ALL, and a
-// fifth domain at the framework floor raises that by a gibibyte for a log that
-// will not fill one. Half is the smallest power of two that clears a year at
+// IT IS NOT THE GIBIBYTE [engine.MinDomainCeiling] names either: the broker
+// grants a stream its whole ceiling when it creates it, so this number is free
+// space a node must have BEFORE IT CAN BOOT AT ALL, and a domain at the
+// framework floor raises that by a gibibyte for a log that will not fill one. Half is the smallest power of two that clears a year at
 // the pessimistic rate with margin.
 //
 // An operator running a ten-person company writes a fiftieth of that and sets
@@ -269,8 +266,8 @@ func (Domain) OpsTable() string { return "iam_ops" }
 // admission — and it is the FIRST strictly-ordered domain to say so, which is
 // why this is the longest answer in the file.
 //
-// The tracker, the knowledge base and the chart all say true, and the argument
-// is the same each time: a node behind on them serves a turn from state that
+// The tracker and the knowledge base both say true, and the argument is the
+// same each time: a node behind on them serves a turn from state that
 // is wrong, so admitting a seat there is confident wrong output. The vector
 // domain says false because it is COMPACTED and a gap is a coverage number.
 // This one says false for a third reason, and stating it is the point.

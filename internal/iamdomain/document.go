@@ -15,10 +15,9 @@ import (
 // # Every one of them is FULL POST-STATE
 //
 // Not a patch, which is the opposite of the tracker's choice for its largest
-// objects and the same as the org chart's, for the org chart's reason: a
-// person is authored as a FORM and submitted whole, so the writer always holds
-// the complete new value and a patch would be a diff it computed in order to
-// be reassembled by every node. The objects are also small — a person is a
+// objects: a person is authored as a FORM and submitted whole, so the writer
+// always holds the complete new value and a patch would be a diff it computed
+// in order to be reassembled by every node. The objects are also small — a person is a
 // name, an address, a stage and a handful of grants.
 //
 // # What a payload may and may not carry

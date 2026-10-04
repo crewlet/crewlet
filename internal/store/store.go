@@ -74,7 +74,7 @@
 // times beside it. Every write transaction this process begins therefore takes
 // its place in one FIFO line per file, handed from each holder to the writer
 // that asked next. A writer's wait is then bounded by the work in front of it
-// rather than by how its polls line up, which is what lets six domains'
+// rather than by how its polls line up, which is what lets five domains'
 // appliers share the replicated estate and each still drain.
 //
 // A writer whose line never reached the front — the holders ahead of it kept
@@ -1258,8 +1258,8 @@ func lockRetryBeat(busy time.Duration) time.Duration {
 // It was the literal eight, justified as "[defaultReaderConns] plus the pins
 // a node declares — four plus three state-log domains today". Both terms had
 // moved under it: the reader budget is max(8, GOMAXPROCS) now, the identity
-// reserve sits beside it, and six domains each pin a writer, so a replicated
-// estate on an ordinary host holds fifteen connections and more on a large one
+// reserve sits beside it, and five domains each pin a writer, so a replicated
+// estate on an ordinary host holds fourteen connections and more on a large one
 // — and a constant justified by a count is wrong the day the count changes,
 // with nothing to say so. (An earlier anchor was a measurement of four
 // goroutines racing one row, which the begin mode made impossible: a write

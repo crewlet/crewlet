@@ -59,8 +59,8 @@ import (
 // is the widest-on-unreadable answer and an answer that covers nothing is not
 // one: `i` beside `b/07` would make the root a SIBLING of every bucket, so a
 // record whose scope this build could not parse would block exactly nothing.
-// The tracker's `t`, the pages log's `p` and the chart's `g` carry the same
-// weight for the same reason.
+// The tracker's `t` and the pages log's `p` carry the same weight for the same
+// reason.
 const (
 	pathDomain = "i"
 	pathBucket = "b"
