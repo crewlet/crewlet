@@ -188,15 +188,14 @@ func TestAPlaintextRevisionIsRefusedNamingTheImport(t *testing.T) {
 	plantPlaintextRevision(t, dir)
 	keyed := bootstrapWithKeys(t, dir, "k1")
 
-	if _, _, err := configCmd(t, keyed, "rekey"); !errors.Is(err, secrets.ErrUnsealedWithKey) {
-		t.Fatalf("rekey of a plaintext revision = %v, want ErrUnsealedWithKey", err)
-	}
-	_, _, err := configCmd(t, keyed, "show")
-	if !errors.Is(err, secrets.ErrUnsealedWithKey) {
-		t.Fatalf("show of a plaintext revision = %v, want ErrUnsealedWithKey", err)
-	}
-	if !strings.Contains(err.Error(), "crewlet config import") {
-		t.Errorf("the refusal does not name the command that fixes it: %v", err)
+	for _, command := range []string{"rekey", "show"} {
+		_, _, err := configCmd(t, keyed, command)
+		if !errors.Is(err, secrets.ErrUnsealedWithKey) {
+			t.Fatalf("%s of a plaintext revision = %v, want ErrUnsealedWithKey", command, err)
+		}
+		if !strings.Contains(err.Error(), "crewlet config import") {
+			t.Errorf("%s's refusal does not name the command that fixes it: %v", command, err)
+		}
 	}
 }
 

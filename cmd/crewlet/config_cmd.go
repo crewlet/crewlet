@@ -564,15 +564,21 @@ func openStored(cipher secrets.Cipher, rev store.Revision) ([]byte, error) {
 	case err == nil:
 		return document, nil
 	case errors.Is(err, secrets.ErrUnsealedWithKey):
-		return nil, fmt.Errorf("revision %s is stored without a seal, so it is "+
-			"not opened; to have its document again, import it from your own "+
-			"copy with `crewlet config import`, which stores it sealed: %w",
-			rev.ID, err)
+		return nil, refuseUnsealed(rev.ID)
 	default:
 		return nil, fmt.Errorf("revision %s does not open under this node's "+
 			"keyring; restore the key it was sealed under to secrets.keys: %w",
 			rev.ID, err)
 	}
+}
+
+// refuseUnsealed is the refusal of a revision stored without a seal, whichever
+// command met it, and it names the one gesture that brings the document back.
+func refuseUnsealed(revisionID string) error {
+	return fmt.Errorf("revision %s is stored without a seal, so it is not "+
+		"opened; to have its document again, import it from your own copy with "+
+		"`crewlet config import`, which stores it sealed: %w",
+		revisionID, secrets.ErrUnsealedWithKey)
 }
 
 // storedCompany opens one revision, or the active one, as the stored form.

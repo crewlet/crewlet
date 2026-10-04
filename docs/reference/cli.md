@@ -375,7 +375,7 @@ Rotates the master key: re-encrypts the active revision's config document under 
 
 Workflow: `crewlet secrets keygen -key-id <new>` → add the new key to `secrets.keys` and set `active_key_id: <new>` while keeping the old key → `crewlet config rekey` **and** `crewlet secrets rekey` → once both succeed, drop the old key from `crewlet.yaml`.
 
-`-dry-run` reports what would move by reading the key id off the envelope, decrypting nothing. Idempotent: a document already under the active key is skipped and says so. A **plaintext** revision is refused like every other reader refuses one: it has no key to rotate, and nothing vouches for who wrote it. Fails clearly, naming the key, if the document is sealed under one no longer in the keyring.
+`-dry-run` reports what would move by reading the key id off the envelope, decrypting nothing. Idempotent: a document already under the active key is skipped and says so. A **plaintext** revision is refused like every other reader refuses one: it has no key to rotate, and nothing vouches for who wrote it, so the refusal names `crewlet config import`, which stores the document sealed again from your own copy. Fails clearly, naming the key, if the document is sealed under one no longer in the keyring.
 
 ---
 

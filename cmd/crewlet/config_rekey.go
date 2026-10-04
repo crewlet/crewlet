@@ -43,8 +43,7 @@ func rekeyConfig(ctx context.Context, cs *configStore, dryRun bool, stdout io.Wr
 	sealedUnder, sealed := secrets.EnvelopeKeyIDOf(rev.Payload)
 	switch {
 	case !sealed:
-		return fmt.Errorf("revision %s has no key to rotate: %w",
-			rev.ID, secrets.ErrUnsealedWithKey)
+		return refuseUnsealed(rev.ID)
 	case sealedUnder == active:
 		fmt.Fprintf(stdout, "revision %s is already sealed under %s\n", rev.ID, active)
 		return nil
