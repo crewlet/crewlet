@@ -182,7 +182,7 @@ back what it wrote.
 | `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a coding agent in a box. Per-run, expires with the run. The exception on this list: a session lives in the process that opened it, so this route belongs to the node that runs the seat, and a `seats` node without `ingress` binds its listener for this route alone. |
 | `/health` · `/ready` | The two probes — [section 6](#6-one-node-or-a-fleet) says why they answer different questions. |
 
-**`workers` is five company-wide singletons, each held on its own
+**`workers` is eight company-wide singletons, each held on its own
 `worker:DUTY` lease.**
 
 | Lease | Duty |
@@ -192,6 +192,9 @@ back what it wrote.
 | `worker:maintenance` | The retention sweep over the records that answer "recently" rather than "ever", and the retirement of a removed seat's mailbox and coding runs. |
 | `worker:integration-reconcile` | The [integration reconcile](integration-reconcile.md) loop: every connected third-party app's pass, on a cadence set by who has to act. |
 | `worker:learning` | Every learning background pass: skill ageing, episode compaction, clustering and cross-agent promotion. |
+| `worker:retention` | The state logs' trim: each domain's floor terms evaluated, what all of them permit purged, and the conclusion published. |
+| `worker:embeddings` | The knowledge base's embeddings, computed once for the company and published as records every node applies. |
+| `worker:iam_sweep` | The identity estate's retention: a sweep record for every bucket that is due, which every node's applier carries out. |
 
 **Six more services run on every node, whatever the roles say.**
 
