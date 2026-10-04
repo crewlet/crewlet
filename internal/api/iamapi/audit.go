@@ -20,7 +20,7 @@ import (
 type auditView struct {
 	ID         string                 `json:"id"`
 	Class      iamdomain.HistoryClass `json:"class"`
-	ObjectKind iamdomain.ObjectKind   `json:"object_kind"`
+	ObjectKind string                 `json:"object_kind"`
 	ObjectID   string                 `json:"object_id,omitempty"`
 	Person     string                 `json:"person,omitempty"`
 	Op         iamdomain.OpKind       `json:"op"`

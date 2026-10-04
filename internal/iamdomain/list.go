@@ -435,9 +435,15 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 
 // HistoryRow is one entry of the identity estate's own trail.
 type HistoryRow struct {
-	ID         string
-	Class      HistoryClass
-	ObjectKind ObjectKind
+	ID    string
+	Class HistoryClass
+
+	// ObjectKind and ObjectID are what the entry is filed under: a record's
+	// subject, or — for a directory record, whose subject names nobody — the
+	// person it is about (`person`) or an invitation's address blind
+	// (`email`). A trail column rather than a subject kind, so a plain
+	// string: `email` is no [ObjectKind] any more.
+	ObjectKind string
 	ObjectID   string
 	PersonID   string
 	Op         OpKind
@@ -538,21 +544,19 @@ func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, erro
 		defer rows.Close()
 		for rows.Next() {
 			var (
-				row        HistoryRow
-				class      string
-				objectKind string
-				op         string
-				actorKind  string
-				at         int64
-				version    int64
+				row       HistoryRow
+				class     string
+				op        string
+				actorKind string
+				at        int64
+				version   int64
 			)
-			if err := rows.Scan(&row.ID, &class, &objectKind, &row.ObjectID,
+			if err := rows.Scan(&row.ID, &class, &row.ObjectKind, &row.ObjectID,
 				&row.PersonID, &op, &row.Actor, &actorKind, &row.OperatorID,
 				&row.Reason, &row.Summary, &at, &version); err != nil {
 				return fmt.Errorf("iamdomain: scan a trail entry: %w", err)
 			}
 			row.Class = HistoryClass(class)
-			row.ObjectKind = ObjectKind(objectKind)
 			row.Op = OpKind(op)
 			row.ActorKind = iam.Kind(actorKind)
 			row.At = fromMillis(at)
