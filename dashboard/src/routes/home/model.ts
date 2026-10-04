@@ -223,7 +223,7 @@ export interface Segment {
 /**
  * The one sentence under the greeting, as runs of text.
  *
- * THE ORDER IS PRECEDENCE: a refused token and a lost connection are said
+ * THE ORDER IS PRECEDENCE: a refused session and a lost connection are said
  * before anything the last push claimed, because what was pushed may be stale;
  * an engine running no company is said before a fleet size, because a fleet
  * running nothing is not "running"; a node that shed its seats says so rather
@@ -252,8 +252,10 @@ export function statusSentence(input: {
 }): Segment[] {
   const { company, connected, authRejected, configured, posture, draining, nodes } = input;
   const sole = (text: string): Segment[] => [{ text }];
+  // NOBODY IS SIGNED IN: the browser holds a session or nothing, never a token
+  // to set, so the repair is the sign-in the frame already offers.
   if (authRejected)
-    return sole("The engine refused this browser's token — set one to read the company.");
+    return sole("Nobody is signed in on this browser — sign in to read the company.");
   if (!connected)
     return sole("Not connected to the engine. What is shown is the last state it sent.");
   if (configured === false) return sole("No configuration is active, so no seat is running.");
