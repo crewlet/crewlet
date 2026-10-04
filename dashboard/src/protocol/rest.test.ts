@@ -449,3 +449,24 @@ describe("whether an answer is the engine's own", () => {
     expect((err as RestError).unanswered).toBe(true);
   });
 });
+
+// A REFUSAL ON AUTHORITY IS THE RULE'S, and only `unauthorized` is one. The
+// socket reads its error frame on the same terms, so the two transports say
+// the same thing about the same refusal.
+describe("what a 403 tells a screen", () => {
+  const refusalOf = (body: Record<string, unknown>) => new RestError(403, body).refusal;
+
+  test("a rule's refusal carries its reason and the grants that would admit", () => {
+    expect(
+      refusalOf({ error: "unauthorized", reason: "no_grant", grants: ["config:read"] }),
+    ).toEqual({ reason: "no_grant", grants: ["config:read"] });
+  });
+
+  // NOT A RULE: a seat the chart no longer holds, a write from another site.
+  // Read as one, its banner said no grant would change it because the rule
+  // asks a relation the chart does not hold — true of neither.
+  test("any other 403 is no rule's refusal", () => {
+    expect(refusalOf({ error: "seat_unavailable", detail: "ana" })).toBeNull();
+    expect(refusalOf({ error: "csrf_origin" })).toBeNull();
+  });
+});

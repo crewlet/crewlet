@@ -103,19 +103,26 @@ export class RestError extends Error {
 
   /**
    * This refusal in the shape `QueryState` renders from — the one the
-   * socket's error frame carries, under the same keys: a 403's rule and the
-   * grants that would have admitted the caller, and a 503's state-log code,
-   * its own words and whether waiting changes it (no `Retry-After` is the
-   * engine saying it will not). Null for anything else, a 401 included:
-   * nobody being signed in is not a rule's refusal, and there are no grants
-   * to name to nobody.
+   * socket's error frame carries, under the same keys and on the same terms:
+   * a `403 unauthorized`'s rule and the grants that would have admitted the
+   * caller, and a 503's state-log code, its own words and whether waiting
+   * changes it (no `Retry-After` is the engine saying it will not). Null for
+   * anything else, a 401 included: nobody being signed in is not a rule's
+   * refusal, and there are no grants to name to nobody.
+   *
+   * ONLY `unauthorized` IS A RULE'S REFUSAL. Every 403 used to be read as one,
+   * with its code standing in for the rule, so a read refused
+   * `seat_unavailable` or `csrf_origin` reached the banner as a refusal naming
+   * no grant — which says "no grant would change that: the rule asks a
+   * relation the org chart does not hold", a claim about neither.
    */
   get refusal(): QueryRefusal | LogRefusal | null {
-    if (this.status === 403) {
-      return {
-        reason: typeof this.body.reason === "string" ? this.body.reason : this.code,
-        grants: this.grants,
-      };
+    if (
+      this.status === 403 &&
+      this.code === "unauthorized" &&
+      typeof this.body.reason === "string"
+    ) {
+      return { reason: this.body.reason, grants: this.grants };
     }
     const hint = this.retryHint;
     if (hint === null) return null;
