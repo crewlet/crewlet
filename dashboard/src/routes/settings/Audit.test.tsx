@@ -19,7 +19,7 @@
  *     screen silent about that is claiming those rows do not exist.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Audit, auditCsv, writerOf } from "./Audit.tsx";
@@ -43,7 +43,10 @@ const json = (body: unknown, status = 200) =>
  * The engine's two REST reads this screen makes — the credential listing and
  * the identity trail — each answered as told, every read recorded by its path.
  */
-let restAnswers: { secrets: () => Response; identity: () => Response };
+let restAnswers: {
+  secrets: () => Response;
+  identity: () => Response | Promise<Response>;
+};
 let restReads: { path: string; query: URLSearchParams }[] = [];
 
 /** The reads made of one REST path, in order. */
@@ -71,8 +74,23 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.useRealTimers();
+  // The tab's visibility goes back to jsdom's own, which stops the clock.
+  delete (document as { visibilityState?: unknown }).visibilityState;
   location.hash = "";
 });
+
+/**
+ * A clock the test moves, started half way through a minute — so a few
+ * seconds passing cross no minute, and a poll a minute on comes after one —
+ * in a tab that is VISIBLE, which jsdom's is not and the shared clock ticks
+ * only in.
+ */
+function clockMidMinute() {
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.setSystemTime(Math.ceil(Date.now() / 60_000) * 60_000 + 30_000);
+}
 
 /** An instant inside every window this screen offers. */
 const RECENTLY = new Date(Date.now() - 60_000).toISOString();
@@ -643,4 +661,53 @@ test("a refused identity trail names the grant, and the other sources stand", as
     expect(screen.getByText(/Reading the identity trail needs audit:read/)).toBeTruthy(),
   );
   expect(screen.getByText("took it off the board")).toBeTruthy();
+});
+
+// THE WINDOW IS NOT THE SECOND HAND.
+//
+// The windowed questions were keyed on edges read off the one-second clock,
+// so each was asked again every tick — the fleet-wide event read among them,
+// whose answer can take two seconds and was dropped for the next tick's.
+test("a second passing asks the windowed sources nothing again", async () => {
+  clockMidMinute();
+  const query = serving({ work_activity: { records: [], complete: true } });
+  mount();
+  const asks = (what: QueryName) => query.mock.calls.filter(([name]) => name === what).length;
+  await waitFor(() => expect(asks("events")).toBeGreaterThan(0));
+  const before = { work: asks("work_activity"), events: asks("events") };
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3_000);
+  });
+  expect(asks("work_activity")).toBe(before.work);
+  expect(asks("events")).toBe(before.events);
+});
+
+// A RE-READ OF THE TRAIL IS QUIET, AND STILL MOVES THE WINDOW.
+//
+// A REST read whose key changes shows nothing until it answers. Keyed on the
+// window's start, the trail's rows left the grid every time the window moved,
+// and a read slower than that was aborted by the next and never answered.
+test("the identity trail stays on screen while its poll asks from the moved start", async () => {
+  clockMidMinute();
+  let answered = 0;
+  restAnswers.identity = () =>
+    answered++ === 0
+      ? json({ events: [identityEntry()], next: 0, position: "CREWLET_IAM_LOG@1:41" })
+      : new Promise<Response>(() => {});
+  serving({ work_activity: { records: [], complete: true } });
+  mount();
+  await waitFor(() => expect(screen.getByText("invited sam.okafor")).toBeTruthy());
+
+  // A SECOND AT A TIME, as the clock ticks: one jump of a minute would be
+  // sixty ticks rendered inside one update.
+  for (let second = 0; second < 61; second++) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+  }
+  const [first, second] = readsOf("/iam/audit");
+  expect(second).toBeTruthy();
+  expect(Date.parse(second!.query.get("at")!)).toBeGreaterThan(Date.parse(first!.query.get("at")!));
+  // THE SECOND READ HAS NOT ANSWERED, and the first one's rows are still drawn.
+  expect(screen.getByText("invited sam.okafor")).toBeTruthy();
 });

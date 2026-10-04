@@ -109,7 +109,7 @@ import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { OPERATOR_SOURCE, RUNTIME_AUDIT_TYPES } from "~/contract/audit.ts";
 import { useNow } from "~/lib/clock.ts";
 import { indexOrg, kindOfAuthor, type SeatKind } from "~/lib/seats.ts";
-import { useTimeRange, type Offer } from "~/lib/range.ts";
+import { useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
 import { rest, RestError } from "~/protocol/index.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { needsSentence } from "~/lib/refusal.ts";
@@ -499,7 +499,15 @@ export function Audit() {
   useSearchTarget(searchBox);
   const now = useNow();
   const seatOf = useSeatOf();
-  const range = useTimeRange(now, AUDIT_OFFER, false);
+  // THE WINDOW MOVES ONCE A POLL, NOT ONCE A SECOND. Every windowed source is
+  // keyed on the edges it is asked with, and anchored on the one-second clock
+  // those edges were a new question every tick: the tracker's feed and the
+  // fleet-wide event read were asked once a second where the poll says once a
+  // minute, and an answer slower than a second — the event read waits up to
+  // two for a node that does not answer — was dropped for the next tick's, so
+  // its rows never arrived. Rounded UP to the poll, the window still ends at or
+  // after now, so the newest row is in it.
+  const range = useTimeRange(Math.ceil(now / POLL_MS) * POLL_MS, AUDIT_OFFER, false);
   const { since, until } = range;
   const [actor, setActor] = useParam("actor", "");
   const [kind, setKind] = useParam("kind", "");
@@ -536,7 +544,7 @@ export function Audit() {
     { pollMs: POLL_MS },
   );
   const secrets = useSecrets();
-  const identity = useIdentityTrail(since);
+  const identity = useIdentityTrail(windowParam(range.window), since);
   // The first of the socket's reads that failed, whose code and refusal the
   // banner shows together. The two REST reads are best effort, and each says
   // what it withheld in a sentence of its own.
@@ -963,12 +971,24 @@ function useSecrets(): { rows: SecretRow[] | null; withheld: string } {
  * pages by position because no two nodes' clocks are compared. Best effort for
  * the reason the credentials are: a reader the directory's trail is refused to
  * keeps the rest of the audit, and is told what is missing.
+ *
+ * KEYED ON THE WINDOW, NOT ITS START. A REST read whose key changes is a new
+ * question, which shows nothing until it answers — so keyed on `since`, which
+ * moves with the clock, the trail's rows left the grid every time the window
+ * moved, and a read slower than the window was aborted by the next one and
+ * never answered at all. The start is read when each read is ASKED, the first
+ * and every poll after it, so the window still advances.
  */
-function useIdentityTrail(since: string): { page: IdentityAuditPage | null; withheld: string } {
-  const params = new URLSearchParams({ at: since, limit: String(PAGE.identity) });
+function useIdentityTrail(
+  question: string,
+  since: string,
+): { page: IdentityAuditPage | null; withheld: string } {
   const read = useRest(
-    `/iam/audit?${params}`,
-    (signal) => rest.get(`/iam/audit?${params}`, signal) as Promise<IdentityAuditPage | null>,
+    `/iam/audit?window=${question}`,
+    (signal) => {
+      const params = new URLSearchParams({ at: since, limit: String(PAGE.identity) });
+      return rest.get(`/iam/audit?${params}`, signal) as Promise<IdentityAuditPage | null>;
+    },
     { pollMs: POLL_MS },
   );
   return { page: read.data, withheld: withheldSentence(IDENTITY_WITHHELD, read) };
