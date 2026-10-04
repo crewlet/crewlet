@@ -68,7 +68,7 @@ const SWE: AgentRow = {
     turn_id: "turn-2",
     started_at: "2031-05-01T08:00:00Z",
     stage: "running",
-    work_item: { key: "ENG-412" },
+    work_item: { backend: "native", id: "t-412", key: "ENG-412", project: "ENG" },
   },
   live_call: {
     turn_id: "turn-2",
@@ -79,7 +79,7 @@ const SWE: AgentRow = {
     round_num: 6,
     rounds_used: 6,
     max_rounds: 25,
-    work_item: { key: "ENG-412" },
+    work_item: { backend: "native", id: "t-412", key: "ENG-412", project: "ENG" },
     in_progress: true,
     updated_at: "2031-05-01T08:06:00Z",
   },
@@ -106,10 +106,13 @@ async function mount(
   store.applySeats(agents);
   const socket = new LiveSocket(store);
   const asked: string[] = [];
+  const params: Record<string, unknown[]> = {};
   (socket as unknown as { query: (what: string, p?: unknown) => Promise<unknown> }).query = (
     what,
+    p,
   ) => {
     asked.push(what);
+    (params[what] ??= []).push(p);
     if (what === "viewer") return Promise.resolve(viewer);
     if (what === "fleet") {
       return Promise.resolve({
@@ -122,7 +125,11 @@ async function mount(
       return Promise.resolve({ rows: [{ handle: "swe", open: 4, blocked: 1, overdue: 0 }] });
     }
     if (what === "work_item_turns") {
-      return Promise.resolve({ key: "ENG-412", turns: [{ turn_id: "turn-1", ordinal: 1 }] });
+      return Promise.resolve({
+        item: "t-412",
+        key: "ENG-412",
+        turns: [{ turn_id: "turn-1", ordinal: 1 }],
+      });
     }
     return Promise.reject(new Error(`the peek asked for ${what}`));
   };
@@ -138,7 +145,7 @@ async function mount(
   await act(async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve();
   });
-  return { asked: asked.filter((w) => w !== "viewer") };
+  return { asked: asked.filter((w) => w !== "viewer"), params };
 }
 
 const ANONYMOUS = { login: "", owner: "", acts: [] };
@@ -203,9 +210,12 @@ test("the peek asks at most three questions", async () => {
 // THE STATE CARD: the engine's line, and which turn on the task and which
 // round of how many.
 test("the state card names the turn on the task and the round", async () => {
-  await mount(OPERATOR);
+  const { params } = await mount(OPERATOR);
   expect(screen.getByText(/Executing ENG-412/)).toBeTruthy();
   expect(screen.getByText("Turn 2 · round 7 of 25")).toBeTruthy();
+  // ASKED FOR BY THE TASK'S ID, shown by its key: a key another task claimed
+  // first would number this turn on the claimant's list.
+  expect(params["work_item_turns"]).toEqual([{ id: "t-412", limit: 1 }]);
   expect(screen.getByText(/serving now: claude-sonnet-5/)).toBeTruthy();
 });
 

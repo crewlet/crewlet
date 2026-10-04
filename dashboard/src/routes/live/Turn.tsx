@@ -147,6 +147,7 @@ import {
 import { TURN_STOP } from "~/contract/turnbands.ts";
 import { useAgents, useConnection, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { seatOnTurn, UNSETTLED } from "~/lib/turns.ts";
+import { itemAddress, turnItem } from "~/lib/work.ts";
 import type {
   EventRecord,
   LiveCall,
@@ -1557,12 +1558,10 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // THE TRAIL: Live › {agent} › Turn n · KEY — see [turnCrumbLabel], and
   // `app/crumbs.ts` for the seat crumb, which leads back to what is running
   // for that seat.
-  const ordinal = useTurnOrdinal(
-    view.workItem?.key ?? "",
-    turnId,
-    running,
-    view.startedAt || view.span.from,
-  );
+  // ASKED FOR AND OPENED BY ITS ADDRESS ([turnItem]): a key another task
+  // claimed first would number and open the claimant.
+  const taskAddress = view.workItem?.key ? itemAddress(turnItem(view.workItem)) : "";
+  const ordinal = useTurnOrdinal(taskAddress, turnId, running, view.startedAt || view.span.from);
   const crumb = turnCrumbLabel(view, ordinal);
   usePageLabels({
     ...(crumb ? { [turnId]: crumb } : {}),
@@ -1621,8 +1620,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // "Copied" on, so what happened is said in a toast.
   const toast = useToast();
   const [pausing, setPausing] = useState(false);
-  const itemKey = view.workItem?.key ?? "";
-  const openTask = useCallback(() => nav.to(["work", itemKey]), [nav, itemKey]);
+  const openTask = useCallback(() => nav.to(["work", taskAddress]), [nav, taskAddress]);
   const moreItems = useMemo<MenuItem[]>(
     () => [
       ...(attempt?.rows ?? [])
@@ -1686,7 +1684,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           },
         ]
       : []),
-    ...(itemKey
+    ...(taskAddress
       ? [
           {
             key: "task",

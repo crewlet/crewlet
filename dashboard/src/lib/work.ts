@@ -48,6 +48,7 @@ import type {
   WorkGroup,
   WorkInboxNotice,
   WorkItemDetail,
+  WorkItemRef,
   WorkLink,
   WorkProjectRow,
   WorkProjectTag,
@@ -165,6 +166,27 @@ export function linkedItem(link: WorkLink): ItemRef {
 /** The task an item answer is about — its flag is on the ANSWER, beside `blocked`. */
 export function detailItem(detail: WorkItemDetail): ItemRef {
   return { id: detail.task.id, key: detail.task.key, key_collision: detail.key_collision };
+}
+
+/**
+ * The task a TURN is charged to. A turn's work item is the turn's own record,
+ * not a tracker row, so it carries no `key_collision`: its key may be one
+ * another task claimed first, and asked for or opened by that key the claimant
+ * answers. So a native task is addressed by its id, which every route and
+ * question about a task takes, and a vendor item — whose id is the vendor's,
+ * which none of them takes — by its key. The key is still what a turn SHOWS.
+ */
+export function turnItem(ref: WorkItemRef): ItemRef {
+  return ref.backend === "native" && ref.id ? { id: ref.id } : { id: ref.id, key: ref.key };
+}
+
+/**
+ * Whether an answer about the task with this `id` and `key` is the answer to a
+ * question asked by `address` — the id or the key ([itemAddress]) — rather
+ * than one still held for the task a seat was on a moment ago.
+ */
+export function answersAddress(address: string, id: string, key: string): boolean {
+  return address !== "" && (address === id || address === key);
 }
 
 // ---------------------------------------------------------------------------
