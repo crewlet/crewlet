@@ -31,7 +31,7 @@ Five figures per domain, and no others:
 |---|---|
 | `bytes` | what the log holds now |
 | `max_bytes` | the ceiling the **broker** is enforcing |
-| `reserve_bytes` | on every log that claims identity — the tracker's, the knowledge base's, the org chart's and the identity estate's — the top of that ceiling kept for gate records; see [the gate reserve](#the-gate-reserve) |
+| `reserve_bytes` | on every log that claims identity — the tracker's, the knowledge base's and the identity estate's — the top of that ceiling kept for gate records; see [the gate reserve](#the-gate-reserve) |
 | `headroom_fraction` | how much of the ceiling **ordinary writes** are held to is unused: `max_bytes` less `reserve_bytes` |
 | `bytes_per_day` | what the log took in over the trailing day (`PER DAY` in the table) |
 
@@ -55,8 +55,7 @@ the remedy is a bigger ceiling (see [Changing a log's
 ceiling](#changing-a-logs-ceiling)) or a shorter `min_age`.
 
 It matters most on the **identity log**. The mutation log and the knowledge
-base grow with a corpus you can forecast, and the chart with headcount; the
-identity log grows with how often people sign in, which is the rate an
+base grow with a corpus you can forecast; the identity log grows with how often people sign in, which is the rate an
 operator cannot predict — and its ceiling is not derived from the disk.
 
 The rate is **measured from the log itself**, not sampled: every record of the
@@ -130,8 +129,8 @@ the group name alone finds nothing.
 A term that **could not be read** blocks, exactly as one that permits nothing
 does. A term nobody could read is not a term that is satisfied, and treating it
 as satisfied is how a trim advances past a node that could not report. A term
-this domain does not **have** — the vector log, the org chart's, the identity
-estate's and the usage log's have no wake feed — is `n/a`
+this domain does not **have** — the vector log, the identity estate's and the
+usage log's have no wake feed — is `n/a`
 rather than zero, which is a different thing again. And a term that was
 read and **binds nothing** — no hold is pinning the log, or a solo fleet takes
 no snapshots — reads `unbounded` rather than carrying a sequence. Inside the
@@ -603,7 +602,7 @@ a readmission is judged by it.
 
 The trim counts nodes **per log**, so an eviction is a record on every log it
 counts nodes on — every log that claims identity: the tracker's, the knowledge
-base's, the org chart's and the identity estate's. (The vector log and the
+base's and the identity estate's. (The vector log and the
 usage log count nothing and get none: a node behind on the vectors is a
 coverage figure, and an evicted node's usage is still what its seats did.) Every
 node running the state log can make the gesture, whichever backends the
@@ -823,7 +822,7 @@ A single record larger than its log takes is a different refusal,
 changes it. Every log declares the largest record it publishes — 8 MiB less
 4 KiB on the tracker's, the knowledge base's, the vector changelog's and the
 usage log's, which is the largest the embedded broker's 8 MiB messages carry
-once a record is signed, 2 MiB on the org chart's, 128 KiB on the identity
+once a record is signed, 128 KiB on the identity
 estate's — and a record past it is refused before it is sent; the stream's
 own `max_msg_size` is that declaration plus 4 KiB for what a stored record
 carries beside it, so the broker holds a peer on another build to it too. Two
@@ -864,9 +863,8 @@ evict`](#eviction) — is itself a record on that log, so a
 log that refused it like any other append could never be emptied: the
 eviction was refused, run again, and refused again.
 
-So on the four logs that carry gate records — every log that claims identity:
-the tracker's, the knowledge base's, the org chart's and the identity
-estate's — **ordinary writes are refused at a soft ceiling** below the
+So on the three logs that carry gate records — every log that claims identity:
+the tracker's, the knowledge base's and the identity estate's — **ordinary writes are refused at a soft ceiling** below the
 broker's, and the top of the ceiling — the **gate reserve**, `reserve_bytes`
 in `crewlet retention status` — takes only the records that install or lift a
 gate: an eviction and the readmission that inverts it. A log full for
@@ -881,7 +879,7 @@ for the reserve and is not a node's eviction or readmission — a purge included
 — is refused before anything is sent, and passes none of the fences an
 eviction is excused.
 
-| | the four identity logs | vector changelog, usage log |
+| | the three identity logs | vector changelog, usage log |
 |---|---|---|
 | ordinary writes and barriers refused at | the ceiling less the reserve | the ceiling |
 | gate records refused at | the ceiling | — (they carry none) |
@@ -903,7 +901,6 @@ So the reserve is the larger of two terms:
 | log | largest record | floor | reserve at the floor | ordinary writes at the floor |
 |---|---|---|---|---|
 | tracker, knowledge base | 8 MiB less 4 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
-| org chart | 2 MiB | 64 MiB | 15 MiB (the fleet term) | 49 MiB |
 | identity estate | 128 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
 
 While a rolling upgrade runs, a node on an older build keeps no reserve, so
@@ -918,8 +915,7 @@ soft ceiling left, is there so that never happens.
 
 A log's Tier A ceiling (`stream.tracker_log_max_bytes`,
 `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
-`stream.chart_log_max_bytes`, `stream.iam_log_max_bytes`,
-`stream.usage_log_max_bytes`) is not a live
+`stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`) is not a live
 setting: it is the value the log's stream is created with, sized with the
 other logs inside what the broker can grant (see
 [Replication](replication.md#how-the-byte-ceilings-are-sized)). Changing a
@@ -929,13 +925,13 @@ maintenance window**, and the reason is not caution:
 - A resize is decided against the usage the log is at, and a publisher makes
   that a moving quantity. The verb decides it before the window opens: a
   target whose soft ceiling — the target less its
-  [gate reserve](#the-gate-reserve), on the four identity logs; the whole
+  [gate reserve](#the-gate-reserve), on the three identity logs; the whole
   target on the vector changelog and the usage log — is at or below what the
   log already holds is refused, naming both and the least target that would
   do, because that ceiling would refuse every ordinary append the moment it
   applied. So is a target under the floor Tier A holds that log's field to — a
   gibibyte on the tracker's, the knowledge base's and the vector changelog's,
-  64 MiB on the org chart's, the identity estate's and the usage log's —
+  64 MiB on the identity estate's and the usage log's —
   naming the field. Anything else is fair, including a target under the
   current ceiling, which is how a log created larger than its budget gives
   the reservation back.
@@ -1283,8 +1279,8 @@ checkpoint, holding there the record the checkpoint names, is neither case — i
 still holds every record the rows are missing — and the verb refuses it as
 having nothing to re-anchor.
 
-**It moves one log.** Each domain — the tracker, the knowledge base, the org
-chart, the identity estate, the vectors — has its own stream and its own generation, and a reanchor moves only
+**It moves one log.** Each domain — the tracker, the knowledge base, the
+identity estate, the vectors — has its own stream and its own generation, and a reanchor moves only
 the one you named: that domain's checkpoint goes to the next generation, where
 its case puts it, keyed to the live instant. Every other domain keeps its
 checkpoint, its generation and its stream exactly as they were. If more than
@@ -1299,7 +1295,7 @@ In order, it: checks the confirmation against the live stream; refuses while
 the fleet guards below say so, and on a node evicted from that domain; appends
 the domain's own generation record to the adopted stream (every log that
 claims identity keeps one, applied as `tracker_log_generations`,
-`pages_log_generations`, `chart_log_generations` and `iam_log_generations`;
+`pages_log_generations` and `iam_log_generations`;
 the vectors keep none); reads the stream's instant
 again, refusing if it was rebuilt again meanwhile; moves this node's consumer;
 and commits the checkpoint. Every step before the checkpoint can be repeated,
@@ -1319,7 +1315,7 @@ and each of them adopts a snapshot from a node in the new generation on its
 own ([a node a peer re-anchored past](#a-node-a-peer-re-anchored-past)).
 
 For every log that keeps a generation record — the tracker's, the knowledge
-base's, the org chart's and the identity estate's — it refuses while any peer
+base's and the identity estate's — it refuses while any peer
 has already re-anchored the stream — a peer at a later generation of it — naming the peer:
 that peer's rows are the fleet's history in the new generation, and a second
 reanchor from another node's rows would open the same generation over a
@@ -1366,7 +1362,7 @@ the request.
 **Today that log is the work tracker's**, `CREWLET_TRACKER_LOG`. A reanchor is
 three steps only the log's own domain can take — reset its rows' versions,
 publish its generation record, write its audit row — and the knowledge base,
-the org chart, the identity estate, the vectors and the usage log have none of
+the identity estate, the vectors and the usage log have none of
 their own yet, so naming one of their logs is refused before anything moves.
 It used to run the tracker's steps for them, resetting the tracker's rows for a
 log that was not the tracker's. Recover one of those logs by adopting the snapshot of a
@@ -1467,9 +1463,7 @@ Every node keeps its **own copy of every configuration revision it has ever
 met**, in `company_config`, and until this release nothing deleted from it.
 One row per config write, per node, each holding the whole document.
 
-Two things now bound it.
-
-**The revision sweep** is part of the ordinary maintenance tick and runs on
+**The revision sweep** bounds it. It is part of the ordinary maintenance tick and runs on
 **every node**, not under the fleet singleton: each node owns its own copy, so
 a singleton would tidy the node holding the duty and let the table grow for
 ever on every other — which looks exactly like a sweep that works, to whoever
@@ -1489,41 +1483,11 @@ repeated. The floor is the **audit log's own horizon** (31 days): an audit row
 naming a revision must still be able to open it, so this can never be set
 below that.
 
-**`crewlet config scrub`** is the one-time erasure for what is already in the
-archive. The org chart used to live inside the company document, so a human
-seat's `email` and `contact` account ids are in every revision that ever
-carried them — on every node, in every backup, in a table nothing deleted
-from. Removing the seat never reached it: the removal writes a *new* revision
-and every older one still holds them. Revisions written after the [chart moved
-onto its own log](../concepts/configuration.md) carry no chart at all, so
-nothing new enters the archive.
-
-```
-crewlet config scrub -dry-run     # which revisions hold personal data
-crewlet config scrub              # erase it from every superseded revision
-crewlet config scrub <revision>   # or from one
-```
-
-Three things about it are not negotiable:
-
-- **It refuses the active revision.** The fleet is serving that document and
-  every node is holding it; rewriting it underneath them would be a
-  configuration change nothing activated — no epoch, no apply, no event. To
-  take an address out of the *live* company, edit the company; that writes a
-  revision the scrub can then reach.
-- **It is this node's copy only.** Run it on every node. Backups taken before
-  the run still hold the original revisions, and nothing here reaches them.
-- **It is not reversible.** The field is replaced with `__scrubbed__`, which
-  is deliberately not the `__redacted__` a config read writes over a
-  credential: that one means "this value exists and you may not see it" and is
-  restored from the row behind it, and this one means the value is gone.
-
-A revision stays immutable as a *configuration* and stops being immutable as a
-copy of somebody's personal data. So **a `crewlet config diff` across a scrub
-shows the tombstone**, which is a change rather than damage; the row carries a
-`scrubbed_at` stamp and the run writes a `config_revision_scrubbed` audit
-event recording the revision and how many fields went — never which, and never
-what they held.
+**And a revision is a copy of the org chart it ran.** A human seat's `email`
+and `contact` account ids are in every revision that carried them — on every
+node, in every backup — and removing the seat writes a *new* revision rather
+than reaching the old ones. They leave the store when the sweep above takes
+their revision, and a backup when the backup is deleted.
 
 ## Old data is not cold data
 
@@ -1704,23 +1668,6 @@ row behind every notice is never swept, so "what was I told about in 2024" is
 still a `work_activity` question at any age. A month is the floor because below
 it an inbox stops being one — somebody away for four weeks would come back to
 nothing.
-
-The org chart's two trails are **never swept**, on any node. `chart_history` —
-one row per change to a unit or a seat: what happened, by whom, from which
-configuration revision — and `chart_import_ledger` — which revision produced
-which position on the chart's log — are kept for the deployment's life, and no
-maintenance job deletes from either. That is affordable because both grow with
-how often a company *restructures*, which is rare: a hire, a move or a rename is
-one history row of well under a kilobyte, so even a company reorganising every
-week accumulates megabytes over years, beside a tracker that grows by the task.
-It is also what the two tables are for. The history answers "when did this team
-change hands" however long ago it happened, which is exactly the question a
-horizon would start refusing; and the ledger is what makes re-activating a
-revision the chart already imported a no-op on every node, so a swept row would
-turn the routine credential-rotation gesture into a second import that rewrites
-every object and wakes everybody again. (The chart's migration names "the
-ledger's own sweep" beside the ledger's position index; there is none, and the
-index serves the newest-import read.)
 
 ## The storage forecast
 

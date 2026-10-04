@@ -52,7 +52,7 @@ one JSON object, and it always has the same three parts in the same places:
   site, so a refusal reads the same wherever it came from — and a route with
   more to say says it in the detail rather than rewording the sentence.
   Never match on it: the wording is copy and can be improved at any time. Every
-  refusal carries one — `/config`, `/secrets`, `/setup` and `/chart` included,
+  refusal carries one — `/config`, `/secrets` and `/setup` included,
   which used to build their own bodies with the code alone, and every
   `/webhooks/*` route, which answered a code with a space in it
   (`invalid signature`) and a `{"status": "unavailable", "reason": …}` shape of
@@ -76,7 +76,7 @@ one JSON object, and it always has the same three parts in the same places:
   (`log_full`), a record larger than the broker takes in one message
   (`record_too_large`), one the broker refused for a reason of its own
   (`broker_refused`), a deleted object — on every surface that answers one
-  with a `503` (`/chart`, `/work`, `/pages`, `/iam`, `/auth`, and every
+  with a `503` (`/work`, `/pages`, `/iam`, `/auth`, and every
   question the query registry answers, `/query/{what}` and its named read
   routes): the same request is
   refused however often it is sent, so the answer is to ask another node, to
@@ -87,7 +87,7 @@ one JSON object, and it always has the same three parts in the same places:
 - **A write that may have landed is not a refusal, and says so as a field.**
   A `503` about a write this node cannot account for — its outcome is
   `unknown` — carries **`"outcome": "unknown"`** and the **`op_id`** to retry
-  under, on every surface that writes through a state log (`/chart`, `/work`,
+  under, on every surface that writes through a state log (`/work`,
   `/pages`, `/iam`, `/auth`); a `503` without `outcome` is a refusal, and
   what it refused was not written — a gesture refused partway lists what did
   land before it as `landed`. The two send a client opposite ways — the
@@ -203,7 +203,7 @@ node means nothing was done.
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
 | `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Takes `fleet:operate`, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
 | `POST` | `/work/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
-| `POST` | `/work/retention/evict/{node}` | Install the eviction gate on a node on every log the trim counts nodes on — the tracker's, the knowledge base's, the org chart's and the identity estate's — so the trim can pass a floor it is pinning. Refused `409` while the node holds a live presence lease; answers per log (see [below](#the-three-retention-gestures-that-write)) |
+| `POST` | `/work/retention/evict/{node}` | Install the eviction gate on a node on every log the trim counts nodes on — the tracker's, the knowledge base's and the identity estate's — so the trim can pass a floor it is pinning. Refused `409` while the node holds a live presence lease; answers per log (see [below](#the-three-retention-gestures-that-write)) |
 | `POST` | `/work/retention/readmit/{node}` | Lift it on every one of those logs — the inverse commit rather than a delete. Refused `409` while the node still lacks records a trim floor lets the log delete |
 | `POST` | `/work/retention/capacity` | Drive a log's byte-ceiling change as far as this node's mode allows |
 | `GET` | `/work/retention/maintenance` | Where that window stands and what is holding it |
@@ -225,7 +225,7 @@ node means nothing was done.
 | `GET` | `/work/turns` | One page of the agent turns charged to an item, newest first: `?id=` (key or id), `?cursor=`, `?limit=` (default 20, at most 50) — see [`work_item_turns`](#queries) |
 | `GET` | `/pages` | The company's own knowledge base: a filtered listing. Served only where `knowledge.backend` is `native` |
 | `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
-| `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, whenever a node publishes a company — every settings apply, every chart write and every boot; each carries `chart_position`, the packed position on the [org chart's log](../concepts/chart-domain.md) its name and purpose were last derived from (absent on a container written before containers carried one), so a node whose chart is older never overwrites them |
+| `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply and every boot; each carries `chart_epoch`, the activation its name and purpose were last written from (Unix milliseconds, absent on a container no stamped apply has written), so a configuration activated earlier never overwrites them |
 | `POST` | `/work/items` `/pages` | **File an item, write a page** — and the rest of the [write surface](#the-human-write-surface): the same tools a seat and your own assistant hold, as the person you signed in as. Guarded, and absent on a company whose tracker or knowledge base is not native |
 | `PATCH` | `/work/items/{key}` | Change an item — and its `/comments`, `/rank`, `/depend`, `/relate`, `/restore` and `/purge` beside it. See [below](#the-human-write-surface) for every route and the authority each takes |
 | `POST` | `/auth/login` | **Sign in.** Login or address, password, and a second factor where one is held. **Unguarded**, and throttled on the login **as typed** from the caller's source: a failure costs the next attempt a wait, never a lockout — see [below](#a-failure-costs-a-wait-never-a-lockout). Every failure answers one code at one deadline — see [below](#every-failed-sign-in-is-one-refusal). A node that cannot read the identity estate or record the session answers `503` — and **every `503` under `/auth` carries a `Retry-After`**, so a client can tell "ask again in a moment" from a node that is gone. A write whose outcome nobody can establish — the second factor's spend, the session's own start — is that `503` with the `op_id`, and **never a session**: a code whose spend may not have landed is a code that still works. A success answers `{person, login, seat?, expires_at, position, status}`, and `status` is `signed_in` — or, where `api.auth.local.totp` is `required` and the person holds no second factor, `second_factor_enrolment_required`: the session it opened may only enrol one (see [A required second factor is enrolled before anything else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else)). `POST /auth/invite/{id}` and a password `POST /auth/step-up` answer the same shape, restricted on the same rule |
@@ -241,19 +241,6 @@ node means nothing was done.
 | `POST` | `/auth/logout/all` | End **every** session you hold, by bumping your own revocation epoch — the one move that is immediate on every node. A revocation nobody can confirm is `503` with its `op_id` rather than a claim that your other sessions ended |
 | `POST` | `/auth/logout/{lineage}` | End **one named** session, which is how you sign out of a laptop you left somewhere from the browser you are using. The owner is read from this node's rows and compared against the caller the guard resolved; `fleet:operate` may end one they do not own. A session already over — ended by a record, past its absolute deadline, revoked or invalidated — answers `ended` with nothing written or announced. A node that cannot read its rows answers `503 identity_unavailable` with a `Retry-After` and writes nothing, because the owner the caller is checked against is one of those rows — unlike `POST /auth/logout`, whose lineage comes off the cookie's own signature. A close nobody can confirm is `503` with its `op_id` — the id is derived from the lineage, so asking again is the same operation |
 | `GET` | `/viewer` | **Who is asking.** The caller's `login`, the `grants` they hold, the seat the identity directory binds them to — its `handle`, `name` and `kind`, all empty for a credential nobody is bound through — and `owner`, the name the caller's own record (inbox, pins, priorities, personal views) is kept under: the seat for a bound person, the login for everybody else. `acts` names the tools [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller — the catalogue's writes the authority table can admit them to before any object is named, always an array — and `project` is where a create of theirs that names no project files, `""` for a caller bound to no seat or a seat whose team owns no project. A node that cannot yet decide `acts` answers `503` rather than an empty list, which would lock every control the caller holds the authority for. An unbound credential is an **ordinary state**, not an error — a pipeline's token acts under its own login, and binding a person to a seat is a directory row rather than a different credential |
-| `GET` | `/chart` | The company's **org chart** — its units, its seats, every `manages:` edge and every unit's lead — with the position the answer was read at. The **runtime half of every object is stripped** unless the caller asks for it AND may read it; the answer says which it got in `runtime`. Its credentials and a seat's address are **masked** either way, as `GET /config` masks the settings. **Always needs a credential** — a signed-in session or a bearer (see [below](#chart--the-org-chart-auth-gated)) |
-| `GET` | `/chart/units` `/chart/seats` | One half each, for a client that renders people constantly and the tree once. `/chart/seats` filters: `kind=human` (or `agent`) keeps one kind, and `unheld=true` keeps the seats **nobody in the identity directory is bound to**, asked by the handle each seat was created under so a renamed seat is judged by its binding. `unheld=true` is the **directory's** question, so it takes what the directory's own listing takes — `people:manage` (whoever invites somebody into one of those seats) or `audit:read` — and a reader holding the board's grant alone is refused `403` naming both. Every node holds the directory from boot, company or none, so a node waiting for its first company answers it too; where a read of the directory fails it is `503`, with a `Retry-After`, rather than a list missing a seat or carrying one it should not |
-| `GET` | `/chart/units/{key}` | One unit, what it directly holds, and its own history; `404 not_found` for a key nothing answers to |
-| `GET` | `/chart/seats/{handle}` | One seat, what it manages, and its own history; `404 not_found` for a handle nothing answers to |
-| `GET` | `/chart/history` | The company-wide **reorganisation feed**, newest first: who moved, who was hired, which team was dissolved — quiet changes included. **Takes `audit:read`**: the record of what happened across the whole company, where one object's own history above is the context of the object you asked about and takes the board's read |
-| `PATCH` | `/chart/units/{key}` | Edit one unit's content. Its **prose** is whoever leads that unit; changing its `project`, `space` or `channel`, or a body carrying `runtime`, takes `config:write` (see [below](#who-may-write-which-part-of-an-object)) |
-| `PATCH` | `/chart/seats/{handle}` | Edit one seat's content, on the same classes — its prose decided by whoever leads **that seat**, and a change to its `project`, `space` or `email` taking `config:write`. It carries no `kind` and no `manages`: both are structure, a batch's `set_kind` and `set_manages` |
-| `POST` | `/chart/batch` | One **structural** change: create, move, set a lead, rename, set a kind, set whom a seat manages, remove. One batch is one record, arbitrated against every other structural write in the company. Takes `config:write`, and a batch that **removes** anything takes `fleet:operate` as well |
-| `POST` | `/chart/units/{key}/rename` `/chart/seats/{handle}/rename` | Change an object's **address**, as a one-operation structural batch. The former one goes on resolving. Takes `config:write` |
-| `POST` | `/chart/import` | Publish one revision's **complete authored structure**, keyed on the revision so a re-import is a no-op. Each edge is `{"object":{...},"parent":...,"lead":...}`, and a seat's edge states its `seat_kind` and its whole `manages` list too — the content writes that follow carry neither. Takes `config:write` |
-| `GET` | `/chart/imports` `/chart/imports/{revision}` | Which revision this company's structure is running, and when it landed |
-| `GET` | `/chart/check` | The **continuous report**: every way the chart and the applied settings disagree (see [below](#the-continuous-report)). **Takes `audit:read`** — it names every seat nobody in the identity directory holds; the counts ride `/health` for everybody |
-| `GET` | `/company/export` | The chart as an authored **document**, whole and unstripped — every unit, every seat with its runtime half, and every seat's `manages:` list under `manages` — for a round trip through a file, its credentials masked as every read of the runtime half is. Takes `config:read` |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
@@ -325,7 +312,7 @@ node means nothing was done.
 >
 > **A person whose seat is gone is `403 seat_unavailable`, naming the seat** —
 > and so is a Tier A token the identity directory binds to one, since both
-> bindings are resolved through the same chart lookup. Their credential is
+> bindings are resolved against the company this node runs. Their credential is
 > perfectly valid and signing in again changes nothing, so
 > `401` would loop a browser through the sign-in page for ever. The one surface
 > it does not cover is `/auth/*`, whose subject is a person's own credential
@@ -358,7 +345,7 @@ node means nothing was done.
 > the delivery flows once the secret is set; nothing is discarded, and nothing
 > unsigned is ever recorded, published, or shown on the dashboard.
 
-Plus the surfaces whose reads are as sensitive as their writes: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up), [`/chart/*` and `/company/export`](#chart--the-org-chart-auth-gated), and `/operator/*` — [`/operator/mcp`](#operatormcp--your-own-assistant) and [`/operator/act`](#operatoract--the-dashboards-write-surface). The list of which credentials a company has not configured yet is a map of what to attack, and so is the shape of the company itself.
+Plus the surfaces whose reads are as sensitive as their writes: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up), and `/operator/*` — [`/operator/mcp`](#operatormcp--your-own-assistant) and [`/operator/act`](#operatoract--the-dashboards-write-surface). The list of which credentials a company has not configured yet is a map of what to attack, and so is the shape of the company itself.
 
 ### Every failed sign-in is one refusal
 
@@ -494,7 +481,7 @@ as the first, which tells them to go and get a new credential.
 
 **A `403` says which rule refused, and what would have admitted you.** Beside
 `"error": "unauthorized"` it carries two detail fields wherever the authority
-table made the refusal — every question, the policy every `/chart/*` and
+table made the refusal — every question, the policy every `/config/*` and
 `/iam/*` route is mounted with, and the snapshot mirrors alike:
 
 ```json
@@ -512,25 +499,25 @@ table made the refusal — every question, the policy every `/chart/*` and
 ([below](#some-gestures-ask-how-recently-you-proved-who-you-are)) — and `grants` are the capabilities any **one** of which would have
 admitted this caller for this object. An empty `grants` is an answer rather
 than an omission: no capability would, and what is missing is a relation the
-chart does not hold. The [human write surface](#the-human-write-surface)
+org chart does not hold. The [human write surface](#the-human-write-surface)
 answers its own refusals `403 forbidden` in its tools' wording instead.
 
-A request the node **cannot decide** — it is behind its chart log, or holds no
-company yet — is `503 unavailable` with a `Retry-After`, never a `403`: a lead
+A request the node **cannot decide** — it holds no company yet — is
+`503 unavailable` with a `Retry-After`, never a `403`: a lead
 told they lead nobody goes looking for an authority they already hold.
 
 | Grant | What it reaches |
 |---|---|
 | `state:read` | The company's working state: `/agents`, `/agents/activity`, `/org`, `/tools`, `/schedules`, `/budgets`, `/sandbox-runs`, the reads under `/work/*` and `/pages/*`, `/containers`, `/feed`, `/viewer`, `/stream/snapshot`, `/tokens/*`, `/ws/stream` |
-| `audit:read` | The record of what happened: `/events*`, the socket's `event` push and the snapshot's `events` section, any seat's `/agents/{id}/memory` and `/agents/{id}/conversations`, every seat's memory totals (`memory_overview`), a running coding job's tail (`/sandbox-runs/{turn_id}/tail`), the turn, phase, trace and A2A-channel questions on the socket, `/iam/audit`, the org chart's company-wide feed (`/chart/history`) and its continuous report (`/chart/check`), and — beside `people:manage` — the seats nobody holds (`/chart/seats?unheld=true`). Separate from `state:read` because a prompt and a tool argument are the company's most sensitive read |
-| `config:read` | Every read under `/config*`, `/company/export`, `/integrations`, `/credential-pool`, `/mcp-servers`, a seat's resolved model chain and tool sources on `/org`, the org chart's **runtime half** (`/chart?runtime=true`) — a seat's model chain, its credentials (masked), its sandbox cell and its `mcp_env` — and the `/setup` and `/secrets` **listings**: they carry no values and still say which credentials a company holds, which it has not set, and when each last changed |
+| `audit:read` | The record of what happened: `/events*`, the socket's `event` push and the snapshot's `events` section, any seat's `/agents/{id}/memory` and `/agents/{id}/conversations`, every seat's memory totals (`memory_overview`), a running coding job's tail (`/sandbox-runs/{turn_id}/tail`), the turn, phase, trace and A2A-channel questions on the socket, `/iam/audit`, and — beside `people:manage` — the company's human seats and who holds each (`/iam/seats`). Separate from `state:read` because a prompt and a tool argument are the company's most sensitive read |
+| `config:read` | Every read under `/config*` — the org chart included, with its credentials masked — `/integrations`, `/credential-pool`, `/mcp-servers`, a seat's resolved model chain and tool sources on `/org`, and the `/setup` and `/secrets` **listings**: they carry no values and still say which credentials a company holds, which it has not set, and when each last changed |
 | `secrets:read` | Revealing a credential's value: `GET /secrets/{name}?reveal=true`, which takes `config:read` as well — the value's grant on top of the row's |
-| `people:manage` | `/iam/*` — inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them — the seats nobody holds (`/chart/seats?unheld=true`), which is what an invitation is sent into, and this node's Tier A token labels (`/iam/node-tokens`, as `audit:read` may too). **The grant that can grant**, and it bounds itself: a caller may not confer a grant they do not hold |
+| `people:manage` | `/iam/*` — inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them — the company's human seats and who holds each (`/iam/seats`, `?unheld=true` for the vacancies), which is what an invitation is sent into, and this node's Tier A token labels (`/iam/node-tokens`, as `audit:read` may too). **The grant that can grant**, and it bounds itself: a caller may not confer a grant they do not hold |
 | `work:write` | Filing and moving work — the [write surface's](#the-human-write-surface) item routes — and `/operator/mcp`'s write half. Some of those verbs also ask a RELATION: re-routing, a project's policy and taking an item out of circulation are its project lead's |
 | `knowledge:write` | Writing the company's own pages. A rename, the trash and a restore are also the container's lead's; see [the write surface](#the-human-write-surface) |
-| `config:write` | **Host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `cli-agent` model, a `run_in: self` sandbox), so a holder can run anything there and read whatever a process there can, the keyring included — see [Identity and Access](../concepts/identity-and-access.md#grants-the-eleven-things-there-are-to-allow). Every write under `/config*`, `/chart/batch`, the rename and import routes, a chart object's runtime half and the relations authority is derived from, and `/setup`'s writes — with `secrets:write` as well wherever the write seals a credential — and, on top of the page's own rule, the create, save, rename, trash, restore and purge of a page in the tool-skills container (a comment on one is not gated: a remark is not the skill). It is also the **admin path** over the org chart's prose: a holder corrects any unit's or seat's name, purpose and goal, leading nothing |
+| `config:write` | **Host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `cli-agent` model, a `run_in: self` sandbox), so a holder can run anything there and read whatever a process there can, the keyring included — see [Identity and Access](../concepts/identity-and-access.md#grants-the-eleven-things-there-are-to-allow). Every write under `/config*` — the org chart included — and `/setup`'s writes — with `secrets:write` as well wherever the write seals a credential — and, on top of the page's own rule, the create, save, rename, trash, restore and purge of a page in the tool-skills container (a comment on one is not gated: a remark is not the skill). |
 | `secrets:write` | `PUT`/`DELETE /secrets/{name}` and `POST /secrets/rekey`, and on top of `config:write` a `/setup` write that seals a credential: a submission carrying one, a provisioning pass, a GitHub App |
-| `fleet:operate` | The deployment rather than the company: `/fleet`, every `/work/retention*` route (the maintenance status and the reanchor value included), `/backup`, `/backups`, the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`) — which no seat may make whatever it holds — and, beside `config:write`, taking an object out of the org chart (a `remove` in `POST /chart/batch`). It is also the **admin path** of every relation rule but the org chart's: a holder is admitted where a lead or an owner would be — on everybody's work, and not on what a seat is told to do |
+| `fleet:operate` | The deployment rather than the company: `/fleet`, every `/work/retention*` route (the maintenance status and the reanchor value included), `/backup`, `/backups`, the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`) — which no seat may make whatever it holds. It is also the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be — on everybody's work, and not on what a seat is told to do |
 | `sandbox:run` | Starting a coding run |
 
 A question asked on the socket is decided by the same declaration the REST
@@ -548,9 +535,9 @@ is told what they lack, not sent to confirm who they are first.
 
 | Window | Setting (default) | What asks for it |
 |---|---|---|
-| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*` and `/chart*` (a lead editing their own unit included), `/setup`'s writes, `PUT`/`DELETE /secrets/{name}` and `POST /secrets/rekey`, the deployment's own controls — `POST /backup` and every `POST /work/retention*` — and every `/iam` write the row below does not name: `POST /iam/people`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `POST /iam/credentials`, revoking a machine token through `DELETE /iam/credentials/{id}`, and ending somebody else's sessions |
+| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*`, `/setup`'s writes, `PUT`/`DELETE /secrets/{name}` and `POST /secrets/rekey`, the deployment's own controls — `POST /backup` and every `POST /work/retention*` — and every `/iam` write the row below does not name: `POST /iam/people`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `POST /iam/credentials`, revoking a machine token through `DELETE /iam/credentials/{id}`, and ending somebody else's sessions |
 | `step_up_sensitive` | `api.auth.session.step_up_sensitive` (15 minutes) | Revealing a value (`GET /secrets/{name}?reveal=true`); changing what an enrolled person may do or how they prove who they are — `PATCH /iam/people/{id}`, `POST /iam/people/{id}/mfa/reset`, `DELETE /iam/credentials/{id}` naming a password, a second factor or the recovery codes, and your own `POST /auth/totp` and `POST /auth/totp/recovery`; and `POST /iam/invalidate-all` |
-| none | | Every read, the two deployment reads (`GET /work/retention/maintenance`, `GET /work/retention/reanchor`) and the import ledger a client polls (`GET /chart/imports*`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account — an administrator ending somebody else's asks `step_up`; and every work and knowledge verb — the tools, `/operator/mcp`, `/operator/act` and the human write surface |
+| none | | Every read, the two deployment reads (`GET /work/retention/maintenance`, `GET /work/retention/reanchor`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account — an administrator ending somebody else's asks `step_up`; and every work and knowledge verb — the tools, `/operator/mcp`, `/operator/act` and the human write surface |
 
 A proof that is too old is **`403 step_up_required`**, the code the sign-in
 surface answers for the same fact, carrying the window it needs so a client can
@@ -665,319 +652,6 @@ per domain — `agents`, `events`, `tokens`, `org`, `fleet`, `mcpstatus`,
 read/stream surface is free to evolve since the dashboard is its only
 consumer.
 
-### `/chart/*` — the org chart (auth-gated)
-
-The org chart is **not part of the stored configuration revision**. It is a
-domain of its own: every change is one record on an ordered log, arbitrated at
-the broker on the subject of the object it changes, with its own history and
-its own author. `PUT`/`PATCH /config` therefore refuses a body carrying
-`units:` or `roles:` by name — `400 chart_not_writable_here` — and points here.
-
-A company file still carries both halves, and always will: an operator authors
-one document describing a company. `crewlet validate` reads it whole and
-`crewlet config import` is what divides it — the settings to a revision, the
-chart to its log.
-
-#### Who may write which part of an object
-
-Every field of a unit and a seat is in one of four classes, and only the first
-is decided by who leads the object:
-
-| Class | Fields | Who may write it |
-|---|---|---|
-| **Prose** | a seat's `name`, `backstory`, `goal`, `responsibilities`, `behavioral_guidelines`; a unit's `name`, `type`, `purpose`, `goals`, `knowledge_refs` | whoever **leads that object** — the unit's lead for a unit, the seat's lead for a seat — or `config:write` |
-| **Authority-bearing relations** | a seat's `project`, `space`, `email`; a unit's `project`, `space`, `channel` | `config:write` |
-| **Runtime** | `runtime` (a seat's model chain, its credentials, its sandbox cell, its worker grants, its schedules, its `mcp_env`, its `contact` and `availability`), and `clear_runtime` | `config:write` |
-| **Structure** | create, move, lead, kind, whom a seat manages, rename, remove — [`POST /chart/batch`](#structure-is-neither) | `config:write`; a removal also `fleet:operate` |
-
-The **relations** are what somebody's authority is derived from, which is why
-leading the object does not reach them: `project` and `space` are which tracker
-project and which page container a seat or unit leads, so a lead pointing their
-unit at another team's key — or the org root's container — would take over its
-removals, its archive and its policy; a unit's `channel` is which chat channel
-it answers; and a seat's `email` is whose vendor actions — a Jira comment, a
-push — are attributed and routed to it. The **runtime** half is the company's
-configuration under another name, and writing it is equivalent to shell on
-every engine host, because a stdio MCP server is `exec.Command` with the
-config's command.
-
-**A seat's `manages` list is structure**, and a `PATCH` naming it is refused
-`400 invalid_body`. It is who the seat's manager is — a lead adding the founder
-to a report's list would become the founder's ancestor — and a rename moves the
-entries naming its object on the chart's structural subject. While a seat's
-content carried the list, a lead's goal edit decided on a node that had not
-applied a rename yet sent the list back as it was read and wrote the renamed
-entry back onto the retired address; now a batch's `set_manages` states it,
-ordered against every rename.
-
-**What a write asks for is what it CHANGES.** A body is full post-state, so a
-lead's `PATCH` carries the relations too — and sending back the values they
-read (the `email` as the read served it) changes nothing and asks for
-nothing. Only a relation whose value differs from
-the one the object holds, compared inside the write's own snapshot, asks for
-`config:write`. The route can see the runtime half in the body and asks for the
-grant before it writes; it cannot see which relations a body changes, so the
-domain refuses those — and both refusals are the same answer: `403
-unauthorized` with `reason: no_grant` and `grants: ["config:write"]`, the
-domain's naming the `fields` that asked. A `503 unavailable` with a
-`Retry-After` is a node that cannot decide.
-
-**A body that leaves `runtime` out keeps the runtime half the object has.** It is
-the one field that is not full post-state, because the person editing a goal
-may neither change that half nor read it back: a lead's `PATCH` of a seat's
-prose lands and the seat keeps its model chain and its credentials. Taking the
-half away is `"clear_runtime": true`, never an empty or absent `runtime` — a
-clear that could be spelled by leaving something out is one a caller makes by
-accident. A `runtime` of `null` is refused `400`, since it could mean either;
-one stated beside `clear_runtime` is refused `422 refused`, and so is a stated
-`runtime` that is not a JSON object.
-
-**A runtime half is held to the company's own rules before anything in it is
-sealed.** A changed half that breaks what a company file would be refused for
-— a `token_budget` ceiling below 1 or keyed on anything but `day`, `week` or
-`month` (`{"year": 5}`), a schedule the scheduler cannot parse, a field the
-seat's kind may not carry — is `422 refused` with the rule's own sentence, and
-no credential in it reaches the secret store. A half carried from the row is
-not re-judged: refusing a lead's goal edit over a half they did not touch would
-refuse them for somebody else's change.
-
-**Every chart write asks for a proof inside `step_up`**, a lead's edit of their
-own team included: it changes what the company executes. The reads — the import
-ledger a client polls among them — ask for none. See
-[Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are).
-
-Reads split the same way and **default to stripped**. A caller asks for the
-runtime half with `?runtime=true` and gets it only if they also hold
-`config:read`; otherwise the answer is served **stripped rather than refused** —
-the rows they asked for are rows they may read. Every answer says which it got:
-
-```json
-{
-  "units": [ … ],
-  "seats": [ … ],
-  "answer": { "level": "linearizable", "position": "CREWLET_CHART_LOG@1:412", "lag": 0 },
-  "runtime": false
-}
-```
-
-Without that flag a company whose seats declare no runtime at all renders
-exactly like a caller who was silently stripped.
-
-**A runtime half you may read is still masked.** Every credential in it — an
-`mcp_env` value, the sandbox's `env` and its setup steps' `files` and `env`, a
-seat's own Slack, Mattermost and GitHub App credentials — is served only as a
-whole `${VAR}` reference and anything else as `"__redacted__"`, found by the
-same `secret` tags `GET /config` masks by; a seat's `email` is served
-the same way. The writer seals every literal into the
-[secret store](../concepts/secret-store.md#what-the-org-chart-puts-here-and-what-it-deliberately-does-not)
-before a record is published, so what you normally see is the `${CHART_…}`
-reference the value was sealed under, and sending it back changes nothing. A
-`"__redacted__"` sent back is **restored** from the row the write patches,
-matched by where it sits — a list member by its own name — and refused
-`422 refused`, naming the field, where the row holds nothing to restore it
-from or the value sits in a list member with no name of its own. The same holds
-for a file `GET /company/export` produced, because an import's content writes
-are these `PATCH`es: imported back into this deployment every mask is restored,
-and imported into one that holds no such row it is refused rather than storing
-the marker. A `${CHART_…}` reference the row being written does not already
-name is **confirmed** against the secret store: one whose value is still held
-is accepted (and kept from the sweep), and one whose value is not — collected
-an hour after the last row stopped naming it, or never stored on this
-deployment — is refused `422 refused`, naming the field and the name, rather
-than written as a reference that resolves to nothing. So a sealed reference in
-an exported file is good only while some row still names it.
-
-**A content write never creates its object.** A `PATCH` naming a unit or a seat
-the chart does not hold is refused (`422 refused`), and nothing is published. The
-refusal names `POST /chart/batch`, which is where an object is created — or,
-where the chart knows why it is not there, the removal that took it (with who
-made it and the reason given) or the address it was renamed to. The write first waits for this node to apply everything the
-structure had been written by, so a `PATCH` straight after the `202` of the
-batch that created its object lands rather than being refused — a batch that
-creates a new object on another one's retired address, or renames an object
-back onto an address it used to hold, included — and a node that cannot catch
-up in time answers `503` as it does for any write it is behind on. Only a
-removed object's address is refused without that wait, since nothing can ever
-be placed on it again.
-
-The same rules are enforced a second time **inside the domain**, against the
-grants the authoring party holds — so a surface that skipped its own check
-still cannot write a seat's credentials or its relations. A `runtime` identical
-to the one the object holds (key order and whitespace aside) changes nothing
-and asks for nothing there, while a different one or a clear asks for
-`config:write` — which is what the route asked for already on seeing the field.
-A refused write publishes nothing and seals nothing: a literal `email` is sealed
-into the secret store only once the write is admitted.
-
-#### Structure is neither
-
-A create, a move, a lead change and a removal go through `POST /chart/batch`,
-and they take `config:write` whoever leads the team. **A removal takes
-`fleet:operate` as well**, because it is the one structural change nothing
-undoes: the removed address is tombstoned for ever — no create, rename or import
-may take it again — the seat's mailbox goes with it, and every node drops what
-is still in flight to the object. That is a purge's reach, and it takes a
-purge's grant: an automation holding only `config:write` to apply a
-configuration cannot dissolve a team between two of its runs. The route asks for
-it the moment a batch carries a `remove`, and the domain asks again at the
-record, so a caller holding only `config:write` is refused `403` naming
-`fleet:operate` and nothing is published. The domain serialises
-every structural record on **one subject for the whole chart**, deliberately:
-two reparents through a common ancestor can each be locally valid and jointly
-produce a cycle no node could see from the subject it arbitrated on. A caller
-that means to move three seats sends three operations in **one** batch — the
-batch is the unit that is ordered, and three requests are three chances to land
-half a reorganisation.
-
-```bash
-curl -X POST localhost:8000/chart/batch \
-  -H "Authorization: Bearer $CREWLET_API_TOKEN" \
-  -d '{"operations":[
-        {"kind":"create_unit","object":{"kind":"unit","id":"platform"}},
-        {"kind":"move","object":{"kind":"seat","id":"sre"},"parent":"platform"}
-      ]}'
-```
-
-Each operation names its `kind` and its `object`, and carries only the fields
-that kind reads:
-
-| `kind` | Takes | Notes |
-|---|---|---|
-| `create_unit` | `parent`, `lead` | The new unit's place and its own lead, so a team is created led in one operation |
-| `create_seat` | `parent`, `seat_kind` | The unit the seat sits in, and what holds it — `agent` or `human`, **required**: an agent is the one kind that runs, so it is never a default. Until the seat's content is written it is **incomplete**, and no node places it |
-| `move` | `parent` | A unit's lead stays with it |
-| `set_lead` | `lead` | The unit stays where it is |
-| `set_kind` | `seat_kind` | A seat's kind is structure, so it changes here and never in the seat's content. Making a person's seat an agent's is refused while somebody in the identity directory holds it, naming them — on a node that cannot read the directory too |
-| `set_manages` | `manages` | The seat's **whole** `manages` list — seat handles and unit keys, kept as written (folded) whether or not they resolve yet, at most 64 of them; an empty or absent list is a seat that manages nobody. A seat only: a unit's reports are its lead's. A batch that also renames an object the list reaches publishes the list the rename leaves |
-| `rename` | `to` | The object is named by the address it answers to **at this point in the batch**, and moves onto `to`; its former address goes on resolving. An operation after it uses the new key, and an object the same batch creates cannot be renamed — create it under the address you mean |
-| `remove` | nothing | The removal is named by the address the chart holds the object at — the one it answered to when the batch began — because it is published as a record of its own and applied against the chart as the batch found it. A rename earlier in the same batch is superseded: the object is removed from the address it held, its identity is tombstoned beside it, and the address the rename would have given it is never tombstoned, so it stays free |
-
-An empty `parent` is the org root, an empty `lead` clears the unit's own lead
-and an empty `manages` clears the seat's list. A field the kind does not take is refused `422 refused` (`the operation
-does not take the field`) rather than dropped, because a batch that dropped it would
-answer as though it asked for less than it said.
-
-A batch whose only effect is removals — its other operations, if any, being a
-rename of an object it then removes — is published as a removal record instead,
-and its answer's `objects` name each object by the address it was removed from;
-one that places and removes is refused, because a removal installs a gate
-and a record that installed one for some of its objects and not others would
-make "does this install a gate" a question about a payload.
-
-#### What a write answers
-
-| Outcome | Status | What to do |
-|---|---|---|
-| `applied` | `200` | The record is durable **and this node has applied it**, so the next read here sees it |
-| `pending` | `202` | Durable at the position in the body; every node will apply it, this one has not yet. Read at that position to see it |
-| `unknown` | `503` | Nothing can be established from this node. The body says `"outcome": "unknown"` — which a refusal never does — and carries the operation id as `op_id`: retry with the **same** one, which the route reads back from `Idempotency-Key` |
-
-Retrying an `unknown` under a *fresh* id would write the change twice if the
-first had in fact landed, which is the one thing the operation ledger exists to
-prevent.
-
-A body carrying a field the route does not read is refused `400 invalid_body`,
-naming the field, rather than having it dropped — every write here is full
-post-state or a structural gesture, so a dropped field would answer `200` for a
-request that asked for more than landed. So is a body holding anything after its
-one JSON value but whitespace — a stray `}` or `]`, or a second value.
-
-A refusal by the chart's own rules is `422 refused`, with the rule's own sentence
-as its `detail` — the body was well formed and the chart will not take it, so no
-reshaping of the body would change the answer. A refused **batch** also names
-which operation broke which rule, as fields rather than only in the sentence:
-`index` (the operation's position in `operations`, from 0), `rule` (the rule's
-name — `the key is taken`, `the key was removed`, `no such parent`, `the move
-closes a cycle`, `the unit is not empty`, …) and `object` (the `{kind, id}` that
-operation named), so a client that sent five hundred operations knows which one
-to take back without parsing the sentence. A content write's refusal names no
-operation and carries none of the three. A contention another writer won is
-`409 stale` (re-read and write again — nothing about the request was wrong), and
-a node that cannot decide **authority** is `503` rather than `403`: a node that
-is booting or behind the log cannot say who leads a unit, and `403` would send
-somebody to ask for an authority they already hold. Every retryable `503` here
-carries a `Retry-After` — estimated from this node's own backlog when it is
-behind the chart log, a couple of seconds otherwise — and one waiting cannot
-clear carries none: an evicted node, or one holding a chart record it cannot
-decode, answers the same however often it is asked.
-
-#### A rename keeps the old address working
-
-`POST /chart/units/{key}/rename` with `{"to": "..."}` changes an object's
-address. A key is not an identity — the row is — so the former address goes on
-resolving until something else claims it, and a reference somebody typed last
-year — a chat mention, a unit's `lead:` naming a handle the seat has since given
-up — still finds what it named. Every read carries `former_keys` /
-`former_handles` so a client rendering a stale reference can say **why** it
-still works rather than reporting it broken, and — once an object has been
-renamed — `origin_key` / `origin_handle`: the address it was **created**
-under, which is its identity. That one never moves and is never issued to
-anything else, while a retired alias may be claimed by a new object, so a
-client that keeps its own picture of the chart across renames matches objects
-by it rather than by their address. It is absent until the first rename,
-while the object still answers to it; the capped former list cannot stand in
-for it, because enough renames push the origin off its end.
-
-The **`manages:` entries** naming the object move with it: every entry that
-reached it before the rename names its new address after, so it does not hang
-on an alias a new object may take or sixteen further renames retire — and since
-a seat's list is structure, ordered against the rename, no content write can
-put the old address back. An entry
-the organisation reads as naming something else is left — one naming a unit by
-a key some seat also answers to names the seat, and a unit renamed onto a key a
-seat answers to keeps its entries on the retired key, which still reaches it.
-See [The org chart](../concepts/chart-domain.md).
-
-The route publishes a batch of one `rename` operation, so it is ordered against
-every other structural write: a create of the same address is decided against
-the rename and refused, never applied on top of it. Its refusals are the
-batch's — `422 refused` naming the rule for an address that is taken, reserved, removed,
-somebody's identity or the one the object already answers to — and `rename` is
-equally an operation you can put in a `POST /chart/batch` beside others.
-
-#### The continuous report
-
-`GET /chart/check` answers one evaluation over the two halves of the running
-company: the chart this node holds and the settings epoch it has applied. It
-takes `audit:read`, like the company-wide `/chart/history`: it names every human
-seat nobody in the identity directory holds and every one nobody can reach,
-which is the directory's question read off the chart. The counts are on
-`/health` for every reader.
-
-Nothing can refuse these at a write, and that is the point rather than a
-limitation — the two halves are written by different people at different times,
-so every finding is reachable through two writes that were each correct when
-they were made:
-
-| Kind | Severity | What it means |
-|---|---|---|
-| `provider_unknown` | error | A seat's model chain names a provider the settings do not declare. The seat runs on the company's fallback model — `default`, else the first provider declared — which nobody chose for it, and bills against it |
-| `sandbox_unconfigured` | error | A seat's code gate is open on a company with no sandbox backend |
-| `worker_unknown` | warning | A seat's `workers:` narrowing names a template that is gone, so it narrows to fewer workers than the list suggests |
-| `reference_dangling` | warning | A `manages:` entry, a unit's lead or a seat's unit resolves to nothing — named on the seat's handle or the unit's key that holds it — or a key of `integrations.gitlab.provisioning.access_levels` names no seat, named on that setting: it grants nothing today and its level to whichever seat is next given the handle |
-| `reference_retired` | warning | A **setting** — a GitLab access level's key, or `integrations.datadog.route_to` — names its seat by a handle the seat **no longer answers to**, named on the setting with the handle as written. It still reaches the seat, because a reference resolves through the handles a seat used to have; but a rename in the chart cannot rewrite a setting, and a retired handle other than the one a seat was created under may be given to a later seat, which would then silently take the setting over. Write the seat's current handle |
-| `alert_fallback_unrouted` | error | `integrations.datadog.route_to` names **no seat that can be woken** — nobody answers to it, or it is a human seat, whose delivery is dropped as the person's own action — so every alert whose monitor names no owner is verified, counted and delivered to nobody. A company file is refused for one; a settings write cannot be, because the seat is the running chart's, and a chart write removing the seat or making it a person's cannot see the setting. `none` dismisses those alerts on purpose and is not reported |
-| `seat_unheld` | warning | A human seat **nobody in the identity directory is bound to**, so no person can sign in and act as it — work routed there waits for somebody who cannot arrive. **Left undecided, not answered,** where the directory cannot be asked: a seat whose holder this node failed to read is counted in the report's `unchecked` instead of being reported as held by nobody, which is the answer an operator would act on |
-| `seat_unreachable` | warning | A human seat with no contact identity, so nothing addressed to it reaches anybody on the chat surface this company runs. Validation **admits** such a seat — a person who works only through the dashboard has no chat account to declare — so this report is the only place it is named, and a warning rather than an error because the state is legitimate. Independent of the above and with a different remedy — a seat can have either without the other |
-| `schedule_unrunnable` | error | An **enabled** schedule nothing can run, named on its scope — the unit's key or the seat's handle — with the schedule's name: a unit's `each` schedule on a unit with no **direct** agent member (a person and a child unit's seats are never runners), a unit's `lead` schedule whose effective lead is a human seat or nobody at all, or a schedule on a human seat. The scheduler resolves no runner for it and skips it on every tick (logging `schedule_no_runners` when one is due), so it never fires. A company file is refused for one; the chart cannot be, because the schedule is its own object's content while what makes it runnable — a member's kind, a lead inherited from an ancestor — is written on other objects. A disabled schedule is not reported |
-| `identity_shared` | error | A seat's **address** or one of its **contact identities** is also another seat's, so routing reaches only one of them — an address the first seat declaring it, a contact identity the last — and this seat never hears a delivery addressed to it, or has a person's word attributed to the other. Reported on the seat routing does not reach, naming the one it does and which surfaces (`email`, `slack`, `jira, confluence`, …). Addresses are compared as the party registry compares them, resolved through **this node's** secret snapshot and folded the same way, so two seats plus-addressing one shared mailbox with their own handles share nothing and are not reported. A node that cannot resolve skips this arm: every address on the chart's rows is a sealed reference, and two references never collide |
-| `budget_idle` | warning | An **agent seat's token ceiling** the company's own ceiling makes unable to refuse the seat a turn, one finding per idle window, naming the window: everything a seat spends is the company's spend too, so a company ceiling at or below the seat's, on a window that holds the seat's whole, is always reached first. It is here because the two ceilings live in **two halves** — a seat's in its org chart runtime, raised through `PATCH /chart/seats/{handle}`, the company's in its settings, raised through `/config` — so no write to a running company sees both. Judged by the rule and worded in the sentence `crewlet validate` gives a company file, so the same pair reads the same in both. A warning: it runs exactly as written and admits nothing a working ceiling would refuse, and what it does is mislead a founder into reading headroom the seat does not have |
-
-The **same** evaluation is summarised on `/health` under `consistency`, so a
-gauge, a probe and this screen can never disagree about whether something is
-wrong. It does **not** move `/health`'s `status`: a company referencing a
-provider somebody deleted is a company with a problem, not a node with one, and
-taking a node out of rotation over a configuration typo would turn one broken
-seat into an outage.
-
-`evaluated: false` means this node could not evaluate at all — it holds no
-chart view, or has applied no settings epoch. Check it before the count:
-`findings: 0` from a node that read nothing is the most misleading answer this
-surface could give. `unchecked`, present only when it is not zero, is the same
-rule one arm down: how many human seats this node could not ask the identity
-directory about, so `seat_unheld` was not decided for them. Both the report and
-`/health`'s `consistency` carry it.
-
 ### `/iam/*` — the company's people, credentials and sessions (auth-gated)
 
 **Always guarded, reads included**, for the reason `/secrets` guards its
@@ -1000,6 +674,7 @@ list and nothing ever will be.
 | `POST /iam/credentials[?person=]` | the person themselves, from their own session; `people:manage` for a **service account** only; never a request presenting a machine token |
 | `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; a machine token revokes machine tokens only, refused before anything is written. An id naming a password, a second factor or the recovery codes also asks a proof inside `step_up_sensitive` |
 | `POST /iam/invalidate-all` | `fleet:operate` **and** `people:manage` — the deployment's grant and the directory's, both, as the record layer holds too. Ends every session **and every machine token** |
+| `GET /iam/seats` | `people:manage` or `audit:read` |
 | `GET /iam/check` | `people:manage` or `audit:read` |
 | `GET /iam/node-tokens` | `people:manage` or `audit:read` |
 | `GET /iam/audit` | `audit:read` |
@@ -1061,10 +736,9 @@ a record it cannot decode — is `503 unavailable` with the op id, and a
 floor carries the identity estate's two seconds, while one that is evicted or
 holds a record it cannot decode, a log at its byte ceiling, a record larger
 than the broker takes and a refusal the broker named carry **none** — the same
-request is refused the same however often it is sent, as on `/chart` and
-`/work`. The sign-in surface, `/auth`, follows the same rule on every write it
+request is refused the same however often it is sent, as on `/work`. The sign-in surface, `/auth`, follows the same rule on every write it
 makes. A write whose snapshot kept moving under it until the framework
-gave up is `409 stale`, as on `/chart` and `/work`: nothing about the request
+gave up is `409 stale`, as on `/work`: nothing about the request
 was wrong, and the same request read again lands.
 
 **A gesture that is several records answers its weakest.** A create with a
@@ -1104,8 +778,8 @@ name their changes are recorded under while they hold no seat: a person's is dot
 and a machine's is coloned (`ci:release`, or `token:<id>` to bind a Tier A
 token), at most 64 characters either way, checked on a create and on a rename
 alike — and so is a `kind` other
-than `person` or `machine`, since a seat belongs to the chart and the engine
-is the node. A value outside a bound is `400` too: a `reason` longer than 256
+than `person` or `machine`, since a seat belongs to the company document and
+the engine is the node. A value outside a bound is `400` too: a `reason` longer than 256
 bytes (it is rendered into the authentication trail beside the op, so it
 names which cause fired rather than narrating) or a `colleague` level other
 than `none`, `read` and `write`. An enrolment checks every one of these
@@ -1166,13 +840,13 @@ fields cannot be refused after its earlier ones have landed:
 - what the node's rows already say a later record would refuse — a `login` its
   holder's kind's grammar refuses (`400`), a `login` somebody else holds
   (`409`, naming the holder), and `grants` the caller may not confer (`403`).
-The seat moves **first**, so a seat the chart does not hold, or one somebody
-else is bound to, is refused before anything has landed. A new `login` or
+The seat moves **first**, so a seat the running company does not hold, or one
+somebody else is bound to, is refused before anything has landed. A new `login` or
 `seat` is **moved**: the new one is claimed first and the old one released
 after, so either refusal leaves the person exactly as they were. `seat: ""`
 unbinds.
 What only a record can decide — a login somebody took a moment ago, a seat
-removed from the chart since the read — is refused by that record, and the
+removed from the company since the read — is refused by that record, and the
 steps before it have landed. So a refusal met after the first record carries
 `landed`, the fields whose change was made (`seat`, `login`, `stage`), and a
 `hint`; an `unknown` met partway carries `landed` too. A
@@ -1187,8 +861,9 @@ used to have, the one it was created under — and the binding records the seat'
 it, and naming the seat a person already holds by its new handle is a no-op
 (`200`, no record) rather than a move. A seat that has been renamed can never be
 bound to a second person under its new name: both names are one seat. A seat
-the chart does not hold is `400` (a value that was typed), and one this node's
-chart could not be read to resolve is `503` with a `Retry-After`.
+the running company does not hold is `400` (a value that was typed), and on a
+node that runs no company yet, which cannot resolve one, it is `503` with a
+`Retry-After`.
 
 #### Values that are shown once
 
@@ -1213,8 +888,8 @@ document with no form.
 
 `POST /iam/invitations` takes `{email, grants, colleague, seat, reason}`.
 `seat` names a seat redeeming the invitation **binds** the person to — by any
-handle the chart answers to it by — and must be a **human** seat nobody is
-bound to: a seat the chart does not hold and an agent's seat are `400`, and one
+handle it answers to — and must be a **human** seat nobody is bound to: a
+seat the running company does not hold and an agent's seat are `400`, and one
 somebody holds is `409` naming them. The invitation records the seat's
 identity, so a rename before the redemption binds the same seat.
 
@@ -1240,6 +915,30 @@ Ciphertext this node's keyring cannot open — a key dropped from the ring befor
 keyring — renders as `sealed`: a state the right keyring ends, and never an
 outage.
 
+#### `GET /iam/seats` lists the human seats and who holds each
+
+```json
+{
+  "seats": [
+    {"handle": "founder", "name": "Founder", "holders": [
+      {"person": "018f3a9c-…", "login": "jane.doe", "stage": "active"}]},
+    {"handle": "qa-lead", "name": "QA Lead", "unit": "quality", "holders": []}
+  ]
+}
+```
+
+Every human seat of the company this node runs, in the order the company
+declares them, with everybody the directory binds to each **at any stage short
+of removal** — a suspended person still holds their seat, and so does somebody
+invited to it. `?unheld=true` keeps the seats nobody holds, which is what an
+invitation's seat picker offers. More than one holder is a duplicate a restore
+left behind, which `GET /iam/check` names.
+
+**A listing, not a report**: what is wrong with a binding is `/iam/check`'s.
+A node that runs no company yet answers `409 no_active_revision`, and one
+that cannot read the directory `503` — never a list of vacancies built from
+what it could not read.
+
 #### `GET /iam/check` walks the whole directory
 
 ```json
@@ -1247,7 +946,7 @@ outage.
   "findings": [
     {"kind": "binding_dangling", "person": "018f3a9c-…", "login": "jane.doe",
      "seat": "platform-lead",
-     "detail": "seat \"platform-lead\" is tombstoned; unbind them, or bind them to another seat"}
+     "detail": "seat \"platform-lead\" is not a seat of the company this node runs; unbind them, or bind them to another seat"}
   ],
   "position": "CREWLET_IAM_LOG@0:1840",
   "people_with_people_manage": 2,
@@ -1264,17 +963,15 @@ what to do.
 
 `binding_dangling` is decided by the **request path's own seat table**, so it
 names exactly the people a request would refuse or hold off for want of their
-seat: a seat removed, tombstoned or turned into an agent seat, or — on a node
-whose chart applier is behind — a hire this node has not applied yet, which
-clears by itself. The `detail` says which. The same evaluation raises the
+seat: a seat the company this node runs no longer holds, or holds as an agent
+seat. The `detail` says which. The same evaluation raises the
 `iam_binding_dangling` [alarm](alarms.md) once a residue has persisted past the
 60-second stall grace.
 
-`bindings_unchecked` counts the bound people whose seat this node's chart
-**could not judge** — its applier past the stall grace, or a view it could not
-read. They are neither reported as dangling nor left out silently, so a report
-answered during a chart stall does not read as a clean directory; ask a node
-whose chart is current.
+`bindings_unchecked` counts the bound people whose seat this node **could not
+judge** — it runs no company yet. They are neither reported as dangling nor
+left out silently, so a report answered before the node's first apply does not
+read as a clean directory; ask a node that runs the company.
 
 A row marked `reserved` is an enrolment whose claims landed and whose person
 record has not: it holds its address, login or seat and has no kind, no stage
@@ -1387,7 +1084,7 @@ does.
 
 A [JSON Merge Patch (RFC 7396)](https://www.rfc-editor.org/rfc/rfc7396): send only the sections you are changing, in the shape the document already has.
 
-The registered media type is `application/merge-patch+json`; plain `application/json` and an absent `Content-Type` are accepted too, since every example here sends one of those. **Any other patch format is `415`** with an `Accept-Patch` header naming what would have worked — notably `application/json-patch+json`, an [RFC 6902](https://www.rfc-editor.org/rfc/rfc6902) list of operations, which is a different format this surface does not serve. Editing one list member is what the [per-entity routes](#per-entity-read-and-write) are for — and, for a seat or a unit, the [chart's own routes](#chart--the-org-chart-auth-gated). A patch format that *can* address a list member does not replace them: a patch addresses by structure, and a seat's position in a unit's list is not its identity — so an index-addressed edit rewrites a different seat the moment anything above it moves.
+The registered media type is `application/merge-patch+json`; plain `application/json` and an absent `Content-Type` are accepted too, since every example here sends one of those. **Any other patch format is `415`** with an `Accept-Patch` header naming what would have worked — notably `application/json-patch+json`, an [RFC 6902](https://www.rfc-editor.org/rfc/rfc6902) list of operations, which is a different format this surface does not serve. Editing one list member is what the [per-entity routes](#per-entity-read-and-write) are for. A patch format that *can* address a list member does not replace them: a patch addresses by structure, and a seat's position in a unit's list is not its identity — so an index-addressed edit rewrites a different seat the moment anything above it moves.
 
 ```bash
 curl -X PATCH https://engine.example.com/config \
@@ -1397,7 +1094,7 @@ curl -X PATCH https://engine.example.com/config \
 
 - **Deep merge.** `{"providers": {"llm": {"main": {"model": "claude-opus-5"}}}}` changes that model and leaves the provider's type, its keys and every other provider alone.
 - **`null` deletes.** `{"integrations": {"gitlab": null}}` removes the section — without it a config surface can only add.
-- **Arrays replace.** RFC 7396 cannot address a list element, so `mcp_servers: [...]` in a patch replaces the whole list. Editing one server is what [`PUT /config/mcp-servers/{name}`](#per-entity-read-and-write) is for; inventing a list syntax here would give two answers to one question. A patch naming `roles` or `units` is refused outright (`400 chart_not_writable_here`): a seat or a unit is the [org chart](#chart--the-org-chart-auth-gated)'s, edited one object at a time through `PATCH /chart/seats/{handle}` and `PATCH /chart/units/{key}`. What a replacement does not remove is a field this build cannot represent: see [Fields a newer build wrote survive every write](#fields-a-newer-build-wrote-survive-every-write).
+- **Arrays replace.** RFC 7396 cannot address a list element, so `mcp_servers: [...]` in a patch replaces the whole list. Editing one server is what [`PUT /config/mcp-servers/{name}`](#per-entity-read-and-write) is for; inventing a list syntax here would give two answers to one question. So does `roles:` or `units:`, which replaces every seat or every unit at that level: edit one through `PUT /config/roles/{handle}` or `PUT /config/units/{id}`. What a replacement does not remove is a field this build cannot represent: see [Fields a newer build wrote survive every write](#fields-a-newer-build-wrote-survive-every-write).
 - **Unknown keys are refused**, not ignored. A patch is the edit least visible in a diff, so a typo that silently changes nothing is the worst outcome available, because the caller believes they changed something. That holds whatever the key is set to, `null` included: deleting a key this build does not know is refused rather than ignored, because the write [carries it back](#fields-a-newer-build-wrote-survive-every-write) and the caller would be told a deletion landed that did not.
 - **Validated as the whole document it produces.** A section that is fine alone is still refused when it leaves the company invalid.
 - Same summary rule and same `If-Match` as `PUT /config`, and a **409** when nothing is active: a patch is defined against a document, and building a company out of one section is not what this route is for.
@@ -1414,35 +1111,38 @@ Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload
   "epoch": 42,
   "warnings": [
     {
-      "kind": "admission", "ref": "",
-      "path": "providers.sandbox.setup", "segments": ["providers", "sandbox", "setup"],
-      "seat": "", "unit": "", "from": "", "to": "",
-      "message": "providers.sandbox.setup: conflicting settings: duplicate setup step name \"git-auth\": 2 steps carry it ..."
+      "kind": "dangling_reference", "ref": "manages",
+      "path": "roles[0].manages[1]", "segments": ["roles", 0, "manages", 1],
+      "seat": "ceo", "unit": "", "from": "ceo", "to": "ghost",
+      "message": "seat \"ceo\" manages \"ghost\", which is neither a seat's handle nor a unit's key, so the entry manages nobody. ..."
     }
-  ]
+  ],
+  "derived": {"seats": [...], "units": [...]}
 }
 ```
 
-- **`warnings`** is what the engine will run but a person should know about. Always a list, empty when there is nothing to say. Each has the same locators as a [problem](#refusals-carry-located-problems) (`path`, `segments`, and the `seat` handle or `unit` name it is about, empty when neither), plus `from` and `to` as display text. Two kinds:
+- **`warnings`** is what the engine will run but a person should know about. Always a list, empty when there is nothing to say. Each has the same locators as a [problem](#refusals-carry-located-problems) (`path`, `segments`, and the `seat` handle or `unit` key it is about, empty when neither), plus `from` and `to` as display text. Three kinds:
   - `dangling_reference`: a reference that resolves to nothing. `ref` says what carries it: `lead` (a unit's lead, a seat handle), `unit` (a root seat's `unit:`, a unit key), `manages` (one `manages` entry — a seat handle or a unit key — at the index it was written) or `gitlab_access_level` (a key under `integrations.gitlab.provisioning.access_levels` naming no seat).
   - `admission`: an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to) the stored company breaks, with `ref`, `from` and `to` empty. A write that keeps one is refused, so only a reload or a revert of a company stored before the rule answers with one, one beside each entity the violation names.
+  - `advisory`: something valid and worth knowing — a human seat with no contact identity, which nobody can @-mention on a chat surface; a token ceiling another ceiling makes unable to refuse a turn; a `${VAR}` nothing supplies.
+- **`derived`** is the hierarchy the engine derives from the document, in full: every seat in the engine's own order with its effective unit, primary manager, managers, reports, automatic reports and onboarding chain, and every unit with its effective type, lead and channel (and whether each was inherited). Each seat and unit carries its authored `path`. The fields are the ones [`GET /org`](#get-org) carries without paths; a client draws the hierarchy from this rather than deriving it again.
 
-  A **settings** revision reports no `dangling_reference` at all, and that is a
-  property of the split rather than a gap: every reference here — a unit's
-  lead, a seat's `manages`, a GitLab access level's key — is answered by the
-  **org chart**, which is a domain of its own. Asked of bytes that carry no
-  chart, the check would report every reference in the company as dangling, on
-  every write, for ever. `crewlet validate` still reports them over an
-  authored file, which carries both halves.
+**Every seat's handle and every unit's key is written into the stored
+document.** A seat that declares no `handle` is stored with the one its `name`
+derives, and a unit with no `id` with one minted from its name, so a later
+correction to a name never moves the identity.
 
-**There is no `derived` hierarchy in this answer.** It used to carry the whole
-org chart the document produced; a settings revision produces none, and
-answering an empty one would tell every client that the company has no seats.
-Read the hierarchy from [`GET /org`](#get-org).
+**A write that takes a human seat away while somebody holds it is refused.**
+Removing a human seat — or making it an agent's — while the identity directory
+binds a person to it, at any stage short of their removal, is
+`409 seat_held`, with the people under `held` (`person`, `login`, `stage`).
+Unbind or remove them first. A node that cannot read the directory answers
+`503 identity_unavailable` naming the `seats` rather than allowing it, and a
+write that takes no human seat away never asks.
 
 #### Dry runs
 
-`PUT /config?dry_run=true`, `PATCH /config?dry_run=true` and `PUT /config/{kind}/{id}?dry_run=true` are the same request, checked in the same order, that store, activate and publish nothing. The dashboard's organization builder sends one on every edit, and its Budgets screen one before it saves the company's own ceilings (a seat's are its [org chart](#chart--the-org-chart-auth-gated) runtime half, which has no dry run), so a check is always exactly the write a save would send. An entity write needs its check more than the whole-document writes do: its caller never sees the rest of the document, so the whole-company validation behind the splice is the only place it learns that a provider fine on its own leaves the company invalid.
+`PUT /config?dry_run=true`, `PATCH /config?dry_run=true` and `PUT /config/{kind}/{id}?dry_run=true` are the same request, checked in the same order, that store, activate and publish nothing. The dashboard's organization builder sends one on every edit, and its Budgets screen one before every ceiling it saves, so a check is always exactly the write a save would send. An entity write needs its check more than the whole-document writes do: its caller never sees the rest of the document, so the whole-company validation behind the splice is the only place it learns that a seat fine on its own leaves the company invalid, or that a ceiling it raised now sits above the company's (a warning, which only a check shows before the save).
 
 ```bash
 curl -X PATCH "https://engine.example.com/config?dry_run=true" \
@@ -1453,7 +1153,7 @@ curl -X PATCH "https://engine.example.com/config?dry_run=true" \
 A valid check answers `200`:
 
 ```json
-{"valid": true, "base_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41", "warnings": []}
+{"valid": true, "base_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41", "warnings": [], "derived": {"seats": [...], "units": [...]}}
 ```
 
 - **`dry_run` is read before anything else**, and takes exactly `true` or `false`, or nothing. Any other value (`1`, `yes`, an empty value, the parameter twice) is `400 invalid_query`: the two readings of a guess differ by whether the fleet's configuration changes.
@@ -1491,7 +1191,7 @@ A refused document (`400 validation_error`, `400 invalid_patch`, `400 invalid_bo
 | `unit` | The name of the unit the problem is about, when it is about one |
 | `line` | The 1-based line in the text that was sent, for a failure the parser found. A patch's failure found in the merged document names no line, because that text is the engine's merge rather than anything sent |
 
-A refusal carries no `derived` hierarchy, for the reason [a write's answer](#what-a-write-answers) gives: a settings document produces none, and an empty one would read as a company with no seats.
+A `validation_error` also carries the `derived` hierarchy the engine built from the refused document, as far as it got, so a client can place each problem on the chart it would have drawn.
 
 No message repeats a credential. A document read from `GET /config` carries masks, which a write restores from the stored revision before validating, so the values a refusal judges are ones the caller was never shown: a message says what rule a value breaks and never the value, a fragment of it, or its length.
 
@@ -1517,22 +1217,22 @@ Independently of any header, every write names the revision it derived from as t
 
 #### Per-entity read and write
 
-Two collections, `llm-providers` and `mcp-servers`, each readable and writable:
+Four collections, `GET` and `PUT`:
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/config/{kind}/{id}` | One entity, redacted, with an `ETag`. **The body is the entity itself**, so it goes straight back into the `PUT` |
-| `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider; with `If-None-Match: *`, add one under that key. Every entity `PUT` takes `?dry_run=true`, see [Dry runs](#dry-runs) |
+| `PUT` | `/config/roles/{handle}` | Replace one seat, wherever it lives — root-level or inside a unit, at any depth. Every entity `PUT` takes `?dry_run=true`, see [Dry runs](#dry-runs) |
+| `PUT` | `/config/units/{id}` | Replace one org unit, by its key |
+| `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider; with `If-None-Match: *`, add one under that key |
 | `PUT` | `/config/mcp-servers/{name}` | Replace one MCP server entry; with `If-None-Match: *`, add one after every server already declared |
 
-A seat and a unit are not collections of the settings: they are the [org chart](../concepts/chart-domain.md)'s, which no revision carries, so this surface lists, reads and writes neither — `/config/roles/{handle}` and `/config/units/{key}` are `404 no_route`, like any other path it does not serve. Read and write them through [`/chart/*`](#chart--the-org-chart-auth-gated): `PATCH /chart/seats/{handle}` and `PATCH /chart/units/{key}` for content, `POST /chart/batch` to hire, open, move or remove one, and `POST /chart/seats/{handle}/rename` or `POST /chart/units/{key}/rename` for its address. A fresh deployment's chart is also seeded from its company file at boot; see [the boot seed](../concepts/control-plane.md#the-boot-seed).
-
-Any other method is `405` with an `Allow` header naming `GET, PUT`. There is no `DELETE`: what names a provider or a server is mostly the org chart's, which no write to `/config` can see (the rename rule below says why), so remove one in the company file, with everything that names it, and run `crewlet config import`, which validates both halves together. A seat or a unit is removed through `/chart/*`.
+Any other method is `405` with an `Allow` header naming `GET, PUT`. There is no `DELETE` — removal is a full-document edit, for the reasons below.
 
 Why these exist beside the whole-document write: `PUT /config` makes every edit
-a company-wide one. A founder changing one provider's model sends back a
-document carrying every other provider, every MCP server and every
-integration, and a concurrent edit anywhere in it is theirs to lose. Editing one entity narrows
+a company-wide one. A founder changing one seat's goal sends back a document
+carrying every other seat, every provider and every integration, and a
+concurrent edit anywhere in it is theirs to lose. Editing one entity narrows
 what a write *claims* to have changed, which is what makes the revision summary
 mean something.
 
@@ -1540,42 +1240,46 @@ It is the same write underneath, and that matters more than the convenience:
 an entity `PUT` opens the active revision, splices the entity in, restores the
 masks the read showed against that same revision, **validates the whole
 document**, and stores a new revision. A change that would leave the company
-invalid is refused even when the entity itself is fine — a delegate template
-naming a provider that no longer exists is exactly the break a per-entity
-surface invites, because the caller never sees the rest of the document.
+invalid is refused even when the entity itself is fine — a seat naming a
+provider that no longer exists is exactly the break a per-entity surface
+invites, because the caller never sees the rest of the document. The
+[seat-holder check](#what-a-write-answers) applies here too: a unit `PUT` that
+drops a human seat somebody holds is `409 seat_held`.
 
 Four rules follow from that:
 
 - **An unknown field is refused, not dropped.** The entity body is read by the
-  whole-document parser, JSON or YAML: `modell` where `model` was meant is
+  whole-document parser, JSON or YAML: `gaol` where `goal` was meant is
   `400 invalid_body` with an `unknown_field` [problem](#refusals-carry-located-problems)
-  placed where the entity sits in the document
-  (`providers.llm.zulu.modell`), with its line in the body. A decoder that
-  ignored what it did not recognise would answer `201` and store the provider
-  with its model silently gone.
+  placed where the seat sits in the document (`roles[1].gaol`), with its line in
+  the body. A decoder that ignored what it did not recognise would answer `201`
+  and store the seat with its goal silently gone.
 - **A plain `PUT` never creates.** An id nothing carries is `404 no_such_entity`,
   not a new entity: naming one that is not there is far more often a typo than
   an intent to add one. The intent is SAID with `If-None-Match: *` — the
-  create-only write, for the two collections this route writes
-  (`mcp-servers`, `llm-providers`): a taken id is `412 entity_exists` rather
-  than a replacement, the body's identity must match the path as on any `PUT`,
-  and the whole company is validated with the new entity in it. A seat and a
-  unit are not addressed here at all (above). The id is looked up before the
+  create-only write, for the two flat collections (`mcp-servers`,
+  `llm-providers`): a taken id is `412 entity_exists` rather than a
+  replacement, the body's identity must match the path as on any `PUT`, and
+  the whole company is validated with the new entity in it. A seat and a unit
+  are `400 not_creatable` — each has a place in the chart the path cannot
+  name — and are added by replacing the unit they sit in, or through
+  `PUT /config`, which shows the whole thing. The id is looked up before the
   body is read, so a mistyped one is a `404` whatever the body holds.
 - **The id in the path is the identity, and a `PUT` never renames.** A body
   whose own identity disagrees with the path is `400 identity_mismatch`, not a
   move: nothing that points at the old identity travels with the splice. A
-  provider's key is what every seat's `llm:` chain names, and an MCP server's
-  name is the key every `mcp_env` block is keyed on and the prefix its tools
-  carry. Send the identity back unchanged and change whatever else you like.
-  Most of what names a server or a provider is the org chart's — a seat's and
-  a unit's runtime half — which no write to `/config` can see, a
-  whole-document `PUT` included: rename it in the company file, together with
-  everything that names it, and `crewlet config import` it, which validates
-  both halves as one company before it writes either.
+  seat's durable id is a UUIDv5 over (company name, handle), so a different
+  handle is a different seat; a unit's key is referenced by every `manages:`
+  entry and root seat `unit:` that names it; a provider's key is what every
+  seat's `llm:` chain names; and an MCP server's name is the key every
+  `mcp_env` block is keyed on and the prefix its tools carry. A body that
+  leaves `handle` (or a unit's `id`) out keeps the one the path names, so
+  changing a seat's display name is an ordinary edit. A seat's handle and a
+  unit's key are permanent: a different one is a removal and a creation, made
+  through `PUT /config`, where what has to move with it is visible.
 - **The same summary and `If-Match` rules apply**, and a node with no
   active revision answers `409 no_active_revision` — there is nothing to splice
-  into, and building a company out of one provider is not what this route is for.
+  into, and building a company out of one seat is not what this route is for.
 
 ### `/secrets/*` — the company's credentials (auth-gated)
 
@@ -2214,13 +1918,11 @@ A submission for one of them names it:
 {"seat": "sre-lead", "values": {"bot_token": "...", "signing_secret": "..."}}
 ```
 
-Those write through the **org chart** rather than a merge patch: a merge patch
-replaces an array wholesale, and a seat is not in the settings at all any more —
-it is its own object on the chart's log, arbitrated on its handle, so two seats'
-submissions never contend. The engine addresses the seat by its handle, which
-is its identity rather than its position, and everything the submission did
-not send stays exactly as stored. The seat's chart record is written as the
-caller, [attributed](#who-a-write-is-attributed-to) like every other write
+Those write through the **entity route** rather than a merge patch, because a
+merge patch replaces an array wholesale and patching the roster to change one
+seat would delete every other one. The engine addresses the seat by its handle,
+which is its identity rather than its position, and everything the submission
+did not send stays exactly as stored. The revision is written as the caller, [attributed](#who-a-write-is-attributed-to) like every other write
 here: a person connecting their seat through their own machine token is its
 author, of their own kind, with `pat:<id>` beside them — it used to record the
 token as the author, of the operator kind.
@@ -2352,9 +2054,9 @@ what stands in its place, and it is validated before anything else happens.
 
 - With a `code`, the engine converts the manifest, **seals the app's private
   key and webhook secret first**, then records `app_id`, `app_slug` and a
-  `${VAR}` pointing at the sealed key on the seat, through the org chart as
+  `${VAR}` pointing at the sealed key on the seat, through the entity route as
   [per-seat setup](#per-seat-setup) does. All three writes are **the
-  beginner's**: the sealed rows and the seat's chart record name whoever
+  beginner's**: the sealed rows and the revision name whoever
   began the creation, with the credential they began it through — they used
   to name `setup`, which is nobody. `installation_id` is
   written as `0`: the install is a second act. The page then links to the
@@ -2416,16 +2118,16 @@ REST carries the rest, and it is two things the socket deliberately is not:
 
 - **Writes.** A change to the company's work is `POST /operator/act/{tool}`,
   made as the principal the dashboard's session resolves to (see
-  [`/operator/act`](#operatoract--the-dashboards-write-surface)); a change to
-  the org chart is `/chart`; a person's directory row is `/iam`; the company
-  document is `PATCH /config`; a credential is `/secrets`; an integration's
+  [`/operator/act`](#operatoract--the-dashboards-write-surface)); a person's
+  directory row is `/iam`; the company document — its org chart included — is
+  `/config`; a credential is `/secrets`; an integration's
   setup is `/setup`; a backup is `POST /backup`. A write answers
   with the position it landed at, and the reads it moved are asked again on the
   socket at that position.
 - **Guarded reads the query registry does not answer** — the secret names
   (`/secrets`), where each `${VAR}` resolves from (`/config/references`), an
-  integration's setup (`/setup/integrations`), the org chart and its runtime
-  half (`/chart`, `/company/export`) and the identity directory (`/iam`). They are credential-scoped
+  integration's setup (`/setup/integrations`) and the identity directory
+  (`/iam`). They are credential-scoped
   surfaces with their own refusals, read through the dashboard's one REST
   loader rather than mirrored onto the socket.
 
@@ -2556,10 +2258,8 @@ correct them: a change that adds, renames or removes a seat produces no event a
 projection could learn from, and an overlay merge cannot express a row going
 away.
 
-**A published company is not the same thing as a config activation.** The org
-chart is a [log of its own](../concepts/chart-domain.md), so a hire, a move, a
-rename or a first schedule publishes a company with no revision anywhere in it
-— and these four pushes follow every one of them, as the last step of
+**A company is published by a node's boot and by every config apply**, and
+these four pushes follow every one of them, as the last step of
 [the convergence](../concepts/configuration.md#what-follows-a-published-company).
 Each is a WHOLE payload that replaces its predecessor: the hub drops the
 oldest queued envelope without telling the client, so a delta it dropped would
@@ -2843,7 +2543,6 @@ exists](../concepts/identity-and-access.md#how-the-first-person-exists)):
 | `applied_epoch` | The activation epoch this node last applied. |
 | `seats` | The handles of the seats this node holds, `[]` on a node holding none. |
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: how far, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. |
-| `consistency` | The [continuous report](#the-continuous-report)'s summary — `{evaluated, findings, worst, counts, unchecked}`, from the same evaluation `/chart/check` serves whole. Read `evaluated` before the count: `false` means this node holds no chart view or has applied no settings epoch, and `findings: 0` from a node that read nothing is no clean bill. It does **not** move `status`. |
 | `identity` | Whether this company has its **first person**: `ready` once anybody is enrolled, `unclaimed` while nobody is — a fresh install waiting for [its first invitation](../concepts/identity-and-access.md#how-the-first-person-exists), issued under a Tier A token — and `unknown` where this node cannot read its identity estate **or has not applied all of it** — a node that has just joined a fleet holds empty rows until its applier catches up, so "nobody" is proved against the identity log's end — which is never reported as `unclaimed`, because a dashboard told nobody is in would tell an operator to invite a first person into a company that may have started. Every node answers it, one with no company included: the identity estate runs from boot, so such a node answers for the fleet's. `/health` is the one surface an unclaimed company can reach — it is never guarded, and before the first person there is no credential to present anywhere else — which is why this is here. It does **not** move `status`. |
 | `nodes` | How many nodes hold a presence lease — the fleet this node's fan-outs (search, fleet history) divide their work by. **Absent** when the presence read failed or did not finish inside the probe's coordination budget (an eighth of the 15-second reconcile interval, under two seconds) (it runs beside the posture read, so a wedged broker slows `/health` by that budget rather than hanging it), and on a node older than the field; never `0`, since the node answering is itself one. A screen says "node count unavailable" for an absence rather than guessing. |
 | `alarms` | `{count, worst, worst_domain}`: how many of this node's [alarms](alarms.md) are firing, and `worst`, the one that has been firing **longest** (absent when `count` is 0) — the table asserts no severity of its own, and the condition that has gone unanswered longest is the one a health card names. `worst_domain` is the state log it fired on, for an alarm the table keeps **per log** (`log_headroom`, `log_ceiling_short`, `trim_blocked`, `deferred_old`, `floor_unknown`), and absent for one about the node as a whole: two logs' `trim_blocked` are two conditions with two remedies, and a card naming the kind alone could not say which log to look at. From the **same** evaluation the `crewlet.alarm.active` gauge and the `alarm_raised` / `alarm_cleared` log lines come from, which runs every fifteen seconds on every node. **Absent** before that evaluation first runs: nothing has looked yet, and `{count: 0}` would read as healthy. |
@@ -3109,8 +2808,7 @@ Two refusals, both **400** rather than a smaller answer:
 enforces them: for the company and for every seat whose `token_budget` caps a
 window, **one entry per capped calendar window** — the day, the ISO week and the
 month on the company's clock — with that window's spend, its ceiling (the
-company's from the active settings revision, a seat's from its runtime half on
-the org chart), the gate's refusal stamp and the engine's judgement of it. It
+company's and a seat's, from the active revision), the gate's refusal stamp and the engine's judgement of it. It
 is the only figure that can honestly be divided into a configured ceiling,
 because both cover the same span. The dashboard's other token figures are spend
 rollups over a window of time the reader chose; dividing one of those into a
@@ -3228,12 +2926,12 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 > registry answers is asked and answered here too. What the socket does not
 > carry is REST: every write — through
 > [`/operator/act`](#operatoract--the-dashboards-write-surface) as the
-> principal the session resolves to, through `/chart` and `/iam`, or through
+> principal the session resolves to, through `/iam`, or through
 > `/config`, `/secrets`, `/setup` and `/backup`, because a write has to be
 > able to say whether it happened and a frame into a dropped socket has no
 > answer — and the few guarded reads no query answers (`GET /secrets`,
-> `GET /config/references`, `GET /setup/integrations` and its passes, the
-> org chart's runtime half), which the dashboard reads through one loader
+> `GET /config/references`, `GET /setup/integrations` and its passes), which
+> the dashboard reads through one loader
 > that re-reads when the session changes and honours a `Retry-After`. The
 > dashboard survives losing the socket by polling `/stream/snapshot` every
 > five seconds — or when a `503` it answers says, and not at all after one
@@ -3270,11 +2968,11 @@ Server → client kinds:
 | `snapshot` | First envelope after the upgrade succeeds, and again on reconnect. | Same payload as `GET /stream/snapshot` — agents carry their in-flight `live_call`, so a reconnect re-renders the live row. |
 | `event`    | Every engine event published to `crewlet.events.>`. | `{ id, type, timestamp, source, actor, summary, category, trace_id, span_id, parent_span_id, topic, agent_id?, channel_id?, payload }` — `agent_id` the seat the event concerns and `channel_id` the agent-to-agent channel it belongs to, each read by the rule that fills the store's own column, so the event log narrows its live rows to a seat or a channel exactly as the store narrows its pages — the same shape as a `/events` row, plus the full event `payload` (from which the snapshot feed's `failed` flag is derived).  `agent_phase_completed` events carry the system prompt, response, and tool calls, so LLM invocations stream live; `agent_turn_progress` events (per tool-call round, tagged with `turn_id` / `phase` / `iteration`) stream the in-flight call before its phase record exists. |
 | `agents`   | After an event moved one or more agents — or a read moved their state: a run record reconcile, or the seat-lease read the five-second tick makes. | The changed agents' overlays, each with its `agent_id`, its `role`, its `activity` and its `stopped_reason` — the *result* of applying the change, so a client merges them rather than running its own state machine over the raw stream. A client merges an overlay onto the roster row carrying the same `agent_id` and DROPS one for a seat its roster does not carry: a seat reaches the roster through the snapshot or a `seats` push, each of which carries its live overlay already merged. |
-| `seats`    | After anything changed the company — a config activation, or a write to the org chart's own log such as a hire, a move or a rename. | The COMPLETE seat list, replacing what the client holds, each row carrying its `agent_id`, its current `handle` and its `role` (name). Distinct from `agents` on purpose: that one is a per-seat merge, and a merge cannot express the deletion of a seat that has gone. |
+| `seats`    | After anything changed the company — a config activation, a hire, a move or a removal among them. | The COMPLETE seat list, replacing what the client holds, each row carrying its `agent_id`, its current `handle` and its `role` (name). Distinct from `agents` on purpose: that one is a per-seat merge, and a merge cannot express the deletion of a seat that has gone. |
 | `sandboxes`| After a detached sandbox run started, asked a question, finished or was lost, and after a reconcile against the durable run record changed the set. | The full in-flight sandbox list. |
 | `tokens`   | On the shared 5-second tick, when a phase completed since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase. | The spend rollup, same shape as `GET /tokens/breakdown`. |
 | `budget`   | After a node's token meter report is applied (every node reports at start and every 15 seconds, a company that caps nothing included). | `{ meter_id, seq, timezone, org: { windows: [...] } }`, the org-wide half: one entry per capped calendar window, each with its span, spend, ceiling, refusal stamp and `state`. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
-| `org` / `tools` / `schedules` | On the same edge as `seats`: every published company, whether an activation or a chart write. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
+| `org` / `tools` / `schedules` | On the same edge as `seats`: every published company. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The whole [health envelope](#the-health-envelope), exactly what `GET /health` answers. There is no query for it. |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
 | `error`    | Reply to a client `query` that could not be answered, or a `watch` that was not installed. | `{ id, what, error, reason?, grants?, retry_after?, refusal?, detail? }` where `error` is a code — and an `unauthorized` one adds `reason` and `grants`, exactly as the REST envelope does: the rule that decided, and the grants any one of which would have admitted the caller (an EMPTY list means no grant would, because what is missing is a relation such as leading that person). A **watch refusal** has no `id` and names `what: "watch"`: `unauthorized` when the caller may not watch that seat — with its `reason` and `grants` — `unavailable` when this node could not read the chart that decides it or the directory a login resolves through — carrying `retry_after` as a query's `unavailable` does, by the same rule and with the same `0` for a read no wait clears, but never the `refusal` or `detail` behind it, because what the directory says about a login names the seat it is bound to — and `not_found` when a login names no record, which only `fleet:operate` is ever told. For a query, the codes are: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *here* — a projection still catching up after a restart or a fresh join, a coordination store it could not reach, or a refusal by its state log — so a client does not report a fault. A query's `unavailable` frame also carries `retry_after`, the whole seconds before asking this node again, and, where a state-log refusal is behind it, `refusal` (its code — `behind`, `log_full`, `deferred`, `broker_refused`, …) and `detail` (its own words, the remedy). **A `retry_after` of `0` is the answer, never an omission**: waiting will not change it — a log at its byte ceiling, a record this node cannot decode, a barrier its broker refused — so the client asks another node or waits for an operator rather than polling this one; see [Read consistency](../guides/consistency.md#the-thirteen-refusals). Its REST twin is `503` with the same `refusal` and `detail` in the body and `Retry-After` carrying the hint, absent where the hint is zero. **A work, page or search question on a node that has not been handed a company yet** is `unavailable` with `refusal: "no_active_revision"`, the tracker's and the knowledge base's own sentence as its `detail`, and `retry_after: 15` — the reconcile poll that brings the company — and its REST twin is `503 no_active_revision` with the same detail and `Retry-After: 15`, as every other surface over those two halves answers such a node. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`, and it carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. A frame has ONE `detail` key, `unavailable`'s words and `bad_params`'s sentence alike. Every other code's text stays in the node's log, since a failure's own text can carry a path. The dashboard asks again after exactly a frame's `retry_after` — and not at all after a `0` — and keeps no wait of its own, so this hint and the `Retry-After` on a REST refusal are the only retry clock it has. |
@@ -3760,12 +3458,9 @@ lead manages the members nobody else manages, and the primary manager is the
 first seat in the engine's own order that manages a seat. The dashboard derived
 these in TypeScript and had already diverged on three of them.
 
-**From the org chart, not from the revision.** The seats and units are the
-[chart's own log](../concepts/chart-domain.md) and a stored revision carries
-neither, so this whole answer — the `roles:` and `units:` above it as well as
-`derived` — is cut from the company this node composed. Only the company's
-`name`, `mission`, `vision`, `policies`, `timezone` and `token_budget` come
-from the revision, because those are settings.
+**From the company this node runs.** The whole answer — the `roles:` and
+`units:` above it as well as `derived` — is cut from the organization of the
+epoch this node applied, so it changes exactly when a revision is applied.
 
 **A renamed seat or unit states the addresses it still answers to.** A derived
 seat carries `origin_handle` — the handle it was created under, present only
@@ -3783,9 +3478,7 @@ from an inherited one. Every list here may arrive as `null` (Go marshals a nil
 slice that way); a reader treats `null` as empty. The authored `path`,
 `unit_path` and `placed_by_ref` of each entry are omitted, because they say
 where a seat was WRITTEN — a fact about a document an ordinary reader is given
-no way to point into, and one a company composed from chart rows cannot answer
-at all, since each row states its unit directly and nothing was moved by a
-reference. Membership is each unit's `seats`.
+no way to point into. Membership is each unit's `seats`.
 
 **What it carries, and nothing else.** The company's `name`, `mission`,
 `vision`, `policies`, `timezone`, `token_budget` and `derived`; for each seat its `name`, `kind`, `handle`, `goal`,
@@ -3815,8 +3508,8 @@ meters count against.
 **A seat's `llm` and `tool_sources` are RESOLVED**, for the reason `derived`
 is: the rule is one a client would get wrong. Both are absent on a human seat,
 which runs neither, and both are published **only to a reader holding
-`config:read`**: they are computed from the seat's runtime half, which every
-other reader is never shown, so a label derived from it follows the same rule.
+`config:read`**: they are computed from the seat's configuration, which no
+other reader is shown, so a label derived from it follows the same rule.
 `timezone` and `token_budget` are published at `state:read`.
 
 - **`llm`** is every phase's provider chain exactly as a turn resolves it —
@@ -4294,7 +3987,7 @@ be, and an own-record rule comparing names would then admit a credential into
 the record of the seat that shares its spelling.
 
 **The credential is recorded again beside the author**, as `operator_id` on
-every work, page and chart record, so an audit can ask what one credential did
+every work and page record and every configuration revision, so an audit can ask what one credential did
 without reasoning about kinds. A machine token acts as its owner — it is their
 authority being exercised, so they are the author — and `operator_id` is what
 tells a write their assistant made through it from one they made themselves;
@@ -4401,7 +4094,7 @@ every surface with a request applies, so a write from the dashboard and one
 from the same person's assistant read identically in the audit and in every
 thread. The principal is resolved **once per call**, when the call is
 admitted, and the write and its audit record both name that one answer: a
-directory rebind or a chart rename landing while the call runs applies from the
+directory rebind or a revision applied while the call runs applies from the
 next call on, and never admits a call as one person and makes it as another.
 
 **The body is JSON and nothing else**: `{"args": {…}}`, declared
@@ -4960,7 +4653,7 @@ controls, and a caller without the grant is refused `403` naming it.
 | Route | What it does |
 |---|---|
 | `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
-| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log — the tracker's, the knowledge base's, the org chart's and the identity estate's; the vector log counts no node and gets none. **Refused `409 eviction_refused`**, with nothing written to any log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail`, `hint`, `op_id` and `actions` — `["wait", "force"]`: stop the node and let its lease lapse, or force it. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** — a judgement nobody could make is not one that came back clear — with a `hint` and `actions` `["retry_same_op", "force"]`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. |
+| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log — the tracker's, the knowledge base's and the identity estate's; the vector log counts no node and gets none. **Refused `409 eviction_refused`**, with nothing written to any log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail`, `hint`, `op_id` and `actions` — `["wait", "force"]`: stop the node and let its lease lapse, or force it. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** — a judgement nobody could make is not one that came back clear — with a `hint` and `actions` `["retry_same_op", "force"]`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. |
 | `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to any log, when in any one of those logs the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence — its last published position is more than one below that bound — or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`, and `actions` `["wait"]`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published` — false for a node that has never published a position and is judged as holding nothing. A position that could not be compared at all — the register or the floor unreadable, or this node behind a reanchor the fleet has made — is `500 gate_failed`, and refuses too. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
 
 `confirm` echoes the node id, and a mismatch is `400`. A node id no node could
@@ -4998,10 +4691,6 @@ log**:
      "outcome": "unknown",
      "actions": ["retry_same_op"],
      "hint": "its outcome is unknown: the same gesture under the same operation id answers from this log's own ledger if the record landed, and writes it if it did not"},
-    {"domain": "chart", "stream": "CREWLET_CHART_LOG",
-     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.chart:node-4",
-     "outcome": "applied",
-     "position": {"stream": "CREWLET_CHART_LOG", "generation": 0, "seq": 4127}},
     {"domain": "iam", "stream": "CREWLET_IAM_LOG",
      "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.iam:node-4",
      "outcome": "applied",
@@ -5624,9 +5313,8 @@ answer:
   [live token meter](#the-live-token-meter) pushes. A window no ceiling caps is
   still counted, because what a seat spent this week is a fact whether or not a
   ceiling is written for the week;
-- **`limit`** is configuration — the company's from the active settings
-  revision, a seat's from its runtime half on the
-  [org chart](../concepts/chart-domain.md) — and **absent** where no ceiling caps the window — never `0`, which would state a
+- **`limit`** is configuration — the company's and a seat's, from the active
+  revision — and **absent** where no ceiling caps the window — never `0`, which would state a
   range of nothing that is already full;
 - **`refused_at`** is when a capped window last turned a charge away, kept in
   the same counter and cleared by the scope's next admitted charge or by the
@@ -5950,10 +5638,9 @@ screen's seat roster](#per-seat-setup), which is where a seat is acted on.
 
 `seats` lists the agents carrying their **own** identity on that surface: a
 Slack app, a Mattermost bot, a per-seat project or space, wherever they sit in
-the hierarchy. A seat in a unit is a seat: the list is read from the company's
-own [org chart](../concepts/chart-domain.md), not from the stored revision's
-`roles:` — a revision carries no seats at all, and the top-level block was by
-definition only the seats belonging to no unit.
+the hierarchy. A seat in a unit is a seat: the list is read from every seat of the
+company's org chart, at any depth, not from the top-level `roles:` alone —
+which is by definition only the seats belonging to no unit.
 
 `routes` is the third of the same family: whether a **verified** delivery
 would wake a seat. The three fail independently, and an operator staring at a

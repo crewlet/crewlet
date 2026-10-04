@@ -1,7 +1,7 @@
 # Replication
 
-Crewlet's own tracker, knowledge base, org chart and identity directory are
-**replicated state machines** — six domains on one framework, the embeddings
+Crewlet's own tracker, knowledge base and identity directory are
+**replicated state machines** — five domains on one framework, the embeddings
 and each node's usage history riding it as
 [compacted domains](#two-compacted-domains-the-embeddings-and-each-nodes-day).
 One ordered stream per domain is the write-ahead log; every node applies it into
@@ -548,7 +548,7 @@ whose scope meets it is retained too. That is bounded rather than open-ended:
 the **deferral grace** is 30 minutes, past which `deferred_old` fires — naming
 the log, the position of the oldest record held and the record version it was
 written at against the one this build reads. Where that log gates seat
-admission (the tracker's, the knowledge base's and the chart's do; the identity
+admission (the tracker's and the knowledge base's do; the identity
 estate's, the vectors' and the usage log's do not) the node's seats move to a
 peer at the same moment, because both are measured from one instant — the
 position heartbeat's first sighting of the record — and the alarm says which of
@@ -620,7 +620,7 @@ and one of them is retired:
 | 9 | A task filed from a chat conversation, whose create says which surface and conversation it came from |
 | 10 | A turn's account of what it did on its task — its summary, its review, the tools it called and the phase it failed in |
 | 11 | A task change carrying a cross-project move's mark: only the root of the subtree being moved, and only until the move's walk is done |
-| 12 | A project's chart stamp — the position on the org chart's log its name, purpose and unit were derived from |
+| 12 | A project's chart stamp — the activation instant of the revision its name, purpose and unit were derived from |
 | 13 | A wake whose task key opens another task, which says so rather than handing the seat a key that opens the wrong one |
 
 So a card keeps its dragged place only through a change written at version 8 —
@@ -630,24 +630,16 @@ at any version above its own, with the task, the person or the project they are
 about, and applies every other write as it arrives.
 
 In the **knowledge base**, one kind of record does: a container's settings, at
-version 3, because they carry the chart position that derived them — a later
-position that only **re-stamps** unchanged settings included. A re-stamp is
-not exempt, because applied without its stamp it would leave that node's row
-the one unstamped copy in the fleet after its upgrade, open to the next stale
-chart it applied. So while an older node is still running, it holds back every
-container a newer node stamped — every space the org chart names, at the first
-chart a newer node applies — together with the page writes in it, until it is
-upgraded. Version 2 is retired: it carried the activation that wrote a
-container's settings, which the chart's position replaced. That is one more
-reason to finish a rolling upgrade inside the deferral grace.
-
-In the **org chart**, version 2 is a structural edge that states its verb — a
-rename's source, a seat's kind — which a version-1 build would read as a bare
-placement and apply a create that met a held address as a move of whatever held
-it. Version 3 is a seat's `manages:` list on its edge, and a marker on every
-record written under that rule: the list is left out of a content record, so a
-record stamped by what it carries alone would read to an older build as a list
-somebody cleared.
+version 3, because they carry the activation instant of the revision that
+derived them — a later activation that only **re-stamps** unchanged settings
+included. A re-stamp is not exempt, because applied without its stamp it would
+leave that node's row the one unstamped copy in the fleet after its upgrade,
+open to the next stale revision it applied. So while an older node is still
+running, it holds back every container a newer node stamped — every space the
+org chart names, at the first revision a newer node applies — together with the
+page writes in it, until it is upgraded. Version 2 is retired and not reused:
+two builds once read it as two different fields. That is one more reason to
+finish a rolling upgrade inside the deferral grace.
 
 In the **identity estate**, version 2 is the retention sweep that collects what
 was spent as well as what lapsed, version 3 a record naming the credential its
@@ -764,16 +756,13 @@ The decision is [ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020
    free space bounds their sum, not each of them.
 2. **Each log's byte ceiling**: `stream.tracker_log_max_bytes`,
    `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
-   `stream.chart_log_max_bytes`, `stream.iam_log_max_bytes` and
-   `stream.usage_log_max_bytes`, sized together as
-   [below](#how-the-byte-ceilings-are-sized). The last three are **not derived
-   from the disk** — an org chart grows with hirings, the identity estate with
-   sign-ins and the usage log with the node-days it holds, and a volume has an
-   opinion about none of them — so each takes a flat default and its own
-   floor. A full log **refuses** appends rather than shedding old records; see
+   `stream.iam_log_max_bytes` and `stream.usage_log_max_bytes`, sized together
+   as [below](#how-the-byte-ceilings-are-sized). The last two are **not
+   derived from the disk** — the identity estate grows with sign-ins and the
+   usage log with the node-days it holds, and a volume has an opinion about
+   neither — so each takes a flat default and its own floor. A full log **refuses** appends rather than shedding old records; see
    [Retention](retention.md). On every log that claims identity — the
-   tracker's, the knowledge base's, the org chart's and the identity
-   estate's — ordinary writes are refused short of it, the top being
+   tracker's, the knowledge base's and the identity estate's — ordinary writes are refused short of it, the top being
    [kept for gate records](retention.md#the-gate-reserve) so that an eviction
    can still unpin a full log.
 3. **The trim floor** — how far back the log can be replayed from, which is
@@ -796,8 +785,8 @@ A byte ceiling is a **reservation**. The broker grants it in full when it
 creates the stream, before a single record is written, and refuses to create a
 stream whose ceiling it could not honour. So the state logs compete for one
 number, and a node sizes them together, once, when it creates their streams —
-**all six** this build registers (the tracker's, the vectors', the knowledge
-base's, the org chart's, the identity estate's and the usage log). Every node
+**all five** this build registers (the tracker's, the vectors', the knowledge
+base's, the identity estate's and the usage log). Every node
 runs every one whatever its roles, and a stream keeps whatever ceiling the
 node that created it gave it, so whichever node creates them first sets the
 ceilings the fleet keeps:
@@ -806,8 +795,8 @@ ceilings the fleet keeps:
 |---|---|
 | **What the broker can grant** | Read from the broker itself. An embedded broker's limit is `stream.store_max_bytes` where you set one, and otherwise three quarters of the free space on the volume holding `stream.store_dir`, counting what its own streams already hold there; an external one's is the NATS account's JetStream limit. What counts against it is the ceilings already granted, not the bytes stored. |
 | **The logs' share** | Half of that, with the ceilings the logs' own streams already hold counted as theirs, so a restart divides the same half the first boot did. Where the broker states no limit, or it cannot be read, the share is half of the stream volume's free space instead, and nothing is added to it: a reservation never spends free space, so that figure already contains what the logs hold. The other half is for everything that reserves nothing: every mailbox, every coordination bucket and the snapshot a joining node reads. |
-| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB), the knowledge base's log for a quarter of that (1..16 GiB), and the vector changelog for 16 GiB capped by the same quarter. The org chart's log asks a flat 64 MiB (`stream.chart_log_max_bytes`, 64 MiB..16 GiB), the identity estate's a flat 512 MiB (`stream.iam_log_max_bytes`, 64 MiB..16 GiB) and the usage log a flat 1 GiB (`stream.usage_log_max_bytes`, 64 MiB..64 GiB): none of them grows with anything the volume has a say in — a chart is hundreds of objects, the identity log grows with headcount and sign-ins, and the usage log is a count of node-days, which more disk does not grow. |
-| **The fit** | A log whose stream already exists takes the ceiling it **holds** off the logs' half first, whatever its field says now. A ceiling you set for a log being created comes off next, and is never scaled. The unset ones being created share what is left in proportion to what each asked for, none goes below 1 GiB, and none is created above what it would get if no log existed yet — the figure every later boot reports its stream against. The 1 GiB is a floor on scaling DOWN, never a raise: an unset ask already below it, the org chart's and the identity log's, is held at exactly what it asked for, whatever the pool. |
+| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB), the knowledge base's log for a quarter of that (1..16 GiB), and the vector changelog for 16 GiB capped by the same quarter. The identity estate's log asks a flat 512 MiB (`stream.iam_log_max_bytes`, 64 MiB..16 GiB) and the usage log a flat 1 GiB (`stream.usage_log_max_bytes`, 64 MiB..64 GiB): neither grows with anything the volume has a say in — the identity log grows with headcount and sign-ins, and the usage log is a count of node-days, which more disk does not grow. |
+| **The fit** | A log whose stream already exists takes the ceiling it **holds** off the logs' half first, whatever its field says now. A ceiling you set for a log being created comes off next, and is never scaled. The unset ones being created share what is left in proportion to what each asked for, none goes below 1 GiB, and none is created above what it would get if no log existed yet — the figure every later boot reports its stream against. The 1 GiB is a floor on scaling DOWN, never a raise: an unset ask already below it, the identity log's, is held at exactly what it asked for, whatever the pool. |
 
 **A stream that already exists keeps its ceiling.** Sizing decides what a
 missing stream is created with and nothing else: a booting node never rewrites
@@ -860,23 +849,21 @@ and no Tier A setting changes them: …
 The sentence about the Tier A field says which of three things the ceiling
 was: **set** (`… sets the ceiling`, with what would have fitted), **derived**
 from the volume and scaled, as above, or the log's own **fixed default** —
-the org chart's, the identity log's and the usage log's, which do not follow
-the volume at all.
+the identity log's and the usage log's, which do not follow the volume at all.
 
 The remedies are the ones it lists. Give the broker more room: raise
 `stream.store_max_bytes` where you set one, or, where you did not, free space
-on that volume (a first boot needs at least 6.08 GiB free there, three
-quarters of which — 4.56 GiB — is what the six logs reserve at their smallest:
-the three 1 GiB scaling floors, the usage log's 1 GiB default, the org chart's
-64 MiB and the identity log's 512 MiB), which the broker measures again when
+on that volume (a first boot needs at least 6 GiB free there, three
+quarters of which — 4.5 GiB — is what the five logs reserve at their smallest:
+the three 1 GiB scaling floors, the usage log's 1 GiB default and the identity
+log's 512 MiB), which the broker measures again when
 the node next starts. Or, when the refused log's ceiling is above the smallest
 value its own field accepts, set that field to a smaller ceiling — the refusal
 offers it only then, and names that floor: 1 GiB for the tracker's, the
 vectors' and the knowledge base's fields, 64 MiB for
-`stream.chart_log_max_bytes`, `stream.iam_log_max_bytes` and
-`stream.usage_log_max_bytes`. So a refused identity log at its 512 MiB default,
-or a refused usage log at its 1 GiB, is offered a smaller one, and a refused
-org chart log at its 64 MiB default, already its field's floor, is not.
+`stream.iam_log_max_bytes` and `stream.usage_log_max_bytes`. So a refused
+identity log at its 512 MiB default, or a refused usage log at its 1 GiB, is
+offered a smaller one.
 
 A log that already exists cannot be shrunk to make room from here. Its ceiling
 changes only through `crewlet retention set-capacity`, which runs on a node

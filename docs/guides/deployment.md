@@ -74,8 +74,8 @@ with — but the operator then has to finish it to see what it did.
 
 ### The room the stream's volume needs
 
-The engine's own tracker, knowledge base, vector index, org chart, identity
-estate and usage history each keep an ordered log on the stream — six logs —
+The engine's own tracker, knowledge base, vector index, identity estate and
+usage history each keep an ordered log on the stream — five logs —
 and each log's byte ceiling is **reserved** on the volume holding
 `stream.store_dir` when its stream is created: the embedded broker grants a
 ceiling in full, up front, or refuses to create the stream at all. Its limit
@@ -86,18 +86,17 @@ from the disk that would be scaled below 1 GiB is **held at 1 GiB** instead,
 and a log whose own default is smaller than that is held at what it asked
 for — so:
 
-- **A first boot needs at least 6.08 GiB free on that volume.** Three
-  quarters of it — 4.56 GiB — is what the six logs reserve at their smallest:
+- **A first boot needs at least 6 GiB free on that volume.** Three
+  quarters of it — 4.5 GiB — is what the five logs reserve at their smallest:
   1 GiB each for the mutation log, the vector changelog and the knowledge
-  base's log, the usage log's flat 1 GiB default, 64 MiB for the org chart's
-  and the identity estate's flat 512 MiB default. Below that the node refuses
+  base's log, the usage log's flat 1 GiB default, and the identity estate's
+  flat 512 MiB default. Below that the node refuses
   to boot with an error naming the log it could not reserve, the bytes it
   needed, the bytes the broker had left, and the Tier A field that sets the
   ceiling.
-- **A floor is per log, not universal.** The org chart's, the identity
-  estate's and the usage log's fields go down to 64 MiB, far below the
-  others, because a chart is a few hundred records a year, the identity log
-  grows with headcount and sign-ins, and the usage log is a census of
+- **A floor is per log, not universal.** The identity estate's and the
+  usage log's fields go down to 64 MiB, far below the others, because the
+  identity log grows with headcount and sign-ins, and the usage log is a census of
   node-days — about 12 MB for a ten-seat node's 181 days — and a ceiling is
   granted in full at create time, so a log at a disk-sized floor costs free
   space a node needs before it can start, for a log that will not fill it.
@@ -106,14 +105,14 @@ for — so:
   quarter of that, and the vector changelog for 16 GiB capped by the same
   quarter. They are scaled down together whenever they ask for more than that
   half, which on a first boot is every volume with less than 256 GiB free;
-  from there up each log gets what it asked for. The org chart's default is a
-  flat 64 MiB, the identity estate's a flat 512 MiB and the usage log's a flat
-  1 GiB — its size is a count of node-days rather than a rate, so more disk
-  buys it nothing — and none of the three is derived from the disk at all.
+  from there up each log gets what it asked for. The identity estate's
+  default is a flat 512 MiB and the usage log's a flat 1 GiB — its size is a
+  count of node-days rather than a rate, so more disk buys it nothing — and
+  neither is derived from the disk at all.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
-  `stream.chart_log_max_bytes`, `stream.iam_log_max_bytes` or
+  `stream.iam_log_max_bytes` or
   `stream.usage_log_max_bytes` later, changes nothing about streams that
   already exist; `crewlet retention set-capacity` is what changes a running
   log's ceiling. A log derived from the disk that is created later — one a new
@@ -308,20 +307,19 @@ for its roles, an ingress-only one included: every node runs the engine, and
 an in-memory member creates every stream it provisions in memory.
 
 **And the company's own records live there, whatever backends it names.**
-Every company keeps its **org chart** — its units and its seats — on a state
-log, and a domain's log is a stream. With `tracker.backend: native` or
-`knowledge.backend: native` (the defaults), its work items and its pages are
-there too. An unset `store_dir` means the first restart recreates those logs
+Every node keeps the company's **identity estate** — its people, their
+credentials and sessions — on a state log, and a domain's log is a stream. With
+`tracker.backend: native` or `knowledge.backend: native` (the defaults), its
+work items and its pages are there too. An unset `store_dir` means the first restart recreates those logs
 empty, and a node whose rows are ahead of a log that restarted from nothing
 stops serving for good. So the engine refuses to boot without one, and
-`crewlet validate` refuses it when given both documents, naming
-`stream.store_dir`.
+`crewlet validate` refuses it, naming `stream.store_dir`.
 
 > This rule used to ask which backends a company ran, and a company on Jira
-> and Confluence was allowed an in-memory member. That company still has an
-> org chart — so it started a chart log in memory and lost the whole chart on
-> its first restart, with nothing having warned. There is no company the rule
-> can correctly let past.
+> and Confluence was allowed an in-memory member. That company still has
+> people who sign in — so it kept its identity log in memory and lost every
+> person and session on its first restart, with nothing having warned. There
+> is no company the rule can correctly let past.
 
 **Divide `store_max_bytes` when several engines share a filesystem.** Every
 stream ceiling on the embedded broker is a *reservation*: the broker refuses to
@@ -504,10 +502,9 @@ node — the donor [dials again](retention.md) by itself.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the six engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the six state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the five state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
-`CREWLET_PAGES_LOG`, `CREWLET_CHART_LOG`, `CREWLET_IAM_LOG`,
-`CREWLET_USAGE_LOG` — every one on every node, including a log its roles do
+`CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG` — every one on every node, including a log its roles do
 not apply), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
 call, measured at 1.7 ms), and the nineteen `crewlet_*` KV buckets:
@@ -829,13 +826,11 @@ observable step rather than a side effect of startup.
 
 Both take the **Tier A** bootstrap file (`crewlet.yaml`) — the founder-owned company YAML is seeded separately (`crewlet config import`, or `crewlet run -company`).
 
-`crewlet config import` writes **both halves** of that file. Against a running
-node it sends the settings to `PUT /config` and the org chart to the chart's
-own routes, and every node converges with no restart. Against a **stopped**
-one it writes the settings to this node's store and **stages** the chart for
-the node's next start, because publishing a chart record needs a broker no
-command-line process opens. Either way the file is one gesture; only the
-timing differs.
+`crewlet config import` writes that file as a new active revision. Against a
+running node it goes through `PUT /config`, and every node converges with no
+restart. Against a **stopped** one it writes this node's store, and the node
+publishes the activation when it next starts. Either way the file is one
+gesture; only the timing differs.
 
 - **`-roles seats`** runs the agents — claims seat leases, boots the instances, processes their turns
 - **`-roles ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
@@ -1654,10 +1649,8 @@ Set budgets at two levels, each a mapping of ceilings per calendar window —
 
 - **Org-wide** — the company's `token_budget`, a setting changed by a
   revision through `/config`
-- **Per seat** — an agent seat's `token_budget`, part of its
-  [org chart](../concepts/chart-domain.md) runtime and changed by a
-  `PATCH /chart/seats/{handle}` runtime write (`config:write`); a role's
-  `token_budget` in the company file is where `crewlet config import` puts it
+- **Per seat** — an agent seat's `token_budget`, changed with the rest of the
+  seat through `/config` — `PUT /config/roles/{handle}` for one seat
 
 ```yaml
 token_budget: {day: 3000000, month: 40000000}
@@ -1691,8 +1684,7 @@ its own or the company's — is refusing. If one is, the seat is **parked**:
 its inbox is held, the delivery goes back to the broker for one of its
 deliveries, and it is delivered again when the window turns over (the one
 that ends last, where several refuse) or at once when a change to the
-ceilings applies on that node — a settings revision for the company's, the
-chart record of a runtime write for a seat's. The node logs
+ceilings applies on that node — the revision that changed them. The node logs
 `seat_budget_parked` with the window and when it resets, and
 `seat_budget_park_released` when the mail flows again. A
 turn refused part-way through is parked the same way, unless it had already

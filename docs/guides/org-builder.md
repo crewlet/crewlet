@@ -2,16 +2,11 @@
 
 The dashboard's Agents workspace has an **Edit org** section
 (`#/agents/edit`, the button on the org chart) for editing the organization of
-a running company, and for creating the company on an engine that has none. A
-company is two things the engine keeps apart, and the builder edits both:
-
-- the **settings** — the charter, providers, integrations and the rest of the
-  company document — which `GET /config` serves and `PATCH /config` writes as
-  a stored, activated, audited revision;
-- the **org chart** — its units, its seats, who leads and who manages whom —
-  which `GET /chart` serves and the chart's own routes write, one record at a
-  time, each with its own author and history
-  ([The org chart domain](../concepts/chart-domain.md)).
+a running company, and for creating the company on an engine that has none.
+The org chart — its units, its seats, who leads and who manages whom — is part
+of the company document, beside the charter, providers and integrations, which
+`GET /config` serves and `PUT` / `PATCH /config` write as a stored, activated,
+audited revision ([Organization Model](../concepts/organization-model.md)).
 
 Every change is made to a draft in the browser. Nothing reaches the engine
 until you review the draft and save it, and the builder keeps every field it
@@ -122,8 +117,8 @@ contact identity, so human leads are created without one, and the only identity
 written is the one you type for your own seat — which is optional too: leave it
 empty if you will work only through the dashboard. A human seat with no contact
 identity is legitimate, but no agent can @-mention that person, so the review
-names each one and the [chart check](../reference/api-endpoints.md#the-continuous-report)
-keeps reporting it as `seat_unreachable` until an identity is added.
+names each one and the configuration keeps warning about it at the seat's
+`contact` until an identity is added.
 
 Everything the template writes is one change: undo takes you back to the form.
 From there the organization is edited like any other, and **Review and save**
@@ -444,9 +439,9 @@ half, which `crewlet config import` writes from a company file.
 | Goal, backstory, responsibilities | |
 | Behavioral guidelines | Agent seats. |
 | Manages | Seats and units. Seats this seat manages automatically as a unit's lead are listed apart, because the engine adds them whatever the list says. |
-| Contact identities, availability | Human seats; runtime half. Contact identities are optional: a seat with none is reached through the dashboard only, and the chart check reports it as `seat_unreachable`. |
+| Contact identities, availability | Human seats; runtime half. Contact identities are optional: a seat with none is reached through the dashboard only, and the configuration warns about it at the seat's `contact`. |
 | Model | Agent seats; runtime half. An ordered chain of the company's `providers.llm` keys, tried in the order shown, which you reorder in place. A seat with no model runs on the provider keyed `default`, else the first provider in the company's order. |
-| Token ceilings: daily, weekly, monthly | Agent seats; runtime half. One box per calendar window on the company's clock, each optional: an empty box is no ceiling on that window, and a 0 is refused rather than read as unlimited. A turn runs only while every capped window has room, and the company's own `token_budget` applies on top; a seat ceiling the company's makes unable to refuse anything is reported by the [chart check](../reference/api-endpoints.md#the-continuous-report) as `budget_idle`. |
+| Token ceilings: daily, weekly, monthly | Agent seats; runtime half. One box per calendar window on the company's clock, each optional: an empty box is no ceiling on that window, and a 0 is refused rather than read as unlimited. A turn runs only while every capped window has room, and the company's own `token_budget` applies on top; a seat ceiling the company's makes unable to refuse anything is reported as a warning on the write's answer. |
 | Schedules: enabled | Agent seats; runtime half. |
 | Integrations | Agent seats; see below. |
 | Owns: project, knowledge space | Where unrouted work for the seat goes and where it files its own. Not a permission. Changing either takes `config:write`. |
@@ -743,16 +738,12 @@ builder are two writers of one company, and how the file is applied decides
 which one wins
 ([Configuration](../concepts/configuration.md)):
 
-- `crewlet run -company company.yaml` fills an empty store and seeds an empty
-  org chart. Once a company exists the file is ignored, so a restart never
-  undoes a builder save.
-- `crewlet run -import-company company.yaml` makes the file's **settings** the
-  active revision again at every start. It does not touch a chart that has
-  been written, so a restart with it replaces the settings the builder saved
-  and keeps its chart changes.
-- `crewlet config import company.yaml` through a running node writes **both**
-  halves: the settings as a new revision, and the file's whole org chart over
-  the one the builder saved.
+- `crewlet run -company company.yaml` fills an empty store. Once a company
+  exists the file is ignored, so a restart never undoes a builder save.
+- `crewlet run -import-company company.yaml` makes the file the active
+  revision again at every start, replacing what the builder saved.
+- `crewlet config import company.yaml` through a running node writes the file
+  as a new revision over the one the builder saved.
 
 So after a save, **Copy settings as YAML** and **Copy the chart** and commit
 them to the file, and the next import writes back what the builder wrote

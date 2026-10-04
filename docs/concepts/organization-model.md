@@ -2,140 +2,6 @@
 
 The organization model (`internal/org`) is the foundational data structure representing the company hierarchy. It determines how agents communicate, what knowledge they can access, who they report to, and how tasks flow.
 
-**This page is about what you author and what the engine derives from it.** Where
-the authored chart is *stored* — as an ordered log with one SQL copy per node,
-rather than as a nested object inside the company document — is
-[The Org Chart Domain](chart-domain.md). The division is the same one that runs
-through this whole page: those tables hold what somebody wrote, and every
-derivation below is computed from them on the way out rather than written down
-beside them. A derived value written down is a second answer that goes stale the
-moment an ancestor moves, with nothing to recompute it — because the change that
-moved the ancestor never named the row that went stale.
-
-Three things on this page are derived and therefore stored nowhere:
-
-- **A unit's effective lead**, which is a walk up the tree from the unit that
-  declares none. Only the *authored* lead is a row.
-- **What a `manages:` entry expands to**, when it names a unit: every seat in
-  that unit's subtree, as the subtree stands when the entry is read.
-- **Who manages a seat**, which is the other end of an edge only one end of
-  which is authored.
-
-### The view is a function of rows and a position
-
-The tree every turn reads is **derived**, and where it is derived *from* is
-what the chart's split changed. It used to be a document: parse the YAML,
-normalise the tree in place, publish the pointer. It is now a pure function
-over the chart's rows — rows in, an immutable value out, carrying **the
-position those rows were read at**.
-
-Two properties come with that, and neither was available before:
-
-- **Two nodes at one position produce the identical view.** That is the whole
-  claim the replicated estate rests on, and a function can be tested for it
-  where a mutation could only be inspected.
-- **A view can say what it is true of.** A company derived from a document is
-  true of that document; one derived from a log is true as of a position, and
-  a screen that renders a chart can now say which.
-
-**It produces the same tree the document path does** — deliberately, and it is
-checked: the row derivation is compared against the document derivation over
-every example and fixture this repository ships, on the derivations that
-matter (the tree's shape, each unit's effective lead and channel, each seat's
-placement, every expanded `manages` list). The document side is normalised
-**twice**, because normalising in place is idempotent only by discipline and a
-comparison against one pass would certify less than the contract.
-
-**A cycle in the rows is broken and reported.** The write path refuses one —
-the batch validator replays every move and walks up from the new parent — but
-rows can predate that rule or be repaired by hand, and a build that recursed
-into one would not produce a wrong answer, it would not terminate. So a cyclic
-unit is re-parented to the root, ordered by key so every node breaks it the
-same way, and the units that moved are named.
-
-### What a structural change is, and what it refuses
-
-A change to the *shape* of the company — a hire, a move, a promotion, a team
-dissolved — is a **batch**: an ordered list of operations that lands as one
-arbitrated record, so exactly one batch at a time can change the chart. It is
-refused **whole**, naming the **first** operation that failed and the rule it
-broke, because a batch that applied what it could and skipped the rest would
-produce half a reorganisation with no record of which half — and which half
-would depend on the order you happened to write them in.
-
-The operations are `create_unit`, `create_seat`, `move`, `set_lead`,
-`set_kind`, `set_manages`, `rename` and `remove`. Each takes its object and only
-the fields its kind reads — `create_unit` a `parent` and a `lead` (so "add the
-platform team, led by the SRE" is one operation), `create_seat` a `parent` and a
-`seat_kind`, `move` a `parent`, `set_lead` a `lead`, `set_kind` a `seat_kind`,
-`set_manages` a seat's whole `manages` list, `rename` a `to`, and `remove`
-nothing — and one carrying a field its kind does not take is refused rather than
-having the field dropped, because a batch that dropped it would answer as though
-it asked for less than it said. An empty `parent` is the org root, an empty
-`lead` clears the unit's own lead and an empty `manages` clears the seat's list,
-so none of them counts as a field supplied. A seat's `manages` list is
-structure rather than part of its content because a rename moves the entries
-naming its object, and only a write ordered against the rename — on the chart's
-one structural subject — can never put the renamed entry back.
-
-Each operation is checked against the state the ones **before it** produced,
-which is the only reading under which the ordinary ways of editing a chart
-work:
-
-- **A parent an earlier operation created is a parent.** Building a department,
-  then a team inside it, then a seat inside that is one gesture and must be one
-  batch.
-- **A unit emptied by one operation can be removed by the next.** "Move
-  everybody out, then dissolve the team" is likewise one gesture.
-- **A renamed object is named by its new address afterwards.** Its members
-  follow it, so "rename the team, then hire into it" names the new key — and an
-  address a rename left may be taken by a create later in the same batch.
-
-And it is the only reading under which the dangerous case is caught:
-
-- **A cycle the batch's own moves close is refused.** Moving Engineering under
-  Platform is fine while Platform is at the root; moving Platform under
-  Engineering is fine while Engineering is at the root. Together they put each
-  under the other, and no per-object check would ever have shown either writer
-  the other's move. This is why the whole structure arbitrates on one subject.
-
-The rest of the rules:
-
-| Refused | Why |
-|---|---|
-| A create onto a key something already holds | Two objects on one address |
-| A create onto a key a removal **retired** | A removed address never resolves again — its history, its references and the tombstone that stops its old records applying are all keyed on it. Its own rule, because the remedy differs: a taken key needs a different name, a removed one can never be used at all |
-| A placement under a unit nothing creates | A reference to a parent that is not there, and will not be |
-| Removing a unit that still holds children or seats | An orphaned subtree is reachable from nothing and removable by nothing |
-| A reserved key — `root`, `tree` and `barrier` for any object, and `none` for a seat | Each already means something: the org root, two of this log's own subject kinds, and the word `integrations.datadog.route_to` uses for nobody |
-| A seat handle outside the handle grammar — one run of lowercase letters, digits and hyphens, at most 64 bytes | A `.` is how a person's login is spelled (`jane.doe`) and a `:` a machine's (`ci:release`, `token:ops`), and every name lookup sends a name of either shape to the identity directory rather than to the chart — so a seat called that could never be reached by name |
-| An operation carrying a field its kind does not take — a `parent` on a `set_lead`, a `lead` on a `move` | Nothing would read it, so the batch would land having done less than it said |
-| A rename onto the address the object already answers to, or of an object the same batch creates | The first moves nothing and would retire the address it keeps; the second would give the object an identity — the address it is created under — nothing ever answered to. Create it under the address you mean |
-| An object named by an address it no longer answers to | A batch names each object by its current address, so a former one is refused naming the address to use |
-| A `create_seat` or a `set_kind` with no `seat_kind`, or one this build does not serve | Whether a person or an agent holds a seat decides whether anything runs there, so it is never a default — the default would be the kind that runs |
-| Making a person's seat an agent's while somebody holds it | The same mistake a removal is refused for: whoever is bound to it would be signed in as a seat a turn loop runs. The refusal names them, and a node that cannot read the identity directory refuses naming itself |
-| A create whose object is the other kind — a `create_unit` naming a seat | The operation and its object disagree about what is being made, and applying either reading makes something the other half did not ask for |
-| More than 500 operations | One batch is one record, and a record past the broker's maximum payload is refused **permanently** with no retry that can place it. Submit several batches; each is arbitrated on its own |
-
-**Every path that gives an object an address asks the same rules** — a
-batch's create, a rename and an import alike — so a name refused here is
-refused on each of them. A content write gives none: it never creates its
-object, and one naming an object the chart does not hold is refused, naming
-this batch. An import decides nothing up front,
-so the chart holds it at the apply instead: an object it names on an address
-it may not take is **declined** there, logged as `chart_apply_declined` and
-counted on `crewlet.chart.apply.declined`, and the rest of the import lands.
-The same happens to a batch's own create whose address something took after
-the batch was decided: the batch publishes each object's edge marked with what
-it did to it, so the apply declines the create and leaves the object holding
-the address where it is, rather than moving it.
-`crewlet validate` refuses the same names in a file first.
-
-A **removal is its own record** and cannot ride with a placement, because a
-removal installs a gate and that has to be answerable without reading the
-record's contents. A batch that does both is refused, telling you to publish
-the placements first.
-
 ---
 
 ## Flexible Hierarchy
@@ -452,11 +318,11 @@ Each Role defines a unique **seat** with its own backstory, skills, personality,
 The org chart is served as a projection every signed-in reader holding `state:read` may read ([`GET /org`](../reference/api-endpoints.md#get-org), and the socket's `org` push) — like every route, never without a credential — so what it carries is decided one field at a time, and some fields by who is reading. Beside the founder's own prose and the hierarchy, it carries:
 
 - **The company's clock** (`timezone`) — the one clock every day, week and month in the engine is cut on, as the engine resolves it: an unwritten `timezone` is UTC. Every `state:read` reader gets it.
-- **Its token budget** — the ceilings the seat's runtime half writes for it (and, at the top, the company's settings write for the company) per calendar window. Every `state:read` reader gets them: a ceiling is a fact about what the seat may spend, and the meters spending against it are [`GET /budgets`](../reference/api-endpoints.md#get-budgets) at the same grant.
-- **Its model chain** (`llm`) — every phase's chain of provider keys, as a turn resolves it: the flat `llm_<phase>` fields over the `llm` mapping, the seat's `llm` for a phase naming nothing, then the company's `default` provider or its first. A key is the label `providers.llm` gives an entry; the model and credentials behind it are not shown. **Only a reader holding `config:read`** is handed it, because it is derived from the seat's runtime half, which every other reader is shown stripped.
+- **Its token budget** — the ceilings the company document writes for the seat (and, at the top, for the company) per calendar window. Every `state:read` reader gets them: a ceiling is a fact about what the seat may spend, and the meters spending against it are [`GET /budgets`](../reference/api-endpoints.md#get-budgets) at the same grant.
+- **Its model chain** (`llm`) — every phase's chain of provider keys, as a turn resolves it: the flat `llm_<phase>` fields over the `llm` mapping, the seat's `llm` for a phase naming nothing, then the company's `default` provider or its first. A key is the label `providers.llm` gives an entry; the model and credentials behind it are not shown. **Only a reader holding `config:read`** is handed it, because it is derived from the seat's configuration, which no other reader may read.
 - **Its tool sources** (`tool_sources`) — `builtin`, then `mcp:<server>` for each MCP server the seat is granted: every shared server, and a `shared: false` template only where the seat or its unit declares credentials for it under `mcp_env`. It is the same rule the engine starts the seat's own server instances by. The credentials themselves are never shown, and the list itself only to a `config:read` reader, for the model chain's reason.
 
-A human seat carries neither of the last two, because it runs no model and no tools. Everything else about a seat — its contact identities, email, `mcp_env`, sandbox, placement, integrations, workers and schedules — is read only through the org chart's own reads with the runtime half (`config:read`, credentials masked) or the operator-gated configuration.
+A human seat carries neither of the last two, because it runs no model and no tools. Everything else about a seat — its contact identities, email, `mcp_env`, sandbox, placement, integrations, workers and schedules — is read only through the configuration (`GET /config`, `GET /config/roles/{handle}`; `config:read`, credentials masked).
 
 ### Handle-Based Identity
 
@@ -478,7 +344,7 @@ roles:
     handle: sr-eng        # Override auto-derived "senior-engineer"
 ```
 
-**Renaming a seat, and removing one.** A seat is *addressed* by its handle and *identified* by an agent id derived from the company name and the handle it was **created** under, so the two gestures are nothing alike. A **rename** moves the address and nothing else: the mailbox and its backlog, the seat lease, the diary, the onboarding markers and the schedule history are keyed on the id and stay with the seat, the rest of its memory — episodes, synthesized skills, counterparty profiles and the thread history that stops it answering one thread twice — is keyed on the handle it was *created* under and stays with it too, and the handles it used to answer to go on resolving (see [Hot Reload](#hot-reload) and [Agent Runtime](agent-runtime.md)). A colleague it learned about keeps their profile through their own rename for the same reason. A **removal** is the one change nothing undoes: the chart retires the seat's address and the handle it was created under for good, so neither is ever given to another seat and no seat is ever "added back" — a new seat for the same role is a new seat, with its own id and an empty mailbox. A removed agent seat's **mailbox**, with the mail still addressed to it, is kept for 24 hours after the seat leaves the running company's agent seats and then retired; its **coding runs** are kept for the same 24 hours and ended when the mailbox is retired, each one announced as lost; and its **memory** is not deleted, though the half keyed by its id is reachable by no other seat, because that id is never derived again. The same 24 hours apply to an agent seat made a person's, which is the one departure that can be reversed: made an agent's again within them, it is the same seat and comes back to its backlog. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
+**Removing a seat, and adding one back.** Because identity is the handle, what a removed agent seat leaves behind is keyed by it too. Its **mailbox**, and the mail still addressed to it, is kept for 24 hours after the seat leaves the running company's agent seats and then retired, so a seat restored within a day finds its backlog and a seat added under the same handle later starts with an empty mailbox. Its **coding runs** are kept for the same 24 hours and ended when the mailbox is retired, each one announced as lost. Its **memory** (diary, episodes, counterparty profiles, onboarding markers) is kept, and because it is keyed by the handle or by the agent id derived from it, a seat added again under the same handle reattaches to it. A handle never changes in place: every write mints the handle a seat leaves out and stores it, so correcting a seat's `name` keeps its handle, and a document that gives a seat a different handle removes the old seat and adds a new one. The same 24 hours apply to an agent seat made a person's, which is the one departure that can be reversed: made an agent's again within them, it is the same seat and comes back to its backlog. A human seat a person is bound to cannot be removed at all until they are unbound or removed: the write is refused `409 seat_held` naming them. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
 
 ### Handles and keys are unique; names are not
 
@@ -487,11 +353,11 @@ Two identities must each name exactly one thing in the whole company:
 | Identity | Unique across | Why |
 |---|---|---|
 | Seat **handle** | Every seat, agent and human | It names the seat's inbox, its derived agent id, its external accounts — and it is what a unit's `lead` and every `manages` entry resolve. Two seats on one handle share an inbox, or an agent absorbs a person's activity. |
-| Unit **key** (`id`, minted from the name where none is declared) | Every unit in the tree, not only siblings | A `manages` entry naming a unit and a root seat's `unit:` reference search the whole tree and resolve to the first unit answering to the key, and the [org chart](chart-domain.md) gives one address to one object. Two units on one key read as distinct on every screen while each reference reaches only one of them. |
+| Unit **key** (`id`, minted from the name where none is declared) | Every unit in the tree, not only siblings | A `manages` entry naming a unit and a root seat's `unit:` reference search the whole tree and resolve to the first unit answering to the key. Two units on one key read as distinct on every screen while each reference reaches only one of them. |
 
-**A display name is neither.** Two seats may share a name on two handles, and two units a name on two keys — two teams called "Platform" in two departments, or two people both called "Alex". Nothing references a seat or a unit by its name, and the chart could not hold one unique if it tried: a name is **content**, written on its own object's subject, so two leads naming two teams alike never contend. A file is held to exactly what the chart holds, so a chart exported from a running company always imports back. What reads a name answers a shared one honestly: a colleague lookup offers every seat an exact name matches, each with its handle, and a roster row carries the handle beside the name. The [org builder](../guides/org-builder.md) suggests "Software Engineer 2" beside an existing "Software Engineer" as a convenience, not a rule.
+**A display name is neither.** Two seats may share a name on two handles, and two units a name on two keys — two teams called "Platform" in two departments, or two people both called "Alex". Nothing references a seat or a unit by its name, so a shared one is never ambiguous to the engine. What reads a name answers a shared one honestly: a colleague lookup offers every seat an exact name matches, each with its handle, and a roster row carries the handle beside the name. The [org builder](../guides/org-builder.md) suggests "Software Engineer 2" beside an existing "Software Engineer" as a convenience, not a rule.
 
-A unit key is compared the way the chart compares an address — lower-cased, with whitespace as a hyphen — so `Product Team` and `product-team` are one key. A unit that declares no `id` is keyed on one minted from its name, which is how two units named alike collide when neither declares an id. A seat or unit with no name (or a name that derives no handle) is refused by its own rule and is never reported as a duplicate of another. A refusal names every entity that shares the key, in one message per key, where each one sits, and — for a unit — the key as it wrote it:
+A unit key is compared folded — lower-cased, with whitespace as a hyphen — so `Product Team` and `product-team` are one key. A unit that declares no `id` is keyed on one minted from its name, which is how two units named alike collide when neither declares an id. A seat or unit with no name (or a name that derives no handle) is refused by its own rule and is never reported as a duplicate of another. A refusal names every entity that shares the key, in one message per key, where each one sits, and — for a unit — the key as it wrote it:
 
 ```
 duplicate unit key "platform": 2 units answer to it (unit "Platform" under unit "Engineering" (key "platform"); unit "Platform" under unit "Product" (key "platform")). ...
@@ -499,14 +365,11 @@ duplicate unit key "platform": 2 units answer to it (unit "Platform" under unit 
 
 #### Where the rules are held
 
-The **chart** holds both on every path that gives an object an address: a batch's create or rename onto a key something already answers to is refused, and an import declines the second placement (see [What a structural change is](#what-a-structural-change-is-and-what-it-refuses)). A **company file** is held to them before any of it is published, so an operator is told at the file rather than by a declined placement in a log line.
+Handle uniqueness is a **runnable** rule: a document breaking it is refused everywhere it is read. Unit-key uniqueness is an **admission rule**, as is a [`unit:` reference on a seat declared inside another unit](#a-seats-unit-reference) — rules added after companies existed — so they are enforced where a document is *submitted* and not where a stored one is merely *read*:
 
-Handle uniqueness is a **runnable** rule: a file breaking it is refused everywhere it is read. Unit-key uniqueness is an **admission rule**, as is a [`unit:` reference on a seat declared inside another unit](#a-seats-unit-reference) — rules added after companies existed — so they are enforced where a file is *submitted* and not where one is merely *read*:
-
-- **Refused where a file becomes the company.** `crewlet validate`, `crewlet config import` and a company file `crewlet run` imports (`-company` into an empty store, `-import-company` over a different company) refuse a file that breaks one, naming the file and the rule.
-- **Read where nothing is written.** A `-company` file `crewlet run` boots on without importing it (the store's own company outranks it), and the vendor commands that act on a company file without storing it (`crewlet gitlab provision`, `crewlet slack provision` and their siblings, `crewlet llm status`), read one as it stands.
-
-A stored configuration revision never carries a chart — the chart is [its own log](chart-domain.md) — so no stored revision is applied with an org rule broken.
+- **Refused on every write.** `PUT /config`, `PATCH /config`, a per-entity write, a `/setup` submission that changes the document, `crewlet config import`, `crewlet validate` and a company file `crewlet run` imports as a new revision (`-company` into an empty store, `-import-company` over a different company) all refuse a document that breaks one, naming the rule.
+- **Applied with a warning.** A stored revision that breaks one is applied by every node and a node boots on it; each logs `org_admission_warning` once per violation when it applies the epoch. The vendor commands that act on a company file without storing it (`crewlet gitlab provision`, `crewlet slack provision` and their siblings, `crewlet llm status`) read one as it stands.
+- **Always readable.** `GET /config`, the revision reads, diffs, `crewlet config show` and `crewlet config export` serve the stored document as it is, so a violation can be seen and corrected.
 
 ### A unit's key is what survives a rename
 
@@ -515,9 +378,9 @@ topic — so it is renamed for the reasons prose is renamed. Its **key** (`id`)
 is its address: what a `lead`, a `manages` entry and a root seat's `unit:`
 name it by, and what everything durable — which team a work item is filed
 into, which team's lead hears about it, which unit a project belongs to — is
-filed under. Every unit has one: a file that declares no `id` has a key minted
-from the unit's name at import, lower-cased with whitespace as a hyphen, and
-re-importing the same file mints the same keys.
+filed under. Every unit has one: a document that declares no `id` has a key
+minted from the unit's name on every write, lower-cased with whitespace as a
+hyphen, and stored, and re-importing the same file mints the same keys.
 
 ```yaml
 units:
@@ -526,19 +389,14 @@ units:
     project: ENG
 ```
 
-So **renaming a unit moves nothing** — the name is content on the unit's own
-object, and nothing is filed under it. A **key** can be renamed too, as a
-structural change to the [org chart](chart-domain.md), and then the key the
-unit was created under (`origin_key`) and the keys it used to answer to go on
-resolving to it, so a reference written before the rename still reaches the
-same team — see
-[A key is an address, not an identity](chart-domain.md).
+So **renaming a unit moves nothing** — nothing is filed under its name. Its
+**key** never changes in place: every write mints the key a unit leaves out and
+stores it, and a document that gives a unit a different key removes the old
+unit and adds a new one.
 
 **Every spelling names the team, everywhere a stored reference is resolved** —
 a `unit` on `create_work_item`, a `routing_unit`, every `unit=` filter, a
-project listing, a workload, a view strip's container: the unit's key, the key
-it was created under or one it used to answer to, compared the way the chart
-compares an address — and its **name**, in any case, where exactly one unit
+project listing, a workload, a view strip's container: the unit's key, compared folded — and its **name**, in any case, where exactly one unit
 carries it. So `unit: Engineering` reaches the team keyed `eng` when no other
 unit is called that. A name two units share names neither of them, rather than
 whichever a walk reached first, and a reference that is one unit's key and
@@ -546,17 +404,16 @@ another unit's name resolves to the unit whose **key** it is.
 
 The references *inside the org chart itself* — a unit's `lead`, a `manages`
 entry, a root seat's `unit:` — are held to the stricter form: a unit by its
-key and a seat by its handle, because they are resolved against the chart they
-are written in. One naming nothing is reported as a
+key and a seat by its handle, because they are resolved against the document
+they are written in. One naming nothing is reported as a
 [dangling reference](#dangling-references) rather than silently ignored.
 
-**Renaming a key does not rewrite the work already filed.** Work filed before
-the rename carries the key it was filed under, and nothing rewrites it — see
+**A new key does not take the old one's work.** Work carries the key it was
+filed under, and nothing rewrites it — see
 [Naming a team](../guides/work-tracker.md#naming-a-team-its-key-or-its-name).
-Nor does a rename re-onboard anybody: onboarding turns on the chain of
-**origin** identities above a seat (see [Onboarding
-convention](#onboarding-convention)), so neither a new name nor a new key moves
-a seat.
+Nor does a new name re-onboard anybody: onboarding turns on the chain of unit
+keys and handles above a seat (see [Onboarding
+convention](#onboarding-convention)), so relabelling a team moves nobody.
 
 ### Management Hierarchy
 
@@ -709,7 +566,7 @@ units:
 
 A seat declared at the **root** can name the unit it belongs to with `unit:`, **by that unit's key**, which is how the per-entity configuration API adds a seat to a unit. The engine moves such a seat into that unit before anything else is derived, so it inherits the unit's tool credentials and is auto-managed by the unit's lead exactly as a seat written inside the unit is. A seat moved this way is still reported, and edited, where it was written.
 
-The reference places a root seat and nothing else. A seat declared **inside** a unit is never moved by one, so a `unit:` on it that keys a different unit reads as a placement and does nothing: the seat stays where it is written while the document says it belongs elsewhere. A document carrying one is refused at that seat's `unit`; repeating the key of the unit the seat is declared in is accepted. This is an [admission rule](#where-the-rules-are-held): a file carrying one is refused where it would become the company, and read as it stands where nothing is written.
+The reference places a root seat and nothing else. A seat declared **inside** a unit is never moved by one, so a `unit:` on it that keys a different unit reads as a placement and does nothing: the seat stays where it is written while the document says it belongs elsewhere. A document carrying one is refused at that seat's `unit`; repeating the key of the unit the seat is declared in is accepted. This is an [admission rule](#where-the-rules-are-held): a document carrying one is refused where it is submitted, and a stored company that already carries one still runs exactly as it did.
 
 ### Dangling references
 
@@ -744,12 +601,8 @@ This mirrors how a real new hire learns.  A founder doesn't need YAML config for
 
 ## Hot Reload
 
-The organization changes without a restart, and it is **not** part of the company configuration any more: it is [the org chart's own log](chart-domain.md). A hire, a move, a rename, a schedule or a seat's credential is a **chart write** — one record, applied by every node's chart applier, with no revision and no activation anywhere in it. `PUT` and `PATCH /config` carry the settings only, and refuse a body carrying `roles:` or `units:` by name; `crewlet config import` divides a whole company file between the two. Either gesture **publishes a company** — the chart view paired with the settings epoch it runs under — and both run the same convergence, described in [What follows a published company](configuration.md#what-follows-a-published-company). The stages of a settings apply, and what a refused one leaves behind, are in [Live Propagation](configuration.md#live-propagation).
+The organization is part of the company configuration, so it changes without a restart. Activating a revision (`PUT /config`, `PATCH /config`, a per-entity write, a revert, or `crewlet config import`) moves the fleet's activation pointer, and each node's reconcile tick applies the revision it names. The stages of that apply, and what a refused one leaves behind, are in [Live Propagation](configuration.md#live-propagation).
 
-**A running organization is never edited in place.** The tree is derived from the chart's rows at a position ([above](#the-view-is-a-function-of-rows-and-a-position)) and published as a new value; turns on many goroutines read the published tree at once, so editing it would be a data race with no owner. A turn holds the company it starts under and reads only that until it ends, so an organization change reaches a seat at its next turn. The chart is held to its rules where it is **written** — a structural batch is refused whole, naming the first operation that failed — and a view that finds a cycle anyway, in rows that predate that rule or were repaired by hand, breaks and reports it rather than refusing to build, because the company still has to run.
+**A running organization is never edited in place.** The apply builds a new `Organization` from the revision, normalizes and validates it, and publishes it as part of a new epoch together with everything else built from the same document. Turns on many goroutines read the published tree at once, so editing it would be a data race with no owner. A turn pins the epoch it starts on and reads only that epoch until it ends, so an organization change reaches a seat at its next turn. A revision whose organization does not validate is refused before its epoch is published, and the node keeps serving the previous one.
 
-**Seats follow the new chart.** Once a company is published the node creates a mailbox for every seat it adds, and [seat ownership](seat-ownership.md) converges placement onto the new seat list, releasing a seat the organization no longer has.
-
-A seat is **addressed** by its handle and **identified** by its id, and the two are deliberately different. The handle is what a document references and a screen shows; the id is a UUIDv5 over the company name and the handle the seat was *created* under (`org.DeriveAgentID`, applied by `org.Organization.AgentIDFor`), recorded on the chart row as its origin. So a seat keeps its identity through a rename and through a move: its mailbox, its seat lease, its memory changelog and its schedule history are all named by the id, and the handle it used to answer to goes on resolving, so a `lead:` naming the old one still reaches them — the `manages:` entries naming the seat move to its new handle in the rename's own record — and so does everything else that resolves a name somebody wrote: an agent's `lookup_colleague`, a chat or page mention, a Datadog monitor tagged with the old handle, a tracker field naming a person. A retired handle is ranked below every live match and above every approximate one, so a seat that has taken that name since always wins it, and a name written down exactly never loses to a substring of somebody else's. Its accounts at Mattermost, GitLab, Datadog and Atlassian keep their names too — those are named after the origin handle directly, since no third-party app stores a Crewlet id. See [Renaming a seat](integration-reconcile.md#renaming-a-seat).
-
-Renaming the **company** is the one edit that does move every agent seat's id, because the company name is the other half of the derivation.
+**Seats follow the new chart.** After the swap the node creates a mailbox for every seat the revision adds, and [seat ownership](seat-ownership.md) converges placement onto the new seat list, releasing a seat the organization no longer has. Everything else derived from the organization — the party registry, the seats' tool surfaces, the tracker's projects, the knowledge containers and the scheduler — follows the same published company; see [What follows a published company](configuration.md#what-follows-a-published-company). An agent seat is identified by its handle, and its runtime id is derived from the company name and that handle (`org.DeriveAgentID`). A seat therefore keeps its identity and its memory through a change of name or a move for as long as its handle is unchanged. A seat whose handle changes is a different seat, and renaming the company gives every agent seat a new id.

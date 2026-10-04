@@ -353,37 +353,30 @@ Two properties differ from the vendor path and both are visible:
 - **An index that is still building says so.** It is a different fact from an empty company, and a seat is told which: "the knowledge base is not searchable from this node yet — ask a colleague rather than concluding nothing has been written down". A seat that read an empty result would act on it, by writing a page that already exists. The gate is this node's FIRST BUILD — one lap over every corpus — and not "nothing is waiting to be indexed": a page saved a moment ago is ordinary staleness, and reading the gate off a pending count made every empty search on a company with people in it answer "still building" instead. After the first lap a search is a true answer over slightly older rows, which is what a search always is.
 - **A CONTAINER IS A DOCUMENT**, and the engine writes one for every `space:`
   the org chart names — a unit's, a seat's own — plus the two reserved ones,
-  whenever a node publishes a company: every settings apply, every chart write
-  and every boot. It is idempotent: a container whose row already says what
-  the chart says is not written again, so the log grows with edits rather than
-  with restarts.
+  on every config apply and every boot. It is idempotent: a container whose
+  row already says what the org chart says is not written again, so the log
+  grows with edits rather than with restarts.
 
-  Its name and purpose follow the **latest chart**, whichever node applies
-  what when. The row carries the packed position on the [org chart's
-  log](chart-domain.md) its settings were derived from (`chart_position`), and
-  a node whose view of the chart is older never overwrites what a newer one
-  wrote — so a node behind on the chart log, or one restarting before it has
-  caught up, leaves the newer names alone, exactly as the chart's projects do
-  (see [the work tracker](../guides/work-tracker.md#projects-and-keys)). A
-  position orders two views without a clock, since both are points on one
-  ordered log. At the same position a row whose settings differ is written
-  back — that is a row an equal-position race left wrong — and a write that
-  names no position is refused, because a node that has applied no chart has
-  none to derive from. A later position over settings the row already holds
-  is written too — a **re-stamp** — because a row left at the older position
-  is open to any chart between the two.
-
-  Every record that carries the stamp, a change and a re-stamp alike, is
-  written at pages record version **3** (version 2 is retired: the field it
-  carried, a stamp of the configuration activation, does not exist in this
-  build). A node that cannot read version 3 holds that container back rather
-  than applying its settings without the stamp, and with it the page writes
-  nested in that container, until it is upgraded — and then applies it stamp
-  and all. A re-stamp is not exempt: applied without its stamp it would leave
-  that node's row the one unstamped copy in the fleet, open to the next stale
-  chart it applied, which would walk the container's settings back on every
-  node, because appliers apply what a writer decided. Every other record is
-  written at version 1.
+  Its name and purpose follow the configuration **activated last**, whichever
+  node applies what when. The row carries the instant its configuration was
+  activated (`chart_epoch`, in Unix milliseconds), and a configuration
+  activated earlier never overwrites one activated later — so a node
+  restarting on a revision the fleet has since replaced leaves the newer names
+  alone, exactly as the tracker's projects do (see
+  [the work tracker](../guides/work-tracker.md#projects-and-keys)). A node with
+  no activation instant — one booting on a revision it has never seen
+  activated — stamps nothing. A container's settings are the one record this
+  domain writes at record version **3** (version 2 is retired and not reused),
+  a later activation that only **re-stamps** unchanged settings included — and
+  every activation re-stamps every container the org chart names. So during a
+  rolling upgrade from a build that cannot read version 3, a node still on
+  that build holds back every chart-named container rather than applying it
+  without its stamp, and with it the page writes in that container, until it
+  is upgraded — and then applies it stamp and all. A re-stamp is not exempt:
+  applied without its stamp it would leave that node's row the one unstamped
+  copy in the fleet after its upgrade, open to the next stale activation it
+  applied, which would walk the container's settings back on every node.
+  Every other record is written at version 1.
 
   A page merely **names** its container, so a page can exist in a container
   with no document — it is reachable by address and by search, and it is

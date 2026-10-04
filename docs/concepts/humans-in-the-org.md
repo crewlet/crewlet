@@ -57,11 +57,9 @@ units:
 | `email` | no | Indexed so a notification addressed to the address resolves to the seat. **Not** a delivery channel: no agent has an email tool by default |
 | `availability` | no | Free text rendered into a lead's roster (timezone, hours, response expectations) |
 
-**`contact` and `availability` ride the seat's runtime half** in the [org
-chart](chart-domain.md), beside its model chain and its credentials, so changing
-either takes `config:write` — whoever leads the seat edits its prose, and not
-which accounts are attributed to it. `email` is one of the relations authority
-is derived from, and takes the same grant for the same reason.
+**`contact`, `availability` and `email` are part of the seat in the company
+document**, so they change through a configuration write — `PUT
+/config/roles/{handle}` for one seat — like everything else about it.
 
 **Every `contact` identity is optional.** They are how agents mention and
 reach a person, and how inbound webhooks attribute their activity by name — so
@@ -71,17 +69,17 @@ through the dashboard is on none of them: they act as their seat through the
 seat with no `contact` block is a legitimate seat rather than a mistake. It is
 not refused. What changes is that no agent can @-mention them: a lead's roster
 tells its agents to hand that person work by assigning it in the tracker, and
-the [continuous report](../reference/api-endpoints.md#the-continuous-report)
-(`GET /chart/check`, `crewlet chart check`) names the seat as a
-`seat_unreachable` **warning** — the one place the engine says so, and a
-warning because the state is legitimate. Add a contact identity when the
-person joins a surface the company runs, and the finding clears.
+the configuration names the seat in a **warning** at its `contact` — printed by
+`crewlet validate` and carried on every `/config` write's answer — the one
+place the engine says so, and a warning because the state is legitimate. Add a
+contact identity when the person joins a surface the company runs, and the
+warning clears.
 
 **And no two seats may claim one identity.** Each of these fields is an
 external account, and an account belongs to one person. A duplicate is
 rejected at validation because it does not fail loudly on its own: inbound
-routing keys a map on the identity, so the *last* seat in the chart takes it,
-while every walk of the chart answers the *first*. One of the two people
+routing keys a map on the identity, so the *last* seat in the document takes it,
+while every walk of the org chart answers the *first*. One of the two people
 silently stops receiving their own mail, with both entries looking perfectly
 ordinary — an inbound message resolves to one seat while the same person's
 wakes go to the other. The comparison ignores case and surrounding whitespace,
@@ -100,7 +98,7 @@ whitespace-stripped when the organization is normalized. A literal
 `github_login` or `gitlab_username` is lowercased there; a reference is
 stored verbatim (never case-mangled) and its *resolved* value is
 lowercased instead. A reference whose variable is unset still counts as a
-declared identity — the chart check does not report its seat unreachable —
+declared identity — the configuration does not warn that its seat is unreachable —
 but the identity is omitted wherever it is consumed until the variable
 resolves, so the raw `${VAR}` text is never emitted. The count of unresolved identities is logged on every published company
 (`parties_indexed`, field `unresolved`). A value that merely *embeds* a
@@ -244,14 +242,14 @@ holds the keys to the secret store — so a `seat:` field on an
 untrusted one; and a seat's `contact` block says how to reach a person, not
 which credential they hold.
 
-**A bound token is held to the chart exactly as a signed-in person is.** Only
-an active **machine** row under the token's login binds it — a person can
+**A bound token is held to the org chart exactly as a signed-in person is.**
+Only an active **machine** row under the token's login binds it — a person can
 never hold `token:<id>`, and a suspended machine binds nothing — and the seat
-it names is resolved through the same chart lookup a session's is. A renamed
-seat is followed to its new handle; a seat that was removed, or is an agent's,
-answers `403 seat_unavailable` naming it; a node that has not yet applied the
-chart as far as the binding, or cannot read the directory or the chart,
-answers `503 identity_unavailable` and is retried. It never quietly acts as
+it names is resolved against the company this node runs, as a session's is. A
+seat the running company does not hold as a human seat — removed, or made an
+agent's — answers `403 seat_unavailable` naming it; a node that runs no company
+yet, or cannot read the directory, answers `503 identity_unavailable` and is
+retried. It never quietly acts as
 the bare credential instead, because one credential writing under a seat on
 one node and under its own name on the next is one actor appearing as two in
 the audit trail. An **unbound** token is the exception that keeps break-glass
@@ -398,7 +396,7 @@ sequenceDiagram
   says, which is read through `work_inbox` as before.
 - **A watch is decided like the inbox itself.** You may watch your own seat;
   a lead may watch a seat they lead; the admin grant may watch any. A watch
-  this node cannot decide because its chart view is behind is not installed,
+  this node cannot decide — it runs no company yet — is not installed,
   and the dashboard asks again when the refusal's `retry_after` says it may
   have changed — never, on a timer, when that is `0` (a log waiting will not
   clear); the next socket asks once more.
@@ -476,8 +474,8 @@ further round of that turn can produce it. If the agent genuinely **can't reach 
 chat tool, or the human has no contact ID), that surfaces as a gap to
 close: give the agent the tool, or route the work through a colleague who
 has it. A human with no contact ID at all is the legitimate case of a
-person who works only through the dashboard, which the chart check names
-(`seat_unreachable`): the roster tells a lead to hand them work by assigning
+person who works only through the dashboard, which the configuration warns
+about at the seat's `contact`: the roster tells a lead to hand them work by assigning
 it in the tracker, and a contact identity is what to add the day they join a
 surface the company runs. The engine never manufactures a sender to bridge
 the gap: there is no "Crewlet" DM and no engine-side fallback. Escalation is ordinary
@@ -559,12 +557,9 @@ the founder seat there carries a single `contact` identity
 
 ## Hot Reload
 
-A seat's kind is **structure** on the org chart: a `create_seat` states it and
-a `set_kind` operation in `POST /chart/batch` changes it — never the seat's
-content write, so a lead editing a backstory cannot turn a person's seat into an
-agent's. Making a person's seat an agent's is refused while somebody holds it,
-naming them. A document import states every seat's kind with its place. The
-change is then applied like any other (see
+A seat's kind is its `kind:` in the company document. Making a person's seat an
+agent's is refused `409 seat_held` while somebody holds it, naming them —
+exactly as removing it is. The change is then applied like any other (see
 [Organization Model: Hot Reload](organization-model.md#hot-reload)):
 
 - `human` to `agent`: the seat joins the next epoch's seat list, so a node
@@ -573,19 +568,18 @@ change is then applied like any other (see
 - `agent` to `human`: the seat leaves the seat list, so the node holding it
   releases it, and its mailbox is retired after the grace period described
   in [Seat Ownership: The removed seat](seat-ownership.md#the-removed-seat).
-  An agent's id is derived from the company name and the handle it was
-  created under (`org.DeriveAgentID`), so flipping the seat back to `agent`
-  later is the same seat: its diary and onboarding marker are where it left
-  them, its episodes too while its handle has not changed, and within the
-  grace period its mailbox and the mail waiting in it.
+  An agent's id is derived from the company name and its handle
+  (`org.DeriveAgentID`), so flipping the seat back to `agent` later is the
+  same seat: its diary, onboarding marker and episodes are where it left
+  them, and within the grace period its mailbox and the mail waiting in it.
 - Contact and availability edits take effect with the next **published
-  company**, which for a seat's own fields means the chart write that carried
-  them: every publish builds a new party registry and reconciles the human
-  contact IDs into it.
+  company** — the apply of the revision that carried them: every publish
+  builds a new party registry and reconciles the human contact IDs into it.
 - **Who holds the seat, and at what stage, takes effect with the next
-  identity apply**, with no chart write at all: suspending the person bound
-  to a seat withdraws its contact IDs, and reinstating them restores them. See
-  [A suspended holder is withdrawn](#a-suspended-holder-is-withdrawn-with-no-chart-record).
+  identity apply**, with no configuration change at all: suspending the
+  person bound to a seat withdraws its contact IDs, and reinstating them
+  restores them. See
+  [A suspended holder is withdrawn](#a-suspended-holder-is-withdrawn-with-no-configuration-change).
 
 ## Identity Resolution (party registry)
 
@@ -601,12 +595,10 @@ Each `Party` carries a `Human` flag, and the notification spine reads it to
 skip a human recipient rather than wake it.
 
 The seat indexes are built from the organization and never change: every
-published company builds a new registry rather than editing the one a running
-turn may be reading. **Published, not activated** — a hire, a move or a rename
-is a write to the [org chart's own log](chart-domain.md) with no revision in
-it, and a registry rebuilt only on a config apply answers "nobody matches" for
-a seat hired this morning, which is the same answer a stranger gets, so nothing
-fails and nothing is logged. See
+published company — a boot's and every apply's — builds a new registry rather
+than editing the one a running turn may be reading. A registry left behind
+answers "nobody matches" for a seat added this morning, which is the same
+answer a stranger gets, so nothing fails and nothing is logged. See
 [What follows a published company](configuration.md#what-follows-a-published-company).
 
 The external-identity map is the part written at runtime, under a lock, and it
@@ -619,17 +611,16 @@ holds two kinds of entry:
   a different seat is never taken over: the conflict is logged as
   `human_contact_id_conflict` naming both seats.
 - **Agent identities** are registered by the integrations: the code host's
-  and the tracker's are derived from each seat's credentials, which ride the
-  chart, and are re-resolved and rebuilt on every published company — the
+  and the tracker's are derived from each seat's credentials, and are re-resolved and rebuilt on every published company — the
   lookups are keyed on the credential and cached, so a company whose
   credentials did not move spends no requests. The chat transports' bot IDs,
   resolved against the live server at connect, are carried across into the
   new registry instead: they are facts about a server rather than about the
   company.
 
-### A suspended holder is withdrawn with no chart record
+### A suspended holder is withdrawn with no configuration change
 
-A human seat's `contact` block is org-chart content, but whether the person
+A human seat's `contact` block is company configuration, but whether the person
 holding the seat may still be reached through it is not: it is a fact about
 the **person**, and it lives in the [identity
 directory](identity-and-access.md#what-a-suspension-reaches-and-how-fast). So
@@ -642,17 +633,17 @@ holder may not be reached registers **no contact identity at all**:
 | `active`, `invited`, `enrolling`, or a binding still being enrolled | registered — each is somebody the company has put in the seat |
 | `suspended` | withheld |
 | `retired` | withheld |
-| removed while holding the seat, and the seat not bound since | withheld until the seat is next bound — and that bind ends the removal's say for good, so a later unbind hands the seat to the chart rather than back to the leaver |
+| removed while holding the seat, and the seat not bound since | withheld until the seat is next bound — and that bind ends the removal's say for good, so a later unbind hands the seat to the org chart rather than back to the leaver |
 | a stage this build cannot name (a newer peer wrote it) | withheld — briefly unreachable is the safe way to be wrong during an upgrade |
-| nobody bound | registered — an unheld seat is routed by the chart, as before the directory existed |
+| nobody bound | registered — an unheld seat is routed by the org chart, as before the directory existed |
 
 A seat with two holders — a duplicate only a restore can produce — is withheld
 if either may not be reached, because one contact map cannot say which of them
 it belongs to.
 
 **A binding follows its seat through a rename.** The directory names the seat
-by the handle it was *created* under — its identity, which no rename moves and
-the chart never issues twice — and every reading finds the seat by it, exactly
+by the handle it was *created* under — its identity, which no rename moves —
+and every reading finds the seat by it, exactly
 as a sign-in finds the same binding's seat. So suspending somebody whose seat was
 renamed after they were bound still withdraws its contact identities, under the
 seat's current handle. A retired handle another seat has since taken as its own
@@ -672,8 +663,8 @@ signal. The log line `parties_indexed`
 reports `withheld_seats` and whether a `directory` was consulted.
 
 **A directory this node cannot read keeps the last reading** rather than
-falling back to the chart, which would hand every suspended person's seat
-back: it logs `party_directory_unreadable` and retries on the net. **A node
+falling back to the org chart alone, which would hand every suspended
+person's seat back: it logs `party_directory_unreadable` and retries on the net. **A node
 that has never read its directory fails closed**: the first registry is built
 at boot, with no last reading to keep, so if the directory cannot be read then
 every human seat is withheld (`directory_unread`) until the net's first
@@ -682,7 +673,7 @@ than a suspended person's accounts being routed to their seat.
 
 **Every node reads its own directory, a satellite included.** A seats-only
 satellite consumes inbound deliveries and runs seats like every other node, so
-it may not route by the chart alone — and it runs the identity domain like
+it may not route by the org chart alone — and it runs the identity domain like
 every other node, whatever its roles, so a suspension reaches it within one
 apply of its own. See
 [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds).

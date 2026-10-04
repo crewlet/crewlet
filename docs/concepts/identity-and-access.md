@@ -24,7 +24,7 @@ it is allowed to be.
 | `person` | A human being — the founder at the dashboard, a teammate with a login | `human` if they hold a seat, `operator` if not |
 | `seat` | An agent seat acting inside its own turn | `agent` |
 | `machine` | A token with nobody behind it: CI, a pipeline, an automation | `operator` |
-| `engine` | The engine itself — a duty's repair, a chart apply, a retention trim | `system` |
+| `engine` | The engine itself — a duty's repair, a config apply, a retention trim | `system` |
 
 Those four recorded values (`agent`, `human`, `operator`, `system`) are the
 author kinds already stored beside every tracker commit and every page
@@ -54,12 +54,12 @@ each act as themselves and are never refused for it. What you cannot do, in
 either direction, is *choose* a seat to act as: a tracker whose author field is
 picked by the writer is not an audit trail.
 
-A token's binding is held to the chart **exactly as a session's is**: only an
-active machine row under its login binds it, and the seat it names goes
-through the same lookup a signed-in person's does — followed through a rename,
-refused `403 seat_unavailable` naming the seat once it is removed or is an
-agent's, and `503` on a node that cannot say (behind the binding on the chart,
-past the stall grace, or unable to read the directory). A token answered as the
+A token's binding is held to the org chart **exactly as a session's is**: only
+an active machine row under its login binds it, and the seat it names goes
+through the same lookup a signed-in person's does — resolved against the
+company this node runs, refused `403 seat_unavailable` naming the seat once that
+company does not hold it as a human seat, and `503` on a node that cannot say
+(one that runs no company yet, or cannot read the directory). A token answered as the
 bare credential there would author under its seat on one node and under its own
 name on the next. A token nobody binds is served as itself even by a node whose
 identity applier is behind, which is what keeps break-glass working.
@@ -103,8 +103,8 @@ redemption and at every rename. That matters most for one family of names:
 `token:<id>` is the login a Tier A token acts under, so the directory row
 holding it is what binds that token to a seat. A person can never hold one, so
 no person can make the deployment's own credential act as their seat. The
-directory enrols people and machines only; a seat belongs to the chart and the
-engine is the node.
+directory enrols people and machines only; a seat belongs to the company
+document and the engine is the node.
 
 **Every principal enrols with a login** — a person as well as a machine,
 although a person's address already finds them. The login is the name an
@@ -164,7 +164,7 @@ opinion, and a blank must not read as a ceiling of nothing.
 | Grant | What it opens |
 |---|---|
 | `state:read` | What the company is doing: the board, the pages, the roster, the org chart, the fleet, budgets, schedules — the ordinary dashboard read |
-| `audit:read` | The *record* of what happened: `/events`, any seat's `/agents/{id}/memory` and `/agents/{id}/conversations`, and the turn frames on `/ws/stream` carry full prompts, tool arguments, diary entries and what a seat said on a chat surface, and `/iam/audit` carries the identity estate's own trail beside them. The org chart's company-wide feed (`/chart/history`) and its continuous report (`/chart/check`) are this read too, and so — beside `people:manage` — is the list of seats nobody holds (`/chart/seats?unheld=true`); one object's own history stays the board's. A seat's trail is the audit read whoever's seat it is — not its lead's by leading it, and not `fleet:operate`'s |
+| `audit:read` | The *record* of what happened: `/events`, any seat's `/agents/{id}/memory` and `/agents/{id}/conversations`, and the turn frames on `/ws/stream` carry full prompts, tool arguments, diary entries and what a seat said on a chat surface, and `/iam/audit` carries the identity estate's own trail beside them. So — beside `people:manage` — is the list of the company's human seats and who holds each (`/iam/seats`). A seat's trail is the audit read whoever's seat it is — not its lead's by leading it, and not `fleet:operate`'s |
 | `config:read` | The company document — the org chart, every integration, and the *names* of every credential the company holds or has not set yet |
 | `secrets:read` | Revealing a stored credential's value (the one `/secrets` route that returns one, which needs an explicit `?reveal=true`, takes `config:read` beside this grant, and logs the access) |
 
@@ -188,10 +188,10 @@ map of what to attack, which is why those surfaces are guarded even for reads.
 |---|---|
 | `work:write` | Filing and moving work: create, update, comment, merge, and the project facets a writer may declare |
 | `knowledge:write` | Authoring the company's own pages: write, save, comment — except in the tool-skills container, which takes `config:write` as well |
-| `config:write` | Changing the company — `PATCH /config` and the epoch activation that rebuilds every seat's tools, providers and MCP children; the org chart's structure, its runtime half and the relations authority is derived from; the tracker's workspace catalogue (`write_work_catalogue`), which is configuration rather than any project's; and a page in the tool-skills container (`pages.skill.write`), which is injected into every seat's turn. **It is host access** — see below |
+| `config:write` | Changing the company — `PATCH /config` and the epoch activation that rebuilds every seat's tools, providers and MCP children; the org chart included; the tracker's workspace catalogue (`write_work_catalogue`), which is configuration rather than any project's; and a page in the tool-skills container (`pages.skill.write`), which is injected into every seat's turn. **It is host access** — see below |
 | `secrets:write` | Sealing, rotating, deleting and re-keying the fleet's credentials |
-| `fleet:operate` | The deployment's own controls: `POST /backup`, the retention floor, the capacity window, the maintenance gestures, evict and readmit, and the two purges — a work item's and a page's — which no seat may make whatever it holds. With `people:manage` beside it, `POST /iam/invalidate-all`; with `config:write` beside it, taking an object out of the org chart — the one structural change nothing undoes |
-| `people:manage` | Authority over **person rows**: inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them — and, with `fleet:operate` beside it, ending every session in the company. It also lists the seats nobody holds (`/chart/seats?unheld=true`), which is what an invitation is sent into |
+| `fleet:operate` | The deployment's own controls: `POST /backup`, the retention floor, the capacity window, the maintenance gestures, evict and readmit, and the two purges — a work item's and a page's — which no seat may make whatever it holds. With `people:manage` beside it, `POST /iam/invalidate-all` |
+| `people:manage` | Authority over **person rows**: inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them — and, with `fleet:operate` beside it, ending every session in the company. It also lists the company's human seats and who holds each (`GET /iam/seats`, `?unheld=true` for the vacancies), which is what an invitation is sent into |
 | `sandbox:run` | Starting a detached coding run, and holding the per-run credential its MCP bridge mints |
 
 **`config:write` is host access: running code on every engine host**, and
@@ -203,9 +203,7 @@ binary the engine runs, and a `sandbox` cell of `run_in: self` does its code
 work inside it; a `run_in: direct` sandbox cell runs a coding agent, and every
 setup step, as that user; a seat's `mcp_env` decides which credentials its
 children are handed; and a seat's worker grants decide which of its tools a
-worker holds. The seat's half of that — its model chain, its credentials, its
-sandbox cell and its `mcp_env`, the runtime half on the org chart — takes the
-same grant through `/chart`. So a holder can run anything on every engine host
+worker holds. So a holder can run anything on every engine host
 and read whatever the engine's user can: the Tier A file, the keyring every
 session cookie is signed under, and every credential the store holds — and
 every other grant is transitively theirs. A separate "runtime" grant would be
@@ -214,8 +212,8 @@ would withhold every settings edit with it. Hand it out as you would a shell on
 those hosts. A machine token may carry it — `iamdomain` mints it onto one
 deliberately, because applying a configuration from a deploy job is what a
 token is for — so minting a token with it is handing that job host access.
-Every write that can start a process — the company document, the chart's
-runtime half, connecting an integration — asks for a
+Every write that can start a process — the company document, connecting an
+integration — asks for a
 [recent step-up](#some-gestures-ask-how-recently-you-proved-who-you-are), which
 is what keeps a stolen week-old cookie from reaching it, and every child the
 engine starts is handed
@@ -340,7 +338,7 @@ suspended by anything but the org chart and the process.
 ### What a suspension reaches, and how fast
 
 A suspension is ONE record on the identity log — `crewlet iam suspend`, or a
-`PATCH /iam/people/{id}` naming the stage — and no chart write. Every node
+`PATCH /iam/people/{id}` naming the stage — and no configuration change. Every node
 applies it, whatever its roles, and what follows is decided on each of them
 from that node's own rows:
 
@@ -358,7 +356,7 @@ seat — a suspended lead's DM to an agent no longer arrives as "your lead
 says" — and nothing about the seat has to be edited to make that true.
 Reinstating them (`crewlet iam activate`) restores all of it on the same terms. See
 [Humans in the Org Chart: A suspended holder is
-withdrawn](humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-chart-record)
+withdrawn](humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-configuration-change)
 for the routing rule for every stage, removal included.
 
 **The stage sticks through every edit.** It has one writer — the status
@@ -366,7 +364,7 @@ record — and a later rename, grant change or credential change forms its
 document from the stage the row holds, so no edit made while somebody is
 suspended can quietly reinstate them.
 
-**What it does not reach is the seat.** It stays in the chart, work can still
+**What it does not reach is the seat.** It stays in the org chart, work can still
 be assigned to it, and the tracker still writes its notices; whoever is bound
 to it next reads them. Suspending a person is not removing a seat.
 
@@ -505,13 +503,13 @@ and changes nothing; the POST is the person, having typed a password.
 on `POST /iam/invitations` name a **human seat nobody holds**, and redeeming the
 link then binds the person it creates to that seat — onboarding somebody into
 their seat with one link rather than an invitation and a bind afterwards. A seat
-the chart does not hold, an agent's seat and a seat somebody is already bound to
-are refused when the invitation is issued, naming the seat. The invitation
+the running company does not hold, an agent's seat and a seat somebody is
+already bound to are refused when the invitation is issued, naming the seat. The invitation
 records the seat's **identity** — the handle it was created under — so a rename
 before the redemption binds the same seat, and the invitation's page shows it
 as the chart calls it then. The redemption claims the seat **first**, before the
-address and the login: a seat is the one thing the chart can move in the week a
-link is open, and a refusal at the first claim leaves nothing behind, where one
+address and the login: a seat is the one thing a configuration change can move in the
+week a link is open, and a refusal at the first claim leaves nothing behind, where one
 after the address would hold that address against the next invitation to the
 same person. A seat that was removed, made an agent's or bound to a colleague
 since the issue is refused as the link's own refusal — `410`, ask whoever sent
@@ -574,47 +572,38 @@ survives somebody being away without making the link a standing way in.
 
 ## The binding has two ends, and only one of them arbitrates
 
-A person is bound to a seat, and the two facts live in two domains: the
-directory holds `seat_id` on the person's row, and the chart holds the seat.
-Each has its own log, its own applier and its own arbitration anchor — so
-neither can refuse a write the other is making.
+A person is bound to a seat, and the two facts live in two places: the
+directory holds `seat_id` on the person's row, and the company document holds
+the seat. The directory is a log with its own applier and arbitration; the
+document is a revision the control plane activates — so neither can refuse a
+write the other is making.
 
 What that means in practice:
 
 - **A binding names the seat by the handle it was created under.** An
-  administrator names a seat by any handle it answers to — its current one, a
-  retired one, the original — and the bind resolves that name through the
-  chart and records the seat's **identity**: the handle it was *created* under,
-  which no rename moves and the chart never issues to another seat. Every
-  reader turns it back into a seat the same way — the request path, the
-  dangling-binding check, contact routing — so a binding follows its seat through every rename, and never follows an
-  old handle to a seat somebody created later. Keyed on the handle typed at the
-  time, a renamed seat could be claimed again under its new name, and a
-  removed person's claim on the old name went on withholding the seat from
-  whoever held it next. See
+  administrator names a seat by any handle it answers to, and the bind
+  resolves that name against the company this node runs and records the
+  seat's **identity**: the handle it was *created* under, which no rename
+  moves. Every reader turns it back into a seat the same way — the request
+  path, the dangling-binding check, contact routing. See
   [ADR-0027](https://github.com/crewlet/crewlet/blob/main/adr/0027-a-seat-binding-names-the-seat-it-was-created-as.md).
+  The check against the running company is **advisory**: a revision applied
+  elsewhere first is one this node has not seen.
 - **The bind arbitrates.** `iam.seat.<identity>` is a claim, create-only at an
   expectation of zero, so two people cannot be bound to one seat, under any of
   its names: they contend at the broker and exactly one wins.
-- **The seat's removal does not.** The chart's removal decide reads the
-  directory inside its own snapshot and refuses a seat somebody holds, naming
-  them — but a bind landing on the other log at the same instant passes its own
-  decide too. Both can land.
+- **The seat's removal does not.** A configuration write that removes a human
+  seat, or makes it an agent's, reads the directory first and is refused
+  `409 seat_held` naming whoever holds it — at any stage short of their
+  removal — but a bind landing at the same instant passes its own decide too,
+  and an offline `crewlet config import` or `activate` has no directory to ask.
+  Both can land.
 
-The residue is a person bound to a seat the chart does not hold as a human
-seat, and it comes in two forms:
-
-- **Settled** — the seat was removed or tombstoned, or turned into an agent
-  seat, and this node's chart has applied everything the bind saw. Nothing
-  clears it but a record: `crewlet iam unbind`, or `crewlet iam bind` to
-  another seat.
-- **Not yet** — the seat is absent from a node whose chart applier has not
-  reached the position the bind was decided at. It clears when that applier
-  catches up.
-
-Both are **named legal states**, not corruption, and they are the honest price
-of two domains: arbitration across them would need one log, and one log for
-the chart and the directory would serialise every hire against every sign-in.
+The residue is a person bound to a seat the running company does not hold as a
+human seat. Nothing clears it but a record: `crewlet iam unbind`, or
+`crewlet iam bind` to another seat. It is a **named legal state**, not
+corruption, and it is the honest price of two writers: arbitration across them
+would serialise every configuration change against every sign-in.
 
 What decides a binding is dangling is the [seat table the request path
 uses](#validation-is-three-valued-twice) — a binding dangles
@@ -623,29 +612,29 @@ the seat — and one evaluation feeds every surface that reports it:
 
 - `crewlet iam check` and [`GET /iam/check`](../reference/api-endpoints.md)
   list each one as `binding_dangling`, with the seat and which form it is in.
-  A binding this node's chart **cannot judge** — its applier past the
-  60-second stall grace — is counted as `bindings_unchecked` rather than
-  reported either way, so a report printed during a chart stall never reads as
-  a clean directory.
+  A binding a node that runs no company yet **cannot judge** is counted as
+  `bindings_unchecked` rather than reported either way, so a report printed
+  before the node's first apply never reads as a clean directory.
 - The **`iam_binding_dangling`** alarm fires once a residue has persisted past
   the same 60 seconds every other alarm uses. The age is how long this node's
   own evaluations — on the alarm heartbeat, every fifteen seconds, on every node
   — have kept finding it, from the first that did to the latest: nothing records
   when a binding began to dangle, so the alarm never claims a persistence
-  nobody saw. A bind racing a removal, or a hire a node applies a few seconds
+  nobody saw. A bind racing a removal, or a revision a node applies a few seconds
   late, clears before it can fire. A beat that cannot read the directory, or
-  whose chart has stalled, changes nothing: a firing alarm stays up and a
+  on a node that runs no company yet, changes nothing: a firing alarm stays up and a
   residue keeps its first sighting, so an outage neither clears the alarm nor
   restarts its clock. A read that fails is logged the way an alarm is — one
   `iam_binding_walk_failed` when the run of failed beats starts and one
   `iam_binding_walk_recovered` when it ends, carrying how long the alarm stood
   on its old reading — rather than once a beat. And a beat re-reads the
-  directory only when the directory's or the chart's applied position has
-  moved since the last, or a binding went unjudged, so a quiet company's
-  heartbeat costs two position reads. See [Alarms](../reference/alarms.md).
+  directory only when the directory's applied position or the running
+  company has moved since the last, or a binding went unjudged, so a quiet
+  company's heartbeat costs a position read. See [Alarms](../reference/alarms.md).
 
-**A node that cannot read the directory refuses the removal rather than
-allowing it.** A read that failed has said nothing, and reading that silence as
+**A node that cannot read the directory refuses a write that would remove a
+held seat rather than allowing it** — `503`, and only a write that takes a
+human seat away asks. A read that failed has said nothing, and reading that silence as
 "nobody holds this seat" would make a store fault the one moment every removal
 succeeds. The refusal says the directory could not be read; the remedy is to
 try again once it can.
@@ -673,17 +662,6 @@ The two readings are one keystroke apart and only one of them fails safe: a
 deadline nobody set is a session nobody bounded, and reading it as "never
 expires" turns a field somebody forgot to fill in into a credential that
 outlives the company.
-
-A seat binding carries a **chart position** rather than a timestamp, and the
-difference is what makes the seat lookup three-valued. The org chart is a
-separate log with its own applier, so a seat missing from a node's view means
-one of two opposite things — the seat is *gone*, or this node has *not applied
-the hire yet* — and those answers are 403 and 503. The binding records the
-chart position the decision was made at, so any node can compare its own
-position against it and tell them apart. Comparing two nodes' wall clocks is
-what the coordination layer states it never does, and a node merely behind on
-the chart would otherwise tell everybody it has not caught up with that their
-seat does not exist.
 
 ---
 
@@ -1144,7 +1122,7 @@ one that acts as anybody else.
 
 **And every write it makes says it was the token.** The owner is the author —
 it is their authority being exercised — and the credential rides beside them
-as `operator_id: pat:<credential id>` on every work item, page and chart change
+as `operator_id: pat:<credential id>` on every work item and page change
 it writes, so what somebody's assistant filed is never mistaken for what they
 filed themselves. A configuration revision and a stored secret record the same
 two — the owner as `created_by` / `updated_by`, with its kind beside it, and
@@ -1299,7 +1277,7 @@ somewhere nobody meant it to.
 
 **There is no validation cache**, and that is not an omission — there is
 nothing to cache. The lookup is a local read of a replicated row and a map
-lookup on a pinned chart view, and the store is never on a network path from
+lookup on the running organization, and the store is never on a network path from
 the request.
 
 ### The dashboard is the browser half
@@ -1370,8 +1348,10 @@ at once.
 
 ### Validation is three-valued, twice
 
-The session and the seat are resolved by two tables with the same shape,
-because each is a row in a domain that **lags independently**.
+The session and the seat are resolved by two tables. The session's row is in
+a domain that **lags**, so its table has a third answer for a node that cannot
+yet say; the seat is answered from the company this node runs, which every node
+applies within seconds of the activation pointer moving.
 
 | What this node's rows say about the session | Reads | Writes | Step-up surfaces |
 |---|---|---|---|
@@ -1382,14 +1362,17 @@ because each is a row in a domain that **lags independently**.
 | The iam applier stalled past 60 s, the person's bucket deferred, or the replicated store answers `ErrNoEstate` | 503 | 503 | 503 |
 | Not a bearer of this format at all | 401 | 401 | 401 |
 
-| What this node's chart view says about the seat | Answer |
+| What the company this node runs says about the seat | Answer |
 |---|---|
-| The person holds no binding | The seatless arm: the login is the handle, and the chart is never consulted |
-| Seat present in the view, `kind: human`, not tombstoned | The seat's handle is the actor |
-| Seat tombstoned, or present and not `kind: human` | 403 forbidden **naming the seat**, whatever this node's chart position: a tombstone and a seat's kind are conclusive, and no amount of catching up changes either |
-| Seat absent, and this node's chart position covers the binding's | 403 forbidden **naming the seat**; never a fall-through to an empty handle |
-| Seat absent, and this node's chart position is below the binding's, chart applier lag under 60 s | 503 `identity_unavailable` naming the chart |
-| The chart applier stalled past 60 s, or the view is not built | 503 |
+| The person holds no binding | The seatless arm: the login is the handle, and the org chart is never consulted |
+| The company holds the seat, `kind: human` | The seat's handle is the actor |
+| The company does not hold the seat, or holds it as an agent's | 403 forbidden **naming the seat**; never a fall-through to an empty handle |
+| This node runs no company yet, or the lookup failed | 503 |
+
+There is no "not yet applied" row. A node that has not applied a revision adding
+a seat answers 403 for that seat for the few seconds until it does, and that
+window is not worth a position on every binding and a comparison on every
+request.
 
 **`reauth_at` is the session's own proof plus `step_up`**, and
 `sensitive_reauth_at` the same proof plus `step_up_sensitive`. Every session a
@@ -1509,7 +1492,7 @@ why each node publishes a hash of its own ceiling.
 
 **A seat refusal does not reach `/auth/*`.** The `403` naming the seat is
 written for every guarded route *except* that surface, because nothing under
-it consults the chart: ending a session, re-proving identity, enrolling a
+it consults the org chart: ending a session, re-proving identity, enrolling a
 second factor and regenerating a recovery set are gestures about a person's own
 credential. Without the exemption an offboarded person would hold a live cookie
 with no way to end it, and every screen they opened would loop through a
@@ -1642,8 +1625,8 @@ showed up as a support question:
   operator by construction, and a founder re-ordering an agent's queue was
   refused by the only tool that offered it;
 - the project lead lookup answered `false` both for "you do not lead this" and
-  for "this node holds no company yet". A node that is booting, installing a
-  revision or behind the chart log therefore told every lead in the company
+  for "this node holds no company yet". A node that is booting or installing a
+  revision therefore told every lead in the company
   that they lead nothing — while reporting itself healthy.
 
 And none of those lookups consulted a grant, so the deployment's own
@@ -1792,7 +1775,7 @@ proof its verb asks for, and there are three answers:
 | Window | Sized by | Asked by |
 |---|---|---|
 | none | — | Every read; every work and knowledge verb; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm |
-| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration and chart writes (a lead editing their own team included), connecting an integration, writing a credential, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures — and every identity-directory write the row below does not name: enrolling, inviting or removing somebody, minting or revoking a machine token, and ending somebody else's sessions |
+| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures — and every identity-directory write the row below does not name: enrolling, inviting or removing somebody, minting or revoking a machine token, and ending somebody else's sessions |
 | `step_up_sensitive` | `api.auth.session.step_up_sensitive` (15 minutes) | Revealing a secret's value; changing what somebody already enrolled may do or how they prove who they are — an edit of their row, a second-factor reset, revoking a password, a second factor or the recovery codes, and enrolling or replacing your own second factor or regenerating your recovery codes; and ending every session in the company |
 
 The two windows are the design's: every identity-directory write asks the
@@ -1982,12 +1965,11 @@ events filtered out of the store:
 
 ---
 
-## Where identity is kept: the fifth state-log domain
+## Where identity is kept: the fourth state-log domain
 
 The vocabulary above is what the engine *names*. Where it is **stored** is a
-replicated state machine of its own — the state log's fifth domain, beside the
-work tracker, the vectors, the knowledge base and the [org
-chart](chart-domain.md). Every change is one record on one ordered stream
+replicated state machine of its own — the state log's fourth domain, beside the
+work tracker, the vectors and the knowledge base. Every change is one record on one ordered stream
 (`CREWLET_IAM_LOG`), applied by a deterministic applier into an identical set
 of SQL tables on every node, with the checkpoint committed in the same
 transaction as the rows.
@@ -2339,7 +2321,7 @@ This is the first strictly-ordered domain whose health does **not** gate seat
 admission, and the reason is worth knowing before you see the alarm.
 
 An agent seat never reads this domain. A seat's principal is its own handle,
-its authority is decided from the [org chart](chart-domain.md), and its work
+its authority is decided from the [org chart](organization-model.md), and its work
 arrives on its mailbox. So a node whose identity applier has stalled runs every
 seat it holds exactly as correctly as a node that is current — and shedding a
 company's seats because a human cannot sign in would be an outage caused by the
@@ -2365,9 +2347,9 @@ every person's sealed values alike. See
 
 ### Sizing `stream.iam_log_max_bytes`
 
-Like the org chart's, this ceiling is **not derived from your disk** — what it
-grows with is your headcount and how often people sign in, and your volume has
-nothing to say about either. Unlike the org chart's, it genuinely grows.
+This ceiling is **not derived from your disk** — what it grows with is your
+headcount and how often people sign in, and your volume has nothing to say about
+either.
 
 Sessions are what size it. People, credentials and invitations are hundreds of
 records a year; a session writes one record when it opens and one when it

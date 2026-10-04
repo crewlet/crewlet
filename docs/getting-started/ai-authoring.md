@@ -171,8 +171,8 @@ types the engine parses with, a schema-only check catches:
 
 A human seat with no `contact` identity passes both checks, because it is a
 legitimate seat: a person who works only through the dashboard has no chat
-account to name. The running engine's chart check reports it as
-`seat_unreachable`, so nobody is surprised that it cannot be @-mentioned.
+account to name. `crewlet validate` warns about it at the seat's `contact`,
+so nobody is surprised that it cannot be @-mentioned.
 
 Three things still need the binary, and the skill tells the assistant to
 check them by reading:

@@ -68,7 +68,7 @@ flowchart TB
 
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream by default</i><br/>crewlet.agent.SEAT-ID.inbox · .control<br/>crewlet.notifications.inbound · crewlet.events.*<br/>crewlet.config.* · crewlet.memory.* · dlq.*")]
     KV[("<b>Coordination KV</b><br/><i>on the stream's own broker</i><br/>seat · node · worker leases with a fencing epoch<br/>activation pointer · per-node status<br/>ledgers · counters · the company's secrets")]
-    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors,<br/>the org chart, the identity directory")]
+    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors,<br/>the identity directory, the usage history")]
 
     EXT -->|"webhooks / websocket"| API
     API -->|"verify · claim once per fleet · publish"| STREAM
@@ -168,7 +168,7 @@ adr/                      # Architecture decision records — a decision that
                           #   binds more than one package, with the gate that
                           #   anchors each one to its authority
 cmd/crewlet/              # The one binary: run, validate, schema, migrate,
-                          #   secrets, config, chart, iam, budgets, backup,
+                          #   secrets, config, iam, budgets, backup,
                           #   retention, work, seats, llm, search, and the six
                           #   integration CLIs — gitlab/github/jira/slack
                           #   `provision`, confluence `import|resync`,
@@ -203,13 +203,10 @@ internal/
 │                         #   domain: records, subjects, ranks, custom fields
 ├── pages/                # The engine's own knowledge base — statelog's third
 │                         #   domain: containers, pages, revisions, comments
-├── chart/                # The company's org chart — statelog's fourth
-│                         #   domain: units, seats and the structure between
-│                         #   them, with each seat's runtime half sealed
-├── iamdomain/            # The identity estate — statelog's fifth domain:
+├── iamdomain/            # The identity estate — statelog's fourth domain:
 │                         #   people, logins, credentials, invitations and
 │                         #   sessions, with uniqueness arbitrated per claim
-├── usage/                # Each node's day, replicated — statelog's sixth
+├── usage/                # Each node's day, replicated — statelog's fifth
 │                         #   domain: spend, turns and reads that outlive the
 │                         #   node that recorded them
 ├── eventfan/             # The fleet's turn-level history, read from every

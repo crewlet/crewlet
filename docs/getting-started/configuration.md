@@ -243,20 +243,17 @@ alone, **on top of** the company's: every round is charged to both, so a seat is
 whichever ceiling it reaches first. A human seat spends nothing, so a `token_budget` on one
 is refused.
 
-On a running company the two live in its two halves, and each changes where its half is
-written. The company's is a setting, changed by a revision through `/config`. A seat's is
-part of its [org chart](../concepts/chart-domain.md) runtime, changed by a
-`PATCH /chart/seats/{handle}` runtime write — `config:write`, like every runtime write — which
-moves no settings epoch: each node enforces it once its own copy of the chart has applied
-the record. `crewlet config import` writes a file's `token_budget`s to both halves. See
+On a running company both are part of the company document and change through `/config`
+— a seat's on its own with `PUT /config/roles/{handle}` — and each node enforces them once
+it has applied that revision. See
 [Budgets and spend](../guides/budgets-and-spend.md#budget-windows).
 
 An **absent key is the only way to leave a window uncapped.** A ceiling of `0` or less is
 refused (`must be at least 1 token … remove token_budget.day for no daily ceiling`): `0`
 used to mean "unlimited", and it is also what a ceiling of nothing would be, so it means
 neither. Stopping a seat on purpose is not a budget's job. A key that is not a window —
-`year` — is refused too, naming the key to remove. A company file, a `/config` write and a
-seat's chart runtime write each refuse both, and a bare number is refused over JSON as well
+`year` — is refused too, naming the key to remove. A company file and a `/config` write each refuse
+both, and a bare number is refused over JSON as well
 as YAML.
 
 [`crewlet validate`](../reference/cli.md) **warns** — it never refuses — about a ceiling that
@@ -269,9 +266,7 @@ can never refuse a turn, because another ceiling is always reached first:
   two months;
 - a seat's ceiling at or above the company's for the same window, or for a longer window
   that holds it (a seat's day against the company's month) — everything a seat spends is
-  the company's spend too. On a running company, where no single write sees both halves,
-  the [chart check](../guides/configure-via-api.md#check-the-two-halves-agree) reports the
-  same pair as `budget_idle`, in the same sentence.
+  the company's spend too. Every `/config` write's answer carries the same warning.
 
 Spend is counted in the fleet's [coordination store](../concepts/coordination.md#token-budgets-are-windows),
 one figure per window, so it survives restarts and is one number for the whole company however
@@ -488,8 +483,8 @@ stream:
   store_dir: "./crewlet-data/stream"  # REQUIRED for an embedded stream.
                                     #   Empty would be in-memory, and every
                                     #   node keeps its state logs here from
-                                    #   boot — the org chart and the people
-                                    #   who can sign in, company or none — so
+                                    #   boot — the people who can sign in,
+                                    #   company or none — so
                                     #   `crewlet validate` and the engine
                                     #   both refuse it rather than lose them
                                     #   at the first restart
@@ -517,9 +512,9 @@ stream:
                                     #   `no suitable peers for placement,
                                     #   insufficient storage` — naming whichever
                                     #   stream was provisioned last. Bounds:
-                                    #   6 GiB..64 TiB — the 4.5625 GiB the six
+                                    #   6 GiB..64 TiB — the 4.5 GiB the five
                                     #   state logs reserve at their smallest,
-                                    #   and about 1.44 GiB for every stream
+                                    #   and about 1.5 GiB for every stream
                                     #   that reserves nothing — and it must not
                                     #   be smaller than the ceilings declared
                                     #   inside it.
@@ -634,21 +629,20 @@ stream:
                                     #   stream, so a full log drops no history —
                                     #   the append is refused, loudly, naming
                                     #   whatever is blocking the trim. ONE
-                                    #   BUDGET FOR ALL SIX LOGS: the broker
+                                    #   BUDGET FOR ALL FIVE LOGS: the broker
                                     #   reserves each ceiling in full when it
                                     #   creates the stream, so this field and
-                                    #   the five below share half of what the
+                                    #   the four below share half of what the
                                     #   broker can grant them, less the ceiling
                                     #   any of them that already exists holds.
                                     #   The unset ones are scaled down together
                                     #   to fit, never below 1 GiB each — and an
-                                    #   unset ask already below it (the org
-                                    #   chart's, the identity log's) is kept as
-                                    #   asked. A value you set is never scaled,
+                                    #   unset ask already below it (the
+                                    #   identity log's) is kept as asked. A value you set is never scaled,
                                     #   and a boot that cannot reserve it fails
                                     #   naming the field, the bytes it needed
                                     #   and the bytes the broker had. Every one
-                                    #   of the six is the value a stream is
+                                    #   of the five is the value a stream is
                                     #   CREATED with: editing it
                                     #   later changes nothing until
                                     #   `crewlet retention set-capacity` does.
@@ -678,22 +672,6 @@ stream:
                                     #   and a blocked trim fills either one in
                                     #   the same time. Crossing it refuses the
                                     #   append, like the mutation log's
-  # chart_log_max_bytes: 67108864   #   the org chart's log, the ordered stream
-                                    #   every change to the company's own
-                                    #   structure goes through (64 MiB..16 GiB).
-                                    #   NOT DERIVED FROM THE DISK: unset takes a
-                                    #   flat 64 MiB. The corpus-sized logs grow
-                                    #   with something your volume has an opinion
-                                    #   about, and a chart does not — it is
-                                    #   hundreds of objects and it changes when
-                                    #   somebody is hired, moved or promoted, so
-                                    #   this is about TWO AND A HALF YEARS of a
-                                    #   completely blocked trim, once the gate
-                                    #   reserve is kept. It is deliberately below
-                                    #   every other log's floor: the broker
-                                    #   grants a ceiling in full when it creates
-                                    #   the stream, so the number is free space a
-                                    #   node needs before it can boot at all
   # iam_log_max_bytes: 536870912    #   the identity estate's log, the ordered
                                     #   stream every person, credential,
                                     #   invitation and session goes through
@@ -892,7 +870,7 @@ api:
     session:
       absolute: 168h          # 1h..720h (default 168h)
       step_up: 1h             # 5m..24h  (default 1h): how recent a proof of
-                              #   identity a config, chart, setup, credential,
+                              #   identity a config, setup, credential,
                               #   deployment or /iam write asks for
       step_up_sensitive: 15m  # 1m..step_up (default 15m): the same for
                               #   revealing a secret, changing what somebody
@@ -1372,7 +1350,7 @@ Everything else a tracker could be told is either a fact about the **operator** 
 
 **Every node needs a stream that survives a restart.** A state-log domain's write-ahead log lives on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory — so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses it from the Tier A file alone, and so does the engine at boot.
 
-It applies whatever backends a company names, and whether the node has a company at all. A native tracker or knowledge base puts its items and its pages there, but the **org chart** and the **identity estate** — the company's units and seats, and the people who can sign in — are domains too, and every node runs them from boot. This rule used to be judged on the two files together and ask about the backends: it let a company on Jira and Confluence through, and then a node started with no company, both of which started logs in memory and lost them on the first restart with nothing having warned.
+It applies whatever backends a company names, and whether the node has a company at all. A native tracker or knowledge base puts its items and its pages there, but the **identity estate** — the people who can sign in — is a domain too, and every node runs it from boot. This rule used to be judged on the two files together and ask about the backends: it let a company on Jira and Confluence through, and then a node started with no company, both of which started logs in memory and lost them on the first restart with nothing having warned.
 
 ---
 
