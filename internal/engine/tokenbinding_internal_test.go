@@ -34,7 +34,7 @@ func (f fakeBindings) PersonByLoginVouched(_ context.Context, login string) (
 }
 
 // boundMachine is an active machine under a Tier A token's login, bound to a
-// seat at chart position 900.
+// seat.
 func boundMachine() iamdomain.Sighting {
 	return iamdomain.Sighting{
 		ID: "018f3a9c-0000-7000-8000-0000000000c1", Kind: iam.KindMachine,
