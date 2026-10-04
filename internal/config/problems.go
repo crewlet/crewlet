@@ -312,7 +312,7 @@ func (x *identityIndex) place(leaf error) *located {
 		for _, r := range dup.Seats {
 			// A HANDLE IS PLACED AT THE HANDLE, which is its identity in
 			// every document this reads — one is written in from the name
-			// where none was declared ([MintHandles]) — and the field the
+			// where none was declared ([MintIdentities]) — and the field the
 			// message tells an operator to change, as a unit is placed at
 			// its id below.
 			field := "name"

@@ -35,7 +35,7 @@ units:
 // The control is the same edit on a document that declares no handle: its
 // derived handle moves, which is exactly what minting exists to stop.
 //
-// Mutation: drop MintHandles from the parse and the first assertions fail.
+// Mutation: drop MintIdentities from the parse and the first assertions fail.
 func TestEverySeatGetsAHandleAtParse(t *testing.T) {
 	t.Parallel()
 	cfg, err := config.ParseCompany([]byte(handleDoc))

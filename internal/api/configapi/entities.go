@@ -50,8 +50,8 @@ import (
 // from its handle, and every `manages:` entry, unit `lead:` and root seat
 // `unit:` names a seat or a unit by them. A display name is only ever an edit
 // of a name — every seat's handle and every unit's key is written into the
-// document when it is parsed ([config.MintHandles], [config.MintUnitIDs]), so
-// nothing derives either from a name a body changed. Changing a handle or a
+// document on every write ([config.MintIdentities]), so nothing derives either
+// from a name a body changed. Changing a handle or a
 // key is a removal and a creation, made through the whole document.
 const (
 	EntityRoles        = "roles"
@@ -768,7 +768,7 @@ func visitUnitAt(at config.Path, u *config.Unit, visit func(config.Path, *config
 }
 
 // roleID is a seat's address here: its handle — declared, since every stored
-// seat carries one ([config.MintHandles]) — so the id in this URL is the
+// seat carries one ([config.MintIdentities]) — so the id in this URL is the
 // handle every other surface shows.
 func roleID(r *config.Role) string { return r.Seat().Handle() }
 

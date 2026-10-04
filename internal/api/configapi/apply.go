@@ -557,7 +557,17 @@ func readPatched(patch []byte, sent *yaml.Node, merged []byte) (*config.Company,
 	// every PATCH that carried a masked credential (any mcp_servers list
 	// read from GET /config) was refused as an invalid patch naming the
 	// masks.
-	return config.DecodeCompany(merged)
+	//
+	// AND IT MINTS NOTHING, where the authored reader writes down every
+	// unit's key and every seat's handle: a seat the patch added would be
+	// stored without its handle, and take another from its name the first
+	// time that name was corrected.
+	cfg, err = config.DecodeCompany(merged)
+	if err != nil {
+		return nil, err
+	}
+	config.MintIdentities(cfg)
+	return cfg, nil
 }
 
 // withoutLines clears the line from every fault in err, for a failure found in

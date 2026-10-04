@@ -47,7 +47,7 @@ type Role struct {
 	// Handle is the canonical identity slug, and WHAT EVERY REFERENCE TO
 	// THIS SEAT RESOLVES: a unit's `lead:` and every `manages:` entry. A
 	// document that declares none has one written in when it is read
-	// ([MintHandles]), derived from Name, so every stored revision carries
+	// ([MintIdentities]), derived from Name, so every stored revision carries
 	// it and editing the name never moves it.
 	//
 	// IMMUTABLE: the seat's durable id is derived from the company name and
@@ -826,9 +826,8 @@ func MintUnitID(name string) string {
 // not happen is a NEW document leaving a team keyed on prose somebody will
 // rename, so a submitted one is refused.
 //
-// Unreachable from any document read through [ParseCompanyNode], which mints
-// one from the name. What it catches is a unit assembled in Go, a name that
-// yields no id at all, and a stored revision a write is trying to keep.
+// Unreachable from any document a write stores, every one of which is minted
+// ([MintIdentities]). What it catches is a unit assembled in Go.
 // Skipped where the unit has no NAME either: the org model already reports
 // that, and reporting both puts one mistake in front of an operator twice.
 func (u *Unit) requireIDs(path Path) error {
@@ -847,36 +846,38 @@ func (u *Unit) requireIDs(path Path) error {
 	return p.err()
 }
 
-// MintUnitIDs gives every unit in the tree, at any depth, an id minted from
-// its name where it declares none.
+// MintIdentities writes every unit's key and every seat's handle into the
+// document, at any depth, where it declares none: a unit's key minted from its
+// name ([MintUnitID]) and a seat's the handle its name derives ([org.Slugify]),
+// so a unit or a seat whose name later changes keeps the identity it was
+// created under.
 //
-// Applied at the ONE place a Tier B document is decoded ([ParseCompanyNode]),
-// so every document the engine reads carries a key for every unit whatever
-// door it came in by — a file, the config write surface, a per-entity splice.
-// Idempotent: a unit that already has an id keeps it.
-func MintUnitIDs(units []Unit) {
-	for i := range units {
-		if strings.TrimSpace(units[i].ID) == "" {
-			units[i].ID = MintUnitID(units[i].Name)
-		}
-		MintUnitIDs(units[i].Children)
-	}
-}
-
-// MintHandles writes every seat's handle into its `handle` field, at any depth,
-// where the document declares none: the handle the name derives
-// ([org.Slugify]), so a seat whose name later changes keeps the identity it
-// was created under.
-//
-// Applied at the ONE place a Tier B document is decoded ([ParseCompanyNode]),
-// beside [MintUnitIDs] and for its reason. Deterministic and idempotent: a seat
-// that already declares a handle keeps it, and a second parse of the same file
-// mints the same handles.
-func MintHandles(c *Company) {
+// EVERY WRITE CALLS IT BEFORE THE DOCUMENT IS STORED: [ParseCompanyNode] for a
+// file and a whole-document write, and the config surface for a per-entity
+// splice and a merge patch, which decode the stored form ([DecodeCompany]) and
+// a member sent on its own ([ParseMember]), neither of which mints. A seat
+// stored without its handle takes whatever its name derives the next time the
+// document is read, and after a correction to that name that is a new handle —
+// a new agent id, an empty mailbox and an empty memory. Deterministic and
+// idempotent: a unit or a seat that declares its identity keeps it, and a
+// second read of the same file mints the same ones.
+func MintIdentities(c *Company) {
+	mintUnitIDs(c.Units)
 	for role := range c.EachRole() {
 		if strings.TrimSpace(role.Handle) == "" {
 			role.Handle = role.Seat().Handle()
 		}
+	}
+}
+
+// mintUnitIDs is [MintIdentities] for the units of one level and every level
+// beneath it.
+func mintUnitIDs(units []Unit) {
+	for i := range units {
+		if strings.TrimSpace(units[i].ID) == "" {
+			units[i].ID = MintUnitID(units[i].Name)
+		}
+		mintUnitIDs(units[i].Children)
 	}
 }
 

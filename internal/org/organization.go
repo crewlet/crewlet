@@ -192,7 +192,7 @@ func (o *Organization) Unit(key string) *Unit {
 //
 // AND WHITESPACE BECOMES A HYPHEN, which is the half a case fold alone does not
 // cover: a unit's key is minted from its display name when the document
-// declares no `id:` ([config.MintUnitIDs]), so `Product Team` is a key a
+// declares no `id:` ([config.MintIdentities]), so `Product Team` is a key a
 // company can be running on, and `product-team` is how it is typed as an
 // address. What it costs is that the two are one key, which the admission rule
 // refuses a document for when two units carry them ([Organization.validateUnitKeys]).

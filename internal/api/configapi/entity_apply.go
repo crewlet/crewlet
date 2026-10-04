@@ -107,6 +107,13 @@ func entityDraft(kind, id string, body submitted, expect string, create bool) (d
 			if refused := write(spliced, id, body); refused != nil {
 				return nil, nil, &EntityError{Err: refused}
 			}
+			// THE IDENTITIES THE WHOLE-DOCUMENT WRITE WOULD HAVE WRITTEN
+			// DOWN, before anything is matched by them: a member is read on
+			// its own and the rest from the stored form, and neither mints,
+			// so a seat added inside a unit's body was stored without its
+			// handle and took a new one the first time its name was
+			// corrected — a new agent id, an empty mailbox and memory.
+			config.MintIdentities(spliced)
 			// The masks the caller was shown come back as the values they
 			// hide, against the revision they were shown FROM. A created
 			// entity matches no member of that revision, so nothing in it

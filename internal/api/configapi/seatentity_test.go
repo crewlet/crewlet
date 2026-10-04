@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // orgDoc is a company whose seats sit at the root, in a unit and in a unit's
@@ -170,5 +171,110 @@ func TestEditingASeatsNameIsNotARename(t *testing.T) {
 		!strings.Contains(res.Body.String(), "ceo") {
 		t.Errorf("PUT a seat under another handle = %d, want 400 identity_mismatch "+
 			"naming ceo: %s", res.Code, res.Body.String())
+	}
+}
+
+// storedMember is the stored revision's member at path — keys and list
+// indexes — as the generic JSON a node reads it back as.
+func storedMember(t *testing.T, s *surface, path ...any) map[string]any {
+	t.Helper()
+	var at any
+	if err := json.Unmarshal([]byte(s.activeDocument(t)), &at); err != nil {
+		t.Fatalf("decode the stored revision: %v", err)
+	}
+	for _, step := range path {
+		switch key := step.(type) {
+		case string:
+			object, _ := at.(map[string]any)
+			at = object[key]
+		case int:
+			list, _ := at.([]any)
+			if key >= len(list) {
+				t.Fatalf("the stored revision has no %v", path)
+			}
+			at = list[key]
+		}
+	}
+	member, ok := at.(map[string]any)
+	if !ok {
+		t.Fatalf("the stored revision has no member at %v", path)
+	}
+	return member
+}
+
+// A UNIT WRITE STORES THE IDENTITY OF EVERYTHING IT ADDS.
+//
+// A unit's body is read on its own and spliced into the stored form, and
+// neither reader writes an identity down. A seat added inside a unit was
+// stored with no handle: read back it took what its name derived, and the
+// first correction to that name, sent through PUT /config, derived another —
+// a new agent id, an empty mailbox, an empty memory, and the old mailbox
+// retired after the grace. A team added there was refused for having no key,
+// by a rule whose sentence says one is minted on import, as the whole-document
+// write mints it.
+//
+// The control is the read before the write: the fixture has neither member.
+// Mutation: drop the mint from the entity draft and the write is refused for
+// the team's key; give the team one, and the seat is stored with no handle.
+func TestAUnitWriteStoresTheIdentityOfEverythingItAdds(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, orgDoc)
+
+	unit := entityOf(t, s, configapi.EntityUnits, "platform-team")
+	if _, there := unit["children"]; there {
+		t.Fatal("the control: the fixture's unit already has a child")
+	}
+	unit["roles"] = append(unit["roles"].([]any),
+		map[string]any{"name": "New Hire", "llm": "zulu"})
+	unit["children"] = []any{map[string]any{"name": "Build Tools"}}
+	body, err := json.Marshal(unit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := s.do(t, http.MethodPut, "/config/units/platform-team", string(body),
+		map[string]string{"X-Summary": "hire into platform and start build tools"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("PUT a unit adding a seat and a team = %d: %s", res.Code, res.Body.String())
+	}
+
+	platform := []any{"units", 0, "children", 0}
+	if got := storedMember(t, s, append(platform, "roles", 1)...)["handle"]; got != "new-hire" {
+		t.Errorf("the added seat is stored with handle %v, want new-hire written down", got)
+	}
+	if got := storedMember(t, s, append(platform, "children", 0)...)["id"]; got != "build-tools" {
+		t.Errorf("the added team is stored with key %v, want build-tools written down", got)
+	}
+}
+
+// A PATCH READ AS THE STORED FORM STORES THE HANDLE OF A SEAT IT ADDS.
+//
+// A merged document carrying a key only a newer peer knows is read by the
+// stored-form reader, which mints nothing, so a seat a patch added there was
+// stored with no handle — while the same patch over a document this build
+// could read whole stored one.
+//
+// Mutation: drop the mint from that reader's branch and the assertion fails.
+func TestAPatchOverAPeersDocumentStoresTheHandleOfASeatItAdds(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedStored(t, orgDoc, func(document map[string]any) {
+		document["a_setting_from_a_newer_build"] = map[string]any{"depth": 3}
+	})
+
+	if _, err := s.svc.Apply(t.Context(), configapi.ApplyRequest{
+		Patch: []byte(`{"roles": [{"name": "CEO", "handle": "ceo", "llm": "zulu"},` +
+			` {"name": "New Hire", "llm": "zulu"}]}`),
+		Summary: "hire at the root", By: iam.Actor{Name: "operator", Kind: iam.ActorOperator},
+	}); err != nil {
+		t.Fatalf("Apply = %v", err)
+	}
+	if got := storedMember(t, s, "roles", 1)["handle"]; got != "new-hire" {
+		t.Errorf("the seat the patch added is stored with handle %v, want new-hire "+
+			"written down", got)
+	}
+	if storedMember(t, s)["a_setting_from_a_newer_build"] == nil {
+		t.Error("the control: the peer's key is gone, so the stored-form reader " +
+			"may not have been the one that read the patch")
 	}
 }
