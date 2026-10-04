@@ -348,3 +348,39 @@ func TestTwoRowsHoldingOneLoginAreTheUnknownArm(t *testing.T) {
 			rig.machine)
 	}
 }
+
+// AN ADMINISTRATOR'S CREATE OF AN ADDRESS AN OPEN INVITATION HOLDS IS REFUSED,
+// NAMING THE INVITATION.
+//
+// The invitation is on its way to the person at that address; creating them
+// beside it would leave a link that creates a second person on one address the
+// day it is followed. The refusal names the invitation, because that is what
+// an administrator withdraws or lets lapse — a person id would name nobody.
+//
+// Mutation: drop the open-invitation check from Enrol's decide and the create
+// lands beside the invitation.
+func TestACreateOfAnInvitedAddressNamesTheInvitation(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	const address = "sarah.chen@example.com"
+	issued, err := inviteFor(t, rig, address, "")
+	if err != nil {
+		t.Fatalf("invite: %v", err)
+	}
+	person := "018f3a9c-0000-7000-8000-0000000006d1"
+	err = rig.enrol(iamdomain.Enrolment{
+		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "Sarah Chen", Email: address, Login: "sarah.chen",
+		OpID: "op-create-sarah", Reason: "a hire",
+	})
+	var taken *iamdomain.ErrTaken
+	if !errors.As(err, &taken) || taken.Field != iamdomain.UniqueEmail ||
+		taken.Invitation != issued.ID || taken.Person != "" {
+		t.Errorf("creating somebody at an invited address answered %v, want "+
+			"the address refused naming invitation %s", err, issued.ID)
+	}
+	rig.drain()
+	if got := rig.column(`SELECT id FROM iam_people WHERE id = ?`, person); len(got) != 0 {
+		t.Errorf("the refused create left person %v", got)
+	}
+}
