@@ -285,6 +285,39 @@ such a write `503 identity_unavailable` rather than allowing it. An offline `cre
 has no directory to ask, so the binding it strands is reported by
 `crewlet iam check` and the `iam_binding_dangling` alarm.
 
+### A lead editing their own team
+
+A person who leads a unit needs no `config:write` to change what is inside it.
+Signed in as themselves, they read and write the seats and units of their team
+— the unit they lead and every unit beneath it — through the same entity
+routes, with the same `If-Match` and `X-Summary`:
+
+```bash
+# Read one seat of the team, and its ETag
+curl -si $CREWLET_URL/config/roles/sre -H "$AUTH"
+
+# Check the edit first: a dry run judges it exactly as the write will
+curl -X PUT "$CREWLET_URL/config/roles/sre?dry_run=true" -H "$AUTH" \
+  -H 'Content-Type: application/json' -H "If-Match: \"$REV\"" --data-binary @sre.json
+
+curl -X PUT $CREWLET_URL/config/roles/sre -H "$AUTH" \
+  -H 'Content-Type: application/json' -H "If-Match: \"$REV\"" \
+  -H "X-Summary: give the SRE its on-call goal" --data-binary @sre.json
+```
+
+Everything the write changes has to be inside their team, where it was and
+where it lands: a seat added, edited, moved between two of their teams or
+removed, a sub-team added or removed, their own unit's name, purpose or
+channel. Handing their unit to another `lead:`, removing or moving it,
+naming somebody outside it in a `lead:` or `manages:` entry, claiming another
+team's project, space or channel, changing a credential, and any setting take
+`config:write`. A write that reaches past them is refused whole —
+`403 unauthorized` with a `refused` list naming every part, the place it
+reaches and why; see [A lead edits their own
+team](../reference/api-endpoints.md#a-lead-edits-their-own-team). The whole
+document (`GET /config`) stays `config:read`'s, so a lead edits through the
+entity routes rather than a `GET` and `PUT` of `/config`.
+
 ## Read paths
 
 ```bash
@@ -335,6 +368,8 @@ classified, beside the `detail` that renders them.
 | `400` | `identity_mismatch` | A per-entity `PUT` whose body names another id than its path: this route never renames — a seat's handle and a unit's key are permanent, and a server or provider is renamed in the whole document, with everything that names it |
 | `400` | `not_creatable` | A create-only `PUT` (`If-None-Match: *`) of a seat or a unit: each has a place the path cannot name, so add it by replacing the unit it sits in, or through `PUT /config` |
 | `401` | `invalid_token` | Bearer missing / wrong / wrong scheme |
+| `403` | `unauthorized` | The credential holds neither the grant the route takes nor, on the org chart, the lead relation. A lead's write that reaches outside their team names every part under `refused` |
+| `403` | `step_up_required` | A write whose proof of identity is older than `step_up`: confirm who you are and send it again |
 | `404` | `no_active_revision` | Reading `/config` before the first PUT |
 | `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — a plain `PUT` never creates; send `If-None-Match: *` to add an MCP server or an LLM provider |
 | `404` | `no_route` | A path under `/config` this surface does not serve |

@@ -688,6 +688,17 @@ What that means in practice:
   holder. It keeps directory changes a reviewable gesture of their own; a
   holder of host access can reach the store the directory lives in regardless.
 
+The org chart inside this document is also written by its **leads**, who need
+no grant for it: a person who leads a unit may change the seats and units
+inside it, judged change by change on both sides of the write, and never a
+setting or a credential ([A lead edits their own
+team](identity-and-access.md#a-lead-edits-their-own-team)). What that reaches
+is bounded by what the settings offer, which stay `config:write`'s: a lead may
+point a seat in their team at any model chain the company declares and enable
+its sandbox in any cell the company configures — so if a `cli-agent` provider
+or a sandbox cell on the engine host exists, a lead can hand it to their own
+seats. Configure those only where every lead may use them.
+
 ### What `allow_anonymous_read` was, and why deleting it was the only fix
 
 Reads used to serve without a credential **by default**, on the argument that

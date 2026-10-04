@@ -512,12 +512,12 @@ told they lead nobody goes looking for an authority they already hold.
 |---|---|
 | `state:read` | The company's working state: `/agents`, `/agents/activity`, `/org`, `/tools`, `/schedules`, `/budgets`, `/sandbox-runs`, the reads under `/work/*` and `/pages/*`, `/containers`, `/feed`, `/viewer`, `/stream/snapshot`, `/tokens/*`, `/ws/stream` |
 | `audit:read` | The record of what happened: `/events*`, the socket's `event` push and the snapshot's `events` section, any seat's `/agents/{id}/memory` and `/agents/{id}/conversations`, every seat's memory totals (`memory_overview`), a running coding job's tail (`/sandbox-runs/{turn_id}/tail`), the turn, phase, trace and A2A-channel questions on the socket, `/iam/audit`, and — beside `people:manage` — the company's human seats and who holds each (`/iam/seats`). Separate from `state:read` because a prompt and a tool argument are the company's most sensitive read |
-| `config:read` | Every read under `/config*` — the org chart included, with its credentials masked — `/integrations`, `/credential-pool`, `/mcp-servers`, a seat's resolved model chain and tool sources on `/org`, and the `/setup` and `/secrets` **listings**: they carry no values and still say which credentials a company holds, which it has not set, and when each last changed |
+| `config:read` | Every read under `/config*` — the org chart included, with its credentials masked, though one seat or unit is also its lead's to read ([A lead edits their own team](#a-lead-edits-their-own-team)) — `/integrations`, `/credential-pool`, `/mcp-servers`, a seat's resolved model chain and tool sources on `/org`, and the `/setup` and `/secrets` **listings**: they carry no values and still say which credentials a company holds, which it has not set, and when each last changed |
 | `secrets:read` | Revealing a credential's value: `GET /secrets/{name}?reveal=true`, which takes `config:read` as well — the value's grant on top of the row's |
 | `people:manage` | `/iam/*` — inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them — the company's human seats and who holds each (`/iam/seats`, `?unheld=true` for the vacancies), which is what an invitation is sent into, and this node's Tier A token labels (`/iam/node-tokens`, as `audit:read` may too). **The grant that can grant**, and it bounds itself: a caller may not confer a grant they do not hold |
 | `work:write` | Filing and moving work — the [write surface's](#the-human-write-surface) item routes — and `/operator/mcp`'s write half. Some of those verbs also ask a RELATION: re-routing, a project's policy and taking an item out of circulation are its project lead's |
 | `knowledge:write` | Writing the company's own pages. A rename, the trash and a restore are also the container's lead's; see [the write surface](#the-human-write-surface) |
-| `config:write` | **Host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `cli-agent` model, a `run_in: self` sandbox), so a holder can run anything there and read whatever a process there can, the keyring included — see [Identity and Access](../concepts/identity-and-access.md#grants-the-eleven-things-there-are-to-allow). Every write under `/config*` — the org chart included — and `/setup`'s writes — with `secrets:write` as well wherever the write seals a credential — and, on top of the page's own rule, the create, save, rename, trash, restore and purge of a page in the tool-skills container (a comment on one is not gated: a remark is not the skill). |
+| `config:write` | **Host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `cli-agent` model, a `run_in: self` sandbox), so a holder can run anything there and read whatever a process there can, the keyring included — see [Identity and Access](../concepts/identity-and-access.md#grants-the-eleven-things-there-are-to-allow). Every write under `/config*` — the org chart included, whose leads may also write what is inside the units they lead ([A lead edits their own team](#a-lead-edits-their-own-team)) — and `/setup`'s writes — with `secrets:write` as well wherever the write seals a credential — and, on top of the page's own rule, the create, save, rename, trash, restore and purge of a page in the tool-skills container (a comment on one is not gated: a remark is not the skill). |
 | `secrets:write` | `PUT`/`DELETE /secrets/{name}` and `POST /secrets/rekey`, and on top of `config:write` a `/setup` write that seals a credential: a submission carrying one, a provisioning pass, a GitHub App |
 | `fleet:operate` | The deployment rather than the company: `/fleet`, every `/work/retention*` route (the maintenance status and the reanchor value included), `/backup`, `/backups`, the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`) — which no seat may make whatever it holds. It is also the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be — on everybody's work, and not on what a seat is told to do |
 | `sandbox:run` | Starting a coding run |
@@ -1032,7 +1032,7 @@ rather than without their credential.
 
 ### `/config/*` — live config management (auth-gated)
 
-Every `/config/*` route takes a grant: `config:read` for the reads below and `config:write` for the writes, whatever the credential — a Tier A token, a session, or the development principal. A caller without it is refused `403 unauthorized` naming the grant (see [Which grant a route needs](#which-grant-a-route-needs)). A write also asks for a proof of identity inside `step_up`, and a session whose proof is older is refused `403 step_up_required` (see [Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are)). See the [Configuration concept doc](../concepts/configuration.md#auth) for the full auth model.
+Every `/config/*` route takes a grant: `config:read` for the reads below and `config:write` for the writes, whatever the credential — a Tier A token, a session, or the development principal. A caller without it is refused `403 unauthorized` naming the grant (see [Which grant a route needs](#which-grant-a-route-needs)). The routes that can change the org chart — `PUT` and `PATCH /config`, a revert, and the seat and unit entity routes — also admit a unit's **lead** for what is inside the units they lead, read and judged change by change (see [A lead edits their own team](#a-lead-edits-their-own-team)). A write also asks for a proof of identity inside `step_up`, and a session whose proof is older is refused `403 step_up_required` (see [Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are)). See the [Configuration concept doc](../concepts/configuration.md#auth) for the full auth model.
 
 **Read-only:**
 
@@ -1141,6 +1141,62 @@ Unbind or remove them first. A node that cannot read the directory answers
 `503 identity_unavailable` naming the `seats` rather than allowing it, and a
 write that takes no human seat away never asks.
 
+#### A lead edits their own team
+
+A person bound to a seat that leads a unit may write the seats and units
+inside it — the unit and every unit beneath it — without `config:write`,
+through the routes that write the org chart: `PUT` and `PATCH /config`,
+`POST /config/revisions/{id}/revert`, and `PUT /config/roles/{handle}` and
+`PUT /config/units/{id}`. The route admits anybody bound to a seat before the
+body is read, and refuses everybody else `403 unauthorized`; an agent is
+refused `seat_refused` whatever it holds. Whatever the route, the write is
+judged on **what it changes**, on both sides of it: every seat and unit it
+adds, removes, moves or edits has to sit inside the caller's subtree where it
+was and where it lands, a unit's own fields are judged on the unit itself
+before and after (so handing it to another `lead:` is refused), a new `lead:`
+or `manages:` entry has to name something inside it, and a new project,
+space, channel, email or contact identity may not be one an object outside
+it already claims. A credential and a setting are never a lead's. The rule,
+change by change, is in [Identity and
+Access](../concepts/identity-and-access.md#a-lead-edits-their-own-team).
+
+A write any part of which is not the caller's is refused whole —
+`403 unauthorized` naming `config:write`, the grant that would admit all of
+it, and a `refused` list naming every part, so a client can show each beside
+what it is about. A [dry run](#dry-runs) answers the same before anything is
+stored.
+
+```json
+{
+  "error": "unauthorized", "message": "...",
+  "reason": "not_lead", "grants": ["config:write"],
+  "refused": [
+    {"kind": "unit", "id": "platform", "op": "changed", "side": "after",
+     "place": "platform", "why": "self", "reason": "not_lead"},
+    {"kind": "unit", "id": "platform", "op": "changed", "side": "after",
+     "place": "data", "why": "lead", "value": "data-lead", "reason": "not_lead"},
+    {"kind": "seat", "id": "staff-eng", "op": "changed", "place": "",
+     "why": "credential", "value": "mcp_env.github.GITHUB_TOKEN", "reason": "no_grant"},
+    {"kind": "setting", "id": "mission", "place": "", "reason": "no_grant"}
+  ]
+}
+```
+
+| Field | What it says |
+|---|---|
+| `kind`, `id` | A `seat` by handle, a `unit` by key, or a `setting` by its top-level key |
+| `op` | What the write does to the seat or unit: `added`, `removed`, `moved` or `changed` |
+| `side` | `before` (the revision replaced) or `after` (the one proposed): which document the place was read in |
+| `place` | The key of the unit the change reaches; `""` is the company root, which is nobody's subtree |
+| `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), a claimed key (`project`, `space`, `channel`, `email`, `contact`, with the key in `value`), `duplicate` (two objects on one id, which only the company grant may write), or `credential` (with the field's path in `value`) |
+| `reason` | The authority table's reason: `not_lead`, `root`, or `no_grant` for a credential or a setting |
+
+A lead reads what they may write the same way: `GET /config/roles/{handle}`
+and `GET /config/units/{id}` serve a seat or a unit of their subtree, masked
+like every read here, and refuse one outside it `403 unauthorized`. The whole
+document, its history and its references stay `config:read`'s, so a lead edits
+through the entity routes.
+
 #### Dry runs
 
 `PUT /config?dry_run=true`, `PATCH /config?dry_run=true` and `PUT /config/{kind}/{id}?dry_run=true` are the same request, checked in the same order, that store, activate and publish nothing. The dashboard's organization builder sends one on every edit, and its Budgets screen one before every ceiling it saves, so a check is always exactly the write a save would send. An entity write needs its check more than the whole-document writes do: its caller never sees the rest of the document, so the whole-company validation behind the splice is the only place it learns that a seat fine on its own leaves the company invalid, or that a ceiling it raised now sits above the company's (a warning, which only a check shows before the save).
@@ -1161,7 +1217,7 @@ A valid check answers `200`:
 - **No summary is needed**, because nothing is stored to record one on. A `_summary` key in the body is still lifted out, so the document checked is the one the write reads.
 - **`base_revision_id`** is the revision the check was built on, and `""` when nothing is active. A client whose draft was built on a different revision learns that the configuration moved without a second request.
 - **Every other refusal is the write's, in the write's order**: `409 no_active_revision` for a patch with nothing to patch, `409 revision_advanced` for a stale `If-Match`, `412 already_configured` for `If-None-Match: *` on a configured company, and `400` with [problems](#refusals-carry-located-problems) for a document the write would refuse.
-- A dry run needs the same token a write does.
+- A dry run needs the same token a write does, and a [lead's](#a-lead-edits-their-own-team) is judged as the write would be: a part that is not theirs is `403` with the `refused` list.
 
 #### Refusals carry located problems
 
@@ -1384,6 +1440,7 @@ On a `409`, re-read `/config` and send the edit again.
 - `201 Created`: a write produced a new revision; the body is `{"revision_id", "epoch", "warnings"}` (see [What a write answers](#what-a-write-answers)). A per-entity write, a reload and a revert return this too: each created one revision.
 - `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
 - `401 Unauthorized`: missing or invalid bearer token — `invalid_token`, in the same [refusal envelope](#every-refusal-is-one-envelope) every route answers with, written by the guard itself before any route runs
+- `403 Forbidden`: `unauthorized` when the credential holds neither the grant nor, on the org chart, the lead relation — with a `refused` list for [a lead's write](#a-lead-edits-their-own-team) — and `step_up_required` for a write whose proof of identity is older than `step_up`
 - `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity write naming an id the active revision does not carry, or `no_route` for a path under `/config` this surface does not serve
 - `405 Method Not Allowed`: `method_not_allowed` for a `/config` path under a method it does not take, with `Allow`
 - `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)

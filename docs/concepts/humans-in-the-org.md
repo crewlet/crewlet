@@ -209,6 +209,14 @@ What the binding buys:
   a report's priorities, where an unbound credential reaches those only through
   `fleet:operate`. See [the authority
   table](identity-and-access.md#the-authority-table-one-function-decides).
+- **You edit your own team.** Holding a unit's lead seat, you may change the
+  seats and units inside it through `/config` — add a seat, edit a goal, move
+  somebody between two of your teams, remove a sub-team, restate your team's
+  purpose — without `config:write`, and read each of them with
+  `GET /config/roles/{handle}` and `GET /config/units/{id}`. Handing your team to
+  somebody else, reaching outside it, a credential and a setting stay
+  `config:write`'s. See [A lead edits their own
+  team](identity-and-access.md#a-lead-edits-their-own-team).
 
 - **Your writes are the seat's.** A write you make — through the `/work` and
   `/pages` HTTP routes or through your assistant — is recorded under the

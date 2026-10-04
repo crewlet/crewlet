@@ -188,7 +188,7 @@ map of what to attack, which is why those surfaces are guarded even for reads.
 |---|---|
 | `work:write` | Filing and moving work: create, update, comment, merge, and the project facets a writer may declare |
 | `knowledge:write` | Authoring the company's own pages: write, save, comment — except in the tool-skills container, which takes `config:write` as well |
-| `config:write` | Changing the company — `PATCH /config` and the epoch activation that rebuilds every seat's tools, providers and MCP children; the org chart included; the tracker's workspace catalogue (`write_work_catalogue`), which is configuration rather than any project's; and a page in the tool-skills container (`pages.skill.write`), which is injected into every seat's turn. **It is host access** — see below |
+| `config:write` | Changing the company — `PATCH /config` and the epoch activation that rebuilds every seat's tools, providers and MCP children; the org chart included, all of it — a unit's lead may change what sits inside it without this grant ([A lead edits their own team](#a-lead-edits-their-own-team)); the tracker's workspace catalogue (`write_work_catalogue`), which is configuration rather than any project's; and a page in the tool-skills container (`pages.skill.write`), which is injected into every seat's turn. **It is host access** — see below |
 | `secrets:write` | Sealing, rotating, deleting and re-keying the fleet's credentials |
 | `fleet:operate` | The deployment's own controls: `POST /backup`, the retention floor, the capacity window, the maintenance gestures, evict and readmit, and the two purges — a work item's and a page's — which no seat may make whatever it holds. With `people:manage` beside it, `POST /iam/invalidate-all` |
 | `people:manage` | Authority over **person rows**: inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them — and, with `fleet:operate` beside it, ending every session in the company. It also lists the company's human seats and who holds each (`GET /iam/seats`, `?unheld=true` for the vacancies), which is what an invitation is sent into |
@@ -223,6 +223,15 @@ a tool server, and does nothing about a holder of this grant, who chose that
 server. `people:manage` being its own grant keeps directory changes a
 reviewable gesture of their own; it is **not** a bound on a `config:write`
 holder, who can reach the store the directory lives in anyway.
+
+**A lead reaches part of it without the grant.** The org chart is written by
+its leads as well ([A lead edits their own
+team](#a-lead-edits-their-own-team)), and a lead may change every field of a
+seat in their team but a credential — its model chain and its sandbox among
+them. What they choose from is what the settings declare, which stay
+`config:write`'s: if the company offers a `cli-agent` provider or a sandbox cell
+that runs on the engine host, a lead can give one to their own seats, and
+through them run code there. Declare those only where every lead may use them.
 
 **Connecting an integration has no grant of its own.** `/setup` performs no
 write of its own — a credential goes through the store `/secrets` serves, and
@@ -1627,10 +1636,10 @@ unlocks.
 | **Own or lead** | Priorities, a person's day, reading their queue; whether a seat works — pausing it, resuming it, a note to the turn it is running (`pause_seat`, `resume_seat`, `steer_turn`) — and answering the question a coding run parked on (`answer_run`) | The owner, whoever leads them, or `fleet:operate`. For a seat's controls the owner is the person bound to the seat; for a run's question it is the run's **requester** — the person whose message woke the turn that launched it — and otherwise whoever leads the run's seat, so nobody who merely leads the requester answers a question the run put to them |
 | **Saved view** | Saving a view | A **personal** view (one naming an owner): its owner, or `fleet:operate`. A **shared** one: its container's lead — a project's, a unit's, or the person whose page it sits on and whoever leads them — or `fleet:operate`, which is the only way to a workspace-wide tab. Replacing a stored view asks this twice: for the view written, and for the view it overwrites as it stands |
 | **Container** | A project's policy — its fields, default assignee, tag renames and archives, archiving the project — re-routing a task to another team, and a page container's own settings | The project's lead or, for pages, the lead of the unit whose `space:` the container is; or `fleet:operate` |
-| **Chart object** | The prose of the org chart: a unit's name and purpose, a seat's goal and responsibilities. The relations authority is derived from — a seat's `project`, `space` and `email`, a unit's `project`, `space` and `channel` — and the runtime half are not in it: they take `config:write`, whoever leads the object. Nor is whom a seat manages, which is the chart's structure | Whoever leads that unit or seat, or `config:write` — the one relation rule whose admin path is the company's grant rather than `fleet:operate`, because the chart is what that grant restructures and what every seat's prompt is built from. A seat never edits its own |
+| **Subtree** | The org chart — its seats and units — read and written through `/config` (`config.org.read`, `config.org.write`) | `config:read` to read and `config:write` to write anything in it, or a person who **leads** the part concerned: a unit is in their subtree when they lead it or a unit above it, and a seat when its unit is. A write by a lead is judged change by change on **both sides** of it — see [A lead edits their own team](#a-lead-edits-their-own-team). The company root is nobody's subtree, and no agent takes either verb |
 | **Destructive** | Removing and restoring a task; trashing and restoring a page | The **container's** lead, or `fleet:operate` |
 | **Authored** | Editing and removing a page comment | Whoever wrote it, or `fleet:operate` |
-| **Operator** | Configuration, secrets, integrations, the node itself, the tracker's workspace catalogue, writing a page in the tool-skills container, and the org chart's structure | The grant the verb names — `config:write` for a tool skill, which is injected into every seat's turn and so rewrites the prompt the company runs under, and for the chart's structure; a chart **removal** names two, `config:write` and `fleet:operate`, and so does ending every session in the company (`fleet:operate` and `people:manage`) |
+| **Operator** | Configuration, secrets, integrations, the node itself, the tracker's workspace catalogue, and writing a page in the tool-skills container | The grant the verb names — `config:write` for a tool skill, which is injected into every seat's turn and so rewrites the prompt the company runs under; ending every session in the company names two (`fleet:operate` and `people:manage`) |
 | **Directory read** | Who can reach the company: the directory, one person's row, their credentials and sessions, and the answering node's Tier A token labels joined to the rows holding their logins (`GET /iam/node-tokens`) | The person the row is about, `people:manage`, or `audit:read` |
 | **Directory self** | Minting and revoking a credential, ending sessions | The person themselves, or `people:manage` |
 
@@ -1688,6 +1697,54 @@ question.
 it belongs nowhere — but it spends somebody else's turn and somebody else's
 budget, so a credential with no write capability at all must not be able to
 make every seat in the company think.
+
+### A lead edits their own team
+
+The org chart is part of the company document, and whoever holds
+`config:write` may change any of it. A person who **leads** a unit may change
+what is inside it without that grant — the seats and units of their
+**subtree**: the unit they lead and every unit beneath it, and every seat in
+one of them. The company root, where the CEO's seat and the top-level units
+sit, is nobody's subtree.
+
+A lead's write is judged **change by change, on both sides of it** — against
+the revision it replaces and the one it proposes — so it is the same whether
+it arrives as a whole document (`PUT` or `PATCH /config`), one seat or one unit
+(`PUT /config/roles/{handle}`, `PUT /config/units/{id}`), or a revert, which is
+judged on everything it would undo. Every part has to land inside their
+subtree:
+
+| A change | Is the lead's when |
+|---|---|
+| A seat or unit **added** | where it lands is inside their subtree afterwards — a seat's unit, a unit's parent |
+| A seat or unit **removed** | where it was is inside their subtree before — so a lead removes a team beneath them, and not the unit they lead, whose parent is not theirs |
+| A seat or unit **moved** | both where it was and where it lands |
+| A seat **edited** | its unit, before and after |
+| A unit's **own fields** edited | the unit itself, before and after — so a lead renames their own team, restates its purpose or changes its channel, while handing it to another `lead:`, or clearing its lead so it inherits one from above, is refused unless they also lead the unit above it |
+| A new **`lead:`** or **`manages:`** entry | what it names is inside their subtree afterwards — a lead cannot name an outsider as a sub-team's lead, or make one of their reports the CEO's manager; a name that resolves to nothing is refused too |
+| A new **project**, **space**, **channel**, **email** or **contact identity** | no object outside their subtree already claims it — a lead's authority over a project or a space is derived from the unit that declares it, and vendor attribution from an address |
+| A **credential** set, cleared or changed — any `${VAR}` or value in a credential field (`mcp_env`, a sandbox's `env`, a setup file, a seat's own app tokens) | never: it takes `config:write`, because a reference names any secret the company holds, and pointing a seat's tools at one hands it to a process the lead configures |
+| A **setting** — anything outside `roles:` and `units:` | never: it takes `config:write` |
+
+Only what a write **changes** is judged: a reference or a claim the object
+already carried was somebody else's decision, and judging it again would make a
+team an administrator wired to another team's channel uneditable by its own
+lead. A seat edited within the lead's subtree may otherwise change anything —
+its model chain, its sandbox, its schedules — among what the company's settings
+offer, which stay `config:write`'s: whether a `cli-agent` provider or a sandbox
+cell on the engine host exists for a lead to choose is the administrator's
+decision.
+
+A refused write is `403 unauthorized` naming `config:write` — the grant that
+would admit all of it — and a `refused` list of every part that is not the
+caller's, each with the place it reaches; a dry run (`?dry_run=true`) answers
+the same, so a lead learns before saving. A lead reads what they may write the
+same way: `GET /config/roles/{handle}` and `GET /config/units/{id}` serve a seat
+or unit of their subtree, masked as every read of the document is, while the
+whole document stays `config:read`'s. The route admits anybody bound to a seat
+before the body is read, and nobody else; an agent never writes the chart,
+and a lead's write asks for the same recent proof of identity every other
+configuration write does.
 
 ### Every tool call goes through it
 

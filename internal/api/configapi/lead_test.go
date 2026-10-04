@@ -1,0 +1,514 @@
+package configapi_test
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
+)
+
+// leadDoc is a company with a lead in the middle of it. The Platform lead
+// leads Platform and the Tooling team inside it; Engineering above them is
+// the CTO's, and Data beside them and Design beside Engineering are other
+// people's. The CEO sits at the root, which is nobody's subtree.
+const leadDoc = `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["sk-literal"]
+mcp_servers:
+  - name: github
+    command: github-mcp
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+units:
+  - name: Engineering
+    id: engineering
+    lead: cto
+    project: ENG
+    roles:
+      - name: CTO
+        handle: cto
+        llm: zulu
+    children:
+      - name: Platform
+        id: platform
+        lead: platform-lead
+        purpose: keep the lights on
+        roles:
+          - name: Platform Lead
+            handle: platform-lead
+            kind: human
+          - name: Staff Engineer
+            handle: staff-eng
+            llm: zulu
+            mcp_env:
+              github:
+                GITHUB_TOKEN: ghp-literal-token
+          - name: SRE
+            handle: sre
+            llm: zulu
+        children:
+          - name: Tooling
+            id: tooling
+            purpose: build tools
+            roles:
+              - name: Toolsmith
+                handle: toolsmith
+                llm: zulu
+      - name: Data
+        id: data
+        lead: data-lead
+        roles:
+          - name: Data Lead
+            handle: data-lead
+            llm: zulu
+  - name: Design
+    id: design
+    lead: designer
+    project: DSN
+    roles:
+      - name: Designer
+        handle: designer
+        llm: zulu
+`
+
+// platformLead is the person bound to the Platform lead's seat, holding no
+// grant at all: whatever they may write, they may write as its lead.
+func platformLead() iam.Principal {
+	return iam.Principal{ID: uuid.New(), Login: "pat.lead", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Seat: "platform-lead",
+		ReauthAt: time.Now().Add(time.Hour)}
+}
+
+// leadSurface is the surface over leadDoc.
+func leadSurface(t *testing.T) *surface {
+	t.Helper()
+	s := newSurface(t)
+	s.seed(t, leadDoc)
+	return s
+}
+
+// doAs is one request as p.
+func doAs(t *testing.T, s *surface, p iam.Principal, method, path, body string,
+	headers map[string]string) *httptest.ResponseRecorder {
+
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	req = req.WithContext(iam.WithPrincipal(req.Context(), p))
+	res := httptest.NewRecorder()
+	s.mux.ServeHTTP(res, req)
+	return res
+}
+
+// putEntityAs reads one seat or unit as the company's own grant would, lets
+// the case edit it, and writes it back as p.
+func putEntityAs(t *testing.T, s *surface, p iam.Principal, kind, id string,
+	change func(map[string]any), query string) *httptest.ResponseRecorder {
+
+	t.Helper()
+	entity := entityOf(t, s, kind, id)
+	change(entity)
+	body, err := json.Marshal(entity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doAs(t, s, p, http.MethodPut, "/config/"+kind+"/"+id+query, string(body),
+		map[string]string{"X-Summary": "a lead's edit"})
+}
+
+// refusedParts is a 403's refused list as kind/id/side/place/why/reason.
+func refusedParts(t *testing.T, res *httptest.ResponseRecorder) []string {
+	t.Helper()
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("answered %d, want 403: %s", res.Code, res.Body.String())
+	}
+	body := decode(t, res)
+	if body["error"] != string(httpjson.CodeUnauthorized) {
+		t.Fatalf("refused as %v, want unauthorized: %v", body["error"], body)
+	}
+	if grants, _ := body[authz.DetailGrants].([]any); !slices.Equal(grants,
+		[]any{string(iam.GrantConfigWrite)}) {
+		t.Errorf("grants = %v, want the company's grant that would admit all of it",
+			body[authz.DetailGrants])
+	}
+	list, _ := body["refused"].([]any)
+	var out []string
+	for _, item := range list {
+		r, _ := item.(map[string]any)
+		out = append(out, strings.Join([]string{str(r["kind"]), str(r["id"]),
+			str(r["side"]), str(r["place"]), str(r["why"]), str(r["reason"])}, "/"))
+	}
+	if len(out) == 0 {
+		t.Fatalf("a 403 named no refused part: %v", body)
+	}
+	return out
+}
+
+func str(v any) string { s, _ := v.(string); return s }
+
+// rolesOf is a unit entity's seat list, for an edit to change.
+func rolesOf(unit map[string]any) []any { list, _ := unit["roles"].([]any); return list }
+
+// childOf is a unit entity's child with this key.
+func childOf(t *testing.T, unit map[string]any, key string) map[string]any {
+	t.Helper()
+	children, _ := unit["children"].([]any)
+	for _, c := range children {
+		if child, _ := c.(map[string]any); child["id"] == key {
+			return child
+		}
+	}
+	t.Fatalf("no child %q in %v", key, unit["id"])
+	return nil
+}
+
+// takeSeat removes the seat with this handle from a list, answering both.
+func takeSeat(t *testing.T, list []any, handle string) ([]any, any) {
+	t.Helper()
+	for i, item := range list {
+		if seat, _ := item.(map[string]any); seat["handle"] == handle {
+			return slices.Delete(slices.Clone(list), i, i+1), item
+		}
+	}
+	t.Fatalf("no seat %q", handle)
+	return nil, nil
+}
+
+// A LEAD WRITES INSIDE THEIR SUBTREE, AND ONLY THERE.
+//
+// Every case is one write by the Platform lead, who holds no grant. What they
+// may do is everything about the seats and units inside Platform — its own
+// fields, a seat's, a seat added, moved between two of their teams, a team
+// removed — and what they may not is anything that reaches outside it on
+// either side of the write: handing Platform to somebody else, removing or
+// moving the unit they lead, moving a seat out, making a seat manage somebody
+// outside, claiming another team's project, touching a root seat, or changing
+// a credential.
+//
+// Mutation: decide every place against the document being replaced alone and
+// the cases that only the proposed document refuses — clearing the unit's
+// lead, a seat moved out — are admitted; drop the claim check and the project
+// case is admitted.
+func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name       string
+		kind, id   string
+		change     func(t *testing.T, entity map[string]any)
+		admitted   bool
+		refusedHas string // kind/id/side/place/why/reason, for a refusal
+	}{
+		{"a seat's goal", configapi.EntityRoles, "sre",
+			func(_ *testing.T, e map[string]any) { e["goal"] = "keep it up" }, true, ""},
+		{"a sub-team's purpose", configapi.EntityUnits, "tooling",
+			func(_ *testing.T, e map[string]any) { e["purpose"] = "build better tools" }, true, ""},
+		{"their own team's purpose", configapi.EntityUnits, "platform",
+			func(_ *testing.T, e map[string]any) { e["purpose"] = "ship the platform" }, true, ""},
+		{"a seat added to their team", configapi.EntityUnits, "platform",
+			func(_ *testing.T, e map[string]any) {
+				e["roles"] = append(rolesOf(e), map[string]any{
+					"name": "Intern", "handle": "intern", "llm": "zulu"})
+			}, true, ""},
+		{"a sub-team removed", configapi.EntityUnits, "platform",
+			func(_ *testing.T, e map[string]any) { delete(e, "children") }, true, ""},
+		{"a seat moved between two of their teams", configapi.EntityUnits, "platform",
+			func(t *testing.T, e map[string]any) {
+				var sre any
+				e["roles"], sre = takeSeat(t, rolesOf(e), "sre")
+				tooling := childOf(t, e, "tooling")
+				tooling["roles"] = append(rolesOf(tooling), sre)
+			}, true, ""},
+		{"a seat's masked credential sent back as it was read", configapi.EntityRoles,
+			"staff-eng", func(_ *testing.T, e map[string]any) { e["goal"] = "ship" }, true, ""},
+
+		{"their own team handed to an outsider", configapi.EntityUnits, "platform",
+			func(_ *testing.T, e map[string]any) { e["lead"] = "data-lead" }, false,
+			"unit/platform/after/platform/self/not_lead"},
+		{"their own team's lead cleared", configapi.EntityUnits, "platform",
+			func(_ *testing.T, e map[string]any) { delete(e, "lead") }, false,
+			"unit/platform/after/platform/self/not_lead"},
+		{"a sub-team led by an outsider", configapi.EntityUnits, "tooling",
+			func(_ *testing.T, e map[string]any) { e["lead"] = "designer" }, false,
+			"unit/tooling/after/design/lead/not_lead"},
+		{"their own team removed", configapi.EntityUnits, "engineering",
+			func(t *testing.T, e map[string]any) {
+				children, _ := e["children"].([]any)
+				e["children"] = []any{children[1]} // Data stays
+			}, false, "unit/platform/before/engineering/place/not_lead"},
+		{"a seat moved out of their team", configapi.EntityUnits, "engineering",
+			func(t *testing.T, e map[string]any) {
+				platform, data := childOf(t, e, "platform"), childOf(t, e, "data")
+				var sre any
+				platform["roles"], sre = takeSeat(t, rolesOf(platform), "sre")
+				data["roles"] = append(rolesOf(data), sre)
+			}, false, "seat/sre/after/data/place/not_lead"},
+		{"a seat made to manage somebody outside", configapi.EntityRoles, "sre",
+			func(_ *testing.T, e map[string]any) { e["manages"] = []any{"designer"} }, false,
+			"seat/sre/after/design/manages/not_lead"},
+		{"a seat made to manage the CEO", configapi.EntityRoles, "sre",
+			func(_ *testing.T, e map[string]any) { e["manages"] = []any{"ceo"} }, false,
+			"seat/sre/after//manages/root"},
+		{"another team's project claimed", configapi.EntityUnits, "tooling",
+			func(_ *testing.T, e map[string]any) { e["project"] = "DSN" }, false,
+			"unit/tooling/before/design/project/not_lead"},
+		{"a seat at the root", configapi.EntityRoles, "ceo",
+			func(_ *testing.T, e map[string]any) { e["goal"] = "grow" }, false,
+			"seat/ceo/before//place/root"},
+		{"a credential changed inside their team", configapi.EntityRoles, "staff-eng",
+			func(_ *testing.T, e map[string]any) {
+				e["mcp_env"] = map[string]any{"github": map[string]any{
+					"GITHUB_TOKEN": "${CEO_GITHUB_TOKEN}"}}
+			}, false, "seat/staff-eng///credential/no_grant"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s := leadSurface(t)
+			res := putEntityAs(t, s, platformLead(), c.kind, c.id,
+				func(e map[string]any) { c.change(t, e) }, "")
+			if c.admitted {
+				if res.Code != http.StatusCreated {
+					t.Fatalf("a lead's write inside their subtree answered %d: %s",
+						res.Code, res.Body.String())
+				}
+				return
+			}
+			if parts := refusedParts(t, res); !slices.Contains(parts, c.refusedHas) {
+				t.Errorf("refused %v, want it to name %s", parts, c.refusedHas)
+			}
+		})
+	}
+}
+
+// A LEAD'S WHOLE-DOCUMENT WRITES ARE JUDGED THE SAME WAY, and so is a revert.
+//
+// PUT, PATCH and a revert reach the same admission an entity write does: a
+// change inside the subtree lands and one that also touches another team is
+// refused. A revert is judged on its WHOLE diff — from the revision active now
+// to the one reverted to — so reverting to a revision an administrator wrote
+// is refused when it would undo anything outside the lead's subtree.
+func TestALeadsWholeDocumentWritesAreJudgedTheSameWay(t *testing.T) {
+	t.Parallel()
+	inside := strings.Replace(leadDoc, "build tools", "build better tools", 1)
+	outside := strings.Replace(inside, "    project: DSN\n",
+		"    project: DSN\n    purpose: draw\n", 1)
+
+	t.Run("PUT", func(t *testing.T) {
+		t.Parallel()
+		s := leadSurface(t)
+		if res := doAs(t, s, platformLead(), http.MethodPut, "/config",
+			string(companyJSON(t, inside)), map[string]string{"X-Summary": "tools"}); res.Code != http.StatusCreated {
+			t.Fatalf("a whole document changing only their subtree = %d: %s",
+				res.Code, res.Body.String())
+		}
+		res := doAs(t, s, platformLead(), http.MethodPut, "/config",
+			string(companyJSON(t, outside)), map[string]string{"X-Summary": "design"})
+		if parts := refusedParts(t, res); !slices.Contains(parts,
+			"unit/design/before/design/self/not_lead") {
+			t.Errorf("refused %v, want it to name Design", parts)
+		}
+	})
+	t.Run("PATCH", func(t *testing.T) {
+		t.Parallel()
+		s := leadSurface(t)
+		units := func(doc string) string {
+			var company map[string]any
+			if err := json.Unmarshal(companyJSON(t, doc), &company); err != nil {
+				t.Fatal(err)
+			}
+			patch, err := json.Marshal(map[string]any{"units": company["units"]})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(patch)
+		}
+		headers := map[string]string{"X-Summary": "tools",
+			"Content-Type": "application/merge-patch+json"}
+		if res := doAs(t, s, platformLead(), http.MethodPatch, "/config",
+			units(inside), headers); res.Code != http.StatusCreated {
+			t.Fatalf("a patch changing only their subtree = %d: %s",
+				res.Code, res.Body.String())
+		}
+		if parts := refusedParts(t, doAs(t, s, platformLead(), http.MethodPatch,
+			"/config", units(outside), headers)); !slices.Contains(parts,
+			"unit/design/before/design/self/not_lead") {
+			t.Errorf("refused %v, want it to name Design", parts)
+		}
+	})
+	t.Run("revert", func(t *testing.T) {
+		t.Parallel()
+		s := leadSurface(t)
+		base := activeRevision(t, s)
+		// AN ADMINISTRATOR CHANGES BOTH TEAMS; the lead reverting all of it
+		// would undo Design's edit too.
+		if res := s.do(t, http.MethodPut, "/config", string(companyJSON(t, outside)),
+			map[string]string{"X-Summary": "both"}); res.Code != http.StatusCreated {
+			t.Fatalf("seed: %d %s", res.Code, res.Body.String())
+		}
+		if parts := refusedParts(t, doAs(t, s, platformLead(), http.MethodPost,
+			"/config/revisions/"+base+"/revert", "", nil)); !slices.Contains(parts,
+			"unit/design/before/design/self/not_lead") {
+			t.Errorf("refused %v, want the revert's edit of Design named", parts)
+		}
+		// AND A REVERT WHOSE WHOLE DIFF IS INSIDE THEIR SUBTREE LANDS.
+		mine := activeRevision(t, s)
+		if res := s.do(t, http.MethodPut, "/config", string(companyJSON(t,
+			strings.Replace(outside, "build better tools", "build the best tools", 1))),
+			map[string]string{"X-Summary": "tools again"}); res.Code != http.StatusCreated {
+			t.Fatalf("seed: %d %s", res.Code, res.Body.String())
+		}
+		if res := doAs(t, s, platformLead(), http.MethodPost,
+			"/config/revisions/"+mine+"/revert", "", nil); res.Code != http.StatusCreated {
+			t.Errorf("a revert inside their subtree = %d: %s", res.Code, res.Body.String())
+		}
+	})
+}
+
+// activeRevision is the id of the revision active now.
+func activeRevision(t *testing.T, s *surface) string {
+	t.Helper()
+	revision, found, err := s.configs.Active(t.Context())
+	if err != nil || !found {
+		t.Fatalf("active revision: %v (found=%v)", err, found)
+	}
+	return revision.ID
+}
+
+// A SETTING IS NEVER A LEAD'S, and the refusal names its key — on a dry run
+// as on a write, so a lead learns before saving what would be refused.
+func TestALeadsSettingChangeIsRefusedNamingTheKey(t *testing.T) {
+	t.Parallel()
+	s := leadSurface(t)
+	before := activeRevision(t, s)
+	for _, query := range []string{"?dry_run=true", ""} {
+		res := doAs(t, s, platformLead(), http.MethodPatch, "/config"+query,
+			`{"mission": "make tools"}`, map[string]string{"X-Summary": "mission"})
+		if parts := refusedParts(t, res); !slices.Equal(parts,
+			[]string{"setting/mission////no_grant"}) {
+			t.Errorf("PATCH%s refused %v, want the mission named alone", query, parts)
+		}
+	}
+	// AND A DRY RUN OF WHAT THEY MAY DO ANSWERS AS ONE: valid, nothing stored.
+	res := putEntityAs(t, s, platformLead(), configapi.EntityRoles, "sre",
+		func(e map[string]any) { e["goal"] = "keep it up" }, "?dry_run=true")
+	if res.Code != http.StatusOK || decode(t, res)["valid"] != true {
+		t.Errorf("a lead's dry run inside their subtree = %d: %s", res.Code, res.Body.String())
+	}
+	if after := activeRevision(t, s); after != before {
+		t.Errorf("a refused write or a dry run moved the active revision to %s", after)
+	}
+}
+
+// THE COMPANY'S GRANT IS THE ADMIN PATH: whoever holds config:write changes
+// anything, a root seat and a setting included, leading nothing at all.
+func TestConfigWriteIsTheAdminPath(t *testing.T) {
+	t.Parallel()
+	s := leadSurface(t)
+	admin := iam.Principal{ID: uuid.New(), Login: "ops.admin", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantConfigWrite},
+		ReauthAt: time.Now().Add(time.Hour)}
+	if res := putEntityAs(t, s, admin, configapi.EntityRoles, "ceo",
+		func(e map[string]any) { e["goal"] = "grow" }, ""); res.Code != http.StatusCreated {
+		t.Errorf("config:write editing a root seat = %d: %s", res.Code, res.Body.String())
+	}
+	if res := doAs(t, s, admin, http.MethodPatch, "/config", `{"mission": "grow"}`,
+		map[string]string{"X-Summary": "mission"}); res.Code != http.StatusCreated {
+		t.Errorf("config:write editing a setting = %d: %s", res.Code, res.Body.String())
+	}
+}
+
+// THE ROUTE REFUSES SOMEBODY WHO COULD LEAD NOTHING BEFORE THE BODY IS READ.
+//
+// A person bound to no seat is no unit's lead, so a body they send is never
+// parsed: an unreadable one is refused 403 rather than 400. The control is a
+// person bound to a seat, whose same body is read — and refused as unreadable
+// — because whether they lead what it changes is only known once it is. An
+// agent never passes, whatever it holds: a seat rewriting the org it runs
+// inside is a model choosing its own team.
+func TestTheRouteRefusesSomebodyWhoCouldLeadNothing(t *testing.T) {
+	t.Parallel()
+	s := leadSurface(t)
+	unbound := platformLead()
+	unbound.Seat = ""
+	headers := map[string]string{"X-Summary": "x"}
+	if res := doAs(t, s, unbound, http.MethodPut, "/config/roles/sre", "{not json",
+		headers); res.Code != http.StatusForbidden {
+		t.Errorf("somebody bound to no seat = %d, want 403 before the body: %s",
+			res.Code, res.Body.String())
+	}
+	if res := doAs(t, s, platformLead(), http.MethodPut, "/config/roles/sre", "{not json",
+		headers); res.Code != http.StatusBadRequest {
+		t.Errorf("a person bound to a seat = %d, want the body read and refused: %s",
+			res.Code, res.Body.String())
+	}
+	agent := platformLead()
+	agent.Kind, agent.Grants = iam.KindSeat, iam.AllGrants
+	if res := doAs(t, s, agent, http.MethodPut, "/config/roles/sre", "{}",
+		headers); res.Code != http.StatusForbidden ||
+		decode(t, res)[authz.DetailReason] != string(authz.ReasonSeatRefused) {
+		t.Errorf("an agent holding every grant = %d %s, want seat_refused",
+			res.Code, res.Body.String())
+	}
+}
+
+// A LEAD READS WHAT THEY MAY WRITE, AND NOTHING ELSE.
+//
+// One seat or one unit of their subtree, masked as every read of the document
+// is — and not a seat or a unit outside it, nor the whole document, which is
+// `config:read`'s.
+func TestALeadReadsOnlyTheirSubtree(t *testing.T) {
+	t.Parallel()
+	s := leadSurface(t)
+	for path, want := range map[string]int{
+		"/config/roles/sre":          http.StatusOK,
+		"/config/units/platform":     http.StatusOK,
+		"/config/units/tooling":      http.StatusOK,
+		"/config/roles/designer":     http.StatusForbidden,
+		"/config/units/engineering":  http.StatusForbidden,
+		"/config/roles/ceo":          http.StatusForbidden,
+		"/config":                    http.StatusForbidden,
+		"/config/mcp-servers/github": http.StatusForbidden,
+	} {
+		if res := doAs(t, s, platformLead(), http.MethodGet, path, "", nil); res.Code != want {
+			t.Errorf("GET %s = %d, want %d: %s", path, res.Code, want, res.Body.String())
+		}
+	}
+	res := doAs(t, s, platformLead(), http.MethodGet, "/config/roles/staff-eng", "", nil)
+	if strings.Contains(res.Body.String(), "ghp-literal-token") {
+		t.Errorf("a lead's read carried a credential in the clear: %s", res.Body.String())
+	}
+}
+
+// A LEAD'S WRITE STILL ASKS FOR A RECENT PROOF, as every write of the company
+// document does.
+func TestALeadsWriteAsksForARecentProof(t *testing.T) {
+	t.Parallel()
+	s := leadSurface(t)
+	stale := platformLead()
+	stale.ReauthAt = time.Now().Add(-time.Minute)
+	res := putEntityAs(t, s, stale, configapi.EntityRoles, "sre",
+		func(e map[string]any) { e["goal"] = "keep it up" }, "")
+	if res.Code != http.StatusForbidden ||
+		decode(t, res)["error"] != string(httpjson.CodeStepUpRequired) {
+		t.Errorf("a stale lead's write = %d %s, want step_up_required",
+			res.Code, res.Body.String())
+	}
+}

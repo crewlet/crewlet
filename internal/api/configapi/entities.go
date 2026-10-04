@@ -394,6 +394,10 @@ var entityKinds = map[string]entityAccess{
 	},
 }
 
+// inOrgChart reports whether a collection is part of the org chart, whose
+// routes its leads may take as well as the company's grant.
+func inOrgChart(kind string) bool { return kind == EntityRoles || kind == EntityUnits }
+
 // EntityKinds names every addressable collection, sorted — so a caller can
 // discover the surface rather than carrying its own copy of this list.
 func EntityKinds() []string {
@@ -478,6 +482,11 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 				})
 			return
 		}
+		// A SEAT OR A UNIT IS READ BY ITS LEAD as well as by the grant
+		// that reads the whole document, decided on where it sits.
+		if inOrgChart(kind) && !s.mayRead(w, r, company, kind, id) {
+			return
+		}
 		// THE DOCUMENT'S TAG, because an entity is a slice of it: the
 		// entity changes when the revision does, and a caller who holds
 		// this tag can send it straight back as If-Match on the write.
@@ -552,6 +561,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			s.refuseEntity(w, kind, id, err)
 			return
 		}
+		d.principal = principalOf(r)
 		prepared, err := s.prepare(r.Context(), d)
 		if err != nil {
 			s.refuseEntity(w, kind, id, err)
