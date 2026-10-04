@@ -304,11 +304,11 @@ func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
 //
 // It was one — `CheckTiers`, which asked the company too — while a node's
 // logs waited for its first company: only a company started one. Every node
-// runs the core runtime from boot now, the org chart and the identity estate
-// on every domain's log, so the pair's check let through exactly the node it
-// should have refused: one started with no company, whose first person's
-// invitation and the chart the org builder wrote would be gone at its first
-// restart. So there is no company in these cases at all.
+// runs the core runtime from boot now, every domain's log and the identity
+// estate on it, so the pair's check let through exactly the node it should
+// have refused: one started with no company, whose first person's invitation
+// would be gone at its first restart. So there is no company in these cases at
+// all.
 //
 // Mutation: let `Durable` pass an embedded stream with a blank directory and
 // the first rows are accepted; drop the call from the stream's validator and
