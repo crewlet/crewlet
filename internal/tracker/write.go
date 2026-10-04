@@ -190,7 +190,7 @@ type Writer struct {
 	// a subtree BEFORE their first append. It is never the write path's
 	// own snapshot — that is the framework's, taken per append — and
 	// nothing decided here is paired with an expectation.
-	db store.PartitionReader
+	db store.ReplicatedReader
 
 	// claims is the coordination a walking sequence takes its claim from,
 	// and nodeID is where it runs — the prefix of every claim's owner, never
@@ -295,7 +295,7 @@ type Writer struct {
 // WriterDeps is everything a writer needs that it does not own.
 type WriterDeps struct {
 	Publisher *statelog.Publisher
-	DB        store.PartitionReader
+	DB        store.ReplicatedReader
 	Claims    Claims
 	NodeID    string
 

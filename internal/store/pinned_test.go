@@ -15,12 +15,12 @@ import (
 // openPinned is the fixture the cases below share: a store sized for n pinned
 // writers, with one probe table.
 //
-// IT RETURNS THE PARTITION, which is where a pin belongs: a pinned writer is
-// an applier's, an applier writes a partition's tables, and the
-// node estate is sized for readers alone.
+// IT RETURNS THE REPLICATED ESTATE, which is where a pin belongs: a pinned
+// writer is an applier's, an applier writes the replicated estate's tables,
+// and the node estate is sized for readers alone.
 func openPinned(t *testing.T, pins int) *store.DB {
 	t.Helper()
-	node, db := openPartitioned(t, filepath.Join(t.TempDir(), "pinned.db"), store.Options{}, pins)
+	node, db := openReplicated(t, filepath.Join(t.TempDir(), "pinned.db"), store.Options{}, pins)
 	t.Cleanup(func() { _ = node.Close() })
 	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
@@ -126,9 +126,9 @@ func TestAPinPastTheDeclaredCountIsRefused(t *testing.T) {
 
 	if _, err := db.Writer(t.Context()); err == nil {
 		t.Fatal("a second writer was pinned against a handle that declared one")
-	} else if !contains(err.Error(), "PartitionFile.Logs") {
-		t.Errorf("refusal = %q, want it to name store.PartitionFile.Logs, "+
-			"which is the field the caller has to change", err)
+	} else if !contains(err.Error(), "DB.OpenReplicated") {
+		t.Errorf("refusal = %q, want it to name DB.OpenReplicated, whose log "+
+			"count is what the caller has to change", err)
 	}
 
 	// AND CLOSING RETURNS THE BUDGET: a domain that restarts its applier

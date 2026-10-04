@@ -76,7 +76,7 @@ import (
 // than wired, and [pages.Fence] never had one, so the two fences now answer the
 // same question the same way.
 type Fence struct {
-	db     store.PartitionReader
+	db     store.ReplicatedReader
 	nodeID string
 
 	// Floor is the fleet's published trim floor at a generation and Ends
@@ -107,7 +107,7 @@ type Fence struct {
 }
 
 // NewFence builds the write fence for one node.
-func NewFence(db store.PartitionReader, nodeID string) *Fence {
+func NewFence(db store.ReplicatedReader, nodeID string) *Fence {
 	return &Fence{db: db, nodeID: nodeID}
 }
 
@@ -193,11 +193,11 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 // same gate again, and burns its whole round budget to a conflict a model
 // reads as a colleague editing the same object.
 type Gates struct {
-	db store.PartitionReader
+	db store.ReplicatedReader
 }
 
 // NewGates builds the gate reader for one node.
-func NewGates(db store.PartitionReader) *Gates { return &Gates{db: db} }
+func NewGates(db store.ReplicatedReader) *Gates { return &Gates{db: db} }
 
 // GatedAt reports whether a record at a position applies nowhere, and the
 // gate that answers for it, by the rule [statelog.Gates] states — which the

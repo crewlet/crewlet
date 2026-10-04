@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -185,7 +184,7 @@ func TestTheFeedFoldsASchedulesRunsAndLeavesItsSkippedTicksOut(t *testing.T) {
 	base := time.Date(2031, 4, 16, 10, 0, 0, 0, time.UTC)
 	outcomes := []string{"fired", "skipped_catchup", "fired", "fired", "skipped_paused",
 		"fired", "skipped_catchup", "fired", "fired"}
-	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		for i, outcome := range outcomes {
 			at := base.Add(-time.Duration(i+1) * 10 * time.Minute)
 			target := "pm"
@@ -209,7 +208,7 @@ func TestTheFeedFoldsASchedulesRunsAndLeavesItsSkippedTicksOut(t *testing.T) {
 		{Task: "a", Kind: tracker.FeedCompleted, At: base,
 			Cursor: tracker.FeedCursor{At: base, Seq: 9}.String()},
 	}, Complete: true}}
-	sources := queries.Sources{Work: work, Usage: storetest.EstateOf(db)}
+	sources := queries.Sources{Work: work, Usage: db.Replicated()}
 	for _, kinds := range []string{"", "schedule"} {
 		got, err := askNative(t, sources, "company_feed", map[string]any{"kinds": kinds})
 		if err != nil {

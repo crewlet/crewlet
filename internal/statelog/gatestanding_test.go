@@ -182,7 +182,7 @@ type missingLedger struct{ probeDomain }
 func (missingLedger) OpsTable() string { return "probe_ops_absent" }
 
 // ledger writes one operation row, as this node's applier would have.
-func ledger(t *testing.T, db store.PartitionHandle, opID, subject string, at statelog.Position) {
+func ledger(t *testing.T, db store.ReplicatedHandle, opID, subject string, at statelog.Position) {
 	t.Helper()
 	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `

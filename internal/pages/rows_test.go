@@ -14,9 +14,10 @@ import (
 // [pages.Gates.GatedAt] is one answer made of two reads — the page's deletion
 // marker and the writer's eviction window — and it shipped as two
 // `Read` calls under a comment saying it was one. Two calls are two snapshots,
-// and two resolutions of a partition an adoption replaces while readers run: the applier commits between them, a purge of the page can land
-// between them, and the two halves then describe two states of the estate —
-// possibly two files.
+// and two resolutions of the replicated estate, which an adoption replaces
+// while readers run: the applier commits between them, a purge of the page can
+// land between them, and the two halves then describe two states of the
+// estate — possibly two files.
 //
 // A STRUCTURAL TEST, because the defect is structural, for the reason
 // read_test.go gives: a behavioural one would have to commit a purge or swap

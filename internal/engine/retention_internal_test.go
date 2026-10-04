@@ -1200,7 +1200,7 @@ func TestTheRetentionReportSaysWhichLogsEvictionsItCouldNotRead(t *testing.T) {
 		t.Fatalf("open a second store: %v", err)
 	}
 	t.Cleanup(func() { _ = closed.Close() })
-	if err := closeEstateZero(closed); err != nil {
+	if err := closed.CloseReplicated(); err != nil {
 		t.Fatalf("close its replicated estate: %v", err)
 	}
 	for name, tc := range map[string]struct {

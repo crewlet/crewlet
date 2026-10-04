@@ -239,7 +239,7 @@ func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 	at := statelog.Position{Stream: probeStream, Generation: 1, Seq: 4_200}
 	// THE DONOR APPLIED THE RECORD AT ITS CHECKPOINT: its ledger names it by
 	// operation, position and the broker's instant.
-	seed := func(t *testing.T, db store.PartitionHandle) {
+	seed := func(t *testing.T, db store.ReplicatedHandle) {
 		t.Helper()
 		if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(t.Context(), `

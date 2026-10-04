@@ -53,8 +53,8 @@ import (
 // in the diff next to the migration. That is the whole mechanism, and it is the
 // one thing the five migrations above did not have.
 //
-// Nothing here binds the REPLICATED estate's partitions, which have their own
-// gate one file over: [TestOnlyTheApplierWritesThePartitions].
+// Nothing here binds the REPLICATED estate, which has its own gate one file
+// over: [TestOnlyTheApplierWritesTheReplicatedEstate].
 func TestEveryNodeTableSaysWhoHasToAgreeOnIt(t *testing.T) {
 	t.Parallel()
 
@@ -342,12 +342,12 @@ var nodeEstatePlacements = []placement{
 // What that costs is stated rather than glossed: a new replicated table can
 // arrive without the page mentioning it. It is covered by the gate that
 // matters for it instead — a write to it fails
-// [TestOnlyTheApplierWritesThePartitions] unless its author says why.
+// [TestOnlyTheApplierWritesTheReplicatedEstate] unless its author says why.
 func TestTheArchitecturePageNamesEveryNodeTable(t *testing.T) {
 	t.Parallel()
 
 	page := estatePage(t)
-	node, replicated := tablesIn(t, store.EstateNode), tablesIn(t, store.EstatePartition)
+	node, replicated := tablesIn(t, store.EstateNode), tablesIn(t, store.EstateReplicated)
 
 	names := make([]string, 0, len(node))
 	for name := range node {

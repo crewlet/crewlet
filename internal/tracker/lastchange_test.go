@@ -436,7 +436,7 @@ func writeReplicated(t *testing.T, r *roundTrip, statement string) {
 // operator's database runs rather than a copy of it that can drift.
 func backfillStatements(t *testing.T, name string) []string {
 	t.Helper()
-	body, err := store.SchemaFile(store.EstatePartition, name)
+	body, err := store.SchemaFile(store.EstateReplicated, name)
 	if err != nil {
 		t.Fatalf("read the migration: %v", err)
 	}

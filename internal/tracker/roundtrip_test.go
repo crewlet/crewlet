@@ -32,7 +32,7 @@ type roundTrip struct {
 	t        *testing.T
 	broker   *js.Queue
 	node     *store.DB
-	db       store.PartitionHandle
+	db       store.ReplicatedHandle
 	log      *js.DomainLog
 	writer   *tracker.Writer
 	applier  *tracker.Applier
@@ -124,7 +124,7 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 // joining the same log — a node that adopted a snapshot, say — under its own
 // id.
 func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB,
-	db store.PartitionHandle, nodeID string) *roundTrip {
+	db store.ReplicatedHandle, nodeID string) *roundTrip {
 
 	t.Helper()
 	rows, err := tracker.NewRows(db.Reader(), statelog.EstateStream(tracker.Domain{}))

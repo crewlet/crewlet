@@ -21,13 +21,13 @@ import (
 // Each domain answers for its own log now, and the trim asks the domain it is
 // trimming.
 //
-// THROUGH THE PARTITION HANDLE, resolved on this call, and that is a
-// correctness property rather than a style: the partition is legitimately not
+// THROUGH THE REPLICATED ESTATE'S HANDLE, resolved on this call, and that is a
+// correctness property rather than a style: the estate is legitimately not
 // open while an adoption swaps its file and after the node closes, and a
 // statement issued on a closed pool panics inside database/sql — which is what
 // an earlier shape of this did when the trim's own tick raced a shutdown.
-// [store.PartitionReader.Read] answers [store.ErrNoEstate] instead.
-func (Domain) Evictions(ctx context.Context, db store.PartitionReader) ([]statelog.EvictionRow, error) {
+// [store.ReplicatedReader.Read] answers [store.ErrNoEstate] instead.
+func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error) {
 	var out []statelog.EvictionRow
 	err := db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `

@@ -20,7 +20,7 @@ import (
 func TestAnAbsentCheckpointVerifiesOnlyAsTheZeroPosition(t *testing.T) {
 	t.Parallel()
 	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
-	path := storetest.Partition(t, estate).Path()
+	path := storetest.ReplicatedDB(t, estate).Path()
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestAManifestNamingAnotherStreamInstanceIsRefused(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed the checkpoint: %v", err)
 	}
-	path := storetest.Partition(t, estate).Path()
+	path := storetest.ReplicatedDB(t, estate).Path()
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}

@@ -43,7 +43,7 @@ func appliedThrough(t *testing.T, n uint64) *applyHarness {
 }
 
 // storedAtOf reads the record the committed checkpoint row names.
-func storedAtOf(t *testing.T, db store.PartitionHandle) time.Time {
+func storedAtOf(t *testing.T, db store.ReplicatedHandle) time.Time {
 	t.Helper()
 	cp, found, err := statelog.CheckpointOf(t.Context(), db, probeStream)
 	if err != nil || !found {
@@ -466,28 +466,28 @@ func offerThrough(h *applyHarness, n uint64) {
 // ITS PLACE.
 //
 // [TestADivergenceSurvivesARestartAfterTheLogLosesItsRecord] is what the node's
-// file buys; this is what stops another file being handed as it. A partition
-// reads and writes exactly as the node's file does, carries none of the
-// verdict's table, and is replaced by an adoption — at the moment the verdict
-// has to be judged against what replaced it. Its handle cannot be handed at
-// all, which the build refuses; its database answers Estate like the node's,
-// so the runner refuses that.
+// file buys; this is what stops another file being handed as it. The
+// replicated estate reads and writes exactly as the node's file does, carries
+// none of the verdict's table, and is replaced by an adoption — at the moment
+// the verdict has to be judged against what replaced it. Its handle cannot be
+// handed at all, which the build refuses; its database answers Estate like the
+// node's, so the runner refuses that.
 func TestOnlyTheNodesOwnFileIsTheRunnersNodeEstate(t *testing.T) {
 	t.Parallel()
 	node := reflect.TypeFor[statelog.NodeEstate]()
-	if reflect.TypeFor[store.PartitionHandle]().Implements(node) {
-		t.Error("a partition's handle satisfies statelog.NodeEstate, so the " +
-			"runtime can hand a partition as the node's own file and the " +
-			"build says nothing")
+	if reflect.TypeFor[store.ReplicatedHandle]().Implements(node) {
+		t.Error("the replicated estate's handle satisfies statelog.NodeEstate, " +
+			"so the runtime can hand it as the node's own file and the build " +
+			"says nothing")
 	}
 	if !reflect.TypeFor[*store.DB]().Implements(node) {
 		t.Fatal("the node's own store does not satisfy statelog.NodeEstate")
 	}
 
 	h := newApplyHarness(t, probeDomain{})
-	part, err := h.estate.DB()
+	replicated, err := h.estate.DB()
 	if err != nil {
-		t.Fatalf("the harness's partition: %v", err)
+		t.Fatalf("the harness's replicated estate: %v", err)
 	}
 	for _, c := range []struct {
 		name   string
@@ -495,7 +495,7 @@ func TestOnlyTheNodesOwnFileIsTheRunnersNodeEstate(t *testing.T) {
 		refuse bool
 	}{
 		{"the node's own file", h.db, false},
-		{"a partition's database", part, true},
+		{"the replicated estate's database", replicated, true},
 	} {
 		_, err := statelog.NewRunner(statelog.RunnerDeps{
 			Domain: probeDomain{}, Spec: specOf(probeDomain{}), Layout: layoutOf(probeDomain{}), LogID: logOf(probeDomain{}), Applier: h.applier,

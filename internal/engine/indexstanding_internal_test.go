@@ -173,6 +173,6 @@ type noEvictions struct{ statelog.Domain }
 // case for the wrong reason once the lister's parameter moved.
 var _ evictionLister = noEvictions{}
 
-func (noEvictions) Evictions(context.Context, store.PartitionReader) ([]statelog.EvictionRow, error) {
+func (noEvictions) Evictions(context.Context, store.ReplicatedReader) ([]statelog.EvictionRow, error) {
 	return nil, nil
 }

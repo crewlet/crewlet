@@ -724,7 +724,7 @@ func newNodeGate(s *stateLog, leases liveLeases, nodeID string,
 // gateLogFor is one identity-claiming log's writer for the gate, publishing
 // through publisher — the domain's own write authority — and reading the rows
 // it decides from out of db.
-func gateLogFor(running *runningLog, publisher *statelog.Publisher, db store.PartitionReader,
+func gateLogFor(running *runningLog, publisher *statelog.Publisher, db store.ReplicatedReader,
 	nodeID string, rec *metrics.Recorder) (gateLog, error) {
 
 	name := running.domain.Name()

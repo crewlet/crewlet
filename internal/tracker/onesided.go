@@ -102,7 +102,7 @@ func (o OneSided) Final() (string, bool) {
 // SELECTED ON THE STORED FLAG, which the applier derives on both ends — so
 // this is an indexed read of exactly the broken edges rather than a join over
 // every relation in the company. On a healthy fleet it reads nothing.
-func ScanOneSided(ctx context.Context, db store.PartitionReader, before time.Time,
+func ScanOneSided(ctx context.Context, db store.ReplicatedReader, before time.Time,
 	limit int) ([]OneSided, error) {
 
 	if db.IsZero() {

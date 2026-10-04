@@ -28,7 +28,7 @@ var wednesday = time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
 
 type roundTrip struct {
 	t       *testing.T
-	db      store.PartitionHandle
+	db      store.ReplicatedHandle
 	log     *js.DomainLog
 	store   *pages.Store
 	applier *pages.Applier
@@ -68,7 +68,7 @@ func newRoundTrip(t *testing.T) *roundTrip {
 }
 
 // openNodeStore opens one node's own store, closed with the test.
-func openNodeStore(t *testing.T, name string) store.PartitionHandle {
+func openNodeStore(t *testing.T, name string) store.ReplicatedHandle {
 	t.Helper()
 	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), name), store.Options{}, 1)
 	t.Cleanup(func() {
@@ -82,7 +82,7 @@ func openNodeStore(t *testing.T, name string) store.PartitionHandle {
 // newRoundTripOn is the harness's node over a log and a store it is handed:
 // the ones [newRoundTrip] opens, or a SECOND node joining the same log under
 // its own id and its own store — the shape a race between two nodes needs.
-func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.PartitionHandle,
+func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
 	nodeID string) *roundTrip {
 
 	t.Helper()

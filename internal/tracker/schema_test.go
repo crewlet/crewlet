@@ -321,8 +321,8 @@ func TestTheRankCheckRefusesWhatTheObviousSpellingAccepts(t *testing.T) {
 // database keeps.
 func trackerSchemaSources() ([]string, error) {
 	var out []string
-	for _, name := range store.SchemaVersions(store.EstatePartition) {
-		body, err := store.SchemaFile(store.EstatePartition, name)
+	for _, name := range store.SchemaVersions(store.EstateReplicated) {
+		body, err := store.SchemaFile(store.EstateReplicated, name)
 		if err != nil {
 			return nil, err
 		}

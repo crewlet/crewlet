@@ -29,7 +29,7 @@ type GateCandidate struct {
 
 	// Reader is the publisher's side of the gates, over the estate the
 	// cases applied into.
-	Reader func(db store.PartitionReader) statelog.Gates
+	Reader func(db store.ReplicatedReader) statelog.Gates
 
 	// Kind is the OBJECT's own subject kind: the one Create, Write and
 	// Purge publish on, and the one whose marker the history purges.
@@ -104,7 +104,7 @@ func RunGates(t *testing.T, new GateFactory) {
 				covered, err := gateAgreement(t, func(t *testing.T) GateCandidate {
 					c := new(t)
 					own, honest := c.Kind, c.Reader
-					c.Reader = func(db store.PartitionReader) statelog.Gates {
+					c.Reader = func(db store.ReplicatedReader) statelog.Gates {
 						return bend.bend(own, honest(db))
 					}
 					return c
@@ -123,7 +123,7 @@ func RunGates(t *testing.T, new GateFactory) {
 				err := GateAgreement(t, func(t *testing.T) GateCandidate {
 					c := new(t)
 					honest := c.Reader
-					c.Reader = func(db store.PartitionReader) statelog.Gates {
+					c.Reader = func(db store.ReplicatedReader) statelog.Gates {
 						return bend(honest(db))
 					}
 					return c
@@ -399,7 +399,7 @@ func gateAgreement(t *testing.T, new GateFactory) ([]string, error) {
 // nothing a probe does is a record the questions read: a probe is asked
 // about and never applied, since what is certified is the gate and an apply
 // would only be the domain's own business.
-func gateCoverage(t *testing.T, c GateCandidate, db store.PartitionHandle, gates statelog.Gates,
+func gateCoverage(t *testing.T, c GateCandidate, db store.ReplicatedHandle, gates statelog.Gates,
 	at func(uint64) statelog.Position) ([]string, []string) {
 
 	t.Helper()
@@ -472,7 +472,7 @@ func gateCoverage(t *testing.T, c GateCandidate, db store.PartitionHandle, gates
 // THE APPLIER IS WHAT THE READER HAS TO AGREE WITH, so the history is only
 // the history the questions assume if the applier dropped exactly what it
 // says it did.
-func applyGateHistory(t *testing.T, c GateCandidate, db store.PartitionHandle,
+func applyGateHistory(t *testing.T, c GateCandidate, db store.ReplicatedHandle,
 	at func(uint64) statelog.Position) []string {
 
 	t.Helper()

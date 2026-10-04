@@ -23,8 +23,9 @@ import (
 // are waiting on, and nothing bounds it.
 //
 // A pin removes the writer from that competition entirely. It costs one
-// connection for the handle's life, which is why [PartitionFile.Logs] is
-// declared by the caller and added to the pool rather than taken out of it.
+// connection for the handle's life, which is why the count of logs is
+// declared by the caller ([DB.OpenReplicated]) and added to the pool rather
+// than taken out of it.
 //
 // # It is not a second transaction implementation
 //
@@ -71,9 +72,10 @@ var ErrWriterClosed = errors.New("store: this pinned writer is closed")
 // Writer pins a connection and returns a handle that owns it until Close.
 //
 // REFUSED PAST THE DECLARED COUNT, naming it. The pool was sized as readers
-// plus [PartitionFile.Logs], so an undeclared pin is not a tight fit — it
-// is a reader's connection taken with nothing reporting the loss, and the
-// symptom (a dashboard that queues) appears nowhere near the cause.
+// plus the logs [DB.OpenReplicated] was given, so an undeclared pin is not a
+// tight fit — it is a reader's connection taken with nothing reporting the
+// loss, and the symptom (a dashboard that queues) appears nowhere near the
+// cause.
 func (d *DB) Writer(ctx context.Context) (*Writer, error) {
 	if !d.isOpen() {
 		return nil, ErrNoEstate
@@ -84,9 +86,9 @@ func (d *DB) Writer(ctx context.Context) (*Writer, error) {
 		d.pins.mu.Unlock()
 		return nil, fmt.Errorf(
 			"store: this handle declared %d pinned writer(s) and %d are held: "+
-				"a partition's pins are one per log it carries — raise "+
-				"store.PartitionFile.Logs to the number of logs whose apply "+
-				"loops run on it, so the pool is sized for them",
+				"the replicated estate's pins are one per log it carries — "+
+				"open it with DB.OpenReplicated for the number of logs whose "+
+				"apply loops run on it, so the pool is sized for them",
 			declared, declared)
 	}
 	d.pins.held++
@@ -186,7 +188,7 @@ func (w *Writer) pinned(ctx context.Context) (*sql.Conn, error) {
 // end and Tx replaces it: ask again after a failed Tx rather than holding the
 // old one. It is NIL only when that replacement could not be had, and the
 // next Tx reports why — so a caller reaching for it directly must check,
-// exactly as one reaching for [DB.PartitionDB] must. There is deliberately NO
+// exactly as one reaching for [DB.ReplicatedDB] must. There is deliberately NO
 // prepared-statement cache on it, and the reason is a measurement rather than
 // a preference: on this driver, executing an applier-shaped upsert 4 000 times
 // through a statement prepared once on this connection is not faster than
@@ -244,8 +246,8 @@ func (w *Writer) Close() error {
 // which is what a multi-statement read wants and what keeps a dashboard query
 // from excluding the engine's writes for its duration. And it runs fn with
 // `query_only` on, so a write inside fn is REFUSED by the engine rather than
-// committed — the promise [PartitionReader] is handed to every reader of a
-// partition on, which a doc comment alone did not keep (see
+// committed — the promise [ReplicatedReader] is handed to every reader of the
+// replicated estate on, which a doc comment alone did not keep (see
 // [beginModeConn.queryOnlyFor]).
 //
 // It carries the same retry as [DB.Tx]: a read transaction can lose a snapshot

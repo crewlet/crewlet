@@ -57,10 +57,10 @@ type FileCursor struct {
 // query is how one of them starts reading a column the other dropped.
 //
 // The file is opened as ONE ESTATE. [store.OpenNode] would treat it as a node
-// — applying the node estate's whole migration sequence into this copy of a
-// partition's file.
+// — applying the node estate's whole migration sequence into this copy of the
+// replicated estate's file.
 func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, error) {
-	db, err := store.OpenEstate(ctx, store.EstatePartition, path, store.Options{})
+	db, err := store.OpenEstate(ctx, store.EstateReplicated, path, store.Options{})
 	if err != nil {
 		return nil, fmt.Errorf("statelog: open %s: %w", path, err)
 	}
@@ -101,9 +101,8 @@ func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, err
 	return out, nil
 }
 
-// CursorFor reads ONE stream's committed checkpoint out of the LIVE partition
-// its log belongs to, reporting false when this node has never committed on
-// it.
+// CursorFor reads ONE stream's committed checkpoint out of the LIVE replicated
+// estate, reporting false when this node has never committed on it.
 //
 // Two callers need it and both need the same three values: the loop resumes
 // its broker consumer from the sequence, stamps its records with the
@@ -116,10 +115,10 @@ func CursorFor(ctx context.Context, db ReadEstate, stream string) (Position, tim
 	return cp.At, cp.KeyedTo, found, err
 }
 
-// ReadEstate is a partition as a caller that only reads it holds it: the
-// runtime's [store.PartitionReader], resolved on every call, or a copy's
+// ReadEstate is the replicated estate as a caller that only reads it holds it:
+// the runtime's [store.ReplicatedReader], resolved on every call, or a copy's
 // [store.DB] a caller opened for the length of one read. A caller holding the
-// write handle hands its Reader, so that what can write a partition stays the
+// write handle hands its Reader, so that what can write the estate stays the
 // short list internal/store's applier gate reads.
 type ReadEstate interface {
 	Read(ctx context.Context, fn func(*sql.Tx) error) error
@@ -136,8 +135,8 @@ type Checkpoint struct {
 }
 
 // CheckpointOf reads ONE stream's committed checkpoint row, whole, out of the
-// LIVE partition its log belongs to, reporting false when this node has never
-// committed on it.
+// LIVE replicated estate, reporting false when this node has never committed
+// on it.
 //
 // ONE READ for what a verification of the checkpoint's record needs
 // ([CheckpointDiverged]): a sequence from one read paired with the instant of

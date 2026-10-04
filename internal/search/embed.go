@@ -241,7 +241,7 @@ type EmbedDeps struct {
 	// (ADR-0028): the codes it trains on and the rows it reads the index's
 	// state from. Read only — what the duty decides it publishes, and the
 	// applier writes.
-	Estate store.PartitionReader
+	Estate store.ReplicatedReader
 
 	// Log names the vector log this duty writes, which is what the index's
 	// training seed is derived from ([IVFSeed]) — so a re-run of a training
@@ -880,7 +880,7 @@ func pack(v []float32, dim int) ([]byte, error) {
 // ONE STATEMENT, because `tracker_tasks` and `kb_vectors` are both in the
 // replicated estate: the selection is an anti-join between the rows and their
 // own vectors, and there is no second read to keep in step.
-type TaskCorpus struct{ DB store.PartitionReader }
+type TaskCorpus struct{ DB store.ReplicatedReader }
 
 // Source implements [Corpus].
 func (TaskCorpus) Source() Source { return SourceTask }

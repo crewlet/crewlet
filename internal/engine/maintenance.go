@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -140,13 +139,12 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// contributes nothing rather than an empty sweep.
 		if n := e.native.Load(); n != nil {
 			if n.writer != nil {
-				// THE TRACKER'S PARTITION WITH ITS WRITE SIDE, which
-				// is what its two exceptions to the applier-only rule
-				// need — the duty's probe clear and the inbox sweep,
-				// each argued where internal/store's applier gate
-				// allows it — and nothing else on this list takes.
-				trackerEstate := e.backends.Store.PartitionHandle(
-					statelog.EstatePartition.String())
+				// THE REPLICATED ESTATE WITH ITS WRITE SIDE, which is
+				// what the tracker's two exceptions to the applier-only
+				// rule need — the duty's probe clear and the inbox
+				// sweep, each argued where internal/store's applier
+				// gate allows it — and nothing else on this list takes.
+				trackerEstate := e.backends.Store.Replicated()
 				// THE TRACKER'S OWN JOBS, and they are a different
 				// kind of thing from a sweep: its records are a log
 				// and nothing deletes them here. They finish work a
@@ -176,16 +174,14 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 				// tracker.Jobs because that list runs under the
 				// duty and this one must not.
 				//
-				// OVER THE REPLICATED ESTATE, wherever this node runs
-				// the tracker's log.
+				// OVER THE REPLICATED ESTATE, which every log of
+				// this node's runtime applies into from boot.
 				//
 				// Its horizon is the company's and is read at
 				// every sweep, for the conversation ledger's
 				// reason above.
 				if n.log != nil {
-					jobs = append(jobs, tracker.InboxJobs(func() []store.PartitionHandle {
-						return n.log.filesOf(tracker.Domain{}.Name())
-					}, e.inboxRetention)...)
+					jobs = append(jobs, tracker.InboxJobs(trackerEstate, e.inboxRetention)...)
 				}
 			}
 			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per

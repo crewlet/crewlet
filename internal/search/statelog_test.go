@@ -70,7 +70,7 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 // count is what says whether anything was published: a record the publisher
 // refused is a batch that published nothing, and a tick that published
 // nothing certifies nothing.
-func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.PartitionReader) error {
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	duty, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: pub, Estate: db, Log: statelog.EstateStream(search.Domain{}).Name,
 		// THE SUITE'S ONE NODE, applied through its own end: the corpus is

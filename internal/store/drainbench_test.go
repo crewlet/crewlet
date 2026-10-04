@@ -188,7 +188,7 @@ func BenchmarkApplyTxUnderForeignCommits(b *testing.B) {
 	} {
 		b.Run(arm.name, func(b *testing.B) {
 			node, w := benchNode(b)
-			replicated := partitionOf(b, node)
+			replicated := replicatedOf(b, node)
 			items := benchItems(benchRows)
 			ctx := b.Context()
 
@@ -302,7 +302,7 @@ func TestAForeignCommitDoesNotAbortAnApplierTransaction(t *testing.T) {
 	t.Parallel()
 	node, w := benchNodeT(t)
 	ctx := t.Context()
-	if err := partitionOf(t, node).Tx(ctx, func(tx *sql.Tx) error {
+	if err := replicatedOf(t, node).Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, foreignTable)
 		return err
 	}); err != nil {
@@ -321,7 +321,7 @@ func TestAForeignCommitDoesNotAbortAnApplierTransaction(t *testing.T) {
 				return
 			default:
 			}
-			if err := partitionOf(t, node).Tx(ctx, func(tx *sql.Tx) error {
+			if err := replicatedOf(t, node).Tx(ctx, func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(ctx,
 					`INSERT INTO bench_foreign (payload) VALUES (?)`, "phase")
 				return err
@@ -436,7 +436,7 @@ func TestAnApplierIsNotStarvedByAWriterCommittingBackToBack(t *testing.T) {
 	t.Parallel()
 	node, w := benchNodeQueued(t)
 	ctx := t.Context()
-	replicated := partitionOf(t, node)
+	replicated := replicatedOf(t, node)
 	if err := replicated.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, foreignTable)
 		return err
@@ -874,13 +874,13 @@ func benchItems(n int) []benchItem {
 func benchWriter(b *testing.B) (*store.DB, *store.Writer) {
 	b.Helper()
 	node, w := benchNode(b)
-	return partitionOf(b, node), w
+	return replicatedOf(b, node), w
 }
 
 func benchWriterT(t *testing.T) (*store.DB, *store.Writer) {
 	t.Helper()
 	node, w := benchNodeT(t)
-	return partitionOf(t, node), w
+	return replicatedOf(t, node), w
 }
 
 // benchNode returns the NODE handle, so an arm can reach either estate.
@@ -929,9 +929,9 @@ func benchNodeQueued(t *testing.T) (*store.DB, *store.Writer) {
 	return db, w
 }
 
-// openApplierStore opens a node with one partition carrying one log — one pin —
-// and the applier-shaped tables in that partition, which is where an applier
-// writes.
+// openApplierStore opens a node with its replicated estate carrying one log —
+// one pin — and the applier-shaped tables in that estate, which is where an
+// applier writes.
 func openApplierStore(tb testing.TB, path string) (*store.DB, *store.Writer) {
 	tb.Helper()
 	return openApplierStoreWith(tb, path, store.Options{})
@@ -941,7 +941,7 @@ func openApplierStore(tb testing.TB, path string) (*store.DB, *store.Writer) {
 func openApplierStoreWith(tb testing.TB, path string, opts store.Options) (*store.DB, *store.Writer) {
 	tb.Helper()
 	ctx := tb.Context()
-	db, rep := openPartitioned(tb, path, opts, 1)
+	db, rep := openReplicated(tb, path, opts, 1)
 	if err := rep.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, applierTables)
 		return err

@@ -31,7 +31,7 @@ type joinHarness struct {
 	// joinEstate is the joiner's replicated estate, as the runtime would
 	// hand it: resolved through the joiner's node handle on every call, so
 	// it reads whatever file the adoption left open.
-	joinEstate store.PartitionHandle
+	joinEstate store.ReplicatedHandle
 	joinPath   string
 	manifest   statelog.Manifest
 	snapPath   string
@@ -99,7 +99,7 @@ func newJoinHarness(t *testing.T) *joinHarness {
 // travelled did — and anything written into its estate before the snapshot.
 type joinDonor struct {
 	domain statelog.Domain
-	seed   func(t *testing.T, estate store.PartitionHandle)
+	seed   func(t *testing.T, estate store.ReplicatedHandle)
 }
 
 // scrubbingProbe is the probe domain as a build from before the ledger
@@ -211,7 +211,7 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 	joinDir := t.TempDir()
 	joiner, joinEstate := storetest.OpenEstate(t, filepath.Join(joinDir, "node.db"), store.Options{}, 1)
 	h.joiner, h.joinEstate = joiner, joinEstate
-	h.joinPath = storetest.Partition(t, joinEstate).Path()
+	h.joinPath = storetest.ReplicatedDB(t, joinEstate).Path()
 	t.Cleanup(func() { _ = h.joiner.Close() })
 	return h
 }
@@ -239,7 +239,7 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 			if h.onClose != nil {
 				h.onClose()
 			}
-			if err := h.joiner.ClosePartition(h.joinEstate.Name()); err != nil {
+			if err := h.joiner.CloseReplicated(); err != nil {
 				return err
 			}
 			return h.closeErr
@@ -251,7 +251,7 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 			if h.reopenErr != nil {
 				return h.reopenErr
 			}
-			_, err := h.joiner.OpenPartition(ctx, storetest.LayoutZero(1))
+			_, err := h.joiner.OpenReplicated(ctx, 1)
 			return err
 		},
 		Record: func(ctx context.Context, began time.Time, donor string,
@@ -525,7 +525,7 @@ func TestAnInterruptedInstallReopensTheLiveDatabase(t *testing.T) {
 			"was already %v — the failure it undoes is that very cancellation, "+
 			"so it fails too and the node is left with no estate", h.reopenCtxErr)
 	}
-	if err := storetest.Partition(t, h.joinEstate).SQL().PingContext(t.Context()); err != nil {
+	if err := storetest.ReplicatedDB(t, h.joinEstate).SQL().PingContext(t.Context()); err != nil {
 		t.Fatalf("the live database is not usable after the rollback: %v", err)
 	}
 }
@@ -719,8 +719,8 @@ func TestADonorThatScrubbedItsLedgerLeavesTheArtefactAWatermark(t *testing.T) {
 		if _, err := h.adopter(t).Join(t.Context()); !errors.Is(err, statelog.ErrEstateNotRestored) {
 			t.Fatalf("Join = %v, want the installed artefact not opening", err)
 		}
-		if _, err := h.joiner.OpenPartition(t.Context(), storetest.LayoutZero(1)); err != nil {
-			t.Fatalf("open the node's partition again: %v", err)
+		if _, err := h.joiner.OpenReplicated(t.Context(), 1); err != nil {
+			t.Fatalf("open the node's replicated estate again: %v", err)
 		}
 		at, _, _, err := statelog.CursorFor(t.Context(), h.joinEstate, probeStream)
 		if err != nil {
@@ -754,7 +754,7 @@ func TestADonorsWatermarkTravelsWithItsLedger(t *testing.T) {
 	swept := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	h := newJoinHarnessFrom(t, joinDonor{
 		domain: probeDomain{},
-		seed: func(t *testing.T, estate store.PartitionHandle) {
+		seed: func(t *testing.T, estate store.ReplicatedHandle) {
 			if err := statelog.RecordLedgerLoss(t.Context(), estate,
 				probeDomain{}, swept); err != nil {
 				t.Fatalf("record the donor's sweep: %v", err)
@@ -939,7 +939,7 @@ func TestAnEarlierAttemptsDebrisIsClearedBeforeTheFetch(t *testing.T) {
 	// A -WAL THAT HOLDS PAGES, copied while its database is still open:
 	// a clean close would fold it in and remove it, and a crash is what
 	// does not.
-	earlier, err := store.OpenEstate(t.Context(), store.EstatePartition, part, store.Options{})
+	earlier, err := store.OpenEstate(t.Context(), store.EstateReplicated, part, store.Options{})
 	if err != nil {
 		t.Fatalf("open a database at the part path: %v", err)
 	}

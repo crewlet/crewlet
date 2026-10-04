@@ -163,7 +163,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	}
 	// A NODE WITHOUT `data` RUNS NONE OF WHAT FOLLOWS — no log, no index,
 	// no copy — and answers its seats' tools through a node that does.
-	if !holdsData(boot) {
+	if !HoldsEstate(boot) {
 		return e.startRemote(c)
 	}
 	runTracker := c.Config.TrackerBackendFor() == config.TrackerNative

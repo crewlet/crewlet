@@ -83,8 +83,8 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 	first.Stop(context.Background())
 
 	// THE ROWS GO. The broker, and every consumer on it, stays.
-	path := estateZeroPath(back.Store)
-	if err := closeEstateZero(back.Store); err != nil {
+	path := back.Store.ReplicatedFile()
+	if err := back.Store.CloseReplicated(); err != nil {
 		t.Fatalf("close the replicated estate: %v", err)
 	}
 	files, err := filepath.Glob(path + "*")
@@ -96,7 +96,7 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 			t.Fatalf("delete %s: %v", f, err)
 		}
 	}
-	if err := openEstateZero(t.Context(), back.Store); err != nil {
+	if _, err := back.Store.OpenReplicated(t.Context(), estateLogs()); err != nil {
 		t.Fatalf("reopen the replicated estate: %v", err)
 	}
 

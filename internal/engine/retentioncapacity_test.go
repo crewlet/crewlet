@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -90,15 +89,15 @@ func TestTheVolumeAlarmReadsEachFilesOwnVolume(t *testing.T) {
 		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	part, err := db.OpenPartition(t.Context(), storetest.LayoutZero(1))
+	replicated, err := db.OpenReplicated(t.Context(), 1)
 	if err != nil {
-		t.Fatalf("open layout 0's partition: %v", err)
+		t.Fatalf("open the replicated estate: %v", err)
 	}
 	nodeSize, err := fileBytes(db.Path())
 	if err != nil {
 		t.Fatal(err)
 	}
-	replicatedSize, err := fileBytes(part.Path())
+	replicatedSize, err := fileBytes(replicated.Path())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -271,7 +271,7 @@ func nullableAt(i, n int) any {
 // for every query and this test would fail on a schema with no faults. The
 // fixture is small and its shape is what matters: enough distinct values that
 // a seek is cheaper than a scan, and ANALYZE run so the planner knows it.
-func planStore(t *testing.T) store.PartitionHandle {
+func planStore(t *testing.T) store.ReplicatedHandle {
 	t.Helper()
 	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
@@ -366,7 +366,7 @@ func planStore(t *testing.T) store.PartitionHandle {
 	return db
 }
 
-func explain(t *testing.T, db store.PartitionHandle, statement string, args []any) []string {
+func explain(t *testing.T, db store.ReplicatedHandle, statement string, args []any) []string {
 	t.Helper()
 	var plan []string
 	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
@@ -424,7 +424,7 @@ func scansHeap(plan []string, table string) bool {
 }
 
 // indexesOn is every index the schema declares on these tables.
-func indexesOn(t *testing.T, db store.PartitionHandle, tables []string) []string {
+func indexesOn(t *testing.T, db store.ReplicatedHandle, tables []string) []string {
 	t.Helper()
 	var found []string
 	if err := db.Read(t.Context(), func(tx *sql.Tx) error {

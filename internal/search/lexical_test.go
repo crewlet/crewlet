@@ -24,7 +24,7 @@ import (
 // indexer walks rather than joins is that no read crosses between them.
 func page(t testing.TB, db *store.DB, id, container, title, body string, version int) {
 	t.Helper()
-	_, err := storetest.Partition(t, storetest.EstateOf(db)).SQL().ExecContext(t.Context(), `
+	_, err := storetest.ReplicatedDB(t, db.Replicated()).SQL().ExecContext(t.Context(), `
 		INSERT INTO pages_heads (id, container, parent_id, title, title_norm, body,
 		                         status, author, edit_version, created_at,
 		                         updated_at, version, scoped_through, document)
@@ -85,7 +85,7 @@ func titles(hits []search.LexicalHit) []string {
 func TestTheShortAnswerBeatsTheLongRunbook(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
+	x := search.NewIndexer(db, db.Replicated().Reader())
 
 	page(t, db, "p.short", "ENG", "Rollback",
 		"To roll back a deploy, run the rollback command against the release.", 1)
@@ -116,7 +116,7 @@ func TestTheShortAnswerBeatsTheLongRunbook(t *testing.T) {
 func TestATitleMatchOutranksABodyMention(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
+	x := search.NewIndexer(db, db.Replicated().Reader())
 
 	page(t, db, "p.named", "ENG", "Incident Response",
 		"This describes what the team does when something breaks.", 1)
@@ -139,7 +139,7 @@ func TestATitleMatchOutranksABodyMention(t *testing.T) {
 func TestAnEditRemovesTheTermsItRemoved(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
+	x := search.NewIndexer(db, db.Replicated().Reader())
 
 	page(t, db, "p.edited", "ENG", "Deploy Notes", "we use kubernetes for this", 1)
 	indexAll(t, x)
@@ -164,11 +164,11 @@ func TestAnEditRemovesTheTermsItRemoved(t *testing.T) {
 func TestOnlyPublishedPagesAreIndexed(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
+	x := search.NewIndexer(db, db.Replicated().Reader())
 
 	page(t, db, "p.live", "ENG", "Live", "the migration plan is here", 1)
 	for id, status := range map[string]string{"p.draft": "draft", "p.gone": "trashed"} {
-		if _, err := storetest.Partition(t, storetest.EstateOf(db)).SQL().ExecContext(t.Context(), `
+		if _, err := storetest.ReplicatedDB(t, db.Replicated()).SQL().ExecContext(t.Context(), `
 			INSERT INTO pages_heads (id, container, parent_id, title, title_norm,
 			                         body, status, author, edit_version,
 			                         created_at, updated_at, version,
@@ -191,7 +191,7 @@ func TestOnlyPublishedPagesAreIndexed(t *testing.T) {
 
 	// AND UNPUBLISHING REMOVES IT. A page a lead moved to draft must stop
 	// being findable, or the retraction did nothing.
-	if _, err := storetest.Partition(t, storetest.EstateOf(db)).SQL().ExecContext(t.Context(),
+	if _, err := storetest.ReplicatedDB(t, db.Replicated()).SQL().ExecContext(t.Context(),
 		`UPDATE pages_heads SET status = 'draft' WHERE id = 'p.live'`); err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestOnlyPublishedPagesAreIndexed(t *testing.T) {
 func TestReadyDistinguishesABuildingIndexFromAnEmptyCompany(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
+	x := search.NewIndexer(db, db.Replicated().Reader())
 
 	// A BUILD THAT HAS NOT RUN IS NOT READY, even over an empty company:
 	// this node has established nothing, and answering "nothing matched"
@@ -264,7 +264,7 @@ func TestALapOverAQuietCorpusReadsNoBodies(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	counted := &countingSource{LexicalSource: search.PageSource{}}
-	x := search.NewIndexerOver(db, storetest.EstateOf(db).Reader(), []search.LexicalSource{counted})
+	x := search.NewIndexerOver(db, db.Replicated().Reader(), []search.LexicalSource{counted})
 	for i := range 45 { // more than one index batch
 		page(t, db, fmt.Sprintf("p.%d", i), "ENG", fmt.Sprintf("Page %d", i),
 			"shared vocabulary across the whole company", 1)
@@ -340,7 +340,7 @@ func TestACancelledLapIsNotAnEmptyLap(t *testing.T) {
 	// Cancelled from INSIDE the walk, after the scan has committed this
 	// node to a batch: an already-dead context would be refused by the
 	// first statement and would never reach the walk's own check.
-	x := search.NewIndexerOver(db, storetest.EstateOf(db).Reader(), []search.LexicalSource{
+	x := search.NewIndexerOver(db, db.Replicated().Reader(), []search.LexicalSource{
 		&stoppingSource{LexicalSource: search.PageSource{}, stop: cancel},
 	})
 	worked, err := x.Sweep(ctx)
@@ -368,7 +368,7 @@ func (s *stoppingSource) Fetch(context.Context, *sql.Tx, []string) ([]search.Doc
 func TestTheIndexerCatchesUpOnItsOwn(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
+	x := search.NewIndexer(db, db.Replicated().Reader())
 	for i := range 45 { // more than one batch
 		page(t, db, fmt.Sprintf("p.%d", i), "ENG", fmt.Sprintf("Page %d", i),
 			"shared vocabulary across the whole company", i+1)
@@ -394,7 +394,7 @@ func TestTheIndexerCatchesUpOnItsOwn(t *testing.T) {
 func TestAScopeNarrowsResultsWithoutChangingTheRanking(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
+	x := search.NewIndexer(db, db.Replicated().Reader())
 
 	page(t, db, "p.eng", "ENG", "Deploy", "the deploy pipeline runs here", 1)
 	page(t, db, "p.prod", "PROD", "Launch", "the deploy pipeline is announced here", 1)
@@ -437,7 +437,7 @@ func TestAScopeNarrowsResultsWithoutChangingTheRanking(t *testing.T) {
 func TestTheSameQueryRanksTheSameWay(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
+	x := search.NewIndexer(db, db.Replicated().Reader())
 	for i := range 12 {
 		page(t, db, fmt.Sprintf("p.%d", i), "ENG", "Tied",
 			"identical body for every one of these pages", 1)
@@ -467,7 +467,7 @@ func TestTheSameQueryRanksTheSameWay(t *testing.T) {
 func TestAnEmptyQueryMatchesNothing(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
+	x := search.NewIndexer(db, db.Replicated().Reader())
 	page(t, db, "p.any", "ENG", "Anything", "some words", 1)
 	indexAll(t, x)
 
@@ -542,7 +542,7 @@ func TestAReadThatFailsPartWayThroughIsNotAShortAnswer(t *testing.T) {
 	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{WrapDriver: fault.Wrap}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 
-	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
+	x := search.NewIndexer(db, db.Replicated().Reader())
 	for i := range 12 {
 		page(t, db, fmt.Sprintf("p.%02d", i), "ENG", fmt.Sprintf("Doc %02d", i),
 			"the migration plan is here", 1)
@@ -620,7 +620,7 @@ func TestAReadThatFailsPartWayThroughIsNotAShortAnswer(t *testing.T) {
 // indexer's input.
 func item(t testing.TB, db *store.DB, id, project, title, body string, version int) {
 	t.Helper()
-	_, err := storetest.Partition(t, storetest.EstateOf(db)).SQL().ExecContext(t.Context(), `
+	_, err := storetest.ReplicatedDB(t, db.Replicated()).SQL().ExecContext(t.Context(), `
 		INSERT INTO tracker_tasks (id, key, project_key, root_id, type, title,
 		                           status, status_group, rank, document,
 		                           version, created_at, updated_at)
@@ -649,7 +649,7 @@ func item(t testing.TB, db *store.DB, id, project, title, body string, version i
 func TestAWorkItemIsFoundByItsOwnWords(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
+	x := search.NewIndexer(db, db.Replicated().Reader())
 
 	item(t, db, "i.retry", "ENG", "Flaky checkout",
 		"the payment client retries with no backoff and hammers the gateway", 1)
@@ -673,7 +673,7 @@ func TestAWorkItemIsFoundByItsOwnWords(t *testing.T) {
 	// AND A REMOVED ITEM LEAVES, through the sweep rather than by hand —
 	// what has to hold is that the indexer NOTICES it, and the trash is
 	// reachable by asking for it rather than by ranking above live work.
-	if _, err := storetest.Partition(t, storetest.EstateOf(db)).SQL().ExecContext(t.Context(),
+	if _, err := storetest.ReplicatedDB(t, db.Replicated()).SQL().ExecContext(t.Context(),
 		`UPDATE tracker_tasks SET removed_at = 1 WHERE id = 'i.retry'`); err != nil {
 		t.Fatal(err)
 	}
@@ -693,7 +693,7 @@ func TestTheReadinessGateCountsEveryCorpus(t *testing.T) {
 	pages := &countingSource{LexicalSource: search.PageSource{}}
 	// A SECOND CORPUS THIS NODE CANNOT WALK, which is what a node still
 	// building one while the other is done looks like from the gate.
-	x := search.NewIndexerOver(db, storetest.EstateOf(db).Reader(), []search.LexicalSource{pages, unreachableSource{}})
+	x := search.NewIndexerOver(db, db.Replicated().Reader(), []search.LexicalSource{pages, unreachableSource{}})
 
 	page(t, db, "p.1", "ENG", "Something", "a body worth indexing", 1)
 	if x.Ready() {
@@ -784,7 +784,7 @@ func TestAFusedHitCarriesNoScore(t *testing.T) {
 func TestEveryPostingSurvivesTheChunkBoundary(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
+	x := search.NewIndexer(db, db.Replicated().Reader())
 
 	// THE SAME ARITHMETIC THE WRITER USES, read from the live estate rather
 	// than assumed: the limit is probed at open and differs per engine, so a
@@ -890,7 +890,7 @@ func TestAFailedIndexStepDoesNotSkipItsWindow(t *testing.T) {
 			"roll back a deploy by release", 1)
 	}
 	src := &failingFetchSource{LexicalSource: search.PageSource{}, failuresLeft: 1}
-	x := search.NewIndexerOver(db, storetest.EstateOf(db).Reader(), []search.LexicalSource{src})
+	x := search.NewIndexerOver(db, db.Replicated().Reader(), []search.LexicalSource{src})
 
 	if _, err := x.Sweep(t.Context()); err == nil {
 		t.Fatal("the sweep whose fetch failed reported success")
@@ -957,7 +957,7 @@ func TestAScanOverAnUnbuiltIndexSaysItCoveredNothing(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	page(t, db, "p.one", "ENG", "Rollback", "roll back a deploy by release", 1)
-	x := search.NewIndexerOver(db, storetest.EstateOf(db).Reader(), []search.LexicalSource{search.PageSource{}})
+	x := search.NewIndexerOver(db, db.Replicated().Reader(), []search.LexicalSource{search.PageSource{}})
 	scanner := search.NodeScanner{Index: x}
 
 	got, err := scanner.Scan(t.Context(), search.FanQuery{Text: "rollback"},
@@ -994,7 +994,7 @@ func TestReadyForNarrowsToTheSourcesAQueryNames(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	page(t, db, "p.one", "ENG", "Rollback", "roll back a deploy by release", 1)
-	x := search.NewIndexerOver(db, storetest.EstateOf(db).Reader(), []search.LexicalSource{search.PageSource{}})
+	x := search.NewIndexerOver(db, db.Replicated().Reader(), []search.LexicalSource{search.PageSource{}})
 
 	if x.ReadyFor(string(search.SourcePage)) {
 		t.Error("a corpus that has not wrapped reported itself built")
@@ -1029,7 +1029,7 @@ func TestReadyForNarrowsToTheSourcesAQueryNames(t *testing.T) {
 func TestASourceThatNeverAdvancesTheCursorFailsRatherThanHangs(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexerOver(db, storetest.EstateOf(db).Reader(), []search.LexicalSource{
+	x := search.NewIndexerOver(db, db.Replicated().Reader(), []search.LexicalSource{
 		stuckSource{LexicalSource: search.PageSource{}},
 	})
 

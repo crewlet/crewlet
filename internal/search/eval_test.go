@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE EVALUATION MEASURES THE COMPANY'S OWN VECTORS, and it can fail.
@@ -24,7 +23,7 @@ func TestTheEvaluationClearsItsFloorAndCanFail(t *testing.T) {
 	db, dim, model := seedVectors(t, 300)
 
 	var healthy, starved search.EvalReport
-	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		var err error
 		healthy, err = search.Eval(t.Context(), tx, search.EvalOptions{
 			Model: model, Dim: dim, Queries: 10, Limit: 20,
@@ -79,7 +78,7 @@ func TestTheEvaluationNamesEveryEmbeddingSpace(t *testing.T) {
 
 	var spaces []search.Space
 	var report search.EvalReport
-	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		var err error
 		if spaces, err = search.SpacesIn(t.Context(), tx); err != nil {
 			return err
@@ -122,7 +121,7 @@ func TestTheGroundTruthIsTheRestOfEachShapesRows(t *testing.T) {
 	t.Parallel()
 	const dim, model, limit = 32, "truth-embed", 20
 	db, _ := indexedStore(t, model, dim, 400)
-	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		docs, err := search.SampleDocuments(t.Context(), tx, model, dim, 6)
 		if err != nil {
 			return err

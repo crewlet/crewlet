@@ -535,7 +535,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 			return e, func() {
 				s := e.native.Load().log
 				s.haltAppliers()
-				if err := closeEstateZero(back.Store); err != nil {
+				if err := back.Store.CloseReplicated(); err != nil {
 					t.Fatalf("close the replicated estate: %v", err)
 				}
 				if err := s.restoreEstate(s.run); err != nil {

@@ -19,7 +19,7 @@ Backup written to /var/backups/crewlet/2026-08-30T18-00 on node-0 in 1.412s
 
 WHAT                          FILE                                       SIZE       CONTENTS
 store (node)                  store.db                                   252.0 KiB  20 migrations
-store (partition estate.000)  store-replicated.db                        1.2 MiB    3 migrations
+store (replicated)            store-replicated.db                        1.2 MiB    3 migrations
 stream CREWLET_AGENT          streams/CREWLET_AGENT.snapshot             1.1 KiB    5 messages
 bucket crewlet_token_windows  streams/KV_crewlet_token_windows.snapshot  512 B      3 messages
 …
@@ -117,8 +117,8 @@ Three properties worth knowing:
   separate files because a snapshot for a joining node is a copy of the second
   one alone, and it must not carry the donor's audit log or the bootstrap half
   of its secret store. Restoring one without the other gives a company whose
-  halves are from different moments. The replicated estate — its one
-  partition, `estate.000` — is something the node **holds** — every node with the `data` role holds it from the moment it
+  halves are from different moments. The replicated estate is something the
+  node **holds** — every node with the `data` role holds it from the moment it
   starts, whether or not its company runs the native tracker or knowledge base,
   because the rows its log derived stay on disk either way — and the backup
   copies what the node holds rather than whatever happens to be open. An

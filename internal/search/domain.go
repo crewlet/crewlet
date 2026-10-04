@@ -231,7 +231,7 @@ func (Domain) FeedGroup() string { return "" }
 // additively and arbitrates nothing.
 //
 // spec is the log the publisher writes, whose checkpoint the seam reads.
-func NewRows(db store.PartitionReader, spec statelog.StreamSpec) (statelog.Rows, error) {
+func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows, error) {
 	return statelog.NewRows(db, Domain{}, spec,
 		func(context.Context, *sql.Tx, statelog.Subject) (bool, bool, error) {
 			return false, false, nil

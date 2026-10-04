@@ -33,7 +33,7 @@ func TestTheTwoStageScanAgreesWithTheExactRanking(t *testing.T) {
 	query := randomEmbedding(rng, dim)
 
 	var got, want []string
-	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		hits, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: query, Model: model, Dim: dim, Limit: 20,
 		})
@@ -76,7 +76,7 @@ func TestASecondModelAtTheSameWidthIsExcluded(t *testing.T) {
 	// scannable.
 	writeVectors(t, db, "other-model", dim, 40, 100, 1000)
 
-	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		rng := rand.New(rand.NewPCG(3, 3))
 		hits, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: randomEmbedding(rng, dim), Model: model, Dim: dim, Limit: 100,
@@ -106,7 +106,7 @@ func TestTheScopeFiltersNarrowTheCandidatePool(t *testing.T) {
 	rng := rand.New(rand.NewPCG(11, 11))
 	query := randomEmbedding(rng, dim)
 
-	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		hits, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: query, Model: model, Dim: dim, Limit: 100,
 			Containers: []string{"ENG"},
@@ -157,7 +157,7 @@ func TestTheAnswerIsOrderedByTheExactDistance(t *testing.T) {
 	t.Parallel()
 	db, dim, model := seedVectors(t, 200)
 	rng := rand.New(rand.NewPCG(5, 5))
-	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		hits, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: randomEmbedding(rng, dim), Model: model, Dim: dim, Limit: 30,
 		})
@@ -206,7 +206,7 @@ func TestTheTwoRowsMoveTogetherOrNotAtAll(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
+		if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 			_, err := applier.Apply(t.Context(), tx, statelog.Record{
 				Envelope: statelog.Envelope{Subject: statelog.Subject{
 					Kind: string(subject.Source), ID: subject.ID}},
@@ -240,7 +240,7 @@ func TestTheTwoRowsMoveTogetherOrNotAtAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := applier.Apply(t.Context(), tx, statelog.Record{
 			Position: statelog.Position{Stream: "S", Generation: 1, Seq: 30},
 			Payload:  payload,
@@ -257,7 +257,7 @@ func TestTheTwoRowsMoveTogetherOrNotAtAll(t *testing.T) {
 func assertPair(t *testing.T, db *store.DB, subject search.Subject, want string) {
 	t.Helper()
 	var wide, narrow string
-	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		read := func(table string) (string, error) {
 			var model string
 			err := tx.QueryRowContext(t.Context(),
@@ -308,7 +308,7 @@ func writeVectors(t *testing.T, db *store.DB, model string, dim, n int, seqBase 
 	t.Helper()
 	applier := search.NewApplier()
 	rng := rand.New(rand.NewPCG(1, uint64(len(model))))
-	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		for i := range n {
 			source := search.SourcePage
 			if i%2 == 1 {

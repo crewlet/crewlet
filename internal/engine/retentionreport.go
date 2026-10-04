@@ -346,14 +346,12 @@ func (r *retention) replica() statelog.ReplicaReport {
 	out := statelog.ReplicaReport{
 		RejoinWindowSeconds: r.cfg.RejoinWindow().Seconds(),
 	}
-	// EVERY PARTITION THE NODE HOLDS, because replacing the node is
-	// adopting each of them.
-	for _, name := range r.db.OpenPartitions() {
-		part, err := r.db.PartitionDB(name)
-		if err != nil {
-			continue
-		}
-		if info, err := os.Stat(part.Path()); err == nil {
+	// THE REPLICATED ESTATE'S FILE, because replacing the node is adopting
+	// it. Measured at its path whether or not it is open at this instant:
+	// an adoption holding it closed is replacing it, and the file the node
+	// would have to be given again is still the one at that name.
+	if path := r.db.ReplicatedFile(); path != "" {
+		if info, err := os.Stat(path); err == nil {
 			out.StoreBytes += info.Size()
 		}
 	}

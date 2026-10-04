@@ -7,7 +7,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
-	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE GATE RESERVE ON THE ENGINE'S OWN LOGS: an eviction still lands on a log
@@ -138,7 +137,7 @@ func TestAnEvictionLandsOnALogFullForOrdinaryWrites(t *testing.T) {
 				"reserve between %d and %d", name, stats.Bytes, soft, ceilings[name])
 		}
 		waitApplied(t, running)
-		rows, err := running.domain.(evictionLister).Evictions(t.Context(), storetest.EstateOf(back.Store).Reader())
+		rows, err := running.domain.(evictionLister).Evictions(t.Context(), back.Store.Replicated().Reader())
 		if err != nil {
 			t.Fatalf("read %s's evictions: %v", name, err)
 		}

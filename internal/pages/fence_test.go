@@ -110,7 +110,7 @@ func TestEveryZeroFenceRefusalNamesItsReason(t *testing.T) {
 	}
 	// wired is a fence over a fresh store, standing at the cursor, with the
 	// floor and the log answering as given.
-	wired := func(db store.PartitionHandle, floor func(context.Context, uint32) (uint64, error),
+	wired := func(db store.ReplicatedHandle, floor func(context.Context, uint32) (uint64, error),
 		ends func(context.Context) (statelog.LogEnds, error)) *pages.Fence {
 
 		f := pages.NewFence(db.Reader(), "node-a")
@@ -139,7 +139,7 @@ func TestEveryZeroFenceRefusalNamesItsReason(t *testing.T) {
 		"an eviction that cannot be read": {
 			build: func(t *testing.T) *pages.Fence {
 				node, db := openFenceNode(t)
-				if err := node.ClosePartition(db.Name()); err != nil {
+				if err := node.CloseReplicated(); err != nil {
 					t.Fatalf("close: %v", err)
 				}
 				return wired(db, floor, ends(40, 100))
@@ -285,15 +285,15 @@ func requireFenceRefusal(t *testing.T, err error, want statelog.Reason) {
 	}
 }
 
-// openFenceStore opens a node's store and its partition in a fresh directory.
-func openFenceStore(t *testing.T) store.PartitionHandle {
+// openFenceStore opens a node's store and its replicated estate in a fresh directory.
+func openFenceStore(t *testing.T) store.ReplicatedHandle {
 	t.Helper()
 	_, db := openFenceNode(t)
 	return db
 }
 
 // openFenceNode is [openFenceStore] with the node's own handle beside it.
-func openFenceNode(t *testing.T) (*store.DB, store.PartitionHandle) {
+func openFenceNode(t *testing.T) (*store.DB, store.ReplicatedHandle) {
 	t.Helper()
 	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = node.Close() })
@@ -302,7 +302,7 @@ func openFenceNode(t *testing.T) (*store.DB, store.PartitionHandle) {
 
 // evictInPages writes the row this node's applier writes when it applies its
 // own eviction, which is the one source the fence reads.
-func evictInPages(t *testing.T, db store.PartitionHandle, nodeID string) {
+func evictInPages(t *testing.T, db store.ReplicatedHandle, nodeID string) {
 	t.Helper()
 	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `

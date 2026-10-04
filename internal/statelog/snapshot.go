@@ -325,7 +325,7 @@ type SnapshotDeps struct {
 	// alone. The node's own estate holds the audit log and the secret
 	// bootstrap, which is exactly what a peer must not inherit and what
 	// would otherwise dominate the transfer.
-	File store.PartitionHandle
+	File store.ReplicatedHandle
 
 	// Dir is where this node keeps its snapshots.
 	Dir string

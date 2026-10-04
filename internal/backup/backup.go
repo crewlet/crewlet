@@ -113,19 +113,12 @@ var log = logging.Get("backup")
 // or a shipping script has to look for — see docs/guides/backup.md.
 const ManifestName = "manifest.json"
 
-// storeFileNames are the database copies inside a backup directory: the
-// node's own file, and the one partition a backup copies beside it. Named
-// rather than derived, because these strings are what a restore procedure and
-// every shipping script look for — see docs/guides/backup.md.
-//
-// THE PARTITION'S IS store-replicated.db because the partition a backup copies
-// is layout 0's one, estate.000 — the replicated estate a node has always
-// kept, under the name its copy has always had. [estates] refuses a node that
-// holds any other, rather than filing it under a name that says it is the
-// whole estate.
+// storeFileNames are the database copies inside a backup directory, one per
+// estate. Named rather than derived, because these strings are what a restore
+// procedure and every shipping script look for — see docs/guides/backup.md.
 var storeFileNames = map[store.Estate]string{
-	store.EstateNode:      "store.db",
-	store.EstatePartition: "store-replicated.db",
+	store.EstateNode:       "store.db",
+	store.EstateReplicated: "store-replicated.db",
 }
 
 // streamDirName holds the stream snapshots.
@@ -207,17 +200,13 @@ type Manifest struct {
 
 // StoreArtifact describes one database copy inside a backup.
 //
-// ONE PER ESTATE, and a backup carries every estate or it carries none: a node
-// is two databases, and a restore holding one of them has a company whose
-// tracker and whose audit log are from different moments — which is not a
-// partial restore, it is an inconsistent one.
+// ONE PER ESTATE THE NODE HOLDS, and a backup carries every one of them or it
+// carries none: a data node is two databases, and a restore holding one of
+// them has a company whose tracker and whose audit log are from different
+// moments — which is not a partial restore, it is an inconsistent one.
 type StoreArtifact struct {
-	// Estate is which kind of the node's databases this copy is.
+	// Estate is which of the node's databases this copy is.
 	Estate store.Estate `json:"estate"`
-
-	// Partition names the partition a partition's copy is, and is empty
-	// for the node's own.
-	Partition string `json:"partition,omitempty"`
 
 	// File is the copy, relative to the backup directory.
 	File string `json:"file"`
@@ -247,20 +236,20 @@ type Options struct {
 	// [New] refuses to build without it.
 	Store *store.DB
 
-	// Partitions answers the partitions this node HOLDS, open or not at the
-	// instant it is asked — the engine's answer, never the store's list of
-	// what happens to be open. Required, and a node that holds none
-	// answers none.
+	// Estate is which of the node's databases it HOLDS — the engine's
+	// answer for its configuration ([HoldingFor] over
+	// engine.HoldsEstate), never whether the replicated estate happens to
+	// be open. Required: the zero value is refused.
 	//
-	// WHY NOT WHAT IS OPEN: a partition an adoption holds closed between
-	// its rename and its reopen, or one whose reopen failed, is still one
-	// the node holds, with rows no other artefact of this backup carries —
-	// and read off the open set it simply was not there, so the backup
-	// left it out and wrote a manifest claiming to be complete. Asked of
-	// the holding, it is a partition that must be copied and cannot be
-	// right now, which is a refusal ([store.ErrNoEstate]) rather than a
+	// WHY NOT WHAT IS OPEN: a replicated estate an adoption holds closed
+	// between its rename and its reopen, or one whose reopen failed, is
+	// still one the node holds, with rows no other artefact of this backup
+	// carries — and read off what is open it simply was not there, so the
+	// backup left it out and wrote a manifest claiming to be complete.
+	// Asked of the holding, it is an estate that must be copied and cannot
+	// be right now, which is a refusal ([store.ErrNoEstate]) rather than a
 	// smaller backup.
-	Partitions func() ([]store.PartitionFile, error)
+	Estate EstateHolding
 
 	// Conn is the broker connection the streams are snapshotted over.
 	//
@@ -321,10 +310,38 @@ type Options struct {
 	Now func() time.Time
 }
 
+// EstateHolding is which of a node's two databases it holds, and therefore
+// which a backup of it copies.
+type EstateHolding string
+
+const (
+	// HoldsNodeOnly is a node without the `data` role: its own file, and no
+	// replicated estate at all.
+	HoldsNodeOnly EstateHolding = "node_only"
+
+	// HoldsReplicated is a data node: its own file and the replicated
+	// estate beside it.
+	HoldsReplicated EstateHolding = "replicated"
+)
+
+// Valid reports whether h is one of the two. The zero value is not: a holding
+// nobody declared is not quietly the node's own file alone, which would be a
+// data node's backup without its tracker.
+func (h EstateHolding) Valid() bool { return h == HoldsNodeOnly || h == HoldsReplicated }
+
+// HoldingFor is the holding of a node that does, or does not, hold the
+// replicated estate — engine.HoldsEstate's answer for its configuration.
+func HoldingFor(replicated bool) EstateHolding {
+	if replicated {
+		return HoldsReplicated
+	}
+	return HoldsNodeOnly
+}
+
 // Service takes backups.
 type Service struct {
 	store   *store.DB
-	held    func() ([]store.PartitionFile, error)
+	holding EstateHolding
 	conn    *nats.Conn
 	api     jsapi.API
 	holds   coord.HoldRegister
@@ -365,11 +382,11 @@ func New(opts Options) (*Service, error) {
 	case opts.Store == nil:
 		return nil, errors.New("backup: Options.Store is required: a node's " +
 			"backup starts with its own store, which the engine opens")
-	case opts.Partitions == nil:
-		return nil, errors.New("backup: Options.Partitions is required: a " +
-			"backup copies every partition the node holds, and only the " +
-			"engine can say which those are — pass Engine.HeldPartitions, " +
-			"which answers none on a node without `data`")
+	case !opts.Estate.Valid():
+		return nil, fmt.Errorf("backup: Options.Estate is %q, and it is required: "+
+			"a backup copies every database the node holds, and only the engine "+
+			"can say whether that includes the replicated estate — pass "+
+			"backup.HoldingFor(engine.HoldsEstate(boot))", opts.Estate)
 	case opts.Holds == nil:
 		return nil, errors.New("backup: Options.Holds is required: without the " +
 			"fleet's trim-hold register the trim can delete what the copy needs")
@@ -385,7 +402,7 @@ func New(opts Options) (*Service, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{store: opts.Store, held: opts.Partitions, conn: opts.Conn, api: opts.API, holds: opts.Holds,
+	return &Service{store: opts.Store, holding: opts.Estate, conn: opts.Conn, api: opts.API, holds: opts.Holds,
 		backups: opts.Backups, nodeID: opts.NodeID, objects: opts.Objects,
 		metrics: opts.Metrics, now: now}, nil
 }
@@ -425,12 +442,23 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		EngineVersion: version.String(),
 	}
 
+	// EVERY ESTATE THE NODE HOLDS, and none of them is optional. A data
+	// node's backup with the node estate alone has every credential and no
+	// tracker; with the replicated estate alone it has the tracker and no
+	// audit log, no memory and no secret bootstrap. Either one restores
+	// into a company that is missing half of itself while looking like a
+	// backup.
+	files, err := s.estates()
+	if err != nil {
+		return Manifest{}, err
+	}
+
 	// THE HOLD IS TAKEN BEFORE THE FIRST BYTE IS COPIED, at the position
 	// this node's appliers stand at NOW — the live cursor, deliberately,
 	// because the pin has to cover everything the copy is about to include
 	// and the copy has not happened yet. A pin at the copy's own position
 	// would be taken after the window it is meant to protect.
-	release, err := s.hold(ctx)
+	release, err := s.hold(ctx, files.replicated)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -440,16 +468,7 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	// convenience — see the package doc. A store copy older than the
 	// stream estate makes a restore repeat work; the other way round makes
 	// it lose work.
-	// BOTH ESTATES, and neither is optional. A backup with the node
-	// estate alone has every credential and no tracker; with the
-	// replicated estate alone it has the tracker and no audit log, no
-	// memory and no secret bootstrap. Either one restores into a company
-	// that is missing half of itself while looking like a backup.
-	files, err := s.estates()
-	if err != nil {
-		return Manifest{}, err
-	}
-	for _, db := range files {
+	for _, db := range files.all() {
 		name := storeFileNames[db.Estate()]
 		info, err := db.Backup(ctx, filepath.Join(dir, name))
 		if err != nil {
@@ -457,7 +476,6 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		}
 		manifest.Stores = append(manifest.Stores, StoreArtifact{
 			Estate:     db.Estate(),
-			Partition:  db.File().Name,
 			File:       name,
 			Source:     db.Path(),
 			Bytes:      info.Bytes,
@@ -471,7 +489,7 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	// is the only one that describes the file — and the applier ran
 	// throughout the copy, so the live cursor names where this node was
 	// when the copy started.
-	if replicated := copyOf(manifest, store.EstatePartition); replicated != "" {
+	if replicated := copyOf(manifest, store.EstateReplicated); replicated != "" {
 		path := filepath.Join(dir, replicated)
 		cursors, err := statelog.CursorsInFile(ctx, path)
 		if err != nil {
@@ -530,7 +548,7 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 			return Manifest{}, fmt.Errorf("backup: measure the copy: %w", err)
 		}
 		for i := range manifest.Stores {
-			if manifest.Stores[i].Estate == store.EstatePartition {
+			if manifest.Stores[i].Estate == store.EstateReplicated {
 				manifest.Stores[i].SHA256 = digest
 				manifest.Stores[i].Bytes = size.Size()
 			}
@@ -590,66 +608,47 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	return manifest, nil
 }
 
-// estates is every database handle a backup copies, in copy order: the node's
-// own store, then each partition the node HOLDS — layout 0's one, the whole
-// replicated estate, on a data node.
-//
-// WHAT THE NODE HOLDS, NOT WHAT HAPPENS TO BE OPEN (see [Options.Partitions]).
-// A held partition that is not open is REFUSED with [store.ErrNoEstate],
-// naming it: the backup would otherwise be missing that partition's rows and
-// say nothing. And an open partition the node does not hold is refused too,
-// because a backup that copied what the engine says and skipped what is
-// actually open would be as silent the other way.
-//
-// A node holding any partition but layout 0's is REFUSED, naming what it
-// holds: a backup has one partition member, named for the whole estate, and a
-// copy of one partition of many filed under that name would restore as a
-// company missing every other partition's rows.
-func (s *Service) estates() ([]*store.DB, error) {
-	held, err := s.held()
-	if err != nil {
-		return nil, fmt.Errorf("backup: which partitions this node holds: %w", err)
-	}
-	holds := make(map[string]bool, len(held))
-	for _, f := range held {
-		holds[f.Name] = true
-	}
-	for _, name := range s.store.OpenPartitions() {
-		if !holds[name] {
-			return nil, fmt.Errorf("backup: the partition %s is open on this node, "+
-				"which does not hold it — a backup copies what the node holds, and "+
-				"this one would leave an open file out", name)
-		}
-	}
-	switch {
-	case len(held) == 0:
-		return []*store.DB{s.store}, nil
-	case len(held) > 1 || held[0].Layout != 0:
-		return nil, fmt.Errorf("backup: this node holds %v, and a backup copies one "+
-			"partition file, %s, which is layout 0's whole estate",
-			names(held), storeFileNames[store.EstatePartition])
-	}
-	part, err := s.store.PartitionDB(held[0].Name)
-	if err != nil {
-		return nil, fmt.Errorf("backup: this node holds the partition %s and it is "+
-			"not open — an adoption is replacing its file, or reopening it failed; "+
-			"take the backup again once the node reports the partition serving: %w",
-			held[0].Name, err)
-	}
-	if part.File() != held[0] {
-		return nil, fmt.Errorf("backup: the partition %s is open as %+v, and this "+
-			"node holds it as %+v", held[0].Name, part.File(), held[0])
-	}
-	return []*store.DB{s.store, part}, nil
+// held is the database handles a backup copies: the node's own store, and the
+// replicated estate beside it on a node that holds one.
+type held struct {
+	node       *store.DB
+	replicated *store.DB
 }
 
-// names is the partitions' names, for a refusal.
-func names(files []store.PartitionFile) []string {
-	out := make([]string, 0, len(files))
-	for _, f := range files {
-		out = append(out, f.Name)
+// all is every handle, in copy order: the node's own first.
+func (h held) all() []*store.DB {
+	if h.replicated == nil {
+		return []*store.DB{h.node}
 	}
-	return out
+	return []*store.DB{h.node, h.replicated}
+}
+
+// estates is every database a backup copies: the node's own store, and the
+// replicated estate where the node HOLDS one.
+//
+// WHAT THE NODE HOLDS, NOT WHAT HAPPENS TO BE OPEN (see [Options.Estate]). A
+// held estate that is not open is REFUSED with [store.ErrNoEstate]: the backup
+// would otherwise be missing every replicated row and say nothing. And an open
+// estate on a node that holds none is refused too, because a backup that copied
+// what the engine says and skipped what is actually open would be as silent the
+// other way.
+func (s *Service) estates() (held, error) {
+	replicated, err := s.store.ReplicatedDB()
+	switch {
+	case s.holding == HoldsNodeOnly && err == nil:
+		return held{}, fmt.Errorf("backup: the replicated estate is open on this "+
+			"node, which is configured to hold none — a backup copies what the "+
+			"node holds, and this one would leave an open file (%s) out",
+			replicated.Path())
+	case s.holding == HoldsNodeOnly:
+		return held{node: s.store}, nil
+	case err != nil:
+		return held{}, fmt.Errorf("backup: this node holds the replicated estate "+
+			"and it is not open — an adoption is replacing its file, or reopening "+
+			"it failed; take the backup again once the node reports its estate "+
+			"serving: %w", err)
+	}
+	return held{node: s.store, replicated: replicated}, nil
 }
 
 // storeRefusal classifies a store copy that failed, copied estates into.
@@ -790,17 +789,14 @@ func storeBytes(m Manifest) int64 {
 // treated as a crashed holder, which is exactly right for a crashed holder and
 // exactly wrong for a 40-minute copy of a large store.
 //
-// A node holding no partition gets a no-op release and no pin: there is no
-// applier cursor to read a position from, so there is nothing to pin at.
-func (s *Service) hold(ctx context.Context) (func(), error) {
-	files, err := s.estates()
-	if err != nil {
-		return nil, err
-	}
-	if len(files) < 2 {
+// A node holding no replicated estate — replicated is nil — gets a no-op
+// release and no pin: there is no applier cursor to read a position from, so
+// there is nothing to pin at.
+func (s *Service) hold(ctx context.Context, replicated *store.DB) (func(), error) {
+	if replicated == nil {
 		return func() {}, nil
 	}
-	live, err := s.livePositions(ctx, files[1])
+	live, err := s.livePositions(ctx, replicated)
 	if err != nil {
 		return nil, err
 	}
@@ -862,11 +858,11 @@ func (s *Service) hold(ctx context.Context) (func(), error) {
 	}, nil
 }
 
-// livePositions is where the appliers of the partition a backup copies stand
-// right now.
-func (s *Service) livePositions(ctx context.Context, partition *store.DB) (map[string]coord.Position, error) {
+// livePositions is where the appliers of the replicated estate a backup copies
+// stand right now.
+func (s *Service) livePositions(ctx context.Context, replicated *store.DB) (map[string]coord.Position, error) {
 	out := map[string]coord.Position{}
-	if err := partition.Read(ctx, func(tx *sql.Tx) error {
+	if err := replicated.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
 			`SELECT stream, generation, seq FROM statelog_cursor`)
 		if err != nil {

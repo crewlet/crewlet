@@ -23,9 +23,9 @@ import (
 
 // NO STATEMENT SPANS TWO FILES.
 //
-// A node is its own database file and one file per partition it holds, and
-// the two rules that makes true are that no transaction spans two of them and
-// no read joins across them. Both fail the same way if they are broken: not
+// A data node is two database files — its own and the replicated estate — and
+// the two rules that makes true are that no transaction spans them and no read
+// joins across them. Both fail the same way if they are broken: not
 // with an error a caller can handle, but with a driver refusing a table it
 // cannot see, from a query nobody thought was crossing a boundary — because in
 // one file it was not.
@@ -43,13 +43,14 @@ import (
 // # What it looks for
 //
 // Two things. A literal that looks like SQL and names a table the node's own
-// schema declares AND one the partition schema declares — the table names are
+// schema declares AND one the replicated schema declares — the table names are
 // DERIVED from each schema, so a table added by a migration is covered by that
 // migration and nothing else. And any ATTACH, which is the one way a statement
-// on one connection reaches a SECOND file, and so the one way it could join two
-// partitions: every partition carries the same table names, so no table name
-// can tell a statement that crossed from one partition into another from one
-// that did not, and the only statement that can cross is one that attaches.
+// on one connection reaches a SECOND file — a copy of the replicated estate, a
+// snapshot artefact, a backup member — whose table names are the same as the
+// live file's, so no table name can tell a statement that crossed into a copy
+// from one that did not, and the only statement that can cross is one that
+// attaches.
 //
 // # Why the control strings are the load-bearing half
 //
@@ -65,19 +66,19 @@ func TestNoStatementSpansTwoFiles(t *testing.T) {
 		t.Fatal("no tables were derived from the node estate's schema; the " +
 			"derivation no longer recognises the DDL it is meant to cover")
 	}
-	partition := tablesIn(t, store.EstatePartition)
+	replicated := tablesIn(t, store.EstateReplicated)
 
 	// The matchers, exercised on strings whose verdict is known. Both
 	// estates are named explicitly here rather than taken from the schema,
 	// so these cases keep their meaning whatever either schema does next.
 	fakeNode := map[string]bool{"crewlet_events": true}
-	fakePartition := map[string]bool{"tracker_tasks": true}
+	fakeReplicated := map[string]bool{"tracker_tasks": true}
 	for _, positive := range []string{
 		`SELECT t.id FROM tracker_tasks t JOIN crewlet_events e ON e.id = t.turn_id`,
 		`INSERT INTO crewlet_events (id) SELECT id FROM tracker_tasks`,
 		`UPDATE tracker_tasks SET n = (SELECT count(*) FROM crewlet_events)`,
 	} {
-		if !bothEstates(positive, fakeNode, fakePartition) {
+		if !bothEstates(positive, fakeNode, fakeReplicated) {
 			t.Errorf("control: %q crosses the estate boundary and the matcher "+
 				"did not flag it", positive)
 		}
@@ -91,22 +92,22 @@ func TestNoStatementSpansTwoFiles(t *testing.T) {
 		// A column that merely contains another table's name.
 		`SELECT tracker_tasks_seen FROM crewlet_events`,
 	} {
-		if bothEstates(negative, fakeNode, fakePartition) {
+		if bothEstates(negative, fakeNode, fakeReplicated) {
 			t.Errorf("control: %q does not cross the boundary but the matcher "+
 				"flagged it", negative)
 		}
 	}
 	for _, positive := range []string{
-		`ATTACH DATABASE 'l1-tracker.008.db' AS other`,
+		`ATTACH DATABASE 'snapshot-41-1700000000.db' AS other`,
 		`attach '/data/crewlet-replicated.db' as estate`,
 		`ATTACH ? AS peer`,
 		// THE SHAPES A PATH COMPUTED IN GO TAKES, which is the natural
-		// way to attach a sibling partition's file: a format string, the
+		// way to attach a copy's file: a format string, the
 		// literal prefix of a concatenation, a double-quoted name and
 		// the other parameter spellings.
 		`ATTACH DATABASE %q AS peer`,
 		`ATTACH DATABASE `,
-		`ATTACH DATABASE "l1-tracker.008.db" AS other`,
+		`ATTACH DATABASE "store-replicated.db" AS other`,
 		`ATTACH $1 AS peer`,
 		`ATTACH @path AS peer`,
 		`ATTACH :path AS peer`,
@@ -157,7 +158,7 @@ func TestNoStatementSpansTwoFiles(t *testing.T) {
 				if !ok {
 					return true
 				}
-				if bothEstates(text, node, partition) || attaches(text) {
+				if bothEstates(text, node, replicated) || attaches(text) {
 					crossings = append(crossings, shortPos(root, fset.Position(n.Pos()).String())+
 						": "+strings.Join(strings.Fields(text), " "))
 				}
@@ -169,11 +170,11 @@ func TestNoStatementSpansTwoFiles(t *testing.T) {
 		})
 	}
 	for _, c := range crossings {
-		t.Errorf("a statement reaches two database files — a node's own and a "+
-			"partition, or a second file it attaches: %s", c)
+		t.Errorf("a statement reaches two database files — a node's own and the "+
+			"replicated estate, or a second file it attaches: %s", c)
 	}
-	t.Logf("estate boundary: %d node table(s), %d partition table(s)",
-		len(node), len(partition))
+	t.Logf("estate boundary: %d node table(s), %d replicated table(s)",
+		len(node), len(replicated))
 }
 
 // attachStatement is SQLite's ATTACH: the keyword, then either DATABASE or
@@ -196,7 +197,7 @@ func attaches(text string) bool { return attachStatement.MatchString(text) }
 var sqlVerb = regexp.MustCompile(`(?is)\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+([a-z_][a-z0-9_]*)`)
 
 // bothEstates reports whether one statement names a table of the node's own
-// schema and one of the partition schema.
+// schema and one of the replicated schema.
 //
 // TABLES IN VERB POSITION ONLY. A bare containment test reads a column named
 // `tracker_tasks_seen` as the table `tracker_tasks`, and reads a package doc
@@ -438,16 +439,16 @@ func shortPos(root, pos string) string {
 
 // EVERY TABLE BELONGS TO EXACTLY ONE ESTATE.
 //
-// A node's own file and its partitions carry two migration sequences, and
+// A node's own file and its replicated estate carry two migration sequences, and
 // nothing stops a table name being declared in both — at which point every rule
 // above it is meaningless: a statement naming that table is in neither estate
 // and in both, and a reader tracing a row has two places to look.
 func TestNoTableIsDeclaredInBothEstates(t *testing.T) {
 	t.Parallel()
-	node, partition := tablesIn(t, store.EstateNode), tablesIn(t, store.EstatePartition)
+	node, replicated := tablesIn(t, store.EstateNode), tablesIn(t, store.EstateReplicated)
 	var shared []string
 	for name := range node {
-		if partition[name] {
+		if replicated[name] {
 			shared = append(shared, name)
 		}
 	}

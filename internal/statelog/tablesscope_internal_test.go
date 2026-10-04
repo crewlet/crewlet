@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE SCOPE INDEX IS THE SAME ROWS AT EVERY CHUNK WIDTH.
@@ -104,11 +103,10 @@ func scopeRowsAt(ctx context.Context, t *testing.T, rec Record, limit int) []str
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	file := storetest.LayoutZero(1)
-	if _, err := db.OpenPartition(ctx, file); err != nil {
-		t.Fatalf("open %s: %v", file.Name, err)
+	if _, err := db.OpenReplicated(ctx, 1); err != nil {
+		t.Fatalf("open the replicated estate: %v", err)
 	}
-	rep := db.PartitionHandle(file.Name)
+	rep := db.Replicated()
 
 	tbl := tables{stream: "TEST", deferred: "probe_deferred", scope: "probe_scope"}
 	if err := rep.Tx(ctx, func(tx *sql.Tx) error {

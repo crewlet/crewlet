@@ -40,7 +40,7 @@ import (
 
 // DutyDeps is what the duty needs that it does not own.
 type DutyDeps struct {
-	DB     store.PartitionHandle
+	DB     store.ReplicatedHandle
 	Writer *Writer
 
 	// Logger is where the duty reports. Nil is the package's own

@@ -54,7 +54,7 @@ func TestANodeAPeerReanchoredPastIsSentToAdopt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the vectors' log: %v", err)
 	}
-	if err := storetest.EstateOf(e.backends.Store).Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := e.backends.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at)
 			VALUES (?, 0, ?, ?, ?)
@@ -312,7 +312,7 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 func copyEstate(t *testing.T, back *Backends) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "crewlet-replicated.db")
-	if _, err := storetest.Partition(t, storetest.EstateOf(back.Store)).Backup(t.Context(), path); err != nil {
+	if _, err := storetest.ReplicatedDB(t, back.Store.Replicated()).Backup(t.Context(), path); err != nil {
 		t.Fatalf("copy the replicated estate: %v", err)
 	}
 	return path
@@ -325,7 +325,7 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 	at statelog.Position, created time.Time) {
 
 	t.Helper()
-	copyDB, err := store.OpenEstate(t.Context(), store.EstatePartition, rows, store.Options{})
+	copyDB, err := store.OpenEstate(t.Context(), store.EstateReplicated, rows, store.Options{})
 	if err != nil {
 		t.Fatalf("open the copy: %v", err)
 	}
@@ -362,7 +362,7 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 	}
 	snapDir := filepath.Join(dir, "snapshots")
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
-		Domains: registered, File: storetest.EstateOf(donorNode), Dir: snapDir, NodeID: "donor",
+		Domains: registered, File: donorNode.Replicated(), Dir: snapDir, NodeID: "donor",
 		EngineVersion: "v0.0.0-test",
 		Recipients:    func(context.Context) (int, error) { return 1, nil },
 		Interval:      24 * time.Hour,

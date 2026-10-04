@@ -61,7 +61,7 @@ type Store struct {
 	// see rows before they form a record. It is never the write path's own
 	// snapshot — that is the framework's, taken per append — and nothing
 	// read here is paired with an expectation.
-	db store.PartitionReader
+	db store.ReplicatedReader
 
 	now      func() time.Time
 	newID    func() string
@@ -73,7 +73,7 @@ type Options struct {
 	// Publisher is the domain's write authority, and DB the replicated
 	// estate its decisions read.
 	Publisher *statelog.Publisher
-	DB        store.PartitionReader
+	DB        store.ReplicatedReader
 
 	// Now is the clock the AUTHORED instants are stamped from. Nil takes
 	// the wall clock in UTC. An argument rather than a package call, so a

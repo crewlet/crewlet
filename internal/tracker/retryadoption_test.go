@@ -211,7 +211,7 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 			Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}),
 			Log: statelog.LogID{Domain: tracker.Domain{}.Name(), Partition: statelog.EstatePartition},
 		}},
-		LivePath: storetest.Partition(t, joiner).Path(),
+		LivePath: storetest.ReplicatedDB(t, joiner).Path(),
 		NodeID:   "node-b",
 		Conn:     donor.broker.Conn(),
 		Need: func(context.Context) (statelog.OfferRequest, error) {
@@ -220,9 +220,9 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 		Hold: func(context.Context, map[string]uint64) (func(), error) {
 			return func() {}, nil
 		},
-		Close: func(context.Context) error { return joinerNode.ClosePartition(joiner.Name()) },
+		Close: func(context.Context) error { return joinerNode.CloseReplicated() },
 		Reopen: func(ctx context.Context) error {
-			_, err := joinerNode.OpenPartition(ctx, storetest.LayoutZero(1))
+			_, err := joinerNode.OpenReplicated(ctx, 1)
 			return err
 		},
 		Record: func(ctx context.Context, began time.Time, from string,

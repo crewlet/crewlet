@@ -387,146 +387,54 @@ var errNoDonor = errors.New("engine: no peer could donate a usable snapshot")
 // estate is the replicated estate's file AS THE RUNTIME HANDS IT to the
 // framework and the domains: resolved through this node's handle on every
 // call, never captured, because an adoption closes the file, renames a peer's
-// artefact over it and opens it again — see [store.PartitionHandle].
-func (s *stateLog) estate() store.PartitionHandle {
-	return s.db.PartitionHandle(statelog.EstatePartition.String())
-}
+// artefact over it and opens it again — see [store.ReplicatedHandle].
+func (s *stateLog) estate() store.ReplicatedHandle { return s.db.Replicated() }
 
-// HeldPartitions is every partition a node configured as b HOLDS: the files it
-// keeps open for as long as it runs, that a backup of it copies and that
-// `crewlet migrate` migrates while it is stopped.
-//
-// UNDER LAYOUT 0 A DATA NODE HOLDS THE WHOLE ESTATE — its one partition,
-// estate.000 — AND A NODE WITHOUT `data` HOLDS NOTHING, whatever the company
-// runs. Holding is a fact about the NODE, not about the revision it applies: a
-// company that moved its tracker to Jira leaves a data node's file on disk
-// with every row its log ever derived, and while the file was opened only by a
-// running state log, a backup of that node left the file out and called
-// itself complete. It is also the one answer three callers need — the engine
-// opening the files, the backup copying them and the operator's migration —
-// so each reads it here rather than deriving it.
-func HeldPartitions(b *config.Bootstrap) ([]store.PartitionFile, error) {
-	layout := LayoutZero()
-	held := heldIn(b, layout)
-	files := make([]store.PartitionFile, 0, len(held))
-	for _, p := range held {
-		f, err := layout.File(p)
-		if err != nil {
-			return nil, fmt.Errorf("engine: the partition %s this node holds: %w", p, err)
-		}
-		files = append(files, f)
-	}
-	return files, nil
-}
+// estateLogs is how many logs run on the replicated estate — one per domain
+// this build registers — and so how many writers their apply loops pin on its
+// file ([store.DB.OpenReplicated]).
+func estateLogs() int { return len(registeredDomains()) }
 
-// heldIn is every partition of layout a node configured as b holds: all of
-// them on a data node, and none on a node without `data`.
-//
-// ALL OF THEM, because nothing joins or leaves a partition while this build
-// runs: the state log opens every partition of the layout it runs and runs
-// every one of its logs.
-func heldIn(b *config.Bootstrap, layout statelog.Layout) []statelog.PartitionID {
-	if !holdsData(b) {
-		return nil
-	}
-	return layout.Partitions()
-}
-
-// HeldPartitions is [HeldPartitions] for this node: the partitions it holds,
-// open or not at the instant of asking — the question a backup has to ask,
-// since one an adoption holds closed between its rename and its reopen is
-// still one the node holds.
-func (e *Engine) HeldPartitions() ([]store.PartitionFile, error) {
-	return HeldPartitions(e.boot)
-}
-
-// holdPartitions opens every partition this node holds, for the life of the
-// node: the store's Close takes them down with it.
+// holdEstate opens this node's replicated estate, for the life of the node:
+// the store's Close takes it down with it. A node without `data` holds none
+// ([HoldsEstate]) and opens nothing.
 //
 // AT BOOT, BEFORE ANY COMPANY IS APPLIED, and not by the state-log runtime,
-// because holding does not depend on the company (see [HeldPartitions]): the
-// runtime runs the logs of what the node holds, and finds the files open.
-// Idempotent, so an engine started again over backends an earlier one used
-// finds them open already.
-func holdPartitions(ctx context.Context, db *store.DB, b *config.Bootstrap) error {
-	files, err := HeldPartitions(b)
-	if err != nil {
-		return err
+// because holding does not depend on the company: a company that moved its
+// tracker to Jira leaves a data node's file on disk with every row its log
+// ever derived, and while the file was opened only by a running state log, a
+// backup of that node left the file out and called itself complete. The
+// runtime runs the logs and finds the file open. Idempotent, so an engine
+// started again over backends an earlier one used finds it open already.
+func holdEstate(ctx context.Context, db *store.DB, b *config.Bootstrap) error {
+	if !HoldsEstate(b) {
+		return nil
 	}
-	for _, f := range files {
-		if _, err := db.OpenPartition(ctx, f); err != nil {
-			return fmt.Errorf("engine: open the partition %s this node holds: %w", f.Name, err)
-		}
+	if _, err := db.OpenReplicated(ctx, estateLogs()); err != nil {
+		return fmt.Errorf("engine: open the replicated estate this node holds: %w", err)
 	}
 	return nil
 }
 
-// openPartitions opens the file of every partition of this node's layout that
-// is not open already, and answers the ones it opened.
-//
-// ALL OR NONE, as the logs are: a failure closes what this call opened and
-// leaves the node as it was, because a partition whose file is missing is one
-// whose logs nothing could apply.
-func (s *stateLog) openPartitions(ctx context.Context) ([]statelog.PartitionID, error) {
-	var opened []statelog.PartitionID
-	for _, p := range s.layout.Partitions() {
-		if _, err := s.db.PartitionDB(p.String()); err == nil {
-			continue
-		}
-		file, err := s.layout.File(p)
-		if err == nil {
-			_, err = s.db.OpenPartition(ctx, file)
-		}
-		if err != nil {
-			for _, done := range opened {
-				_ = s.db.ClosePartition(done.String())
-			}
-			return nil, fmt.Errorf("engine: open the partition %s: %w", p, err)
-		}
-		opened = append(opened, p)
-	}
-	return opened, nil
+// estateOpen reports whether this node's replicated estate is open — which,
+// while its state log runs, it is but for the window an adoption holds it
+// closed, or after a join whose reopen failed.
+func (s *stateLog) estateOpen() bool {
+	_, err := s.db.ReplicatedDB()
+	return err == nil
 }
 
-// closedPartitions names every partition of the layout this node does not have
-// open — which, while its state log runs, is only ever one a failed join left
-// closed.
-func (s *stateLog) closedPartitions() []string {
-	var out []string
-	for _, p := range s.layout.Partitions() {
-		if _, err := s.db.PartitionDB(p.String()); err != nil {
-			out = append(out, p.String())
-		}
+// reopenEstate opens the replicated estate if it is not open. It is the one
+// way the runtime brings its file back: at its own start, and when a join left
+// it closed.
+func (s *stateLog) reopenEstate(ctx context.Context) error {
+	if s.estateOpen() {
+		return nil
 	}
-	return out
-}
-
-// partitionClosed reports whether any partition of the layout is not open.
-func (s *stateLog) partitionClosed() bool { return len(s.closedPartitions()) > 0 }
-
-// wholeEstate is the one partition a whole-estate snapshot copies, a
-// whole-estate join replaces and a whole-estate adoption history is folded
-// into — which is the layout's only partition, and there is none on a layout
-// that has more than one.
-//
-// A SNAPSHOT IS A COPY OF ONE FILE, and the donor serves one artefact naming
-// every log it covers, so an artefact covers the estate only where the estate
-// is one file: layout 0, whose one partition is estate.000. A layout of many
-// partitions has no whole-estate artefact to take, offer or install.
-func (s *stateLog) wholeEstate() (statelog.PartitionID, bool) {
-	partitions := s.layout.Partitions()
-	if len(partitions) != 1 {
-		return statelog.PartitionID{}, false
+	if _, err := s.db.OpenReplicated(ctx, estateLogs()); err != nil {
+		return fmt.Errorf("engine: open the replicated estate: %w", err)
 	}
-	return partitions[0], true
-}
-
-// partitionFile is partition p of this node's layout as the store opens it.
-// Every partition asked of it is one of the layout's own — the layout was
-// validated where it was built — so an error here is a programming mistake,
-// and it is returned rather than assumed away.
-func (s *stateLog) partitionFile(p statelog.PartitionID) (store.PartitionFile, error) {
-	return s.layout.File(p)
+	return nil
 }
 
 // snapshotHeld is the artefact this node holds, and why it holds no current
@@ -633,10 +541,10 @@ func (e *Engine) startStateLogAt(ctx context.Context, boot *config.Bootstrap,
 	provisionCtx, cancelProvision := context.WithTimeout(ctx, host.Clustered().SequenceBudget())
 	defer cancelProvision()
 
-	// EVERY PARTITION'S FILE FIRST, before anything reads a checkpoint out
-	// of one: the join below asks each log's rows where they stand, and a
-	// partition that is not open answers nothing it could be asked.
-	if _, err = s.openPartitions(ctx); err != nil {
+	// THE ESTATE'S FILE FIRST, before anything reads a checkpoint out of
+	// it: the join below asks each log's rows where they stand, and an
+	// estate that is not open answers nothing it could be asked.
+	if err = s.reopenEstate(ctx); err != nil {
 		s.Stop()
 		return nil, err
 	}
@@ -651,16 +559,11 @@ func (e *Engine) startStateLogAt(ctx context.Context, boot *config.Bootstrap,
 	// whose ledger was scrubbed, on a file whose watermark does not say so
 	// — carried into that watermark here, once, before the join below can
 	// replace the file and before anything publishes. See
-	// [statelog.FoldLegacyAdoptions]. Every such adoption installed the
-	// whole estate, so it is folded into the whole estate's one partition;
-	// a layout of many has none, and no whole-estate adoption ever
-	// installed any of its files.
-	if _, ok := s.wholeEstate(); ok {
-		if err := statelog.FoldLegacyAdoptions(ctx, e.backends.Store, s.estate(),
-			registeredDomains()); err != nil {
-			s.Stop()
-			return nil, err
-		}
+	// [statelog.FoldLegacyAdoptions].
+	if err := statelog.FoldLegacyAdoptions(ctx, e.backends.Store, s.estate(),
+		registeredDomains()); err != nil {
+		s.Stop()
+		return nil, err
 	}
 
 	// ADOPT BEFORE ANY APPLIER RUNS, because a join REPLACES the
@@ -807,11 +710,11 @@ func (s *stateLog) Stop() {
 			running.consumer.Close()
 		}
 	}
-	// AND NOT THE FILES: the NODE holds its partitions, whether or not a
-	// state log runs their logs ([HeldPartitions]), and the store's own
-	// Close takes them down with it. A state log that gave them back on
-	// its way out left a node whose company stopped running one holding
-	// nothing a backup would copy.
+	// AND NOT THE FILE: the NODE holds its replicated estate, whether or
+	// not a state log runs its logs ([holdEstate]), and the store's own
+	// Close takes it down with it. A state log that gave it back on its way
+	// out left a node whose company stopped running one holding nothing a
+	// backup would copy.
 }
 
 // applierRun is one domain's apply loop: what ends it, and what reports it
@@ -1107,11 +1010,11 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		Domain: domain, Spec: spec, Applier: applier, Fetch: consumer,
 		// WHERE THE LOG SITS, held to the stream it applies.
 		Layout: s.layout, LogID: id,
-		// THE LOG'S PARTITION, not the node's own file. The applier PINS
-		// a connection for the life of its loop, and the pins live on the
-		// partition's pool — that is where the log's applier writes, and
-		// the pool is sized for one pin per log the partition carries
-		// ([store.PartitionFile.Logs]). Handed the node's own file it
+		// THE REPLICATED ESTATE, not the node's own file. The applier
+		// PINS a connection for the life of its loop, and the pins live on
+		// the estate's pool — that is where the log's applier writes, and
+		// the pool is sized for one pin per log it carries
+		// ([estateLogs]). Handed the node's own file it
 		// would refuse at its first round with "declared 0 pinned
 		// writers", which stops the loop before it applies a single
 		// record: the domain's rows never move, and the only symptom is a
@@ -1877,7 +1780,7 @@ func (s *stateLog) judgeCopy(ctx context.Context) copyVerdict {
 	// failure for as long as the file stayed shut, where a peer's copy could
 	// have answered them.
 	if s.db != nil {
-		if _, err := s.db.PartitionDB(statelog.EstatePartition.String()); err != nil {
+		if _, err := s.db.ReplicatedDB(); err != nil {
 			return copyVerdict{fault: shutEstate}
 		}
 	}
@@ -2205,22 +2108,9 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 				"fleet for a snapshot at the generation named")
 	}
 
-	// AN ADOPTION INSTALLS ONE FILE, the whole estate's, which only a
-	// layout of one partition has — see [stateLog.wholeEstate].
-	whole, ok := s.wholeEstate()
-	if !ok {
-		return "", statelog.OfferRequest{}, fmt.Errorf("engine: logs %v cannot "+
-			"replay from where their rows stand, and layout %d has %d partitions: "+
-			"a whole-estate snapshot is one file, and this layout's estate is not",
-			slices.Concat(behind, passed), s.layout.Number, len(s.layout.Partitions()))
-	}
-	file, err := s.partitionFile(whole)
-	if err != nil {
-		return "", statelog.OfferRequest{}, err
-	}
 	adopter, err := statelog.NewAdopter(statelog.AdoptDeps{
 		Domains:  s.registered(),
-		LivePath: e.backends.Store.PartitionPath(file),
+		LivePath: e.backends.Store.ReplicatedFile(),
 		NodeID:   s.nodeID,
 		Conn:     conn.Conn(),
 		Need: func(context.Context) (statelog.OfferRequest, error) {
@@ -2230,9 +2120,9 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 			return s.stillUsable(ctx, logs, m)
 		},
 		Hold:  s.holdTail,
-		Close: func(context.Context) error { return e.backends.Store.ClosePartition(file.Name) },
+		Close: func(context.Context) error { return e.backends.Store.CloseReplicated() },
 		Reopen: func(ctx context.Context) error {
-			if _, reopenErr := e.backends.Store.OpenPartition(ctx, file); reopenErr != nil {
+			if _, reopenErr := e.backends.Store.OpenReplicated(ctx, estateLogs()); reopenErr != nil {
 				return reopenErr
 			}
 			return nil
@@ -2378,8 +2268,8 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	return nil
 }
 
-// restoreEstate reopens every partition of the layout a failed join left
-// closed, and moves every consumer to the checkpoint the file it opened keeps.
+// restoreEstate reopens the replicated estate a failed join left closed, and
+// moves every consumer to the checkpoint the file it opened keeps.
 //
 // THE APPLIERS ARE HALTED AROUND IT, as around a join: a consumer is reset
 // only while nothing fetches from it, and the relaunch is what resumes each
@@ -2412,12 +2302,11 @@ func (s *stateLog) restoreEstate(ctx context.Context) error {
 	// ctx is the state log's own run context, for [Engine.rejoin]'s
 	// reason: the relaunched appliers outlive the heartbeat tick.
 	defer s.launchAppliers(ctx)
-	reopened, err := s.openPartitions(ctx)
-	if err != nil {
+	if err := s.reopenEstate(ctx); err != nil {
 		return fmt.Errorf("%w: %w", statelog.ErrEstateNotRestored, err)
 	}
 	log.WarnContext(ctx, "statelog_estate_restored", "node", s.nodeID,
-		"partitions", reopened,
+		"path", s.db.ReplicatedFile(),
 		"detail", "the replicated database an earlier join left closed is "+
 			"open again; the node asks the fleet for a snapshot only if it is "+
 			"still below the floor, and no sooner than its retry interval allows")
@@ -2538,7 +2427,7 @@ func (s *stateLog) requestRejoin(now time.Time) {
 	if s.rejoin == nil || s.rejoining {
 		return
 	}
-	lost := s.partitionClosed()
+	lost := !s.estateOpen()
 	ask := !now.Before(s.rejoinAfter)
 	if !lost && !ask {
 		return
@@ -2577,7 +2466,7 @@ func (s *stateLog) requestRejoin(now time.Time) {
 		}
 		if errors.Is(err, statelog.ErrEstateNotRestored) {
 			log.ErrorContext(s.run, "statelog_estate_lost",
-				"node", s.nodeID, "partitions", s.closedPartitions(), "error", err.Error(),
+				"node", s.nodeID, "path", s.db.ReplicatedFile(), "error", err.Error(),
 				"asks_fleet_again_in", max(0, time.Until(s.rejoinAfter)).Round(time.Second),
 				"detail", "this node has no replicated database open, so it "+
 					"answers no tracker, page or search read from its own copy "+
@@ -4042,14 +3931,4 @@ func (s *stateLog) opsLedgers() map[string]maintenance.OpsLedger {
 		}
 	}
 	return out
-}
-
-// filesOf is the replicated estate's file where this node runs a log of the
-// named domain, and nothing where it does not — what a per-node sweep of one of
-// that domain's tables walks.
-func (s *stateLog) filesOf(domain string) []store.PartitionHandle {
-	if s.Domain(domain) == nil {
-		return nil
-	}
-	return []store.PartitionHandle{s.estate()}
 }

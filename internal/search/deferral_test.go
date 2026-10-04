@@ -177,7 +177,7 @@ func (d versionDomain) RecordVersion() int { return d.reads }
 func retainedSeqs(t *testing.T, db *store.DB) []uint64 {
 	t.Helper()
 	var out []uint64
-	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(),
 			`SELECT position FROM vectors_log_deferred ORDER BY position`)
 		if err != nil {
@@ -210,7 +210,7 @@ func runLog(t *testing.T, db *store.DB, domain statelog.Domain, payloads [][]byt
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: domain, Spec: statelog.EstateStream(domain), Layout: statelog.EstateLayout(domain.Name()), LogID: statelog.EstateLog(domain), Applier: search.NewApplier(), Fetch: log, Log: log,
-		Node: db, DB: storetest.EstateOf(db),
+		Node: db, DB: db.Replicated(),
 		Checkpoint: statelog.Position{Generation: 1}, Metrics: recorder,
 	})
 	if err != nil {

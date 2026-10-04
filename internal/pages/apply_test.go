@@ -25,7 +25,7 @@ import (
 
 type harness struct {
 	t       *testing.T
-	db      store.PartitionHandle
+	db      store.ReplicatedHandle
 	applier *pages.Applier
 	seq     uint64
 

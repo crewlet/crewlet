@@ -360,7 +360,7 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 // suiteWrite is one write through the tracker's own [tracker.Writer] — the
 // builder every write path in the domain shares, which is where the
 // framework's stamp is kept or lost.
-func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.PartitionReader) error {
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	w, err := tracker.NewWriter(tracker.WriterDeps{
 		Publisher: pub, DB: db, NodeID: statelogtest.SuiteWriter,
 		Actor: "suite", ActorKind: tracker.AuthorSystem,
@@ -470,7 +470,7 @@ func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
 				Encode:  encodeSuiteRecord,
 				Kinds:   suiteKinds(),
 			},
-			Reader:       func(db store.PartitionReader) statelog.Gates { return tracker.NewGates(db) },
+			Reader:       func(db store.ReplicatedReader) statelog.Gates { return tracker.NewGates(db) },
 			Kind:         string(tracker.KindTask),
 			SubjectKinds: kindNames(tracker.ObjectKinds),
 			Create: func(id, writer, opID string) ([]byte, error) {

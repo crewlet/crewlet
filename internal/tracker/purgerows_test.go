@@ -388,7 +388,7 @@ func applyPurgeThroughARunner(t *testing.T, r *roundTrip, purgeAt uint64,
 
 // dumpReproducible reads every row of every table the identity claim covers,
 // each row rendered as a JSON array of its columns, sorted.
-func dumpReproducible(t *testing.T, db store.PartitionHandle) map[string][]string {
+func dumpReproducible(t *testing.T, db store.ReplicatedHandle) map[string][]string {
 	t.Helper()
 	out := map[string][]string{}
 	if err := db.Read(t.Context(), func(tx *sql.Tx) error {

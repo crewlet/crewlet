@@ -18,7 +18,7 @@ import (
 // it too — the one that makes a later domain answer it before the trim ever
 // runs against that domain's log.
 type evictionLister interface {
-	Evictions(ctx context.Context, db store.PartitionReader) ([]statelog.EvictionRow, error)
+	Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error)
 }
 
 // runEvictions reports what [Evictions] found.

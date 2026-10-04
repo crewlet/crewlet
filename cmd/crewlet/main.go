@@ -1536,10 +1536,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	}
 	backups, err := backup.New(backup.Options{
 		Store: e.Backends().Store,
-		// WHAT THIS NODE HOLDS, from the engine that decides it — never
-		// the store's list of what happens to be open, which is short a
-		// partition while an adoption replaces it.
-		Partitions: e.HeldPartitions,
+		// WHAT THIS NODE HOLDS, from the rule the engine opens it by —
+		// never whether the replicated estate happens to be open, which it
+		// is not while an adoption replaces it.
+		Estate: backup.HoldingFor(engine.HoldsEstate(boot)),
 		// Nil on a node that dialled an external NATS cluster, whose
 		// streams are backed up at the cluster. See internal/backup.
 		Conn: e.Backends().Conn(),

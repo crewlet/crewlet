@@ -224,7 +224,7 @@ func (e *Engine) stopEmbedding() {
 // counting and filling the same set: a corpus the duty embeds and the gauge
 // does not reports a company as permanently short of coverage, and the reverse
 // reports it as complete while a whole source kind is unsearchable by meaning.
-func (e *Engine) corpora(estate store.PartitionReader) []search.Corpus {
+func (e *Engine) corpora(estate store.ReplicatedReader) []search.Corpus {
 	if e.backends == nil || e.backends.Store == nil || estate.IsZero() {
 		return nil
 	}
@@ -342,7 +342,7 @@ func (d *embedDuty) tick(ctx context.Context) tickReport {
 		Publisher: d.publisher,
 		// THE REPLICATED ESTATE AND THE VECTOR LOG, for the semantic
 		// index the duty keeps beside its vectors (ADR-0028).
-		Estate:   d.db.PartitionHandle(statelog.EstatePartition.String()).Reader(),
+		Estate:   d.db.Replicated().Reader(),
 		Log:      d.log.spec.Name,
 		Standing: d.standing,
 		Embedder: provider,
@@ -497,7 +497,7 @@ func (d *embedDuty) evicted(ctx context.Context) ([]statelog.Tombstone, error) {
 		if !ok {
 			return nil, fmt.Errorf("the %s log lists no evictions", running.domain.Name())
 		}
-		rows, err := lister.Evictions(ctx, d.db.PartitionHandle(statelog.EstatePartition.String()).Reader())
+		rows, err := lister.Evictions(ctx, d.db.Replicated().Reader())
 		if err != nil {
 			return nil, fmt.Errorf("read the %s log's evictions: %w",
 				running.domain.Name(), err)

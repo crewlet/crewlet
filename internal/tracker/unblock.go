@@ -122,7 +122,7 @@ type UnblockScan struct {
 // A dependent with any open edge is not ready. A dependent already told about
 // a later clearing is not owed anything. Both are the difference between a
 // repair and a source of duplicate wakes.
-func ScanUnblocked(ctx context.Context, db store.PartitionReader, since uint64,
+func ScanUnblocked(ctx context.Context, db store.ReplicatedReader, since uint64,
 	limit int) (UnblockScan, error) {
 
 	scan := UnblockScan{Through: since}

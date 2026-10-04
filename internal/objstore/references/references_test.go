@@ -24,7 +24,7 @@ func TestEveryTableThatNamesAChunkIsDeclared(t *testing.T) {
 	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 	columns := map[string][]string{}
-	rows, err := storetest.Partition(t, storetest.EstateOf(db)).SQL().QueryContext(t.Context(),
+	rows, err := storetest.ReplicatedDB(t, db.Replicated()).SQL().QueryContext(t.Context(),
 		`SELECT m.name, i.name FROM sqlite_master m
 		 JOIN pragma_table_info(m.name) i
 		 WHERE m.type = 'table'`)

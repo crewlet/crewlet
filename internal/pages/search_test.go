@@ -28,7 +28,7 @@ func searchCorpus(t *testing.T, docs map[string][2]string) *pages.Searcher {
 func searchStore(t *testing.T, docs map[string][2]string) (*pages.Searcher, *store.DB) {
 	t.Helper()
 	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
-	estate := storetest.Partition(t, storetest.EstateOf(db))
+	estate := storetest.ReplicatedDB(t, db.Replicated())
 	for id, doc := range docs {
 		if _, err := estate.SQL().ExecContext(t.Context(), `
 			INSERT INTO pages_heads (id, container, parent_id, title, title_norm, body,
@@ -39,7 +39,7 @@ func searchStore(t *testing.T, docs map[string][2]string) (*pages.Searcher, *sto
 			t.Fatalf("insert page %s: %v", id, err)
 		}
 	}
-	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
+	x := search.NewIndexer(db, db.Replicated().Reader())
 	for quiet := 0; quiet < 2; {
 		worked, err := x.Sweep(t.Context())
 		if err != nil {

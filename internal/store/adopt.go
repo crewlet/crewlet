@@ -172,7 +172,7 @@ func RemoveCopy(path string) error {
 // its pages already applied, and the whole point here is that the database is
 // self-contained the instant this returns.
 func checkpointAndClose(ctx context.Context, path string) error {
-	pool, err := openPrepared(ctx, path, Options{MaxOpenConns: 1}, nil)
+	pool, err := openPrepared(ctx, path, Options{MaxOpenConns: 1})
 	if err != nil {
 		return err
 	}

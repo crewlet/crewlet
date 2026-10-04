@@ -139,12 +139,12 @@ const MaxSearchLimit = 50
 
 // Searcher answers a ranked item search over this node's corpus.
 type Searcher struct {
-	db   store.PartitionReader
+	db   store.ReplicatedReader
 	rank Ranker
 }
 
 // NewSearcher builds one over this node's store and its index.
-func NewSearcher(db store.PartitionReader, rank Ranker) *Searcher {
+func NewSearcher(db store.ReplicatedReader, rank Ranker) *Searcher {
 	return &Searcher{db: db, rank: rank}
 }
 

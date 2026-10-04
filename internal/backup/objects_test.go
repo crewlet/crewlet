@@ -15,14 +15,13 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // fileWithChunks puts a file row and its chunk rows straight into the
 // replicated estate, as an applier would have.
 func fileWithChunks(t *testing.T, db *store.DB, chunks ...[]byte) {
 	t.Helper()
-	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(), `INSERT INTO tracker_files
 			(id, project_key, path, created_at, updated_at, version, document)
 			VALUES ('ENG.x', 'ENG', 'x', 0, 0, 1, x'7b7d')`); err != nil {
@@ -57,7 +56,7 @@ func TestABackupCarriesTheChunksItsCopyNames(t *testing.T) {
 	fileWithChunks(t, db, chunks...)
 	fleet := memory.NewFleet()
 	svc := build(t, backup.Options{
-		Store: db, Partitions: holdsTheEstate, NodeID: "n", Holds: fleet, Backups: fleet,
+		Store: db, Estate: backup.HoldsReplicated, NodeID: "n", Holds: fleet, Backups: fleet,
 		Now: func() time.Time { return clock },
 		Objects: &backup.Objects{Get: func(_ context.Context, h objstore.Hash) ([]byte, error) {
 			if b, ok := held[h]; ok {
@@ -86,7 +85,7 @@ func TestABackupOfChunksInAStreamNamesTheStream(t *testing.T) {
 	fileWithChunks(t, db, []byte("one chunk"), []byte("another"))
 	fleet := memory.NewFleet()
 	svc := build(t, backup.Options{
-		Store: db, Partitions: holdsTheEstate, NodeID: "n", Holds: fleet, Backups: fleet,
+		Store: db, Estate: backup.HoldsReplicated, NodeID: "n", Holds: fleet, Backups: fleet,
 		Now: func() time.Time { return clock },
 		Objects: &backup.Objects{Stream: "OBJ_crewlet_files",
 			Get: func(context.Context, objstore.Hash) ([]byte, error) {
@@ -125,7 +124,7 @@ func TestABackupMissingAChunkWritesNoManifest(t *testing.T) {
 			fileWithChunks(t, db, []byte("lost"))
 			fleet := memory.NewFleet()
 			svc := build(t, backup.Options{
-				Store: db, Partitions: holdsTheEstate, NodeID: "n", Holds: fleet, Backups: fleet,
+				Store: db, Estate: backup.HoldsReplicated, NodeID: "n", Holds: fleet, Backups: fleet,
 				Now: func() time.Time { return clock }, Objects: objects,
 			})
 			dir := filepath.Join(t.TempDir(), "incomplete")
@@ -155,7 +154,7 @@ func TestABackupRecordsAChunkTheStoreHasLostAndCompletes(t *testing.T) {
 	seedCursor(t, db, "CREWLET_TRACKER_LOG", 1, 7)
 	fleet := memory.NewFleet()
 	svc := build(t, backup.Options{
-		Store: db, Partitions: holdsTheEstate, NodeID: "n", Holds: fleet, Backups: fleet,
+		Store: db, Estate: backup.HoldsReplicated, NodeID: "n", Holds: fleet, Backups: fleet,
 		Now: func() time.Time { return clock },
 		Objects: &backup.Objects{Get: func(_ context.Context, h objstore.Hash) ([]byte, error) {
 			if h == objstore.HashOf(kept) {
@@ -213,7 +212,7 @@ func TestABackupTakesWhatItsPreviousBackupHolds(t *testing.T) {
 	var fetched atomic.Int32
 	fleet := memory.NewFleet()
 	svc := build(t, backup.Options{
-		Store: db, Partitions: holdsTheEstate, NodeID: "n", Holds: fleet, Backups: fleet,
+		Store: db, Estate: backup.HoldsReplicated, NodeID: "n", Holds: fleet, Backups: fleet,
 		Now: func() time.Time { return clock },
 		Objects: &backup.Objects{Get: func(_ context.Context, h objstore.Hash) ([]byte, error) {
 			fetched.Add(1)

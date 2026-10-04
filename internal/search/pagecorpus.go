@@ -30,7 +30,7 @@ import (
 // whose text nobody touched — a provider bill for a title change.
 
 // PageCorpus embeds the knowledge base's published pages.
-type PageCorpus struct{ DB store.PartitionReader }
+type PageCorpus struct{ DB store.ReplicatedReader }
 
 // Source implements [Corpus].
 func (PageCorpus) Source() Source { return SourcePage }

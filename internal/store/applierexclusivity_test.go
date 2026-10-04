@@ -16,25 +16,24 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// ONLY A STATE LOG'S APPLIER WRITES A PARTITION.
+// ONLY A STATE LOG'S APPLIER WRITES THE REPLICATED ESTATE.
 //
 // The rule, stated once: a mutation to replicated state is published as ONE
 // record on its log, the broker arbitrates it, and it reaches SQL only through
-// that log's deterministic applier, in the partition file the log belongs to.
-// The stream is the write-ahead log and the files are the derived durable
-// state — never the reverse. [internal/statelog] argues the whole of it;
-// adr/0002 is the decision, and this test is what that decision's
-// `Enforced-by:` names.
+// that log's deterministic applier, in the replicated estate's file. The
+// stream is the write-ahead log and the file is the derived durable state —
+// never the reverse. [internal/statelog] argues the whole of it; adr/0002 is
+// the decision, and this test is what that decision's `Enforced-by:` names.
 //
 // # Why an absence needs a test, and why this one in particular
 //
 // Every other rule about the estates already had a gate and has never been
 // re-litigated: no statement spans two files, no table is declared in both
 // estates. This one had none, and it is the rule with the failure that cannot
-// be seen from inside the node that breaks it. A local write to a partition
-// succeeds, the rows look right on the node that made them, and the divergence
-// only appears as two nodes answering one question differently — at which
-// point the write that caused it is months behind in the log.
+// be seen from inside the node that breaks it. A local write to the replicated
+// estate succeeds, the rows look right on the node that made them, and the
+// divergence only appears as two nodes answering one question differently —
+// at which point the write that caused it is months behind in the log.
 //
 // The tree carried three such writes when this was added — a version reset
 // after a reanchor, a probe-flag clear and an inbox sweep — and each had to
@@ -48,31 +47,32 @@ import (
 // Every non-test .go file under internal/ and cmd/, parsed with go/parser,
 // looking for three things:
 //
-//  1. A WRITE HANDLE. A partition reaches a caller as one of two types:
-//     [store.PartitionHandle], which can open a write transaction and pin a
-//     Writer, and [store.PartitionReader], which can only read. Every reader
-//     in the tree is handed the second, so the first IS the capability this
-//     rule is about, and the walk reports every place that holds it: the type
-//     named anywhere — a field, a parameter, a result, a variable — a call to
-//     any function the tree declares as answering one, unless the answer is
-//     narrowed on the spot ([readOnlyOfHandle]), and a call that takes a
-//     partition's own [store.DB]: `.DB()`, `.PartitionDB(name)`,
-//     `.OpenPartition(…)`. The framework's own write seam, `statelog.Estate`,
+//  1. A WRITE HANDLE. The replicated estate reaches a caller as one of two
+//     types: [store.ReplicatedHandle], which can open a write transaction and
+//     pin a Writer, and [store.ReplicatedReader], which can only read. Every
+//     reader in the tree is handed the second, so the first IS the capability
+//     this rule is about, and the walk reports every place that holds it: the
+//     type named anywhere — a field, a parameter, a result, a variable — a
+//     call to any function the tree declares as answering one, unless the
+//     answer is narrowed on the spot ([readOnlyOfHandle]), and a call that
+//     takes the estate's own [store.DB]: `.DB()`, `.ReplicatedDB()`,
+//     `.OpenReplicated(…)`. The framework's own write seam, `statelog.Estate`,
 //     is the same capability as an interface, and is reported wherever it is
 //     named outside the framework.
-//  2. A DML string literal naming a table the PARTITION schema declares, in a
-//     file that is not an applier. This one catches a write whose handle
+//  2. A DML string literal naming a table the REPLICATED schema declares, in
+//     a file that is not an applier. This one catches a write whose handle
 //     arrived by a route the first missed — an interface the walk cannot
 //     name, a value `:=` inferred from a call it did not recognise.
 //  3. A DML statement whose table is COMPUTED, which no reader of the source
 //     can check either.
 //
-// Before the estate was divided into partitions the write side was one
-// method, `Replicated()`, and the walk followed its result: a chained write,
-// or a handoff to anything not declared a reader. The handle is now a value
-// the runtime hands every domain, and following it would have flagged every
-// domain's constructor; what replaced the handoff list is the TYPE, which a
-// reader is handed instead of declaring itself one.
+// The write side was once a method answering the open file itself, and the
+// walk followed its result: a chained write, or a handoff to anything not
+// declared a reader. The handle is now a value the runtime hands every domain
+// — [store.DB.Replicated] answers it, resolved per call rather than captured —
+// and following it would have flagged every domain's constructor; what
+// replaced the handoff list is the TYPE, which a reader is handed instead of
+// declaring itself one.
 //
 // Matching is on the NAME rather than on a resolved type, which is the safe
 // direction for the reason [TestOnlyOnePlaceWritesARunningStreamsConfiguration]
@@ -89,12 +89,12 @@ import (
 // internal/skipgate's `Always` entries do. An allowance for a write somebody
 // deleted is an allowance that would silently cover the next write into the
 // same file.
-func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
+func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 	t.Parallel()
 
-	partition := tablesIn(t, store.EstatePartition)
-	if len(partition) == 0 {
-		t.Fatal("no tables were derived from the partition schema; this guard " +
+	replicated := tablesIn(t, store.EstateReplicated)
+	if len(replicated) == 0 {
+		t.Fatal("no tables were derived from the replicated schema; this guard " +
 			"is watching an estate it cannot see and would pass whatever the " +
 			"tree did")
 	}
@@ -105,7 +105,7 @@ func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
 	// decision this list has to make: a write method that no entry here
 	// names would be flagged, and one wrongly named here would be a write
 	// the walk waves through.
-	handle := reflect.TypeFor[store.PartitionHandle]()
+	handle := reflect.TypeFor[store.ReplicatedHandle]()
 	var writes []string
 	for i := range handle.NumMethod() {
 		if name := handle.Method(i).Name; !readOnlyOfHandle[name] {
@@ -114,13 +114,13 @@ func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
 	}
 	for name := range readOnlyOfHandle {
 		if _, ok := handle.MethodByName(name); !ok {
-			t.Errorf("readOnlyOfHandle names %q, which store.PartitionHandle "+
+			t.Errorf("readOnlyOfHandle names %q, which store.ReplicatedHandle "+
 				"does not have — an exemption for a method nobody can call "+
 				"would silently cover the next one of that name", name)
 		}
 	}
 	if want := []string{"DB", "Tx", "Writer"}; !slices.Equal(writes, want) {
-		t.Errorf("store.PartitionHandle's methods outside readOnlyOfHandle are "+
+		t.Errorf("store.ReplicatedHandle's methods outside readOnlyOfHandle are "+
 			"%v, want %v: a new method either writes — and this walk must "+
 			"flag a call that reaches it — or it does not and belongs in "+
 			"readOnlyOfHandle with the reason", writes, want)
@@ -132,52 +132,54 @@ func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
 	// against sites the walk found — so a matcher that stopped matching
 	// would report a clean tree and take the allowances with it.
 	controlAccessors := handleAccessors{
-		methods: map[string]bool{"PartitionHandle": true, "estate": true},
-		funcs:   map[string]map[string]bool{"internal/store/storetest": {"EstateOf": true}},
+		methods: map[string]bool{"Replicated": true, "estate": true},
+		funcs:   map[string]map[string]bool{"internal/store/storetest": {"OpenEstate": true}},
 	}
 	for _, positive := range []string{
-		`var h store.PartitionHandle`,
-		`type deps struct{ DB store.PartitionHandle }`,
-		`g := func(db store.PartitionHandle) {}`,
-		`h := node.PartitionHandle(name)`,
-		`node.PartitionHandle(name).Tx(ctx, fn)`,
-		`run(s.estate(p))`,
-		`h := storetest.EstateOf(node)`,
+		`var h store.ReplicatedHandle`,
+		`type deps struct{ DB store.ReplicatedHandle }`,
+		`g := func(db store.ReplicatedHandle) {}`,
+		`h := node.Replicated()`,
+		`node.Replicated().Tx(ctx, fn)`,
+		`run(s.estate())`,
+		`_, h := storetest.OpenEstate(t, path, opts, 4)`,
 		`db, err := h.DB()`,
-		`part, err := node.PartitionDB(name)`,
-		`part, err := node.OpenPartition(ctx, f)`,
+		`db, err := node.ReplicatedDB()`,
+		`db, err := node.OpenReplicated(ctx, logs)`,
 		`var e statelog.Estate`,
 	} {
-		if !reachesPartitionWrite(t, positive, controlAccessors) {
-			t.Errorf("control: %q holds a partition's write side and the "+
-				"matcher did not flag it", positive)
+		if !reachesReplicatedWrite(t, positive, controlAccessors) {
+			t.Errorf("control: %q holds the replicated estate's write side and "+
+				"the matcher did not flag it", positive)
 		}
 	}
 	for _, negative := range []string{
-		`r := node.PartitionHandle(name).Reader()`,
-		`err := s.estate(p).Read(ctx, fn)`,
-		`var r store.PartitionReader`,
-		`g := func(db store.PartitionReader) {}`,
-		`p := prompts.Partition(msg)`,
-		`key := r.prompts.Partition(msg)`,
-		`db := c.PartitionDB(t, i)`,
+		`r := node.Replicated().Reader()`,
+		`err := s.estate().Read(ctx, fn)`,
+		`var r store.ReplicatedReader`,
+		`g := func(db store.ReplicatedReader) {}`,
+		`path := node.ReplicatedFile()`,
+		`p := store.ReplicatedPath(dir, configured)`,
+		`db := storetest.ReplicatedDB(t, h)`,
+		`db := c.ReplicatedDB(t, i)`,
 		`w, err := db.Writer(ctx)`,
 		`err := db.Tx(ctx, fn)`,
-		`p := statelog.EstatePartition`,
+		`k := store.EstateReplicated`,
+		`var k store.Estate`,
 	} {
-		if reachesPartitionWrite(t, negative, controlAccessors) {
-			t.Errorf("control: %q does not hold a partition's write side and "+
-				"the matcher flagged it", negative)
+		if reachesReplicatedWrite(t, negative, controlAccessors) {
+			t.Errorf("control: %q does not hold the replicated estate's write "+
+				"side and the matcher flagged it", negative)
 		}
 	}
-	fakePartition := map[string]bool{"tracker_tasks": true}
+	fakeReplicated := map[string]bool{"tracker_tasks": true}
 	for _, positive := range []string{
 		`DELETE FROM tracker_tasks WHERE created_at < ?`,
 		`UPDATE tracker_tasks SET rank = ?`,
 		`INSERT INTO tracker_tasks (id) VALUES (?)`,
 	} {
-		if !writesTable(positive, fakePartition) {
-			t.Errorf("control: %q writes a partition table and the matcher "+
+		if !writesTable(positive, fakeReplicated) {
+			t.Errorf("control: %q writes a replicated table and the matcher "+
 				"did not flag it", positive)
 		}
 	}
@@ -186,8 +188,8 @@ func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
 		`tracker_tasks is written only by the applier`,
 		`DELETE FROM crewlet_events WHERE created_at < ?`,
 	} {
-		if writesTable(negative, fakePartition) {
-			t.Errorf("control: %q does not write a partition table and the "+
+		if writesTable(negative, fakeReplicated) {
+			t.Errorf("control: %q does not write a replicated table and the "+
 				"matcher flagged it", negative)
 		}
 	}
@@ -256,7 +258,7 @@ func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
 	}
 	if _, unexpected := judge([]site{{File: held, Line: 1, Why: "control", Class: siteDML}},
 		controlAllowed); len(unexpected) != 1 {
-		t.Error("control: a statement writing a partition table in a file allowed " +
+		t.Error("control: a statement writing a replicated table in a file allowed " +
 			"only as a holder was not reported")
 	}
 
@@ -264,10 +266,10 @@ func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
 	files := parseTree(t, root, "internal", "cmd")
 	accessors := collectAccessors(files)
 	// THE COLLECTOR, ON THE TREE. The store's own constructor is declared
-	// with a bare `PartitionHandle` result and the runtime's accessor with
+	// with a bare `ReplicatedHandle` result and the runtime's accessor with
 	// a qualified one; an accessor list missing either would let every call
 	// of it through as though it answered nothing.
-	for _, want := range []string{"PartitionHandle", "estate"} {
+	for _, want := range []string{"Replicated", "estate"} {
 		if !accessors.methods[want] {
 			t.Errorf("the walk did not find the method %q among those that "+
 				"answer a write handle, so no call of it would be judged", want)
@@ -278,7 +280,7 @@ func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
 	for _, f := range files {
 		consts := stringConsts(f.file)
 		inspectWithParent(f.file, func(n, parent ast.Node) bool {
-			if why, ok := partitionWriteAt(n, parent, f.names, accessors); ok {
+			if why, ok := replicatedWriteAt(n, parent, f.names, accessors); ok {
 				found = append(found, site{
 					File: f.rel, Line: f.fset.Position(n.Pos()).Line, Why: why,
 					Class: siteHandle,
@@ -290,7 +292,7 @@ func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
 				return true
 			}
 			switch {
-			case writesTable(text, partition):
+			case writesTable(text, replicated):
 				found = append(found, site{
 					File: f.rel, Line: f.fset.Position(n.Pos()).Line,
 					Why:   "DML on " + strings.Join(strings.Fields(text), " "),
@@ -311,12 +313,12 @@ func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
 		})
 	}
 	if len(found) == 0 {
-		t.Fatal("found no writes to a partition at all, not even the " +
+		t.Fatal("found no writes to the replicated estate at all, not even the " +
 			"applier's own — so this guard is watching for a shape nobody " +
 			"writes and would pass whatever the tree did. Fix the walk")
 	}
 
-	used, unexpected := judge(found, allowedPartitionWriter)
+	used, unexpected := judge(found, allowedReplicatedWriter)
 	slices.SortFunc(unexpected, func(a, b site) int {
 		if a.File != b.File {
 			return strings.Compare(a.File, b.File)
@@ -324,21 +326,21 @@ func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
 		return a.Line - b.Line
 	})
 	for _, s := range unexpected {
-		t.Errorf("%s:%d reaches a partition's write side (%s).\n"+
-			"\tA partition is derived state: a mutation is published as one "+
-			"record on its log, arbitrated by the broker, and written by that "+
-			"log's applier on every node holding the partition. A local write "+
+		t.Errorf("%s:%d reaches the replicated estate's write side (%s).\n"+
+			"\tThe replicated estate is derived state: a mutation is published "+
+			"as one record on its log, arbitrated by the broker, and written by "+
+			"that log's applier on every data node. A local write "+
 			"succeeds, looks correct on this node, and shows up later as two "+
 			"nodes answering one question differently. See "+
 			"adr/0002-the-stream-is-the-write-ahead-log.md. A holder that only "+
-			"reads takes store.PartitionReader — the handle's Reader() — and is "+
+			"reads takes store.ReplicatedReader — the handle's Reader() — and is "+
 			"not reported. If this write is genuinely not a record — a column "+
 			"no record owns, or a sweep of rows whose class permits it — add it "+
-			"to allowedPartitionWriter with the reason.", s.File, s.Line, s.Why)
+			"to allowedReplicatedWriter with the reason.", s.File, s.Line, s.Why)
 	}
 
 	// AND THE OTHER DIRECTION.
-	for _, a := range allowedPartitionWriter {
+	for _, a := range allowedReplicatedWriter {
 		if !a.Kind.Valid() {
 			t.Errorf("%s is allowed with kind %q — an entry says which of the "+
 				"four things it is, so a reviewer can tell the mechanism from "+
@@ -353,8 +355,8 @@ func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
 				a.Prefix, a.Kind, a.Why)
 		}
 	}
-	t.Logf("parsed %d files; partition writers: %d site(s) across %d allowance(s)",
-		len(files), len(found), len(allowedPartitionWriter))
+	t.Logf("parsed %d files; replicated-estate writers: %d site(s) across %d allowance(s)",
+		len(files), len(found), len(allowedReplicatedWriter))
 }
 
 // site is one place the walk found a write, for the report.
@@ -374,11 +376,11 @@ type site struct {
 type siteClass string
 
 const (
-	// siteHandle holds a partition's write side: the handle, the
-	// framework's write seam, or a partition's own database.
+	// siteHandle holds the replicated estate's write side: the handle,
+	// the framework's write seam, or the estate's own database.
 	siteHandle siteClass = "handle"
 
-	// siteDML is a statement that writes a table the partition schema
+	// siteDML is a statement that writes a table the replicated schema
 	// declares.
 	siteDML siteClass = "dml"
 
@@ -397,19 +399,20 @@ const (
 	mechanism allowanceKind = "mechanism"
 
 	// holder: this file holds or hands out the write handle — the runtime
-	// opening each partition and handing it to the framework, a copy of a
-	// FILE — and writes no row. It covers the handle and nothing else, so
-	// a statement writing a partition table there is reported like one
-	// anywhere else.
+	// opening the replicated estate and handing it to the framework, a copy
+	// of the FILE — and writes no row. It covers the handle and nothing
+	// else, so a statement writing a replicated table there is reported
+	// like one anywhere else.
 	holder allowanceKind = "holder"
 
-	// exception: a genuine write to a partition that is not a record,
-	// because no record could own what it touches. Read both before adding
-	// a third.
+	// exception: a genuine write to the replicated estate that is not a
+	// record, because no record could own what it touches. Read both before
+	// adding a third.
 	exception allowanceKind = "exception"
 
 	// notReplicated: the walk flagged a statement whose table it could not
-	// resolve, and that table is not in a partition at all. The claim is
+	// resolve, and that table is not in the replicated estate at all. The
+	// claim is
 	// made in the register rather than inferred from silence, because a
 	// computed table name is exactly what a reader cannot check.
 	notReplicated allowanceKind = "not_replicated"
@@ -440,7 +443,7 @@ func (k allowanceKind) covers(c siteClass) bool {
 	return false
 }
 
-// allowance is one file permitted to write a partition, with why.
+// allowance is one file permitted to write the replicated estate, with why.
 //
 // Keyed on the FILE rather than the line, so an edit above a write does not
 // have to be reflected here — the same choice internal/clientsource argues for
@@ -462,7 +465,7 @@ type allowance struct {
 	// HOLDER, arrived when the write handle became a value the runtime
 	// hands out: a file that only passes it on was allowed as mechanism,
 	// and that allowed its every statement too — a sweep planted there
-	// wrote a partition table and the gate passed.
+	// wrote a replicated table and the gate passed.
 	Kind allowanceKind
 
 	// Why must say what makes this write legitimate in terms of the RULE
@@ -472,20 +475,20 @@ type allowance struct {
 	Why string
 }
 
-// allowedPartitionWriter is every file that holds a partition's write side,
-// and the case each one makes.
+// allowedReplicatedWriter is every file that holds the replicated estate's
+// write side, and the case each one makes.
 //
 // ADDING AN ENTRY IS THE DECISION, so it belongs in a diff somebody reviews
 // rather than in a count somebody raises. A new applier file is an ordinary
 // entry; a new EXCEPTION is a change to what this rule means and should be
 // argued in the pull request, not just in the Why.
-var allowedPartitionWriter = []allowance{
+var allowedReplicatedWriter = []allowance{
 	// -----------------------------------------------------------------
 	// The mechanism. These are the appliers this rule names as the one
 	// writer, plus the framework they run on and the store beneath it —
-	// and, as HOLDERS, the runtime that opens each partition and hands it
-	// out and the two copies of a partition's file, none of which may
-	// issue a write of its own.
+	// and, as HOLDERS, the runtime that opens the replicated estate and
+	// hands it out and the copies of its file, none of which may issue a
+	// write of its own.
 	// -----------------------------------------------------------------
 	{
 		Prefix: "internal/statelog/", Kind: mechanism,
@@ -498,43 +501,44 @@ var allowedPartitionWriter = []allowance{
 	},
 	{
 		Prefix: "internal/store/", Kind: mechanism,
-		Why: "The partitions' OWNER — it opens each file, runs the " +
+		Why: "The replicated estate's OWNER — it opens the file, runs the " +
 			"migrations and constructs the handle. A write here is the " +
 			"schema, not a row.",
 	},
 	{
 		Prefix: "internal/engine/statelog.go", Kind: holder,
-		Why: "THE RUNTIME: it opens and closes each partition its layout " +
-			"places here, and hands the write handle to the framework's own " +
-			"loops — the appliers, the snapshotter, the adoption and its " +
+		Why: "THE RUNTIME: it opens the replicated estate — at boot, at its " +
+			"own start, around an adoption and after a join that left it " +
+			"closed — and hands the write handle to the framework's own " +
+			"loops: the appliers, the snapshotter, the adoption and its " +
 			"legacy fold. It writes no row of its own.",
 	},
 	{
 		Prefix: "internal/engine/reanchor.go", Kind: holder,
-		Why: "Hands the framework's reanchor the partition whose checkpoint " +
-			"it rewrites. It writes no row of its own.",
+		Why: "Hands the framework's reanchor the replicated estate whose " +
+			"checkpoint it rewrites. It writes no row of its own.",
 	},
 	{
 		Prefix: "internal/engine/maintenance.go", Kind: holder,
-		Why: "Where the runtime hands the tracker's partition to the tracker's " +
+		Why: "Where the runtime hands the replicated estate to the tracker's " +
 			"two exceptions below — the duty's probe clear and the inbox " +
 			"sweep. It writes no row of its own.",
 	},
 	{
 		Prefix: "internal/engine/retention", Kind: holder,
-		Why: "The retention report and the capacity check take each open " +
-			"partition's database to size its FILE. Neither writes a row.",
+		Why: "The capacity check takes the replicated estate's open database " +
+			"to measure its FILE and its pool. It writes no row.",
 	},
 	{
 		Prefix: "internal/backup/backup.go", Kind: holder,
-		Why: "Takes the partition's database to copy the FILE — VACUUM INTO " +
-			"and the manifest — never to write a row.",
+		Why: "Takes the replicated estate's database to copy the FILE — " +
+			"VACUUM INTO and the manifest — never to write a row.",
 	},
 	{
 		Prefix: "cmd/crewlet/ops.go", Kind: holder,
-		Why: "`crewlet migrate` opens every partition its layout names, " +
-			"which is how an operator's migration reaches each file. The " +
-			"only write is the schema.",
+		Why: "`crewlet migrate` opens the replicated estate beside the " +
+			"node's own file, which is how an operator's migration reaches " +
+			"it. The only write is the schema.",
 	},
 	{
 		Prefix: "internal/tracker/apply", Kind: mechanism,
@@ -575,7 +579,7 @@ var allowedPartitionWriter = []allowance{
 			"node-estate tables — agent_diary, episodes, counterparty_profiles, " +
 			"synthesized_skills and its versions, agent_onboarding_markers, " +
 			"conversation_sessions — every one placed in nodeEstatePlacements " +
-			"one file over. It never names a partition table.",
+			"one file over. It never names a replicated table.",
 	},
 
 	// -----------------------------------------------------------------
@@ -604,7 +608,7 @@ var allowedPartitionWriter = []allowance{
 //
 // AN ENTRY COVERS WHAT ITS KIND SAYS AND NOTHING ELSE. A file that is here
 // because it holds the write handle is not thereby allowed a statement that
-// writes a partition table: that is the one thing this rule forbids everywhere
+// writes a replicated table: that is the one thing this rule forbids everywhere
 // but an applier, and a whole-file allowance read the file as allowed
 // wholesale.
 func judge(found []site, allowed []allowance) (map[string]bool, []site) {
@@ -635,24 +639,23 @@ func allowanceFor(file string, allowed []allowance) (allowance, bool) {
 	return best, found
 }
 
-// readOnlyOfHandle names the [store.PartitionHandle] methods that do not
+// readOnlyOfHandle names the [store.ReplicatedHandle] methods that do not
 // write: a call answering a write handle and narrowed on the spot by one of
 // these holds nothing a writer could use. `Reader` is the one that matters —
-// it is how the runtime hands a domain's reader its partition — and the rest
+// it is how the runtime hands a domain's reader the estate — and the rest
 // are what a caller asks of the handle in passing. The test holds this list
 // against the handle's own method set, so a method added there is a decision
 // made here.
 var readOnlyOfHandle = map[string]bool{
 	"Reader": true,
 	"Read":   true,
-	"Name":   true,
 	"IsZero": true,
 	"Caps":   true,
 }
 
-// partitionWriteAt reports whether one node, whose parent in the tree is
-// parent, holds a partition's write side, and how.
-func partitionWriteAt(n, parent ast.Node, f fileNames, acc handleAccessors) (string, bool) {
+// replicatedWriteAt reports whether one node, whose parent in the tree is
+// parent, holds the replicated estate's write side, and how.
+func replicatedWriteAt(n, parent ast.Node, f fileNames, acc handleAccessors) (string, bool) {
 	switch v := n.(type) {
 	case *ast.SelectorExpr:
 		id, ok := v.X.(*ast.Ident)
@@ -660,8 +663,8 @@ func partitionWriteAt(n, parent ast.Node, f fileNames, acc handleAccessors) (str
 			return "", false
 		}
 		switch {
-		case f.store != "" && id.Name == f.store && v.Sel.Name == "PartitionHandle":
-			return "holds a store.PartitionHandle", true
+		case f.store != "" && id.Name == f.store && v.Sel.Name == "ReplicatedHandle":
+			return "holds a store.ReplicatedHandle", true
 		case f.statelog != "" && id.Name == f.statelog && v.Sel.Name == "Estate":
 			return "holds a statelog.Estate, the framework's write seam", true
 		}
@@ -678,8 +681,8 @@ func partitionWriteAt(n, parent ast.Node, f fileNames, acc handleAccessors) (str
 	return "", false
 }
 
-// answersWrite reports whether a call answers a partition's write side: a
-// write handle, or a partition's own database.
+// answersWrite reports whether a call answers the replicated estate's write
+// side: a write handle, or the estate's own database.
 func answersWrite(call *ast.CallExpr, f fileNames, acc handleAccessors) (string, bool) {
 	switch fun := call.Fun.(type) {
 	case *ast.Ident:
@@ -700,11 +703,11 @@ func answersWrite(call *ast.CallExpr, f fileNames, acc handleAccessors) (string,
 		case acc.methods[name]:
 			return "calls ." + name + ", which answers a write handle", true
 		case name == "DB" && len(call.Args) == 0:
-			return "takes a partition's database through .DB()", true
-		case name == "PartitionDB" && len(call.Args) == 1:
-			return "takes a partition's database through .PartitionDB", true
-		case name == "OpenPartition":
-			return "opens a partition's database", true
+			return "takes the replicated estate's database through .DB()", true
+		case name == "ReplicatedDB" && len(call.Args) == 0:
+			return "takes the replicated estate's database through .ReplicatedDB()", true
+		case name == "OpenReplicated":
+			return "opens the replicated estate's database", true
 		}
 	}
 	return "", false
@@ -755,11 +758,11 @@ func namesWriteHandle(n ast.Node, f fileNames) bool {
 		switch v := n.(type) {
 		case *ast.SelectorExpr:
 			if id, ok := v.X.(*ast.Ident); ok && f.store != "" && id.Name == f.store &&
-				v.Sel.Name == "PartitionHandle" {
+				v.Sel.Name == "ReplicatedHandle" {
 				found = true
 			}
 		case *ast.Ident:
-			if f.dir == "internal/store" && v.Name == "PartitionHandle" {
+			if f.dir == "internal/store" && v.Name == "ReplicatedHandle" {
 				found = true
 			}
 		}
@@ -768,9 +771,9 @@ func namesWriteHandle(n ast.Node, f fileNames) bool {
 	return found
 }
 
-// reachesPartitionWrite parses one snippet and reports whether the matcher
+// reachesReplicatedWrite parses one snippet and reports whether the matcher
 // flags it, so the controls exercise the same code the walk does.
-func reachesPartitionWrite(t *testing.T, src string, acc handleAccessors) bool {
+func reachesReplicatedWrite(t *testing.T, src string, acc handleAccessors) bool {
 	t.Helper()
 	// Wrapped in a function, because the controls include statements as
 	// well as expressions and only a declaration parses both — and under
@@ -779,7 +782,6 @@ func reachesPartitionWrite(t *testing.T, src string, acc handleAccessors) bool {
 	file, err := parser.ParseFile(token.NewFileSet(), "control.go", `package p
 
 import (
-	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -795,7 +797,7 @@ func f() {
 	names := namesOf(file, "internal/p")
 	flagged := false
 	inspectWithParent(file, func(n, parent ast.Node) bool {
-		if _, ok := partitionWriteAt(n, parent, names, acc); ok {
+		if _, ok := replicatedWriteAt(n, parent, names, acc); ok {
 			flagged = true
 		}
 		return true

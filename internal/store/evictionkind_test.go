@@ -21,7 +21,7 @@ import (
 func TestAnEvictionRowFromTheKindEraComesThroughTheDropOfItsKind(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "replicated.db")
-	old := migratedThrough(t, EstatePartition, path,
+	old := migratedThrough(t, EstateReplicated, path,
 		"0034_a_gate_says_whether_it_was_a_release.sql")
 	for _, stmt := range []string{
 		`INSERT INTO tracker_evictions
@@ -42,7 +42,7 @@ func TestAnEvictionRowFromTheKindEraComesThroughTheDropOfItsKind(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := OpenEstate(t.Context(), EstatePartition, path, Options{})
+	db, err := OpenEstate(t.Context(), EstateReplicated, path, Options{})
 	if err != nil {
 		t.Fatalf("migrate the kind-era database forward: %v", err)
 	}

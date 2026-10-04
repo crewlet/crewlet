@@ -152,18 +152,16 @@ func (r *retention) poolWait(db *store.DB, file string) {
 const walSuffix = "-wal"
 
 // storeFiles is every database file this node holds, in a stable order: its
-// own, then each partition it holds open by name. A partition an adoption holds
-// closed is not measured while it is closed — the file under its name is the
-// one being replaced.
+// own, then the replicated estate where it holds one open. An estate an
+// adoption holds closed is not measured while it is closed — the file under
+// its name is the one being replaced.
 func storeFiles(db *store.DB) []*store.DB {
 	if db == nil {
 		return nil
 	}
 	out := []*store.DB{db}
-	for _, name := range db.OpenPartitions() {
-		if part, err := db.PartitionDB(name); err == nil {
-			out = append(out, part)
-		}
+	if replicated, err := db.ReplicatedDB(); err == nil {
+		out = append(out, replicated)
 	}
 	return out
 }
@@ -269,14 +267,14 @@ type storeVolume struct {
 // be about.
 //
 // PER VOLUME, because the files need not share one. `store.replicated_path`
-// puts the replicated estate's partition files wherever an operator names —
-// the fast local disk for the node's own file and a large network volume for
-// the partitions is the reason it exists — and the reading used to measure the
+// puts the replicated estate's file wherever an operator names — the fast
+// local disk for the node's own file and a large network volume for the
+// replicated one is the reason it exists — and the reading used to measure the
 // node estate's volume alone against every file's bytes: a replicated estate
 // filling its own volume never fired, and a node estate beside a nearly full
-// disk of somebody else's fired for bytes that were not there. Two files on one volume are one volume's bytes, so the
-// volumes are told apart by what the filesystem says they are, never by their
-// paths.
+// disk of somebody else's fired for bytes that were not there. Two files on
+// one volume are one volume's bytes, so the volumes are told apart by what the
+// filesystem says they are, never by their paths.
 //
 // Named by the directory of the first file found on it, in the files' order —
 // the node estate before the replicated one — so the same volume is named the

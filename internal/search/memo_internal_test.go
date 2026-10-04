@@ -28,7 +28,7 @@ func TestTheDecodedIndexIsHeldUntilItsDigestMoves(t *testing.T) {
 	b, headB := memoStore(t, "log", 2)
 	load := func(db *store.DB, h IndexHead) (IVF, error) {
 		var index IVF
-		err := storetest.EstateOf(db).Read(ctx, func(tx *sql.Tx) error {
+		err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 			var err error
 			index, err = memo.load(ctx, tx, h)
 			return err
@@ -39,7 +39,7 @@ func TestTheDecodedIndexIsHeldUntilItsDigestMoves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := storetest.EstateOf(a).Tx(ctx, func(tx *sql.Tx) error {
+	if err := a.Replicated().Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `DELETE FROM kb_ivf_centroids`)
 		return err
 	}); err != nil {
@@ -77,7 +77,7 @@ func memoStore(t *testing.T, log string, seed byte) (*store.DB, IndexHead) {
 	}
 	h := IndexHead{Generation: 9, Log: log, Model: "m", Dim: dim, Lists: lists,
 		Probes: 1, Digest: digestOf(centroids)}
-	if err := storetest.EstateOf(db).Tx(ctx, func(tx *sql.Tx) error {
+	if err := db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `INSERT INTO kb_ivf_centroids (id, digest, centroids)
 			VALUES (1, ?, ?)`, h.Digest, centroids)
 		return err

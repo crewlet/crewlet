@@ -325,7 +325,7 @@ func TestEnsuringAContainerIsIdempotent(t *testing.T) {
 		r.drain()
 	}
 	var records int
-	if err := storetest.Partition(t, r.db).SQL().QueryRowContext(t.Context(),
+	if err := storetest.ReplicatedDB(t, r.db).SQL().QueryRowContext(t.Context(),
 		`SELECT COUNT(*) FROM pages_containers`).Scan(&records); err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +458,7 @@ func TestAPurgeIsPermanentAndFreesTheAddress(t *testing.T) {
 	}
 	r.drain()
 	var markers int
-	if err := storetest.Partition(t, r.db).SQL().QueryRowContext(t.Context(),
+	if err := storetest.ReplicatedDB(t, r.db).SQL().QueryRowContext(t.Context(),
 		`SELECT COUNT(*) FROM pages_deletions`).Scan(&markers); err != nil {
 		t.Fatal(err)
 	}

@@ -51,7 +51,7 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 	}
 	snapshotter, err := NewSnapshotter(SnapshotDeps{
 		Domains: []Registered{{Domain: loggerProbe{}, Log: loggerProbeLog, Spec: loggerProbeSpec()}},
-		File:    (&store.DB{}).PartitionHandle("estate.000"),
+		File:    (&store.DB{}).Replicated(),
 		Dir:     t.TempDir(), NodeID: "node-a",
 		Recipients: func(context.Context) (int, error) { return 1, nil },
 		Interval:   time.Hour,

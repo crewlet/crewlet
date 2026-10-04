@@ -290,7 +290,7 @@ const (
 // asking for `session` got whatever this node happened to hold, and
 // `max_lag_seconds` bounded nothing at all.
 type Reader struct {
-	db  store.PartitionReader
+	db  store.ReplicatedReader
 	log *statelog.Reader
 }
 
@@ -300,7 +300,7 @@ type Reader struct {
 // a build where every level silently degrades to whatever the local rows say,
 // which is the state this type is being moved out of — and a degradation that
 // is invisible in the answer is worse than a refusal.
-func NewReader(db store.PartitionReader, log *statelog.Reader) (*Reader, error) {
+func NewReader(db store.ReplicatedReader, log *statelog.Reader) (*Reader, error) {
 	if db.IsZero() {
 		return nil, fmt.Errorf("tracker: a reader needs a store")
 	}

@@ -92,7 +92,7 @@ type Indexer struct {
 	// replicated estate whose documents it indexes — read only, because the
 	// documents are an applier's rows and the index is not.
 	db     *store.DB
-	estate store.PartitionReader
+	estate store.ReplicatedReader
 
 	// built is which sources have completed at least one lap since this
 	// process started, which is what [Indexer.Ready] answers.
@@ -157,13 +157,13 @@ func (x *Indexer) WithLinks(links func(body string) []string) *Indexer {
 // NewIndexer builds an indexer that keeps its index in a node's own store and
 // reads the documents of the replicated estate, covering every corpus in
 // [DefaultLexicalSources].
-func NewIndexer(db *store.DB, estate store.PartitionReader) *Indexer {
+func NewIndexer(db *store.DB, estate store.ReplicatedReader) *Indexer {
 	return NewIndexerOver(db, estate, DefaultLexicalSources())
 }
 
 // NewIndexerOver builds one over the sources given, which is what a test that
 // is about ONE corpus uses.
-func NewIndexerOver(db *store.DB, estate store.PartitionReader, sources []LexicalSource) *Indexer {
+func NewIndexerOver(db *store.DB, estate store.ReplicatedReader, sources []LexicalSource) *Indexer {
 	built := make(map[string]*atomic.Bool, len(sources))
 	for _, source := range sources {
 		built[source.Source()] = &atomic.Bool{}
@@ -437,7 +437,7 @@ func (x *Indexer) staleIn(ctx context.Context, source LexicalSource,
 		// — a legitimate, documented state, since an adoption closes it
 		// between its rename and its reopen — has no pool, and a
 		// statement issued on a closed one panics inside database/sql.
-		// [store.PartitionReader.Read] answers [store.ErrNoEstate]
+		// [store.ReplicatedReader.Read] answers [store.ErrNoEstate]
 		// instead, which every caller here already reads as an empty
 		// index pass.
 		var out []Doc

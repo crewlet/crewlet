@@ -297,7 +297,7 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 // being verified, and it takes the exclusive lock, which is a claim on a file
 // this process is about to rename.
 func verifyBackup(ctx context.Context, path string, want []string) ([]string, error) {
-	pool, err := openPrepared(ctx, path, Options{MaxOpenConns: 1}, nil)
+	pool, err := openPrepared(ctx, path, Options{MaxOpenConns: 1})
 	if err != nil {
 		return nil, fmt.Errorf("store: backup verify: the copy at %s will not open: %w", path, err)
 	}
@@ -413,8 +413,8 @@ func remove(path string) error {
 
 // vacuumInto writes the copy to part through ONE CONNECTION DRAWN FROM THIS
 // HANDLE ([DB.conn]) rather than through the pool, so a close that lands after
-// [DB.Backup]'s guard — an adoption or a leave closing the partition a
-// snapshot is being taken of — answers [ErrNoEstate], the state every caller
+// [DB.Backup]'s guard — an adoption closing the replicated estate a snapshot
+// is being taken of — answers [ErrNoEstate], the state every caller
 // branches on, rather than database/sql's "database is closed", which none
 // does.
 func (d *DB) vacuumInto(ctx context.Context, part string) error {

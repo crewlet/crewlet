@@ -17,7 +17,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -687,7 +686,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 		}
 	}
 	for _, lister := range []evictionLister{tracker.Domain{}, pages.Domain{}} {
-		rows, err := lister.Evictions(t.Context(), storetest.EstateOf(back.Store).Reader())
+		rows, err := lister.Evictions(t.Context(), back.Store.Replicated().Reader())
 		if err != nil {
 			t.Fatalf("read the evictions: %v", err)
 		}

@@ -259,7 +259,7 @@ func (r *roundTrip) olderNodeApplies() func(query string) int {
 type olderNode struct {
 	r      *roundTrip
 	node   *store.DB
-	estate store.PartitionHandle
+	estate store.ReplicatedHandle
 
 	// next is the first sequence its next loop has not been handed.
 	next uint64

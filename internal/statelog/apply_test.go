@@ -310,7 +310,7 @@ func (f *probeFetch) ackedAll() map[uint64]int {
 type applyHarness struct {
 	t       *testing.T
 	db      *store.DB
-	estate  store.PartitionHandle
+	estate  store.ReplicatedHandle
 	runner  *statelog.Runner
 	applier *probeApplier
 	fetch   *probeFetch

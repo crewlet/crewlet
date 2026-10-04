@@ -83,7 +83,7 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 // suiteWrite is one write through the knowledge base's own [pages.Store] —
 // the builder every write path in the domain shares, which is where the
 // framework's stamp is kept or lost.
-func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.PartitionReader) error {
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	s, err := pages.NewStore(pages.Options{Publisher: pub, DB: db})
 	if err != nil {
 		return err
@@ -240,7 +240,7 @@ func TestThePagesGateReaderKeepsTheSharedRule(t *testing.T) {
 				Encode:  encodeSuiteRecord,
 				Kinds:   suiteKinds(),
 			},
-			Reader:       func(db store.PartitionReader) statelog.Gates { return pages.NewGates(db) },
+			Reader:       func(db store.ReplicatedReader) statelog.Gates { return pages.NewGates(db) },
 			Kind:         string(pages.KindPage),
 			SubjectKinds: kindNames(pages.ObjectKinds),
 			Create: func(id, writer, opID string) ([]byte, error) {

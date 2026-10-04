@@ -1131,10 +1131,9 @@ type Store struct {
 	SnapshotDir string `yaml:"snapshot_dir,omitempty" json:"snapshot_dir,omitempty" desc:"Where this node keeps snapshots of the replicated estate; empty is <dir of path>/snapshots."`
 
 	// ReplicatedPath is where the replicated estate lives on this node —
-	// everything a state log's applier writes: the file of layout 0's one
-	// partition, with every later layout's partition files kept in the
-	// same directory beside it. Empty puts it beside Path, which is what
-	// makes "back up the data directory" true.
+	// everything a state log's applier writes, held whole by every data
+	// node from boot. Empty puts it beside Path, which is what makes "back
+	// up the data directory" true.
 	//
 	// Separable because the two estates have different appetites — the
 	// replicated one is what a snapshot copies and what a node joining the
@@ -1143,13 +1142,15 @@ type Store struct {
 	// still this node's alone, and neither is shared with a peer.
 	ReplicatedPath string `yaml:"replicated_path,omitempty" json:"replicated_path,omitempty" desc:"Where the replicated estate's database file lives; empty puts it beside path."`
 
-	// MaxOpenConns bounds the node's own database's pool, and is the read
-	// concurrency the replicated estate's partition files SHARE between
-	// them: each file keeps at least two readers of it, beside one pinned
-	// writer per state log the partition carries. 0 takes the store's own
-	// default of four, which is sized to the dashboard's query
-	// concurrency.
-	MaxOpenConns int `yaml:"max_open_conns,omitempty" json:"max_open_conns,omitempty" js:"min=0" desc:"Connection pool bound for the node's database, and the read concurrency its partition files share (at least two readers each, beside one writer per log); 0 takes the store default of 4."`
+	// MaxOpenConns bounds the node's own database's pool, and is the
+	// readers of the replicated estate's: that pool keeps at least two of
+	// them, and its one pinned writer per state log is ADDED on top rather
+	// than taken out of them, because a bound the pins came out of would
+	// leave a read burst queueing behind them — or, at or below the pin
+	// count, the last apply loop waiting for a connection none of the
+	// others gives back. 0 takes the store's own default of four, which is
+	// sized to the dashboard's query concurrency.
+	MaxOpenConns int `yaml:"max_open_conns,omitempty" json:"max_open_conns,omitempty" js:"min=0" desc:"Connection pool bound for the node's database, and the readers of the replicated estate's (at least two, with one pinned writer per log added on top); 0 takes the store default of 4."`
 
 	// BusyTimeoutSeconds is how long a statement waits for the file lock
 	// before giving up; 0 takes the store's own default.

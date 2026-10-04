@@ -30,7 +30,7 @@ var liveStreamCreatedAt = time.Unix(1_700_000_000, 0).UTC()
 type snapHarness struct {
 	t      *testing.T
 	db     *store.DB
-	estate store.PartitionHandle
+	estate store.ReplicatedHandle
 	dir    string
 	health statelog.Health
 	nodes  int

@@ -239,9 +239,9 @@ func openBeginStore(t *testing.T) *store.DB {
 // A READ TRANSACTION REFUSES A WRITE, and the connection it ran on writes
 // again afterwards.
 //
-// [store.PartitionReader] is handed to every reader of a partition on the
-// strength of being unable to write, and a partition written anywhere but its
-// applier diverges from every peer that holds it — silently, since the rows
+// [store.ReplicatedReader] is handed to every reader of the replicated estate
+// on the strength of being unable to write, and an estate written anywhere but
+// its applier diverges from every peer that holds it — silently, since the rows
 // look right on the node that wrote them. A type with no Tx method keeps a
 // caller from asking for a write transaction; it does not keep a statement
 // inside a read's own transaction from writing, and one did: an INSERT through
@@ -316,25 +316,25 @@ func TestAReadTransactionRefusesAWrite(t *testing.T) {
 		t.Errorf("a prepared write, after a read, was refused: %v", err)
 	}
 
-	// AND A PARTITION'S READER, which is the handle the rule is written on.
-	file := store.PartitionFile{Layout: 1, Name: "tracker.000", Logs: 1}
-	if _, err := node.OpenPartition(ctx, file); err != nil {
-		t.Fatalf("open %s: %v", file.Name, err)
+	// AND THE REPLICATED ESTATE'S READER, which is the handle the rule is
+	// written on.
+	if _, err := node.OpenReplicated(ctx, 1); err != nil {
+		t.Fatalf("open the replicated estate: %v", err)
 	}
-	h := node.PartitionHandle(file.Name)
+	h := node.Replicated()
 	if err := h.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.Exec(`CREATE TABLE rows (v TEXT)`)
 		return err
 	}); err != nil {
-		t.Fatalf("create in the partition: %v", err)
+		t.Fatalf("create in the replicated estate: %v", err)
 	}
 	if err := h.Reader().Read(ctx, func(tx *sql.Tx) error {
 		_, err := tx.Exec(`INSERT INTO rows (v) VALUES ('from a reader')`)
 		return err
 	}); err == nil {
-		t.Error("a write through a partition's reader was not refused")
+		t.Error("a write through the replicated estate's reader was not refused")
 	}
 	if n := count(h.Reader(), "rows"); n != 0 {
-		t.Errorf("a write through a partition's reader left %d row(s)", n)
+		t.Errorf("a write through the replicated estate's reader left %d row(s)", n)
 	}
 }

@@ -149,7 +149,7 @@ func newScanCorpus(b *testing.B, n int) *scanCorpus {
 	// is a measurement of the write path rather than a corpus.
 	const chunk = 2_000
 	for start := 0; start < n; start += chunk {
-		if err := storetest.EstateOf(db).Tx(b.Context(), func(tx *sql.Tx) error {
+		if err := db.Replicated().Tx(b.Context(), func(tx *sql.Tx) error {
 			for i := start; i < min(start+chunk, n); i++ {
 				subject := search.Subject{
 					Source: search.SourcePage, ID: fmt.Sprintf("p%07d", i),
@@ -203,7 +203,7 @@ func (c *scanCorpus) run(b *testing.B, readers int) {
 	one := func(ctx context.Context) {
 		query := queries[next.Add(1)%uint64(len(queries))]
 		started := time.Now()
-		if err := storetest.EstateOf(c.db).Read(ctx, func(tx *sql.Tx) error {
+		if err := c.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 			_, _, err := search.Semantic(ctx, tx, search.SemanticQuery{
 				Vector: query, Model: c.model, Dim: c.dim,
 			})
@@ -383,7 +383,7 @@ func seedCorpus(b *testing.B, n int, model string) (*store.DB, *search.Fixture) 
 	applier := search.NewApplier()
 	const chunk = 2_000
 	for start := 0; start < n; start += chunk {
-		if err := storetest.EstateOf(db).Tx(b.Context(), func(tx *sql.Tx) error {
+		if err := db.Replicated().Tx(b.Context(), func(tx *sql.Tx) error {
 			for i := start; i < min(start+chunk, n); i++ {
 				rec := embedRecord(search.SourcePage, fmt.Sprintf("p%07d", i),
 					model, pack(f.Vector(i)))
@@ -437,7 +437,7 @@ func newIndexedCorpus(b *testing.B, n int) *indexedCorpus {
 		docs = append(docs, search.SampledDoc{Vector: vector})
 		shapes = append(shapes, []search.ShapeQuery{{Shape: search.ShapeAll}})
 	}
-	if err := storetest.EstateOf(c.db).Read(b.Context(), func(tx *sql.Tx) error {
+	if err := c.db.Replicated().Read(b.Context(), func(tx *sql.Tx) error {
 		tops, err := search.ExactTops(b.Context(), tx, docs, shapes, c.model,
 			search.FixtureWidth, search.ReturnDepth)
 		for _, top := range tops {
@@ -456,7 +456,7 @@ func applyRecordAt(b *testing.B, db *store.DB, rec search.VectorRecord, seq uint
 	if err != nil {
 		b.Fatal(err)
 	}
-	if err := storetest.EstateOf(db).Tx(b.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Tx(b.Context(), func(tx *sql.Tx) error {
 		_, err := search.NewApplier().Apply(b.Context(), tx, statelog.Record{
 			Position: statelog.Position{Stream: "S", Generation: 1, Seq: seq},
 			Payload:  payload,
@@ -482,7 +482,7 @@ func (c *indexedCorpus) run(b *testing.B, readers int, scan bool) {
 		i := next.Add(1) % uint64(len(c.queries))
 		started := time.Now()
 		var hits []search.SemanticHit
-		if err := storetest.EstateOf(c.db).Read(ctx, func(tx *sql.Tx) error {
+		if err := c.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 			var err error
 			hits, _, err = search.Semantic(ctx, tx, search.SemanticQuery{
 				Vector: c.queries[i], Model: c.model, Dim: search.FixtureWidth,
@@ -592,7 +592,7 @@ func BenchmarkIndexHeadRead(b *testing.B) {
 		// INSIDE ONE TRANSACTION, as an apply batch reads it: the cost is
 		// the read, not a transaction's begin and end.
 		b.Run(c.name, func(b *testing.B) {
-			if err := storetest.EstateOf(db).Read(b.Context(), func(tx *sql.Tx) error {
+			if err := db.Replicated().Read(b.Context(), func(tx *sql.Tx) error {
 				for b.Loop() {
 					if err := c.read(tx); err != nil {
 						return err
@@ -674,7 +674,7 @@ func BenchmarkIndexTraining(b *testing.B) {
 					docs := make([]search.SampledDoc, 0, search.EvalQueries)
 					var shapes [][]search.ShapeQuery
 					var sample time.Duration
-					if err := storetest.EstateOf(db).Read(b.Context(), func(tx *sql.Tx) error {
+					if err := db.Replicated().Read(b.Context(), func(tx *sql.Tx) error {
 						var err error
 						started = time.Now()
 						docs, err = search.SampleDocuments(b.Context(), tx, model,

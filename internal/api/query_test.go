@@ -23,7 +23,6 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
@@ -34,8 +33,8 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 	if err != nil {
 		t.Fatalf("store.OpenNode: %v", err)
 	}
-	if _, err := db.OpenPartition(t.Context(), storetest.LayoutZero(1)); err != nil {
-		t.Fatalf("open layout 0's partition beside the node: %v", err)
+	if _, err := db.OpenReplicated(t.Context(), 1); err != nil {
+		t.Fatalf("open the replicated estate beside the node: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -61,7 +60,7 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 		State:    state,
 		EventLog: db.Events(),
 		Sources: queries.Sources{State: state, Events: eventfan.Solo("node-a", db.Events()),
-			Usage: storetest.EstateOf(db)},
+			Usage: db.Replicated()},
 		Now: func() time.Time { return clock },
 	}
 	if mutate != nil {

@@ -611,7 +611,7 @@ func (r *reanchorRunner) Reanchored(at statelog.Position, created, storedAt time
 // reanchorFixture is one domain's transition over a real store.
 type reanchorFixture struct {
 	db       *store.DB
-	estate   store.PartitionHandle
+	estate   store.ReplicatedHandle
 	log      *reanchorLog
 	consumer *reanchorConsumer
 	runner   *reanchorRunner
@@ -637,7 +637,7 @@ func (f *reanchorFixture) deps(domain statelog.Domain) statelog.ReanchorDeps {
 }
 
 // reanchorStore is a node with a replicated estate and no cursor yet.
-func reanchorStore(t *testing.T) (*store.DB, store.PartitionHandle) {
+func reanchorStore(t *testing.T) (*store.DB, store.ReplicatedHandle) {
 	t.Helper()
 	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
@@ -650,7 +650,7 @@ func reanchorStore(t *testing.T) (*store.DB, store.PartitionHandle) {
 
 // seedCursor writes a domain's committed checkpoint, which is what a node that
 // has been running holds.
-func seedCursor(t *testing.T, db store.PartitionHandle, stream string, at statelog.Position,
+func seedCursor(t *testing.T, db store.ReplicatedHandle, stream string, at statelog.Position,
 	created time.Time) {
 
 	t.Helper()
@@ -671,7 +671,7 @@ func seedCursor(t *testing.T, db store.PartitionHandle, stream string, at statel
 }
 
 // cursorOf reads a stream's committed checkpoint back, whole.
-func cursorOf(t *testing.T, db store.PartitionHandle, stream string) (statelog.Position, time.Time) {
+func cursorOf(t *testing.T, db store.ReplicatedHandle, stream string) (statelog.Position, time.Time) {
 	t.Helper()
 	at, created, found, err := statelog.CursorFor(t.Context(), db, stream)
 	if err != nil {
@@ -2255,7 +2255,7 @@ func probeBody(t *testing.T, seq uint64, opID string) []byte {
 // holdRecord seeds the fixture's rows with the record the fake log holds at
 // seq, applied under opID at generation 1 — what a node that applied it holds
 // in its operation ledger.
-func holdRecord(t *testing.T, db store.PartitionHandle, seq uint64, opID string) {
+func holdRecord(t *testing.T, db store.ReplicatedHandle, seq uint64, opID string) {
 	t.Helper()
 	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(), `SELECT 1 FROM probe_ops LIMIT 1`); err != nil {
@@ -2521,7 +2521,7 @@ func TestARestoredReanchorsLowerGenerationsAfterItsRecordAreVoid(t *testing.T) {
 // row, which every artefact carries whole.
 func TestARestoredCheckpointsRuleTravelsInASnapshot(t *testing.T) {
 	t.Parallel()
-	h := newJoinHarnessFrom(t, joinDonor{domain: probeDomain{}, seed: func(t *testing.T, db store.PartitionHandle) {
+	h := newJoinHarnessFrom(t, joinDonor{domain: probeDomain{}, seed: func(t *testing.T, db store.ReplicatedHandle) {
 		t.Helper()
 		if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(t.Context(), `

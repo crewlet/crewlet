@@ -135,7 +135,7 @@ func Stamped(t *testing.T, new Factory) error {
 
 // seedCheckpoint places a fresh estate's checkpoint for one stream, which is
 // the row a snapshot reads the generation it stamps from.
-func seedCheckpoint(ctx context.Context, db store.PartitionHandle, at statelog.Position) error {
+func seedCheckpoint(ctx context.Context, db store.ReplicatedHandle, at statelog.Position) error {
 	return db.Tx(ctx, func(tx *sql.Tx) error {
 		now := store.EncodeTime(time.Unix(1_700_000_000, 0).UTC())
 		_, err := tx.ExecContext(ctx, `

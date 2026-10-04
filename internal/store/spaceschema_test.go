@@ -31,7 +31,7 @@ import (
 func TestEveryDomainTableIsInTheReplicatedSchema(t *testing.T) {
 	t.Parallel()
 
-	schema := tablesIn(t, store.EstatePartition)
+	schema := tablesIn(t, store.EstateReplicated)
 	framework := map[string]bool{}
 	for name := range schema {
 		if strings.HasPrefix(name, frameworkTablePrefix) {

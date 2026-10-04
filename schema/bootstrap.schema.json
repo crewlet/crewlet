@@ -642,7 +642,7 @@
               "type": "string"
             }
           ],
-          "description": "Connection pool bound for the node's database, and the read concurrency its partition files share (at least two readers each, beside one writer per log); 0 takes the store default of 4."
+          "description": "Connection pool bound for the node's database, and the readers of the replicated estate's (at least two, with one pinned writer per log added on top); 0 takes the store default of 4."
         },
         "objects": {
           "$ref": "#/$defs/StoreObjects"

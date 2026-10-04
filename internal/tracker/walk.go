@@ -111,7 +111,7 @@ func (p RespreadPlan) Batch(k int) []Placement {
 // ascending order, and the project's current minimum. Everything after that is
 // arithmetic — which is what makes the assignment a pure function of the plan
 // and therefore identical on whichever node completes the walk.
-func PlanRespread(ctx context.Context, db store.PartitionReader, project string) (RespreadPlan, error) {
+func PlanRespread(ctx context.Context, db store.ReplicatedReader, project string) (RespreadPlan, error) {
 	var rows []Placement
 	var lowest Rank
 	err := db.Read(ctx, func(tx *sql.Tx) error {

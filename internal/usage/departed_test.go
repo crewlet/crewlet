@@ -11,7 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
@@ -59,7 +58,7 @@ func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 	}
 	// AT THE CHECKPOINT THE ROWS HOLD, as the engine builds a node's runner
 	// — generation 1 on a node that never committed, which a fresh one is.
-	checkpoint, found, err := statelog.CheckpointOf(t.Context(), storetest.EstateOf(db), spec.Name)
+	checkpoint, found, err := statelog.CheckpointOf(t.Context(), db.Replicated(), spec.Name)
 	if err != nil {
 		t.Fatalf("%s: read the checkpoint: %v", id, err)
 	}
@@ -71,14 +70,14 @@ func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 		Domain: usage.Domain{}, Spec: spec,
 		Layout: statelog.EstateLayout(usage.Domain{}.Name()), LogID: statelog.EstateLog(usage.Domain{}),
 		Applier: usage.NewApplier(), Fetch: consumer,
-		Log: log, Node: db, DB: storetest.EstateOf(db),
+		Log: log, Node: db, DB: db.Replicated(),
 		Checkpoint: checkpoint.At, CheckpointStoredAt: checkpoint.StoredAt,
 		StreamCreatedAt: stats.CreatedAt.UTC(), NodeID: id,
 	})
 	if err != nil {
 		t.Fatalf("%s: build the applier: %v", id, err)
 	}
-	rows, err := usage.NewRows(storetest.EstateOf(db).Reader(), statelog.EstateStream(usage.Domain{}))
+	rows, err := usage.NewRows(db.Replicated().Reader(), statelog.EstateStream(usage.Domain{}))
 	if err != nil {
 		t.Fatalf("%s: build the read seam: %v", id, err)
 	}
@@ -137,7 +136,7 @@ func (n *fleetNode) spendOf(t *testing.T, day string, want int) []usage.SpendRow
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		rows, err := usage.Spend(t.Context(), storetest.EstateOf(n.db), usage.SpendQuery{From: day, To: day})
+		rows, err := usage.Spend(t.Context(), n.db.Replicated(), usage.SpendQuery{From: day, To: day})
 		if err != nil {
 			t.Fatalf("%s: read the spend: %v", n.id, err)
 		}

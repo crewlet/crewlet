@@ -183,7 +183,7 @@ func (Domain) FeedGroup() string { return "" }
 // deletion marker, since a day leaves by the horizon rather than by a record.
 //
 // spec is the log the publisher writes, whose checkpoint the seam reads.
-func NewRows(db store.PartitionReader, spec statelog.StreamSpec) (statelog.Rows, error) {
+func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows, error) {
 	return statelog.NewRows(db, Domain{}, spec,
 		func(context.Context, *sql.Tx, statelog.Subject) (bool, bool, error) {
 			return false, false, nil

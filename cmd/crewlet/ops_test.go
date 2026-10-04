@@ -524,7 +524,7 @@ func TestOfflineCommandsHonourTheReplicatedPath(t *testing.T) {
 	if _, _, err := cli(t, "migrate", "-config", cfg); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	schema, err := store.PendingEstate(context.Background(), store.EstatePartition,
+	schema, err := store.PendingEstate(context.Background(), store.EstateReplicated,
 		elsewhere, store.Options{})
 	if err != nil {
 		t.Fatalf("read the configured replicated estate: %v", err)

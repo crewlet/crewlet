@@ -18,7 +18,7 @@ import (
 // it.
 type applyHarness struct {
 	t       *testing.T
-	db      store.PartitionHandle
+	db      store.ReplicatedHandle
 	applier *tracker.Applier
 	seq     uint64
 

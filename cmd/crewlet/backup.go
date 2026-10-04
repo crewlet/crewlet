@@ -80,7 +80,6 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 		NodeID     string    `json:"node_id"`
 		Stores     []struct {
 			Estate     string   `json:"estate"`
-			Partition  string   `json:"partition"`
 			File       string   `json:"file"`
 			Source     string   `json:"source"`
 			Bytes      int64    `json:"bytes"`
@@ -112,7 +111,7 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 	}
 	for _, st := range manifest.Stores {
 		fmt.Fprintf(w, "store (%s)\t%s\t%s\t%d migrations\n",
-			storeCopyName(st.Estate, st.Partition), st.File, humanBytes(st.Bytes), len(st.Migrations))
+			st.Estate, st.File, humanBytes(st.Bytes), len(st.Migrations))
 	}
 	// THE CHUNKS ARE THE COMPANY'S, not this node's share: absent only where
 	// the copy names no file at all.
@@ -179,17 +178,4 @@ func humanBytes(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
-}
-
-// storeCopyName is how every command that reads a backup manifest names one
-// store copy: its estate, and for a partition, WHICH partition — because a
-// node's partitions are all one estate, and the name is what tells one copy
-// from another. ONE FUNCTION for both readers of the manifest (`crewlet
-// backup` printing what it took, and `crewlet retention verify --restore`
-// printing what it found), so they cannot name one copy two ways.
-func storeCopyName(estate, partition string) string {
-	if partition == "" {
-		return estate
-	}
-	return estate + " " + partition
 }

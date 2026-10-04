@@ -104,9 +104,9 @@ func (l *loopback) sent() int {
 // applyRecord runs the shipped applier over one record in one transaction, as
 // the framework's loop does.
 func applyRecord(ctx context.Context, db *store.DB, rec statelog.Record) error {
-	return storetest.EstateOf(db).Tx(ctx, func(tx *sql.Tx) error {
+	return db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
 		_, err := usage.NewApplier().Apply(ctx, tx, rec, statelog.ApplyOptions{
-			MaxVariables: storetest.EstateOf(db).Caps().MaxVariables,
+			MaxVariables: db.Replicated().Caps().MaxVariables,
 		})
 		return err
 	})
@@ -143,7 +143,7 @@ func dump(t *testing.T, db *store.DB) map[string][]string {
 		"usage_schedule_runs": "day, node, scope_type, scope_id, name, fired_at, target",
 	}
 	out := map[string][]string{}
-	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		for table, order := range orders {
 			rows, err := tx.QueryContext(t.Context(), `SELECT * FROM `+table+` ORDER BY `+order)
 			if err != nil {

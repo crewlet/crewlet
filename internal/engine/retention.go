@@ -808,7 +808,7 @@ func (r *retention) feedTerm(ctx context.Context, running *runningLog) (
 // refuses a registered identity-claiming domain that does not answer this,
 // and the statelogtest suite certifies that every one answers it correctly.
 type evictionLister interface {
-	Evictions(ctx context.Context, db store.PartitionReader) ([]statelog.EvictionRow, error)
+	Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error)
 }
 
 // The two identity-claiming domains this build registers, held to the
@@ -872,7 +872,7 @@ func logTombstones(ctx context.Context, db *store.DB, domain statelog.Domain,
 			"domain", domain.Name())
 		return nil, false
 	}
-	rows, err := lister.Evictions(ctx, db.PartitionHandle(statelog.EstatePartition.String()).Reader())
+	rows, err := lister.Evictions(ctx, db.Replicated().Reader())
 	switch {
 	case errors.Is(err, store.ErrNoEstate) || errors.Is(err, context.Canceled):
 		// A STOP THIS PROCESS ASKED FOR IS NOT AN UNREADABLE TABLE. The

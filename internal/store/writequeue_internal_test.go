@@ -203,18 +203,18 @@ func TestWritersBeginInTheOrderTheyAsked(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	defer func() { _ = node.Close() }()
-	db, err := node.OpenPartition(ctx, PartitionFile{Name: layoutZeroPartition, Logs: 1})
+	db, err := node.OpenReplicated(ctx, 1)
 	if err != nil {
-		t.Fatalf("open the partition: %v", err)
+		t.Fatalf("open the replicated estate: %v", err)
 	}
 	second, err := OpenNode(ctx, node.Path(), Options{BusyTimeout: time.Minute})
 	if err != nil {
 		t.Fatalf("open a second handle on the same file: %v", err)
 	}
 	defer func() { _ = second.Close() }()
-	other, err := second.OpenPartition(ctx, PartitionFile{Name: layoutZeroPartition, Logs: 1})
+	other, err := second.OpenReplicated(ctx, 1)
 	if err != nil {
-		t.Fatalf("open a second handle on the same partition: %v", err)
+		t.Fatalf("open a second handle on the same replicated estate: %v", err)
 	}
 	if err := db.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE order_probe (

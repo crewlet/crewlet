@@ -80,14 +80,15 @@ func TestAConnectionWhoseTransactionDidNotEndIsRetired(t *testing.T) {
 			fault := &rollbackFault{}
 			// THE POOLED CASES RUN ON THE NODE'S OWN FILE, whose pool of
 			// one is what makes a connection left dirty the one the next
-			// caller draws; a partition keeps at least two readers. The
-			// pinned case runs on the partition, where pins are declared.
-			node, part := openPartitioned(t, filepath.Join(t.TempDir(), "retire.db"),
+			// caller draws; the replicated estate keeps at least two
+			// readers. The pinned case runs on the replicated estate,
+			// where pins are declared.
+			node, replicated := openReplicated(t, filepath.Join(t.TempDir(), "retire.db"),
 				store.Options{WrapDriver: fault.wrap, MaxOpenConns: 1}, 1)
 			defer func() { _ = node.Close() }()
 			db := node
 			if c.pinned {
-				db = part
+				db = replicated
 			}
 			var err error
 			if err := db.Tx(ctx, func(tx *sql.Tx) error {
@@ -330,7 +331,8 @@ func TestABodyThatPanicsDoesNotCostTheHandleItsConnection(t *testing.T) {
 		breakRollback bool
 		opts          store.Options
 		// pinned is whether the case writes through a pinned writer,
-		// which a partition declares and the node's own file does not.
+		// which the replicated estate declares and the node's own file
+		// does not.
 		pinned    bool
 		panicking func(context.Context, *store.DB, *store.Writer)
 		next      func(context.Context, *store.DB, *store.Writer) error
@@ -396,12 +398,12 @@ func TestABodyThatPanicsDoesNotCostTheHandleItsConnection(t *testing.T) {
 			opts.WrapDriver = fault.wrap
 			// THE POOLED CASES ON THE NODE'S OWN FILE, whose pool of one
 			// is what a lost connection would wedge; the pinned case on
-			// the partition, where pins are declared.
-			node, part := openPartitioned(t, filepath.Join(t.TempDir(), "panic.db"), opts, 1)
+			// the replicated estate, where pins are declared.
+			node, replicated := openReplicated(t, filepath.Join(t.TempDir(), "panic.db"), opts, 1)
 			defer func() { _ = node.Close() }()
 			db := node
 			if c.pinned {
-				db = part
+				db = replicated
 			}
 			var err error
 			if err := db.Tx(ctx, func(tx *sql.Tx) error {
@@ -478,7 +480,7 @@ func TestAWriterThatLostItsConnectionStillGivesBackItsPin(t *testing.T) {
 	ctx := t.Context()
 	fault := &rollbackFault{}
 	closedDoor := &openFault{}
-	node, db := openPartitioned(t, filepath.Join(t.TempDir(), "lost.db"), store.Options{
+	node, db := openReplicated(t, filepath.Join(t.TempDir(), "lost.db"), store.Options{
 		WrapDriver: func(d driver.Driver) driver.Driver {
 			return closedDoor.wrap(fault.wrap(d))
 		},
@@ -599,7 +601,7 @@ func (d *openFaultDriver) Open(name string) (driver.Conn, error) {
 func TestACancelledTransactionDoesNotCrashTheHandBack(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	node, db := openPartitioned(t, filepath.Join(t.TempDir(), "cancel.db"), store.Options{}, 1)
+	node, db := openReplicated(t, filepath.Join(t.TempDir(), "cancel.db"), store.Options{}, 1)
 	defer func() { _ = node.Close() }()
 	if err := db.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE retire_probe (id INTEGER PRIMARY KEY)`)
@@ -679,7 +681,7 @@ func TestTheRetireSwitchIsTakenBeforeAnyTransactionExists(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	fault := &rollbackFault{}
-	node, db := openPartitioned(t, filepath.Join(t.TempDir(), "order.db"),
+	node, db := openReplicated(t, filepath.Join(t.TempDir(), "order.db"),
 		store.Options{WrapDriver: fault.wrap}, 1)
 	defer func() { _ = node.Close() }()
 	if err := db.Tx(ctx, func(tx *sql.Tx) error {

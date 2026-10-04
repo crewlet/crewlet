@@ -39,7 +39,7 @@ type Guards func(ctx context.Context, tx *sql.Tx, subj Subject) (deleted, guard 
 
 // SnapshotRows is [Rows] over one domain's own estate.
 type SnapshotRows struct {
-	db     store.PartitionReader
+	db     store.ReplicatedReader
 	tables tables
 	guards Guards
 }
@@ -48,13 +48,14 @@ type SnapshotRows struct {
 // logs spec names — whose stream keys the checkpoint a decision is paired with
 // and whose prefix keys every anchor an expectation is formed from.
 //
-// A PARTITION'S READ HANDLE, and nothing looser: the node's own database reads
-// exactly as a partition does, and a seam over it answers every decision from
-// a file with none of the domain's tables — "no such table", or worse, the
-// empty answer of a table that happens to share the name.
-func NewRows(db store.PartitionReader, d Domain, spec StreamSpec, guards Guards) (*SnapshotRows, error) {
+// THE REPLICATED ESTATE'S READ HANDLE, and nothing looser: the node's own
+// database reads exactly as the replicated estate does, and a seam over it
+// answers every decision from a file with none of the domain's tables — "no
+// such table", or worse, the empty answer of a table that happens to share
+// the name.
+func NewRows(db store.ReplicatedReader, d Domain, spec StreamSpec, guards Guards) (*SnapshotRows, error) {
 	if db.IsZero() {
-		return nil, fmt.Errorf("statelog: a read seam needs a partition")
+		return nil, fmt.Errorf("statelog: a read seam needs the replicated estate")
 	}
 	t, err := newTables(d, spec)
 	if err != nil {

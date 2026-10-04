@@ -40,7 +40,7 @@ import (
 // every multi-statement answer runs inside one `BEGIN DEFERRED`, and the
 // framework's read is where that transaction now comes from.
 type Reader struct {
-	db  store.PartitionReader
+	db  store.ReplicatedReader
 	log *statelog.Reader
 
 	// committed is this node's own applied position on the pages log, or
@@ -51,7 +51,7 @@ type Reader struct {
 
 // ReaderOptions configure a reader.
 type ReaderOptions struct {
-	DB store.PartitionReader
+	DB store.ReplicatedReader
 
 	// Log is this domain's read authority. REQUIRED: without it every read
 	// level is a label rather than a guarantee, which is silent at every

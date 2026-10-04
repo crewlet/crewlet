@@ -140,7 +140,7 @@ func writeLegacyAdoption(t *testing.T, db *store.DB, started time.Time, complete
 }
 
 // lostBefore is the probe ledger's watermark in a partition.
-func lostBefore(t *testing.T, db store.PartitionHandle) (time.Time, bool) {
+func lostBefore(t *testing.T, db store.ReplicatedHandle) (time.Time, bool) {
 	t.Helper()
 	rows, err := statelog.NewRows(db.Reader(), probeDomain{}, specOf(probeDomain{}), nil)
 	if err != nil {

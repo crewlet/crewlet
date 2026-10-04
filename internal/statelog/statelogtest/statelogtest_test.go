@@ -44,8 +44,8 @@ func TestTheCompactedControlPasses(t *testing.T) {
 
 // rowsOver is the framework's own read seam over one control domain, which is
 // what a real domain's constructor returns too.
-func rowsOver(d statelog.Domain) func(store.PartitionReader, statelog.StreamSpec) (statelog.Rows, error) {
-	return func(db store.PartitionReader, spec statelog.StreamSpec) (statelog.Rows, error) {
+func rowsOver(d statelog.Domain) func(store.ReplicatedReader, statelog.StreamSpec) (statelog.Rows, error) {
+	return func(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows, error) {
 		return statelog.NewRows(db, d, spec, nil)
 	}
 }
@@ -54,9 +54,9 @@ func rowsOver(d statelog.Domain) func(store.PartitionReader, statelog.StreamSpec
 // publisher, stamped with what stampOf makes of the stamp it is handed — the
 // identity for a domain that does its job, anything else for one that lies.
 func controlWrite(stampOf func(statelog.Stamp) statelog.Stamp) func(context.Context,
-	*statelog.Publisher, store.PartitionReader) error {
+	*statelog.Publisher, store.ReplicatedReader) error {
 
-	return func(ctx context.Context, pub *statelog.Publisher, _ store.PartitionReader) error {
+	return func(ctx context.Context, pub *statelog.Publisher, _ store.ReplicatedReader) error {
 		const opID = "control-write"
 		subject := statelog.Subject{Kind: "widget", ID: "w-1"}
 		scope := statelog.ScopeSet{Paths: []string{"widget/w-1"}}
@@ -100,7 +100,7 @@ func control() statelogtest.Candidate {
 		Rows:       rowsOver(controlDomain{}),
 		Write:      controlWrite(func(s statelog.Stamp) statelog.Stamp { return s }),
 		EncodeGate: encodeControlGate,
-		Migrate: func(ctx context.Context, db store.PartitionHandle) error {
+		Migrate: func(ctx context.Context, db store.ReplicatedHandle) error {
 			return db.Tx(ctx, func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(ctx, controlDDL)
 				return err
@@ -318,7 +318,7 @@ func (controlDomain) Evicts(payload []byte) (bool, error) {
 }
 
 // Evictions answers from this log's own rows, as a real domain does.
-func (controlDomain) Evictions(ctx context.Context, db store.PartitionReader) ([]statelog.EvictionRow, error) {
+func (controlDomain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error) {
 	var out []statelog.EvictionRow
 	err := db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
@@ -841,7 +841,7 @@ type unlisted struct{ controlBase }
 // log's behalf and finding nothing.
 type blindLister struct{ controlDomain }
 
-func (blindLister) Evictions(context.Context, store.PartitionReader) ([]statelog.EvictionRow, error) {
+func (blindLister) Evictions(context.Context, store.ReplicatedReader) ([]statelog.EvictionRow, error) {
 	return nil, nil
 }
 
@@ -861,7 +861,7 @@ func (d deletingApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Rec
 // listingCompacted claims no identity and answers for evictions anyway.
 type listingCompacted struct{ compactedControl }
 
-func (listingCompacted) Evictions(ctx context.Context, db store.PartitionReader) ([]statelog.EvictionRow, error) {
+func (listingCompacted) Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error) {
 	return controlDomain{}.Evictions(ctx, db)
 }
 

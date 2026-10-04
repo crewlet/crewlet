@@ -10,7 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
@@ -87,7 +86,7 @@ func TestANodesDayIsDerivedFromItsOwnRecords(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 
-	rows, err := usage.Spend(t.Context(), storetest.EstateOf(db), usage.SpendQuery{From: "2026-09-23", To: "2026-09-23"})
+	rows, err := usage.Spend(t.Context(), db.Replicated(), usage.SpendQuery{From: "2026-09-23", To: "2026-09-23"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +222,7 @@ func TestABootAfterMidnightRepublishesYesterday(t *testing.T) {
 	if err := booted.Flush(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := usage.Spend(t.Context(), storetest.EstateOf(own), usage.SpendQuery{From: "2026-09-23", To: "2026-09-24"})
+	rows, err := usage.Spend(t.Context(), own.Replicated(), usage.SpendQuery{From: "2026-09-23", To: "2026-09-24"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +261,7 @@ func TestAnUnresolvedPublishIsSentAgain(t *testing.T) {
 			"content must be the same operation, or the broker cannot collapse a "+
 			"copy that did land", log.requests[1].OpID, log.requests[0].OpID)
 	}
-	rows, err := usage.Spend(t.Context(), storetest.EstateOf(own), usage.SpendQuery{From: "2026-09-23", To: "2026-09-23"})
+	rows, err := usage.Spend(t.Context(), own.Replicated(), usage.SpendQuery{From: "2026-09-23", To: "2026-09-23"})
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("after the retry the day holds %v (%v)", rows, err)
 	}

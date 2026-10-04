@@ -108,17 +108,17 @@ func usageLog(l statelog.Layout) statelog.LogID {
 }
 
 // UsageEstate is the replicated estate as a reader of the usage domain's rows
-// needs it — the spend answers' source (ADR-0020): the partition carrying the
-// domain's log under this node's layout.
+// needs it — the spend answers' source (ADR-0020).
 //
 // RESOLVED ON EVERY READ through the node handle, never captured: an adoption
-// closes the partition and reopens it, and a reader holding the handle it
-// booted with would answer every named spend window from a file no longer at
-// that name. A partition that is not open here answers [store.ErrNoEstate],
-// which the query surface reports as "not available yet".
+// closes the file and reopens it, and a reader holding the handle it booted
+// with would answer every named spend window from a file no longer at that
+// name. An estate that is not open here — a node without `data` holds none —
+// answers [store.ErrNoEstate], which the query surface reports as "not
+// available yet".
 func (e *Engine) UsageEstate() usage.Estate {
 	if e.backends == nil || e.backends.Store == nil {
-		return store.PartitionReader{}
+		return store.ReplicatedReader{}
 	}
-	return e.backends.Store.PartitionHandle(usageLog(e.layout()).Partition.String()).Reader()
+	return e.backends.Store.Replicated().Reader()
 }

@@ -203,7 +203,7 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "bounds.db")
 
-	pool, err := openPrepared(t.Context(), path, Options{MaxOpenConns: 3}, nil)
+	pool, err := openPrepared(t.Context(), path, Options{MaxOpenConns: 3})
 	if err != nil {
 		t.Fatalf("openPrepared: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 		t.Errorf("max open conns = %d, want the requested 3", got)
 	}
 
-	unset, err := openPrepared(t.Context(), filepath.Join(t.TempDir(), "d.db"), Options{}, nil)
+	unset, err := openPrepared(t.Context(), filepath.Join(t.TempDir(), "d.db"), Options{})
 	if err != nil {
 		t.Fatalf("openPrepared: %v", err)
 	}
@@ -223,25 +223,26 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 			got, defaultReaderConns)
 	}
 
-	// AND A PARTITION'S PINS WIDEN THE FILE THAT HOLDS THEM, rather than
-	// being taken out of the readers' share: a pin counts against the pool
-	// like any other connection, so a partition carrying three logs on a
-	// fixed four would leave one connection for every reader of it.
+	// AND THE REPLICATED ESTATE'S PINS WIDEN THE FILE THAT HOLDS THEM,
+	// rather than being taken out of the readers' share: a pin counts
+	// against the pool like any other connection, so an estate carrying
+	// three logs on a fixed four would leave one connection for every
+	// reader of it.
 	//
-	// AND ONLY THAT FILE. An applier writes a partition, so widening the
-	// node's own file for the pins would be headroom nothing ever takes on
-	// the file that is not being written.
+	// AND ONLY THAT FILE. An applier writes the replicated estate, so
+	// widening the node's own file for the pins would be headroom nothing
+	// ever takes on the file that is not being written.
 	dir := t.TempDir()
 	node, err := OpenNode(t.Context(), filepath.Join(dir, "n.db"), Options{})
 	if err != nil {
 		t.Fatalf("open the node: %v", err)
 	}
 	defer func() { _ = node.Close() }()
-	part, err := node.OpenPartition(t.Context(), PartitionFile{Name: "estate.000", Logs: 3})
+	replicated, err := node.OpenReplicated(t.Context(), 3)
 	if err != nil {
-		t.Fatalf("open the partition: %v", err)
+		t.Fatalf("open the replicated estate: %v", err)
 	}
-	if got, want := part.sql.Stats().MaxOpenConnections, defaultReaderConns+3; got != want {
+	if got, want := replicated.sql.Stats().MaxOpenConnections, defaultReaderConns+3; got != want {
 		t.Errorf("max open conns with 3 pinned writers = %d, want %d: a pin "+
 			"has to be ADDED to the readers' bound, not carved out of it",
 			got, want)
@@ -249,6 +250,34 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 	if got := node.sql.Stats().MaxOpenConnections; got != defaultReaderConns {
 		t.Errorf("the node estate widened to %d for pins it never holds, want %d",
 			got, defaultReaderConns)
+	}
+
+	// A CONFIGURED BOUND IS THE READERS' TOO, with the pins added on top
+	// and never fewer than two readers. Bounded at the configured figure
+	// itself, a pool of three with three loops pinned would leave no
+	// reader at all — and one at or below the pin count leaves the last
+	// loop waiting for a connection none of the others gives back.
+	for _, c := range []struct{ conns, want int }{
+		{conns: 3, want: 3 + 3},
+		{conns: 1, want: replicatedReadFloor + 3},
+	} {
+		configured, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "c.db"),
+			Options{MaxOpenConns: c.conns})
+		if err != nil {
+			t.Fatalf("open a node bounded at %d: %v", c.conns, err)
+		}
+		defer func() { _ = configured.Close() }()
+		estate, err := configured.OpenReplicated(t.Context(), 3)
+		if err != nil {
+			t.Fatalf("open the replicated estate of a node bounded at %d: %v", c.conns, err)
+		}
+		if got := estate.sql.Stats().MaxOpenConnections; got != c.want {
+			t.Errorf("a node bounded at %d opened its replicated estate with %d "+
+				"connections for 3 pinned writers, want %d", c.conns, got, c.want)
+		}
+		if got := configured.sql.Stats().MaxOpenConnections; got != c.conns {
+			t.Errorf("a node bounded at %d opened its own file with %d", c.conns, got)
+		}
 	}
 	var busyMS int
 	if err := unset.QueryRowContext(t.Context(), `PRAGMA busy_timeout`).Scan(&busyMS); err != nil {
@@ -338,7 +367,7 @@ func migratedThrough(t *testing.T, estate Estate, path, last string) *sql.DB {
 		t.Fatalf("the %s estate has no migration %q, so a database 'through' it "+
 			"is either every migration or none — name one of %v", estate, last, versions)
 	}
-	pool, err := openPrepared(t.Context(), path, Options{}, nil)
+	pool, err := openPrepared(t.Context(), path, Options{})
 	if err != nil {
 		t.Fatalf("open %s: %v", path, err)
 	}

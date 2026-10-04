@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE FAN-OUT'S OWN INSTRUMENT: what dividing the buckets buys, what it costs,
@@ -66,7 +65,7 @@ import (
 func BenchmarkSearchFanOut(b *testing.B) {
 	const corpus = 4_000
 	db := openStore(b)
-	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
+	x := search.NewIndexer(db, db.Replicated().Reader())
 	for i := range corpus {
 		container := "ENG"
 		if i%3 == 0 {

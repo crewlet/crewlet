@@ -298,27 +298,28 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 	// gone at its next restart with nothing able to read them in between
 	// — it hands them to a data node instead ([observe.Custody], armed by
 	// [New] once the estate client exists).
-	if holdsData(b) {
+	if HoldsEstate(b) {
 		out.Queue.AddPublishListener(observe.NewWriter(db.Events()).Listen())
 	}
 	return out, nil
 }
 
-// openStore opens this node's own database. The partitions it holds are
-// opened on the handle this returns when the engine is built
-// ([holdPartitions]), whichever caller opened the store.
+// openStore opens this node's own database. The replicated estate it holds is
+// opened on the handle this returns when the engine is built ([holdEstate]),
+// whichever caller opened the store.
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
 	opts := store.Options{
 		MaxOpenConns:   b.Store.MaxOpenConns,
 		ReplicatedPath: b.Store.ReplicatedPath,
 		BusyTimeout:    b.Store.BusyTimeout(),
 	}
-	// A NODE WITHOUT `data` HOLDS NO PARTITION and keeps nothing that has to
-	// outlive it. Its own file is discarded and recreated at every boot, and
-	// it holds nothing ([HeldPartitions]), so no partition is ever opened on
-	// it — a path that reaches for one is told [store.ErrNoEstate] rather than
-	// handed an empty database that reads as a company with nothing in it.
-	if !holdsData(b) {
+	// A NODE WITHOUT `data` HOLDS NO REPLICATED ESTATE and keeps nothing
+	// that has to outlive it. Its own file is discarded and recreated at
+	// every boot, and it holds nothing ([HoldsEstate]), so no replicated
+	// estate is ever opened on it — a path that reaches for one is told
+	// [store.ErrNoEstate] rather than handed an empty database that reads as
+	// a company with nothing in it.
+	if !HoldsEstate(b) {
 		opts.Scratch = b.Store.Scratch
 	}
 	// Nil embeddings means no vector recall is configured, which the store
@@ -729,7 +730,16 @@ func clusteredStream(b *config.Bootstrap) bool {
 	return b.BrokerKind() != placement.BrokerMember || b.Stream.Cluster.Name != ""
 }
 
-// holdsData reports whether this node holds the company's durable state.
+// HoldsEstate reports whether a node configured as b holds the company's
+// durable state — the replicated estate, opened from boot and held whole: a
+// node with the `data` role holds it, and a node without holds nothing.
+//
+// It is a fact about the NODE, not about the company it applies, and it is the
+// one answer two callers read here rather than deriving it: the engine opening
+// the file, and a backup copying it ([backup.HoldingFor]). The operator's
+// `crewlet migrate` reaches the same answer by another road — Tier A requires
+// a node without `data` to be scratch and refuses one with it, and the command
+// refuses a scratch store before it reaches the replicated estate at all.
 //
 // Through the profile, which is the one parse of `node.roles`: an unreadable
 // role list has already been refused by Tier A, and every other reader of the
@@ -737,7 +747,7 @@ func clusteredStream(b *config.Bootstrap) bool {
 //
 // A NIL BOOTSTRAP IS EVERY ROLE, on the rule an unset role list follows: an
 // engine assembled without one declares nothing to subtract.
-func holdsData(b *config.Bootstrap) bool {
+func HoldsEstate(b *config.Bootstrap) bool {
 	if b == nil {
 		return true
 	}

@@ -776,10 +776,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		}
 		ownsBackends = true
 	}
-	// THE PARTITIONS THIS NODE HOLDS, opened before anything can read or
-	// copy one — lent backends included, since holding is a fact about the
-	// node rather than about whoever opened its store.
-	if err = holdPartitions(ctx, backends.Store, opts.Bootstrap); err != nil {
+	// THE REPLICATED ESTATE THIS NODE HOLDS, opened before anything can
+	// read or copy it — lent backends included, since holding is a fact
+	// about the node rather than about whoever opened its store.
+	if err = holdEstate(ctx, backends.Store, opts.Bootstrap); err != nil {
 		if ownsBackends {
 			backends.Close(ctx)
 		}
@@ -837,7 +837,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// and asks a peer only while that copy cannot, and a node without
 	// `data` asks for everything — see router.go. Built before anything
 	// publishes, because a tool is handed its facades as soon as a seat is.
-	if holdsData(opts.Bootstrap) {
+	if HoldsEstate(opts.Bootstrap) {
 		e.local = newLocalEstate(e)
 	}
 	if e.router, err = e.newRouter(backends.Queue, nodeID); err != nil {
@@ -851,7 +851,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// DID — before anything publishes, because the custody listener must
 	// be in place before the first turn a restarted node picks up off its
 	// durable inbox.
-	if !holdsData(opts.Bootstrap) {
+	if !HoldsEstate(opts.Bootstrap) {
 		e.custody = observe.NewCustody(backends.Queue)
 		backends.Queue.AddPublishListener(e.custody.Listen())
 		e.custody.Start(ctx)

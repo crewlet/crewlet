@@ -549,8 +549,8 @@ What each of the four holds, in full:
 
 **Every node, identically — the replicated store.**
 
-One file, the estate's one partition `estate.000`, which every data node holds
-whole — written by a state log's applier:
+One file, the replicated estate, which every data node holds whole — written by
+a state log's applier:
 records arrive in one order from the log, every node applies the same ones,
 and the rows plus this node's position on the log commit in a single
 transaction. There is no leader
@@ -561,7 +561,7 @@ no record could own: the clear of a duplicate-rank probe flag each node's own
 applier sets, and the inbox sweep over rows whose class lets two nodes
 legitimately hold different ones. They are named with their reasons in one
 place, and a third fails the build — the rule and its exceptions are
-`adr/0002`, held by `internal/store.TestOnlyTheApplierWritesThePartitions`.
+`adr/0002`, held by `internal/store.TestOnlyTheApplierWritesTheReplicatedEstate`.
 A log reanchor is not among them: it writes the framework's own checkpoint,
 and the audit row it leaves is applied from the generation record it appends
 to the adopted log.

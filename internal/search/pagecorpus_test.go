@@ -32,7 +32,7 @@ type pageRow struct {
 func TestARenamedPageIsNotReEmbedded(t *testing.T) {
 	t.Parallel()
 	db := pagesStore(t)
-	corpus := search.PageCorpus{DB: storetest.EstateOf(db).Reader()}
+	corpus := search.PageCorpus{DB: db.Replicated().Reader()}
 
 	writePage(t, db, pageRow{
 		id: "p1", container: "eng", title: "Runbook", body: "how to restart",
@@ -88,7 +88,7 @@ func TestARenamedPageIsNotReEmbedded(t *testing.T) {
 func TestAWithdrawnPageLosesItsVector(t *testing.T) {
 	t.Parallel()
 	db := pagesStore(t)
-	corpus := search.PageCorpus{DB: storetest.EstateOf(db).Reader()}
+	corpus := search.PageCorpus{DB: db.Replicated().Reader()}
 
 	for _, row := range []pageRow{
 		{id: "kept", container: "eng", title: "Kept", body: "b", status: "published", edit: 1},
@@ -141,7 +141,7 @@ func writePage(t *testing.T, db *store.DB, row pageRow) {
 	if row.trashed {
 		trashed = int64(1)
 	}
-	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(context.WithoutCancel(t.Context()), `
 			INSERT INTO pages_heads
 				(id, container, title, title_norm, body, status, edit_version,
@@ -163,7 +163,7 @@ func writePage(t *testing.T, db *store.DB, row pageRow) {
 
 func writeVector(t *testing.T, db *store.DB, source, id string, rev int64) {
 	t.Helper()
-	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(context.WithoutCancel(t.Context()), `
 			INSERT INTO kb_vectors
 				(source, source_id, source_rev, model, dim, search_shard,

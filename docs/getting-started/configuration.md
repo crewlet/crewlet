@@ -817,9 +817,9 @@ store:
                                     #   separate volume is the production shape
   # replicated_path: "./crewlet-data/crewlet-replicated.db"
                                     #   the REPLICATED estate — everything a
-                                    #   state log's applier writes, the file of
-                                    #   the estate's one partition, `estate.000`,
-                                    #   held whole by every data node. Empty puts it
+                                    #   state log's applier writes, held whole
+                                    #   by every data node from boot, and by no
+                                    #   node without `data`. Empty puts it
                                     #   beside `path`, which is what makes "back
                                     #   up the data directory" true. It is a
                                     #   separate FILE rather than more tables
@@ -842,11 +842,12 @@ store:
                                     #   store: what they wrote would be gone at
                                     #   the next boot
   # max_open_conns: 0               #   connection-pool bound for this node's
-                                    #   own database, and the read concurrency
-                                    #   the replicated estate's file takes a
-                                    #   share of: it keeps at least two readers,
-                                    #   plus one pinned connection per state
-                                    #   log it carries. 0 takes the store's own default
+                                    #   own database, and the readers of the
+                                    #   replicated estate's: that pool keeps at
+                                    #   least two readers, plus one pinned
+                                    #   connection per state log it carries,
+                                    #   ADDED on top rather than taken out of
+                                    #   them. 0 takes the store's own default
                                     #   of four. Raise it if the `pool_starved`
                                     #   alarm fires — see reference/alarms.md —
                                     #   which means reads are queuing before

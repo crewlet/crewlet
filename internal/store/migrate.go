@@ -22,32 +22,27 @@ import (
 //go:embed all:schema
 var schemaFS embed.FS
 
-// Estate names which kind of file a handle is on: the node's own, or one of
-// the partitions of the replicated estate the node holds.
+// Estate names one of a node's two databases.
 //
-// # Why they are separate files
+// # Why there are two
 //
 // A node's own estate and the estate its appliers replicate are different
 // things under every reading, and the boundary was already drawn in prose
 // before it was drawn in the filesystem:
 //
-//   - A SNAPSHOT is a copy of a partition. Taken from one file with the node's
-//     own tables in it, it would be `VACUUM INTO` of everything followed by a
-//     DELETE of every local table on the copy — and Turso has no in-place
-//     VACUUM, so the copy keeps the deleted pages as free pages and the
-//     transfer, the checksum and the integrity check all pay for them. The
-//     largest of those tables is the audit event log, with every phase's
-//     prompt in its payload.
-//   - The IDENTITY CLAIM a peer verifies a snapshot against is a checksum over
-//     the replicated tables, and nothing else may be in the way of it.
+//   - A SNAPSHOT is a copy of the replicated estate. Taken from one file it
+//     is `VACUUM INTO` of everything followed by a DELETE of every local
+//     table on the copy — and Turso has no in-place VACUUM, so the copy keeps
+//     the deleted pages as free pages and the transfer, the checksum and the
+//     integrity check all pay for them. The largest of those tables is the
+//     audit event log, with every phase's prompt in its payload.
+//   - The IDENTITY CLAIM a peer verifies a snapshot against is a checksum
+//     over the replicated tables, and nothing else may be in the way of it.
 //   - The APPLIER's write cadence is its own: in one file every audit insert
 //     shares a WAL, a checkpoint and an fsync queue with the applier's
 //     commits, whatever the driver's conflict granularity turns out to be.
 //
-// And the replicated estate is itself a file PER PARTITION, for the first
-// reason one level down — see partition.go.
-//
-// NO TRANSACTION SPANS TWO FILES and no read joins across them. A transaction
+// NO TRANSACTION SPANS THE TWO and no read joins across them. A transaction
 // is one file, which is also why the tables an applier writes for its own
 // bookkeeping live with the rows it writes beside them rather than with the
 // node's other local state.
@@ -58,33 +53,16 @@ const (
 	// memory, config revisions, the bootstrap secret store.
 	EstateNode Estate = "node"
 
-	// EstatePartition is one partition of the replicated estate: what a
-	// state log's appliers write, for the logs that partition carries.
-	EstatePartition Estate = "partition"
+	// EstateReplicated is everything a state log's applier writes.
+	EstateReplicated Estate = "replicated"
 )
 
-// Estates are the two kinds, in the order a node brings them up.
-var Estates = []Estate{EstateNode, EstatePartition}
+// Estates are the two, in the order a node brings them up.
+var Estates = []Estate{EstateNode, EstateReplicated}
 
 // Valid reports whether e is one of the two. The zero value is not: an
 // estate nobody named is not quietly the node's.
-func (e Estate) Valid() bool { return e == EstateNode || e == EstatePartition }
-
-// schemaDir is the directory under schema/ an estate's migration sequence is
-// embedded in.
-//
-// A PARTITION'S IS replicated/, whatever its space: that sequence holds every
-// domain's tables and the framework's, and it is the one sequence this build
-// carries for a partition file — layout 0's one file has applied it from the
-// start, and a partitioned layout's files carry it whole. ONE SEQUENCE FOR
-// EVERY PARTITION means `schema_migrations` keys each file's ledger on the
-// bare filename, which is what every layout-0 file already holds.
-func (e Estate) schemaDir() string {
-	if e == EstatePartition {
-		return "replicated"
-	}
-	return string(e)
-}
+func (e Estate) Valid() bool { return e == EstateNode || e == EstateReplicated }
 
 // migrateMu serialises migration runs across every handle in the process.
 //
@@ -129,7 +107,7 @@ func (d *DB) migrate(ctx context.Context) ([]string, error) {
 		if slices.Contains(applied, name) {
 			continue
 		}
-		body, err := schemaFS.ReadFile(path.Join("schema", d.estate.schemaDir(), name))
+		body, err := schemaFS.ReadFile(path.Join("schema", string(d.estate), name))
 		if err != nil {
 			return nil, fmt.Errorf("store: read schema %s: %w", name, err)
 		}
@@ -193,8 +171,8 @@ func (d *DB) AppliedMigrations(ctx context.Context) ([]string, error) {
 }
 
 // appliedVersions reads the ledger through ONE CONNECTION DRAWN FROM THIS
-// HANDLE ([DB.conn]), for [DB.vacuumInto]'s reason: a partition closed after
-// [DB.AppliedMigrations]'s guard answers [ErrNoEstate] rather than
+// HANDLE ([DB.conn]), for [DB.vacuumInto]'s reason: a replicated estate closed
+// after [DB.AppliedMigrations]'s guard answers [ErrNoEstate] rather than
 // database/sql's "database is closed".
 func (d *DB) appliedVersions(ctx context.Context) ([]string, error) {
 	conn, err := d.conn(ctx)
@@ -232,7 +210,7 @@ func (d *DB) appliedVersions(ctx context.Context) ([]string, error) {
 // reads sqlite_master instead, deliberately — a clause a file carries and the
 // driver silently ignored would pass a text scan and fail in production.
 func SchemaFile(estate Estate, name string) ([]byte, error) {
-	body, err := schemaFS.ReadFile(path.Join("schema", estate.schemaDir(), name))
+	body, err := schemaFS.ReadFile(path.Join("schema", string(estate), name))
 	if err != nil {
 		return nil, fmt.Errorf("store: read the %s estate's %s: %w", estate, name, err)
 	}
@@ -250,7 +228,7 @@ func schemaVersions(estate Estate) ([]string, error) {
 	if !estate.Valid() {
 		return nil, fmt.Errorf("store: %q is not an estate; the estates are %v", estate, Estates)
 	}
-	entries, err := fs.ReadDir(schemaFS, path.Join("schema", estate.schemaDir()))
+	entries, err := fs.ReadDir(schemaFS, path.Join("schema", string(estate)))
 	if err != nil {
 		return nil, fmt.Errorf("store: read the %s estate's embedded schema: %w", estate, err)
 	}
@@ -281,9 +259,9 @@ func SchemaVersions(estate Estate) []string {
 	return names
 }
 
-// Pending reports the schema files a node's databases have not applied —
-// its own file at path, and each named partition's where the node keeps it —
-// WITHOUT applying them.
+// Pending reports the schema files a node's two databases have not applied —
+// its own file at path, and its replicated estate where [ReplicatedPath] puts
+// it for opts — WITHOUT applying them.
 //
 // # Why this is not an open followed by a comparison
 //
@@ -318,22 +296,25 @@ func SchemaVersions(estate Estate) []string {
 // leave the file excluded from every OTHER process for the rest of this one's
 // life, with nothing to point at. That is why the test asserts the refcount
 // rather than a following open — an open that succeeds proves nothing.
-func Pending(ctx context.Context, path string, opts Options, partitions ...PartitionFile) ([]Schema, error) {
-	out := make([]Schema, 0, 1+len(partitions))
-	node, err := pendingOne(ctx, EstateNode, path, opts)
-	if err != nil {
-		return nil, err
-	}
-	out = append(out, node)
-	for _, f := range partitions {
-		if err := f.Validate(); err != nil {
-			return nil, err
+//
+// # Both files, always both
+//
+// A node is two databases with two independent sequences, and a report that
+// named one of them would be a deploy gate that passes while the other is
+// behind. Its caller refuses a scratch store — the one kind of node that holds
+// no replicated estate — before it asks, so every node this reports on holds
+// both.
+func Pending(ctx context.Context, path string, opts Options) ([]Schema, error) {
+	out := make([]Schema, 0, len(Estates))
+	for _, estate := range Estates {
+		file := path
+		if estate == EstateReplicated {
+			file = ReplicatedPath(path, opts.ReplicatedPath)
 		}
-		one, err := pendingOne(ctx, EstatePartition, partitionPath(path, opts.ReplicatedPath, f), opts)
+		one, err := pendingOne(ctx, estate, file, opts)
 		if err != nil {
 			return nil, err
 		}
-		one.Partition = f.Name
 		out = append(out, one)
 	}
 	return out, nil
@@ -341,11 +322,8 @@ func Pending(ctx context.Context, path string, opts Options, partitions ...Parti
 
 // Schema is one file's migration state.
 type Schema struct {
-	// Estate is which kind of file this describes.
+	// Estate is which of the node's two files this describes.
 	Estate Estate
-	// Partition names the partition a partition file is, and is empty for
-	// the node's own.
-	Partition string
 	// Path is the file it lives in.
 	Path string
 	// Applied are the versions the database has recorded, in order.
@@ -369,8 +347,8 @@ func KnownMigrations(estate Estate) ([]string, error) {
 // without migrating it.
 //
 // It exists for the one caller that holds a database file which is not a
-// node's own: a snapshot being adopted. That file is a partition and nothing
-// else, and it must be inspected BEFORE anything migrates it — a recipient
+// node's own: a snapshot being adopted. That file is a replicated estate and
+// nothing else, and it must be inspected BEFORE anything migrates it — a recipient
 // refuses a donor whose migrations this binary does not carry, and migrating
 // first would answer the question by changing it.
 func PendingEstate(ctx context.Context, estate Estate, path string, opts Options) (Schema, error) {
@@ -389,7 +367,7 @@ func pendingOne(ctx context.Context, estate Estate, path string, opts Options) (
 	pool, err := openPrepared(ctx, path, Options{
 		MaxOpenConns: opts.MaxOpenConns, BusyTimeout: opts.BusyTimeout,
 		WrapDriver: opts.WrapDriver,
-	}, nil)
+	})
 	if err != nil {
 		return Schema{}, err
 	}
