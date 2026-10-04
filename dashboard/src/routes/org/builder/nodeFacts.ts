@@ -46,6 +46,7 @@ import type {
   ConfigUnit,
   DerivedSeat,
   DerivedUnit,
+  OrgProjection,
   SandboxEntry,
 } from "~/protocol/index.ts";
 import { activityOf } from "~/lib/seats.ts";
@@ -136,21 +137,42 @@ export function seatLabels(draft: Draft): Map<string, string> {
   );
 }
 
+/** Every handle and unit key the org push says the running company holds. */
+export function companyIdentities(org: OrgProjection | null): Set<string> {
+  const out = new Set<string>();
+  for (const seat of org?.derived?.seats ?? []) out.add(seat.handle);
+  for (const unit of org?.derived?.units ?? []) out.add(unit.id);
+  out.delete("");
+  return out;
+}
+
+/**
+ * Every handle and unit key a node this draft creates must avoid: the draft's
+ * and the saved company's — a removed node's included, since its memory and
+ * mailbox still answer to it — and `company`'s, the running company's
+ * (`BuilderApi.identities`). The last is how a lead's draft of one unit
+ * avoids the rest of the company, which it does not hold and the engine
+ * counts all the same: offered a handle another team's seat answers to, the
+ * lead learned of it only as a refusal at the company's top level.
+ */
+export function takenIdentities(state: BuilderState, company: ReadonlySet<string>): Set<string> {
+  return new Set([...identitiesOf(state.draft), ...identitiesOf(state.baseDraft), ...company]);
+}
+
 /**
  * Why `value` cannot be the identity of a node this draft created, or `null`
- * when it can: the engine's grammar, and every handle and key the draft and
- * the saved company hold — a removed node's included, since its memory and
- * mailbox still answer to it — except `self`, the node's own.
+ * when it can: the engine's grammar, and every identity in `taken`
+ * ([takenIdentities]) except `self`, the node's own.
  */
 export function identityProblemOf(
-  state: BuilderState,
+  taken: ReadonlySet<string>,
   kind: "seat" | "unit",
   value: string,
   self: string,
 ): string | null {
-  const taken = new Set([...identitiesOf(state.draft), ...identitiesOf(state.baseDraft)]);
-  taken.delete(self);
-  return kind === "seat" ? handleProblem(value, taken) : unitKeyProblem(value, taken);
+  const others = new Set(taken);
+  others.delete(self);
+  return kind === "seat" ? handleProblem(value, others) : unitKeyProblem(value, others);
 }
 
 /** The units whose DECLARED lead names this seat's handle, in the document's order. */

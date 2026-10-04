@@ -24,7 +24,9 @@
  * ONE NAMESPACE FOR BOTH. A `manages:` entry may name a seat or a unit, and
  * the engine reads it as the seat when both answer to it, so a unit keyed like
  * a seat is a unit no entry can name. A minted identity avoids every handle and
- * every key the draft or the saved company holds.
+ * every key the draft or the saved company holds, and the running company's
+ * from the org push (`nodeFacts.takenIdentities`), which is the rest of the
+ * company a lead's draft of one unit does not hold.
  */
 
 /** The longest handle or key: a seat handle's width (`iam.MaxLogin`) and the key grammar's own bound. */

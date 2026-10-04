@@ -329,7 +329,9 @@ type one (lowercase letters, digits and hyphens for a handle; a unit's key
 starts with a letter and may hold underscores; at most 64 characters), and it
 is never an address a seat or unit of the saved company or the draft holds —
 one this draft removes included, because a new seat under a removed seat's
-handle would be that seat again, its memory and mailbox included. The address
+handle would be that seat again, its memory and mailbox included. A lead's
+draft avoids the rest of the company's addresses too, though it holds only
+their unit. The address
 is fixed once the draft is saved. A human seat's contact identity is optional:
 the form offers it, it can be added later in the seat's editor, and without
 one the person is reached through the dashboard only.

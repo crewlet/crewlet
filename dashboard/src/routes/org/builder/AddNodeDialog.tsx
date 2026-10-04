@@ -39,7 +39,8 @@ import {
   Refusal,
   UnitTypeField,
 } from "./dialogParts.tsx";
-import { identitiesOf, locate, siblingsAt } from "./model/draft.ts";
+import { locate, siblingsAt } from "./model/draft.ts";
+import { takenIdentities } from "./nodeFacts.ts";
 import { handleProblem, mintHandle, mintUnitKey, unitKeyProblem } from "./model/identity.ts";
 import { COMPANY_KEY, mintKey, type NodeKey } from "./model/keys.ts";
 import type { Intent } from "./model/operations.ts";
@@ -154,8 +155,9 @@ function useAddNode({ parent, kind: initialKind = "agent", onClose }: AddProps):
   const parentNode = parentKey === COMPANY_KEY ? undefined : locate(state.draft, parentKey);
 
   // EVERY IDENTITY THE COMPANY HAS HELD, the saved company's as well as the
-  // draft's: a removed seat's handle is still its memory and mailbox.
-  const taken = new Set([...identitiesOf(state.draft), ...identitiesOf(state.baseDraft)]);
+  // draft's — a removed seat's handle is still its memory and mailbox — and
+  // the running company's beyond a lead's unit.
+  const taken = takenIdentities(state, api.identities);
   const [kind, setKind] = useState<AddKind>(initialKind);
   const [name, setName] = useState(DEFAULT_NAMES[initialKind]);
   const [named, setNamed] = useState(false);

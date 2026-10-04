@@ -10,12 +10,13 @@
  */
 
 import { describe, expect, test } from "vitest";
-import type { AgentRow, CompanyDocument, SandboxEntry } from "~/protocol/index.ts";
+import type { AgentRow, CompanyDocument, OrgProjection, SandboxEntry } from "~/protocol/index.ts";
 import type { SeatActivity } from "~/contract/wire.ts";
 import { locate } from "./model/draft.ts";
 import { builderReducer } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import {
+  companyIdentities,
   derivedSeatOf,
   derivedUnitOf,
   gitLabAccessLevel,
@@ -31,6 +32,7 @@ import {
   providerOrder,
   referenceNames,
   seatLabels,
+  takenIdentities,
   toolCredentialNames,
   unitsLedBy,
   unpinnedProvider,
@@ -115,12 +117,31 @@ describe("the engine's answers about a node", () => {
       type: "record",
       intent: { type: "remove", target: "seat:sre" },
     });
-    expect(identityProblemOf(removed, "seat", "sre", "")).toMatch(/already names/);
-    expect(identityProblemOf(removed, "seat", "engineering", "")).toMatch(/already names/);
-    expect(identityProblemOf(removed, "seat", "ceo", "ceo")).toBeNull();
-    expect(identityProblemOf(removed, "seat", "quality", "")).toBeNull();
-    expect(identityProblemOf(removed, "unit", "Ops", "")).toMatch(/lowercase/);
-    expect(identityProblemOf(removed, "unit", "ops", "")).toBeNull();
+    const taken = takenIdentities(removed, new Set());
+    expect(identityProblemOf(taken, "seat", "sre", "")).toMatch(/already names/);
+    expect(identityProblemOf(taken, "seat", "engineering", "")).toMatch(/already names/);
+    expect(identityProblemOf(taken, "seat", "ceo", "ceo")).toBeNull();
+    expect(identityProblemOf(taken, "seat", "quality", "")).toBeNull();
+    expect(identityProblemOf(taken, "unit", "Ops", "")).toMatch(/lowercase/);
+    expect(identityProblemOf(taken, "unit", "ops", "")).toBeNull();
+  });
+
+  // A LEAD'S DRAFT HOLDS ONE UNIT, and the engine counts every seat and unit
+  // of the company: what the org push says the running company holds is
+  // taken too, so a lead is never offered a handle another team answers to.
+  test("the running company's seats and units are taken beside the draft's", () => {
+    const company = companyIdentities({
+      name: "Acme",
+      derived: {
+        seats: [{ handle: "engineer", name: "Engineer", kind: "agent" }],
+        units: [{ id: "platform", name: "Platform" }],
+      },
+    } as OrgProjection);
+    expect([...company].sort()).toEqual(["engineer", "platform"]);
+    const taken = takenIdentities(keyedState(fixtureCompany()), company);
+    expect(identityProblemOf(taken, "seat", "engineer", "")).toMatch(/already names/);
+    expect(identityProblemOf(taken, "unit", "platform", "")).toMatch(/already names/);
+    expect(companyIdentities(null).size).toBe(0);
   });
 });
 

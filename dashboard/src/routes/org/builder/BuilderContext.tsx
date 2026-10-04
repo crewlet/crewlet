@@ -143,6 +143,12 @@ export interface BuilderApi {
    * record nothing.
    */
   readOnly: boolean;
+  /**
+   * Every handle and unit key the running company holds, from the org push:
+   * what a node this draft creates must avoid besides the draft's own
+   * (`nodeFacts.takenIdentities`), since a lead's draft holds one unit.
+   */
+  identities: ReadonlySet<string>;
   /** Live state, for the StateBadge on saved agent seats. */
   agents: AgentRow[];
   sandboxes: SandboxEntry[];

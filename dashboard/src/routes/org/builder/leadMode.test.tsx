@@ -57,12 +57,15 @@ function leadCompany(): CompanyDocument {
 /** The org push as the engine derives it from [leadCompany]. */
 function leadOrg(): OrgProjection {
   const document = leadCompany();
-  const { units } = fixtureDerived(document);
+  const { seats, units } = fixtureDerived(document);
   return {
     name: document.name,
     roles: [{ name: "CEO", handle: "ceo" }],
     units: (document.units ?? []).map((u) => ({ id: u.id!, name: u.name })),
-    derived: { seats: [], units: (units ?? []).map(({ path: _path, ...unit }) => unit) },
+    derived: {
+      seats: (seats ?? []).map(({ path: _path, unit_path: _unit, ...seat }) => seat),
+      units: (units ?? []).map(({ path: _path, ...unit }) => unit),
+    },
   };
 }
 
@@ -312,6 +315,24 @@ describe("a lead's draft", () => {
     expect(await screen.findByText("SRE")).toBeDefined();
     expect(screen.queryByText("Dev")).toBeNull();
     expect(screen.getByRole("button", { name: "Editing Ops as its lead" })).toBeDefined();
+  });
+
+  // A NEW SEAT AVOIDS EVERY HANDLE IN THE COMPANY, not only the unit's: the
+  // engine counts Sales' seller as well, and offered `seller` the lead would
+  // have learned of it only as a refusal at the company's top level.
+  test("a seat a lead adds is offered a handle nobody in the company holds", async () => {
+    const engine = new Engine(leadCompany());
+    mountLead(engine, "#/agents/edit?view=table");
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Select Engineering" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Engineering" }));
+    const menu = await screen.findByRole("menu", { name: "Actions for Engineering" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Add agent seat" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add to Engineering" });
+    fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Seller" } });
+    expect((within(dialog).getByLabelText("Handle") as HTMLInputElement).value).toBe("seller-2");
+    fireEvent.change(within(dialog).getByLabelText("Handle"), { target: { value: "seller" } });
+    expect(within(dialog).getByText("seller already names a seat or a unit.")).toBeDefined();
   });
 
   // A RELOAD REOPENS THE UNIT THE KEPT DRAFT WAS MADE OF. Which unit a lead

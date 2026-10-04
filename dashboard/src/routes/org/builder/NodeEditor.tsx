@@ -96,7 +96,6 @@ import type { Segment } from "./model/document.ts";
 import {
   allUnits,
   handleOf,
-  identitiesOf,
   locate,
   unitIdOf,
   type DraftSeat,
@@ -127,6 +126,7 @@ import {
   placementSummary,
   providerOrder,
   seatLabels,
+  takenIdentities,
   toolCredentialNames,
   unpinnedProvider,
 } from "./nodeFacts.ts";
@@ -694,7 +694,9 @@ function UnitEditor({
   ];
 
   const minted = isMintedKey(key);
-  const keyProblem = minted ? identityProblemOf(state, "unit", form.id, initial.id) : null;
+  const keyProblem = minted
+    ? identityProblemOf(takenIdentities(state, api.identities), "unit", form.id, initial.id)
+    : null;
   const blocked =
     form.name.trim() === "" ? "A unit needs a name." : keyProblem !== null ? keyProblem : null;
 
@@ -909,7 +911,7 @@ function SeatEditor({
   );
   const disabled = api.readOnly;
   const handleProblem = minted
-    ? identityProblemOf(state, "seat", form.handle, initial.handle)
+    ? identityProblemOf(takenIdentities(state, api.identities), "seat", form.handle, initial.handle)
     : null;
 
   const budgetErrors = human ? {} : tokenBudgetErrors(form.tokenBudget);
@@ -1170,9 +1172,9 @@ function HandleFact({
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const taken = new Set([...identitiesOf(state.draft), ...identitiesOf(state.baseDraft)]);
+  const taken = takenIdentities(state, api.identities);
   const next = typed ?? mintHandle(seat.data.name, taken);
-  const problem = identityProblemOf(state, "seat", next, "");
+  const problem = identityProblemOf(taken, "seat", next, "");
 
   function replace() {
     if (problem !== null || api.readOnly) return;

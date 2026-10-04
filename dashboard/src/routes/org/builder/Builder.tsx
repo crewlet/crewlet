@@ -100,6 +100,7 @@ import {
 } from "./model/scheduler.ts";
 import { readyToUpdate } from "./model/writes.ts";
 import { scopedTransport } from "./model/scope.ts";
+import { companyIdentities } from "./nodeFacts.ts";
 import { UpdateDraftDialog } from "./UpdateDraftDialog.tsx";
 import { isRecord } from "./model/json.ts";
 import {
@@ -1328,6 +1329,7 @@ function BuilderScreen({
 
   // ---- The context --------------------------------------------------------------
 
+  const identities = useMemo(() => companyIdentities(org), [org]);
   const api = useMemo((): BuilderApi => {
     const byNode = problemsCurrent ? state.check.problems.byNode : new Map();
     const sources = (key: NodeKey, severity: PlacedProblem["severity"]) =>
@@ -1355,6 +1357,7 @@ function BuilderScreen({
       announce,
       focusNode,
       readOnly,
+      identities,
       agents,
       sandboxes,
       keys,
@@ -1371,6 +1374,7 @@ function BuilderScreen({
     announce,
     focusNode,
     readOnly,
+    identities,
     agents,
     sandboxes,
     keys,

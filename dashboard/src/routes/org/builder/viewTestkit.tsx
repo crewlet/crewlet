@@ -66,11 +66,15 @@ export interface HarnessProbe {
   selection: NodeKey | null;
 }
 
+/** A harness's running company holds nothing the draft does not, unless a case says so. */
+const NO_IDENTITIES: ReadonlySet<string> = new Set();
+
 export function BuilderHarness({
   initial,
   spies,
   probe,
   readOnly = false,
+  identities = NO_IDENTITIES,
   agents = [],
   sandboxes = [],
   selected: initialSelection = null,
@@ -80,6 +84,7 @@ export function BuilderHarness({
   spies: BuilderSpies;
   probe: HarnessProbe;
   readOnly?: boolean;
+  identities?: ReadonlySet<string>;
   agents?: AgentRow[];
   sandboxes?: SandboxEntry[];
   /** The node selected when the view mounts, as a link naming one leaves it. */
@@ -144,12 +149,13 @@ export function BuilderHarness({
       announce: spies.announce,
       focusNode: (key) => view.current?.focusNode(key),
       readOnly,
+      identities,
       agents,
       sandboxes,
       keys,
       registerView,
     }),
-    [state, dispatch, selected, readOnly, agents, sandboxes, keys, registerView, spies],
+    [state, dispatch, selected, readOnly, identities, agents, sandboxes, keys, registerView, spies],
   );
 
   return (
@@ -172,6 +178,8 @@ export function harnessProbe(): HarnessProbe {
 /** What a suite may set on the harness. */
 export interface HarnessOptions {
   readonly readOnly?: boolean;
+  /** The running company's handles and keys (`BuilderApi.identities`); none by default. */
+  readonly identities?: ReadonlySet<string>;
   readonly agents?: AgentRow[];
   readonly sandboxes?: SandboxEntry[];
 }
@@ -194,6 +202,7 @@ export function renderInBuilder(
       spies={spies}
       probe={probe}
       readOnly={options.readOnly}
+      identities={options.identities}
       agents={options.agents}
       sandboxes={options.sandboxes}
     >
