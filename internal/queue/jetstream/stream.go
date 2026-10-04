@@ -494,35 +494,6 @@ func consumerNameSafe(s string) string {
 	return strings.NewReplacer(".", "_", "*", "_", ">", "_", " ", "_").Replace(s)
 }
 
-// pairFromConsumerName recovers the (topic, group) pair a durable consumer was
-// created for from its name and its filter subject, for a consumer made before
-// consumers carried the pair in their metadata (see subscriptionMetadata).
-//
-// Recovered only when it can be PROVEN. The topic is the filter subject
-// verbatim; the group is what the name holds before the rewritten topic, and
-// the candidate counts only if it rebuilds the very name, digest included. That
-// refuses exactly the two cases the name cannot answer: a group whose rewrite
-// was lossy (a dot, a space or a wildcard became an underscore) and a name
-// whose readable part was truncated. Every group the engine creates is a
-// plain seat or service name, so neither arises for its own consumers; a guess
-// in either case would list a subscription under a pair nothing can address,
-// and a caller deleting it would delete nothing.
-func pairFromConsumerName(name, topic string) (group string, ok bool) {
-	if topic == "" {
-		return "", false
-	}
-	idLen := len(consumerNameSep) + 2*consumerDigestBytes
-	if len(name) <= idLen {
-		return "", false
-	}
-	readable := name[:len(name)-idLen]
-	group, ok = strings.CutSuffix(readable, consumerNameSep+consumerNameSafe(topic))
-	if !ok || group == "" || consumerName(topic, group) != name {
-		return "", false
-	}
-	return group, true
-}
-
 // DomainStream is the stream a statelog domain declares, in the vocabulary a
 // domain owns rather than the broker's.
 //

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -1225,11 +1224,9 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 				"fleet that is a metadata group that has not settled, and the "+
 				"create has not been attempted yet")
 	})
-	var found jetstream.Consumer
 	getErr := jsprovision.Ask(lookupCtx, q.Clustered().AskTerm(),
 		func(ctx context.Context) error {
-			var e error
-			found, e = q.js.Consumer(ctx, stream, name)
+			_, e := q.js.Consumer(ctx, stream, name)
 			return e
 		}, nil)
 	stopLookup()
@@ -1254,15 +1251,6 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 		// TOLD IT IS THERE. Nothing to create, nothing to report: the
 		// bool means "this call found it absent AND then provisioned
 		// it", which this call did not.
-		//
-		// The stamp stays, because it is the one write this arm may
-		// still owe — a mailbox made before consumers carried their
-		// pair is the mailbox ListSubscriptions exists to find, and
-		// [Queue.stampSubscriptionPair] writes nothing at all to one
-		// that already carries it. So the steady state is still zero
-		// writes, and the legacy mailbox is still repaired on the
-		// first boot that meets it rather than on none.
-		q.stampSubscriptionPair(ctx, stream, found, topic, group)
 		return false, nil
 	case errors.Is(getErr, jetstream.ErrConsumerNotFound):
 		// Told it is NOT there. The create below makes it.
@@ -1276,15 +1264,12 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 		return false, fmt.Errorf("inspect consumer %s: %w", name, q.brokerFailed(ctx, getErr))
 	}
 
-	cons, won, err := q.ensureDurableConsumer(ctx, stream, jetstream.ConsumerConfig{
+	_, won, err := q.ensureDurableConsumer(ctx, stream, jetstream.ConsumerConfig{
 		Durable:       name,
 		FilterSubject: topic,
 		// The pair, verbatim. The durable name cannot carry it (it is a
 		// lossy rewrite plus a digest), and ListSubscriptions has to hand
-		// back exactly what the caller created. Carried on the CREATE, and
-		// stamped onto a consumer that predates the field by the alignment
-		// below, because ensureDurableConsumer creates rather than upserts
-		// and so writes nothing to a consumer that is already there.
+		// back exactly what the caller created. Carried on the CREATE.
 		Metadata:  subscriptionMetadata(topic, group),
 		AckPolicy: jetstream.AckExplicitPolicy,
 		// Earliest, always. A consumer created at "latest" exists and
@@ -1312,75 +1297,7 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 	// that consumer with no error, and is indistinguishable from having
 	// made it. It costs a log line rather than a decision — nothing in the
 	// engine branches on this bool.
-	if !won {
-		q.stampSubscriptionPair(ctx, stream, cons, topic, group)
-	}
 	return won, nil
-}
-
-// stampSubscriptionPair records the pair on a consumer this call FOUND rather
-// than made, when the consumer does not already carry it.
-//
-// # Why it takes a call of its own
-//
-// A mailbox created before consumers carried their pair is exactly the one
-// ListSubscriptions exists for: a seat removed before this build shipped left
-// it, and pairOf can then only recover the pair from the durable name, which
-// is a lossy rewrite and refuses to guess when the rewrite lost something (a
-// dotted group, a space). Left unstamped, that mailbox is warned about on
-// every maintenance sweep and retired by none of them.
-//
-// The create cannot do it. [Queue.ensureDurableConsumer] issues an ActionCreate
-// and the broker answers an existing consumer whose configuration differs with
-// ErrConsumerExists, writing nothing, which is what the read-back beside it
-// then recovers. So the stamp is a second, deliberate write.
-//
-// THE LIVE CONFIGURATION IS WHAT IS SENT BACK, with only the two metadata keys
-// set on top of it. Every other field stays as the broker holds it, because a
-// booting node is not the writer of a running consumer's ack window or
-// delivery budget, and rebuilding the config from this build's defaults is how
-// one node's Tier A silently becomes the fleet's.
-//
-// BEST EFFORT, and reported rather than returned: the mailbox exists and
-// carries mail either way, so failing the ensure would refuse a seat over a
-// cosmetic write, while the listing degrades exactly as it did before the
-// metadata existed. The one that cannot be recovered is already logged by
-// [Queue.subscriptionOf].
-func (q *Queue) stampSubscriptionPair(ctx context.Context, stream string,
-	cons jetstream.Consumer, topic, group string) {
-
-	if cons == nil {
-		return
-	}
-	info := cons.CachedInfo()
-	if info == nil {
-		return
-	}
-	if md := info.Config.Metadata; md[metaTopic] == topic && md[metaGroup] == group {
-		return
-	}
-	config := info.Config
-	config.Metadata = maps.Clone(config.Metadata)
-	if config.Metadata == nil {
-		config.Metadata = map[string]string{}
-	}
-	maps.Copy(config.Metadata, subscriptionMetadata(topic, group))
-
-	// ITS OWN BUDGET, for the reason [DomainConsumer.resumeAt] gives: an
-	// UpdateConsumer is a write against the same metadata group as the
-	// create, and the caller's context either carries the deadline that
-	// just expired or carries none at all, which hands nats.go its
-	// five-second default.
-	writeCtx, cancel := context.WithTimeout(ctx, q.provisionBudget())
-	defer cancel()
-	q.noteConsumerProposal()
-	if _, err := q.js.UpdateConsumer(writeCtx, stream, config); err != nil {
-		q.log.WarnContext(ctx, "jetstream_subscription_pair_unstamped",
-			"stream", stream, "topic", topic, "group", group, "error", err.Error(),
-			"detail", "this mailbox still carries no subscription pair, so a "+
-				"listing recovers it from the durable name and leaves it out "+
-				"when the name cannot prove it; the mailbox itself is unaffected")
-	}
 }
 
 // ensureDurableConsumer creates a durable consumer, tolerating a PEER having
@@ -1574,10 +1491,8 @@ func carriesSubscriptions(stream string) bool {
 // An ephemeral consumer (a stream subscription, a peek, a memory replay) is not
 // a subscription and is skipped. A durable consumer is listed under the pair
 // its metadata records when that pair derives its name; one whose metadata
-// carries no such pair (an older build made it, or something rewrote it) is
-// recovered from its name when that can be proven (see pairOf and
-// pairFromConsumerName), and one that cannot be is logged and left out rather
-// than listed under a guessed pair.
+// carries no such pair (something other than this backend made or rewrote it)
+// is logged and left out rather than listed under a guessed pair (see pairOf).
 func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]queue.Subscription, error) {
 	if q.isClosed() {
 		return nil, ErrClosed
@@ -1665,25 +1580,17 @@ const (
 // pairOf reads the pair a consumer was created for.
 //
 // A PAIR IS LISTED ONLY WHEN IT ADDRESSES THIS CONSUMER: the durable name the
-// pair derives (consumerName) must be this consumer's own. That holds for the
-// metadata as much as for a name recovered by pairFromConsumerName, because the
-// caller acts on the pair rather than on the consumer: a retirement sweep
-// deletes consumerName(topic, group), so metadata naming any other pair (edited
-// by a tool, or copied onto another consumer) would send it to delete a
-// subscription it never looked at while this one kept its mail. Metadata that
-// fails the check falls through to the name, which proves its own pair or
-// nothing.
+// pair derives (consumerName) must be this consumer's own, because the caller
+// acts on the pair rather than on the consumer: a retirement sweep deletes
+// consumerName(topic, group), so metadata naming any other pair (edited by a
+// tool, or copied onto another consumer) would send it to delete a
+// subscription it never looked at while this one kept its mail.
 func pairOf(info *jetstream.ConsumerInfo) (queue.Subscription, pairVerdict) {
 	if info == nil || info.Config.Durable == "" {
 		return queue.Subscription{}, pairNotSubscription
 	}
-	name := info.Config.Durable
 	if topic, group := info.Config.Metadata[metaTopic], info.Config.Metadata[metaGroup]; topic != "" && group != "" &&
-		consumerName(topic, group) == name {
-		return queue.Subscription{Topic: topic, Group: group}, pairListed
-	}
-	topic := info.Config.FilterSubject
-	if group, ok := pairFromConsumerName(name, topic); ok {
+		consumerName(topic, group) == info.Config.Durable {
 		return queue.Subscription{Topic: topic, Group: group}, pairListed
 	}
 	return queue.Subscription{}, pairUnprovable
