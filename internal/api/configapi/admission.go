@@ -43,20 +43,14 @@ import (
 //
 // # What a refusal says
 //
-// A refused READ of one seat or unit says nothing about it: one in a team the
-// caller does not lead, one at the root and an id the revision does not hold
-// are refused in the same bytes, because a missing id is decided at the root
-// before it is looked for and the root is refused as another team's unit is.
-// A write naming a missing id is refused the same way, before it is called
-// missing. Only the company's grant is told an id is not there.
-//
-// A refused WRITE says more, and that is the price of the rule rather than an
-// oversight: each refused part names the place it reaches — the unit a named
-// seat sits in — because that place is what the caller is refused on, and
-// whether a reference is refused at all already depends on what sits outside
-// their subtree. So anybody bound to a seat can learn the chart's SHAPE by
-// naming things in a write of their own; never a seat's or a unit's fields,
-// which only a read serves.
+// The chart's SHAPE is no secret from anybody the route admits. A refused
+// write names the place each refused part reaches — the unit a named seat
+// sits in — because that place is what the caller is refused on, and whether
+// a reference is refused at all already depends on what sits outside their
+// subtree; and a write to a seat or unit the revision does not hold is
+// `404 no_such_entity`. So anybody bound to a seat can learn which seats and
+// units exist and where they sit, as `state:read` is served the chart whole.
+// What only a read serves is a seat's or a unit's fields.
 //
 // # Before validation, and before the seat-holder check
 //
@@ -207,20 +201,11 @@ func (s *Service) mayRead(w http.ResponseWriter, r *http.Request,
 		s.fail(w, "build the organization the read is decided on", err)
 		return false
 	}
-	return mayAt(w, r, authz.ActionOrgRead, o, id, placeOf(o, kind, id))
-}
-
-// mayAt decides a on one place of the org chart o — container empty for the
-// root, which is decided without a tree — answering the refusal itself; ok is
-// false when the request has been answered.
-func mayAt(w http.ResponseWriter, r *http.Request, a authz.Action,
-	o *org.Organization, id, container string) (ok bool) {
-
-	d := authz.Decide(r.Context(), *principalOf(r), a,
-		authz.Object{Kind: authz.KindUnit, ID: id, Container: container},
+	d := authz.Decide(r.Context(), *principalOf(r), authz.ActionOrgRead,
+		authz.Object{Kind: authz.KindUnit, ID: id, Container: placeOf(o, kind, id)},
 		orgchart.Of(o), time.Now())
 	if d.Unknown() || !d.Allowed {
-		authz.EnvelopeRefusal(w, r, authz.Policy{Action: a}, d)
+		authz.EnvelopeRefusal(w, r, authz.Policy{Action: authz.ActionOrgRead}, d)
 		return false
 	}
 	return true

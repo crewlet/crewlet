@@ -403,11 +403,10 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 		}
 		if o.Container == "" {
 			// THE ROOT IS REFUSED AS A UNIT SOMEBODY ELSE LEADS IS, with
-			// no chart asked: the remedy is the same grant, and a reason
-			// of its own told a seat in another team apart from a seat or
-			// unit the company does not have — the surface decides an id
-			// it cannot find at the root — so the entity routes listed the
-			// company's handles to anybody bound to a seat.
+			// no chart asked: the remedy is the same grant, and the
+			// surface decides a read of an id it cannot find at the root,
+			// so a reason of its own would tell that read apart from a
+			// seat in another team.
 			return consulting(Decision{Reason: ReasonNotLead}, r.grant)
 		}
 		return consulting(leadsUnit(ctx, chart, actorOf(p), o.Container), r.grant)

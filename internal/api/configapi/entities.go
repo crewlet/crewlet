@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -478,9 +477,7 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 		// A SEAT OR A UNIT IS READ BY ITS LEAD as well as by the grant
 		// that reads the whole document, decided on where it sits — and
 		// BEFORE it is looked for: an id the revision does not hold is
-		// decided at the root, so somebody who may not read it is refused
-		// exactly as for a seat in another team rather than told it is
-		// missing, which would make this route a roster.
+		// decided at the root, so only the grant is told it is missing.
 		if inOrgChart(kind) && !s.mayRead(w, r, company, kind, id) {
 			return
 		}
@@ -568,13 +565,6 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		}
 		d.principal = principalOf(r)
 		prepared, err := s.prepare(r.Context(), d)
-		// AN ID THE REVISION DOES NOT HOLD IS DECIDED AT THE ROOT before it
-		// is called missing, as a read of it is: only the company's grant
-		// learns that it is not there.
-		if inOrgChart(kind) && errors.Is(err, ErrNoSuchEntity) &&
-			!mayAt(w, r, authz.ActionOrgWrite, nil, id, "") {
-			return
-		}
 		if err != nil {
 			s.refuseEntity(w, kind, id, err)
 			return

@@ -608,18 +608,17 @@ func TestALeadReadsOnlyTheirSubtree(t *testing.T) {
 	}
 }
 
-// THE ENTITY ROUTES ARE NO ROSTER.
+// A READ IS DECIDED BEFORE ITS ID IS LOOKED UP.
 //
 // A person bound to a seat who leads nothing is refused a seat in another
 // team, a seat at the root, a unit, and an id the company does not have, in
-// the same bytes: an id the revision does not hold is decided at the root
-// before it is looked for, and the root is refused as another team's unit is.
-// A write to a missing id is refused before it is called missing too. The
-// control is the company's grant, which is told the id is not there.
+// the same bytes: an id the revision does not hold is decided at the root, and
+// the root is refused as another team's unit is. The control is the company's
+// read grant, which is told the id is not there.
 //
 // Mutation: look the id up before deciding, or give the root a refusal reason
 // of its own, and the missing id answers differently from the seat in Design.
-func TestTheEntityRoutesAreNoRoster(t *testing.T) {
+func TestAReadIsDecidedBeforeItsIDIsLookedUp(t *testing.T) {
 	t.Parallel()
 	s := leadSurface(t)
 	colleague := platformLead()
@@ -638,25 +637,11 @@ func TestTheEntityRoutesAreNoRoster(t *testing.T) {
 			t.Errorf("GET %s answered %s, unlike %s", path, res.Body.String(), first)
 		}
 	}
-	headers := map[string]string{"X-Summary": "probe"}
-	res := doAs(t, s, colleague, http.MethodPut, "/config/roles/nosuch",
-		`{"name": "Nosuch", "llm": "zulu"}`, headers)
-	if res.Code != http.StatusForbidden ||
-		decode(t, res)[authz.DetailReason] != string(authz.ReasonNotLead) {
-		t.Errorf("PUT of a missing seat = %d %s, want 403 not_lead",
-			res.Code, res.Body.String())
-	}
 	admin := iam.Principal{ID: uuid.New(), Login: "ops.admin", Kind: iam.KindPerson,
-		Stage:    iam.StageActive,
-		Grants:   []iam.Grant{iam.GrantConfigRead, iam.GrantConfigWrite},
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantConfigRead},
 		ReauthAt: time.Now().Add(time.Hour)}
 	if res := doAs(t, s, admin, http.MethodGet, "/config/roles/nosuch", "", nil); res.Code != http.StatusNotFound {
 		t.Errorf("config:read reading a missing seat = %d, want 404: %s",
-			res.Code, res.Body.String())
-	}
-	if res := doAs(t, s, admin, http.MethodPut, "/config/roles/nosuch",
-		`{"name": "Nosuch", "llm": "zulu"}`, headers); res.Code != http.StatusNotFound {
-		t.Errorf("config:write writing a missing seat = %d, want 404: %s",
 			res.Code, res.Body.String())
 	}
 }
