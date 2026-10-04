@@ -313,7 +313,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	role := company.SeatByHandle(actor.Handle)
 	if role == nil {
-		// The binding names a seat the chart no longer has: a chart write
+		// The binding names a seat the company no longer has: an apply
 		// removed it between the binding and this call.
 		return refused(tools.RefusalForbidden, fmt.Sprintf("The seat %q you are "+
 			"bound to is not in the company chart.", actor.Handle)), nil

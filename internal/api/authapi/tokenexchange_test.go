@@ -596,7 +596,7 @@ func (e *sessionEstate) BoundSeat(_ context.Context, login string) (
 	return e.bindings[login], nil
 }
 
-// seatChart is a chart view holding a fixed set of seats.
+// seatChart is an organisation holding a fixed set of seats.
 type seatChart struct{ seats map[string]session.Seat }
 
 func (c *seatChart) Seat(_ context.Context, ref string) (session.Seat, bool, error) {
