@@ -195,15 +195,14 @@ reinvent them:
 Get these wrong and the fix is expensive or lossy. The schema cannot
 catch most of them.
 
-**The company `name` is permanent; a handle is not.** An agent's durable
-id is `uuid5(ns, f"{org.name}:{origin handle}")`, where the origin handle
-is the one the seat was **created** under and is frozen on its chart row.
-So renaming a seat later moves its address and nothing else: its mailbox,
-its lease, its diary, its onboarding markers and its scheduled work all
-stay where they are, and the handle it used to answer to goes on
-resolving for references somebody already wrote down. Changing the
-company `name` is the edit that does mint a new id for every agent and
-orphan every one of those things — settle it before the company runs, and
+**The company `name` and every handle are permanent.** An agent's durable
+id is `uuid5(ns, f"{org.name}:{handle}")`. Every write stores the handle a
+seat leaves out — derived from its name — so correcting a seat's `name`
+later keeps its handle, its mailbox, its lease, its diary, its onboarding
+markers and its scheduled work; a document that gives a seat a different
+handle removes that seat and adds a new one with an empty mailbox and no
+memory. Changing the company `name` mints a new id for every agent and
+orphans every one of those things — settle it before the company runs, and
 warn the founder explicitly if they later ask to change it.
 
 **Nothing is referenced by a display name.** A `lead` and a `manages`
@@ -223,7 +222,7 @@ name is long or likely to change.
 not.** Each reference resolves to the first match anywhere in the tree, so
 two units answering to one key silently share one team's work, routing and
 pages, and two seats on one handle share one inbox — `crewlet validate`
-refuses both, and so does the org chart. A `name` is prose and may repeat:
+refuses both, and so does every write. A `name` is prose and may repeat:
 two seats called `Software Engineer` are fine on two handles, but two that
 declare no `handle` derive the same one and are refused for that. Prefer
 names a reader can tell apart anyway (`Software Engineer 2`), since a
@@ -306,8 +305,8 @@ roles:
 `kind: human` seats are addressable but never spawned: no runtime, no
 inbox, no LLM. They reject the runtime-only fields, and `contact` is
 optional: a person with none works through the dashboard only, agents
-cannot @-mention them, and `crewlet chart check` reports the seat as
-`seat_unreachable`. Scope their `manages` to the top roles — a
+cannot @-mention them, and `crewlet validate` warns about the seat at its
+`contact`. Scope their `manages` to the top roles — a
 founder managing every seat floods them. See
 [Humans in the org chart](https://docs.crewlet.ai/concepts/humans-in-the-org/).
 

@@ -592,8 +592,8 @@ roles:
       - "Final approval on strategy, roadmap trade-offs, and high-impact bets"
       - "Unblock anything the Agent CEO escalates"
     manages: [agent-ceo]                       # BY HANDLE: `manages:` names seats by their
-                                               #   handle and units by their key, so the
-                                               #   chart survives every rename
+                                               #   handle and units by their key, so a
+                                               #   changed display name moves no reference
     contact:
       # Mattermost identifies people by username, not an opaque ID — this
       # is the account you sign in as.  `founder` is what

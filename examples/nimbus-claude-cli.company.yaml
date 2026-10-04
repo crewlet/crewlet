@@ -707,8 +707,8 @@ roles:
       - "Final approval on strategy, roadmap trade-offs, and high-impact bets"
       - "Unblock anything the Agent CEO escalates"
     manages: [agent-ceo]                       # BY HANDLE: `manages:` names seats by their
-                                               #   handle and units by their key, so the
-                                               #   chart survives every rename
+                                               #   handle and units by their key, so a
+                                               #   changed display name moves no reference
     contact:
       # Mattermost identifies people by username, not an opaque ID — this
       # is the account you sign in as.  `founder` is what
@@ -722,7 +722,8 @@ roles:
       # a person in the identity directory, which binds her to this seat
       # — so the dashboard knows whose day it is showing and what she
       # files from it is filed by her.  Until somebody is bound, the
-      # seat is an ordinary unheld one and `crewlet chart check` says so.
+      # seat is an ordinary unheld one, which `GET /iam/seats?unheld=true`
+      # lists.
 
 # Flexible org — units can nest to any depth.
 # Each unit has a type (department, team, squad, pod, etc.) and can
