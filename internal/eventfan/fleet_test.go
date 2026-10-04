@@ -506,170 +506,33 @@ func servesAs(t *testing.T, b *memory.Broker, node string, version int, row stor
 	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
 }
 
-// A FILTER AN OLDER PEER CANNOT APPLY IS NOT ANSWERED AROUND.
+// A PEER THAT CANNOT SPEAK THE VERSION ASKED IS NAMED, NOT ANSWERED AROUND.
 //
-// An older build ignores a parameter it does not know, so a channel or seat
-// filter scattered to it comes back as its UNFILTERED rows, merged in as though
-// they matched. So a request is stamped with the lowest version that answers
-// it: a listing narrowing by nothing new still goes out as v1 and the older
-// peer's rows are part of it, while one narrowing by a v2 filter goes out as v2,
-// the older peer refuses by version, and the coverage names it rather than the
-// page carrying its unmatched row. The histogram is always v2, because its
-// failed split is a field a v1 peer never sends and a sum would read as zero.
+// A peer refuses a version above its own by name, and the asker reports it in
+// the coverage rather than merging rows it cannot vouch for: the page holds
+// the asker's own row, and the coverage says which node is missing and why.
 //
-// Mutation: stamp every request with [eventfan.Protocol], and the plain listing
-// loses the older peer; stamp them all v1, and its row lands on the channel's
-// page.
-func TestAFilterAnOlderPeerCannotApplyIsNotAnsweredAround(t *testing.T) {
+// Mutation: answer a refused peer's error as an empty part, and the coverage
+// reports the fleet complete.
+func TestAPeerThatCannotSpeakTheVersionIsNamed(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
 	a := newNode(t, broker, "node-a")
 	at := time.Now().UTC().Add(-time.Minute)
-	appendTo(t, a, store.EventRecord{ID: "on-channel", Type: "a2a_asked", Category: "task",
-		Time: at, Tags: map[string]string{"channel_id": "ch-1"}})
-	servesAs(t, broker, "node-old", 1, store.EventRecord{ID: "old-unrelated", Type: "x",
+	appendTo(t, a, store.EventRecord{ID: "mine", Type: "x", Category: "task", Time: at})
+	servesAs(t, broker, "node-old", eventfan.Protocol-1, store.EventRecord{ID: "theirs", Type: "x",
 		Category: "task", Time: at.Add(time.Second)})
-	fan := fanFrom(a, "node-a", "node-old")
 
-	plain, coverage, err := fan.List(t.Context(), store.ListQuery{Limit: 10})
+	page, coverage, err := fanFrom(a, "node-a", "node-old").List(t.Context(), store.ListQuery{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !coverage.Complete || len(plain.Rows) != 2 {
-		t.Errorf("a listing with no new filter: %v, coverage %+v — want both nodes' rows "+
-			"and the older peer answering", idsOf(plain.Rows), coverage)
+	if got := idsOf(page.Rows); !slices.Equal(got, []string{"mine"}) {
+		t.Errorf("the page = %v, want only the asker's own row", got)
 	}
-
-	narrowed, coverage, err := fan.List(t.Context(), store.ListQuery{ChannelID: "ch-1", Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := idsOf(narrowed.Rows); !slices.Equal(got, []string{"on-channel"}) {
-		t.Errorf("the channel's page = %v, want only the row on it — an older peer's "+
-			"unfiltered row must not be merged in as a match", got)
-	}
-	if coverage.Complete || !missing(coverage, "node-old", "v2") {
-		t.Errorf("coverage %+v does not name node-old as unable to answer v2", coverage)
-	}
-
-	_, coverage, err = fan.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if coverage.Complete || !missing(coverage, "node-old", "v2") {
-		t.Errorf("the axis's coverage %+v does not name node-old — its bars carry no "+
-			"failed split and would under-count", coverage)
-	}
-}
-
-// A v3 FILTER IS NOT ANSWERED AROUND BY A v2 PEER.
-//
-// The company's phases used to narrow by a role name; they narrow by the
-// seat's own id now, and a v2 build reads only the role — so it would answer
-// "this seat's phases" with every seat's. A listing and an axis narrowed by
-// `suspended` are the same hazard: a v2 build counts the completion that
-// parked a turn as one that ended it. Each goes out as v3, the v2 peer refuses
-// by version, and the coverage names it; the unnarrowed question is still
-// answered by the whole fleet.
-//
-// Mutation: ask the narrowed phases in v1, and the v2 peer's row is listed as
-// this seat's; drop the Suspended case from [listParams.version], and the axis
-// is summed over the v2 peer's unfiltered bars.
-func TestAV3FilterIsNotAnsweredAroundByAV2Peer(t *testing.T) {
-	t.Parallel()
-	broker := memory.NewBroker()
-	a := newNode(t, broker, "node-a")
-	at := time.Now().UTC().Add(-time.Minute)
-	appendTo(t, a, store.EventRecord{ID: "mine", Type: "agent_phase_completed", Category: "agent",
-		Time: at, Tags: map[string]string{"agent_id": "agent-a", "agent_role": "Engineer"},
-		Payload: []byte(`{"phase":"execute"}`)})
-	servesAs(t, broker, "node-v2", 2, store.EventRecord{ID: "twin", Type: "agent_phase_completed",
-		Category: "agent", Time: at.Add(time.Second)})
-	fan := fanFrom(a, "node-a", "node-v2")
-
-	all, coverage, err := fan.Phases(t.Context(), "", 10, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !coverage.Complete || len(all.Rows) != 2 {
-		t.Errorf("the company's phases: %v, coverage %+v — want both nodes' rows", idsOf(all.Rows), coverage)
-	}
-	seat, coverage, err := fan.Phases(t.Context(), "agent-a", 10, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := idsOf(seat.Rows); !slices.Equal(got, []string{"mine"}) {
-		t.Errorf("one seat's phases = %v, want only its own — a v2 peer's unfiltered row is not a match", got)
-	}
-	if coverage.Complete || !missing(coverage, "node-v2", "v3") {
-		t.Errorf("coverage %+v does not name node-v2 as unable to answer v3", coverage)
-	}
-
-	ended := false
-	_, coverage, err = fan.List(t.Context(), store.ListQuery{Suspended: &ended, Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if coverage.Complete || !missing(coverage, "node-v2", "v3") {
-		t.Errorf("a listing narrowed by suspended: coverage %+v does not name node-v2", coverage)
-	}
-	_, coverage, err = fan.Histogram(t.Context(), store.HistogramQuery{
-		ListQuery: store.ListQuery{Type: "agent_turn_completed", Suspended: &ended}, Bucket: store.BucketHour,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if coverage.Complete || !missing(coverage, "node-v2", "v3") {
-		t.Errorf("an axis narrowed by suspended: coverage %+v does not name node-v2", coverage)
-	}
-}
-
-// A v4 FILTER IS NOT ANSWERED AROUND BY A v3 PEER.
-//
-// The event log's "Failures only" is a `failed` filter now, and a v3 build
-// does not read it — it would answer "the failures" with every event it holds,
-// merged in as though each one matched. The narrowed listing and its axis go
-// out as v4, the v3 peer refuses by version and the coverage names it; the
-// same listing without the filter is still answered by the whole fleet.
-//
-// Mutation: drop the Failed case from [listParams.version], and the v3 peer's
-// clean row is listed as a failure.
-func TestAV4FilterIsNotAnsweredAroundByAV3Peer(t *testing.T) {
-	t.Parallel()
-	broker := memory.NewBroker()
-	a := newNode(t, broker, "node-a")
-	at := time.Now().UTC().Add(-time.Minute)
-	appendTo(t, a, store.EventRecord{ID: "broke", Type: "sandbox_run_failed", Category: "system", Time: at})
-	servesAs(t, broker, "node-v3", 3, store.EventRecord{ID: "fine", Type: "thing_happened",
-		Category: "system", Time: at.Add(time.Second)})
-	fan := fanFrom(a, "node-a", "node-v3")
-
-	all, coverage, err := fan.List(t.Context(), store.ListQuery{Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !coverage.Complete || len(all.Rows) != 2 {
-		t.Errorf("the unnarrowed log: %v, coverage %+v — want both nodes' rows", idsOf(all.Rows), coverage)
-	}
-	failed := true
-	only, coverage, err := fan.List(t.Context(), store.ListQuery{Failed: &failed, Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := idsOf(only.Rows); !slices.Equal(got, []string{"broke"}) {
-		t.Errorf("the failures = %v, want only the one that failed — a v3 peer's clean row is not a match", got)
-	}
-	if coverage.Complete || !missing(coverage, "node-v3", "v4") {
-		t.Errorf("a listing narrowed by failed: coverage %+v does not name node-v3", coverage)
-	}
-	_, coverage, err = fan.Histogram(t.Context(), store.HistogramQuery{
-		ListQuery: store.ListQuery{Failed: &failed}, Bucket: store.BucketHour,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if coverage.Complete || !missing(coverage, "node-v3", "v4") {
-		t.Errorf("an axis narrowed by failed: coverage %+v does not name node-v3", coverage)
+	if coverage.Complete || !missing(coverage, "node-old", fmt.Sprintf("v%d", eventfan.Protocol)) {
+		t.Errorf("coverage %+v does not name node-old as unable to answer v%d",
+			coverage, eventfan.Protocol)
 	}
 }
 
