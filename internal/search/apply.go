@@ -129,7 +129,7 @@ func (a Applier) embed(ctx context.Context, tx *sql.Tx, vec VectorRecord, at sta
 	}
 
 	// FILED IN THE INSTALLED INDEX AS IT IS WRITTEN, under the index's own
-	// generation — or under none, when the partition has no index in this
+	// generation — or under none, when the corpus has no index in this
 	// row's embedding space. Filing it here rather than waiting for a
 	// reassign record is what keeps a document written after an index was
 	// installed findable by the probe the moment it is findable at all.

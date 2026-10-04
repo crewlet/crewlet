@@ -10,15 +10,15 @@
 ## The decision
 
 The first stage of semantic search is an INVERTED FILE over the 1-bit sign
-codes the narrow table already holds. A partition's rows are filed in lists by
+codes the narrow table already holds. The corpus's rows are filed in lists by
 k-means in Hamming space, a query ranks the lists by its own code and reads
 the nearest ones, and the exact f32 rerank above it is unchanged — the index
 decides which documents are looked at and never how they are ordered.
 
 It is replicated state like the vectors it indexes. The embedding duty — the
-vector log's one writer — trains it from the partition's own codes with a
+vector log's one writer — trains it from the corpus's own codes with a
 seed derived from the log and the index it replaces, measures its recall
-against the exact scan on held-out documents (sampled from the partition, kept
+against the exact scan on held-out documents (sampled from the corpus, kept
 out of the k-means and never counted as their own answer), and PUBLISHES it as
 a record on the vector log; every holder's applier installs it, files each
 vector written after it as it is written, and re-files the older rows as
@@ -48,7 +48,7 @@ the count without re-filing a row, and retrains in the same tick when no count
 within half the lists meets the floor any more. It retrains when the corpus
 has doubled or halved, and when the fullest list has grown past four times the
 mean AND doubled its share since the training filed it. Below
-`search.IVFMinCorpus`, on a partition whose training installed nothing, and in
+`search.IVFMinCorpus`, on a corpus whose training installed nothing, and in
 a space the index was not trained in, the first stage is the full scan it
 always was.
 
@@ -127,6 +127,3 @@ Whether the 1-bit first stage suits a company's corpus at all — that is
 `crewlet search eval`, which now measures the index and the full scan side by
 side, and `ivf_recall_below_floor`, which fires when even every list misses
 the floor. The source filter's plan, which is still the primary key's seek.
-How a partitioned estate asks each partition — the index is built per
-partition file so that it can be, and the fan-out across partitions is the
-estate's own decision.

@@ -267,13 +267,15 @@ func (e SkillUsed) SummaryFor(actor string) string {
 // executor's prompt is built from resolve, recording hit and rendered size for
 // each of them.
 //
-// IT IS THE ONLY VISIBILITY THIS PIPELINE HAS. Every block degrades to empty
-// on failure by design — an unreachable store, an unconfigured auxiliary
-// model and a filter that selected nothing all render the same nothing — so
-// without this event a seat running with no memory at all looks exactly like
-// a seat whose stores had nothing to say. Operators plot per-block hit rate
-// per agent: a block stuck at zero is a configuration or data problem, not a
-// turn problem.
+// IT IS THE ONLY VISIBILITY THIS PIPELINE HAS. Every block but two degrades
+// silently on failure by design — an unreachable store, an unconfigured
+// auxiliary model and a filter that selected nothing all leave the seat with
+// no memory — so without this event a seat running with no memory at all
+// looks exactly like a seat whose stores had nothing to say. The two are the
+// knowledge and chat-thread blocks, which say in words when their source could
+// not be read, because there the difference sends a seat somewhere else.
+// Operators plot per-block hit rate per agent: a block stuck at zero is a
+// configuration or data problem, not a turn problem.
 type PrefetchSummary struct {
 	Agent       string `json:"agent_id"`
 	AgentHandle string `json:"agent_handle"`

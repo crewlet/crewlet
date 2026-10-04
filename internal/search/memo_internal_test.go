@@ -4,39 +4,39 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// A PROCESS HOLDS ONE DECODED INDEX PER LOG, and a partition's retrain
-// replaces its own entry.
+// THE DECODED INDEX IS SERVED FROM THE MEMO WHILE ITS DIGEST HOLDS, AND A
+// RETRAIN REPLACES IT.
 //
-// A partitioned layout's search asks every partition a node holds, one after
-// another, and each has an index of its own. A memo with one slot evicted
-// itself on every partition of every search — a read of the centroids, a hash
-// and a decode per partition per query. Held per log, the second partition's
-// load leaves the first one's in place: here the first store's centroids row is
-// deleted after it was decoded, so a second load of it can only succeed from
-// the memo. And a retrain of a log replaces that log's entry rather than
-// lingering beside it, so the memo holds as many indexes as partitions.
-func TestAProcessHoldsOneDecodedIndexPerLog(t *testing.T) {
+// A node holds one index, so the memo has one slot: a load of the centroids it
+// decoded last needs no read at all — here the store's centroids row is deleted
+// after the first load, so a second load can only succeed from the memo. And a
+// hit is the DIGEST's, never the generation's: another store's index at the
+// same generation is read from that store, and once it has been, the first
+// index is no longer held — a retrain leaves nothing behind.
+func TestTheDecodedIndexIsHeldUntilItsDigestMoves(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	memo := &ivfMemo{}
-	a, headA := memoStore(t, "log-a", 1)
-	b, headB := memoStore(t, "log-b", 2)
-	load := func(db *store.DB, h IndexHead) error {
-		return storetest.EstateOf(db).Read(ctx, func(tx *sql.Tx) error {
-			_, err := memo.load(ctx, tx, h)
+	a, headA := memoStore(t, "log", 1)
+	b, headB := memoStore(t, "log", 2)
+	load := func(db *store.DB, h IndexHead) (IVF, error) {
+		var index IVF
+		err := storetest.EstateOf(db).Read(ctx, func(tx *sql.Tx) error {
+			var err error
+			index, err = memo.load(ctx, tx, h)
 			return err
 		})
+		return index, err
 	}
-	if err := load(a, headA); err != nil {
-		t.Fatal(err)
-	}
-	if err := load(b, headB); err != nil {
+	first, err := load(a, headA)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := storetest.EstateOf(a).Tx(ctx, func(tx *sql.Tx) error {
@@ -45,17 +45,21 @@ func TestAProcessHoldsOneDecodedIndexPerLog(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := load(a, headA); err != nil {
-		t.Fatalf("the first log's index was evicted by the second's: %v", err)
+	if again, err := load(a, headA); err != nil || !reflect.DeepEqual(again, first) {
+		t.Fatalf("the index decoded last was read again (%v), want it from the memo", err)
 	}
 
-	c, retrained := memoStore(t, "log-a", 3)
-	if err := load(c, retrained); err != nil {
+	// THE SAME GENERATION, OTHER CENTROIDS: read from their own store.
+	other, err := load(b, headB)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(memo.entries) != 2 {
-		t.Fatalf("the memo holds %d indexes for two logs after one retrained",
-			len(memo.entries))
+	if reflect.DeepEqual(other, first) {
+		t.Fatal("another store's index at the same generation was answered from the memo")
+	}
+	// AND THE FIRST IS NO LONGER HELD: its row is gone, so a load must fail.
+	if _, err := load(a, headA); err == nil {
+		t.Fatal("the index the memo held before was still answered after another replaced it")
 	}
 }
 

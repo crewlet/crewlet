@@ -119,7 +119,7 @@ const (
 
 	// IVFMaxLists is the most: 2 048, the most whose TRAINING costs the
 	// node holding the duty minutes of its cores rather than a quarter of an
-	// hour at the partition sizes an index serves.
+	// hour at the corpus sizes an index serves.
 	//
 	// The k-means costs sample × lists × rounds Hamming distances and its
 	// sample is [IVFTrainPointsPerList] a list, so it grows with the SQUARE
@@ -140,10 +140,10 @@ const (
 	// most one node searches inside [SemanticScanBudget] through an index at
 	// its probe ceiling — the mean list still holds ≈ 266 rows, four times
 	// the [IVFMinListRows] a centroid needs, so the cap costs resolution only
-	// on partitions past what a node serves anyway.
+	// on corpora past what a node serves anyway.
 	IVFMaxLists = 2048
 
-	// IVFMinCorpus is the smallest partition that gets an index: sixteen
+	// IVFMinCorpus is the smallest corpus that gets an index: sixteen
 	// lists of sixty-four rows. Below it the full scan reads fewer than a
 	// thousand narrow rows, which costs about a millisecond — there is
 	// nothing for an index to save.
@@ -206,7 +206,7 @@ const (
 	// [ScanBatch]'s size, for its reason: a thousand rows is a handful of
 	// statements, and a reassign apply costs at most IVFReassignBatch ×
 	// lists Hamming distances — about 135 ms at 2 048 lists — so no apply
-	// transaction holds this store's writer for a whole partition.
+	// transaction holds this store's writer for the whole corpus.
 	IVFReassignBatch = ScanBatch
 )
 
@@ -321,7 +321,7 @@ func (x IVF) Centroid(j int) []uint64 { return x.centroids[j*x.words : (j+1)*x.w
 //
 // INTEGER ARITHMETIC ONLY. A float distance here — the cosine of the f32
 // vector against a ±1 centroid, say — ranks nearly the same and is not
-// bit-reproducible across architectures, so two holders of one partition
+// bit-reproducible across architectures, so two copies of the estate
 // would disagree about where a document lives: see ADR-0028.
 func (x IVF) Nearest(code []uint64) int {
 	best, list := math.MaxInt, 0
@@ -362,7 +362,7 @@ func (x IVF) ProbeOrder(code []uint64) []int {
 // order they finished.
 //
 // It stops within a stride ([ivfStride]) of ctx ending and answers ctx's
-// error, never a partial filing: at the largest partition an index serves the
+// error, never a partial filing: at the largest corpus an index serves the
 // filing is the longest step a training takes without returning — tens of
 // seconds on its share of the cores — and a duty tick cut off, by a lease it
 // could not renew or an engine stopping, must not go on spending those cores
@@ -627,7 +627,7 @@ func (x IVF) update(ctx context.Context, points Codes, assignment, distance []in
 	// AN EMPTY LIST IS RE-SEEDED, never left: a centroid nothing is nearest
 	// to is a list every document skips, and the count the corpus was sized
 	// for silently shrinks. It takes the point farthest from its own
-	// centroid — the one the current partition fits worst.
+	// centroid — the one the current corpus fits worst.
 	var empty []int
 	for j := range lists {
 		if start[j] == start[j+1] {
@@ -683,7 +683,7 @@ func sampleRows(n, k int, seed uint64, skip []int) []int {
 // The training runs on whichever node holds the embedding duty, and that node
 // is also running seats and answering searches — the first stage of every
 // semantic search is itself a CPU-bound scan. On every core, a training at the
-// largest partition an index serves took the whole node for over a minute.
+// largest corpus an index serves took the whole node for over a minute.
 // Measured at 500 000 topical sources and 2 048 lists on this repository's
 // four-core container, shared with two other test runs, with two searchers
 // scanning 40 000 codes throughout (BenchmarkIVFTrainingShare): on every core
@@ -707,7 +707,7 @@ func sampleRows(n, k int, seed uint64, skip []int) []int {
 // ([ivfMinWorkers] says why a two- or three-core node is not halved), and the
 // k-means stops growing once the list count reaches [IVFMaxLists] — its sample
 // is a fixed number of rows a list — so past that the filing and the reading
-// are the only terms a larger partition lengthens.
+// are the only terms a larger corpus lengthens.
 //
 // A node allowed ONE core trains on it, as every build has, and no share can
 // leave its searches anything. With the same two searchers on that one core
@@ -715,7 +715,7 @@ func sampleRows(n, k int, seed uint64, skip []int) []int {
 // sources (BenchmarkIVFTrainingShare -cpu 1), and 282 s and 172 s again
 // pinned to one CPU of a host whose other three were busy; its reading
 // measured 394 µs a source (BenchmarkIndexTraining -cpu 1, pinned the same
-// way), ≈ 215 s at the largest partition. That is about eleven minutes in all,
+// way), ≈ 215 s at the largest corpus. That is about eleven minutes in all,
 // which a single core with two searches always in flight — already past the
 // load its corpus table is measured at — spends ONCE, because the tick is
 // bounded by its progress rather than by its length.
@@ -926,7 +926,7 @@ func ProbeCount(order []int, probes, ceiling int, total func(list int) int, matc
 type QueryShape string
 
 const (
-	// ShapeAll is a search over the whole partition.
+	// ShapeAll is a search over the whole corpus.
 	ShapeAll QueryShape = "all"
 
 	// ShapeSource is a search narrowed to one source — every search the
@@ -944,7 +944,7 @@ var QueryShapes = []QueryShape{ShapeAll, ShapeSource, ShapeContainer}
 // Valid reports whether a shape off the wire is one this build measures.
 func (q QueryShape) Valid() bool { return slices.Contains(QueryShapes, q) }
 
-// TrainingCorpus is what a training measures on: the partition's codes in key
+// TrainingCorpus is what a training measures on: the corpus's codes in key
 // order, and what each row's shape filters match on.
 type TrainingCorpus struct {
 	Codes Codes

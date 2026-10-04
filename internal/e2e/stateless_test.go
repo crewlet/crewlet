@@ -165,8 +165,8 @@ func TestAStatelessNodeSearchesTheFleetsKnowledge(t *testing.T) {
 		answer := searcher.Search(t.Context(), knowledge.Query{
 			Text: "rollback drain node", Org: p.agent.engine.Company().Org, Limit: 5,
 		})
-		// AND NOTHING MISSING: the one partition was answered.
-		return answer.Partitions.Complete() && slices.ContainsFunc(answer.Hits,
+		// AND THE SEARCH RAN: a data node answered it, serving a mode.
+		return answer.ServedMode != "" && slices.ContainsFunc(answer.Hits,
 			func(h knowledge.Hit) bool { return h.Title == "Rollback runbook" })
 	})
 }

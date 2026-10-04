@@ -299,10 +299,10 @@ type Engine struct {
 	remote atomic.Pointer[remoteNative]
 
 	// router is how every seat tool on this node reaches the estate — this
-	// node's own copy where it serves the partition, a holder's otherwise —
-	// built in [New] on EVERY node, before anything publishes; see
-	// router.go. local is what this node serves, nil on a node that holds
-	// no data.
+	// node's own copy while it is in service, another data node's otherwise
+	// — built in [New] on EVERY node, before anything publishes; see
+	// router.go. local is this data node's own copy, nil on a node that
+	// holds no data.
 	router *estate.Router
 	local  *localEstate
 
@@ -833,12 +833,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return nil, err
 	}
 
-	// EVERY NODE ROUTES THE ESTATE: a data node answers what it serves and
-	// asks for the rest, and a node without `data` asks for everything —
-	// see router.go. Built before anything publishes, because a tool is
-	// handed its facades as soon as a seat is.
+	// EVERY NODE ROUTES THE ESTATE: a data node answers from its own copy
+	// and asks a peer only while that copy cannot, and a node without
+	// `data` asks for everything — see router.go. Built before anything
+	// publishes, because a tool is handed its facades as soon as a seat is.
 	if holdsData(opts.Bootstrap) {
-		e.local = newLocalEstate(e, holdingOf(opts.Bootstrap, LayoutZero()))
+		e.local = newLocalEstate(e)
 	}
 	if e.router, err = e.newRouter(backends.Queue, nodeID); err != nil {
 		if ownsBackends {

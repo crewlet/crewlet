@@ -226,24 +226,24 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	if e.NativeHydrated(t.Context()) {
 		t.Fatal("the node admits seats while below the log")
 	}
-	// A COPY WITH A HOLE IN IT STOPS SERVING ITS PARTITION, and the node
-	// keeps its seats: every call they make goes to a holder whose copy is
-	// sound — on this node alone there is none, so it is refused naming the
-	// partition — and moving them would hand them to a peer asking the same
-	// holders.
-	waitUntil(t, 5*time.Second, "the copy below the log to stop serving its partition",
+	// A COPY WITH A HOLE IN IT GOES OUT OF SERVICE, and the node keeps its
+	// seats: every call they make goes to a data node whose copy is sound —
+	// on this node alone there is none, so it is refused as an estate
+	// nobody serves — and moving them would hand them to a peer asking the
+	// same data nodes.
+	waitUntil(t, 5*time.Second, "the copy below the log to go out of service",
 		func() bool {
-			_, serves, _ := e.local.For(t.Context(), statelog.EstatePartition)
+			_, serves := e.local.For(t.Context())
 			return !serves
 		})
 	if ok, reason := e.SeatsServiceable(); !ok {
 		t.Fatalf("the node shed its seats over a copy below the log (%s) — a "+
-			"wrong copy stops serving its partition, and the seats stay", reason)
+			"wrong copy goes out of service, and the seats stay", reason)
 	}
-	var unserved *estate.ErrPartitionUnserved
+	var unserved *estate.ErrUnserved
 	if _, err := e.router.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); !errors.As(err, &unserved) {
 		t.Fatalf("a read of the only copy, below the log, answered %v — want it "+
-			"refused naming the partition nobody serves", err)
+			"refused as an estate nobody serves", err)
 	}
 	s.publishPositions(t.Context())
 	if !rejoinRequested() {

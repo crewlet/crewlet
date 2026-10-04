@@ -217,7 +217,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	}
 	// A REASSIGN SEEKS ITS RANGE ON THE PRIMARY KEY — it re-files a
 	// thousand rows, and a plan that walked the space to find them would
-	// cost every holder a partition's read per batch.
+	// cost every holder a read of the whole corpus per batch.
 	if joined := strings.Join(plans["a reassign's range"], "\n"); !strings.Contains(joined,
 		"sqlite_autoindex_kb_vectors_bin_1 (source=? AND source_id>=? AND source_id<?)") {
 		t.Fatalf("a reassign's range is not a seek on the primary key:\n%s", joined)

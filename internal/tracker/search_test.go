@@ -51,11 +51,12 @@ func TestARankedSearchWalksPastARemovedItemWithoutAGap(t *testing.T) {
 			"task:b": {ID: keep2.ID},
 		},
 	}
-	slice, err := tracker.NewSearcher(r.db.Reader(), rank).Slice(t.Context(), tracker.SearchQuery{Text: "retry"})
+	answer, err := tracker.NewSearcher(r.db.Reader(), rank).Search(t.Context(),
+		tracker.SearchQuery{Text: "retry", Limit: 2})
 	if err != nil {
-		t.Fatalf("slice: %v", err)
+		t.Fatalf("search: %v", err)
 	}
-	got := tracker.MergeSearch([]tracker.SearchSlice{slice}, tracker.SearchQuery{Limit: 2}).Hits
+	got := answer.Hits
 	if len(got) != 2 || got[0].ID != keep1.ID || got[1].ID != keep2.ID {
 		t.Fatalf("ranked %+v, want the two surviving items, the removed leader walked past", got)
 	}
@@ -72,16 +73,18 @@ func TestAnEmptyRankingFromABuildingIndexSaysSo(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	task := r.createTask("Retry backoff")
-	_, err := tracker.NewSearcher(r.db.Reader(), fakeRanker{building: true}).Slice(t.Context(), tracker.SearchQuery{Text: "retry"})
+	_, err := tracker.NewSearcher(r.db.Reader(), fakeRanker{building: true}).Search(t.Context(),
+		tracker.SearchQuery{Text: "retry"})
 	if !errors.Is(err, tracker.ErrIndexBuilding) {
 		t.Fatalf("an empty ranking from a building index = %v, want ErrIndexBuilding", err)
 	}
 	found := fakeRanker{building: true,
 		lexical: []search.Scored{{Key: "task:a", Score: 1}},
 		docs:    map[string]tracker.RankedDoc{"task:a": {ID: task.ID}}}
-	slice, err := tracker.NewSearcher(r.db.Reader(), found).Slice(t.Context(), tracker.SearchQuery{Text: "retry"})
-	if err != nil || !slices.ContainsFunc(tracker.MergeSearch([]tracker.SearchSlice{slice}, tracker.SearchQuery{}).Hits,
+	answer, err := tracker.NewSearcher(r.db.Reader(), found).Search(t.Context(),
+		tracker.SearchQuery{Text: "retry"})
+	if err != nil || !slices.ContainsFunc(answer.Hits,
 		func(row tracker.Ranked) bool { return row.ID == task.ID }) {
-		t.Fatalf("a ranking that found an item while building = (%+v, %v), want the item", slice, err)
+		t.Fatalf("a ranking that found an item while building = (%+v, %v), want the item", answer, err)
 	}
 }

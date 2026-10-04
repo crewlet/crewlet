@@ -598,24 +598,25 @@ func (n *native) shutdown(ctx context.Context) {
 // native backend is trivially hydrated, which is what a company on Jira and
 // Confluence has.
 //
-// ONE GATE ON EVERY NODE, asked of the copy that will serve the seat through
-// the estate's router ([estate.Router.Serves]) for each partition a seat needs
-// ([seatNeeds]): this node's own where it serves the partition — STRICT,
-// because this is seat admission rather than a read, and a node merely inside
-// the trim floor still serves rows that are behind, which a seat attaching to
-// it acts on — and otherwise the first holder that answers, which admits only
-// once its own copy is established: the same gate, one hop away. A node whose
-// own copy is WRONG does not serve the partition ([localEstate.For]), so it is
-// admitted on a sound holder's word, like a node that holds no data.
+// ONE GATE ON EVERY NODE, asked ONCE of the copy that will serve the seat
+// through the estate's router ([estate.Router.Serves]): this node's own where
+// its copy serves — STRICT, because this is seat admission rather than a read,
+// and a node merely inside the trim floor still serves rows that are behind,
+// which a seat attaching to it acts on — and otherwise the first data node
+// that answers, which admits only once its own copy is established: the same
+// gate, one hop away. A node whose own copy is WRONG serves nothing
+// ([localEstate.For]), so it is admitted on a sound data node's word, like a
+// node that holds no data. Both halves the company runs natively must be
+// served there, since a seat's tools reach both.
 //
 // AND THE ROUTER'S VIEW MUST HAVE LISTED THE FLEET AT LEAST ONCE — not answer
-// now: a node that answers a partition from its own copy asks no view for it,
-// and one that must ask a holder is refused by the router itself when its view
-// cannot name one. Requiring a current view here withheld every claim on a
-// data node whose own copy was serving its seats all along.
+// now: a node that answers from its own copy asks no view, and one that must
+// ask a data node is refused by the router itself when its view cannot name
+// one. Requiring a current view here withheld every claim on a data node whose
+// own copy was serving its seats all along.
 //
-// IT TAKES A CONTEXT because where this node does not serve the partition the
-// answer is a request, and a sweep that is shutting down must not wait on it.
+// IT TAKES A CONTEXT because where this node's copy does not serve the answer
+// is a request, and a sweep that is shutting down must not wait on it.
 func (e *Engine) NativeHydrated(ctx context.Context) bool {
 	runTracker, wiki, ok := e.nativeHalves()
 	if !ok || (!runTracker && !wiki) || e.router == nil {
@@ -626,29 +627,15 @@ func (e *Engine) NativeHydrated(ctx context.Context) bool {
 			"detail", "this node's view of the fleet has not listed it yet")
 		return false
 	}
-	layout, err := e.estatePlacement().Layout()
-	if err != nil {
-		log.DebugContext(ctx, "seat_admission_withheld", "reason", "unroutable",
-			"detail", err.Error())
-		return false
-	}
-	needs, err := seatNeeds(layout, runTracker, wiki)
-	if err != nil {
-		log.DebugContext(ctx, "seat_admission_withheld", "reason", "unaddressed",
-			"detail", err.Error())
-		return false
-	}
-	for _, need := range needs {
-		trackerServed, pagesServed, err := e.router.Serves(ctx, need.partition)
-		if err != nil || (need.tracker && !trackerServed) || (need.pages && !pagesServed) {
-			detail := "no copy of it admits a seat yet"
-			if err != nil {
-				detail = err.Error()
-			}
-			log.DebugContext(ctx, "seat_admission_withheld", "reason", "no_serving_holder",
-				"partition", need.partition.String(), "detail", detail)
-			return false
+	trackerServed, pagesServed, err := e.router.Serves(ctx)
+	if err != nil || (runTracker && !trackerServed) || (wiki && !pagesServed) {
+		detail := "no copy of the estate admits a seat yet"
+		if err != nil {
+			detail = err.Error()
 		}
+		log.DebugContext(ctx, "seat_admission_withheld", "reason", "no_serving_copy",
+			"detail", detail)
+		return false
 	}
 	return true
 }
@@ -666,7 +653,7 @@ func (e *Engine) nativeHalves() (runTracker, wiki, ok bool) {
 }
 
 // SeatsServiceable reports whether this node may KEEP the seats it holds: it
-// may while it can ROUTE every partition its seats' calls address, and sheds
+// may while it can ROUTE its seats' calls to a copy of the estate, and sheds
 // them only once it cannot.
 //
 // # A wrong copy is not a reason to shed
@@ -676,29 +663,28 @@ func (e *Engine) nativeHalves() (runTracker, wiki, ok bool) {
 // checkpoint on another stream, a stalled prefix, a record held past the
 // deferral grace — because a seat left running on one answered its own tools
 // out of a copy the fleet had abandoned. The router makes that the copy's
-// problem and not the seats': a wrong copy stops SERVING its partition
+// problem and not the seats': a wrong copy goes out of service
 // ([localEstate.For]), so every call this node's seats make is answered by a
-// holder whose copy is sound, exactly as a node holding no data is answered.
-// Moving the seats instead cost each of them its processes and its memory to
-// be served by the very same peers — and on a single node it stopped the
-// company, which is still what happens: a partition no holder serves refuses
-// its calls, naming it.
+// data node whose copy is sound, exactly as a node holding no data is
+// answered. Moving the seats instead cost each of them its processes and its
+// memory to be served by the very same peers — and on a single node it stopped
+// the company, which is still what happens: an estate no data node serves
+// refuses its calls, saying so.
 //
 // # What a node cannot survive is not being able to route
 //
-// A partition this node answers from its OWN copy needs nothing else to be
-// routed — the router asks this node first and asks nobody where it answers —
-// so a node that answers every partition its seats need itself keeps them
-// whatever its view of the fleet says: under layout 0, every data node whose
-// copy is sound. Any other partition is routed by the watched presence view,
-// and a view that answers unknown ([coord.LeaseView.Leases]) and last listed
-// longer ago than [statelog.FloorCacheStale] — the age past which nothing may
-// decide from a cached coordination fact, so no node sheds sooner than any
-// other decider stops trusting the same view — is a node that can no longer
-// say where its seats' calls go, which no copy of its own makes up for; its
-// seats go to a peer that can. A company whose halves are both on a vendor
-// routes nothing, and a view that has never listed sheds nothing: admission
-// claims no seat before it does.
+// A node that answers from its OWN copy needs nothing else to route its seats'
+// calls — the router asks this node first and asks nobody where it answers —
+// so every data node whose copy is sound keeps its seats whatever its view of
+// the fleet says. Any other node routes by the watched presence view, and a
+// view that answers unknown ([coord.LeaseView.Leases]) and last listed longer
+// ago than [statelog.FloorCacheStale] — the age past which nothing may decide
+// from a cached coordination fact, so no node sheds sooner than any other
+// decider stops trusting the same view — is a node that can no longer say
+// where its seats' calls go, which no copy of its own makes up for; its seats
+// go to a peer that can. A company whose halves are both on a vendor routes
+// nothing, and a view that has never listed sheds nothing: admission claims no
+// seat before it does.
 func (e *Engine) SeatsServiceable() (bool, string) {
 	return e.serviceable(time.Now())
 }
@@ -709,18 +695,8 @@ func (e *Engine) serviceable(now time.Time) (bool, string) {
 	if !ok || (!runTracker && !wiki) {
 		return true, ""
 	}
-	if e.local != nil {
-		// WHICH partitions is the layout's answer, and a layout this node
-		// cannot read is one it cannot count any partition answered here
-		// under: the view alone decides, as on a node holding no data.
-		if layout, err := e.estatePlacement().Layout(); err == nil {
-			parts := routedPartitions(layout, runTracker, wiki)
-			if len(parts) > 0 && !slices.ContainsFunc(parts, func(p statelog.PartitionID) bool {
-				return !e.local.servesUnasked(p)
-			}) {
-				return true, ""
-			}
-		}
+	if e.local != nil && e.local.servesUnasked() {
+		return true, ""
 	}
 	return routable(e.dataView, now)
 }
@@ -796,7 +772,7 @@ func (e *Engine) NativeStatus(ctx context.Context) []ReplicationStatus {
 func (e *Engine) Domains() []statelog.Domain { return registeredDomains() }
 
 // Tracker is this node's OWN copy's tracker read side, or nil — what this
-// node's router answers from while it serves the partition, and what a test
+// node's router answers from while its copy serves, and what a test
 // reads to see one node's copy. A surface reads through [OperatorWork]
 // instead, which answers from a peer's copy once this one is out of service.
 func (e *Engine) Tracker() *tracker.Reader {
@@ -1879,7 +1855,7 @@ func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
 // a person's inbox or a purge read off rows the node itself would not vouch
 // for, or refused outright where the file was shut. Through the router the
 // operator is answered as the seats are, from this node's copy while it serves
-// and from a holder's whose copy does while it does not.
+// and from another data node's while it does not.
 func OperatorWork(e *Engine) (estate.Work, bool) {
 	runTracker, _, ok := e.nativeHalves()
 	if !ok || !runTracker || e.router == nil {

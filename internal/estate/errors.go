@@ -77,7 +77,6 @@ var sentinels = []sentinel{
 	{"statelog.ErrEstateNotRestored", statelog.ErrEstateNotRestored},
 	{"statelog.ErrExists", statelog.ErrExists},
 	{"statelog.ErrGenerationPassed", statelog.ErrGenerationPassed},
-	{"statelog.ErrInvalidCut", statelog.ErrInvalidCut},
 	{"statelog.ErrInvalidLayout", statelog.ErrInvalidLayout},
 	{"statelog.ErrInvalidPartitionID", statelog.ErrInvalidPartitionID},
 	{"statelog.ErrLogDiverged", statelog.ErrLogDiverged},
@@ -97,9 +96,7 @@ var sentinels = []sentinel{
 	{"statelog.ErrWrongPartition", statelog.ErrWrongPartition},
 	{"statelog.ErrWrongStream", statelog.ErrWrongStream},
 
-	{"estate.ErrBadCursor", ErrBadCursor},
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
-	{"estate.ErrUnaddressed", ErrUnaddressed},
 }
 
 // typedKind is one error type whose value crosses the wire.
@@ -133,7 +130,7 @@ var typedKinds = []typedKind{
 	{"statelog.Refused", reflect.TypeFor[*statelog.Refused]()},
 	{"statelog.Unavailable", reflect.TypeFor[*statelog.Unavailable]()},
 
-	{"estate.ErrPartitionUnserved", reflect.TypeFor[*ErrPartitionUnserved]()},
+	{"estate.ErrUnserved", reflect.TypeFor[*ErrUnserved]()},
 }
 
 // wireError is an error as it crosses: what it says, and what it is.

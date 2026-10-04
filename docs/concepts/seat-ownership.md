@@ -112,7 +112,7 @@ bad states, and the engine treats them as opposites.
 | | What it means | What the node does |
 |---|---|---|
 | **Behind** | Records are on the log that this node has not applied yet. It is catching up, and it will. | **Keeps every seat it holds**, and claims no new ones until it is level. The sweep logs `seat_claims_withheld` at debug, and the fleet view counts how many of this node's replication loops are current |
-| **Wrong** | The copy cannot become current by applying more records | **Stops serving the estate and keeps every seat.** Its seats' calls go to the other data nodes, exactly as a node holding no data is served, and other nodes asking it are told it does not serve the estate (`estate_partition_not_served`). It serves again once a reading finds the copy sound |
+| **Wrong** | The copy cannot become current by applying more records | **Takes its copy out of service and keeps every seat.** Its seats' calls go to the other data nodes, exactly as a node holding no data is served, and other nodes asking it are told its copy is `out_of_service`. The node logs `estate_copy_not_served` when the copy goes out of service, and serves again once a reading finds the copy sound |
 
 Six states are *wrong*, and each is a fact about the rows rather than about how
 far along they are:

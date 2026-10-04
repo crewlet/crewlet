@@ -22,9 +22,9 @@ import (
 // and the k-means and the filing are the only work on it that can occupy
 // every core for a minute at a time. Unbounded they did: the training ran on
 // GOMAXPROCS workers. Halved without a floor, a two- or three-core node
-// trained on ONE, whose training at the largest partition an index serves
+// trained on ONE, whose training at the largest corpus an index serves
 // does not fit the duty's tick ([ivfMinWorkers]) — so every tick on it was cut
-// off and its partition never got an index. A node allowed a single core
+// off and its corpus never got an index. A node allowed a single core
 // still trains, on it.
 func TestATrainingTakesAtMostItsShareOfTheCores(t *testing.T) {
 	t.Parallel()
@@ -39,8 +39,8 @@ func TestATrainingTakesAtMostItsShareOfTheCores(t *testing.T) {
 				"it has", procs, workers)
 		case workers < min(procs, 2):
 			t.Fatalf("a node allowed %d cores trains on %d worker(s): below two, "+
-				"a training at the largest partition an index serves overruns the "+
-				"tick, and the partition is never indexed", procs, workers)
+				"a training at the largest corpus an index serves overruns the "+
+				"tick, and the corpus is never indexed", procs, workers)
 		case workers > max(procs/ivfCoreShare, 2):
 			t.Fatalf("a node allowed %d cores trains on %d workers, more than "+
 				"1/%d of them", procs, workers, ivfCoreShare)
@@ -360,7 +360,7 @@ func TestTheIndexIsTheSameOnAnyNumberOfWorkers(t *testing.T) {
 }
 
 // BenchmarkIVFTrainingShare is a training's two CPU-bound steps — the k-means
-// and filing every code — at the largest partition an index serves and the
+// and filing every code — at the largest corpus an index serves and the
 // largest list count, on the share of the cores the duty runs them on
 // ([ivfWorkers]) and on every core, which is what they ran on before the share
 // existed: the figures behind [ivfCoreShare].

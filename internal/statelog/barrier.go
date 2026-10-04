@@ -102,9 +102,8 @@ const DefaultBarrierBudget = 5 * time.Second
 // names, whose own barrier subject the index appends to.
 //
 // ONE PER LOG, AND SINGLE-FLIGHTED PER LOG: a barrier proves where ONE
-// stream's end is, so a domain with a log in each of two partitions has two
-// ends to prove and two indexes proving them, and readers of one never wait
-// on an append to the other.
+// stream's end is, so each log a node runs has its own index proving its own
+// end, and a reader of one log never waits on an append to another.
 //
 // admission is the log's gate reserve ([Reserve]) — required of a domain that
 // keeps one, the one every other ordinary append on this log on this node is

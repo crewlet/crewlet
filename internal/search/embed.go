@@ -237,14 +237,15 @@ type EmbedDeps struct {
 	// Publisher is the vector domain's write authority.
 	Publisher *statelog.Publisher
 
-	// Estate is the partition the duty keeps an index for (ADR-0028): the
-	// codes it trains on and the rows it reads the index's state from. Read
-	// only — what the duty decides it publishes, and the applier writes.
+	// Estate is the replicated estate the duty keeps an index for
+	// (ADR-0028): the codes it trains on and the rows it reads the index's
+	// state from. Read only — what the duty decides it publishes, and the
+	// applier writes.
 	Estate store.PartitionReader
 
 	// Log names the vector log this duty writes, which is what the index's
-	// training seed is derived from ([IVFSeed]) — so two partitions'
-	// trainings draw different samples and a re-run of one draws the same.
+	// training seed is derived from ([IVFSeed]) — so a re-run of a training
+	// draws the same sample.
 	Log string
 
 	// Standing reads what the index step must know about the vector log
@@ -289,7 +290,7 @@ type EmbedDeps struct {
 	// REQUIRED, never defaulted to a bound nobody is told about: the duty's
 	// caller bounds every tick, and one that forgot to say which bound
 	// would measure a training by its length again — which on a one-core
-	// node cut off every training at the largest partition, so its index
+	// node cut off every training at the largest corpus, so its index
 	// was never built and the node spent five minutes of its only core on
 	// it every tick, for ever.
 	Budget Budget
@@ -315,7 +316,7 @@ type EmbedDeps struct {
 // EXEMPT ([Budget.Exempt]), whole, rather than reporting from inside functions
 // that know nothing of a tick.
 //
-// Measured by its LENGTH instead, a training at the largest partition an
+// Measured by its LENGTH instead, a training at the largest corpus an
 // index serves never finished on a node allowed one core and sharing it with
 // two searchers: its reading projects to three and a half minutes there
 // (394 µs a source at ≈ 545 000) and its arithmetic to seven and a half more
@@ -327,7 +328,7 @@ type EmbedDeps struct {
 //
 // At that load the reading alone would have fitted five minutes, 1.4 times
 // over. But a budget of time is a cliff that moves: the reading nearly doubled
-// between an idle core and two searchers, it grows with the partition, and
+// between an idle core and two searchers, it grows with the corpus, and
 // the tick that trains also makes this tick's embedding batches, each a
 // provider call with a fifteen-second timeout of its own — eight of them and
 // the reading pass five minutes at the load measured. Progress has no such
@@ -374,8 +375,8 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 	case d.Publisher == nil:
 		return nil, fmt.Errorf("search: the embed duty has no publisher")
 	case d.Estate.IsZero():
-		return nil, fmt.Errorf("search: the embed duty has no partition — it keeps " +
-			"the partition's semantic index, and trains it from the codes there")
+		return nil, fmt.Errorf("search: the embed duty has no estate — it keeps " +
+			"the corpus's semantic index, and trains it from the codes there")
 	case d.Log == "":
 		return nil, fmt.Errorf("search: the embed duty names no vector log — " +
 			"the index's training seed is derived from it")

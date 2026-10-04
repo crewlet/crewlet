@@ -185,7 +185,7 @@ func (Domain) Tables() map[string]statelog.TableClass {
 		// The installed semantic index (ADR-0028) — its head, its
 		// centroids and the rollout its training cut: written only by
 		// applying a centroids record, and not recomputable in this file
-		// — it is a training over every code in the partition — so they
+		// — it is a training over every code in the corpus — so they
 		// travel, and a node adopting a snapshot adopts the index with
 		// them. Divergent for kb_vectors' reason: no identity is claimed.
 		"kb_ivf":           statelog.Divergent,

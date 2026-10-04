@@ -308,9 +308,11 @@ type Answer struct {
 
 	// Candidates are the two methods' global lists the fusion was computed
 	// from — each method merged by score across the answering slices, cut
-	// at [FuseN] — which is what this corpus answers a query with when it
-	// is one of several and somebody else fuses ([FuseCandidates]).
+	// at [FuseN] — which a caller walks in their fused order
+	// ([Candidates.Fused]) past the documents it cannot show, rather than
+	// filtering Hits after the cut.
 	Candidates Candidates
+
 	// Nodes is every participant in the assignment table, sorted by id,
 	// and whether each covered its range — the per-node half of
 	// [Answer.Coverage]. Absent is the same fact, narrowed to the ones
@@ -693,7 +695,7 @@ func fuseSlices(answers []Slice, table []Assigned, q FanQuery, scatterErr error)
 		Semantic:        MergeByScore(semantic, FuseN),
 		SemanticSkipped: out.SemanticSkipped,
 	}
-	fused := FuseCandidates([]Candidates{out.Candidates})
+	fused := out.Candidates.Fused()
 	if limit <= 0 {
 		limit = ReturnDepth
 	}

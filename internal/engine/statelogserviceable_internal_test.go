@@ -132,7 +132,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	}
 
 	// AND THE COPY STILL ANSWERS REQUESTS, which is where this decision
-	// lives now: a copy's fault stops it SERVING its partition rather than
+	// lives now: a copy's fault takes it OUT OF SERVICE rather than
 	// shedding its seats, so the regression above would come back as the
 	// request gate reading a record in flight as a copy that is wrong or
 	// lags. One record is inside the snapshot slack of a copy that has
@@ -140,17 +140,16 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	// of the same instant, disagreeing the same way. Judged otherwise, every
 	// request another node sent it would go to whichever peer happened to be
 	// level, and a single node's own seats would wait for the lagging pass.
-	p := statelog.EstatePartition
-	if v := s.partitionVerdict(t.Context(), p); v.fault != "" || !v.answers {
+	if v := s.judgeCopy(t.Context()); v.fault != "" || !v.answers {
 		t.Fatalf("a copy one record behind is judged %+v, want sound and answering", v)
 	}
 	e.local.mu.Lock()
-	delete(e.local.verdicts, p) // judged afresh, at this instant
+	e.local.slot = verdictSlot{} // judged afresh, at this instant
 	e.local.mu.Unlock()
-	served, serves, err := e.local.For(t.Context(), p)
+	served, serves := e.local.For(t.Context())
 	switch {
-	case err != nil || !serves:
-		t.Fatalf("a copy one record behind is not served: (%v, %v)", serves, err)
+	case !serves:
+		t.Fatal("a copy one record behind is not served")
 	case served.Answers == nil || !served.Answers(t.Context()):
 		t.Fatal("a copy one record behind answers no request")
 	case served.Admits == nil || served.Admits(t.Context()):

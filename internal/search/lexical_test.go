@@ -531,11 +531,11 @@ func waitFor(t *testing.T, want func() bool, why string) {
 // only [storetest.FailReadsAfter] arms it.
 //
 // It matters most here. [Indexer.Search] RAISES rather than answering empty —
-// the adapter above it is what turns a failure into the empty block a turn
-// tolerates — so a missing rows.Err() check does not surface as an error at
-// all. It surfaces as a shorter list of hits, which is indistinguishable from
-// a company that has written less down, and a seat acts on it by writing a
-// page that already exists.
+// the adapter above it is what turns a failure into an answer that says the
+// search did not run — so a missing rows.Err() check does not surface as an
+// error at all. It surfaces as a shorter list of hits, which is
+// indistinguishable from a company that has written less down, and a seat acts
+// on it by writing a page that already exists.
 func TestAReadThatFailsPartWayThroughIsNotAShortAnswer(t *testing.T) {
 	t.Parallel()
 	fault := storetest.FailReadsAfter(2, errors.New("the result set gave up"))

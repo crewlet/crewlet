@@ -408,10 +408,10 @@ func unavailableIfTransient(err error) error {
 //     caller waits, so that one stays a failure.
 //   - [coord.ErrUnavailable], the coordination contract's own third answer:
 //     the store could not be reached, which is neither "held" nor "absent".
-//   - the estate router finding no copy to answer from: no holder serves the
-//     partition right now ([estate.ErrPartitionUnserved]) — no live node holds
-//     data, or none that does answers. The tracker and the knowledge base are
-//     read through the router, as a seat's tools read them, so a copy out of
+//   - the estate router finding no copy to answer from: no data node serves
+//     the estate right now ([estate.ErrUnserved]) — no live node holds data,
+//     or none that does answers. The tracker and the knowledge base are read
+//     through the router, as a seat's tools read them, so a copy out of
 //     service or a peer restarting reaches this surface as this.
 //
 // ASKED BY THE ANSWERS as well as the registry, for the answers that read what
@@ -422,7 +422,7 @@ func transient(err error) bool {
 	if errors.As(err, &refused) && refused.Code.Retryable() {
 		return true
 	}
-	var unserved *estate.ErrPartitionUnserved
+	var unserved *estate.ErrUnserved
 	return errors.Is(err, coord.ErrUnavailable) || errors.As(err, &unserved)
 }
 

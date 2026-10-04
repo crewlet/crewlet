@@ -50,7 +50,7 @@ import (
 //
 // # Both members, because each one alone certifies the wrong thing
 //
-// The isotropic member has no structure a partition can find, and meeting the
+// The isotropic member has no structure a k-means can find, and meeting the
 // floor there takes about every list — the index is then not worth installing,
 // and the gate asserts that the training SAYS so rather than installing an
 // index that reads the whole table through a second structure. The topical
@@ -688,7 +688,7 @@ func TestAnIndexFromALaterBuildIsJudgedByItsStructure(t *testing.T) {
 
 // A VERDICT ABOUT ANOTHER EMBEDDING SPACE SAYS NOTHING ABOUT THIS SEARCH.
 //
-// A partition whose last training — under the model the company has since
+// A corpus whose last training — under the model the company has since
 // left — concluded it should have no index, scans in the new space because
 // there is no index in it, not because of that verdict: reported as the
 // verdict, an operator reads a training of a model they no longer run as the
@@ -777,11 +777,11 @@ func TestTheIndexStepFollowsTheCorpus(t *testing.T) {
 		state search.IndexState
 		want  search.IndexAction
 	}{
-		{"an empty partition wants nothing",
+		{"an empty corpus wants nothing",
 			search.IndexState{}, search.IndexKeep},
-		{"a partition below the minimum corpus is left to the scan",
+		{"a corpus below the minimum is left to the scan",
 			search.IndexState{Sources: search.IVFMinCorpus - 1}, search.IndexKeep},
-		{"a partition at the minimum corpus is trained",
+		{"a corpus at the minimum is trained",
 			search.IndexState{Sources: search.IVFMinCorpus}, search.IndexTrain},
 		{"a node behind the log decides nothing from its rows",
 			search.IndexState{Sources: search.IVFMinCorpus, Behind: true}, search.IndexKeep},
@@ -848,7 +848,7 @@ func TestTheIndexStepFollowsTheCorpus(t *testing.T) {
 // corpus with a template copied thousands of times files every copy in one
 // list and no training can split them. Judged against the mean alone, every
 // tick after the rollout decided to retrain it — a full training and a
-// rollout re-filing the partition on every holder, every two ticks for ever.
+// rollout re-filing the corpus on every holder, every two ticks for ever.
 // Judged against what its own training achieved, the index trained here is
 // kept, over three seeds.
 func TestAnIndexTrainedOverDuplicatesComesToRest(t *testing.T) {
@@ -935,7 +935,7 @@ func TestAProbeCountThatLosesTheHeadIsNotChosen(t *testing.T) {
 //
 // Each batch is applied on every holder and re-files exactly the range the
 // index's own record fixed — so the ranges alone must cover every id, of every
-// source, including a source the partition holds no row of. A gap is a row no
+// source, including a source the corpus holds no row of. A gap is a row no
 // batch ever re-files; and a range the record's own validation would refuse
 // is a centroids record no holder can install.
 func TestARolloutCoversEveryKey(t *testing.T) {

@@ -98,17 +98,16 @@ and [ADR-0025](https://github.com/crewlet/crewlet/blob/main/adr/0025-a-node-with
 
 ### How a request reaches the estate
 
-The replicated estate is one estate — its one partition is `estate.000` — and
-every data node holds the whole of it. Every node, with `data` or without,
-still reaches it through one **router**, and a seat's tools behave the same on
-either kind of node. So do the operator's surfaces: the API's tracker and
+The replicated estate is one estate, and every data node holds the whole of it.
+Every node, with `data` or without, still reaches it through one **router**,
+and a seat's tools behave the same on either kind of node. So do the operator's surfaces: the API's tracker and
 knowledge-base routes, a project's file rows and the operator's own MCP go
 through the same router, so a data node whose copy is out of service answers
 its operator from a peer's copy, exactly as it answers its seats.
 
 ```mermaid
 flowchart TD
-    op[A seat's tool call,<br/>or an operator's request] --> local{Does this node<br/>hold the estate?}
+    op[A seat's tool call,<br/>or an operator's request] --> local{Is this a data node<br/>whose copy is in service?}
     local -- yes --> own[Answer from this node's own copy,<br/>after its floors]
     local -- no --> order[Ask the live data nodes in order:<br/>last to answer, rendezvous, silent ones last]
     own -- behind its floor, or lagging its logs --> order
@@ -118,28 +117,33 @@ flowchart TD
     order -- nobody left --> lagging{Did a copy decline<br/>only for lagging?}
     lagging -- yes --> last[Ask it again, told to take the request,<br/>held to the same floors]
     last -- ran it --> done
-    lagging -- no --> unserved[Refused, naming the estate]
+    lagging -- no --> unserved[Refused: no data node served it]
     last -- nobody ran it --> unserved
 ```
 
 - **This node first, where it is a data node.** A data node answers its own
-  seats' calls from its own copy, in-process, and asks nobody.
+  seats' calls from its own copy, in-process, and asks nobody — unless that
+  copy is **out of service**: wrong rather than behind (an applier stopped,
+  the node evicted, its rows below the log), in which case its seats' calls
+  go to the other data nodes and it keeps every seat.
 - **Otherwise the data nodes, in order**: the node that last answered, then an
   order that spreads askers across the data nodes the fleet's presence names,
   with a node that went silent in the last thirty seconds asked last.
-- **A node that ran nothing is passed over, whatever the operation**: one that
-  holds no copy (`not_holder`) or cannot tell whether it does
-  (`holding_unknown`), whose copy lags its logs (asked again last), or that is
-  behind the caller's floor. What may be repeated once a node *may* have run a
+- **A node that ran nothing is passed over, whatever the operation**: one whose
+  copy is out of service (`out_of_service`), whose copy lags its logs (asked
+  again last), or that is behind the caller's floor. What may be repeated once a node *may* have run a
   write is the operation's own rule: a tracker write moves on under the same
   operation id, a knowledge-base write that went unanswered is reported as
   unknown and never sent twice, and a tracker write one data node answered
   *unvouched* — its ledger cannot say whether the operation landed — is asked
   of the next under the same id before the caller is told the outcome is
   unknown.
-- **Nobody answering is an answer that names the estate**, with what each data
-  node said — never an empty list, which would say the company has none of
-  what was asked for.
+- **Nobody answering is an answer that says so**, with what each data node said
+  — never an empty list, which would say the company has none of what was asked
+  for. A knowledge search nobody answered is the one exception that does not
+  fail, because a search is best effort: it answers no hits, serves no mode
+  and covers none of the corpus, which every surface renders as "could not be
+  searched" rather than "nothing matched".
 
 A read waits up to ten seconds on one data node before the next is asked, a
 write up to a minute (or the caller's own deadline); none is ever longer than

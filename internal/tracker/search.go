@@ -92,8 +92,8 @@ type SearchQuery struct {
 }
 
 // SearchAnswer is a ranked item search's hits and what the search did — the
-// mode it served, what it covered, why it served less than was asked, and
-// which partitions of a divided estate answered ([knowledge.Outcome]).
+// mode it served, what it covered and why it served less than was asked
+// ([knowledge.Outcome]).
 type SearchAnswer struct {
 	Hits []Ranked `json:"hits"`
 	knowledge.Outcome
@@ -156,52 +156,34 @@ func NewSearcher(db store.PartitionReader, rank Ranker) *Searcher {
 // is nothing" — which it would otherwise act on by filing a duplicate.
 var ErrIndexBuilding = fmt.Errorf("tracker: the search index is still building")
 
-// SearchSlice is what one corpus answers a ranked search with BEFORE it is
-// fused: its candidates, every work item it can show by the index's key, and
-// what its ranking did.
+// Search ranks the company's work items against plain text, up to q's limit
+// items, best first.
 //
-// THE CANDIDATES RATHER THAN A RANKED LIST, for [search.Candidates]' reason:
-// a list's order means nothing beside another corpus's, so each corpus sends
-// what the fusion ranks it by, and the item behind every key it might win.
-type SearchSlice struct {
-	Candidates search.Candidates `json:"candidates"`
-
-	// Items is the work item behind each candidate key, ABSENT for one
-	// indexed and removed since — the index is behind this node's rows by
-	// design — so the fusion walks past it rather than reporting an item
-	// nobody can open.
-	Items map[string]Ranked `json:"items,omitempty"`
-
-	// Outcome is what this corpus's ranking did, for the fused answer's
-	// own ([knowledge.MergeOutcomes]).
-	Outcome knowledge.Outcome `json:"outcome"`
-}
-
-// Search ranks the company's work items against plain text: this node's
-// corpus, as one [Searcher.Slice] fused by [MergeSearch] — the two steps a
-// gather takes over several, so one corpus and many are ranked by one rule.
+// THE FUSED ORDER IS WALKED PAST AN ITEM REMOVED SINCE IT WAS INDEXED, rather
+// than cut first and filtered after: the index is behind this node's rows by
+// design, so a removed leader costs the answer that item and never a place. And
+// THE PLACE IS COUNTED OVER WHAT SURVIVES, so the numbering has no gap a reader
+// would take for a result that went missing.
 func (s *Searcher) Search(ctx context.Context, q SearchQuery) (SearchAnswer, error) {
-	slice, err := s.Slice(ctx, q)
-	if err != nil {
-		return SearchAnswer{}, err
-	}
-	return MergeSearch([]SearchSlice{slice}, q), nil
-}
-
-// Slice answers a ranked search from this node's corpus, before fusion.
-func (s *Searcher) Slice(ctx context.Context, q SearchQuery) (SearchSlice, error) {
 	switch {
 	case s == nil || s.rank == nil || s.db.IsZero():
-		return SearchSlice{}, fmt.Errorf("tracker: this node has no search index")
+		return SearchAnswer{}, fmt.Errorf("tracker: this node has no search index")
 	case !q.Mode.Valid():
-		return SearchSlice{}, fmt.Errorf("tracker: unknown search mode %q — "+
+		return SearchAnswer{}, fmt.Errorf("tracker: unknown search mode %q — "+
 			"the modes are hybrid, keyword and semantic", q.Mode)
+	}
+	limit := q.Limit
+	switch {
+	case limit <= 0:
+		limit = SearchLimit
+	case limit > MaxSearchLimit:
+		limit = MaxSearchLimit
 	}
 	ranked, err := s.rank.Candidates(ctx, q)
 	if err != nil {
-		return SearchSlice{}, err
+		return SearchAnswer{}, err
 	}
-	out := SearchSlice{Candidates: ranked.Candidates, Outcome: ranked.Outcome}
+	answer := SearchAnswer{Hits: make([]Ranked, 0, limit), Outcome: ranked.Outcome}
 	if len(ranked.Docs) == 0 {
 		// THE GATE IS ASKED ONLY ON AN EMPTY ANSWER, because that is the
 		// only answer it changes: a search that found something has
@@ -216,28 +198,34 @@ func (s *Searcher) Slice(ctx context.Context, q SearchQuery) (SearchSlice, error
 		// telling the reader to wait for something that will not
 		// change what they were told.
 		if lexicalRan(ranked.ServedMode) && s.rank.Building(ctx) {
-			return SearchSlice{}, ErrIndexBuilding
+			return SearchAnswer{}, ErrIndexBuilding
 		}
-		return out, nil
+		return answer, nil
 	}
 	rows, err := s.itemsByID(ctx, ranked.Docs)
 	if err != nil {
-		return SearchSlice{}, err
+		return SearchAnswer{}, err
 	}
-	out.Items = make(map[string]Ranked, len(ranked.Docs))
-	for key, doc := range ranked.Docs {
+	for _, key := range ranked.Candidates.Fused() {
+		doc, named := ranked.Docs[key]
+		if !named {
+			continue
+		}
 		row, held := rows[doc.ID]
 		if !held {
 			// INDEXED AND GONE. The index is behind this node's own
 			// rows by design — see the indexer's own orphan sweep —
-			// so a hit whose item has been removed since is dropped
-			// rather than reported as an item nobody can open.
+			// so a hit whose item has been removed since is walked
+			// past rather than reported as an item nobody can open.
 			continue
 		}
-		row.Snippet = doc.Snippet
-		out.Items[key] = row
+		row.Snippet, row.Rank = doc.Snippet, len(answer.Hits)+1
+		answer.Hits = append(answer.Hits, row)
+		if len(answer.Hits) == limit {
+			break
+		}
 	}
-	return out, nil
+	return answer, nil
 }
 
 // lexicalRan reports whether an answer served in this mode read the lexical
@@ -245,54 +233,6 @@ func (s *Searcher) Slice(ctx context.Context, q SearchQuery) (SearchSlice, error
 // which [knowledge.Mode.Resolved] alone would call hybrid.
 func lexicalRan(served knowledge.Mode) bool {
 	return served != "" && served.Lexical()
-}
-
-// MergeSearch fuses the slices of DISJOINT corpora into one ranked answer of up
-// to q's limit items, best first ([search.FuseCandidates]), and says what the
-// fused answer did ([knowledge.MergeOutcomes]).
-//
-// THE PLACE IS COUNTED OVER WHAT SURVIVES, so an item dropped as gone leaves no
-// gap in the numbering a reader would take for a result that went missing —
-// and the fused order is walked past it rather than cut first, so a removed
-// item costs the answer that item and never a place.
-func MergeSearch(slices []SearchSlice, q SearchQuery) SearchAnswer {
-	limit := q.Limit
-	switch {
-	case limit <= 0:
-		limit = SearchLimit
-	case limit > MaxSearchLimit:
-		limit = MaxSearchLimit
-	}
-	cands := make([]search.Candidates, 0, len(slices))
-	outcomes := make([]knowledge.Outcome, 0, len(slices))
-	for _, slice := range slices {
-		cands = append(cands, slice.Candidates)
-		outcomes = append(outcomes, slice.Outcome)
-	}
-	out := make([]Ranked, 0, limit)
-	for _, key := range search.FuseCandidates(cands) {
-		row, ok := itemFor(slices, key)
-		if !ok {
-			continue
-		}
-		row.Rank = len(out) + 1
-		out = append(out, row)
-		if len(out) == limit {
-			break
-		}
-	}
-	return SearchAnswer{Hits: out, Outcome: knowledge.MergeOutcomes(outcomes)}
-}
-
-// itemFor is the item behind key in whichever slice named it — exactly one,
-// since the corpora are disjoint.
-func itemFor(slices []SearchSlice, key string) (Ranked, bool) {
-	for _, slice := range slices {
-		if row, ok := slice.Items[key]; ok {
-			return row, true
-		}
-	}
-	return Ranked{}, false
 }
 
 // itemsByID reads what a ranked hit has to carry, for one batch of candidates.

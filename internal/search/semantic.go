@@ -31,8 +31,8 @@ import (
 // a one-second target. So the first stage is now an INVERTED FILE over the
 // same sign codes ([Stage1], ivf.go): the codes are filed in lists by k-means
 // in Hamming space, a query ranks the lists by its own code and reads the
-// nearest ones, and the exact rerank above it is UNCHANGED. What the index costs and loses is
-// measured, per partition, by the training that installs it, and again by
+// nearest ones, and the exact rerank above it is UNCHANGED. What the index
+// costs and loses is measured by the training that installs it, and again by
 // `crewlet search eval` against the exact scan.
 //
 // Measured on this container at 3 072 dimensions, at the SHIPPED depths —
@@ -48,9 +48,9 @@ import (
 // installed index may probe ([IVFProbeCeiling]); at 10 000 sources the same
 // training found nothing worth installing and the scan answered.
 //
-// The full scan is still the first stage below [IVFMinCorpus], on a partition
+// The full scan is still the first stage below [IVFMinCorpus], on a corpus
 // whose training found no probe count worth installing, and during the minute
-// a model change leaves a partition with no index in the new space.
+// a model change leaves the corpus with no index in the new space.
 //
 // THE ONE-READER NUMBER IS NOT THE BUDGET. Eight concurrent readers on four
 // cores cost 2.5x (the scan) and 3x (the index) that p95 — see
@@ -181,7 +181,7 @@ type SemanticQuery struct {
 	// the index has.
 	Probes int
 
-	// FullScan reads every row of the space whatever index the partition
+	// FullScan reads every row of the space whatever index the corpus
 	// has: the exact first stage the index approximates, which is what an
 	// evaluation compares it against. False is the ordinary search.
 	FullScan bool
@@ -215,13 +215,13 @@ type SemanticHit struct {
 //	the full scan             2.90 µs a source   7.34 µs a source
 //	the index, half its lists 1.84 µs            5.48 µs
 //
-// So a partition answered by the scan holds ≈ 345 000 embeddable sources
+// So a corpus answered by the scan holds ≈ 345 000 embeddable sources
 // inside the budget while its node is idle and ≈ 136 000 while eight searches
 // compete for its cores, and one whose index probes half its lists — the most
 // any installed index may ([IVFProbeCeiling]) — ≈ 545 000 and ≈ 183 000. Half
 // is the FLOOR of what an index buys rather than its typical figure: a
-// partition whose training chose an eighth reads a quarter as many rows as
-// one at half, and the probe share a partition's training chose is on the
+// corpus whose training chose an eighth reads a quarter as many rows as one
+// at half, and the probe share the corpus's training chose is on the
 // `search_index_trained` log line and in `crewlet search eval`.
 //
 // It is a CEILING on the statement rather than a promise about it — the point
@@ -236,7 +236,7 @@ const (
 	// Stage1Scan read every row of the embedding space.
 	Stage1Scan Stage1Method = "scan"
 
-	// Stage1IVF read the lists of the partition's index nearest the query,
+	// Stage1IVF read the lists of the corpus's index nearest the query,
 	// plus in full any row a rollout had not yet re-filed.
 	Stage1IVF Stage1Method = "ivf"
 )
@@ -251,10 +251,10 @@ func (m Stage1Method) Valid() bool { return slices.Contains(Stage1Methods, m) }
 type ScanReason string
 
 const (
-	// ScanUnindexed is a partition that has never had an index.
+	// ScanUnindexed is a corpus that has never had an index.
 	ScanUnindexed ScanReason = "unindexed"
 
-	// ScanRetired is a partition whose last training IN THE QUERY'S SPACE
+	// ScanRetired is a corpus whose last training IN THE QUERY'S SPACE
 	// concluded it should have none ([IndexVerdict] says why).
 	ScanRetired ScanReason = "retired"
 
@@ -286,7 +286,7 @@ type Stage1Report struct {
 	Method Stage1Method
 
 	// Lists is the index's list count and Probed how many of them were
-	// read; both zero on a scan. Probed/Lists is the share of the partition
+	// read; both zero on a scan. Probed/Lists is the share of the corpus
 	// the probe read, which is what a search's cost is proportional to.
 	Lists, Probed int
 
@@ -313,10 +313,11 @@ type Candidate struct {
 // with what the first stage read.
 //
 // IT RAISES rather than answering empty, and the seam above it is what turns a
-// failure into the empty block a turn tolerates: this is the storage layer,
-// where "the store would not answer" and "nothing matched" are different
-// facts, and collapsing them here would make a broken index look exactly like
-// a company that has written nothing down.
+// failure into the answer a turn tolerates — no hits and no mode served, which
+// a turn renders as "could not be searched": this is the storage layer, where
+// "the store would not answer" and "nothing matched" are different facts, and
+// collapsing them here would make a broken index look exactly like a company
+// that has written nothing down.
 func Semantic(ctx context.Context, tx *sql.Tx, q SemanticQuery) ([]SemanticHit, Stage1Report, error) {
 	statement, args, report, err := semanticStatement(ctx, tx, q)
 	if err != nil {
@@ -344,13 +345,13 @@ func Semantic(ctx context.Context, tx *sql.Tx, q SemanticQuery) ([]SemanticHit, 
 	return out, report, nil
 }
 
-// Stage1 answers the first-stage candidates for one query inside one
-// partition's file: the index's probe when the partition has a current index
-// in the query's embedding space, and the full scan below [IVFMinCorpus], on
-// a partition with no index, or when the caller asks for it.
+// Stage1 answers the first-stage candidates for one query inside the estate's
+// file: the index's probe when the corpus has a current index in the query's
+// embedding space, and the full scan below [IVFMinCorpus], on a corpus with no
+// index, or when the caller asks for it.
 //
 // THE SAME STATEMENT [Semantic] runs its rerank over, built by the same plan,
-// so the candidates a partition reports and the ones its own search reranks
+// so the candidates a first stage reports and the ones its own search reranks
 // cannot differ.
 func Stage1(ctx context.Context, tx *sql.Tx, q SemanticQuery) ([]Candidate, Stage1Report, error) {
 	q, err := q.normalised()
@@ -525,7 +526,7 @@ func planStage1(ctx context.Context, tx *sql.Tx, q SemanticQuery) (stage1Plan, e
 		return scan(ScanUnindexed), nil
 	case !head.InSpace(q.Model, q.Dim):
 		// THE SPACE FIRST: a verdict about another space says nothing about
-		// this one, and reporting it as this partition's would send an
+		// this one, and reporting it as this corpus's would send an
 		// operator after a training of a model they have left.
 		return scan(ScanOtherSpace), nil
 	case head.Lists == 0:

@@ -467,28 +467,26 @@ type Searcher interface {
 
     // Search returns up to Query.Limit ranked hits, and what the search
     // did: the mode it served, the modes this backend can serve, what part
-    // of the fleet it covered, whether the estate answered,
-    // and why it served less than was asked. It never reports an error:
-    // every failure path is an answer with no hits.
+    // of the fleet it covered, and why it served less than was asked. It
+    // never reports an error: every failure path is an answer with no hits.
     Search(ctx context.Context, q Query) Result
 }
 ```
 
-**A search says what it did not reach.** The native knowledge base is searched
-on a node that holds the estate — this one when it has the `data` role, a data
-node otherwise — and an estate that did not answer is named on the outcome's
-`Partitions`, never left as a shorter list: "nothing matched" and "part of the
-knowledge base was not searched" send a seat to different places. The
-turn-start block and `search_knowledge` say so in words — the
-estate's partition did not answer and the list may be incomplete. Confluence has one corpus, somebody
-else's, and states no coverage.
+**A search that did not run says so.** The native knowledge base is searched on
+a data node — this one when it has the `data` role, another data node
+otherwise — and a search no data node could run is answered with no hits, **no
+mode served** and none of the corpus covered, never as a plain empty list:
+"nothing matched" and "the knowledge base could not be searched" send a seat to
+different places. The turn-start block and `search_knowledge` say the second in
+words.
 
 Contract semantics every backend honors:
 
 - **Scope lives behind the seam.** `Search` derives its container scope from the organization ([`knowledge.scope`](#accessible-containers)); callers pass a role, a plain-text query, and ancestor-title exclusions — never CQL fragments, space keys, or project lists. Because the organization is a per-call parameter, live config edits to `knowledge.scope` flow through with no engine refresh hook.
 - **Unscoped-vs-nothing is enforced inside `Search`**: empty scope + a self-authenticating role ⇒ unscoped search (the backend's own ACLs bound the hits); empty scope + a credential-less role ⇒ no results.
 - **`CanSearch` is a cheap, no-I/O pre-gate** — "could a search possibly hit anything?" Its only job is letting the [relevant-knowledge prefetch](#relevant-knowledge-prefetch) skip the aux-LLM query-generation call when the search is a guaranteed no-op.
-- **Best-effort, never silent**: `Search` never reports an error; every failure path returns no hits and the prompt block renders empty. What it does not do is fail quietly: the `Result` carries an `Outcome` — `ServedMode`, `Modes`, `Coverage{nodes, complete, buckets_missing}`, `Partitions` (whether a native search reached the estate, and if not, why) and a `Degraded` reason — so a caller can tell "nothing matched" from "part of the corpus was not scanned" and from "this could not rank the way it was asked". `search_knowledge` says the second to the seat in words, and says "the knowledge base could not be searched just now" for a search that never ran rather than "no team documents match".
+- **Best-effort, never silent**: `Search` never reports an error; every failure path returns no hits, and a search that did not run serves no mode — so the turn-start block (`UnsearchedKnowledgeHint`) and `search_knowledge` both say the knowledge base "could not be searched" rather than rendering an empty block or "nothing surfaced". What it does not do is fail quietly: the `Result` carries an `Outcome` — `ServedMode`, `Modes`, `Coverage{nodes, complete, buckets_missing}` and a `Degraded` reason — so a caller can tell "nothing matched" from "part of the corpus was not scanned" and from "this could not rank the way it was asked". `search_knowledge` says the second to the seat in words, and says "the knowledge base could not be searched just now" for a search that never ran rather than "no team documents match".
 - **`Query.Mode`** is `hybrid` (the zero value), `keyword` or `semantic` — see [modes](#three-modes-and-the-querys-own-vector). A backend that cannot rank that way says so in the outcome; Confluence answers `modes: [keyword]`.
 - **`Query.ExcludeAncestors`** drops hits whose ancestor/parent chain matches any listed title. Left nil it takes the default, `"Auto-Drafted Skills"` (`knowledge.AutoDraftedParent`), so unreviewed [promotion drafts](agent-learning.md) never surface before a lead publishes them; an empty, non-nil list disables the exclusion. Every draft title also carries the `[Auto-draft] ` prefix (`knowledge.AutoDraftTitlePrefix`) as a fail-closed backstop for a backend whose parent lookup fails.
 

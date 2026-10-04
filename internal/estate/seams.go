@@ -8,13 +8,13 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// The asking half: the seams every node's tools are handed, each answered by
-// whichever node serves the partition the call addresses — this one where it
-// does.
+// The asking half: the seams every node's tools are handed, each answered by a
+// data node whose copy of the estate serves — this one where it does.
 //
 // Each method has the signature of the in-process one it stands in for, so
 // the tool layer is handed these on every node and cannot tell which node
@@ -103,18 +103,15 @@ func (w Work) Project(ctx context.Context, q tracker.ProjectDetailQuery) (tracke
 	return call(ctx, w.r, opProject, nil, q)
 }
 
-// Search is the tracker's ranked search: every partition holding the corpus
-// of work items asked, the candidates fused, and the partitions that did not
-// answer named on the answer.
+// Search is the tracker's ranked search, answered by a data node's index. A
+// search no node could run is its error, never an empty answer: "nothing
+// matched" would send the seat off to file what it was looking for.
 func (w Work) Search(ctx context.Context, q tracker.SearchQuery) (tracker.SearchAnswer, error) {
 	if !q.Mode.Valid() {
 		return tracker.SearchAnswer{}, fmt.Errorf("tracker: unknown search mode %q — "+
 			"the modes are hybrid, keyword and semantic", q.Mode)
 	}
-	answer, cov, err := gather(ctx, w.r, opWorkSearch, "",
-		workSearchArgs{Text: q.Text, Limit: q.Limit, Mode: q.Mode})
-	answer.Partitions = cov
-	return answer, err
+	return call(ctx, w.r, opWorkSearch, nil, workSearchArgs{Text: q.Text, Limit: q.Limit, Mode: q.Mode})
 }
 
 // Workload answers a unit's workload, its days cut on loc.
@@ -482,8 +479,7 @@ func (p Pages) EditComment(ctx context.Context, actor pages.Actor, pageID, comme
 	return out.Comment, out.Written, err
 }
 
-// Knowledge is the native knowledge search, answered by a node that holds the
-// index.
+// Knowledge is the native knowledge search, answered by a data node's index.
 type Knowledge struct{ r *Router }
 
 // Knowledge answers the knowledge search.
@@ -504,10 +500,12 @@ func (Knowledge) CanSearch(*org.Role, *org.Organization) bool { return true }
 // answers no hits, because a turn must not die because the node holding the
 // index — this one or another — was slow.
 //
-// AND IT SAYS WHAT IT DID NOT REACH, failure included: every partition holding
-// the knowledge base's corpus is asked, and one that did not answer is named on
-// the answer's coverage, so "nothing matched" is never what a seat is told
-// about a part of the knowledge base nobody searched.
+// AND IT SAYS IT DID NOT RUN, which is not "nothing matched": a search no data
+// node could answer serves NO mode and covers NONE of the corpus's buckets, so
+// every reader of the outcome — the search tool, the turn-start block, a screen
+// — tells the seat the knowledge base could not be searched rather than that
+// the company has written nothing down, which it would act on by writing a
+// duplicate of a page that exists.
 func (k Knowledge) Search(ctx context.Context, q knowledge.Query) knowledge.Result {
 	args := knowledgeArgs{Text: q.Text, Limit: q.Limit, Mode: q.Mode, Scoped: q.Org != nil}
 	if q.Seat != nil {
@@ -516,24 +514,31 @@ func (k Knowledge) Search(ctx context.Context, q knowledge.Query) knowledge.Resu
 	if q.ExcludeAncestors != nil {
 		args.Exclusion, args.ExcludeAncestors = true, q.ExcludeAncestors
 	}
-	result, cov, err := gather(ctx, k.r, opKnowledgeSearch, "", args)
+	result, err := call(ctx, k.r, opKnowledgeSearch, nil, args)
 	if err != nil {
 		log.WarnContext(ctx, "knowledge_search_failed", "error", err.Error(),
-			"detail", "the knowledge block degrades to empty and names what it did not "+
-				"reach; a turn must not die because the node holding the index was slow")
-		return knowledge.Result{Outcome: knowledge.Outcome{
-			Coverage:   knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}},
-			Partitions: cov,
-		}}
+			"detail", "the knowledge block says the search did not run; a turn must "+
+				"not die because the node holding the index was slow")
+		return notSearched()
 	}
-	result.Partitions = cov
 	return result
 }
 
-// Building reports whether the index of any partition a search reads is still
-// building, which is what turns an empty block into "still indexing" rather
-// than "the company has written nothing down". False when nothing answers.
+// notSearched is the answer to a knowledge search no data node ran: no hits,
+// no mode served, and every bucket of the corpus missing — the outcome every
+// reader already renders as "could not be searched".
+func notSearched() knowledge.Result {
+	return knowledge.Result{Outcome: knowledge.Outcome{
+		Coverage: knowledge.Coverage{
+			Nodes: []knowledge.NodeCoverage{}, BucketsMissing: search.SearchShards,
+		},
+	}}
+}
+
+// Building reports whether the index a search reads is still building, which
+// is what turns an empty block into "still indexing" rather than "the company
+// has written nothing down". False when nothing answers.
 func (k Knowledge) Building(ctx context.Context) bool {
-	building, _, err := gather(ctx, k.r, opKnowledgeBuilding, "", struct{}{})
+	building, err := call(ctx, k.r, opKnowledgeBuilding, nil, struct{}{})
 	return err == nil && building
 }

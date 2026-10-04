@@ -255,15 +255,14 @@ ranges can go missing.
 ### When the estate does not answer
 
 The bucket division above is how the corpus is scanned. On a node without the
-`data` role the search itself is asked of a data node — the estate is one
-partition, `estate.000`, held whole by every data node — and an answer that
-could not be had from any of them is **named** on the result rather than
-returned as an empty list: nobody serves it, its holder did not answer, was
-behind, or failed. A seat is told the knowledge base did not answer and that
-the list may be incomplete, and an empty answer with the estate missing is
-never told "nothing matched". The bucket coverage above stays what it is,
-beside it: the two say different things — a range of the corpus unscanned,
-and the estate not reached at all.
+`data` role the search itself is asked of a data node — every data node holds
+the whole estate — and a search none of them could run is answered with **no
+mode served** and none of the corpus covered (`served_mode` empty,
+`coverage.complete` false), rather than as an empty list: a seat is told the
+knowledge base could not be searched, and never "nothing matched". A work-item
+search no data node could run is an error the caller is told, for the same
+reason. The bucket coverage above says something narrower: a search that ran,
+with a range of the corpus unscanned.
 
 ---
 

@@ -12,14 +12,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE EMBEDDING DUTY'S SECOND JOB: keeping the partition's semantic index
+// THE EMBEDDING DUTY'S SECOND JOB: keeping the corpus's semantic index
 // current — ADR-0028.
 //
 // # Why the duty and nobody else
 //
 // The duty is the vector log's one writer, a fleet singleton, and the index is
 // published on that log. Training where the vectors are published means one
-// training per partition, billed once — k-means over every code plus a recall
+// training per corpus, billed once — k-means over every code plus a recall
 // measurement that reads every exact vector — and a record every holder
 // applies, rather than N nodes training N slightly different indexes from N
 // slightly different moments of the log.
@@ -29,7 +29,7 @@ import (
 // THIS NODE HAS APPLIED THE LOG. Every decision below reads the duty's own
 // node's rows, and the duty moves between nodes on a lease: a node still
 // catching up would see the index the log has already replaced — or none — and
-// train over a healthy one, making every row of the partition stale on every
+// train over a healthy one, making every row of the corpus stale on every
 // holder to get back where it started. So the step runs only on a node whose
 // applier has reached the end the log had when the tick began
 // ([LogStanding.Current]), and it runs FIRST in the tick, before this tick's
@@ -52,7 +52,7 @@ import (
 //
 // # What a tick does, and why the steps are separate ticks
 //
-// Every tick reads the partition's own state — how many sources the configured
+// Every tick reads the corpus's own state — how many sources the configured
 // embedding space holds, what index is installed, how many rows are filed under
 // it and how big its fullest list is — and takes at most ONE step
 // ([DecideIndex]):
@@ -72,7 +72,7 @@ import (
 //     the same reading in the same tick.
 //
 // Training and its rollout are deliberately TWO ticks. Each is bounded by the
-// partition — the training by the k-means and the one exact pass, the rollout
+// corpus — the training by the k-means and the one exact pass, the rollout
 // by one Hamming search per row against every centroid on every holder — and a
 // tick is bounded by the duty's lease (the engine cuts it off when a renewal
 // does not confirm it, and a step cut off publishes nothing) and by a budget
@@ -109,12 +109,12 @@ import (
 // longer meet the floor and nothing else would notice until an operator's
 // scheduled `crewlet search eval` failed. A measurement is a training without
 // the k-means — every code read once, one exact pass and the probe choice, at
-// the largest partition two to five minutes of one core
+// the largest corpus an index serves, two to five minutes of one core
 // ([BenchmarkIndexTraining]: 212 µs a source to read idle and 394 µs beside
-// two searchers, and the probe choice) — so a
-// day bounds how long a drifted index can serve below the floor at one pass a
-// day per partition; the evaluation the operator guide asks for is monthly, so
-// the duty has re-measured thirty times before an operator would look.
+// two searchers, and the probe choice) — so a day bounds how long a drifted
+// index can serve below the floor at one pass a day; the evaluation the
+// operator guide asks for is monthly, so the duty has re-measured thirty times
+// before an operator would look.
 const IVFMeasureInterval = 24 * time.Hour
 
 // IndexRecordVersion is the record version every node applying the vector log
@@ -139,12 +139,12 @@ func IndexRecordVersion() int {
 	return version
 }
 
-// IndexAction is the one step a tick takes on the partition's index.
+// IndexAction is the one step a tick takes on the corpus's index.
 type IndexAction string
 
 const (
 	// IndexKeep changes nothing: the index is current, there is none and
-	// the partition is too small to want one, or the step may not act.
+	// the corpus is too small to want one, or the step may not act.
 	IndexKeep IndexAction = "keep"
 
 	// IndexTrain trains a new index (or publishes the verdict that there
@@ -213,7 +213,7 @@ func (s IndexState) Stale() int { return s.Sources - s.Filed }
 // IN THIS ORDER, and each case is why the next one can assume what it does: a
 // node behind the log, or a fleet with a node that cannot read the index's
 // records, takes no step at all; an index in another embedding space is no
-// index; a verdict that the partition was too small is revisited the moment it
+// index; a verdict that the corpus was too small is revisited the moment it
 // is not; a corpus that moved by [IVFRetrainFactor] is re-derived whatever else
 // is true, because the probe count was measured at another size; a live index
 // with unfiled rows finishes its rollout before anything judges its lists; only
@@ -227,7 +227,7 @@ func DecideIndex(s IndexState, model string, dim int) IndexAction {
 }
 
 // decideIndex is [DecideIndex] with the log's standing set aside: the step
-// the partition wants, which a tick that may not act still reports.
+// the corpus wants, which a tick that may not act still reports.
 func decideIndex(s IndexState, model string, dim int) IndexAction {
 	inSpace := s.Indexed && s.Head.InSpace(model, dim)
 	live := inSpace && s.Head.Lists > 0
@@ -261,11 +261,11 @@ func decideIndex(s IndexState, model string, dim int) IndexAction {
 // cures it when the lopsidedness is NEW. A corpus with many identical codes
 // (blank tasks, a template copied a thousand times) files them all in one list
 // whatever the seed, because identical codes are nearest to the same centroid:
-// 2 000 copies of one code in a 22 000-source partition left a largest list of
+// 2 000 copies of one code in a 22 000-source corpus left a largest list of
 // about 2 020 against a mean of 85 after every training. Judged against the
 // mean alone, every tick after the rollout decided to train again — a full
 // k-means and exact pass, a new generation making every row stale on every
-// holder, and a rollout re-filing the partition, every two minutes for ever.
+// holder, and a rollout re-filing the corpus, every two minutes for ever.
 // Judged against what the training achieved, that index comes to rest, and one
 // whose corpus has drifted since — the fullest list doubling its share — is
 // still retrained, which is the case the rule exists for.
@@ -290,7 +290,7 @@ func heldBy(readers map[string]int) []string {
 	return out
 }
 
-// maintainIndex takes this tick's step on the partition's index, and reports
+// maintainIndex takes this tick's step on the corpus's index, and reports
 // how many records it published.
 func (e *Embedder) maintainIndex(ctx context.Context, dim int) (int, error) {
 	standing, err := e.deps.Standing(ctx)
@@ -381,7 +381,7 @@ type trainingSet struct {
 	filed []filing
 }
 
-// train trains the partition's index from its own rows and publishes it — or
+// train trains the corpus's index from its own rows and publishes it — or
 // publishes the verdict that it should have none.
 func (e *Embedder) train(ctx context.Context, dim int, state IndexState) (int, error) {
 	var basis int64
@@ -579,8 +579,8 @@ func (e *Embedder) arithmetic(steps func() error) error {
 // readTrainingSet reads the space's codes in key order, what each row's
 // shapes filter on, and the held-out trials a training measures recall on —
 // telling advanced every [progressStride] rows it reads, here and in the exact
-// pass, since at the largest partition on one busy core the two take longer
-// than a wedged step is given ([Budget]).
+// pass, since at the largest corpus an index serves, on one busy core, the two
+// take longer than a wedged step is given ([Budget]).
 //
 // KEY ORDER — source, then source id — because it is the tie break the SQL
 // probe declares, and [IVFCandidates] breaks ties on the row number: loaded in
@@ -595,7 +595,7 @@ func readTrainingSet(ctx context.Context, tx *sql.Tx, model string, dim int, adv
 	containers := map[string]int32{}
 	rows, err := tx.QueryContext(ctx, trainingCodesStatement, model, dim)
 	if err != nil {
-		return trainingSet{}, fmt.Errorf("search: read the partition's codes: %w", err)
+		return trainingSet{}, fmt.Errorf("search: read the corpus's codes: %w", err)
 	}
 	for rows.Next() {
 		var source, id, container string
@@ -826,7 +826,7 @@ func batchOf(ranges []RolloutRange, source Source, id string) (int, bool) {
 // THE WHOLE KEY SPACE, not only the ids read: each source's ids are cut every
 // [IVFReassignBatch], its first range starts at the source's beginning and its
 // last runs to its end — and every source this build embeds gets at least one
-// open range, whether or not the partition holds a row of it — so a row
+// open range, whether or not the corpus holds a row of it — so a row
 // written anywhere in the key space falls in exactly one batch.
 func RolloutRanges(ids map[Source][]string) []RolloutRange {
 	var out []RolloutRange

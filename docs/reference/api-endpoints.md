@@ -2131,27 +2131,15 @@ rows that should have gone may still be present, and the totals were computed
 over the incomplete set. That is a different fact from staleness, and a client
 that renders `read_level` and swallows `complete` looks confidently right.
 
-**A list from the estate also says whether the estate answered.**
-`work_items`, `work_my_work`, `work_inbox`, `work_projects`, `work_activity`,
-`work_search`, `pages` and `knowledge` (their REST twins included) carry
-`coverage`, one object of the same shape on every one of them. The estate is
-one partition, `estate.000`, held whole by every data node, so a read
-addresses exactly that one:
-
-| Field | What it holds |
-|---|---|
-| `addressed` | How many partitions the read addressed — always `1`, `answered` and `missing` together |
-| `answered` | The partition that answered, by id (`estate.000`); absent when it did not |
-| `missing` | The partition, when it did not answer, as `{partition, reason, detail}`: `reason` is `unserved` (no data node serves it), `unreachable` (data nodes are named and none answered), `behind` (a data node could not reach the caller's own writes in time), `not_holder` (every data node asked had stopped serving it) or `error` (the read ran there and failed), and `detail` is who was asked and what each said. A reason this build does not know is still a missing partition. Absent when nothing is missing |
-| `at` | Where each log was when the read began, by stream, as position objects — a lower bound on what the answer holds. Absent for a search, which reads an index each node builds behind its own rows |
-
-A read nothing answered is an error rather than a list — except `knowledge`,
-which is best effort and answers no hits with the partition named missing,
-rendered as *1 of 1 partitions did not answer; this list may be incomplete* —
-never as an empty list, which would say the company has nothing in it.
-`coverage` is **absent** where the reader states none — the Jira and Confluence
-backends, and a reader handed rows directly — rather than a coverage claiming
-the read addressed nothing.
+**A read no data node could answer is `unavailable`, never a list.** The
+tracker and the knowledge base are answered by a data node's copy of the estate
+— this node's own where it holds one, another data node's otherwise — and a
+read nobody answered is refused `unavailable` (REST: `503` with a
+`Retry-After`) rather than answered as an empty list, which would say the
+company has nothing in it. `knowledge` is the one exception, because a search is
+best effort: a search no data node ran answers no hits with `served_mode`
+empty and `coverage.complete` false, which a screen renders as "could not be
+searched" rather than "nothing matched".
 
 ### Whose record a personal question answers for
 

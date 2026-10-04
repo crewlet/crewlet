@@ -1,13 +1,16 @@
 package estate
 
 import (
+	"context"
 	"encoding"
 	"encoding/json"
 	"maps"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -113,16 +116,11 @@ func uncarried(t *testing.T) map[string]string {
 	for _, spec := range registry {
 		walk(spec.args)
 		walk(spec.result)
-		if spec.part != nil {
-			walk(spec.part)
-		}
 	}
-	// AND THE ENVELOPE EVERY ONE OF THEM TRAVELS IN — a gather's per-
-	// partition reply included — since a field of the request or the reply
-	// that does not cross loses every operation's answer at once.
-	for _, envelope := range []reflect.Type{
-		reflect.TypeFor[request](), reflect.TypeFor[reply](), reflect.TypeFor[partReply](),
-	} {
+	// AND THE ENVELOPE EVERY ONE OF THEM TRAVELS IN, since a field of the
+	// request or the reply that does not cross loses every operation's
+	// answer at once.
+	for _, envelope := range []reflect.Type{reflect.TypeFor[request](), reflect.TypeFor[reply]()} {
 		walk(envelope)
 	}
 	return found
@@ -154,10 +152,7 @@ func TestEveryOperationsTypesDecode(t *testing.T) {
 	t.Parallel()
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
-		for _, ty := range []reflect.Type{spec.args, spec.result, spec.part} {
-			if ty == nil {
-				continue
-			}
+		for _, ty := range []reflect.Type{spec.args, spec.result} {
 			raw, err := json.Marshal(reflect.New(ty).Elem().Interface())
 			if err != nil {
 				t.Errorf("%s: encode a zero %s: %v", name, ty, err)
@@ -173,55 +168,186 @@ func TestEveryOperationsTypesDecode(t *testing.T) {
 	}
 }
 
-// AN OLDER ASKER'S REQUEST IS RESOLVED, NEVER REFUSED AS MALFORMED.
+// floorless is every operation that carries no floor, and why: what it reads
+// is not a log's rows at a position, so no floor could hold its answer to
+// anything.
 //
-// A rolling upgrade puts a build from before partitions in front of this one,
-// on the one layout the two can share — layout 0; the protocol version fences
-// a divided one — and such a build names no partition and sends its own
-// arguments, which lack every field this build added. The server resolves that
-// request by the operation's arguments under its own layout, so each operation
-// must resolve arguments that carry NOTHING, the least an older build's can
-// carry, to the one partition: an operation whose partition function requires
-// a field of its own refuses every older asker, and an older asker takes the
-// refusal as final. Admission's ping did exactly that, and withheld every seat
-// claim on every stateless node not yet upgraded.
-func TestEveryOperationResolvesAnOlderAskersRequest(t *testing.T) {
+// TWO-SIDED, like [carriedByServer]: an operation that declares no floor and
+// is not listed fails — one that forgot its domain would read from before the
+// asker's own writes with nothing to show for it — and a listed one that now
+// declares a floor fails too.
+var floorless = map[string]string{
+	"tracker.search": "reads the lexical and semantic indexes, which each node " +
+		"maintains behind its applier on its own schedule",
+	"knowledge.search": "reads the indexes, as tracker.search does",
+	"knowledge.building": "asks whether the lexical index has caught up, which no " +
+		"log position describes",
+	"estate.ping": "asks whether the copy admits a seat, its own stricter gate, " +
+		"not whether it has reached the asker's writes",
+}
+
+// EVERY OPERATION SAYS WHICH LOG ITS FLOORS ARE ON: an operation that carries a
+// floor names its domain, the domain is one whose log a floor can be on, and
+// the stream it waits on is that domain's own log — the tracker's
+// CREWLET_TRACKER_LOG or the knowledge base's CREWLET_PAGES_LOG, named as they
+// have always been. One that named none would carry no floor at all, and one
+// that named another domain's would wait on an applier it does not depend on
+// ([ready]).
+func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 	t.Parallel()
+	logs := map[string]string{
+		trackerDomain: "CREWLET_TRACKER_LOG",
+		pagesDomain:   "CREWLET_PAGES_LOG",
+	}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
-		if spec.partitions == nil {
-			continue
+		_, listed := floorless[name]
+		switch {
+		case spec.domain == "" && !listed:
+			t.Errorf("%s carries no floor: declare the domain whose log it reads, or "+
+				"name why no floor holds it in floorless", name)
+		case spec.domain != "" && listed:
+			t.Errorf("floorless lists %s, which carries a floor on the %s log", name, spec.domain)
+		case spec.domain == "":
+			if spec.floorStream != "" {
+				t.Errorf("%s carries no floor and still names the stream %q", name, spec.floorStream)
+			}
+		case logs[spec.domain] == "":
+			t.Errorf("%s carries a floor on the %q domain's log, want one of %v",
+				name, spec.domain, slices.Sorted(maps.Keys(logs)))
+		case spec.floorStream != logs[spec.domain]:
+			t.Errorf("%s waits on %q, want its own domain's log %q",
+				name, spec.floorStream, logs[spec.domain])
 		}
-		parts, err := spec.partitions(t.Context(), layoutZero, layoutResolver{layout: layoutZero},
-			json.RawMessage(`{}`))
-		if err != nil || !slices.Equal(parts, []statelog.PartitionID{statelog.EstatePartition}) {
-			t.Errorf("%s: a request with none of this build's fields resolves to (%v, %v), "+
-				"want %s", name, parts, err, statelog.EstatePartition)
+	}
+	for _, name := range slices.Sorted(maps.Keys(floorless)) {
+		if _, known := registry[name]; !known {
+			t.Errorf("floorless lists %s, which is no operation", name)
 		}
 	}
 }
 
-// EVERY OPERATION SAYS WHICH LOG ITS FLOORS ARE ON: an operation that
-// addresses a partition and carries a floor names its domain, and the domain
-// is one a partition's logs belong to. One that named none would carry no
-// floor at all — reading from before the asker's own writes with nothing to
-// show for it — and one that named another domain's would wait on an applier
-// it does not depend on ([address]).
-func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
+// THE ENVELOPE IS PINNED, BYTE FOR BYTE: one read request, a reply that answers
+// it, admission's ping and a copy out of service. A field added to the
+// envelope, renamed or made to send its zero value changes what every node of
+// a fleet mid-upgrade reads of every other, and this is where that shows —
+// rather than in a router that silently reads a field its peer stopped
+// sending.
+func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 	t.Parallel()
-	domains := []string{trackerDomain, pagesDomain, vectorsDomain}
-	for _, name := range slices.Sorted(maps.Keys(registry)) {
-		spec := registry[name]
-		if spec.partitions == nil || spec.floorless {
-			continue
+	at := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	for name, tc := range map[string]struct {
+		value any
+		want  string
+	}{
+		"a read request": {
+			value: request{Op: opTasks.spec.name, Args: json.RawMessage(`{"Query":{}}`),
+				Floors:   []statelog.Position{{Stream: trackerStream, Generation: 1, Seq: 7}},
+				Deadline: at, From: "agent-1"},
+			want: `{"op":"tracker.tasks","args":{"Query":{}},` +
+				`"floors":[{"stream":"CREWLET_TRACKER_LOG","generation":1,"seq":7}],` +
+				`"deadline":"2026-10-04T12:00:00Z","from":"agent-1"}`,
+		},
+		"a write's last resort": {
+			value: request{Op: opCreateTask.spec.name, Actor: &swe, AcceptLagging: true},
+			want: `{"op":"tracker.create_task","actor":{"handle":"swe","kind":"agent",` +
+				`"provenance":{"OperatorID":"","Seat":"","TurnID":"","Chain":null,` +
+				`"Origin":null}},"accept_lagging":true}`,
+		},
+		"admission's ping": {
+			value: request{Op: opPing.spec.name, Args: json.RawMessage(`{}`), From: "agent-1"},
+			want:  `{"op":"estate.ping","args":{},"from":"agent-1"}`,
+		},
+		"an answer": {
+			value: reply{Node: "data-a", Result: json.RawMessage(`{"TotalHint":7}`)},
+			want:  `{"node":"data-a","result":{"TotalHint":7}}`,
+		},
+		"a copy out of service": {
+			value: reply{Node: "data-a", Unserved: unservedOutOfService, Detail: "wrong"},
+			want:  `{"node":"data-a","unserved":"out_of_service","detail":"wrong"}`,
+		},
+	} {
+		raw, err := json.Marshal(tc.value)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
 		}
-		if !slices.Contains(domains, spec.domain) {
-			t.Errorf("%s carries a floor and names the domain %q, want one of %v",
-				name, spec.domain, domains)
-			continue
-		}
-		if streams := spec.floorStreams(layoutZero, statelog.EstatePartition); len(streams) != 1 {
-			t.Errorf("%s's floors at layout 0 are on %v, want its own domain's one log", name, streams)
+		if string(raw) != tc.want {
+			t.Errorf("%s encodes as\n%s\nwant\n%s", name, raw, tc.want)
 		}
 	}
+}
+
+// WHAT THE ROUTER ACTUALLY SENDS FOR ADMISSION'S PING is the golden above, read
+// off the wire rather than built by hand: the envelope test pins a request a
+// test spelled, and only this one fails when [Router.Serves] starts sending
+// arguments a data node of the previous build would read differently — a
+// partition, a layout, anything at all beyond the empty object.
+func TestAdmissionsPingIsTheOneTheEnvelopePins(t *testing.T) {
+	t.Parallel()
+	asker := &recordingAsker{answer: []byte(`{"node":"data-a","result":{"Tracker":true,"Pages":true}}`)}
+	r, err := NewRouter(RouterOptions{
+		Self: "agent-1", Queue: asker, Placement: &fakePlacement{nodes: []string{"data-a"}},
+		Session: NewSession(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker, pages, err := r.Serves(t.Context())
+	if err != nil || !tracker || !pages {
+		t.Fatalf("Serves = (%v, %v, %v), want both halves served", tracker, pages, err)
+	}
+	sent := asker.requests()
+	if len(sent) != 1 {
+		t.Fatalf("admission sent %d requests, want exactly one", len(sent))
+	}
+	if sent[0].subject != Subject("data-a") {
+		t.Errorf("admission asked %q, want the data node's own subject %q",
+			sent[0].subject, Subject("data-a"))
+	}
+	var req request
+	if err := json.Unmarshal(sent[0].payload, &req); err != nil {
+		t.Fatalf("the ping does not decode as a request: %v\n%s", err, sent[0].payload)
+	}
+	// THE DEADLINE IS THE ATTEMPT'S, which moves with the clock: everything
+	// else is compared byte for byte against the golden.
+	if req.Deadline.IsZero() {
+		t.Error("the ping carries no deadline, so a data node keeps working on an " +
+			"answer nobody is waiting for")
+	}
+	req.Deadline = time.Time{}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"op":"estate.ping","args":{},"from":"agent-1"}`; string(raw) != want {
+		t.Errorf("the router's ping encodes as\n%s\nwant the envelope's\n%s", raw, want)
+	}
+}
+
+// recordingAsker answers every request with one reply and keeps what it was
+// sent, and where.
+type recordingAsker struct {
+	answer []byte
+
+	mu   sync.Mutex
+	sent []sentRequest
+}
+
+// sentRequest is one request a [recordingAsker] was handed.
+type sentRequest struct {
+	subject string
+	payload []byte
+}
+
+func (a *recordingAsker) Ask(_ context.Context, subject string, payload []byte, _ int) ([][]byte, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.sent = append(a.sent, sentRequest{subject: subject, payload: slices.Clone(payload)})
+	return [][]byte{a.answer}, nil
+}
+
+func (a *recordingAsker) requests() []sentRequest {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.sent)
 }

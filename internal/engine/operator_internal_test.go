@@ -14,23 +14,20 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// peerCopy is a peer data node's copy of estate.000, answering what an
+// peerCopy is a peer data node's copy of the estate, answering what an
 // operator's surfaces ask with values that say it answered.
 type peerCopy struct {
-	cpus   estate.CPUs
 	mu     sync.Mutex
 	purged []estate.Actor
 }
 
-func (p *peerCopy) CPUs() *estate.CPUs { return &p.cpus }
-
-func (p *peerCopy) For(context.Context, statelog.PartitionID) (estate.Backend, bool, error) {
+func (p *peerCopy) For(context.Context) (estate.Backend, bool) {
 	return estate.Backend{
 		Tracker: peerBoard{}, Pages: peerPages{},
 		Writer: func(a estate.Actor) estate.TrackerWriter {
 			return &peerWriter{peer: p, actor: a}
 		},
-	}, true, nil
+	}, true
 }
 
 // peerBoard is the peer's tracker reads.
@@ -65,15 +62,11 @@ func (w *peerWriter) PurgeTask(_ context.Context, opID, _, _, _ string) (tracker
 	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied, OpID: opID}}, nil
 }
 
-// twoDataNodes names this node and a peer as layout 0's holders.
+// twoDataNodes names this node and a peer as the data nodes.
 type twoDataNodes struct{}
 
-func (twoDataNodes) Layout() (statelog.Layout, error) { return LayoutZero(), nil }
-func (twoDataNodes) Serving(statelog.PartitionID) ([]string, uint64, error) {
-	return []string{"data-peer", "data-self"}, 0, nil
-}
-func (twoDataNodes) Refresh(context.Context) error { return nil }
-func (twoDataNodes) Unanswered(string)             {}
+func (twoDataNodes) Holders() ([]string, error) { return []string{"data-peer", "data-self"}, nil }
+func (twoDataNodes) Unanswered(string)          {}
 
 // THE OPERATOR'S SURFACES ARE ANSWERED THROUGH THE ROUTER, AS THE SEATS' TOOLS
 // ARE — the dashboard's and the REST routes' reads, the file routes, the purge
@@ -95,8 +88,7 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 		return q
 	}
 	peer := &peerCopy{}
-	stop, err := estate.Serve(t.Context(), start(), "data-peer", peer, twoDataNodes{},
-		estate.ServerSeams{})
+	stop, err := estate.Serve(t.Context(), start(), "data-peer", peer, estate.ServerSeams{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +98,7 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	e := &Engine{backends: &Backends{}, mode: statelog.ModeNormal}
 	e.native.Store(&native{trackerReader: &tracker.Reader{}, pageReader: &pages.Reader{},
 		writer: &tracker.Writer{}, pages: &pages.Store{}})
-	e.local = localWith(e, time.Now, func(context.Context, *native, statelog.PartitionID) copyVerdict {
+	e.local = localWith(e, time.Now, func(context.Context, *native) copyVerdict {
 		if faulted.Load() {
 			return copyVerdict{fault: "tracker", answers: true}
 		}
@@ -121,8 +113,8 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	}
 	e.router = router
 	faulted.Store(true)
-	if _, ok := judged(t.Context(), e.local, statelog.EstatePartition); ok {
-		t.Fatal("the premise: this node's wrong copy still serves its partition")
+	if _, ok := judged(t.Context(), e.local); ok {
+		t.Fatal("the premise: this node's wrong copy is still served")
 	}
 
 	work, ok := OperatorWork(e)

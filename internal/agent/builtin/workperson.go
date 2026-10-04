@@ -806,7 +806,7 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 	if err != nil {
 		return readFailure(tracker.WorkInboxTool, err), nil
 	}
-	return jsonResult(inboxView{InboxAnswer: answer, Unanswered: answer.Coverage.Notice()})
+	return jsonResult(answer)
 }
 
 // snoozeScopeNames is the three scopes, derived from the tracker's own list

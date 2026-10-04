@@ -41,7 +41,7 @@ import (
 //
 // # An index is measured TWICE: what searches run, and the scan it replaces
 //
-// When the partition has an index (ADR-0028), every query runs through it —
+// When the corpus has an index (ADR-0028), every query runs through it —
 // that is the recall the company actually gets, and the one [EvalReport.Passed]
 // judges — and again with the full scan as its first stage, so the report says
 // what the index COSTS in recall against the exact first stage it
@@ -119,10 +119,10 @@ type EvalReport struct {
 	Limit, Candidates int
 
 	// Stage1 is the first stage the unfiltered searches ran: the
-	// partition's index, or the full scan and why.
+	// corpus's index, or the full scan and why.
 	Stage1 Stage1Report
 
-	// Index is the partition's index as its head records it, nil when it
+	// Index is the corpus's index as its head records it, nil when it
 	// has never had one.
 	Index *IndexSummary
 
@@ -187,13 +187,13 @@ type ShapeReport struct {
 // Passed reports whether the shape met its floor with no head miss.
 func (s ShapeReport) Passed() bool { return s.Recall >= s.Floor && s.HeadMisses == 0 }
 
-// IndexSummary is the partition's index as an evaluation reports it.
+// IndexSummary is the corpus's index as an evaluation reports it.
 type IndexSummary struct {
 	// Generation is the packed position of the record that installed it.
 	Generation int64
 	Model      string
 	Dim        int
-	// Lists is zero for a verdict that the partition has none; Why says
+	// Lists is zero for a verdict that the corpus has none; Why says
 	// which verdict.
 	Lists, Probes int
 	TrainedOn     int

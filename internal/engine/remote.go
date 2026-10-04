@@ -166,8 +166,8 @@ func dataNodesOf(held []coord.Lease) []string {
 	return out
 }
 
-// serveEstate makes this data node answer the fleet for the partitions it
-// serves.
+// serveEstate makes this data node answer the fleet from its copy of the
+// estate.
 //
 // EVERY DATA NODE SERVES, whether or not another node asks yet — one joins
 // without anybody reconfiguring the others — and from BEFORE its native runtime
@@ -177,8 +177,7 @@ func (e *Engine) serveEstate(ctx context.Context) error {
 	if e.local == nil || e.router == nil || e.backends == nil || e.backends.Queue == nil {
 		return nil
 	}
-	stop, err := estate.Serve(ctx, e.backends.Queue, e.id, e.local, e.estatePlacement(),
-		e.serverSeams())
+	stop, err := estate.Serve(ctx, e.backends.Queue, e.id, e.local, e.serverSeams())
 	if err != nil {
 		return fmt.Errorf("engine: serve the estate: %w", err)
 	}

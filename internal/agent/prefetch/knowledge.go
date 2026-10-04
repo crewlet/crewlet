@@ -79,6 +79,19 @@ const BuildingKnowledgeHint = "(the knowledge base is not searchable from " +
 	"found by a search right now, so ask a colleague who would know rather " +
 	"than concluding nothing has been written down)"
 
+// UnsearchedKnowledgeHint is what the block says when the search did not run
+// at all — no copy of the knowledge base answered it, or its backend could not
+// be reached.
+//
+// A DIFFERENT SENTENCE from [EmptyKnowledgeHint], for [BuildingKnowledgeHint]'s
+// reason: "nothing surfaced" is a claim about what the company has written
+// down, and a search that never ran makes none. A seat told it concludes the
+// page does not exist and writes a duplicate of one that does — the same
+// answer the search_knowledge tool gives a search that served no mode.
+const UnsearchedKnowledgeHint = "(the knowledge base could not be searched at " +
+	"turn start, so this says nothing about whether a page exists — search it " +
+	"with a focused query once you know what the task needs)"
+
 // knowledgeQuerySystemPrompt turns a task into a search query.
 const knowledgeQuerySystemPrompt = `You turn an AI agent's current task into a search query for its team's knowledge base.
 
@@ -158,13 +171,12 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
 	hits := answer.Hits
-	// PART OF THE KNOWLEDGE BASE THAT DID NOT ANSWER IS SAID, never shown
-	// as a shorter list: the block would read as everything the company
-	// has written about the task.
-	missing := answer.Partitions.Notice()
 	if len(hits) == 0 {
-		if missing != "" {
-			return knowledgeBlock{text: missingKnowledgeHint(missing)}
+		// NOTHING RAN, which is not "nothing matched": a search that
+		// served no mode searched nothing, so the block says so rather
+		// than telling the seat the company has written nothing down.
+		if answer.ServedMode == "" {
+			return knowledgeBlock{text: UnsearchedKnowledgeHint}
 		}
 		return knowledgeBlock{text: EmptyKnowledgeHint}
 	}
@@ -173,29 +185,17 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 		bullets = append(bullets, renderHit(hit))
 	}
 	rendered := joinBullets(bullets)
-	switch {
-	case rendered == "" && missing != "":
-		return knowledgeBlock{text: missingKnowledgeHint(missing)}
-	case rendered == "":
+	if rendered == "" {
 		return knowledgeBlock{text: EmptyKnowledgeHint}
 	}
 	// THE POINTER IS THE POINT: these are titles and snippets, not the
 	// pages. A seat that acted on a snippet would be acting on the first
 	// two hundred characters of a runbook.
-	text := rendered + "\nTo read any of these in full, look it up by title " +
-		"with your knowledge-base tools."
-	if missing != "" {
-		text += "\n" + missingKnowledgeHint(missing)
+	return knowledgeBlock{
+		text: rendered + "\nTo read any of these in full, look it up by title " +
+			"with your knowledge-base tools.",
+		pages: hits, query: query,
 	}
-	return knowledgeBlock{text: text, pages: hits, query: query}
-}
-
-// missingKnowledgeHint is what the block says when part of the knowledge base
-// did not answer the search: the one sentence every surface renders that as,
-// and what to do about it — which is not "nothing is written down".
-func missingKnowledgeHint(notice string) string {
-	return "(" + notice + " — part of the knowledge base was not searched, so " +
-		"search again before concluding nothing has been written down)"
 }
 
 // knowledgeQuery asks the auxiliary model for a search query.

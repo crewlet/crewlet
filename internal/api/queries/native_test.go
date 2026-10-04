@@ -224,12 +224,11 @@ func (s *stubWork) Task(_ context.Context, _ string, want tracker.DetailWants,
 }
 
 type stubPages struct {
-	filter   pages.Filter
-	list     []pages.Summary
-	total    int
-	after    string
-	err      error
-	coverage statelog.Coverage
+	filter pages.Filter
+	list   []pages.Summary
+	total  int
+	after  string
+	err    error
 
 	// level is what the surface asked for, so a route that stopped naming
 	// one is visible: an unset level is what made every page read on this
@@ -260,7 +259,6 @@ func (s *stubPages) List(_ context.Context, f pages.Filter,
 	s.filter, s.level, s.fresh = f, fresh.Level, fresh
 	return pages.Listing{
 		Pages: s.list, Total: s.total, After: s.after, Level: fresh.Level, Complete: true,
-		Coverage: s.coverage,
 	}, s.err
 }
 
@@ -694,45 +692,6 @@ func TestTheBoardCarriesItsOwnTotalAndReadLevel(t *testing.T) {
 	}
 }
 
-// THE BOARD AND THE PAGES LISTING SAY WHAT THEY DID NOT REACH, as every
-// gathered answer does: a partition that did not answer rides beside the rows
-// as `coverage` rather than reading as a shorter list — and a reader stating
-// no coverage sends none, rather than one claiming nothing was addressed.
-func TestTheBoardAndThePagesListingCarryTheirCoverage(t *testing.T) {
-	missing := statelog.Coverage{
-		Addressed: 2, Answered: []string{"tracker.000"},
-		Missing: []statelog.MissingPartition{{Partition: "tracker.001", Reason: statelog.MissingBehind}},
-	}
-	for _, tc := range []struct {
-		route   string
-		sources func(statelog.Coverage) queries.Sources
-	}{
-		{"work_items", func(c statelog.Coverage) queries.Sources {
-			return queries.Sources{Work: &stubWork{answer: tracker.Answer{Coverage: c}}}
-		}},
-		{"pages", func(c statelog.Coverage) queries.Sources {
-			return queries.Sources{Pages: &stubPages{coverage: c}}
-		}},
-	} {
-		got, err := askNative(t, tc.sources(missing), tc.route, nil)
-		if err != nil {
-			t.Fatalf("%s: %v", tc.route, err)
-		}
-		payload, _ := got.(map[string]any)
-		if cov, _ := payload["coverage"].(statelog.Coverage); len(cov.Missing) != 1 {
-			t.Errorf("%s carried coverage %#v, want the partition that did not answer",
-				tc.route, payload["coverage"])
-		}
-		got, err = askNative(t, tc.sources(statelog.Coverage{}), tc.route, nil)
-		if err != nil {
-			t.Fatalf("%s: %v", tc.route, err)
-		}
-		if cov, present := got.(map[string]any)["coverage"]; present {
-			t.Errorf("%s stating no coverage sent %#v", tc.route, cov)
-		}
-	}
-}
-
 // A NODE THAT IS BEHIND ANSWERS "COME BACK", NOT "THE SERVER BROKE".
 //
 // This is a difference a client acts on: a 503 with a hint refreshes the
@@ -820,8 +779,7 @@ func TestARefusalAboutTheRequestIsNeverReclassifiedAsUnavailable(t *testing.T) {
 // 400; and the registry answered a 500 where a screen should try again.
 func TestAReadNoCopyCouldAnswerIsUnavailable(t *testing.T) {
 	t.Parallel()
-	unserved := &estate.ErrPartitionUnserved{Partition: "estate.000",
-		Detail: "data-a: no answer"}
+	unserved := &estate.ErrUnserved{Detail: "data-a: no answer"}
 	for _, tc := range []struct {
 		name   string
 		what   string

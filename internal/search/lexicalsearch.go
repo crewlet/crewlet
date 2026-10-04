@@ -89,8 +89,9 @@ const defaultSearchLimit = 10
 // IT RAISES rather than answering empty, unlike [knowledge.Searcher], and the
 // two are reconciled at the seam: this is the storage layer, where "the store
 // would not answer" and "nothing matched" are different facts, and the
-// knowledge adapter above it is what turns a failure into the empty block a
-// turn tolerates. Collapsing them here would make a broken index look exactly
+// knowledge adapter above it is what turns a failure into the answer a turn
+// tolerates — no hits and no mode served, which a turn renders as "could not
+// be searched". Collapsing them here would make a broken index look exactly
 // like a company that has written nothing down.
 func (x *Indexer) Search(ctx context.Context, q LexicalQuery) ([]LexicalHit, error) {
 	terms := textindex.Terms(q.Text)

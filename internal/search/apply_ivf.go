@@ -23,7 +23,7 @@ import (
 // applier makes from a committed record, in the framework's transaction — the
 // index is derived state on every node for exactly the reason the vectors are.
 
-// IndexHead is the partition's index row, without the centroids: what is
+// IndexHead is the semantic index's row, without the centroids: what is
 // installed, in which embedding space, and what its latest measurement found.
 type IndexHead struct {
 	// Generation is the packed position of the record that installed it.
@@ -32,7 +32,7 @@ type IndexHead struct {
 	Log   string
 	Model string
 	Dim   int
-	// Lists is zero for a verdict that the partition has no index.
+	// Lists is zero for a verdict that the corpus has no index.
 	Lists, Probes int
 	TrainedOn     int
 	// Largest is the most rows the training filed in one list.
@@ -64,15 +64,15 @@ func (h IndexHead) live(model string, dim int) bool {
 	return h.Lists > 0 && h.InSpace(model, dim)
 }
 
-// ReadIndex is the partition's index row, or false when it has never had one
+// ReadIndex is the semantic index's row, or false when there has never been one
 // — what an alarm reading and an evaluation report, read through the same
 // statement the probe and the applier read it with.
 func ReadIndex(ctx context.Context, tx *sql.Tx) (IndexHead, bool, error) {
 	return readIndexHead(ctx, tx)
 }
 
-// readIndexHead is the installed index's row, or false when the partition has
-// never had one.
+// readIndexHead is the installed index's row, or false when there has never
+// been one.
 func readIndexHead(ctx context.Context, tx *sql.Tx) (IndexHead, bool, error) {
 	var h IndexHead
 	var why string
@@ -90,8 +90,7 @@ func readIndexHead(ctx context.Context, tx *sql.Tx) (IndexHead, bool, error) {
 		return IndexHead{}, false, nil
 	}
 	if err != nil {
-		return IndexHead{}, false, fmt.Errorf("search: read the partition's "+
-			"index: %w", err)
+		return IndexHead{}, false, fmt.Errorf("search: read the index: %w", err)
 	}
 	h.Why = IndexVerdict(why)
 	h.TrainedAt = store.DecodeTime(trainedAt)
@@ -114,10 +113,10 @@ const indexHeadStatement = `
 	       shape_source, head_misses, measured_at, measure_position
 	FROM kb_ivf WHERE id = 1`
 
-// ivfMemo holds decoded indexes, one per vector log, each keyed by the digest
-// of the bytes it was decoded from.
+// ivfMemo holds the decoded index, checked against the digest of the bytes it
+// was decoded from.
 //
-// # Why a memo, and why its key is the LOG and its check the CONTENT
+// # Why a memo, and why its check is the CONTENT
 //
 // A written vector is filed by reading the centroids — up to three quarters of
 // a megabyte — and a node catching up applies thousands of vectors a second,
@@ -125,23 +124,18 @@ const indexHeadStatement = `
 // that changes once per retraining. A search likewise ranks every list of the
 // index before it reads any.
 //
-// ONE ENTRY PER LOG, because a process holds one index per partition and a
-// partitioned layout's search asks each partition it holds in turn: a single
-// slot evicted itself on every partition of every query, re-reading and
-// re-hashing a blob per partition per search. Keyed by the log, a retrained
-// partition's new index REPLACES its old one rather than lingering beside it,
-// so the memo holds exactly as many indexes as the process holds partitions —
-// at most [statelog.MaxPartitions] per space — and nothing a retrain left
-// behind.
+// ONE SLOT, because a node holds one index — the estate's, over its one vector
+// log — and a retrained index REPLACES the one before it rather than lingering
+// beside it, so the memo holds nothing a retrain left behind.
 //
-// A hit needs the DIGEST to match as well, never the generation: a generation
-// is a position on one log, and two stores in one process — a test's, or a
-// snapshot being adopted beside the live file — can hold different centroids
-// under one log's name. A digest names the bytes, so a hit is the same
-// centroids wherever they were read from.
+// A hit needs the DIGEST to match, never the generation: a generation is a
+// position on the log, and two stores in one process — a test's, or a snapshot
+// being adopted beside the live file — can hold different centroids at one
+// position. A digest names the bytes, so a hit is the same centroids wherever
+// they were read from.
 type ivfMemo struct {
-	mu      sync.Mutex
-	entries map[string]memoEntry
+	mu   sync.Mutex
+	held *memoEntry
 }
 
 type memoEntry struct {
@@ -153,9 +147,9 @@ type memoEntry struct {
 func (m *ivfMemo) load(ctx context.Context, tx *sql.Tx, h IndexHead) (IVF, error) {
 	if m != nil {
 		m.mu.Lock()
-		held, ok := m.entries[h.Log]
+		held := m.held
 		m.mu.Unlock()
-		if ok && held.digest == h.Digest {
+		if held != nil && held.digest == h.Digest {
 			return held.index, nil
 		}
 	}
@@ -180,10 +174,7 @@ func (m *ivfMemo) load(ctx context.Context, tx *sql.Tx, h IndexHead) (IVF, error
 	}
 	if m != nil {
 		m.mu.Lock()
-		if m.entries == nil {
-			m.entries = map[string]memoEntry{}
-		}
-		m.entries[h.Log] = memoEntry{digest: h.Digest, index: index}
+		m.held = &memoEntry{digest: h.Digest, index: index}
 		m.mu.Unlock()
 	}
 	return index, nil
@@ -203,8 +194,8 @@ func digestOf(blob []byte) string {
 }
 
 // fileUnder is where a vector written now is filed: the installed index's
-// generation and the vector's nearest list, or (0, 0) when the partition has
-// no index in its embedding space.
+// generation and the vector's nearest list, or (0, 0) when the corpus has no
+// index in its embedding space.
 func (a Applier) fileUnder(ctx context.Context, tx *sql.Tx, head IndexHead, model string, dim int, embedding []byte) (int64, int, error) {
 	if !head.live(model, dim) {
 		return 0, 0, nil
@@ -352,7 +343,7 @@ func readListCounts(ctx context.Context, tx *sql.Tx) (ListCounts, error) {
 // IT TOUCHES NO ROW. Every row stays filed under the index it was filed under
 // — stale now — until a reassign record for this generation re-files its
 // batch; a search reads the stale rows in full meanwhile ([Stage1]). Filing
-// them here would hold this store's writer for the whole partition. What it
+// them here would hold this store's writer for the whole corpus. What it
 // does empty is the per-list counts, because they count the rows filed under
 // the INSTALLED generation, and there are none yet.
 func (a Applier) install(ctx context.Context, tx *sql.Tx, vec VectorRecord, at statelog.Position) (int, error) {

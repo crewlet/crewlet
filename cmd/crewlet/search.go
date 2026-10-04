@@ -54,7 +54,7 @@ const searchUsage = `usage: crewlet search eval [-store PATH] [-config PATH] [fl
 
   eval   Measure the two-stage semantic search against the exact scan, on the
          vectors a store actually holds. Ground truth is the exact f32 scan's
-         own top-K, so nobody authors a judgement. When the partition has a
+         own top-K, so nobody authors a judgement. When the corpus has a
          semantic index the search is measured through it — what searches
          run — and again with the full scan as its first stage, so the report
          says what the index costs. Every query is measured unfiltered,
@@ -186,7 +186,7 @@ func describeStage1(r search.EvalReport) string {
 		why := "its training installed none"
 		switch {
 		case r.Index != nil && r.Index.Why == search.VerdictTooSmall:
-			why = "the partition is below the index's minimum corpus"
+			why = "the corpus is below the index's minimum"
 		case r.Index != nil && r.Index.Why == search.VerdictNotWorthwhile:
 			why = fmt.Sprintf("its training found no probe count within 1/%d "+
 				"of the lists that met the floor", search.IVFProbeCeiling)
@@ -196,7 +196,7 @@ func describeStage1(r search.EvalReport) string {
 		return "the full scan — the index was trained in another embedding " +
 			"space, and the embed duty retrains it"
 	case search.ScanUnindexed:
-		return "the full scan — the partition has no index yet"
+		return "the full scan — the corpus has no index yet"
 	case search.ScanFiltered:
 		return "the full scan — the search's filter keeps too few rows near " +
 			"its query for the index to read"

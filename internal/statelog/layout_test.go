@@ -309,8 +309,8 @@ func TestEveryLogHasItsOwnKeyStreamAndSubjectSpace(t *testing.T) {
 // THE STREAM CARRIES THE LAYOUT, AND THE KEY DOES NOT.
 //
 // Layout 1's tracker.007 and a repartitioned layout 2's have one key and two
-// streams. That is what makes [statelog.Cut] key on the stream: a position of
-// the old layout's log can never stand beside the new one's under one key.
+// streams, so a position keyed on its stream — a session's floor — of the old
+// layout's log can never stand beside the new one's under one key.
 func TestTheStreamCarriesTheLayoutAndTheKeyDoesNot(t *testing.T) {
 	t.Parallel()
 	one := layoutOne()
@@ -908,49 +908,5 @@ func TestAPlaceIsTheLayoutsOwnLogUnderItsOwnName(t *testing.T) {
 			t.Errorf("%s is placed (%v); a runner built on it judges records by one "+
 				"partition while applying another's", bad.name, err)
 		}
-	}
-}
-
-// A CUT OFF THE WIRE FILES EVERY POSITION UNDER ITS OWN STREAM, or it does not
-// decode.
-//
-// A cut is keyed by stream so that one log's position can never sit under
-// another's name — but a map's key is whatever the encoder wrote, and a peer's
-// answer is a map somebody else encoded. A position filed under another
-// stream is a floor a reader raises on the wrong log, so the decode refuses it
-// rather than leaving the check to every reader.
-func TestACutWhoseKeyIsNotItsPositionsStreamIsRefused(t *testing.T) {
-	t.Parallel()
-	good := statelog.Cut{
-		"CREWLET_TRACKER_LOG": {Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 7},
-		"CREWLET_PAGES_LOG":   {Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 0},
-	}
-	raw, err := json.Marshal(good)
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	var back statelog.Cut
-	if err := json.Unmarshal(raw, &back); err != nil {
-		t.Fatalf("a well-formed cut was refused: %v", err)
-	}
-	if len(back) != len(good) || back["CREWLET_TRACKER_LOG"] != good["CREWLET_TRACKER_LOG"] {
-		t.Fatalf("the cut decoded as %v, want %v", back, good)
-	}
-
-	for name, body := range map[string]string{
-		"another stream's name": `{"CREWLET_TRACKER_LOG":{"stream":"CREWLET_PAGES_LOG","generation":1,"seq":7}}`,
-		"no stream at all":      `{"CREWLET_TRACKER_LOG":{"generation":1,"seq":7}}`,
-	} {
-		var cut statelog.Cut
-		err := json.Unmarshal([]byte(body), &cut)
-		if !errors.Is(err, statelog.ErrInvalidCut) {
-			t.Errorf("%s: a cut filing a position under %s decoded (err %v)", name, name, err)
-		}
-		if cut != nil {
-			t.Errorf("%s: the refused cut was still assigned: %v", name, cut)
-		}
-	}
-	if err := (statelog.Cut{"A": {Stream: "B", Seq: 1}}).Validate(); !errors.Is(err, statelog.ErrInvalidCut) {
-		t.Errorf("Validate passed a position filed under another stream: %v", err)
 	}
 }

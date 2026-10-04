@@ -146,7 +146,7 @@ func NewFixture(n int, seed uint64) *Fixture {
 //
 // # Why the family needs a topical member now
 //
-// The isotropic member has no structure a partition could find — it is one
+// The isotropic member has no structure a k-means could find — it is one
 // continuous cloud — so an inverted file over it is a partition of a cloud
 // along arbitrary boundaries, and meeting the floor takes half the lists. A
 // company's corpus is not that: its documents cluster by project, by wiki
@@ -154,7 +154,7 @@ func NewFixture(n int, seed uint64) *Fixture {
 // isotropic member would certify an index that is never worth installing; one
 // that measured it only here would certify recall on a corpus friendlier than
 // the worst one it must survive. So [ADR-0028]'s gate runs both, and the
-// training's own measurement is what decides, per partition, which one a
+// training's own measurement is what decides, for each corpus, which one a
 // company's corpus resembles.
 func NewTopicalFixture(n int, seed uint64) *Fixture {
 	basis := newBasis()

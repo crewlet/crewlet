@@ -3,7 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
-	"slices"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,25 +13,20 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/estate"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// localWith is a local estate serving estate.000, judging its copy by read.
+// localWith is a local estate judging its copy by read.
 func localWith(e *Engine, now func() time.Time,
-	read func(context.Context, *native, statelog.PartitionID) copyVerdict) *localEstate {
-	return &localEstate{e: e, holding: statelog.ServesOnly(statelog.EstatePartition), now: now,
-		read: read, verdicts: map[statelog.PartitionID]*verdictSlot{}}
+	read func(context.Context, *native) copyVerdict) *localEstate {
+	return &localEstate{e: e, now: now, read: read}
 }
 
-// landed waits for p's verdict read in flight, if there is one, to land.
-func landed(l *localEstate, p statelog.PartitionID) {
+// landed waits for the verdict read in flight, if there is one, to land.
+func landed(l *localEstate) {
 	l.mu.Lock()
-	var reading chan struct{}
-	if slot := l.verdicts[p]; slot != nil {
-		reading = slot.reading
-	}
+	reading := l.slot.reading
 	l.mu.Unlock()
 	if reading != nil {
 		<-reading
@@ -41,83 +36,45 @@ func landed(l *localEstate, p statelog.PartitionID) {
 // judged is For after the verdict it finds stale has been read again: the
 // request that finds it stale answers from the verdict before it, and the one
 // after the read lands answers from the new one.
-func judged(ctx context.Context, l *localEstate, p statelog.PartitionID) (estate.Backend, bool) {
-	_, _, _ = l.For(ctx, p)
-	landed(l, p)
-	b, ok, _ := l.For(ctx, p)
-	return b, ok
+func judged(ctx context.Context, l *localEstate) (estate.Backend, bool) {
+	_, _ = l.For(ctx)
+	landed(l)
+	return l.For(ctx)
 }
 
 // sound is a copy that is not wrong and answers requests.
-func sound(context.Context, *native, statelog.PartitionID) copyVerdict {
+func sound(context.Context, *native) copyVerdict {
 	return copyVerdict{answers: true}
 }
 
-// A DATA NODE'S GATHER QUERIES TAKE ONE CPUs: the server answering other
-// nodes' batches and the router answering this node's own gathers both read
-// it off the local estate, so the local estate must answer the same one every
-// time — two would each run a query per CPU beside the other, on the same
-// processors.
-func TestTheLocalEstateAnswersOneCPUs(t *testing.T) {
-	t.Parallel()
-	l := localWith(&Engine{}, time.Now, sound)
-	if first := l.CPUs(); first == nil || l.CPUs() != first {
-		t.Fatalf("the local estate answered CPUs %p, then %p — want one, the same every time",
-			first, l.CPUs())
-	}
-}
-
-// A DATA NODE ANSWERS ONLY WHAT IT SERVES: the partitions gate 3 says it
-// serves ([holdingOf]), never one it does not hold and never one whose holding
-// it cannot tell — the router asks another holder for those. A partition it
-// holds before its runtime is up is still served, with no halves, so every
-// operation on it is answered "not here" and moves on rather than being
-// refused as a partition nobody serves.
-func TestTheLocalEstateAnswersOnlyWhatThisNodeServes(t *testing.T) {
+// A DATA NODE'S COPY IS SERVED BEFORE ITS RUNTIME IS UP, with no halves, so
+// every operation on it is answered "not here" and moves on rather than being
+// refused as an estate nobody serves — and with its halves, answering, once
+// the runtime is.
+func TestTheLocalEstateServesItsCopyWithWhatItRuns(t *testing.T) {
 	t.Parallel()
 	e := &Engine{backends: &Backends{}}
 	l := localWith(e, time.Now, sound)
 
-	b, ok, err := l.For(t.Context(), statelog.EstatePartition)
-	if !ok || err != nil || b.Tracker != nil {
-		t.Fatalf("a held partition with no runtime = (%+v, %v, %v), want served with no halves",
-			b, ok, err)
+	b, ok := l.For(t.Context())
+	if !ok || b.Tracker != nil {
+		t.Fatalf("a copy with no runtime = (%+v, %v), want served with no halves", b, ok)
 	}
 	e.native.Store(&native{trackerReader: &tracker.Reader{}})
-	if b, ok, err = l.For(t.Context(), statelog.EstatePartition); !ok || err != nil ||
-		b.Tracker == nil || b.Answers == nil || !b.Answers(t.Context()) {
-		t.Fatalf("a held partition with a runtime = (%+v, %v, %v), want its halves, answering",
-			b, ok, err)
-	}
-	if _, ok, err := l.For(t.Context(), statelog.PartitionID{Space: statelog.SpaceTracker, Index: 7}); ok ||
-		err != nil {
-		t.Errorf("a partition this node does not hold = (%v, %v), want definitively not served",
-			ok, err)
-	}
-	// CANNOT TELL is its own answer, never a "no": another node asking is
-	// told `holding_unknown`, not `not_holder`.
-	l.holding = failingHolding{}
-	if _, ok, err := l.For(t.Context(), statelog.EstatePartition); ok || err == nil {
-		t.Errorf("a partition whose holding could not be told = (%v, %v), want not served "+
-			"and unknown", ok, err)
+	if b, ok = judged(t.Context(), l); !ok || b.Tracker == nil || b.Answers == nil ||
+		!b.Answers(t.Context()) {
+		t.Fatalf("a copy with a runtime = (%+v, %v), want its halves, answering", b, ok)
 	}
 }
 
-type failingHolding struct{}
-
-func (failingHolding) Serving(statelog.PartitionID) (bool, error) {
-	return false, errors.New("the executor could not say")
-}
-
-// A COPY THAT IS WRONG STOPS SERVING ITS PARTITION, AND THE NODE KEEPS ITS
-// SEATS.
+// A COPY THAT IS WRONG GOES OUT OF SERVICE, AND THE NODE KEEPS ITS SEATS.
 //
 // A halted applier, an eviction, rows below the log, a checkpoint on another
 // stream, a stalled prefix, a record held past its grace: this node's router
-// no longer answers the partition from its own copy — its seats' calls go to
-// the partition's other holders, and another node asking is told `not_holder`
-// — while serviceability, which is about routing, keeps every seat. It serves
-// again the moment a reading finds the copy sound.
+// no longer answers from its own copy — its seats' calls go to the other data
+// nodes, and another node asking is told `out_of_service` — while
+// serviceability, which is about routing, keeps every seat. It serves again
+// the moment a reading finds the copy sound.
 func TestAWrongCopyStopsServingAndTheSeatsStay(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1_700_000_000, 0)
@@ -125,31 +82,31 @@ func TestAWrongCopyStopsServingAndTheSeatsStay(t *testing.T) {
 	e := &Engine{backends: &Backends{}}
 	e.native.Store(&native{trackerReader: &tracker.Reader{}})
 	l := localWith(e, func() time.Time { return now },
-		func(context.Context, *native, statelog.PartitionID) copyVerdict { return verdict })
+		func(context.Context, *native) copyVerdict { return verdict })
 
-	if _, ok, _ := l.For(t.Context(), statelog.EstatePartition); !ok {
+	if _, ok := judged(t.Context(), l); !ok {
 		t.Fatal("a sound copy is not served")
 	}
 	now = now.Add(servingRecheck)
 	verdict = copyVerdict{fault: "tracker", answers: true}
-	if _, ok := judged(t.Context(), l, statelog.EstatePartition); ok {
-		t.Fatal("a copy that is wrong still serves its partition")
+	if _, ok := judged(t.Context(), l); ok {
+		t.Fatal("a copy that is wrong is still served")
 	}
 	if ok, reason := e.SeatsServiceable(); !ok {
-		t.Fatalf("a wrong copy shed the node's seats (%s) — it stops serving its "+
-			"partition, and the seats read it from another holder", reason)
+		t.Fatalf("a wrong copy shed the node's seats (%s) — it goes out of "+
+			"service, and the seats read the estate from another data node", reason)
 	}
 
 	// A BLIP DOES NOT BRING IT BACK: a reading that reached no broker keeps
 	// the fault it had.
 	now = now.Add(servingRecheck)
 	verdict = copyVerdict{refusal: statelog.RefuseBrokerUnreachable}
-	if _, ok := judged(t.Context(), l, statelog.EstatePartition); ok {
+	if _, ok := judged(t.Context(), l); ok {
 		t.Fatal("a reading that reached no broker put a wrong copy back into service")
 	}
 	now = now.Add(servingRecheck)
 	verdict = copyVerdict{answers: true}
-	if _, ok := judged(t.Context(), l, statelog.EstatePartition); !ok {
+	if _, ok := judged(t.Context(), l); !ok {
 		t.Fatal("a copy found sound again is still not served")
 	}
 }
@@ -158,31 +115,30 @@ func TestAWrongCopyStopsServingAndTheSeatsStay(t *testing.T) {
 // not reach the broker keeps the verdict before it — while a copy never judged
 // answers nothing.
 //
-// The verdict reads every log's bounds from the broker, so read per request
-// it would put three round trips in front of every tool call; and one blip
-// must not send every request away from a copy that was answering them.
+// The verdict reads every log's health from the broker, so read per request it
+// would put those round trips in front of every tool call; and one blip must
+// not send every request away from a copy that was answering them.
 func TestACopysVerdictIsReadOncePerRecheckAndKeptThroughABlip(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1_700_000_000, 0)
 	var reads atomic.Int32
 	verdict := copyVerdict{answers: true}
 	l := localWith(&Engine{}, func() time.Time { return now },
-		func(context.Context, *native, statelog.PartitionID) copyVerdict {
+		func(context.Context, *native) copyVerdict {
 			reads.Add(1)
 			return verdict
 		})
 	n := &native{}
-	p := statelog.EstatePartition
 	fresh := func() copyVerdict {
-		l.verdict(t.Context(), n, p)
-		landed(l, p)
-		return l.verdict(t.Context(), n, p)
+		l.verdict(t.Context(), n)
+		landed(l)
+		return l.verdict(t.Context(), n)
 	}
 
 	// A COPY NEVER JUDGED, whose first read found no broker, answers
 	// nothing.
 	verdict = copyVerdict{refusal: statelog.RefuseBrokerUnreachable}
-	if l.verdict(t.Context(), n, p).answers {
+	if l.verdict(t.Context(), n).answers {
 		t.Fatal("a copy nobody could measure answered")
 	}
 	now = now.Add(servingRecheck)
@@ -191,7 +147,7 @@ func TestACopysVerdictIsReadOncePerRecheckAndKeptThroughABlip(t *testing.T) {
 		t.Fatal("a copy measured as answering did not")
 	}
 	for range 10 {
-		l.verdict(t.Context(), n, p)
+		l.verdict(t.Context(), n)
 	}
 	if got := reads.Load(); got != 2 {
 		t.Fatalf("the verdict was read %d times, want 2 — once per recheck", got)
@@ -212,9 +168,9 @@ func TestACopysVerdictIsReadOncePerRecheckAndKeptThroughABlip(t *testing.T) {
 //
 // Every tool call a data node's seats make and every request another node
 // sends it asks the copy's verdict first, and a read of the broker can take
-// its whole budget. So ONE read runs per partition however many requests found
-// the verdict stale, nobody but a request for a partition never judged waits
-// on it, a request that stops waiting leaves when its own context ends — and
+// its whole budget. So ONE read runs however many requests found the verdict
+// stale, nobody but a request that finds the copy never judged waits on it, a
+// request that stops waiting leaves when its own context ends — and
 // the read is stamped with the instant it LANDED, so a read slower than the
 // recheck is not stale the moment it is stored and read again by the next
 // request in line.
@@ -227,7 +183,7 @@ func TestASlowVerdictReadQueuesNoRequest(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{}, 16)
 	l := localWith(&Engine{}, now,
-		func(context.Context, *native, statelog.PartitionID) copyVerdict {
+		func(context.Context, *native) copyVerdict {
 			reads.Add(1)
 			started <- struct{}{}
 			<-release
@@ -236,7 +192,6 @@ func TestASlowVerdictReadQueuesNoRequest(t *testing.T) {
 			return copyVerdict{answers: true}
 		})
 	n := &native{}
-	p := statelog.EstatePartition
 
 	// NEVER JUDGED: every request waits on the ONE read, and a request
 	// whose caller gives up leaves without it.
@@ -247,13 +202,13 @@ func TestASlowVerdictReadQueuesNoRequest(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			answered <- l.verdict(t.Context(), n, p).answers
+			answered <- l.verdict(t.Context(), n).answers
 		}()
 	}
 	<-started
 	impatient, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	v, returned := within(time.Second, func() copyVerdict { return l.verdict(impatient, n, p) })
+	v, returned := within(time.Second, func() copyVerdict { return l.verdict(impatient, n) })
 	close(release)
 	switch {
 	case !returned:
@@ -273,8 +228,8 @@ func TestASlowVerdictReadQueuesNoRequest(t *testing.T) {
 	}
 	// STAMPED WHEN IT LANDED: three rechecks passed during the read, and
 	// the verdict it stored is still fresh.
-	l.verdict(t.Context(), n, p)
-	landed(l, p)
+	l.verdict(t.Context(), n)
+	landed(l)
 	if got := reads.Load(); got != 1 {
 		t.Fatalf("a verdict read slower than the recheck was stale when stored: %d reads", got)
 	}
@@ -283,14 +238,14 @@ func TestASlowVerdictReadQueuesNoRequest(t *testing.T) {
 	// before it while the read that replaces it is in flight.
 	clock.Add(int64(servingRecheck))
 	stuck := make(chan struct{})
-	l.read = func(context.Context, *native, statelog.PartitionID) copyVerdict {
+	l.read = func(context.Context, *native) copyVerdict {
 		reads.Add(1)
 		<-stuck
 		return copyVerdict{answers: true}
 	}
 	answered2, returned := within(time.Second, func() bool {
 		for range requests {
-			if !l.verdict(t.Context(), n, p).answers {
+			if !l.verdict(t.Context(), n).answers {
 				return false
 			}
 		}
@@ -303,7 +258,7 @@ func TestASlowVerdictReadQueuesNoRequest(t *testing.T) {
 	case !answered2:
 		t.Fatal("a stale verdict was not answered from the one before it")
 	}
-	landed(l, p)
+	landed(l)
 	if got := reads.Load(); got != 2 {
 		t.Fatalf("%d requests on a stale verdict read it %d times in all, want one more read",
 			requests, got)
@@ -409,7 +364,7 @@ func (f *flakyLister) ListLive(ctx context.Context, class coord.Class) ([]coord.
 
 // staleView is a view of the fleet's data nodes that listed once and has since
 // answered unknown for longer than any decider trusts a cached coordination
-// fact — a node that can name no holder of anything — on a clock it answers.
+// fact — a node that can name no data node at all — on a clock it answers.
 func staleView(t *testing.T) (*coord.LeaseView, func() time.Time) {
 	t.Helper()
 	var clock atomic.Int64
@@ -435,10 +390,10 @@ func staleView(t *testing.T) (*coord.LeaseView, func() time.Time) {
 	return view, now
 }
 
-// dataNodeOver is a data node serving estate.000 from a copy judged by read,
+// dataNodeOver is a data node serving the estate from a copy judged by read,
 // whose router routes by view.
 func dataNodeOver(t *testing.T, view *coord.LeaseView, now func() time.Time,
-	read func(context.Context, *native, statelog.PartitionID) copyVerdict) *Engine {
+	read func(context.Context, *native) copyVerdict) *Engine {
 
 	t.Helper()
 	e := &Engine{backends: &Backends{}, dataView: view}
@@ -460,27 +415,26 @@ type silentAsker struct{}
 
 func (silentAsker) Ask(context.Context, string, []byte, int) ([][]byte, error) { return nil, nil }
 
-// A NODE THAT ANSWERS EVERY PARTITION ITS SEATS NEED FROM ITS OWN COPY ROUTES
-// THEM WITHOUT THE VIEW — the router asks this node first and asks nobody
-// where it answers — so a view gone unknown past the bound sheds none of its
-// seats and withholds none of its claims. Under layout 0 that is every data
-// node whose copy is sound: a partial coordination fault that stopped the
-// fleet listing and not the seat renewals used to release a single data
-// node's every seat, and then refuse to claim them back, while its own copy
-// served them all along. A node that must ask another holder for any
-// partition still sheds on the same view, since its seats' calls have nowhere
-// it can name to go.
+// A NODE THAT ANSWERS ITS SEATS FROM ITS OWN COPY ROUTES THEM WITHOUT THE
+// VIEW — the router asks this node first and asks nobody where it answers — so
+// a view gone unknown past the bound sheds none of its seats and withholds
+// none of its claims. That is every data node whose copy is sound: a partial
+// coordination fault that stopped the fleet listing and not the seat renewals
+// used to release a single data node's every seat, and then refuse to claim
+// them back, while its own copy served them all along. A node that must ask
+// another data node still sheds on the same view, since its seats' calls have
+// nowhere it can name to go.
 func TestANodeServingItsSeatsItselfNeedsNoViewToKeepOrClaimThem(t *testing.T) {
 	t.Parallel()
 	view, now := staleView(t)
 	var faulted atomic.Bool
-	e := dataNodeOver(t, view, now, func(context.Context, *native, statelog.PartitionID) copyVerdict {
+	e := dataNodeOver(t, view, now, func(context.Context, *native) copyVerdict {
 		if faulted.Load() {
 			return copyVerdict{fault: "tracker", answers: true}
 		}
 		return copyVerdict{answers: true}
 	})
-	judged(t.Context(), e.local, statelog.EstatePartition)
+	judged(t.Context(), e.local)
 
 	if ok, reason := e.serviceable(now()); !ok {
 		t.Fatalf("a data node serving its seats from its own copy shed them over a stale "+
@@ -494,14 +448,14 @@ func TestANodeServingItsSeatsItselfNeedsNoViewToKeepOrClaimThem(t *testing.T) {
 	// cannot.
 	faulted.Store(true)
 	e.local.mu.Lock()
-	delete(e.local.verdicts, statelog.EstatePartition)
+	e.local.slot = verdictSlot{}
 	e.local.mu.Unlock()
-	judged(t.Context(), e.local, statelog.EstatePartition)
+	judged(t.Context(), e.local)
 	if ok, _ := e.serviceable(now()); ok {
-		t.Fatal("a node whose copy is wrong and whose view cannot name a holder kept its seats")
+		t.Fatal("a node whose copy is wrong and whose view cannot name a data node kept its seats")
 	}
 	if e.NativeHydrated(t.Context()) {
-		t.Fatal("a node whose copy is wrong and whose view cannot name a holder claimed a seat")
+		t.Fatal("a node whose copy is wrong and whose view cannot name a data node claimed a seat")
 	}
 
 	// A NODE HOLDING NO DATA, on the same view, sheds.
@@ -520,51 +474,106 @@ func TestANodeServingItsSeatsItselfNeedsNoViewToKeepOrClaimThem(t *testing.T) {
 	}
 }
 
-// ADMISSION WAITS FOR THE PARTITION A SEAT CANNOT DO WITHOUT, under every
-// layout: the tracker's CATALOGUE, which every create reads — the one
-// partition under layout 0, the company space's where a layout divides the
-// tracker — and the knowledge base's one partition where there is one. A
-// knowledge base divided by container adds nothing to wait for, since no one
-// of its partitions is the one every seat reads. A layout that gives a native
-// half nothing to wait for is refused rather than read as nothing to wait for,
-// which would admit a seat onto a company nobody checked.
-func TestSeatAdmissionWaitsForThePartitionsASeatCannotDoWithout(t *testing.T) {
+// BOTH HALVES THE COMPANY RUNS NATIVELY MUST BE SERVED BY THE COPY THAT WILL
+// SERVE THE SEAT, because a seat's tools reach both: a node holding no data
+// that admitted a seat on a data node running only the tracker would hand that
+// seat a wiki whose every call is answered "not here" — and a node admitting
+// on the wiki alone, a tracker the same. And a half the company runs on a
+// vendor is not asked for at all, or a company with its pages on Confluence
+// would never admit a seat anywhere.
+//
+// Each step moves the clock past the window [estate.Router.Serves] trusts a
+// data node's answer for, so every step is a fresh ask of the fleet.
+func TestASeatIsAdmittedOnlyWhereBothHalvesItRunsAreServed(t *testing.T) {
 	t.Parallel()
-	company := statelog.PartitionID{Space: statelog.SpaceCompany}
-	noCompany := statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
-		{Space: statelog.SpaceTracker, Partitions: 4, Domains: []string{tracker.Domain{}.Name()}},
-		{Space: statelog.SpacePages, Partitions: 2, Domains: []string{pages.Domain{}.Name()}},
-	}}
-	noPages := statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
-		{Space: statelog.SpaceTracker, Partitions: 4, Domains: []string{tracker.Domain{}.Name()}},
-		{Space: statelog.SpaceCompany, Partitions: 1, Domains: []string{tracker.Domain{}.Name()}},
-	}}
-	for _, c := range []struct {
-		name             string
-		layout           statelog.Layout
-		runTracker, wiki bool
-		want             []seatNeed
-		unaddressed      bool
+	for _, step := range []struct {
+		name           string
+		runs           remoteNative
+		tracker, pages bool
+		want           bool
 	}{
-		{name: "layout 0, both halves", layout: LayoutZero(), runTracker: true, wiki: true,
-			want: []seatNeed{{partition: statelog.EstatePartition, tracker: true, pages: true}}},
-		{name: "layout 0, the wiki alone", layout: LayoutZero(), wiki: true,
-			want: []seatNeed{{partition: statelog.EstatePartition, pages: true}}},
-		{name: "layout 0, nothing native", layout: LayoutZero()},
-		{name: "a company space holds the catalogue", layout: noPages, runTracker: true,
-			want: []seatNeed{{partition: company, tracker: true}}},
-		{name: "a knowledge base divided by container", layout: noCompany, wiki: true},
-		{name: "no company space", layout: noCompany, runTracker: true, unaddressed: true},
-		{name: "no pages log", layout: noPages, wiki: true, unaddressed: true},
+		{name: "the data node runs the wiki and not the tracker",
+			runs: remoteNative{tracker: true, wiki: true}, tracker: false, pages: true},
+		{name: "the data node runs the tracker and not the wiki",
+			runs: remoteNative{tracker: true, wiki: true}, tracker: true, pages: false},
+		{name: "the data node runs both",
+			runs: remoteNative{tracker: true, wiki: true}, tracker: true, pages: true, want: true},
+		{name: "the company's wiki is on a vendor",
+			runs: remoteNative{tracker: true}, tracker: true, pages: false, want: true},
+		{name: "the company's tracker is on a vendor",
+			runs: remoteNative{wiki: true}, tracker: false, pages: true, want: true},
 	} {
-		got, err := seatNeeds(c.layout, c.runTracker, c.wiki)
-		switch {
-		case c.unaddressed:
-			if !errors.Is(err, estate.ErrUnaddressed) {
-				t.Errorf("%s: seatNeeds = (%v, %v), want ErrUnaddressed", c.name, got, err)
+		t.Run(step.name, func(t *testing.T) {
+			t.Parallel()
+			e, answer := statelessOver(t)
+			e.remote.Store(&step.runs)
+			answer(step.tracker, step.pages)
+			if got := e.NativeHydrated(t.Context()); got != step.want {
+				t.Fatalf("a node running tracker=%v wiki=%v, asking a data node serving "+
+					"tracker=%v pages=%v, admitted a seat: %v, want %v",
+					step.runs.tracker, step.runs.wiki, step.tracker, step.pages, got, step.want)
 			}
-		case err != nil || !slices.Equal(got, c.want):
-			t.Errorf("%s: seatNeeds = (%+v, %v), want %+v", c.name, got, err, c.want)
-		}
+		})
 	}
+
+	// AND THE ANSWER IS ASKED AGAIN once its trust has run out: a data node
+	// that comes to serve the half it lacked admits the next sweep's seat.
+	e, answer := statelessOver(t)
+	e.remote.Store(&remoteNative{tracker: true, wiki: true})
+	answer(true, false)
+	if e.NativeHydrated(t.Context()) {
+		t.Fatal("a seat was admitted on a data node that does not run the wiki the company runs")
+	}
+	answer(true, true)
+	if !e.NativeHydrated(t.Context()) {
+		t.Fatal("a seat was withheld after the data node came to serve both halves")
+	}
+}
+
+// statelessOver is a node holding no data whose router asks one data node,
+// and a function that sets what that data node answers admission's ping with
+// and moves the router's clock past the trust it holds an answer for.
+func statelessOver(t *testing.T) (*Engine, func(tracker, pages bool)) {
+	t.Helper()
+	var clock atomic.Int64
+	clock.Store(time.Unix(1_700_000_000, 0).UnixNano())
+	asker := &pingAnswerer{}
+	router, err := estate.NewRouter(estate.RouterOptions{
+		Self: "agent-1", Queue: asker, Placement: oneDataNode{},
+		Session: estate.NewSession(),
+		Now:     func() time.Time { return time.Unix(0, clock.Load()) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &Engine{router: router}, func(tracker, pages bool) {
+		asker.set(tracker, pages)
+		clock.Add(int64(time.Minute))
+	}
+}
+
+// oneDataNode is a fleet with one data node in it.
+type oneDataNode struct{}
+
+func (oneDataNode) Holders() ([]string, error) { return []string{"data-1"}, nil }
+func (oneDataNode) Unanswered(string)          {}
+
+// pingAnswerer is a data node answering admission's ping with the halves it is
+// told it runs.
+type pingAnswerer struct {
+	mu     sync.Mutex
+	answer []byte
+}
+
+func (p *pingAnswerer) set(tracker, pages bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.answer = fmt.Appendf(nil, `{"node":"data-1","result":{"Tracker":%t,"Pages":%t}}`,
+		tracker, pages)
+}
+
+func (p *pingAnswerer) Ask(context.Context, string, []byte, int) ([][]byte, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return [][]byte{p.answer}, nil
 }

@@ -66,7 +66,7 @@ func TestAMaintenanceModeDataNodeServesNoWriter(t *testing.T) {
 			trackerReader: &tracker.Reader{}, pageReader: &pages.Reader{},
 		}
 		e.native.Store(n)
-		b := e.partitionBackend(n, statelog.EstatePartition)
+		b := e.estateBackend(n)
 		if got := b.Writer != nil && b.PageWriter != nil; got != wantWriters {
 			t.Errorf("%s: writers offered = %v, want %v", mode, got, wantWriters)
 		}

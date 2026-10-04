@@ -389,7 +389,7 @@ func TestAnUnreadableCorpusDoesNotStopTheOnesAfterIt(t *testing.T) {
 // A DUTY WITH NO BUDGET IS A REFUSED WIRING: its caller bounds every tick, and
 // one that did not say which bound would measure a training by its length
 // rather than its progress — which on a one-core node cut off every training
-// at the largest partition.
+// at the largest corpus.
 func TestTheDutyRefusesAWiringWithNoBudget(t *testing.T) {
 	t.Parallel()
 	h := newEmbedHarness(t)

@@ -20,7 +20,6 @@ import (
 // answers a value naming what it was asked, and each write records the
 // operation, its id and who wrote it.
 type desk struct {
-	cpus   CPUs
 	mu     sync.Mutex
 	wrote  []string
 	opIDs  []string
@@ -37,13 +36,11 @@ func (d *desk) note(op, opID string, a Actor) tracker.WriteResult {
 	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied, OpID: opID}}
 }
 
-func (d *desk) CPUs() *CPUs { return &d.cpus }
-
-func (d *desk) For(context.Context, statelog.PartitionID) (Backend, bool, error) {
+func (d *desk) For(context.Context) (Backend, bool) {
 	return Backend{
 		Tracker: deskBoard{d: d}, Pages: deskPages{},
 		Writer: func(a Actor) TrackerWriter { return deskWriter{d: d, a: a} },
-	}, true, nil
+	}, true
 }
 
 type deskBoard struct {
@@ -197,7 +194,7 @@ func (w deskWriter) PurgeTask(_ context.Context, opID, _, _, _ string) (tracker.
 // EVERY OPERATOR OPERATION CROSSES WHOLE: the reads the dashboard, the REST
 // routes and the operator's MCP ask, and the writes only they make — views,
 // the catalogue, a person's own state, the trash, the purge — reach a data
-// node from a node that does not serve the partition with their arguments,
+// node from a node that holds no data with their arguments,
 // their answers (a revision's found-or-not included) and the operator who
 // made them, and the workload is rendered against the SERVING node's chart,
 // which is the one that can cross no wire.
@@ -205,13 +202,12 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	d := &desk{units: chartOf("data-d")}
-	stop, err := Serve(t.Context(), f.start(t), "data-d", d, f.servers, ServerSeams{Units: d.units})
+	stop, err := Serve(t.Context(), f.start(t), "data-d", d, ServerSeams{Units: d.units})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = stop(context.Background()) })
 	f.placement.set(func(p *fakePlacement) { p.nodes = []string{"data-d"} })
-	f.servers.set(func(p *fakePlacement) { p.nodes = []string{"data-d"} })
 	ctx, now := t.Context(), time.Now()
 
 	work := f.client.Work()

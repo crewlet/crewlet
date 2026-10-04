@@ -98,7 +98,7 @@ const (
 )
 
 const (
-	// OpCentroids installs the partition's semantic index — or retires it —
+	// OpCentroids installs the corpus's semantic index — or retires it —
 	// on the subject [IndexCentroids]. See [IndexRecord].
 	OpCentroids Op = "centroids"
 

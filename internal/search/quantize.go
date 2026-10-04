@@ -6,14 +6,14 @@
 //
 // # The first stage is an index, and the index is replicated state
 //
-// A partition's sign codes are filed in lists by k-means in Hamming space, and
+// The corpus's sign codes are filed in lists by k-means in Hamming space, and
 // a search reads the lists nearest its own code instead of every row — the
 // exact rerank above it unchanged. The index is trained by the embedding duty,
 // MEASURED against the exact scan before it is installed, and published on the
-// vector log as a record every holder applies, so every holder of a partition
+// vector log as a record every data node applies, so every copy of the estate
 // holds the same centroids and files every row in the same list. How many
 // lists a search reads is that measurement's answer, never a constant, and a
-// partition whose corpus has no structure a partition can find gets no index
+// corpus with no structure a k-means can find gets no index
 // at all: the full scan stays its first stage. See ADR-0028 for the decision
 // and ivf.go, ivfrecord.go, apply_ivf.go and ivfduty.go for each half.
 //

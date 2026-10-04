@@ -15,7 +15,7 @@ import (
 // # Published once, applied everywhere, like the vectors themselves
 //
 // The centroids are the product of a training no node should repeat: a
-// seeded k-means over every code in the partition, plus a recall measurement
+// seeded k-means over every code in the corpus, plus a recall measurement
 // that scans the exact vectors. Trained by the embedding duty — the log's one
 // writer — and PUBLISHED, they are applied into every holder's file by the
 // same applier that writes the rows they index, so every holder holds the same
@@ -41,7 +41,7 @@ import (
 // between the two would carry half of each. So the duty publishes the re-filing
 // as [OpReassign] records, each naming one batch of the index's ROLLOUT, and
 // each holder applies them in log order — the same rows re-filed at the same
-// position everywhere, and never a whole partition inside one apply
+// position everywhere, and never the whole corpus inside one apply
 // transaction.
 //
 // The rollout's key ranges are cut ONCE, by the training, from the ids the
@@ -119,20 +119,19 @@ func IndexScopePath(subject Subject) string {
 	return centroids + statelog.ScopeSeparator + subject.ID
 }
 
-// IndexRecord is the partition's semantic index as the duty trained it — or
+// IndexRecord is the corpus's semantic index as the duty trained it — or
 // the verdict that it has none.
 type IndexRecord struct {
 	// Log is the vector log the index was trained for, and Basis the
 	// generation it replaces — zero for the first. Seed is the training's
 	// seed, [IVFSeed] of the two: carried so an operator, or a test, can
-	// re-train it bit for bit. The log is also what a process holding many
-	// partitions keys its decoded copy of each partition's index on.
+	// re-train it bit for bit.
 	Log   string `json:"log"`
 	Basis int64  `json:"basis"`
 	Seed  uint64 `json:"seed"`
 
 	// Lists is how many lists the index has. ZERO IS A VERDICT, not an
-	// absence: the partition has no index and every search scans, because it
+	// absence: the corpus has no index and every search scans, because it
 	// is below [IVFMinCorpus] or because no probe count within
 	// [IVFProbeCeiling] met the floor (Why says which).
 	Lists int `json:"lists"`
@@ -141,7 +140,7 @@ type IndexRecord struct {
 	// measured recall met the floor with no head miss ([ChooseProbes]).
 	Probes int `json:"probes,omitempty"`
 
-	// TrainedOn is how many sources the partition held when it was
+	// TrainedOn is how many sources the corpus held when it was
 	// trained, which is what the retrain rule is read at.
 	TrainedOn int `json:"trained_on"`
 
@@ -154,7 +153,7 @@ type IndexRecord struct {
 
 	// Measurement is what the training measured against the exact scan —
 	// at Probes, or at every list on a verdict that the index was not worth
-	// installing. Nil when nothing was measured: a partition retired for its
+	// installing. Nil when nothing was measured: a corpus retired for its
 	// size is one nobody measured.
 	Measurement *Measurement `json:"measurement,omitempty"`
 
@@ -194,7 +193,7 @@ func (r RolloutRange) Holds(source Source, id string) bool {
 // index passed only if every shape met its own floor with no head miss, and
 // the shape closest to failing is the one an operator needs named.
 type Measurement struct {
-	// Sources is how many sources the partition held when it was measured.
+	// Sources is how many sources the corpus held when it was measured.
 	Sources int `json:"sources"`
 
 	// Recall and Floor are the worst shape's: its mean recall, and the
@@ -239,11 +238,11 @@ func (m Measurement) validate() error {
 	return nil
 }
 
-// IndexVerdict is why a partition has no index.
+// IndexVerdict is why the corpus has no index.
 type IndexVerdict string
 
 const (
-	// VerdictTooSmall is a partition below [IVFMinCorpus].
+	// VerdictTooSmall is a corpus below [IVFMinCorpus].
 	VerdictTooSmall IndexVerdict = "below_min_corpus"
 
 	// VerdictNotWorthwhile is an index whose recall needed more than
@@ -277,8 +276,8 @@ func (x IndexRecord) validate(model string, dim int) error {
 	}
 	if !isToken(x.Log) {
 		return fmt.Errorf("search: an index record names no vector log (%q) — "+
-			"a process holding many partitions keys each one's decoded index "+
-			"on it", x.Log)
+			"its training's seed is derived from it, so without it the index "+
+			"cannot be trained again bit for bit", x.Log)
 	}
 	if x.Measurement != nil {
 		if err := x.Measurement.validate(); err != nil {
@@ -391,7 +390,7 @@ func (r ReassignRecord) validate(subject Subject) error {
 //
 // A RECORD OF ITS OWN rather than a re-published centroids record, because a
 // probe count is a fact about how the index is READ and changes no row: a new
-// centroids record is a new generation, and every row of the partition would
+// centroids record is a new generation, and every row of the corpus would
 // be re-filed to change one number.
 type MeasureRecord struct {
 	// Index is the generation measured. Any other generation's measurement

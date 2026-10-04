@@ -22,22 +22,18 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// layoutZero is the one layout this build runs: one partition, three logs.
-var layoutZero = statelog.EstateLayout("tracker", "vectors", "pages")
-
-// The stream of layout 0's tracker log, as a floor names it.
-var trackerStream = func() string {
-	name, _ := layoutZero.Stream(statelog.LogID{Domain: "tracker", Partition: statelog.EstatePartition})
-	return name
-}()
+// The streams of the tracker's and the knowledge base's logs, as a floor names
+// them.
+var (
+	trackerStream = floorStreams[trackerDomain]
+	pagesStream   = floorStreams[pagesDomain]
+)
 
 // fakeNode is one data node's backend, recording what it was asked.
 type fakeNode struct {
 	TrackerReader
 	TrackerWriter
 	PageWriter
-
-	cpus CPUs
 
 	mu        sync.Mutex
 	name      string
@@ -60,9 +56,8 @@ type fakeNode struct {
 	failWith error
 	written  statelog.Position
 
-	// notHolder is a node that does not serve the partition right now,
-	// and holdingUnknown one that cannot tell whether it does.
-	notHolder, holdingUnknown bool
+	// outOfService is a node whose copy is wrong, so it serves nothing.
+	outOfService bool
 
 	// notAdmitting is a copy that serves requests and admits no seat.
 	notAdmitting bool
@@ -165,20 +160,21 @@ func (f *fakeNode) Comment(_ context.Context, _ pages.Actor, _ string,
 	return pages.Comment{Body: in.Body}, pages.Written{}, nil
 }
 
-func (f *fakeNode) Slice(_ context.Context, q knowledge.Query) (pages.SearchSlice, error) {
+func (f *fakeNode) Answer(_ context.Context, q knowledge.Query) (knowledge.Result, error) {
 	f.note("search")
 	f.mu.Lock()
 	f.queries = append(f.queries, q)
 	f.mu.Unlock()
-	return pages.SearchSlice{
-		Candidates: search.Candidates{Lexical: []search.Scored{{Key: "page:" + f.name, Score: 1}}},
-		Hits:       map[string]knowledge.Hit{"page:" + f.name: {Title: "found on " + f.name}},
+	return knowledge.Result{
+		Hits: []knowledge.Hit{{Title: "found on " + f.name}},
+		Outcome: knowledge.Outcome{ServedMode: knowledge.ModeKeyword,
+			Coverage: knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}, Complete: true}},
 	}, nil
 }
 
 func (f *fakeNode) Building(context.Context) bool { return false }
 
-// backend is this node as a [Backend] over estate.000.
+// backend is this node as a [Backend] over its copy of the estate.
 func (f *fakeNode) backend() Backend {
 	return Backend{
 		Tracker: f, PageWriter: f, Knowledge: f,
@@ -221,28 +217,19 @@ func (f *fakeNode) backend() Backend {
 			f.asked = append(f.asked, "admits")
 			return !f.notAdmitting
 		},
-		Applied: func(stream string) statelog.Position {
-			return statelog.Position{Stream: stream, Generation: 1, Seq: 7}
-		},
 	}
 }
 
-// CPUs implements [LocalBackends]: the node's one.
-func (f *fakeNode) CPUs() *CPUs { return &f.cpus }
-
-// For implements [LocalBackends]: this node serves estate.000 unless it was
-// told it does not, or that it cannot tell.
-func (f *fakeNode) For(_ context.Context, p statelog.PartitionID) (Backend, bool, error) {
+// For implements [LocalBackends]: this node's copy serves unless it was told
+// it is out of service.
+func (f *fakeNode) For(context.Context) (Backend, bool) {
 	f.mu.Lock()
-	notHolder, holdingUnknown := f.notHolder, f.holdingUnknown
+	outOfService := f.outOfService
 	f.mu.Unlock()
-	switch {
-	case holdingUnknown:
-		return Backend{}, false, errors.New("the executor could not say")
-	case notHolder || p != statelog.EstatePartition:
-		return Backend{}, false, nil
+	if outOfService {
+		return Backend{}, false
 	}
-	return f.backend(), true, nil
+	return f.backend(), true
 }
 
 // seams is the serving node's own chart and scope.
@@ -256,49 +243,22 @@ func (f *fakeNode) seams() ServerSeams {
 	}
 }
 
-// fakePlacement is layout 0 served by whichever nodes a case names, at the
-// epoch it names.
+// fakePlacement is the data nodes a case names, or an error where it says the
+// placement cannot tell.
 type fakePlacement struct {
 	mu         sync.Mutex
-	layout     statelog.Layout
 	nodes      []string
-	epoch      uint64
 	err        error
-	servingErr error
-	refreshes  int
-	onRefresh  func(*fakePlacement)
 	unanswered []string
 }
 
-func (p *fakePlacement) Layout() (statelog.Layout, error) {
+func (p *fakePlacement) Holders() ([]string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.err != nil {
-		return statelog.Layout{}, p.err
+		return nil, p.err
 	}
-	return p.layout, nil
-}
-
-func (p *fakePlacement) Serving(statelog.PartitionID) ([]string, uint64, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.err != nil {
-		return nil, 0, p.err
-	}
-	if p.servingErr != nil {
-		return nil, 0, p.servingErr
-	}
-	return slices.Clone(p.nodes), p.epoch, nil
-}
-
-func (p *fakePlacement) Refresh(context.Context) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.refreshes++
-	if p.onRefresh != nil {
-		p.onRefresh(p)
-	}
-	return nil
+	return slices.Clone(p.nodes), nil
 }
 
 func (p *fakePlacement) Unanswered(node string) {
@@ -313,22 +273,14 @@ func (p *fakePlacement) set(change func(*fakePlacement)) {
 	change(p)
 }
 
-func (p *fakePlacement) refreshed() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.refreshes
-}
-
 // fleet is some data nodes serving on one broker, and a router on a node
 // that holds nothing.
 type fleet struct {
 	broker *memory.Broker
 	nodes  map[string]*fakeNode
 
-	// placement is what the routers route by, and servers what the
-	// serving nodes' own views say — two views, so a case can put them at
-	// different map epochs.
-	placement, servers *fakePlacement
+	// placement is what the routers route by.
+	placement *fakePlacement
 
 	client *Router
 }
@@ -337,13 +289,12 @@ func newFleet(t *testing.T, names ...string) *fleet {
 	t.Helper()
 	sorted := slices.Sorted(slices.Values(names))
 	f := &fleet{broker: memory.NewBroker(), nodes: map[string]*fakeNode{},
-		placement: &fakePlacement{layout: layoutZero, nodes: sorted},
-		servers:   &fakePlacement{layout: layoutZero, nodes: slices.Clone(sorted)}}
+		placement: &fakePlacement{nodes: sorted}}
 	for _, name := range names {
 		node := &fakeNode{name: name, units: chartOf(name)}
 		f.nodes[name] = node
 		stop, err := Serve(t.Context(), silencer{q: f.start(t), node: node}, name, node,
-			f.servers, node.seams())
+			node.seams())
 		if err != nil {
 			t.Fatalf("serve %s: %v", name, err)
 		}
@@ -419,12 +370,12 @@ type namedChart struct{ tracker.Units }
 // chartOf is a chart value distinguishable per node, compared by identity.
 func chartOf(string) tracker.Units { return &namedChart{} }
 
-// first is the node r asks first for estate.000, which is the rendezvous
-// winner among the nodes the placement names.
+// first is the node r asks first, which is the rendezvous winner among the
+// nodes the placement names.
 func (f *fleet) first(t *testing.T, r *Router) (string, *fakeNode) {
 	t.Helper()
-	nodes, _, _ := f.placement.Serving(statelog.EstatePartition)
-	ordered := r.order(statelog.EstatePartition, nodes)
+	nodes, _ := f.placement.Holders()
+	ordered := r.order(nodes)
 	if len(ordered) == 0 {
 		t.Fatalf("no node to ask among %v", nodes)
 	}
@@ -443,8 +394,8 @@ func (f *fleet) other(n *fakeNode) *fakeNode {
 
 var swe = Actor{Handle: "swe", Kind: tracker.AuthorAgent}
 
-// A READ IS ANSWERED BY A NODE THAT SERVES THE PARTITION, with the serving
-// node's own chart attached — the asking node's chart cannot cross a wire, and
+// A READ IS ANSWERED BY A DATA NODE, with the serving node's own chart
+// attached — the asking node's chart cannot cross a wire, and
 // a read that arrived without one would render every unit unresolved.
 func TestAReadIsAnsweredWithTheServingNodesChart(t *testing.T) {
 	t.Parallel()
@@ -503,12 +454,15 @@ func TestAnUnknownPlacementIsNotAnEmptyFleet(t *testing.T) {
 	f := newFleet(t)
 	f.placement.set(func(p *fakePlacement) { p.err = errors.New("the leases could not be listed") })
 	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
-	var unserved *ErrPartitionUnserved
+	var unserved *ErrUnserved
 	if err == nil || errors.As(err, &unserved) {
 		t.Fatalf("an unknown placement answered %v, want the placement's own error", err)
 	}
-	if !strings.Contains(err.Error(), "the leases could not be listed") {
-		t.Fatalf("the error %q does not carry the placement's reason", err)
+	// AND IT NAMES ITS OPERATION, so the person reading it knows which call
+	// to look at.
+	const want = "estate: tracker.tasks: read who holds the estate: the leases could not be listed"
+	if err.Error() != want {
+		t.Fatalf("the error %q, want %q", err, want)
 	}
 }
 
@@ -570,9 +524,8 @@ func TestAnUnansweredTrackerWriteRepeatsUnderTheSameOperation(t *testing.T) {
 }
 
 // A WRITE'S POSITION IS THE NEXT REQUEST'S FLOOR, on whichever node answers
-// it — on EVERY log of the partition, since a holder applies them all and a
-// seat's next read of the partition must include what it wrote to any of
-// them. A floor on a log the partition does not carry is never waited for.
+// it — on the log of the operation's own domain, and on no other: a floor on
+// another domain's log, or on a stream no domain logs to, is never waited for.
 func TestAWritesPositionIsTheNextReadsFloor(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -589,18 +542,18 @@ func TestAWritesPositionIsTheNextReadsFloor(t *testing.T) {
 	if len(node.floors) != 1 || node.floors[0] != node.written {
 		t.Fatalf("the read waited for %v, want the write's %v", node.floors, node.written)
 	}
-	// ANOTHER DOMAIN'S LOG IN THE SAME PARTITION: a page write does not
-	// depend on the tracker's rows, so it carries no floor on its log.
+	// ANOTHER DOMAIN'S LOG: a page write does not depend on the tracker's
+	// rows, so it carries no floor on its log.
 	node.set(func(n *fakeNode) { n.floors = nil })
 	if _, _, err := f.client.Pages().Comment(t.Context(), pages.Actor{}, "p", pages.NewComment{}); err != nil {
 		t.Fatalf("comment: %v", err)
 	}
 	if len(node.floors) != 0 {
-		t.Errorf("a write to the partition's pages log waited on %v, the tracker "+
+		t.Errorf("a write to the pages log waited on %v, the tracker "+
 			"log's floor — a log it does not depend on", node.floors)
 	}
-	// ANOTHER PARTITION'S LOG: a position on a stream estate.000 does not
-	// carry is not a floor any holder of it could reach.
+	// A STREAM NO DOMAIN LOGS TO: a position on it is a floor no
+	// operation is about.
 	f.client.Observe(statelog.Position{Stream: "CREWLET_OTHER_LOG", Generation: 1, Seq: 3})
 	node.set(func(n *fakeNode) { n.floors = nil })
 	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
@@ -608,21 +561,18 @@ func TestAWritesPositionIsTheNextReadsFloor(t *testing.T) {
 	}
 	for _, at := range node.floors {
 		if at.Stream != trackerStream {
-			t.Errorf("a read of estate.000 waited on %v, a log it does not carry", at)
+			t.Errorf("a tracker read waited on %v, a log it does not read", at)
 		}
 	}
 }
 
-// A FLOOR ON ANOTHER DOMAIN'S LOG NEVER HOLDS AN OPERATION, though one
-// partition carries both logs: no operation reads another domain's rows, so a
-// seat a page change woke — its trigger a floor on the pages log — reads and
-// writes the tracker on a node whose pages applier is stuck exactly as before
-// it was woken, and only the knowledge base's own operations wait for that
-// applier.
+// A FLOOR ON ANOTHER DOMAIN'S LOG NEVER HOLDS AN OPERATION, though the estate
+// carries both logs: no operation reads another domain's rows, so a seat a
+// page change woke — its trigger a floor on the pages log — reads and writes
+// the tracker on a node whose pages applier is stuck exactly as before it was
+// woken, and only the knowledge base's own operations wait for that applier.
 func TestAFloorOnAnotherDomainsLogNeverHoldsAnOperation(t *testing.T) {
 	t.Parallel()
-	pagesStream, _ := layoutZero.Stream(statelog.LogID{Domain: pagesDomain,
-		Partition: statelog.EstatePartition})
 	f := newFleet(t, "data-a")
 	node := f.nodes["data-a"]
 	node.set(func(n *fakeNode) { n.behindOn = pagesStream })
@@ -641,16 +591,15 @@ func TestAFloorOnAnotherDomainsLogNeverHoldsAnOperation(t *testing.T) {
 	if len(carried) != 0 {
 		t.Errorf("the tracker's operations waited on %v, the pages log's floor", carried)
 	}
-	// AND THE HOLDER HOLDS TO IT TOO: an older asker sends its floors on
-	// every log of the partition, and the one on another domain's log is
-	// not waited for.
-	raw, _ := json.Marshal(request{Op: opTasks.spec.name, Partitions: []string{"estate.000"},
+	// AND THE SERVER HOLDS TO IT TOO, whatever an asker sends: a tracker
+	// read carrying a floor on the pages log does not wait for it.
+	raw, _ := json.Marshal(request{Op: opTasks.spec.name,
 		Floors: []statelog.Position{{Stream: pagesStream, Generation: 1, Seq: 9}}})
 	replies, err := f.start(t).Ask(t.Context(), Subject("data-a"), raw, 1)
 	var rep reply
 	if err != nil || len(replies) != 1 || json.Unmarshal(replies[0], &rep) != nil ||
 		rep.Unserved != "" || rep.Err != nil {
-		t.Fatalf("an older asker's tracker read with a pages floor = (%+v, %v), want it answered",
+		t.Fatalf("a tracker read with a pages floor = (%+v, %v), want it answered",
 			rep, err)
 	}
 
@@ -658,26 +607,26 @@ func TestAFloorOnAnotherDomainsLogNeverHoldsAnOperation(t *testing.T) {
 	// the asker stops listening.
 	f.client.writeBudget = statelog.ReadBudget + time.Second
 	_, _, err = f.client.Pages().Comment(t.Context(), pages.Actor{}, "p", pages.NewComment{})
-	var unserved *ErrPartitionUnserved
+	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) || !strings.Contains(err.Error(), "has not applied") ||
 		node.askedFor("comment") {
-		t.Fatalf("a page write behind its own log's floor = %v, want the partition "+
-			"unserved as behind, and nothing written", err)
+		t.Fatalf("a page write behind its own log's floor = %v, want it unserved as "+
+			"behind, and nothing written", err)
 	}
 }
 
 // A NODE BEHIND THE FLOOR SAYS SO RATHER THAN ANSWER FROM BEFORE THE WRITE,
-// and when every holder is behind the caller is told the partition is
-// unserved — naming it.
-func TestEveryHolderBehindTheFloorIsAnUnservedPartition(t *testing.T) {
+// and when every data node is behind the caller is told the estate is
+// unserved — naming each node it asked.
+func TestEveryDataNodeBehindTheFloorIsAnUnservedEstate(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
 	f.client.Observe(statelog.Position{Stream: trackerStream, Generation: 1, Seq: 5})
 	f.nodes["data-a"].set(func(n *fakeNode) { n.behind = true })
 	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
-	var unserved *ErrPartitionUnserved
-	if !errors.As(err, &unserved) || unserved.Partition != "estate.000" {
-		t.Fatalf("err = %v, want ErrPartitionUnserved naming estate.000", err)
+	var unserved *ErrUnserved
+	if !errors.As(err, &unserved) || !strings.HasPrefix(unserved.Detail, "data-a: ") {
+		t.Fatalf("err = %v, want ErrUnserved naming data-a", err)
 	}
 	if f.nodes["data-a"].askedFor("tasks") {
 		t.Error("a node behind the floor answered anyway")
@@ -789,15 +738,15 @@ func TestAKnowledgeSearchKeepsItsExclusionAndTakesTheServersScope(t *testing.T) 
 	}
 }
 
-// A PARTITION NOBODY SERVES IS AN ANSWER NAMING IT — never an empty result,
-// which would read as a company with nothing in it.
+// AN ESTATE NO DATA NODE SERVES IS AN ANSWER SAYING SO — never an empty
+// result, which would read as a company with nothing in it.
 func TestNoServingNodeSaysSo(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
-	var unserved *ErrPartitionUnserved
-	if !errors.As(err, &unserved) || unserved.Partition != "estate.000" {
-		t.Fatalf("err = %v, want ErrPartitionUnserved naming estate.000", err)
+	var unserved *ErrUnserved
+	if !errors.As(err, &unserved) {
+		t.Fatalf("err = %v, want ErrUnserved", err)
 	}
 }
 
@@ -836,10 +785,10 @@ func TestATurnsSpendCrossesAndRepeatsUnderItsOperation(t *testing.T) {
 	}
 }
 
-// A NODE THAT SERVES THE PARTITION ANSWERS ITS OWN SEATS IN-PROCESS, and asks
-// nobody: under layout 0 a data node holds everything, and a request over the
-// broker to itself would be a round trip for nothing.
-func TestANodeThatServesThePartitionAnswersItself(t *testing.T) {
+// A DATA NODE ANSWERS ITS OWN SEATS IN-PROCESS, and asks nobody: it holds the
+// whole estate, and a request over the broker to itself would be a round trip
+// for nothing.
+func TestADataNodeAnswersItself(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
 	local := &fakeNode{name: "data-self", units: chartOf("self")}
@@ -856,12 +805,12 @@ func TestANodeThatServesThePartitionAnswersItself(t *testing.T) {
 
 // A LOCAL READ WAITS FOR THIS NODE'S OWN FLOOR — design B, the join direction.
 //
-// A data node's seats may write a partition through ANOTHER holder — this node
-// was not serving it yet, or had stopped on a fault — and then read it here:
-// the write is on the log and not yet in this node's rows. A node that trusted
-// its own copy because "it applies the write itself" answers its own seat from
-// before a write it was told landed. So the local path waits for the floor
-// exactly as a remote holder would.
+// A data node's seats may write through ANOTHER data node — this node's copy
+// was out of service, or behind — and then read here: the write is on the log
+// and not yet in this node's rows. A node that trusted its own copy because
+// "it applies the write itself" answers its own seat from before a write it
+// was told landed. So the local path waits for the floor exactly as a remote
+// node would.
 func TestALocalReadWaitsForTheNodesOwnFloor(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -894,7 +843,7 @@ func TestALocalReadWaitsForTheNodesOwnFloor(t *testing.T) {
 }
 
 // A LOCAL COPY THAT CANNOT REACH THE FLOOR IN TIME ANSWERS `behind` TO ITSELF,
-// and the router asks the partition's next holder, which has.
+// and the router asks the next data node, which has.
 func TestALocalCopyBehindItsFloorAsksAnotherHolder(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -969,8 +918,8 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 		t.Fatalf("a page write with every copy lagging: %v", err)
 	}
 
-	// THIS NODE'S OWN COPY, where it is the only holder: its seats are
-	// answered, not refused naming a partition it serves.
+	// THIS NODE'S OWN COPY, where it is the only data node: its seats are
+	// answered, not refused as though nobody held the estate.
 	local := &fakeNode{name: "data-self", units: chartOf("self"), notReady: true}
 	alone := newFleet(t).router(t, "data-self", local)
 	if _, err := alone.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
@@ -993,31 +942,31 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 	}
 }
 
-// A SEARCH THAT REACHED NOTHING STILL SAYS SO: at layout 0 one partition, its
-// only holder gone, is a search that failed — answered with no hits, as the
-// seam requires, and with that partition named missing, so the turn-start
-// block and the tool say "1 of 1 partitions did not answer" rather than
-// "nothing is written down".
-func TestASearchThatReachedNothingNamesWhatItMissed(t *testing.T) {
+// A SEARCH THAT REACHED NOTHING STILL SAYS SO: its only data node gone, a
+// knowledge search is answered with no hits, as the seam requires — and with
+// NO MODE SERVED and none of the corpus covered, so the turn-start block and
+// the tool say the knowledge base could not be searched rather than "nothing
+// is written down", which a seat acts on by writing a duplicate.
+func TestASearchThatReachedNothingSaysItDidNotRun(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
 	f.nodes["data-a"].set(func(n *fakeNode) { n.silent = true })
 	got := f.client.Knowledge().Search(t.Context(), knowledge.Query{Text: "deploys", Limit: 5})
-	if len(got.Hits) != 0 || got.Partitions.Addressed != 1 || len(got.Partitions.Missing) != 1 ||
-		got.Partitions.Missing[0].Partition != "estate.000" ||
-		got.Partitions.Missing[0].Reason != statelog.MissingUnreachable {
-		t.Fatalf("a search nothing answered = %+v, want estate.000 named unreachable", got)
+	if len(got.Hits) != 0 || got.ServedMode != "" || got.Coverage.Complete ||
+		got.Coverage.BucketsMissing != search.SearchShards || got.Coverage.Nodes == nil {
+		t.Fatalf("a search nothing answered = %+v, want no mode served and every "+
+			"bucket missing", got)
 	}
-	const notice = "1 of 1 partitions did not answer; this list may be incomplete"
-	if got.Partitions.Notice() != notice {
-		t.Errorf("it renders %q, want %q", got.Partitions.Notice(), notice)
+	// AND THE ITEM SEARCH IS AN ERROR, never an empty list.
+	if answer, err := f.client.Work().Search(t.Context(),
+		tracker.SearchQuery{Text: "deploys", Limit: 5}); err == nil {
+		t.Fatalf("an item search nothing answered = %+v, want its error", answer)
 	}
 }
 
-// A SEARCH ON A FLEET A BURST PUT BEHIND RUNS ON ONE NODE, as a read does:
-// under layout 0 a search is a gather of the one partition, and its last
-// resort asks the lagging copies one at a time, stopping at the first that
-// answers — never every data node at once for one search.
+// A SEARCH ON A FLEET A BURST PUT BEHIND RUNS ON ONE NODE, as a read does: its
+// last resort asks the lagging copies one at a time, stopping at the first
+// that answers — never every data node at once for one search.
 func TestASearchWithEveryCopyLaggingRunsOnce(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b", "data-c")
@@ -1025,7 +974,7 @@ func TestASearchWithEveryCopyLaggingRunsOnce(t *testing.T) {
 		n.set(func(n *fakeNode) { n.notReady = true })
 	}
 	got := f.client.Knowledge().Search(t.Context(), knowledge.Query{Text: "deploys", Limit: 5})
-	if len(got.Hits) != 1 || !got.Partitions.Complete() {
+	if len(got.Hits) != 1 || got.ServedMode == "" || !got.Coverage.Complete {
 		t.Fatalf("search with every copy lagging = %+v, want one copy's answer", got)
 	}
 	var ran []string
@@ -1040,9 +989,9 @@ func TestASearchWithEveryCopyLaggingRunsOnce(t *testing.T) {
 }
 
 // A COPY TOLD TO ANSWER ANYWAY THAT REFUSES AGAIN IS NOT ASKED A THIRD TIME —
-// an older build, which ignores the request's say-so — so a gather whose only
-// holder is one ends naming the partition rather than circling it until the
-// caller's deadline.
+// a build that ignores the request's say-so — so a search whose only data node
+// is one ends saying it did not run rather than circling it until the caller's
+// deadline.
 func TestALaggingCopyThatRefusesTheLastResortIsNotAskedAgain(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -1051,9 +1000,8 @@ func TestALaggingCopyThatRefusesTheLastResortIsNotAskedAgain(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	got := f.client.Knowledge().Search(ctx, knowledge.Query{Text: "deploys", Limit: 5})
-	if ctx.Err() != nil || len(got.Partitions.Missing) != 1 ||
-		got.Partitions.Missing[0].Reason != statelog.MissingUnserved {
-		t.Fatalf("search = %+v (deadline %v), want estate.000 missing as unserved before the "+
+	if ctx.Err() != nil || got.ServedMode != "" || got.Coverage.Complete {
+		t.Fatalf("search = %+v (deadline %v), want it answered as not run before the "+
 			"caller's deadline", got, ctx.Err())
 	}
 	node.mu.Lock()
@@ -1065,29 +1013,25 @@ func TestALaggingCopyThatRefusesTheLastResortIsNotAskedAgain(t *testing.T) {
 	}
 }
 
-// A GATHER THAT FAILS NAMES ITS OPERATION, as a single-partition read does:
-// a placement that cannot say who serves a partition fails a search and a
-// board alike with "estate: <operation>: read who serves <partition>", so the
-// person reading it knows which call to look at.
-func TestAGatherThatFailsNamesItsOperation(t *testing.T) {
+// A SEARCH THAT FAILS NAMES ITS OPERATION, as every read does: a placement
+// that cannot say who holds the estate fails it with "estate: <operation>:
+// read who holds the estate", so the person reading it knows which call to
+// look at.
+func TestASearchThatFailsNamesItsOperation(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
 	f.placement.set(func(p *fakePlacement) {
-		p.servingErr = errors.New("the presence view answers unknown")
+		p.err = errors.New("the presence view answers unknown")
 	})
 	_, err := f.client.Work().Search(t.Context(), tracker.SearchQuery{Text: "deploys", Limit: 5})
-	const want = "estate: tracker.search: read who serves estate.000: the presence view answers unknown"
+	const want = "estate: tracker.search: read who holds the estate: the presence view answers unknown"
 	if err == nil || err.Error() != want {
-		t.Errorf("a gather the placement could not route = %v, want %q", err, want)
-	}
-	_, err = f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
-	if err == nil || !strings.HasPrefix(err.Error(), "estate: tracker.tasks: read who serves estate.000: ") {
-		t.Errorf("a single-partition read the placement could not route = %v, want the same shape", err)
+		t.Errorf("a search the placement could not route = %v, want %q", err, want)
 	}
 }
 
 // A LAGGING COPY OF ITS OWN STILL ANSWERS WHEN THE PLACEMENT CANNOT SAY WHO
-// SERVES. This node knows it holds the partition without asking anybody, so a
+// HOLDS THE ESTATE. This node knows it holds it without asking anybody, so a
 // view that answers unknown names no peer to prefer and takes nothing from the
 // copy the walk passed over for lagging. Answered with the placement's error
 // instead, a single data node a burst put behind refused every call its own
@@ -1097,7 +1041,7 @@ func TestALaggingOwnCopyAnswersWhileThePlacementCannot(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	f.placement.set(func(p *fakePlacement) {
-		p.servingErr = errors.New("the presence view answers unknown")
+		p.err = errors.New("the presence view answers unknown")
 	})
 	own := &fakeNode{name: "data-self", units: chartOf("self"), notReady: true}
 	r := f.router(t, "data-self", own)
@@ -1118,11 +1062,11 @@ func TestALaggingOwnCopyAnswersWhileThePlacementCannot(t *testing.T) {
 		t.Fatalf("a lagging copy of its own refused this node's write: %v", err)
 	}
 
-	// A COPY THAT DOES NOT SERVE THE PARTITION is no holder at all, and the
-	// answer is the placement's own reason — never "nobody serves it".
-	own.set(func(n *fakeNode) { n.notHolder = true })
+	// A COPY OUT OF SERVICE is no node to ask at all, and the answer is the
+	// placement's own reason — never "nobody serves it".
+	own.set(func(n *fakeNode) { n.outOfService = true })
 	_, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
-	var unserved *ErrPartitionUnserved
+	var unserved *ErrUnserved
 	if err == nil || errors.As(err, &unserved) ||
 		!strings.Contains(err.Error(), "the presence view answers unknown") {
 		t.Fatalf("a node serving nothing while its placement cannot answer = %v, want "+
@@ -1158,17 +1102,16 @@ func TestACopyThatAdmitsNoSeatStillServesRequests(t *testing.T) {
 			"question", local.asked)
 	}
 	// AND ADMISSION STILL REFUSES IT: the two gates disagree on purpose.
-	if trackerServed, _, err := r.Serves(t.Context(), statelog.EstatePartition); err != nil ||
-		trackerServed {
+	if trackerServed, _, err := r.Serves(t.Context()); err != nil || trackerServed {
 		t.Fatalf("a copy that admits no seat was admitted (%v, %v)", trackerServed, err)
 	}
 }
 
-// THE HOLDER THAT ANSWERED LAST FOR A PARTITION IS ASKED FIRST NEXT TIME, ahead
-// of the rendezvous winner — its applier is the one most likely to hold this
+// THE DATA NODE THAT ANSWERED LAST IS ASKED FIRST NEXT TIME, ahead of the
+// rendezvous winner — its applier is the one most likely to hold this
 // node's writes — and loses that place the moment it goes silent, not only for
 // as long as it stays suspect.
-func TestTheHolderThatAnsweredLastIsAskedFirstUntilItGoesSilent(t *testing.T) {
+func TestTheNodeThatAnsweredLastIsAskedFirstUntilItGoesSilent(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
 	r := f.router(t, "agent-2", nil)
@@ -1183,11 +1126,11 @@ func TestTheHolderThatAnsweredLastIsAskedFirstUntilItGoesSilent(t *testing.T) {
 	}
 
 	// THE RUNNER-UP ANSWERS ONCE, because the winner ran nothing...
-	winner.set(func(n *fakeNode) { n.notHolder = true })
+	winner.set(func(n *fakeNode) { n.outOfService = true })
 	if err := read(); err != nil {
 		t.Fatalf("tasks: %v", err)
 	}
-	winner.set(func(n *fakeNode) { n.notHolder = false })
+	winner.set(func(n *fakeNode) { n.outOfService = false })
 	// ...AND IS ASKED FIRST FROM THEN ON.
 	for range 3 {
 		if err := read(); err != nil {
@@ -1195,28 +1138,28 @@ func TestTheHolderThatAnsweredLastIsAskedFirstUntilItGoesSilent(t *testing.T) {
 		}
 	}
 	if winner.askedFor("tasks") {
-		t.Fatal("the rendezvous winner was asked ahead of the holder that answered last")
+		t.Fatal("the rendezvous winner was asked ahead of the node that answered last")
 	}
 
-	// A HOLDER THAT GOES SILENT LOSES ITS PLACE for good: once its
-	// suspicion lapses it is back in the rendezvous order, not first.
+	// A NODE THAT GOES SILENT LOSES ITS PLACE for good: once its suspicion
+	// lapses it is back in the rendezvous order, not first.
 	runnerUp.set(func(n *fakeNode) { n.silent = true })
-	winner.set(func(n *fakeNode) { n.notHolder = true })
+	winner.set(func(n *fakeNode) { n.outOfService = true })
 	if err := read(); err == nil {
 		t.Fatal("a read nobody could answer was answered")
 	}
 	runnerUp.set(func(n *fakeNode) { n.silent = false })
-	winner.set(func(n *fakeNode) { n.notHolder = false })
+	winner.set(func(n *fakeNode) { n.outOfService = false })
 	clock.Add(int64(2 * suspectFor))
 	if got, _ := f.first(t, r); got != winnerName {
-		t.Fatalf("%s is asked first after the holder that answered last went silent, want "+
+		t.Fatalf("%s is asked first after the node that answered last went silent, want "+
 			"the rendezvous winner %s", got, winnerName)
 	}
 }
 
 // A WRITE THIS NODE'S OWN WRITE AUTHORITY REFUSED AT GATE 3 is taken to a peer
-// under the same operation id, exactly as a remote holder's refusal is: it
-// appended nothing, and a node that serves the partition can take it.
+// under the same operation id, exactly as a remote node's refusal is: it
+// appended nothing, and another data node can take it.
 func TestALocalGateThreeRefusalMovesOnUnderTheSameOperation(t *testing.T) {
 	t.Parallel()
 	for _, reason := range []statelog.Reason{statelog.ReasonNotHolder, statelog.ReasonHoldingUnknown} {
@@ -1234,140 +1177,39 @@ func TestALocalGateThreeRefusalMovesOnUnderTheSameOperation(t *testing.T) {
 	}
 }
 
-// A NODE THAT DOES NOT SERVE THE PARTITION RIGHT NOW is never asked
-// in-process — a copy that stopped serving on a fault is read from the
-// partition's other holders — and answers another node's request
-// `not_holder`, having run nothing.
-func TestANodeThatDoesNotServeThePartitionRunsNothing(t *testing.T) {
+// A COPY OUT OF SERVICE is never asked in-process — its seats are answered by
+// the other data nodes — and answers another node's request `out_of_service`,
+// having run nothing; the asker moves to the next data node.
+func TestACopyOutOfServiceRunsNothing(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
-	local := &fakeNode{name: "data-self", units: chartOf("self"), notHolder: true}
+	local := &fakeNode{name: "data-self", units: chartOf("self"), outOfService: true}
 	r := f.router(t, "data-self", local)
 	_, first := f.first(t, r)
-	first.set(func(n *fakeNode) { n.notHolder = true })
+	first.set(func(n *fakeNode) { n.outOfService = true })
 	written, err := r.WriterAs(swe).CreateTask(t.Context(), "op-9", tracker.Task{Project: "ENG"}, nil)
 	if err != nil || written.Key != "ENG-1" {
 		t.Fatalf("create = (%+v, %v)", written, err)
 	}
 	if local.askedFor("create") || first.askedFor("create") {
-		t.Fatal("a node that does not serve the partition ran the write")
+		t.Fatal("a copy out of service ran the write")
 	}
 	if got := f.other(first).ops(); !slices.Equal(got, []string{"op-9"}) {
-		t.Fatalf("the serving holder ran %v, want [op-9]", got)
-	}
-}
-
-// NOT_HOLDER FROM A SERVER WITH A NEWER MAP REFRESHES THE VIEW, ONCE, and the
-// request walks the holders the fresh view names.
-//
-// The server is the authority: a router routing by an older map costs one
-// `not_holder` and one direct read of the map, never a wrong answer. And only
-// once per request, because a view just read that a server still outruns is
-// not one this request can wait for.
-func TestANotHolderFromANewerMapRefreshesTheViewOnce(t *testing.T) {
-	t.Parallel()
-	f := newFleet(t, "data-a", "data-b")
-	a, b := f.nodes["data-a"], f.nodes["data-b"]
-	a.set(func(n *fakeNode) { n.notHolder = true })
-	f.servers.set(func(p *fakePlacement) { p.epoch = 7 })
-	f.placement.set(func(p *fakePlacement) {
-		p.nodes, p.epoch = []string{"data-a"}, 3
-		p.onRefresh = func(p *fakePlacement) { p.nodes, p.epoch = []string{"data-a", "data-b"}, 7 }
-	})
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
-		t.Fatalf("tasks after a newer map: %v", err)
-	}
-	if got := f.placement.refreshed(); got != 1 {
-		t.Fatalf("the view was refreshed %d times, want once", got)
-	}
-	if !b.askedFor("tasks") {
-		t.Fatal("the holder the fresh view names was not asked")
+		t.Fatalf("the serving node ran %v, want [op-9]", got)
 	}
 
-	// ONCE: a server whose map keeps outrunning a view just read is not
-	// chased again — the request moves on, and fails naming the partition.
-	b.set(func(n *fakeNode) { n.notHolder = true })
-	f.placement.set(func(p *fakePlacement) {
-		p.nodes, p.epoch, p.refreshes = []string{"data-a", "data-b"}, 3, 0
-		p.onRefresh = func(p *fakePlacement) { p.epoch = 5 }
-	})
-	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
-	var unserved *ErrPartitionUnserved
-	if !errors.As(err, &unserved) {
-		t.Fatalf("every holder refusing answered %v, want ErrPartitionUnserved", err)
-	}
-	if got := f.placement.refreshed(); got != 1 {
-		t.Fatalf("the view was refreshed %d times for one request, want once", got)
-	}
-}
-
-// NOT_HOLDER FROM A SERVER NO NEWER THAN THE VIEW IS THE SERVER'S OWN STATE —
-// a joiner not serving yet, a leaver — so the router moves to the next holder
-// and reads nothing again.
-func TestANotHolderAtTheViewsEpochMovesToTheNextHolder(t *testing.T) {
-	t.Parallel()
-	f := newFleet(t, "data-a", "data-b")
-	_, first := f.first(t, f.client)
-	first.set(func(n *fakeNode) { n.notHolder = true })
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
-		t.Fatalf("tasks: %v", err)
-	}
-	if got := f.placement.refreshed(); got != 0 {
-		t.Fatalf("a not_holder at the view's own epoch refreshed the view %d times", got)
-	}
-	if !f.other(first).askedFor("tasks") {
-		t.Fatal("the next holder was not asked")
-	}
-}
-
-// A NODE THAT CANNOT TELL WHETHER IT SERVES THE PARTITION SAYS SO, and is not
-// `not_holder`: it names no map epoch, because nothing about the asker's map is
-// in question, so the asker moves to the next holder without reading its map
-// again — however new the server's own map is. The same holds for this node's
-// own copy: a holding it cannot read is passed over for a peer.
-func TestAHoldingNobodyCanTellMovesOnWithoutARefresh(t *testing.T) {
-	t.Parallel()
-	f := newFleet(t, "data-a", "data-b")
-	_, first := f.first(t, f.client)
-	first.set(func(n *fakeNode) { n.holdingUnknown = true })
-	f.servers.set(func(p *fakePlacement) { p.epoch = 7 })
-	f.placement.set(func(p *fakePlacement) { p.epoch = 3 })
-	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
-		t.Fatalf("tasks: %v", err)
-	}
-	if got := f.placement.refreshed(); got != 0 {
-		t.Fatalf("a holding the server could not tell refreshed the asker's view %d times", got)
-	}
-	if first.askedFor("tasks") || !f.other(first).askedFor("tasks") {
-		t.Fatal("the read was not taken from the node that could not tell to the next holder")
-	}
-
-	raw, err := json.Marshal(request{Op: "tracker.tasks", Args: json.RawMessage(`{}`),
-		Partitions: []string{statelog.EstatePartition.String()}, MapEpoch: 3})
+	raw, err := json.Marshal(request{Op: opTasks.spec.name})
 	if err != nil {
 		t.Fatal(err)
 	}
 	replies, err := f.start(t).Ask(t.Context(), Subject(first.name), raw, 1)
-	if err != nil || len(replies) != 1 {
+	var rep reply
+	if err != nil || len(replies) != 1 || json.Unmarshal(replies[0], &rep) != nil {
 		t.Fatalf("ask = (%d replies, %v)", len(replies), err)
 	}
-	var rep reply
-	if err := json.Unmarshal(replies[0], &rep); err != nil {
-		t.Fatal(err)
-	}
-	if rep.Unserved != unservedHoldingUnknown || rep.Epoch != 0 {
-		t.Fatalf("the server answered %q at epoch %d, want %q with no epoch",
-			rep.Unserved, rep.Epoch, unservedHoldingUnknown)
-	}
-
-	local := &fakeNode{name: "data-self", units: chartOf("self"), holdingUnknown: true}
-	r := f.router(t, "data-self", local)
-	first.set(func(n *fakeNode) { n.holdingUnknown = false })
-	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
-		t.Fatalf("tasks from a node that cannot tell: %v", err)
-	}
-	if local.askedFor("tasks") {
-		t.Fatal("a node that cannot tell whether it serves the partition answered it itself")
+	if rep.Unserved != unservedOutOfService || rep.Result != nil || rep.Err != nil {
+		t.Fatalf("a copy out of service answered %+v, want %q and nothing run",
+			rep, unservedOutOfService)
 	}
 }
 
@@ -1398,7 +1240,7 @@ func TestAnUnvouchedWriteIsAskedOfTheNextHolderUnderTheSameOperation(t *testing.
 		}
 	}
 
-	// NOBODY VOUCHES: the answer is the unknown, never an unserved partition.
+	// NOBODY VOUCHES: the answer is the unknown, never an unserved estate.
 	second.set(func(n *fakeNode) { n.unvouched = true })
 	written, err = r.WriterAs(swe).CreateTask(t.Context(), "op-v", tracker.Task{Project: "ENG"}, nil)
 	if err != nil || written.Outcome != statelog.OutcomeUnknown || !written.Unvouched {
@@ -1408,9 +1250,8 @@ func TestAnUnvouchedWriteIsAskedOfTheNextHolderUnderTheSameOperation(t *testing.
 }
 
 // A GATE-3 REFUSAL APPENDED NOTHING, so every class moves on from it under the
-// same operation id: the write authority refused because this node does not
-// serve the log's partition, or could not tell — and another holder can take
-// the write. A refusal about another node's COPY is final, and reaches the
+// same operation id: the write authority refused at its holding gate, and
+// another data node can take the write. A refusal about another node's COPY is final, and reaches the
 // caller whole: the node that refused passed its own fences, and the remedy —
 // the same operation once the duplicate window lets go — is the caller's.
 func TestAGateThreeRefusalMovesOnUnderTheSameOperation(t *testing.T) {
@@ -1424,10 +1265,10 @@ func TestAGateThreeRefusalMovesOnUnderTheSameOperation(t *testing.T) {
 		written, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-g",
 			tracker.Task{Project: "ENG"}, nil)
 		if err != nil || written.Key != "ENG-1" {
-			t.Fatalf("%s: create = (%+v, %v), want the next holder's answer", reason, written, err)
+			t.Fatalf("%s: create = (%+v, %v), want the next node's answer", reason, written, err)
 		}
 		if got := f.other(first).ops(); !slices.Equal(got, []string{"op-g"}) {
-			t.Fatalf("%s: the next holder ran %v, want [op-g]", reason, got)
+			t.Fatalf("%s: the next node ran %v, want [op-g]", reason, got)
 		}
 	}
 
@@ -1444,101 +1285,82 @@ func TestAGateThreeRefusalMovesOnUnderTheSameOperation(t *testing.T) {
 		t.Fatalf("a refusal naming another node's copy answered %v, want it whole", err)
 	}
 	if f.other(first).askedFor("create") {
-		t.Error("a refusal that is final was taken to another holder")
+		t.Error("a refusal that is final was taken to another node")
 	}
 }
 
 // ADMISSION ASKS THE COPY THAT WILL SERVE THE SEAT: this node's own where it
-// serves the partition — never passed over for a peer's, since its seats read
-// here — and a remote holder's where it does not.
+// serves — never passed over for a peer's, since its seats read here — and a
+// remote data node's where it does not.
 func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
 	peer := f.nodes["data-a"]
 	local := &fakeNode{name: "data-self", units: chartOf("self"), notAdmitting: true}
 	r := f.router(t, "data-self", local)
-	trackerServed, _, err := r.Serves(t.Context(), statelog.EstatePartition)
+	trackerServed, _, err := r.Serves(t.Context())
 	if err != nil || trackerServed {
 		t.Fatalf("a node whose own copy admits no seat was admitted (%v, %v)", trackerServed, err)
 	}
 	if peer.askedFor("admits") {
-		t.Fatal("a peer was asked for a node that serves the partition itself")
+		t.Fatal("a peer was asked for a node whose own copy serves")
 	}
 
-	// A COPY THIS NODE DOES NOT SERVE — faulted, or never held — is asked
-	// of a holder that does.
-	local.set(func(n *fakeNode) { n.notHolder = true })
-	trackerServed, _, err = r.Serves(t.Context(), statelog.EstatePartition)
+	// A COPY OUT OF SERVICE is asked of a data node whose copy serves.
+	local.set(func(n *fakeNode) { n.outOfService = true })
+	trackerServed, _, err = r.Serves(t.Context())
 	if err != nil || !trackerServed {
 		t.Fatalf("a node served by a peer was not admitted (%v, %v)", trackerServed, err)
 	}
 
-	// AND A REMOTE HOLDER THAT ADMITS NO SEAT IS PASSED OVER, like a node
+	// AND A REMOTE NODE THAT ADMITS NO SEAT IS PASSED OVER, like a node
 	// that ran nothing.
 	peer.set(func(n *fakeNode) { n.notAdmitting = true })
-	if trackerServed, _, err = f.client.Serves(t.Context(), statelog.EstatePartition); trackerServed {
-		t.Fatalf("a node was admitted on a holder that admits no seat (%v)", err)
+	if trackerServed, _, err = f.client.Serves(t.Context()); trackerServed {
+		t.Fatalf("a node was admitted on a data node that admits no seat (%v)", err)
 	}
 }
 
-// AN OLDER BUILD'S ADMISSION IS ANSWERED. A stateless node from before
-// partitions asks its ping with no arguments and names no partition; a data
-// node of this build answers it as the question it always was — whether its
-// copy of the estate admits a seat — rather than refusing it as malformed,
-// which that node would take as final and withhold every seat claim until it
-// was upgraded too.
-func TestAnOlderBuildsAdmissionIsAnswered(t *testing.T) {
+// ADMISSION'S PING IS ABOUT THE ONE ESTATE, so it carries no arguments, and a
+// data node answers it with or without them: asked with none at all it is
+// still the question whether its copy admits a seat — never refused as
+// malformed, which the asker would take as final and withhold every seat
+// claim on.
+func TestAdmissionsPingNeedsNoArguments(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
-	raw, err := json.Marshal(map[string]any{"op": "estate.ping", "args": struct{}{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	replies, err := f.start(t).Ask(t.Context(), Subject("data-a"), raw, 1)
-	if err != nil || len(replies) != 1 {
-		t.Fatalf("ask = (%d replies, %v)", len(replies), err)
-	}
-	var rep reply
-	if err := json.Unmarshal(replies[0], &rep); err != nil {
-		t.Fatal(err)
-	}
-	var answer served
-	if rep.Err != nil || rep.Unserved != "" || json.Unmarshal(rep.Result, &answer) != nil ||
-		!answer.Tracker {
-		t.Fatalf("an older build's ping was answered %+v, want the admission answer", rep)
+	for name, envelope := range map[string]map[string]any{
+		"empty arguments": {"op": "estate.ping", "args": struct{}{}},
+		"no arguments":    {"op": "estate.ping"},
+	} {
+		raw, err := json.Marshal(envelope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		replies, err := f.start(t).Ask(t.Context(), Subject("data-a"), raw, 1)
+		if err != nil || len(replies) != 1 {
+			t.Fatalf("%s: ask = (%d replies, %v)", name, len(replies), err)
+		}
+		var rep reply
+		if err := json.Unmarshal(replies[0], &rep); err != nil {
+			t.Fatal(err)
+		}
+		var answer served
+		if rep.Err != nil || rep.Unserved != "" || json.Unmarshal(rep.Result, &answer) != nil ||
+			!answer.Tracker {
+			t.Fatalf("%s: the ping was answered %+v, want the admission answer", name, rep)
+		}
 	}
 	if !f.nodes["data-a"].askedFor("admits") {
-		t.Fatal("the older question was answered without asking the copy")
-	}
-
-	// UNDER A LAYOUT THAT DIVIDES THE ESTATE the older question has no
-	// partition to be about — and no older build shares such a fleet.
-	f.servers.set(func(p *fakePlacement) { p.layout = dividedLayout })
-	replies, err = f.start(t).Ask(t.Context(), Subject("data-a"), raw, 1)
-	if err != nil || len(replies) != 1 {
-		t.Fatalf("ask = (%d replies, %v)", len(replies), err)
-	}
-	rep = reply{}
-	if err := json.Unmarshal(replies[0], &rep); err != nil {
-		t.Fatal(err)
-	}
-	if rep.Err == nil || !errors.Is(decodeError(rep.Err), ErrUnaddressed) {
-		t.Fatalf("a whole-estate ping under a divided layout answered %+v, want ErrUnaddressed", rep)
+		t.Fatal("the ping was answered without asking the copy")
 	}
 }
 
-// dividedLayout is a layout that divides every domain.
-var dividedLayout = statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
-	{Space: statelog.SpaceTracker, Partitions: 4, Domains: []string{"tracker", "vectors"}},
-	{Space: statelog.SpacePages, Partitions: 2, Domains: []string{"pages", "vectors"}},
-	{Space: statelog.SpaceCompany, Partitions: 1, Domains: []string{"tracker"}},
-}}
-
-// ADMISSION IS BOUNDED AS A WHOLE, not per holder: a sweep asks it on every
-// pass, the first one at boot, and each listed holder that is wedged would
-// otherwise cost the sweep a whole read attempt. A fleet whose holders do not
-// answer withholds the claim within the bound, and the sweep goes on.
-func TestWedgedHoldersCostAdmissionNoMoreThanItsBound(t *testing.T) {
+// ADMISSION IS BOUNDED AS A WHOLE, not per data node: a sweep asks it on every
+// pass, the first one at boot, and each listed node that is wedged would
+// otherwise cost the sweep a whole read attempt. A fleet whose data nodes do
+// not answer withholds the claim within the bound, and the sweep goes on.
+func TestWedgedDataNodesCostAdmissionNoMoreThanItsBound(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b", "data-c")
 	hang := make(chan struct{})
@@ -1555,35 +1377,19 @@ func TestWedgedHoldersCostAdmissionNoMoreThanItsBound(t *testing.T) {
 	begun := time.Now()
 	done := make(chan answer, 1)
 	go func() {
-		served, _, err := r.Serves(t.Context(), statelog.EstatePartition)
+		served, _, err := r.Serves(t.Context())
 		done <- answer{served, err}
 	}()
 	select {
 	case got := <-done:
 		if got.served || got.err == nil {
-			t.Fatalf("wedged holders admitted a seat (%v, %v)", got.served, got.err)
+			t.Fatalf("wedged data nodes admitted a seat (%v, %v)", got.served, got.err)
 		}
 		if waited := time.Since(begun); waited > 2*time.Second {
-			t.Fatalf("admission waited %s on wedged holders, past its %s bound",
+			t.Fatalf("admission waited %s on wedged data nodes, past its %s bound",
 				waited, r.admissionBudget)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("admission waited on every wedged holder in turn, past its bound")
-	}
-}
-
-// AN OPERATION THAT ADDRESSES ITS DOMAIN AS ONE PARTITION HAS NONE under a
-// layout that divides the domain, and says so rather than guessing one — the
-// same answer the domain's own partition function gives.
-func TestAWholeDomainOperationUnderADividedLayoutIsUnaddressed(t *testing.T) {
-	t.Parallel()
-	f := newFleet(t, "data-a")
-	f.placement.set(func(p *fakePlacement) { p.layout = dividedLayout })
-	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
-	if !errors.Is(err, ErrUnaddressed) {
-		t.Fatalf("err = %v, want ErrUnaddressed", err)
-	}
-	if f.nodes["data-a"].askedFor("tasks") {
-		t.Error("a node was asked for an operation with no partition")
+		t.Fatal("admission waited on every wedged data node in turn, past its bound")
 	}
 }

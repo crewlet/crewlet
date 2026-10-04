@@ -18,8 +18,16 @@ import (
 // it that hides the tool-skills container.
 func searchCorpus(t *testing.T, docs map[string][2]string) *pages.Searcher {
 	t.Helper()
-	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
+	s, db := searchStore(t, docs)
 	t.Cleanup(func() { _ = db.Close() })
+	return s
+}
+
+// searchStore is [searchCorpus] with the store handed back, for a case that
+// takes it away from under the searcher.
+func searchStore(t *testing.T, docs map[string][2]string) (*pages.Searcher, *store.DB) {
+	t.Helper()
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	estate := storetest.Partition(t, storetest.EstateOf(db))
 	for id, doc := range docs {
 		if _, err := estate.SQL().ExecContext(t.Context(), `
@@ -45,7 +53,7 @@ func searchCorpus(t *testing.T, docs map[string][2]string) *pages.Searcher {
 	}
 	return pages.NewSearcher(pages.SearcherOptions{
 		Index: x, SkillsContainer: func() string { return "SKILLS" },
-	})
+	}), db
 }
 
 // A TOOL-SKILL PAGE COSTS THE ANSWER THAT PAGE AND NEVER A PLACE: a search walks
@@ -73,16 +81,42 @@ func TestAToolSkillPageCostsTheAnswerNoPlace(t *testing.T) {
 			t.Errorf("a %s page was returned: %+v", hit.Container, hit)
 		}
 	}
-	if !answer.Partitions.Complete() || answer.Partitions.Addressed != 0 {
-		t.Errorf("one corpus searched alone states partition coverage %+v, want none",
-			answer.Partitions)
+}
+
+// A SEARCH THAT COULD NOT RUN IS AN ERROR TO WHOEVER ANSWERS FOR IT, and an
+// empty answer that says so to a turn.
+//
+// [pages.Searcher.Answer] is what the estate router serves a search with, and
+// its failure is what lets the asking node tell "the knowledge base could not
+// be searched" from "nothing matched": degraded to an empty answer here, the
+// router would carry an empty list back as if it were the company's. Search,
+// which a turn reads, stays best effort — no hits, nothing served, and this
+// node named as the participant that covered none of its range.
+func TestASearchThatCouldNotRunIsAnErrorToItsRouter(t *testing.T) {
+	t.Parallel()
+	s, db := searchStore(t, map[string][2]string{"eng-00": {"ENG", "Deploy runbook"}})
+	q := knowledge.Query{Text: "deploy", Limit: 5}
+	if got := s.Search(t.Context(), q); len(got.Hits) != 1 {
+		t.Fatalf("the open store answered %+v, want its one page", got)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if answer, err := s.Answer(t.Context(), q); err == nil {
+		t.Fatalf("a search over a closed store answered %+v, want its error", answer)
+	}
+	got := s.Search(t.Context(), q)
+	if len(got.Hits) != 0 || got.ServedMode != "" || got.Coverage.Complete ||
+		got.Coverage.BucketsMissing != search.SearchShards {
+		t.Fatalf("a search that could not run answered %+v, want no hits, nothing served "+
+			"and every bucket missing", got.Outcome)
 	}
 }
 
-// ONE CORPUS SEARCHED ALONE IS ITS SLICE FUSED: the answer a node gives when it
-// holds the whole knowledge base is exactly the fusion of its own slice — the
-// path a gather takes over several — so there is one ranking rule, not two.
-func TestASearchIsItsOwnSliceFused(t *testing.T) {
+// ANSWER AND SEARCH ARE ONE RANKING: a search that runs answers the same hits
+// whether the router asked for its error or a turn asked best effort.
+func TestASearchThatRanAnswersTheSameEitherWay(t *testing.T) {
 	t.Parallel()
 	docs := map[string][2]string{}
 	for i := range 8 {
@@ -91,15 +125,11 @@ func TestASearchIsItsOwnSliceFused(t *testing.T) {
 	}
 	s := searchCorpus(t, docs)
 	q := knowledge.Query{Text: "deploy", Limit: 5}
-	slice, err := s.Slice(t.Context(), q)
+	answered, err := s.Answer(t.Context(), q)
 	if err != nil {
-		t.Fatalf("slice: %v", err)
+		t.Fatalf("answer: %v", err)
 	}
-	if len(slice.Candidates.Lexical) == 0 || len(slice.Hits) == 0 {
-		t.Fatalf("the slice holds no candidates: %+v", slice)
-	}
-	merged := pages.MergeSearch([]pages.SearchSlice{slice}, q).Hits
-	if got := s.Search(t.Context(), q).Hits; !reflect.DeepEqual(got, merged) || len(got) != 5 {
-		t.Fatalf("searched %+v, want its own slice fused %+v", got, merged)
+	if got := s.Search(t.Context(), q); !reflect.DeepEqual(got, answered) || len(got.Hits) != 5 {
+		t.Fatalf("searched %+v, want what Answer answered %+v", got, answered)
 	}
 }

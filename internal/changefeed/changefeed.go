@@ -448,10 +448,10 @@ func (f *Feed) release(ctx context.Context, id string) {
 // estate whose deliveries carry no log position.
 //
 // THE COMMITTING RECORD'S OWN POSITION, because that is what the woken seat
-// must read no older than: the change that woke it. A seat reading a list
-// across partitions waits for its node's floors rather than appending a
-// barrier on every log, and this is the floor that names what it was woken
-// for.
+// must read no older than: the change that woke it. The turn hands it to its
+// node's floors before its first read, so whichever data node answers that
+// read has applied the change — and this is the floor that names what the seat
+// was woken for.
 func triggerOf(rec Record) string {
 	if rec.Stream == "" || rec.Position == 0 {
 		return ""

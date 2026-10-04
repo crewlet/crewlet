@@ -9,16 +9,12 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 )
 
-// CORPORA FUSED FROM THEIR CANDIDATES RANK EXACTLY AS ONE CORPUS DOES.
-//
-// A gather asks each partition for its candidates — each method's top-FuseN
-// with scores — and fuses them where it holds them all. That is only worth
-// doing if it is the SAME ranking a single scan of every document would have
-// produced: the per-method global top-N lies inside the union of the
-// per-corpus top-N because the corpora are disjoint, so merging by score and
-// fusing once is identical to fusing the whole. Split a corpus every way and
-// the order must not move.
-func TestDisjointCorporaFuseExactlyAsOneCorpus(t *testing.T) {
+// THE CANDIDATES FUSE BY THE FAN-OUT'S OWN RULE, so the order a caller walks
+// past what it cannot show is the order the fan-out answered: each method by
+// score, cut at FuseN, then reciprocal rank fusion once over the two. A list
+// that arrived in another order — a slice's, before the merge — is ranked by
+// its scores, never by where it happened to be.
+func TestTheCandidatesFuseByTheFanOutsOwnRule(t *testing.T) {
 	t.Parallel()
 	rng := rand.New(rand.NewPCG(7, 11))
 	const docs = 400
@@ -33,39 +29,23 @@ func TestDisjointCorporaFuseExactlyAsOneCorpus(t *testing.T) {
 		}
 		semantic = append(semantic, search.Scored{Key: key, Score: -rng.Float64()})
 	}
-	whole := search.FuseCandidates([]search.Candidates{topOf(lexical, semantic, nil)})
-	if len(whole) == 0 {
-		t.Fatal("the whole corpus fused to nothing")
-	}
-	for _, partitions := range []int{2, 4, 64} {
-		parts := make([]search.Candidates, partitions)
-		for p := range parts {
-			parts[p] = topOf(lexical, semantic, func(key string) bool {
-				var n int
-				_, _ = fmt.Sscanf(key, "page:%d", &n)
-				return n%partitions == p
-			})
+	byScore := func(list []search.Scored) []string {
+		var keys []string
+		for _, s := range search.MergeByScore([][]search.Scored{list}, search.FuseN) {
+			keys = append(keys, s.Key)
 		}
-		if got := search.FuseCandidates(parts); !slices.Equal(got, whole) {
-			t.Errorf("split %d ways the corpus fused to a different order:\n got %v\nwant %v",
-				partitions, head(got), head(whole))
-		}
+		return keys
 	}
-}
-
-// topOf is one corpus's candidates: the documents keep admits, each method's
-// best FuseN by score.
-func topOf(lexical, semantic []search.Scored, keep func(string) bool) search.Candidates {
-	pick := func(all []search.Scored) []search.Scored {
-		var mine []search.Scored
-		for _, s := range all {
-			if keep == nil || keep(s.Key) {
-				mine = append(mine, s)
-			}
-		}
-		return search.MergeByScore([][]search.Scored{mine}, search.FuseN)
+	want := search.Fuse(byScore(lexical), byScore(semantic))
+	if len(want) == 0 {
+		t.Fatal("the corpus fused to nothing")
 	}
-	return search.Candidates{Lexical: pick(lexical), Semantic: pick(semantic)}
+	// UNSORTED, as the documents were generated: the rule sorts them.
+	got := search.Candidates{Lexical: lexical, Semantic: semantic}.Fused()
+	if !slices.Equal(got, want) {
+		t.Errorf("the candidates fused to a different order:\n got %v\nwant %v",
+			head(got), head(want))
+	}
 }
 
 func head(keys []string) []string { return keys[:min(len(keys), 8)] }

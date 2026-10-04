@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // ── the fakes ──
@@ -179,9 +178,10 @@ type searcher struct {
 	queries []knowledge.Query
 	cannot  bool
 
-	// coverage is what the search says it covered — a partition missing
-	// from it is part of the knowledge base nobody searched.
-	coverage statelog.Coverage
+	// unsearched is a search that did not run: no hits and no mode
+	// served, which every reader of the outcome renders as "could not be
+	// searched".
+	unsearched bool
 
 	// building reports the backend's index as still catching up. A real
 	// one that keeps no index does not implement this at all, which is
@@ -200,7 +200,15 @@ func (s *searcher) Search(_ context.Context, q knowledge.Query) knowledge.Result
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.queries = append(s.queries, q)
-	return knowledge.Result{Hits: s.hits, Outcome: knowledge.Outcome{Partitions: s.coverage}}
+	if s.unsearched {
+		return knowledge.Result{Outcome: knowledge.Outcome{
+			Coverage: knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}},
+		}}
+	}
+	return knowledge.Result{Hits: s.hits, Outcome: knowledge.Outcome{
+		ServedMode: knowledge.ModeKeyword,
+		Coverage:   knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}, Complete: true},
+	}}
 }
 
 func (s *searcher) asked() []knowledge.Query {
@@ -248,7 +256,7 @@ func fetch(t *testing.T, src prefetch.Sources, r prefetch.Request) prefetch.Bloc
 	return prefetch.New(src).Fetch(t.Context(), r)
 }
 
-// ── everything degrades to nothing ──
+// ── every block degrades, and most of them to nothing ──
 
 // A NIL SOURCE IS A SUPPORTED CONFIGURATION, not a degraded one: a company
 // with reflection off or no knowledge backend has exactly this, and a turn
@@ -716,31 +724,29 @@ func TestTheModelWritesTheSearchQuery(t *testing.T) {
 	}
 }
 
-// PART OF THE KNOWLEDGE BASE THAT DID NOT ANSWER IS SAID, never shown as a
-// shorter block: with hits, the block names what was not searched beside them;
-// with none, it says so instead of "no team documents surfaced" — which a seat
-// reads as the company having written nothing about the task.
-func TestAKnowledgeBlockMissingAPartitionSaysSo(t *testing.T) {
+// A SEARCH THAT NEVER RAN IS SAID, never shown as an empty block: no copy of
+// the knowledge base answered it, and "no team documents surfaced" — which a
+// seat reads as the company having written nothing about the task — is a claim
+// a search that ran nothing cannot make. A search that ran and matched nothing
+// still says that.
+func TestAKnowledgeSearchThatNeverRanSaysItCouldNotSearch(t *testing.T) {
 	t.Parallel()
-	short := statelog.Coverage{Addressed: 4, Answered: []string{"pages.000", "pages.002", "pages.003"},
-		Missing: []statelog.MissingPartition{{Partition: "pages.001", Reason: statelog.MissingUnreachable}}}
-	const notice = "1 of 4 partitions did not answer; this list may be incomplete"
-
 	got := fetch(t, prefetch.Sources{
-		Knowledge: &searcher{coverage: short, hits: []knowledge.Hit{{Title: "Staging runbook"}}},
+		Knowledge: &searcher{unsearched: true},
 		Models:    models{provider: &aux{answers: []string{"staging proxy"}}},
 	}, request(t)).RelevantKnowledge
-	if !strings.Contains(got, "Staging runbook") || !strings.Contains(got, notice) {
-		t.Fatalf("a block missing a partition rendered:\n%s\nwant the hit and %q", got, notice)
+	if got != prefetch.UnsearchedKnowledgeHint {
+		t.Fatalf("a search that never ran rendered %q, want %q rather than "+
+			"\"nothing surfaced\"", got, prefetch.UnsearchedKnowledgeHint)
 	}
 
 	got = fetch(t, prefetch.Sources{
-		Knowledge: &searcher{coverage: short},
+		Knowledge: &searcher{},
 		Models:    models{provider: &aux{answers: []string{"staging proxy"}}},
 	}, request(t)).RelevantKnowledge
-	if got == prefetch.EmptyKnowledgeHint || !strings.Contains(got, notice) {
-		t.Fatalf("an empty block missing a partition rendered %q, want %q rather than "+
-			"\"nothing surfaced\"", got, notice)
+	if got != prefetch.EmptyKnowledgeHint {
+		t.Fatalf("a search that ran and matched nothing rendered %q, want %q",
+			got, prefetch.EmptyKnowledgeHint)
 	}
 }
 

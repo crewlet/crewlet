@@ -168,9 +168,9 @@ type Config struct {
 	// already in hand, and it fires only where this node cannot serve that
 	// work at all — in the engine, a node that can no longer say where the
 	// estate its seats read and write is served. A copy of the estate that
-	// is WRONG is not such a case: the node stops serving that partition
-	// and its seats read it from another holder, which is the same answer a
-	// peer would give them.
+	// is WRONG is not such a case: the node takes it out of service and its
+	// seats read the estate from another data node, which is the same
+	// answer a peer would give them.
 	//
 	// VOLUNTARY, not fenced: the lease is still held and still renewed, so
 	// the in-flight turn finishes and the seat leaves when it goes idle.

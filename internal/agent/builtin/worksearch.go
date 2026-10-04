@@ -129,6 +129,5 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"work — some of the fleet did not answer in time — so an item " +
 			"not listed here may still exist"
 	}
-	noteUnanswered(out, answer.Partitions)
 	return jsonAnswer(out, "Ask for fewer with `limit`.")
 }

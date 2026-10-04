@@ -2,7 +2,6 @@ package statelog
 
 import (
 	"cmp"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -176,8 +175,8 @@ type LogID struct {
 // THE KEY DOES NOT CARRY THE LAYOUT NUMBER: layout 1's `tracker@tracker.007`
 // and a repartitioned layout 2's are the same string. The STREAM does carry
 // it ([Layout.Stream]), so anything that must never compare two layouts keys
-// on the stream, as [Cut] does; anything keyed by this string records the
-// layout beside it.
+// on the stream; anything keyed by this string records the layout beside
+// it.
 func (l LogID) String() string {
 	if l.Partition == (PartitionID{Space: SpaceEstate}) {
 		return l.Domain
@@ -553,56 +552,4 @@ func (l Layout) spaceOf(p PartitionID) (SpaceLayout, bool) {
 		}
 	}
 	return SpaceLayout{}, false
-}
-
-// Cut is where a gather was answered: one position per log stream, keyed by
-// the STREAM's name — the position's own [Position.Stream].
-//
-// The stream rather than the [LogID] key, because the stream carries the
-// layout number and the key does not: a cut can then never set a position of
-// one layout's log beside another's under one key, and a key that disagreed
-// with its value's stream would be one value with two names.
-type Cut map[string]Position
-
-// ErrInvalidCut reports a cut one of whose positions is filed under a key that
-// is not the position's own stream, or names no stream at all.
-var ErrInvalidCut = errors.New("statelog: a cut files a position under another stream's name")
-
-// Validate reports whether every position of the cut is filed under its own
-// stream — the one invariant a cut has, and the one nothing in its type holds.
-//
-// A key that disagrees with its value is one position with two names: a reader
-// that looks a log's stream up finds a position that is another log's, and a
-// floor raised from it waits on a sequence of the wrong number space — or, a
-// layout apart, on a log the reader's own layout does not carry.
-func (c Cut) Validate() error {
-	for key, at := range c {
-		switch {
-		case at.Stream == "":
-			return fmt.Errorf("%w: the position under %q names no stream", ErrInvalidCut, key)
-		case key != at.Stream:
-			return fmt.Errorf("%w: %q holds a position on %q", ErrInvalidCut, key, at.Stream)
-		}
-	}
-	return nil
-}
-
-// UnmarshalJSON decodes a cut and refuses one [Cut.Validate] refuses.
-//
-// ON THE DECODE rather than at each reader, because a cut is what a peer
-// answered with — a gather's per-partition positions, crossing the estate's
-// wire from whichever build answered — and a reader that forgot to validate
-// would carry the second name onward. Decoded here, no cut in this process was
-// ever read off a wire without the check.
-func (c *Cut) UnmarshalJSON(raw []byte) error {
-	var decoded map[string]Position
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return err
-	}
-	cut := Cut(decoded)
-	if err := cut.Validate(); err != nil {
-		return err
-	}
-	*c = cut
-	return nil
 }

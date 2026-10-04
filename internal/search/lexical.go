@@ -89,7 +89,7 @@ const ScanBatch = 1_000
 // side rather than a JOIN.
 type Indexer struct {
 	// db is this node's own estate, where the index is kept, and estate the
-	// partition whose documents it indexes — read only, because the
+	// replicated estate whose documents it indexes — read only, because the
 	// documents are an applier's rows and the index is not.
 	db     *store.DB
 	estate store.PartitionReader
@@ -155,7 +155,7 @@ func (x *Indexer) WithLinks(links func(body string) []string) *Indexer {
 }
 
 // NewIndexer builds an indexer that keeps its index in a node's own store and
-// reads the documents of one partition, covering every corpus in
+// reads the documents of the replicated estate, covering every corpus in
 // [DefaultLexicalSources].
 func NewIndexer(db *store.DB, estate store.PartitionReader) *Indexer {
 	return NewIndexerOver(db, estate, DefaultLexicalSources())
@@ -433,7 +433,7 @@ func (x *Indexer) staleIn(ctx context.Context, source LexicalSource,
 		// the bodies in a second transaction would fetch a version the
 		// scan never saw.
 		//
-		// THROUGH THE HANDLE, NOT A POOL. A partition that is not open
+		// THROUGH THE HANDLE, NOT A POOL. An estate that is not open
 		// — a legitimate, documented state, since an adoption closes it
 		// between its rename and its reopen — has no pool, and a
 		// statement issued on a closed one panics inside database/sql.
@@ -635,7 +635,7 @@ func (x *Indexer) orphansOf(ctx context.Context, source LexicalSource,
 
 	live := map[string]bool{}
 	// THROUGH THE HANDLE, for [Indexer.nextBatch]' reason: a closed
-	// partition's pool panics where the handle answers [store.ErrNoEstate].
+	// estate's pool panics where the handle answers [store.ErrNoEstate].
 	if err := x.estate.Read(ctx, func(tx *sql.Tx) error {
 		held, err := source.Live(ctx, tx, candidates)
 		live = held

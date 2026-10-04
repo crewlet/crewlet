@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/period"
-	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -109,10 +107,9 @@ type TrackerWriter interface {
 	PurgeTask(ctx context.Context, opID, id, project, reason string) (tracker.WriteResult, error)
 }
 
-// WorkSearcher is the tracker's ranked search over one partition's corpus,
-// before the fusion a gather makes across partitions ([tracker.MergeSearch]).
+// WorkSearcher is the tracker's ranked search over this node's corpus.
 type WorkSearcher interface {
-	Slice(ctx context.Context, q tracker.SearchQuery) (tracker.SearchSlice, error)
+	Search(ctx context.Context, q tracker.SearchQuery) (tracker.SearchAnswer, error)
 }
 
 // PageReader is the knowledge base's read side.
@@ -143,17 +140,20 @@ type PageWriter interface {
 		body string, key pages.CallKey) (pages.Comment, pages.Written, error)
 }
 
-// KnowledgeSearcher is the native knowledge search over one partition's
-// corpus, before the fusion a gather makes across partitions
-// ([pages.MergeSearch]), with the one question a caller asks of an empty
-// answer.
+// KnowledgeSearcher is the native knowledge search over this node's corpus,
+// with the one question a caller asks of an empty answer.
+//
+// ANSWER, NOT THE BEST-EFFORT SEARCH: a search that could not run is an error
+// here ([pages.Searcher.Answer]), because the asking node has to tell "the
+// knowledge base could not be searched" from "nothing matched" — and an empty
+// answer carried back over the wire reads as the second.
 type KnowledgeSearcher interface {
-	Slice(ctx context.Context, q knowledge.Query) (pages.SearchSlice, error)
+	Answer(ctx context.Context, q knowledge.Query) (knowledge.Result, error)
 	Building(ctx context.Context) bool
 }
 
-// Backend is one serving node's answer to every operation on ONE partition it
-// serves, resolved PER REQUEST: a node that booted with no company brings its
+// Backend is one data node's answer to every operation, over its copy of the
+// estate, resolved PER REQUEST: a node that booted with no company brings its
 // native runtime up at its first apply, and a request that arrives before then
 // is answered "not here" rather than refused for ever.
 //
@@ -167,16 +167,16 @@ type Backend struct {
 	PageWriter PageWriter
 	Knowledge  KnowledgeSearcher
 
-	// Committed waits until this node's applier of the partition holds a
+	// Committed waits until this node's applier of the floor's log holds a
 	// position — the floor every request carries, the node's own included.
 	Committed func(ctx context.Context, at statelog.Position) error
 
-	// Answers is whether this copy of the partition may answer a request
-	// now ([statelog.Health.Answers]): serving — drained since its appliers
+	// Answers is whether this copy may answer a request now
+	// ([statelog.Health.Answers]): serving — drained since its appliers
 	// started and within the snapshot slack of every log's end — or level
 	// this instant. A copy that does not LAGS: it is asked only once every
-	// holder whose copy does not has run nothing, by a remote asker and by
-	// this node's own router alike — a worse holder, never no holder
+	// data node whose copy does not has run nothing, by a remote asker and
+	// by this node's own router alike — a worse node to ask, never no node
 	// ([Router.route]).
 	//
 	// NOT A SEAT'S ADMISSION, which refuses at a lag of one: a busy
@@ -191,26 +191,13 @@ type Backend struct {
 	// that will serve it ([Router.Serves]). Only admission's ping reads it.
 	Admits func(ctx context.Context) bool
 
-	// Applied is where this copy's applier of one of the partition's logs
-	// has committed, read BEFORE a read that reports its coverage begins —
-	// so the cut it reports is a lower bound on what the answer holds
-	// ([statelog.Coverage.At]). Nil states no cut.
-	Applied func(stream string) statelog.Position
-
-	// Barrier appends a barrier on one of the partition's logs and waits
-	// for this copy to apply through it ([statelog.Reader.Barrier]) — the
-	// `linearizable` half of a gather slice. False where the log keeps no
-	// read index: it makes no freshness claim (the vectors' derived log),
-	// and where it was is what [Backend.Applied] says.
-	Barrier func(ctx context.Context, stream string) (statelog.Position, bool, error)
-
-	// ServerSeams are the node's own, partition-free: the dispatcher sets
-	// them on every backend it hands an operation.
+	// ServerSeams are the node's own: the dispatcher sets them on every
+	// backend it hands an operation.
 	ServerSeams
 }
 
-// ServerSeams are what an operation reads of the SERVING node rather than of a
-// partition: the chart seams a query or a dependency consults and the org a
+// ServerSeams are what an operation reads of the SERVING node rather than of
+// its copy: the chart seams a query or a dependency consults and the org a
 // knowledge search is scoped by — the node's current epoch, which is what the
 // package doc says crosses no wire — and the node's own event log.
 type ServerSeams struct {
@@ -231,12 +218,17 @@ var errNoHalf = errors.New("estate: this node runs no native backend for this op
 // ([Backend.Admits]): nothing ran, and the asker moves on.
 var errNotAdmitting = errors.New("estate: this copy admits no seat yet")
 
-// The domains an operation addresses as one partition, and how the ones that
-// name an object find it.
+// The domains an operation's floor may be on, and each one's log — named as it
+// has always been, the one log the estate keeps of the domain. An operation's
+// floor is on its OWN domain's log and no other: see [ready].
 var (
 	trackerDomain = tracker.Domain{}.Name()
 	pagesDomain   = pages.Domain{}.Name()
-	vectorsDomain = search.Domain{}.Name()
+
+	floorStreams = map[string]string{
+		trackerDomain: statelog.EstateStream(tracker.Domain{}).Name,
+		pagesDomain:   statelog.EstateStream(pages.Domain{}).Name,
+	}
 )
 
 // ---- the tracker's reads ------------------------------------------------ //
@@ -246,15 +238,14 @@ type tasksArgs struct {
 	Now   time.Time
 }
 
-var opTasks = define("tracker.tasks", opRead, wholeDomain[tasksArgs](trackerDomain), false,
+var opTasks = define("tracker.tasks", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a tasksArgs) (tracker.Answer, error) {
 		if b.Tracker == nil {
 			return tracker.Answer{}, errNoHalf
 		}
 		a.Query.Units = b.Units
 		return b.Tracker.Tasks(ctx, a.Query, a.Now)
-	}).covered(
-	func(a *tracker.Answer, c statelog.Coverage) { a.Coverage = c })
+	})
 
 type taskArgs struct {
 	IDOrKey string
@@ -266,7 +257,7 @@ type taskArgs struct {
 	Zone string
 }
 
-var opTask = define("tracker.task", opRead, byTask(func(a taskArgs) string { return a.IDOrKey }), false,
+var opTask = define("tracker.task", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a taskArgs) (tracker.TaskDetail, error) {
 		if b.Tracker == nil {
 			return tracker.TaskDetail{}, errNoHalf
@@ -291,7 +282,7 @@ type viewsArgs struct {
 	Zone  string
 }
 
-var opViews = define("tracker.views", opRead, wholeDomain[viewsArgs](trackerDomain), false,
+var opViews = define("tracker.views", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a viewsArgs) (tracker.ViewListing, error) {
 		if b.Tracker == nil {
 			return tracker.ViewListing{}, errNoHalf
@@ -340,7 +331,7 @@ type expandArgs struct {
 	Zone string
 }
 
-var opExpandedQuery = define("tracker.expanded_query", opRead, wholeDomain[expandArgs](trackerDomain), false,
+var opExpandedQuery = define("tracker.expanded_query", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a expandArgs) (tracker.Query, error) {
 		if b.Tracker == nil {
 			return tracker.Query{}, errNoHalf
@@ -352,7 +343,7 @@ var opExpandedQuery = define("tracker.expanded_query", opRead, wholeDomain[expan
 		return b.Tracker.ExpandedQuery(ctx, a.Params, a.Viewer, a.Now, loc)
 	})
 
-var opCatalogue = define("tracker.catalogue", opRead, wholeDomain[tracker.CatalogueQuery](trackerDomain), false,
+var opCatalogue = define("tracker.catalogue", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
 		if b.Tracker == nil {
 			return tracker.CatalogueAnswer{}, errNoHalf
@@ -365,7 +356,7 @@ type personArgs struct {
 	Now   time.Time
 }
 
-var opPerson = define("tracker.person", opRead, wholeDomain[personArgs](trackerDomain), false,
+var opPerson = define("tracker.person", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a personArgs) (tracker.PersonState, error) {
 		if b.Tracker == nil {
 			return tracker.PersonState{}, errNoHalf
@@ -378,7 +369,7 @@ type threadArgs struct {
 	Fresh statelog.Freshness
 }
 
-var opThread = define("tracker.thread", opRead, byTask(func(a threadArgs) string { return a.Query.Task }), false,
+var opThread = define("tracker.thread", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a threadArgs) (tracker.ResolvedThread, error) {
 		if b.Tracker == nil {
 			return tracker.ResolvedThread{}, errNoHalf
@@ -391,14 +382,13 @@ type activityArgs struct {
 	Now   time.Time
 }
 
-var opActivity = define("tracker.activity", opRead, wholeDomain[activityArgs](trackerDomain), false,
+var opActivity = define("tracker.activity", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a activityArgs) (tracker.ActivityAnswer, error) {
 		if b.Tracker == nil {
 			return tracker.ActivityAnswer{}, errNoHalf
 		}
 		return b.Tracker.Activity(ctx, a.Query, a.Now)
-	}).covered(
-	func(a *tracker.ActivityAnswer, c statelog.Coverage) { a.Coverage = c })
+	})
 
 type myWorkArgs struct {
 	Query tracker.MyWorkQuery
@@ -408,7 +398,7 @@ type myWorkArgs struct {
 	Zone string
 }
 
-var opMyWork = define("tracker.my_work", opRead, wholeDomain[myWorkArgs](trackerDomain), false,
+var opMyWork = define("tracker.my_work", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a myWorkArgs) (tracker.MyWork, error) {
 		if b.Tracker == nil {
 			return tracker.MyWork{}, errNoHalf
@@ -418,20 +408,18 @@ var opMyWork = define("tracker.my_work", opRead, wholeDomain[myWorkArgs](tracker
 			return tracker.MyWork{}, err
 		}
 		return b.Tracker.MyWork(ctx, a.Query, a.Now, loc)
-	}).covered(
-	func(w *tracker.MyWork, c statelog.Coverage) { w.Coverage = c })
+	})
 
-var opProjects = define("tracker.projects", opRead, wholeDomain[tracker.ProjectQuery](trackerDomain), false,
+var opProjects = define("tracker.projects", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q tracker.ProjectQuery) (tracker.ProjectListing, error) {
 		if b.Tracker == nil {
 			return tracker.ProjectListing{}, errNoHalf
 		}
 		q.Units = b.Units
 		return b.Tracker.Projects(ctx, q)
-	}).covered(
-	func(l *tracker.ProjectListing, c statelog.Coverage) { l.Coverage = c })
+	})
 
-var opProject = define("tracker.project", opRead, wholeDomain[tracker.ProjectDetailQuery](trackerDomain), false,
+var opProject = define("tracker.project", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q tracker.ProjectDetailQuery) (tracker.ProjectDetail, error) {
 		if b.Tracker == nil {
 			return tracker.ProjectDetail{}, errNoHalf
@@ -449,24 +437,16 @@ type workSearchArgs struct {
 	Mode knowledge.Mode
 }
 
-// THE RANKED SEARCH IS A GATHER over every partition holding the corpus of
-// work items: each answers its candidates, and the fusion is made where they
-// are all held ([tracker.MergeSearch]) — the arithmetic one corpus is ranked
-// by.
-//
-// NO FLOOR: the ranked search reads the lexical index, which each node's own
-// walk maintains on its own schedule behind the applier, so a floor on the log
-// would promise a visibility the index does not give.
-var opWorkSearch = defineGather("tracker.search", corpusOf[workSearchArgs](trackerDomain),
-	func(ctx context.Context, b Backend, _ statelog.PartitionID, a workSearchArgs) (tracker.SearchSlice, error) {
+// THE RANKED SEARCH CARRIES NO FLOOR: it reads the lexical index, which each
+// node's own walk maintains on its own schedule behind the applier, so a floor
+// on the log would promise a visibility the index does not give.
+var opWorkSearch = define("tracker.search", opRead, "", false,
+	func(ctx context.Context, b Backend, _ *Actor, a workSearchArgs) (tracker.SearchAnswer, error) {
 		if b.WorkSearch == nil {
-			return tracker.SearchSlice{}, errNoHalf
+			return tracker.SearchAnswer{}, errNoHalf
 		}
-		return b.WorkSearch.Slice(ctx, tracker.SearchQuery{Text: a.Text, Limit: a.Limit, Mode: a.Mode})
-	},
-	func(a workSearchArgs, g Gathered[tracker.SearchSlice]) (tracker.SearchAnswer, error) {
-		return tracker.MergeSearch(g.Answered(), tracker.SearchQuery{Limit: a.Limit, Mode: a.Mode}), nil
-	}).floorless()
+		return b.WorkSearch.Search(ctx, tracker.SearchQuery{Text: a.Text, Limit: a.Limit, Mode: a.Mode})
+	})
 
 type workloadArgs struct {
 	Query tracker.WorkloadQuery
@@ -476,7 +456,7 @@ type workloadArgs struct {
 	Zone string
 }
 
-var opWorkload = define("tracker.workload", opRead, wholeDomain[workloadArgs](trackerDomain), false,
+var opWorkload = define("tracker.workload", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a workloadArgs) (tracker.WorkloadAnswer, error) {
 		if b.Tracker == nil {
 			return tracker.WorkloadAnswer{}, errNoHalf
@@ -498,21 +478,20 @@ type inboxArgs struct {
 // an operation's name is not a subject, but that one is spelled like a seat's
 // inbox subject, and the guard that keeps every subject in internal/queue/topics
 // rightly reads any literal ending `.inbox` as one written by hand.
-var opInbox = define("tracker.read_inbox", opRead, wholeDomain[inboxArgs](trackerDomain), false,
+var opInbox = define("tracker.read_inbox", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a inboxArgs) (tracker.InboxAnswer, error) {
 		if b.Tracker == nil {
 			return tracker.InboxAnswer{}, errNoHalf
 		}
 		return b.Tracker.Inbox(ctx, a.Query, a.Now)
-	}).covered(
-	func(a *tracker.InboxAnswer, c statelog.Coverage) { a.Coverage = c })
+	})
 
 type routingArgs struct {
 	Query tracker.RoutingQuery
 	Now   time.Time
 }
 
-var opRouting = define("tracker.routing", opRead, wholeDomain[routingArgs](trackerDomain), false,
+var opRouting = define("tracker.routing", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a routingArgs) (tracker.RoutingAnswer, error) {
 		if b.Tracker == nil {
 			return tracker.RoutingAnswer{}, errNoHalf
@@ -527,9 +506,9 @@ type turnsOfArgs struct {
 	Fresh   statelog.Freshness
 }
 
-// A TASK'S TURNS are that task's partition's: the turn records are charged to
-// it (ADR-0022) and live beside its rows.
-var opTurnsOf = define("tracker.turns_of", opRead, byTask(func(a turnsOfArgs) string { return a.IDOrKey }), false,
+// A TASK'S TURNS are the tracker's: the turn records are charged to the task
+// (ADR-0022) and live beside its rows.
+var opTurnsOf = define("tracker.turns_of", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a turnsOfArgs) (tracker.TaskTurns, error) {
 		if b.Tracker == nil {
 			return tracker.TaskTurns{}, errNoHalf
@@ -543,7 +522,7 @@ type everyViewArgs struct {
 	Zone  string
 }
 
-var opEveryView = define("tracker.every_view", opRead, wholeDomain[everyViewArgs](trackerDomain), false,
+var opEveryView = define("tracker.every_view", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a everyViewArgs) (tracker.ViewListing, error) {
 		if b.Tracker == nil {
 			return tracker.ViewListing{}, errNoHalf
@@ -565,7 +544,7 @@ type flowArgs struct {
 	Zone string
 }
 
-var opFlow = define("tracker.flow", opRead, wholeDomain[flowArgs](trackerDomain), false,
+var opFlow = define("tracker.flow", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a flowArgs) (tracker.FlowAnswer, error) {
 		if b.Tracker == nil {
 			return tracker.FlowAnswer{}, errNoHalf
@@ -577,7 +556,7 @@ var opFlow = define("tracker.flow", opRead, wholeDomain[flowArgs](trackerDomain)
 		return b.Tracker.Flow(ctx, a.Query, a.Now, loc)
 	})
 
-var opCompanyFeed = define("tracker.company_feed", opRead, wholeDomain[tracker.FeedQuery](trackerDomain), false,
+var opCompanyFeed = define("tracker.company_feed", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q tracker.FeedQuery) (tracker.FeedPage, error) {
 		if b.Tracker == nil {
 			return tracker.FeedPage{}, errNoHalf
@@ -593,7 +572,7 @@ type decisionsArgs struct {
 	Zone string
 }
 
-var opDecisions = define("tracker.decisions", opRead, wholeDomain[decisionsArgs](trackerDomain), false,
+var opDecisions = define("tracker.decisions", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a decisionsArgs) (tracker.DecisionsAnswer, error) {
 		if b.Tracker == nil {
 			return tracker.DecisionsAnswer{}, errNoHalf
@@ -610,7 +589,7 @@ type turnPlacesArgs struct {
 	Fresh statelog.Freshness
 }
 
-var opTurnPlaces = define("tracker.turn_places", opRead, wholeDomain[turnPlacesArgs](trackerDomain), false,
+var opTurnPlaces = define("tracker.turn_places", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a turnPlacesArgs) (map[string]tracker.TurnPlace, error) {
 		if b.Tracker == nil {
 			return nil, errNoHalf
@@ -624,7 +603,7 @@ var opTurnPlaces = define("tracker.turn_places", opRead, wholeDomain[turnPlacesA
 // the two writes. The BYTES never cross here — a stateless node uploads and
 // downloads chunks through its own object client, straight to the data nodes
 // that hold them, and asks this service only for the row that names them.
-var opFiles = define("tracker.files", opRead, wholeDomain[tracker.FileQuery](trackerDomain), false,
+var opFiles = define("tracker.files", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q tracker.FileQuery) (tracker.FileListing, error) {
 		if b.Tracker == nil {
 			return tracker.FileListing{}, errNoHalf
@@ -638,7 +617,7 @@ type fileArgs struct {
 	Fresh   statelog.Freshness
 }
 
-var opFile = define("tracker.file", opRead, wholeDomain[fileArgs](trackerDomain), false,
+var opFile = define("tracker.file", opRead, trackerDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a fileArgs) (tracker.FileDetail, error) {
 		if b.Tracker == nil {
 			return tracker.FileDetail{}, errNoHalf
@@ -651,7 +630,7 @@ type putFileArgs struct {
 	Put  tracker.FilePut
 }
 
-var opPutFile = define("tracker.put_file", opIdempotentWrite, wholeDomain[putFileArgs](trackerDomain), true,
+var opPutFile = define("tracker.put_file", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a putFileArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -667,7 +646,7 @@ type removeFileArgs struct {
 	IfMatch uint64
 }
 
-var opRemoveFile = define("tracker.remove_file", opIdempotentWrite, wholeDomain[removeFileArgs](trackerDomain), true,
+var opRemoveFile = define("tracker.remove_file", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a removeFileArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -686,7 +665,7 @@ type recordTurnArgs struct {
 // write. It carries its operation id, so an unanswered one is asked again of
 // the next node: the applier adds a turn's spend only for a new operation, and
 // a repeat under the same id counts nothing twice.
-var opRecordTurn = define("tracker.record_turn", opIdempotentWrite, byTask(func(a recordTurnArgs) string { return a.Turn.Task }), true,
+var opRecordTurn = define("tracker.record_turn", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a recordTurnArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -714,7 +693,7 @@ type createTaskArgs struct {
 	Notify *tracker.Notify
 }
 
-var opCreateTask = define("tracker.create_task", opIdempotentWrite, wholeDomain[createTaskArgs](trackerDomain), true,
+var opCreateTask = define("tracker.create_task", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a createTaskArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -730,7 +709,7 @@ type createTaskAskingArgs struct {
 	Notify *tracker.Notify
 }
 
-var opCreateTaskAsking = define("tracker.create_task_asking", opIdempotentWrite, wholeDomain[createTaskAskingArgs](trackerDomain), true,
+var opCreateTaskAsking = define("tracker.create_task_asking", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a createTaskAskingArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -761,7 +740,7 @@ type placedTask struct {
 // holder under the same id, and a step that holder's ledger answers is not
 // written twice. A step one holder answered unvouched is not final
 // ([unvouched]).
-var opPlaceTask = define("tracker.place_task", opIdempotentWrite, byTask(func(a placeTaskArgs) string { return a.Place.Task }), true,
+var opPlaceTask = define("tracker.place_task", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a placeTaskArgs) (placedTask, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -792,7 +771,7 @@ type updateTaskArgs struct {
 	Notify    *tracker.Notify
 }
 
-var opUpdateTask = define("tracker.update_task", opIdempotentWrite, byTask(func(a updateTaskArgs) string { return a.ID }), true,
+var opUpdateTask = define("tracker.update_task", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a updateTaskArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -809,7 +788,7 @@ type dependArgs struct {
 	Change tracker.DependencyChange
 }
 
-var opDepend = define("tracker.depend", opIdempotentWrite, byTask(func(a dependArgs) string { return a.Change.Task }), true,
+var opDepend = define("tracker.depend", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a dependArgs) (tracker.DependencyResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -826,7 +805,7 @@ type mergeArgs struct {
 	Notify    *tracker.Notify
 }
 
-var opMergeDuplicates = define("tracker.merge_duplicates", opIdempotentWrite, byTask(func(a mergeArgs) string { return a.Duplicate }), true,
+var opMergeDuplicates = define("tracker.merge_duplicates", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a mergeArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -842,7 +821,7 @@ type moveArgs struct {
 	Notify *tracker.Notify
 }
 
-var opMoveTaskToProject = define("tracker.move_task_to_project", opIdempotentWrite, byTask(func(a moveArgs) string { return a.TaskID }), true,
+var opMoveTaskToProject = define("tracker.move_task_to_project", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a moveArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -858,7 +837,7 @@ type writeProjectArgs struct {
 	Authority tracker.ProjectAuthority
 }
 
-var opWriteProject = define("tracker.write_project", opIdempotentWrite, wholeDomain[writeProjectArgs](trackerDomain), true,
+var opWriteProject = define("tracker.write_project", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a writeProjectArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -874,7 +853,7 @@ type writeTagsArgs struct {
 	Authority tracker.TagAuthority
 }
 
-var opWriteTags = define("tracker.write_tags", opIdempotentWrite, wholeDomain[writeTagsArgs](trackerDomain), true,
+var opWriteTags = define("tracker.write_tags", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a writeTagsArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -895,7 +874,7 @@ type ensuredTags struct {
 	Warnings []string
 }
 
-var opEnsureTags = define("tracker.ensure_tags", opIdempotentWrite, wholeDomain[ensureTagsArgs](trackerDomain), true,
+var opEnsureTags = define("tracker.ensure_tags", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a ensureTagsArgs) (ensuredTags, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -916,7 +895,7 @@ type writeViewArgs struct {
 	View tracker.View
 }
 
-var opWriteView = define("tracker.write_view", opIdempotentWrite, wholeDomain[writeViewArgs](trackerDomain), true,
+var opWriteView = define("tracker.write_view", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a writeViewArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -930,7 +909,7 @@ type writeTypesArgs struct {
 	Types []tracker.TaskType
 }
 
-var opWriteTypes = define("tracker.write_types", opIdempotentWrite, wholeDomain[writeTypesArgs](trackerDomain), true,
+var opWriteTypes = define("tracker.write_types", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a writeTypesArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -944,7 +923,7 @@ type writeFieldsArgs struct {
 	Fields []tracker.FieldDef
 }
 
-var opWriteFields = define("tracker.write_fields", opIdempotentWrite, wholeDomain[writeFieldsArgs](trackerDomain), true,
+var opWriteFields = define("tracker.write_fields", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a writeFieldsArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -962,7 +941,7 @@ type markInboxArgs struct {
 // A GESTURE, never the lists: the tracker resolves it against the record its
 // own decide reads, so a caller never sends back a list it read in another
 // transaction — on whichever holder answers.
-var opMarkInbox = define("tracker.mark_inbox", opIdempotentWrite, wholeDomain[markInboxArgs](trackerDomain), true,
+var opMarkInbox = define("tracker.mark_inbox", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a markInboxArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -977,7 +956,7 @@ type writePinsArgs struct {
 	Gesture tracker.PinGesture
 }
 
-var opWritePins = define("tracker.write_pins", opIdempotentWrite, wholeDomain[writePinsArgs](trackerDomain), true,
+var opWritePins = define("tracker.write_pins", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a writePinsArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -994,7 +973,7 @@ type writePrioritiesArgs struct {
 	Authority  tracker.PersonAuthority
 }
 
-var opWritePriorities = define("tracker.write_priorities", opIdempotentWrite, wholeDomain[writePrioritiesArgs](trackerDomain), true,
+var opWritePriorities = define("tracker.write_priorities", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a writePrioritiesArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -1011,7 +990,7 @@ type removeTaskArgs struct {
 	Notify  *tracker.Notify
 }
 
-var opRemoveTask = define("tracker.remove_task", opIdempotentWrite, byTask(func(a removeTaskArgs) string { return a.ID }), true,
+var opRemoveTask = define("tracker.remove_task", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a removeTaskArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -1027,7 +1006,7 @@ type restoreTaskArgs struct {
 	Notify  *tracker.Notify
 }
 
-var opRestoreTask = define("tracker.restore_task", opIdempotentWrite, byTask(func(a restoreTaskArgs) string { return a.ID }), true,
+var opRestoreTask = define("tracker.restore_task", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a restoreTaskArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -1047,7 +1026,7 @@ type purgeTaskArgs struct {
 // repeat after an unanswered one collapses on, and the purge's own ledger row
 // answers that repeat with the first outcome — and its refusals keep their
 // identity, so an operator re-running one is told it is purged, not behind.
-var opPurgeTask = define("tracker.purge_task", opIdempotentWrite, byTask(func(a purgeTaskArgs) string { return a.ID }), true,
+var opPurgeTask = define("tracker.purge_task", opIdempotentWrite, trackerDomain, true,
 	func(ctx context.Context, b Backend, actor *Actor, a purgeTaskArgs) (tracker.WriteResult, error) {
 		w, err := writerFor(b, actor)
 		if err != nil {
@@ -1063,21 +1042,20 @@ type listPagesArgs struct {
 	Fresh  statelog.Freshness
 }
 
-var opListPages = define("pages.list", opRead, wholeDomain[listPagesArgs](pagesDomain), false,
+var opListPages = define("pages.list", opRead, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a listPagesArgs) (pages.Listing, error) {
 		if b.Pages == nil {
 			return pages.Listing{}, errNoHalf
 		}
 		return b.Pages.List(ctx, a.Filter, a.Fresh)
-	}).covered(
-	func(l *pages.Listing, c statelog.Coverage) { l.Coverage = c })
+	})
 
 type getPageArgs struct {
 	Ref   string
 	Fresh statelog.Freshness
 }
 
-var opGetPage = define("pages.get", opRead, byPage(func(a getPageArgs) string { return a.Ref }), false,
+var opGetPage = define("pages.get", opRead, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a getPageArgs) (pages.Detail, error) {
 		if b.Pages == nil {
 			return pages.Detail{}, errNoHalf
@@ -1090,7 +1068,7 @@ type skillPagesArgs struct {
 	Fresh     statelog.Freshness
 }
 
-var opSkillPages = define("pages.skill_pages", opRead, wholeDomain[skillPagesArgs](pagesDomain), false,
+var opSkillPages = define("pages.skill_pages", opRead, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a skillPagesArgs) ([]pages.Page, error) {
 		if b.Pages == nil {
 			return nil, errNoHalf
@@ -1102,7 +1080,7 @@ type containersArgs struct {
 	Fresh statelog.Freshness
 }
 
-var opContainers = define("pages.containers", opRead, wholeDomain[containersArgs](pagesDomain), false,
+var opContainers = define("pages.containers", opRead, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a containersArgs) ([]pages.ContainerListing, error) {
 		if b.Pages == nil {
 			return nil, errNoHalf
@@ -1110,16 +1088,8 @@ var opContainers = define("pages.containers", opRead, wholeDomain[containersArgs
 		return b.Pages.Containers(ctx, a.Fresh)
 	})
 
-// A PAGE'S ACTIVITY is that page's partition's; a container's, or the whole
-// knowledge base's, addresses the domain as one.
-var opPageActivity = define("pages.activity", opRead,
-	address[pages.PageActivityQuery]{domain: pagesDomain, partitions: func(ctx context.Context,
-		l statelog.Layout, r Resolver, q pages.PageActivityQuery) ([]statelog.PartitionID, error) {
-		if q.Page != "" {
-			return byPage(func(q pages.PageActivityQuery) string { return q.Page }).partitions(ctx, l, r, q)
-		}
-		return wholeDomain[pages.PageActivityQuery](pagesDomain).partitions(ctx, l, r, q)
-	}}, false,
+// A PAGE'S ACTIVITY, a container's, or the whole knowledge base's.
+var opPageActivity = define("pages.activity", opRead, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q pages.PageActivityQuery) (pages.PageActivity, error) {
 		if b.Pages == nil {
 			return pages.PageActivity{}, errNoHalf
@@ -1139,7 +1109,7 @@ type aRevision struct {
 	Found    bool
 }
 
-var opRevision = define("pages.revision", opRead, byPage(func(a revisionArgs) string { return a.PageID }), false,
+var opRevision = define("pages.revision", opRead, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a revisionArgs) (aRevision, error) {
 		if b.Pages == nil {
 			return aRevision{}, errNoHalf
@@ -1153,7 +1123,7 @@ type createPageArgs struct {
 	Page  pages.NewPage
 }
 
-var opCreatePage = define("pages.create", opOnceWrite, wholeDomain[createPageArgs](pagesDomain), false,
+var opCreatePage = define("pages.create", opOnceWrite, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a createPageArgs) (pages.Written, error) {
 		if b.PageWriter == nil {
 			return pages.Written{}, errNoHalf
@@ -1167,7 +1137,7 @@ type savePageArgs struct {
 	Save   pages.Save
 }
 
-var opSavePage = define("pages.save", opOnceWrite, byPage(func(a savePageArgs) string { return a.PageID }), false,
+var opSavePage = define("pages.save", opOnceWrite, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a savePageArgs) (pages.Written, error) {
 		if b.PageWriter == nil {
 			return pages.Written{}, errNoHalf
@@ -1183,7 +1153,7 @@ type renamePageArgs struct {
 	Key    pages.CallKey
 }
 
-var opRenamePage = define("pages.rename", opOnceWrite, byPage(func(a renamePageArgs) string { return a.PageID }), false,
+var opRenamePage = define("pages.rename", opOnceWrite, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a renamePageArgs) (pages.Written, error) {
 		if b.PageWriter == nil {
 			return pages.Written{}, errNoHalf
@@ -1203,7 +1173,7 @@ type commented struct {
 	Written pages.Written
 }
 
-var opCommentPage = define("pages.comment", opOnceWrite, byPage(func(a commentArgs) string { return a.PageID }), false,
+var opCommentPage = define("pages.comment", opOnceWrite, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a commentArgs) (commented, error) {
 		if b.PageWriter == nil {
 			return commented{}, errNoHalf
@@ -1220,7 +1190,7 @@ type editCommentArgs struct {
 	Key       pages.CallKey
 }
 
-var opEditComment = define("pages.edit_comment", opOnceWrite, byPage(func(a editCommentArgs) string { return a.PageID }), false,
+var opEditComment = define("pages.edit_comment", opOnceWrite, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a editCommentArgs) (commented, error) {
 		if b.PageWriter == nil {
 			return commented{}, errNoHalf
@@ -1275,34 +1245,25 @@ func (a knowledgeArgs) query(b Backend) knowledge.Query {
 	return q
 }
 
-// THE KNOWLEDGE SEARCH IS A GATHER over every partition holding the knowledge
-// base's corpus, on [opWorkSearch]'s terms: each partition answers its
-// candidates and the pages behind them, and the fusion is made where they are
-// all held ([pages.MergeSearch]).
-var opKnowledgeSearch = defineGather("knowledge.search", corpusOf[knowledgeArgs](pagesDomain),
-	func(ctx context.Context, b Backend, _ statelog.PartitionID, a knowledgeArgs) (pages.SearchSlice, error) {
+// THE KNOWLEDGE SEARCH CARRIES NO FLOOR, for [opWorkSearch]'s reason: it
+// reads the index, which no log position describes.
+var opKnowledgeSearch = define("knowledge.search", opRead, "", false,
+	func(ctx context.Context, b Backend, _ *Actor, a knowledgeArgs) (knowledge.Result, error) {
 		if b.Knowledge == nil {
-			return pages.SearchSlice{}, errNoHalf
+			return knowledge.Result{}, errNoHalf
 		}
-		return b.Knowledge.Slice(ctx, a.query(b))
-	},
-	func(a knowledgeArgs, g Gathered[pages.SearchSlice]) (knowledge.Result, error) {
-		return pages.MergeSearch(g.Answered(), knowledge.Query{Limit: a.Limit, Mode: a.Mode}), nil
-	}).floorless()
+		return b.Knowledge.Answer(ctx, a.query(b))
+	})
 
-// WHETHER AN INDEX IS STILL BUILDING is asked of every partition a search
-// reads: an empty answer is "still indexing" if ANY of them is, since that
-// partition's documents are the ones the answer could not have found.
-var opKnowledgeBuilding = defineGather("knowledge.building", corpusOf[struct{}](pagesDomain),
-	func(ctx context.Context, b Backend, _ statelog.PartitionID, _ struct{}) (bool, error) {
+// WHETHER THE INDEX IS STILL BUILDING, which is what turns an empty search into
+// "still indexing" — asked, like the search, of the index rather than the log.
+var opKnowledgeBuilding = define("knowledge.building", opRead, "", false,
+	func(ctx context.Context, b Backend, _ *Actor, _ struct{}) (bool, error) {
 		if b.Knowledge == nil {
 			return false, errNoHalf
 		}
 		return b.Knowledge.Building(ctx), nil
-	},
-	func(_ struct{}, g Gathered[bool]) (bool, error) {
-		return slices.Contains(g.Answered(), true), nil
-	}).floorless()
+	})
 
 // served is what a node runs, as a seat's admission asks it.
 type served struct {
@@ -1310,55 +1271,19 @@ type served struct {
 	Pages   bool
 }
 
-// pingArgs names the partition admission asks about.
-//
-// EMPTY FROM AN OLDER BUILD, whose admission asked this question of the whole
-// estate with no arguments at all — and a rolling upgrade puts that build's
-// stateless nodes in front of this build's data nodes. So a ping naming no
-// partition is that older question and is answered as it was: of the one
-// partition of a layout that has one, which is every layout an older build
-// can share a fleet with (a layout that divides the estate is fenced by the
-// protocol version such a build cannot pass), and [ErrUnaddressed] under any
-// other — the answer every whole-estate operation gives there.
-type pingArgs struct {
-	Partition string
-}
-
-// pingPartitions is the partition admission asks about: the one it names, or
-// the whole estate's one partition for an older asker, which names none.
-func pingPartitions(_ context.Context, l statelog.Layout, _ Resolver, a pingArgs) (
-	[]statelog.PartitionID, error) {
-
-	if a.Partition == "" {
-		if parts := l.Partitions(); len(parts) == 1 {
-			return parts, nil
-		}
-		return nil, fmt.Errorf("%w: an admission question that names no partition "+
-			"asks about the whole estate, and layout %d divides it into %d partitions",
-			ErrUnaddressed, l.Number, len(l.Partitions()))
-	}
-	p, err := statelog.ParsePartitionID(a.Partition)
-	if err != nil {
-		return nil, fmt.Errorf("admission names %q: %w", a.Partition, err)
-	}
-	if len(l.Logs(p)) == 0 {
-		return nil, fmt.Errorf("%w: layout %d has no partition %s", ErrUnaddressed, l.Number, p)
-	}
-	return []statelog.PartitionID{p}, nil
-}
-
-// opPing is ADMISSION's question, asked of a holder of the partition a seat
-// needs: whether its copy admits a seat now ([Backend.Admits]), and which
-// halves it runs natively. A copy that does not is passed over, like a node
-// that ran nothing — see [Router.Serves].
+// opPing is ADMISSION's question, asked of a data node: whether its copy
+// admits a seat now ([Backend.Admits]), and which halves it runs natively. A
+// copy that does not is passed over, like a node that ran nothing — see
+// [Router.Serves].
 //
 // NO FLOOR, and past the serving gate on purpose: it asks whether the copy is
 // ready for a seat, which is its own stricter gate, not whether it has
-// reached this node's writes.
-var opPing = define("estate.ping", opRead, address[pingArgs]{partitions: pingPartitions}, false,
-	func(ctx context.Context, b Backend, _ *Actor, _ pingArgs) (served, error) {
+// reached this node's writes. And NO ARGUMENTS: the one estate is the only
+// thing it can be about.
+var opPing = define("estate.ping", opRead, "", false,
+	func(ctx context.Context, b Backend, _ *Actor, _ struct{}) (served, error) {
 		if b.Admits != nil && !b.Admits(ctx) {
 			return served{}, errNotAdmitting
 		}
 		return served{Tracker: b.Tracker != nil, Pages: b.Pages != nil}, nil
-	}).ungated().floorless()
+	}).ungated()

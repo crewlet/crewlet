@@ -258,7 +258,7 @@ func (c *scanCorpus) run(b *testing.B, readers int) {
 // # Why the topical fixture, and what that choice claims
 //
 // An inverted file is only worth having where the corpus has structure a
-// partition can find, and the isotropic fixture has none: its training
+// k-means can find, and the isotropic fixture has none: its training
 // declines to install an index at all (TestIVFRecallMeetsTheFloorCurve). So
 // the corpus here is the fixture family's topical member, at the shipped
 // width, written through the applier and indexed exactly as the embedding duty

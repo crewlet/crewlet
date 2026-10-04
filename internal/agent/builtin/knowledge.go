@@ -177,16 +177,7 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"shortly, or work from what you have."}, nil
 	}
 	partial := partialNote(result.Coverage)
-	// PART OF THE KNOWLEDGE BASE THAT DID NOT ANSWER IS SAID, and never as
-	// "no documents match": its pages are the ones nobody searched.
-	missing := result.Partitions.Notice()
 	if len(hits) == 0 {
-		if missing != "" {
-			return tools.Result{Output: fmt.Sprintf("No team documents matched %q in "+
-				"what was searched, and %s — part of the knowledge base was not "+
-				"searched, so search again before concluding nothing is written "+
-				"down.", clip(query), missing)}, nil
-		}
 		return tools.Result{Output: fmt.Sprintf(
 			"No team documents match %q. Try different keywords, or work from what "+
 				"you have — not everything is written down.%s", clip(query), partial)}, nil
@@ -212,9 +203,6 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// two hundred characters of a runbook.
 	b.WriteString("\nTo read any of these in full, look it up by title with your " +
 		"knowledge-base tools.")
-	if missing != "" {
-		b.WriteString("\n" + missing + ".")
-	}
 	b.WriteString(partial)
 	return tools.Result{Output: b.String()}, nil
 }

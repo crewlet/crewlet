@@ -16,10 +16,9 @@ import (
 // raising the quantization over-fetch would pay latency on every search for a
 // loss the codes never had. A scan below the floor is the sign codes failing
 // this corpus, and there the over-fetch is the remedy. Printing one verdict
-// for both sends an operator to the wrong knob on exactly the partitions that
-// have an index.
+// for both sends an operator to the wrong knob exactly when there is an index.
 //
-// And the first-stage line names WHY a partition scanned, because "no index"
+// And the first-stage line names WHY a corpus scanned, because "no index"
 // has four causes an operator acts on differently: too small, measured not
 // worth installing, trained in another space, never trained.
 func TestTheEvalVerdictNamesWhichFirstStageFailed(t *testing.T) {
@@ -80,11 +79,11 @@ func TestTheEvalVerdictNamesWhichFirstStageFailed(t *testing.T) {
 			absent: []string{"THROUGH THE INDEX"},
 		},
 		{
-			name: "a partition with no index fails",
+			name: "a corpus with no index fails",
 			report: search.EvalReport{Stage1: search.Stage1Report{
 				Method: search.Stage1Scan, Why: search.ScanUnindexed},
 				Recall: 0.90, Floor: 0.98, ScanRecall: 0.90},
-			want:   []string{"the full scan — the partition has no index yet", "raise BinaryOversample"},
+			want:   []string{"the full scan — the corpus has no index yet", "raise BinaryOversample"},
 			absent: []string{"THROUGH THE INDEX", "scan recall"},
 		},
 		{
@@ -117,12 +116,12 @@ func TestTheEvalVerdictNamesWhichFirstStageFailed(t *testing.T) {
 			want: []string{"no probe count within 1/2 of the lists", "index        measured"},
 		},
 		{
-			name: "a partition below the index's minimum",
+			name: "a corpus below the index's minimum",
 			report: search.EvalReport{Model: "m", Dim: 64, Stage1: search.Stage1Report{
 				Method: search.Stage1Scan, Why: search.ScanRetired},
 				Index:  &search.IndexSummary{Model: "m", Dim: 64, Why: search.VerdictTooSmall},
 				Recall: 0.99, Floor: 0.98},
-			want:   []string{"below the index's minimum corpus"},
+			want:   []string{"the corpus is below the index's minimum"},
 			absent: []string{"index        measured"},
 		},
 		{

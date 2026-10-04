@@ -195,7 +195,7 @@ func TestALocalWriteReportsIntoTheTurnsSetOnce(t *testing.T) {
 		t.Fatalf("the turn's set holds %v, want the one item, once", got)
 	}
 	if f.nodes["data-a"].askedFor("create") {
-		t.Error("a node that serves the partition asked a peer")
+		t.Error("a data node whose copy serves asked a peer")
 	}
 }
 

@@ -68,27 +68,23 @@ it, not how the estate is divided between the nodes that hold it.
 The client a node without `data` ran is now a ROUTER that every node runs,
 and the decision above holds through it unchanged: one subject per serving
 node, the asker's choice of node, the failover rule stated per operation and
-the session floor on every request. What the amendment adds is the unit the
-router routes by — a PARTITION of the estate, which every operation names —
-and five consequences of routing by one on every node rather than by "any
-data node" on the nodes that hold none:
+the session floor on every request. Every data node holds the whole estate, so
+the router asks for nothing but the operation; what the amendment adds is four
+consequences of routing on every node rather than on the nodes that hold none:
 
 - A data node reaches its OWN copy through the same router, in-process, held to
-  the same floors as a remote holder — its seats may have written a partition
-  through another holder while it was not serving it — and asks a copy that
-  LAGS its logs only once every holder whose copy does not has run nothing,
-  exactly as a remote asker does: a worse holder, never no holder.
-- A node that does not serve the partition it is asked for answers
-  `not_holder` with its map epoch, and ran nothing; a newer epoch sends the
-  asker to read the map once and ask again, and a partition no holder serves is
-  refused naming it.
-- A tracker write one holder answered UNVOUCHED is asked of the next under the
-  same operation id before the caller is told the outcome is unknown: that
-  holder's ledger cannot say whether it landed, and another's may.
-- A data node whose copy of a partition is WRONG rather than behind stops
-  serving that partition and keeps its seats: for that partition it is a node
-  without data, reaching the estate through a node that holds it — which is
-  this record's decision, applied to the node itself.
+  the same floors as a remote data node — its seats may have written through
+  another data node while its copy was out of service — and asks a copy that
+  LAGS its logs only once every data node whose copy does not has run nothing,
+  exactly as a remote asker does: a worse node to ask, never no node.
+- A tracker write one data node answered UNVOUCHED is asked of the next under
+  the same operation id before the caller is told the outcome is unknown: that
+  node's ledger cannot say whether it landed, and another's may.
+- A data node whose copy is WRONG rather than behind takes it OUT OF SERVICE
+  and keeps its seats: a peer asking it is told `out_of_service`, having run
+  nothing, and its own seats reach the estate through another data node — which
+  is this record's decision, applied to the node itself. An estate no data node
+  serves refuses the operation saying so, never an empty answer.
 - The OPERATOR'S surfaces go through the same router as the seats' tools: the
   API's tracker and knowledge-base routes, a project's file rows and the
   operator's own MCP. Read straight off the node's own copy, a data node whose
@@ -97,8 +93,7 @@ data node" on the nodes that hold none:
   what acts on a node's own state log rather than reads the estate — the
   retention report, capacity, reanchor, eviction and backup.
 
-Under the single-file layout every data node serves the one partition, so what
-a fleet sees of this is routing through the watched view of the presence
+What a fleet sees of this is routing through the watched view of the presence
 leases, a data node's reads waiting on its floors, and the request gate asking
 whether a copy lags rather than whether it is level this instant — and choosing
 a lagging copy last rather than never.

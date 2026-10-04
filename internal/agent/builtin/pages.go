@@ -307,11 +307,10 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if err != nil {
 		return pageReadFailure(ListPagesTool, err), nil
 	}
-	if len(got.Pages) == 0 && got.Coverage.Complete() {
+	if len(got.Pages) == 0 {
 		return tools.Result{Output: "No pages match that filter."}, nil
 	}
 	out := map[string]any{"count": len(got.Pages), "pages": got.Pages}
-	noteUnanswered(out, got.Coverage)
 	// AND HOW MANY THE FILTER MATCHED IN ALL, when that is more than this
 	// answer holds. Without it a listing cut at its limit read as the whole
 	// container, and a model that believes a short list writes the page that

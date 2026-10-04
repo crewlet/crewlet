@@ -171,8 +171,9 @@
 //
 // The exception is a record that INSTALLS AN APPLY GATE — a rule under which
 // a durable record produces no rows on ANY node. That is a STOP: the applier
-// halts, health goes false immediately, and the node stops serving the
-// partition — its seats read it from a holder that can decode it. A deferred gate does not postpone one record's effect on one
+// halts, health goes false immediately, and the node takes its copy of the
+// estate out of service — its seats read it from another data node that can
+// decode it. A deferred gate does not postpone one record's effect on one
 // node; it silently licenses every record above it.
 //
 // # Retention rests on the ENVELOPE, so a writer can ask who reads what
@@ -489,20 +490,6 @@
 // before layouts wrote: they are the rules the partitioned layout's writes are
 // held to from its first record.
 //
-// # A read across partitions is answered at a CUT
-//
-// The four read levels are per LOG and stay so: a read of one partition is
-// answered at its level exactly as it always was. A read that addresses
-// several — a GATHER — is answered partition by partition, each by a node
-// that serves it, and reports where each log was as a [Cut] and what it could
-// not answer as a [Coverage], whose [Coverage.Notice] is the one sentence
-// every surface renders a missing partition as. What each partition is read at
-// is [GatherLevel]'s: a seat's gather at `session`, floored at its own writes
-// and at the record whose wake started its turn, because `linearizable` there
-// is a barrier on every log per read; an operator's at `linearizable`, whose
-// holder appends one barrier on each of the partition's logs and answers at or
-// after them ([Reader.Barrier], single-flighted per log like every barrier).
-//
 // # Which log a coordination record is about
 //
 // ONE RULE, for every record the fleet shares about a log — a node's row in
@@ -512,9 +499,9 @@
 // it has always had:
 //
 //   - the log's STREAM NAME, which the partition grammar builds from the layout
-//     number ([Layout.Stream]) — what a hold, a backup point, a capacity
-//     operation and a [Cut] are keyed by, since each is a statement about one
-//     stream's number space;
+//     number ([Layout.Stream]) — what a hold, a backup point and a capacity
+//     operation are keyed by, since each is a statement about one stream's
+//     number space;
 //   - the log's KEY ([LogID.String]) WITH THE LAYOUT NUMBER BESIDE IT IN THE
 //     SAME RECORD — what the positions register's rows and the published
 //     floors are keyed by, since the key is what an operator reads and a row

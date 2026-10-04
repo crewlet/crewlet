@@ -1676,8 +1676,8 @@ func (r *Runner) Rejoined(at Position, keyed, live time.Time) error {
 // fault is retried quietly inside the budget and reported only past it, when
 // the honest reading is that this node's rows have stopped moving. Reported,
 // it takes the same path a stop does: reads refuse `stalled` naming it, and
-// the node stops serving the partition. It clears the moment a retry
-// succeeds.
+// the node takes its copy of the estate out of service, so its seats read it
+// from the other data nodes. It clears the moment a retry succeeds.
 func (r *Runner) Fault(now time.Time) (string, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -2094,8 +2094,9 @@ func (r *Runner) faulted(ctx context.Context, err error) error {
 			"domain", r.domain.Name(), "stream", r.spec.Name,
 			"position", r.Committed().String(), "error", err.Error(),
 			"since", since, "detail", "this node's rows have stopped moving; "+
-				"its reads refuse and it stops serving the partition until a "+
-				"retry succeeds")
+				"its reads refuse and it takes its copy of the estate out of "+
+				"service, so its seats read it from the other data nodes, until "+
+				"a retry succeeds")
 	}
 	r.count(metrics.StatelogApplyRetries)
 	return nil
@@ -2720,8 +2721,8 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 					return fmt.Errorf("%w: %s at %s installs an apply gate at "+
 						"record version %d and this build reads %d — a gate this "+
 						"node cannot read would license every record above it, so "+
-						"the applier halts and this node stops serving the partition "+
-						"to its seats, which read it from a holder that can",
+						"the applier halts and this node takes its copy of the estate "+
+						"out of service, so its seats read it from a data node that can",
 						ErrStopped, rec.Kind, rec.Position, rec.V, r.domain.RecordVersion())
 				}
 				if err := r.tables.retain(ctx, tx, rec, r.spec.Replay == ReplayCompacted, opts.MaxVariables); err != nil {
@@ -3141,8 +3142,8 @@ func (r *Runner) stop(ctx context.Context, err error) error {
 		"position", r.Committed().String(), "error", err.Error(),
 		"detail", "this node's rows for this domain are frozen here and every "+
 			"read of them refuses; for a domain that gates seat admission this "+
-			"node also stops serving the partition, and its seats read it from "+
-			"the partition's other holders; a build "+
+			"node also takes its copy of the estate out of service, and its "+
+			"seats read it from the other data nodes; a build "+
 			"that can read what this one could not resumes it at its next boot, "+
 			"and for a recreated stream an operator's reanchor of this one "+
 			"stream resumes it in place, with no restart")

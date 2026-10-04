@@ -10,40 +10,35 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE ESTATE'S ROUTER, ON EVERY NODE.
 //
 // Every seat tool on every node reaches the tracker and the knowledge base
-// through one [estate.Router]: a node that serves the partition an operation
-// addresses answers it in-process, and one that does not asks a node that
-// does. Under layout 0 a data node serves the one partition, `estate.000`, and
-// so answers all of its own seats' calls itself — with its floors enforced
-// exactly as a remote holder enforces them — while a node without `data`
-// serves nothing and asks for everything. A tool cannot tell which, and must
-// not: a tool that behaved differently on the two kinds of node would be two
-// tools, and only one of them tested.
+// through one [estate.Router]: a data node holds the whole estate and answers
+// its own seats' calls from its own copy — with its floors enforced exactly as
+// a remote data node enforces them — while a node without `data` holds nothing
+// and asks for everything. A tool cannot tell which, and must not: a tool that
+// behaved differently on the two kinds of node would be two tools, and only
+// one of them tested.
 //
-// # Who serves what, as this node routes it
+// # Who holds the estate, as this node routes it
 //
-// The estate's servers are every live data node as this node's WATCHED
-// presence view names them ([wholeEstate] over [coord.LeaseView]) — the view
-// the fleet's other per-request questions read, never a second one, and never
-// a listing of the fleet per call.
+// Every live data node, as this node's WATCHED presence view names them
+// ([wholeEstate] over [coord.LeaseView]) — the view the fleet's other
+// per-request questions read, never a second one, and never a listing of the
+// fleet per call.
 //
-// # What this node serves
+// # What this node answers
 //
-// [localEstate]: the partitions its write authority's gate 3 says it serves
-// ([holdingOf], the one rule the files it opens and the logs it may write are
-// read from), each answered from this node's own copy — and a copy that LAGS
+// [localEstate]: on a data node, its own copy — and a copy that LAGS
 // ([statelog.Health.Answers] false: neither level this instant nor drained and
-// within the snapshot slack) is asked only once every holder whose copy does
-// not has run nothing, by this node's router and by every other node's alike: a
-// worse holder, never no holder (estate's [estate.Router] doc). A copy that is
-// WRONG is not served at all ([localEstate.For]), and the node keeps its seats.
+// within the snapshot slack) is asked only once every data node whose copy
+// does not has run nothing, by this node's router and by every other node's
+// alike: a worse node to ask, never no node (estate's [estate.Router] doc). A
+// copy that is WRONG is out of service ([localEstate.For]), and the node keeps
+// its seats.
 
 // The placement the router is handed.
 var _ estate.Placement = wholeEstate{}
@@ -52,16 +47,17 @@ var _ estate.Placement = wholeEstate{}
 // whether it answers requests — is trusted by the request gate
 // ([localEstate.For]) before it is read again.
 //
-// ONE SECOND. The verdict reads every log's bounds from the broker — a
-// JetStream API request per log — and a gate that asked per request would put
-// three round trips in front of every tool call a data node answers. Refreshed
-// at most once a second PER PARTITION, and never on a request's own path once
-// it has been read — see [localEstate.verdict] — a node pays at most one
-// verdict's reads a second per partition however many requests it answers; and
-// a verdict a second old errs only about a copy that crossed the snapshot
-// slack (a thousand records) inside that second, which the floors still hold
-// to every write the node's own seats made. It is counted from when the read
-// LANDED, so a read slower than this is not already stale when it is stored.
+// ONE SECOND. The verdict reads the broker for every log whose health judges a
+// copy — a JetStream API request per log at least — and a gate that asked per
+// request would put those round trips in front of every tool call a data node
+// answers. Refreshed
+// at most once a second, and never on a request's own path once it has been
+// read — see [localEstate.verdict] — a node pays at most one verdict's reads a
+// second however many requests it answers; and a verdict a second old errs
+// only about a copy that crossed the snapshot slack (a thousand records)
+// inside that second, which the floors still hold to every write the node's
+// own seats made. It is counted from when the read LANDED, so a read slower
+// than this is not already stale when it is stored.
 const servingRecheck = time.Second
 
 // servingRead bounds one verdict's reads of the broker, whatever the deadline
@@ -71,12 +67,12 @@ const servingRecheck = time.Second
 //
 // statelog.ReadBudget, the budget a floor wait takes — the same "is this copy
 // fit to answer" question, bounded the same way. It may exceed
-// [servingRecheck]: nobody waits on a read but a request for a partition never
-// judged, and that request waits no longer than its own context.
+// [servingRecheck]: nobody waits on a read but a request that finds the copy
+// never judged, and that request waits no longer than its own context.
 const servingRead = statelog.ReadBudget
 
 // newRouter builds this node's router over the fleet's queue, routing by the
-// presence view and answering in-process for what this node serves.
+// presence view and answering in-process from this node's own copy.
 func (e *Engine) newRouter(q estate.Asker, nodeID string) (*estate.Router, error) {
 	opts := estate.RouterOptions{
 		Self: nodeID, Queue: q, Placement: e.estatePlacement(),
@@ -92,22 +88,19 @@ func (e *Engine) newRouter(q estate.Asker, nodeID string) (*estate.Router, error
 	return r, nil
 }
 
-// estatePlacement is who serves the estate as this node routes: every live data
+// estatePlacement is who holds the estate as this node routes: every live data
 // node, from the watched presence view.
 func (e *Engine) estatePlacement() estate.Placement {
-	return wholeEstate{running: LayoutZero(), roster: presenceRoster{view: e.dataView}}
+	return wholeEstate{roster: presenceRoster{view: e.dataView}}
 }
 
-// wholeEstate is the router's placement: every live data node serves the
-// estate's one partition, as this node's watched presence view names them.
+// wholeEstate is the router's placement: every live data node holds the whole
+// estate, as this node's watched presence view names them.
 //
 // PRESENCE AND NOT A LISTING PER CALL, because every seat tool asks it first:
 // the view answers from memory, and a node it named that went silent is listed
 // again at once ([wholeEstate.Unanswered]) rather than a heartbeat later.
 type wholeEstate struct {
-	// running is the layout this node runs.
-	running statelog.Layout
-
 	// roster is every live data node, from memory.
 	roster dataRoster
 }
@@ -122,133 +115,97 @@ type dataRoster interface {
 	Invalidate()
 }
 
-// Layout is the layout this node runs.
-func (w wholeEstate) Layout() (statelog.Layout, error) { return w.running, nil }
-
-// Serving is every live data node, sorted, for the estate's one partition, at
-// epoch 0 — there is no map to count epochs of. An error from the roster is
+// Holders is every live data node, sorted. An error from the roster is
 // UNKNOWN, never "no holder".
-func (w wholeEstate) Serving(p statelog.PartitionID) ([]string, uint64, error) {
-	if parts := w.running.Partitions(); len(parts) != 1 || parts[0] != p {
-		return nil, 0, fmt.Errorf("engine: %q is not the estate's partition", p.String())
-	}
+func (w wholeEstate) Holders() ([]string, error) {
 	nodes, err := w.roster.LiveDataNodes()
 	if err != nil {
-		return nil, 0, fmt.Errorf("engine: who serves %s: %w", p.String(), err)
+		return nil, fmt.Errorf("engine: who holds the estate: %w", err)
 	}
 	out := slices.Clone(nodes)
 	slices.Sort(out)
-	return out, 0, nil
-}
-
-// Refresh asks the roster to list again. A server's newer epoch — the only
-// reason a router refreshes — is never met, since every node's epoch is 0.
-func (w wholeEstate) Refresh(context.Context) error {
-	w.roster.Invalidate()
-	return nil
+	return out, nil
 }
 
 // Unanswered asks the roster to list again, because a node it named went
 // silent.
 func (w wholeEstate) Unanswered(string) { w.roster.Invalidate() }
 
-// newLocalEstate is this node's own backends, per partition holding says it
-// serves — [holdingOf] the layout it runs, the one rule its write authority's
-// gate 3 reads too.
-func newLocalEstate(e *Engine, holding statelog.Holding) *localEstate {
-	return &localEstate{e: e, holding: holding, now: time.Now,
-		read: func(ctx context.Context, n *native, p statelog.PartitionID) copyVerdict {
-			return n.log.partitionVerdict(ctx, p)
-		},
-		verdicts: map[statelog.PartitionID]*verdictSlot{}}
+// newLocalEstate is this data node's own copy, as the router answers from it.
+func newLocalEstate(e *Engine) *localEstate {
+	return &localEstate{e: e, now: time.Now,
+		read: func(ctx context.Context, n *native) copyVerdict {
+			return n.log.judgeCopy(ctx)
+		}}
 }
 
 // localEstate is [estate.LocalBackends] over this node's own copy.
 type localEstate struct {
-	e       *Engine
-	holding statelog.Holding
-	now     func() time.Time
+	e   *Engine
+	now func() time.Time
 
-	// read judges a copy — the state log's own judgement in production, a
-	// parameter for the tests.
-	read func(ctx context.Context, n *native, p statelog.PartitionID) copyVerdict
+	// read judges the copy — the state log's own judgement in production,
+	// a parameter for the tests.
+	read func(ctx context.Context, n *native) copyVerdict
 
-	// mu guards verdicts and every slot in it, and is NEVER held across a
-	// read of the broker — see [localEstate.verdict].
-	mu       sync.Mutex
-	verdicts map[statelog.PartitionID]*verdictSlot
-
-	// cpus is the places a gather's queries of this node's copies take —
-	// ONE for the node, which its server and its router both read here
-	// ([localEstate.CPUs]).
-	cpus estate.CPUs
+	// mu guards slot, and is NEVER held across a read of the broker — see
+	// [localEstate.verdict].
+	mu   sync.Mutex
+	slot verdictSlot
 }
 
-// CPUs implements [estate.LocalBackends]: the node's one, so the batches it
-// answers for other nodes and its own seats' gathers share its processors
-// rather than each running a query per CPU beside the other.
-func (l *localEstate) CPUs() *estate.CPUs { return &l.cpus }
-
-// verdictSlot is one partition's verdict: the last one read, and the read in
-// flight to replace it.
+// verdictSlot is the copy's verdict: the last one read, and the read in flight
+// to replace it.
 type verdictSlot struct {
 	// held is the last verdict read, valid once known is.
 	held  heldVerdict
 	known bool
 
 	// reading is closed when the read in flight lands, and nil while none
-	// is: ONE read per partition at a time, however many requests found the
-	// verdict stale.
+	// is: ONE read at a time, however many requests found the verdict
+	// stale.
 	reading chan struct{}
 }
 
-// heldVerdict is one partition's last verdict, and when its read landed.
+// heldVerdict is the copy's last verdict, and when its read landed.
 type heldVerdict struct {
 	at time.Time
 	copyVerdict
 }
 
-// For implements [estate.LocalBackends]: p's backend where this node serves p.
+// For implements [estate.LocalBackends]: the backend over this node's copy,
+// or false while the copy is out of service.
 //
 // A COPY THAT IS WRONG IS NOT SERVED. An applier halted at a record it cannot
 // decode or held one past the deferral grace, an eviction, rows below the
 // log's first record, a checkpoint on another stream, a stalled prefix: a copy
-// in any of those states stops SERVING its partition — this node's router
-// sends its own seats' calls to the partition's other holders, and another
-// node asking is told `not_holder` — and never sheds the node's seats, which
-// read the partition from a holder whose copy is sound. That is the whole of
-// the remedy a fault needs: the seats were never the problem, the copy was,
-// and moving them cost every one of them its processes and its memory to be
-// served by the very same peers.
+// in any of those states goes OUT OF SERVICE — this node's router sends its
+// own seats' calls to the other data nodes, and another node asking is told
+// `out_of_service` — and never sheds the node's seats, which read the estate
+// from a data node whose copy is sound. That is the whole of the remedy a
+// fault needs: the seats were never the problem, the copy was, and moving them
+// cost every one of them its processes and its memory to be served by the very
+// same peers.
 //
-// A PARTITION HELD WITH NO RUNTIME YET — a data node that booted with no
-// company — is served with no halves, so every operation on it is answered
-// "no native backend here" and moves on, while the node still answers for it.
-func (l *localEstate) For(ctx context.Context, p statelog.PartitionID) (estate.Backend, bool, error) {
-	serving, err := l.holding.Serving(p)
-	switch {
-	case err != nil:
-		// CANNOT TELL, kept apart from "does not serve" — gate 3's own
-		// two refusals — so another node asking is told
-		// `holding_unknown` rather than `not_holder`.
-		return estate.Backend{}, false, fmt.Errorf("engine: whether this node serves %s: %w", p, err)
-	case !serving:
-		return estate.Backend{}, false, nil
-	}
+// A COPY WITH NO RUNTIME YET — a data node that booted with no company — is
+// served with no halves, so every operation on it is answered "no native
+// backend here" and moves on, while the node still answers for it.
+func (l *localEstate) For(ctx context.Context) (estate.Backend, bool) {
 	n := l.e.native.Load()
 	if n == nil {
-		return estate.Backend{}, true, nil
+		return estate.Backend{}, true
 	}
-	v := l.verdict(ctx, n, p)
+	v := l.verdict(ctx, n)
 	if v.fault != "" {
-		return estate.Backend{}, false, nil
+		return estate.Backend{}, false
 	}
-	b := l.e.partitionBackend(n, p)
+	b := l.e.estateBackend(n)
 	b.Answers = func(context.Context) bool { return v.answers }
-	return b, true, nil
+	return b, true
 }
 
-// verdict is p's verdict, read again once it is older than [servingRecheck].
+// verdict is the copy's verdict, read again once it is older than
+// [servingRecheck].
 //
 // # Never on a request's path, and never under the lock
 //
@@ -259,10 +216,10 @@ func (l *localEstate) For(ctx context.Context, p statelog.PartitionID) (estate.B
 // found the verdict it waited for already older than the recheck and read
 // again in turn, and none could leave when its own caller gave up: twenty
 // calls behind an unreachable broker waited forty seconds. So the read runs
-// OFF the request path, one per partition at a time (the [verdictSlot]'s
-// reading), and a request meanwhile answers from the verdict before it —
-// nobody waits on a read but a request for a partition never judged, and that
-// one waits no longer than its own context.
+// OFF the request path, one at a time (the [verdictSlot]'s reading), and a
+// request meanwhile answers from the verdict before it — nobody waits on a
+// read but a request that finds the copy never judged, and that one waits no
+// longer than its own context.
 //
 // # A reading that could not reach the broker changes nothing it could not see
 //
@@ -270,8 +227,8 @@ func (l *localEstate) For(ctx context.Context, p statelog.PartitionID) (estate.B
 // unless a log that was read says otherwise — a broker blip must not send every
 // request away from a sound copy, nor bring a wrong one back into service on no
 // information. A copy never judged answers nothing: nobody has measured it.
-func (l *localEstate) verdict(ctx context.Context, n *native, p statelog.PartitionID) copyVerdict {
-	slot, v, known, reading := l.peek(ctx, n, p)
+func (l *localEstate) verdict(ctx context.Context, n *native) copyVerdict {
+	v, known, reading := l.peek(ctx, n)
 	if known {
 		return v
 	}
@@ -284,25 +241,21 @@ func (l *localEstate) verdict(ctx context.Context, n *native, p statelog.Partiti
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return slot.held.copyVerdict
+	return l.slot.held.copyVerdict
 }
 
-// peek is p's verdict as held NOW, never waiting: the last one read and true,
-// or false where none has been — and it starts a read wherever the verdict
-// held is older than [servingRecheck] and none is in flight. reading is closed
-// when that read lands.
-func (l *localEstate) peek(ctx context.Context, n *native, p statelog.PartitionID) (
-	slot *verdictSlot, v copyVerdict, known bool, reading chan struct{}) {
+// peek is the copy's verdict as held NOW, never waiting: the last one read and
+// true, or false where none has been — and it starts a read wherever the
+// verdict held is older than [servingRecheck] and none is in flight. reading
+// is closed when that read lands.
+func (l *localEstate) peek(ctx context.Context, n *native) (v copyVerdict, known bool,
+	reading chan struct{}) {
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	slot = l.verdicts[p]
-	if slot == nil {
-		slot = &verdictSlot{}
-		l.verdicts[p] = slot
-	}
+	slot := &l.slot
 	if slot.known && l.now().Sub(slot.held.at) < servingRecheck {
-		return slot, slot.held.copyVerdict, true, nil
+		return slot.held.copyVerdict, true, nil
 	}
 	reading = slot.reading
 	if reading == nil {
@@ -311,104 +264,76 @@ func (l *localEstate) peek(ctx context.Context, n *native, p statelog.PartitionI
 		// DETACHED from the request that found the verdict stale, since
 		// every request after it shares what it reads, and BOUNDED by
 		// [servingRead], which is the goroutine's whole lifetime.
-		go l.refresh(context.WithoutCancel(ctx), n, p, slot, reading)
+		go l.refresh(context.WithoutCancel(ctx), n, reading)
 	}
-	return slot, slot.held.copyVerdict, slot.known, reading
+	return slot.held.copyVerdict, slot.known, reading
 }
 
-// servesUnasked reports whether this node answers p from its own copy as far
-// as it can tell WITHOUT WAITING: it serves p, runs its native runtime, and the
-// last verdict read of the copy — where one has been — found it sound.
+// servesUnasked reports whether this node answers from its own copy as far as
+// it can tell WITHOUT WAITING: it runs its native runtime, and the last
+// verdict read of the copy — where one has been — found it sound.
 //
 // For serviceability, which asks it on every sweep and may not wait on the
 // broker. A copy nobody has judged yet is not read as a wrong one — its first
 // read is started here, and the next sweep has the answer — and a verdict held
 // past the recheck answers while the read that replaces it runs, exactly as a
 // request is answered.
-func (l *localEstate) servesUnasked(p statelog.PartitionID) bool {
-	serving, err := l.holding.Serving(p)
-	if err != nil || !serving {
-		return false
-	}
+func (l *localEstate) servesUnasked() bool {
 	n := l.e.native.Load()
 	if n == nil {
 		return false
 	}
-	_, v, known, _ := l.peek(context.Background(), n, p)
+	v, known, _ := l.peek(context.Background(), n)
 	return !known || v.fault == ""
 }
 
-// refresh reads p's verdict once and stores it in slot, stamped with the
+// refresh reads the copy's verdict once and stores it, stamped with the
 // instant the read LANDED: stamped with the instant it began, a read slower
 // than [servingRecheck] would be stale the moment it was stored, and the next
 // request would read again at once.
-func (l *localEstate) refresh(ctx context.Context, n *native, p statelog.PartitionID,
-	slot *verdictSlot, done chan struct{}) {
-
+func (l *localEstate) refresh(ctx context.Context, n *native, done chan struct{}) {
 	defer close(done)
 	read, cancel := context.WithTimeout(ctx, servingRead)
 	defer cancel()
-	v := l.read(read, n, p)
+	v := l.read(read, n)
 
 	l.mu.Lock()
-	known, held := slot.known, slot.held
+	known, held := l.slot.known, l.slot.held
 	if v.refusal == statelog.RefuseBrokerUnreachable {
 		v.answers = known && held.answers
 		if v.fault == "" && known {
 			v.fault = held.fault
 		}
 	}
-	slot.held, slot.known, slot.reading = heldVerdict{at: l.now(), copyVerdict: v}, true, nil
+	l.slot.held, l.slot.known, l.slot.reading = heldVerdict{at: l.now(), copyVerdict: v}, true, nil
 	l.mu.Unlock()
 
 	if v.fault != "" && (!known || held.fault == "") {
-		log.WarnContext(ctx, "estate_partition_not_served", "partition", p.String(),
-			"log", v.fault,
-			"detail", "this node's copy of the partition is wrong rather than behind, "+
-				"so it stops serving it; its seats read the partition from its other "+
-				"holders until the copy recovers")
+		log.WarnContext(ctx, "estate_copy_not_served", "log", v.fault,
+			"detail", "this node's copy of the estate is wrong rather than behind, "+
+				"so it goes out of service; its seats read the estate from the "+
+				"other data nodes until the copy recovers")
 	}
 }
 
-// partitionBackend is this data node's answer for partition p — under layout 0
-// the whole native runtime, since p is the estate.
+// estateBackend is this data node's answer for its copy of the estate: the
+// whole native runtime.
 //
 // WRITES ONLY WHILE THIS NODE PUBLISHES. A node restarted into a maintenance
 // mode is the evidence a capacity operation is established from, and a write
 // it took on anybody's behalf would be the publish the mode exists to rule
 // out — so its writers are absent ([Engine.writeSide] hands none out) and
 // every write is answered "not here".
-func (e *Engine) partitionBackend(n *native, p statelog.PartitionID) estate.Backend {
+func (e *Engine) estateBackend(n *native) estate.Backend {
 	b := estate.Backend{
 		Committed: e.WaitCommitted,
 		Admits: func(ctx context.Context) bool {
-			ok, refusal := n.log.PartitionEstablished(ctx, p, true)
+			ok, refusal := n.log.Established(ctx, true)
 			if !ok && refusal != "" {
-				log.DebugContext(ctx, "seat_admission_withheld",
-					"partition", p.String(), "reason", string(refusal))
+				log.DebugContext(ctx, "seat_admission_withheld", "reason", string(refusal))
 			}
 			return ok
 		},
-	}
-	if n.log != nil {
-		// WHERE THIS COPY IS, and the barrier a linearizable gather is
-		// read after — each per log, since a partition carries several.
-		b.Applied = func(stream string) statelog.Position {
-			if running := n.log.logOf(stream); running != nil {
-				return running.runner.Committed()
-			}
-			return statelog.Position{}
-		}
-		b.Barrier = func(ctx context.Context, stream string) (statelog.Position, bool, error) {
-			running := n.log.logOf(stream)
-			if running == nil || running.reader == nil {
-				// A LOG WITH NO READ AUTHORITY makes no freshness
-				// claim — the vectors' derived log.
-				return statelog.Position{}, false, nil
-			}
-			at, err := running.reader.Barrier(ctx)
-			return at, true, err
-		}
 	}
 	if n.trackerReader != nil {
 		b.Tracker = n.trackerReader
@@ -439,8 +364,8 @@ func (e *Engine) partitionBackend(n *native, p statelog.PartitionID) estate.Back
 	return b
 }
 
-// serverSeams is what this node supplies to every operation it answers,
-// whichever partition it is on: its current chart and org.
+// serverSeams is what this node supplies to every operation it answers: its
+// current chart and org.
 func (e *Engine) serverSeams() estate.ServerSeams {
 	seams := estate.ServerSeams{
 		Units: liveUnits{engine: e}, Leads: liveLeads{engine: e},
@@ -455,102 +380,8 @@ func (e *Engine) serverSeams() estate.ServerSeams {
 	return seams
 }
 
-// seatNeed is a partition a seat needs a serving holder of before it is
-// admitted, and which of the company's native halves it needs there.
-type seatNeed struct {
-	partition      statelog.PartitionID
-	tracker, pages bool
-}
-
-// seatNeeds is what seat admission waits for under layout l: for a native
-// tracker, the partition holding its CATALOGUE, which every create reads; for
-// a native knowledge base, its one partition where the layout gives it one.
-// Under layout 0 both are estate.000.
-//
-// A KNOWLEDGE BASE DIVIDED BY CONTAINER adds nothing to wait for: no one of its
-// partitions is the one every seat reads, and a page operation on a partition
-// nobody serves is refused naming it, as every operation is. A layout that
-// gives a native half NO partition to wait for — the tracker with neither one
-// partition nor a company space holding its catalogue, the knowledge base with
-// no log at all — is refused ([estate.ErrUnaddressed]) rather than read as
-// nothing to wait for, which would admit a seat onto a company nobody checked.
-func seatNeeds(l statelog.Layout, runTracker, wiki bool) ([]seatNeed, error) {
-	var out []seatNeed
-	need := func(p statelog.PartitionID, tracker, pages bool) {
-		for i := range out {
-			if out[i].partition == p {
-				out[i].tracker = out[i].tracker || tracker
-				out[i].pages = out[i].pages || pages
-				return
-			}
-		}
-		out = append(out, seatNeed{partition: p, tracker: tracker, pages: pages})
-	}
-	if runTracker {
-		p, err := trackerCatalogue(l)
-		if err != nil {
-			return nil, err
-		}
-		need(p, true, false)
-	}
-	if wiki {
-		name := pages.Domain{}.Name()
-		switch logs := l.LogsOf(name); len(logs) {
-		case 0:
-			return nil, fmt.Errorf("%w: layout %d carries no log of the %s domain, so a "+
-				"seat on a company running its knowledge base natively has nowhere to "+
-				"read it", estate.ErrUnaddressed, l.Number, name)
-		case 1:
-			need(logs[0].Partition, false, true)
-		}
-	}
-	return out, nil
-}
-
-// trackerCatalogue is the partition holding the tracker's catalogue under l:
-// the domain's one partition where the layout gives it one, and otherwise the
-// company space's, where a divided layout keeps the company-wide objects every
-// tracker partition must see.
-func trackerCatalogue(l statelog.Layout) (statelog.PartitionID, error) {
-	name := tracker.Domain{}.Name()
-	if p := l.OnlyPartition(name); p.Valid() {
-		return p, nil
-	}
-	company := statelog.PartitionID{Space: statelog.SpaceCompany}
-	for _, log := range l.LogsOf(name) {
-		if log.Partition == company {
-			return company, nil
-		}
-	}
-	return statelog.PartitionID{}, fmt.Errorf("%w: layout %d gives the %s domain neither "+
-		"one partition nor a company space to keep its catalogue in, and every create "+
-		"reads the catalogue", estate.ErrUnaddressed, l.Number, name)
-}
-
-// routedPartitions is every partition a seat's calls may address under l on a
-// company running these halves natively: each partition carrying a log of the
-// tracker's domain or the knowledge base's, beside which the vectors a search
-// reads are kept.
-func routedPartitions(l statelog.Layout, runTracker, wiki bool) []statelog.PartitionID {
-	var out []statelog.PartitionID
-	add := func(domain string) {
-		for _, log := range l.LogsOf(domain) {
-			if !slices.Contains(out, log.Partition) {
-				out = append(out, log.Partition)
-			}
-		}
-	}
-	if runTracker {
-		add(tracker.Domain{}.Name())
-	}
-	if wiki {
-		add(pages.Domain{}.Name())
-	}
-	return out
-}
-
-// presenceRoster is the fleet's presence view as the layout-0 placement's
-// roster: every live data node, from memory.
+// presenceRoster is the fleet's presence view as the router's placement reads
+// it: every live data node, from memory.
 type presenceRoster struct{ view *coord.LeaseView }
 
 // LiveDataNodes is every live data node. A node with no view has no

@@ -2,10 +2,7 @@ package knowledge
 
 import (
 	"fmt"
-	"slices"
 	"strings"
-
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // # Three modes, one vocabulary
@@ -192,122 +189,10 @@ type Outcome struct {
 
 	Coverage Coverage    `json:"coverage"`
 	Degraded Degradation `json:"degraded"`
-
-	// Partitions is what a search answered PARTITION BY PARTITION covered —
-	// the engine's own corpus, which a partitioned estate divides between
-	// the data nodes holding it. Coverage above is the CPU division of one
-	// copy (a node that did not scan its buckets); this is the DATA
-	// division (a partition no holder answered for), and it is the one a
-	// short list cannot be told apart from: a partition that did not
-	// answer is a part of the corpus this answer never searched. A caller
-	// renders a non-empty [statelog.Coverage.Missing] as its
-	// [statelog.Coverage.Notice], never as the shorter list alone —
-	// "nothing matched" and "part of the knowledge base was not searched"
-	// send a seat to different places.
-	//
-	// THE ZERO VALUE for a backend with no partitions — Confluence, whose
-	// one corpus is somebody else's — which states nothing missing.
-	Partitions statelog.Coverage `json:"partitions,omitzero"`
 }
 
 // Result is one knowledge search's answer.
 type Result struct {
 	Hits []Hit
 	Outcome
-}
-
-// MergeOutcomes is what one search answered by several DISJOINT corpora did,
-// from each corpus's own outcome — the partitions of a divided estate, each
-// ranked by its own holders and fused where they are all held.
-//
-// THE MODE SERVED IS THE FULLEST ANY CORPUS SERVED, and the difference is
-// said rather than averaged away: a corpus that ranked without meaning (its
-// query vector failed there) beside one that ranked by it is a semantic
-// ranking over part of the corpus, which is [DegradedSemanticPartial] — the
-// same words main's bucket fan-out uses for one participant whose vector scan
-// failed, one level up. Where no corpus ranked by meaning the answer carries
-// the first reason any of them gave, which is the configuration's (every
-// holder runs the same company) or one provider failure.
-//
-// MODES ARE THE ONES EVERY CORPUS OFFERS, because a mode one holder cannot
-// serve as asked is a mode the fused answer cannot either; COVERAGE IS SUMMED
-// — a participant that covered its range everywhere it was asked is answered,
-// one that failed anywhere is named with the first reason it gave, and the
-// buckets no answer covered are counted across the corpora. [Outcome.Partitions]
-// is left for whoever gathered the corpora to state, since only it knows which
-// did not answer at all.
-//
-// One outcome is returned unchanged, so a search over a single corpus — every
-// search under the single-partition layout — answers exactly what that
-// corpus's ranking did.
-func MergeOutcomes(parts []Outcome) Outcome {
-	switch len(parts) {
-	case 0:
-		return Outcome{Coverage: Coverage{Nodes: []NodeCoverage{}}}
-	case 1:
-		return parts[0]
-	}
-	out := Outcome{Coverage: Coverage{Complete: true}}
-	semantic, partial := false, false
-	for i, p := range parts {
-		if i == 0 {
-			out.Modes = slices.Clone(p.Modes)
-		} else {
-			out.Modes = slices.DeleteFunc(out.Modes, func(m Mode) bool {
-				return !slices.Contains(p.Modes, m)
-			})
-		}
-		if p.ServedMode != "" && p.ServedMode.Semantic() {
-			semantic = true
-		}
-		if p.Degraded == DegradedSemanticPartial {
-			partial = true
-		}
-		out.Coverage.Complete = out.Coverage.Complete && p.Coverage.Complete
-		out.Coverage.BucketsMissing += p.Coverage.BucketsMissing
-	}
-	for _, p := range parts {
-		switch {
-		case semantic && p.ServedMode != "" && p.ServedMode.Semantic():
-			out.ServedMode = p.ServedMode
-		case semantic:
-			// A corpus that ranked without meaning beside one that
-			// ranked by it.
-			partial = true
-		case out.ServedMode == "":
-			out.ServedMode = p.ServedMode
-		}
-		if out.Degraded == NotDegraded && !semantic {
-			out.Degraded = p.Degraded
-		}
-	}
-	if semantic && partial {
-		out.Degraded = DegradedSemanticPartial
-	}
-	out.Coverage.Nodes = mergeNodes(parts)
-	return out
-}
-
-// mergeNodes is every participant across the corpora, once, sorted by id:
-// answered where it answered every range it was asked for, otherwise named
-// with the first reason it gave.
-func mergeNodes(parts []Outcome) []NodeCoverage {
-	byID := map[string]NodeCoverage{}
-	for _, p := range parts {
-		for _, n := range p.Coverage.Nodes {
-			prior, seen := byID[n.ID]
-			switch {
-			case !seen:
-				byID[n.ID] = n
-			case prior.Answered && !n.Answered:
-				byID[n.ID] = n
-			}
-		}
-	}
-	out := make([]NodeCoverage, 0, len(byID))
-	for _, n := range byID {
-		out = append(out, n)
-	}
-	slices.SortFunc(out, func(a, b NodeCoverage) int { return strings.Compare(a.ID, b.ID) })
-	return out
 }

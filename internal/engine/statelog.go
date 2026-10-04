@@ -1963,46 +1963,55 @@ func (s *stateLog) identityDomains() []*runningLog {
 // domain is what keeps that a property of the domain rather than a list
 // somewhere of the ones to skip.
 func (s *stateLog) Established(ctx context.Context, strict bool) (bool, statelog.ReadRefusal) {
-	return s.everyReadiness(ctx, everyLog, func(h statelog.Health) (bool, statelog.ReadRefusal) {
-		return h.Established(strict)
-	})
+	if s == nil {
+		return true, ""
+	}
+	for _, running := range s.running() {
+		if !running.domain.ReadinessInput() {
+			continue
+		}
+		health, err := s.health(ctx, running)
+		if err != nil {
+			return false, statelog.RefuseBrokerUnreachable
+		}
+		if ok, refusal := health.Established(strict); !ok {
+			return false, refusal
+		}
+	}
+	return true, ""
 }
 
-// PartitionEstablished is [stateLog.Established] over p's logs alone — what a
-// seat's admission asks of the copy of p that will serve it.
-func (s *stateLog) PartitionEstablished(ctx context.Context, p statelog.PartitionID,
-	strict bool) (bool, statelog.ReadRefusal) {
-	return s.everyReadiness(ctx, inPartition(p), func(h statelog.Health) (bool, statelog.ReadRefusal) {
-		return h.Established(strict)
-	})
-}
-
-// copyVerdict is what the estate's router reads of this node's copy of one
-// partition: whether it is WRONG ([stateLog.partitionVerdict] says what that
-// means) and, if not, whether it answers requests now.
+// copyVerdict is what the estate's router reads of this node's copy of the
+// estate: whether it is WRONG ([stateLog.judgeCopy] says what that means) and,
+// if not, whether it answers requests now.
 type copyVerdict struct {
-	// fault names the first of the partition's logs whose copy is wrong —
-	// or the partition itself, where its file is not open at all — empty
-	// for a copy that is not.
+	// fault names the first log whose copy is wrong — or [shutEstate],
+	// where the estate's file is not open at all — empty for a copy that
+	// is not.
 	fault string
 
-	// answers is [statelog.Health.Answers] over every log of the
-	// partition, and refusal the first refusal where it is false —
+	// answers is [statelog.Health.Answers] over every log whose health
+	// judges the copy, and refusal the first refusal where it is false —
 	// [statelog.RefuseBrokerUnreachable] for a log whose health could not
 	// be read.
 	answers bool
 	refusal statelog.ReadRefusal
 }
 
-// partitionVerdict judges this node's copy of p from ONE reading of each of
+// shutEstate is the fault a copy whose file is not open is judged by: no log
+// is to blame, the whole copy is.
+const shutEstate = "estate"
+
+// judgeCopy judges this node's copy of the estate from ONE reading of each of
 // its logs' health: every reading costs the broker a request per log, and the
 // two questions are asked of the same instant. A LOG WHOSE HEALTH COULD NOT BE
 // READ is not a fault, for the reason below, and it is not an answer either.
 //
 // # What makes a copy WRONG
 //
-// A copy that is wrong is one this node stops SERVING while its seats keep
-// running and read the estate from its other holders ([localEstate.For]).
+// A copy that is wrong is one this node takes OUT OF SERVICE while its seats
+// keep running and read the estate from the other data nodes
+// ([localEstate.For]).
 //
 // # This is a different question from Established, and the difference is what
 // # separates waiting from not serving
@@ -2041,20 +2050,20 @@ type copyVerdict struct {
 //
 // Whatever reads this must also ACT on it — the `deferred_old` alarm once told
 // an operator "its seats move at 30m" about a node nothing ever moved. What
-// the answer does now is stop the node serving the partition, which the alarms
+// the answer does now is take the node's copy out of service, which the alarms
 // say.
 //
 // A DOMAIN WHOSE HEALTH CANNOT BE READ IS NOT WRONG. An unreachable broker is
 // the outage during which a company most needs its copies to keep answering,
 // and taking one out of service on an unread number is the failure mode
 // `unknown` exists throughout this package to prevent.
-func (s *stateLog) partitionVerdict(ctx context.Context, p statelog.PartitionID) copyVerdict {
+func (s *stateLog) judgeCopy(ctx context.Context) copyVerdict {
 	out := copyVerdict{answers: true}
 	if s == nil {
 		return out
 	}
 	// A FILE THAT IS NOT OPEN IS A COPY THAT CANNOT ANSWER AT ALL — lost to
-	// a join that could not reopen it, or closed between an adoption's
+	// a rejoin that could not reopen it, or closed between an adoption's
 	// rename and its reopen — rather than one that is behind: every read of
 	// it fails with no estate, and its appliers are halted, which on a
 	// company writing nothing owes no progress, so nothing below would ever
@@ -2062,13 +2071,13 @@ func (s *stateLog) partitionVerdict(ctx context.Context, p statelog.PartitionID)
 	// failure for as long as the file stayed shut, where a peer's copy could
 	// have answered them.
 	if s.db != nil {
-		if _, err := s.db.PartitionDB(p.String()); err != nil {
-			return copyVerdict{fault: p.String()}
+		if _, err := s.db.PartitionDB(statelog.EstatePartition.String()); err != nil {
+			return copyVerdict{fault: shutEstate}
 		}
 	}
 	now := time.Now()
 	for _, running := range s.running() {
-		if running.id.Partition != p || !running.domain.ReadinessInput() {
+		if !running.domain.ReadinessInput() {
 			continue
 		}
 		health, err := s.health(ctx, running)
@@ -2089,39 +2098,6 @@ func (s *stateLog) partitionVerdict(ctx context.Context, p statelog.PartitionID)
 		}
 	}
 	return out
-}
-
-// everyLog selects every log a node runs, for a question about the whole node.
-func everyLog(*runningLog) bool { return true }
-
-// inPartition selects the logs of partition p, for a question about one copy.
-func inPartition(p statelog.PartitionID) func(*runningLog) bool {
-	return func(running *runningLog) bool { return running.id.Partition == p }
-}
-
-// everyReadiness is judge over every log selected by in whose domain's health
-// gates seat admission, in the register's order, answering the first refusal —
-// and [statelog.RefuseBrokerUnreachable] for a log whose health could not be
-// read. A node with no state log is judged ready: it has nothing to wait for.
-func (s *stateLog) everyReadiness(ctx context.Context, in func(*runningLog) bool,
-	judge func(statelog.Health) (bool, statelog.ReadRefusal)) (bool, statelog.ReadRefusal) {
-
-	if s == nil {
-		return true, ""
-	}
-	for _, running := range s.running() {
-		if !in(running) || !running.domain.ReadinessInput() {
-			continue
-		}
-		health, err := s.health(ctx, running)
-		if err != nil {
-			return false, statelog.RefuseBrokerUnreachable
-		}
-		if ok, refusal := judge(health); !ok {
-			return false, refusal
-		}
-	}
-	return true, ""
 }
 
 // health assembles one domain's readiness from the four places it lives: this
@@ -4469,7 +4445,7 @@ func (s *stateLog) positionGauges(ctx context.Context, row coord.NodePositions) 
 // SECONDS RATHER THAN A COUNT, and beside the count rather than instead of it:
 // one record held for an hour and sixty held for a second are the same count
 // and completely different states, and it is the AGE that decides whether this
-// node still serves the partition (D122).
+// node's copy stays in service (D122).
 //
 // It rides the position heartbeat because that is where the deferral is
 // observed — see [progress], which is the only thing that knows when the

@@ -67,12 +67,8 @@ type fakeTracker struct {
 
 	// searched is every text the ranked search was asked for, and ranked
 	// what it answers with.
-	searched []string
-	ranked   []tracker.Ranked
-
-	// coverage is what every gathered answer the fake gives says it
-	// covered — a partition missing from it is work nobody read.
-	coverage  statelog.Coverage
+	searched  []string
+	ranked    []tracker.Ranked
 	searchErr error
 	// searchModes is every mode a search asked for, and partialSearch
 	// makes the fake answer over part of the corpus.
@@ -361,7 +357,6 @@ func (f *fakeTracker) Search(_ context.Context,
 	if f.partialSearch {
 		answer.Coverage = knowledge.Coverage{BucketsMissing: 21}
 	}
-	answer.Partitions = f.coverage
 	if q.Limit <= 0 || q.Limit > len(f.ranked) {
 		answer.Hits = f.ranked
 		return answer, nil
@@ -1447,7 +1442,6 @@ func (f *fakeTracker) Inbox(_ context.Context, q tracker.InboxQuery,
 
 	f.inboxQuery = q
 	return tracker.InboxAnswer{
-		Coverage:       f.coverage,
 		Handle:         q.Who.Handle,
 		PrimaryReasons: tracker.DefaultPrimaryReasons,
 		Notices: []tracker.InboxNotice{{

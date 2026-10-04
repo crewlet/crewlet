@@ -170,7 +170,7 @@ func TestAMeasurementThatMissesTheFloorRetrains(t *testing.T) {
 // framework stops rather than defers on an envelope it cannot read. So while
 // the log counts a node advertising no build that reads them — or one that
 // reads below [search.IndexRecordVersion] — the duty embeds as ever and
-// publishes nothing about the index, and the partition keeps the full scan.
+// publishes nothing about the index, and the corpus keeps the full scan.
 // The moment the last such node is upgraded, the next tick trains.
 //
 // And a duty on a node that has not applied the whole log decides nothing from
@@ -512,7 +512,7 @@ func (e topicalEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]fl
 //
 // The bound exists to cut off a tick that WEDGED, and a wedge is the absence
 // of progress — so every long step of a training must show it, or on a node
-// allowed one core, where a training at the largest partition is over six
+// allowed one core, where a training at the largest corpus is over six
 // minutes of reading and six more of arithmetic, the bound cut off every
 // training such a node began, for ever. The reading of every code and the
 // exact pass stream rows: each reports every [search.ProgressStride] of them,
