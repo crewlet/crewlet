@@ -32,7 +32,7 @@ node:
 
 | Role | What it does |
 |---|---|
-| `data` | Holds the company's durable state on its own disk: a full copy of the replicated estate, and the event log. `workers`' duties and `ingress`'s retention, capacity, eviction and backup surfaces read this node's own copy directly, so both require it (the API's tracker and knowledge-base routes go through the [estate router](estate-placement.md#how-a-request-reaches-its-partition) instead). It does not decide the node's broker — its `stream` block does ([broker kinds](../guides/fleet.md#the-broker-members-and-leaves)) — but under this release a data node on a leaf is refused, so every data node is a broker member holding a share of its replicas and a vote in its quorums. A node without it is [stateless](#a-node-that-holds-no-data) |
+| `data` | Holds the company's durable state on its own disk: a full copy of the replicated estate, and the event log. `workers`' duties and `ingress`'s retention, capacity, eviction and backup surfaces read this node's own copy directly, so both require it (the API's tracker and knowledge-base routes go through the [estate router](#how-a-request-reaches-the-estate) instead). It does not decide the node's broker — its `stream` block does ([broker kinds](../guides/fleet.md#the-broker-members-and-leaves)) — but a data node on a leaf is refused, so every data node is a broker member holding a share of its replicas and a vote in its quorums. A node without it is [stateless](#a-node-that-holds-no-data) |
 | `ingress` | Serves the HTTP API — every integration's webhooks, the dashboard, the REST and WebSocket read surface |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns, and serves their agent-mode tool bridge when `CREWLET_MCP_BRIDGE_URL` is set |
 | `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the sandbox waiter, the maintenance sweep (retention and removed-seat mailbox retirement), the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion). These read their work list from the **org**, never from the node's own seats: a `workers` node runs no seats at all, so a duty that iterated the local seats would cover nothing. Creating every seat's mailbox is not among them: every node does that at start and on each apply |
@@ -95,6 +95,57 @@ one (see [who has to acknowledge](../guides/retention.md#who-has-to-acknowledge)
 This is the shape for an agent host you want small and
 disposable — see [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data)
 and [ADR-0025](https://github.com/crewlet/crewlet/blob/main/adr/0025-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md).
+
+### How a request reaches the estate
+
+The replicated estate is one estate — its one partition is `estate.000` — and
+every data node holds the whole of it. Every node, with `data` or without,
+still reaches it through one **router**, and a seat's tools behave the same on
+either kind of node. So do the operator's surfaces: the API's tracker and
+knowledge-base routes, a project's file rows and the operator's own MCP go
+through the same router, so a data node whose copy is out of service answers
+its operator from a peer's copy, exactly as it answers its seats.
+
+```mermaid
+flowchart TD
+    op[A seat's tool call,<br/>or an operator's request] --> local{Does this node<br/>hold the estate?}
+    local -- yes --> own[Answer from this node's own copy,<br/>after its floors]
+    local -- no --> order[Ask the live data nodes in order:<br/>last to answer, rendezvous, silent ones last]
+    own -- behind its floor, or lagging its logs --> order
+    order --> reply{The data node's answer}
+    reply -- ran it --> done[The answer]
+    reply -- ran nothing --> order
+    order -- nobody left --> lagging{Did a copy decline<br/>only for lagging?}
+    lagging -- yes --> last[Ask it again, told to take the request,<br/>held to the same floors]
+    last -- ran it --> done
+    lagging -- no --> unserved[Refused, naming the estate]
+    last -- nobody ran it --> unserved
+```
+
+- **This node first, where it is a data node.** A data node answers its own
+  seats' calls from its own copy, in-process, and asks nobody.
+- **Otherwise the data nodes, in order**: the node that last answered, then an
+  order that spreads askers across the data nodes the fleet's presence names,
+  with a node that went silent in the last thirty seconds asked last.
+- **A node that ran nothing is passed over, whatever the operation**: one that
+  holds no copy (`not_holder`) or cannot tell whether it does
+  (`holding_unknown`), whose copy lags its logs (asked again last), or that is
+  behind the caller's floor. What may be repeated once a node *may* have run a
+  write is the operation's own rule: a tracker write moves on under the same
+  operation id, a knowledge-base write that went unanswered is reported as
+  unknown and never sent twice, and a tracker write one data node answered
+  *unvouched* — its ledger cannot say whether the operation landed — is asked
+  of the next under the same id before the caller is told the outcome is
+  unknown.
+- **Nobody answering is an answer that names the estate**, with what each data
+  node said — never an empty list, which would say the company has none of
+  what was asked for.
+
+A read waits up to ten seconds on one data node before the next is asked, a
+write up to a minute (or the caller's own deadline); none is ever longer than
+the caller's deadline. Every request carries the asking node's own writes as a
+floor, so whichever data node answers has applied them or says it is behind —
+see [Read Consistency](../guides/consistency.md#reading-your-own-write-back).
 
 The knowledge index is the one place the *work* is divided, and only the work:
 every indexed document carries a
@@ -176,7 +227,7 @@ stopping it.
 
 | Slot | Answers | Documented in |
 |---|---|---|
-| `leases` | Which node runs which seat, which node holds which duty, which nodes are alive at all, and — once the estate is partitioned — which data nodes are members of the estate map | [Seat Ownership](seat-ownership.md#the-lease) |
+| `leases` | Which node runs which seat, which node holds which duty, and which nodes are alive at all | [Seat Ownership](seat-ownership.md#the-lease) |
 | `config` · `status` | Which company revision is current, and which nodes have reached it | [Control Plane](control-plane.md) |
 | `ledger` | Has this trigger already been worked — read before a turn, written after one | [The completion ledger](seat-ownership.md#the-completion-ledger) |
 | `claims` | Has this inbound delivery been seen — the dedupe that used to be a per-process map, and that GitHub and GitLab did not have at all | [Event System](event-system.md) |

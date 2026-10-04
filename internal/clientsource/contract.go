@@ -210,10 +210,6 @@ var contract = []Entry{
 	{"BROKER_KINDS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryBrokerKind"},
 	{"BROKER_FINDING_KINDS", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryBrokerFinding"},
 	{"BROKER_REMOVE_TIMEOUT_MS", ReadScalar, "internal/api.TestTheDashboardWaitsPastABrokerRemoval"},
-	{"ESTATE_MAP_STATES", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryEstateState"},
-	{"HOLDER_STATES", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryEstateState"},
-	{"PARTITION_STATES", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryEstateState"},
-	{"HOLD_LENGTHS", ReadLiteral, "internal/api.TestTheDashboardOffersHoldLengthsTheEngineAccepts"},
 	{"OBJECTS_STATES", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryObjectsState"},
 
 	// links.ts

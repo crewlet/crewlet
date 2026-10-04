@@ -91,19 +91,6 @@ var alarmMeaning = map[Kind]string{
 	KindObjectsMissing: "Parts of the company's files are not in the object " +
 		"store: the collector's last audit asked the store for every chunk the " +
 		"estate names, and some were not there. Those files cannot be read in full.",
-	KindEstateUnserved: "A partition of the estate map has no copy that can answer: every " +
-		"holder the map lists serving it is on a node the map counts absent or unhealthy, " +
-		"or it has none — or, under layout 0, every live data node's copy of the estate " +
-		"has stopped serving it. Every read and write routed to it is refused.",
-	KindEstateShort: "A partition has fewer copies that can answer than its target has, and " +
-		"this node has seen it so for longer than the grace after which the map replaces a " +
-		"member it counts gone.",
-	KindEstateMoveStalled: "A holder has been joining a partition for longer than the " +
-		"rejoin window a join is sized against, as this node has seen it.",
-	KindEstateViewStale: "This node's view of the estate map or of the estate leases has " +
-		"not been confirmed within the age past which it is unknown: the staleness bound " +
-		"every cached coordination fact is held to, or the estate leases' TTL where that " +
-		"is shorter.",
 }
 
 const alarmHeader = `# Alarms

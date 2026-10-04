@@ -577,14 +577,6 @@ var allowedPartitionWriter = []allowance{
 			"conversation_sessions — every one placed in nodeEstatePlacements " +
 			"one file over. It never names a partition table.",
 	},
-	{
-		Prefix: "internal/coord/kv/maps.go", Kind: notReplicated,
-		Why: "Not a statement at all: `\"update \"+what` is the verb of an " +
-			"error message about a compare-and-set on a coordination KV " +
-			"bucket, and the walk renders the unresolved noun as a computed " +
-			"table. The placement maps it writes live in coordination, never " +
-			"in a partition, and the package holds no store handle.",
-	},
 
 	// -----------------------------------------------------------------
 	// THE EXCEPTIONS. Two writes that are not a record, each because no

@@ -852,8 +852,8 @@ func (e *Engine) reread(ctx context.Context, stream string) (
 // The seal's proof is that every BROKER process restarted, because a request
 // the broker has already queued is retired by the process holding it going
 // away, and every PUBLISHER must be admitted. So a live node takes part if it
-// holds the estate — it publishes records, and says so on its estate lease
-// ([capacityHolders]) — or if its broker is a member, which holds queued
+// holds the estate — it publishes records ([capacityHolders]) — or if its
+// broker is a member, which holds queued
 // requests whatever its roles ([capacityMembers]). Counted over data nodes
 // alone, a member that holds no data was never waited for, and the seal could
 // pass while its broker still held a request that would resize the log after
@@ -877,16 +877,12 @@ func (e *Engine) capacityParticipants(ctx context.Context) ([]string, error) {
 		seen[row.NodeID] = true
 	}
 	if e.backends.Coord != nil {
-		estate, err := e.backends.Coord.ListLive(ctx, coord.ClassEstate)
-		if err != nil {
-			return nil, fmt.Errorf("engine: list the live estate leases: %w", err)
-		}
-		for _, id := range capacityHolders(estate) {
-			seen[id] = true
-		}
 		held, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
 		if err != nil {
 			return nil, fmt.Errorf("engine: list the live nodes: %w", err)
+		}
+		for _, id := range capacityHolders(held) {
+			seen[id] = true
 		}
 		for _, id := range capacityMembers(held) {
 			seen[id] = true
@@ -901,33 +897,27 @@ func (e *Engine) capacityParticipants(ctx context.Context) ([]string, error) {
 	return sortedKeys(seen), nil
 }
 
-// capacityHolders is every live node holding a copy of the replicated estate —
-// the publishers of its records — as its estate lease says (estatelease.go).
+// capacityHolders is every live node holding the replicated estate — the
+// publishers of its records — as its presence says: every data node holds the
+// one estate whole.
 //
-// THE ESTATE LEASE AND NOT PRESENCE, for the estate map's own reason: a node
-// holds its estate lease for exactly as long as its estate runtime runs, from
-// the moment the runtime is up until after it has stopped applying, which is
-// the span in which it can publish — where a presence lease says what a node
-// was configured as, and a drain gives it up at its first step while the
-// runtime still runs. Under the single-file layout that is every data node
-// running the estate, each holding the one partition whole; once the estate is
-// partitioned it is every node holding any partition of it, which is who
-// publishes to any of its logs.
+// PRESENCE AND THE POSITIONS REGISTER BETWEEN THEM, because neither alone sees
+// every publisher. A drain gives presence up at its first step while the
+// node's state log still runs, and a node that has not yet heartbeated its
+// first position is on presence alone; the register's rows
+// ([Engine.capacityParticipants]) cover the first and presence the second. A
+// presence whose roles this build cannot read is read as every role, so the
+// node is counted: a publisher that went uncounted is the one thing this set
+// exists to prevent.
 //
-// A DATA NODE RUNNING NO ESTATE is left out, and publishes nothing a seal has
-// to retire: a company on vendor backends for both its tracker and its
-// knowledge base runs no state log at all, and a node with no company yet runs
-// none until an apply brings one — whose writers a maintenance mode withholds
-// and a normal mode admits first. Its broker is counted on its own terms
-// ([capacityMembers]), and a node the fleet holds a position for is counted by
-// that. A lease this build cannot read as an estate lease still names a node,
-// and the node is counted: a publisher that went uncounted is the one thing
-// this set exists to prevent.
-func capacityHolders(estate []coord.Lease) []string {
-	out := make([]string, 0, len(estate))
-	for _, lease := range estate {
-		if node, ok := coord.EstateNode(lease.Resource); ok && node != "" {
-			out = append(out, node)
+// A DATA NODE RUNNING NO ESTATE is counted all the same — a company on vendor
+// backends for both its tracker and its knowledge base runs no state log — and
+// costs only an acknowledgement an operator can exclude.
+func capacityHolders(held []coord.Lease) []string {
+	out := make([]string, 0, len(held))
+	for _, lease := range held {
+		if profile, ok := placement.FromLease(lease); ok && profile.HoldsData() {
+			out = append(out, profile.ID)
 		}
 	}
 	return out

@@ -135,9 +135,9 @@ func TestEveryBrokerKindAndRoleCombination(t *testing.T) {
 				var got []refusal
 				for _, p := range Problems(err) {
 					got = append(got, refusal{p.Path, p.Kind})
-					if !strings.Contains(p.Message, "until the partitioned estate is live") {
-						t.Errorf("%s is refused without saying it is refused only until "+
-							"the partitioned estate is live: %s", p.Path, p.Message)
+					if !strings.Contains(p.Message, "data") {
+						t.Errorf("%s is refused without naming the data role it turns "+
+							"on: %s", p.Path, p.Message)
 					}
 				}
 				if !slices.Equal(got, want) {
@@ -166,8 +166,6 @@ func TestTheDiskRulesFollowTheDataRoleOnEveryBroker(t *testing.T) {
 				"store:\n  path: /var/n.db\n", "store.scratch", "missing"},
 			"a node without data keeping an estate": {
 				"store:\n  scratch: true\n  replicated_path: /var/r.db\n", "store", "conflict"},
-			"a node without data offering an estate share": {
-				"store:\n  scratch: true\n  estate:\n    weight: 2\n", "store.estate", "conflict"},
 		} {
 			t.Run(string(kind)+"/"+name, func(t *testing.T) {
 				t.Parallel()

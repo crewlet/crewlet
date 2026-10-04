@@ -297,8 +297,6 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       return where.name ? inside("secrets", ownName(labels, where.name)) : sectionPage("secrets");
     case "nodes":
       return where.node ? inside("nodes", ownName(labels, where.node)) : sectionPage("nodes");
-    case "estate":
-      return sectionPage("estate");
     case "config": {
       if (!where.revisions) return sectionPage("config");
       const config: Crumb = {

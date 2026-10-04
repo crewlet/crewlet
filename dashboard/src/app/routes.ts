@@ -113,7 +113,6 @@ export type Screen =
   | { screen: "models"; id?: string }
   | { screen: "secrets"; name?: string }
   | { screen: "nodes"; node?: string }
-  | { screen: "estate" }
   | { screen: "config"; revisions: boolean; revision?: string }
   | { screen: "backups"; domain?: string }
   | { screen: "audit" };
@@ -378,10 +377,6 @@ function settings(rest: string[], screen: Make, under: Under): Route {
     case "nodes":
       if (tail.length > 1) return none();
       return screen(tail[0] ? { screen: "nodes", node: tail[0] } : { screen: "nodes" });
-    case "estate":
-      // NO TAIL: a partition is a row of this screen, and a node has its own
-      // page under Nodes that the rows link to.
-      return tail.length ? none() : screen({ screen: "estate" });
     case "config":
       if (tail.length === 0) return screen({ screen: "config", revisions: false });
       if (tail[0] === "revisions" && tail.length <= 2) {

@@ -180,8 +180,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runWork(rest, stdout, stderr)
 	case "objects":
 		return runObjects(rest, stdout, stderr)
-	case "estate":
-		return runEstate(rest, stdout, stderr)
 	case "fleet":
 		return runFleet(rest, stdout, stderr)
 	case "seats":
@@ -218,9 +216,6 @@ Usage:
                               produced and which nothing undoes
   crewlet objects status      Where the company's files are kept, and what the
                               object store's collector last found missing
-  crewlet estate <cmd>        Which data nodes hold each partition of the estate, and
-                              the gestures on the estate map: out, in, hold, release,
-                              move a partition's copy off a node
   crewlet fleet broker <cmd>  The fleet broker's members, as the nodes advertise them
                               and as its metadata group counts them: list, and
                               remove a member that is gone for good
@@ -741,12 +736,7 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 	// Inserted rather than appended onto Tier A's own list, which is nil
 	// for a document with no warnings at all: the payload promises both
 	// lists are arrays, and `append(nil)` of nothing stays nil.
-	//
-	// AND THE PAIR'S OWN, after Tier A's: each is located in the Tier A
-	// document (a node label the company's placement reads), so it belongs
-	// beside that file's warnings rather than among the company's.
-	tiers := append(boot.Warnings(), config.TierWarnings(boot, company.Company)...)
-	res.Warnings = slices.Insert(res.Warnings, 0, tiers...)
+	res.Warnings = slices.Insert(res.Warnings, 0, boot.Warnings()...)
 	res.Summary = map[string]any{
 		"company": company.Name, "seats": len(company.epoch.Seats()),
 		"llm_providers": len(company.epoch.Models.Keys()),
@@ -1804,13 +1794,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// read and write chunks through this node's object client and
 		// the rows through its tracker, attributed to the operator.
 		Files: api.EngineFiles(e),
-		// THE ESTATE MAP — which data nodes hold each partition — and the
-		// gestures on it, through this node because
-		// the map lives in the coordination store its broker holds. One
-		// seam serves GET /estate and the routes under it. Under layout 0
-		// the read answers that every data node holds the whole estate,
-		// and every gesture is refused saying so.
-		Estate: api.EngineEstate(e),
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.

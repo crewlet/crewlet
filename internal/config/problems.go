@@ -674,7 +674,7 @@ func (b *Bootstrap) Warnings() []Warning {
 					"in the metadata group — one more member every election and every "+
 					"stream or consumer created waits on — holding no copy anybody "+
 					"asked for. Beyond %d a fleet adds LEAVES, not members (a node that "+
-					"holds data is a member until the partitioned estate is live)",
+					"holds data is always a member)",
 				others, others+1, MaxStreamReplicas, MaxStreamReplicas,
 				MaxStreamReplicas)))
 		}
@@ -767,107 +767,6 @@ func (b *Bootstrap) loggingLevelName() string {
 		return "`info` (unset)"
 	}
 	return "`" + string(b.Logging.Level) + "`"
-}
-
-// TierWarnings is everything valid about a PAIR of documents that the operator
-// should still know — the warning half of [CheckTiers], printed by `crewlet
-// validate` given both files and logged by a node applying a revision.
-//
-// Separate from CheckTiers for the reason [Bootstrap.Warnings] is separate from
-// Validate: a warning takes no error path, and one printed beside a refusal is
-// noise at exactly the moment somebody is reading carefully.
-func TierWarnings(boot *Bootstrap, company *Company) []Warning {
-	if boot == nil || company == nil {
-		return nil
-	}
-	var out []Warning
-
-	data := boot.Profile("").HoldsData()
-
-	// A DATA NODE MISSING THE COMPANY'S FAILURE-DOMAIN LABEL is placed on
-	// as a domain of its own, which is the safe degradation and a silent
-	// one: the founder asked for copies spread across zones, and a node
-	// with no `zone` is a zone of one, so two copies of a chunk — or of a
-	// partition — can land in the one real zone this node shares with a
-	// labelled peer. Neither tier can see it alone — Tier B names the key
-	// and Tier A carries the labels — so it is said here, where both are in
-	// hand.
-	//
-	// ONE RULE FOR BOTH MAPS, and one warning per missing KEY: the object
-	// store and the estate read a failure domain the same way, and two
-	// blocks naming one label are one label this node lacks, not two.
-	//
-	// A WARNING RATHER THAN A REFUSAL, because a fleet mid-way through
-	// labelling its nodes is a real and correct state, and refusing the
-	// revision there would refuse the one that asks for the spreading.
-	if data {
-		out = append(out, missingDomainLabels(boot.Node.Labels, []spreadBlock{
-			{field: "estate.failure_domain", key: company.Estate.FailureDomain,
-				copies: "copies of its estate's partitions"},
-		})...)
-	}
-
-	// ONE COPY OF EVERY PARTITION IN A FLEET is valid and is a company that
-	// loses whatever a single disk held: with `estate.replicas: 1` each
-	// partition of the estate is kept on one data node, so a node lost is
-	// every partition it held gone until a backup is restored — where the
-	// default keeps three, and a node lost is a rebuild the fleet does on
-	// its own. Only Tier B names the count and only Tier A says the node is
-	// in a fleet, so it is said here. A fleet with ONE data node keeps one
-	// copy whatever this says, so raising it costs that fleet nothing.
-	//
-	// It says what it will mean, because it means nothing yet: under the
-	// single-file layout every data node holds the whole estate.
-	if data && company.Estate.ReplicaCount() == 1 && boot.declaresFleet() {
-		out = append(out, advisory(field("estate.replicas"),
-			"is 1, and this data node is one of a fleet: once the estate is "+
-				"divided into partitions each is kept on ONE data node, so a disk "+
-				"lost loses every partition it held until a backup is restored. "+
-				"Leave it unset for the default of 3. Under the single-file layout "+
-				"every data node still holds the whole estate"))
-	}
-	return out
-}
-
-// spreadBlock is one company block that spreads copies across a node label.
-type spreadBlock struct {
-	// field is where the block names the key, key the key it names, and
-	// copies what it spreads, for the warning's words.
-	field, key, copies string
-}
-
-// missingDomainLabels is one warning for every failure-domain KEY the blocks
-// name that labels does not carry — naming every block that spreads across it.
-func missingDomainLabels(labels map[string]string, blocks []spreadBlock) []Warning {
-	var keys []string
-	named := map[string][]spreadBlock{}
-	for _, b := range blocks {
-		if b.key == "" {
-			continue
-		}
-		if _, labelled := labels[b.key]; labelled {
-			continue
-		}
-		if _, seen := named[b.key]; !seen {
-			keys = append(keys, b.key)
-		}
-		named[b.key] = append(named[b.key], b)
-	}
-	out := make([]Warning, 0, len(keys))
-	for _, key := range keys {
-		var copies, fields []string
-		for _, b := range named[key] {
-			copies = append(copies, b.copies)
-			fields = append(fields, b.field)
-		}
-		out = append(out, advisory(entry(field("node.labels"), key), fmt.Sprintf(
-			"the company spreads %s across %q (%s), and this data node carries "+
-				"no %q label: it counts as a domain of its own, so a copy placed "+
-				"here may share a %s with another. Set node.labels.%s",
-			strings.Join(copies, " and "), key, strings.Join(fields, ", "),
-			key, key, key)))
-	}
-	return out
 }
 
 // CheckTiers holds the rules that need BOTH documents, and it exists because

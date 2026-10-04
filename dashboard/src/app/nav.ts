@@ -543,15 +543,6 @@ export const WORKSPACES: WorkspaceRow[] = [
         guarded: true,
       },
       {
-        key: "estate",
-        label: "Estate",
-        icon: "database",
-        path: ["settings", "estate"],
-        hint: "Which data nodes hold each partition of the replicated estate",
-        group: "Engine",
-        guarded: true,
-      },
-      {
         key: "config",
         label: "Configuration",
         icon: "code",
@@ -645,7 +636,6 @@ export const RESERVED_SEGMENTS: string[] = [
   "models",
   "secrets",
   "nodes",
-  "estate",
   "config",
   "revisions",
   "backups",

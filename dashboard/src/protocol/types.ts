@@ -22,7 +22,6 @@
  */
 
 import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
-import type { FleetEstate } from "./estate.ts";
 // THE SHAPES AN ENGINE GATE HOLDS ARE NOT DECLARED HERE. They live in
 // `../contract/`, the one home of every declaration a Go test reads, and this
 // file composes them into the answers and frames it declares. RELATIVE, like
@@ -1481,113 +1480,6 @@ export interface ReportedObjects {
  */
 export type FleetObjects = { state: Exclude<ObjectsState, "reported"> } | ReportedObjects;
 
-/*
- * WHO IS IN A PLACEMENT MAP — `MapAbsence`, `MapProbation`, `MapMember`,
- * `MapHold` and `MapRemoval` — is the estate map's lifecycle
- * (`internal/membership`), rendered by `internal/api/queries/membership.go`
- * and read by `protocol/estate.ts`.
- */
-
-/**
- * A member's open run of absence, COUNTED IN THE MAINTAINER'S TICKS — never
- * timed, so a clock that moved cannot stretch or skip it. `ticks` of
- * `out_after_ticks` removes the member while no hold is in force; `present` of
- * `clear_after_ticks` clears the run, and a member back for fewer keeps every
- * tick it counted, which is what eventually removes one that flaps.
- */
-export interface MapAbsence {
-  ticks: number;
-  out_after_ticks: number;
-  present: number;
-  clear_after_ticks: number;
-  /** When the run began, as the duty holder of the time read its clock — display only. */
-  since: string;
-  /** `absent` or `unhealthy`, kept a string so a newer engine's reason is shown. */
-  reason: string;
-  detail?: string;
-}
-
-/**
- * A member's probation: a node the map removed for absence and has seen back,
- * COUNTED IN TICKS as an absence is. It is read from and repaired from at once
- * and placed on nothing until it has been present and healthy
- * `placed_after_ticks` ticks in a row (`present` so far); a tick that misses it
- * removes it again, however far it had got.
- */
-export interface MapProbation {
-  present: number;
-  placed_after_ticks: number;
-  /** When the map removed it — display only — and the absence that did. */
-  removed_at: string;
-  reason: string;
-  detail?: string;
-}
-
-/**
- * A node barred from a map — evicted — that the map does not hold: removed,
- * forgotten or never seen. Should it come back it joins as a member out, placed
- * on nothing, until it is readmitted — the only gesture that lifts a bar. A put
- * back (`/estate/in`) of a barred node is refused (`barred_member`).
- */
-export interface MapBar {
-  node: string;
-  by: string;
-  reason?: string;
-  at: string;
-}
-
-/** One member as the MAP alone describes it — what a gesture's answer carries. */
-export interface MapMember {
-  node: string;
-  weight: number;
-  /** Its value of the map's failure-domain label; absent when it has none. */
-  domain?: string;
-  /** Taken out: placed on nothing while it still serves what it holds. */
-  out: boolean;
-  out_by?: string;
-  out_reason?: string;
-  out_at?: string;
-  /**
-   * Barred — evicted — absent while it is not: out until it is readmitted,
-   * whatever becomes of its membership: a removal does not lift it, as it lifts
-   * an out, and a put back of it is refused (`barred_member`). `out_by`,
-   * `out_reason` and `out_at` are the bar's where no out of an operator's own
-   * was recorded beside it.
-   */
-  barred?: boolean;
-  /**
-   * On probation, absent while it is not: placed on nothing, like an out
-   * member, but the maintainer's to end rather than an operator's — a member
-   * can be both.
-   */
-  probation?: MapProbation;
-  absence?: MapAbsence;
-}
-
-/** An operator's hold: no member is removed however long it is gone, until `until`. */
-export interface MapHold {
-  until: string;
-  by: string;
-  reason?: string;
-  at: string;
-}
-
-/**
- * A node the map removed for absence, remembers, and has not seen back. Seen
- * present and healthy, it is a member again at once, on probation, and placed
- * on after `placed_after_ticks` ticks in a row; gone `forget_after_ticks` ticks
- * in a row (`gone` so far), it is forgotten and joins as any new node would.
- */
-export interface MapRemoval {
-  node: string;
-  at: string;
-  reason: string;
-  detail?: string;
-  gone: number;
-  forget_after_ticks: number;
-  placed_after_ticks: number;
-}
-
 /**
  * The state log's retention document, as `crewlet retention status --json` and
  * `GET /work/retention` both serve it.
@@ -1842,28 +1734,6 @@ export interface RetentionGateResult {
   /** Whether every log holds the record durably (`applied` or `pending`). */
   complete: boolean;
   domains: RetentionGateDomain[];
-  /**
-   * The estate map's part of the gesture — an eviction takes the node out of
-   * it, a readmission puts it back — and ABSENT under a layout that places no
-   * map (layout 0, where every data node holds the whole estate).
-   */
-  map?: RetentionGateMap;
-}
-
-/**
- * The estate map's answer to a gate gesture, in a log's shape: whether the
- * stored map now says what the gesture asked, or why not, with `actions` and
- * `hint` exactly when the gesture did not finish it — which an `error` with
- * neither is not: a map that places nothing on the node has nothing to take it
- * off.
- */
-export interface RetentionGateMap {
-  /** `out` for an eviction, `in` for a readmission. */
-  gesture: string;
-  landed: boolean;
-  error?: string;
-  actions?: string[];
-  hint?: string;
 }
 
 /** One log's answer to a gate gesture. */
@@ -4499,7 +4369,6 @@ export interface QueryMap {
   seat_activity: SeatActivityAnswer;
   fleet: FleetAnswer;
   fleet_broker: FleetBrokerAnswer;
-  estate: FleetEstate;
   access: AccessAnswer;
   mcp_servers_status: McpServersStatusAnswer;
   credential_pool: CredentialPoolAnswer;

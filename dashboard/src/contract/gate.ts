@@ -56,9 +56,8 @@ export const GATE_ACTIONS_KEEPING_OPERATION = [
  *
  * TWO MINUTES, the command line's own `gateRequestTimeout` and for its
  * reason: the engine answers one gesture within `engine.GateAnswerBudget` — a
- * minute and three quarters: half a minute to judge it, a minute to write
- * every log, a quarter of one for the estate map's part — and the rest is the
- * request's round trip. Waiting past the node's own bound is what makes its
+ * minute and a half: half a minute to judge it and a minute to write every
+ * log — and the rest is the request's round trip. Waiting past the node's own bound is what makes its
  * answer — every log's outcome — reach the operator rather than a client
  * timeout that knows none of it. The default thirty seconds gave up on a
  * gesture the node went on to finish.

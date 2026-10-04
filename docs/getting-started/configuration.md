@@ -292,50 +292,6 @@ See the [Scheduling](../concepts/scheduling.md) concept doc for delivery
 modes (`each` / `lead`), at-most-once semantics, catchup, and the
 per-task wall-clock timeout.
 
-### Estate
-
-How the company keeps its **replicated estate** — its tracker, its knowledge
-base and their search vectors — once a layout divides it into partitions: how
-many copies of each partition the estate map keeps, and what those copies are
-spread across.
-
-```yaml
-estate:                                  # optional — the zero block is the default
-  replicas: 3                            # copies of each partition, each on a
-                                         #   different data node, 1..10; 0 or unset is 3
-  failure_domain: zone                   # a node label KEY; no two copies of a
-                                         #   partition share its value while enough
-                                         #   values exist
-```
-
-**Under the single-file layout this build runs, the block places nothing.**
-Every data node holds the whole estate, so there is no partition to place and
-no estate map to place it in: the map's duty reads the block on every tick,
-finds no partitioned layout, and writes nothing. It is validated and carried
-now so that the revision a company is running when its estate is partitioned
-already says how many copies it wants.
-
-**`replicas`** is the company's, not a node's: every node applies it from the
-same activation, and a node applying an older revision late cannot set it
-back. Three is the default because it is the
-smallest count that survives losing a copy *while* a second is being rebuilt,
-and the smallest at which a partition still holds the two verified snapshots
-its logs' trim waits for while one of its holders has lost its store. A fleet
-with fewer data nodes keeps one copy on each. `crewlet validate` given both
-files warns about `replicas: 1` on a data node that is one of a fleet: each
-partition would be kept on one disk, and a disk lost would be every partition
-it held.
-
-**`failure_domain`** names a key every data node sets under
-[`node.labels`](../concepts/configuration.md#nodelabels) — `zone`, `rack`,
-`host` — and copies of a partition are spread so no two share its value. With
-fewer distinct values than copies, some partitions keep two copies in one
-domain rather than fewer copies. A data node **missing** the label counts as a
-domain of its own, which is the safe degradation and a silent one, so `crewlet
-validate` given both files warns about it at `node.labels.<key>`. The key
-follows the node-label grammar: at most 63 bytes, no whitespace or unprintable
-character. Unset spreads copies across nodes with no further constraint.
-
 ---
 
 ## Providers
@@ -641,11 +597,9 @@ stream:
                                     #   a leaf `port` are refused beside it).
                                     #   Every stream and bucket its clients use
                                     #   is a member's, reached across this link.
-                                    #   UNTIL THE PARTITIONED ESTATE IS LIVE a
-                                    #   node without `data` must be a leaf and a
-                                    #   node with it must not: every data node
-                                    #   holds the whole estate as a member, and
-                                    #   each refusal says it lasts that long
+                                    #   A node without `data` must be a leaf
+                                    #   and a node with it must not: every data
+                                    #   node holds the whole estate as a member
   #   port: 7422                    #   A MEMBER's listener, where leaves join.
                                     #   A member that opens one is in a fleet
                                     #   even with no peers, so it must persist
@@ -863,16 +817,14 @@ store:
                                     #   separate volume is the production shape
   # replicated_path: "./crewlet-data/crewlet-replicated.db"
                                     #   the REPLICATED estate — everything a
-                                    #   state log's applier writes. It names the
-                                    #   file of the estate's one partition today,
-                                    #   and a partitioned layout keeps each of
-                                    #   its partition files in the same
-                                    #   directory beside it. Empty puts it
+                                    #   state log's applier writes, the file of
+                                    #   the estate's one partition, `estate.000`,
+                                    #   held whole by every data node. Empty puts it
                                     #   beside `path`, which is what makes "back
                                     #   up the data directory" true. It is a
                                     #   separate FILE rather than more tables
                                     #   because a snapshot for a joining node is
-                                    #   a copy of a partition's file alone;
+                                    #   a copy of the estate's file alone;
                                     #   separate it only to put it on a
                                     #   different disk, and never onto the same
                                     #   file as `path`
@@ -891,11 +843,10 @@ store:
                                     #   the next boot
   # max_open_conns: 0               #   connection-pool bound for this node's
                                     #   own database, and the read concurrency
-                                    #   the replicated estate's partition files
-                                    #   SHARE: each file keeps at least two
-                                    #   readers of it, plus one pinned
-                                    #   connection per state log the partition
-                                    #   carries. 0 takes the store's own default
+                                    #   the replicated estate's file takes a
+                                    #   share of: it keeps at least two readers,
+                                    #   plus one pinned connection per state
+                                    #   log it carries. 0 takes the store's own default
                                     #   of four. Raise it if the `pool_starved`
                                     #   alarm fires — see reference/alarms.md —
                                     #   which means reads are queuing before
@@ -949,18 +900,6 @@ store:
                                     #   shared profile, a web identity or the
                                     #   instance's role. A private CA is read
                                     #   from AWS_CA_BUNDLE
-  # estate:                         # this node's part in the ESTATE MAP, which
-                                    #   places the replicated estate's
-                                    #   partitions once a layout divides it —
-                                    #   see the company's `estate` block.
-                                    #   REFUSED on a node without `data`
-  #   weight: 1                     #   this node's share of the partitions
-                                    #   relative to the other data nodes',
-                                    #   1..64; 0 is the default, 1. It rides
-                                    #   the node's estate membership lease.
-                                    #   Under the single-file layout every data
-                                    #   node holds the whole estate whatever its
-                                    #   weight
 
 coordination:
   type: local                       # one node holding its own seat leases;

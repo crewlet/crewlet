@@ -126,14 +126,14 @@ flowchart LR
 ```
 
 - **It is replicated state, like the vectors.** The embedding duty trains it
-  from the partition's own codes, publishes it as a record on the vector log,
+  from the corpus's own codes, publishes it as a record on the vector log,
   and every node applies that record — so every node holds the same centroids
   and files every document in the same list, and a node that adopts a
   snapshot adopts the index inside it. The arithmetic is integer Hamming
   distance with a fixed tie break, so two CPUs never disagree about a list.
 - **How many lists a search reads is measured, never configured.** Every
   training measures recall against the exact scan on 25 documents sampled
-  from the partition — the evaluation's own method, with the sampled
+  from the corpus — the evaluation's own method, with the sampled
   documents kept out of the training and never counted as their own answer —
   in **every shape a search is issued in**: unfiltered, narrowed to each
   source, and narrowed to one container. It installs the smallest number of
@@ -146,20 +146,20 @@ flowchart LR
   source or to some containers keeps only the rows its filter matches, so its
   answer is spread over lists an unfiltered search never reads: on the test
   corpus, reading the unfiltered count of lists recalled 0.949 with three
-  top-ten misses for a search narrowed to the tenth of the partition that is
+  top-ten misses for a search narrowed to the tenth of the corpus that is
   pages, and under 0.75 for one narrowed to a single container. So a narrowed
   search reads lists, nearest first, until it has seen as many of **its own**
   rows as an unfiltered search reads rows — and runs the full scan instead
   when that would take more than half the lists, which is what a filter
   matching few rows near the query needs anyway.
-- **It follows the corpus.** It is retrained when the partition has doubled or
+- **It follows the corpus.** It is retrained when the corpus has doubled or
   halved since training, and when its fullest list has grown past four times
   the mean **and** doubled its share since the training filed it (a corpus
   full of identical documents piles them into one list whatever the training,
   and retraining it would change nothing). The duty **re-measures** it every
   day against the corpus as it is then, adjusts how many lists a search reads,
   and retrains it on the spot if no count within half the lists meets the
-  floor any more. A partition below **1 024** sources has no index at all.
+  floor any more. A corpus below **1 024** sources has no index at all.
 - **A new index never hides a document.** It is installed by one record and
   its rows are re-filed by batches of a thousand whose ranges its training
   fixed, published on the duty's next tick; until the last batch has applied,
@@ -206,8 +206,8 @@ at half. That rule is the evaluation's own definition of passing, so an index
 never installs a first stage `crewlet search eval` would report as failing.
 
 These figures are for a search that is not narrowed — or narrowed to a source
-that is all of its partition. A search narrowed to a small share of the
-partition reads proportionally more lists, and past half of them it is on the
+that is all of its corpus. A search narrowed to a small share of the
+corpus reads proportionally more lists, and past half of them it is on the
 full scan's figures.
 
 #### What the quality of this can and cannot be promised
@@ -223,7 +223,7 @@ deliberately makes no claim about recall on your documents.
 
 `crewlet search eval` is what answers that, against your own vectors. The
 ground truth is the exact scan's own top-K, so nobody authors a judgement.
-When the partition has an index the search is measured **through it** — what
+When the corpus has an index the search is measured **through it** — what
 searches actually run — and again with the full scan as its first stage, so
 the report says what the index costs. Each query document is measured
 unfiltered, narrowed to each source and narrowed to its own container, each
@@ -297,7 +297,7 @@ is behind cannot monopolise the provider budget. The one long tick is a
 and make one exact pass, plus a k-means and a filing of every code that run on
 **half the node's cores, and never fewer than two** — so the seats and the
 searches on a node of four cores or more keep the other half — which comes to
-a little over three minutes at the largest partition an index serves. Two is
+a little over three minutes at the largest corpus an index serves. Two is
 the floor because on a two- or three-core node one worker bought the searches
 nothing measurable and nearly doubled the training. A node with a **single
 core** trains on it, as it always did, and with searches always in flight on
@@ -467,7 +467,7 @@ type Searcher interface {
 
     // Search returns up to Query.Limit ranked hits, and what the search
     // did: the mode it served, the modes this backend can serve, what part
-    // of the fleet it covered, which partitions of the estate it reached,
+    // of the fleet it covered, whether the estate answered,
     // and why it served less than was asked. It never reports an error:
     // every failure path is an answer with no hits.
     Search(ctx context.Context, q Query) Result
@@ -475,12 +475,12 @@ type Searcher interface {
 ```
 
 **A search says what it did not reach.** The native knowledge base is searched
-partition by partition — every partition holding its corpus, each by a node
-that serves it — and a partition that did not answer is named on the outcome's
+on a node that holds the estate — this one when it has the `data` role, a data
+node otherwise — and an estate that did not answer is named on the outcome's
 `Partitions`, never left as a shorter list: "nothing matched" and "part of the
 knowledge base was not searched" send a seat to different places. The
-turn-start block and `search_knowledge` render it as *N of M partitions did
-not answer; this list may be incomplete*. Confluence has one corpus, somebody
+turn-start block and `search_knowledge` say so in words — the
+estate's partition did not answer and the list may be incomplete. Confluence has one corpus, somebody
 else's, and states no coverage.
 
 Contract semantics every backend honors:
@@ -488,7 +488,7 @@ Contract semantics every backend honors:
 - **Scope lives behind the seam.** `Search` derives its container scope from the organization ([`knowledge.scope`](#accessible-containers)); callers pass a role, a plain-text query, and ancestor-title exclusions — never CQL fragments, space keys, or project lists. Because the organization is a per-call parameter, live config edits to `knowledge.scope` flow through with no engine refresh hook.
 - **Unscoped-vs-nothing is enforced inside `Search`**: empty scope + a self-authenticating role ⇒ unscoped search (the backend's own ACLs bound the hits); empty scope + a credential-less role ⇒ no results.
 - **`CanSearch` is a cheap, no-I/O pre-gate** — "could a search possibly hit anything?" Its only job is letting the [relevant-knowledge prefetch](#relevant-knowledge-prefetch) skip the aux-LLM query-generation call when the search is a guaranteed no-op.
-- **Best-effort, never silent**: `Search` never reports an error; every failure path returns no hits and the prompt block renders empty. What it does not do is fail quietly: the `Result` carries an `Outcome` — `ServedMode`, `Modes`, `Coverage{nodes, complete, buckets_missing}`, `Partitions` (the partitions of the estate a native search reached, and every one it did not, named with why) and a `Degraded` reason — so a caller can tell "nothing matched" from "part of the corpus was not scanned" and from "this could not rank the way it was asked". `search_knowledge` says the second to the seat in words, and says "the knowledge base could not be searched just now" for a search that never ran rather than "no team documents match".
+- **Best-effort, never silent**: `Search` never reports an error; every failure path returns no hits and the prompt block renders empty. What it does not do is fail quietly: the `Result` carries an `Outcome` — `ServedMode`, `Modes`, `Coverage{nodes, complete, buckets_missing}`, `Partitions` (whether a native search reached the estate, and if not, why) and a `Degraded` reason — so a caller can tell "nothing matched" from "part of the corpus was not scanned" and from "this could not rank the way it was asked". `search_knowledge` says the second to the seat in words, and says "the knowledge base could not be searched just now" for a search that never ran rather than "no team documents match".
 - **`Query.Mode`** is `hybrid` (the zero value), `keyword` or `semantic` — see [modes](#three-modes-and-the-querys-own-vector). A backend that cannot rank that way says so in the outcome; Confluence answers `modes: [keyword]`.
 - **`Query.ExcludeAncestors`** drops hits whose ancestor/parent chain matches any listed title. Left nil it takes the default, `"Auto-Drafted Skills"` (`knowledge.AutoDraftedParent`), so unreviewed [promotion drafts](agent-learning.md) never surface before a lead publishes them; an empty, non-nil list disables the exclusion. Every draft title also carries the `[Auto-draft] ` prefix (`knowledge.AutoDraftTitlePrefix`) as a fail-closed backstop for a backend whose parent lookup fails.
 

@@ -25,12 +25,6 @@ subcommand below is served by it.
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: chunks listed and deleted by the last collection, chunks named and **missing** by the last audit, with the missing hashes listed. `-json` prints the fleet view's `objects` block as the node answered it |
-| `crewlet estate map [config] [-all] [-json]` | Which data nodes hold each partition of the replicated estate: the [estate map](../concepts/estate-placement.md) read from a running node — its layout, epoch and copies, a hold, one row per member with its share, how many partitions it serves, joins and leaves, whether it is out, on probation or has partitions moved off it, how far an absence has run and what its store says — then every partition that is not settled, with its copies, target, holders and moves (`-all` lists every one). At layout 0, every fleet on this build, it says that every data node holds the whole estate and lists them |
-| `crewlet estate out <node> -confirm <node> [-reason TEXT]` | Take a data node out of every partition's target: each copy it holds is rebuilt on another member while it keeps serving, then released |
-| `crewlet estate in <node> -confirm <node>` | Put a member back, or vouch for a node the map removed for being gone. Refused for a node an eviction bars, which only `crewlet retention readmit` puts back |
-| `crewlet estate hold -for DURATION -confirm <generation> [-reason TEXT]` | Hold the estate map, at most 24h: no member is removed however long it is gone. Confirmed by the map's generation, which `map` prints |
-| `crewlet estate release -confirm <generation>` | End a hold |
-| `crewlet estate move <partition> -from <node> -confirm <node> [-reason TEXT] [-cancel]` | Move one partition's copy off one node: it is rebuilt on the member the partition's ranking offers next, then released. `-cancel` lifts the move |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a build older than the field) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. As the person the token is bound to |
@@ -736,102 +730,6 @@ answered a state this build does not know — and zero otherwise, missing chunks
 included: a store that lost bytes is an answer, and the
 [`objects_missing`](alarms.md) alarm is what pages for it.
 
-## `crewlet estate`
-
-```
-crewlet estate map [-all] [-json] [<config.yaml>] [-url URL] [-token TOKEN]
-crewlet estate out <node> -confirm <node> [-reason TEXT] [<config.yaml>] [-url URL] [-token TOKEN]
-crewlet estate in <node> -confirm <node> [<config.yaml>] [-url URL] [-token TOKEN]
-crewlet estate hold -for DURATION -confirm <generation> [-reason TEXT] [<config.yaml>] [-url URL] [-token TOKEN]
-crewlet estate release -confirm <generation> [<config.yaml>] [-url URL] [-token TOKEN]
-crewlet estate move <partition> -from <node> -confirm <node> [-reason TEXT] [-cancel] [<config.yaml>] [-url URL] [-token TOKEN]
-```
-
-Which data nodes hold each partition of the replicated estate, and the
-operator's gestures on the [estate map](../concepts/estate-placement.md). Every
-verb talks to a running node, for `backup`'s reason: the map is one record in
-the coordination store. `map` reads `GET /estate`; the gestures are clients of
-the `/estate/*` routes in the
-[API reference](api-endpoints.md#gestures-on-the-estate-map).
-
-**At layout 0 — every fleet on this build — there is no map.** The estate is not
-divided into partitions and every data node holds the whole of it, so `map`
-prints that sentence and the data nodes that hold the estate (a node running a
-build from before the estate lease is listed as holding no estate lease, and
-holds the whole estate all the same), and every gesture fails with the node's
-`estate_whole` refusal in the same words: there is nothing to move, and a data
-node is added or taken away by starting or stopping it.
-
-### `crewlet estate map`
-
-Under a partitioned layout it prints the map line — layout, epoch, the copies
-the map places against those the company asks for, the map's generation — the
-partitions per space, a shortfall or a crowded failure domain in words, a
-balance that did not converge, and a hold. Then one row per member:
-
-| Column | Is |
-|---|---|
-| `SHARE` | its measured share of every partition copy the map places |
-| `SERVING` / `JOINING` / `LEAVING` | how many partitions the map lists it holding in each state |
-| `PLACED` | `-` where the map places on it; otherwise `barred` for a node evicted (placed on nothing until it is readmitted, however often the map removes it and sees it back), `out`, `probation N/40`, and `moved off N` for partitions an operator moved off it |
-| `ABSENT` | how many of the maintainer's ticks have counted it gone, of the ticks that remove it |
-| `STORE` | what its estate lease says of its store: `ok`, `failed: why`, `unsaid` — a lease that does not say, which the map counts exactly as failed — `not counted: why` for a store that is healthy but runs another layout, or `no lease` |
-
-Under the members it counts the partitions unserved, short of copies, the
-holders joining and leaving and the moves in force, and lists every partition
-that is not settled — fewer copies serving than its target wants, a holder not
-serving or on a node the map counts absent, or a move in force — with its
-copies, its target and its holders as `node:state`, what the node's own lease
-reports where it differs (`data-b:leaving(draining)`), and `!` on a node the map
-counts absent. A node barred by an eviction that the map does not hold — removed
-for its absence, forgotten, or never seen — is named on a `BARRED:` line with
-who barred it and the `crewlet retention readmit` that lifts the bar. `-all`
-lists every partition; `-json` prints the answer as the node gave it.
-
-### `crewlet estate out` / `in` / `move`
-
-`out` takes a member out of every partition's target: each copy it holds is
-rebuilt on another member while it keeps serving, then released under the two
-conditions every leave waits for — so taking a node away is a copy rather than a
-recovery. Keep it running until `map` shows it serving, joining and leaving
-nothing. It is refused (`nowhere_to_rebuild`) where no other member could take
-its copies — as many placeable members as `estate.replicas` — since every
-partition would then keep one copy fewer rather than move one: add a data node
-first, or lower `estate.replicas` if the company means to keep fewer and take it
-out once `map` shows the lower count (the map takes it on its duty's next tick
-after the activation). `in` puts it back, or vouches for a node the map removed
-— but never a node an eviction **bars**: that is refused (`barred_member`) with
-the map unchanged — as is an `out` of a barred node the map does not hold,
-which is placed on nothing already — and the command names `crewlet retention
-readmit`, the one gesture that lifts a bar, because only it knows when every
-log the eviction was written to has taken the node back. `move` takes
-one partition's copy off one node: the partition's target skips it, so the copy
-is rebuilt on the member its ranking offers next and then released; it lasts
-until `-cancel` lifts it or the node leaves the map, and it is refused
-(`nowhere_to_move`) where no member is left to rebuild the copy on. Should
-members leave after it, so that the others could not hold the partition's
-copies without the node, the node is in the target again and `map` prints the
-move as `off <node> (<by>, waiting)` until a member returns: a move moves a copy
-and never drops one. Each repeats its node in `-confirm`.
-
-### `crewlet estate hold` / `release`
-
-`hold` holds the map for `-for` (at most 24h, and required); `release` ends it.
-Each acts on the whole map rather than on one node, so each is confirmed by the
-map's **generation**, which `map` prints on its first line: the gesture lands
-only on that map, and one confirmed for another — a `-url` pointing at another
-fleet, or a map written again from nothing since it was read — is refused
-(`other_estate_map`) with nothing written. The node judges the generation, not
-this command: only a map has one, so at layout 0 — where `map` prints none — a
-`hold` or a `release` needs no `-confirm` to be told, in the node's own
-`estate_whole` words, that there is nothing to hold; under a map, one without
-`-confirm` is refused and names the flag.
-
-Every gesture is a compare-and-set on the stored map, so what each prints is
-whether the map **now says** what was asked, and one the node never answered is
-safe to run again — a `hold` excepted, whose resend replaces the hold in force
-with its length counted from the resend.
-
 ## `crewlet fleet broker`
 
 ```
@@ -1062,14 +960,13 @@ The command prints the watermark before and after and the instant the
 eviction takes effect: **the node stays counted for about a minute**, so a live
 one is certain to have read its own tombstone before the trim passes it.
 
-On an estate [divided into partitions](../concepts/estate-placement.md) the
-node you ran it on writes the logs of the partitions it serves, and sends every
-other log's record to a node that serves that partition, which writes it under
-the same operation id — so one command reaches every log, and such a line names
-the node that wrote it, whose standing its hint is about:
+Where the node you ran it on does not serve the estate itself — its copy out
+of service, or behind — it sends that log's record to another data node, which
+writes it under the same operation id, so one command reaches every log; such a
+line names the node that wrote it, whose standing its hint is about:
 
 ```
-  tracker@tracker.001: applied at CREWLET_L1_TRACKER_001_TRACKER 12 (written by node-q)
+  tracker: applied at CREWLET_TRACKER_LOG 918100012 (written by node-q)
 ```
 
 The gesture is **judged once, before either log is written**. A node that still
@@ -1130,9 +1027,8 @@ command's rendering of the node's `actions` (see
 [the gate answer](api-endpoints.md#the-three-retention-gestures-that-write)).
 
 The command mints the operation id **before** it asks, and waits two minutes
-for the answer — past the minute and three quarters the node takes at most to
-answer one gesture (half a minute to judge it, a minute to write every log and
-a quarter of one for the estate map's part), which it finishes even if the
+for the answer — past the minute and a half the node takes at most to answer
+one gesture (half a minute to judge it and a minute to write every log), which it finishes even if the
 connection drops. So a gesture that got
 no answer at all still prints the `-op-id` that finishes it — and so does one
 whose answer the node did not write: a reverse proxy's 504 page, any status
@@ -1182,18 +1078,9 @@ position is a heartbeat old, so a node that has only just caught up can be
 refused once more; run the command again.
 
 A readmission that cannot be **judged** is refused as well, with nothing
-written: `503 readmission_unjudged`. On an estate divided into partitions the
-judgement asks a node serving every log the readmission writes, so a partition
-nobody serves — its holders down, or its only copy the one the readmitted node
-kept through its eviction — refuses it, and the line under the node's own hint
-says where to watch for that partition rather than for the node:
-
-```
-crewlet: the node answered 503: readmission_unjudged
-  engine: the readmission of node-4 cannot be judged on tracker@tracker.007: read its readmission bound: estate: no node serves tracker.007 right now
-  no node serving tracker.007 answered, so the standing of its log tracker@tracker.007 cannot be read, and the readmission could not be written there either. Run it again once the partition is served: …
-  `crewlet estate map` shows which nodes hold the partition named above and whether any copy of it serves; once one does, run this again
-```
+written: `503 readmission_unjudged` — for instance when no data node serving
+the estate could give a log's readmission bound, the floor the writing node's
+fence holds the node to.
 
 The node's position is not what is wrong there, so it is not told to catch up.
 Anything else the judgement could not read — the positions register, a

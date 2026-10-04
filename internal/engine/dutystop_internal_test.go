@@ -9,7 +9,7 @@ import (
 )
 
 // A DUTY'S LOOP IS STOPPED BEFORE THE DUTY IS GIVEN BACK, so a node that stops
-// never exits holding it — the object collector's and the estate map's alike.
+// never exits holding it.
 //
 // The loop claims the duty afresh on every turn, and a claim of a released
 // lease simply succeeds. Stopped after the release, a turn in flight across it
@@ -31,10 +31,6 @@ func TestADutyIsNotTakenBackAsTheNodeStops(t *testing.T) {
 			defer o.collectorMu.Unlock()
 			o.collector.stop()
 			o.collector = start()
-		},
-		estateMapDuty: func(e *Engine, start func() *loop) {
-			e.estateMaintainer.stop()
-			e.estateMaintainer = start()
 		},
 	} {
 		t.Run(duty, func(t *testing.T) {

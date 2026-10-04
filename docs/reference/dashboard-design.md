@@ -755,7 +755,6 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/models` · `#/settings/models/{id}` | **Models & keys** — every `providers.llm` entry, the keys it rotates through by variable name, which a vendor is refusing and when each comes back (`credential_pool`), and the seats whose chain names it; one model's keys whole and its seats, and its **Edit** *(operator)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(operator)* | |
 | `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes** — leases (each seat's holder and **since** when), duties, config rollout, the fleet broker's members as the nodes advertise them and as its metadata group counts them, and where the company's files are kept (the object store's backend and its collector's last passes) *(operator)* | |
-| `#/settings/estate` | **Estate** — which data nodes hold each partition of the replicated estate: at layout 0 the sentence that every data node holds the whole of it and the nodes that do; under a map, one tab per space with a row per partition (copies against its target, holder chips coloured by the map's state and the node's own report, target, moves), the members, the hold, and the gestures *(operator)*. NO DETAIL ROUTE — a partition is a row here, and a node has its own page under Nodes | |
 | `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(operator)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
 | `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(operator)*. Domains live only under `backups/` | |
 | `#/settings/audit` | **Audit log** — every write a person or a token made, every call they made at runtime, and every configuration revision labelled with the kind of writer it recorded (`operator` or `node`) *(operator)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime` |
@@ -5177,7 +5176,7 @@ Settings is the one workspace that draws its sections as a **column** beside
 the screen rather than as tabs in the page bar, in three groups: **Company**
 (General, People & access, and Budgets as a cross-link — it lives once, under Spend, and its
 arrow says pressing it leaves Settings), **Connect** (Integrations, Tools &
-MCP, Models & keys, Secrets) and **Engine** (Nodes, Estate, Configuration, Backups &
+MCP, Models & keys, Secrets) and **Engine** (Nodes, Configuration, Backups &
 retention, Audit log). A guarded section draws a key and **is never hidden**: a section that
 vanished for a reader without an operator credential is one they cannot know
 exists. The landing page is one of the column's sections, so its trail reads

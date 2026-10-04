@@ -82,8 +82,8 @@ func (e *Engine) startRemote(c *Company) error {
 // second reading of "which nodes hold data" is how one of them comes to count
 // a stateless node and wait for ever on a position it will never publish. (The
 // capacity handshake asks two different questions with filters of their own:
-// who publishes the estate's records, which the ESTATE lease answers, and
-// whose broker is a member — see [Engine.capacityParticipants].) Those list
+// who publishes the estate's records and whose broker is a member — see
+// [Engine.capacityParticipants].) Those list
 // the store directly and deliberately:
 // each runs on a duty's tick rather than per request, and each decides
 // something a roster up to a heartbeat old must not — what may be trimmed,

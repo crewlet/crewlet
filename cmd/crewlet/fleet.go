@@ -361,3 +361,20 @@ func fleetBrokerRemove(args []string, stdout, stderr io.Writer) error {
 	fmt.Fprintln(stdout, "\n  A member that restarts under that name joins the group again as a new voter.")
 	return nil
 }
+
+// shortDuration renders d without a trailing zero unit.
+//
+// ONLY A UNIT'S OWN ZERO IS DROPPED: the seconds when a larger unit precedes
+// them, then the minutes when the hours do. Trimming the bare text "0s" and
+// "0m" cut into a unit's own digits — "10s" came out "1", "50m0s" "5" and
+// "1h30m0s" "1h3".
+func shortDuration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
+}

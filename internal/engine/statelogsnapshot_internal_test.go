@@ -21,7 +21,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
-	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -1088,50 +1087,6 @@ func TestAnArtefactOfAnotherPartitionIsNotHeld(t *testing.T) {
 	}
 }
 
-// THE SNAPSHOT LOOP COUNTS A PARTITION'S HOLDERS, NOT ITS REGISTER ROWS ALONE.
-//
-// A node joining a partition has no row naming its logs until it has adopted a
-// copy — the copy this count decides whether anybody takes. Counted from the
-// register alone, a partition's lone server saw a fleet of one and took no
-// artefact, and the joiner waited for a donor that could not exist. So the
-// count is the trim's own counted set: rows naming the partition's logs, not
-// released, and the partition's holders — the map's, under a divided layout.
-func TestTheSnapshotLoopCountsAPartitionsHolders(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	layout := partitionedTestLayout()
-	tracker0 := statelog.PartitionID{Space: statelog.SpaceTracker}
-	fleet := placedMap(t, layout, map[statelog.PartitionID][]partmap.Holder{
-		tracker0: {{Node: "node-a", State: partmap.Serving, Since: 1},
-			{Node: "node-j", State: partmap.Joining, Since: 2}},
-	})
-	for _, row := range []coord.NodePositions{
-		{NodeID: "node-a", Layout: 1, Domains: map[string]coord.DomainPosition{
-			"tracker@tracker.000": {Seq: 4, AppliedThrough: 4}}},
-		{NodeID: "node-l", Layout: 1, Domains: map[string]coord.DomainPosition{
-			"tracker@tracker.000": {Seq: 3, AppliedThrough: 3, State: coord.LogReleased}}},
-		{NodeID: "node-o", Layout: 1, Domains: map[string]coord.DomainPosition{
-			"tracker@tracker.001": {Seq: 2, AppliedThrough: 2}}},
-	} {
-		if err := fleet.PutPositions(ctx, row); err != nil {
-			t.Fatal(err)
-		}
-	}
-	backend := coordmem.New()
-	claimLeases(t, backend, layout.Number, "node-a")
-	e := &Engine{backends: &Backends{Coord: backend}}
-	e.estateWatch.Store(runningWatch(t, fleet, backend, nil, layout, &viewClock{now: time.Now()}))
-	s := &stateLog{layout: layout, fleet: fleet}
-	n, err := e.countedOn(ctx, s, tracker0, time.Now())
-	if err != nil {
-		t.Fatalf("countedOn: %v", err)
-	}
-	if want := []string{"node-a", "node-j"}; !slices.Equal(n, want) {
-		t.Errorf("tracker.000 counts %v, want its server and its joiner %v — not the "+
-			"node that released it, nor one holding another partition", n, want)
-	}
-}
-
 // A SNAPSHOT'S RECIPIENTS ARE THE COUNTED NODES OTHER THAN THIS ONE — and this
 // one need not be counted at all.
 //
@@ -1144,27 +1099,31 @@ func TestTheSnapshotLoopCountsAPartitionsHolders(t *testing.T) {
 // asking is counted beside it, and a node counted alone has none.
 func TestASnapshotsRecipientsAreTheCountedNodesOtherThanThisOne(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	layout := partitionedTestLayout()
-	tracker0 := statelog.PartitionID{Space: statelog.SpaceTracker}
-	fleet := placedMap(t, layout, map[statelog.PartitionID][]partmap.Holder{
-		tracker0: {{Node: "node-j", State: partmap.Joining, Since: 2}},
-	})
+	ctx := t.Context()
 	backend := coordmem.New()
-	claimLeases(t, backend, layout.Number, "node-j")
-	e := &Engine{backends: &Backends{Coord: backend}}
-	e.estateWatch.Store(runningWatch(t, fleet, backend, nil, layout, &viewClock{now: time.Now()}))
+	claimPresences(t, backend, map[string][]string{"node-j": {"data", "seats"}})
+	view, err := coord.NewLeaseView(backend, coord.ClassNode,
+		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = view.Run(runCtx)
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	e := &Engine{backends: &Backends{Coord: backend}, dataView: view}
+	fleet := coordmem.NewFleet()
 	for node, want := range map[string]int{
 		"node-x": 1, // counted on nothing: its one recipient is the joiner
 		"node-j": 0, // the joiner itself, counted alone: nobody to donate to
 	} {
-		s := &stateLog{layout: layout, fleet: fleet, nodeID: node}
-		got, err := e.recipientsOn(ctx, s, tracker0, time.Now())
-		if err != nil {
-			t.Fatalf("recipientsOn %s: %v", node, err)
-		}
-		if got != want {
-			t.Errorf("%s counts %d recipient(s) of tracker.000, want %d", node, got, want)
-		}
+		s := &stateLog{layout: LayoutZero(), fleet: fleet, nodeID: node}
+		waitUntil(t, 10*time.Second, "the presence view to name node-j", func() bool {
+			got, err := e.recipientsOn(ctx, s, statelog.EstatePartition, time.Now())
+			return err == nil && got == want
+		})
 	}
 }

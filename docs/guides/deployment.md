@@ -43,8 +43,7 @@ webhooks and the dashboard, and there is nothing else to operate.
 Give that proxy a **read timeout above two minutes** on the API port. Nearly
 every request is answered in well under a second, but a node eviction or
 readmission ([Retention](retention.md#eviction)) may take up to a minute and
-three quarters — half a minute to judge it, a minute to write every log, and a
-quarter of one for the estate map's part — and `crewlet retention evict` and
+a half — half a minute to judge it and a minute to write every log — and `crewlet retention evict` and
 the dashboard's evict dialog both wait two minutes for its answer.
 nginx's `proxy_read_timeout` defaults to sixty, which cuts exactly those off
 with a 504. Nothing is lost when it does — the node finishes the gesture

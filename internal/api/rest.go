@@ -78,12 +78,6 @@ var namedRoutes = []struct {
 	// it asks a member for the metadata group, which the lease table the
 	// fleet view is read from cannot say.
 	{method: "GET", pattern: "/fleet/broker", what: "fleet_broker"},
-	// THE ESTATE MAP: which data nodes hold each partition of the
-	// replicated estate. Its own route rather than a block of /fleet,
-	// because it is a map of its own with gestures of its own under
-	// /estate, and a fleet poll every fifteen seconds would carry every
-	// partition's holders whether or not anybody asked about them.
-	{method: "GET", pattern: "/estate", what: "estate"},
 	{method: "GET", pattern: "/sandbox-runs", what: "sandbox_runs"},
 	// ONE RUNNING RUN'S LIVE OUTPUT, with the job as `launch_id=`: a run is
 	// one execution of a turn and may launch more than one job.

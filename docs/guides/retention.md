@@ -58,35 +58,18 @@ never a horizon.
 | `age_floor` | the newest sequence older than `min_age` |
 
 The **counted set** of a log is every node the trim waits for there: each node
-that has reported a position on the log, and each node that **holds the log's
-partition** even before its first report, when it counts at position zero
-because it is about to replay what the trim would otherwise delete. A node
-evicted from the log, or one that released it as it left the partition, stops
-being counted about a minute after that record lands — and a node whose own
-positions row says it has released the log stops being counted at once. It is
-the partition's holders and no other partition's, so a node that is offline
-pins only the logs of the partitions it holds.
+that has reported a position on the log, and each **live data node** even
+before its first report, when it counts at position zero because it is about
+to replay what the trim would otherwise delete. The live data nodes are listed
+afresh from the presence leases on every tick rather than read from a watched
+view, because a view up to a heartbeat old may miss a node that has just
+booted — the one node the trim must not pass. A node evicted from the log stops
+being counted about a minute after that record lands.
 
-Who holds a partition depends on the [layout](../concepts/estate-placement.md):
-
-- **Layout 0** — the single-file estate — has one partition, which every data
-  node holds whole, so its holders are the live data nodes.
-- **A partitioned layout's** holders are the [estate map's](../concepts/estate-placement.md)
-  holders of that partition in **every** state — joining, serving and leaving
-  — whether or not their leases are live: a joiner is exactly the node whose
-  tail must not be deleted, and a data node that holds nothing is counted on
-  no log at all. The map is read through this node's estate view, and a view
-  that is not fresh — its map or its leases unconfirmed for longer than a
-  minute — is **unknown**: every log's trim is then blocked on `applied`, and
-  the term's detail says the estate view is stale.
-
-**Each partition's logs are trimmed by one node**: the holder of that
-partition's trim duty, `worker:retention@<partition>` (`worker:retention` for
-layout 0's one partition, the lease it has always been). Only a node that
-serves the partition may claim it, so the duties of a fleet's partitions
-spread over the nodes that hold them, and a node that cannot reach its
-partition stops that partition's trim and nobody else's. Every node still
-evaluates its own alarms on every tick, whatever duty it holds.
+**The estate's logs are trimmed by one node**: the holder of the trim duty,
+`worker:retention`. Only a data node that serves the estate may claim it.
+Every node still evaluates its own alarms on every tick, whatever duty it
+holds.
 
 `feed_ack_floor` is the acknowledgement floor of the durable consumer that each
 log's own change feed opens — the feed's **group** `crewlet-tracker-feed` on
@@ -284,31 +267,19 @@ peer's snapshot of the replicated estate, verify it, and adopt it wholesale. (A
 node that is only below the published trim floor, while the log still holds
 what it lacks, replays it instead and needs none of this.)
 
-**A snapshot is a copy of one partition's file.** Under layout 0 that is the
-whole estate, as it has always been; under a [partitioned
-layout](../concepts/estate-placement.md) a node takes one artefact of each
-partition it keeps an established copy of, one at a time — the partition whose
-newest artefact is oldest first — each on `snapshot_interval` and each judged
-against its own file's size for free space. A copy is kept whether or not the
-node may write the partition: a holder the map is moving away keeps applying
-its logs until its leave begins, and so does a machine an eviction barred,
-back with its files — and either may hold its partition's only copy, which is
-the one a joiner has to fetch. A partition the node runs and keeps no copy of
-yet — at every boot until its copy is established, while it joins one, or
-while whether it keeps one cannot be told — is looked at again every thirty
-seconds rather than an interval later, and an artefact it already holds of a
-partition whose copy is only unknown for a moment stays advertised. Its manifest names the partition and the layout it
-is a copy of, and every log of that partition: a joiner refuses an artefact of
-another partition, or one naming a log its partition does not carry, before a
-byte moves, and a donor answers only for a partition it keeps a copy of. A request that
-names no partition — a build from before partitions — is answered, under layout
-0, as a request for the whole estate, which is the only thing that build can
-mean, so the two builds donate to each other through a rolling upgrade; a donor
-running a partitioned layout answers it with nothing, since that build would
-install one partition's file as its whole estate. An artefact that build took,
-whose manifest names no partition, is layout 0's. Each partition's artefacts live in a directory of their own under
-`store.snapshot_dir`, named as its file is (`l1-tracker.007`); layout 0's stay
-in `store.snapshot_dir` itself.
+**A snapshot is a copy of the replicated estate's file** — the estate's one
+partition, `estate.000` — and never of the node's own. It is taken on
+`snapshot_interval` and judged against the file's size for free space. A copy
+is kept whether or not the node may write the estate: an evicted machine,
+back with its files, keeps applying its logs and may hold
+the only copy a joiner can fetch. At every boot, until its copy is established,
+a node looks again every thirty seconds rather than an interval later. Its
+manifest names the partition and every log it carries: a joiner refuses an
+artefact naming another partition, or a log the estate does not carry, before
+a byte moves. A request that names no partition — from a build that predates
+the field — is answered as a request for the whole estate, which is the only
+thing that build can mean, so the two builds donate to each other through a
+rolling upgrade. Artefacts live in `store.snapshot_dir` itself.
 
 ```
 crewlet retention snapshots
@@ -316,16 +287,13 @@ crewlet retention snapshots
 
 Its own verb rather than a block of `status`, because the repository is **per
 node**: "which of my machines can donate, and how old is what they hold" is a
-disk question, and it is the one you ask when a join has failed. Under a
-partitioned layout each row is one node's artefact of one partition, named
-beside the node.
+disk question, and it is the one you ask when a join has failed.
 
-**`SnapshotsKept = 1`, per partition.** With N donors the fleet is the
-redundancy — one per holder across at least two holders — and a recipient that
-fails a verification asks the next donor. The trim's `snapshot_floor` asks for
-two of a log's counted nodes to hold an artefact of its partition; a partition
-held by one node is satisfied by construction, its recovery artefact being a
-backup.
+**`SnapshotsKept = 1`.** With N donors the fleet is the redundancy — one per
+data node across at least two — and a recipient that fails a verification asks
+the next donor. The trim's `snapshot_floor` asks for two of a log's counted
+nodes to hold an artefact; an estate held by one node is satisfied by
+construction, its recovery artefact being a backup.
 
 **The manifest names the position the file keeps.** The checkpoint commits with
 the rows, so the position inside the copy is the only one that describes it,
@@ -336,19 +304,20 @@ where they do not. A domain nobody has written to yet is at position zero in
 both, and adoptable.
 
 **On a single node the loop does not run at all.** It skips with the published
-reason `sole_node` — the fleet counts no node on the partition but this one —
-because a full copy every day buys an artefact no peer can fetch. A solo deployment's recovery artefact is `crewlet backup`. Who counts is
-the partition's counted set, as the trim counts it: every node whose row names
-one of its logs, and every node holding it — so a node joining the partition is
-counted before its first report, and the partition's lone server takes the
-artefact that joiner needs.
+reason `sole_node` — the fleet counts no data node but this one — because a
+full copy every day buys an artefact no peer can fetch. A solo deployment's
+recovery artefact is `crewlet backup`. Who counts is the estate's counted set,
+as the trim counts it: every node whose row names one of its logs, and every
+live data node — so a node joining the fleet is counted before its first
+report, and the lone data node already there takes the artefact that joiner
+needs.
 
-Every skip is published on the node's own register row — per partition under a
-partitioned layout — so a failed join has an answer rather than a silence:
+Every skip is published on the node's own register row, so a failed join has
+an answer rather than a silence:
 
 | Reason | What it means |
 |---|---|
-| `sole_node` | no counted node on the partition but this one; nothing to donate to. This node need not be counted itself: one an eviction barred, back with its files, still donates to a joiner beside it. Counted as the trim counts: every node whose row names one of the partition's logs and has not released it, every holder of the partition — so a joiner that has not published a row yet is somebody to donate to — less nodes evicted or released longer ago than the fence window. A view of the holders this node cannot confirm leaves them out, and the rows alone are counted |
+| `sole_node` | no counted node but this one; nothing to donate to. This node need not be counted itself: one an eviction removed, back with its files, still donates to a joiner beside it. Counted as the trim counts: every node whose row names one of the estate's logs, every live data node — so a joiner that has not published a row yet is somebody to donate to — less nodes evicted longer ago than the fence window. A view of the data nodes this node cannot confirm leaves them out, and the rows alone are counted |
 | `lagging` | this node is more than 1 000 records behind |
 | `unhydrated` | this node has not established a complete copy of some domain |
 | `deferred` | this node holds a record it cannot decode |
@@ -482,8 +451,8 @@ adopts a snapshot from a node in the new generation, **on its own**:
   which stops its applier before anything of the new generation is applied.
 - From then until the adoption lands it refuses that domain's reads and writes
   as `wrong_stream`, logs `statelog_generation_passed` naming both generations,
-  and stops serving the partition — its seats stay, and read it from the
-  partition's other holders — whether or not its own readings of the log look
+  and stops serving the estate — its seats stay, and read it from the
+  other data nodes — whether or not its own readings of the log look
   wrong. On a broker restored from an older copy, a node whose checkpoint was
   below the restored end sees nothing wrong at all, which is why the fleet's
   generation is what decides it rather than the log.
@@ -582,69 +551,20 @@ nothing — a node behind on it is a coverage figure — and gets none.) Every
 node running the state log can make the gesture, whichever backends the
 company uses: a company on an external tracker still runs both logs.
 
-On an estate [divided into partitions](../concepts/estate-placement.md) the
-same rule reads per partition, and three things follow from it:
-
-- **An eviction is written on the logs the node is counted on** — every log
-  whose partition the estate map names it a holder of, in any state and
-  whether or not it has reported there, and every log its positions row names
-  and it has not released. Those are exactly the logs the trim waits for it
-  on, so a log outside them never counted it and gets no record. A
-  **readmission** is written on every identity-claiming log of the layout:
-  where the node is evicted is a fact each log's own rows hold — a holder
-  evicted before it first reported was counted on a log its row never named,
-  and the map lets an evicted node go — and a readmission on a log that never
-  evicted it changes no row there. It is **judged** only on the logs it would
-  be counted on once back: a node with no row that the map names a holder of
-  nothing is refused nowhere, since it returns to a partition only by adopting
-  a copy. And it is judged on **every one** of those, before any log is
-  written: a log the node you run it on does not write has its bound — the
-  floor and first surviving sequence the writing node's fence holds a node to
-  — read from a node that serves its partition, and a bound no holder could
-  give refuses the readmission rather than passing it unjudged:
-  `readmission_unjudged`, with nothing written. Every **other** log it writes
-  is asked of a node serving it too, its bound not judged: the map takes the
-  node back only once every log has, so a log nobody serves is one no
-  readmission can finish, whether or not the node would be counted there.
-  Where no node serves a partition it writes, the readmission waits on that,
-  and the refusal says so — including
-  the case where the partition's only copy is the one the readmitted node
-  kept through its eviction, which nobody writes while it is barred: a node
-  the estate map names in its place adopts that copy from it (a node keeps
-  offering the copies it keeps), and then serves the partition, and the
-  readmission can be judged and written there.
-- **Each log is written by a node that serves its partition.** The node you
-  run the gesture on writes the logs of the partitions it serves and runs; it
-  sends every other log's record to a node that serves that partition, which
-  writes it under the same operation id on its behalf — so one gesture on any
-  node reaches every log. Such a log's line names the node that wrote it
-  (`written by node-q`), and its hint is about that node: a refusal it gave —
-  evicted, behind, a log rebuilt under it — is its standing, never the
-  standing of the node you ran the gesture on. Each holder is given fifteen
-  seconds before the next is asked; where none of them wrote the record the
-  line says so, and the same `-op-id` finishes it once one does.
-- **The estate map is part of the gesture.** An eviction also takes the node
-  **out** of the estate map — recorded with the reason `evicted` — and, unlike
-  [`crewlet estate out`](../concepts/estate-placement.md), the eviction is a
-  **bar**: it is written whether or not the map still holds the node (an
-  evicted machine is usually one the map has already removed for its absence),
-  and neither that removal nor the node's return lifts it. A repaired machine
-  restarted under its old id joins the map out and is placed on nothing until
-  it is readmitted, so no partition lands on a node its logs still gate — and
-  the copies it comes back with are never routed to: the map lists them
-  `leaving`, and the node releases them. A
-  readmission puts it back **in**, and only once **every** log has taken it
-  back — by a gesture that itself finds every log done. Every log is reached
-  from whichever node you run it on, so until the last log is finished the
-  line says the map waits for the logs, and the same `-op-id` — on any node —
-  finishes them, each finished log answering from its own ledger, and then
-  makes the in. `crewlet estate in` never lifts the
-  bar: it refuses a barred node and names this command. The
-  answer carries the map's own line (`estate map: out — written`). A map that could not be written leaves the gesture unfinished
-  however the logs answered, and the same `-op-id` finishes it; a readmission
-  of a node the map keeps nothing of — no member, no removal it remembers, no
-  bar — is finished and says why. `crewlet estate map` names every bar. Under
-  the single-file layout there is no map, and no line for one.
+**Each log is written by a node that serves the estate.** The node you run
+the gesture on writes the logs itself where its own copy serves; where it does
+not — its copy is out of service, or behind — it sends that log's record to
+another data node, which writes it under the same operation id on its behalf,
+so one gesture on any data node reaches every log. Such a log's line names the
+node that wrote it (`written by node-q`), and its hint is about that node: a
+refusal it gave — evicted, behind, a log rebuilt under it — is its standing,
+never the standing of the node you ran the gesture on. Each data node is given
+fifteen seconds before the next is asked; where none of them wrote the record
+the line says so, and the same `-op-id` finishes it once one does. A
+readmission is **judged** on every log it writes before any is written, and a
+log whose bound — the floor and first surviving sequence the writing node's
+fence holds a node to — no data node could give refuses the readmission rather
+than passing it unjudged: `readmission_unjudged`, with nothing written.
 
 It is **judged once, before anything is written**: a node that still holds a
 live presence lease is refused, because it is still reaching the fleet and
@@ -666,8 +586,7 @@ every write has — `applied`, `pending` or `unknown` — or `not written` with 
 reason that stopped that log. A log that answered holds its record whatever
 the other did, and the gesture runs to its end **whatever happens to the
 command**: once the first record is about to be written the node finishes the
-gesture under its own budgets — a minute for the logs, then a quarter of one for
-the estate map's part — so a dropped connection or a client timeout does not
+gesture under its own budget — a minute for the logs — so a dropped connection or a client timeout does not
 leave the node evicted on one log and counted on the other.
 
 When **not every log holds it**, the command exits non-zero, and under each
@@ -709,13 +628,6 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   sent sooner — through any node — is collapsed onto that record and answered
   `evicted` again, so wait out the window first. A fresh id is not the way
   round it, for the reason above.
-- `released` — the node you ran it on released that log when it left the log's
-  partition, and the gesture's record there landed after the release and
-  applies nowhere. It holds the operation id on that log for the log's
-  duplicate window (two minutes) from when it landed, so once that has passed,
-  run the gesture, under the same `-op-id`, through a node that serves the
-  partition (`-url`); sooner, the id is collapsed onto the record and answered
-  `released` again.
 - `overtaken` or `abandoned` — the node you ran it on wrote that log's record
   from rows a reanchor left behind — after a restored reanchor it had not yet
   learned of, or in a generation a reanchor abandoned — so it landed and
@@ -723,23 +635,23 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   (two minutes) from when it landed: once that has passed, run the gesture,
   under the same `-op-id`, through a node on the log's current generation
   (`-url`).
-- **Another node's copy** — `evicted`, `released`, `overtaken` or `abandoned`,
+- **Another node's copy** — `evicted`, `overtaken` or `abandoned`,
   with a hint naming another node as the writer of the record at that position.
   The `-op-id` you sent had already been written under by that node — you ran
   the gesture through it first, and by the time its record landed it had been
-  evicted or had left the log's partition, or it had written the record from
+  evicted, or it had written the record from
   rows a reanchor left behind (overtaken or abandoned) — and the node you ran it
   on this time had its append collapsed onto that node's record, which applies
   nowhere. The refusal is about that node, not this one, which was counted and
-  served the partition when it tried: once the duplicate window (two minutes
+  served the estate when it tried: once the duplicate window (two minutes
   from when the record landed) has passed, run the gesture again with the same
   `-op-id` through the same node.
 - `not_holder` or `holding_unknown` — the node you ran it on stopped serving
-  that log's partition, or could not tell whether it serves it, between
-  choosing to write the log itself and writing it, so it wrote nothing there:
-  run the gesture again with the same `-op-id`, which sends the record to a
-  node that serves the partition now.
-- **No node that serves the partition wrote it** — every holder the record
+  the estate, or could not tell whether it serves it, between choosing to
+  write the log itself and writing it, so it wrote nothing there: run the
+  gesture again with the same `-op-id`, which sends the record to a data node
+  that serves the estate now.
+- **No node that serves the estate wrote it** — every data node the record
   was sent to did not serve it, could not run it, or did not answer: run the
   gesture again with the same `-op-id` once one does.
 - `unknown` that **this node cannot tell** — its operation ledger may have
@@ -749,8 +661,8 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   it is not offered as a retry: run it, under the same `-op-id`, through a node
   whose ledger reaches back that far (`-url`). The dashboard says the same and
   sends you to another node's dashboard. Where the line names **another node**
-  as the writer, every holder of the partition that answered could not tell,
-  and another node would send the record to the same holders: run the same
+  as the writer, every data node that answered could not tell, and another
+  node would send the record to the same data nodes: run the same
   gesture again, which asks them all again — one that did not answer this
   time may vouch for it.
 - `wrong_stream` — the log was rebuilt under this node:
@@ -784,9 +696,9 @@ written and what to do.
 - The dialog **mints the operation id in the browser before its first
   request**, in the engine's grammar and on the browser's clock, and keeps it
   for the whole gesture. So a request that timed out or dropped still holds
-  the id — the dialog waits two minutes, past the minute and three quarters
-  the node takes at most to answer one: half a minute to judge it, a minute to
-  write every log and a quarter of one for the estate map — and the dialog
+  the id — the dialog waits two minutes, past the minute and a half the node
+  takes at most to answer one: half a minute to judge it and a minute to write
+  every log — and the dialog
   offers **Finish this gesture**, which sends the same request under the same
   id and reads every log's answer. So does an
   answer the node did not write: a reverse proxy's 504 page, any status with no
@@ -836,29 +748,13 @@ written and what to do.
   lease listing this node cannot read — offers **Force eviction**, behind a
   second typed confirmation, which sends `force=true` and carries it into every
   Finish of that gesture.
-- Under a divided layout, **Settings › Estate** offers **Readmit…** — the same
-  dialog — for every node the estate map bars: on a barred member's row, and
-  beside the line naming a barred node the map does not hold. **Settings ›
-  Backups & retention** offers a readmission only for a node whose logs still
-  hold its eviction, and a readmission whose every log took the node back
-  while the map part did not land (coordination unreachable, a newer build's
-  map, a node that does not serve every partition) leaves the node barred with
-  no eviction on any log: only the map knows the bar, so its screen is where
-  the gesture that lifts it is offered. A gesture held there reads **Finish
-  readmission…** or **Readmission sent…** on its row, as on **Settings ›
-  Backups & retention**, until the map no longer bars the node. Never **Put back**, which the engine refuses for a
-  barred node.
 
 It prints the watermark before and after, and the instant the eviction takes
 effect. **The evicted node stays counted for about a minute** on each log after
 that log's record lands, so a live node is certain to have read its own
 tombstone before the trim passes it. `crewlet retention status` shows the node
 as evicted only once every log holds its tombstone, and dates it from the
-latest of them. A node whose latest tombstone is its own **release** — written
-as it left a partition, not by an operator — is shown as having **left**
-(`left, releasing its logs itself`; `left` on **Settings › Backups & retention**) rather than as
-evicted by itself: the trim stops counting it the same way, and nobody ran a
-gesture against it.
+latest of them.
 
 The honest worst case for that window is **zero**: a node three heartbeats late
 reads its tombstone exactly when the trim may pass it. So the window is a
@@ -1075,12 +971,9 @@ broker already queued is retired by the process holding it going away — and
 that every **publisher** was admitted. So the operation's participants are:
 
 - every node the fleet holds a position for;
-- every live node holding an **estate lease** — every data node whose estate
-  runtime is running, from the moment it is up until after it has stopped
-  applying — whose process publishes records. A data node running no estate
-  (a company on vendor backends for both its tracker and its knowledge base,
-  or a node with no company yet) publishes none and is not asked on that
-  account;
+- every live node whose presence names the **`data`** role — or whose roles
+  cannot be read, since leaving out a node that may hold data could pass a seal
+  it should hold — because a data node publishes records;
 - every live **broker member**, whatever its roles, because its broker holds
   queued requests whether or not the node keeps data;
 - every live node whose presence does not say what its broker is — a node
@@ -1089,7 +982,7 @@ that every **publisher** was admitted. So the operation's participants are:
   not costs only an acknowledgement you can `exclude`;
 - and the coordinator itself.
 
-A **leaf** or a client of an external cluster that runs no estate is not asked:
+A **leaf** or a client of an external cluster that holds no data is not asked:
 its broker queues nothing, and its seats publish through a data node, which is.
 Each node's broker kind is on `crewlet fleet broker list`.
 
@@ -1163,7 +1056,7 @@ broker reports and every applier compares at boot against the instant its
 checkpoint was committed under. On a difference the applier **stops** rather
 than resuming — the log line names both instants and this verb — the node's
 reads and writes refuse `wrong_stream` with that reason, it stops serving the
-partition — its seats read it from a peer — and `crewlet retention status` leads with `NOT READY <domain>:
+estate — its seats read it from a peer — and `crewlet retention status` leads with `NOT READY <domain>:
 wrong_stream (recreated) — …` carrying the same sentence, both instants
 included (the dashboard shows the same refusal above the domain's block). A checkpoint past the log's end is caught as `wrong_stream` too,
 because a position the log has never reached is a position on another stream.
@@ -1323,8 +1216,8 @@ creation instant arrives in both answers. Nothing else can see it — a rebuilt
 stream comes back at generation 0 counting from 1, so once it has published
 past the node's checkpoint every sequence term reads healthy while the node
 applies a different history into rows keyed by the old one. The node logs
-`statelog_stream_recreated` with both instants, stops serving the partition —
-its seats stay, and read it from the partition's other holders — and refuses
+`statelog_stream_recreated` with both instants, stops serving the estate —
+its seats stay, and read it from the other data nodes — and refuses
 every read and every write of that domain with `wrong_stream` until that stream
 is re-anchored, and it applies nothing from the rebuilt stream into rows keyed
 to the old one.
@@ -1471,8 +1364,7 @@ thing under test to test itself. It writes nothing to the live store and takes
 no lock on it.
 
 It prints what the artefact holds — when it was taken and by which node, each
-store copy (its estate and, for a partition, which one, as `crewlet backup`
-names it) with its size and migration count, and every domain's generation and
+store copy (its estate, as `crewlet backup` names it) with its size and migration count, and every domain's generation and
 sequence —
 and then **exits non-zero past its cadence**, which defaults to 30 days
 (`-cadence`). That default is derived rather than chosen: `min_age` is 7 days,

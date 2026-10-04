@@ -18,7 +18,7 @@ A satellite comes in two shapes, and the difference is the `data` role:
 | | `roles: [seats]` — **stateless** | `roles: [data, seats]` — **holds data** |
 |---|---|---|
 | Its store | Scratch: deleted at every boot, and no copy of the tracker or knowledge base | Its own full copy of the replicated estate |
-| Its broker | A **leaf** of the members' — no JetStream, no replica, no vote | A cluster **member**, holding replicas (a data node on a leaf is refused until the partitioned estate is live) |
+| Its broker | A **leaf** of the members' — no JetStream, no replica, no vote | A cluster **member**, holding replicas (a data node on a leaf is refused) |
 | Disk it needs | Its seats' memory and working rows, nothing else | The whole company's history |
 | Its seats' tools | Read and write through a data node, over the broker | Read and write its own copy, through the same router |
 | Replacing it | Delete it and start another — it keeps nothing | A member leaving and joining |
@@ -262,7 +262,7 @@ the dependency surface before choosing a host for it:
   are each a request to a data node over the broker — no inbound port, the
   same link. It is admitted to claim seats only once a data node answers
   that its own copy is level with its logs, and while none answers its tools
-  fail naming the partition nobody served rather than answering from nothing. What it publishes about its
+  fail naming the estate nobody served rather than answering from nothing. What it publishes about its
   own turns is handed to a data node's event log (the audit trail cannot live
   in a store deleted at its next boot), so `GET /events` on that data node
   shows it; its seats' memory rides the compacted changelog every seat's

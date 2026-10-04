@@ -8,7 +8,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
-	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -103,48 +102,6 @@ func TestAnUnansweredPresenceViewCountsTheRegisterAlone(t *testing.T) {
 	}
 	if len(n) != 2 {
 		t.Errorf("counted %v, want the register's two rows", n)
-	}
-}
-
-// AND A STALE ESTATE VIEW COUNTS THE REGISTER'S HALF, under a divided layout,
-// where a partition's holders are the estate map's: a view past its freshness
-// bound names no holder, so the joiner the map names is not counted — and the
-// count still answers, from the rows naming the partition's logs.
-func TestAStaleEstateViewCountsTheRegisterAlone(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	layout := partitionedTestLayout()
-	tracker0 := statelog.PartitionID{Space: statelog.SpaceTracker}
-	fleet := placedMap(t, layout, map[statelog.PartitionID][]partmap.Holder{
-		tracker0: {{Node: "node-a", State: partmap.Serving, Since: 1},
-			{Node: "node-j", State: partmap.Joining, Since: 2}},
-	})
-	if err := fleet.PutPositions(ctx, coord.NodePositions{NodeID: "node-a", Layout: 1,
-		Domains: map[string]coord.DomainPosition{"tracker@tracker.000": {Seq: 4}}}); err != nil {
-		t.Fatal(err)
-	}
-	backend := coordmem.New()
-	claimLeases(t, backend, layout.Number, "node-a")
-	c := &viewClock{now: time.Now()}
-	maps := &breakableMaps{MapSource: fleet}
-	e := &Engine{backends: &Backends{Coord: backend}}
-	e.estateWatch.Store(runningWatch(t, maps, backend, nil, layout, c))
-	s := &stateLog{layout: layout, fleet: fleet}
-	count := func() int {
-		t.Helper()
-		n, err := e.countedOn(ctx, s, tracker0, c.Now())
-		if err != nil {
-			t.Fatalf("countedOn: %v", err)
-		}
-		return len(n)
-	}
-	if got := count(); got != 2 {
-		t.Fatalf("a fresh view counts %d on tracker.000, want its server and its joiner", got)
-	}
-	maps.set(true)
-	c.advance(statelog.FloorCacheStale + time.Minute)
-	if got := count(); got != 1 {
-		t.Errorf("a stale view counts %d on tracker.000, want the register's one row", got)
 	}
 }
 

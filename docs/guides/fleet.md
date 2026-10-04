@@ -172,14 +172,13 @@ write, every coordination bucket — so Tier A requires `stream.store_dir` on it
 whatever its roles: one kept in memory loses its copy of all of them at its
 next restart.
 
-**Which roles pair with which broker, under this release.** A node without
-`data` joins an embedded fleet as a leaf, and a node with `data` is a member
-(or a client of an external cluster). Three pairings are **refused until the
-partitioned estate is live**, and each refusal says so: a data node on a leaf,
-a broker member that holds no data, and `ingress` or `workers` on a node
-without `data`. Under the single-file layout this release runs, every data node
-holds the whole estate as a member of the broker, and a node without data
-reaches the estate through one.
+**Which roles pair with which broker.** A node without `data` joins an
+embedded fleet as a leaf, and a node with `data` is a member (or a client of
+an external cluster). Three pairings are **refused**, and each refusal names
+both ways out: a data node on a leaf, a broker member that holds no data, and
+`ingress` or `workers` on a node without `data`. Every data node holds the
+whole estate as a member of the broker, and a node without data reaches the
+estate through one.
 
 **A capacity seal counts every broker.** Changing a log's byte ceiling
 restarts the fleet into a maintenance mode, and the seal that proves no queued
@@ -280,29 +279,26 @@ estate at all — and on an embedded stream its broker joins the fleet as a
 is the shape for an agent host you want small and disposable, and
 [Running One Agent Somewhere Else](satellite-nodes.md) walks through one.
 
-What it can run is `seats` alone, until the partitioned estate is live.
-`ingress` and `workers` still read and write a node's own copy of the estate
-directly under this release's single-file layout — the API's retention report,
-capacity, reanchor, eviction and backup surfaces, the scheduler, the trim — so
-Tier A refuses either without `data`, naming the field and saying the refusal
-lasts only as long as that layout. (The API's tracker and knowledge-base
+What it can run is `seats` alone. `ingress` and `workers` read and write a
+node's own copy of the estate directly — the API's retention report, capacity,
+reanchor, eviction and backup surfaces, the scheduler, the trim — so Tier A
+refuses either without `data`, naming the field and why. (The API's tracker and knowledge-base
 routes and the operator's MCP do not: they go through the same router a seat's
 tools do, so a data node whose copy is out of service answers its operator from
 a peer's copy, as it answers its seats.) Its seats use exactly the tools a data
 node's seats do, and each of those tools asks a data node over the broker:
 
-- **Reads and writes** go to a data node that serves the partition the call
-  addresses — under this release's layout, any data node — picked by the asking
-  node, and move to the next if it does not answer or ran nothing — except a
+- **Reads and writes** go to a data node — any data node, since every one
+  holds the whole estate — picked by the asking node, and move to the next if it does not answer or ran nothing — except a
   knowledge-base write, which has no operation id a repeat could be collapsed
   on and is reported as unknown rather than sent twice. A data node's own seats
   go through the same router and are answered from its own copy
-  ([how a request reaches its partition](../concepts/estate-placement.md#how-a-request-reaches-its-partition)).
+  ([how a request reaches the estate](../concepts/scaling.md#how-a-request-reaches-the-estate)).
 - **Its own writes are visible to its next read** on whichever data node
   answers it: every request carries the furthest position the node has been
   told landed, and a data node that has not applied that far says so rather
   than answer from before it. When no data node can serve the call, the tool
-  fails naming the partition nobody served.
+  fails naming the estate nobody served.
 - **Its audit trail is kept by a data node.** What it publishes about its
   turns is handed to a data node's event log, where `GET /events` on that node
   shows it.
@@ -437,7 +433,7 @@ and left unserved:
 | Part | Rule |
 |---|---|
 | `node` | A node id, under `node.id`'s own rule: starts with a letter or digit, then letters, digits, `.`, `_` or `-`, at most 64 characters. A `${VAR}` is **not** resolved here — Tier B compares the pin as written — so write the node id itself. The published schema carries the same pattern, so an editor flags a malformed pin as you type |
-| label key | 1 to 63 bytes of UTF-8 with no whitespace and no unprintable character. Dots, slashes and non-ASCII letters are fine (`topology.example.com/zone`). The same grammar governs `node.labels` in Tier A and the estate's `failure_domain`, so a key one of them accepts the others accept too |
+| label key | 1 to 63 bytes of UTF-8 with no whitespace and no unprintable character. Dots, slashes and non-ASCII letters are fine (`topology.example.com/zone`). The same grammar governs `node.labels` in Tier A, so a key one of them accepts the other accepts too |
 | label value | Any string, compared exactly: interior spaces and the empty string are both values a node can carry. What a selector's value may **not** have is whitespace around it — every node's label values are trimmed of theirs when its Tier A file loads, so `" eu"` could never match; it is refused rather than trimmed, because the difference is the one you cannot see in the file |
 
 A document with several bad keys reports every one of them, in the same
@@ -634,7 +630,7 @@ Three things make that work, and all three are per node:
   `stream.tracker_retention.snapshot_interval` (default 24h). A node declines
   to take one while it is still catching up, while it holds a record it
   cannot decode, while the disk is short, or while the fleet counts no other
-  node on the partition — and retries shortly rather than waiting out the
+  data node — and retries shortly rather than waiting out the
   interval.
 - **Every node serves them.** There is no designated donor: a fleet whose
   only donor was down would have nothing to give.

@@ -181,12 +181,6 @@ type retention struct {
 	// leave. Nil puts none.
 	background func(domain string) int
 
-	// estate fills the estate map's half of a reading — what this node's
-	// estate view has seen of each partition's copies and joins, and how
-	// old the view is. Nil on an engine running no estate view, which
-	// reads as nothing to report.
-	estate func(now time.Time, out *statelog.Reading)
-
 	// mu guards the coverage cache below. The tick and every API request
 	// assemble a report, on different goroutines.
 	mu sync.Mutex
@@ -234,7 +228,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 	r := &retention{
 		fleet:       e.backends.Fleet,
 		leases:      e.backends.Coord,
-		holders:     e.holdersOf(s.layout),
+		holders:     e.holdersOf(),
 		state:       s,
 		db:          e.backends.Store,
 		cfg:         boot.Stream.TrackerRetention,
@@ -250,7 +244,6 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		objects:    e.objectsReading,
 		seats:      func() int { return seatCount(e.Company()) },
 		background: e.backgroundBarriers,
-		estate:     e.estateReading,
 		pooled:     map[string]poolCounters{},
 		done:       make(chan struct{}),
 	}
@@ -514,9 +507,9 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	//
 	// UNKNOWN IS NOT FATAL TO THE TICK, unlike the register: the logs are
 	// still evaluated, each reading its counted set as UNKNOWN, so every
-	// floor is published BLOCKED on the applied term with the reason — an
-	// estate map too stale to decide from, say (§F2) — rather than left
-	// standing unexplained.
+	// floor is published BLOCKED on the applied term with the reason — a
+	// presence listing that did not answer, say — rather than left standing
+	// unexplained.
 	if r.holders != nil {
 		if in.holders, err = r.holders.Holders(ctx, r.state.layout.Partitions()); err != nil {
 			in.holdersUnknown = fmt.Sprintf("who holds the log's partition is unknown (%v)", err)

@@ -924,10 +924,9 @@ function offline(err) {
 * It is the DEFAULT, not the only deadline: a call whose path is genuinely
 * longer passes [RequestOptions.timeoutMs] rather than removing the deadline.
 * Two do. A backup copies the whole store before it answers. And the node
-* gate takes up to a minute and three quarters to answer a gesture (half a
-* minute to judge it, a minute to write every log, a quarter of one for the
-* estate map's part), so thirty seconds gave up on a gesture the node went on
-* to finish, holding nothing to finish it with.
+* gate takes up to a minute and a half to answer a gesture (half a minute to
+* judge it, a minute to write every log), so thirty seconds gave up on a
+* gesture the node went on to finish, holding nothing to finish it with.
 */
 var REQUEST_TIMEOUT_MS = 3e4;
 /** A deadline as a person would say it: seconds under two minutes, else
@@ -1244,18 +1243,16 @@ function newGateOpID(verb, node, now = Date.now(), random = (bytes) => crypto.ge
 //#endregion
 //#region src/contract/fleet.ts
 /**
-* The fleet's own maps, broker and object store, as the engine bounds them:
-* the kinds a node's broker can be and the disagreements named between the
-* two records of its membership, the states of the estate map and of a
-* partition's holders, how long a removal may take, the lengths a hold is
-* offered at, and the states of the object store's report.
+* The fleet's broker and object store, as the engine bounds them: the kinds
+* a node's broker can be and the disagreements named between the two records
+* of its membership, how long a removal may take, and the states of the object
+* store's report.
 *
 * Each is a COPY of something the engine owns, because this is a separate
 * build that cannot import a Go identifier — held to the engine's in both
-* directions by `internal/api`'s `broker_client_test.go`,
-* `estate_client_test.go` and `objects_test.go`. What is done with them is
-* behaviour, and lives in `protocol/broker.ts`, `protocol/estate.ts` and the
-* Settings screens.
+* directions by `internal/api`'s `broker_client_test.go` and
+* `objects_test.go`. What is done with them is behaviour, and lives in
+* `protocol/broker.ts` and the Settings screens.
 */
 /**
 * How a node's broker takes part in the fleet's — `placement.BrokerKind`, as
@@ -1293,37 +1290,6 @@ var BROKER_FINDING_KINDS = [
 * failed.
 */
 var BROKER_REMOVE_TIMEOUT_MS = 185e3;
-/**
-* Which of the five things the estate was when the question was asked —
-* `queries.EstateMapStates`. `whole` is layout 0: every data node holds the
-* whole estate and there is no map.
-*/
-var ESTATE_MAP_STATES = [
-	"unavailable",
-	"whole",
-	"no_map",
-	"unreadable",
-	"placed"
-];
-/** What the MAP says a holder is doing with a partition — `partmap.HolderStates`. */
-var HOLDER_STATES = [
-	"joining",
-	"serving",
-	"leaving"
-];
-/**
-* What a node's own estate lease says it is doing with a partition —
-* `partmap.PartitionStates`. Kept a string on the wire, so a state a newer
-* node reports is shown rather than dropped.
-*/
-var PARTITION_STATES = [
-	"adopting",
-	"catching_up",
-	"serving",
-	"faulted",
-	"draining",
-	"released"
-];
 //#endregion
 //#region src/contract/actions.ts
 /**
@@ -1951,4 +1917,4 @@ function refusalOf(tool, requestId, err, floors) {
 	};
 }
 //#endregion
-export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, ESTATE_MAP_STATES, HOLDER_STATES, LiveSocket, PARTITION_STATES, QueryError, REQUEST_TIMEOUT_MS, RestError, SessionFloors, Store, act, api, apiToken, clearToken, domainOf, isAbort, keepsOperation, layoutOpID, newGateOpID, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, retryAfterSeconds, storeToken };
+export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SessionFloors, Store, act, api, apiToken, clearToken, domainOf, isAbort, keepsOperation, layoutOpID, newGateOpID, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, retryAfterSeconds, storeToken };

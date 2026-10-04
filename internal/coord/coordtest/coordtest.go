@@ -444,7 +444,7 @@ func newHarness(t *testing.T, newBackend func(t *testing.T) coord.Backend) *harn
 	// nothing, so "every lease" is a question this surface deliberately
 	// does not answer. These four are what the suite itself claims.
 	for _, class := range []coord.Class{
-		coord.ClassSeat, coord.ClassWorker, coord.ClassNode, coord.ClassEstate,
+		coord.ClassSeat, coord.ClassWorker, coord.ClassNode, callerClass,
 	} {
 		if live := h.listLive(class); len(live) != 0 {
 			t.Fatalf("newBackend must return an empty store, got %d live %s lease(s): %v",
@@ -817,3 +817,8 @@ func resources(leases []coord.Lease) []string {
 	}
 	return out
 }
+
+// callerClass is a lease class this package does not own, as a caller's own
+// claims are leased (the tracker's, under classes of their own): what the suite
+// claims to prove a listing of one class never returns another's.
+const callerClass coord.Class = "claim"

@@ -120,12 +120,6 @@ type native struct {
 	// every embedded engine and every test.
 	stopSlices queue.Unsubscribe
 
-	// lease is this data node's estate membership (`estate:{node}`),
-	// claimed once the runtime is up and given back only after it has
-	// stopped — see estatelease.go. Nil where there is no coordination
-	// store to claim it in.
-	lease *memberLease
-
 	// run is the context every goroutine this node started runs under, and
 	// stop is what ends it.
 	//
@@ -239,8 +233,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	if e.router != nil {
 		route = e.router
 	}
-	if n.gate, err = newNodeGate(sl, e.backends.Coord, e.holdersOf(sl.layout),
-		e.gateMembership(sl.layout), route, e.backends.Store, nodeID, e.metrics); err != nil {
+	if n.gate, err = newNodeGate(sl, e.backends.Coord, e.holdersOf(), route,
+		e.backends.Store, nodeID, e.metrics); err != nil {
 		return err
 	}
 
@@ -406,12 +400,6 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}()
 	}
 
-	// AND THE ESTATE MEMBERSHIP, once the runtime it describes is up — the
-	// log applying, the index building — and before the runtime is
-	// published, so it is a field written once like every other; the
-	// failure path above gives it back with the rest.
-	n.lease = e.startEstateLease(ctx, n)
-
 	// PUBLISHED LAST, whole: every field above is written before the
 	// store, which is what lets every reader load it without a lock.
 	e.native.Store(n)
@@ -548,9 +536,6 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	if n == nil {
 		return
 	}
-	// THE ESTATE VIEW FIRST, which the retention loop's alarm evaluation
-	// reads the estate alarms from.
-	e.startEstateWatch(ctx)
 	e.startRetention(ctx, e.boot, n.log)
 	// AND THE VECTOR DOMAIN'S ONE WRITER. Without it every other half of
 	// semantic search is present and correct over an empty corpus — which
@@ -610,14 +595,6 @@ func (n *native) shutdown(ctx context.Context) {
 	// nothing is applying, which is not wrong so much as a shutdown that
 	// looks like a stall in every log line it produces on the way out.
 	n.log.Stop()
-	// AND THE MEMBERSHIP AFTER ALL OF IT: a member is what the estate map
-	// places partitions on and a capacity window waits for, so it is given
-	// back only once nothing of this runtime serves or applies — never at
-	// a drain's first step, which is presence's and the reason this lease
-	// exists (estatelease.go).
-	if n.lease != nil {
-		n.lease.stop(ctx)
-	}
 }
 
 // NativeHydrated reports whether every native projection this node runs has

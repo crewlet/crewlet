@@ -201,7 +201,7 @@ func (e *Engine) newEmbedDuty(s *stateLog) *embedDuty {
 		metrics:    e.metrics,
 		log:        running,
 		register:   s.positions,
-		holders:    e.holdersOf(s.layout),
+		holders:    e.holdersOf(),
 		identity:   s.identityDomains(),
 		db:         e.backends.Store,
 		renewEvery: search.EmbedInterval,

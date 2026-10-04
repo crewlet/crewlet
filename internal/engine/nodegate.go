@@ -11,8 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
-	"github.com/crewlet/crewlet/internal/estate/partmap"
-	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -53,12 +51,11 @@ import (
 //
 // Then each identity-claiming log THE GESTURE CONCERNS gets its gate record,
 // and each answers with its own three-valued outcome, reported in the
-// register's order of domains ([stateLog.identityLogs]). Under layout 0 that is every identity-claiming log,
-// since every data node holds the one partition. Under a divided layout an
-// eviction writes every log the node is COUNTED ON — whose partition the
-// estate map names it a holder of, in any state, or whose key its positions
-// row names and has not released (contract §E4): exactly the logs the trim
-// waits for it on ([stateLog.countedOnLogs]). A readmission writes every
+// register's order of domains ([stateLog.identityLogs]). An eviction writes
+// every log the node is COUNTED ON — every identity-claiming log, since every
+// data node holds the one estate, or one whose key its positions row names and
+// has not released (contract §E4): exactly the logs the trim waits for it on
+// ([stateLog.countedOnLogs]). A readmission writes every
 // identity-claiming log of the layout, because where the node is evicted is a
 // fact each log's own rows hold and nothing outside them can list — a holder
 // evicted before it first reported was counted on a log its row never named,
@@ -81,43 +78,13 @@ import (
 // that wrote it where that is not this one ([DomainGate.Writer]), because a
 // refusal is about the node whose authority gave it.
 //
-// # And the estate map
-//
-// Under a divided layout an eviction also BARS the node from the estate map
-// ([EstateControl.Bar]) — takes it out, and keeps it out through its removal
-// for absence and its return — so the maintainer never places a partition on
-// an evicted node that comes back, nor makes it a server of a copy it comes
-// back with (partmap's "a barred node is never made a server"), and a
-// readmission lifts the bar and puts it back IN ([EstateControl.Readmit]) —
-// the one gesture that does: the operator's own `crewlet estate in` refuses a
-// barred node, since only the readmission knows when its logs have taken it
-// back. An operator's plain out would not do: it ends when membership removes
-// the member, which for a machine an operator evicts is usually already the
-// case, and a repaired machine restarted under its old id was then placed on
-// after its probation while every log it was placed to serve still gated it.
-//
-// Both AFTER the logs, and the in ONLY ONCE EVERY LOG HAS TAKEN THE NODE BACK:
-// an in placing the node while one of its logs still holds its eviction is the
-// one order in which a partition is placed on a node that partition's log
-// gates — every write it decides there refused, and the trim, counting it from
-// a tombstone rather than its row, passing the holder that applies the log. So
-// a readmission with a log unfinished leaves the map unwritten, saying it
-// waits for the logs ([ErrMapAwaitsLogs]), and the same gesture under the same
-// operation id — which answers the finished logs from their own ledgers —
-// makes the in once the last log is done — on whichever node it runs, since a
-// gesture reaches every log from any node, each one this node does not serve
-// through a holder that does. An eviction's bar needs no such wait: it errs in
-// the safe direction whatever the logs answered. The map's answer is its own
-// part of the result ([MapGate]).
-//
 // The logs are independent — a gate on one log drops that log's records and
 // lifts that log's pin, whatever another did — so they are written AT ONCE,
 // and a log that refuses or cannot answer does not stop another being written:
 // the gesture gets as far as it can, and
 // the result says exactly how far. And it gets there whatever its CALLER does
 // meanwhile: once the first record is about to be written the gesture runs
-// under its own budgets ([GateLogBudget] for the logs, then [GateMapBudget]
-// for the map) rather than the request's, because a dropped connection is not
+// under its own budget ([GateLogBudget]) rather than the request's, because a dropped connection is not
 // a request to leave a node evicted on one log and counted on the other.
 //
 // # And a retry finishes it, idempotently
@@ -136,22 +103,18 @@ import (
 // operator finishes by running the same command again rather than something to
 // repair.
 
-// The gesture's budgets: what bounds each of its three phases, and so how long
-// a node takes to answer one gesture at most ([GateAnswerBudget]).
+// The gesture's budgets: what bounds each of its two phases, and so how long a
+// node takes to answer one gesture at most ([GateAnswerBudget]).
 //
-// THREE BUDGETS, ONE PER PHASE, because each phase waits on something different
-// and one shared deadline let the slowest starve the next. The map's part ran
-// on whatever the logs' walk left of a single minute, and a walk that legitimately
-// spent it — a partition mid-move, its holders silent — handed the map a context
-// already expired: the eviction's bar went unwritten, and a retry walked the same
-// silent holders first and missed it again.
+// ONE BUDGET PER PHASE, because each phase waits on something different and
+// one shared deadline let the slower starve the other.
 const (
 	// GateJudgeBudget bounds the JUDGEMENT, everything before the first
 	// record: the coordination reads an eviction is judged on and the logs
 	// it concerns are chosen from (the presence leases, the positions
-	// register, the estate map's holders, the published floors), and for a
-	// readmission the bound of every log it writes elsewhere, read on a
-	// holder of that log's partition, all at once ([stateLog.Readmissible]).
+	// register, the published floors), and for a readmission the bound of
+	// every log it writes elsewhere, read on a holder of the estate, all at
+	// once ([stateLog.Readmissible]).
 	//
 	// THIRTY SECONDS: one complete election of the coordination store's
 	// group, which may stall those reads once — jsprovision's clustered ask
@@ -168,47 +131,33 @@ const (
 
 	// GateLogBudget bounds the LOGS, from the first record to the last log's
 	// answer. They are written at once ([NodeGate.write]), so it waits as long
-	// as the SLOWEST log, whether the gesture writes layout 0's two logs or a
-	// divided layout's every partition's — written one after another, as they
-	// were while a gesture wrote two, the bound would have grown with the
-	// partitions a node serves.
+	// as the SLOWEST log — written one after another, the bound would grow
+	// with the logs a gesture writes.
 	//
-	// ONE MINUTE, from the slowest log: one this node sends to its
-	// partition's holders ([estate.Router.Gate]), asked one at a time, each
-	// given at most one [estate.AppendAttempt] (fifteen seconds) before the
-	// next is asked. At the company's default copies
-	// ([config.DefaultEstateReplicas], three) a partition MID-MOVE has one
-	// more serving holder than that — a move makes before it breaks, so the
-	// joiner serves before the leaver stops — and a walk past every one of
-	// the four is four attempts: a minute. A holder whose copy lags answers
-	// that at once and is asked again last, so it costs one attempt, not two.
-	// A log this node writes itself waits only on its own publisher. A company
-	// keeping more copies, with more of them silent, has that log answer that
-	// its holders did not, and the same gesture under the same operation id
-	// asks the silent ones last ([estate.Router]'s suspicion, thirty seconds)
-	// and finishes it.
+	// ONE MINUTE, from the slowest log: one this node sends to the estate's
+	// holders ([estate.Router.Gate]) — the live data nodes — asked one at a
+	// time, each given at most one [estate.AppendAttempt] (fifteen seconds)
+	// before the next is asked: a walk past [gateLogWalk] of them. A holder
+	// whose copy lags answers that at once and is asked again last, so it
+	// costs one attempt, not two. A log this node writes itself waits only on
+	// its own publisher. A fleet with more of its data nodes silent has that
+	// log answer that its holders did not, and the same gesture under the
+	// same operation id asks the silent ones last ([estate.Router]'s
+	// suspicion, thirty seconds) and finishes it.
 	GateLogBudget = time.Minute
 
-	// GateMapBudget bounds the estate MAP's part, after the logs, on a context
-	// of its own: the eviction's bar or the readmission's lift, a
-	// compare-and-set loop of at most [mapGestureAttempts] reads and writes of
-	// one coordination record and a read after the last.
-	//
-	// FIFTEEN SECONDS: jsprovision's clustered ask term, sized to span one
-	// complete election of a replicated group (the vendored server's
-	// maxElectionTimeout, 9s, and lostQuorumInterval, 10s) — the one thing
-	// that stalls those round trips, each a few milliseconds otherwise, and
-	// once, since an election settles the group for all of them.
-	GateMapBudget = 15 * time.Second
+	// gateLogWalk is how many silent holders one log's walk outlasts inside
+	// [GateLogBudget]: four, one more than the three data nodes a fleet's
+	// broker is most often built of.
+	gateLogWalk = 4
 
-	// GateBudget bounds one gesture from its first record to its last answer:
-	// the logs, then the map.
-	GateBudget = GateLogBudget + GateMapBudget
+	// GateBudget bounds one gesture from its first record to its last answer.
+	GateBudget = GateLogBudget
 
 	// GateAnswerBudget is the longest a node takes to answer one gesture
 	// request: its judgement, then the gesture. `crewlet retention evict`
 	// and the dashboard wait a little longer than this, so the node's own
-	// answer — every log's outcome, the map's, and the operation id —
+	// answer — every log's outcome and the operation id —
 	// reaches the operator before the client gives up.
 	GateAnswerBudget = GateJudgeBudget + GateBudget
 )
@@ -334,14 +283,13 @@ func (e *ReadmissionUnjudged) Unwrap() error { return e.Err }
 // Remedy is what the operator does about it.
 //
 // A LOG NO NODE SERVES is waited out, and the sentence says what it waits on,
-// because one case is not a holder coming back: a partition whose ONLY copy is
+// because one case is not a holder coming back: an estate whose ONLY copy is
 // the one the readmitted machine kept through its eviction. Nobody writes that
-// copy while the machine is barred, and nobody else holds one, so the partition
-// is served again only once a node the estate map names in its place has
-// adopted the copy from the machine — which offers it for as long as it keeps
-// it ([statelog.Copies]) — or, where no other data node can hold it, once one
-// is added. Told only to ask again, an operator retried a gesture no retry
-// could finish.
+// copy while the machine is gated, and nobody else holds one, so the estate is
+// served again only once another data node has adopted the copy from the
+// machine — which offers it for as long as it keeps it ([statelog.Copies]) —
+// and where there is none, once one is added. Told only to ask again, an
+// operator retried a gesture no retry could finish.
 func (e *ReadmissionUnjudged) Remedy() statelog.GateRemedy {
 	var unserved *estate.ErrPartitionUnserved
 	if errors.As(e.Err, &unserved) {
@@ -349,12 +297,12 @@ func (e *ReadmissionUnjudged) Remedy() statelog.GateRemedy {
 			Actions: []statelog.GateAction{statelog.GateWait},
 			Detail: fmt.Sprintf("no node serving %s answered, so the standing of its log "+
 				"%s cannot be read, and the readmission could not be written there either. "+
-				"Run it again once the partition is served: when a holder of it returns or "+
+				"Run it again once the estate is served: when a data node returns or "+
 				"answers — or, where its only copy is the one %s kept through its eviction, "+
-				"which nobody writes while the node is barred, once a node the estate map "+
-				"names in its place has adopted that copy from %s, which offers it while it "+
-				"keeps it; if no other data node can hold %s, add one",
-				unserved.Partition, e.Log, e.Node, e.Node, unserved.Partition),
+				"which nobody writes while the node is gated, once another data node has "+
+				"adopted that copy from %s, which offers it while it keeps it; if there is "+
+				"no other data node, add one",
+				unserved.Partition, e.Log, e.Node, e.Node),
 		}
 	}
 	return statelog.GateRemedy{
@@ -375,95 +323,6 @@ type GateResult struct {
 	// every one ([countedGateLogs]) — in the register's order of domains,
 	// every one of them, whatever it answered.
 	Domains []DomainGate
-
-	// Map is what the gesture did to the estate map, nil under a layout
-	// that places no map (layout 0).
-	Map *MapGate
-}
-
-// ErrMapAwaitsLogs is a readmission's map part left unwritten because a log the
-// gesture concerns has not taken the node back yet: the node is put back in the
-// estate map only once every log has, or the maintainer could place a partition
-// on it that the partition's log still gates. The gesture's own entries say
-// which logs are unfinished, and the same gesture under the same operation id —
-// on any node, since every log is reached from any node — finishes them and
-// then makes the in.
-var ErrMapAwaitsLogs = errors.New("engine: the node is put back in the estate map only once " +
-	"every log has taken it back")
-
-// MapGate is the estate map's part of a gesture: an eviction bars the node from
-// it ([membership.Bar], recorded as `evicted`) — out, and kept out whatever
-// becomes of its membership — and a readmission lifts the bar and puts it back
-// ([membership.Readmit]).
-type MapGate struct {
-	// Gesture is "out" for an eviction's bar and "in" for a readmission.
-	Gesture string
-
-	// Landed is whether the stored map now says what the gesture asked.
-	Landed bool
-
-	// Err is why the map was not changed, or could not be read or written.
-	Err error
-}
-
-// done reports a map that says what the gesture asked — or, for a readmission,
-// one that keeps nothing of the node to lift: a node it neither holds,
-// remembers nor bars has nothing keeping it off the map.
-//
-// NEVER AN EVICTION'S REFUSAL: a bar is written whether or not the map holds
-// the node, so an eviction whose map part did not land has not finished — a
-// map that "places nothing on the node" today is one that will the day the
-// machine comes back.
-func (m MapGate) done() bool {
-	if m.Err != nil {
-		return m.Gesture == "in" && errors.Is(m.Err, membership.ErrUnknownMember)
-	}
-	return m.Landed
-}
-
-// Remedy is what the operator does about a map the gesture did not finish, or
-// the zero remedy for one it did — beside which a map that places nothing on
-// the node already still says so.
-func (m MapGate) Remedy() statelog.GateRemedy {
-	switch {
-	case m.Err == nil && m.Landed:
-		return statelog.GateRemedy{}
-	case m.Err == nil:
-		return statelog.GateRemedy{Actions: []statelog.GateAction{statelog.GateRetrySameOp},
-			Detail: "the estate map kept changing under the gesture: the same gesture " +
-				"under the same operation id writes it again, and every log that holds " +
-				"its record answers from its own rows"}
-	case errors.Is(m.Err, ErrMapAwaitsLogs):
-		return statelog.GateRemedy{Actions: []statelog.GateAction{statelog.GateRetrySameOp},
-			Detail: "the node is put back in the estate map only once every log has taken " +
-				"it back, so that no partition is placed on it while its log still gates " +
-				"it: the same gesture under the same operation id finishes the logs this " +
-				"answer names, and then puts it back"}
-	case m.Gesture == "in" && errors.Is(m.Err, membership.ErrUnknownMember):
-		return statelog.GateRemedy{Detail: "the estate map keeps nothing of the node to " +
-			"lift: it is no member the map holds, and no node it remembers removing or " +
-			"bars, so nothing keeps it off the map"}
-	case errors.Is(m.Err, membership.ErrNothingPlaceable):
-		// THE SAME OPERATION, once there is somewhere else to place: a
-		// fresh one would write every log that already holds the record
-		// again.
-		return statelog.GateRemedy{Actions: []statelog.GateAction{statelog.GateRetrySameOp},
-			Detail: "taking the node out would leave the estate map no present member " +
-				"to place copies on: add a data node, then the same gesture under the " +
-				"same operation id finishes it"}
-	case errors.Is(m.Err, partmap.ErrNoMap):
-		return statelog.GateRemedy{Actions: []statelog.GateAction{statelog.GateRetrySameOp},
-			Detail: "no estate map has been written for this layout yet, so there is " +
-				"nothing to take the node out of: the same gesture under the same " +
-				"operation id finishes it once the map's duty has written the first"}
-	case errors.Is(m.Err, ErrEstateNewerMap):
-		return statelog.GateRemedy{Actions: []statelog.GateAction{statelog.GateOtherNode},
-			Detail: "the estate map was written by a newer build: run the same gesture " +
-				"through a node running it, under the same operation id"}
-	}
-	return statelog.GateRemedy{Actions: []statelog.GateAction{statelog.GateRetrySameOp},
-		Detail: "the estate map could not be read or written: the same gesture under " +
-			"the same operation id finishes it once coordination answers"}
 }
 
 // Complete reports whether every log holds the gate record durably — applied
@@ -473,15 +332,7 @@ func (m MapGate) Remedy() statelog.GateRemedy {
 // record, and a retry under the same [GateResult.OpID] writes only what is
 // missing — where the log's own answer says a retry can ([DomainGate.Retry]).
 func (r GateResult) Complete() bool {
-	if !r.logsDone() {
-		return false
-	}
-	if r.Map != nil {
-		// A NODE COUNTED ON NO LOG is complete once the map says so: a
-		// member that holds nothing yet is still one the map places on.
-		return r.Map.done()
-	}
-	return len(r.Domains) > 0
+	return r.logsDone() && len(r.Domains) > 0
 }
 
 // DomainGate is one log's answer to one gesture.
@@ -868,10 +719,6 @@ type NodeGate struct {
 	// went on counting the evicted node on.
 	logs func(ctx context.Context, node string, readmit bool) ([]gateLog, error)
 
-	// estate takes a node out of the estate map and puts it back, nil
-	// under a layout that places no map.
-	estate estateMembership
-
 	// live lists the nodes holding a presence lease, which an eviction is
 	// judged against, and readmissible is the state log's own judgement of
 	// a readmission.
@@ -883,8 +730,8 @@ type NodeGate struct {
 	// no judgement could make the write allowed.
 	publishing func(gesture string) error
 
-	// budgets are the gesture's three budgets: the zero value is the
-	// package's own ([GateJudgeBudget], [GateLogBudget], [GateMapBudget]),
+	// budgets are the gesture's two budgets: the zero value is the
+	// package's own ([GateJudgeBudget], [GateLogBudget]),
 	// and a test sets shorter ones to spend a phase whole.
 	budgets gateBudgets
 }
@@ -892,7 +739,7 @@ type NodeGate struct {
 // gateBudgets is one gesture's budget per phase; a zero one is the package's
 // constant for that phase.
 type gateBudgets struct {
-	judge, logs, mapPart time.Duration
+	judge, logs time.Duration
 }
 
 // orDefault is b with every phase it leaves zero set to the package's budget.
@@ -903,38 +750,8 @@ func (b gateBudgets) orDefault() gateBudgets {
 	if b.logs == 0 {
 		b.logs = GateLogBudget
 	}
-	if b.mapPart == 0 {
-		b.mapPart = GateMapBudget
-	}
 	return b
 }
-
-// estateMembership is the estate map's two membership gestures, as the node
-// gate makes them ([EstateControl]): the eviction's bar, and the readmission's
-// lift of it — never the operator's in, which refuses a barred node.
-type estateMembership interface {
-	Bar(ctx context.Context, node, by, reason string) (EstateGesture, error)
-	Readmit(ctx context.Context, node, by string) (EstateGesture, error)
-}
-
-// gateMembership is the estate map's gestures as the node gate makes them
-// under layout, nil under a layout that places no map — layout 0, where every
-// data node holds the one partition and the map's duty writes none — or on a
-// node with no coordination store to hold one.
-//
-// AN UNTYPED NIL, never a nil *EstateControl in the interface: the gate asks
-// whether it has a map to gesture on by comparing with nil.
-func (e *Engine) gateMembership(layout statelog.Layout) estateMembership {
-	if layout.Number == 0 || e.estateControl == nil {
-		return nil
-	}
-	return e.estateControl
-}
-
-// evictedReason is what an eviction records on the estate map as why the node
-// is out, so a surface can tell a node an operator judged gone from one taken
-// out for maintenance.
-const evictedReason = "evicted"
 
 // gateLog is one identity-claiming log as the gate writes it: through this
 // node's own write authority where it serves the log's partition and runs the
@@ -1136,7 +953,7 @@ func domainOpID(gesture string, readmit bool, domain, node string) string {
 // logs of the partitions this node serves and report itself unfinished on
 // every other for ever.
 func newNodeGate(s *stateLog, leases liveLeases, holders partitionHolders,
-	estate estateMembership, route gateRoute, db *store.DB, nodeID string,
+	route gateRoute, db *store.DB, nodeID string,
 	rec *metrics.Recorder) (*NodeGate, error) {
 
 	if route == nil {
@@ -1154,7 +971,6 @@ func newNodeGate(s *stateLog, leases liveLeases, holders partitionHolders,
 		logs: func(ctx context.Context, node string, readmit bool) ([]gateLog, error) {
 			return countedGateLogs(ctx, s, holders, route, db, nodeID, rec, node, readmit)
 		},
-		estate: estate,
 	}
 	if err := checkGateWriters(registeredDomains()); err != nil {
 		return nil, err
@@ -1513,7 +1329,7 @@ func (g *NodeGate) Readmit(ctx context.Context, req GateRequest) (GateResult, er
 }
 
 // write publishes the gate record to every identity-claiming log the gesture
-// concerns, all at once, and then makes the estate map's part of it.
+// concerns, all at once.
 //
 // UNDER ITS OWN BUDGETS, NOT THE CALLER'S. The judgement ran under the
 // caller's context — judge, bounded by [GateJudgeBudget] — and so does the
@@ -1523,10 +1339,6 @@ func (g *NodeGate) Readmit(ctx context.Context, req GateRequest) (GateResult, er
 // request to leave a node evicted on one log and counted on the other. The
 // values travel, so each write keeps the trace and the operator it was asked
 // under.
-//
-// AND THE MAP ITS OWN, AFTER THE LOGS ([GateMapBudget]): bounded by what the
-// logs' walk left, the map's part of a gesture whose walk legitimately took
-// [GateLogBudget] was handed an expired context and never written.
 //
 // The only error is that the logs to write cannot be told: nothing was
 // written.
@@ -1559,17 +1371,6 @@ func (g *NodeGate) write(judge context.Context, req GateRequest, readmit bool) (
 		})
 	}
 	wg.Wait()
-	// THE MAP AFTER THE LOGS, and a readmission's in only once every one of
-	// them has taken the node back — see the file's doc.
-	switch {
-	case g.estate == nil:
-	case readmit && !out.logsDone():
-		out.Map = &MapGate{Gesture: "in", Err: ErrMapAwaitsLogs}
-	default:
-		mapCtx, cancelMap := context.WithTimeout(detached, budgets.mapPart)
-		defer cancelMap()
-		out.Map = g.mapGesture(mapCtx, req, readmit)
-	}
 	return out, nil
 }
 
@@ -1582,15 +1383,4 @@ func (r GateResult) logsDone() bool {
 		}
 	}
 	return true
-}
-
-// mapGesture is the estate map's part of a gesture: the bar for an eviction,
-// and for a readmission its lift — the in, under the gesture's name for it.
-func (g *NodeGate) mapGesture(ctx context.Context, req GateRequest, readmit bool) *MapGate {
-	if readmit {
-		res, err := g.estate.Readmit(ctx, req.Node, req.By)
-		return &MapGate{Gesture: "in", Landed: res.Landed, Err: err}
-	}
-	res, err := g.estate.Bar(ctx, req.Node, req.By, evictedReason)
-	return &MapGate{Gesture: "out", Landed: res.Landed, Err: err}
 }

@@ -29,25 +29,6 @@ export type {
   MetaGroup,
   MetaPeer,
 } from "./broker.ts";
-export { ESTATE_MAP_STATES, HOLDER_STATES, PARTITION_STATES } from "./estate.ts";
-export type {
-  EstateBalance,
-  EstateGestureAnswer,
-  EstateHolder,
-  EstateLease,
-  EstateMapState,
-  EstateMember,
-  EstateMove,
-  EstatePartition,
-  EstateSpace,
-  FleetEstate,
-  HolderState,
-  PartitionState,
-  PlacedEstate,
-  UnplacedEstate,
-  WholeEstate,
-  WholeHolder,
-} from "./estate.ts";
 export type { RequestOptions, RestResponse, QueryValue } from "./rest.ts";
 export {
   apiToken,

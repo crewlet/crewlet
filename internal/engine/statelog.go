@@ -20,7 +20,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
-	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -221,11 +220,6 @@ type stateLog struct {
 	// publishing serializes [stateLog.publishPositions], whose reading of
 	// the runners and write of the row must not interleave with another's.
 	publishing sync.Mutex
-
-	// copyStates is the state of this node's copy of each partition the last
-	// beat that could read it said ([stateLog.partitionReports]), guarded by
-	// publishing.
-	copyStates map[statelog.PartitionID]partmap.PartitionState
 
 	// clustered is whether the broker has peers, which is what a replicated
 	// create's budget branches on — and so how long a reanchor's steps after
@@ -552,10 +546,8 @@ func HeldPartitions(b *config.Bootstrap) ([]store.PartitionFile, error) {
 // ALL OF THEM, because nothing joins or leaves a partition while this build
 // runs: the state log opens every partition of the layout it runs and runs
 // every one of its logs. It is the one rule what a node holds
-// ([HeldPartitions]), what it serves ([holdingOf]) and what its estate lease
-// describes ([estateLeaseAccount]) are read from, so the files a node keeps
-// open, the logs it may write and the partitions the estate map is told it
-// holds can never be two answers.
+// ([HeldPartitions]) and what it serves ([holdingOf]) are read from, so the
+// files a node keeps open and the logs it may write can never be two answers.
 func heldIn(b *config.Bootstrap, layout statelog.Layout) []statelog.PartitionID {
 	if !holdsData(b) {
 		return nil
@@ -574,15 +566,10 @@ func heldIn(b *config.Bootstrap, layout statelog.Layout) []statelog.PartitionID 
 // it runs no applier and so no publisher. The set is fixed for the life of the
 // runtime for the same reason, so it is read once, where the runtime is built.
 //
-// NOT THE ESTATE LEASE'S `serving`, which is the copy's own state — how far it
-// has applied, what a map promotes a joiner on — and under layout 0 may say
-// `catching_up` of a partition this node serves: see [estateLeaseAccount].
-// Nor the estate view's Serves (partmap.View), which under layout 0 answers
-// from the presence roster that routing reads at any age, so a roster that
-// could not be listed would refuse `holding_unknown` on a node holding the
-// whole estate. Once partitions move, the join and leave executor answers this
-// instead, from its own steps and the view's map half, and the lease saying
-// `serving` and this starting to serve become one step of a join.
+// NOT THE COPY'S OWN STATE — how far it has applied — which may say a copy
+// this node serves is catching up. Nor the presence roster routing reads at
+// any age, so a roster that could not be listed would refuse
+// `holding_unknown` on a node holding the whole estate.
 func holdingOf(b *config.Bootstrap, layout statelog.Layout) statelog.Holding {
 	return statelog.ServesOnly(heldIn(b, layout)...)
 }
@@ -2009,13 +1996,12 @@ func (s *stateLog) logEndsOf(domain string, l *jetstream.DomainLog,
 // it always was. Under a divided layout a node is counted only where it holds
 // or has reported, and judged everywhere a node with no row was refused on
 // every trimmed log — at position zero — for partitions it holds nothing of
-// and would come back to only by adopting a copy; and since the readmission is
-// also what puts it back in the estate map, it could never be put back at all.
+// and would come back to only by adopting a copy, so it could never be
+// readmitted at all.
 //
 // BUT EVERY LOG IT WRITES IS ASKED, judged or not. A readmission is written on
 // every identity-claiming log ([countedGateLogs]), since where the node is
-// evicted is a fact only each log's rows hold, and the estate map takes the
-// node back only once every one of them has ([ErrMapAwaitsLogs]). So a log
+// evicted is a fact only each log's rows hold. So a log
 // whose partition no node serves is one no readmission can finish, whether or
 // not the node would be counted there. Asked only on the logs it is judged on,
 // a readmission with an unserved partition elsewhere was written on every
@@ -2283,19 +2269,9 @@ func (s *stateLog) PartitionEstablished(ctx context.Context, p statelog.Partitio
 	})
 }
 
-// Serving reports whether this node's copy may answer for the estate: every
-// domain whose health gates seat admission is [statelog.Health.Serving] —
-// drained and within the snapshot slack of its log, rather than at a lag of
-// zero this instant, which is admission's question and not this one. What a
-// node's estate lease says of its copy (estatelease.go).
-func (s *stateLog) Serving(ctx context.Context) (bool, statelog.ReadRefusal) {
-	return s.everyReadiness(ctx, everyLog, statelog.Health.Serving)
-}
-
 // copyVerdict is what the estate's router reads of this node's copy of one
-// partition: whether it is WRONG — the question [stateLog.Healthy] asks of
-// every partition through this same verdict, so the lease and the router
-// cannot disagree — and, if not, whether it answers requests now.
+// partition: whether it is WRONG ([stateLog.partitionVerdict] says what that
+// means) and, if not, whether it answers requests now.
 type copyVerdict struct {
 	// fault names the first of the partition's logs whose copy is wrong —
 	// or the partition itself, where its file is not open at all — empty
@@ -2312,11 +2288,58 @@ type copyVerdict struct {
 
 // partitionVerdict judges this node's copy of p from ONE reading of each of
 // its logs' health: every reading costs the broker a request per log, and the
-// two questions are asked of the same instant.
+// two questions are asked of the same instant. A LOG WHOSE HEALTH COULD NOT BE
+// READ is not a fault, for the reason below, and it is not an answer either.
 //
-// A LOG WHOSE HEALTH COULD NOT BE READ IS NOT A FAULT — [stateLog.Healthy]'s
-// rule, for its reason: an unreachable broker is the outage during which the
-// seats most need their node — and it is not an answer either.
+// # What makes a copy WRONG
+//
+// A copy that is wrong is one this node stops SERVING while its seats keep
+// running and read the estate from its other holders ([localEstate.For]).
+//
+// # This is a different question from Established, and the difference is what
+// # separates waiting from not serving
+//
+// [stateLog.Established] gates ADMISSION: a node mid-hydration keeps what it
+// holds and claims nothing new, which is right, because its rows are merely
+// incomplete and will complete. This one says the rows are WRONG — they will
+// not become right by applying more records — and the states it fires on are:
+//
+//   - the applier has STOPPED, so its rows are frozen at the record that
+//     halted it and every later object is missing its consequences;
+//   - the node is EVICTED, so its peers drop every record it publishes and
+//     its rows have already stopped being the fleet's;
+//   - the node is BELOW THE LOG, so records it never applied have been
+//     deleted and its rows have a hole nothing will fill — a node that is
+//     only below the published trim floor, whose missing records the log
+//     still holds, is replaying them and is behind rather than wrong — and a
+//     floor NOBODY COULD READ for four heartbeats takes the same branch as
+//     below, because an unread floor is not a floor that is satisfied;
+//   - its checkpoint names A STREAM THAT IS NOT THIS ONE, a log deleted and
+//     rebuilt under it, so its rows are keyed to a history that is gone;
+//   - the applied prefix is STALLED, so the node owes progress it has not
+//     made for [statelog.StallGrace] and every expectation it forms is stale;
+//   - it has held a record it CANNOT DECODE past [statelog.DeferralGrace],
+//     which is D122: under the grace nothing changes, because that covers
+//     every rolling upgrade; past it the honest reading is "this node cannot
+//     run this company's records" rather than "this node is briefly behind".
+//
+// BEING BEHIND IS NOT ON THAT LIST AND FIRES NOTHING HERE. A lag is the
+// admission gate's business, and a term here that read one took a copy out of
+// service on its own writes: when this shed seats, a single node released all
+// seven of its seats on each burst of tracker records, because the record it
+// had not applied yet made the reading `lag == 0` false for one heartbeat.
+// What a stalled prefix says and a lag does not is that the node is not
+// applying its way out.
+//
+// Whatever reads this must also ACT on it — the `deferred_old` alarm once told
+// an operator "its seats move at 30m" about a node nothing ever moved. What
+// the answer does now is stop the node serving the partition, which the alarms
+// say.
+//
+// A DOMAIN WHOSE HEALTH CANNOT BE READ IS NOT WRONG. An unreachable broker is
+// the outage during which a company most needs its copies to keep answering,
+// and taking one out of service on an unread number is the failure mode
+// `unknown` exists throughout this package to prevent.
 func (s *stateLog) partitionVerdict(ctx context.Context, p statelog.PartitionID) copyVerdict {
 	out := copyVerdict{answers: true}
 	if s == nil {
@@ -2391,87 +2414,6 @@ func (s *stateLog) everyReadiness(ctx context.Context, in func(*runningLog) bool
 		}
 	}
 	return true, ""
-}
-
-// Healthy reports whether this node's copy of every registered domain is
-// sound — not WRONG — and names the first that is not: what the estate lease
-// reports as `faulted`, and, per partition ([stateLog.partitionVerdict]), what
-// stops this node SERVING a partition while its seats keep running and read it
-// from the partition's other holders ([localEstate.For]).
-//
-// # This is a different question from Established, and the difference is what
-// # separates waiting from not serving
-//
-// [stateLog.Established] gates ADMISSION: a node mid-hydration keeps what it
-// holds and claims nothing new, which is right, because its rows are merely
-// incomplete and will complete. This one says the rows are WRONG — they will
-// not become right by applying more records — and the states it fires on are:
-//
-//   - the applier has STOPPED, so its rows are frozen at the record that
-//     halted it and every later object is missing its consequences;
-//   - the node is EVICTED, so its peers drop every record it publishes and
-//     its rows have already stopped being the fleet's;
-//   - the node is BELOW THE LOG, so records it never applied have been
-//     deleted and its rows have a hole nothing will fill — a node that is
-//     only below the published trim floor, whose missing records the log
-//     still holds, is replaying them and is behind rather than wrong — and a
-//     floor NOBODY COULD READ for four heartbeats takes the same branch as
-//     below, because an unread floor is not a floor that is satisfied;
-//   - its checkpoint names A STREAM THAT IS NOT THIS ONE, a log deleted and
-//     rebuilt under it, so its rows are keyed to a history that is gone;
-//   - the applied prefix is STALLED, so the node owes progress it has not
-//     made for [statelog.StallGrace] and every expectation it forms is stale;
-//   - it has held a record it CANNOT DECODE past [statelog.DeferralGrace],
-//     which is D122: under the grace nothing changes, because that covers
-//     every rolling upgrade; past it the honest reading is "this node cannot
-//     run this company's records" rather than "this node is briefly behind".
-//
-// BEING BEHIND IS NOT ON THAT LIST AND FIRES NOTHING HERE. A lag is the
-// admission gate's business, and a term here that read one took a copy out of
-// service on its own writes: when this shed seats, a single node released all
-// seven of its seats on each burst of tracker records, because the record it
-// had not applied yet made the reading `lag == 0` false for one heartbeat.
-// What a stalled prefix says and a lag does not is that the node is not
-// applying its way out.
-//
-// Whatever reads this must also ACT on it — the `deferred_old` alarm once told
-// an operator "its seats move at 30m" about a node nothing ever moved. What
-// the answer does now is stop the node serving the partition, which the alarms
-// and the lease both say.
-//
-// A DOMAIN WHOSE HEALTH CANNOT BE READ IS NOT WRONG. An unreachable broker is
-// the outage during which a company most needs its copies to keep answering,
-// and taking one out of service on an unread number is the failure mode
-// `unknown` exists throughout this package to prevent.
-//
-// ONE JUDGEMENT PER PARTITION, the router's ([stateLog.partitionVerdict]):
-// what the lease says of a copy and whether the copy serves must never be two
-// answers. Judged here a second way, a copy whose FILE was shut — a term only
-// the verdict has — stopped serving while its lease went on saying `serving`,
-// so estate_partition_unserved, read off the leases, stayed silent over a
-// fleet whose only copy refused every call.
-func (s *stateLog) Healthy(ctx context.Context) (bool, string) {
-	if s == nil {
-		return true, ""
-	}
-	for _, p := range s.heldPartitions() {
-		if v := s.partitionVerdict(ctx, p); v.fault != "" {
-			return false, v.fault
-		}
-	}
-	return true, ""
-}
-
-// heldPartitions is every partition this node runs a log of, in the layout's
-// order.
-func (s *stateLog) heldPartitions() []statelog.PartitionID {
-	var out []statelog.PartitionID
-	for _, running := range s.running() {
-		if !slices.Contains(out, running.id.Partition) {
-			out = append(out, running.id.Partition)
-		}
-	}
-	return out
 }
 
 // health assembles one domain's readiness from the four places it lives: this
@@ -3966,7 +3908,7 @@ func (e *Engine) snapshotLoop(s *stateLog, plan snapshotPlan, interval time.Dura
 // ON THE TRANSITION, NEVER THE STATE: a partition becoming unknown is a warning
 // once, and one known again is said once at info; a pass that finds what the
 // last one found says nothing. The loop asks every [snapshotSkipRetry] while an
-// answer is withheld, and a stale estate view withholds every partition at
+// answer is withheld, and a coordination outage withholds every partition at
 // once — so a warning per pass was one line per held partition every thirty
 // seconds, hundreds at a time, for as long as the outage lasted, burying the
 // one line that said it began.
@@ -4354,7 +4296,7 @@ func (e *Engine) countedOn(ctx context.Context, s *stateLog, p statelog.Partitio
 		return nil, err
 	}
 	var holders []statelog.Presence
-	if held, err := e.watchedHolders(s.layout).Holders(ctx, []statelog.PartitionID{p}); err == nil {
+	if held, err := e.watchedHolders().Holders(ctx, []statelog.PartitionID{p}); err == nil {
 		holders = held[p]
 	}
 	var db *store.DB
@@ -4767,13 +4709,6 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	if below {
 		s.requestRejoin(row.At)
 	}
-	// EVERY PARTITION IT RUNS A LOG OF, on a row of a divided layout: what
-	// its copy of each is doing, which the snapshot stamp below completes
-	// with its artefact. A layout-0 row carries none — see
-	// [coord.PartitionReport].
-	if s.layout.Number != 0 {
-		row.Partitions = s.partitionReports(ctx, held)
-	}
 	if held := s.snapshots.Load(); held != nil {
 		stampSnapshot(&row, *held)
 	}
@@ -4862,61 +4797,6 @@ func (s *stateLog) deferralGauges(now time.Time) {
 		s.metrics.Set(metrics.StatelogDeferredOldestAgeSeconds, age,
 			metrics.Attrs{"domain": name})
 	}
-}
-
-// partitionReports is this node's report on each partition it runs a log of:
-// the state of its copy of the partition ([partitionRuntime]), which the
-// snapshot stamp completes with the partition's artefact. Called under
-// [stateLog.publishing], which is what guards the states remembered between
-// beats.
-func (s *stateLog) partitionReports(ctx context.Context,
-	held []*runningLog) map[string]coord.PartitionReport {
-
-	out := make(map[string]coord.PartitionReport)
-	for _, running := range held {
-		p := running.id.Partition
-		if _, reported := out[p.String()]; reported {
-			continue
-		}
-		state, known := readPartitionState(ctx, partitionRuntime{s: s, p: p})
-		switch {
-		case known:
-			if s.copyStates == nil {
-				s.copyStates = map[statelog.PartitionID]partmap.PartitionState{}
-			}
-			s.copyStates[p] = state
-		case s.copyStates[p] != "":
-			// A BEAT THAT COULD NOT READ THE COPY'S HEALTH says what the
-			// last beat that could said, as the estate lease does.
-			state = s.copyStates[p]
-		default:
-			state = partmap.PartCatchingUp
-		}
-		out[p.String()] = coord.PartitionReport{State: string(state)}
-	}
-	return out
-}
-
-// partitionRuntime is this node's state log as one partition's copy: the
-// questions the estate lease asks of the whole runtime ([estateRuntime]),
-// asked of the partition's logs alone — a fault on one partition is that
-// partition's, never the node's other copies'.
-type partitionRuntime struct {
-	s *stateLog
-	p statelog.PartitionID
-}
-
-// Healthy implements [estateRuntime] over the partition's logs, by the
-// router's one judgement of the copy ([stateLog.partitionVerdict]) — so what
-// the estate lease reports of p and whether this node serves p are one answer.
-func (r partitionRuntime) Healthy(ctx context.Context) (bool, string) {
-	v := r.s.partitionVerdict(ctx, r.p)
-	return v.fault == "", v.fault
-}
-
-// Serving implements [estateRuntime] over the partition's logs.
-func (r partitionRuntime) Serving(ctx context.Context) (bool, statelog.ReadRefusal) {
-	return r.s.everyReadiness(ctx, inPartition(r.p), statelog.Health.Serving)
 }
 
 // logOf is the running log whose stream this is, or nil.

@@ -549,8 +549,8 @@ What each of the four holds, in full:
 
 **Every node, identically — the replicated store.**
 
-One file per partition a node holds — today one, `estate.000`, the whole
-estate, which every data node holds — written by a state log's applier:
+One file, the estate's one partition `estate.000`, which every data node holds
+whole — written by a state log's applier:
 records arrive in one order from the log, every node applies the same ones,
 and the rows plus this node's position on the log commit in a single
 transaction. There is no leader
@@ -578,7 +578,7 @@ to the adopted log.
 
 | Bucket | What it holds |
 |---|---|
-| **`crewlet_leases`** | `node:` · `seat:` ownership; and `estate:` — a data node's membership in the estate map, claimed by its estate runtime once it is up and released last in a drain, carrying its weight, the layout it runs, the map epoch it acted on and what it holds of each partition (while the estate is one file, layout 0's one partition, held whole). The bucket's age **is** the lease TTL |
+| **`crewlet_leases`** | `node:` · `seat:` ownership. The bucket's age **is** the lease TTL |
 | **`crewlet_duties`** | `worker:` ownership. Each record is judged by its own duty's deadline; the bucket's age only has to outlive the longest duty |
 | **`crewlet_epochs`** | The monotonic fencing counter. No age at all — see below |
 | **`crewlet_config`** | The activation pointer and its payload — the pointer's own revision **is** the epoch |
@@ -590,7 +590,6 @@ to the adopted log.
 | `crewlet_follows` | The chat threads each seat follows, so the next reply wakes it whichever node claims that delivery. The bucket's age, 90 days, is the last-activity horizon |
 | `crewlet_objects` | The [object store](object-store.md)'s **backend record** — `nats` or `s3:<endpoint>/<bucket>/<prefix>`, written create-only by the first node to boot and compared by every node after it, which refuses to boot configured with another store — and the `object-collector` duty's **last report**, replaced by each pass so every node's `/fleet` shows it whoever ran it. **No age** — an expired record would let the next node record a different store and split the company's files between two |
 | `crewlet_chunk_locks` | One key per file chunk being deleted by the collector or re-stored by a writer, so a deletion can never land between a re-upload of a chunk and the row that names it. Create-only; the bucket's age, **one minute**, is the lock's lifetime, so a holder that dies holding one is let go by the bucket |
-| `crewlet_estate_map` | Which data nodes hold each partition of the replicated estate once it is divided into partitions, and what the map's maintainer carries between ticks. One key, written only by compare-and-set and **watched** by every node — hence a bucket of its own. Created on every node and empty while every data node holds the whole estate. **No age** — an expired map would read as an estate nobody holds |
 | `crewlet_custody` | Which data node keeps each batch of a stateless node's events: claimed create-only by the data node that wrote the batch, after it wrote it, so exactly one node's log keeps it ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)). The bucket's age, 32 days, outlasts the event log's retention, so a node settling a batch it wrote before a crash always finds the answer |
 | `crewlet_integrations` · `crewlet_mailboxes` | Each surface's reconcile status, and the seat mailboxes that may exist so a removed seat's can be retired |
 | `crewlet_statelog_positions` | **Four key classes**, all answering what the log may delete: each node's position per domain; the trim holds a backup or a join takes; what each owner's newest backup covers, which is the only input the backup term has; and the floor the trim published, with the term holding it and how long it has been holding — the last is the one nothing can re-derive, because a duty that moves on a lease carries no memory across the move. **No age at all**, and this is the one where an age would be worst — an expired position reads as a node that has applied *nothing*, which either pins the trim for ever or, read the other way, deletes records that node still needs |
@@ -709,10 +708,7 @@ on the same heartbeat as its seats, carrying its roles, its labels and its
 status. Reading `node:*` back is the whole of fleet discovery — no gossip, no
 coordinator, no registry to configure — which is why adding a node is starting
 a process and removing one is stopping it. Dropping that row is the first thing
-a drain does — which is why the estate map does not read membership from it:
-a data node keeps serving its partitions through its drain, so its place in
-the estate map is a lease of its own, `estate:{ID}`, given back only once it
-serves none.
+a drain does.
 
 **Placement is deliberately dumb.** Every node greedily claims up to a fair
 share — `ceil(seats / live nodes)`, live nodes being the presence leases of

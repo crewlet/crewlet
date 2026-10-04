@@ -41,31 +41,6 @@ type GateAnswer struct {
 	Complete bool `json:"complete"`
 
 	Domains []GateDomainAnswer `json:"domains"`
-
-	// Map is the estate map's part of the gesture — an eviction takes the
-	// node out of it, a readmission puts it back — and ABSENT under a
-	// layout that places no map, which is layout 0: there every data node
-	// holds the whole estate and nothing is placed.
-	Map *GateMapAnswer `json:"map,omitempty"`
-}
-
-// GateMapAnswer is the estate map's answer to a gesture: whether the stored map
-// now says what the gesture asked, or why not, with Actions and Hint exactly
-// when the gesture did not finish it — [GateDomainAnswer]'s shape, because a
-// surface renders the map as one more part of the gesture.
-type GateMapAnswer struct {
-	// Gesture is `out` for an eviction and `in` for a readmission.
-	Gesture string `json:"gesture"`
-
-	// Landed is whether this gesture wrote the map. False with no Error is
-	// a map that kept changing under it; false with an Error is a map the
-	// gesture could not change, which may still be finished — a map that
-	// places nothing on the node has nothing to take it off.
-	Landed bool   `json:"landed"`
-	Error  string `json:"error,omitempty"`
-
-	Actions []statelog.GateAction `json:"actions,omitempty"`
-	Hint    string                `json:"hint,omitempty"`
 }
 
 // GateDomainAnswer is one log's answer to a gesture.
@@ -152,16 +127,6 @@ func RenderGate(evict bool, result engine.GateResult) GateAnswer {
 			entry.Actions, entry.Hint = remedy.Actions, remedy.Detail
 		}
 		out.Domains = append(out.Domains, entry)
-	}
-	if m := result.Map; m != nil {
-		entry := &GateMapAnswer{Gesture: m.Gesture, Landed: m.Landed}
-		if m.Err != nil {
-			entry.Error = m.Err.Error()
-		}
-		if remedy := m.Remedy(); !remedy.IsZero() {
-			entry.Actions, entry.Hint = remedy.Actions, remedy.Detail
-		}
-		out.Map = entry
 	}
 	return out
 }

@@ -127,16 +127,6 @@ func (e *Engine) installEpoch(c *Company, activatedAt time.Time) {
 	e.auditSkills()
 }
 
-// logTierWarnings says what is valid about this node's pair of documents and
-// worth an operator knowing ([config.TierWarnings]) — once per boot and per
-// apply, on the node the warning is about, because it names THIS node's Tier A
-// file and no other node can see it.
-func logTierWarnings(ctx context.Context, boot *config.Bootstrap, company *config.Company) {
-	for _, w := range config.TierWarnings(boot, company) {
-		log.WarnContext(ctx, "config_tier_warning", "path", w.Path, "detail", w.Message)
-	}
-}
-
 // indexes reports whether the live party registry was built from exactly this
 // company. By identity, because an epoch is published rather than mutated: a
 // revision equal in every field is still a different epoch, with a registry of
@@ -228,7 +218,6 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 				"this node still serves the previous epoch")
 		return configplane.StatusError, nil, fmt.Errorf("engine: apply: %w", err)
 	}
-	logTierWarnings(ctx, e.boot, cfg)
 	var applied []string
 	// THE SNAPSHOT FIRST, because re-activating an unchanged revision is
 	// the documented rotation gesture: the payload has not moved, so the

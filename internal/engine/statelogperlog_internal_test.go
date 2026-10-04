@@ -17,7 +17,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
-	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -351,16 +350,8 @@ func TestAStateLogRunsEveryLogOfItsLayoutEachOnItsOwn(t *testing.T) {
 	if mine.Layout != 1 {
 		t.Errorf("the row says layout %d, and its keys are layout 1's", mine.Layout)
 	}
-	// A REPORT PER PARTITION IT RUNS, each in a state its estate lease could
-	// name, and no snapshot on the row — that is layout 0's one partition's.
 	if err := mine.Validate(); err != nil {
 		t.Errorf("the heartbeat wrote a row no node may write: %v", err)
-	}
-	for _, p := range layout.Partitions() {
-		report, reported := mine.Partitions[p.String()]
-		if !reported || !partmap.PartitionState(report.State).Valid() {
-			t.Errorf("the row reports %s as %+v (%v), want a state of its copy", p, report, reported)
-		}
 	}
 	for _, running := range s.running() {
 		pos, held := mine.Domains[running.key]
@@ -599,7 +590,7 @@ func TestTheFrameworkSurfacesFollowALogThatRestarts(t *testing.T) {
 	}
 	// A FLEET OF ONE: no other holder answers for the stopped log.
 	route := &routeRecorder{err: &estate.ErrPartitionUnserved{Partition: leaving.Partition.String()}}
-	gate, err := newNodeGate(s, e.backends.Coord, everywhere, nil, route, e.backends.Store, s.nodeID, nil)
+	gate, err := newNodeGate(s, e.backends.Coord, everywhere, route, e.backends.Store, s.nodeID, nil)
 	if err != nil {
 		t.Fatalf("the node gate: %v", err)
 	}

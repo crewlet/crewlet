@@ -45,7 +45,6 @@ type Fleet struct {
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
 	mailboxes    map[string]coord.MailboxRecord
-	estateMap    versioned
 
 	// objectBackend is the fleet's recorded object backend, empty until a
 	// node records one; chunkLocks every chunk lock not yet let go, with
@@ -56,18 +55,15 @@ type Fleet struct {
 	chunkLocks       map[string]chunkLock
 	chunkLockTTL     time.Duration
 
-	// estateWatches is every open watch of the estate map, each handed
-	// every write of it under mu.
-	estateWatches map[*mapWatch]struct{}
-	pauses        map[string]coord.SeatPause
-	positions     map[string]coord.NodePositions
-	holds         map[string]coord.TrimHold
-	floors        map[string]coord.TrimFloor
-	backups       map[string]coord.BackupPoint
-	maintenance   map[string]coord.MaintenanceOperation
-	admissions    map[string]coord.Admission
-	maintAcks     map[string]coord.MaintenanceAck
-	maintRev      uint64
+	pauses      map[string]coord.SeatPause
+	positions   map[string]coord.NodePositions
+	holds       map[string]coord.TrimHold
+	floors      map[string]coord.TrimFloor
+	backups     map[string]coord.BackupPoint
+	maintenance map[string]coord.MaintenanceOperation
+	admissions  map[string]coord.Admission
+	maintAcks   map[string]coord.MaintenanceAck
+	maintRev    uint64
 
 	// pauseWatchers are the open seat-pause watches, each told of every
 	// change under the lock that made it.

@@ -62,12 +62,8 @@ short-lived; and coordination is deliberately **not** itself a replicated log â€
 central property is the one a lease must not have.
 
 Nor does it decide where the replicated estate's rows are held: they stay
-[ADR-0002](0002-the-stream-is-the-write-ahead-log.md)'s derived state wherever
-they are. The MAP saying which data nodes hold each partition of the estate is
-a different fact, and this record's question answers it like the object
-store's placement map: the whole company has to route to every partition the
-same way now, so it is a record of its own in the coordination store
-(`coord.EstateMaps`), never a table.
+[ADR-0002](0002-the-stream-is-the-write-ahead-log.md)'s derived state, on every
+data node.
 
 ## The table this record was written for
 

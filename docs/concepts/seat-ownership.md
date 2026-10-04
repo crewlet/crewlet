@@ -112,7 +112,7 @@ bad states, and the engine treats them as opposites.
 | | What it means | What the node does |
 |---|---|---|
 | **Behind** | Records are on the log that this node has not applied yet. It is catching up, and it will. | **Keeps every seat it holds**, and claims no new ones until it is level. The sweep logs `seat_claims_withheld` at debug, and the fleet view counts how many of this node's replication loops are current |
-| **Wrong** | The copy cannot become current by applying more records | **Stops serving the partition and keeps every seat.** Its seats' calls go to the partition's other holders, exactly as a node holding no data is served, and other nodes asking it are told it does not serve the partition (`estate_partition_not_served`). It serves again once a reading finds the copy sound |
+| **Wrong** | The copy cannot become current by applying more records | **Stops serving the estate and keeps every seat.** Its seats' calls go to the other data nodes, exactly as a node holding no data is served, and other nodes asking it are told it does not serve the estate (`estate_partition_not_served`). It serves again once a reading finds the copy sound |
 
 Six states are *wrong*, and each is a fact about the rows rather than about how
 far along they are:
@@ -147,21 +147,20 @@ behind is worth looking at, and it is not what moves work.
 
 Why not give the seats back, as a node whose copy was wrong once did: the
 seats were never the problem, the copy was, and every call they make is routed
-([how a request reaches its partition](estate-placement.md#how-a-request-reaches-its-partition))
-— so a peer that took them over would be served by the very same holders,
+([how a request reaches the estate](scaling.md#how-a-request-reaches-the-estate))
+— so a peer that took them over would be served by the very same data nodes,
 at the cost of every seat's processes and memory moving. On a single node there
 is no other holder, and the company stops working until the state clears: every
-call is refused naming the partition nobody serves, which is the right trade
+call is refused naming the estate nobody serves, which is the right trade
 for rows that are wrong — the alternative is agents acting on them.
 
 What a node does give its seats back for is not being able to **route** at
-all: a partition its seats' calls address that it does not answer from its own
-copy, while its view of who serves the estate has been unreadable for longer
-than the 60-second bound every cached coordination fact is held to
-(`unserviceable`, `seats_shed_unserviceable`). A node that answers every such
-partition from its own copy routes them without the view — under the
-single-file layout, every data node whose copy is sound — and keeps its seats
-whatever the view says. The release is voluntary, like a rebalance: the
+all: its seats' calls need another data node — it holds no data, or its own
+copy is out of service — while its view of who serves the estate has been
+unreadable for longer than the 60-second bound every cached coordination fact
+is held to (`unserviceable`, `seats_shed_unserviceable`). A data node whose
+copy is sound answers from it without the view, and keeps its seats whatever
+the view says. The release is voluntary, like a rebalance: the
 in-flight turn finishes, and the seat leaves when it goes idle.
 
 ## Fencing: what it protects, and what it cannot
@@ -492,7 +491,6 @@ Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**,
 | `retention` | The state-log **trim**: every 15 minutes it evaluates each domain's floor across every data node's position, the backups and the holds, purges what they all permit, and publishes what it concluded and which term is holding it (see [Retention](../guides/retention.md)) | Two nodes purging and publishing at once would publish two conclusions about one log, and how long a term has been holding is a property of a series of ticks that must be one node's |
 | `embeddings` | Computes the embedding of every page and task whose vector is missing or stale and publishes it to the vectors log, which every node applies | Each node embedding the corpus would be one provider bill per node for one company — the cost the vectors log exists to pay once |
 | `object-collector` | Runs the [object store's](object-store.md#collection-and-audit) two passes against the one store the fleet's files are in: hourly, deletes every chunk written more than a day ago that no row names (and deletes nothing when this node's estate is incomplete); daily, audits that every chunk a row names is in the store, raising `objects_missing` when one is not. Records each pass in the coordination store | Two collectors are safe — every deletion takes the chunk's lock and re-reads its age under it — but each would list the whole store and read every row naming a chunk, for one answer |
-| `estate-map` | Keeps the estate map — which data nodes hold each partition of the replicated estate once a layout divides it — in step with the company's `estate` block and the live `estate:` leases — absence counted in its ticks, probation for a removed node seen back, an operator's out and hold — and moves each partition's holders toward where the map places it, make before break. Writes by compare-and-set. **While the estate is one file that every data node holds whole (layout 0), it writes nothing**: there is no map, none is created for that layout, and each tick reads the leases, the store and the company and leaves the store as it found it — the duty's own lease is the only record it keeps | Two writers would each move holders for one change, and a node joins or leaves a partition on what the map says |
 
 Without a placement host — the single-node case — the answer is always yes: there is no fleet to be a singleton within. A duty claim that *fails* (an unreachable lease store) skips the tick rather than proceeding: unknown ownership is not ownership, and assuming otherwise is how every node decides it is the singleton at once.
 

@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
-	mapplacement "github.com/crewlet/crewlet/internal/placement"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -421,16 +420,13 @@ func (b *Bootstrap) Validate() error {
 // to persist — are asked of that, whatever the roles (see
 // [Bootstrap.validateTopology] and [StreamLeaf]).
 //
-// # And the pairings refused until the partitioned estate is live
+// # And the pairings that are refused
 //
-// Separating the two questions admits three pairings that were refused while
-// `data` meant both: a data node on a leaf, a broker member that holds no
-// data, and ingress or workers on a node without it. They are what the
-// partitioned estate is built from, and this build does not run it: every data
-// node here holds the WHOLE estate and is a member of the broker, and a node
-// without data reaches the estate through one. So each is still refused, by
-// [refusedUntilPartitioned], naming why and naming that the refusal lasts only
-// as long as the single-file layout does.
+// Separating the two questions admits three pairings the estate cannot run on:
+// a data node on a leaf, a broker member that holds no data, and ingress or
+// workers on a node without it. Every data node holds the WHOLE estate and is
+// a member of the broker, and a node without data reaches the estate through
+// one, so each is refused, by [Bootstrap.checkRolesAndBroker], naming why.
 func (b *Bootstrap) ValidateRoles() error {
 	var p problems
 	roles, err := b.Node.RoleSet()
@@ -462,47 +458,37 @@ func (b *Bootstrap) ValidateRoles() error {
 					"of the replicated estate, and a node without %q holds none",
 				placement.RoleData)
 		}
-		if b.Store.Estate != (StoreEstate{}) {
-			p.add(field("store.estate"), ErrConflict,
-				"is a node's share of the replicated estate, and a node without "+
-					"%q holds none — it reads and writes the estate through the "+
-					"nodes that do", placement.RoleData)
-		}
 	}
-	b.refusedUntilPartitioned(&p, roles)
+	b.checkRolesAndBroker(&p, roles)
 	return p.err()
 }
 
-// refusedUntilPartitioned refuses the three pairings of roles and broker the
-// partitioned estate is built from, and this build does not run.
+// checkRolesAndBroker refuses the three pairings of roles and broker the
+// estate cannot run on.
 //
-// ONE PLACE FOR ALL THREE, because they are one decision rather than three: each
-// is correct once the estate is placed by partition and every node routes to
-// the partition's holders, and each is wrong under the single-file layout for
-// the same reason — a data node here holds the whole estate as a member of the
-// broker, and a node without data asks one for everything. When the partitioned
-// estate is live this function goes, whole.
+// ONE PLACE FOR ALL THREE, because they are one decision rather than three:
+// every data node holds the whole estate as a MEMBER of the broker, and a node
+// without data holds none and asks a data node for everything — so a data node
+// on a leaf, a member holding no data, and a stateless node running the
+// estate's own duties or surfaces are each the same mistake.
 //
 // Each refusal is reported where the operator most likely erred, and names both
 // ways out.
-func (b *Bootstrap) refusedUntilPartitioned(p *problems, roles placement.RoleSet) {
+func (b *Bootstrap) checkRolesAndBroker(p *problems, roles placement.RoleSet) {
 	data := roles.Has(placement.RoleData)
 	switch kind := b.BrokerKind(); {
 	case data && kind == placement.BrokerLeaf:
 		p.add(field("stream.leaf.urls"), ErrConflict,
-			"joins this data node to the fleet's broker as a leaf, which is refused "+
-				"until the partitioned estate is live: under the single-file layout "+
-				"every data node holds the whole estate as a MEMBER of the broker. "+
-				"Remove the leaf urls, or drop %q from node.roles", placement.RoleData)
+			"joins this data node to the fleet's broker as a leaf, and every data "+
+				"node holds the whole estate as a MEMBER of the broker. Remove the "+
+				"leaf urls, or drop %q from node.roles", placement.RoleData)
 	case !data && kind == placement.BrokerMember:
 		p.add(field("stream.leaf.urls"), ErrMissing,
 			"a node without %q runs its embedded broker as a MEMBER here, and a "+
-				"broker member that holds no data is refused until the partitioned "+
-				"estate is live: under the single-file layout a node without %q "+
-				"joins the fleet as a LEAF of the members' — no JetStream, no "+
-				"replica, no vote. Name the members' leaf listeners here, or add "+
-				"%q to node.roles", placement.RoleData, placement.RoleData,
-			placement.RoleData)
+				"node without %q joins the fleet as a LEAF of the members' — no "+
+				"JetStream, no replica, no vote. Name the members' leaf listeners "+
+				"here, or add %q to node.roles", placement.RoleData,
+			placement.RoleData, placement.RoleData)
 	}
 	if data {
 		return
@@ -512,14 +498,14 @@ func (b *Bootstrap) refusedUntilPartitioned(p *problems, roles placement.RoleSet
 			continue
 		}
 		p.add(field("node.roles"), ErrConflict,
-			"%q needs %q until the partitioned estate is live: %s. Add %q, or "+
-				"drop %q", role, placement.RoleData, needsData[role],
+			"%q needs %q: %s. Add %q, or drop %q", role, placement.RoleData,
+			needsData[role],
 			placement.RoleData, role)
 	}
 }
 
-// needsData is why each role a node without data cannot run under the
-// single-file layout needs `data` — see [Bootstrap.refusedUntilPartitioned].
+// needsData is why each role a node without data cannot run needs `data` — see
+// [Bootstrap.checkRolesAndBroker].
 var needsData = map[placement.NodeRole]string{
 	placement.RoleWorkers: "the company-wide duties — the log trim, the " +
 		"embedding pass, the maintenance sweep, the scheduler — read and " +
@@ -895,7 +881,7 @@ type Node struct {
 	// retention sweep, and one with no ingress node never hears a webhook.
 	// Neither is visible in any single node's config, so the engine checks
 	// it against live node presence at runtime.
-	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state and needs store.scratch; until the partitioned estate is live it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers."`
+	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state and needs store.scratch; it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers."`
 
 	// Labels are free-form facts about where this process runs (zone: eu,
 	// gpu: "true"), matched exactly by a seat's role.placement selector.
@@ -1155,7 +1141,7 @@ type Store struct {
 	// fleet writes at line rate — so an operator with a fast local disk
 	// and a large network volume has a real reason to split them. Both are
 	// still this node's alone, and neither is shared with a peer.
-	ReplicatedPath string `yaml:"replicated_path,omitempty" json:"replicated_path,omitempty" desc:"Where the replicated estate's partition files live: layout 0's file, with later layouts' beside it; empty puts it beside path."`
+	ReplicatedPath string `yaml:"replicated_path,omitempty" json:"replicated_path,omitempty" desc:"Where the replicated estate's database file lives; empty puts it beside path."`
 
 	// MaxOpenConns bounds the node's own database's pool, and is the read
 	// concurrency the replicated estate's partition files SHARE between
@@ -1192,47 +1178,7 @@ type Store struct {
 	// Objects is where the company's files are kept — see [StoreObjects].
 	// Every node carries the same block, data or not.
 	Objects StoreObjects `yaml:"objects,omitempty" json:"objects,omitzero"`
-
-	// Estate is this node's part in the estate map: how large a share of
-	// the replicated estate's partitions it offers to hold, once a layout
-	// divides the estate into them.
-	//
-	// UNDER store. FOR SNAPSHOT_DIR'S REASON — a fact about this node's
-	// disk rather than about the company — and refused on a node without `data`,
-	// which holds none. Under the single-file layout every data node holds
-	// the whole estate whatever its weight: the weight rides its estate
-	// lease, and the map it is read by is written only once the estate is
-	// partitioned.
-	Estate StoreEstate `yaml:"estate,omitempty" json:"estate,omitzero"`
 }
-
-// StoreEstate is one data node's part in the estate map.
-//
-// NO DIRECTORY YET, deliberately. Where a node keeps its partition files is a
-// fact about its disk too, and it arrives with the partition files it locates:
-// under the single-file layout the estate is the one file at
-// `store.replicated_path`, and a directory no file is ever opened in would be a
-// setting that changes nothing — the configured-and-nothing-happened shape
-// every other block here refuses.
-type StoreEstate struct {
-	// Weight is this node's share of the partitions relative to the other
-	// data nodes': a node of weight 2 is placed on about twice as many
-	// partitions as one of weight 1. Set it in proportion to the space its
-	// disk offers the estate. 0 is the default share, 1.
-	Weight int `yaml:"weight,omitempty" json:"weight,omitempty" js:"min=0;max=64" desc:"This node's share of the replicated estate's partitions relative to the other data nodes, 1..64; 0 is the default, 1. Read once the estate is divided into partitions; under the single-file layout every data node holds all of it."`
-}
-
-// EstateWeight is the share this node offers, with the default applied.
-func (e StoreEstate) EstateWeight() int {
-	if e.Weight == 0 {
-		return DefaultEstateWeight
-	}
-	return e.Weight
-}
-
-// DefaultEstateWeight is a data node's share of the estate when it names none:
-// equal to every other node that names none.
-const DefaultEstateWeight = 1
 
 func (s *Store) validate(path Path) error {
 	var p problems
@@ -1259,10 +1205,6 @@ func (s *Store) validate(path Path) error {
 			"must be 0 (the store default) or positive, got %v", s.BusyTimeoutSeconds)
 	}
 	p.wrap(s.Objects.validate(at(path, "objects")))
-	if w := s.Estate.Weight; w < 0 || w > mapplacement.MaxWeight {
-		p.add(at(at(path, "estate"), "weight"), ErrOutOfRange,
-			"must be 0 (the default share) or 1..%d, got %d", mapplacement.MaxWeight, w)
-	}
 	return p.err()
 }
 
@@ -1708,13 +1650,12 @@ type StreamCluster struct {
 // broker a LEAF ([Bootstrap.BrokerKind]) and `port` opens a MEMBER's listener,
 // and a node is exactly one of them. A leaf's broker runs no JetStream, holds
 // no replica and is in no quorum; everything its clients ask of the fleet
-// crosses this link. Which nodes may BE a leaf is the roles' question — until
-// the partitioned estate is live, only a node without `data` (see
-// [Bootstrap.ValidateRoles]).
+// crosses this link. Which nodes may BE a leaf is the roles' question — only a
+// node without `data` (see [Bootstrap.ValidateRoles]).
 type StreamLeaf struct {
 	// URLs are the leaf listeners of the members this node may join, any
 	// of which will do. Setting them makes this node's broker a leaf.
-	URLs []string `yaml:"urls,omitempty" json:"urls,omitempty" desc:"Leaf listeners of the members this node joins as a LEAF - no JetStream, no replica, no vote - e.g. nats-leaf://member-a.internal:7422. Any one that answers will do. Until the partitioned estate is live only a node without the data role may be a leaf, and an embedded node without it must be one."`
+	URLs []string `yaml:"urls,omitempty" json:"urls,omitempty" desc:"Leaf listeners of the members this node joins as a LEAF - no JetStream, no replica, no vote - e.g. nats-leaf://member-a.internal:7422. Any one that answers will do. Only a node without the data role may be a leaf, and an embedded node without it must be one."`
 
 	// Port is the leaf listener a MEMBER opens for the fleet's leaves. Zero
 	// opens none.

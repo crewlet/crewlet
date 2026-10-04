@@ -164,34 +164,6 @@ test("a superseded operation offers no finish and says it needs another remedy",
   expect(finishable({ opId: result.op_id, force: false, answer: result })).toBe(false);
 });
 
-// THE ESTATE MAP IS ONE MORE PART OF THE GESTURE. Under a divided layout an
-// eviction takes the node out of the map; every log holding the record and the
-// map unwritten is a gesture not finished — which a dialog reading the logs
-// alone would have confirmed — and it is finished under the same id.
-test("an unwritten estate map leaves the gesture unfinished and offers the finish", () => {
-  const result = answer("map_unwritten");
-  render(<GateOutcome result={result} evict />);
-  expect(screen.getByRole("alert").className).toContain("danger");
-  expect(screen.getByText(/the estate map is not written/)).toBeTruthy();
-  expect(screen.getByText("estate map")).toBeTruthy();
-  expect(screen.getByText(result.map!.hint!)).toBeTruthy();
-  expect(screen.getByText(/Finish this gesture sends it again/)).toBeTruthy();
-  expect(screen.queryByText(/evicted on every log/)).toBeNull();
-  expect(finishable({ opId: result.op_id, force: false, answer: result })).toBe(true);
-
-  // THE CONTROL: a map that landed is part of the confirmation, and the
-  // layout-0 answer, which carries no map, draws no row for one.
-  cleanup();
-  const landed = answer("map_out");
-  render(<GateOutcome result={landed} evict />);
-  expect(screen.getByRole("status").className).toContain("success");
-  expect(screen.getByText("written")).toBeTruthy();
-  expect(finishable({ opId: landed.op_id, force: false, answer: landed })).toBe(false);
-  cleanup();
-  render(<GateOutcome result={answer("applied")} evict />);
-  expect(screen.queryByText("estate map")).toBeNull();
-});
-
 // --- the request: the id, the finish, the force, the deadline -------------
 
 // THE TYPED CONFIRMATION, AND AN ID IN THE ENGINE'S GRAMMAR, TRAVEL — minted

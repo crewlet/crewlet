@@ -37,7 +37,7 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | Every other read (`GET`, `HEAD`, `OPTIONS`): the dashboard, the REST reads, `/query/*`, `/ws/stream` | Served | A read starts nothing, and it is how the drain is watched. |
 | `/mcp/{token}` and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls and spans of coding runs that started before the drain. A [detached run](../concepts/code-sandbox.md) outlives the turn that started it, so the drain never waits on one, and refusing these would shorten no drain and only break a run mid-flight. |
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
-| Every other write: `/config`, `/secrets`, `/setup`, `/backup`, the `/work/*` writes, the `/estate/*` gestures, `POST /operator/mcp`, `POST /operator/act/{tool}` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
+| Every other write: `/config`, `/secrets`, `/setup`, `/backup`, the `/work/*` writes, `POST /operator/mcp`, `POST /operator/act/{tool}` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
 
 `/operator/mcp` is the one route the by-method rule splits, because it is mounted for every verb: its `POST` — every JSON-RPC call, reads included — is refused, and its `GET` server-to-client stream is served like any other read. Its `DELETE`, which ends a session, rides the default with the writes; the session dies with the listener a moment later either way. `/mcp/{token}` is not split, because the whole prefix is served: a coding run's tool calls are the one thing on this listener the node must not break.
 
@@ -99,13 +99,6 @@ node means nothing was done.
 | `GET` | `/fleet/broker` | The fleet broker's membership: every live node's broker kind as its presence advertises it, the JetStream metadata group as a member reports it, and every disagreement between the two — a member gone for good first among them. **Always needs a token** (see [The broker's membership](#the-brokers-membership)) |
 | `POST` | `/fleet/broker/remove/{node}` | Remove a member from the metadata group through a live member's system account. `?confirm=` repeats the node id; refused while the node holds a live presence lease as a member unless `?force=true`. **Operator-only** |
 | `POST` | `/fleet/broker/remove-peer/{peer}` | The same removal, naming the voter by the raft peer id `GET /fleet/broker` shows — for a voter whose name no member has heard. `?confirm=` repeats the peer id. **Operator-only** |
-| `GET` | `/estate` | The [estate map](../concepts/estate-placement.md): which data nodes hold each partition of the replicated estate, in which state, and what each node's estate lease says. At layout 0 — every fleet on this build — it answers that every data node holds the whole estate. **Always needs a token** (see [below](#get-estate)) |
-| `POST` | `/estate/out/{node}` | Take a data node out of every partition's target: what it holds is rebuilt on the others while it keeps serving, then released. `?confirm=` repeats the node id; `?reason=` is recorded. **Operator-only** (see [Gestures on the estate map](#gestures-on-the-estate-map)) |
-| `POST` | `/estate/in/{node}` | Put a member back, or vouch for a node the map removed for being gone — never one an eviction bars, which only its [readmission](#the-three-retention-gestures-that-write) puts back. `?confirm=` repeats the node id |
-| `POST` | `/estate/hold` | Hold the estate map for `?for=` (at most `24h`, required): no member is removed however long it is gone. `?confirm=` repeats the map's `generation`; `?reason=` is recorded |
-| `POST` | `/estate/release` | End a hold. `?confirm=` repeats the map's `generation` |
-| `POST` | `/estate/move/{partition}` | Move one partition's copy off `?from=`: it is rebuilt on another member, then released. `?confirm=` repeats the node; `?reason=` is recorded |
-| `POST` | `/estate/move/{partition}/cancel` | Lift a move. `?from=` names the node and `?confirm=` repeats it |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/access` | Who can reach the company through this engine and as whom: the API token LABELS the guard accepts (never a value), the person each one acts as, every human seat with its contacts and the state of its binding, and the auth posture. **Always needs a token** (see [below](#get-access)) |
 | `GET` | `/credential-pool` | Every `providers.llm` entry, each key it rotates through by variable name, and which of them a vendor is refusing and until when — this node's pools beside the fleet's cooldown ledger (never a value). **Always needs a token** (see [below](#get-credential-pool)) |
@@ -2005,7 +1998,7 @@ Server → client kinds:
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The whole [health envelope](#the-health-envelope), exactly what `GET /health` answers. There is no query for it. |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
-| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error, retry_after_seconds?, detail? }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, a coordination store it could not reach, or no copy of the estate to answer from (the tracker and the knowledge base are read through the [estate router](../concepts/estate-placement.md#how-a-request-reaches-its-partition), so a copy out of service or a data node restarting is a holder to ask again rather than a fault) — so a client says "ask again in a moment" rather than reporting a fault. It is the one code that carries **`retry_after_seconds`**: how long to wait, from the same helper as its REST twin's `503` `Retry-After` header, so the two transports never disagree — the refusal's own derived hint where it has one (how far behind this node is, over how fast it is draining), rounded and never below a second, and the health tick's five seconds otherwise. The dashboard asks again after exactly that wait and keeps no wait of its own, so this hint — and the `Retry-After` on a REST refusal — is the only retry clock it has. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. It is the one code that carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. Every other code's text stays in the node's log, since a failure's own text can carry a path. |
+| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error, retry_after_seconds?, detail? }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, a coordination store it could not reach, or no copy of the estate to answer from (the tracker and the knowledge base are read through the [estate router](../concepts/scaling.md#how-a-request-reaches-the-estate), so a copy out of service or a data node restarting is a holder to ask again rather than a fault) — so a client says "ask again in a moment" rather than reporting a fault. It is the one code that carries **`retry_after_seconds`**: how long to wait, from the same helper as its REST twin's `503` `Retry-After` header, so the two transports never disagree — the refusal's own derived hint where it has one (how far behind this node is, over how fast it is draining), rounded and never below a second, and the health tick's five seconds otherwise. The dashboard asks again after exactly that wait and keeps no wait of its own, so this hint — and the `Retry-After` on a REST refusal — is the only retry clock it has. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. It is the one code that carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. Every other code's text stays in the node's log, since a failure's own text can carry a path. |
 | `pong`     | Reply to a client `ping`. | `null` |
 
 #### Client frames
@@ -2040,7 +2033,6 @@ REST route calls, so the two surfaces cannot diverge:
 | `seat_activity` | `{seat?, days?, previous?}` | `GET /agents/activity`. Every seat's TURNS over the `days` (1 to 90, default 7) company days ending today, summed across every node from the replicated usage domain — so the answer is the same on whichever node is asked and still counts a node that has left. `{since, until, days, previous_since?, previous_until?, seats, quantile_resolution}`; each seat is `{handle, role, agent_id, in_chart, turns, failed, reviewed, first_pass, first_pass_pct?, sent_back, p50_ms?, p90_ms?, tokens, per_day, last_turn_at?, previous?}`. `first_pass_pct` is `first_pass` over REVIEWED turns (0–100) and is ABSENT when none was reviewed — a 0% for a seat nobody reviewed would be a verdict nobody gave. `sent_back` counts reviews that sent work back. `p50_ms` and `p90_ms` are read from the merged turn-duration histogram and are within `quantile_resolution` (0.06) of the true value; absent when no turn ended. `per_day` is every day of the window, oldest first, a quiet day included as zeros. `previous` (with `previous=true`) is the seat's `{turns, failed, reviewed, first_pass, sent_back, tokens, per_day}` over the same number of days before, `per_day` being every one of those days, oldest first — so a profile draws the fortnight its week-on-week figure is made over from this one answer. Every AGENT seat of the current chart has a row, a quiet one with zeros ("took no turns" is a measurement); a seat that has left the chart appears with `in_chart: false` while its days are in the window; a human seat has none. `seat=` narrows to one handle, and a handle with no rows answers one row of zeros rather than none; a human seat's handle is refused (`bad_params`, naming the person), because the engine runs no turns for a person and a zero row would say one took none. Ordered by handle |
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
-| `estate` | `{}` | `GET /estate`: the estate map as the stored record says it, joined with every data node's estate lease — or, at layout 0, the data nodes that each hold the whole estate. **Operator-only** |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Operator-only** |
 | `access` | `{}` | `GET /access`: the token labels, the people and the posture the Settings › People & access screen draws. **Operator-only**. See [below](#get-access) |
 | `credential_pool` | `{}` | `GET /credential-pool`: every model's keys and their cooldowns, the Settings › Models & keys screen. **Operator-only**. See [below](#get-credential-pool) |
@@ -2139,30 +2131,27 @@ rows that should have gone may still be present, and the totals were computed
 over the incomplete set. That is a different fact from staleness, and a client
 that renders `read_level` and swallows `complete` looks confidently right.
 
-**A list across the estate's partitions also says which partitions it
-covered.** `work_items`, `work_my_work`, `work_inbox`, `work_projects`,
-`work_activity`, `work_search`, `pages` and `knowledge` (their REST twins
-included) carry `coverage`, one object of the same shape on every one of them:
+**A list from the estate also says whether the estate answered.**
+`work_items`, `work_my_work`, `work_inbox`, `work_projects`, `work_activity`,
+`work_search`, `pages` and `knowledge` (their REST twins included) carry
+`coverage`, one object of the same shape on every one of them. The estate is
+one partition, `estate.000`, held whole by every data node, so a read
+addresses exactly that one:
 
 | Field | What it holds |
 |---|---|
-| `addressed` | How many [partitions](../concepts/estate-placement.md) the read addressed — `answered` and `missing` together |
-| `answered` | The partitions that answered, by id (`tracker.007`); absent when none did |
-| `missing` | Every partition that did not, each `{partition, reason, detail}`: `reason` is `unserved` (no node serves it), `unreachable` (holders are named and none answered), `behind` (a holder could not reach the caller's own writes on it in time), `not_holder` (every holder asked had stopped serving it — the estate map is moving) or `error` (the read ran there and failed), and `detail` is who was asked and what each said. A reason this build does not know is still a missing partition. Absent when nothing is missing |
-| `at` | Where each log of an answering partition was when its read began, by stream, as position objects — a lower bound on what the answer holds. Absent for a search, which reads an index each node builds behind its own rows |
+| `addressed` | How many partitions the read addressed — always `1`, `answered` and `missing` together |
+| `answered` | The partition that answered, by id (`estate.000`); absent when it did not |
+| `missing` | The partition, when it did not answer, as `{partition, reason, detail}`: `reason` is `unserved` (no data node serves it), `unreachable` (data nodes are named and none answered), `behind` (a data node could not reach the caller's own writes in time), `not_holder` (every data node asked had stopped serving it) or `error` (the read ran there and failed), and `detail` is who was asked and what each said. A reason this build does not know is still a missing partition. Absent when nothing is missing |
+| `at` | Where each log was when the read began, by stream, as position objects — a lower bound on what the answer holds. Absent for a search, which reads an index each node builds behind its own rows |
 
-A non-empty `missing` means **the list may be incomplete**: render it as *N of M
-partitions did not answer; this list may be incomplete* — the one sentence a
-seat's tools and the operator's assistant show — never as the shorter list,
-which would say the company has less in it than it does. A partition missing
-from one page of a list is not one out of rows: the cursor resumes it where it
-was asked from. `coverage` is **absent** where the reader states none — the
-Jira and Confluence backends, and a reader handed rows directly — rather than
-a coverage claiming the read addressed nothing. At layout 0, which every fleet
-on this build runs, every read addresses the one partition `estate.000`, so
-`addressed` is `1`, and a read nothing answered is an error rather than a
-list — except `knowledge`, which is best effort and answers no hits with that
-partition named missing.
+A read nothing answered is an error rather than a list — except `knowledge`,
+which is best effort and answers no hits with the partition named missing,
+rendered as *1 of 1 partitions did not answer; this list may be incomplete* —
+never as an empty list, which would say the company has nothing in it.
+`coverage` is **absent** where the reader states none — the Jira and Confluence
+backends, and a reader handed rows directly — rather than a coverage claiming
+the read addressed nothing.
 
 ### Whose record a personal question answers for
 
@@ -3293,10 +3282,7 @@ a renderer prints the impossible one.
 
 A node row's **`evicted`** is its tombstone once every log holds one, dated
 from the latest, and its **`kind`** says which gate that latest one is:
-`eviction`, an operator's, or `release`, the node's own as it left a partition.
-Both stop the trim counting the node alike; a surface renders a release as the
-node having **left** rather than as "evicted by" the node itself, since nobody
-ran a gesture against it.
+`eviction`, an operator's.
 
 **`evictions_unreadable`** is `true` on the tracker's or the pages log's row
 when the answering node could not read that log's evictions as it assembled
@@ -3332,7 +3318,7 @@ letting it write again are not reads, whatever a laptop deployment allows.
 |---|---|
 | `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
 | `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log — the tracker's and the pages log; the vector log counts no node and gets none. **Refused `409 eviction_refused`**, with nothing written to either log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail`, `hint`, `op_id` and `actions` — `["wait", "force"]`: stop the node and let its lease lapse, or force it. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** — a judgement nobody could make is not one that came back clear — with a `hint` and `actions` `["retry_same_op", "force"]`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. A node in a [capacity window](../guides/retention.md#changing-a-logs-ceiling) answers **`409 not_publishing`**, before anything is judged, with `detail`, `hint` and `actions` `["wait"]`: a gate record is an append, and the window's mode appends nothing; readmission answers the same. |
-| `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to either log, when in the tracker's or the pages log the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence — its last published position is more than one below that bound — or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`, and `actions` `["wait"]`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published` — false for a node that has never published a position and is judged as holding nothing. A judgement that could not be made at all refuses too, with nothing written, as **`503 readmission_unjudged`**: the register, a floor or the partitions' holders unreadable, this node behind a reanchor the fleet has made, or — each log being asked where it is written — no node serving the partition of any log the readmission writes, whether or not the node would be counted on it. The body carries `detail`, `hint`, `actions` and, where one log could not be judged, that `log`; `actions` is `["wait"]` for a log no node serves, whose `hint` says what it waits on — a holder returning, or, where the partition's only copy is the one the readmitted node kept through its eviction, a node the estate map names in its place adopting that copy (or a data node added, where none can hold it) — and `["retry_same_op", "other_node"]` for anything else. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
+| `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to either log, when in the tracker's or the pages log the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence — its last published position is more than one below that bound — or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`, and `actions` `["wait"]`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published` — false for a node that has never published a position and is judged as holding nothing. A judgement that could not be made at all refuses too, with nothing written, as **`503 readmission_unjudged`**: the register, a floor or the live data nodes unreadable, this node behind a reanchor the fleet has made, or — each log being asked where it is written — no data node serving the estate to give a log's bound. The body carries `detail`, `hint`, `actions` and, where one log could not be judged, that `log`; `actions` is `["wait"]` where no data node serves the estate, whose `hint` says what it waits on — a data node returning — and `["retry_same_op", "other_node"]` for anything else. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
 
 `confirm` echoes the node id, and a mismatch is `400`. A node id no node could
 run under — the [`node.id`](../concepts/configuration.md#nodeid) rule, since the
@@ -3343,14 +3329,10 @@ the gesture and `crewlet retention status` prints it beside the eviction.
 
 **The gesture is judged once, before any log is written**, and then its record
 goes to every identity-claiming log it concerns at once. The trim counts nodes
-per log, so a record on one log lifts that log's pin and no other. On an estate
-[divided into partitions](../concepts/estate-placement.md) an eviction concerns
-the logs the node is counted on — whose partition the estate map names it a
-holder of, or whose key its positions row names and it has not released — and
-a readmission every identity-claiming log; each is written by a node that
-serves its partition, and one this node does not serve is answered
-`not_holder` ([the retention guide](../guides/retention.md#eviction)). A `200`
-answers **per log**:
+per log, so a record on one log lifts that log's pin and no other. Each is
+written by a data node that serves the estate — this one where its own copy
+serves, another where it does not ([the retention guide](../guides/retention.md#eviction)).
+A `200` answers **per log**:
 
 ```json
 {
@@ -3382,15 +3364,14 @@ written**, and `reason` names why in the vocabulary every write refusal uses
 (`log_full`, `evicted`, …). A log that answered holds its record whatever the
 other did.
 
-An entry carries **`writer`** where a node other than this one wrote it: a
-log of a partition this node does not serve (or serves and does not run right
-now) is sent to a node that serves it, which writes the record under the same
-`op_id` on this node's behalf — so one request reaches every log. Its
-`outcome`, `error` and `hint` are that node's, and `writer` is absent where this
-node wrote the log itself. Each such node is given fifteen seconds before the
-next holder of the partition is asked; where no holder wrote the record, the
-entry's `error` says no node that serves the partition did, and offers
-`retry_same_op`.
+An entry carries **`writer`** where a node other than this one wrote it: a log
+this node cannot write right now — its copy does not serve the estate — is
+sent to a data node that does, which writes the record under the same `op_id`
+on this node's behalf — so one request reaches every log. Its `outcome`,
+`error` and `hint` are that node's, and `writer` is absent where this node
+wrote the log itself. Each such node is given fifteen seconds before the next
+data node is asked; where none wrote the record, the entry's `error` says no
+node that serves the estate did, and offers `retry_same_op`.
 
 An `unknown` entry may also carry **`"unvouched": true`**: the writing node's
 operation ledger may have lost the row the operation needs — it was minted
@@ -3399,25 +3380,9 @@ reached it — so the node published nothing and cannot tell whether the record
 landed, and the same request through it answers the same way every time. Such
 an entry offers `other_node` rather than `retry_same_op`: send the same request,
 with the same `op_id`, through a node whose ledger reaches back that far. With
-a `writer`, every holder of the partition that answered was asked already and
-none could tell, and another node would ask the same holders: it offers
+a `writer`, every data node that answered was asked already and none could
+tell, and another node would ask the same data nodes: it offers
 `retry_same_op`, which asks them all again.
-
-On a divided estate the answer also carries **`map`** — the estate map's part
-of the gesture, which an eviction takes the node out of and a readmission puts
-it back into — and has no such key at layout 0, which places no map:
-
-```json
-"map": {"gesture": "out", "landed": false,
-        "error": "engine: the estate map could not be read or written",
-        "actions": ["retry_same_op"],
-        "hint": "the estate map could not be read or written: the same gesture under the same operation id finishes it once coordination answers"}
-```
-
-`landed` says the gesture wrote the map. An unwritten map leaves `complete`
-false however every log answered, and carries `actions` and `hint` like a log;
-an `error` with neither — the map places nothing on the node, so there is
-nothing to take it off — is finished.
 
 A log the gesture did not finish also carries **`actions`** — what to do, in
 order — and **`hint`**, the sentence saying why. Both are absent on a log that
@@ -3433,13 +3398,13 @@ a fresh one is equally safe.
 
 | Action | What the operator does | Where the gate answers it |
 |---|---|---|
-| `retry_same_op` | Send the same request again with the answer's `op_id` | An `unknown` outcome (unless it is `unvouched` by this node itself), a lost race, a failure before the write answered, a log no node that serves its partition wrote, and a refusal that clears on its own (`behind`, `deferred`, `floor_unknown`, `below_floor`, `not_holder`, `holding_unknown` — the last two a partition this node stopped serving, or could not tell it serves, as it wrote, which the same request sends to a node that serves it); a gate refusal — `evicted`, `released`, `overtaken`, `abandoned` — of **another node's copy** of the operation, which this node's append was collapsed onto (`hint` names that node): the reason is that node's standing, not this one's, so this node finishes it once the log's duplicate window (two minutes from when the copy landed) has passed; `503 eviction_unjudged`; and `503 readmission_unjudged` for anything the judgement could not read but a partition nobody serves (beside `other_node`) |
+| `retry_same_op` | Send the same request again with the answer's `op_id` | An `unknown` outcome (unless it is `unvouched` by this node itself), a lost race, a failure before the write answered, a log no node that serves the estate wrote, and a refusal that clears on its own (`behind`, `deferred`, `floor_unknown`, `below_floor`, `not_holder`, `holding_unknown` — the last two an estate this node stopped serving, or could not tell it serves, as it wrote, which the same request sends to a node that serves it); a gate refusal — `evicted`, `overtaken`, `abandoned` — of **another node's copy** of the operation, which this node's append was collapsed onto (`hint` names that node): the reason is that node's standing, not this one's, so this node finishes it once the log's duplicate window (two minutes from when the copy landed) has passed; `503 eviction_unjudged`; and `503 readmission_unjudged` for anything the judgement could not read but an estate nobody serves (beside `other_node`) |
 | `new_gesture` | Start a new gesture, without `op_id` | `superseded` — the operation's record landed and a later gate record on the same node has undone it since (an eviction retried after a readmission) — and `op_reused`, an operation id that already names a record on another object |
 | `force` | Send the eviction again with `force=true` | `409 eviction_refused`, `503 eviction_unjudged` |
-| `other_node` | Send it, with the same `op_id`, through another node the fleet still counts | Of this node's own standing or its own record: `evicted` (this node is evicted itself), `released` (this node released the log when it left the log's partition — send it through a node that serves the partition), `overtaken` and `abandoned` (this node wrote the record from rows a reanchor left behind — send it through a node on the log's current generation), an `unvouched` unknown this node gave (its ledger cannot say whether the record landed), and beside `retry_same_op` on `deferred`, `below_floor` and a `503 readmission_unjudged` that is not a partition nobody serves. With a `writer`, each of these is that node's standing rather than this one's, and `hint` names it. A `released`, `overtaken` or `abandoned` refusal, and an `evicted` one that names a `position`, is a record that landed and applies nowhere: it holds the `op_id` on that log for the log's duplicate window (two minutes) from when it landed, and the same `op_id` sent sooner — through any node — is answered the same way again, so `hint` says to wait that out first |
+| `other_node` | Send it, with the same `op_id`, through another node the fleet still counts | Of this node's own standing or its own record: `evicted` (this node is evicted itself), `overtaken` and `abandoned` (this node wrote the record from rows a reanchor left behind — send it through a node on the log's current generation), an `unvouched` unknown this node gave (its ledger cannot say whether the record landed), and beside `retry_same_op` on `deferred`, `below_floor` and a `503 readmission_unjudged` that is not an estate nobody serves. With a `writer`, each of these is that node's standing rather than this one's, and `hint` names it. An `overtaken` or `abandoned` refusal, and an `evicted` one that names a `position`, is a record that landed and applies nowhere: it holds the `op_id` on that log for the log's duplicate window (two minutes) from when it landed, and the same `op_id` sent sooner — through any node — is answered the same way again, so `hint` says to wait that out first |
 | `reanchor` | [Re-anchor the log](../guides/retention.md#re-anchoring-a-recreated-or-restored-log) first, then send the same request with the same `op_id` | `wrong_stream` |
 | `set_capacity` | [Raise the log's ceiling](../guides/retention.md#changing-a-logs-ceiling), then send the same request with the same `op_id` | `log_full` — a gate record is admitted into the log's [gate reserve](../guides/retention.md#the-gate-reserve), so this is a log full to its broker ceiling past even that |
-| `wait` | Wait for what `hint` names to clear on its own, then run it again — what that is depends on the refusal, so a client reads the answer's `error` beside the action | `409 eviction_refused` (the lease to lapse), `409 readmission_refused` (the node to catch up), `503 readmission_unjudged` (a partition the readmission writes to be served again), `409 not_publishing` (the fleet to leave its capacity window) |
+| `wait` | Wait for what `hint` names to clear on its own, then run it again — what that is depends on the refusal, so a client reads the answer's `error` beside the action | `409 eviction_refused` (the lease to lapse), `409 readmission_refused` (the node to catch up), `503 readmission_unjudged` (a data node to serve the estate again), `409 not_publishing` (the fleet to leave its capacity window) |
 | `restore` | Restore the store and the stream from one backup | `skew` |
 
 A log with a `hint` and **no** `actions` is one no gesture clears — a record
@@ -3488,12 +3453,13 @@ cleaned, because a retry has to send back the id it holds, byte for byte; every
 id an answer carries already fits.
 
 **The gesture does not stop when its caller does.** The judgement runs under
-the request, so a request abandoned before it wrote nothing; once the first
-record is about to be written the node finishes the gesture under its own
-budgets — a minute for the logs, then a quarter of one for the estate map's
-part, a minute and a quarter in all — so a dropped connection or a client
-timeout never leaves a
-node evicted on one log and counted on the other. A caller that sends its own
+the request, within half a minute, so a request abandoned before it wrote
+nothing; once the first record is about to be written the node finishes the
+gesture under its own budget — a minute for the logs — so a dropped connection
+or a client timeout never leaves a node evicted on one log and counted on the
+other. A node answers one gesture within **ninety seconds** at most — the
+judgement and the logs together — so a client waiting two minutes, as both of
+the engine's own do, always reads the node's own answer. A caller that sends its own
 `op_id` — `crewlet retention evict` and the dashboard both do — can ask again
 with it and read every log's answer; one that let the route mint it has lost
 the id with the answer that never arrived.
@@ -4099,194 +4065,6 @@ refused during a [drain](#during-a-drain). Every refusal carries `detail` and
 | `503` | `no_member` | No live member could carry the removal — including when the only live member is the one being removed, which never carries its own |
 | `504` | `outcome_unknown` | The member carrying it did not answer; it may have committed the removal first — read the group before asking again |
 | `500` | `broker_remove_failed` | Anything else; read the group before asking again |
-
-### `GET /estate`
-
-The [estate map](../concepts/estate-placement.md): which data nodes hold each
-partition of the replicated estate, and what each of them says about its part in
-holding it. **Always needs a token.** It is the `estate` question, so the
-[socket's query channel](#ws-wsstream) answers it too — that is how the
-dashboard's **Settings › Estate** screen and `crewlet estate map` read it — and it is absent
-(`404`) on a node with no coordination store.
-
-Every fleet on this build runs **layout 0**: the estate is not divided into
-partitions, and every data node holds the whole of it. The answer says so in the
-sentence every surface gives that layout, and lists the data nodes that hold it
-— every live data node, as the fleet's presence names them, each with what its
-estate lease says where it holds one:
-
-```json
-{
-  "state": "whole",
-  "layout": 0,
-  "detail": "layout 0: every data node holds the whole estate, so there is no partition to place, move or hold a node for",
-  "partition": "estate.000",
-  "holders": [
-    {
-      "node": "data-a",
-      "lease": {
-        "weight": 1,
-        "layout": 0,
-        "healthy": true,
-        "able": true,
-        "free_bytes": 103079215104
-      },
-      "reports": "serving"
-    },
-    {
-      "node": "data-b"
-    }
-  ]
-}
-```
-
-A holder with no `lease` is a data node running a build from before the estate
-lease; it holds and serves the whole estate all the same. A test holds this
-example to what the renderer writes for that fleet.
-
-`state` names which of five things the answer is, and each but `placed` carries
-the sentence that says it in `detail`:
-
-| `state` | Means |
-|---|---|
-| `whole` | Layout 0: every data node holds the whole estate, and there is no map |
-| `no_map` | A partitioned layout whose first map the `estate-map` duty has not written yet: nothing is placed |
-| `placed` | A map, rendered in full (below) |
-| `unreadable` | A map a newer build wrote, which this node does not read — ask a node running that build |
-| `unavailable` | The map, the estate leases or the presence leases could not be read; nothing is known from here, and asking again is safe |
-
-Under a partitioned layout, a `placed` answer carries the map whole:
-
-| Field | Means |
-|---|---|
-| `generation` / `epoch` | The map's lineage — what a hold and a release are confirmed by — and its epoch, which counts changes to the holder table and nothing else |
-| `spaces` | How the layout divides the estate: each space, its partition count and the domains with a log in each partition |
-| `replicas` / `copies` | The copies of each partition the company asks for (`estate.replicas`), and how many the map places — fewer while it has fewer placeable members |
-| `failure_domain` / `distinct_domains` / `domain_limited` | The node label copies are spread across (`estate.failure_domain`), how many of its values the placeable members span, and whether that is fewer than `copies` |
-| `hold` | An operator's hold in force now, absent when there is none |
-| `balance` | How evenly the map spreads partitions over the members' weights, and the tolerance it aimed within — the finest the partition count promises for the fleet. `converged: false` is a measurement, never a fault |
-| `unserved` / `short` / `joining` / `leaving` / `moves` | Partitions no copy can answer for; partitions with fewer copies that can answer than their target has; holders joining and leaving; operator moves in force |
-| `members` | Each member as the map describes it — `weight`, `domain`, `out`, `barred` (evicted: out until it is readmitted, whatever becomes of its membership, with the bar's `out_by`, `out_reason` and `out_at` where no out of an operator's own is recorded), `probation` and `absence` counted in the maintainer's ticks, as the object map's members are — plus its `share_percent` of every partition copy, how many partitions it is `serving`, `joining` and `leaving`, the partitions an operator `moved_off` it, whether it holds a `live` estate lease, and that lease: whether its store is `healthy` (absent when it does not say, which the map counts as failed), whether the map counts it `able`, the `map_epoch` it last acted on, and its `free_bytes` |
-| `removed` | Nodes the map removed for being gone and still remembers, as the object map lists them — except one an eviction bars, which is listed under `barred` alone: what a removal says (it rejoins on probation, and `in` vouches for it) is false of it |
-| `barred` | Nodes barred by an eviction that the map does not hold — removed for their absence, forgotten, or never seen — each with `by`, `reason` and `at`. One that comes back joins as a member out and is placed on nothing until it is readmitted |
-| `partitions` | Every partition in the layout's order: its `target`, how many copies are `serving` (holders the map lists serving whose node it counts present and healthy) against how many it has `wanted`, its `holders` — each with the map's `state` and the epoch it entered it `since`, what the node's own lease `reports` of the partition, and whether the map counts the node `able` — and the operator's `moves` of it, each `waiting: true` while the members left could not hold the partition's copies without that node, which is then in the `target` again |
-
-A **copy** is a holder the map lists serving whose node holds a live estate lease
-saying its store is healthy and that it runs the map's layout. The map itself
-keeps a serving holder serving for ten minutes after its node goes, until
-membership removes it; routers route to it and nothing answers, so the answer
-does not count it.
-
-### Gestures on the estate map
-
-```
-POST /estate/out/{node}?confirm={node}&reason=
-POST /estate/in/{node}?confirm={node}
-POST /estate/hold?for={duration}&confirm={generation}&reason=
-POST /estate/release?confirm={generation}
-POST /estate/move/{partition}?from={node}&confirm={node}&reason=
-POST /estate/move/{partition}/cancel?from={node}&confirm={node}
-```
-
-The operator's gestures on the estate map, through a running node for the
-placement map's reason. `crewlet estate out`, `in`, `hold`, `release` and `move`
-are clients of these routes. **Operator-only**, refused during a
-[drain](#during-a-drain), and absent on a node with no coordination store.
-
-Every gesture is **confirmed**. The four that move a node's copies repeat the
-node; a hold and a release name no node and act on the whole map, so they repeat
-the map's `generation` from `GET /estate` — the confirmation that says this is
-the map of the fleet you meant, not another's reached through the wrong node.
-The generation is judged against the **stored map**, inside the gesture's
-compare-and-set: only a map has one, so where there is none the refusal is the
-fleet's own — `estate_whole` or `no_estate_map` — whatever `?confirm=` says.
-
-- **out** takes a member out of every partition's target: each copy it holds is
-  rebuilt on another member while it keeps serving, then released under the two
-  conditions every leave waits for.
-- **in** puts it back — or vouches for a node the map removed for being gone.
-  A node an eviction **bars** is refused `barred_member` with the map unchanged:
-  the bar stands for the eviction on every log the node was counted on, so it is
-  lifted only by the node's readmission, once every one of those logs has taken
-  it back — and no route offers that lift on its own.
-- **hold** holds the map for `for`, at most `24h` and required: no member is
-  removed for being gone until the hold ends or is released.
-- **release** ends the hold.
-- **move** moves one partition's copy off one node: the partition's target skips
-  that node, so its copy is rebuilt on the member the partition's ranking offers
-  next — spread across failure domains as far as the members allow — and then
-  released. It lasts until it is cancelled or the node leaves the map. A move
-  moves a copy and never drops one: should members leave after it, so that the
-  others could not hold the partition's copies without the node, the node is in
-  the target again and the move **waits** (`waiting: true`) until a member
-  returns.
-- **cancel** lifts a move; one that is not in force is answered as landed with
-  nothing written.
-
-At layout 0 there is no map, and every gesture is refused `409 estate_whole` in
-the words the read gives. Under a map, each is a read, a pure change and a
-compare-and-set, answered with whether the map **now says** what was asked:
-
-```json
-{
-  "landed": true,
-  "epoch": 9,
-  "generation": "7d3e2a10-4b6c-4e8f-9a1d-5c2b8f0e6a4d",
-  "node": "data-c",
-  "member": {
-    "node": "data-c",
-    "weight": 1,
-    "domain": "eu-3",
-    "out": false
-  },
-  "partition": "tracker.000",
-  "move": {
-    "node": "data-c",
-    "by": "founder",
-    "reason": "disk swap",
-    "at": "2026-09-01T12:00:00Z"
-  },
-  "target": [
-    "data-a",
-    "data-b"
-  ]
-}
-```
-
-No gesture moves `epoch`: the epoch counts the holder table, and a gesture
-changes the targets — the maintainer's next tick moves the holders toward them.
-`member` is the member as the map now describes it, absent for a node it does
-not hold; `move` is the move of `partition` off `node` in force now, absent after
-a cancel; `target` is where the partition's copies should now be; `hold` is the
-hold in force. `landed: false` is a gesture that lost every race to another
-writer, as on the placement map. A request that went unanswered is safe to send
-again: an out, an in, a release, a move or a cancel the map already says is
-answered as landed with nothing written, and a hold sent again replaces the one
-in force, its length counted from the resend. A test holds this example to what
-the renderer answers for that move.
-
-Every refusal carries `detail` and `hint`:
-
-| Status | `error` | When |
-|---|---|---|
-| `400` | `confirm_required` | `?confirm=` does not repeat the node — or, for a hold or a release under a map, is not a generation at all |
-| `400` | `partition_invalid` | The path names no partition: a space and a three-digit index, like `tracker.007` |
-| `400` | `invalid_hold` | `?for=` is missing, is not a duration, or is not more than nothing and at most `24h` |
-| `403` | `operator_required` | The request carries no operator identity |
-| `404` | `unknown_member` | The node is not a member of the map — nor, for `in`, one it removed |
-| `404` | `unknown_partition` | The map's layout has no such partition |
-| `409` | `estate_whole` | Layout 0: every data node holds the whole estate, and there is nothing to place, move or hold |
-| `409` | `removed_member` | `out` of a node the map removed: `in` is the gesture that names it |
-| `409` | `barred_member` | `in` of a node an eviction bars, or `out` of one it bars and the map does not hold: it is placed on nothing already, and only its readmission — which lifts the bar once every log has taken it back — puts it back |
-| `409` | `not_a_holder` | A move off a node that holds no copy of the partition |
-| `409` | `nowhere_to_move` | A move with no member to rebuild the copy on — as many placeable members as copies. Add a data node first, or lower `estate.replicas` if the company means to keep fewer and send the move again once the map shows the lower count |
-| `409` | `estate_refused` | Taking it out would leave no member present to hold a copy |
-| `409` | `nowhere_to_rebuild` | `out` of a member no other could take the copies of — as many placeable members as copies — so every partition would keep one copy fewer rather than move it. Add a data node first, or lower `estate.replicas` if the company means to keep fewer and send the out again once the map shows the lower count — the map's duty takes it on its next tick after the activation, and the detail names the activation the map's count comes from |
-| `409` | `other_estate_map` | A hold or a release confirmed for another map's generation |
-| `409` | `estate_newer_map` | A newer build wrote the map, and this one must not rewrite it |
-| `503` | `no_estate_map` | A partitioned fleet whose first map is not written yet: ask again once the `estate-map` duty has written it |
-| `503` | `estate_unavailable` | The coordination store did not answer; whether the map changed is unknown, and asking again is safe |
-| `500` | `estate_failed` | The gesture failed on this node before the map was written. Nothing changed; this node's log (`api_estate_gesture_failed`) has the reason |
 
 ### `GET /sandbox-runs`
 

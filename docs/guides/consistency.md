@@ -68,8 +68,8 @@ happened to omit the key. There are four:
 
 | Surface | Default | May the caller choose? |
 |---|---|---|
-| A seat's own tools, inside a turn | `linearizable` for a read of one [partition](../concepts/estate-placement.md); `session` for a list read across several, floored at its node's own writes and at the change that woke the turn ([below](#read-your-trigger-is-a-floor-not-the-mechanism)) | No |
-| The operator MCP, about tracker content | `linearizable`, across partitions too | No |
+| A seat's own tools, inside a turn | `linearizable`, floored at its node's own writes and at the change that woke the turn ([below](#read-your-trigger-is-a-floor-not-the-mechanism)) | No |
+| The operator MCP, about tracker content | `linearizable` | No |
 | The dashboard and the REST read path | `stale` | Yes — `linearizable`, `stale`, `consistent_prefix`, or `session` beside a `min_position` |
 | Any answer **about replication** — the retention report, Settings › Backups & retention's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
 
@@ -269,14 +269,9 @@ another company's system.
 
 So a seat's `linearizable` reads are not what makes it see its own trigger.
 What they buy is the other half: that an answer the turn *decides* on is not
-one from before the read arrived. A list read across several partitions reads
-at `session` instead, floored at the node's own writes and at the trigger,
-because `linearizable` there would append a barrier on every partition's log
-for every read — and what a seat needs from a list is to see what it wrote and
-what woke it. A gather of one partition is a single-partition read and stays
-`linearizable`, which is every seat read at layout 0. The operator's reads stay
-`linearizable` across partitions and are not settable: the person asking is
-deciding something about their own company, and operators are few.
+one from before the read arrived. The operator's reads are `linearizable` too
+and are not settable: the person asking is deciding something about their own
+company, and operators are few.
 
 ## See also
 

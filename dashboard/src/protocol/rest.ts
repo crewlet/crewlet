@@ -149,10 +149,9 @@ function offline(err: unknown): RestError {
  * It is the DEFAULT, not the only deadline: a call whose path is genuinely
  * longer passes [RequestOptions.timeoutMs] rather than removing the deadline.
  * Two do. A backup copies the whole store before it answers. And the node
- * gate takes up to a minute and three quarters to answer a gesture (half a
- * minute to judge it, a minute to write every log, a quarter of one for the
- * estate map's part), so thirty seconds gave up on a gesture the node went on
- * to finish, holding nothing to finish it with.
+ * gate takes up to a minute and a half to answer a gesture (half a minute to
+ * judge it, a minute to write every log), so thirty seconds gave up on a
+ * gesture the node went on to finish, holding nothing to finish it with.
  */
 export const REQUEST_TIMEOUT_MS = 30_000;
 

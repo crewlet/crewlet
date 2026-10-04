@@ -56,9 +56,9 @@ A lost acknowledgement is resolved from the log before it is ever called
 carries its own operation id is its answer — `applied` where this node has
 applied it and no gate dropped it, even where this node's ledger has lost the
 operation's row, and refused under the gate that dropped it otherwise — the
-domain's own, or one of the log's: the partition the record belongs to, or a
-rule a reanchor placed on the checkpoint (`abandoned`, `overtaken`). A gate
-that drops a record by who wrote it (an eviction, a release) is asked about the
+domain's own, or one of the log's: a rule a reanchor placed on the checkpoint
+(`abandoned`, `overtaken`). A gate that drops a record by who wrote it (an
+eviction) is asked about the
 node the record names, which is not always the one asking: an append the broker
 collapses onto another node's copy of the same operation is answered by that
 copy.
@@ -229,10 +229,7 @@ are deliberate:
   before learning it was evicted will drop it on replay. Every record names
   the node that published it and the generation it was decided in; the write
   path is handed both and refuses to append a record that does not carry
-  them, because a record naming nobody is one this gate can never drop. The
-  same gate holds for a node that **released** the log as it left the log's
-  partition ([below](#a-node-that-leaves-a-partition-releases-its-logs)), and
-  a record it dropped is refused `released` rather than `evicted`.
+  them, because a record naming nobody is one this gate can never drop.
 - **The deletion gate.** A record about a task a purge destroyed — a turn's
   record of what it spent on the task included — or about a purged page
   applies nowhere, for ever. This is what stops a redelivery months later
@@ -247,87 +244,29 @@ a purge mean something on a system where the log outlives the decision; the
 third is what lets the engine stop writing a kind without stranding the nodes
 that still have to read past one.
 
-### A record belongs to its log's partition
+### Only a node that serves the estate writes to its logs
 
-The replicated estate is divided into **partitions**, and each domain has one
-log per partition that carries it. Two more rules hold every write to the
-partition it is in, and neither is a gate an ordinary write ever meets:
+Beside the gates, one rule says who may write at all. Every data node serves the estate from
+the moment it starts, and a node without the `data` role serves nothing and
+writes nothing. A write asked of a node that does not serve it — a node without
+data, or a data node whose copy is [out of service](../concepts/seat-ownership.md#a-copy-that-is-behind-and-a-copy-that-is-wrong)
+— is refused `not_holder` before it reads anything, and a node that cannot tell
+whether it serves refuses `holding_unknown` rather than guess. In both cases
+another data node takes the write
+([how a request reaches the estate](../concepts/scaling.md#how-a-request-reaches-the-estate)).
 
-- **A write's scope lies inside its own partition.** A record's scope is what a
-  node that cannot decode it files the record under, and what the next write's
-  deferral check probes — both in one partition's database. A write whose scope
-  named an object in another partition would file a deferral that partition
-  never sees, so the write path refuses it before anything is appended. An
-  effect in another partition is a write decided there.
-- **A record on the wrong log applies nowhere.** Every node that applies a log
-  asks the record's own domain which partition it belongs to, and drops one that
-  belongs to another — `wrong_partition`, on the `statelog_record_gated` line
-  and the `crewlet.statelog.records_gated` counter. Every node asks the same
-  question of the same bytes, so every copy drops it alike. The write path asks
-  the same question first and never appends such a record, so one on a log was
-  written by something else.
+### Who a refusal names
 
-A third rule says who may write at all:
-
-- **Only a node that serves a partition writes to its logs.** A node serves a
-  partition from the moment it has caught up on every one of the partition's
-  logs until it begins to leave, and the trim counts the partition's holders
-  from the moment they begin to join — so every node that decides a write is a
-  node the trim is already waiting for. A write asked of a node that does not
-  serve the partition is refused `not_holder` before it reads anything, and
-  asked again just before the record is appended, so a write still deciding
-  when its node began to leave never reaches the log. A node that cannot tell
-  whether it serves the partition refuses `holding_unknown` rather than guess.
-  In both cases a node that serves the partition takes the write.
-
-Today's estate is one partition, `estate.000`, which every data node serves
-from the moment it starts and no node joins or leaves while it runs — and a
-node without the `data` role serves nothing and writes nothing, as it always
-has. So none of these rules refuses anything today; they are the rules a
-divided estate is held to from its first record. A data node's estate lease
-may meanwhile say `catching_up` of `estate.000`: what the lease says of a
-partition is how far that node's copy has applied, which is what the
-[estate map](../concepts/estate-placement.md) promotes a joining node on, and
-under today's estate nothing reads it to decide who may write. Once partitions
-move, the two are one step — a joining node starts to serve a partition's
-writes when its lease says `serving`, and a leaving one stops when its lease
-says `draining`.
-
-### A node that leaves a partition releases its logs
-
-A data node that stops holding a partition does not simply stop writing to
-it: a write it had in flight can still land after it has left. So as it
-leaves, the node **releases** each of the partition's logs that claims
-identity — the work tracker's and the knowledge base's — with a record of its
-own on that log. Everything it wrote below its release applies on every node;
-everything that lands above it is dropped on every node by the same gate an
-eviction installs, and the write that published it is refused `released`. The
-log's order is the only thing that decides which side a write fell on, so no
-node has to trust anyone's clock or a coordination read to agree.
-
-A release is the node's own statement and only ever names the node that
-publishes it — the write path refuses one naming another node, which would be
-an eviction nobody judged. It is the one record a node writes on a log after
-it has stopped serving the log's partition, and the write path refuses it
-while the node still serves: a node stops deciding first and releases second,
-so that everything it decided lies below its release. It is recorded as a
-release rather than an eviction, and the node's own write check does not treat
-it as one: a node that left a partition is not a node the fleet removed. When
-the node joins the partition again, a node that serves the partition readmits
-it before it adopts the partition's data. Nothing in today's single-partition
-estate releases a log.
-
-A write refused `released` is on the log, and it holds its operation id for
-the log's **duplicate window** (two minutes for every shipped log): the broker
-collapses the same id, sent again inside it by any node, onto that record, and
-the answer is `released` again — the resolution judges the record by the node
-that *wrote* it, never by the node asking. So a node that serves the partition
-takes the write under a fresh operation id, or under the same one once the
-window has passed; neither can apply twice, because the record in the way
-applies nowhere. The same holds for a write refused `evicted` that names a
-position: that record landed too. An `evicted` refusal with no position was
-made before anything was appended, and another node takes the write under the
-same id at once.
+A write refused `evicted` that names a position is on the log, and it holds
+its operation id for the log's **duplicate window** (two minutes for every
+shipped log): the broker collapses the same id, sent again inside it by any
+node, onto that record, and the answer is `evicted` again — the resolution
+judges the record by the node that *wrote* it, never by the node asking. So
+another data node takes the write under a fresh operation id, or under the same
+one once the window has passed; neither can apply twice, because the record in
+the way applies nowhere. An `evicted` refusal with no position was made before
+anything was appended, and another node takes the write under the same id at
+once.
 
 When the record in the way is **another node's** — the asking node's append
 was collapsed onto a copy that node wrote — the refusal names that node as the
@@ -336,8 +275,8 @@ node's. The asking node passed its own checks before it appended, so it is the
 one that takes the write, once the window has passed; a node gesture refused
 this way says so in its `hint` and offers the same operation id again rather
 than another node. That holds for every gate that drops a record for what its
-writer was or did — `evicted`, `released`, `abandoned`, `overtaken` and
-`wrong_partition` — and for none other: a copy dropped because its task or page
+writer was or did — `evicted`, `abandoned` and `overtaken` — and for none
+other: a copy dropped because its task or page
 was purged is refused `deleted` and names no writer, because the purge refuses
 the asking node's own write exactly as it did the copy, now and on every retry.
 
@@ -485,7 +424,7 @@ every seat it holds and claims no new ones until it is level — see [a copy
 that is behind, and a copy that is wrong](../concepts/seat-ownership.md#a-copy-that-is-behind-and-a-copy-that-is-wrong)
 for the six states that take a copy out of service, none of which is a
 distance — and none of which moves a seat either: the node's seats read the
-partition from its other holders. What lag does bound is how fresh an answer a
+estate from the other data nodes. What lag does bound is how fresh an answer a
 read can ask for
 ([Read Consistency](consistency.md)).
 
@@ -635,20 +574,17 @@ changes, with nothing else in them). A drag or a purge written before version 13
 every node applied it by when it is replayed — a purge from an older build
 leaves that history, those notices, turn records and mirror rows where they are,
 because its peers kept them — so a node catching up from a snapshot holds
-exactly what its peers do. Version 14 is a node's **release** of a log as it
-leaves a partition ([above](#a-node-that-leaves-a-partition-releases-its-logs)).
-An old node holds those records back, with the task, the person or the project
-they are about, and applies every other write as it arrives — except the purge
-and the release, which install a gate: a gate a node cannot apply stops that
-node's tracker (it stops serving the partition, and its seats read it from a
-node that can) rather than being deferred, so **purge nothing while a rolling
-upgrade across version 13 is in progress**, and a release reaches an older node
-as the gate it is rather than as the eviction its bytes would otherwise read as.
-Nothing in today's single-partition estate writes a release.
+exactly what its peers do. Version 14 is a node's **release** of a log, a kind
+the engine defines and no node writes. An old node holds those records back,
+with the task, the person or the project they are about, and applies every
+other write as it arrives — except the purge, which installs a gate: a gate a
+node cannot apply stops that node's tracker (it stops serving the estate, and
+its seats read it from a node that can) rather than being deferred, so **purge
+nothing while a rolling upgrade across version 13 is in progress**.
 
 In the knowledge base, two kinds of record do. A node's release of the
-knowledge base's log, at version 3, is the tracker's version 14 on this log. And
-a container's settings, at version 2, because they carry the activation that
+knowledge base's log, at version 3, is the tracker's version 14 on this log —
+written by no node either. And a container's settings, at version 2, because they carry the activation that
 wrote them — a later
 activation that only **re-stamps** unchanged settings included. A re-stamp is
 not exempt, because applied without its stamp it would leave that node's row
@@ -859,15 +795,15 @@ replication:
 | Line | Level | What it says |
 |---|---|---|
 | `statelog_apply_retrying` | `WARN` | The applier hit a failure it retries in place. Written once, when the run of failures starts. |
-| `statelog_apply_faulted` | `ERROR` | The same failure has outlived the retry budget (30 seconds): this node's rows have stopped moving, its reads refuse and it stops serving the partition — its seats read it from the partition's other holders — until a retry succeeds. Written once per run of failures, when it crosses the budget — not on every retry. While it lasts, the node's status and every refused read name the current error, and `crewlet.statelog.apply.retries` counts the attempts. |
+| `statelog_apply_faulted` | `ERROR` | The same failure has outlived the retry budget (30 seconds): this node's rows have stopped moving, its reads refuse and it stops serving the estate — its seats read it from the other data nodes — until a retry succeeds. Written once per run of failures, when it crosses the budget — not on every retry. While it lasts, the node's status and every refused read name the current error, and `crewlet.statelog.apply.retries` counts the attempts. |
 | `statelog_apply_recovered` | `INFO` | A retry succeeded and the run of failures is over, with how long it lasted (`after`) and the last error it saw. A failure after it starts a new run, written again from `statelog_apply_retrying`. |
-| `statelog_applier_stopped` | `ERROR` | The applier stopped for good — a gate this build cannot read, a hole that will not close, a recreated stream, a record written in a generation this node never entered — naming the stream, the position its rows froze at and why. Every read of that domain refuses from then on, and for the tracker or the knowledge base the node also stops serving the partition: the seats it holds stay and read it from the partition's other holders, and a new one is admitted only on a holder whose copy is sound. What resumes it is a build that can read what this one could not, at its next boot; for a recreated stream, [`crewlet retention reanchor`](retention.md#re-anchoring-a-recreated-or-restored-log) of that one stream, which resumes it in place with no restart; and for a log a peer re-anchored, the snapshot this node [adopts on its own](retention.md#a-node-a-peer-re-anchored-past). Written once per stop. |
+| `statelog_applier_stopped` | `ERROR` | The applier stopped for good — a gate this build cannot read, a hole that will not close, a recreated stream, a record written in a generation this node never entered — naming the stream, the position its rows froze at and why. Every read of that domain refuses from then on, and for the tracker or the knowledge base the node also stops serving the estate: the seats it holds stay and read it from the other data nodes, and a new one is admitted only on a data node whose copy is sound. What resumes it is a build that can read what this one could not, at its next boot; for a recreated stream, [`crewlet retention reanchor`](retention.md#re-anchoring-a-recreated-or-restored-log) of that one stream, which resumes it in place with no restart; and for a log a peer re-anchored, the snapshot this node [adopts on its own](retention.md#a-node-a-peer-re-anchored-past). Written once per stop. |
 | `statelog_checkpoint_named` | `INFO` | A checkpoint that named no record — written before checkpoints named theirs, or placed by a reanchor where the log held none — was named from this node's own evidence, never from the log's record: `evidence` is `ledger_instant` (its operation ledger's row at the checkpoint keeps the record's instant), `ledger_operation` (an older row names the operation the log's record carries) or `retained` (its copy of a record it could not decode). From then on it is compared like any other. See [retention](retention.md#re-anchoring-a-recreated-or-restored-log). |
 | `statelog_checkpoint_other_operation` | `WARN` | The same naming found this node's ledger naming, at its checkpoint, another operation (`applied_op_id`) than the log's record there carries (`log_op_id`): the log holds another record at the checkpoint, and the domain is refused as diverged from then on. |
 | `statelog_checkpoint_unnamed` | `WARN` | Nothing this node kept names the record its checkpoint stands on — the ledger's sweep took the row, or the record there wrote none (a read barrier, a repeated operation, a gated record). The applier carries on and its next batch names a record, but until then a broker restored from an older copy and written past these rows goes unnoticed. Written once per checkpoint. |
 | `statelog_adopted` | `INFO` | The node replaced its replicated database with a peer's snapshot, naming the donor, the artefact's `sha256` (the donor's `statelog_snapshot_sent` carries the same one) and when it was taken (`taken_at`), which is how old the history it installed is. |
-| `statelog_record_gated` | `WARN` | A durable record this node's applier **dropped**: it applies on no node, and this line is its only witness. Each node's applier writes it once per record, when the transaction that drops it commits. It names the `domain`, the record's `position` and `kind`, the node that published it (`writer`, empty for a record that names none) and the `gate` that dropped it. The domain's own gates: `evicted` — the `writer` was [evicted](retention.md#eviction) below this position and not readmitted; `released` — the `writer` released the log as it [left the log's partition](#a-node-that-leaves-a-partition-releases-its-logs) below this position; `deleted` — the record is about a task (its turns' records included) or a page a purge destroyed, whose marker holds every writer's record on it for ever; `retired` — a kind this build [no longer applies](#the-other-direction-a-kind-that-was-removed). The framework's: `abandoned` for a record written in a generation a reanchor skipped because only an evicted peer held it ([retention](retention.md#a-node-a-peer-re-anchored-past)), `overtaken` for one a node wrote in the old generation after a restored reanchor's own record, before it learned of the move ([retention](retention.md#re-anchoring-a-recreated-or-restored-log)), and `wrong_partition` for one its own domain places in another partition than the log it is on, adding the `log` it is on and the partition it `belongs_to` ([above](#a-record-belongs-to-its-logs-partition)). A record more than one gate holds is logged under the first the applier asks — the framework's three, then a retired kind, then the writer's eviction or release, then the object's marker — so a write refused over the same record can name another (`statelog_write_gated` names the one that holds it now). Counted by `crewlet.statelog.records_gated` under the same `gate`, which the `records_gated` alarm reads. |
-| `statelog_write_gated` | `WARN` | A write **refused** because what it appended applies nowhere, naming the `domain`, `subject` and `op_id`, the `gate` it was refused under, a `position` and a `writer`. When `writer` names a node other than the one whose log this is, the record at `position` is *that* node's copy of the operation, which this write's append was collapsed onto — not a record this node published — and under every gate but `deleted` the refusal is about that node and names it ([above](#a-node-that-leaves-a-partition-releases-its-logs)). When `writer` is this node, the record at `position` is its own, or another operation's — the newest on the subject — at which the gate holds this node, so whatever it appended under the operation applies nowhere. The gate is the one that holds the record now, which can differ from the one the applier logged: once a task or page is purged, a record an eviction or a release dropped on it is refused `deleted`. It is a refusal, counted under `crewlet.statelog.publish.refusals` by its reason, and not a second drop: the drop is the `statelog_record_gated` line each node's applier writes once, which `crewlet.statelog.records_gated` and the `records_gated` alarm count. |
+| `statelog_record_gated` | `WARN` | A durable record this node's applier **dropped**: it applies on no node, and this line is its only witness. Each node's applier writes it once per record, when the transaction that drops it commits. It names the `domain`, the record's `position` and `kind`, the node that published it (`writer`, empty for a record that names none) and the `gate` that dropped it. The domain's own gates: `evicted` — the `writer` was [evicted](retention.md#eviction) below this position and not readmitted; `released` — the `writer` released the log below this position, which a node running the one estate never does; `deleted` — the record is about a task (its turns' records included) or a page a purge destroyed, whose marker holds every writer's record on it for ever; `retired` — a kind this build [no longer applies](#the-other-direction-a-kind-that-was-removed). The framework's: `abandoned` for a record written in a generation a reanchor skipped because only an evicted peer held it ([retention](retention.md#a-node-a-peer-re-anchored-past)), and `overtaken` for one a node wrote in the old generation after a restored reanchor's own record, before it learned of the move ([retention](retention.md#re-anchoring-a-recreated-or-restored-log)), and `wrong_partition` for one its own domain places in a partition other than the log it is on, adding the `log` it is on and the partition it `belongs_to` — which a fleet running the one estate never writes. A record more than one gate holds is logged under the first the applier asks — the framework's three, then a retired kind, then the writer's eviction or release, then the object's marker — so a write refused over the same record can name another (`statelog_write_gated` names the one that holds it now). Counted by `crewlet.statelog.records_gated` under the same `gate`, which the `records_gated` alarm reads. |
+| `statelog_write_gated` | `WARN` | A write **refused** because what it appended applies nowhere, naming the `domain`, `subject` and `op_id`, the `gate` it was refused under, a `position` and a `writer`. When `writer` names a node other than the one whose log this is, the record at `position` is *that* node's copy of the operation, which this write's append was collapsed onto — not a record this node published — and under every gate but `deleted` the refusal is about that node and names it ([above](#who-a-refusal-names)). When `writer` is this node, the record at `position` is its own, or another operation's — the newest on the subject — at which the gate holds this node, so whatever it appended under the operation applies nowhere. The gate is the one that holds the record now, which can differ from the one the applier logged: once a task or page is purged, a record an eviction or a release dropped on it is refused `deleted`. It is a refusal, counted under `crewlet.statelog.publish.refusals` by its reason, and not a second drop: the drop is the `statelog_record_gated` line each node's applier writes once, which `crewlet.statelog.records_gated` and the `records_gated` alarm count. |
 | `statelog_publish_unknown` | `WARN` | A write could not tell whether its record landed. The operation id is in the line; retry under that id, never a fresh one. |
 | `statelog_write_unvouched` | `WARN` | A write was answered `unknown` rather than published or refused (a `refusal` field says what the decision refused), because its operation was minted (`minted_at`) before this node's operation ledger may have lost rows — to the ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older build, which arrives without its ledger — and the ledger holds no row to say whether it already landed. Retrying on this node answers the same; a node whose ledger lost nothing that far back can answer it, and the operation's own record — if it landed — is on the log. |
 | `statelog_reanchor_started`, `statelog_reanchored` | `WARN` | A generation transition of ONE domain. Both name the domain (`domain`), the one stream it moved (`stream`), the new generation, the stream's live creation instant (`stream_created_at`), the case (`case`: `recreated`, followed from its first surviving record; `restored`, followed from its end; or `abandoned`, followed from this node's own checkpoint with the records of the generation an evicted peer held void) and the new checkpoint (`cursor`); the start also names the instant the rows were keyed to before (`keyed_to`), this node's checkpoint (`position`) and where the log ends (`last_seq`) and the generation its rows stood at (`from_generation` — every generation strictly between it and the new one is abandoned), and the completion gives the stream's high-water mark before the reanchor (`prev_last_seq_seen`). A restored reanchor the operator ran with `-discard` names, on the start as `discarding` and on the completion as `discarded`, the sequence of the newest record written after the restore that it applied on no node (0 when it discarded none). No other domain's checkpoint moves, and the domain's applier resumes without a restart. |

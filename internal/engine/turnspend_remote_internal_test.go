@@ -10,7 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/estate"
-	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -161,7 +160,7 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 		return q
 	}
 	served := &servedWriter{}
-	placement := partmap.Whole{Running: LayoutZero(), Roster: staticRoster{node: "data-1"}}
+	placement := wholeEstate{running: LayoutZero(), roster: staticRoster{node: "data-1"}}
 	stop, err := estate.Serve(t.Context(), start(), "data-1", &servedEstate{backend: estate.Backend{
 		Writer: func(estate.Actor) estate.TrackerWriter { return served },
 	}}, placement, estate.ServerSeams{})

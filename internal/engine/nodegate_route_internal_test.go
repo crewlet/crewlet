@@ -333,7 +333,7 @@ func aGateServedElsewhereBy(t *testing.T, e *Engine, s *stateLog, node string,
 	for _, p := range holds {
 		held[p] = []statelog.Presence{{NodeID: node}}
 	}
-	gate, err := newNodeGate(asker, e.backends.Coord, held, nil, router,
+	gate, err := newNodeGate(asker, e.backends.Coord, held, router,
 		e.backends.Store, "node-a", nil)
 	if err != nil {
 		t.Fatalf("the node gate: %v", err)
@@ -385,70 +385,24 @@ func (servedBy) Unanswered(string)             {}
 
 // EACH PHASE'S BUDGET COVERS WHAT THAT PHASE WAITS ON.
 //
-// The logs: a log this node does not write is asked of its partition's serving
-// holders one at a time, each for at most one [estate.AppendAttempt]. At the
-// company's default copies a partition mid-move has one serving holder more —
-// the joiner serves before the leaver stops — and a budget shorter than a walk
-// past all of them ends the gesture before the last one's answer, with some of
-// its logs written. The map: one election of the coordination store's group,
-// jsprovision's clustered ask term, the one thing that stalls its round trips.
-// The judgement: that election, and a bound read past one silent holder with
-// room for the next one's answer — a judgement cut short has written nothing.
+// The logs: a log this node does not write is asked of the estate's holders one
+// at a time, each for at most one [estate.AppendAttempt], and a budget shorter
+// than the walk it is sized for ends the gesture before the last one's answer,
+// with some of its logs written. The judgement: one election of the
+// coordination store's group, jsprovision's clustered ask term, and a bound
+// read past one silent holder with room for the next one's answer — a
+// judgement cut short has written nothing.
 func TestTheGateBudgetsCoverWhatEachPhaseWaitsOn(t *testing.T) {
 	t.Parallel()
 	election := jsprovision.AskTerm(true)
-	walk := time.Duration(config.DefaultEstateReplicas+1) * estate.AppendAttempt
+	walk := time.Duration(gateLogWalk) * estate.AppendAttempt
 	if GateLogBudget < walk {
-		t.Errorf("GateLogBudget is %v, and a walk past the %d serving holders of a "+
-			"partition mid-move takes %v", GateLogBudget, config.DefaultEstateReplicas+1, walk)
-	}
-	if GateMapBudget < election {
-		t.Errorf("GateMapBudget is %v, shorter than one election of a replicated group (%v)",
-			GateMapBudget, election)
+		t.Errorf("GateLogBudget is %v, and a walk past %d silent holders takes %v",
+			GateLogBudget, gateLogWalk, walk)
 	}
 	if stalls := election + estate.ReadAttempt; GateJudgeBudget <= stalls {
 		t.Errorf("GateJudgeBudget is %v, which an election's stall and one silent "+
 			"holder (%v) spend before the next holder can answer", GateJudgeBudget, stalls)
-	}
-}
-
-// THE MAP'S PART IS WRITTEN WHATEVER THE LOGS' WALK TOOK.
-//
-// The logs and the map have budgets of their own. Here a log's holders are
-// silent for the logs' whole budget — a walk that spent all of it, as one past
-// every holder of a partition mid-move can — and the eviction's bar still
-// lands, on a context of its own. Bounded by what the walk left of one shared
-// deadline, the map was handed an expired context and the bar was never
-// written, and a retry walked the same silent holders first and missed it
-// again.
-func TestTheMapsPartIsWrittenWhateverTheLogsWalkTook(t *testing.T) {
-	t.Parallel()
-	written := 0
-	recorder := &mapRecorder{logsWritten: &written}
-	silent := gateLog{domain: "tracker@tracker.000", stream: "tracker@tracker.000",
-		route: func(ctx context.Context, _, _, _ string, _ bool) (statelog.Result, string, error) {
-			<-ctx.Done()
-			return statelog.Result{}, "", ctx.Err()
-		}}
-	g := &NodeGate{
-		logs:         gateLogs(silent),
-		estate:       recorder,
-		live:         func(context.Context) ([]statelog.Presence, error) { return nil, nil },
-		readmissible: func(context.Context, string) error { return nil },
-		publishing:   func(string) error { return nil },
-		budgets:      gateBudgets{logs: 50 * time.Millisecond},
-	}
-	res, err := g.Evict(t.Context(), GateRequest{Node: "node-away", By: "ops",
-		OpID: statelog.NewOpID(time.Now(), "evict-past-the-walk")})
-	if err != nil {
-		t.Fatalf("evict: %v", err)
-	}
-	if res.Domains[0].Err == nil {
-		t.Fatalf("the silent log answered %+v, want the walk spent", res.Domains[0])
-	}
-	if res.Map == nil || !res.Map.Landed || res.Map.Err != nil {
-		t.Errorf("after a walk that spent the logs' budget the map answered %+v, want the "+
-			"bar written", res.Map)
 	}
 }
 
@@ -481,4 +435,41 @@ func TestAGateRecordOfAnUnknownKindIsNeverAnEviction(t *testing.T) {
 		t.Errorf("a kind the writer refused is remedied %+v, want the same gesture again, "+
 			"naming node-old", remedy)
 	}
+}
+
+// routeRecorder is a gate route that records what it was sent and answers
+// every record applied, by writer — or err.
+type routeRecorder struct {
+	writer string
+	err    error
+
+	mu      sync.Mutex
+	records []estate.GateArgs
+	bounds  []estate.LogRef
+}
+
+func (r *routeRecorder) Gate(_ context.Context, a estate.GateArgs) (statelog.Result, string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.records = append(r.records, a)
+	if r.err != nil {
+		return statelog.Result{}, "", r.err
+	}
+	return statelog.Result{Outcome: statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: "s", Generation: 1, Seq: 4}}, r.writer, nil
+}
+
+// ReadmissionBound answers every log's bound as the zero one — nothing below
+// it can be gone — or err.
+func (r *routeRecorder) ReadmissionBound(_ context.Context, l estate.LogRef) (statelog.ReadmissionBound, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.bounds = append(r.bounds, l)
+	return statelog.ReadmissionBound{}, r.err
+}
+
+func (r *routeRecorder) sent() []estate.GateArgs {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.records)
 }

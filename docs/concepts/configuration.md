@@ -9,7 +9,7 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 | Tier | Storage | Owner | Update model | Contents |
 |------|---------|-------|--------------|----------|
 | **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, logging (level, shape and an optional rotating log file) |
-| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, the company's one clock (`timezone`), providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), org roles & units, token budgets, and how many copies of each partition of its replicated estate the estate map keeps once the estate is partitioned (`estate`) |
+| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, the company's one clock (`timezone`), providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), org roles & units, and token budgets |
 
 **Tier A** controls *how the engine boots*. **Tier B** is *what the company is*.
 
@@ -96,10 +96,10 @@ node:
 
 | Role | What it does | What a fleet loses without it |
 |---|---|---|
-| `data` | Keeps the company's durable state on this node's disk: a copy of the replicated estate and the event log. The company's files are not under it: they are in the [object store](object-store.md), which on the default `nats` backend is a stream the broker's members keep. It says nothing about the broker (see below). `ingress` and `workers` require it until the partitioned estate is live | Every seat's tracker and knowledge tools, which a node without `data` answers through one that has it |
+| `data` | Keeps the company's durable state on this node's disk: a copy of the replicated estate and the event log. The company's files are not under it: they are in the [object store](object-store.md), which on the default `nats` backend is a stream the broker's members keep. It says nothing about the broker (see below). `ingress` and `workers` require it | Every seat's tracker and knowledge tools, which a node without `data` answers through one that has it |
 | `ingress` | Serves the HTTP API: webhooks, the dashboard, the REST endpoints | No integration can reach the company, and there is nothing to look at |
 | `seats` | Claims seat leases and runs agents, and serves their agent-mode tool bridge (`/mcp/{token}`) when `CREWLET_MCP_BRIDGE_URL` is set | Every trigger queues up unread |
-| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, the object store's collector, the estate map, and the learning background passes (episode lifecycle, skill curation, clustering and promotion) | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no integration is reconciled, no unnamed file chunk is collected, and a data node that joins or leaves is never placed on or taken off |
+| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, the object store's collector, and the learning background passes (episode lifecycle, skill curation, clustering and promotion) | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no integration is reconciled, no unnamed file chunk is collected, and a data node that joins or leaves is never placed on or taken off |
 
 Subtracting a role subtracts it from **this node, never from the
 company**, so the fleet as a whole still needs every role somewhere. That
@@ -112,8 +112,8 @@ peers divide the seats by; counting it would strand the difference.
 **`data` is the one role that is a promise about the disk rather than about
 work.** A node without it keeps nothing that has to outlive it, and Tier A
 holds it to that whatever its broker: `store.scratch: true` is required (its
-store is deleted at every boot), and `store.replicated_path`,
-`store.snapshot_dir` and `store.estate` are refused. `store.objects` is not: it names the one store the whole fleet keeps its files in, and a node without `data` uploads and downloads through it directly. See
+store is deleted at every boot), and `store.replicated_path` and
+`store.snapshot_dir` are refused. `store.objects` is not: it names the one store the whole fleet keeps its files in, and a node without `data` uploads and downloads through it directly. See
 [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data).
 
 **The broker is not a role.** How a node's broker takes part in the fleet's
@@ -133,13 +133,12 @@ cluster, peers or a leaf listener — must set `stream.store_dir`, because it
 holds the fleet's streams for every node that reaches it; a leaf carries no
 cluster block, no store directory and no leaf listener.
 
-Three pairings of roles and broker are **refused until the partitioned estate
-is live**, and each refusal says so: a data node on a leaf, a broker member
-without `data`, and `ingress` or `workers` without `data`. Under the
-single-file layout this build runs, every data node holds the whole estate as
-a member of the broker, and a node without `data` reaches the estate through
-one — so today a node without `data` on an embedded stream joins the fleet as
-a leaf through `stream.leaf.urls`. `crewlet validate` also warns about two
+Three pairings of roles and broker are **refused**, and each refusal names
+both ways out: a data node on a leaf, a broker member without `data`, and
+`ingress` or `workers` without `data`. Every data node holds the whole estate
+as a member of the broker, and a node without `data` reaches the estate
+through one — so a node without `data` on an embedded stream joins the fleet
+as a leaf through `stream.leaf.urls`. `crewlet validate` also warns about two
 valid shapes: a member whose peer list names more than four other members
 (no stream keeps more than five copies, so a sixth member is a voter holding
 nothing — a fleet grows by adding leaves), and a fleet node that left
@@ -156,16 +155,12 @@ key is at most 63 bytes — Kubernetes' limit on a label name — and holds no
 whitespace or unprintable character anywhere, because it is matched
 exactly wherever it is named: a key with a space inside it is refused
 rather than accepted as a label nothing could name. Labels are advertised
-to peers on this node's presence lease — and, on a data node, on its estate
-membership lease — so a label change takes effect
+to peers on this node's presence lease, so a label change takes effect
 one heartbeat after the restart that made it — not at the next config
 activation.
 
 Nothing here means anything to the engine on its own: the org decides
-what to select on, and the company's
-[`estate.failure_domain`](../getting-started/configuration.md#estate) names
-the key its copies are spread across. A data node missing that key is
-warned about by `crewlet validate` given both files.
+what to select on.
 
 ### Tier B example (`company.yaml`)
 

@@ -60,79 +60,6 @@
         }
       ]
     },
-    "map_out": {
-      "node": "node-4",
-      "evicted": true,
-      "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4",
-      "complete": true,
-      "domains": [
-        {
-          "domain": "tracker",
-          "stream": "CREWLET_TRACKER_LOG",
-          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.tracker:node-4",
-          "outcome": "applied",
-          "position": {
-            "stream": "CREWLET_TRACKER_LOG",
-            "generation": 1,
-            "seq": 918280002
-          }
-        },
-        {
-          "domain": "pages",
-          "stream": "CREWLET_PAGES_LOG",
-          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.pages:node-4",
-          "outcome": "applied",
-          "position": {
-            "stream": "CREWLET_PAGES_LOG",
-            "generation": 1,
-            "seq": 4410
-          }
-        }
-      ],
-      "map": {
-        "gesture": "out",
-        "landed": true
-      }
-    },
-    "map_unwritten": {
-      "node": "node-4",
-      "evicted": true,
-      "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4",
-      "complete": false,
-      "domains": [
-        {
-          "domain": "tracker",
-          "stream": "CREWLET_TRACKER_LOG",
-          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.tracker:node-4",
-          "outcome": "applied",
-          "position": {
-            "stream": "CREWLET_TRACKER_LOG",
-            "generation": 1,
-            "seq": 918280002
-          }
-        },
-        {
-          "domain": "pages",
-          "stream": "CREWLET_PAGES_LOG",
-          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.pages:node-4",
-          "outcome": "applied",
-          "position": {
-            "stream": "CREWLET_PAGES_LOG",
-            "generation": 1,
-            "seq": 4410
-          }
-        }
-      ],
-      "map": {
-        "gesture": "out",
-        "landed": false,
-        "error": "engine: the estate map could not be read or written",
-        "actions": [
-          "retry_same_op"
-        ],
-        "hint": "the estate map could not be read or written: the same gesture under the same operation id finishes it once coordination answers"
-      }
-    },
     "pending": {
       "node": "node-4",
       "evicted": true,
@@ -162,79 +89,6 @@
           }
         }
       ]
-    },
-    "readmit_map_in": {
-      "node": "node-4",
-      "evicted": false,
-      "op_id": "01a0c450-6c00-759e-9f3d-a8947a7f9160.readmit-node-4",
-      "complete": true,
-      "domains": [
-        {
-          "domain": "tracker",
-          "stream": "CREWLET_TRACKER_LOG",
-          "op_id": "01a0c450-6c00-759e-9f3d-a8947a7f9160.readmit-node-4.readmit.tracker:node-4",
-          "outcome": "applied",
-          "position": {
-            "stream": "CREWLET_TRACKER_LOG",
-            "generation": 1,
-            "seq": 918280007
-          }
-        },
-        {
-          "domain": "pages",
-          "stream": "CREWLET_PAGES_LOG",
-          "op_id": "01a0c450-6c00-759e-9f3d-a8947a7f9160.readmit-node-4.readmit.pages:node-4",
-          "outcome": "applied",
-          "position": {
-            "stream": "CREWLET_PAGES_LOG",
-            "generation": 1,
-            "seq": 4415
-          }
-        }
-      ],
-      "map": {
-        "gesture": "in",
-        "landed": true
-      }
-    },
-    "readmit_map_unwritten": {
-      "node": "node-4",
-      "evicted": false,
-      "op_id": "01a0c450-6c00-759e-9f3d-a8947a7f9160.readmit-node-4",
-      "complete": false,
-      "domains": [
-        {
-          "domain": "tracker",
-          "stream": "CREWLET_TRACKER_LOG",
-          "op_id": "01a0c450-6c00-759e-9f3d-a8947a7f9160.readmit-node-4.readmit.tracker:node-4",
-          "outcome": "applied",
-          "position": {
-            "stream": "CREWLET_TRACKER_LOG",
-            "generation": 1,
-            "seq": 918280007
-          }
-        },
-        {
-          "domain": "pages",
-          "stream": "CREWLET_PAGES_LOG",
-          "op_id": "01a0c450-6c00-759e-9f3d-a8947a7f9160.readmit-node-4.readmit.pages:node-4",
-          "outcome": "applied",
-          "position": {
-            "stream": "CREWLET_PAGES_LOG",
-            "generation": 1,
-            "seq": 4415
-          }
-        }
-      ],
-      "map": {
-        "gesture": "in",
-        "landed": false,
-        "error": "engine: the estate map could not be read or written",
-        "actions": [
-          "retry_same_op"
-        ],
-        "hint": "the estate map could not be read or written: the same gesture under the same operation id finishes it once coordination answers"
-      }
     },
     "superseded": {
       "node": "node-4",
@@ -458,7 +312,7 @@
         ],
         "detail": "engine: the readmission of node-4 cannot be judged on tracker@tracker.007: read its readmission bound: estate: no node serves tracker.007 right now",
         "error": "readmission_unjudged",
-        "hint": "no node serving tracker.007 answered, so the standing of its log tracker@tracker.007 cannot be read, and the readmission could not be written there either. Run it again once the partition is served: when a holder of it returns or answers — or, where its only copy is the one node-4 kept through its eviction, which nobody writes while the node is barred, once a node the estate map names in its place has adopted that copy from node-4, which offers it while it keeps it; if no other data node can hold tracker.007, add one",
+        "hint": "no node serving tracker.007 answered, so the standing of its log tracker@tracker.007 cannot be read, and the readmission could not be written there either. Run it again once the estate is served: when a data node returns or answers — or, where its only copy is the one node-4 kept through its eviction, which nobody writes while the node is gated, once another data node has adopted that copy from node-4, which offers it while it keeps it; if there is no other data node, add one",
         "log": "tracker@tracker.007",
         "node": "node-4",
         "op_id": "01a0c450-6c00-79ad-8c62-c1a2d6774ed0.readmit-node-4"

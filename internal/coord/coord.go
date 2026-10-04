@@ -8,7 +8,7 @@
 // kind of thing the lease is for. That is not decoration: the key a resource
 // becomes carries its class as a subject token of its own, so a whole class
 // is a wildcard the broker can match and a listing asks for one kind rather
-// than reading every lease in the fleet. Four classes name four kinds:
+// than reading every lease in the fleet. Three classes name three kinds:
 //
 //   - seat:{handle} — one agent seat this node runs.
 //   - worker:{duty} — a fleet singleton: the maintenance sweep, the
@@ -23,18 +23,6 @@
 //     roster, and the fair-share target every node computes for itself is
 //     ceil(seats / that count). A node that stops renewing its presence is
 //     not merely idle — it raises everyone else's share.
-//   - estate:{id} — a data node's membership in the ESTATE MAP, which
-//     places the partitions of the replicated estate, and what the node
-//     holds of it: per partition, whether it is adopting, catching up,
-//     serving or leaving, and the map epoch it last acted on. A class of its
-//     own rather than a field of presence, for two reasons. Presence is the
-//     SEAT HOST's, and a shutdown drain gives it up at its first step while
-//     the node is still serving — and this lease is released LAST in a
-//     drain, after the node has stopped serving every partition it held, so
-//     the map's maintainer never reads a node still serving as one that
-//     left. And presence carries what the node was CONFIGURED with, where
-//     this carries whether its store is healthy.
-//     What the lease carries is internal/estate/partmap's.
 //
 // What belongs here rather than in a node's own database is ADR-0003, the
 // tri-state below is ADR-0005, why [ProtocolVersion] REFUSES an older
@@ -402,7 +390,7 @@ type AcquireOptions struct {
 	// Meta rides with the record; see Lease.Meta.
 	Meta map[string]any
 
-	// Ungated skips the lower-protocol refusal, and exactly four callers
+	// Ungated skips the lower-protocol refusal, and exactly two callers
 	// need it.
 	//
 	// Node presence: membership is not work. A newer-protocol node that
@@ -410,13 +398,6 @@ type AcquireOptions struct {
 	// for is invisible in the membership read — its peers then divide the
 	// seats by a count that excludes it and each take a larger share,
 	// while its own capacity also excludes itself.
-	//
-	// Estate-map membership, for presence's reason with a longer tail: a data node
-	// that could not claim its `estate:` lease during an upgrade reads to
-	// the estate map as ABSENT, and past the map's grace every partition it
-	// holds is rebuilt on the other members — and a capacity window no
-	// longer counts it as a publisher of the estate's records while it
-	// still is one.
 	//
 	// Singleton duties: a duty record left at protocol 1 by a build that
 	// predates the gate would block every seat claim fleet-wide the moment
@@ -526,9 +507,9 @@ type Backend interface {
 	// ListOwned returns the live leases this owner holds.
 	ListOwned(ctx context.Context, owner string) ([]Lease, error)
 
-	// ListLive returns the live leases of one resource class. Both
-	// membership reads are built on this: the fleet's — ListLive(ClassNode)
-	// — and the estate map's, ListLive(ClassEstate).
+	// ListLive returns the live leases of one resource class. The
+	// membership read is built on this: ListLive(ClassNode) is the fleet's
+	// roster.
 	ListLive(ctx context.Context, class Class) ([]Lease, error)
 
 	// PreferredResources returns resources of this class whose stickiness
@@ -606,7 +587,7 @@ const ResourceSeparator = ":"
 // key, and a listing that returns nothing is indistinguishable from a class
 // with no members at every caller. [Class.Valid] is what refuses one.
 //
-// Classes are deliberately NOT enumerated here. This package owns the four
+// Classes are deliberately NOT enumerated here. This package owns the three
 // the fleet itself leases; the tracker's claims are leases in the same bucket
 // under classes of their own, and an enumeration here would either be wrong
 // or drag every caller's vocabulary into this package.
@@ -617,7 +598,6 @@ const (
 	ClassSeat   Class = "seat"
 	ClassWorker Class = "worker"
 	ClassNode   Class = "node"
-	ClassEstate Class = "estate"
 )
 
 // Valid reports whether this class can address a key.
@@ -719,14 +699,6 @@ func WorkerResource(duty string) string { return ClassWorker.Resource(duty) }
 // seat.
 func NodeResource(nodeID string) string { return ClassNode.Resource(nodeID) }
 
-// EstateResource names a data node's estate-map membership lease.
-//
-// Claimed by the node's ESTATE RUNTIME rather than by the seat host, once that
-// runtime is up, and given back only after the node has stopped serving every
-// partition it held — see the package doc. What the lease carries is
-// internal/estate/partmap's.
-func EstateResource(nodeID string) string { return ClassEstate.Resource(nodeID) }
-
 // IsSeatResource reports whether a resource names a seat.
 func IsSeatResource(resource string) bool { return ClassSeat.Holds(resource) }
 
@@ -741,9 +713,3 @@ func SeatHandle(resource string) (string, bool) { return ClassSeat.Name(resource
 
 // NodeID recovers the node id from a presence resource name.
 func NodeID(resource string) (string, bool) { return ClassNode.Name(resource) }
-
-// EstateNode recovers the node id from an estate-map membership resource name,
-// reporting false for a resource of any other class — the node's presence
-// included, which names the same node and says nothing about what it holds of
-// the estate.
-func EstateNode(resource string) (string, bool) { return ClassEstate.Name(resource) }

@@ -117,15 +117,15 @@ Three properties worth knowing:
   separate files because a snapshot for a joining node is a copy of the second
   one alone, and it must not carry the donor's audit log or the bootstrap half
   of its secret store. Restoring one without the other gives a company whose
-  halves are from different moments. The replicated estate is a partition the
-  node **holds** — every node with the `data` role holds it from the moment it
+  halves are from different moments. The replicated estate — its one
+  partition, `estate.000` — is something the node **holds** — every node with the `data` role holds it from the moment it
   starts, whether or not its company runs the native tracker or knowledge base,
   because the rows its log derived stay on disk either way — and the backup
-  copies what the node holds rather than whatever happens to be open. A
-  partition the node holds that is closed at that instant (an adoption
+  copies what the node holds rather than whatever happens to be open. An
+  estate the node holds that is closed at that instant (an adoption
   replacing its file, or one whose reopen failed) **refuses the backup, naming
   it**, rather than writing a manifest without it; take it again once the node
-  reports the partition serving. A node without `data` holds none and backs up
+  reports the estate serving. A node without `data` holds none and backs up
   its own file alone.
 - **The chunks come from the object store, not from this node's disk.** On
   `nats` they are already a stream — `OBJ_crewlet_files` — and the stream

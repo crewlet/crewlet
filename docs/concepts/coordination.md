@@ -136,13 +136,11 @@ empty answer is the one this estate cannot survive, since "no rows" is
 legitimate everywhere it is asked.
 
 That is why a **resource name is segmented**. A lease is named
-`seat:{handle}`, `node:{id}`, `worker:{duty}` or `estate:{id}`,
-and the part before the colon is the **class**; the key it becomes carries that class as a
+`seat:{handle}`, `node:{id}` or `worker:{duty}`, and the part before the colon is the **class**; the key it becomes carries that class as a
 subject token of its own, so `seat` is a wildcard and the seats are addressable
-without the nodes. The reads that pay for it run on a ticker: the membership
-reads — the fleet's, which asks for the presence leases, and the estate
-map's, which asks for the `estate:` leases — each read one class instead of
-every lease in the fleet, and the sweep's
+without the nodes. The reads that pay for it run on a ticker: the fleet's
+membership read asks for the presence leases — one class instead of every
+lease in the fleet — and the sweep's
 placement hints come from the `epochs` bucket — the one with no expiry at all,
 holding a record for every resource the deployment has ever leased, which used
 to be read whole every five seconds to find one node's seats.
@@ -162,39 +160,6 @@ leader, and one the leader cannot answer — none elected, none reachable — is
 in-process, 40–220 µs at the median where a replica's read took 25–135 µs, and
 about half the read throughput through one node's connection — a few percent
 of it spent by ten thousand seats renewing on the fifteen-second heartbeat.
-The one watch a node acts on keeps the same rule: the broker places the
-estate map's watch on whichever replica it picks, which may be behind, so the
-watch hands over the map as the leader holds it first and then only what is
-newer — a replica that is behind can delay the next version, never hand over
-an older one.
-
-**The estate map's membership is a class of its own**, `estate:{id}`, rather
-than a field of presence, for two reasons. Presence is the seat host's, and a
-shutdown drain gives it up at its first step while the node is still serving
-its partitions — so a data node claims the estate lease once its estate
-runtime is up and releases it LAST in a drain, after it has stopped serving
-every partition it holds. And presence carries what the node was configured
-with, so the estate lease carries what the estate map decides by — the node's weight, the
-layout it runs, the map epoch it last acted on, what it holds of each
-partition and whether its store is healthy. A lease that does not say its
-store is healthy counts as a failed one, because the lease was born with the
-field. The lease is kept by a loop of its own, which claims nothing on a beat
-that cannot say what the lease must: a membership written without its account would be read
-as a claim the node never made.
-
-Every data node running the estate holds one today, while the estate is still
-one file that every data node holds whole (layout 0): it says layout 0, no map
-epoch, and the one partition `estate.000` — `serving` once its copy has
-drained and stays within the snapshot slack of its logs (1,000 records),
-`catching_up` before that or past it, and `faulted` when the copy is wrong
-rather than behind. `serving` is deliberately not a seat's admission, which
-waits for a lag of zero: a busy company has a record in flight on most beats,
-and a lease sampling that instant would leave `serving` on every one of them. Nothing
-reads those states until a layout divides the estate; what reads the lease now
-is that it is there — a [capacity window](../guides/retention.md#who-has-to-acknowledge)
-counts every live `estate:` lease as a publisher of the estate's records. A
-data node that runs no estate — a company on vendor backends for both its
-tracker and its knowledge base, or a node with no company yet — holds none.
 
 There is deliberately **no all-classes listing**. A class is one segment of a
 name, so the empty one addresses nothing, and a read of it would answer with
@@ -211,7 +176,7 @@ then returned by no listing at all, which every node reads as a free seat.
 ```mermaid
 flowchart LR
     subgraph COORD["coordination store — shared by the fleet"]
-        L[("leases<br/>seats · presence · estate membership")]
+        L[("leases<br/>seats · presence")]
         D[("duties<br/>fleet singletons")]
         E[("epochs<br/>the fencing counter")]
         C[("config<br/>activation pointer")]
@@ -231,7 +196,6 @@ flowchart LR
         POS[("positions<br/>what the state log may delete · seat pauses")]
         OBJ[("objects<br/>the file store · collector report")]
         CK[("chunk locks<br/>one file chunk at a time")]
-        EST[("estate map<br/>who holds each partition")]
     end
     subgraph NODE["node — its own database"]
         DB[("events · episodes · diary<br/>conversations<br/>company payload · secrets")]
@@ -243,7 +207,7 @@ flowchart LR
 
 | Slot | Answers | Documented in |
 |---|---|---|
-| `leases` | Which node runs which seat, which nodes are alive at all, and — once a layout divides the replicated estate — which data nodes are members of the estate map and what each holds of every partition | [Seat Ownership](seat-ownership.md#the-lease) |
+| `leases` | Which node runs which seat, and which nodes are alive at all | [Seat Ownership](seat-ownership.md#the-lease) |
 | `duties` | Which node holds which [singleton duty](seat-ownership.md#singleton-duties). Its own bucket because a duty and a seat want opposite TTLs: see [Duties have a bucket of their own](#duties-have-a-bucket-of-their-own) | [Seat Ownership § Singleton duties](seat-ownership.md#singleton-duties) |
 | `epochs` | The monotonic fencing counter each seat's, duty's and node's tokens are minted from. Its own bucket because it is the one thing here that must never expire (see the retention table below) | [Seat Ownership](seat-ownership.md#the-lease) |
 | `config` | Which company revision is current. The key's own revision is the fencing epoch | [Control Plane](control-plane.md) |
@@ -263,7 +227,6 @@ flowchart LR
 | `follows` | Which chat threads each seat is following, one record per (backend, seat, channel, thread). It is company-wide because an inbound chat message is claimed and parsed by ONE node — `notify-inbound` is a competing consumer group — and the next reply in the same thread by whichever node wins that time: a follow only one node could see made a non-mention reply reach its seat by chance, less often the more nodes ran. It was the last table in a node's own database answering a question the company has to agree on. Rows written before the move are carried here at the next start rather than dropped — the local table survives, permanently empty, as that handoff's source, because a migration runs before any Go code and cannot reach this store | [Slack](../integrations/slack.md#thread-routing) |
 | `objects` | Which store the company's files are in — `nats`, or `s3:<endpoint>/<bucket>/<prefix>` — recorded create-only by the first node to boot and compared by every node after it, which refuses to boot on a mismatch rather than split the files between two stores; and what the `object-collector` duty last found, because the duty moves and every node's `/fleet` reports the latest pass whoever ran it | [Object Store § One store per fleet](object-store.md#one-store-per-fleet), [§ Collection and audit](object-store.md#collection-and-audit) |
 | `chunk locks` | Who may touch one file chunk right now: the collector deleting a chunk no row names, and a writer storing a chunk that already exists, take the chunk's lock around their check and their write, so a deletion can never land between a re-upload and the row that names it | [Object Store § Why a deletion takes a lock](object-store.md#why-a-deletion-takes-a-lock) |
-| `estate map` | Which data nodes hold each partition of the replicated estate once it is divided into partitions: the one map every node routes by and every data node joins and leaves partitions by, and what its maintainer has to carry between ticks. Written only by compare-and-set, and **watched** by every node, which is why it has a bucket to itself — a watch over a bucket holding one record delivers that record and nothing else. A watch is handed the current map — as the stream's leader holds it, never an older one from the replica the watch happens to be served by — and then each later one in order; one superseded before it was handed over may be skipped, since the bucket keeps one version, so a reader acts on the newest map it holds. Created on every node and empty while every data node holds the whole estate | [Architecture § Where state lives](architecture.md#5-where-state-lives) |
 | `positions` | **What the state log may delete**, in four key classes: where every node stands per domain, the live pins a backup or a joining node holds, what each owner's newest backup covers, and the floor the trim itself published with the term that is holding it. Four classes in one bucket because all four answer one question and all four need the same retention, which is none. Four more share it for that retention alone — a log's capacity operation, each node's admission to publish, each node's acknowledgement that it restarted for the operation, and the **seat pauses** (`seat_pause`): which seats a person has paused, by whom, why, and whether they also stopped the running turn — because each must outlive any clock: an expiring operation admits publishers, an expiring admission hides one, an expiring acknowledgement un-seals a barrier that has already run, and an expiring pause is a resume nobody chose. Every listing filters by class | [Retention](../guides/retention.md), [Changing a log's ceiling](../guides/retention.md#changing-a-logs-ceiling), [Agent Runtime § Pausing a seat](agent-runtime.md#pausing-a-seat) |
 
 **The page and work-item embeddings are not here.** They were a slot of their
@@ -303,7 +266,7 @@ A single node shares nothing, because there is no peer to tell. Cooldowns stay i
 
 ## Retention is a bucket's age
 
-Every slot above except `epochs`, `config`, `channels`, `sandbox runs`, `secrets`, `integrations`, `mailboxes`, `objects`, `estate map` and `positions` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write. `leases` is in that group and is the load-bearing case: a lease does not expire because something deletes it, it expires because the bucket's age *is* the lease TTL, which is exactly what makes a dead node's seat reclaimable with nobody around to release it. `duties` is in it too, with one difference that matters: its age only reaps a record, and a duty ends at the deadline its own record carries, judged by every reader against the broker's clock (see [Duties have a bucket of their own](#duties-have-a-bucket-of-their-own)). That deadline is data in the record rather than a per-key TTL, so the create-only rule below does not reach it.
+Every slot above except `epochs`, `config`, `channels`, `sandbox runs`, `secrets`, `integrations`, `mailboxes`, `objects` and `positions` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write. `leases` is in that group and is the load-bearing case: a lease does not expire because something deletes it, it expires because the bucket's age *is* the lease TTL, which is exactly what makes a dead node's seat reclaimable with nobody around to release it. `duties` is in it too, with one difference that matters: its age only reaps a record, and a duty ends at the deadline its own record carries, judged by every reader against the broker's clock (see [Duties have a bucket of their own](#duties-have-a-bucket-of-their-own)). That deadline is data in the record rather than a per-key TTL, so the create-only rule below does not reach it.
 
 That is a constraint rather than a preference. On the default embedded backend a per-key TTL is *create-only*: an update clears it, leaving the key immortal. A rate window that is incremented four times would therefore never expire — the one key in the system guaranteed to be written more than once. So each retention is fixed when its bucket is created, which is why they are **separate buckets** rather than prefixes in one:
 
@@ -333,18 +296,17 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `mailboxes` | none | A record's age cannot tell a seat that is still in the company from one that left, so an age would forget a mailbox that still exists and leave it retaining mail for a seat nobody runs. It is bounded by the handles a company has ever used, and a record leaves when the [maintenance duty](seat-ownership.md#singleton-duties) retires its mailbox |
 | `objects` | none | The backend record is standing state for the life of the deployment, and one that expired would let the next node to boot record a different store — the company's files split between two places with nothing failing. The collector's report beside it is replaced by every pass, so it needs no age either |
 | `chunk locks` | 1 minute | The age **is** the lock's lifetime: what anybody does under one is one check and one delete, or one write of at most a mebibyte, so a lock lapses only under a holder that has already abandoned its request — and a holder that died holding one is let go by the bucket rather than by anybody's clock. Longer is how long a writer waits behind a collector that died |
-| `estate map` | none | The map is standing state for the life of the deployment, and one that expired would read as an estate nobody holds — every router finding no node that serves any partition |
 | `positions` | none | The sharpest case in the table. A node's position is what the trim reads to decide what every other node may delete, so a key that expired would read as a node that has applied **nothing** — which either pins the trim for ever or, read the other way round, lets it delete records that node still needs. A node stops being counted by an operator's audited eviction, never by a clock — and its row stays even then, because a readmission is judged by the position it holds |
 
 Putting two of those in one bucket gives one of them the other's retention, and **every such mistake is silent** — a cooldown that expired in a second, a fleet view showing a node that died last week.
 
-This is also why the retention sweep in the [maintenance duty](seat-ownership.md#singleton-duties) has no jobs for the aged buckets: the broker expires those records, so there is nothing left for a sweep to delete, and a job that swept an empty table every tick would only report that it had. Every **ageless** bucket is the exception, for the reason its row gives — nothing expires them, so removal is a decision somebody takes, and each names a different somebody. `channels` and `mailboxes` are the maintenance duty's own decision, the one closing an idle ask and the other retiring a removed seat's inbox; `integrations` is the reconcile loop's, which forgets a surface whose block has left the company document on the tick that notices; `secrets` wait for an operator's unset; the `objects` backend record is removed only by an operator moving the company to another store, and the collector's report beside it is replaced by each pass; the `estate map` is never removed — it is rewritten by its duty and by an operator's gestures, and only ever by compare-and-set; a node's own `positions` row is never removed at all — an audited eviction stops the trim counting it, and the row is kept because a readmission is judged by it; and `sandbox runs` end at their own pause reaper or a terminal delete.
+This is also why the retention sweep in the [maintenance duty](seat-ownership.md#singleton-duties) has no jobs for the aged buckets: the broker expires those records, so there is nothing left for a sweep to delete, and a job that swept an empty table every tick would only report that it had. Every **ageless** bucket is the exception, for the reason its row gives — nothing expires them, so removal is a decision somebody takes, and each names a different somebody. `channels` and `mailboxes` are the maintenance duty's own decision, the one closing an idle ask and the other retiring a removed seat's inbox; `integrations` is the reconcile loop's, which forgets a surface whose block has left the company document on the tick that notices; `secrets` wait for an operator's unset; the `objects` backend record is removed only by an operator moving the company to another store, and the collector's report beside it is replaced by each pass; a node's own `positions` row is never removed at all — an audited eviction stops the trim counting it, and the row is kept because a readmission is judged by it; and `sandbox runs` end at their own pause reaper or a terminal delete.
 
 ### Removal markers are swept
 
 Removing a record does not remove it from the bucket's stream: a delete or a purge appends a **marker** that says the key was removed, and on these buckets — one revision per key — the marker replaces the value. An aged bucket takes its markers with everything else. An ageless one keeps each for the life of the deployment, and every [listing](#the-three-valued-answer) whose pass meets one reads it again from the stream leader, so without a sweep a listing's cost would grow with every record the company had ever removed.
 
-So the [maintenance duty](seat-ownership.md#singleton-duties) sweeps them, as the job `coordination_markers`: on one node for the whole fleet, every 15-minute maintenance tick, from **every shared-state bucket with no age** — `config`, `budgets`, `channels`, `sandbox runs`, `secrets`, `integrations`, `mailboxes`, `objects`, `estate map` and `positions`. That set is derived from the retention each bucket is opened with rather than listed, so a new ageless bucket is covered without anybody remembering to add it, and one that never removes a record costs a pass that finds nothing. `epochs` is the one ageless bucket outside it, and needs nothing: a fencing counter is never removed, so it holds no marker. The sweep removes the markers written more than **three hours** (`coord.MarkerRetention`) before the tick, and a bucket it could not sweep is retried on the next tick without stopping the others.
+So the [maintenance duty](seat-ownership.md#singleton-duties) sweeps them, as the job `coordination_markers`: on one node for the whole fleet, every 15-minute maintenance tick, from **every shared-state bucket with no age** — `config`, `budgets`, `channels`, `sandbox runs`, `secrets`, `integrations`, `mailboxes`, `objects` and `positions`. That set is derived from the retention each bucket is opened with rather than listed, so a new ageless bucket is covered without anybody remembering to add it, and one that never removes a record costs a pass that finds nothing. `epochs` is the one ageless bucket outside it, and needs nothing: a fencing counter is never removed, so it holds no marker. The sweep removes the markers written more than **three hours** (`coord.MarkerRetention`) before the tick, and a bucket it could not sweep is retried on the next tick without stopping the others.
 
 Three hours is not what keeps an answer right. Nothing in the engine takes a marker as an answer: a listing asks the leader about each one its pass delivered, and a create over a removed key asks the leader what the key holds before it writes — a live value is the key existing, a marker is the revision to write over, and nothing at all is a key never written. The contract suite sweeps every marker, however new, and holds each record family to the answers it gave before. The horizon decides how long a removal stays visible in the bucket against what that costs: a listing reads again each marker its pass meets, so it pays for the removals of the last three hours and a quarter — the horizon plus one tick — where without the sweep it paid for every removal the deployment had ever made; and three hours is the longest claim any operation on these records can hold (`coord.MaxDutyTTL`), so nothing that read a record before it was removed can still be acting on that read when its marker goes.
 
@@ -475,3 +437,4 @@ That distinction was not always drawn, and each consequence was silent. The toke
 - [Scaling Out](scaling.md) — the five kinds of coupling a fleet had to resolve, and which one a lock actually fixes
 - [Deployment](../guides/deployment.md) — running more than one node
 - [Event System](event-system.md) — the queue this sits beside, and what it is not
+

@@ -333,21 +333,6 @@ type Engine struct {
 	// collector's duty. See objects.go.
 	objects *objectStore
 
-	// estateMaintainer is the estate map duty's loop, nil until the node
-	// that claims it exists, and on a node that publishes nothing; and
-	// estateControl the operator's gestures on the map, nil where there is
-	// no coordination store to hold one. See estatemap.go and
-	// estatecontrol.go.
-	estateMaintainer *loop
-	estateControl    *EstateControl
-
-	// estateWatch is this node's estate view and what the estate alarms
-	// read of it, nil until the state log's duties start and on a node
-	// with no coordination store. ATOMIC for retention's reason: armed with
-	// the native runtime, which an apply can bring up while the API reads
-	// the alarms. See estateview.go.
-	estateWatch atomic.Pointer[estateWatch]
-
 	// boot is the operator's Tier A configuration this engine was built
 	// from. Immutable; kept because a node that meets its first native
 	// company at an apply brings the state log up then, and the log's
@@ -706,7 +691,6 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if err := config.CheckTiers(opts.Bootstrap, opts.Company); err != nil {
 		return nil, fmt.Errorf("engine: %w", err)
 	}
-	logTierWarnings(ctx, opts.Bootstrap, opts.Company)
 	// THE COMPLETION POLL'S CADENCE, whether or not this node will ever run a
 	// sandbox: an apply can bring it its first, and the poll starts there.
 	// See [checkSandboxPollInterval].
@@ -999,13 +983,6 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if err := e.startObjects(); err != nil {
 		return nil, err
 	}
-	// AND THE ESTATE MAP'S GESTURES, on every node that reaches the
-	// coordination store and in every mode: a gesture is a compare-and-set
-	// on one record, not work this node publishes. Under the single-file layout every one of them answers
-	// that there is no map — see estatecontrol.go.
-	if backends.Fleet != nil {
-		e.estateControl = &EstateControl{store: backends.Fleet, running: LayoutZero(), now: time.Now}
-	}
 
 	// AND THE FOLLOWS, on the same reasoning and in the same window: before
 	// the epoch below builds the chat transports, so nothing is matching an
@@ -1258,14 +1235,6 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return nil, fmt.Errorf("engine: sandbox waiter: %w", err)
 	}
 	e.startMaintenance(ctx)
-	// AND THE ESTATE MAP'S, a singleton on the same terms. Under the
-	// single-file layout it writes nothing but its own duty lease — see
-	// estatemap.go — and it is armed all the same, so a map a partitioned
-	// node writes is maintained, and the duty is the one a partitioned
-	// fleet runs rather than one first armed on the day it matters.
-	if err := e.startEstateMap(ctx); err != nil {
-		return nil, err
-	}
 	// THE LOG'S OWN TRIM, beside the sweep and after the node exists for
 	// the same reason: its duty is claimed under the node's incarnation,
 	// and a trim that ran before the lease existed would run on every node
@@ -1638,8 +1607,6 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
 	e.stopRetention()
-	// AFTER the retention loop, whose evaluation reads it.
-	e.stopEstateWatch()
 	e.stopBudgetReports()
 	// Before the node's stop detaches the inboxes: an alarm firing into a
 	// client that is closing would log a release it could not make.
@@ -1681,8 +1648,6 @@ func (e *Engine) teardown(ctx context.Context) {
 	// AND BEFORE the native runtime below, whose tracker reader it reads
 	// the references through.
 	e.stopObjectCollector()
-	// AND THE ESTATE MAP'S, for the same reason.
-	e.stopEstateMap()
 	// AFTER every duty loop above has stopped and waited out its tick, so no
 	// tick of this node runs once a peer can take the duty, and no turn of
 	// this node can claim one again once it is given back.

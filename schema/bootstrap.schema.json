@@ -422,7 +422,7 @@
           "description": "Agent turns this process runs at once; 0 takes the engine default. Per node, so a fleet's ceiling is N times this."
         },
         "roles": {
-          "description": "What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state and needs store.scratch; until the partitioned estate is live it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers.",
+          "description": "What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state and needs store.scratch; it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers.",
           "items": {
             "type": [
               "string",
@@ -628,9 +628,6 @@
           ],
           "description": "Lock wait before a write gives up, whether it waits in the driver or in the store's own queue, and the anchor for the one retry it then gets; 0 takes the store default."
         },
-        "estate": {
-          "$ref": "#/$defs/StoreEstate"
-        },
         "max_open_conns": {
           "anyOf": [
             {
@@ -660,7 +657,7 @@
           ]
         },
         "replicated_path": {
-          "description": "Where the replicated estate's partition files live: layout 0's file, with later layouts' beside it; empty puts it beside path.",
+          "description": "Where the replicated estate's database file lives; empty puts it beside path.",
           "type": [
             "string",
             "number",
@@ -692,32 +689,6 @@
             "boolean",
             "null"
           ]
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "StoreEstate": {
-      "additionalProperties": false,
-      "properties": {
-        "weight": {
-          "anyOf": [
-            {
-              "maximum": 64,
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            {
-              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
-              "type": "string"
-            }
-          ],
-          "description": "This node's share of the replicated estate's partitions relative to the other data nodes, 1..64; 0 is the default, 1. Read once the estate is divided into partitions; under the single-file layout every data node holds all of it."
         }
       },
       "type": [
@@ -1070,7 +1041,7 @@
           "description": "A member's leaf listener, where the fleet's leaves join. Accepts any connection that reaches it, like the route port. A member with one is in a fleet, so it needs stream.store_dir."
         },
         "urls": {
-          "description": "Leaf listeners of the members this node joins as a LEAF - no JetStream, no replica, no vote - e.g. nats-leaf://member-a.internal:7422. Any one that answers will do. Until the partitioned estate is live only a node without the data role may be a leaf, and an embedded node without it must be one.",
+          "description": "Leaf listeners of the members this node joins as a LEAF - no JetStream, no replica, no vote - e.g. nats-leaf://member-a.internal:7422. Any one that answers will do. Only a node without the data role may be a leaf, and an embedded node without it must be one.",
           "items": {
             "type": [
               "string",

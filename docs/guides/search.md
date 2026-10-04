@@ -17,7 +17,7 @@ A hybrid search runs two rankers and fuses them:
 - **Lexical** — BM25 over the engine's own inverted list, in this node's
   database.
 - **Semantic** — a two-stage vector search over the replicated vectors, whose
-  first stage probes the partition's semantic index when it has one.
+  first stage probes the corpus's semantic index when it has one.
 
 Every indexed document carries a **search shard**: a stable hash of its own
 identity into 64 fixed buckets, written beside the row in both estates by the
@@ -96,7 +96,7 @@ both.
 The semantic scan has a **one-second budget**, and how much fits inside it
 depends on how many searches the node is running *at the same moment* — seats
 taking turns, the dashboard, a person searching — and on which **first stage**
-answers: the full scan of every sign code, or the partition's semantic index,
+answers: the full scan of every sign code, or the corpus's semantic index,
 which reads only the lists nearest the query (see
 [the knowledge system](../concepts/knowledge-system.md#the-first-stage-is-an-index-over-the-codes)).
 Measured side by side in one run, at 3 072 dimensions on four cores, p95, over
@@ -113,8 +113,8 @@ The second row is the one for a node that is running a company. The metric
 see [Metrics](../reference/metrics.md). The index's column is **per probe
 share**: an index that reads an eighth of its lists — which the same corpus's
 training chooses at 120 000 sources — reads a quarter of the rows this one
-does, and a partition with no index is on the scan's column. So is a search
-**narrowed** to a small share of the partition — to the pages in a partition
+does, and a corpus with no index is on the scan's column. So is a search
+**narrowed** to a small share of the corpus — to the pages in a corpus
 that is mostly tasks, or to one container: it reads lists until it has seen
 as many of its own rows as an unfiltered search reads, and past half the
 lists it runs the scan instead, which reads every row its filter keeps. `crewlet search
@@ -252,24 +252,18 @@ broker. A search that returned nothing because the broker hiccupped would be a
 fleet-wide outage of a read every node can serve alone, so only the *peers'*
 ranges can go missing.
 
-### A partition that does not answer
+### When the estate does not answer
 
-The bucket division above is how one partition's corpus is scanned. A search
-is also asked of every **partition** holding its corpus — the knowledge base's
-partitions for `search_knowledge` and the turn-start block, the tracker's for
-`search_work_items` — each answered by a node that serves it, and the answers
-are merged exactly as the buckets' are: each partition returns its best
-candidates per method *with their scores*, and the asking node merges each
-method by score and fuses once. Under layout 0 there is one partition, so this
-is the search it has always been.
-
-A partition that does not answer is **named** on the answer rather than left
-as a shorter list — which partition, and why: nobody serves it, its holder did
-not answer, was behind, no longer serves it, or failed. A seat is told *N of M
-partitions did not answer; this list may be incomplete*, and an empty answer
-with a partition missing is never told "nothing matched". The bucket coverage
-above stays what it is, beside it: the two say different things — a range of a
-partition's corpus unscanned, and a partition not asked at all.
+The bucket division above is how the corpus is scanned. On a node without the
+`data` role the search itself is asked of a data node — the estate is one
+partition, `estate.000`, held whole by every data node — and an answer that
+could not be had from any of them is **named** on the result rather than
+returned as an empty list: nobody serves it, its holder did not answer, was
+behind, or failed. A seat is told the knowledge base did not answer and that
+the list may be incomplete, and an empty answer with the estate missing is
+never told "nothing matched". The bucket coverage above stays what it is,
+beside it: the two say different things — a range of the corpus unscanned,
+and the estate not reached at all.
 
 ---
 
@@ -307,8 +301,8 @@ re-read once, and until that lap finishes the node reports `building`.
 3. **Check `recall_below_floor`.** A corpus whose vectors are behind is
    answering semantically from a fraction of itself.
 4. **Check the first stage.** `crewlet search eval` says whether searches are
-   probing the partition's index or scanning, and why — unfiltered, and for
-   each narrowed shape how many of its searches scanned. A partition scans
+   probing the corpus's index or scanning, and why — unfiltered, and for
+   each narrowed shape how many of its searches scanned. A corpus scans
    below 1 024 sources, while a model change is re-embedding it, when its
    training measured that no index reading half its lists or fewer meets the
    recall floor in every shape — which is a property of the corpus, and

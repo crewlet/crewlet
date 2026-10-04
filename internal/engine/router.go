@@ -9,7 +9,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
-	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -30,12 +29,10 @@ import (
 //
 // # Who serves what, as this node routes it
 //
-// Under layout 0 there is no estate map, and the one partition's servers are
-// every live data node as this node's WATCHED presence view names them
-// ([partmap.Whole] over [coord.LeaseView]) — the view the fleet's other
-// per-request questions read, never a second one, and never a listing of the
-// fleet per call. A partitioned layout routes by the estate map's view
-// ([partmap.View]), which satisfies the same interface.
+// The estate's servers are every live data node as this node's WATCHED
+// presence view names them ([wholeEstate] over [coord.LeaseView]) — the view
+// the fleet's other per-request questions read, never a second one, and never
+// a listing of the fleet per call.
 //
 // # What this node serves
 //
@@ -48,11 +45,8 @@ import (
 // worse holder, never no holder (estate's [estate.Router] doc). A copy that is
 // WRONG is not served at all ([localEstate.For]), and the node keeps its seats.
 
-// Every placement the router may be handed.
-var (
-	_ estate.Placement = partmap.Whole{}
-	_ estate.Placement = (*partmap.View)(nil)
-)
+// The placement the router is handed.
+var _ estate.Placement = wholeEstate{}
 
 // servingRecheck is how long a copy's verdict — whether it is wrong, and
 // whether it answers requests — is trusted by the request gate
@@ -98,12 +92,65 @@ func (e *Engine) newRouter(q estate.Asker, nodeID string) (*estate.Router, error
 	return r, nil
 }
 
-// estatePlacement is who serves which partition as this node routes: under
-// layout 0 — the only layout this build runs — every live data node, from the
-// watched presence view.
+// estatePlacement is who serves the estate as this node routes: every live data
+// node, from the watched presence view.
 func (e *Engine) estatePlacement() estate.Placement {
-	return partmap.Whole{Running: LayoutZero(), Roster: presenceRoster{view: e.dataView}}
+	return wholeEstate{running: LayoutZero(), roster: presenceRoster{view: e.dataView}}
 }
+
+// wholeEstate is the router's placement: every live data node serves the
+// estate's one partition, as this node's watched presence view names them.
+//
+// PRESENCE AND NOT A LISTING PER CALL, because every seat tool asks it first:
+// the view answers from memory, and a node it named that went silent is listed
+// again at once ([wholeEstate.Unanswered]) rather than a heartbeat later.
+type wholeEstate struct {
+	// running is the layout this node runs.
+	running statelog.Layout
+
+	// roster is every live data node, from memory.
+	roster dataRoster
+}
+
+// dataRoster is every live data node, as the router's placement reads them.
+type dataRoster interface {
+	// LiveDataNodes is every live data node; an error is UNKNOWN.
+	LiveDataNodes() ([]string, error)
+
+	// Invalidate asks for the nodes to be listed again: one it named went
+	// silent.
+	Invalidate()
+}
+
+// Layout is the layout this node runs.
+func (w wholeEstate) Layout() (statelog.Layout, error) { return w.running, nil }
+
+// Serving is every live data node, sorted, for the estate's one partition, at
+// epoch 0 — there is no map to count epochs of. An error from the roster is
+// UNKNOWN, never "no holder".
+func (w wholeEstate) Serving(p statelog.PartitionID) ([]string, uint64, error) {
+	if parts := w.running.Partitions(); len(parts) != 1 || parts[0] != p {
+		return nil, 0, fmt.Errorf("engine: %q is not the estate's partition", p.String())
+	}
+	nodes, err := w.roster.LiveDataNodes()
+	if err != nil {
+		return nil, 0, fmt.Errorf("engine: who serves %s: %w", p.String(), err)
+	}
+	out := slices.Clone(nodes)
+	slices.Sort(out)
+	return out, 0, nil
+}
+
+// Refresh asks the roster to list again. A server's newer epoch — the only
+// reason a router refreshes — is never met, since every node's epoch is 0.
+func (w wholeEstate) Refresh(context.Context) error {
+	w.roster.Invalidate()
+	return nil
+}
+
+// Unanswered asks the roster to list again, because a node it named went
+// silent.
+func (w wholeEstate) Unanswered(string) { w.roster.Invalidate() }
 
 // newLocalEstate is this node's own backends, per partition holding says it
 // serves — [holdingOf] the layout it runs, the one rule its write authority's
@@ -559,7 +606,7 @@ func routedPartitions(l statelog.Layout, runTracker, wiki bool) []statelog.Parti
 // roster: every live data node, from memory.
 type presenceRoster struct{ view *coord.LeaseView }
 
-// LiveDataNodes implements [partmap.Roster]. A node with no view has no
+// LiveDataNodes is every live data node. A node with no view has no
 // coordination and so no fleet: nobody else to ask, which is an answer rather
 // than an unknown.
 func (r presenceRoster) LiveDataNodes() ([]string, error) {
@@ -573,7 +620,7 @@ func (r presenceRoster) LiveDataNodes() ([]string, error) {
 	return dataNodesOf(leases), nil
 }
 
-// Invalidate implements [partmap.Roster]: a node the view named went silent,
+// Invalidate lists again: a node the view named went silent,
 // so it lists again rather than waiting out its heartbeat.
 func (r presenceRoster) Invalidate() {
 	if r.view != nil {

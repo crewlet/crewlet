@@ -191,9 +191,6 @@ func wireAPI(
 		// an upload on one member and a download from another cross the
 		// object store the way a deployment's do.
 		Files: api.EngineFiles(e),
-		// AND THE ESTATE MAP'S, the one seam GET /estate and its gestures
-		// read through, as `crewlet run` wires it.
-		Estate: api.EngineEstate(e),
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return e.WebhookSecrets() },
 			Publisher: backends.Queue,

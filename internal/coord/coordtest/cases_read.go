@@ -154,11 +154,10 @@ var readCases = []testCase{
 		h.claim(coord.NodeResource("node-a"), coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
 		})
-		// The estate map's membership names the SAME node as its
-		// presence, under a class of its own — so a listing that matched
-		// on the node id rather than on the class would count one node
-		// twice in each.
-		h.claim(coord.EstateResource("node-a"), coord.AcquireOptions{
+		// A caller's own class names the SAME node as its presence — so
+		// a listing that matched on the node id rather than on the class
+		// would count one node twice in each.
+		h.claim(callerClass.Resource("node-a"), coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
 		})
 
@@ -169,8 +168,7 @@ var readCases = []testCase{
 		h.requireResources("live seats", h.listLive(coord.ClassSeat), "seat:ceo")
 		h.requireResources("live workers", h.listLive(coord.ClassWorker), "worker:scheduler")
 		h.requireResources("live nodes", h.listLive(coord.ClassNode), "node:node-a")
-		h.requireResources("live estate-map members", h.listLive(coord.ClassEstate),
-			"estate:node-a")
+		h.requireResources("live claims", h.listLive(callerClass), "claim:node-a")
 	}},
 
 	{"a_class_that_cannot_address_a_key_is_refused", func(h *harness) {
