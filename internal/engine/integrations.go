@@ -50,15 +50,6 @@ const integrationDutyName = "integration-reconcile"
 // both would hold, and both would sweep every surface for the whole length of
 // the upgrade.
 //
-// What a rename cannot reach, the coordination store handles instead. On the
-// embedded KV this TTL was REFUSED for as long as duties shared the seat
-// lease bucket (a 45 s age), so no fleet ran this loop at all; duties now live
-// in a bucket of their own, and a build that predates that bucket locks the
-// duty somewhere a newer build cannot see. The store therefore refuses every
-// duty claim on a newer node while a node of the older build is live, which is
-// the rolling-upgrade rule the coord package doc states. This constant needs
-// nothing further for it.
-//
 // What bounds a single holder's work is neither number. [integration.Worker]
 // re-claims before every surface it visits, and a claim by the owner that
 // already holds it doubles as a renew, so the TTL only ever has to cover ONE
