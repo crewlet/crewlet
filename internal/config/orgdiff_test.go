@@ -319,6 +319,72 @@ func TestANewClaimReachesItsOtherClaimants(t *testing.T) {
 	}
 }
 
+// A NEW OBJECT REACHES EVERY OBJECT ALREADY NAMING ITS ID, before the write.
+//
+// A `lead:` or `manages:` entry may name nothing yet, and one naming a unit's
+// key resolves to a seat of that handle first — so an object added under such
+// a name takes over the reference without the referrer changing at all. The
+// referrer's place is reached: the unit a `lead:` is on, the unit a seat
+// stating a `manages:` entry sits in, the root for a root seat. An object
+// added under a name nobody states reaches only where it lands (the control,
+// and [TestEachOpReachesItsPlaces]'s added seat).
+//
+// Mutation: drop the referrers from an addition and every case reaches only
+// the place the object lands in.
+func TestANewObjectReachesWhoAlreadyNamesIt(t *testing.T) {
+	t.Parallel()
+	swap := func(doc, old, replacement string) string {
+		t.Helper()
+		if !strings.Contains(doc, old) {
+			t.Fatalf("the fixture has no %q to replace", old)
+		}
+		return strings.Replace(doc, old, replacement, 1)
+	}
+	const sre = "          - name: SRE\n"
+	const ghost = "          - name: Ghost\n            handle: ghost\n            llm: zulu\n"
+	const purpose = "        purpose: keep the lights on\n"
+	for _, c := range []struct {
+		name          string
+		before, after string
+		id, want      string
+	}{
+		{"a dangling lead of another team, taken by a seat",
+			swap(diffBase, "    lead: designer\n", "    lead: ghost\n"),
+			swap(swap(diffBase, "    lead: designer\n", "    lead: ghost\n"), sre, ghost+sre),
+			"ghost", "before/design/named/ghost"},
+		{"a unit's key another team's seat manages, taken by a seat",
+			swap(diffBase, "        handle: designer\n",
+				"        handle: designer\n        manages: [engineering]\n"),
+			swap(swap(diffBase, "        handle: designer\n",
+				"        handle: designer\n        manages: [engineering]\n"),
+				sre, "          - name: Bot\n            handle: engineering\n            llm: zulu\n"+sre),
+			"engineering", "before/design/named/engineering"},
+		{"a dangling manages entry of a root seat, taken by a unit",
+			swap(diffBase, "    handle: ceo\n", "    handle: ceo\n    manages: [ops]\n"),
+			swap(swap(diffBase, "    handle: ceo\n", "    handle: ceo\n    manages: [ops]\n"),
+				purpose, purpose+"        children:\n          - name: Ops\n            id: ops\n"),
+			"ops", "before//named/ops"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			var change config.OrgChange
+			for _, ch := range config.DiffOrg(parse(t, c.before), parse(t, c.after)).Changes {
+				if ch.ID == c.id {
+					change = ch
+				}
+			}
+			if change.Op != config.OrgAdded || !slices.Contains(touches(change), c.want) {
+				t.Errorf("%s added reached %v, want %s", c.id, touches(change), c.want)
+			}
+		})
+	}
+	// THE CONTROL: the same seat added under a name nobody states.
+	plain := only(t, config.DiffOrg(parse(t, diffBase), parse(t, swap(diffBase, sre, ghost+sre))))
+	if !slices.Equal(touches(plain), []string{"after/platform/place/"}) {
+		t.Errorf("a seat nobody names reached %v, want only where it lands", touches(plain))
+	}
+}
+
 // A CREDENTIAL CHANGE IS LISTED APART, and an unchanged one is not.
 //
 // Setting, altering and clearing a credential are all changes; carrying it

@@ -44,6 +44,14 @@ import (
 //     over a project or a space is derived from the unit that declares it,
 //     and vendor attribution from an address, so declaring a key another team
 //     already holds would be taking that team's.
+//   - WHO ALREADY NAMES A NEW OBJECT, before: every `lead:` and `manages:`
+//     entry in the document that states the id an added seat or unit takes.
+//     A reference may name nothing — a unit can land before the seat that
+//     leads it — and one that names a unit's key resolves to a seat of that
+//     handle first, so adding a seat under such a name hands the referrer's
+//     authority to whatever the lead configures: a seat added as `ghost`
+//     becomes the lead of an outside team whose `lead: ghost` dangled, with
+//     the lead who added it above that whole team.
 //
 // Only what a write CHANGES is judged: a reference or a claim the object
 // already carried was somebody else's decision, and judging it again would
@@ -145,8 +153,9 @@ type OrgTouch struct {
 	// the top of the company sits in and a reference naming nothing reaches.
 	Unit string
 	// Why is what about the change reaches it: `place`, `self`, `lead`,
-	// `manages`, or the key a claim is about (`project`, `space`,
-	// `channel`, `email`, `contact`).
+	// `manages`, the key a claim is about (`project`, `space`, `channel`,
+	// `email`, `contact`), or `named` for another object's reference that
+	// already states the id an added object takes.
 	Why string
 	// Value is the reference or the claimed key, as the change stated it;
 	// empty for `place` and `self`.
@@ -203,6 +212,11 @@ func diffObject(kind OrgKind, id string, b, a *surveyed) (OrgChange, bool) {
 	case !had:
 		change.Op = OrgAdded
 		change.Touches = []OrgTouch{{Side: OrgAfter, Unit: is.place, Why: "place"}}
+		for _, referrer := range b.referrers[id] {
+			change.Touches = append(change.Touches, OrgTouch{
+				Side: OrgBefore, Unit: referrer.place, Why: "named", Value: id,
+			})
+		}
 	case !has:
 		change.Op = OrgRemoved
 		change.Touches = []OrgTouch{{Side: OrgBefore, Unit: was.place, Why: "place"}}
@@ -260,6 +274,9 @@ type surveyed struct {
 	objects map[OrgKind]map[string]object
 	// claimants is who states each claimed key.
 	claimants map[claim][]claimant
+	// referrers is who states each name in a `lead:` or `manages:` entry,
+	// whether or not anything answers to it.
+	referrers map[string][]claimant
 	// seatPlaces is the unit holding each seat, by handle; "" for the root.
 	seatPlaces map[string]string
 }
@@ -297,7 +314,8 @@ type claim struct {
 	value string
 }
 
-// claimant is an object stating a claim, and the place it reaches.
+// claimant is an object stating a claim or a reference, and the place it
+// reaches.
 type claimant struct {
 	kind  OrgKind
 	id    string
@@ -311,6 +329,7 @@ func survey(c *Company) *surveyed {
 		org:        o,
 		objects:    map[OrgKind]map[string]object{OrgSeat: {}, OrgUnit: {}},
 		claimants:  map[claim][]claimant{},
+		referrers:  map[string][]claimant{},
 		seatPlaces: map[string]string{},
 	}
 	unitParents := map[string]string{}
@@ -376,6 +395,9 @@ func survey(c *Company) *surveyed {
 			}
 			for _, c := range o.claims {
 				s.claimants[c] = append(s.claimants[c], claimant{kind: kind, id: id, place: place})
+			}
+			for _, ref := range o.refs {
+				s.referrers[ref.to] = append(s.referrers[ref.to], claimant{kind: kind, id: id, place: place})
 			}
 		}
 	}

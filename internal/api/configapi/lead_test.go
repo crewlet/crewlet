@@ -312,6 +312,45 @@ func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 	}
 }
 
+// A LEAD CANNOT TAKE OVER A REFERENCE BY ADDING WHAT IT NAMES.
+//
+// A `lead:` may name a seat nobody has added yet, and Design's here does.
+// Adding a seat under that handle to Platform changes nothing about Design,
+// yet in the proposed document that seat would lead Design and the Platform
+// lead would be above every member of it — so the addition reaches Design,
+// before the write, and is refused there. The same addition under a name a
+// unit INSIDE their subtree states is theirs: Tooling's dangling lead is.
+//
+// Mutation: drop the referrers from an addition and the ghost seat lands,
+// leaving the Platform lead leading Design.
+func TestALeadCannotTakeOverAReferenceByAddingWhatItNames(t *testing.T) {
+	t.Parallel()
+	doc := strings.Replace(leadDoc, "    lead: designer\n", "    lead: ghost\n", 1)
+	doc = strings.Replace(doc, "            purpose: build tools\n",
+		"            purpose: build tools\n            lead: tools-lead\n", 1)
+	if !strings.Contains(doc, "lead: ghost") || !strings.Contains(doc, "lead: tools-lead") {
+		t.Fatal("the fixture did not take the dangling leads")
+	}
+	add := func(handle string) func(map[string]any) {
+		return func(e map[string]any) {
+			e["roles"] = append(rolesOf(e), map[string]any{
+				"name": handle, "handle": handle, "llm": "zulu"})
+		}
+	}
+	s := newSurface(t)
+	s.seed(t, doc)
+	res := putEntityAs(t, s, platformLead(), configapi.EntityUnits, "platform", add("ghost"), "")
+	if parts := refusedParts(t, res); !slices.Contains(parts,
+		"seat/ghost/before/design/named/not_lead") {
+		t.Errorf("refused %v, want Design's lead named", parts)
+	}
+	if res := putEntityAs(t, s, platformLead(), configapi.EntityUnits, "platform",
+		add("tools-lead"), ""); res.Code != http.StatusCreated {
+		t.Errorf("a seat added under a name their own sub-team states = %d: %s",
+			res.Code, res.Body.String())
+	}
+}
+
 // A LEAD'S WHOLE-DOCUMENT WRITES ARE JUDGED THE SAME WAY, and so is a revert.
 //
 // PUT, PATCH and a revert reach the same admission an entity write does: a
