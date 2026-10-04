@@ -45,7 +45,8 @@ func (h *heardMoves) take() []iamdomain.Moved {
 // hands its own. So the applier here is the one a running node builds, and the
 // listener the one the API registers. A sign-in is the control: it is the bulk
 // of this log's traffic, moves nobody's credential, and must reach the
-// listener not at all, or every sign-in in the company re-decides every socket.
+// listener not at all, or every sign-in in the company reaches open sockets it
+// did not touch.
 func TestAnIdentityBatchReachesTheCredentialListener(t *testing.T) {
 	t.Parallel()
 	rig := newDirectoryRig(t)
@@ -71,7 +72,7 @@ func TestAnIdentityBatchReachesTheCredentialListener(t *testing.T) {
 	rig.apply(t, iamdomain.SessionSubject(lineage), iamdomain.OpOpen, founder, session)
 	if got := heard.take(); len(got) != 0 {
 		t.Fatalf("a sign-in reached the credential listener as %+v: every sign-in "+
-			"would decide every open socket again", got)
+			"would reach open sockets it did not touch", got)
 	}
 
 	rig.apply(t, iamdomain.SessionSubject(lineage), iamdomain.OpClose, founder, session)

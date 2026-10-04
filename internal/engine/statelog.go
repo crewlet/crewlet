@@ -2221,9 +2221,9 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	switch {
 	case err != nil:
 		// A JOIN THAT FAILED may have installed the artefact before it
-		// did, so the rows are told about as replaced: deciding every
-		// credential again for nothing costs a read per open socket, and
-		// not deciding one a peer's record ended leaves it serving.
+		// did, so the rows are told about as replaced: closing every open
+		// socket for its handshake to decide costs one reconnect per tab,
+		// and not closing one a peer's record ended leaves it serving.
 		replaced = true
 		return err
 	case outcome == joinNoDonor:

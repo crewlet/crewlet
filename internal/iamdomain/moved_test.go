@@ -151,15 +151,15 @@ func TestABatchSaysWhoseCredentialsItMoved(t *testing.T) {
 // guard refuses their REST requests 503. A socket held open on that person's
 // session heard nothing, so a revocation a newer peer wrote kept streaming the
 // company to the tab on every node still on the older build. So a retention
-// decides every credential again, which the guard then answers per bucket. It
-// moves no seat's standing, because the contact routing is rebuilt from rows
-// and a retained record wrote none.
+// names everyone, which closes every socket for its handshake to decide — and
+// the guard answers that per bucket. It moves no seat's standing, because the
+// contact routing is rebuilt from rows and a retained record wrote none.
 //
 // The control is a batch that applied nothing and retained nothing, which
 // hands over nothing at all — before and after.
 //
 // Mutation: make Retained a no-op and the move never arrives.
-func TestARetainedRecordDecidesEveryCredentialAgain(t *testing.T) {
+func TestARetainedRecordNamesEveryone(t *testing.T) {
 	t.Parallel()
 	var got []iamdomain.Moved
 	applier := iamdomain.NewApplier("node-a", func(m iamdomain.Moved) {
