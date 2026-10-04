@@ -358,8 +358,9 @@ func resumeAbandoned(t *testing.T, rig *coordRig) {
 	rig.resumer.err = fmt.Errorf("%w: the reviewer's provider went away", ErrResumeAbandoned)
 }
 
-// noConversation is a row with nothing to resume INTO: what a build predating
-// [StatusLaunching] wrote, read by this one across a rolling upgrade.
+// noConversation is a row with nothing to resume INTO, which no live path
+// writes — a run holds [StatusLaunching] until its conversation is — and which
+// the coordinator still meets as an assertion ([Coordinator.resumeAndSettle]).
 //
 // [PendingStore.BeginLaunch] is the one write that drops a suspension, so the
 // status [place] chose is put back after it.

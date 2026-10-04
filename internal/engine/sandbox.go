@@ -1207,7 +1207,7 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.T
 		// The conversation is where the resume reports and what admits a
 		// person's answer; the partition states the batch this run was
 		// launched from, which tells two runs parked on one direct message
-		// apart and is all a peer predating the conversation can match on.
+		// apart ([sandbox.ConversationRef.Best]).
 		PartitionKey:    t.PartitionKey,
 		ConversationKey: t.ConversationKey,
 		// The delivery obligation, so the resumed turn knows whether
