@@ -48,13 +48,14 @@ import (
 // config.Unit gains a field nobody has classified, so a new field needs a
 // decision rather than defaulting to either side.
 //
-// # The tree is the chart's, the identity is the settings'
+// # The tree is the running organisation's
 //
-// The seats and units are the chart's own log, composed into the org this node
-// runs ([org.Organization]); a stored revision carries neither, so a
-// projection cut from the document's roles and units showed every open screen
-// a company with nobody in it. The company's name, mission, vision, policies,
-// clock and own token budget are SETTINGS, which is what a revision does hold.
+// The seats and units are read from the organisation this node runs
+// ([org.Organization]) — the document's `roles:` and `units:` as the engine
+// built them, every root seat a `unit:` reference moved already in its unit —
+// so the tree a reader is shown is the one a turn reads. The company's name,
+// mission, vision, policies, clock and own token budget come from the
+// document.
 //
 // # Authored values, not effective ones
 //
@@ -83,14 +84,15 @@ import (
 // the seat is GRANTED ([config.MCPServer.Grants], the rule the engine starts
 // a seat's children by), which depends on the company's server list and on
 // credentials the seat may inherit from its unit. Both are resolved from the
-// seat AS THE ENGINE RUNS IT — the composed org, whose runtime half is the
-// chart's — never from the document.
+// seat AS THE ENGINE RUNS IT — the running organisation, where a unit's
+// credentials are already layered under its agent members — never from the
+// authored role.
 //
 // NEITHER REACHES A `state:read` READER. A provider key names a model entry
 // and a server name names a tool server, and both are read off a seat's
-// RUNTIME half, which the chart's own surface strips from every reader who
-// does not hold `config:read`; a label derived from that half follows the same
-// rule, or the projection would be a way round the strip. So the projection is
+// RUNTIME settings, which `GET /config` serves only to a `config:read` holder;
+// a label derived from them follows the same rule, or the projection would be
+// a way round that guard. So the projection is
 // [stream.Shaped]: a `config:read` audience is handed the resolved fields, and
 // every other audience the same tree without them — on the push, the snapshot
 // and GET /org alike. What they never carry, for any audience, is anything a
@@ -161,7 +163,7 @@ type OrgSeat struct {
 	Manages              []string `json:"manages,omitempty"`
 	Availability         string   `json:"availability,omitempty"`
 
-	// TokenBudget is this seat's own ceilings, as its chart record writes
+	// TokenBudget is this seat's own ceilings, as the document writes
 	// them; a window it does not name is capped only by the company's.
 	TokenBudget *OrgTokenBudget `json:"token_budget,omitempty"`
 
@@ -274,14 +276,9 @@ func orgProjection(company func() (*config.Company, *org.Organization)) OrgProje
 	if c == nil {
 		return OrgProjection{}
 	}
-	// THE ROSTER, NOT THE DOCUMENT. The seats and units are the chart's own
-	// log now, and a stored revision carries neither — so a projection cut
-	// from `c.Roles` and `c.Units` showed every open screen a company with
-	// nobody in it, derived cleanly from bytes that were perfectly correct.
-	//
-	// The company's NAME, mission, vision, policies, clock and own budget
-	// stay on the left: those are settings, and they are what a revision
-	// does still hold.
+	// THE ROSTER for the tree, so a reader is shown the seats and units as
+	// the engine runs them; the company's NAME, mission, vision, policies,
+	// clock and own budget from the document.
 	derived := config.DeriveFrom(roster)
 	b := orgBuilder{
 		providers: c.Providers.ProviderOrder(),
@@ -318,7 +315,8 @@ func topUnits(o *org.Organization) []*org.Unit {
 }
 
 // orgBuilder carries what a seat's resolved fields are resolved against: the
-// company's SETTINGS, while the seat they are resolved for is the chart's.
+// company's settings, while the seat they are resolved for is the running
+// organisation's.
 type orgBuilder struct {
 	// providers is providers.llm's keys in config order.
 	providers []string

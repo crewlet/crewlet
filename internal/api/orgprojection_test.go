@@ -38,8 +38,8 @@ const (
 	// named by `into`, which carries the labels the value decides (a
 	// provider key, a server name) and never the value's own contents —
 	// and which only a `config:read` audience is handed, because the labels
-	// are read off a seat's runtime half, which the chart strips from every
-	// other reader.
+	// are read off a seat's runtime settings, which `GET /config` serves to
+	// nobody else.
 	exposureResolved
 )
 
@@ -289,7 +289,7 @@ func orgBody(t *testing.T, a *api.App, token string) []byte {
 // public fields are filled with distinct prose that MUST appear to both, which
 // is what stops this passing on an empty answer; the labels a seat's chain and
 // tool sources resolve to MUST appear to the `config:read` reader and must not
-// to the other — a label read off a seat's runtime half is that half's to
+// to the other — a label read off a seat's runtime settings is theirs to
 // guard.
 //
 // Mutation: hand every audience the whole projection, and the reader's
