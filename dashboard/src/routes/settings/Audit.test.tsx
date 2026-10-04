@@ -33,18 +33,38 @@ vi.mock("~/lib/store-hooks.ts", async () => {
   return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
 });
 
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+
+/**
+ * The engine's two REST reads this screen makes — the credential listing and
+ * the identity trail — each answered as told, every read recorded by its path.
+ */
+let restAnswers: { secrets: () => Response; identity: () => Response };
+let restReads: { path: string; query: URLSearchParams }[] = [];
+
+/** The reads made of one REST path, in order. */
+const readsOf = (path: string) => restReads.filter((r) => r.path === path);
+
 beforeEach(() => {
   location.hash = "#/settings/audit";
+  restReads = [];
+  restAnswers = {
+    secrets: () => json({ secrets: [] }),
+    identity: () => json({ events: [], next: 0, position: "CREWLET_IAM_LOG@1:1" }),
+  };
   Object.defineProperty(globalThis, "fetch", {
     writable: true,
-    value: vi.fn(() =>
-      Promise.resolve(
-        new Response(JSON.stringify({ secrets: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    ),
+    value: vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://engine.test");
+      restReads.push({ path: url.pathname, query: url.searchParams });
+      if (url.pathname === "/iam/audit") return restAnswers.identity();
+      if (url.pathname === "/secrets") return restAnswers.secrets();
+      return json({});
+    }),
   });
 });
 
@@ -568,4 +588,59 @@ test("an empty To cell says why in the row's own terms", async () => {
   await waitFor(() => expect(screen.getByText(/backed up to \/var\/backups\/two/)).toBeTruthy());
   expect(screen.getByText("No directory recorded")).toBeTruthy();
   expect(screen.queryByText("Not recorded")).toBeNull();
+});
+
+/** One entry of the identity trail, as `GET /iam/audit` answers it. */
+function identityEntry(over: Record<string, unknown> = {}) {
+  return {
+    id: "ih-1",
+    class: "change",
+    object_kind: "login",
+    object_id: "sam.okafor",
+    person: "0198f0a0-0000-7000-8000-0000000000e5",
+    op: "invite",
+    actor: "jane",
+    actor_kind: "person",
+    operator_id: "session:0192f00e",
+    summary: "invited sam.okafor",
+    at: RECENTLY,
+    position: 41,
+    ...over,
+  };
+}
+
+// THE SIXTH SOURCE: WHO CAN REACH THE COMPANY, AND WHO CHANGED IT.
+//
+// An invitation, a grant edit and a revoked token change no tracker or wiki
+// record either. The identity estate keeps its own trail, which the route
+// pages by POSITION — so the window's start is handed over as an instant for
+// the route to resolve.
+test("the identity trail is merged in, asked from the window's start", async () => {
+  restAnswers.identity = () =>
+    json({ events: [identityEntry()], next: 0, position: "CREWLET_IAM_LOG@1:41" });
+  serving({ work_activity: { records: [commit()], complete: true } });
+  mount();
+  await waitFor(() => expect(screen.getByText("invited sam.okafor")).toBeTruthy());
+  const read = readsOf("/iam/audit")[0]!;
+  expect(Date.parse(read.query.get("at") ?? "")).toBeLessThan(Date.now() - 6 * 86_400_000);
+  expect(read.query.get("limit")).toBe("200");
+  // ITS AUTHOR drawn as the seat the chart holds by that address, and the
+  // credential it came through beside it.
+  expect(screen.getAllByRole("link", { name: /Jane Founder/ }).length).toBeGreaterThan(0);
+  expect(screen.getAllByText("session:0192f00e").length).toBeGreaterThan(0);
+  // AND THE REST STAND beside it.
+  expect(screen.getByText("took it off the board")).toBeTruthy();
+});
+
+// A REFUSED TRAIL IS SAID, AND THE REST STAND: the directory's trail is the
+// audit grant's, and a reader refused it keeps every other source.
+test("a refused identity trail names the grant, and the other sources stand", async () => {
+  restAnswers.identity = () =>
+    json({ error: "unauthorized", reason: "no_grant", grants: ["audit:read"] }, 403);
+  serving({ work_activity: { records: [commit()], complete: true } });
+  mount();
+  await waitFor(() =>
+    expect(screen.getByText(/Reading the identity trail needs audit:read/)).toBeTruthy(),
+  );
+  expect(screen.getByText("took it off the board")).toBeTruthy();
 });
