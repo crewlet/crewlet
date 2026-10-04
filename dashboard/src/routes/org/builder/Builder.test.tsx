@@ -32,6 +32,29 @@ const NOBODY = { login: "", owner: "", grants: [] };
 /** Somebody signed in who holds neither configuration grant. */
 const READER = { login: "reader", owner: "reader", grants: ["state:read"] };
 
+/**
+ * Somebody bound to a seat who may read the configuration, holds no
+ * `config:write` and leads no unit — so the builder drafts the whole company.
+ */
+const BOUND_READER = { ...READER, handle: "reader", grants: ["config:read"] };
+
+/**
+ * What the engine answers [BOUND_READER]'s check of the draft as it was read:
+ * the route admits anybody bound to a seat until it has read the write, and
+ * the admission then refuses every part of it, starting with the unchanged
+ * document.
+ */
+const refusedWhole = () =>
+  json(
+    {
+      error: "unauthorized",
+      reason: "no_grant",
+      grants: ["config:write"],
+      refused: [{ kind: "document", id: "", place: "", why: "unchanged", reason: "no_grant" }],
+    },
+    403,
+  );
+
 /** The socket comes back, which is when the frame asks who is reading again. */
 function reconnect(store: { setConnected: (up: boolean) => void }) {
   act(() => store.setConnected(false));
@@ -174,9 +197,8 @@ describe("the posture table", () => {
   // without the coordination store that refusal described.
   test("a halted builder marks the toolbar's add entries unavailable", async () => {
     const engine = new Engine(company());
-    engine.script = (r) =>
-      r.query.get("dry_run") === "true" ? json({ error: "forbidden" }, 403) : null;
-    mountBuilder({ engine, viewer: () => ({ ...READER, grants: ["config:read"] }) });
+    engine.script = (r) => (r.query.get("dry_run") === "true" ? refusedWhole() : null);
+    mountBuilder({ engine, viewer: () => BOUND_READER });
     expect(await screen.findByText("Needs config:write")).toBeDefined();
 
     // An edit is refused before it reaches the log, and says why.
@@ -796,13 +818,16 @@ describe("a step-up the person declined", () => {
     expect(screen.getByText("editable")).toBeDefined();
   });
 
-  // THE CONTROL: a refusal of the grant itself still names it.
+  // THE CONTROL: a refusal of the grant itself still names it — for a reader
+  // bound to a seat, whose refusal the engine words part by part, as for one
+  // bound to none.
   test("a refusal of the grant still names config:write", async () => {
     const engine = new Engine(company());
-    engine.script = (r) =>
-      r.query.get("dry_run") === "true" ? json({ error: "unauthorized" }, 403) : null;
-    mountBuilder({ engine, viewer: () => ({ ...READER, grants: ["config:read"] }) });
+    engine.script = (r) => (r.query.get("dry_run") === "true" ? refusedWhole() : null);
+    mountBuilder({ engine, viewer: () => BOUND_READER });
     expect(await screen.findByText("Needs config:write")).toBeDefined();
+    expect(screen.queryByText("1 problem")).toBeNull();
+    expect(screen.getByText("read only")).toBeDefined();
     expect(screen.getByRole("button", { name: "Sign in as somebody else" })).toBeDefined();
     expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
   });

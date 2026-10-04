@@ -108,26 +108,42 @@ describe("classifyCheck", () => {
         { status: 200, body: { valid: true, base_revision_id: "r1", warnings: null, derived } },
         "edit",
         "r1",
+        null,
       ),
     ).toEqual({ status: "clean", warnings: [], derived });
   });
 
   test("a dry run that validated against another base is a conflict", () => {
     expect(
-      classifyCheck({ status: 200, body: { valid: true, base_revision_id: "r2" } }, "edit", "r1"),
+      classifyCheck(
+        { status: 200, body: { valid: true, base_revision_id: "r2" } },
+        "edit",
+        "r1",
+        null,
+      ),
     ).toEqual({
       status: "conflict",
       reason: "base_moved",
       currentRevisionId: "r2",
     });
     expect(
-      classifyCheck({ status: 200, body: { valid: true, base_revision_id: "r2" } }, "create", null),
+      classifyCheck(
+        { status: 200, body: { valid: true, base_revision_id: "r2" } },
+        "create",
+        null,
+        null,
+      ),
     ).toMatchObject({
       status: "conflict",
       reason: "already_configured",
     });
     expect(
-      classifyCheck({ status: 200, body: { valid: true, base_revision_id: "" } }, "create", null),
+      classifyCheck(
+        { status: 200, body: { valid: true, base_revision_id: "" } },
+        "create",
+        null,
+        null,
+      ),
     ).toMatchObject({
       status: "clean",
     });
@@ -169,7 +185,31 @@ describe("classifyCheck", () => {
       ],
     ];
     for (const [answer, expected] of cases)
-      expect(classifyCheck(answer, "edit", "r1"), JSON.stringify(answer)).toEqual(expected);
+      expect(classifyCheck(answer, "edit", "r1", null), JSON.stringify(answer)).toEqual(expected);
+  });
+
+  // A PART REFUSED IS A PROBLEM ONLY WITH A LEAD'S DRAFT. Drafting the whole
+  // company without config:write is leading no unit, and every write of it is
+  // refused whole — the engine names the unchanged document first — which is
+  // a grant the reader lacks rather than a problem with each edit.
+  test("a refused part is a lead's draft's problem, and a grant the whole company's reader lacks", () => {
+    const answer: HttpAnswer = {
+      status: 403,
+      body: {
+        error: "unauthorized",
+        reason: "no_grant",
+        grants: ["config:write"],
+        refused: [{ kind: "document", id: "", place: "", why: "unchanged", reason: "no_grant" }],
+      },
+    };
+    expect(classifyCheck(answer, "edit", "r1", null)).toEqual({
+      status: "guarded",
+      code: "unauthorized",
+    });
+    expect(classifyCheck(answer, "edit", "r1", "engineering")).toMatchObject({
+      status: "problems",
+      code: "unauthorized",
+    });
   });
 
   test("a refused document carries its problems, and a refusal without any is given one from its detail", () => {
@@ -193,6 +233,7 @@ describe("classifyCheck", () => {
         },
         "edit",
         "r1",
+        null,
       ),
     ).toEqual({
       status: "problems",
@@ -206,6 +247,7 @@ describe("classifyCheck", () => {
         { status: 413, body: { error: "body_too_large", detail: "the body is over the limit" } },
         "edit",
         "r1",
+        null,
       ),
     ).toEqual({
       status: "problems",
@@ -467,6 +509,7 @@ function harness() {
         sent,
         mode: "create",
         baseRevision: null,
+        scope: null,
       };
     },
     onSettled: (s) => settled.push(s),

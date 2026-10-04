@@ -172,7 +172,10 @@ export function classifySave(
   if (afterUnknown && refusal.kind === "conflict") {
     return { kind: "unknown", currentRevisionId: refusal.currentRevisionId, detail };
   }
-  return { kind: "refused", outcome: classifyCheck(answer, attempt.mode, attempt.baseRevision) };
+  return {
+    kind: "refused",
+    outcome: classifyCheck(answer, attempt.mode, attempt.baseRevision, attempt.scope),
+  };
 }
 
 /** Whether a revision is the one a save wrote. */
@@ -366,7 +369,7 @@ export async function readyToUpdate(
     sent: toDocument(fromDocument(document)),
     scope,
   });
-  const checked = classifyCheck(await transport.send(request, signal), "edit", active);
+  const checked = classifyCheck(await transport.send(request, signal), "edit", active, scope);
   if ((checked.status === "clean" || checked.status === "problems") && checked.derived) {
     return { kind: "ready", revisionId: active, document, derived: checked.derived };
   }

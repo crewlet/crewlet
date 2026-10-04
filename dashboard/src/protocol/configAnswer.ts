@@ -95,7 +95,9 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
   // and its refusal names each part that is not (`refused`,
   // `configapi.RefusedChange`): the caller holds what they need for the rest,
   // so it is a problem with the draft, placed on each seat and unit it names,
-  // and not a refusal of the person.
+  // and not a refusal of the person. A caller who leads no unit is refused
+  // every part the same way, and a writer that knows its draft is the whole
+  // company reads that as the grant they lack (the builder's `classifyCheck`).
   const refused = Array.isArray(body.refused) ? body.refused.filter(isRecord) : [];
   if (answer.status === 403 && refused.length > 0) {
     return {

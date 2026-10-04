@@ -49,6 +49,7 @@ export function prepareCheck(state: BuilderState, generation: number): PreparedC
     sent,
     mode: state.mode,
     baseRevision: state.base.revision,
+    scope: state.scope,
   };
 }
 

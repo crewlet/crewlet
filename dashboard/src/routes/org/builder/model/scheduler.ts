@@ -143,7 +143,8 @@ const derivedOf = (value: unknown): Derived | null =>
   isRecord(value) ? (value as unknown as Derived) : null;
 
 /**
- * What an answer to a check means for a draft built on `baseRevision`.
+ * What an answer to a check means for a draft built on `baseRevision`, of the
+ * unit a lead's draft is about (`scope`) or of the whole company (`null`).
  *
  * Also used for a save's refusal: a write answers with the same codes, and a
  * 201 is classified by `writes.ts`, which is the only place a success differs.
@@ -152,6 +153,7 @@ export function classifyCheck(
   answer: HttpAnswer,
   mode: BuilderMode,
   baseRevision: string | null,
+  scope: string | null,
 ): CheckOutcome {
   if (answer.status >= 200 && answer.status < 300) {
     const body = isRecord(answer.body) ? answer.body : {};
@@ -171,6 +173,16 @@ export function classifyCheck(
       warnings: list<ConfigWarning>(result.warnings),
       derived: derivedOf(result.derived),
     };
+  }
+  // A PART REFUSED IS A PROBLEM WITH A LEAD'S DRAFT, NEVER THE COMPANY'S.
+  // Whoever drafts the whole company holds config:write, whose writes are
+  // never refused part by part, or leads no unit (`Builder`'s scope) and is
+  // refused every write whole: the engine's route admits anybody bound to a
+  // seat until it has read what a write changes, so it still names each part,
+  // starting with an unchanged draft's `document`. That is a grant the reader
+  // lacks, which pauses editing, and not a problem with each edit.
+  if (answer.status === 403 && scope === null) {
+    return { status: "guarded", code: text(isRecord(answer.body) ? answer.body.error : "") };
   }
   // EVERY REFUSAL IS READ THE WAY EVERY OTHER /config WRITER READS IT
   // (`protocol/configAnswer.ts`). A check has no stored revision to settle,
@@ -443,6 +455,8 @@ export interface PreparedCheck {
   readonly sent: IndexedDocument;
   readonly mode: BuilderMode;
   readonly baseRevision: string | null;
+  /** The unit a lead's draft is about; `null` for the whole company. */
+  readonly scope: string | null;
 }
 
 /** One answered check, for the reducer. */
@@ -565,7 +579,8 @@ export class CheckRunner {
       }
     };
     this.options.transport.send(prepared.request, controller.signal).then(
-      (answer) => settle(classifyCheck(answer, prepared.mode, prepared.baseRevision)),
+      (answer) =>
+        settle(classifyCheck(answer, prepared.mode, prepared.baseRevision, prepared.scope)),
       // An aborted check is superseded, not unreachable, and `settle` drops
       // it. A transport that rejects for any other reason broke its contract,
       // and the check is reported as unanswered rather than left in flight for
