@@ -418,13 +418,37 @@ func TestANewObjectReachesWhoAlreadyNamesIt(t *testing.T) {
 //
 // Mutation: list only the credential fields and the address naming a
 // variable is no change a lead is refused; compare a credential field's
-// strings alone and the server blocks holding none are no change either.
+// strings alone and the server blocks holding none are no change either; list
+// only what the after document holds and every credential cleared is none.
 func TestACredentialChangeIsListedApart(t *testing.T) {
 	t.Parallel()
 	base := parse(t, diffBase)
 	altered := only(t, config.DiffOrg(base, edit(t, "${PLATFORM_GITHUB}", "${CEO_GITHUB}")))
 	if !slices.Equal(altered.Credentials, []string{"mcp_env"}) {
 		t.Errorf("an altered credential listed %v", altered.Credentials)
+	}
+	// AND SO IS ONE CLEARED — emptied, removed, or left naming its server
+	// with nothing under it — on a seat and on a unit: a seat's own value
+	// cleared hands it whatever its unit shares for that server, and a
+	// unit's cleared takes its members' away.
+	own := "            mcp_env:\n              github:\n                GITHUB_TOKEN: ${PLATFORM_GITHUB}\n"
+	for _, cleared := range []string{"            mcp_env: {}\n", "",
+		"            mcp_env: {github: {}}\n"} {
+		change := only(t, config.DiffOrg(base, edit(t, own, cleared)))
+		if !slices.Equal(change.Credentials, []string{"mcp_env"}) {
+			t.Errorf("a seat's credential cleared to %q listed %v, want mcp_env",
+				cleared, change.Credentials)
+		}
+	}
+	shared := edit(t, "        purpose: keep the lights on\n", "        purpose: keep the lights on\n"+
+		"        mcp_env:\n          github:\n            GITHUB_TOKEN: ${PLATFORM_SHARED}\n")
+	for _, cleared := range []*config.Company{base, edit(t, "        purpose: keep the lights on\n",
+		"        purpose: keep the lights on\n        mcp_env: {}\n")} {
+		change := only(t, config.DiffOrg(shared, cleared))
+		if !slices.Equal(change.Credentials, []string{"mcp_env"}) {
+			t.Errorf("a unit's shared credential cleared listed %v, want mcp_env",
+				change.Credentials)
+		}
 	}
 	// A KEY WITH NOTHING UNDER IT IS A CREDENTIAL CHANGE: an `mcp_env`
 	// block naming a per-seat server starts that server for the seat, with

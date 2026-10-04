@@ -477,7 +477,13 @@ func settingsChanged(before, after *Company) []string {
 // attaching any per-seat tool server to their agents.
 //
 // A credential field holding nothing — an empty string, map or list — is
-// none, so a block whose credential fields are unset holds none.
+// none, so a block whose credential fields are unset holds none. EMPTYING ONE
+// IS STILL A CHANGE: the side that held a value lists its path and the side
+// that holds none does not, which [credentialsChanged] reports as cleared. What
+// is no change is an empty block where there was none, because nothing can
+// tell the two apart: the document is stored and read back with an empty
+// field omitted, so counting it would refuse a lead sending back exactly what
+// they read.
 func credentialsOf(v any) map[string]string {
 	out := map[string]string{}
 	var walk func(v reflect.Value, path Path)

@@ -235,8 +235,9 @@ func takeSeat(t *testing.T, list []any, handle string) ([]any, any) {
 // moving the unit they lead, moving a seat out, making a seat manage somebody
 // outside, touching a root seat, changing a key another system finds a seat
 // or a team by — a project, even one nothing in the company names any more,
-// a channel or a contact id — changing a credential — an `mcp_env` key with nothing under it among them, since the
-// key alone starts that tool server for the seat — or naming a `${VAR}`
+// a channel or a contact id — changing a credential — an `mcp_env` key with
+// nothing under it among them, since the key alone starts that tool server
+// for the seat, and a credential emptied or removed — or naming a `${VAR}`
 // anywhere — a contact id or an address that names one is resolved from the
 // engine's own environment and recited to whoever looks the seat up.
 //
@@ -251,7 +252,8 @@ func takeSeat(t *testing.T, list []any, handle string) ([]any, any) {
 // lead, a seat moved out — are admitted; drop the key check and the project,
 // the channel and the contact id are admitted; list only credential fields and the contact id and the
 // address naming a variable are admitted; compare a credential field's
-// strings alone and the empty server blocks are admitted.
+// strings alone and the empty server blocks are admitted; list only what the
+// proposed document holds and the emptied and removed credentials are.
 func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -337,6 +339,12 @@ func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 				e["mcp_env"] = map[string]any{"github": map[string]any{
 					"GITHUB_TOKEN": "${CEO_GITHUB_TOKEN}"}}
 			}, false, "seat/staff-eng///credential/no_grant"},
+		{"a seat's credential emptied", configapi.EntityRoles, "staff-eng",
+			func(_ *testing.T, e map[string]any) { e["mcp_env"] = map[string]any{} }, false,
+			"seat/staff-eng///credential/no_grant"},
+		{"a seat's credential removed", configapi.EntityRoles, "staff-eng",
+			func(_ *testing.T, e map[string]any) { delete(e, "mcp_env") }, false,
+			"seat/staff-eng///credential/no_grant"},
 		{"a tool server attached to a seat by an empty block", configapi.EntityRoles, "sre",
 			func(_ *testing.T, e map[string]any) {
 				e["mcp_env"] = map[string]any{"github": map[string]any{}}
