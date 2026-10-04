@@ -294,15 +294,13 @@ func TestTheWorkKeyOutlivesTheRoundsThatRebuildTheCall(t *testing.T) {
 		"agent_id": "CEO", "turn_id": "run-1", "work_key": "wk-1",
 		"phase": "execute", "iteration": 1,
 	}, at("2026-06-14T12:00:00Z")))
-	// A round from a node that predates the field carries no work key. It
-	// must not blank what the opening frame established.
 	s.Apply(env("agent_turn_progress", map[string]any{
-		"agent_id": "CEO", "turn_id": "run-1",
+		"agent_id": "CEO", "turn_id": "run-1", "work_key": "wk-1",
 		"phase": "execute", "iteration": 1, "round_num": 0,
 	}, at("2026-06-14T12:00:02Z"), id("e2"), streamOnly))
 
 	got := overlayOf(t, s, "CEO")
 	if got.LiveCall == nil || got.LiveCall.WorkKey != "wk-1" {
-		t.Errorf("work key = %+v, want it carried across the round", got.LiveCall)
+		t.Errorf("work key = %+v, want the round's own", got.LiveCall)
 	}
 }

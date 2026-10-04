@@ -174,7 +174,6 @@ type LiveCall struct {
 	// Rounds is the per-round timing the loop recorded — when each provider
 	// call was made, how long it took, its tokens and how many tools it
 	// asked for — as the progress frame carries it ([types.PhaseRound]).
-	// Empty on a frame from a build that predates it.
 	Rounds []any `json:"rounds"`
 
 	// MaxRounds is the round cap currently GRANTED to this phase, which an
@@ -211,8 +210,7 @@ type LiveCall struct {
 	CacheWriteTokens int `json:"cache_write_tokens"`
 
 	// WorkItem is the item the turn is charged to, when it is on one — the
-	// same `{backend, id, key, project}` the turn's start named. Carried
-	// like WorkKey, because a frame from an older build names none.
+	// same `{backend, id, key, project}` the turn's start named.
 	WorkItem *types.WorkItem `json:"work_item,omitempty"`
 
 	// Node is the node that published the call's frames: the node running
