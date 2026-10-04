@@ -79,8 +79,8 @@ import (
 // and the identity estate — and every wait inside a write is the
 // publisher's own, each bounded by [statelog.DefaultResolveBudget]: a wait for
 // this node's applier to reach a peer's record, and the resolution of its own
-// ([gateWaitsPerLog]). At a margin of three ([gateBudgetMargin]) that is two
-// minutes today.
+// ([gateWaitsPerLog]). At a margin of three ([gateBudgetMargin]) that is
+// ninety seconds today.
 //
 // IT WAS A LITERAL MINUTE, sized when two logs claimed identity: a margin of
 // three over twenty seconds. The register grew to four and the literal did
