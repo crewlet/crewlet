@@ -2,7 +2,6 @@ package iamdomain_test
 
 import (
 	"errors"
-	"maps"
 	"testing"
 	"time"
 
@@ -11,7 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 // THE DIRECTORY SAYS WHO HOLDS EACH SEAT, AT WHAT STAGE — and who held one
@@ -425,46 +423,5 @@ func TestABindWithNoSeatLookupIsUnavailable(t *testing.T) {
 	if got := rig.column(`SELECT seat_id FROM iam_people WHERE id = ?`,
 		person); len(got) != 1 || got[0] != "sarah-chen" {
 		t.Errorf("after the control sarah holds %v, want sarah-chen", got)
-	}
-}
-
-// WHICH SEATS ARE HELD IS THREE-VALUED, and a read this node cannot perform is
-// the third value rather than "nobody".
-//
-// It answered not-held on an error, so the chart's continuous report named
-// every human seat in the company as held by nobody for as long as a store
-// fault lasted, and the seat listing's `unheld` filter listed all of them under
-// a parameter promising the vacancies. And only an ACTIVE holder holds: a
-// suspended person's seat is one nobody can act as.
-func TestWhichSeatsAreHeldIsThreeValued(t *testing.T) {
-	t.Parallel()
-	rig := newWriteRig(t)
-	reader := rig.reader(t)
-	bindNew(t, rig, "sarah.chen", "sarah-chen")
-	suspended := bindNew(t, rig, "priya.shah", "platform-lead")
-	if _, err := rig.writer.SetStage(t.Context(), suspended, iam.StageSuspended,
-		"op-suspend", "on leave"); err != nil {
-		t.Fatalf("suspend: %v", err)
-	}
-	rig.drain()
-
-	held, err := reader.HeldSeats(t.Context())
-	if err != nil {
-		t.Fatalf("HeldSeats: %v", err)
-	}
-	if want := map[string]bool{"sarah-chen": true}; !maps.Equal(held, want) {
-		t.Errorf("held seats = %v, want %v — an active holder only", held, want)
-	}
-
-	if err := rig.db.CloseReplicated(); err != nil {
-		t.Fatalf("close the replicated estate: %v", err)
-	}
-	if held, err = reader.HeldSeats(t.Context()); err == nil {
-		t.Errorf("an estate this node cannot read answered %v with no error",
-			held)
-	}
-	if !errors.Is(err, store.ErrNoEstate) {
-		t.Errorf("the unreadable arm answered %v, want it to carry %v", err,
-			store.ErrNoEstate)
 	}
 }

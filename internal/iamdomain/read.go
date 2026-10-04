@@ -1054,54 +1054,6 @@ func readInvalidated(ctx context.Context, tx *sql.Tx) (uint64, error) {
 	return uint64(invalidated), nil
 }
 
-// HeldSeats is every seat an ACTIVE person in this estate is bound to, each
-// named by its IDENTITY — the handle it was created under (ADR-0027) — read
-// in ONE snapshot.
-//
-// # One snapshot, because it answers a whole report
-//
-// The chart's continuous check and the seat listing's `unheld` filter each ask
-// about every human seat in the company at once. Asked a seat at a time it was
-// a transaction per seat — every `/health` a load balancer polled paid for all
-// of them — and the answers were taken at different instants, so one report
-// could combine bindings that never coexisted.
-//
-// # An error is never "nobody", here either
-//
-// It used to answer a read it could not perform as NOT HELD, on the reasoning
-// that one unreadable row should not fail a page that is otherwise correct.
-// What that bought was the report naming every human seat in the company as
-// held by nobody during a store fault, and the filter listing all of them
-// under a parameter that promised the vacancies: the false answer is the exact
-// one the caller acts on. So the error travels, and each caller decides what
-// it costs — the report leaves the finding undecided and counts it, the
-// filter refuses.
-func (r *Reader) HeldSeats(ctx context.Context) (map[string]bool, error) {
-	held := map[string]bool{}
-	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		clear(held)
-		rows, err := tx.QueryContext(ctx, `
-			SELECT seat_id FROM iam_people
-			 WHERE seat_id != '' AND stage = ?`, string(iam.StageActive))
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var seat string
-			if err := rows.Scan(&seat); err != nil {
-				return err
-			}
-			held[seat] = true
-		}
-		return rows.Err()
-	})
-	if err != nil {
-		return nil, fmt.Errorf("iamdomain: read which seats are held: %w", err)
-	}
-	return held, nil
-}
-
 // SeatHolder is one seat binding, as contact routing reads the directory.
 //
 // A FACT AND NOT A VERDICT. Which stages may be reached through a seat's
