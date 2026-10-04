@@ -470,6 +470,47 @@ func TestALeadsSettingChangeIsRefusedNamingTheKey(t *testing.T) {
 	}
 }
 
+// A WRITE THAT CHANGES NOTHING IS THE COMPANY GRANT'S.
+//
+// Storing the document unchanged makes a new revision and re-activates it on
+// every node — `POST /config/reload`'s gesture — so a caller without
+// `config:write` is refused it however it arrives: a patch of a key that is
+// already unset, by a person who leads nothing, and an entity sent back as it
+// was read, by a lead. The revision does not move. The control is the company's
+// grant, whose same patch lands.
+//
+// Mutation: admit a diff with no part refused, as before, and both writes
+// land as new revisions.
+func TestAWriteThatChangesNothingIsTheCompanyGrants(t *testing.T) {
+	t.Parallel()
+	s := leadSurface(t)
+	before := activeRevision(t, s)
+	colleague := platformLead()
+	colleague.Seat = "toolsmith"
+	headers := map[string]string{"X-Summary": "nothing"}
+	if parts := refusedParts(t, doAs(t, s, colleague, http.MethodPatch, "/config",
+		`{"vision": null}`, headers)); !slices.Equal(parts,
+		[]string{"document////unchanged/no_grant"}) {
+		t.Errorf("a no-op patch refused %v, want the unchanged document named", parts)
+	}
+	if parts := refusedParts(t, putEntityAs(t, s, platformLead(), configapi.EntityRoles,
+		"sre", func(map[string]any) {}, "")); !slices.Equal(parts,
+		[]string{"document////unchanged/no_grant"}) {
+		t.Errorf("a lead's unchanged seat refused %v, want the unchanged document named",
+			parts)
+	}
+	if after := activeRevision(t, s); after != before {
+		t.Errorf("a refused no-op moved the active revision to %s", after)
+	}
+	admin := iam.Principal{ID: uuid.New(), Login: "ops.admin", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantConfigWrite},
+		ReauthAt: time.Now().Add(time.Hour)}
+	if res := doAs(t, s, admin, http.MethodPatch, "/config", `{"vision": null}`,
+		headers); res.Code != http.StatusCreated {
+		t.Errorf("config:write re-publishing the document = %d: %s", res.Code, res.Body.String())
+	}
+}
+
 // THE COMPANY'S GRANT IS THE ADMIN PATH: whoever holds config:write changes
 // anything, a root seat and a setting included, leading nothing at all.
 func TestConfigWriteIsTheAdminPath(t *testing.T) {

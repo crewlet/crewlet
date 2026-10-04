@@ -1726,6 +1726,7 @@ subtree:
 | A new **project**, **space**, **channel**, **email** or **contact identity** | no object outside their subtree already claims it — a lead's authority over a project or a space is derived from the unit that declares it, and vendor attribution from an address |
 | A **credential** set, cleared or changed — any value in a credential field (`mcp_env`, a sandbox's `env`, a setup file, a seat's own app tokens), and a `${VAR}` set, cleared or changed in **any** field | never: it takes `config:write`, because a reference names any variable the engine can resolve — the company's secrets and the node's own keyring and tokens alike. Pointing a seat's tools at one hands it to a process the lead configures, and a seat's `email` and contact ids resolve one too and are recited to anybody who looks the seat up, so a lead naming a secret as their own Slack id would read it back |
 | A **setting** — anything outside `roles:` and `units:` | never: it takes `config:write` |
+| **Nothing** — a write whose document is the one it replaces | never: storing it still makes a new revision and re-activates it on every node, rebuilding every seat's tools, providers and MCP children, which is `POST /config/reload`'s gesture and takes `config:write` |
 
 Only what a write **changes** is judged: a reference or a claim the object
 already carried was somebody else's decision, and judging it again would make a

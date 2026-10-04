@@ -1186,11 +1186,11 @@ stored.
 
 | Field | What it says |
 |---|---|
-| `kind`, `id` | A `seat` by handle, a `unit` by key, or a `setting` by its top-level key |
+| `kind`, `id` | A `seat` by handle, a `unit` by key, a `setting` by its top-level key, or the `document` (no `id`) for a write that changes nothing — re-publishing the company unchanged re-activates it on every node, which is `POST /config/reload`'s and `config:write`'s |
 | `op` | What the write does to the seat or unit: `added`, `removed`, `moved` or `changed` |
 | `side` | `before` (the revision replaced) or `after` (the one proposed): which document the place was read in |
 | `place` | The key of the unit the change reaches; `""` is the company root, which is nobody's subtree |
-| `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), a claimed key (`project`, `space`, `channel`, `email`, `contact`, with the key in `value`), `named` (another object's `lead:` or `manages:` entry that already states the id an added seat or unit takes, with the id in `value`), `duplicate` (two objects on one id, which only the company grant may write), or `credential` (a credential field, or a `${VAR}` in any field, with the field's path in `value`) |
+| `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), a claimed key (`project`, `space`, `channel`, `email`, `contact`, with the key in `value`), `named` (another object's `lead:` or `manages:` entry that already states the id an added seat or unit takes, with the id in `value`), `duplicate` (two objects on one id, which only the company grant may write), `credential` (a credential field, or a `${VAR}` in any field, with the field's path in `value`), or `unchanged` (the `document` itself) |
 | `reason` | The authority table's reason: `not_lead`, `root`, or `no_grant` for a credential or a setting |
 
 A lead reads what they may write the same way: `GET /config/roles/{handle}`

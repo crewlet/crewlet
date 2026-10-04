@@ -30,6 +30,13 @@ import (
 // field are never a lead's: all three are asked as `config.write`, the
 // company's grant.
 //
+// A WRITE THAT CHANGES NOTHING IS NOT A LEAD'S EITHER. Storing the document
+// unchanged still makes a new revision and re-activates it on every node,
+// rebuilding every seat's tools, providers and MCP children — the gesture
+// `POST /config/reload` makes, which is `config:write`'s. Admitted because no
+// part of it was refused, anybody bound to a seat could force that fleet-wide
+// rebuild at will with `{"vision": null}`.
+//
 // FROM THE TWO DOCUMENTS, NEVER THE RUNNING COMPANY, so a node behind on its
 // applies decides a write exactly as a current one does.
 //
@@ -50,10 +57,11 @@ import (
 // RefusedChange is one part of a write its caller may not make, as a refusal
 // names it.
 type RefusedChange struct {
-	// Kind is `seat`, `unit`, or `setting` for a key outside the org chart.
+	// Kind is `seat`, `unit`, `setting` for a key outside the org chart, or
+	// `document` for a write that changes nothing.
 	Kind string `json:"kind"`
 	// ID is the seat's handle, the unit's key, or the setting's top-level
-	// key.
+	// key; empty for the document.
 	ID string `json:"id"`
 	// Op is what the write does to the seat or unit: added, removed, moved
 	// or changed.
@@ -65,8 +73,9 @@ type RefusedChange struct {
 	// company root.
 	Place string `json:"place"`
 	// Why is what about the change reaches it — `place`, `self`, `lead`,
-	// `manages`, a claimed key, `duplicate` — or `credential` for a
-	// credential the change sets, clears or alters.
+	// `manages`, a claimed key, `named`, `duplicate` — `credential` for a
+	// credential the change sets, clears or alters, or `unchanged` for a
+	// write that changes nothing.
 	Why string `json:"why,omitempty"`
 	// Value is the reference, the claimed key or the credential's path.
 	Value string `json:"value,omitempty"`
@@ -105,6 +114,10 @@ func admit(ctx context.Context, p iam.Principal, prior, next *config.Company) er
 		return nil
 	}
 	diff := config.DiffOrg(prior, next)
+	if len(diff.Changes) == 0 && len(diff.Settings) == 0 {
+		return &AdmissionError{Refused: []RefusedChange{{Kind: "document",
+			Why: "unchanged", Reason: company.Reason}}}
+	}
 	charts := map[config.OrgSide]authz.Chart{
 		config.OrgBefore: orgchart.Of(diff.Before),
 		config.OrgAfter:  orgchart.Of(diff.After),
@@ -151,8 +164,9 @@ func refuseAdmission(w http.ResponseWriter, err *AdmissionError) {
 	detail := authz.RefusalDetail(err.Refused[0].Reason, []iam.Grant{iam.GrantConfigWrite})
 	detail["refused"] = err.Refused
 	detail["hint"] = "a lead may change only the seats and units inside a unit " +
-		"they lead, on both sides of the write, and no setting or credential; " +
-		"each refused part names the place it reaches"
+		"they lead, on both sides of the write, and no setting, credential or " +
+		"${VAR}; a write that changes nothing re-publishes the company and is " +
+		"config:write's; each refused part names the place it reaches"
 	httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
 }
 
