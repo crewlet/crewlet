@@ -148,12 +148,6 @@ const (
 	ActionChartRuntime     Action = "chart.runtime.write"
 	ActionChartStructure   Action = "chart.structure.write"
 	ActionChartRename      Action = "chart.rename"
-	ActionChartImport      Action = "chart.import"
-	// ActionChartImportRead is the import LEDGER read — which revisions'
-	// structure landed, and where. The importer's own grant, as it always
-	// was, under a verb of its own because it asks for no step-up: a client
-	// polling its import is reading.
-	ActionChartImportRead Action = "chart.import.read"
 	// ActionChartRemove takes an object OUT of the chart — a structural
 	// batch whose operations remove something. Its own verb beside
 	// [ActionChartStructure] because it asks for the deployment's grant as
@@ -536,10 +530,6 @@ var rules = map[Action]rule{
 	// a namespace the whole company shares is not a fact about one team.
 	ActionChartRename:  {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
 	ActionChartRuntime: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
-	ActionChartImport:  {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
-	// THE LEDGER IS READ ON THE IMPORTER'S GRANT and asks for no proof:
-	// polling whether an import landed changes nothing.
-	ActionChartImportRead: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyAny},
 
 	ActionConfigRead:   {class: ClassOperator, grant: iam.GrantConfigRead, recency: iam.RecencyAny},
 	ActionConfigWrite:  {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
