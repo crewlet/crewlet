@@ -50,10 +50,9 @@ func TestAnEnrolmentHoldsALoginToItsHoldersKind(t *testing.T) {
 				iamdomain.ErrInvalidLogin)
 		}
 	}
-	// NOTHING WAS CLAIMED. The grammar is checked before the first
-	// append, so a refused enrolment leaves no reservation holding the
-	// name — a reservation under `token:ops` would be half of the binding
-	// this rule exists to refuse.
+	// NOTHING WAS WRITTEN. The grammar is checked before the record is
+	// published, so a refused enrolment publishes nothing — a row under
+	// `token:ops` would be half of the binding this rule exists to refuse.
 	rig.drain()
 	if got := rig.column(`SELECT login FROM iam_people`); len(got) != 0 {
 		t.Errorf("a refused enrolment left logins %v in the estate", got)
