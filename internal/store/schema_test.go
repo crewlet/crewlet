@@ -216,30 +216,68 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 	}
 }
 
-// AND THE THREE DUPLICATE-CLAIM INDEXES ARE SHIPPED, PARTIAL AND NON-UNIQUE.
+// THE DIRECTORY'S LOOKUPS SEARCH AN INDEX, AND NEVER SCAN THE PEOPLE.
 //
-// The uniqueness half is already covered by the estate-wide scan in
-// schemarules_test.go, which refuses UNIQUE in any replicated migration. What
-// THAT cannot say is the positive claim: that these three indexes exist at all.
-// A duplicate claim is a state ordinary traffic cannot produce — the broker
-// refuses the second claim on a subject — and can arise from a restore or a
-// reanchor, so the duty that REPORTS one is the whole remedy, and a duty whose
-// index nobody shipped is a full scan of the directory on every tick.
-func TestTheDuplicateClaimIndexesArePartialAndNotUnique(t *testing.T) {
+// A sign-in resolves a login or an address blind to its row, and every
+// directory decision asks whether anybody else holds the value it is about to
+// give — each a query with a BOUND value. 0034's indexes over those two columns
+// were PARTIAL, over the rows whose value is not empty, which a bound value
+// cannot be proved to satisfy: measured on this driver, both lookups were a
+// SCAN of every person. 0053 replaced them with plain indexes. The plan is read as the driver
+// reports it, for the shapes the directory runs — its uniqueness check and the
+// sign-in's sighting.
+//
+// Mutation: take 0053 out and the login and address rows read
+// `SCAN iam_people`.
+func TestTheDirectoryLookupsSearchAnIndex(t *testing.T) {
 	t.Parallel()
-
-	ddl := replicatedDDL(t)
-	for _, want := range []string{
-		"ON iam_people (email_blind, id) WHERE email_blind != ''",
-		"ON iam_people (login, id) WHERE login != ''",
-		"ON iam_people (seat_id, id) WHERE seat_id != ''",
+	db := openReplicated(t)
+	for _, tc := range []struct {
+		query string
+		args  []any
+		index string
+	}{
+		{`SELECT id FROM iam_people WHERE login = ? AND id <> ? LIMIT 1`,
+			[]any{"jane.doe", "p1"}, "iam_people_login_idx"},
+		{`SELECT id FROM iam_people WHERE email_blind = ? AND id <> ? LIMIT 1`,
+			[]any{"blind", "p1"}, "iam_people_email_idx"},
+		{`SELECT id FROM iam_people WHERE seat_id = ? AND id <> ? LIMIT 1`,
+			[]any{"founder", "p1"}, "iam_people_seat_lookup_idx"},
+		{`SELECT id, stage, login, seat_id, document FROM iam_people
+		   WHERE login = ? LIMIT 2`,
+			[]any{"jane.doe"}, "iam_people_login_idx"},
 	} {
-		if !strings.Contains(ddl, want) {
-			t.Errorf("no index matching %q is shipped — the duplicate-claim "+
-				"duty reads these three, and without them its scan is the whole "+
-				"directory on every tick", want)
+		plan := planOf(t, db, tc.query, tc.args...)
+		if want := "SEARCH iam_people USING INDEX " + tc.index; !strings.Contains(plan, want) {
+			t.Errorf("%s\nplans as %q, want %q — a lookup that scans reads "+
+				"every person in the company on every sign-in", tc.query, plan, want)
 		}
 	}
+}
+
+// planOf is the driver's own EXPLAIN QUERY PLAN for query, one step per line.
+func planOf(t *testing.T, db *store.DB, query string, args ...any) string {
+	t.Helper()
+	var steps []string
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				return err
+			}
+			steps = append(steps, detail)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("explain %q: %v", query, err)
+	}
+	return strings.Join(steps, "\n")
 }
 
 // openReplicated brings up a fresh store with every migration applied.
