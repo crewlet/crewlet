@@ -70,25 +70,32 @@ jobs:
           # GitHub works out whether a pull request conflicts when it is first
           # asked, and answers UNKNOWN until it has. Ask until every bump has an
           # answer, two minutes at most; one still UNKNOWN waits for the next merge.
+          #
+          # Only the number and the answer are listed. GraphQL refuses a query that
+          # could reach more than 500,000 nodes, and one that also asks for every
+          # pull request's commits and each commit's authors is a hundred times a
+          # hundred times a hundred. Each conflicting bump is read on its own below.
           for _ in 1 2 3 4 5 6 7 8; do
-            prs="$(gh pr list --author app/dependabot --base main --limit 100 \
-              --json number,mergeable,commits,comments)"
+            prs="$(gh pr list --author app/dependabot --base main --limit 1000 \
+              --json number,mergeable)"
             jq -e 'all(.[]; .mergeable != "UNKNOWN")' <<<"$prs" >/dev/null && break
             sleep 15
           done
 
-          # Conflicting, and nobody has asked for a recreate since the branch last
-          # changed. A refused `rebase` does not count: it left the branch as it was.
-          # Both timestamps are UTC ISO-8601, which compares as text.
-          jq -r '.[]
-            | select(.mergeable == "CONFLICTING")
-            | select((.commits[-1].committedDate) as $head
+          jq -r '.[] | select(.mergeable == "CONFLICTING") | .number' <<<"$prs" |
+            while read -r n; do
+              # Nobody has asked for a recreate since the branch last changed. A
+              # refused `rebase` does not count: it left the branch as it was. Both
+              # timestamps are UTC ISO-8601, which compares as text.
+              asked="$(gh pr view "$n" --json commits,comments | jq '
+                (.commits[-1].committedDate) as $head
                 | any(.comments[];
                     (.body | test("^@dependabot recreate"))
-                    and .createdAt > $head)
-                | not)
-            | .number' <<<"$prs" |
-            while read -r n; do
+                    and .createdAt > $head)')"
+              if [ "$asked" = true ]; then
+                echo "#$n is in conflict, and Dependabot was already asked since its last commit"
+                continue
+              fi
               gh api "repos/$GITHUB_REPOSITORY/issues/$n/comments" \
                 -f body='@dependabot recreate' --silent
               echo "asked Dependabot to recreate #$n"
