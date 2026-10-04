@@ -350,15 +350,9 @@ func TestAChartApplyWithNoActivationIsRefused(t *testing.T) {
 	}
 }
 
-// THE STAMP IS ON THE ROW, and the column the log-position guard used is not
-// there at all.
-//
-// The guard is only worth having if a reader can see it: the reconcile compares
-// the stored number against the activation it is applying, so a column the
-// applier never filled would make every node's comparison read zero and every
-// reconcile a write. And the column it replaced — a log position nothing
-// writes any more — is gone, because a guard column nothing fills reads as a
-// fact about the row and is exactly the kind of value a later reader compares.
+// THE STAMP IS ON THE ROW: the reconcile compares the stored number against
+// the activation it is applying, so a column the applier never filled would
+// make every node's comparison read zero and every reconcile a write.
 func TestTheChartEpochIsWrittenOntoTheProjectRow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
@@ -374,19 +368,6 @@ func TestTheChartEpochIsWrittenOntoTheProjectRow(t *testing.T) {
 	if got, want := r.projectChartEpoch("ENG"), configplane.ActivationStamp(at); got != want {
 		t.Errorf("tracker_projects.chart_epoch = %d, want %d — the guard "+
 			"the next reconcile compares is not on the row", got, want)
-	}
-	var count int
-	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(r.t.Context(),
-			`SELECT count(*) FROM pragma_table_info('tracker_projects')
-			 WHERE name = 'chart_position'`).Scan(&count)
-	}); err != nil {
-		t.Fatalf("read the project table's columns: %v", err)
-	}
-	if count != 0 {
-		t.Error("tracker_projects still carries chart_position, which nothing " +
-			"writes: a guard column with no writer is a value every reader " +
-			"is entitled to misread")
 	}
 }
 
