@@ -400,19 +400,29 @@ func (c *Company) UnresolvedMasks() []Path {
 		return nil
 	}
 	var found []Path
-	findMasks(reflect.ValueOf(*c), nil, false, &found)
+	eachCredential(reflect.ValueOf(*c), nil, false, func(path Path, value string) {
+		if value == Redacted {
+			found = append(found, path)
+		}
+	})
 	return found
 }
 
-func findMasks(v reflect.Value, path Path, secret bool, found *[]Path) {
+// eachCredential visits every string reachable from v that a credential field
+// holds — under a `secret` tag, at any depth beneath it — with its path.
+//
+// ONE WALK, read by the mask check above and by what a write changes in the
+// org chart ([DiffOrg]): the two have to agree about which values are
+// credentials, and the tag ([secrets.Field]) is the only thing that says so.
+func eachCredential(v reflect.Value, path Path, secret bool, visit func(Path, string)) {
 	switch v.Kind() {
 	case reflect.String:
-		if secret && v.String() == Redacted {
-			*found = append(*found, path)
+		if secret {
+			visit(path, v.String())
 		}
 	case reflect.Pointer, reflect.Interface:
 		if !v.IsNil() {
-			findMasks(v.Elem(), path, secret, found)
+			eachCredential(v.Elem(), path, secret, visit)
 		}
 	case reflect.Struct:
 		for i := range v.NumField() {
@@ -420,16 +430,16 @@ func findMasks(v reflect.Value, path Path, secret bool, found *[]Path) {
 			if !field.IsExported() {
 				continue
 			}
-			findMasks(v.Field(i), at(path, jsonName(field)),
-				secret || secrets.Field(field), found)
+			eachCredential(v.Field(i), at(path, jsonName(field)),
+				secret || secrets.Field(field), visit)
 		}
 	case reflect.Slice, reflect.Array:
 		for i := range v.Len() {
-			findMasks(v.Index(i), idx(path, i), secret, found)
+			eachCredential(v.Index(i), idx(path, i), secret, visit)
 		}
 	case reflect.Map:
 		for _, mapKey := range v.MapKeys() {
-			findMasks(v.MapIndex(mapKey), entry(path, mapKey.String()), secret, found)
+			eachCredential(v.MapIndex(mapKey), entry(path, mapKey.String()), secret, visit)
 		}
 	}
 }
