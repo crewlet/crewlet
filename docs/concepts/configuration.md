@@ -900,22 +900,12 @@ The whole document is stored as `{"__encrypted__": "enc:v1:<key_id>:<base64>"}` 
 - **Encrypt on write.** Every write path (`PUT /config`, per-entity `PUT`, `crewlet config import`, `crewlet run -company` / `-import-company`) encrypts the whole document before the payload reaches the DB.
 - **Decrypt at the read boundary.** The engine and the API it serves, migrations, and the CLI each decrypt the blob (`secrets.Open`, then `config.DecodeCompany`) into the plaintext structure before use, so the Tier A key is required for **every** config read. `${VAR}` references *inside* the config are kept verbatim in the blob and still resolve from the environment at construction time.
 - **Fail closed.** A revision sealed under a key this node's keyring does not hold is refused rather than run as an opaque blob it can't read.
-- **Authenticated, not only hidden.** The document a node fetches from its peers comes through the coordination store, which anything reaching the broker can write, so the seal is also what proves a node of this fleet wrote it. A revision stored **unsealed** is refused — never applied, adopted, shown or reverted to — with an error naming what brings it back, which depends on the revision: `crewlet config seal` for this node's active revision, importing its document again for a superseded one (nothing seals one in place), and the publishing node's own `crewlet config seal` for a body a peer sent. See [Control Plane § The design](control-plane.md#the-design).
+- **Authenticated, not only hidden.** The document a node fetches from its peers comes through the coordination store, which anything reaching the broker can write, so the seal is also what proves a node of this fleet wrote it. A revision stored **unsealed** is refused — never applied, adopted, shown or reverted to — with an error naming the way to have its document back: importing it again from your own copy (`crewlet config import` or `PUT /config`), which stores it sealed. See [Control Plane § The design](control-plane.md#the-design).
 - **One key, not N env vars.** After encrypting, the engine needs only the Tier A key in its environment — not a per-secret env var for every LLM key, MCP token, and webhook secret.
 
 Because the key gates every read, keep it as available as the database itself: the API, dashboard, migrations, and CLI all fail closed without it.
 
 **Threat model.** Encryption at rest defends against *data-at-rest* exposure: a leaked backup, a copied store file, a stolen volume snapshot, a coordination-store dump on a laptop — the attacker gets one opaque ciphertext blob per revision, no structure and no credentials. It also keeps config egress clean (`GET /config`, dashboard views, and revision diffs are decrypt-then-redact — no plaintext secrets) and absorbs accidental plaintext (a raw key pasted into `company.yaml` is encrypted on write, so it never lands in the DB in the clear). It does **not** defend against a compromised engine host that holds both the DB and the Tier A key (that host can decrypt — it must, to run; keep the key out of the store's backup domain — that separation is the point), a malicious operator with a valid key and API access, or in-memory extraction from the live process. The property: plaintext config exists only transiently in the encrypt/decrypt path and in the live engine's memory — never in durable storage.
-
-### A revision stored before the keyring was required
-
-Every write path seals, so the only plaintext revision a store can hold is one a build older than the mandatory keyring wrote. A node refuses to read it, naming the command that fixes it:
-
-```bash
-crewlet config seal                          # re-stores the active revision sealed
-```
-
-`crewlet config seal` writes a new revision holding the encrypted document — the one read of a plaintext revision the engine allows, because it is the operator vouching for the revision their own node was running. It's idempotent: a second run on an already-sealed revision is a no-op. Superseded plaintext revisions stay unreadable to every other reader, which says so and names importing the document again as the way to have it back.
 
 ### Rotation
 

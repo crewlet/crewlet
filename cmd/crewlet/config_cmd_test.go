@@ -434,7 +434,6 @@ func TestALockedConfigStoreNamesEachSubcommandsOwnRoute(t *testing.T) {
 		"diff":      "/diff?against=",
 		"activate":  "/revert",
 		"rekey":     "POST /config/reload",
-		"seal":      "no route through the API",
 	} {
 		remedy := lockedStoreRemedy(sub)
 		if !strings.Contains(remedy, want) {

@@ -10,15 +10,14 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// `crewlet config seal` and `crewlet config rekey` — the config document's
-// half of a keyring rotation.
+// `crewlet config rekey` — the config document's half of a keyring rotation.
 //
 // # Why the secret store's rekey is not enough
 //
 // A company's credentials live in two places sealed with the same Tier A
 // keyring: the secret store, and the config document itself, which a founder
 // may legitimately carry literals in. `crewlet secrets rekey` moves the
-// first. Without these, the second stays sealed under whatever key sealed it
+// first. Without this, the second stays sealed under whatever key sealed it
 // — so an operator who follows the documented rotation, sees `secrets rekey`
 // report success and drops the retired key has just made their company
 // configuration unreadable on every node, at the next apply, with no way back
@@ -29,43 +28,6 @@ import (
 // Revisions are immutable and the activation pointer is append-only, which is
 // what makes the history a record rather than a claim. Re-sealing writes a new
 // revision carrying the same document, exactly as `import` and `revert` do.
-
-// sealConfig re-stores a plaintext active revision as a sealed one.
-//
-// The one-time migration off plaintext-at-rest: a store written before the
-// keyring was required holds a plaintext revision, and nothing re-seals it on
-// its own — `import` seals what it writes, but only when something is
-// imported. There is no keyring check here: the store this command opened was
-// named by a Tier A that loaded, and Tier A refuses a file without one.
-func sealConfig(ctx context.Context, cs *configStore, stdout io.Writer) error {
-	rev, err := revisionOrActive(ctx, cs, "")
-	if err != nil {
-		return err
-	}
-	if _, sealed := secrets.EnvelopeKeyIDOf(rev.Payload); sealed {
-		fmt.Fprintf(stdout, "revision %s is already sealed; nothing to do\n", rev.ID)
-		return nil
-	}
-	// THE MIGRATION'S READ, and the one place a plaintext revision is read
-	// with a keyring in hand: every other reader refuses it
-	// ([secrets.ErrUnsealedWithKey]; a reader of the active revision names
-	// this command), because an unsealed payload is one anything that
-	// reaches the store could have written. Sealing it is the operator vouching for the revision their
-	// own node has been running.
-	document, err := secrets.OpenToReseal(cs.cipher, rev.Payload)
-	if err != nil {
-		return fmt.Errorf("open revision %s: %w", rev.ID, err)
-	}
-	id, err := reseal(ctx, cs, rev, document, "sealed under "+activeKeyID(cs))
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(stdout, "sealed revision %s as %s under %s\n", rev.ID, id, activeKeyID(cs))
-	// THE NEXT START ALONE: no running node can be on a plaintext revision,
-	// which every reader but this one refuses.
-	fmt.Fprintln(stdout, offlinePublish)
-	return nil
-}
 
 // rekeyConfig re-seals the active revision under the keyring's active key.
 //
@@ -81,14 +43,8 @@ func rekeyConfig(ctx context.Context, cs *configStore, dryRun bool, stdout io.Wr
 	sealedUnder, sealed := secrets.EnvelopeKeyIDOf(rev.Payload)
 	switch {
 	case !sealed:
-		// SAID RATHER THAN SILENTLY SEALED. "Rotate the key this is under"
-		// and "start encrypting this at all" are different decisions, and
-		// an operator running a rotation script has not asked for the
-		// second — see [sealConfig].
-		return fmt.Errorf(
-			"revision %s is stored in plaintext, so there is no key to "+
-				"rotate; `crewlet config seal` encrypts it under %s first",
-			rev.ID, active)
+		return fmt.Errorf("revision %s has no key to rotate: %w",
+			rev.ID, secrets.ErrUnsealedWithKey)
 	case sealedUnder == active:
 		fmt.Fprintf(stdout, "revision %s is already sealed under %s\n", rev.ID, active)
 		return nil

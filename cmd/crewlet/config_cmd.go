@@ -50,7 +50,6 @@ Usage:
   crewlet config diff ID [-against ID|active]
                                    Compare two revisions
   crewlet config activate ID       Mark a revision active here; published at the next start
-  crewlet config seal              Encrypt a plaintext active revision under the keyring
   crewlet config rekey [-dry-run]  Re-seal the active revision under the active key
 
 Flags:
@@ -70,7 +69,7 @@ becomes unreadable.
 // directions, because the two lists are three screens apart and nothing else
 // connects them.
 var configSubcommands = []string{
-	"import", "show", "export", "revisions", "diff", "activate", "seal", "rekey",
+	"import", "show", "export", "revisions", "diff", "activate", "rekey",
 }
 
 // defaultRevisionLimit is how many revisions `crewlet config revisions` lists.
@@ -192,8 +191,6 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		return diffRevisions(ctx, cs, subject, against, stdout)
 	case "activate":
 		return activateRevision(ctx, cs, subject, stdout)
-	case "seal":
-		return sealConfig(ctx, cs, stdout)
 	case "rekey":
 		return rekeyConfig(ctx, cs, dryRun, stdout)
 	default:
@@ -391,10 +388,9 @@ func lockedStoreRemedy(sub string) string {
 			"/config/reload stores the active document again under that " +
 			"node's active key — or " + stop
 	default:
-		// seal rewrites the store's own rows and has no route through the
-		// API: a running node refuses a plaintext revision.
-		return "This rewrites the store's own rows and has no route through " +
-			"the API: " + stop
+		// Every subcommand that opens the store is named above; a new one
+		// still gets the stop, which is always true.
+		return "S" + stop[1:]
 	}
 }
 
@@ -556,30 +552,20 @@ func renderValue(v any) string {
 }
 
 // openStored opens a revision this node's store holds, and a refusal says what
-// brings it back — which depends on the revision, so the keyring's own refusal
-// names nothing.
+// brings it back.
 //
-// An UNSEALED revision was written by a build older than the mandatory
-// keyring. The ACTIVE one is sealed by `crewlet config seal`, which re-seals
-// the active revision and nothing else; a SUPERSEDED one is sealed in place by
-// nothing at all, so it can be neither shown nor reverted to, and its document
-// comes back only by importing it again from the operator's own copy. A
-// revision sealed under a key the keyring does not hold needs that key back.
+// An UNSEALED revision is refused: nothing vouches for who wrote it, and its
+// document comes back only by importing it again from the operator's own
+// copy. A revision sealed under a key the keyring does not hold needs that key
+// back.
 func openStored(cipher secrets.Cipher, rev store.Revision) ([]byte, error) {
 	document, err := secrets.Open(cipher, rev.Payload)
 	switch {
 	case err == nil:
 		return document, nil
-	case errors.Is(err, secrets.ErrUnsealedWithKey) && rev.Active:
-		return nil, fmt.Errorf("revision %s is this node's active revision, and "+
-			"a build older than the mandatory keyring stored it without a seal; "+
-			"seal it with `crewlet config seal`, which stores it sealed and "+
-			"activates it: %w", rev.ID, err)
 	case errors.Is(err, secrets.ErrUnsealedWithKey):
-		return nil, fmt.Errorf("revision %s is a superseded revision a build "+
-			"older than the mandatory keyring stored without a seal, and nothing "+
-			"seals a superseded revision in place, so it can be neither shown nor "+
-			"reverted to; to have its document again, import it from your own "+
+		return nil, fmt.Errorf("revision %s is stored without a seal, so it is "+
+			"not opened; to have its document again, import it from your own "+
 			"copy with `crewlet config import`, which stores it sealed: %w",
 			rev.ID, err)
 	default:

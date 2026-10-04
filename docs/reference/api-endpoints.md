@@ -1606,15 +1606,11 @@ remedy:
 
 - **`unreadable_revision`**: it is sealed under a key the keyring no longer
   holds. `hint` says to put that key back in the node's `secrets.keys`.
-- **`unsealed_revision`**: it was stored **without a seal**, which only a build
-  older than the mandatory keyring wrote. A node reads only sealed revisions,
-  because the seal is what says a node of this fleet wrote one; a plaintext
-  revision could have been written by anything that reached the store. `hint`
-  depends on which revision it is. The **active** revision is sealed by
-  running [`crewlet config seal`](cli.md#crewlet-config-seal) on the node,
-  which stores it sealed and activates it. A **superseded** one is sealed in
-  place by nothing, so it can be neither shown, compared nor reverted to; to
-  have its document again, import it from your own copy with `PUT /config` or
+- **`unsealed_revision`**: it was stored **without a seal**. A node reads only
+  sealed revisions, because the seal is what says a node of this fleet wrote
+  one; a plaintext revision could have been written by anything that reached
+  the store, so it can be neither shown, compared nor reverted to. `hint` says
+  to import its document again from your own copy with `PUT /config` or
   `crewlet config import`, which stores it sealed.
 
 These used to be `500 internal_error` everywhere but a revert, and a revert to

@@ -95,7 +95,7 @@ When a name exists in both with **different** values, boot logs `secret_shadowed
 
 ### A keyring is required
 
-The secret store has **no plaintext mode**, and neither does anything else any more: every node's Tier A carries a keyring (`crewlet validate` refuses a file without one, and a node refuses to start), and a company document stored unsealed is refused by every reader but `crewlet config seal`. A store whose whole purpose is holding secrets should not be able to hold them in the clear. The one place a command runs with no keyring is a provisioning run given no Tier A file at all, which opens no store and resolves from the environment alone — and says so.
+The secret store has **no plaintext mode**, and neither does anything else any more: every node's Tier A carries a keyring (`crewlet validate` refuses a file without one, and a node refuses to start), and a company document stored unsealed is refused by every reader. A store whose whole purpose is holding secrets should not be able to hold them in the clear. The one place a command runs with no keyring is a provisioning run given no Tier A file at all, which opens no store and resolves from the environment alone — and says so.
 
 Each value is sealed with AES-256-GCM and the record's own `name` bound in as associated data, so a ciphertext moved to another name fails to decrypt rather than silently impersonating a different secret. That is also what makes a **read fail closed**: a snapshot that skipped a record it could not open would let the environment answer for it, which is exactly the stale-`.env` shadowing the store exists to prevent — so an unopenable record refuses the whole snapshot, loudly, and the previous one keeps serving.
 

@@ -290,10 +290,8 @@ func TestANodeWithNoPointerPublishesItsActiveRevision(t *testing.T) {
 // A BOOT PUBLISHES NO REVISION IT HOLDS IN THE CLEAR.
 //
 // What a node publishes with no pointer to defer to, every peer applies — and
-// every peer refuses a body that is not sealed, this node included. Published,
-// a revision an older build stored unsealed was refused on every node, each
-// telling its operator to seal a revision that was never theirs. It is refused
-// here instead, naming the command this node's operator runs.
+// every peer refuses a body that is not sealed, this node included. It is
+// refused here instead, naming the command this node's operator runs.
 //
 // The control is the same store holding the revision sealed: published.
 //
@@ -313,7 +311,7 @@ func TestABootPublishesNoRevisionItHoldsInTheClear(t *testing.T) {
 			}
 		}
 		if _, err := db.Configs().InsertActive(t.Context(), store.Revision{
-			Source: "file", CreatedBy: "an-older-build", CreatedByKind: iam.ActorSystem,
+			Source: "file", CreatedBy: "not-a-node", CreatedByKind: iam.ActorSystem,
 			Summary: "stored before", Payload: payload, CreatedAt: time.Now().UTC(),
 		}); err != nil {
 			t.Fatal(err)
@@ -336,8 +334,8 @@ func TestABootPublishesNoRevisionItHoldsInTheClear(t *testing.T) {
 		if !errors.Is(err, secrets.ErrUnsealedWithKey) {
 			t.Fatalf("a boot over an unsealed revision = %v, want it refused unsealed", err)
 		}
-		if !strings.Contains(err.Error(), "crewlet config seal") {
-			t.Errorf("the refusal does not name the command that seals it: %v", err)
+		if !strings.Contains(err.Error(), "crewlet config import") {
+			t.Errorf("the refusal does not name the command that brings it back sealed: %v", err)
 		}
 		if published {
 			t.Error("the boot published a revision it holds in the clear")
