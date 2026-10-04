@@ -313,56 +313,68 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		{"a view naming neither is refused", seat("cto"),
 			authz.ActionViewSave, authz.Object{Kind: authz.KindView},
 			false, authz.ReasonUnnamed},
-		// A UNIT IS THE OTHER CONTAINER RELATION, and the fixture holds
-		// the two apart: the CTO leads the `sre` UNIT and the PLATFORM
+		// --- the org chart's subtree ---------------------------------- //
+		//
+		// A UNIT IS ITS OWN RELATION, and the fixture holds it apart from
+		// the project one: the CTO leads the `sre` UNIT and the PLATFORM
 		// PROJECT, and neither key answers the other's map. A rule that
-		// asked the project relation with a unit key would refuse the
-		// lead of that very unit on every company whose unit does not
-		// file under a project of the same name.
+		// asked the project relation with a unit key would refuse the lead
+		// of that very unit on every company whose unit does not file under
+		// a project of the same name.
 		//
 		// A PERSON BOUND TO THE SEAT, because that is who writes the chart:
-		// it is an HTTP surface a seat's tools never reach, and every write
-		// on it asks for a recent proof of identity no seat can give.
-		{"a unit's lead edits its content", personLeading("cto"),
-			authz.ActionChartContent,
+		// it is a /config write, no seat's tool reaches it, and every write
+		// asks for a recent proof of identity no seat can give.
+		{"a unit's lead writes inside it", personLeading("cto"),
+			authz.ActionOrgWrite,
 			authz.Object{Kind: authz.KindUnit, Container: "sre"},
 			true, authz.ReasonLead},
 		{"a colleague in it does not", personLeading("sre"),
-			authz.ActionChartContent,
+			authz.ActionOrgWrite,
 			authz.Object{Kind: authz.KindUnit, Container: "sre"},
 			false, authz.ReasonNotLead},
 		{"a unit key is not a project key", personLeading("cto"),
-			authz.ActionChartContent,
+			authz.ActionOrgWrite,
 			authz.Object{Kind: authz.KindUnit, Container: "PLATFORM"},
 			false, authz.ReasonNotLead},
-		// A SEAT'S RUNTIME SETTINGS ARE THE COMPANY'S, whoever leads the
-		// team: a seat's model chain, its credentials and its mcp_env are
-		// exec.Command on every engine host.
-		{"a unit's lead does not write runtime settings", personLeading("cto"),
-			authz.ActionChartRuntime, authz.Object{Kind: authz.KindCompany},
-			false, authz.ReasonNoGrant},
-		{"the company's own grant does",
-			person("jane.doe", iam.GrantConfigWrite),
-			authz.ActionChartRuntime, authz.Object{Kind: authz.KindCompany},
+		// THE ROOT IS NO UNIT'S, so it is in nobody's subtree: a seat or a
+		// unit at the top of the company is the company grant's alone.
+		{"the company root is nobody's subtree", personLeading("cto"),
+			authz.ActionOrgWrite, authz.Object{Kind: authz.KindUnit},
+			false, authz.ReasonRoot},
+		{"the company's grant writes anywhere",
+			person("jane.doe", iam.GrantConfigWrite), authz.ActionOrgWrite,
+			authz.Object{Kind: authz.KindUnit},
 			true, authz.ReasonGrant},
-		{"structure is the company's too", personLeading("cto"),
-			authz.ActionChartStructure, authz.Object{Kind: authz.KindCompany},
-			false, authz.ReasonNoGrant},
-		// THE ADMIN PATH OVER A CHART OBJECT'S PROSE IS THE COMPANY'S
-		// GRANT: whoever may restructure the chart may correct a goal in
-		// it, leading nothing — and the deployment's grant, which
-		// decides nothing about what a seat is told to do, may not.
-		{"the company's grant corrects any seat's prose",
-			person("jane.doe", iam.GrantConfigWrite), authz.ActionChartContent,
-			authz.Object{Kind: authz.KindPerson, Owner: "sre"},
-			true, authz.ReasonGrant},
-		{"and any unit's", person("jane.doe", iam.GrantConfigWrite),
-			authz.ActionChartContent,
+		{"the deployment's grant alone does not",
+			person("jane.doe", iam.GrantFleetOperate), authz.ActionOrgWrite,
 			authz.Object{Kind: authz.KindUnit, Container: "sre"},
+			false, authz.ReasonNotLead},
+		{"an agent never writes the chart, whatever it holds",
+			seat("cto", iam.GrantConfigWrite), authz.ActionOrgWrite,
+			authz.Object{Kind: authz.KindUnit, Container: "sre"},
+			false, authz.ReasonSeatRefused},
+		{"a lead reads inside their subtree", personLeading("cto"),
+			authz.ActionOrgRead,
+			authz.Object{Kind: authz.KindUnit, Container: "sre"},
+			true, authz.ReasonLead},
+		{"the read grant reads anywhere",
+			person("jane.doe", iam.GrantConfigRead), authz.ActionOrgRead,
+			authz.Object{Kind: authz.KindUnit},
 			true, authz.ReasonGrant},
-		{"the deployment's grant alone does not", person("jane.doe", iam.GrantFleetOperate),
-			authz.ActionChartContent,
-			authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+		{"and does not write",
+			person("jane.doe", iam.GrantConfigRead), authz.ActionOrgWrite,
+			authz.Object{Kind: authz.KindUnit, Container: "sre"},
+			false, authz.ReasonNotLead},
+		// A WRITE NOBODY HAS READ YET passes the route for anybody a unit
+		// could name as its lead, and nobody else: the body decides.
+		{"a person bound to a seat passes the route before the body",
+			personLeading("sre"), authz.ActionOrgWrite,
+			authz.Object{Kind: authz.KindUnit, Unresolved: true},
+			true, authz.ReasonLead},
+		{"somebody bound to no seat leads nothing", person("jane.doe"),
+			authz.ActionOrgWrite,
+			authz.Object{Kind: authz.KindUnit, Unresolved: true},
 			false, authz.ReasonNotLead},
 
 		// --- destructive ---------------------------------------------- //
@@ -630,86 +642,45 @@ func TestTheAdminPathDecidesWithNoChartAtAll(t *testing.T) {
 	}
 }
 
-// A CHART OBJECT'S REFUSAL NAMES THE COMPANY'S GRANT, AND THAT GRANT NEEDS NO
-// CHART.
+// THE SUBTREE'S REFUSAL NAMES ITS ROW'S GRANT, AND THAT GRANT NEEDS NO CHART.
 //
 // `Decision.Grants` is what a person refused reads as the remedy, so a lead
-// refused a seat they do not lead is told `config:write` — the grant that
-// admits them — and not `fleet:operate`, which no longer does. And the admin
-// path is decided before the relation, so a node that cannot read its org never
-// tells an administrator holding the company's grant that it cannot tell.
-// Mutation: put the deployment's grant back as this class's admin path and
-// every assertion here goes red.
-func TestAChartObjectsAdminPathIsTheCompanysGrant(t *testing.T) {
-	t.Parallel()
-	object := authz.Object{Kind: authz.KindPerson, Owner: "cto"}
-	refused := authz.Decide(t.Context(), personLeading("sre"),
-		authz.ActionChartContent, object, nimbus(), decidedAt)
-	if refused.Allowed || !slices.Equal(refused.Grants, []iam.Grant{iam.GrantConfigWrite}) {
-		t.Errorf("a lead refused a seat they do not lead: allowed %v naming "+
-			"%v, want a refusal naming [config:write]", refused.Allowed, refused.Grants)
-	}
-	admitted := authz.Decide(t.Context(), person("jane.doe", iam.GrantConfigWrite),
-		authz.ActionChartContent, object, authz.NoChart{}, decidedAt)
-	if admitted.Unknown() || !admitted.Allowed {
-		t.Errorf("the company's grant on a node with no chart: allowed %v, "+
-			"err %v — the admin path needs no chart", admitted.Allowed, admitted.Err)
-	}
-	deployment := authz.Decide(t.Context(), person("jane.doe", iam.GrantFleetOperate),
-		authz.ActionChartContent, object, nimbus(), decidedAt)
-	if deployment.Allowed {
-		t.Error("fleet:operate alone rewrote a seat's prose")
-	}
-}
-
-// TAKING AN OBJECT OUT OF THE CHART TAKES BOTH HATS.
+// refused a unit they do not lead is told `config:write` for a write and
+// `config:read` for a read — the grant that admits them — and never
+// `fleet:operate`, the admin path of the classes that decide somebody's work.
+// And the admin path is decided before the relation, so a node that cannot
+// read its org never tells an administrator that it cannot tell, while a lead
+// on the same node is told exactly that.
 //
-// A removal is structure, so the company's grant; and it is the one structural
-// change nothing undoes — the address is tombstoned for ever and the seat's
-// mailbox goes with it — so the deployment's grant as well, which is the bar a
-// purge has. A refusal names what the caller LACKS: an administrator holding
-// the company's grant is told the deployment's is missing, and nothing else.
-// An ordinary structural batch still takes the company's grant alone, which is
-// the control that the second hat is the removal's and not the batch's.
-//
-// Mutation: admit a removal on either grant alone and one case lets it
-// through; drop `also` from its row and the config:write holder is admitted.
-func TestARemovalFromTheChartTakesBothHats(t *testing.T) {
+// Mutation: make the class's admin path the deployment's grant and every
+// grant assertion here goes red; ask the chart before the grant and the
+// administrator's decision turns unknown.
+func TestTheSubtreesAdminPathIsItsRowsGrant(t *testing.T) {
 	t.Parallel()
-	decide := func(p iam.Principal, a authz.Action) authz.Decision {
-		return authz.Decide(t.Context(), p, a,
-			authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, decidedAt)
-	}
-	for _, c := range []struct {
-		name    string
-		holds   []iam.Grant
-		missing []iam.Grant
-	}{
-		{"the company's grant alone", []iam.Grant{iam.GrantConfigWrite},
-			[]iam.Grant{iam.GrantFleetOperate}},
-		{"the deployment's grant alone", []iam.Grant{iam.GrantFleetOperate},
-			[]iam.Grant{iam.GrantConfigWrite}},
-		{"neither", []iam.Grant{iam.GrantStateRead},
-			[]iam.Grant{iam.GrantFleetOperate, iam.GrantConfigWrite}},
+	object := authz.Object{Kind: authz.KindUnit, Container: "elsewhere"}
+	for action, want := range map[authz.Action]iam.Grant{
+		authz.ActionOrgWrite: iam.GrantConfigWrite,
+		authz.ActionOrgRead:  iam.GrantConfigRead,
 	} {
-		d := decide(person("jane.doe", c.holds...), authz.ActionChartRemove)
-		if d.Allowed || d.Reason != authz.ReasonNoGrant ||
-			!slices.Equal(d.Grants, c.missing) {
-			t.Errorf("%s decided %+v, want refused naming exactly %v", c.name,
-				d, c.missing)
+		refused := authz.Decide(t.Context(), personLeading("cto"), action, object,
+			nimbus(), decidedAt)
+		if refused.Allowed || !slices.Equal(refused.Grants, []iam.Grant{want}) {
+			t.Errorf("%s: a lead refused a unit they do not lead: allowed %v "+
+				"naming %v, want a refusal naming [%s]", action, refused.Allowed,
+				refused.Grants, want)
 		}
-	}
-	both := person("jane.doe", iam.GrantConfigWrite, iam.GrantFleetOperate)
-	if d := decide(both, authz.ActionChartRemove); !d.Allowed || d.Reason != authz.ReasonGrant {
-		t.Errorf("both grants decided %+v, want admitted on the grant", d)
-	}
-	if recency, _ := authz.RecencyOf(authz.ActionChartRemove); recency != iam.RecencyStepUp {
-		t.Errorf("a removal asks for a %q proof, want %q — it is a structural "+
-			"write like every other", recency, iam.RecencyStepUp)
-	}
-	if d := decide(person("jane.doe", iam.GrantConfigWrite),
-		authz.ActionChartStructure); !d.Allowed {
-		t.Errorf("an ordinary structural batch refused the company's grant: %+v", d)
+		admitted := authz.Decide(t.Context(), person("jane.doe", want), action, object,
+			authz.NoChart{}, decidedAt)
+		if admitted.Unknown() || !admitted.Allowed {
+			t.Errorf("%s: %s on a node with no chart: allowed %v, err %v — the "+
+				"admin path needs no chart", action, want, admitted.Allowed, admitted.Err)
+		}
+		blind := authz.Decide(t.Context(), personLeading("cto"), action, object,
+			chart{err: authz.ErrNoChart}, decidedAt)
+		if !blind.Unknown() {
+			t.Errorf("%s: a lead on a node that cannot read its chart decided "+
+				"%+v, want unknown", action, blind)
+		}
 	}
 }
 

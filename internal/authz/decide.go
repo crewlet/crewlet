@@ -79,7 +79,7 @@ const (
 	// would ask the personal one. The payload decides, and there is
 	// nothing to pick.
 	//
-	// It reads the container's KIND for [ClassChartObject]'s reason — a
+	// It reads the container's KIND for [Chart.LeadsUnit]'s reason — a
 	// project key and a unit key are two relations — and the WORKSPACE
 	// container reaches no relation at all, so a company-wide tab is the
 	// admin path alone.
@@ -92,27 +92,30 @@ const (
 	// object's KIND picks which of the two relations is asked.
 	ClassContainer Class = "container"
 
-	// ClassChartObject — one object in the org chart's PROSE: a unit's
-	// name and purpose, a seat's goal and responsibilities. Whoever leads
-	// that object, or the COMPANY's grant, which is this class's admin
-	// path rather than the deployment's ([chartAdminGrant]). The
-	// relations authority is derived from and a seat's runtime settings
-	// are the company's grant, whoever leads it, and are asked separately
-	// ([ActionChartContent]).
+	// ClassSubtree — the org chart: the seats and units of the company
+	// document. The ROW's own grant (`config:write` to change it,
+	// `config:read` to read it), or a LEAD over the part concerned: a unit
+	// is in a principal's SUBTREE when they are the effective lead of it or
+	// of any unit above it ([Chart.LeadsUnit]), and [Object.Container]
+	// names the unit a change reaches — empty for the company root, which no
+	// unit holds and so is nobody's subtree ([ReasonRoot]).
 	//
-	// ITS OWN CLASS RATHER THAN [ClassContainer], because the chart holds
-	// FOUR lead relations and they are four questions: who leads a seat,
-	// who leads a unit, who leads the unit that owns a PROJECT, and who
-	// leads the unit that owns a PAGE CONTAINER. A
-	// project is a tracker key a unit may declare, so asking the project
-	// relation with a unit key matches only a company whose unit files its
-	// work under a project of the same name — and answers false everywhere
-	// else, refusing the lead of that very unit with no error to notice.
+	// ONE QUESTION PER PLACE, AND THE SURFACE ASKS IT OF EVERY PLACE A
+	// WRITE REACHES, on both sides of it (internal/api/configapi): where a
+	// seat or a unit was, where it is now, what its references name and who
+	// else claims the keys it states. That is what keeps a lead inside
+	// their own team — a lead who could hand their unit to somebody else,
+	// make a report the CEO's manager or claim another team's project would
+	// gain authority outside it through the very relations this package
+	// decides everything else by.
 	//
-	// It reads the object's KIND to pick the relation, which is why a
-	// caller states one: a unit names itself in [Object.Container]
-	// and a seat in [Object.Owner].
-	ClassChartObject Class = "chart_object"
+	// A WRITE NOBODY HAS READ YET ([Object.Unresolved]) is admitted to
+	// anybody bound to a seat, the only kind of principal a unit can name
+	// as its lead, so the surface can read the body and decide on what it
+	// changes; somebody bound to none leads nothing and is refused before
+	// it is read. The gate asks NO CHART: "leads somebody" would refuse a
+	// lead alone in the team they are about to staff.
+	ClassSubtree Class = "subtree"
 
 	// ClassDestructive — removing, restoring and moving a task out of its
 	// project, trashing and restoring a page. The CONTAINER's lead, or the
@@ -163,7 +166,7 @@ const (
 // Classes are the thirteen, in declaration order.
 var Classes = []Class{
 	ClassRead, ClassSelf, ClassColleagueWrite, ClassOwnRecord, ClassOwnOrLead,
-	ClassSavedView, ClassContainer, ClassChartObject, ClassDestructive,
+	ClassSavedView, ClassContainer, ClassSubtree, ClassDestructive,
 	ClassAuthored, ClassOperator, ClassDirectoryRead,
 	ClassDirectorySelf,
 }
@@ -199,7 +202,7 @@ var Classes = []Class{
 //
 // THE ADMIN PATH IS CHECKED BEFORE THE CHART, on every class that has one,
 // because the chart can fail and the grant cannot: an operator holding
-// fleet:operate — or config:write, on a chart object — must not be told "I
+// fleet:operate — or config:write, on the org chart — must not be told "I
 // cannot tell" by a node that is behind.
 //
 // AND THE PROOF LAST, at now: a verb whose row asks for a recent proof of
@@ -372,43 +375,34 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 		if o.Container == "" {
 			return consulting(Decision{Reason: ReasonUnnamed}, adminGrant)
 		}
-		// THE KIND PICKS THE RELATION, for [ClassChartObject]'s reason
-		// and [Chart.LeadsContainer]'s: a page container and a tracker
-		// project are two key classes a unit declares in two fields,
-		// and one relation asked with the other's key matches only a
-		// company that spelled them the same.
+		// THE KIND PICKS THE RELATION, for [Chart.LeadsContainer]'s
+		// reason: a page container and a tracker project are two key
+		// classes a unit declares in two fields, and one relation asked
+		// with the other's key matches only a company that spelled them
+		// the same.
 		if o.Kind == KindContainer || o.Kind == KindPage {
 			return consulting(leadsContainer(ctx, chart, actorOf(p), o.Container), adminGrant)
 		}
 		return consulting(leadsProject(ctx, chart, actorOf(p), o.Container), adminGrant)
 
-	case ClassChartObject:
-		// THE COMPANY'S GRANT IS THE ADMIN PATH HERE, not the
-		// deployment's — see [chartAdminGrant].
-		if p.Can(chartAdminGrant) {
-			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, chartAdminGrant)
+	case ClassSubtree:
+		// THE ROW'S OWN GRANT IS THE ADMIN PATH, and it needs no chart.
+		if p.Can(r.grant) {
+			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, r.grant)
 		}
-		// THE KIND PICKS THE RELATION. See the class's own doc for why
-		// one relation cannot serve for all three, and what asking the
-		// wrong one costs.
-		switch o.Kind {
-		case KindUnit:
-			if o.Container == "" {
-				return consulting(Decision{Reason: ReasonUnnamed}, chartAdminGrant)
+		if o.Unresolved {
+			// THE BODY IS NOT READ YET. Anybody bound to a seat could
+			// lead some unit, so the surface reads the write and
+			// decides each place it reaches; nobody else leads any.
+			if p.Seat == "" {
+				return consulting(Decision{Reason: ReasonNotLead}, r.grant)
 			}
-			return consulting(leadsUnit(ctx, chart, actorOf(p), o.Container), chartAdminGrant)
-		case KindPerson:
-			if o.Owner == "" {
-				return consulting(Decision{Reason: ReasonUnnamed}, chartAdminGrant)
-			}
-			// NO SELF PATH, which is what makes this different from
-			// [ClassOwnOrLead]: a seat rewriting its own goal, its
-			// backstory and its responsibilities is a model editing
-			// the prompt it is about to run under, and nobody asked
-			// for that. Its LEAD edits it.
-			return consulting(leads(ctx, chart, actorOf(p), o.Owner, ReasonNotLead), chartAdminGrant)
+			return consulting(Decision{Allowed: true, Reason: ReasonLead}, r.grant)
 		}
-		return consulting(Decision{Reason: ReasonUnnamed}, chartAdminGrant)
+		if o.Container == "" {
+			return consulting(Decision{Reason: ReasonRoot}, r.grant)
+		}
+		return consulting(leadsUnit(ctx, chart, actorOf(p), o.Container), r.grant)
 
 	case ClassAuthored:
 		if o.Author == "" {
@@ -651,8 +645,8 @@ func writeGrantFor(k ObjectKind) iam.Grant {
 		// no colleague-write verb takes one — and stating the grant
 		// anyway is the difference between a kind that is unreachable
 		// here and one that falls through to the empty gate below by
-		// accident. Chart writes reach their authority through
-		// ClassChartObject and ClassOperator instead.
+		// accident. The org chart reaches its authority through
+		// ClassSubtree instead.
 		return iam.GrantConfigWrite
 	}
 	return ""

@@ -125,28 +125,16 @@ const (
 
 	// --- the org chart ---------------------------------------------- //
 	//
-	// The org chart is the company document's `roles:` and `units:`, and a
-	// seat's RUNTIME settings — its model chain, its credentials, its
-	// sandbox cell, its worker grants and schedules, an mcp_env block — are
-	// equivalent to shell on every engine host: a stdio MCP server is
-	// exec.Command with the config's command. So they are decided as an
-	// operator surface, and so are the RELATIONS somebody's authority is
-	// derived from — a seat's project, space and email, a unit's project,
-	// space and channel. The PROSE — a name, a purpose, a goal — is decided
-	// by whoever leads the object ([ActionChartContent]). Whom a seat
-	// manages is STRUCTURE ([ActionChartStructure]), because it is a
-	// reporting line rather than a fact about the seat.
-	ActionChartRead        Action = "chart.read"
-	ActionChartReadRuntime Action = "chart.runtime.read"
-	ActionChartContent     Action = "chart.content.write"
-	ActionChartRuntime     Action = "chart.runtime.write"
-	ActionChartStructure   Action = "chart.structure.write"
-	ActionChartRename      Action = "chart.rename"
-	// ActionChartRemove takes an object OUT of the chart — a structural
-	// batch whose operations remove something. Its own verb beside
-	// [ActionChartStructure] because it asks for the deployment's grant as
-	// well as the company's ([rule.also]): see its row.
-	ActionChartRemove Action = "chart.remove"
+	// The org chart is the company document's `roles:` and `units:`, and it
+	// is written through the same routes and the same revision as every
+	// setting. TWO VERBS rather than one per field or per gesture, because
+	// the question is the same for every change a write makes — is the
+	// place it reaches inside a unit this principal leads — and the surface
+	// asks it of each place the write reaches ([ClassSubtree]). What a lead
+	// may not change is decided there too, by asking [ActionConfigWrite]: a
+	// setting, and a credential anywhere in the chart.
+	ActionOrgWrite Action = "config.org.write"
+	ActionOrgRead  Action = "config.org.read"
 
 	// --- whether a seat works, and what its turn is doing ------------ //
 	//
@@ -283,19 +271,17 @@ func (p Presence) Valid() bool { return slices.Contains(Presences, p) }
 // disagree one verb is decided by a class that reads a grant nobody set.
 type rule struct {
 	class Class
-	// grant is what [ClassOperator] requires. Empty on every other class,
-	// which decides from the principal's relation to the object instead —
-	// and empty on an operator row is a gate somebody forgot to fill in,
-	// which [granted] refuses.
+	// grant is what [ClassOperator] requires, and the admin path of
+	// [ClassSubtree]. Empty on every other class, which decides from the
+	// principal's relation to the object instead — and empty on an operator
+	// row is a gate somebody forgot to fill in, which [granted] refuses.
 	grant iam.Grant
 
 	// also is a SECOND capability an operator row requires beside grant:
 	// the row admits only a principal holding BOTH. Empty on every row but
-	// the two gestures that belong to two parties at once — ending every
+	// the one gesture that belongs to two parties at once — ending every
 	// session in the company, which is the deployment's to run and the
-	// directory's to decide ([ActionSessionInvalidate]), and taking an
-	// object out of the org chart, which is the company's shape to change
-	// and the deployment's to make irreversible ([ActionChartRemove]).
+	// directory's to decide ([ActionSessionInvalidate]).
 	//
 	// A FIELD AND NOT A SECOND VERB ASKED FROM INSIDE THE HANDLER, because
 	// the table is what a REST route, a socket question and a walk all read:
@@ -532,39 +518,18 @@ var rules = map[Action]rule{
 	// touch this remark"; the writer answers "may you rewrite it".
 	ActionWorkCommentEdit: {class: ClassAuthored, recency: iam.RecencyAny},
 
-	ActionChartRead: {class: ClassRead, recency: iam.RecencyAny},
-	// A SEAT'S RUNTIME SETTINGS ARE THE COMPANY DOCUMENT — the same
-	// credentials, the same MCP commands, the same shape of every secret
-	// the company holds — so reading them takes the grant that reads that
-	// document rather than the one that reads the board.
-	ActionChartReadRuntime: {class: ClassOperator, grant: iam.GrantConfigRead, recency: iam.RecencyAny},
-	// A CONTENT EDIT IS THE OBJECT'S LEAD'S, which is what makes the chart
-	// writable by somebody other than whoever holds the deployment: a lead
-	// renaming their own team, restating its purpose or correcting a seat's
-	// goal is not a configuration change. It admits the lead to the WRITE;
-	// what the body turns out to change — a seat's runtime settings, a
-	// relation leadership is derived from — is asked again with the
-	// company's grant.
-	ActionChartContent: {class: ClassChartObject, recency: iam.RecencyStepUp},
-	// STRUCTURE IS THE COMPANY'S. Two reparents through a common ancestor
-	// can each be locally valid and jointly produce a cycle — so a move is
-	// never a fact about one unit and is not one lead's to make.
-	ActionChartStructure: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
-	// A REMOVAL TAKES BOTH HATS: the company's grant, because a removal is
-	// structure like any other, AND the deployment's, because it is the
-	// one structural change whose effects outlive an undo — the seat's
-	// mailbox is retired and whatever was still in flight to it goes with
-	// it. That is a purge's blast radius, and a purge is whoever runs the
-	// deployment's to make.
-	ActionChartRemove: {class: ClassOperator, grant: iam.GrantFleetOperate,
-		also: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
-	// A RENAME IS THE COMPANY'S, as every structural change is, because an
-	// address is how every other domain refers to a thing — a `manages:`
-	// entry, a lead, a channel binding, the account name a vendor holds —
-	// so reassigning one inside a namespace the whole company shares is not
-	// a fact about one team.
-	ActionChartRename:  {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
-	ActionChartRuntime: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
+	// THE ORG CHART IS ITS LEADS' AS WELL AS THE COMPANY'S. The row's grant
+	// is the admin path, and a lead writes what lies inside the units they
+	// lead — see [ClassSubtree]. HUMAN-ONLY and at the step-up window, as
+	// every other write of the company document is: a seat rewriting the
+	// org it runs inside is a model choosing its own team.
+	ActionOrgWrite: {class: ClassSubtree, grant: iam.GrantConfigWrite,
+		humanOnly: true, recency: iam.RecencyStepUp},
+	// AND A LEAD READS WHAT THEY MAY WRITE: one seat or one unit of their
+	// subtree, masked as every read of the document is, without the grant
+	// that reads the whole document.
+	ActionOrgRead: {class: ClassSubtree, grant: iam.GrantConfigRead,
+		recency: iam.RecencyAny},
 
 	ActionConfigRead:  {class: ClassOperator, grant: iam.GrantConfigRead, recency: iam.RecencyAny},
 	ActionConfigWrite: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
@@ -699,8 +664,9 @@ func Actions() []Action { return slices.Sorted(maps.Keys(rules)) }
 // GrantOf reports the capability a verb requires, and whether the table knows
 // the verb at all.
 //
-// EMPTY WITH ok IS A REAL ANSWER: every class but [ClassOperator] decides
-// from the principal's relation to the object and asks for no capability. The
+// EMPTY WITH ok IS A REAL ANSWER: every class but [ClassOperator] and
+// [ClassSubtree] decides from the principal's relation to the object alone
+// and asks for no capability. The
 // pair is what lets a walk tell "this verb needs nothing" from "nobody has
 // written a rule for this verb", which are the two answers a single empty
 // string folds together.

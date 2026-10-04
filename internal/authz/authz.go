@@ -36,7 +36,7 @@
 // Everything [Decide] needs arrives as an argument: the principal, the verb,
 // the object. The one thing it cannot hold is the org chart — that is a fact
 // about the company, it is edited live, and a copy here would be a second
-// opinion about the hierarchy. So the chart is a four-method seam the consumer
+// opinion about the hierarchy. So the chart is a five-method seam the consumer
 // implements, and every other input is a value a test can write down. A rule
 // exercised only through a running engine is a rule nobody re-reads.
 //
@@ -128,9 +128,17 @@
 // agent on the engine host itself, and a seat's worker grants decide which of
 // its tools a worker runs with. So holding it IS running code on every engine
 // host, and whatever a process there can read — the keyring included — is
-// reachable through it. No row in this table narrows that: a seat, a unit and
-// every setting are one document written under that one grant, a removal
-// included. The grant is conferred like host access.
+// reachable through it. The grant is conferred like host access.
+//
+// THE ORG CHART IS ALSO ITS LEADS' ([ClassSubtree]): a person who leads a unit
+// may change the seats and units inside it without the grant, every field but
+// a credential's and every place a change reaches held to their own subtree on
+// both sides of the write (internal/api/configapi). What that reaches is
+// stated rather than narrowed: a lead may point a seat in their team at any
+// model chain and any sandbox cell the company's SETTINGS offer — which
+// remain `config:write`'s, so whether a `cli-agent` provider or a host-side
+// sandbox cell exists for a lead to choose is the administrator's decision —
+// and may not name a credential at all.
 package authz
 
 import (
@@ -162,8 +170,8 @@ const (
 	KindTask ObjectKind = "task"
 	// KindProject is a project and the policy that governs its items.
 	KindProject ObjectKind = "project"
-	// KindUnit is a team in the org chart, and the container a chart
-	// content write is decided against.
+	// KindUnit is a team in the org chart, and the subtree an org chart
+	// write is decided against ([ClassSubtree]).
 	KindUnit ObjectKind = "unit"
 	// KindPage is one knowledge page.
 	KindPage ObjectKind = "page"
@@ -229,7 +237,10 @@ type Object struct {
 	// never theirs to learn — and a caller who leads somebody is answered
 	// [ErrUnresolved]: resolve the login, then decide again on the record.
 	//
-	// Read by the two personal classes and by nothing else.
+	// Read by the two personal classes, and by [ClassSubtree], where it is
+	// the same question asked about a WRITE nobody has read yet: what the
+	// body changes decides it, so the route admits whoever could lead any
+	// part of the chart and the surface decides again on each change.
 	Unresolved bool
 
 	// Author is the login that WROTE this, for the one class where
@@ -243,7 +254,8 @@ type Object struct {
 
 	// Container is the project a task is filed under, or the container a
 	// page sits in. It is what the container and destructive classes ask
-	// the chart about.
+	// the chart about — and, for [ClassSubtree], the key of the unit an org
+	// chart change reaches, empty for the company root.
 	Container string
 
 	// ContainerKind is what sort of thing Container names, for the one
@@ -368,6 +380,11 @@ const (
 	// window the verb asks for ([Decision.Recency]). Confirming who they
 	// are and asking again is the whole remedy — no grant would change it.
 	ReasonStepUp Reason = "step_up"
+	// ReasonRoot is a refusal: what an org chart write reaches is no
+	// unit's — a seat or unit at the company root, or a reference that
+	// names nothing — so it is in nobody's subtree, and only the row's own
+	// grant writes it. See [ClassSubtree].
+	ReasonRoot Reason = "root"
 )
 
 // Reasons are every one, in declaration order.
@@ -375,14 +392,15 @@ var Reasons = []Reason{
 	ReasonGrant, ReasonSelf, ReasonAuthor, ReasonLead,
 	ReasonNoGrant, ReasonNotSelf, ReasonNotLead, ReasonNotAuthor,
 	ReasonSeatRefused, ReasonTokenRefused, ReasonStage, ReasonUnnamed,
-	ReasonUnknownAction, ReasonStepUp,
+	ReasonUnknownAction, ReasonStepUp, ReasonRoot,
 }
 
 // Valid reports whether a reason is one this build knows.
 func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 
 // adminGrant is the capability that overrides every relation-based class but
-// one — an org chart object's, whose admin path is [chartAdminGrant].
+// one — the org chart's own subtree, whose admin path is its row's grant
+// ([ClassSubtree]).
 //
 // [iam.GrantFleetOperate] rather than a grant of its own, because that is what
 // the closed eleven has for "whoever runs this deployment" and a second admin
@@ -398,21 +416,3 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 // reading everybody's inbox by virtue of it, and folding the two would make
 // the grant that can grant also the grant that reads.
 const adminGrant = iam.GrantFleetOperate
-
-// chartAdminGrant is the capability that overrides the lead relation on an org
-// chart object's prose ([ClassChartObject]) — the COMPANY's grant, and not
-// [adminGrant].
-//
-// # Why the chart is the one relation class with its own
-//
-// Every other relation class decides somebody's WORK — a queue, a view, a
-// project's policy, a remark — and whoever runs the deployment is the right
-// party to unstick it. The chart is the company's own structure and the text
-// every seat's prompt is built from, which is what `config:write` already
-// governs: that grant writes every seat's runtime settings, every relation
-// leadership is derived from, and every structural change. Its admin path was
-// `fleet:operate`, which was wrong in both directions — an SRE holding only
-// the deployment's grant could rewrite what any seat is told to do, while an
-// administrator holding the company's grant and leading nobody could not
-// correct a single seat's goal on a chart they could restructure at will.
-const chartAdminGrant = iam.GrantConfigWrite
