@@ -7,7 +7,9 @@
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { OrgProjection } from "~/protocol/index.ts";
+import { setStepUpConfirmer, type OrgProjection } from "~/protocol/index.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
+import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
 import { useBuilder, type BuilderViewHandle } from "./BuilderContext.tsx";
 import { menuEntryLabel } from "~/testing.tsx";
 import { href } from "~/app/router.tsx";
@@ -727,10 +729,76 @@ describe("somebody else signing in mid-edit", () => {
     expect(screen.queryByText("Needs config:write")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() =>
-      expect(liveRegion().textContent).toBe("Editing is paused because nobody is signed in."),
+      expect(liveRegion().textContent).toBe("Editing is paused. Nobody is signed in."),
     );
     // The seats are still drawn from the draft, not replaced by a refusal.
     expect(within(screen.getByRole("list", { name: "Seats" })).getByText("CEO")).toBeDefined();
+  });
+});
+
+// A DECLINED STEP-UP IS NOT A MISSING GRANT. A configuration write asks for a
+// recent proof, so a dry run sent an hour into a session is refused
+// `403 step_up_required` once the person declines to confirm. They hold the
+// grant and are signed in: the builder says what is asked of them, offers to
+// check again — which asks them again — and keeps their draft, rather than
+// sending them to an administrator and dropping the draft as a tab that
+// changed hands.
+describe("a step-up the person declined", () => {
+  let uninstall: (() => void) | undefined;
+  afterEach(() => {
+    uninstall?.();
+    uninstall = undefined;
+  });
+
+  test("is worded as a confirmation, keeps the draft, and checks again on asking", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine, viewer: () => EDITOR });
+    await screen.findByText("No problems");
+
+    let confirmed = false;
+    engine.script = (r) =>
+      r.query.get("dry_run") === "true" && !confirmed
+        ? json({ error: "step_up_required", reason: "step_up" }, 403)
+        : null;
+    // No confirmer is installed, so the transport's question is declined.
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+
+    expect(await screen.findByText("Needs confirmation")).toBeDefined();
+    expect(screen.queryByText("Needs config:write")).toBeNull();
+    expect(
+      screen.getByText(`${ACT_ERRORS.step_up_required} Your draft stays on this page.`),
+    ).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Sign in as somebody else" })).toBeNull();
+    // The same person declining is not the tab changing hands.
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain("Lead and more");
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await waitFor(() =>
+      expect(liveRegion().textContent).toBe(`Editing is paused. ${ACT_ERRORS.step_up_required}`),
+    );
+
+    // Asked again, the person confirms, and the replayed check answers.
+    uninstall = setStepUpConfirmer(async () => {
+      confirmed = true;
+      return true;
+    });
+    const sent = engine.checks().length;
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect(await screen.findByText("No problems")).toBeDefined();
+    expect(engine.checks()).toHaveLength(sent + 2);
+    expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more");
+    expect(screen.getByText("editable")).toBeDefined();
+  });
+
+  // THE CONTROL: a refusal of the grant itself still names it.
+  test("a refusal of the grant still names config:write", async () => {
+    const engine = new Engine(company());
+    engine.script = (r) =>
+      r.query.get("dry_run") === "true" ? json({ error: "unauthorized" }, 403) : null;
+    mountBuilder({ engine, viewer: () => ({ ...READER, grants: ["config:read"] }) });
+    expect(await screen.findByText("Needs config:write")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Sign in as somebody else" })).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
   });
 });
 

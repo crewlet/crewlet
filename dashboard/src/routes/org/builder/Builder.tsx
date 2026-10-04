@@ -55,6 +55,7 @@ import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { goSignIn } from "~/lib/session.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { CONFIG_WRITE_REASONS, configGuardedReason } from "~/lib/useWriteAccess.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import type { Tone } from "@crewlethq/ui";
 import {
@@ -80,7 +81,12 @@ import {
   type LastChange,
 } from "./model/reducer.ts";
 import { describeOperation } from "./model/operations.ts";
-import type { CheckOutcome, CheckStatus } from "./model/scheduler.ts";
+import {
+  saveRules,
+  STEP_UP_REQUIRED,
+  type CheckOutcome,
+  type CheckStatus,
+} from "./model/scheduler.ts";
 import { readyToUpdate } from "./model/writes.ts";
 import { UpdateDraftDialog } from "./UpdateDraftDialog.tsx";
 import { isRecord } from "./model/json.ts";
@@ -93,7 +99,6 @@ import {
 import type { DraftStorage } from "./model/persistence.ts";
 import { clearDraft } from "./model/persistence.ts";
 import { deriveChanges } from "./model/changes.ts";
-import { saveRules } from "./model/scheduler.ts";
 import { seatsNeedingContact } from "./model/templates.ts";
 import type { KeySource } from "./model/keys.ts";
 import { ReviewSaveDialog } from "./ReviewSaveDialog.tsx";
@@ -322,12 +327,19 @@ interface StatusLook {
 }
 
 /**
- * How the toolbar reads a check status. A refusal is worded by whether
- * anybody is signed in: a signed-in reader lacks the GRANT a check is asked
- * under, and telling them to sign in would send them looking for a session
- * they already hold.
+ * How the toolbar reads a check status. A refusal is worded by what lifts it,
+ * from the refusal's own `code`: nobody signed in is asked to sign in, a
+ * step-up the person declined is theirs to confirm, and only a refusal of the
+ * GRANT names config:write — said about a declined confirmation, it sent a
+ * person who holds the grant to an administrator for nothing. Anything else
+ * is "Refused", and the banner beneath carries its sentence.
  */
-function statusLook(status: CheckStatus, problems: number, signedIn: boolean): StatusLook {
+function statusLook(
+  status: CheckStatus,
+  problems: number,
+  signedIn: boolean,
+  code: string,
+): StatusLook {
   switch (status) {
     case "checking":
       return { label: "Checking", tone: "neutral", icon: RotateCwGlyph };
@@ -340,12 +352,28 @@ function statusLook(status: CheckStatus, problems: number, signedIn: boolean): S
     case "conflict":
       return { label: "The configuration changed", tone: "warning", icon: TriangleAlertGlyph };
     case "guarded":
-      return {
-        label: signedIn ? "Needs config:write" : "Needs sign-in",
-        tone: "danger",
-        icon: KeyGlyph,
-      };
+      return { label: guardedLabel(code, signedIn), tone: "danger", icon: KeyGlyph };
   }
+}
+
+/** The toolbar's word for a refusal on authority (see [statusLook]). */
+function guardedLabel(code: string, signedIn: boolean): string {
+  if (!signedIn) return "Needs sign-in";
+  if (code === STEP_UP_REQUIRED) return "Needs confirmation";
+  return configGuardedReason(code) === CONFIG_WRITE_REASONS.no_grant
+    ? "Needs config:write"
+    : "Refused";
+}
+
+/**
+ * The code the refusal the check stands on named, or "" for none. Read, like
+ * [conflictOf], from THE LAST ANSWER WHATEVER GENERATION IT WAS FOR: a
+ * refusal halts the check too, so a draft that changes afterwards hears no
+ * newer answer.
+ */
+function guardedCodeOf(state: BuilderState): string {
+  const outcome = state.check.outcome;
+  return outcome?.status === "guarded" ? outcome.code : "";
 }
 
 /**
@@ -799,20 +827,34 @@ function BuilderScreen({
     if (keeping.unsettled) resume(keeping.unsettled);
   }, [keeping.unsettled, resume]);
 
+  // WHICH REFUSAL HOLDS THE BUILDER, by its code. A refused READ of the
+  // configuration is a grant (a read asks for no step-up), so only a refused
+  // check or save names anything else, and every one is worded as every other
+  // writer of the company document words it ([configGuardedReason]). The one
+  // a person lifts on the spot is a step-up they declined: a check sent again
+  // asks them to confirm again (`protocol/rest.ts`).
+  const guarded = posture.kind === "guarded" || status === "guarded";
+  const guardedCode =
+    posture.kind !== "guarded" && status === "guarded" ? guardedCodeOf(state) : "";
+  const stepUp = guardedCode === STEP_UP_REQUIRED;
+
+  // Why editing is paused, as the sentence the live region says after
+  // "Editing is paused."
   const readOnlyReason = useMemo((): string | null => {
-    if (save.unsettled || keeping.unsettled) return "the outcome of the last save is not known yet";
-    if (keeping.offer) return "a kept draft is waiting for Keep or Discard";
-    if (posture.kind === "guarded" || status === "guarded") {
-      return signedIn ? "editing the organization needs config:write" : "nobody is signed in";
+    if (save.unsettled || keeping.unsettled) {
+      return "The outcome of the last save is not known yet.";
     }
-    if (status === "conflict") return "the configuration changed since this draft was started";
-    if (loaded && !isBaseKeyed(state)) return "the engine has not described this company yet";
+    if (keeping.offer) return "A kept draft is waiting for Keep or Discard.";
+    if (guarded) return signedIn ? configGuardedReason(guardedCode) : "Nobody is signed in.";
+    if (status === "conflict") return "The configuration changed since this draft was started.";
+    if (loaded && !isBaseKeyed(state)) return "The engine has not described this company yet.";
     return null;
   }, [
     save.unsettled,
     keeping.unsettled,
     keeping.offer,
-    posture.kind,
+    guarded,
+    guardedCode,
     status,
     loaded,
     state,
@@ -828,7 +870,7 @@ function BuilderScreen({
         action.type === "redo" ||
         action.type === "discard";
       if (mutates && readOnlyReason !== null) {
-        announce(`Editing is paused because ${readOnlyReason}.`);
+        announce(`Editing is paused. ${readOnlyReason}`);
         return;
       }
       dispatchRaw(action);
@@ -963,7 +1005,7 @@ function BuilderScreen({
   const openIfWritable = useCallback(
     (next: DialogRequest) => {
       if (readOnlyReason !== null) {
-        announce(`Editing is paused because ${readOnlyReason}.`);
+        announce(`Editing is paused. ${readOnlyReason}`);
         return;
       }
       openDialog(next);
@@ -1284,7 +1326,7 @@ function BuilderScreen({
   }
 
   const problemCount = problemsCurrent ? state.check.problems.problemCount : 0;
-  const look = statusLook(status, problemCount, signedIn);
+  const look = statusLook(status, problemCount, signedIn, guardedCode);
   const canUndo = !readOnly && state.log.ops.length > 0;
   const canRedo = !readOnly && state.log.undone.length > 0;
   // THE CREATE FORM HAS NO TOOLBAR: there is no draft to undo, check or save
@@ -1548,18 +1590,27 @@ function BuilderScreen({
           </div>
         )}
 
-        {(posture.kind === "guarded" || status === "guarded") && (
+        {/* A DECLINED STEP-UP IS CHECKED AGAIN, NOT SIGNED OUT OF: the person
+            holds the grant and is signed in, and the check sent again is what
+            asks them to confirm. */}
+        {guarded && (
           <Callout
             variant="danger"
             icon={<KeyGlyph />}
             action={
-              <Button variant="secondary" size="small" onClick={signIn}>
-                {signedIn ? "Sign in as somebody else" : "Sign in"}
-              </Button>
+              stepUp ? (
+                <Button variant="secondary" size="small" onClick={reset}>
+                  Check again
+                </Button>
+              ) : (
+                <Button variant="secondary" size="small" onClick={signIn}>
+                  {signedIn ? "Sign in as somebody else" : "Sign in"}
+                </Button>
+              )
             }
           >
             {signedIn
-              ? `Editing the organization needs config:write, which ${viewer.login} does not hold. Your draft stays on this page.`
+              ? `${configGuardedReason(guardedCode)} Your draft stays on this page.`
               : "Editing the organization needs you to sign in. Your draft stays on this page, and leaving it to sign in asks first."}
           </Callout>
         )}

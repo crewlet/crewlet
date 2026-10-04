@@ -571,6 +571,17 @@ describe("keeping the log", () => {
     ).toBe(true);
   });
 
+  // A DECLINED STEP-UP IS THE SAME PERSON at the keyboard choosing not to
+  // confirm yet, not the tab changing hands: dropped, the draft they were
+  // about to confirm and save was gone on the next reload.
+  test("a step-up the person declined keeps it", () => {
+    const state = keyedEdit();
+    const edited = run(state, { type: "record", intent: { type: "remove", target: "unit:Sales" } });
+    const declined = run(edited, checked(edited, { status: "guarded", code: "step_up_required" }));
+    expect(declined.keep).toBe(true);
+    expect(declined.check.outcome).toEqual({ status: "guarded", code: "step_up_required" });
+  });
+
   test("a save makes the draft the base, keyed by the derivation the write answered with", () => {
     const create = run(INITIAL_BUILDER, {
       type: "load",

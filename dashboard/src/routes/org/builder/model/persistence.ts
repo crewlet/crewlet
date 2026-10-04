@@ -29,7 +29,9 @@
  *
  * WHAT CLEARS IT: a save, a discard, a change of who is signed in, and a check
  * the engine refused with 401 or 403. The last two are the tab changing hands,
- * and a colleague's draft is not something to offer the next reader.
+ * and a colleague's draft is not something to offer the next reader. A 403
+ * for a step-up the person declined is not: it is the same person choosing
+ * not to confirm who they are yet, and their draft stays kept.
  * [persistencePlan] turns the builder's state into the one write or removal
  * that matches it.
  *
@@ -478,7 +480,7 @@ export interface PersistableState {
   readonly mode: BuilderMode;
   readonly baseRevision: string | null;
   readonly log: Log;
-  /** False from a token change or a refused check until the next operation. */
+  /** False from a change of reader or a refused check until the next operation. */
   readonly keep: boolean;
   /** The write id of a save of this log whose outcome is not known yet, or `null`. */
   readonly write: string | null;

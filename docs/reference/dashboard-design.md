@@ -6802,8 +6802,9 @@ while the screen binds the real chart, table, editor and dialogs, and
   update flow for a company that moved, and discards one kept for the other
   mode. It writes nothing before that decision, because the plan for an empty
   log is to clear. A change of reader or a refused credential clears it and
-  withdraws an offer, and a sign-out empties the tab's storage before it
-  reloads. A kept draft carries the principal it was kept for (the tab's
+  withdraws an offer — but not a step-up the reader declined, which is the
+  same person choosing not to confirm yet — and a sign-out empties the tab's
+  storage before it reloads. A kept draft carries the principal it was kept for (the tab's
   reader), the decision waits until the tab knows its reader, and a draft kept
   for anybody else is discarded without being offered or mentioned — the
   builder's own change-of-reader check lives in a component, and a builder the
@@ -6873,7 +6874,12 @@ while the screen binds the real chart, table, editor and dialogs, and
   through, and say why in the live region. The actions themselves are
   DISABLED rather than hidden, so a reader without `config:write` still reads
   what the builder does; Edit and Open seat change no draft and stay
-  available.
+  available. A refused check or save is worded by the refusal's code, in the
+  sentence every writer of the company document uses (`configGuardedReason`):
+  only a grant the reader lacks names `config:write`, and a step-up they
+  declined — a configuration write asks for one, so it is the refusal an
+  hour-old session meets — says so and offers Check again, which sends the
+  check again and so asks them to confirm who they are again.
 
 ### The org builder draws the engine's organization
 

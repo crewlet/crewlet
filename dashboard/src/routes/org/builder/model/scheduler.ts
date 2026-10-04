@@ -22,16 +22,21 @@
  * STATES. `checking` while an answer for the current generation is due;
  * `clean` and `problems` for a validated draft; `conflict` when the engine
  * holds a newer revision than the draft's base (a 409, a 412, or a dry run
- * reporting a different base); `guarded` when it refused the token (401 or
- * 403); `unreachable` when the request was never answered or the engine
- * failed (status 0, or a 5xx). A draining node's `503 draining` is one of
- * those, deliberately: the drain ends, so the retry reaches a peer behind a
- * load balancer, or this node once it has restarted.
+ * reporting a different base); `guarded` when it refused this browser on
+ * authority (401 or 403, carrying the refusal's code); `unreachable` when the
+ * request was never answered or the engine failed (status 0, or a 5xx). A
+ * draining node's `503 draining` is one of those, deliberately: the drain
+ * ends, so the retry reaches a peer behind a load balancer, or this node once
+ * it has restarted.
  *
- * TWO OF THEM HALT. `conflict` and `guarded` do not change by asking again:
- * the answer to the next check is the same refusal. So a change to the draft
- * in one of them sends nothing, and checking resumes only on a reset (a load,
- * an updated draft, a token change).
+ * TWO OF THEM HALT. `conflict` and `guarded` do not change by asking again
+ * on their own: the answer to the next check is the same refusal. So a change
+ * to the draft in one of them sends nothing, and checking resumes only on a
+ * reset (a load, an updated draft, a change of reader, or the person asking).
+ * A step-up the person declined ([STEP_UP_REQUIRED]) is the one refusal they
+ * lift on the spot: the transport asks them to confirm again whenever the
+ * check is sent again, which is theirs to ask for, never a timer's — a
+ * dialog that reopened at every keystroke would be one they could not leave.
  *
  * `unreachable` BACKS OFF. Asking again at every keystroke would hammer an
  * engine that is restarting, or a network that is down, with requests that
@@ -123,6 +128,14 @@ export type CheckOutcome =
     }
   | { readonly status: "guarded"; readonly code: string }
   | { readonly status: "unreachable"; readonly detail: string };
+
+/**
+ * The code of a `guarded` refusal that is a step-up the person declined: the
+ * transport (`protocol/rest.ts`) asked them to confirm who they are and they
+ * did not. Not a grant they lack and not the tab changing hands, so it is
+ * worded, offered and kept as neither.
+ */
+export const STEP_UP_REQUIRED = "step_up_required";
 
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 const list = <T>(value: unknown): readonly T[] => (Array.isArray(value) ? (value as T[]) : []);

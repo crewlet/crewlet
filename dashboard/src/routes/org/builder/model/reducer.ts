@@ -69,7 +69,7 @@ import {
   type Rebased,
 } from "./history.ts";
 import { EMPTY_PROBLEMS, placeProblems, type ProblemIndex } from "./problems.ts";
-import type { CheckOutcome, SettledCheck } from "./scheduler.ts";
+import { STEP_UP_REQUIRED, type CheckOutcome, type SettledCheck } from "./scheduler.ts";
 import type { KeptDraft } from "./persistence.ts";
 import type { BuilderMode } from "./transport.ts";
 
@@ -446,7 +446,11 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
           : state.check.derived;
       let next: BuilderState = {
         ...state,
-        keep: outcome.status === "guarded" ? false : state.keep,
+        // A REFUSAL MAY BE THE TAB CHANGING HANDS, so the log stops being
+        // kept — except a step-up the person declined, which is the same
+        // person at the keyboard choosing not to confirm yet.
+        keep:
+          outcome.status === "guarded" && outcome.code !== STEP_UP_REQUIRED ? false : state.keep,
         check: {
           generation: settled.generation,
           outcome,
