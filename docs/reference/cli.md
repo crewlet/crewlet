@@ -262,6 +262,12 @@ token — with `created_by_kind` saying which (`operator` or `human`) and
 invoking operator. Either way that author travels with the revision to every
 node in the fleet.
 
+Through the API it is decided as any `PUT /config` is: the company's grant
+writes anything, and a [unit's lead](api-endpoints.md#a-lead-edits-their-own-team)
+may import a file whose every change is inside the units they lead. Offline
+there is nobody to decide on: the store is written by whoever can open it on
+the host, which is already more than any grant.
+
 It does **not** refuse because a revision is already active, and there is no
 flag to force it past one: the pointer is append-only, so an import *chains* a
 revision rather than overwriting one, and `crewlet config activate` takes you
