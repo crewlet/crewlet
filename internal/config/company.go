@@ -973,7 +973,7 @@ func (c *Company) VectorsEnabled() bool {
 // Applied to EVERY seat in the document, at any depth. Nearly all of a real
 // company's roles live inside units, which nest arbitrarily — so a rule that
 // walked the root `roles:` list alone left the typo invisible exactly where
-// it is most likely to be written. The walk is [Company.eachRole] rather than
+// it is most likely to be written. The walk is [Company.EachRole] rather than
 // a loop here, so the next whole-document rule about seats inherits it.
 //
 // Skipped entirely when providers.llm is empty. A company with no models is a

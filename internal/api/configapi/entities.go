@@ -159,20 +159,18 @@ var entityKinds = map[string]entityAccess{
 	EntityRoles: {
 		ids: func(c *config.Company) []string {
 			var out []string
-			eachRole(c, func(r *config.Role) { out = append(out, roleID(r)) })
+			for r := range c.EachRole() {
+				out = append(out, roleID(r))
+			}
 			return sorted(out)
 		},
 		find: func(c *config.Company, id string) (any, bool) {
-			var found *config.Role
-			eachRole(c, func(r *config.Role) {
-				if found == nil && roleID(r) == id {
-					found = r
+			for r := range c.EachRole() {
+				if roleID(r) == id {
+					return r, true
 				}
-			})
-			if found == nil {
-				return nil, false
 			}
-			return found, true
+			return nil, false
 		},
 		replace: func(c *config.Company, id string, raw submitted) error {
 			// FOUND FIRST, judged second. Both orders refuse the same
@@ -183,11 +181,12 @@ var entityKinds = map[string]entityAccess{
 			// was found is where a body that cannot be read is refused.
 			var target *config.Role
 			var at config.Path
-			eachRoleAt(c, func(p config.Path, r *config.Role) {
-				if target == nil && roleID(r) == id {
+			for r, p := range c.EachRole() {
+				if roleID(r) == id {
 					target, at = r, p
+					break
 				}
-			})
+			}
 			if target == nil {
 				return ErrNoSuchEntity
 			}
@@ -219,29 +218,28 @@ var entityKinds = map[string]entityAccess{
 	EntityUnits: {
 		ids: func(c *config.Company) []string {
 			var out []string
-			eachUnit(c, func(u *config.Unit) { out = append(out, u.IdentityKey()) })
+			for u := range c.EachUnit() {
+				out = append(out, u.IdentityKey())
+			}
 			return sorted(out)
 		},
 		find: func(c *config.Company, id string) (any, bool) {
-			var found *config.Unit
-			eachUnit(c, func(u *config.Unit) {
-				if found == nil && u.IdentityKey() == id {
-					found = u
+			for u := range c.EachUnit() {
+				if u.IdentityKey() == id {
+					return u, true
 				}
-			})
-			if found == nil {
-				return nil, false
 			}
-			return found, true
+			return nil, false
 		},
 		replace: func(c *config.Company, id string, raw submitted) error {
 			var target *config.Unit
 			var at config.Path
-			eachUnitAt(c, func(p config.Path, u *config.Unit) {
-				if target == nil && u.IdentityKey() == id {
+			for u, p := range c.EachUnit() {
+				if u.IdentityKey() == id {
 					target, at = u, p
+					break
 				}
-			})
+			}
 			if target == nil {
 				return ErrNoSuchEntity
 			}
@@ -661,8 +659,9 @@ func (s *Service) refuseEntity(w http.ResponseWriter, kind, id string, err error
 }
 
 // firstElement is the first seat, or unit, of a stored document tree whose
-// identity is id, visited in the order [eachRole] and [eachUnit] visit the
-// struct, so it is the element find returned.
+// identity is id, visited in the order [config.Company.EachRole] and
+// [config.Company.EachUnit] visit the struct, so it is the element find
+// returned.
 func firstElement(root map[string]any, isUnit bool, id string) (map[string]any, bool) {
 	var found map[string]any
 	consider := func(element map[string]any, unit bool) {
@@ -723,48 +722,6 @@ func objects(value any) []map[string]any {
 		}
 	}
 	return out
-}
-
-// --- walking the document -------------------------------------------------
-
-// eachRole visits every seat in the company, root-level and unit-nested
-// alike, because an operator editing "the CEO" does not think about which
-// list it happens to live in.
-func eachRole(c *config.Company, visit func(*config.Role)) {
-	eachRoleAt(c, func(_ config.Path, r *config.Role) { visit(r) })
-}
-
-// eachRoleAt is [eachRole] with the place each seat is written at, in the
-// same order, so a seat found through either is the same seat.
-func eachRoleAt(c *config.Company, visit func(config.Path, *config.Role)) {
-	for i := range c.Roles {
-		visit(config.Path{"roles", i}, &c.Roles[i])
-	}
-	eachUnitAt(c, func(at config.Path, u *config.Unit) {
-		for i := range u.Roles {
-			visit(append(slices.Clone(at), "roles", i), &u.Roles[i])
-		}
-	})
-}
-
-// eachUnit visits every unit, nesting to any depth.
-func eachUnit(c *config.Company, visit func(*config.Unit)) {
-	eachUnitAt(c, func(_ config.Path, u *config.Unit) { visit(u) })
-}
-
-// eachUnitAt is [eachUnit] with the place each unit is written at: parents
-// before their children, depth first.
-func eachUnitAt(c *config.Company, visit func(config.Path, *config.Unit)) {
-	for i := range c.Units {
-		visitUnitAt(config.Path{"units", i}, &c.Units[i], visit)
-	}
-}
-
-func visitUnitAt(at config.Path, u *config.Unit, visit func(config.Path, *config.Unit)) {
-	visit(at, u)
-	for i := range u.Children {
-		visitUnitAt(append(slices.Clone(at), "children", i), &u.Children[i], visit)
-	}
 }
 
 // roleID is a seat's address here: its handle — declared, since every stored

@@ -304,7 +304,7 @@ const (
 // EachUnit walks every unit this document declares, at any depth, parent
 // before children, each with the path it was written at.
 //
-// THE TWIN OF [Company.eachRole], and it exists for the reason that one
+// THE TWIN OF [Company.EachRole], and it exists for the reason that one
 // records: the walk was written inline in every rule that needed it, and each
 // copy is a chance for a rule to cover the top-level units and quietly exempt
 // every team one level down — which, in a company with an org chart, is most
