@@ -214,6 +214,15 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 		t.Error("iam_people still carries chart_position — nothing writes it " +
 			"since a seat binding stopped recording the chart's position")
 	}
+	// AND NO SCOPED STAMP BESIDE THE VERSION. It was the column a claim on
+	// another subject stamped a person's row with; every record that writes
+	// the row now advances `version`, so a second stamp would be a value
+	// every reader is entitled to fold into the wrong comparison.
+	if cols := columnsOf(t, db, "iam_people"); slices.Contains(cols, "scoped_through") {
+		t.Error("iam_people still carries scoped_through — nothing writes it " +
+			"since the directory decided every login, address and seat on one " +
+			"subject")
+	}
 }
 
 // THE DIRECTORY'S LOOKUPS SEARCH AN INDEX, AND NEVER SCAN THE PEOPLE.
