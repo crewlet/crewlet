@@ -9,13 +9,15 @@ import (
 )
 
 // The fleet's turn-level history, armed: this node answers every peer's
-// history questions from its own event store, and asks every live peer when it
-// is asked one (ADR-0021).
+// history questions from its own event store, and asks every live data node
+// when it is asked one (ADR-0021).
 //
-// # Every node serves, in every mode
+// # Every data node serves, in every mode
 //
-// A node's events are in its own store and nowhere else, so a node that stopped
-// answering would be a gap in every history screen of the company. That
+// A data node's events are in its own store and nowhere else — its own, and
+// the custody batches of nodes without `data` it keeps, whose stores are
+// scratch — so a data node that stopped answering would be a gap in every
+// history screen of the company. That
 // includes a node in maintenance: it publishes nothing, but it still holds
 // everything it published, and the window an operator is investigating is
 // exactly the one it must not go dark for. Answering is not publishing — the
@@ -40,12 +42,20 @@ func (e *Engine) armHistory(ctx context.Context) error {
 		Self:   e.id,
 		Local:  e.backends.Store.Events(),
 		Queue:  e.backends.Queue,
-		Roster: e.liveNodes,
+		Roster: e.dataRoster,
 		Report: e.reportHistory,
 	}
 	if e.backends.Queue == nil {
 		// A NODE WITH NO BROKER IS THE FLEET, which is a legal
 		// deployment rather than a degradation: its reads are its store.
+		return nil
+	}
+	if e.local == nil {
+		// A NODE WITHOUT `data` HOLDS NO HISTORY to answer from: its
+		// store is scratch, and custody puts every event it publishes in
+		// exactly one data node's event log (internal/observe). It still ASKS —
+		// its dashboard reads the fleet like any other — and it is never
+		// asked, since the roster is the data nodes.
 		return nil
 	}
 	stop, err := eventfan.Serve(ctx, e.backends.Queue, e.id, e.backends.Store.Events())

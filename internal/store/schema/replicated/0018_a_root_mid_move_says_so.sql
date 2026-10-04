@@ -40,4 +40,4 @@
 
 ALTER TABLE tracker_tasks ADD COLUMN moving INTEGER NOT NULL DEFAULT 0;
 
-CREATE INDEX tracker_tasks_moving_idx ON tracker_tasks (id) WHERE moving = 1;
+CREATE INDEX tracker_tasks_moving_idx ON tracker_tasks (id) WHERE moving = 1;   -- roots mid-move: duty.pendingMoves, duty.finishMoves

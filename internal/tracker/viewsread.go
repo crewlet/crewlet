@@ -101,7 +101,11 @@ type ViewQuery struct {
 	// other way round — see [Units] and [CanonicalContainer]. Nil matches
 	// the container as asked, which is the honest answer for a surface
 	// holding no chart.
-	Units Units
+	//
+	// NOT SERIALISED: an interface a JSON encoder writes as `{}` and
+	// cannot decode back. A surface that sends this across a wire has the
+	// far side attach ITS OWN chart — see internal/estate.
+	Units Units `json:"-"`
 
 	Level statelog.ReadLevel
 
@@ -130,7 +134,7 @@ type ViewQuery struct {
 	// pinned "due this week" counts the week the board it opens draws.
 	Counts bool
 	Now    time.Time
-	Zone   *time.Location
+	Zone   *time.Location `json:"-"`
 }
 
 // ViewListing is the strip, with the framework's own verdict on the read.

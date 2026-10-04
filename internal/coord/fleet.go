@@ -100,6 +100,23 @@ const (
 	// floor with it.
 	FireRetention = 7 * 24 * time.Hour
 
+	// RebaseRetention is how long a recorded rebase is kept — see
+	// [Rebases] — and so the bucket's age.
+	//
+	// THE OPERATION LEDGER'S OWN RETENTION (statelog.OpsRetention), which
+	// is a day past the horizon a rebase is inherited within
+	// (statelog.MintHorizon). An attempt inherits a recorded instant only
+	// while it lies within that horizon of the attempt's own clock, and the
+	// bucket's age is counted from the write, which is no earlier than the
+	// instant it records — so a record the bucket has aged out is one the
+	// rule would have replaced anyway. Shorter would forget an instant a
+	// retry still has to inherit, and the retry would mint anew and write
+	// again whatever the attempt before it wrote; longer keeps a record per
+	// rebased unit of work that nothing can ever read. This package cannot
+	// import the state log, so coordtest's retention guard holds the two
+	// together.
+	RebaseRetention = 30 * 24 * time.Hour
+
 	// CooldownMax is the longest credential cooldown anything sets, and
 	// therefore the bucket's age. A cooldown carries its own end instant,
 	// so the bucket only has to outlive the longest one.
@@ -125,6 +142,33 @@ const (
 	// early would re-arm a company mid-month, and one that aged out late
 	// costs a record nobody reads.
 	BudgetRetention = 32 * 24 * time.Hour
+
+	// CustodyRetention is how long the record of which data node keeps a
+	// batch of a stateless node's event records lasts — see [Custody] —
+	// and so the bucket's age.
+	//
+	// A DAY PAST THE EVENT LOG'S OWN RETENTION (store.EventRetention). A
+	// node that wrote a batch and never learned whether it kept it asks
+	// this record later — at its next pass, or at boot after a crash — and
+	// a record aged out while the batch's rows were still in the log would
+	// answer that nobody keeps it, so the node would keep a second copy of
+	// a batch another node already holds. The rows go at the event log's
+	// retention, so a record that outlives them by a day — the sweep's
+	// slack — is never asked about a batch it no longer describes. Longer
+	// keeps a record per batch nobody can ask about. This package cannot
+	// import the store, so coordtest's retention guard holds the two
+	// together.
+	CustodyRetention = 32 * 24 * time.Hour
+
+	// ChunkLockTTL is how long a chunk lock outlives a holder that never let
+	// it go — the age of the bucket the locks are in (see [ObjectStores]).
+	//
+	// A MINUTE: what anybody does under one lock is one stat and one delete,
+	// or one put of at most a mebibyte, and internal/objstore bounds that
+	// work at a third of this, so a lock lapses only under a holder that has
+	// already abandoned its request. The cost of the length is how long a
+	// writer waits behind a collector that died holding one.
+	ChunkLockTTL = time.Minute
 
 	// SandboxRunRetention is absent for the same reason as the channel
 	// bucket's, one step sharper: a detached coding run can sit parked on
@@ -172,6 +216,33 @@ const (
 	// StatusFreshness is a multiple of it and a package that imported the
 	// configplane for one constant would invert the dependency.
 	ReconcileInterval = 15 * time.Second
+
+	// MarkerRetention is how long the record that a key was REMOVED — a
+	// delete or purge marker — stays in a store that never ages its
+	// records, before [Markers.SweepMarkers] removes it.
+	//
+	// NOT A CORRECTNESS BOUND, and that is established rather than hoped:
+	// every reader of a backend that keeps markers asks what the key holds
+	// NOW before it trusts one — a listing reads a marker its pass
+	// delivered again from the stream leader, and a create re-reads the key
+	// before conditioning on one — so a marker swept the instant after it
+	// was written changes no answer. The contract suite sweeps with a
+	// cutoff in the future and holds every other answer to what it was.
+	//
+	// What the horizon decides is how long a removal stays VISIBLE, against
+	// what that costs. Every marker still held is one leader read on each
+	// listing whose pass delivers it, so a listing pays for the records
+	// removed in the last horizon plus one sweep interval. And a marker is
+	// the store's only trace that a key was removed rather than never
+	// written, so it has to outlive every operation that could still be
+	// acting on what it read before the removal: a listing runs inside the
+	// tick that takes it, every read-decide-write on these records runs
+	// under a claim, and no claim outlives [MaxDutyTTL]. Hence three hours —
+	// every operation in flight when a key was removed has finished before
+	// its marker goes, and a listing re-reads at most the removals of the
+	// last three hours and a quarter, where without the sweep it re-read
+	// every removal the deployment had ever made.
+	MarkerRetention = MaxDutyTTL
 )
 
 // Counter is the fleet's shared fixed-window counter, behind the notification
@@ -647,6 +718,78 @@ type Fires interface {
 	ClaimFire(ctx context.Context, key string, at time.Time) (bool, error)
 }
 
+// Custody decides which data node keeps each batch of a stateless node's event
+// records (ADR-0025).
+//
+// # Why the whole company has to agree on it
+//
+// A node without `data` keeps no event log of its own, so it publishes its
+// records in batches onto one durable topic and the data nodes take them from
+// one fleet-wide group, each writing what it takes into its own log. A group
+// delivers a batch whose acknowledgement was lost AGAIN, to whichever member
+// asks next — so without a decision a batch can land in two logs, and every
+// figure derived from a node's own log counts it twice: the usage domain sums
+// each node's day, so a stateless node's spend would be billed once per data
+// node that happened to write it.
+//
+// # Create-only, written AFTER the rows, and the loser deletes
+//
+// A data node writes a batch into its own log first and claims it second:
+// whoever creates the key keeps the batch, and any other node that wrote it
+// deletes its copy. The other order — claim, then write — leaves a claimant
+// that died between the two holding a batch nobody wrote. In this order the
+// worst a crash leaves is a written copy whose claim is unknown, which the
+// node settles the same way on its next pass, and a batch is acknowledged only
+// once its keeper is decided, so the group keeps offering it until then.
+type Custody interface {
+	// ClaimCustody records node as the keeper of batch unless a keeper is
+	// already recorded, and answers the keeper: node itself, or the node
+	// that claimed first. An error is the third answer — the store could
+	// not say — and the caller must neither keep nor delete its copy on
+	// it.
+	ClaimCustody(ctx context.Context, batch, node string) (string, error)
+}
+
+// Rebases is the fleet's record of the instant a unit of work's derived
+// operation ids are minted at, for the work whose own start is too old for the
+// operation ledger to vouch for.
+//
+// A derived id carries the instant its work began, so a retry reproduces it;
+// an attempt that finds that instant past the state log's horizon mints at its
+// own instant instead (statelog.MintAt) and records it HERE, keyed by the seed
+// the ids are derived from — the work key, or the run where the turn has none.
+// Every later attempt at the same work reads it back and inherits it: a crash
+// re-run of a dispatched turn, a failed resume retried, the next half of a
+// turn a coding run parked. Each of those can run on another node — a crash
+// re-run lands wherever the seat's delivery is taken next, a resume on the
+// seat's next owner — so the record has to be the fleet's: on the node's own
+// database the successor found nothing, minted anew, and wrote a second copy
+// of every write the attempt before it made.
+//
+// A READ AND A CONDITIONAL WRITE, with the value typed. The rule deciding the
+// instant is the state log's, applied by the caller between the two, and the
+// condition is what makes two attempts racing on one seed agree: the loser's
+// write is refused, it reads the winner's instant, and the rule then keeps it.
+//
+// Retention is the bucket's age, [RebaseRetention].
+type Rebases interface {
+	// Rebase reads the instant recorded for seed and the version it was
+	// read at: the zero instant and version 0 where nothing is recorded.
+	//
+	// RAISES rather than answering "nothing", because "nothing" sends the
+	// caller to mint at its own instant — which, for a retry of an attempt
+	// that did record one, is a second copy of that attempt's every write.
+	Rebase(ctx context.Context, seed string) (time.Time, uint64, error)
+
+	// RecordRebase writes at as seed's instant, conditional on version:
+	// version 0 writes only where nothing is recorded, any other only
+	// where that version still holds. False is a LOST RACE — another
+	// attempt recorded first, or moved it since — and the caller reads
+	// again and re-decides, because the instant it would have replaced
+	// may be one it now has to inherit.
+	RecordRebase(ctx context.Context, seed string, at time.Time, version uint64) (bool, error)
+}
+
 // Record is one stored value with the version it was read at.
 //
 // The version is an OPAQUE token: pass back exactly what a read handed you.
@@ -960,6 +1103,34 @@ type Mailboxes interface {
 	DeleteMailbox(ctx context.Context, handle string, version uint64) (bool, error)
 }
 
+// Markers is the one piece of housekeeping the shared state asks of its
+// caller: removing the record that a key was removed.
+//
+// # Why a store that forgets on its own still needs it
+//
+// A KV backend removes a key by appending a delete or purge MARKER, and a
+// bucket the broker ages takes the marker with everything else when it ages
+// out. The families above that no clock may reap — the runs, the channels,
+// the mailboxes, the secrets, the budgets, the integration statuses, the
+// positions register — keep every marker for the life of the deployment, and
+// each one is a leader read on every listing that meets it (internal/coord/kv
+// walk.go says why a marker is read again rather than trusted). So the
+// markers are swept, as a DECISION under the maintenance duty, for the reason
+// the channels are: a bucket's age cannot express which records may go.
+//
+// # It changes no answer
+//
+// That is the contract, and the suite holds it: sweep every marker, and every
+// read, listing, create and conditional write answers exactly as before. A
+// backend that keeps no marker at all — the memory twin deletes the entry —
+// satisfies it by sweeping nothing.
+type Markers interface {
+	// SweepMarkers removes every marker written before cutoff from the
+	// record families no clock ages, reporting how many went. A failure
+	// part-way reports the markers already removed beside the error.
+	SweepMarkers(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
 // Fleet is a backend that serves all of the shared state, which is what the
 // contract suite certifies and what the engine wires from.
 //
@@ -978,16 +1149,72 @@ type Fleet interface {
 	Channels
 	Follows
 	Fires
+	Rebases
 	SandboxRuns
 	Secrets
 	Integrations
 	Mailboxes
+	ObjectStores
 	SeatPauses
 	PositionRegister
 	HoldRegister
 	FloorRegister
 	BackupRegister
 	MaintenanceRegister
+	Markers
+	Custody
+}
+
+// ObjectStores is what the whole fleet has to agree on about the object store
+// (ADR-0026): which backend its files are in, and who may touch one chunk at a
+// time.
+//
+// # The backend is the fleet's, and recorded once
+//
+// Every node reads and writes files through the backend its own Tier A names,
+// and two nodes naming different ones split the company's files between them
+// with nothing failing — each side's uploads read back on that side alone,
+// and the collector running on one side deletes nothing the other wrote. So
+// the first node to open the store records which backend it is, create-only
+// and with no age, and every node after compares its own against it and
+// refuses to boot on a mismatch.
+//
+// # Chunk locks, aged at [ChunkLockTTL]
+//
+// The collector deletes a chunk no row names once it is past a grace, and a
+// file re-using such a chunk re-puts it to make it young again. The one race
+// that loses a file's bytes is a delete landing after that re-put, so the two
+// take the chunk's lock around their check and their write (internal/objstore,
+// Locks). A lock is a create-only key in a bucket whose age is the lock's
+// lifetime, so a holder that dies holding one is let go by the bucket rather
+// than by anybody's clock.
+type ObjectStores interface {
+	// AgreeObjectBackend records identity as the fleet's object backend
+	// unless one is recorded, and answers the recorded one: identity
+	// itself, or what the first node recorded. An error is UNKNOWN — the
+	// caller must not open a backend it could not check.
+	AgreeObjectBackend(ctx context.Context, identity string) (string, error)
+
+	// LockChunk takes chunk's lock for owner, answering false while
+	// another owner holds it. Taking a lock this owner already holds
+	// answers true, so a retried take whose answer was lost is not a
+	// second holder.
+	LockChunk(ctx context.Context, chunk, owner string) (bool, error)
+
+	// UnlockChunk lets go of chunk's lock if owner holds it, and does
+	// nothing otherwise — a lock that aged out and was taken by somebody
+	// else is theirs.
+	UnlockChunk(ctx context.Context, chunk, owner string) error
+
+	// RecordObjectCollection stores what the collector last found, an
+	// opaque value its owner (internal/engine) encodes, replacing the last
+	// one: the duty moves between nodes, and every node's status surface
+	// reads the latest report whoever wrote it.
+	RecordObjectCollection(ctx context.Context, value []byte) error
+
+	// ObjectCollection reads the last report, false when none was ever
+	// written.
+	ObjectCollection(ctx context.Context) ([]byte, bool, error)
 }
 
 // Follows is which chat threads each seat is following.

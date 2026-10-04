@@ -67,23 +67,34 @@ type DomainConsumer struct {
 	// handle cleared by a failed reset can be rebuilt without the caller
 	// knowing how one is configured.
 	want jetstream.ConsumerConfig
+
+	// pull is the consumer's standing pull (pullrequest.go): one inbox
+	// every fetch's request is answered on, and what it delivered that no
+	// fetch has taken. Made by the first fetch, dropped by a reset, whose
+	// consumer those deliveries belonged to, and released by [Close], whose
+	// consumer stays. Guarded by mu.
+	pull *puller
+	// closed is [DomainConsumer.Close] having run. Guarded by mu.
+	closed bool
 }
 
 // domainConsumerMaxAckPending is how many records the broker may hand this
-// node's applier before one is acknowledged, and it is THE COUNT BOUND ON A
-// PULL.
-//
-// The vendored client cannot bound one pull by both bytes and count, so the
-// applier pulls by bytes and the count has to live somewhere the broker
-// enforces it. This is that place: a pull hands over at most this many
-// records however many bytes it asked for, and [DomainConsumer.Fetch] returns
-// every one of them. The alternative — the applier taking a prefix of a
-// byte-bounded batch — left the remainder delivered and unacknowledged, so
-// the broker hit its own default cap of a thousand, handed over nothing more
-// for a thirty-second ack window, and then redelivered the same prefix.
+// node's applier before one is acknowledged.
 //
 // [statelog.FetchMessages] is the number, and it is the applier's transaction
-// budget: one pull is at most one transaction's worth of records in flight.
+// budget: one pull is at most one transaction's worth of records, and this
+// ceiling keeps it at most one transaction's worth IN FLIGHT. The pull carries
+// the count itself as well — see [DomainConsumer.Fetch] — so what this adds is
+// the bound across pulls: records delivered and not yet acknowledged, because
+// their transaction has not committed, hold back the next pull rather than
+// piling up behind it.
+//
+// It used to be the ONLY count bound, because the client library could not
+// send one pull with both a count and a byte bound and the applier pulled by
+// bytes. Before that it was the applier taking a prefix of a byte-bounded
+// batch, which left the remainder delivered and unacknowledged, so the broker
+// hit its own default cap of a thousand, handed over nothing more for a
+// thirty-second ack window, and then redelivered the same prefix.
 const domainConsumerMaxAckPending = statelog.FetchMessages
 
 // domainConsumerAckWait is how long the broker waits for an acknowledgement
@@ -457,8 +468,15 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 			c.name, c.stream, err)
 	}
 	// THE DELETE HAS LANDED, so from here the broker has no consumer and
-	// the handle must not go on naming one.
+	// the handle must not go on naming one — and what the standing pull
+	// holds was delivered by the consumer that is gone: the new one hands
+	// those records over again from the checkpoint, so they are dropped
+	// with the inbox rather than handed to the next fetch a second time.
 	c.cons = nil
+	if c.pull != nil {
+		c.pull.close()
+		c.pull = nil
+	}
 	// THROUGH [jsprovision.Place] like every other replicated create,
 	// which this one was not. A domain consumer is placed by the same
 	// metadata group as the durable consumers beside it, so it meets the
@@ -988,7 +1006,19 @@ func domainConsumerName(stream, nodeID string) string {
 	return readable + "__" + id
 }
 
-// Fetch implements [statelog.Fetcher].
+// Fetch implements [statelog.Fetcher]: the next burst of records, up to
+// maxMessages of them and, when maxBytes is positive, maxBytes of them,
+// waiting up to wait for the first.
+//
+// THROUGH THE CONSUMER'S STANDING PULL (pullrequest.go), never a pull of its
+// own. A request carries BOTH bounds and the server enforces both, so nothing
+// past either is delivered to one — see pullrequest.go for why the request is
+// made by hand, where the client library's byte-bounded fetch allocated
+// 32 MiB on every call. Every request is answered on the one inbox the handle
+// holds, so a record the server delivers to a request the client stopped
+// counting — under load the server's clock and the client's disagree about
+// when one ends — lands in the handle's buffer rather than on an inbox nobody
+// holds, where it waited out the thirty-second ack window.
 //
 // A message that cannot report its own sequence is DROPPED with its
 // acknowledgement withheld, rather than passed on with a zero: the sequence is
@@ -996,69 +1026,55 @@ func domainConsumerName(stream, nodeID string) string {
 // expectation, so a record delivered as sequence zero would move the cursor
 // backwards on every node that applied it.
 //
-// # Everything a pull delivered is returned
+// # It returns at the first burst, not at the end of the wait
 //
-// A byte-bounded pull cannot also be count-bounded by this client, and the
-// count is enforced by the consumer's own in-flight ceiling instead — see
-// [domainConsumerMaxAckPending]. So maxMessages is passed to the broker only
-// on the count-bounded path, and on the byte-bounded one the batch is drained
-// whole: a message the broker delivered and this call did not return is one it
-// holds against that ceiling and redelivers after the ack window, which is a
-// hole in the applier's run for thirty seconds.
+// A pull that is read until its request ENDS holds whatever reached it for the
+// rest of its wait — one record does not end a request — so a record appended
+// a millisecond into a half-second pull was applied half a second later, and a
+// barrier appended onto a quiet log sat in a pull nobody had finished
+// collecting, against a read budget it could exceed. So a fetch hands over
+// what has arrived as soon as the burst it belongs to is complete — the newest
+// delivery reports nothing pending behind it — or a bound is met, which is
+// what [statelog.Fetcher] asks for; the runner decides whether a partial run
+// is worth another fetch.
+//
+// # Everything the broker delivered is returned, by this call or a later one
+//
+// What a request delivers past what one call returns stays in the handle's
+// buffer, and the next call hands it over first. And a CONTEXT THAT ENDS
+// returns nothing and leaves what was delivered there: returned beside the
+// error, a stopping caller would drop records the broker holds in flight until
+// the ack window, while left, they reach the next reader on this handle at
+// once.
 func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 	wait time.Duration) ([]statelog.Message, error) {
 
 	if maxMessages <= 0 {
 		return nil, nil
 	}
-	opts := []jetstream.FetchOpt{jetstream.FetchMaxWait(wait)}
-	var batch jetstream.MessageBatch
-	var err error
-	cons, err := c.consumerFor(ctx)
+	// THE STANDING PULL FIRST, which is what refuses a closed handle before
+	// anything is rebuilt for it; it sends nothing.
+	p, err := c.standing()
 	if err != nil {
 		return nil, err
 	}
-	if maxBytes > 0 {
-		batch, err = cons.FetchBytes(maxBytes, opts...)
-	} else {
-		batch, err = cons.Fetch(maxMessages, opts...)
+	// THE CONSUMER IS ENSURED BEFORE A REQUEST IS SENT, so a handle a failed
+	// reset cleared is rebuilt before a request is addressed to a name the
+	// broker does not hold — see [DomainConsumer.consumerFor].
+	if _, err = c.consumerFor(ctx); err != nil {
+		return nil, err
 	}
-	if err != nil {
+	msgs, err := p.fetch(ctx, maxMessages, max(maxBytes, 0), wait)
+	switch {
+	case ctx.Err() != nil:
+		return nil, ctx.Err()
+	case err != nil:
 		return nil, fmt.Errorf("jetstream: fetch from %s: %w", c.name, err)
 	}
-
-	// THE CONTEXT ENDS THE DRAIN, and until it did this function took a
-	// context and used it for nothing but its own return value.
-	//
-	// A batch closes when it is FULL or when `wait` expires — one record
-	// arriving does not end it — so a caller that wanted the records
-	// already in hand had no way to say so and paid the whole wait. The
-	// applier's [statelog.Runner] is exactly that caller: a barrier
-	// appended onto a quiet log sat in a batch nobody had finished
-	// collecting for five seconds, against a two second read budget, so
-	// every linearizable read on an idle company refused `behind`.
-	//
-	// WHAT IS COLLECTED IS RETURNED. A cancelled drain is this caller
-	// deciding it has waited long enough, not a failure — the messages
-	// already taken are real, and the ones still in the batch are
-	// redelivered because they were never acknowledged.
-	var out []statelog.Message
-	msgs := batch.Messages()
-	for {
-		var msg jetstream.Msg
-		var open bool
-		select {
-		case msg, open = <-msgs:
-			if !open {
-				msg = nil
-			}
-		case <-ctx.Done():
-		}
-		if msg == nil {
-			break
-		}
-		meta, err := msg.Metadata()
-		if err != nil {
+	out := make([]statelog.Message, 0, len(msgs))
+	for _, msg := range msgs {
+		meta, unreadable := msg.Metadata()
+		if unreadable != nil {
 			// NOT ACKNOWLEDGED. A message whose metadata is
 			// unreadable is one this node cannot place in the log,
 			// and acknowledging it would move the broker's floor
@@ -1068,15 +1084,55 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 		out = append(out, statelog.Message{
 			Seq:      meta.Sequence.Stream,
 			StoredAt: meta.Timestamp,
-			Payload:  msg.Data(),
-			Ack:      msg.Ack,
+			Payload:  msg.Data,
+			Ack:      func() error { return msg.Ack() },
 		})
 	}
-	if err := batch.Error(); err != nil && !errors.Is(err, context.Canceled) {
-		return out, fmt.Errorf("jetstream: fetch from %s: %w", c.name, err)
-	}
-	return out, ctx.Err()
+	return out, nil
 }
+
+// standing is the handle's standing pull, made on first use.
+func (c *DomainConsumer) standing() (*puller, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil, fmt.Errorf("jetstream: %s's handle was closed; open the "+
+			"consumer again to read it: %w", c.name, errHandleClosed)
+	}
+	if c.pull != nil {
+		return c.pull, nil
+	}
+	p, err := c.q.newPuller(c.stream, c.name)
+	if err != nil {
+		return nil, err
+	}
+	c.pull = p
+	return p, nil
+}
+
+// Close gives up this handle for good, leaving the consumer on the broker for
+// whoever opens it next — a stopped engine's successor in the same process,
+// on the same connection. Call it once nothing will fetch through the handle
+// again; a fetch after it is refused.
+//
+// WHAT THE HANDLE HOLDS IS HANDED BACK, not left: its standing pull's buffer,
+// and every record a request it left standing delivers from here (see
+// pullrequest.go's head). Left, those went to a handle nobody would read, and
+// the successor's own request — queued behind the abandoned one, since the
+// server serves them oldest first — waited out the ack window for a record
+// already on the log. Idempotent.
+func (c *DomainConsumer) Close() {
+	c.mu.Lock()
+	p := c.pull
+	c.pull, c.closed = nil, true
+	c.mu.Unlock()
+	if p != nil {
+		p.release()
+	}
+}
+
+// errHandleClosed is a fetch through a [DomainConsumer] that was closed.
+var errHandleClosed = errors.New("jetstream: state-log consumer handle closed")
 
 // Pending implements [statelog.Fetcher]: how many records this consumer has
 // not delivered, which is what tells a partially filled batch whether waiting

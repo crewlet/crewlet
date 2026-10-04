@@ -17,7 +17,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 var clock = time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
@@ -30,9 +32,13 @@ func embeddedNATS(t *testing.T) *nats.Conn {
 	ns, err := server.NewServer(&server.Options{
 		ServerName: "backup-test",
 		JetStream:  true,
-		Port:       -1,
-		DontListen: true,
-		StoreDir:   t.TempDir(),
+		// THE FLEET'S DOMAIN, as every embedded member serves it, so the
+		// snapshot's raw request is asked in the API a real node speaks
+		// rather than one no node answers any more.
+		JetStreamDomain: jsapi.Domain,
+		Port:            -1,
+		DontListen:      true,
+		StoreDir:        t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("configure embedded server: %v", err)
@@ -93,19 +99,81 @@ func seedBucket(t *testing.T, nc *nats.Conn, bucket, key, value string) {
 
 func openStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "store.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "store.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+// A BACKUP COPIES WHAT THE NODE HOLDS, NOT WHAT HAPPENS TO BE OPEN.
+//
+// A data node's replicated estate holds rows no other artefact of the backup
+// carries. While it is closed — an adoption between its rename and its
+// reopen, a reopen that failed — the backup must refuse rather than write a
+// manifest for the node's own file alone and call that complete; and a
+// replicated estate open on a node configured to hold none is refused the
+// same way, since copying the one and skipping the other is as silent. A node
+// that holds none copies its own file, and that is complete.
+func TestABackupCopiesWhatTheNodeHolds(t *testing.T) {
+	t.Parallel()
+	fleet := memory.NewFleet()
+	service := func(db *store.DB, holding backup.EstateHolding) *backup.Service {
+		return build(t, backup.Options{
+			Store: db, Estate: holding, NodeID: "n", Holds: fleet, Backups: fleet,
+			Now: func() time.Time { return clock },
+		})
+	}
+
+	t.Run("a held replicated estate that is closed", func(t *testing.T) {
+		t.Parallel()
+		db := openStore(t)
+		if err := db.CloseReplicated(); err != nil {
+			t.Fatalf("close the replicated estate: %v", err)
+		}
+		dir := filepath.Join(t.TempDir(), "b")
+		_, err := service(db, backup.HoldsReplicated).Take(t.Context(), dir)
+		if !errors.Is(err, store.ErrNoEstate) {
+			t.Fatalf("a backup of a data node whose replicated estate is closed = %v, "+
+				"want ErrNoEstate — it would otherwise be missing every row that "+
+				"estate holds", err)
+		}
+		if !strings.Contains(err.Error(), "replicated estate") {
+			t.Errorf("the refusal does not name the replicated estate: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, backup.ManifestName)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("a refused backup wrote its manifest: %v", err)
+		}
+	})
+	t.Run("an open replicated estate on a node that holds none", func(t *testing.T) {
+		t.Parallel()
+		db := openStore(t)
+		_, err := service(db, backup.HoldsNodeOnly).Take(t.Context(), filepath.Join(t.TempDir(), "b"))
+		if err == nil || !strings.Contains(err.Error(), db.ReplicatedFile()) {
+			t.Fatalf("a backup that would leave an open replicated estate out = %v, "+
+				"want a refusal naming its file", err)
+		}
+	})
+	t.Run("a node holding none", func(t *testing.T) {
+		t.Parallel()
+		node, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		t.Cleanup(func() { _ = node.Close() })
+		manifest, err := service(node, backup.HoldsNodeOnly).Take(t.Context(), filepath.Join(t.TempDir(), "b"))
+		if err != nil {
+			t.Fatalf("a backup of a node holding no replicated estate: %v", err)
+		}
+		if len(manifest.Stores) != 1 || manifest.Stores[0].Estate != store.EstateNode {
+			t.Errorf("a node holding none backed up %+v, want its own file alone", manifest.Stores)
+		}
+	})
 }
 
 func service(t *testing.T, db *store.DB, nc *nats.Conn) *backup.Service {
 	t.Helper()
 	fleet := memory.NewFleet()
 	return build(t, backup.Options{
-		Store: db, Conn: nc, NodeID: "node-0", Holds: fleet, Backups: fleet,
+		Store: db, Estate: backup.HoldsReplicated, Conn: nc, API: jsapi.Embedded(), NodeID: "node-0", Holds: fleet, Backups: fleet,
 		Now: func() time.Time { return clock },
 	})
 }
@@ -246,6 +314,72 @@ func TestTheManifestIsWhatMarksABackupFinished(t *testing.T) {
 	}
 }
 
+// A STORE COPY IS RECORDED BYTE FOR BYTE AS EVERY EARLIER MANIFEST RECORDED IT.
+//
+// A manifest outlives the binary that wrote it: a restore procedure, a
+// shipping script and an operator's own tooling read `stores` from backups
+// taken by builds long gone, by its key names and by the estate's value. So
+// one copy of each estate is pinned here as the exact bytes it encodes to —
+// `estate` is the store's own name for the file, "node" or "replicated", and
+// there is no other field naming which file a copy is — and a real backup's
+// manifest on disk is held to the same keys, so a field added to
+// [backup.StoreArtifact] is a decision this test makes somebody take.
+func TestAStoreCopyIsRecordedAsEveryEarlierManifestRecordedIt(t *testing.T) {
+	t.Parallel()
+	pinned, err := json.Marshal([]backup.StoreArtifact{
+		{
+			Estate: store.EstateNode, File: "store.db", Source: "/data/company.db",
+			Bytes: 4096, SHA256: strings.Repeat("a", 64), Migrations: []string{"0001_init.sql"},
+		},
+		{
+			Estate: store.EstateReplicated, File: "store-replicated.db",
+			Source: "/data/crewlet-replicated.db", Bytes: 8192,
+			SHA256: strings.Repeat("b", 64), Migrations: []string{"0001_statelog.sql"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	want := `[{"estate":"node","file":"store.db","source":"/data/company.db","bytes":4096,` +
+		`"sha256":"` + strings.Repeat("a", 64) + `","migrations":["0001_init.sql"]},` +
+		`{"estate":"replicated","file":"store-replicated.db","source":"/data/crewlet-replicated.db",` +
+		`"bytes":8192,"sha256":"` + strings.Repeat("b", 64) + `","migrations":["0001_statelog.sql"]}]`
+	if string(pinned) != want {
+		t.Errorf("a pair of store copies encodes as\n%s\nwant\n%s", pinned, want)
+	}
+
+	dir := filepath.Join(t.TempDir(), "backup-golden")
+	if _, err := service(t, openStore(t), embeddedNATS(t)).Take(t.Context(), dir); err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, backup.ManifestName))
+	if err != nil {
+		t.Fatalf("read the manifest: %v", err)
+	}
+	var raw struct {
+		Stores []map[string]json.RawMessage `json:"stores"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("decode the manifest: %v", err)
+	}
+	keys := []string{"bytes", "estate", "file", "migrations", "sha256", "source"}
+	var copies []string
+	for _, st := range raw.Stores {
+		got := make([]string, 0, len(st))
+		for k := range st {
+			got = append(got, k)
+		}
+		slices.Sort(got)
+		if !slices.Equal(got, keys) {
+			t.Errorf("a store copy on disk carries the keys %v, want exactly %v", got, keys)
+		}
+		copies = append(copies, string(st["estate"])+" "+string(st["file"]))
+	}
+	if wantCopies := []string{`"node" "store.db"`, `"replicated" "store-replicated.db"`}; !slices.Equal(copies, wantCopies) {
+		t.Errorf("a data node's backup recorded its copies as %v, want %v", copies, wantCopies)
+	}
+}
+
 // A backup is a SET whose meaning depends on being one set. Writing a second
 // one into the same directory would leave a store copy and stream snapshots
 // from different moments, indistinguishable from a consistent pair.
@@ -316,7 +450,7 @@ func TestANodeOnAnExternalBrokerBacksUpItsStoreAlone(t *testing.T) {
 	t.Parallel()
 	fleet := memory.NewFleet()
 	storeOnly := build(t, backup.Options{
-		Store: openStore(t), NodeID: "n", Holds: fleet, Backups: fleet,
+		Store: openStore(t), Estate: backup.HoldsReplicated, NodeID: "n", Holds: fleet, Backups: fleet,
 		Now: func() time.Time { return clock },
 	})
 	dir := filepath.Join(t.TempDir(), "store-only")
@@ -333,23 +467,30 @@ func TestANodeOnAnExternalBrokerBacksUpItsStoreAlone(t *testing.T) {
 	}
 }
 
-// A STORE, BOTH FLEET REGISTERS AND A NODE ID ARE REQUIRED, and a missing one
-// is refused by name.
+// A STORE, WHAT IT HOLDS, BOTH FLEET REGISTERS AND A NODE ID ARE REQUIRED, and
+// a missing one is refused by name.
 //
 // The engine beside every API holds all three registers, and a backup that did
 // less around a nil would be either missing the node's own estate or invisible
-// to the trim. A blank node id is the subtler one: it keys the hold and the
-// announced point, so every node that named itself through CREWLET_NODE_ID
-// would share one hold and announce a point the register refuses.
+// to the trim. Without the node's holding it could only copy what happens to
+// be open, which is how a data node whose company ran no state log backed up
+// without its replicated estate — and the holding's ZERO value is refused for
+// that reason, rather than read as a node holding its own file alone. A blank
+// node id is the subtler one: it keys the hold
+// and the announced point, so every node that named itself through
+// CREWLET_NODE_ID would share one hold and announce a point the register
+// refuses.
 func TestNewRefusesAMissingStoreOrRegister(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	fleet := memory.NewFleet()
+	held := backup.HoldsReplicated
 	for field, opts := range map[string]backup.Options{
-		"Store":   {NodeID: "n", Holds: fleet, Backups: fleet},
-		"Holds":   {NodeID: "n", Store: db, Backups: fleet},
-		"Backups": {NodeID: "n", Store: db, Holds: fleet},
-		"NodeID":  {NodeID: "  ", Store: db, Holds: fleet, Backups: fleet},
+		"Store":   {NodeID: "n", Estate: held, Holds: fleet, Backups: fleet},
+		"Estate":  {NodeID: "n", Store: db, Holds: fleet, Backups: fleet},
+		"Holds":   {NodeID: "n", Store: db, Estate: held, Backups: fleet},
+		"Backups": {NodeID: "n", Store: db, Estate: held, Holds: fleet},
+		"NodeID":  {NodeID: "  ", Store: db, Estate: held, Holds: fleet, Backups: fleet},
 	} {
 		svc, err := backup.New(opts)
 		if err == nil {

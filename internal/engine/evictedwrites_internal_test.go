@@ -102,14 +102,14 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 
 	// AND THE PUBLISHER'S OWN READING OF THE GATE AGREES, so a write
 	// resolved later is told `evicted` rather than "somebody else won".
-	if reason, gated, err := tracker.NewGates(back.Store).GatedAt(t.Context(),
+	if reason, gated, err := tracker.NewGates(back.Store.Replicated().Reader()).GatedAt(t.Context(),
 		statelog.Subject{Kind: string(tracker.KindView), ID: "v-evicted"},
 		self, "op-view-evicted", viewAt); err != nil || !gated ||
 		reason != statelog.ReasonEvicted {
 		t.Fatalf("the tracker's gate reads (%q, %v, %v) for the evicted node's "+
 			"record, want evicted", reason, gated, err)
 	}
-	if reason, gated, err := pages.NewGates(back.Store).GatedAt(t.Context(),
+	if reason, gated, err := pages.NewGates(back.Store.Replicated().Reader()).GatedAt(t.Context(),
 		statelog.Subject{Kind: string(pages.KindContainer), ID: "EVICTED"},
 		self, "", pageAt); err != nil || !gated ||
 		reason != statelog.ReasonEvicted {
@@ -177,10 +177,10 @@ func pagesEviction(t *testing.T, node string) []byte {
 }
 
 // appendRecord puts one encoded record on a domain's log at its own subject.
-func appendRecord(t *testing.T, running *runningDomain, subject string, payload []byte) uint64 {
+func appendRecord(t *testing.T, running *runningLog, subject string, payload []byte) uint64 {
 	t.Helper()
 	seq, _, err := running.log.Append(t.Context(),
-		running.domain.Stream().SubjectPrefix+"."+subject, "", nil, payload)
+		running.spec.SubjectPrefix+"."+subject, "", nil, payload)
 	if err != nil {
 		t.Fatalf("append to %s: %v", running.domain.Name(), err)
 	}
@@ -193,8 +193,8 @@ func appendRecord(t *testing.T, running *runningDomain, subject string, payload 
 // otherwise hand them over again only after its thirty-second ack window.
 func relaunch(t *testing.T, s *stateLog) {
 	t.Helper()
-	for _, name := range s.order {
-		running := s.domains[name]
+	for _, running := range s.running() {
+		name := running.domain.Name()
 		if err := running.consumer.Reset(t.Context(), running.runner.Committed().Seq); err != nil {
 			t.Fatalf("move %s's consumer to its checkpoint: %v", name, err)
 		}
@@ -203,7 +203,7 @@ func relaunch(t *testing.T, s *stateLog) {
 }
 
 // waitApplied waits for a domain's applier to commit its whole log.
-func waitApplied(t *testing.T, running *runningDomain) {
+func waitApplied(t *testing.T, running *runningLog) {
 	t.Helper()
 	_, last, err := running.log.Bounds(t.Context())
 	if err != nil {
@@ -214,7 +214,7 @@ func waitApplied(t *testing.T, running *runningDomain) {
 }
 
 // requireWriter asserts the record at seq names writer.
-func requireWriter(t *testing.T, running *runningDomain, seq uint64, writer string) {
+func requireWriter(t *testing.T, running *runningLog, seq uint64, writer string) {
 	t.Helper()
 	_, payload, _, ok, err := running.log.At(t.Context(), seq)
 	if err != nil || !ok {

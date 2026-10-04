@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE TWO-STAGE SEARCH AGREES WITH THE EXACT SCAN AT THE SHIPPED DEPTH.
@@ -33,7 +34,7 @@ func TestTheTwoStageScanAgreesWithTheExactRanking(t *testing.T) {
 
 	var got, want []string
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		hits, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
+		hits, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: query, Model: model, Dim: dim, Limit: 20,
 		})
 		if err != nil {
@@ -77,7 +78,7 @@ func TestASecondModelAtTheSameWidthIsExcluded(t *testing.T) {
 
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		rng := rand.New(rand.NewPCG(3, 3))
-		hits, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
+		hits, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: randomEmbedding(rng, dim), Model: model, Dim: dim, Limit: 100,
 		})
 		if err != nil {
@@ -106,7 +107,7 @@ func TestTheScopeFiltersNarrowTheCandidatePool(t *testing.T) {
 	query := randomEmbedding(rng, dim)
 
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		hits, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
+		hits, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: query, Model: model, Dim: dim, Limit: 100,
 			Containers: []string{"ENG"},
 		})
@@ -124,7 +125,7 @@ func TestTheScopeFiltersNarrowTheCandidatePool(t *testing.T) {
 				"so the fixture cannot tell a working filter from an absent "+
 				"one", len(hits))
 		}
-		pages, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
+		pages, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: query, Model: model, Dim: dim, Limit: 100,
 			Sources: []search.Source{search.SourcePage},
 		})
@@ -157,7 +158,7 @@ func TestTheAnswerIsOrderedByTheExactDistance(t *testing.T) {
 	db, dim, model := seedVectors(t, 200)
 	rng := rand.New(rand.NewPCG(5, 5))
 	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		hits, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
+		hits, _, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: randomEmbedding(rng, dim), Model: model, Dim: dim, Limit: 30,
 		})
 		if err != nil {
@@ -288,11 +289,7 @@ func assertPair(t *testing.T, db *store.DB, subject search.Subject, want string)
 
 func openReplicated(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(),
-		filepath.Join(t.TempDir(), "node.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }

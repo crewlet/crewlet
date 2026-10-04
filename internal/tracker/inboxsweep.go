@@ -43,9 +43,15 @@ import (
 // What ages out is the mailbox entry, which is what the config doc promises:
 // "the history it points at is untouched".
 
-// InboxJobs is the sweep for a person's inbox rows.
-func InboxJobs(db *store.DB, retention time.Duration) []maintenance.Job {
-	if db == nil {
+// InboxJobs is the sweep for a person's inbox rows, over the replicated estate
+// db: the zero handle is a node with no tracker to sweep, which contributes no
+// job rather than one that fails every tick.
+//
+// retention is ASKED AT EVERY SWEEP, because the horizon is the company's
+// `tracker.native.inbox_retention_days` and an apply moves it under a running
+// node — see [maintenance.Horizon] for what reading it once cost.
+func InboxJobs(db store.ReplicatedHandle, retention maintenance.Horizon) []maintenance.Job {
+	if db.IsZero() {
 		return nil
 	}
 	return []maintenance.Job{{
@@ -72,9 +78,9 @@ func InboxJobs(db *store.DB, retention time.Duration) []maintenance.Job {
 // running node. A pooled write transaction takes the same write lock through
 // the same queue (see internal/store's writequeue.go), which is all this
 // needs.
-func purgeInbox(ctx context.Context, db *store.DB, cutoff time.Time) (int64, error) {
+func purgeInbox(ctx context.Context, db store.ReplicatedHandle, cutoff time.Time) (int64, error) {
 	var swept int64
-	err := db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+	err := db.Tx(ctx, func(tx *sql.Tx) error {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx,
 			`DELETE FROM tracker_notifications WHERE created_at < ?`,

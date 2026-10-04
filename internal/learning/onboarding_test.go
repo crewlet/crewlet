@@ -26,9 +26,9 @@ func onboardingOn(t *testing.T, db *store.DB) *learning.Onboarding {
 
 func openStore(t *testing.T, path string) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), path, store.Options{})
+	db, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open(%s): %v", path, err)
+		t.Fatalf("store.OpenNode(%s): %v", path, err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db
@@ -880,10 +880,10 @@ func (unknownRowsResult) RowsAffected() (int64, error) { return 0, errPassWrite 
 
 func faultedStore(t *testing.T, f *passWriteFault) *learning.Onboarding {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "f.db"),
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "f.db"),
 		store.Options{WrapDriver: f.wrap})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return learning.NewOnboarding(db)

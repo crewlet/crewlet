@@ -7,9 +7,11 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/search"
 )
 
 // A FAILED BOOT MUST LEAVE NOTHING RUNNING — THE SAME RULE ONE FRAME UP.
@@ -83,7 +85,10 @@ type servedQueue struct {
 	withdrawn map[string]int
 }
 
-// Serve registers for real and wraps the withdrawal so it can be counted.
+// Serve registers for real and wraps the withdrawal so it can be counted, per
+// subject: a search answerer and the estate server are different claims on
+// the fleet, and a count of both together would let one leak while the other
+// was withdrawn twice.
 func (q *servedQueue) Serve(ctx context.Context, subject string,
 	fn queue.AnswerFunc) (queue.Unsubscribe, error) {
 
@@ -92,6 +97,9 @@ func (q *servedQueue) Serve(ctx context.Context, subject string,
 		return nil, err
 	}
 	q.mu.Lock()
+	if q.served == nil {
+		q.served, q.withdrawn = map[string]int{}, map[string]int{}
+	}
 	q.served[subject]++
 	q.mu.Unlock()
 	return func(ctx context.Context) error {
@@ -144,7 +152,7 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 			"native start, so move it to whatever step now does")
 	}
 
-	served, withdrawn := watched.counts(topics.SearchSlice)
+	served, withdrawn := watched.counts(search.SliceSubject)
 	if served != 1 {
 		t.Fatalf("this node registered %d search answerers, want 1 — the boot "+
 			"failed before the native runtime was up, so this case is no "+
@@ -156,6 +164,18 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 			"peers count as answered, and the runtime behind them — the apply "+
 			"loops, the position heartbeat, the donor, the indexer — is still "+
 			"running against a store the caller is free to close", withdrawn)
+	}
+	// AND THE ESTATE SERVER, registered before the native start: a data
+	// node whose boot failed must not stay on the fleet's stateless nodes'
+	// list of who to ask, answering from a runtime that is being torn down.
+	nodeID, err := config.ResolveNodeID(&b, nil)
+	if err != nil {
+		t.Fatalf("resolve the node id: %v", err)
+	}
+	served, withdrawn = watched.counts(estate.Subject(nodeID))
+	if served != 1 || withdrawn != 1 {
+		t.Errorf("the estate server was registered %d time(s) and withdrawn %d, "+
+			"want once each", served, withdrawn)
 	}
 	served, withdrawn = watched.counts(topics.ObserveRead)
 	if served != 1 {

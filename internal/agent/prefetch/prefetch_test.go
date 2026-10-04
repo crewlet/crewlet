@@ -178,6 +178,11 @@ type searcher struct {
 	queries []knowledge.Query
 	cannot  bool
 
+	// unsearched is a search that did not run: no hits and no mode
+	// served, which every reader of the outcome renders as "could not be
+	// searched".
+	unsearched bool
+
 	// building reports the backend's index as still catching up. A real
 	// one that keeps no index does not implement this at all, which is
 	// why the fetcher reaches it through an optional interface — the
@@ -195,7 +200,15 @@ func (s *searcher) Search(_ context.Context, q knowledge.Query) knowledge.Result
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.queries = append(s.queries, q)
-	return knowledge.Result{Hits: s.hits}
+	if s.unsearched {
+		return knowledge.Result{Outcome: knowledge.Outcome{
+			Coverage: knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}},
+		}}
+	}
+	return knowledge.Result{Hits: s.hits, Outcome: knowledge.Outcome{
+		ServedMode: knowledge.ModeKeyword,
+		Coverage:   knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}, Complete: true},
+	}}
 }
 
 func (s *searcher) asked() []knowledge.Query {
@@ -243,7 +256,7 @@ func fetch(t *testing.T, src prefetch.Sources, r prefetch.Request) prefetch.Bloc
 	return prefetch.New(src).Fetch(t.Context(), r)
 }
 
-// ── everything degrades to nothing ──
+// ── every block degrades, and most of them to nothing ──
 
 // A NIL SOURCE IS A SUPPORTED CONFIGURATION, not a degraded one: a company
 // with reflection off or no knowledge backend has exactly this, and a turn
@@ -708,6 +721,32 @@ func TestTheModelWritesTheSearchQuery(t *testing.T) {
 	// on the first two hundred characters of a runbook.
 	if !strings.Contains(got, "look it up by title") {
 		t.Fatalf("the block does not say to open the page:\n%s", got)
+	}
+}
+
+// A SEARCH THAT NEVER RAN IS SAID, never shown as an empty block: no copy of
+// the knowledge base answered it, and "no team documents surfaced" — which a
+// seat reads as the company having written nothing about the task — is a claim
+// a search that ran nothing cannot make. A search that ran and matched nothing
+// still says that.
+func TestAKnowledgeSearchThatNeverRanSaysItCouldNotSearch(t *testing.T) {
+	t.Parallel()
+	got := fetch(t, prefetch.Sources{
+		Knowledge: &searcher{unsearched: true},
+		Models:    models{provider: &aux{answers: []string{"staging proxy"}}},
+	}, request(t)).RelevantKnowledge
+	if got != prefetch.UnsearchedKnowledgeHint {
+		t.Fatalf("a search that never ran rendered %q, want %q rather than "+
+			"\"nothing surfaced\"", got, prefetch.UnsearchedKnowledgeHint)
+	}
+
+	got = fetch(t, prefetch.Sources{
+		Knowledge: &searcher{},
+		Models:    models{provider: &aux{answers: []string{"staging proxy"}}},
+	}, request(t)).RelevantKnowledge
+	if got != prefetch.EmptyKnowledgeHint {
+		t.Fatalf("a search that ran and matched nothing rendered %q, want %q",
+			got, prefetch.EmptyKnowledgeHint)
 	}
 }
 

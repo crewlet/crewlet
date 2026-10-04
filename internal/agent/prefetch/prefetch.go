@@ -35,21 +35,37 @@ var log = logging.Get("agent.prefetch")
 // before the turn and handed to the runner as fixed strings, so there is
 // nowhere for a second fetch to happen.
 //
-// # Everything degrades to nothing
+// # Every block degrades, and most of them to nothing
 //
-// A store that is unreachable, a model that is not configured, a filter that
-// returns nonsense — every one of them renders an empty block. A turn must
-// not die because a wiki was slow, and a seat given no memory works worse
-// than one given the right memory and far better than one given the wrong
-// memory. That last point is why there is no recency-only fallback when the
-// relevance filter fails: preferring "no memory this turn" over "somebody
-// else's memory" is the only safe default for a seat that talks to several
-// people.
+// No block fails the turn. A store that is unreachable, a model that is not
+// configured, a filter that returns nonsense — each costs its own block and
+// nothing else, and for every block but two it renders exactly what finding
+// nothing would, which for most of them is an empty block. A seat given no
+// memory works worse than one given the right memory and far better than one
+// given the wrong memory. That last point is why there is no recency-only
+// fallback when the relevance filter fails: preferring "no memory this turn"
+// over "somebody else's memory" is the only safe default for a seat that talks
+// to several people.
+//
+// TWO BLOCKS SAY IN WORDS WHEN THEIR SOURCE COULD NOT BE READ, rather than
+// rendering what finding nothing would: the relevant-knowledge block
+// ([UnsearchedKnowledgeHint], and [BuildingKnowledgeHint] while this node's
+// index is still catching up) and the chat-thread block
+// ([UnreadableThreadHint]). For those two, "there
+// is nothing to say" and "this could not be read" send a seat to opposite
+// places — the first says act on what you were given, the second says the
+// answer may exist and go and look before concluding it does not. A seat told
+// nothing surfaced from a knowledge base nobody searched writes a duplicate of
+// a page that exists; a seat handed no thread and no word that one exists
+// answers a fragment of a conversation as if it were the whole. So a turn
+// still does not die because a wiki was slow, but the slow wiki costs it the
+// knowledge block's hits and the seat is told so, not that the company has
+// written nothing down.
 //
 // Which is exactly why every block reports its hit and its rendered size on
-// the prefetch_summary event: degrading silently is the design, and an
-// operator with no per-block signal cannot tell a seat whose stores are empty
-// from one whose stores are unreachable.
+// the prefetch_summary event: for every other block, degrading silently is
+// the design, and an operator with no per-block signal cannot tell a seat
+// whose stores are empty from one whose stores are unreachable.
 
 // Blocks are the rendered sections, one per prompt heading.
 //
@@ -326,7 +342,9 @@ func New(src Sources) *Fetcher { return &Fetcher{src: src, now: time.Now} }
 // auxiliary calls', see [ThreadTimeout].
 //
 // It never returns an error. Each block reports its own failure into the
-// log and renders empty — see the package comment.
+// log and costs only its own block — rendering what finding nothing would,
+// or, for the knowledge and chat-thread blocks, saying in words that its
+// source could not be read; see the package comment.
 func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 	if f == nil || r.Seat == nil {
 		return Blocks{}

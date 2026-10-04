@@ -57,8 +57,12 @@ const (
 	EstateReplicated Estate = "replicated"
 )
 
-// Estates are the two, in the order [Open] brings them up.
+// Estates are the two, in the order a node brings them up.
 var Estates = []Estate{EstateNode, EstateReplicated}
+
+// Valid reports whether e is one of the two. The zero value is not: an
+// estate nobody named is not quietly the node's.
+func (e Estate) Valid() bool { return e == EstateNode || e == EstateReplicated }
 
 // migrateMu serialises migration runs across every handle in the process.
 //
@@ -84,12 +88,8 @@ func (d *DB) migrate(ctx context.Context) ([]string, error) {
 	migrateMu.Lock()
 	defer migrateMu.Unlock()
 
-	if _, err := d.sql.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS schema_migrations (
-			version    TEXT    NOT NULL PRIMARY KEY,
-			applied_at INTEGER NOT NULL
-		)`); err != nil {
-		return nil, fmt.Errorf("store: create schema_migrations: %w", err)
+	if err := d.createMigrationLedger(ctx); err != nil {
+		return nil, err
 	}
 
 	applied, err := d.appliedVersions(ctx)
@@ -120,6 +120,24 @@ func (d *DB) migrate(ctx context.Context) ([]string, error) {
 	return done, nil
 }
 
+// createMigrationLedger creates `schema_migrations`, the table every applied
+// file is recorded in, if the database has none yet.
+//
+// ONE STATEMENT WITH TWO CALLERS: [DB.migrate], and the tests that stand a
+// database up at an OLDER schema to prove what a later migration does to rows
+// written under it. A second copy of this DDL there would be a ledger the real
+// migrator might one day read differently.
+func (d *DB) createMigrationLedger(ctx context.Context) error {
+	if _, err := d.sql.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    TEXT    NOT NULL PRIMARY KEY,
+			applied_at INTEGER NOT NULL
+		)`); err != nil {
+		return fmt.Errorf("store: create schema_migrations: %w", err)
+	}
+	return nil
+}
+
 func (d *DB) applyOne(ctx context.Context, version, body string) error {
 	tx, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
@@ -146,14 +164,23 @@ func (d *DB) applyOne(ctx context.Context, version, body string) error {
 // order. Read-only: it creates nothing, so a readiness probe may call it while
 // another handle is mid-migration.
 func (d *DB) AppliedMigrations(ctx context.Context) ([]string, error) {
-	if d == nil || d.sql == nil {
+	if !d.isOpen() {
 		return nil, ErrNoEstate
 	}
 	return d.appliedVersions(ctx)
 }
 
+// appliedVersions reads the ledger through ONE CONNECTION DRAWN FROM THIS
+// HANDLE ([DB.conn]), for [DB.vacuumInto]'s reason: a replicated estate closed
+// after [DB.AppliedMigrations]'s guard answers [ErrNoEstate] rather than
+// database/sql's "database is closed".
 func (d *DB) appliedVersions(ctx context.Context) ([]string, error) {
-	rows, err := d.sql.QueryContext(ctx,
+	conn, err := d.conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("store: read schema_migrations: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	rows, err := conn.QueryContext(ctx,
 		`SELECT version FROM schema_migrations ORDER BY version`)
 	if err != nil {
 		return nil, fmt.Errorf("store: read schema_migrations: %w", err)
@@ -195,9 +222,12 @@ func SchemaFile(estate Estate, name string) ([]byte, error) {
 // there is no second source of truth for it.
 //
 // The two sequences are numbered INDEPENDENTLY. schema_migrations keys on the
-// base filename and each estate has its own table, so `0001` in one estate and
+// base filename and each file has its own table, so `0001` in one estate and
 // `0001` in the other are two migrations and neither can mask the other.
 func schemaVersions(estate Estate) ([]string, error) {
+	if !estate.Valid() {
+		return nil, fmt.Errorf("store: %q is not an estate; the estates are %v", estate, Estates)
+	}
 	entries, err := fs.ReadDir(schemaFS, path.Join("schema", string(estate)))
 	if err != nil {
 		return nil, fmt.Errorf("store: read the %s estate's embedded schema: %w", estate, err)
@@ -229,12 +259,13 @@ func SchemaVersions(estate Estate) []string {
 	return names
 }
 
-// Pending reports, for EACH of a node's two estates, the schema files its
-// database has not applied — WITHOUT applying them.
+// Pending reports the schema files a node's two databases have not applied —
+// its own file at path, and its replicated estate where [ReplicatedPath] puts
+// it for opts — WITHOUT applying them.
 //
-// # Why this is not Open followed by a comparison
+// # Why this is not an open followed by a comparison
 //
-// Open migrates. That is the right default — every process that touches the
+// Opening migrates. That is the right default — every process that touches the
 // store gets a current schema without an operator remembering a step — but
 // it makes "what would this apply" unanswerable through it: by the time you
 // could ask, the answer is none.
@@ -254,17 +285,25 @@ func SchemaVersions(estate Estate) []string {
 // schema of a live engine's database and only refused at the point it tried
 // to change it: the check that runs first was the one with no guard.
 //
-// The lock is released before returning, and NOT because [Open] would
+// The lock is released before returning, and NOT because an open would
 // otherwise be refused — it would not. The claim is refcounted per process
-// (see lock.go), so `crewlet migrate` calling Pending and then Open shares one
-// claim either way, and a Pending that never released would look perfectly
-// fine from inside that command.
+// (see lock.go), so `crewlet migrate` calling Pending and then opening shares
+// one claim either way, and a Pending that never released would look
+// perfectly fine from inside that command.
 //
 // It is released because a claim this process no longer needs is a claim it
 // must not keep: the lock lives as long as the process, so a leak here would
 // leave the file excluded from every OTHER process for the rest of this one's
 // life, with nothing to point at. That is why the test asserts the refcount
-// rather than a following Open — an Open that succeeds proves nothing.
+// rather than a following open — an open that succeeds proves nothing.
+//
+// # Both files, always both
+//
+// A node is two databases with two independent sequences, and a report that
+// named one of them would be a deploy gate that passes while the other is
+// behind. Its caller refuses a scratch store — the one kind of node that holds
+// no replicated estate — before it asks, so every node this reports on holds
+// both.
 func Pending(ctx context.Context, path string, opts Options) ([]Schema, error) {
 	out := make([]Schema, 0, len(Estates))
 	for _, estate := range Estates {
@@ -281,9 +320,9 @@ func Pending(ctx context.Context, path string, opts Options) ([]Schema, error) {
 	return out, nil
 }
 
-// Schema is one estate's migration state.
+// Schema is one file's migration state.
 type Schema struct {
-	// Estate is which of a node's two databases this describes.
+	// Estate is which of the node's two files this describes.
 	Estate Estate
 	// Path is the file it lives in.
 	Path string
@@ -309,9 +348,9 @@ func KnownMigrations(estate Estate) ([]string, error) {
 //
 // It exists for the one caller that holds a database file which is not a
 // node's own: a snapshot being adopted. That file is a replicated estate and
-// nothing else, and it must be inspected BEFORE anything migrates it — a
-// recipient refuses a donor whose migrations this binary does not carry, and
-// migrating first would answer the question by changing it.
+// nothing else, and it must be inspected BEFORE anything migrates it — a recipient
+// refuses a donor whose migrations this binary does not carry, and migrating
+// first would answer the question by changing it.
 func PendingEstate(ctx context.Context, estate Estate, path string, opts Options) (Schema, error) {
 	return pendingOne(ctx, estate, path, opts)
 }
@@ -325,7 +364,10 @@ func pendingOne(ctx context.Context, estate Estate, path string, opts Options) (
 	}
 	defer lock.release()
 
-	pool, err := openPrepared(ctx, path, opts.forEstate(estate))
+	pool, err := openPrepared(ctx, path, Options{
+		MaxOpenConns: opts.MaxOpenConns, BusyTimeout: opts.BusyTimeout,
+		WrapDriver: opts.WrapDriver,
+	})
 	if err != nil {
 		return Schema{}, err
 	}

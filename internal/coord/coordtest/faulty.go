@@ -60,9 +60,9 @@ func (f *Faulty) fault() error {
 }
 
 // TryAcquire delegates, or fails with the configured error.
-func (f *Faulty) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, error) {
+func (f *Faulty) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
 	if err := f.fault(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	return f.inner.TryAcquire(ctx, resource, opts)
 }

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -106,7 +108,11 @@ type DetailWants struct {
 	// It is not one of the wants above: resolving costs no query, and a
 	// flag would be one more thing a surface can forget while rendering
 	// an id where a person expects their team's name.
-	Units Units
+	//
+	// NOT SERIALISED: an interface a JSON encoder writes as `{}` and
+	// cannot decode back. A surface that sends this across a wire has the
+	// far side attach ITS OWN chart — see internal/estate.
+	Units Units `json:"-"`
 
 	// Clock is the company's calendar the task's due date is stood
 	// against — see [TaskDetail.DueStanding]. Nil answers no standing,
@@ -132,8 +138,13 @@ type DetailWants struct {
 // DayClock is an instant and the company's zone: what "today" is, on the
 // calendar every due band, overdue mark and `due=` token is cut on.
 type DayClock struct {
-	Now  time.Time
-	Zone *time.Location
+	Now time.Time
+
+	// Zone is never encoded — a *time.Location is a table of transitions
+	// a JSON encoder writes as nothing at all — and a read that crosses to
+	// another node carries its NAME beside the clock instead
+	// (internal/estate's taskArgs).
+	Zone *time.Location `json:"-"`
 }
 
 // DueStanding is where a task's due date stands against the company's today.
@@ -442,23 +453,28 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		return TaskDetail{}, fmt.Errorf("tracker: name a task by id or by key")
 	}
 	var out TaskDetail
-	// A POINT READ, and that is what makes a deferred scope a REFUSAL here
-	// where the listing continues: this answer is about one object, and a
-	// record this node cannot decode covering it means the rows it is
-	// about to read may already be wrong.
+	// A READ THAT REPORTS ITS COVERAGE rather than refusing: a record this
+	// node cannot decode covering the task is served beside the rows with
+	// [TaskDetail.Incomplete] saying so, because a detail read has callers
+	// who can act on a caveat — a model is told to say it could not check,
+	// a person sees the task with a banner — and a refusal would hand both
+	// nothing at all during exactly the rolling upgrade that puts such a
+	// record on the wire. A write to the task still refuses; it is the one
+	// that could make the rows wronger.
 	//
-	// THE SCOPE IS THE TASK ITSELF and cannot be formed until the id is
-	// resolved, which happens inside the transaction — so the framework
-	// read is given the object's own term once, from the reference, and
-	// the coverage probe inside the transaction is what catches an alias.
+	// THE SCOPE IS THE TASK ITSELF and cannot be formed until the
+	// reference is resolved — a key names no path, and an id names no
+	// project — so the framework resolves it in the answer's own
+	// transaction ([taskReadScope]) and probes where the task is filed.
 	//
 	// THE WHOLE FRESHNESS, not the level alone: a staleness bound is
 	// about this node's lag rather than about a set, so one row's read
 	// is exactly as far behind as a listing's, and a floor the caller
 	// named is the position its own write landed at.
-	served, err := r.log.Read(ctx, fresh.Query(statelog.ScopeSet{Paths: []string{ScopeTerm{
-		Kind: TermObject, ID: idOrKey,
-	}.Path()}}.Normalised(), false), func(tx *sql.Tx) error {
+	served, err := r.log.Read(ctx, fresh.Resolved(func(ctx context.Context,
+		tx *sql.Tx) (statelog.ScopeSet, error) {
+		return taskReadScope(ctx, tx, idOrKey)
+	}, true), func(tx *sql.Tx) error {
 		id, err := resolveTaskID(ctx, tx, idOrKey)
 		if err != nil {
 			return err
@@ -558,11 +574,16 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		// says nothing about this task — reporting it here would put a
 		// permanent warning on every task in a company holding one
 		// undecodable record about one other task.
-		incomplete, err := coverageOf(ctx, tx, statelog.ScopeSet{
-			Paths: []string{ScopeTerm{
-				Kind: TermObject, ID: id, Container: out.Task.Project,
-			}.Path()},
-		}.Normalised())
+		//
+		// THE SAME RESOLUTION THE FRAMEWORK PROBED, in the same
+		// transaction, so the count reported here is about exactly the
+		// paths that decided whether the answer is complete — the key's
+		// own address included.
+		scope, err := taskReadScope(ctx, tx, idOrKey)
+		if err != nil {
+			return err
+		}
+		incomplete, err := coverageOf(ctx, tx, scope)
 		if err != nil {
 			return err
 		}
@@ -594,6 +615,56 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		out.Complete = false
 	}
 	return out, nil
+}
+
+// taskReadScope is what a point read of one task is about, resolved from the
+// reference the caller named.
+//
+// THE TASK'S OWN PATH, under the project it is filed in — the only place a
+// record about it is filed. A key adds its own address term as well, because a
+// deferred alias claim or re-key is filed under the key and not under the task.
+//
+// A REFERENCE THAT RESOLVES TO NOTHING STILL BOUNDS A SCOPE, because "no such
+// task" is a claim about rows a deferred create has not written yet: a key
+// names its project, so a create or an alias there could be the answer, and an
+// id names nothing narrower than the domain.
+func taskReadScope(ctx context.Context, tx *sql.Tx, idOrKey string) (statelog.ScopeSet, error) {
+	ref := strings.TrimSpace(idOrKey)
+	isID := uuid.Validate(ref) == nil
+	var keyTerm *ScopeTerm
+	if !isID {
+		key := strings.ToUpper(ref)
+		project, _, _ := strings.Cut(key, "-")
+		keyTerm = &ScopeTerm{Kind: TermKey, Container: project, ID: key}
+	}
+	var id, project string
+	err := tx.QueryRowContext(ctx, `
+		SELECT id, project_key FROM tracker_tasks WHERE id = ?
+		UNION ALL
+		SELECT id, project_key FROM tracker_tasks WHERE key = ?
+		UNION ALL
+		SELECT t.id, t.project_key FROM tracker_task_keys k
+		  JOIN tracker_tasks t ON t.id = k.task_id WHERE k.key = ?
+		LIMIT 1`,
+		ref, strings.ToUpper(ref), strings.ToUpper(ref)).Scan(&id, &project)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		if keyTerm == nil {
+			return statelog.ScopeSet{Paths: []string{
+				ScopeTerm{Kind: TermDomain}.Path(),
+			}}, nil
+		}
+		return statelog.ScopeSet{Paths: []string{
+			ScopeTerm{Kind: TermContainer, ID: keyTerm.Container}.Path(),
+		}}.Normalised(), nil
+	case err != nil:
+		return statelog.ScopeSet{}, fmt.Errorf("tracker: resolve %q: %w", idOrKey, err)
+	}
+	paths := []string{ScopeTerm{Kind: TermObject, Container: project, ID: id}.Path()}
+	if keyTerm != nil {
+		paths = append(paths, keyTerm.Path())
+	}
+	return statelog.ScopeSet{Paths: paths}.Normalised(), nil
 }
 
 // reporterSeat is the seat bound to the credential that filed this task, off
@@ -702,10 +773,10 @@ func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) 
 	if entered != 0 {
 		task.StatusEnteredAt = store.DecodeTime(entered)
 	}
-	// AND THE RANK, for the same reason: the order moves the column and
-	// never the document, so the document's copy is the key the task was
-	// filed or last re-homed at — which a detail read answered as the
-	// card's place long after a drag had moved it.
+	// AND THE RANK, for the same reason: an order older than [rewriteVersion]
+	// moved the column and never the document, so the document's copy can be
+	// the key the task was filed or last re-homed at — which a detail read
+	// answered as the card's place long after a drag had moved it.
 	task.Rank = Rank(rank)
 	// AND THE SPEND, for the rank's reason exactly: a turn adds to the
 	// task's COLUMNS in the transaction that inserts its turn row

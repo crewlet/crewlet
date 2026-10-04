@@ -44,9 +44,9 @@ func TestTheCompactedControlPasses(t *testing.T) {
 
 // rowsOver is the framework's own read seam over one control domain, which is
 // what a real domain's constructor returns too.
-func rowsOver(d statelog.Domain) func(*store.DB) (statelog.Rows, error) {
-	return func(db *store.DB) (statelog.Rows, error) {
-		return statelog.NewRows(db, d, nil)
+func rowsOver(d statelog.Domain) func(store.ReplicatedReader, statelog.StreamSpec) (statelog.Rows, error) {
+	return func(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows, error) {
+		return statelog.NewRows(db, d, spec, nil)
 	}
 }
 
@@ -54,9 +54,9 @@ func rowsOver(d statelog.Domain) func(*store.DB) (statelog.Rows, error) {
 // publisher, stamped with what stampOf makes of the stamp it is handed — the
 // identity for a domain that does its job, anything else for one that lies.
 func controlWrite(stampOf func(statelog.Stamp) statelog.Stamp) func(context.Context,
-	*statelog.Publisher, *store.DB) error {
+	*statelog.Publisher, store.ReplicatedReader) error {
 
-	return func(ctx context.Context, pub *statelog.Publisher, _ *store.DB) error {
+	return func(ctx context.Context, pub *statelog.Publisher, _ store.ReplicatedReader) error {
 		const opID = "control-write"
 		subject := statelog.Subject{Kind: "widget", ID: "w-1"}
 		scope := statelog.ScopeSet{Paths: []string{"widget/w-1"}}
@@ -84,8 +84,8 @@ func control() statelogtest.Candidate {
 		Rows:       rowsOver(controlDomain{}),
 		Write:      controlWrite(func(s statelog.Stamp) statelog.Stamp { return s }),
 		EncodeGate: encodeControlGate,
-		Migrate: func(ctx context.Context, db *store.DB) error {
-			return db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+		Migrate: func(ctx context.Context, db store.ReplicatedHandle) error {
+			return db.Tx(ctx, func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(ctx, controlDDL)
 				return err
 			})
@@ -228,11 +228,19 @@ type controlBase struct{}
 
 func (controlBase) Name() string { return "control" }
 
+// controlStream is the control's own stream — named here rather than taken
+// from a production domain's topics constants, because a fake that took one
+// would certify the framework under a name a real domain owns.
+const (
+	controlStream = "CREWLET_CONTROL_LOG"
+	controlPrefix = "crewlet.control.log"
+)
+
 func (controlBase) Stream() statelog.StreamSpec {
 	return statelog.StreamSpec{
-		Name:            "CREWLET_CONTROL_LOG",
-		Subjects:        []string{"crewlet.control.log.>"},
-		SubjectPrefix:   "crewlet.control.log",
+		Name:            controlStream,
+		Subjects:        []string{controlPrefix + ".>"},
+		SubjectPrefix:   controlPrefix,
 		ArbitratedKinds: []string{"widget"},
 		MaxBytes:        16 << 20,
 		Duplicates:      2 * time.Minute,
@@ -290,10 +298,24 @@ func (controlDomain) Tables() map[string]statelog.TableClass {
 	return tables
 }
 
+// EvictionSubject and Evicts read the control's node gates off its
+// log, as every identity-claiming domain must be able to.
+func (controlDomain) EvictionSubject(node string) statelog.Subject {
+	return statelog.Subject{Kind: controlGateKind, ID: node}
+}
+
+func (controlDomain) Evicts(payload []byte) (bool, error) {
+	var gate controlGate
+	if err := json.Unmarshal(payload, &gate); err != nil {
+		return false, err
+	}
+	return !gate.Readmit, nil
+}
+
 // Evictions answers from this log's own rows, as a real domain does.
-func (controlDomain) Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error) {
+func (controlDomain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error) {
 	var out []statelog.EvictionRow
-	err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT node_id, at, by, from_position, readmitted_position
 			FROM control_evictions ORDER BY node_id`)
@@ -585,6 +607,63 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 	})
 }
 
+// A KIND A ROW INTRODUCES IS STAMPED AT THAT ROW'S VERSION, and the suite holds
+// a domain to it in both directions: its ordinary record of that kind carries
+// the kind's own row and nothing else, so the version it is owed is the row's
+// rather than one — demanding one would demand that builds with no applier for
+// the kind apply it — and a record of it stamped one is the fault the row
+// exists to prevent.
+func TestTheSuiteHoldsAKindARowIntroducedToThatRowsVersion(t *testing.T) {
+	t.Parallel()
+	fields := append(statelog.RecordFields{}, controlFields...)
+	fields = append(fields, statelog.VersionedField{
+		Name: "Kind=gadget", Since: 2, Path: []string{"Kind"}, Equals: "gadget",
+	})
+	byTable := func(rec controlRecord) (int, error) {
+		body, err := json.Marshal(rec)
+		if err != nil {
+			return 0, err
+		}
+		return fields.Minimum(rec.Op, body)
+	}
+	withGadgets := func(stamp stamper) statelogtest.Candidate {
+		c := control()
+		c.Kinds = []string{"widget", "gadget"}
+		c.Fields = fields
+		c.Encode = func(kind, id, opID string, version int) ([]byte, error) {
+			return encodeControl(controlRecord{Envelope: controlEnvelope(kind, id, opID, version)}, stamp)
+		}
+		c.Carrying = func(field statelog.VersionedField) ([]byte, error) {
+			rec := controlRecord{Envelope: controlEnvelope("widget", "carrying", "suite-carrying", 0)}
+			switch field.Name {
+			case "widget.Colour":
+				rec.Colour = "violet"
+			case "Kind=gadget":
+				rec.Envelope = controlEnvelope("gadget", "carrying", "suite-carrying", 0)
+			default:
+				return nil, fmt.Errorf("the control has no field %s", field.Name)
+			}
+			return encodeControl(rec, stamp)
+		}
+		return c
+	}
+
+	if errs := statelogtest.Stamping(withGadgets(byTable)); len(errs) != 0 {
+		t.Errorf("a domain stamping a gadget at the version its row gives it was "+
+			"refused: %v", errs)
+	}
+	errs := statelogtest.Stamping(withGadgets(func(controlRecord) (int, error) { return 1, nil }))
+	var found bool
+	for _, err := range errs {
+		if strings.Contains(err.Error(), "the only versioned field it carries is its kind's own") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a gadget stamped at version one passed the base-record case: %v", errs)
+	}
+}
+
 // A DOMAIN THAT STAMPS THE WRONG VERSION IS CAUGHT, in both directions and
 // in both halves of the table-and-build agreement.
 //
@@ -757,7 +836,7 @@ type unlisted struct{ controlBase }
 // log's behalf and finding nothing.
 type blindLister struct{ controlDomain }
 
-func (blindLister) Evictions(context.Context, *store.DB) ([]statelog.EvictionRow, error) {
+func (blindLister) Evictions(context.Context, store.ReplicatedReader) ([]statelog.EvictionRow, error) {
 	return nil, nil
 }
 
@@ -777,7 +856,7 @@ func (d deletingApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Rec
 // listingCompacted claims no identity and answers for evictions anyway.
 type listingCompacted struct{ compactedControl }
 
-func (listingCompacted) Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error) {
+func (listingCompacted) Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error) {
 	return controlDomain{}.Evictions(ctx, db)
 }
 
@@ -814,6 +893,10 @@ func TestTheSuiteCatchesADomainThatMisnamesItsNodeGate(t *testing.T) {
 			mutate: func(c *statelogtest.Candidate) { c.EncodeGate = nil },
 			names:  "supplies no eviction record",
 		},
+		"an identity-claiming domain that reads no node gate off its log": {
+			mutate: func(c *statelogtest.Candidate) { c.Domain = unprobed{controlBase{}} },
+			names:  "cannot read its node gates off its log",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -829,6 +912,13 @@ func TestTheSuiteCatchesADomainThatMisnamesItsNodeGate(t *testing.T) {
 		})
 	}
 }
+
+// unprobed claims identity, gates its evictions, and cannot read them off its
+// log — the base with the control's gate answers and none of its probe.
+type unprobed struct{ controlBase }
+
+func (unprobed) InstallsGate(env statelog.Envelope) bool { return env.Kind == controlGateKind }
+func (unprobed) NodeGate(env statelog.Envelope) bool     { return env.Kind == controlGateKind }
 
 // evictionNotANodeGate answers no to its own eviction, so the publisher would
 // refuse the gesture that unpins its log.

@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // pageRow is one row of pages_heads as this corpus reads it.
@@ -31,7 +32,7 @@ type pageRow struct {
 func TestARenamedPageIsNotReEmbedded(t *testing.T) {
 	t.Parallel()
 	db := pagesStore(t)
-	corpus := search.PageCorpus{DB: db}
+	corpus := search.PageCorpus{DB: db.Replicated().Reader()}
 
 	writePage(t, db, pageRow{
 		id: "p1", container: "eng", title: "Runbook", body: "how to restart",
@@ -87,7 +88,7 @@ func TestARenamedPageIsNotReEmbedded(t *testing.T) {
 func TestAWithdrawnPageLosesItsVector(t *testing.T) {
 	t.Parallel()
 	db := pagesStore(t)
-	corpus := search.PageCorpus{DB: db}
+	corpus := search.PageCorpus{DB: db.Replicated().Reader()}
 
 	for _, row := range []pageRow{
 		{id: "kept", container: "eng", title: "Kept", body: "b", status: "published", edit: 1},
@@ -127,11 +128,7 @@ func TestAWithdrawnPageLosesItsVector(t *testing.T) {
 
 func pagesStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }

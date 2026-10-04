@@ -16,8 +16,8 @@ pointing at the other.
 
 Twelve packages in this tree exist for exactly this reason and nothing else:
 `textcut`, `whsec`, `jsprovision`, `httpx`, `api/httpjson`, `tokens`,
-`procgroup`, `clientsource`, `runtoken`, `hostbox`, `solo`, `backoff`. Each of
-their doc comments names the duplication as its reason for existing, and
+`procgroup`, `clientsource`, `runtoken`, `hostbox`, `solo` and `backoff`. Each
+of their doc comments names the duplication as its reason for existing, and
 several name what the divergence cost.
 
 Where a second implementation genuinely cannot be removed — the dashboard is a

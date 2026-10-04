@@ -305,11 +305,25 @@ func TestAReadmissionBelowTheFloorIsRefusedAsAnAnswer(t *testing.T) {
 		}
 	}
 
-	// AND A JUDGEMENT NOBODY COULD MAKE IS NOT A REFUSAL OF THE NODE.
-	gate.readmit = errors.New("engine: read the positions register: unreachable")
+	// AND A JUDGEMENT NOBODY COULD MAKE IS NOT A REFUSAL OF THE NODE: it is
+	// a 503 carrying what to do, as an unjudged eviction is — never a 500
+	// an operator reads as an engine fault.
+	gate.readmit = fmt.Errorf("engine: readmit node node-4: %w", &engine.ReadmissionUnjudged{
+		Node: "node-4", Err: errors.New("read the positions register: unreachable")})
+	code, body = postAck(t, a, "/work/retention/readmit/node-4?confirm=node-4")
+	if code != http.StatusServiceUnavailable || body["error"] != "readmission_unjudged" {
+		t.Fatalf("an unreadable register answered %d %v, want 503 readmission_unjudged", code, body)
+	}
+	if got := actionsOf(body); !slices.Equal(got, []string{string(statelog.GateRetrySameOp),
+		string(statelog.GateOtherNode)}) {
+		t.Errorf("actions = %v, want the same gesture again, here or through another node", got)
+	}
+
+	// AND A FAILURE THE ENGINE DID NOT TYPE STAYS A FAILURE.
+	gate.readmit = errors.New("engine: something nobody anticipated")
 	if code, body := postAck(t, a, "/work/retention/readmit/node-4?confirm=node-4"); code !=
 		http.StatusInternalServerError || body["error"] != "gate_failed" {
-		t.Fatalf("an unreadable register answered %d %v, want 500 gate_failed", code, body)
+		t.Fatalf("an untyped failure answered %d %v, want 500 gate_failed", code, body)
 	}
 }
 

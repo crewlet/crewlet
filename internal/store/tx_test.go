@@ -31,7 +31,7 @@ import (
 // be paying for the race on every contended write.
 func TestAReadThenWriteCannotLoseARace(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(),
+	db, err := store.OpenNode(t.Context(),
 		filepath.Join(t.TempDir(), "tx.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)

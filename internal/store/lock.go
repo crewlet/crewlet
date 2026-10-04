@@ -259,3 +259,37 @@ func pidOf(stamped string) (int, bool) {
 	pid, err := strconv.Atoi(fields[1])
 	return pid, err == nil
 }
+
+// discard deletes a database and every sidecar beside it, holding the store's
+// own lock while it does — see [Options.Scratch].
+//
+// THE LOCK IS WHAT MAKES A DELETE SAFE TO ASK FOR. Without it, a node told its
+// store is scratch and pointed by mistake at a path another engine is running
+// on would unlink that engine's database from under it. With it, that node is
+// refused naming the holder, exactly as a second opener is. A handle THIS
+// process already holds is refused too: the in-process claim is shared rather
+// than exclusive, so the lock alone would let a scratch open delete a
+// database a caller here is reading.
+func discard(dbPath string) error {
+	if dbPath == "" || strings.HasPrefix(dbPath, ":memory:") {
+		// Nothing on disk: an in-memory database starts empty by
+		// construction.
+		return nil
+	}
+	locksHeld.mu.Lock()
+	open := locksHeld.by[dbPath] != nil
+	locksHeld.mu.Unlock()
+	if open {
+		return fmt.Errorf("store: %s is open in this process, and a scratch "+
+			"store is discarded before it is opened — never under a live handle", dbPath)
+	}
+	lock, err := lockStore(dbPath)
+	if err != nil {
+		return err
+	}
+	defer lock.release()
+	if err := removeDatabaseFiles(dbPath); err != nil {
+		return fmt.Errorf("store: discard the scratch store: %w", err)
+	}
+	return nil
+}

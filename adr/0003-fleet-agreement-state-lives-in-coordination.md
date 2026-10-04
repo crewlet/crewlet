@@ -61,6 +61,10 @@ short-lived; and coordination is deliberately **not** itself a replicated log â€
 `internal/coord` gives five reasons, the first being that the framework's
 central property is the one a lease must not have.
 
+Nor does it decide where the replicated estate's rows are held: they stay
+[ADR-0002](0002-the-stream-is-the-write-ahead-log.md)'s derived state, on every
+data node.
+
 ## The table this record was written for
 
 `chat_thread_follows` was company-wide chat routing state in the node's own

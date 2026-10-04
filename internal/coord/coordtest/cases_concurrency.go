@@ -2,6 +2,8 @@ package coordtest
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -38,19 +40,19 @@ const churnTTL = 2 * time.Millisecond
 const contendedClaimBudget = 10 * time.Second
 
 // claimUntilDefinite retries an unknown answer until the backend gives a real
-// one: a lease, or a definite refusal. It reports the last error if the budget
-// runs out with the store still unable to answer.
-func claimUntilDefinite(h *harness, resource string, opts coord.AcquireOptions) (*coord.Lease, error) {
+// one: a lease, or a definite refusal and its reason. It reports the last error
+// if the budget runs out with the store still unable to answer.
+func claimUntilDefinite(h *harness, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
 	deadline := time.Now().Add(contendedClaimBudget)
 	var last error
 	for attempt := 0; ; attempt++ {
-		lease, err := h.b.TryAcquire(h.ctx, resource, opts)
+		lease, refused, err := h.b.TryAcquire(h.ctx, resource, opts)
 		if err == nil {
-			return lease, nil
+			return lease, refused, nil
 		}
 		last = err
 		if h.ctx.Err() != nil || !time.Now().Before(deadline) {
-			return nil, fmt.Errorf("no definite answer in %v (%d attempts): %w",
+			return nil, "", fmt.Errorf("no definite answer in %v (%d attempts): %w",
 				contendedClaimBudget, attempt+1, last)
 		}
 		// A backoff, because the point of coming back is to arrive when
@@ -81,7 +83,7 @@ var concurrencyCases = []testCase{
 		for i := range claimants {
 			wg.Go(func() {
 				<-start
-				lease, err := claimUntilDefinite(h, "seat:ceo", coord.AcquireOptions{
+				lease, refused, err := claimUntilDefinite(h, "seat:ceo", coord.AcquireOptions{
 					Owner: fmt.Sprintf("node-%02d:1", i),
 					TTL:   LongTTL,
 				})
@@ -92,6 +94,12 @@ var concurrencyCases = []testCase{
 					failures = append(failures, fmt.Errorf("claimant %d: %w", i, err))
 				case lease != nil:
 					winners = append(winners, lease)
+				case refused != coord.RefusedHeld:
+					// Every loser lost to the winner's hold, and a
+					// seat host acts on the reason: read as a gate,
+					// it would judge one on every sweep.
+					failures = append(failures, fmt.Errorf("claimant %d: refused %q, want %q",
+						i, refused, coord.RefusedHeld))
 				}
 			})
 		}
@@ -126,7 +134,7 @@ var concurrencyCases = []testCase{
 		for range callers {
 			wg.Go(func() {
 				<-start
-				lease, err := claimUntilDefinite(h, "seat:ceo", coord.AcquireOptions{
+				lease, _, err := claimUntilDefinite(h, "seat:ceo", coord.AcquireOptions{
 					Owner: "node-a:1", TTL: LongTTL,
 				})
 				mu.Lock()
@@ -206,7 +214,7 @@ var concurrencyCases = []testCase{
 				for n := range iterations {
 					switch n % 3 {
 					case 0:
-						lease, err := h.b.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
+						lease, _, err := h.b.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 							Owner: owner, TTL: churnTTL, Preferred: owner,
 						})
 						if err != nil {
@@ -290,5 +298,117 @@ var concurrencyCases = []testCase{
 			h.t.Fatalf("epoch %d after churn that reached %d — the counter rewound",
 				final.Epoch, maxEpoch)
 		}
+	}},
+
+	{"a_lease_renewed_throughout_a_listing_is_in_every_listing", func(h *harness) {
+		// "A class listing may lag" is about a lease that CHANGED — a
+		// peer claimed a second ago is discovered a second late. It is
+		// not licence to drop one that was live before the listing
+		// began and after it ended, and a renew is the write every live
+		// lease takes on every heartbeat. Missing one is a live node
+		// that looks gone (placement divides the seats by the rest), an
+		// owner whose drain looks finished, and — for an older-protocol
+		// peer — a floor that lets the newer build claim beside it.
+		//
+		// Measured on the embedded KV before its listings were
+		// certified: a store that keeps one revision per key REMOVES the
+		// revision a listing is about to read when the key is renewed,
+		// and 23% of listings lost a lease that way.
+		nodes := []string{"n0", "n1", "n2", "n3", "n4"}
+		held := map[string]*coord.Lease{}
+		for _, n := range nodes {
+			held[n] = h.claim(coord.NodeResource(n), coord.AcquireOptions{
+				Owner: n + ":1", TTL: LongTTL, Ungated: true, Protocol: 2,
+			})
+		}
+		// The older build's presence, so the floor has a lease that
+		// only it can see.
+		held["old"] = h.claim(coord.NodeResource("old"), coord.AcquireOptions{
+			Owner: "old:1", TTL: LongTTL, Ungated: true, Protocol: 1,
+		})
+		want := []string{"node:n0", "node:n1", "node:n2", "node:n3", "node:n4", "node:old"}
+
+		c := startChurn([]string{"n0", "n2", "old"}, func(n string) error {
+			l := held[n]
+			ok, err := h.b.Renew(h.ctx, l.Resource, l.Owner, l.Epoch, LongTTL)
+			if err == nil && !ok {
+				err = fmt.Errorf("the renew reported the lease lost")
+			}
+			return err
+		})
+		raced, wrong := c.readThrough(h.ctx, func() (string, bool) {
+			live, err := h.b.ListLive(h.ctx, coord.ClassNode)
+			if err != nil {
+				return fmt.Sprintf("ListLive: %v", err), true
+			}
+			if got := slices.Sorted(slices.Values(resources(live))); !slices.Equal(got, want) {
+				return fmt.Sprintf("ListLive(node) = %v", got), false
+			}
+			owned, err := h.b.ListOwned(h.ctx, "old:1")
+			if err != nil {
+				return fmt.Sprintf("ListOwned: %v", err), true
+			}
+			if got := resources(owned); !slices.Equal(got, []string{"node:old"}) {
+				return fmt.Sprintf("ListOwned(old:1) = %v", got), false
+			}
+			floor, found, err := h.b.FleetProtocolFloor(h.ctx)
+			if err != nil {
+				return fmt.Sprintf("FleetProtocolFloor: %v", err), true
+			}
+			if !found || floor != 1 {
+				return fmt.Sprintf("FleetProtocolFloor = (%d, %v), want (1, true)", floor, found), false
+			}
+			return "", false
+		})
+		c.verdict(h.t, "the lease reads", raced, wrong)
+	}},
+
+	{"a_hint_rewritten_throughout_a_listing_is_in_every_listing", func(h *harness) {
+		// The stickiness hint's record is rewritten whenever its resource
+		// changes tenure, and a restarted node reads the hints to find
+		// the seats it had warm. A listing that dropped a hint whose
+		// record was mid-rewrite sends those seats to whichever node
+		// sweeps first — the one thing the hint exists to prevent.
+		seats := []string{"seat:s0", "seat:s1", "seat:s2", "seat:s3", "seat:s4"}
+		// A cell per seat rather than a map of leases: the map is only
+		// READ once the rewriters start, and each rewriter writes its own
+		// seat's cell and nothing else.
+		type tenure struct{ lease *coord.Lease }
+		held := map[string]*tenure{}
+		for _, s := range seats {
+			held[s] = &tenure{h.claim(s, coord.AcquireOptions{
+				Owner: "node-a:1", TTL: LongTTL, Preferred: "node-a",
+			})}
+		}
+		// A new tenure per round: released, then claimed again naming the
+		// same node, so the hint never changes and its record always does.
+		c := startChurn([]string{"seat:s0", "seat:s2"}, func(s string) error {
+			cell := held[s]
+			if _, err := h.b.Release(h.ctx, s, cell.lease.Owner, cell.lease.Epoch); err != nil {
+				return err
+			}
+			next, refused, err := h.b.TryAcquire(h.ctx, s, coord.AcquireOptions{
+				Owner: "node-a:1", TTL: LongTTL, Preferred: "node-a",
+			})
+			if err == nil && next == nil {
+				err = fmt.Errorf("refused (%q) a resource its own owner had just released", refused)
+			}
+			if err != nil {
+				return err
+			}
+			cell.lease = next
+			return nil
+		})
+		raced, wrong := c.readThrough(h.ctx, func() (string, bool) {
+			hints, err := h.b.PreferredResources(h.ctx, coord.ClassSeat, "node-a")
+			if err != nil {
+				return fmt.Sprintf("PreferredResources: %v", err), true
+			}
+			if got := slices.Sorted(maps.Keys(hints)); !slices.Equal(got, seats) {
+				return fmt.Sprintf("%v", got), false
+			}
+			return "", false
+		})
+		c.verdict(h.t, "PreferredResources", raced, wrong)
 	}},
 }

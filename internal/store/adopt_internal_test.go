@@ -147,7 +147,7 @@ func cutName(cut, steps int) string {
 // state every step of the install is arranged around.
 func seedProbe(t *testing.T, path, mark string) {
 	t.Helper()
-	db, err := Open(t.Context(), path, Options{})
+	db, err := OpenNode(t.Context(), path, Options{})
 	if err != nil {
 		t.Fatalf("open %s: %v", path, err)
 	}
@@ -174,7 +174,7 @@ func readProbe(t *testing.T, path string) (string, bool) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return "", false
 	}
-	db, err := Open(t.Context(), path, Options{})
+	db, err := OpenNode(t.Context(), path, Options{})
 	if err != nil {
 		t.Fatalf("the next open of %s failed: %v — an interrupted adoption "+
 			"must leave a database somebody can open", path, err)

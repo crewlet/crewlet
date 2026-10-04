@@ -20,33 +20,57 @@ type serveSub struct {
 	owner   *Queue
 	subject string
 	answer  queue.AnswerFunc
+
+	// serving is the ANSWERER's context, cancelled when its registration
+	// ends — which is what the contract hands an answerer, and what the
+	// real backend hands it. This twin used to pass the asker's instead,
+	// so an answer here ended when its asker left and one on the broker
+	// ran on, and a case written against one taught nothing about the
+	// other.
+	serving context.Context
+	retire  context.CancelFunc
+
+	// gate bounds the answers in flight and is what a withdrawal waits
+	// on — the contract's rule, in the one implementation both backends
+	// share.
+	gate *queue.AnswerGate
 }
 
 // Serve makes this client one of subject's answerers.
-func (q *Queue) Serve(_ context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
+func (q *Queue) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
 	if h == nil {
 		return nil, ErrNilHandler
 	}
 	if subject == "" {
 		return nil, ErrEmptySubject
 	}
-	sub := &serveSub{owner: q, subject: subject, answer: h}
+	serving, retire := context.WithCancel(context.WithoutCancel(ctx))
+	sub := &serveSub{owner: q, subject: subject, answer: h,
+		serving: serving, retire: retire, gate: queue.NewAnswerGate()}
 	q.broker.mu.Lock()
 	if q.notStartedLocked() {
 		q.broker.mu.Unlock()
+		retire()
 		return nil, ErrNotStarted
 	}
 	q.broker.servers = append(q.broker.servers, sub)
 	q.broker.mu.Unlock()
 	log.Debug("scatter_server_added", "subject", subject)
 
-	return func(context.Context) error {
+	return func(ctx context.Context) error {
 		q.broker.mu.Lock()
 		before := len(q.broker.servers)
 		q.broker.servers = slices.DeleteFunc(q.broker.servers,
 			func(s *serveSub) bool { return s == sub })
 		removed := before != len(q.broker.servers)
 		q.broker.mu.Unlock()
+		// CANCELLED BEFORE THE WAIT, so an answer watching its context
+		// returns now rather than finishing work nobody will read.
+		sub.retire()
+		if err := sub.gate.Close(ctx); err != nil {
+			return fmt.Errorf("memory: stop serving %s: answers still in "+
+				"flight: %w", subject, err)
+		}
 		if removed {
 			log.Debug("scatter_server_removed", "subject", subject)
 		}
@@ -102,7 +126,18 @@ func (q *Queue) Ask(ctx context.Context, subject string, request []byte, want in
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			reply, err := s.call(scatter, request)
+			// A SLOT FIRST, waited for no longer than the asker waits:
+			// past the cap a request queues rather than drops, exactly
+			// as it does on the broker.
+			if !s.gate.Enter(scatter) {
+				return
+			}
+			//nolint:contextcheck // the ANSWERER's context, which the
+			// contract hands an answerer: the asker's deadline bounds
+			// the wait for a slot above and the collection below, never
+			// the answer — see [serveSub.serving].
+			reply, err := s.call(s.serving, request)
+			s.gate.Leave()
 			if err != nil {
 				// AN ERROR ANSWERS NOTHING, which is the same
 				// fact as a server that was down — see

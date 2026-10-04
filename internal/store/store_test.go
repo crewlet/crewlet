@@ -68,7 +68,7 @@ func TestTursoIsTheOnlyDriverInTheBinary(t *testing.T) {
 // nothing runs in.
 func open(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "store.db"),
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "store.db"),
 		store.Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)

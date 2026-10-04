@@ -333,6 +333,9 @@ export default defineConfig({
       // Taking a backup (Settings › Backups & retention). The record it
       // lands in is read over the socket.
       "/backup": { target: "http://localhost:8000" },
+      // Removing a dead member from the broker's metadata group (Settings ›
+      // Nodes, Broker members). The membership is read over the socket.
+      "/fleet": { target: "http://localhost:8000" },
     },
   },
 });

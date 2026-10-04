@@ -65,8 +65,10 @@ func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 	if !found {
 		checkpoint.At.Generation = 1
 	}
+	// THE DOMAIN'S OWN STREAM, as the engine runs it.
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: usage.Domain{}, Applier: usage.NewApplier(), Fetch: consumer,
+		Domain: usage.Domain{}, Spec: spec,
+		Applier: usage.NewApplier(), Fetch: consumer,
 		Log: log, Node: db, DB: db.Replicated(),
 		Checkpoint: checkpoint.At, CheckpointStoredAt: checkpoint.StoredAt,
 		StreamCreatedAt: stats.CreatedAt.UTC(), NodeID: id,
@@ -74,13 +76,15 @@ func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 	if err != nil {
 		t.Fatalf("%s: build the applier: %v", id, err)
 	}
-	rows, err := usage.NewRows(db)
+	rows, err := usage.NewRows(db.Replicated().Reader(), usage.Domain{}.Stream())
 	if err != nil {
 		t.Fatalf("%s: build the read seam: %v", id, err)
 	}
+	// ON THE SAME LOG, which the publisher writes and the runner applies.
 	authority, err := statelog.NewPublisher(statelog.Deps{
-		Domain: usage.Domain{}, Log: log, Rows: rows, Fence: usage.NewFence(),
-		Gates: usage.NewGates(), Waiter: runner, Identity: runner, NodeID: id,
+		Domain: usage.Domain{}, Spec: spec,
+		Log: log, Records: log, Rows: rows, Fence: usage.NewFence(),
+		Gates: usage.NewGates(), Waiter: runner, Voids: runner, Identity: runner, NodeID: id,
 		Generation:    func() uint32 { return runner.Committed().Generation },
 		ResolveBudget: 5 * time.Second,
 	})

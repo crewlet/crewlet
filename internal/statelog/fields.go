@@ -67,6 +67,31 @@ type VersionedField struct {
 	// met on the way is searched element by element, so a field inside a
 	// list of objects is carried when any element carries it.
 	Path []string
+
+	// Equals narrows the rule to one VALUE at Path, compared as the JSON
+	// string it is written as. EMPTY means any value but null.
+	//
+	// It is what a new KIND or a new OP is: a value of a field every record
+	// has carried since the base format, so a row naming only the key would
+	// stamp every record the domain writes. Its row names the key and the
+	// value instead — a file kind is `subject.kind` equal to "file" — and
+	// an older build retains the records of the kind it has no applier for
+	// rather than faulting at the end of its dispatch.
+	Equals string
+
+	// Gate marks a field a GATE may carry: a change to what a gate's APPLY
+	// does, which no older build can honour.
+	//
+	// Every other field is refused on a gate (each domain's encoder says
+	// why), because the one thing an older build does with a gate it cannot
+	// read is HALT at it — a deferred gate would license every record above
+	// it — and a halt takes that node out of service until it upgrades. A
+	// field marked here is the deliberate exception: a gate whose apply
+	// changed cannot be applied the old way without leaving that node's rows
+	// different from every newer node's for good, and cannot be deferred, so
+	// halting an older node is the one honest answer left. It is chosen per
+	// field, in the table a reviewer reads, never by a writer.
+	Gate bool
 }
 
 // RecordFields is a domain's table of every field its records have gained
@@ -97,11 +122,44 @@ func (f RecordFields) Minimum(op string, record []byte) (int, error) {
 		if field.Since <= minimum || (field.Op != "" && field.Op != op) {
 			continue
 		}
-		if carries(root, field.Path) {
+		if field.carriedBy(root) {
 			minimum = field.Since
 		}
 	}
 	return minimum, nil
+}
+
+// Ungated names the versioned fields a record carries that put a GATE above
+// what its own apply needs: every carried field not marked
+// [VersionedField.Gate] whose version is above the highest version among the
+// gate fields the record carries (1 where it carries none).
+//
+// THE GATE FIELDS DECIDE THE HALT, and anything at or below them halts nobody
+// they do not already halt: a build that cannot read such a field cannot read
+// the gate either, and stops there whether the field is carried or not. Only a
+// field ABOVE them takes an older node out of service that the gate's own rule
+// did not — for a field rather than for a rule it cannot honour — which is
+// what the encoder refuses. A barrier and a generation carry no gate field, so
+// every versioned field they carry is named here.
+func (f RecordFields) Ungated(op string, record []byte) []string {
+	var root map[string]json.RawMessage
+	if len(f) == 0 || json.Unmarshal(record, &root) != nil {
+		return nil
+	}
+	gate := 1
+	for _, field := range f {
+		if field.Gate && (field.Op == "" || field.Op == op) && field.carriedBy(root) {
+			gate = max(gate, field.Since)
+		}
+	}
+	var out []string
+	for _, field := range f {
+		if !field.Gate && field.Since > gate && (field.Op == "" || field.Op == op) &&
+			field.carriedBy(root) {
+			out = append(out, fmt.Sprintf("%s (version %d)", field.Name, field.Since))
+		}
+	}
+	return out
 }
 
 // Carried names the versioned fields a record carries, for a refusal that has
@@ -113,7 +171,7 @@ func (f RecordFields) Carried(op string, record []byte) []string {
 	}
 	var out []string
 	for _, field := range f {
-		if (field.Op == "" || field.Op == op) && carries(root, field.Path) {
+		if (field.Op == "" || field.Op == op) && field.carriedBy(root) {
 			out = append(out, fmt.Sprintf("%s (version %d)", field.Name, field.Since))
 		}
 	}
@@ -165,21 +223,34 @@ func (f RecordFields) Check(reads int) error {
 	return nil
 }
 
-// carries walks path from node and reports whether a non-null value sits at its
-// end.
-func carries(node map[string]json.RawMessage, path []string) bool {
+// carriedBy reports whether a record's decoded root carries the field: a
+// non-null value at its path — any element's, where the path crosses an
+// array — equal to [VersionedField.Equals] where it names one.
+func (field VersionedField) carriedBy(root map[string]json.RawMessage) bool {
+	return anyAt(root, field.Path, func(value json.RawMessage) bool {
+		if field.Equals == "" {
+			return true
+		}
+		var s string
+		return json.Unmarshal(value, &s) == nil && s == field.Equals
+	})
+}
+
+// anyAt walks path from node and reports whether a non-null value at its end
+// satisfies match. An array met on the way is searched element by element.
+func anyAt(node map[string]json.RawMessage, path []string, match func(json.RawMessage) bool) bool {
 	value, ok := node[path[0]]
 	if !ok || isNull(value) {
 		return false
 	}
 	if len(path) == 1 {
-		return true
+		return match(value)
 	}
-	return carriedIn(value, path[1:])
+	return anyIn(value, path[1:], match)
 }
 
-// carriedIn descends one value, searching an array element by element.
-func carriedIn(value json.RawMessage, rest []string) bool {
+// anyIn descends one value, searching an array element by element.
+func anyIn(value json.RawMessage, rest []string, match func(json.RawMessage) bool) bool {
 	trimmed := bytes.TrimSpace(value)
 	if len(trimmed) == 0 {
 		return false
@@ -190,14 +261,14 @@ func carriedIn(value json.RawMessage, rest []string) bool {
 		if json.Unmarshal(trimmed, &child) != nil {
 			return false
 		}
-		return carries(child, rest)
+		return anyAt(child, rest, match)
 	case '[':
 		var items []json.RawMessage
 		if json.Unmarshal(trimmed, &items) != nil {
 			return false
 		}
 		for _, item := range items {
-			if carriedIn(item, rest) {
+			if anyIn(item, rest, match) {
 				return true
 			}
 		}

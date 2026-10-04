@@ -3,6 +3,7 @@ package statelog_test
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"reflect"
 	"regexp"
 	"strings"
@@ -266,14 +267,17 @@ func TestAnEvictionIsEffectiveExactlyWhenTheGateSaysSo(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			tomb := statelog.Tombstone{NodeID: "node-9", At: evicted, By: "ops-3"}
+			d := healthyDomain("tracker", true)
+			d.Tombstones = []statelog.Tombstone{tomb}
 			rep := statelog.NewReport(statelog.ReportInputs{
 				NodeID:           "node-1",
 				At:               tc.at,
 				RegisterReadable: true,
-				Register: []coord.NodePositions{
-					{NodeID: "node-9", At: evicted},
-				},
-				Tombstones: []statelog.Tombstone{{NodeID: "node-9", At: evicted, By: "ops-3"}},
+				Domains:          []statelog.DomainInputs{d},
+				Register: []coord.NodePositions{{NodeID: "node-9", At: evicted,
+					Domains: map[string]coord.DomainPosition{"tracker": {Seq: 3}}}},
+				Tombstones: []statelog.Tombstone{tomb},
 			})
 			row := rep.Nodes[0]
 			if row.Evicted == nil {
@@ -298,11 +302,13 @@ func TestAnEvictionIsEffectiveExactlyWhenTheGateSaysSo(t *testing.T) {
 // did not appear in would be a block with no visible cause.
 func TestALiveNodeWithNoPositionIsCountedAndRendered(t *testing.T) {
 	t.Parallel()
+	d := healthyDomain("tracker", true)
 	rep := statelog.NewReport(statelog.ReportInputs{
 		NodeID:           "node-1",
 		At:               reportAt,
 		RegisterReadable: true,
 		Live:             []statelog.Presence{{NodeID: "node-7"}},
+		Domains:          []statelog.DomainInputs{d},
 	})
 	if len(rep.Nodes) != 1 || rep.Nodes[0].NodeID != "node-7" {
 		t.Fatalf("a live node that has never reported is missing from the node "+
@@ -316,6 +322,46 @@ func TestALiveNodeWithNoPositionIsCountedAndRendered(t *testing.T) {
 		t.Errorf("a node that has never reported shows a position (%v, %d domains); "+
 			"that is a node at zero rather than a node with nothing to say",
 			row.At, len(row.Domains))
+	}
+}
+
+// THE COUNTED MARK IS THE TRIM'S SET, LOG BY LOG.
+//
+// A node is marked counted where some log's counted set holds it, each set over
+// that log's own rows and tombstones and the live data nodes: a node evicted
+// past the window on the only log its row names is counted nowhere, and one
+// evicted on one log and still reporting another is counted — on the other.
+// Folded into one set over every row, the first was marked counted while the
+// trim waited for it on no log.
+func TestTheCountedMarkIsTheTrimsSetLogByLog(t *testing.T) {
+	t.Parallel()
+	tracker := healthyDomain("tracker", true)
+	tracker.Tombstones = []statelog.Tombstone{
+		{NodeID: "evicted", At: reportAt.Add(-time.Hour)},
+		{NodeID: "half", At: reportAt.Add(-time.Hour)},
+	}
+	pages := healthyDomain("pages", true)
+	row := func(node string, positions map[string]coord.DomainPosition) coord.NodePositions {
+		return coord.NodePositions{NodeID: node, At: reportAt, Domains: positions}
+	}
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID:           "node-1",
+		At:               reportAt,
+		RegisterReadable: true,
+		Domains:          []statelog.DomainInputs{tracker, pages},
+		Register: []coord.NodePositions{
+			row("server", map[string]coord.DomainPosition{"tracker": {Seq: 9}, "pages": {Seq: 9}}),
+			row("evicted", map[string]coord.DomainPosition{"tracker": {Seq: 2}}),
+			row("half", map[string]coord.DomainPosition{"tracker": {Seq: 2}, "pages": {Seq: 2}}),
+		},
+	})
+	marks := map[string]bool{}
+	for _, n := range rep.Nodes {
+		marks[n.NodeID] = n.Counted
+	}
+	want := map[string]bool{"server": true, "evicted": false, "half": true}
+	if !maps.Equal(marks, want) {
+		t.Errorf("the node block marks counted %v, want %v", marks, want)
 	}
 }
 

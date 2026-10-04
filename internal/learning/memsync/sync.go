@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -68,13 +67,14 @@ type Syncer struct {
 // Nil rather than a syncer that quietly does nothing: a node with no broker
 // has no way to publish or replay, and a caller that got a working-looking
 // object would believe its seats' memory was travelling when it was not.
-func New(db *store.DB, conn *nats.Conn, agentID AgentIDFor) (*Syncer, error) {
-	if db == nil || conn == nil || agentID == nil {
+//
+// IT TAKES A JETSTREAM CLIENT rather than a connection, because the client is
+// where the API a broker is addressed in is decided — the embedded fleet's
+// domain or an external cluster's account (see internal/jsapi) — and the
+// caller holds the one its queue already speaks.
+func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor) (*Syncer, error) {
+	if db == nil || js == nil || agentID == nil {
 		return nil, nil
-	}
-	js, err := jetstream.New(conn)
-	if err != nil {
-		return nil, fmt.Errorf("memsync: reach the JetStream API: %w", err)
 	}
 	return &Syncer{db: db, js: js, agentID: agentID, marks: map[string]int64{}}, nil
 }

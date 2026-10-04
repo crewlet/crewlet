@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -433,6 +434,85 @@ units:
 	}
 	if err := cfg.ValidateRunnable(); err != nil {
 		t.Errorf("ValidateRunnable() = %v, want nil: the rule is an admission rule", err)
+	}
+}
+
+// A CRON THE GRAMMAR REFUSES IS REFUSED WHERE IT WAS WRITTEN, on admission.
+//
+// Load counted a cron's fields and never parsed one, so `61 * * * *` and
+// `0 9 * * MON-FRY` validated clean and then failed on every scheduler tick —
+// a schedule that never fired, and an error line nobody had been told to look
+// for. A submitted document is refused for one, on a seat's schedule and a
+// unit's alike, at the cron and naming what the parser found. A stored revision
+// carrying one ran exactly that way, the rest of the company untouched, so it
+// still runs; and a cron without five fields stays the runnable rule it always
+// was, reported once.
+func TestACronTheGrammarRefusesIsAnAdmissionRule(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+roles:
+  - name: CEO
+    schedules:
+      - {name: standup, cron: "61 * * * *", task: post a status note}
+      - {name: review, cron: "0 9 * * MON-FRI", task: review the week}
+units:
+  - name: Engineering
+    roles:
+      - name: Dev
+    schedules:
+      - {name: triage, cron: "0 9 * * MON-FRY", task: triage the queue}
+`
+	if _, err := config.ParseCompany([]byte(doc)); err == nil {
+		t.Fatal("a submitted document with a cron the grammar refuses was accepted")
+	}
+	cfg, err := config.ParseCompanyDocument([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	admission := cfg.ValidateAdmission()
+	if !errors.Is(admission, org.ErrInvalidSchedule) {
+		t.Fatalf("ValidateAdmission() = %v, want the crons refused", admission)
+	}
+	problems := config.Problems(admission)
+	var paths []string
+	for _, p := range problems {
+		paths = append(paths, p.Path)
+	}
+	for _, want := range []string{"roles[0].schedules[0].cron", "units[0].schedules[0].cron"} {
+		if !slices.Contains(paths, want) {
+			t.Errorf("no refusal at %s: %v", want, paths)
+		}
+	}
+	if len(problems) != 2 {
+		t.Errorf("%d problems, want the two crons alone: %v", len(problems), paths)
+	}
+	for _, said := range []string{"value 61 is outside 0-59", `"FRY" is not a number or a name`} {
+		if !strings.Contains(admission.Error(), said) {
+			t.Errorf("the refusal does not say what the parser found (%q): %v", said, admission)
+		}
+	}
+	if err := cfg.ValidateRunnable(); err != nil {
+		t.Errorf("ValidateRunnable() = %v, want nil: the grammar is an admission rule", err)
+	}
+
+	// FOUR FIELDS is the runnable rule, and only the runnable rule: one
+	// mistake, said once.
+	short, err := config.ParseCompanyDocument([]byte(`
+name: Acme
+roles:
+  - name: CEO
+    schedules:
+      - {name: standup, cron: "0 9 * *", task: post a status note}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := short.ValidateRunnable(); !errors.Is(err, org.ErrInvalidSchedule) {
+		t.Errorf("ValidateRunnable() = %v, want a four-field cron refused", err)
+	}
+	if err := short.ValidateAdmission(); err != nil {
+		t.Errorf("ValidateAdmission() = %v, want nothing: the field count is the runnable rule's", err)
 	}
 }
 

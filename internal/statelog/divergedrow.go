@@ -51,9 +51,18 @@ import (
 //
 // DECLARED HERE because the applier is the caller. The node estate is never
 // replaced under a running process, so a handle to it may be held.
+//
+// ESTATE IS IN THE SHAPE so that the replicated estate cannot be handed here.
+// Its [store.ReplicatedHandle] reads and writes exactly as this does, over a
+// file with none of this table in it, and the two are handed to one
+// constructor side by side ([RunnerDeps]); a store handle says which estate it
+// is, and a replicated handle — which is only ever the replicated estate —
+// does not, so the mistake is a build failure rather than a divergence verdict
+// lost on the one day it is written.
 type NodeEstate interface {
 	Read(ctx context.Context, fn func(*sql.Tx) error) error
 	Tx(ctx context.Context, fn func(*sql.Tx) error) error
+	Estate() store.Estate
 }
 
 // writeDiverged records that stream's log diverged from these rows at d.

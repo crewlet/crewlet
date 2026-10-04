@@ -52,7 +52,7 @@ func presentNode(t *testing.T, backend coord.Backend, id string, status *coord.N
 	if status != nil {
 		meta[coord.StatusKey] = status.Meta()
 	}
-	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id), coord.AcquireOptions{
+	if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id), coord.AcquireOptions{
 		Owner: id + ":1", TTL: time.Minute, Meta: meta,
 	}); err != nil {
 		t.Fatal(err)

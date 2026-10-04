@@ -79,7 +79,7 @@ func TestNullBoundary(t *testing.T) {
 
 func TestVectorEncoding(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "v.db"),
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "v.db"),
 		store.Options{EmbeddingDim: 4})
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -126,7 +126,7 @@ func TestVectorEncoding(t *testing.T) {
 // wrong — it just has no declared width to violate.
 func TestVectorDimensionUnconfigured(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "v0.db"),
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "v0.db"),
 		store.Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)

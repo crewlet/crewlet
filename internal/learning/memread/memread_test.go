@@ -31,7 +31,7 @@ type node struct {
 
 func newNode(t *testing.T, owner string) *node {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "m.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "m.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -85,7 +85,7 @@ func newFleet() *fleet {
 // hold gives handle's lease to owner.
 func (f *fleet) hold(t *testing.T, handle, owner string) {
 	t.Helper()
-	lease, err := f.leases.TryAcquire(t.Context(), coord.SeatResource(handle),
+	lease, _, err := f.leases.TryAcquire(t.Context(), coord.SeatResource(handle),
 		coord.AcquireOptions{Owner: owner, TTL: time.Minute})
 	if err != nil || lease == nil {
 		t.Fatalf("acquire %s for %s: %v", handle, owner, err)
@@ -106,7 +106,7 @@ func (f *fleet) present(t *testing.T, owner string, features ...coord.Feature) {
 			t.Fatalf("release %s's presence: %v", was.Owner, err)
 		}
 	}
-	lease, err := f.leases.TryAcquire(t.Context(), coord.NodeResource(node), coord.AcquireOptions{
+	lease, _, err := f.leases.TryAcquire(t.Context(), coord.NodeResource(node), coord.AcquireOptions{
 		Owner: owner, TTL: time.Minute, Preferred: node, Ungated: true,
 		Meta: map[string]any{coord.StatusKey: coord.NodeStatus{Features: features}.Meta()},
 	})

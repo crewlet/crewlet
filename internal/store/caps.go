@@ -313,7 +313,7 @@ func record(caps *Capabilities, capability gatedCapability, got gateOutcome) boo
 // back and no debris to clean up.
 //
 // 3.4 ms per call, measured, and only on a probe that actually hit the gate —
-// at most once per capability, once per [Open] of the node estate, which is
+// at most once per capability, once per [OpenNode], which is
 // once per process.
 func probeBehindGate(ctx context.Context, feature string, stmts []string) (bool, error) {
 	db, err := sql.Open(driverName, ":memory:?experimental="+feature)

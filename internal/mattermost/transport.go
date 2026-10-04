@@ -560,6 +560,13 @@ func (t *Transport) SetStatus(ctx context.Context, handle, channel, thread, _ st
 // where taking the indicator down is the one thing that cannot fail.
 func (t *Transport) ClearStatus(context.Context, string, string, string) bool { return true }
 
+// seatToken is the bot token a seat's transport authenticates with — and
+// therefore the one [SeatTokens] checks. Empty when the seat names a variable
+// that is unset.
+func seatToken(role *org.Role, lookup org.EnvLookup) string {
+	return envref.Resolve(role.Mattermost.BotToken, lookup)
+}
+
 // SeatsFrom builds the transport's seat list from an org.
 //
 // The USERNAME defaults to the handle, and both are needed downstream — so
@@ -574,7 +581,7 @@ func SeatsFrom(o *org.Organization, lookup org.EnvLookup) []SeatConfig {
 		if role.IsHuman() || role.Mattermost.IsZero() {
 			continue
 		}
-		token := envref.Resolve(role.Mattermost.BotToken, lookup)
+		token := seatToken(role, lookup)
 		if token == "" {
 			// A seat whose ${VAR} did not resolve is skipped rather
 			// than started with an empty token, which would fail at

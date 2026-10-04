@@ -39,19 +39,31 @@ type Fleet struct {
 	channels     map[string]coord.Channel
 	follows      map[string]followEntry
 	fires        map[string]time.Time
+	custody      map[string]string
+	rebases      map[string]rebaseEntry
 	runs         map[string]coord.Record
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
 	mailboxes    map[string]coord.MailboxRecord
-	pauses       map[string]coord.SeatPause
-	positions    map[string]coord.NodePositions
-	holds        map[string]coord.TrimHold
-	floors       map[string]coord.TrimFloor
-	backups      map[string]coord.BackupPoint
-	maintenance  map[string]coord.MaintenanceOperation
-	admissions   map[string]coord.Admission
-	maintAcks    map[string]coord.MaintenanceAck
-	maintRev     uint64
+
+	// objectBackend is the fleet's recorded object backend, empty until a
+	// node records one; chunkLocks every chunk lock not yet let go, with
+	// the instant it was taken, aged at chunkLockTTL as the KV bucket ages
+	// its keys.
+	objectBackend    string
+	objectCollection []byte
+	chunkLocks       map[string]chunkLock
+	chunkLockTTL     time.Duration
+
+	pauses      map[string]coord.SeatPause
+	positions   map[string]coord.NodePositions
+	holds       map[string]coord.TrimHold
+	floors      map[string]coord.TrimFloor
+	backups     map[string]coord.BackupPoint
+	maintenance map[string]coord.MaintenanceOperation
+	admissions  map[string]coord.Admission
+	maintAcks   map[string]coord.MaintenanceAck
+	maintRev    uint64
 
 	// pauseWatchers are the open seat-pause watches, each told of every
 	// change under the lock that made it.
@@ -81,6 +93,12 @@ type workedEntry struct {
 	detail string
 }
 
+// rebaseEntry is one recorded rebase and the version it was written at.
+type rebaseEntry struct {
+	at      time.Time
+	version uint64
+}
+
 var _ coord.Fleet = (*Fleet)(nil)
 
 // NewFleet returns an empty twin.
@@ -95,11 +113,15 @@ func NewFleet() *Fleet {
 		channels:     map[string]coord.Channel{},
 		follows:      map[string]followEntry{},
 		fires:        map[string]time.Time{},
+		custody:      map[string]string{},
+		rebases:      map[string]rebaseEntry{},
 		runs:         map[string]coord.Record{},
 		secrets:      map[string]coord.SecretRecord{},
 		integrations: map[string][]byte{},
 		mailboxes:    map[string]coord.MailboxRecord{},
 		pauses:       map[string]coord.SeatPause{},
+		chunkLocks:   map[string]chunkLock{},
+		chunkLockTTL: coord.ChunkLockTTL,
 	}
 }
 
@@ -617,6 +639,63 @@ func (f *Fleet) ClaimFire(_ context.Context, key string, at time.Time) (bool, er
 	return true, nil
 }
 
+// ---- the custody claims ----------------------------------------------- //
+
+// ClaimCustody records node as the keeper of batch unless one is recorded,
+// answering the keeper. The bucket's age is not modelled, for the completion
+// ledger's reason.
+func (f *Fleet) ClaimCustody(_ context.Context, batch, node string) (string, error) {
+	if batch == "" || node == "" {
+		return "", errors.New("coord/memory: a custody claim needs a batch and a node")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if held, ok := f.custody[batch]; ok {
+		return held, nil
+	}
+	f.custody[batch] = node
+	return node, nil
+}
+
+// ---- the rebases -------------------------------------------------------- //
+
+// Rebase reads the instant recorded for a seed and its version.
+//
+// The bucket's age is not modelled, for the reason the completion ledger's is
+// not: it is a property of the bucket the KV backend creates, held there, and
+// a twin inside one test process never runs for a month.
+func (f *Fleet) Rebase(_ context.Context, seed string) (time.Time, uint64, error) {
+	if seed == "" {
+		return time.Time{}, 0, errors.New("coord/memory: a rebase needs a seed")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	entry, ok := f.rebases[seed]
+	if !ok {
+		return time.Time{}, 0, nil
+	}
+	return entry.at, entry.version, nil
+}
+
+// RecordRebase writes a seed's instant, conditional on the version read.
+func (f *Fleet) RecordRebase(_ context.Context, seed string, at time.Time, version uint64) (bool, error) {
+	if seed == "" {
+		return false, errors.New("coord/memory: a rebase needs a seed")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	entry, ok := f.rebases[seed]
+	switch {
+	case version == 0 && ok, version != 0 && (!ok || entry.version != version):
+		return false, nil
+	}
+	// DRAWN FROM THE STORE-WIDE COUNTER, like every versioned write here, so
+	// a version a caller holds can never name a later record.
+	f.version++
+	f.rebases[seed] = rebaseEntry{at: at.UTC(), version: f.version}
+	return true, nil
+}
+
 // ---- the detached sandbox runs ----------------------------------------- //
 
 // SandboxRun reads one run's record.
@@ -868,3 +947,10 @@ func (f *Fleet) Unfollow(_ context.Context, backend, handle, channel, thread str
 	delete(f.follows, key)
 	return true, nil
 }
+
+// SweepMarkers removes nothing, because the twin keeps no markers: a delete
+// here removes the entry from its map, so the state a KV backend reaches only
+// after its sweep is the state this one is always in. That is the contract's
+// promise read from the other side — sweeping changes no answer — and the
+// suite holds both backends to it.
+func (f *Fleet) SweepMarkers(context.Context, time.Time) (int64, error) { return 0, nil }

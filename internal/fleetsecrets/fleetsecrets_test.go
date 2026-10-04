@@ -222,9 +222,9 @@ func TestARekeyRefusesToLeaveARowBehind(t *testing.T) {
 
 func localStore(t *testing.T, cipher secrets.Cipher) *store.SecretValues {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "s.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "s.db"), store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db.SecretValues(cipher)

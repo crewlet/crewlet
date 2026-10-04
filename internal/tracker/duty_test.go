@@ -251,7 +251,7 @@ func TestTheDutyClearsAnAbandonedMerge(t *testing.T) {
 	r.drain()
 
 	var merged int
-	if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT merging FROM tracker_tasks WHERE id = 't-1'`).Scan(&merged)
 	}); err != nil {
@@ -370,7 +370,7 @@ func TestTheDutyLeavesAMergeWhoseWalkHoldsItsClaim(t *testing.T) {
 		markMerge(t, r, dup, "keep")
 	}
 	// A WALK RUNNING ON ANOTHER NODE: its claim, as that node holds it.
-	lease, err := r.claims.TryAcquire(t.Context(), tracker.MergeClaim("held"),
+	lease, _, err := r.claims.TryAcquire(t.Context(), tracker.MergeClaim("held"),
 		coord.AcquireOptions{Owner: "node-b", TTL: tracker.ClaimTTL})
 	if err != nil || lease == nil {
 		t.Fatalf("hold the running walk's claim: (%v, %v)", lease, err)
@@ -559,7 +559,7 @@ func trackerWorker(t *testing.T, r *roundTrip) *maintenance.Worker {
 func flagged(t *testing.T, r *roundTrip, column string) bool {
 	t.Helper()
 	var set int
-	if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT `+column+` FROM tracker_projects WHERE key = 'ENG'`).Scan(&set)
 	}); err != nil {

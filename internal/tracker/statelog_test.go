@@ -256,6 +256,60 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 			Kind: tracker.ChangeProjectUpdated, Mutation: body,
 			Actor: "lead", ActorKind: tracker.AuthorAgent,
 		}.Encode()
+	case "Subject.Kind=file":
+		// A FILE WRITTEN INTO A PROJECT: the kind is what an older build
+		// has no applier for, and every field of the payload is base.
+		body, err := json.Marshal(tracker.File{
+			V: tracker.DocumentVersion, Project: "SUITE", Path: "notes/plan.md",
+			Size: 0, CreatedAt: at, UpdatedAt: at,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.FileSubject("SUITE", "notes/plan.md"),
+				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+			},
+			Kind: tracker.ChangeFileWritten, Mutation: body,
+			Actor: "dev", ActorKind: tracker.AuthorAgent,
+		}.Encode()
+	case "RankOrder.Placements":
+		// A DRAG IN A PROJECT'S ORDER: the placements are what the apply
+		// writes into each moved task's document from this version.
+		body, err := json.Marshal(tracker.RankOrder{
+			V: tracker.DocumentVersion, Project: "SUITE",
+			Placements: []tracker.Placement{{Task: "suite-task", Rank: "a0"}},
+		})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.RankOrderSubject("SUITE"),
+				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+			},
+			Mutation: body, Actor: "dev", ActorKind: tracker.AuthorAgent,
+		}.Encode()
+	case "Op=purge":
+		// A PURGE: a gate whose apply changed, carrying nothing else new.
+		body, err := json.Marshal(map[string]any{
+			"v": tracker.GateRecordVersion, "reason": "filed by mistake",
+		})
+		if err != nil {
+			return nil, err
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
+				Op: tracker.OpPurge, CreatedAt: at, Writer: "suite-node",
+				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+			},
+			Kind: tracker.ChangePurged, Mutation: body,
+			Actor: "founder", ActorKind: tracker.AuthorHuman,
+		}.Encode()
 	default:
 		return nil, fmt.Errorf("the suite has no record carrying %s — add one "+
 			"beside the field's row", field.Name)
@@ -306,7 +360,7 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 // suiteWrite is one write through the tracker's own [tracker.Writer] — the
 // builder every write path in the domain shares, which is where the
 // framework's stamp is kept or lost.
-func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) error {
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	w, err := tracker.NewWriter(tracker.WriterDeps{
 		Publisher: pub, DB: db, NodeID: statelogtest.SuiteWriter,
 		Actor: "suite", ActorKind: tracker.AuthorSystem,
@@ -416,8 +470,9 @@ func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
 				Encode:  encodeSuiteRecord,
 				Kinds:   suiteKinds(),
 			},
-			Reader: func(db *store.DB) statelog.Gates { return tracker.NewGates(db) },
-			Kind:   string(tracker.KindTask),
+			Reader:       func(db store.ReplicatedReader) statelog.Gates { return tracker.NewGates(db) },
+			Kind:         string(tracker.KindTask),
+			SubjectKinds: kindNames(tracker.ObjectKinds),
 			Create: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(tracker.TaskSubject(id), tracker.OpCreate,
 					writer, opID, newTask(id))
@@ -442,6 +497,17 @@ func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
 			},
 		}
 	})
+}
+
+// kindNames is every kind the tracker writes, as the strings its envelope
+// carries — the build's own list rather than one kept beside it, so a kind
+// added to the domain is a kind the gate family asks about.
+func kindNames(kinds []tracker.ObjectKind) []string {
+	out := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		out = append(out, string(k))
+	}
+	return out
 }
 
 // gateSuiteRecord is one record the gate family applies, written by writer.

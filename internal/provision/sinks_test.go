@@ -29,10 +29,10 @@ func sinkCases() []sinkCase {
 		{
 			name: "the secret store",
 			build: func(t *testing.T) (provision.TokenSink, func(*testing.T) map[string]string) {
-				db, err := store.Open(t.Context(),
+				db, err := store.OpenNode(t.Context(),
 					filepath.Join(t.TempDir(), "s.db"), store.Options{})
 				if err != nil {
-					t.Fatalf("store.Open: %v", err)
+					t.Fatalf("store.OpenNode: %v", err)
 				}
 				t.Cleanup(func() { _ = db.Close() })
 				key, err := secrets.GenerateKey()

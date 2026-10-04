@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -51,8 +52,11 @@ func ParseBootstrap(data []byte, r *Resolver) (*Bootstrap, error) {
 		return nil, err
 	}
 
-	missing := r.Document(&doc)
+	missing, err := r.Document(&doc, reflect.TypeFor[Bootstrap]())
 	LogUnresolved("bootstrap", missing)
+	if err != nil {
+		return nil, err
+	}
 
 	cfg := DefaultBootstrap()
 	if err := decodeDocument(&doc, &cfg); err != nil {
@@ -377,6 +381,11 @@ func decodeDocument(doc *yaml.Node, out any) error {
 // its line, which is a line of the encoded buffer: every failure is moved
 // back onto the node it came from before it is returned (see position.go).
 func decodeNode(node *yaml.Node, out any) error {
+	// A FRACTION BOUND FOR A WHOLE NUMBER is refused before the decoder
+	// sees it, because the decoder truncates it without a word — see
+	// [refuseFractions]. Collected beside whatever the decode itself
+	// refuses, so one pass reports both.
+	faults := refuseFractions(node, reflect.TypeOf(out))
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	if err := enc.Encode(blockStyle(node)); err != nil {
@@ -388,9 +397,9 @@ func decodeNode(node *yaml.Node, out any) error {
 	dec := yaml.NewDecoder(bytes.NewReader(buf.Bytes()))
 	dec.KnownFields(true)
 	if err := dec.Decode(out); err != nil && !errors.Is(err, io.EOF) {
-		return decodeError(err, retiredFor(out), indexBuffer(buf.Bytes(), node))
+		faults = append(faults, leafErrors(decodeError(err, retiredFor(out), indexBuffer(buf.Bytes(), node)))...)
 	}
-	return nil
+	return faults.err()
 }
 
 // retiredFor is the retired-key table that applies to the type being

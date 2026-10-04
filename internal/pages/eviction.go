@@ -135,9 +135,9 @@ func standingIn(ctx context.Context, tx *sql.Tx, nodeID string) (statelog.Evicti
 // THROUGH THE NODE HANDLE'S REPLICATED PEER, for the reason [Fence.Evicted]
 // gives: the peer is nil while an adoption swaps the file, and [store.DB.Read]
 // answers that as [store.ErrNoEstate] rather than a panic.
-func (Domain) Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error) {
+func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error) {
 	var out []statelog.EvictionRow
-	err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT node_id, at, by, from_position, readmitted_position
 			FROM pages_evictions ORDER BY node_id`)
@@ -152,8 +152,8 @@ func (Domain) Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionR
 				at, from   int64
 				readmitted sql.NullInt64
 			)
-			if err := rows.Scan(&e.NodeID, &at, &e.By, &from, &readmitted); err != nil {
-				return err
+			if scanErr := rows.Scan(&e.NodeID, &at, &e.By, &from, &readmitted); scanErr != nil {
+				return scanErr
 			}
 			e.At = store.DecodeTime(at)
 			e.From = uint64(from)

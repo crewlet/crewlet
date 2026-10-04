@@ -17,13 +17,20 @@ import {
   BlockedBanner,
   DomainBlock,
   DomainSize,
+  donorsCounted,
   gateAction,
   MaintenanceBanner,
   NodePositions,
   ServedLevelBanner,
   Terms,
+  Tombstone,
 } from "./Retention.tsx";
-import type { RetentionDomain, RetentionNode, RetentionTerm } from "~/protocol/index.ts";
+import type {
+  RetentionDomain,
+  RetentionNode,
+  RetentionSnapshot,
+  RetentionTerm,
+} from "~/protocol/index.ts";
 
 afterEach(cleanup);
 
@@ -279,7 +286,7 @@ test("a node with an unfinished gesture offers to finish it rather than start af
   const held = {
     opId: "01a0c450-6c00-7011-a233-445566778899.evict-node-a",
     force: false,
-    unanswered: "the engine did not answer within 75 seconds",
+    unanswered: "the engine did not answer within 60 seconds",
   };
   expect(gateAction(node(), { "node-a:evict": held })).toEqual({
     evict: true,
@@ -294,7 +301,12 @@ test("a node with an unfinished gesture offers to finish it rather than start af
   // THE CONTROL: nothing held is the ordinary gesture for the node's state.
   expect(gateAction(node(), {})).toEqual({ evict: true, label: "Evict…" });
   expect(
-    gateAction(node({ evicted: { by: "o", at: "", effective_at: "", effective: true } }), {}),
+    gateAction(
+      node({
+        evicted: { by: "o", at: "", effective_at: "", effective: true },
+      }),
+      {},
+    ),
   ).toEqual({ evict: false, label: "Readmit…" });
 });
 
@@ -367,6 +379,31 @@ test("a refused domain names its refusal, the finding and the sentence", () => {
   expect(screen.getByText("log_truncated")).toBeTruthy();
 });
 
+// AN EVICTION NAMES WHO RAN IT, AND IS NOT IMMEDIATE. The node stays counted
+// until `effective_at`, and an operator who cannot see that reads the
+// unchanged watermark as a failure and runs the gesture twice.
+test("an evicted node names its operator, and counts down until it takes effect", () => {
+  const at = "2031-04-01T12:00:00Z";
+  const effectiveAt = "2031-04-01T12:01:00Z";
+  const { rerender } = render(
+    <Tombstone
+      evicted={{ by: "ops", at, effective_at: effectiveAt, effective: false }}
+      now={Date.parse(at)}
+    />,
+  );
+  expect(screen.getByText(/^evicted in /)).toBeTruthy();
+  expect(screen.getByTitle(/^evicted by ops; takes effect /)).toBeTruthy();
+
+  rerender(
+    <Tombstone
+      evicted={{ by: "ops", at, effective_at: effectiveAt, effective: true }}
+      now={Date.parse(effectiveAt)}
+    />,
+  );
+  expect(screen.getByText("evicted")).toBeTruthy();
+  expect(screen.getByTitle("evicted by ops")).toBeTruthy();
+});
+
 // A POSITION FROM ANOTHER GENERATION IS LABELLED, NOT SUBTRACTED, and a
 // diverged node is marked — nothing else on its line shows it.
 test("a node on a generation the log left is labelled rather than caught up", () => {
@@ -390,4 +427,16 @@ test("a node on a generation the log left is labelled rather than caught up", ()
   expect(screen.getByText("log diverged")).toBeTruthy();
   expect(screen.queryByText("lag —")).toBeNull();
   expect(screen.queryByText(/behind/)).toBeNull();
+});
+
+// A DONOR IS A NODE HOLDING AN ARTEFACT, ONE ROW EACH. Every data node keeps the
+// one estate, so its row is its one artefact: a node that took one counts, and
+// one that holds none — whatever its reason — does not.
+test("the donors are the nodes holding an artefact, one row each", () => {
+  const at = "2026-09-30T12:00:00Z";
+  const held = (node_id: string): RetentionSnapshot => ({ node_id, at, domains: { tracker: 4 } });
+  expect(
+    donorsCounted([held("node-a"), held("node-b"), { node_id: "node-c", skip: "lagging" }]),
+  ).toBe(2);
+  expect(donorsCounted([{ node_id: "node-c" }])).toBe(0);
 });

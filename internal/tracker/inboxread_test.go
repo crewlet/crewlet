@@ -272,7 +272,7 @@ func TestAStreamMismatchIsNotReadPast(t *testing.T) {
 		t.Fatalf("write bob's record: %v", err)
 	}
 	r.drain()
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `UPDATE tracker_persons
 			SET seen_through = ?, seen_through_stream = ? WHERE handle = 'bob'`,
 			int64(notice.LogSeq+1_000), "CREWLET_TRACKER_LOG_FROM_A_PREVIOUS_LIFE")
@@ -566,7 +566,7 @@ func TestAnUpgradeRemovesTheNoticesAPredecessorWroteForTheirAuthor(t *testing.T)
 
 	rederive := func() int {
 		var repaired int
-		if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 			n, err := r.applier.Rederive(t.Context(), tx, statelog.ApplyOptions{})
 			repaired = n
 			return err
@@ -585,7 +585,7 @@ func TestAnUpgradeRemovesTheNoticesAPredecessorWroteForTheirAuthor(t *testing.T)
 	// credential for the one reason that IS news to an author, her own
 	// blocker cleared, which it keeps. Copied from a row the applier wrote,
 	// so every other column is one a real apply produces.
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		for _, row := range []struct{ recipient, reason string }{
 			{"jane-founder", "assignee"},
 			{"founder", "unblocked"},

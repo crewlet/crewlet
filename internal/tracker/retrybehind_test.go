@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A RETRIED CREATE ON A NODE THAT IS BEHIND NEVER TAKES ANOTHER TASK'S KEY.
@@ -23,13 +24,9 @@ func TestARetriedCreateOnANodeBehindTakesAKeyOfItsOwn(t *testing.T) {
 	t.Parallel()
 	a := newRoundTrip(t)
 	a.applyWhileWriting()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node-b.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open node b's store: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	b := newRoundTripOn(t, a.broker, a.log, db, "node-b")
+	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node-b.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = dbNode.Close() })
+	b := newRoundTripOn(t, a.broker, a.log, dbNode, db, "node-b")
 
 	create := func(op, id string) {
 		t.Helper()

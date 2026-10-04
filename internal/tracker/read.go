@@ -290,7 +290,7 @@ const (
 // asking for `session` got whatever this node happened to hold, and
 // `max_lag_seconds` bounded nothing at all.
 type Reader struct {
-	db  *store.DB
+	db  store.ReplicatedReader
 	log *statelog.Reader
 }
 
@@ -300,8 +300,8 @@ type Reader struct {
 // a build where every level silently degrades to whatever the local rows say,
 // which is the state this type is being moved out of — and a degradation that
 // is invisible in the answer is worse than a refusal.
-func NewReader(db *store.DB, log *statelog.Reader) (*Reader, error) {
-	if db == nil {
+func NewReader(db store.ReplicatedReader, log *statelog.Reader) (*Reader, error) {
+	if db.IsZero() {
 		return nil, fmt.Errorf("tracker: a reader needs a store")
 	}
 	if log == nil {
@@ -1916,9 +1916,9 @@ func anyOf[T ~string](values []T) []any {
 	return out
 }
 
-// trackerStream is the domain's stream name, read from the declaration rather
-// than written again — one spelling, so the framework and every reader compare
-// against the same one.
+// trackerStream is the name of the log this domain's rows are keyed to, read
+// from the domain's own declaration rather than written again — one
+// spelling, so the framework and every reader compare against the same one.
 var trackerStream = Domain{}.Stream().Name
 
 // placeholders is a bound-parameter list of n slots.

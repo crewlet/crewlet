@@ -411,6 +411,10 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	parsers = append(parsers, nativeParsers...)
 	prompts = append(prompts, nativePrompts...)
 
+	// THROUGH THE ONE DOOR every fleet-wide group passes ([Engine.joins]).
+	if !e.joins(ctx, notify.InboundGroup) {
+		return nil
+	}
 	svc, err := notify.New(notify.Options{
 		Queue:     e.backends.Queue,
 		Registry:  e.Registry,

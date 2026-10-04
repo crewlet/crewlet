@@ -83,7 +83,7 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 // suiteWrite is one write through the knowledge base's own [pages.Store] —
 // the builder every write path in the domain shares, which is where the
 // framework's stamp is kept or lost.
-func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) error {
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	s, err := pages.NewStore(pages.Options{Publisher: pub, DB: db})
 	if err != nil {
 		return err
@@ -240,8 +240,9 @@ func TestThePagesGateReaderKeepsTheSharedRule(t *testing.T) {
 				Encode:  encodeSuiteRecord,
 				Kinds:   suiteKinds(),
 			},
-			Reader: func(db *store.DB) statelog.Gates { return pages.NewGates(db) },
-			Kind:   string(pages.KindPage),
+			Reader:       func(db store.ReplicatedReader) statelog.Gates { return pages.NewGates(db) },
+			Kind:         string(pages.KindPage),
+			SubjectKinds: kindNames(pages.ObjectKinds),
 			Create: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(pages.TitleSubject(suiteContainer, "Page "+id),
 					pages.OpCreate, writer, opID, pages.CreatePayload{
@@ -268,6 +269,17 @@ func TestThePagesGateReaderKeepsTheSharedRule(t *testing.T) {
 			},
 		}
 	})
+}
+
+// kindNames is every kind the knowledge base writes, as the strings its
+// envelope carries — the build's own list rather than one kept beside it, so a
+// kind added to the domain is a kind the gate family asks about.
+func kindNames(kinds []pages.ObjectKind) []string {
+	out := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		out = append(out, string(k))
+	}
+	return out
 }
 
 // gateSuiteRecord is one record the gate family applies, written by writer.

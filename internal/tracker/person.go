@@ -621,7 +621,10 @@ func checkInboxGesture(g InboxGesture, now time.Time) error {
 			return invalid("%s is not a position to read through: %v",
 				at, err)
 		}
-		if stream := (Domain{}).Stream().Name; at.Stream != stream {
+		// THE TRACKER'S LOG, which is where every notice a person reads
+		// through is filed ([Domain.Stream]): a position on any other
+		// stream is in a number space the inbox does not count in.
+		if stream := trackerStream; at.Stream != stream {
 			return invalid("%s is a position on %s, and an inbox is "+
 				"read through a position on %s — the one `work_inbox` answers",
 				at, at.Stream, stream)

@@ -19,7 +19,27 @@ var protocolCases = []testCase{
 		h.claim("seat:ceo", coord.AcquireOptions{Owner: "old-node:1", TTL: LongTTL, Protocol: 1})
 		h.refused("seat:engineer", coord.AcquireOptions{
 			Owner: "new-node:1", TTL: LongTTL, Protocol: 2,
+		}, coord.RefusedProtocol)
+	}},
+
+	{"a_peer_holding_the_resource_is_the_refusal_whatever_the_gate_says", func(h *harness) {
+		// Both rules refuse this claim: the old node holds the very seat
+		// asked for, and it holds it at an older protocol. The answer is
+		// the HOLD, because a claim that cannot write has nothing for a
+		// gate to stop — and it is what a seat host reads to decide
+		// whether a pass that took nothing was stalled by an upgrade.
+		// Read as a gate, every seat its peers hold would send the host
+		// to judge one; read the other way round, a sweep would have to
+		// judge a gate for every seat it cannot have.
+		h.claim("seat:ceo", coord.AcquireOptions{
+			Owner: "old-node:1", TTL: LongTTL, Preferred: "old-node", Protocol: 1,
 		})
+		before := h.mustHold("seat:ceo", "old-node:1")
+		h.refused("seat:ceo", coord.AcquireOptions{
+			Owner: "new-node:1", TTL: LongTTL / 2, Preferred: "new-node", Protocol: 2,
+		}, coord.RefusedHeld)
+		h.requireUnchanged("a claim refused by a live holder at an older protocol", before,
+			h.mustHold("seat:ceo", "old-node:1"))
 	}},
 
 	{"an_older_node_still_claims_beside_a_newer_holder", func(h *harness) {
@@ -48,11 +68,12 @@ var protocolCases = []testCase{
 		// the lapse both still mean what they did, and neither is racing
 		// a wall clock any more.
 		h.claim("seat:ceo", coord.AcquireOptions{Owner: "old-node:1", TTL: LongTTL, Protocol: 1})
-		h.refused("seat:ceo", coord.AcquireOptions{Owner: "new-node:1", TTL: LongTTL, Protocol: 2})
+		h.refused("seat:engineer", coord.AcquireOptions{Owner: "new-node:1", TTL: LongTTL, Protocol: 2},
+			coord.RefusedProtocol)
 
 		h.claim("seat:ceo", coord.AcquireOptions{Owner: "old-node:1", TTL: ShortTTL, Protocol: 1})
 		h.lapse()
-		lease := h.claim("seat:ceo", coord.AcquireOptions{
+		lease := h.claim("seat:engineer", coord.AcquireOptions{
 			Owner: "new-node:1", TTL: LongTTL, Protocol: 2,
 		})
 		if lease.Protocol != 2 {
@@ -66,7 +87,7 @@ var protocolCases = []testCase{
 		})
 		h.refused("seat:engineer", coord.AcquireOptions{
 			Owner: "new-node:1", TTL: LongTTL, Protocol: 2,
-		})
+		}, coord.RefusedProtocol)
 		if !h.release("seat:ceo", "old-node:1", old.Epoch) {
 			h.t.Fatal("release of the old hold reported failure")
 		}
@@ -82,7 +103,8 @@ var protocolCases = []testCase{
 			Owner: "new-node:1", TTL: LongTTL, Protocol: 2,
 		})
 		h.claim("seat:engineer", coord.AcquireOptions{Owner: "old-node:1", TTL: LongTTL, Protocol: 1})
-		h.refused("seat:ceo", coord.AcquireOptions{Owner: "new-node:1", TTL: LongTTL, Protocol: 2})
+		h.refused("seat:ceo", coord.AcquireOptions{Owner: "new-node:1", TTL: LongTTL, Protocol: 2},
+			coord.RefusedProtocol)
 
 		// Renew is deliberately NOT gated: it extends a hold this node
 		// already has and is already acting on. Refusing it would drop a
@@ -93,15 +115,22 @@ var protocolCases = []testCase{
 		}
 	}},
 
-	{"a_gate_refused_claim_leaves_the_record_untouched", func(h *harness) {
+	{"a_gate_refused_claim_writes_nothing", func(h *harness) {
 		// The gate's refusal is the one a backend is most likely to
 		// implement as an afterthought — checked in a different place
 		// from the ownership predicate, and easy to reach only after the
 		// record has already been written. During a rolling upgrade the
 		// newer half of the fleet is refused on every sweep, so a gated
-		// refusal that writes would rewrite the OLD node's live records
-		// continuously, for as long as the upgrade takes: the exact
-		// window the gate exists to make safe.
+		// refusal that writes would burn an epoch and move a hint on every
+		// seat a newer node reaches for, continuously, for as long as the
+		// upgrade takes: the exact window the gate exists to make safe.
+		//
+		// The resource refused here is one nobody holds but which has a
+		// history — a tenure at epoch 1 whose hint names the node that
+		// held it — because a pristine resource has nothing a stray write
+		// could visibly move. (A claim on a resource a PEER holds never
+		// reaches the gate at all; see
+		// a_peer_holding_the_resource_is_the_refusal_whatever_the_gate_says.)
 		//
 		// SCOPE, because the contract permits one exception and this
 		// case must not be read as forbidding it. The violation here is
@@ -116,18 +145,36 @@ var protocolCases = []testCase{
 		// a recorded degradation, not a defect, and a concurrent gate
 		// test must assert the claim is surrendered, never that the
 		// record is pristine.
+		first := h.claim("seat:engineer", coord.AcquireOptions{
+			Owner: "new-node:1", TTL: LongTTL, Preferred: "new-node", Protocol: 2,
+		})
+		if !h.release("seat:engineer", "new-node:1", first.Epoch) {
+			h.t.Fatal("release of the first tenure reported failure")
+		}
 		old := h.claim("seat:ceo", coord.AcquireOptions{
-			Owner: "old-node:1", TTL: LongTTL, Preferred: "old-node", Protocol: 1,
+			Owner: "old-node:1", TTL: LongTTL, Protocol: 1,
 		})
-		before := h.mustHold("seat:ceo", "old-node:1")
 
-		h.refused("seat:ceo", coord.AcquireOptions{
-			Owner: "new-node:1", TTL: LongTTL / 2, Preferred: "new-node", Protocol: 2,
-		})
-		h.requireUnchanged("a claim refused by the gate", before, h.mustHold("seat:ceo", "old-node:1"))
+		h.refused("seat:engineer", coord.AcquireOptions{
+			Owner: "new-node:1", TTL: LongTTL, Preferred: "elsewhere", Protocol: 2,
+		}, coord.RefusedProtocol)
+		if _, moved := h.preferred(coord.ClassSeat, "elsewhere")["seat:engineer"]; moved {
+			h.t.Fatal("a claim the gate refused moved the resource's hint")
+		}
 		if floor, any := h.floor(); !any || floor != old.Protocol {
 			h.t.Fatalf("FleetProtocolFloor = (%d, %v) after a gated refusal, want (%d, true)",
 				floor, any, old.Protocol)
+		}
+
+		if !h.release("seat:ceo", "old-node:1", old.Epoch) {
+			h.t.Fatal("release of the old hold reported failure")
+		}
+		next := h.claim("seat:engineer", coord.AcquireOptions{
+			Owner: "new-node:1", TTL: LongTTL, Protocol: 2,
+		})
+		if next.Epoch != first.Epoch+1 {
+			h.t.Fatalf("the tenure after a gated refusal is at epoch %d, want %d — the refused "+
+				"claim minted a token", next.Epoch, first.Epoch+1)
 		}
 	}},
 
@@ -140,7 +187,7 @@ var protocolCases = []testCase{
 		})
 		h.refused(coord.SeatResource("ceo"), coord.AcquireOptions{
 			Owner: "new:1", TTL: LongTTL, Protocol: 2,
-		})
+		}, coord.RefusedProtocol)
 	}},
 
 	{"ungated_claims_skip_the_gate", func(h *harness) {
@@ -235,7 +282,7 @@ var protocolCases = []testCase{
 		h.claim("seat:ceo", coord.AcquireOptions{Owner: "old:1", TTL: LongTTL, Protocol: 1})
 		h.refused("seat:engineer", coord.AcquireOptions{
 			Owner: "new:1", TTL: LongTTL, Protocol: coord.ProtocolVersion,
-		})
+		}, coord.RefusedProtocol)
 	}},
 
 	{"a_windowed_counter_node_waits_for_the_last_lifetime_counter_node", func(h *harness) {
@@ -257,7 +304,7 @@ var protocolCases = []testCase{
 		})
 		h.refused(coord.SeatResource("ceo"), coord.AcquireOptions{
 			Owner: "windowed:1", TTL: LongTTL, Protocol: coord.ProtocolVersion,
-		})
+		}, coord.RefusedProtocol)
 		// And the floor that the lifetime counters' retirement reads says
 		// so: an older node is live, so their bucket is still in use.
 		if floor, any := h.floor(); !any || floor >= coord.WindowedCountersProtocol {
@@ -269,10 +316,9 @@ var protocolCases = []testCase{
 	// --- the observability half ----------------------------------------
 
 	{"fleet_protocol_floor_reports_the_oldest_live_holder", func(h *harness) {
-		// TryAcquire can only answer yes or no, so a node stalled by the
-		// gate looks identical to one whose peers simply hold every
-		// seat. This is the call that tells them apart — once per claim
-		// sweep, not once per resource.
+		// A claim refused RefusedProtocol says the gate stopped it;
+		// this is the call that names the protocol behind that
+		// refusal, asked after one and never once per sweep.
 		if floor, any := h.floor(); any {
 			h.t.Fatalf("FleetProtocolFloor = (%d, true) on an empty store, want (_, false)", floor)
 		}

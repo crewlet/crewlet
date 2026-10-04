@@ -2,6 +2,8 @@ package jetstream
 
 import (
 	"context"
+	"errors"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -668,5 +670,652 @@ func TestAGroupsBlockingReadEndsWithItsContext(t *testing.T) {
 	}
 	if err := group.Stop(); err != nil {
 		t.Errorf("stopping twice: %v", err)
+	}
+}
+
+// A RECORD THAT REACHES AN ABANDONED PULL GOES TO THE NEXT READER AT ONCE, not
+// after the ack window.
+//
+// A fetch whose context ends leaves its pull request standing on the server
+// for the rest of its wait, and a record appended in that window is delivered
+// to it — to a fetch nobody is running. Over a connection that stays open (an
+// applier stopped and another started in the same process) the next pull then
+// waited out the thirty-second ack window for a record already on the log, and
+// a read barrier appended in that window refused every linearizable read as
+// behind for the whole of it. The delivery lands in the handle's standing
+// buffer, and the next fetch takes it; measured against the build that dropped
+// the abandoned pull's inbox, the second fetch below returns nothing.
+func TestARecordReachingAnAbandonedPullIsHandedBack(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_ABANDON_LOG", "crewlet.abandon.log")
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_ABANDON_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// THE ABANDONED PULL: a long wait, given up on almost at once.
+	drain, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if got, err := cons.Fetch(drain, 1, 0, 20*time.Second); len(got) != 0 {
+		t.Fatalf("an empty log answered %d record(s) (%v)", len(got), err)
+	}
+	// A record the standing pull is still asking for.
+	appendN(t, log, "crewlet.abandon.log.task", 1)
+
+	// THE NEXT READER, well inside the ack window.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := cons.Fetch(t.Context(), 1, 0, 500*time.Millisecond)
+		if err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if len(got) == 1 {
+			if got[0].Seq != 1 {
+				t.Fatalf("the next reader was handed sequence %d, want 1", got[0].Seq)
+			}
+			return
+		}
+	}
+	t.Fatal("the record appended while an abandoned pull stood was not handed to " +
+		"the next reader within five seconds: it sat in a batch nobody reads " +
+		"until the ack window redelivered it")
+}
+
+// A CLOSED HANDLE TAKES NOTHING THE NEXT READER OF ITS CONSUMER NEEDS.
+//
+// A reader that stops leaves the pull it last sent standing at the broker for
+// the rest of its wait, and the broker serves the oldest request first. Over a
+// connection that outlives the reader — a state log stopped and another opened
+// in the same process — a record appended in that window went to the stopped
+// reader's inbox, and the next reader of the same consumer waited out the
+// thirty-second ack window for it. Closing the handle drops the inbox, so the
+// broker, finding no interest in the old request, serves the new one.
+func TestAClosedHandleTakesNothingTheNextReaderNeeds(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_CLOSED_LOG", "crewlet.closed.log")
+	first, err := q.DomainConsumer(t.Context(), "CREWLET_CLOSED_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// THE STOPPED READER'S PULL: a long wait, given up on almost at once.
+	drain, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if got, err := first.Fetch(drain, 1, 0, 20*time.Second); len(got) != 0 {
+		t.Fatalf("an empty log answered %d record(s) (%v)", len(got), err)
+	}
+	waitStanding(t, first)
+	first.Close()
+
+	// THE NEXT READER of the same consumer, which agrees with the rows and
+	// is therefore kept rather than rebuilt.
+	second, err := q.DomainConsumer(t.Context(), "CREWLET_CLOSED_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(second.Close)
+	appendN(t, log, "crewlet.closed.log.task", 1)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := second.Fetch(t.Context(), 1, 0, 500*time.Millisecond)
+		if err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if len(got) == 1 {
+			if got[0].Seq != 1 {
+				t.Fatalf("the next reader was handed sequence %d, want 1", got[0].Seq)
+			}
+			return
+		}
+	}
+	t.Fatal("the record appended after the first reader closed was not handed to " +
+		"the next reader within five seconds: the broker delivered it to the " +
+		"closed reader's standing pull, where it waits out the ack window")
+}
+
+// A RECORD DELIVERED TO A REQUEST THE CLIENT GAVE UP ON IS TAKEN BY THE NEXT
+// FETCH — at once, never after the ack window.
+//
+// The client and the server each decide when a request ends, on their own
+// clocks, and under load they disagree: the server is still serving a request
+// the client has stopped counting. A pull that dropped its inbox when it
+// stopped counting left what the server then delivered on an inbox nobody
+// held, in flight against the consumer until the thirty-second ack window
+// redelivered it — measured on a loaded cluster as apply latency past thirty
+// seconds and drains of a few thousand records taking a minute and a half.
+//
+// The disagreement is made here directly: a request the server will serve
+// for twenty seconds, which the client counts as already over — what a
+// server running later than [pullGrace] looks like from the client. A record
+// appended then is delivered to it; the next fetch must hand it over at once.
+func TestARecordDeliveredToARequestTheClientGaveUpOnIsTakenByTheNext(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_LATE_LOG", "crewlet.late.log")
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_LATE_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if got, err := cons.Fetch(t.Context(), 1, 0, 10*time.Millisecond); err != nil || len(got) != 0 {
+		t.Fatalf("an empty log answered %d record(s), %v", len(got), err)
+	}
+	p, err := cons.standing()
+	if err != nil {
+		t.Fatalf("the standing pull: %v", err)
+	}
+	p.mu.Lock()
+	if err := p.request(1, 0, 20*time.Second); err != nil {
+		p.mu.Unlock()
+		t.Fatalf("a long request: %v", err)
+	}
+	// THE CLIENT HAS STOPPED COUNTING IT; the server has not.
+	p.requests[len(p.requests)-1].until = time.Now().Add(-time.Second)
+	p.mu.Unlock()
+	waitStanding(t, cons)
+	appendN(t, log, "crewlet.late.log.task", 1)
+
+	took := time.Now()
+	got, err := cons.Fetch(t.Context(), 1, 0, 5*time.Second)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if len(got) != 1 || got[0].Seq != 1 {
+		t.Fatalf("the next fetch took %d record(s) from %d, want sequence 1 — the "+
+			"record the server delivered to a request the client had given up on "+
+			"was not held for it", len(got), seqOf(got))
+	}
+	if waited := time.Since(took); waited > time.Second {
+		t.Fatalf("the record reached the next fetch after %v; it was delivered "+
+			"before the fetch began", waited)
+	}
+}
+
+// standPhantom makes the client count a request the server never received —
+// which is what a request looks like once the connection it was served on
+// has dropped, or once its ending status was lost: nothing will ever end it
+// but the client's own presumption.
+func standPhantom(t *testing.T, cons *DomainConsumer, until time.Duration) {
+	t.Helper()
+	p, err := cons.standing()
+	if err != nil {
+		t.Fatalf("the standing pull: %v", err)
+	}
+	p.mu.Lock()
+	p.requests = append(p.requests, &standingRequest{batch: 1, until: time.Now().Add(until)})
+	p.mu.Unlock()
+}
+
+// A FETCH IS BOUNDED BY ITS WAIT AND THE GRACE even when the request it is
+// waiting on never ends.
+//
+// The ending status is not guaranteed: a dropped connection takes the
+// server's copy of a request with it, and a slow consumer's inbox drops a
+// status like any other message. Past its deadline a fetch counted the
+// request as standing until a delivery woke it to look, and nothing would —
+// so it waited out an HOUR's timer, and the applier calling it applied
+// nothing for that long. The error is the discriminator: a fetch that
+// honours the presumption returns nothing, cleanly, well inside the
+// context's ten seconds.
+func TestAFetchIsBoundedEvenWhenItsRequestNeverEnds(t *testing.T) {
+	t.Parallel()
+	q, _ := openDomain(t, "CREWLET_LOST_LOG", "crewlet.lost.log")
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_LOST_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	standPhantom(t, cons, 300*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	got, err := cons.Fetch(ctx, 1, 0, 50*time.Millisecond)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("a fetch waiting on a request nothing serves answered %d record(s), "+
+			"%v — want nothing, once the request is presumed gone", len(got), err)
+	}
+}
+
+// A REQUEST LEFT STANDING DOES NOT KEEP THE NEXT FETCH FROM ASKING once it is
+// presumed gone.
+//
+// A fetch sends a request only when none stands, so one an earlier fetch left
+// behind — a caller whose context ended — is what this fetch waits on. If
+// that request's end never comes, the presumption is the only thing that lets
+// this fetch send its own: evaluated only on a wake, it did not, and a record
+// appended meanwhile was delivered to nobody until the fetch's whole wait had
+// passed. The wait here is twenty seconds; the request must reach the server
+// inside [waitStanding]'s five.
+func TestARequestLeftStandingDoesNotKeepTheNextFetchFromAsking(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_LEFT_LOG", "crewlet.left.log")
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_LEFT_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	standPhantom(t, cons, 200*time.Millisecond)
+	type fetched struct {
+		got []statelog.Message
+		err error
+	}
+	done := make(chan fetched, 1)
+	go func() {
+		got, err := cons.Fetch(t.Context(), 1, 0, 20*time.Second)
+		done <- fetched{got, err}
+	}()
+	waitStanding(t, cons)
+	appendN(t, log, "crewlet.left.log.task", 1)
+	select {
+	case f := <-done:
+		if f.err != nil || len(f.got) != 1 || seqOf(f.got) != 1 {
+			t.Fatalf("the fetch returned %d record(s) from %d, %v, want sequence 1",
+				len(f.got), seqOf(f.got), f.err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("a record appended into a fetch's own request was not handed over")
+	}
+}
+
+// standLong sends a request the server serves for twenty seconds through a
+// handle's standing pull, and waits until the server holds it — what an
+// engine's last fetch leaves behind when the engine stops.
+func standLong(t *testing.T, cons *DomainConsumer) *puller {
+	t.Helper()
+	p, err := cons.standing()
+	if err != nil {
+		t.Fatalf("the standing pull: %v", err)
+	}
+	p.mu.Lock()
+	err = p.request(1, 0, 20*time.Second)
+	p.mu.Unlock()
+	if err != nil {
+		t.Fatalf("a long request: %v", err)
+	}
+	waitWaiting(t, cons, 1)
+	return p
+}
+
+// waitWaiting waits until the server holds n requests on the consumer.
+func waitWaiting(t *testing.T, cons *DomainConsumer, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		info, err := consumerInfo(t, cons)
+		if err != nil {
+			t.Fatalf("consumer info: %v", err)
+		}
+		if info.NumWaiting >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the server holds %d request(s) on %s, want %d — a request "+
+				"did not reach it", info.NumWaiting, cons.name, n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A CLOSED HANDLE HANDS BACK WHAT IT HELD, to the next handle on the consumer
+// at once.
+//
+// The next reader of a consumer is not always the handle's next fetch: an
+// engine stopped and another started over the same backends opens a handle of
+// its own, and the first one's buffer is read by nobody. The second fetch's
+// twenty-second wait is inside the consumer's thirty-second ack window, so a
+// record left in that buffer is not handed over at all.
+func TestAClosedHandleHandsBackWhatItHeld(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_HELD_LOG", "crewlet.held.log")
+	first, err := q.DomainConsumer(t.Context(), "CREWLET_HELD_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	p := standLong(t, first)
+	// THE SUCCESSOR OPENS while nothing has been delivered, which is what
+	// keeps the consumer rather than rebuilding it — a rebuild would hand
+	// everything over again whatever the first handle did.
+	second, err := q.DomainConsumer(t.Context(), "CREWLET_HELD_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open the successor: %v", err)
+	}
+	appendN(t, log, "crewlet.held.log.task", 1)
+	waitUntil(t, "the first handle to hold the record", func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return len(p.buffered) == 1
+	})
+	first.Close()
+	got, err := second.Fetch(t.Context(), 1, 0, 20*time.Second)
+	if err != nil || len(got) != 1 || seqOf(got) != 1 {
+		t.Fatalf("the successor's fetch returned %d record(s) from %d, %v, want "+
+			"sequence 1 — the record the closed handle held was not handed back",
+			len(got), seqOf(got), err)
+	}
+	if _, err := first.Fetch(t.Context(), 1, 0, time.Millisecond); !errors.Is(err, errHandleClosed) {
+		t.Errorf("a fetch through the closed handle answered %v, want it refused", err)
+	}
+}
+
+// A CLOSED HANDLE'S STANDING REQUEST DOES NOT TAKE THE SUCCESSOR'S NEXT
+// RECORD.
+//
+// The server serves a consumer's requests oldest first, so the closed handle's
+// request — still standing for most of its twenty seconds — was served before
+// the successor's queued behind it: this is the engine's own case, a read
+// barrier appended into the second engine delivered to the first one's
+// inbox. On a member that SERVES LEAVES, which is a data node's configuration
+// in a fleet with nodes that hold no data, because such a server can find a
+// request's reply across a link as well as on its own clients.
+func TestAClosedHandlesStandingRequestDoesNotTakeTheNextRecord(t *testing.T) {
+	t.Parallel()
+	q := newQueueWith(t, Config{
+		ServerName: "member", LeafHost: "127.0.0.1", LeafPort: unusedPort(t),
+		StoreDir: t.TempDir(),
+	})
+	if err := q.EnsureDomainStream(t.Context(), DomainStream{
+		Name: "CREWLET_LATER_LOG", Subjects: []string{"crewlet.later.log.>"},
+		MaxBytes: 16 << 20, Duplicates: time.Minute,
+	}); err != nil {
+		t.Fatalf("EnsureDomainStream: %v", err)
+	}
+	log, err := q.DomainLog(t.Context(), "CREWLET_LATER_LOG")
+	if err != nil {
+		t.Fatalf("open the log: %v", err)
+	}
+	first, err := q.DomainConsumer(t.Context(), "CREWLET_LATER_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	p := standLong(t, first)
+	second, err := q.DomainConsumer(t.Context(), "CREWLET_LATER_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open the successor: %v", err)
+	}
+	first.Close()
+	type fetched struct {
+		got []statelog.Message
+		err error
+	}
+	done := make(chan fetched, 1)
+	go func() {
+		got, err := second.Fetch(t.Context(), 1, 0, 20*time.Second)
+		done <- fetched{got, err}
+	}()
+	waitWaiting(t, second, 2)
+	appendN(t, log, "crewlet.later.log.task", 1)
+	select {
+	case f := <-done:
+		if f.err != nil || len(f.got) != 1 || seqOf(f.got) != 1 {
+			t.Fatalf("the successor's fetch returned %d record(s) from %d, %v, want "+
+				"sequence 1 — the closed handle's request was served it",
+				len(f.got), seqOf(f.got), f.err)
+		}
+	case <-time.After(25 * time.Second):
+		t.Fatal("the successor's fetch did not return")
+	}
+	// AND THE INBOX IS GONE, so nothing the server still sends it can
+	// reach it.
+	waitUntil(t, "the closed handle's inbox to be drained", func() bool {
+		return !p.sub.IsValid()
+	})
+}
+
+// A RECORD IS HANDED OVER WITH ITS BURST, not at the end of the wait.
+//
+// One record does not end a pull request, so a fetch that read its request
+// until it ended held a record appended a millisecond in for the rest of the
+// wait: half a second at the applier's own, which was the 99th-percentile
+// apply latency across a hundred and twenty-nine streams. What
+// [statelog.Fetcher] asks is to wait for the FIRST record; the runner decides
+// whether a partial run is worth another fetch.
+func TestARecordIsHandedOverWithItsBurst(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_BURST_LOG", "crewlet.burst.log")
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_BURST_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	type fetched struct {
+		got []statelog.Message
+		err error
+		at  time.Time
+	}
+	done := make(chan fetched, 1)
+	go func() {
+		got, err := cons.Fetch(t.Context(), statelog.FetchMessages, statelog.FetchBytes,
+			5*time.Second)
+		done <- fetched{got, err, time.Now()}
+	}()
+	waitStanding(t, cons)
+	appended := time.Now()
+	appendN(t, log, "crewlet.burst.log.task", 3)
+	select {
+	case f := <-done:
+		if f.err != nil || len(f.got) == 0 || seqOf(f.got) != 1 {
+			t.Fatalf("the fetch returned %d record(s) from %d, %v", len(f.got), seqOf(f.got), f.err)
+		}
+		if waited := f.at.Sub(appended); waited > time.Second {
+			t.Fatalf("records appended into a standing fetch were handed over "+
+				"%v later — the fetch held them for its wait", waited)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("a fetch holding appended records did not return them before " +
+			"its wait ran out")
+	}
+}
+
+// waitStanding waits until the server holds a request for this consumer, so a
+// record appended next is delivered to it rather than waiting for a request.
+func waitStanding(t *testing.T, cons *DomainConsumer) {
+	t.Helper()
+	waitWaiting(t, cons, 1)
+}
+
+// waitUntil waits up to five seconds for cond, naming what it waited for.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("waited five seconds for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// idlePullBudget is the most one pull of an EMPTY log may allocate, heap
+// bytes, whatever the bounds it carries.
+//
+// 64 KiB: an idle applier pulls twice a second per domain ([statelog.FetchWait])
+// and a node runs three domains, so this is ≤ 384 KiB/s of garbage from a node
+// doing nothing. The pull measures about 6.5 KiB — a subscription, a request, a
+// timer, and the server's side of it in this same process — so the budget is
+// ten times what it needs and still below BOTH of the client library's fetches:
+// the byte-bounded one's 32 MiB (181 MiB/s from three idle consumers, and an
+// OOM kill for a process running a few hundred of them) and the count-only
+// one's ≈ 172 KiB at the applier's four thousand. A figure that grows with the
+// BATCH a pull may receive, rather than with what it did receive, is the
+// defect, and the second is the fix that would have looked like one.
+const idlePullBudget = 64 << 10
+
+// AN IDLE PULL ALLOCATES FOR WHAT IT RECEIVED, never for the batch it was
+// allowed.
+//
+// The client library's byte-bounded fetch fixes its message count at a
+// million and sizes two channels by it on every call — 32 MiB per pull of a
+// log with nothing in it, and the applier pulls every half second per domain
+// for the life of the node. Its count-only fetch sizes the same channels by
+// the count, ~172 KiB at the applier's four thousand. Neither is a leak, so
+// nothing but the allocation rate shows it, and the rate is the symptom: a
+// process with a few hundred consumers was OOM-killed at 12.7 GB in about a
+// minute.
+//
+// NOT PARALLEL, because the measurement is the process's own allocation
+// counter and a concurrent case would be counted as this one.
+func TestAnIdlePullAllocatesForWhatItReceived(t *testing.T) {
+	q, _ := openDomain(t, "CREWLET_IDLE_PULL", "crewlet.idlepull")
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_IDLE_PULL", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	pull := func() {
+		got, err := cons.Fetch(t.Context(), statelog.FetchMessages,
+			statelog.FetchBytes, 20*time.Millisecond)
+		if err != nil || len(got) != 0 {
+			t.Fatalf("an idle pull answered %d record(s), %v", len(got), err)
+		}
+	}
+	pull() // the connection's first request warms its own buffers
+	const pulls = 20
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	for range pulls {
+		pull()
+	}
+	runtime.ReadMemStats(&after)
+	per := (after.TotalAlloc - before.TotalAlloc) / pulls
+	t.Logf("an idle pull allocated %d bytes", per)
+	if per > idlePullBudget {
+		t.Fatalf("an idle pull allocated %d KiB, and the budget is %d KiB — a "+
+			"pull that sizes its buffers by the batch it MAY receive allocates "+
+			"that on every call of an idle applier, twice a second per domain",
+			per>>10, idlePullBudget>>10)
+	}
+}
+
+// ONE PULL HONOURS BOTH OF ITS BOUNDS, and nothing past either is delivered.
+//
+// The applier asks for a count AND a byte total on every pull — one
+// transaction's worth of records, and no more bytes than one transaction
+// should hold — and the client library could send only one of them: its
+// byte-bounded fetch fixed the count at a million, so the count lived only in
+// the consumer's in-flight ceiling. What this asserts is the BROKER's view,
+// not the returned slice: a record delivered and not returned is one the
+// consumer holds in flight until the ack window, so the ack-pending count must
+// equal what came back.
+func TestAPullHonoursBothOfItsBounds(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_BOUNDS_LOG", "crewlet.bounds.log")
+	body := []byte(`{"pad":"` + strings.Repeat("x", 1000) + `"}`)
+	for i := range 6 {
+		if _, _, err := log.Append(t.Context(), "crewlet.bounds.log.task", "", nil, body); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_BOUNDS_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	inFlight := func() int {
+		t.Helper()
+		info, err := consumerInfo(t, cons)
+		if err != nil {
+			t.Fatalf("consumer info: %v", err)
+		}
+		return info.NumAckPending
+	}
+
+	// THE COUNT BINDS, under a byte bound that would admit all six.
+	got, err := cons.Fetch(t.Context(), 3, 1<<20, 500*time.Millisecond)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if len(got) != 3 || seqOf(got) != 1 {
+		t.Fatalf("a pull for 3 records under a 1 MiB bound returned %d from %d, "+
+			"want 3 from 1", len(got), seqOf(got))
+	}
+	if n := inFlight(); n != 3 {
+		t.Fatalf("the consumer holds %d records in flight after a pull that "+
+			"returned 3 — the count was not the request's, so the broker "+
+			"delivered past it", n)
+	}
+
+	// THE BYTES BIND, under a count that would admit all the rest: a
+	// record here is a kilobyte and its envelope, so fifteen hundred bytes
+	// holds one and not two.
+	got, err = cons.Fetch(t.Context(), 100, 1500, 500*time.Millisecond)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if len(got) != 1 || seqOf(got) != 4 {
+		t.Fatalf("a pull bounded at 1500 bytes returned %d record(s) from %d, "+
+			"want 1 from 4", len(got), seqOf(got))
+	}
+	if n := inFlight(); n != 4 {
+		t.Fatalf("the consumer holds %d records in flight after pulls that "+
+			"returned 4", n)
+	}
+}
+
+// A PULL THE SERVER ENDS AS A FAILURE IS AN ERROR, never an empty batch.
+//
+// The ordinary endings — the wait running out, a bound met — say nothing is
+// there; a consumer deleted under a standing request says nothing CAN be
+// there, and an applier told the first would sit on a log it is no longer
+// reading and report itself caught up.
+func TestAPullEndedAsAFailureReportsIt(t *testing.T) {
+	t.Parallel()
+	q, _ := openDomain(t, "CREWLET_REFUSED_LOG", "crewlet.refused.log")
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_REFUSED_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := cons.Fetch(t.Context(), 10, 1<<20, 10*time.Second)
+		done <- err
+	}()
+	// THE REQUEST MUST BE STANDING before the consumer goes, or the
+	// deletion is a pull addressed to nothing rather than one cut off.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		info, err := consumerInfo(t, cons)
+		if err != nil {
+			t.Fatalf("consumer info: %v", err)
+		}
+		if info.NumWaiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the pull never reached the server")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := q.JetStream().DeleteConsumer(t.Context(), "CREWLET_REFUSED_LOG", cons.Name()); err != nil {
+		t.Fatalf("delete the consumer: %v", err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, errPullRefused) {
+			t.Fatalf("a pull whose consumer was deleted under it returned %v, "+
+				"want the refusal — an empty answer reads as a quiet log", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a pull whose consumer was deleted under it went on waiting " +
+			"for its whole expiry")
+	}
+}
+
+// BenchmarkAnIdlePull is what one pull of an empty log costs, B/op being the
+// figure [TestAnIdlePullAllocatesForWhatItReceived] bounds: ≈ 6.5 KiB here,
+// against 32 MiB through the client library's byte-bounded fetch and
+// ≈ 136 KiB through its count-only one.
+func BenchmarkAnIdlePull(b *testing.B) {
+	q, err := Open(b.Context(), Config{})
+	if err != nil {
+		b.Fatalf("open: %v", err)
+	}
+	b.Cleanup(func() { _ = q.Stop(context.WithoutCancel(b.Context())) })
+	if err := q.EnsureDomainStream(b.Context(), DomainStream{
+		Name: "CREWLET_IDLE_BENCH", Subjects: []string{"crewlet.idlebench.>"},
+		MaxBytes: 16 << 20, Duplicates: time.Minute,
+	}); err != nil {
+		b.Fatalf("stream: %v", err)
+	}
+	cons, err := q.DomainConsumer(b.Context(), "CREWLET_IDLE_BENCH", "node-a", 0)
+	if err != nil {
+		b.Fatalf("open: %v", err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := cons.Fetch(b.Context(), statelog.FetchMessages,
+			statelog.FetchBytes, time.Millisecond); err != nil {
+			b.Fatalf("fetch: %v", err)
+		}
 	}
 }

@@ -135,7 +135,7 @@ func TestEveryOpDeclaresItsScope(t *testing.T) {
 func (h *applyHarness) movedAt(packed int64) []string {
 	h.t.Helper()
 	var out []string
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Read(h.t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(h.t.Context(),
 			`SELECT id FROM tracker_tasks
 			 WHERE version = ? OR scoped_through = ? ORDER BY id`, packed, packed)

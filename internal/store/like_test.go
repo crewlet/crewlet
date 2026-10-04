@@ -16,7 +16,7 @@ import (
 // says the filter did not apply.
 func TestALikeSearchTreatsWildcardsAsText(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "like.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "like.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

@@ -50,9 +50,9 @@ func runSuite(m *testing.M) int {
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
-	db, err := store.Open(context.Background(), filepath.Join(dir, "api.db"), store.Options{})
+	db, err := store.OpenNode(context.Background(), filepath.Join(dir, "api.db"), store.Options{})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "api test: store.Open:", err)
+		fmt.Fprintln(os.Stderr, "api test: store.OpenNode:", err)
 		return 2
 	}
 	defer func() { _ = db.Close() }()
@@ -179,6 +179,9 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	if opts.Capacity == nil {
 		opts.Capacity = &fakeStateLog{}
 	}
+	if opts.FleetBroker == nil {
+		opts.FleetBroker = &fakeFleetBroker{}
+	}
 	if opts.Backup == nil {
 		opts.Backup = &fakeBackup{}
 	}
@@ -218,7 +221,8 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	for _, field := range []string{
 		"Runtime", "EventLog", "Sources.Company", "Sources.Events", "Sources.NodeID",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
-		"Config", "Secrets", "Setup", "Retention", "Capacity", "Backup", "Audit",
+		"Config", "Secrets", "Setup", "Retention", "Capacity", "FleetBroker", "Backup",
+		"Audit",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)

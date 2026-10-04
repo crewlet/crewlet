@@ -2,6 +2,9 @@ package engine_test
 
 import (
 	"context"
+	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -89,6 +92,70 @@ func TestNoBootstrapIsRefusedByNew(t *testing.T) {
 		Company: parsedCompany(t, companyDoc),
 	}); err == nil {
 		t.Error("an engine built with no bootstrap config")
+	}
+}
+
+// AN INVALID TIER A IS REFUSED BY THE ENGINE ITSELF, before anything is opened
+// — not only by the loader, which is the one caller that validates and the one
+// path a bootstrap built in code, or edited after loading, never takes.
+//
+// The first shape is the one the e2e fleet harness actually ran on, with
+// nothing to say so: a clustered stream on local coordination, where every
+// member keeps its leases in its own process and claims every seat and every
+// duty for itself. The second is the one it moved to next, and Tier A refuses
+// it too: two embedded members, which have no coordination quorum without each
+// other. Each refusal names the field an operator changes, and leaves no store
+// file behind — a node that opened its store first would have migrated a
+// database for a config it was always going to refuse.
+func TestAnInvalidBootstrapIsRefusedBeforeAnythingIsOpened(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		mutate func(*config.Bootstrap)
+		field  string
+	}{
+		{
+			name: "a clustered stream on local coordination",
+			mutate: func(b *config.Bootstrap) {
+				b.Stream.Cluster.Name = "acme"
+				b.Coordination.Type = config.CoordinationLocal
+			},
+			field: "coordination.type",
+		},
+		{
+			name: "two embedded members on the embedded KV",
+			mutate: func(b *config.Bootstrap) {
+				b.Stream.Cluster.Name = "acme"
+				b.Stream.Cluster.Port = 6222
+				b.Stream.Cluster.Peers = []string{"nats://10.0.0.2:6222"}
+				b.Stream.Replicas = 2
+				b.Coordination.Type = config.CoordinationEmbeddedKV
+			},
+			field: "stream.cluster.peers",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			boot := bootstrap(t, func(b *config.Bootstrap) {
+				b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+				tc.mutate(b)
+			})
+			_, err := engine.New(t.Context(), engine.Options{
+				Bootstrap: boot, Company: parsedCompany(t, companyDoc),
+			})
+			if err == nil {
+				t.Fatal("the engine built a node on a bootstrap Tier A refuses")
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("the refusal does not name %s: %v", tc.field, err)
+			}
+			for _, path := range []string{boot.Store.Path, boot.Stream.StoreDir} {
+				if _, statErr := os.Stat(path); !errors.Is(statErr, fs.ErrNotExist) {
+					t.Errorf("%s exists after the refusal (%v): the engine opened "+
+						"something before it checked the config", path, statErr)
+				}
+			}
+		})
 	}
 }
 

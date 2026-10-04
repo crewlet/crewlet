@@ -45,6 +45,11 @@ func TestEveryChangeKindIsClassifiedAsTaskOrNot(t *testing.T) {
 		// person write that announces itself is `prioritised`, above,
 		// because somebody else reordered your day.
 		tracker.ChangePersonUpdated: true,
+
+		// A project's files, read from the project rather than woken
+		// into anybody's inbox.
+		tracker.ChangeFileWritten: true,
+		tracker.ChangeFileRemoved: true,
 	}
 	for _, kind := range tracker.ChangeKinds {
 		if got := kind.TaskCommit(); got == notTasks[kind] {

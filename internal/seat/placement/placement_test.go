@@ -221,12 +221,12 @@ func TestParseRoles(t *testing.T) {
 		{
 			name:   "nil is every role",
 			values: nil,
-			want:   []string{"ingress", "seats", "workers"},
+			want:   []string{"data", "ingress", "seats", "workers"},
 		},
 		{
 			name:   "empty is every role",
 			values: []string{},
-			want:   []string{"ingress", "seats", "workers"},
+			want:   []string{"data", "ingress", "seats", "workers"},
 		},
 		{
 			name:   "one role is one role",
@@ -279,7 +279,7 @@ func TestUnsetRoleSetIsEveryRole(t *testing.T) {
 	t.Parallel()
 
 	var unset RoleSet
-	for _, role := range []NodeRole{RoleIngress, RoleSeats, RoleWorkers} {
+	for _, role := range Vocabulary() {
 		if !unset.Has(role) {
 			t.Fatalf("the unset role set must have %q", role)
 		}
@@ -289,13 +289,23 @@ func TestUnsetRoleSetIsEveryRole(t *testing.T) {
 	}
 
 	zero := NodeProfile{ID: "n1"}
-	if !zero.RunsSeats() || !zero.RunsWorkers() || !zero.RunsIngress() {
+	if !zero.RunsSeats() || !zero.RunsWorkers() || !zero.RunsIngress() || !zero.HoldsData() {
 		t.Fatalf("a profile with no declared roles must do everything, got %v", zero.Roles.Names())
 	}
 
 	declared := NodeProfile{ID: "api", Roles: Roles(RoleIngress)}
 	if declared.RunsSeats() {
 		t.Fatal("an ingress-only node must not run seats")
+	}
+	// AND AN OLDER PEER HOLDS DATA. A presence row an older build wrote
+	// names no `data` role, and reading it as stateless would drop a
+	// member's position out of the trim's minimum.
+	if !zero.HoldsData() {
+		t.Fatal("a profile with no declared roles must hold data")
+	}
+	stateless := NodeProfile{ID: "agent", Roles: Roles(RoleSeats)}
+	if stateless.HoldsData() {
+		t.Fatal("a seats-only node must not hold data")
 	}
 }
 
@@ -318,7 +328,7 @@ func TestProfileRoundTripsThroughLeaseMeta(t *testing.T) {
 
 	me := NodeProfile{
 		ID:     "n1",
-		Roles:  Roles(RoleSeats, RoleWorkers),
+		Roles:  Roles(RoleSeats, RoleWorkers, RoleData),
 		Labels: map[string]string{"zone": "eu"},
 	}
 
@@ -804,5 +814,125 @@ func assertProfile(t *testing.T, got, want NodeProfile) {
 		if !maps.Equal(got.Labels, want.Labels) {
 			t.Fatalf("labels = %v, want %v", got.Labels, want.Labels)
 		}
+	}
+}
+
+// PRESENCE IS A NODE'S PROFILE AND NOTHING ELSE. A share written onto it would
+// be a second answer to what the node holds — one that a shutdown drain
+// withdraws, at its first step, while the node is still serving.
+func TestPresenceCarriesNoObjectShare(t *testing.T) {
+	t.Parallel()
+	meta := NodeProfile{ID: "n1", Roles: Roles(RoleData)}.Meta()
+	for key := range meta {
+		if key != "roles" && key != "labels" {
+			t.Errorf("presence carries %q: a node's profile is its roles and labels", key)
+		}
+	}
+}
+
+// A NODE'S SEAT COUNT READS OFF ITS ROW, and a row that does not say is not
+// a row that says zero.
+//
+// Peers sum these counts to learn whether any seat is free. The count arrives
+// as an int from this process and as a float64 after a round trip through the
+// lease store; anything else — absent, as a build from before the count
+// writes it, or not a whole non-negative number — is the node not saying.
+func TestASeatCountReadsOffTheRowAndSilenceIsNotZero(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		raw  any
+		want *int
+	}{
+		"written here":       {raw: 3, want: ptr(3)},
+		"after a round trip": {raw: float64(3), want: ptr(3)},
+		"zero, said":         {raw: float64(0), want: ptr(0)},
+		"absent":             {raw: nil, want: nil},
+		"a string":           {raw: "3", want: nil},
+		"negative":           {raw: float64(-1), want: nil},
+		"a fraction":         {raw: 2.5, want: nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			meta := map[string]any{}
+			if tc.raw != nil {
+				meta[HeldKey] = tc.raw
+			}
+			got := FromMeta("node-a", meta).Held
+			switch {
+			case (got == nil) != (tc.want == nil):
+				t.Fatalf("Held = %v, want %v", got, tc.want)
+			case got != nil && *got != *tc.want:
+				t.Fatalf("Held = %d, want %d", *got, *tc.want)
+			}
+		})
+	}
+}
+
+func ptr(n int) *int { return &n }
+
+// ── the broker kind on the wire ──────────────────────────────────────
+
+// EVERY KIND A NODE ADVERTISES READS BACK AS ITSELF, through the JSON round
+// trip the lease store puts every row through. A kind that came back as
+// unknown would count a leaf as a member of every seal — safe, and a seal that
+// waits on a node that can never acknowledge it.
+func TestEveryAdvertisedBrokerKindRoundTrips(t *testing.T) {
+	t.Parallel()
+	for _, kind := range BrokerKinds() {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			raw, err := json.Marshal(NodeProfile{ID: "n1", Broker: kind}.Meta())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if got := FromMeta("n1", decoded).Broker; got != kind {
+				t.Fatalf("advertised %q, read back %q", kind, got)
+			}
+		})
+	}
+}
+
+// A ROW THAT DOES NOT SAY IS UNKNOWN, NEVER A LEAF — an older build's row, a
+// value of the wrong type, a kind a newer build added. A leaf is the one
+// reading that would drop a member out of a capacity seal, so it is the one a
+// row that says nothing must never be given; unknown is what a seal counts.
+func TestABrokerKindTheRowDoesNotStateIsUnknownNeverALeaf(t *testing.T) {
+	t.Parallel()
+	for name, meta := range map[string]map[string]any{
+		"an older build's row":       {"roles": []any{"data"}},
+		"no meta at all":             nil,
+		"an empty string":            {"broker": ""},
+		"a value of the wrong type":  {"broker": 7},
+		"a list":                     {"broker": []any{"member"}},
+		"a kind a newer build added": {"broker": "observer"},
+		"another spelling":           {"broker": "Member"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := FromMeta("n1", meta).Broker
+			if got != BrokerUnknown {
+				t.Fatalf("read %q; a row that does not say must read as unknown", got)
+			}
+			if got.String() != "unknown" {
+				t.Errorf("an unknown kind renders as %q, want \"unknown\" — an "+
+					"empty cell reads as nothing to look at", got.String())
+			}
+		})
+	}
+}
+
+// A PROFILE WITH NO KIND WRITES NONE, so absence stays the one way to say
+// unknown and a profile nobody derived a kind for does not claim one.
+func TestAnUnknownBrokerKindIsNotWritten(t *testing.T) {
+	t.Parallel()
+	if _, ok := (NodeProfile{ID: "n1"}).Meta()["broker"]; ok {
+		t.Fatal("a profile with no broker kind advertised one")
+	}
+	if BrokerUnknown.Valid() {
+		t.Fatal("unknown is valid: it would be written onto a presence row as a kind")
 	}
 }

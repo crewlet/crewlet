@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -121,8 +122,8 @@ type Domain interface {
 
 	// ReadinessInput reports whether this domain's health gates seat
 	// admission. A strictly ordered domain's stall is a fault; a
-	// compacted domain's gap is a coverage number, and shedding a
-	// company's seats for one would be the outage the number exists to
+	// compacted domain's gap is a coverage number, and taking a copy
+	// out of service for one would be the outage the number exists to
 	// avoid.
 	ReadinessInput() bool
 
@@ -256,6 +257,10 @@ type StreamSpec struct {
 	// MaxBytes is the ceiling. Crossing it REFUSES an append rather than
 	// dropping the oldest record, so zero — unlimited — is a stream that
 	// fills the volume instead.
+	//
+	// A domain declares its WHOLE budget here, and it is the one setting a
+	// node may replace: the stream a node creates carries the ceiling its
+	// own Tier A sized ([StreamSpec.Instantiates]).
 	MaxBytes int64
 
 	// MaxPerSubject retains only the newest message per subject, turning
@@ -329,6 +334,50 @@ func (s StreamSpec) Validate() error {
 	}
 	if s.Duplicates <= 0 {
 		return fmt.Errorf("statelog: stream %q sets no duplicate window", s.Name)
+	}
+	return nil
+}
+
+// Instantiates refuses a spec that is not domain d's stream: every setting but
+// the byte ceiling must be the domain's own, names included.
+//
+// The NAMES because every per-log record a node keeps is keyed by one of two
+// things — the checkpoint and the anchors by the stream, a position row and a
+// floor by the domain's name — and a spec naming another stream than the
+// domain it runs under would file one log's positions under another's name.
+// The REST because the loop that reads the log, the arbitration the publisher
+// forms and the duplicate window a retry leans on are all chosen from the
+// DOMAIN's declaration, and a stream of another shape is one those choices
+// are wrong for, silently.
+//
+// ONLY THE CEILING MAY DIFFER: the spec a node creates the stream with
+// carries the byte budget its own Tier A sized, which is the node's to
+// choose.
+func (s StreamSpec) Instantiates(d Domain) error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+	if d == nil {
+		return fmt.Errorf("statelog: stream %q names no domain", s.Name)
+	}
+	want := d.Stream()
+	switch {
+	case s.Name != want.Name,
+		s.SubjectPrefix != want.SubjectPrefix,
+		!slices.Equal(s.Subjects, want.Subjects):
+		return fmt.Errorf("statelog: stream (%q, %q, %v) is not the %s domain's, "+
+			"which is (%q, %q, %v)", s.Name, s.SubjectPrefix, s.Subjects, d.Name(),
+			want.Name, want.SubjectPrefix, want.Subjects)
+	case s.Replay != want.Replay,
+		s.MaxPerSubject != want.MaxPerSubject,
+		s.MaxAge != want.MaxAge,
+		s.Duplicates != want.Duplicates,
+		!slices.Equal(s.ArbitratedKinds, want.ArbitratedKinds):
+		return fmt.Errorf("statelog: stream %q is not the %s domain's: "+
+			"its replay, per-subject bound, age bound, duplicate window or "+
+			"arbitrated kinds differ from the domain's own declaration, and every "+
+			"one of them decides how the framework reads and writes that log",
+			s.Name, d.Name())
 	}
 	return nil
 }

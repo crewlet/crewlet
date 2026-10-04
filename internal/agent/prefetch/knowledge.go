@@ -79,6 +79,19 @@ const BuildingKnowledgeHint = "(the knowledge base is not searchable from " +
 	"found by a search right now, so ask a colleague who would know rather " +
 	"than concluding nothing has been written down)"
 
+// UnsearchedKnowledgeHint is what the block says when the search did not run
+// at all — no copy of the knowledge base answered it, or its backend could not
+// be reached.
+//
+// A DIFFERENT SENTENCE from [EmptyKnowledgeHint], for [BuildingKnowledgeHint]'s
+// reason: "nothing surfaced" is a claim about what the company has written
+// down, and a search that never ran makes none. A seat told it concludes the
+// page does not exist and writes a duplicate of one that does — the same
+// answer the search_knowledge tool gives a search that served no mode.
+const UnsearchedKnowledgeHint = "(the knowledge base could not be searched at " +
+	"turn start, so this says nothing about whether a page exists — search it " +
+	"with a focused query once you know what the task needs)"
+
 // knowledgeQuerySystemPrompt turns a task into a search query.
 const knowledgeQuerySystemPrompt = `You turn an AI agent's current task into a search query for its team's knowledge base.
 
@@ -149,15 +162,22 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 	if query == "" {
 		return knowledgeBlock{}
 	}
-	hits := f.src.Knowledge.Search(ctx, knowledge.Query{
+	answer := f.src.Knowledge.Search(ctx, knowledge.Query{
 		Text: query, Seat: r.Seat, Org: r.Org, Limit: knowledgeHits,
 		// AUTO-DRAFTS HIDDEN. Those pages are unreviewed proposals a
 		// synthesis pass wrote; an executor cannot tell one from a
 		// ratified runbook, and following an unratified one is how a
 		// draft becomes policy without anybody agreeing to it.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
-	}).Hits
+	})
+	hits := answer.Hits
 	if len(hits) == 0 {
+		// NOTHING RAN, which is not "nothing matched": a search that
+		// served no mode searched nothing, so the block says so rather
+		// than telling the seat the company has written nothing down.
+		if answer.ServedMode == "" {
+			return knowledgeBlock{text: UnsearchedKnowledgeHint}
+		}
 		return knowledgeBlock{text: EmptyKnowledgeHint}
 	}
 	bullets := make([]string, 0, len(hits)+1)

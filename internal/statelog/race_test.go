@@ -465,7 +465,10 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		// applies past it — and its operation ledger is EMPTY, because
 		// it adopted a snapshot from a donor that scrubbed its ledger
 		// DURING this write, after the operation was minted and after
-		// its decision was checked.
+		// its decision was checked. And a PEER's write lands above it
+		// before anybody asks the subject what it holds, so the newest
+		// record there is another operation's: nothing on the log says
+		// whether this one landed below it.
 		h.applier.mu.Lock()
 		h.applier.auto = false
 		h.applier.mu.Unlock()
@@ -473,7 +476,13 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		h.appends.fail(errors.New("no response from stream"), false)
 		minted := time.Now()
 		h.appends.mu.Lock()
-		h.appends.beforeLastSeq = func() { h.adoptFromAScrubbingDonor(minted.Add(time.Hour)) }
+		h.appends.beforeLastSeq = func() {
+			h.adoptFromAScrubbingDonor(minted.Add(time.Hour))
+			if _, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
+				probeRecord(statelog.Stamp{Gen: 1, Writer: "node-b"}, "peer-op", "peer")); err != nil {
+				t.Errorf("the peer's write: %v", err)
+			}
+		}
 		h.appends.mu.Unlock()
 
 		op := statelog.NewOpID(minted, "write-a")
@@ -503,6 +512,53 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 			t.Errorf("unknown named position %s: the record found there was "+
 				"never acknowledged as this write's, and a caller reads a "+
 				"position as where its own record landed", res.Position)
+		}
+	})
+
+	t.Run("a lost acknowledgement whose record is the newest answers applied from the record whatever the ledger lost", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		first, err := h.write(probeSubject("a"), "op-0", "one")
+		if err != nil {
+			t.Fatalf("the first write: %v", err)
+		}
+		h.anchorAt(probeSubject("a"), first.Position.Seq)
+		decided := h.rows.snapshots()
+
+		// As above, with no peer: the newest record on the subject is
+		// the one this write appended, and it carries this operation's
+		// id — so the log itself says the write landed there, whatever
+		// the ledger lost, and no gate dropped it.
+		h.applier.mu.Lock()
+		h.applier.auto = false
+		h.applier.mu.Unlock()
+		h.applier.advance(statelog.Position{Stream: probeStream, Generation: 1, Seq: 1_000})
+		h.appends.fail(errors.New("no response from stream"), false)
+		minted := time.Now()
+		h.appends.mu.Lock()
+		h.appends.beforeLastSeq = func() { h.adoptFromAScrubbingDonor(minted.Add(time.Hour)) }
+		h.appends.mu.Unlock()
+
+		op := statelog.NewOpID(minted, "write-a")
+		res, err := h.write(probeSubject("a"), op, "two")
+		if err != nil {
+			t.Fatalf("write across an adoption: %v", err)
+		}
+		landed := statelog.Position{Stream: probeStream, Generation: 1,
+			Seq: uint64(h.appends.lastSeq.Load())}
+		if res.Outcome != statelog.OutcomeApplied || res.Position != landed {
+			t.Fatalf("result = %+v, want applied at %s — the record there carries "+
+				"this operation's id, this node applied past it and no gate "+
+				"dropped it", res, landed)
+		}
+		if !res.Collapsed {
+			t.Error("the answer is not marked collapsed — a record this call " +
+				"found rather than was acknowledged for is one it cannot prove " +
+				"its own decision, and a caller computing its answer inside the " +
+				"decision must not report it")
+		}
+		if got := h.rows.snapshots() - decided; got != 1 {
+			t.Fatalf("the write decided %d time(s), want once", got)
 		}
 	})
 
@@ -548,7 +604,7 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 // seam rather than inferred by whichever loop got there first.
 func TestAStreamSpecAndItsReplayProtocolMustAgree(t *testing.T) {
 	t.Parallel()
-	base := func() statelog.StreamSpec { return probeDomain{}.Stream() }
+	base := func() statelog.StreamSpec { return specOf(probeDomain{}) }
 	for name, tc := range map[string]struct {
 		spec statelog.StreamSpec
 		want string

@@ -99,6 +99,17 @@
 // row may be an earlier copy's, which a node that was behind decided against
 // other rows than this call did.
 //
+// A copy the broker collapsed an append onto need not be this node's at all:
+// an operation handed to another node — a write refused `evicted` by one the
+// fleet put out, retried through one it still counts — lands on the first copy
+// while the window lasts, and when that copy applied nowhere there is no
+// ledger row to answer from. Whether a gate dropped it is a question
+// about the node that WROTE it, so the resolution reads the record off the log
+// and asks the gates about its writer, answering that writer's refusal; asked
+// about itself, the retrying node found no gate and a ledger that vouched, and
+// reported a contract violation. The id stays spent on that log until the
+// window passes, which is what the refusal tells its caller.
+//
 // # An operation id carries the instant it was minted
 //
 // Layer 1 has a hole the other two cannot fill: the ops table can LOSE ROWS.
@@ -141,6 +152,15 @@
 // carries no instant is read as minted before every loss. opid.go states the
 // grammar, the clock it is read off and what that assumes of the fleet.
 //
+// A DERIVED id's instant is the start of the work it belongs to, and that can
+// be further back than any ledger remembers — a trigger dispatched a month
+// late, a turn resumed a month after it parked — where every new write under it
+// would be answered `unknown` on every node for good. [MintAt] is the rule an
+// attempt applies to the instant it inherits, against its own clock, and
+// mint.go says why the line is [MintHorizon] rather than the retention. That an
+// attempt past it rebases, records the instant for the fleet and is judged at
+// its own clock rather than an earlier attempt's is ADR-0029.
+//
 // # A record this build cannot decode is RETAINED, with one exception
 //
 // It is kept at its position, never skipped and never stopped on, and
@@ -151,9 +171,22 @@
 //
 // The exception is a record that INSTALLS AN APPLY GATE — a rule under which
 // a durable record produces no rows on ANY node. That is a STOP: the applier
-// halts, health goes false immediately, and the seats move to a node that can
+// halts, health goes false immediately, and the node takes its copy of the
+// estate out of service — its seats read it from another data node that can
 // decode it. A deferred gate does not postpone one record's effect on one
 // node; it silently licenses every record above it.
+//
+// # Retention rests on the ENVELOPE, so a writer can ask who reads what
+//
+// A build retains what it can file: the envelope must decode. A kind whose
+// envelope an older build REFUSES — one that validated a field a newer build
+// widened — is a stop on that build, not a deferral, and no version number on
+// the record changes that. So every node's position heartbeat names, per log,
+// the highest record version its build reads ([NodePosition].RecordVersion),
+// and [Readers] reads it across the trim's own counted set: a writer about to
+// publish such a kind waits until every node that applies the log reads it —
+// a node that says nothing being one that predates the question. The vector
+// log's index records are the first such kind (internal/search, ADR-0028).
 //
 // # A record is stamped with the lowest version that reads it
 //
@@ -320,11 +353,11 @@
 // a rebuild is a lost update, it is caught within the call, as (ii) is. A node
 // that knows its log is not the one its rows are keyed to refuses every write,
 // `wrong_stream`, and every read with the same word — until an operator
-// re-anchors THAT log ([Reanchor]), which moves its domain alone into a new
+// re-anchors THAT log ([Reanchor]), which moves that log alone into a new
 // generation on the live stream and re-keys the runner to it, so every number
-// above is in one space again. A generation is per domain for exactly this
+// above is in one space again. A generation is per LOG for exactly this
 // reason: it is a coordinate in one stream's number space, and moving another
-// domain's would key that domain to a stream it never read.
+// domain's log would key it to a stream it never read.
 //
 // The instant is not the only way the premise fails. A broker restored from a
 // copy older than this node's rows keeps its stream, instant and all, and the
@@ -390,14 +423,71 @@
 // ([Request.NodeGate]), and a reanchor then opens the generation after the
 // abandoned one with its records void ([ReanchorAbandoned]).
 //
+// # A domain declares its own stream
+//
+// A [Domain] declares its stream ([Domain.Stream]) beside its tables and its
+// gates, and a node runs exactly that stream at the byte ceiling its own Tier A
+// sized — held to the declaration in everything else
+// ([StreamSpec.Instantiates]). Every piece of per-stream machinery here is the
+// domain's log's: a runner, a publisher, a reader and a read index each take
+// its [StreamSpec]; the checkpoint, the generation, the anchors and the stream
+// identity are keyed by the stream's name; a position row, a floor and a
+// manifest name the log by the domain's; and a barrier proves where that one
+// log ends, single-flighted per node per log ([ReadIndex]).
+//
+// # Who may write a log: every writer is counted by construction
+//
+// The floor theorem above rests on a premise none of its three clauses states:
+// EVERY WRITER IS COUNTED — the trim never removes a record that a node which
+// may still decide a write has not applied. It holds by construction, not by a
+// gate a write passes:
+//
+//   - A publisher exists only on a node with the `data` role. Such a node holds
+//     the replicated estate and runs every log into it; a node without `data`
+//     holds no estate and builds no publisher, so it has no write to decide —
+//     its tools reach the estate through a data node that does.
+//   - Every live data node is in every log's counted set ([CountedSet]): by
+//     its presence lease from boot, at position zero until its first heartbeat
+//     reports one, and by its positions row after that, which never expires —
+//     until an eviction's tombstone on that log is older than the fence
+//     window. So a node that can decide a write is a node the trim is already
+//     waiting for, from before its first decision.
+//
+// The one way out of the set while still running is an eviction, and an
+// evicted node's records are what clause (iii) drops on every node, whatever it
+// manages to publish. So nothing a write asks has to say whether this node may
+// write; what refuses a node that should not decide is its own state — an
+// eviction (`evicted`), a stream it is not on (`wrong_stream`), a floor it is
+// below (`below_floor`) — each a fence of the write authority above.
+//
+// # Which log a coordination record is about
+//
+// ONE RULE, for every record the fleet shares about a log — a node's row in
+// the positions register, a published trim floor, a trim hold, a backup point,
+// a capacity operation and its lease: a record names its log by one of the two
+// names the log has, and each record keeps the one it has always had:
+//
+//   - the log's STREAM NAME — what a hold, a backup point and a capacity
+//     operation are keyed by, since each is a statement about one stream's
+//     number space;
+//   - the log's KEY, which is its domain's name — what the positions
+//     register's rows and the published floors are keyed by, since the key is
+//     what an operator reads and a row describes every log a node runs at
+//     once.
+//
+// An EVICTION is not a coordination record at all, and needs no such name: it
+// is a record on the very log it gates, applied into that log's rows in the
+// replicated estate, so it is about that log by construction — the same way a
+// checkpoint, an anchor and a generation are.
+//
 // # The alarm table borrows every threshold it fires at
 //
 // It is in this package rather than beside any one subsystem because an alarm
 // is the framework's answer to "is this node doing its job", and everything
 // above it asks the same question. The rule is ADR-0015 and alarms.go is where
 // it is carried out: an alarm never invents a number, it fires at the one some
-// OTHER decision already made — the grace that sheds a node, the grace that
-// moves its seats, the budget a caller was promised — and ONE evaluation feeds
-// every surface, so a gauge, a log line and a screen cannot disagree about
-// whether something is wrong.
+// OTHER decision already made — the grace that takes a copy out of service,
+// the grace that stops a node serving a copy it cannot decode, the budget a
+// caller was promised — and ONE evaluation feeds every surface, so a gauge, a
+// log line and a screen cannot disagree about whether something is wrong.
 package statelog

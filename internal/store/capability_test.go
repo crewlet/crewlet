@@ -71,7 +71,7 @@ var capabilityMatrix = struct {
 func TestCapabilityMatrix(t *testing.T) {
 	t.Parallel()
 	want := capabilityMatrix
-	db, err := store.Open(t.Context(),
+	db, err := store.OpenNode(t.Context(),
 		filepath.Join(t.TempDir(), "caps.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -301,7 +301,7 @@ func exerciseMatch(t *testing.T, db *store.DB, table, match string) {
 // at the call site at all.
 func TestPartialIndexConflictTarget(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(),
+	db, err := store.OpenNode(t.Context(),
 		filepath.Join(t.TempDir(), "arb.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -346,7 +346,7 @@ func TestPartialIndexConflictTarget(t *testing.T) {
 // for; the recall tests then assert BEHAVIOUR and stay readable.
 func TestVectorDistanceSemanticsRecallDependsOn(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(),
+	db, err := store.OpenNode(t.Context(),
 		filepath.Join(t.TempDir(), "sem.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -454,7 +454,7 @@ func packRaw(v []float32) []byte {
 // EVERY ESTATE REPORTS THE PROBED LIMIT, however it was opened.
 //
 // The replicated estate used to report a zero MaxVariables on its own handle
-// until [Open] copied the node's probe onto it — after openEstate had already
+// until the node's open copied its probe onto it — after openEstate had already
 // written its `store_opened` line — and a standalone
 // [store.OpenEstate](EstateReplicated) handle never got one at all. That was
 // invisible for as long as nothing read the field. [store.InsertRows] reads it
@@ -465,10 +465,7 @@ func TestEveryEstateReportsTheProbedVariableLimit(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 
-	node, err := store.Open(ctx, filepath.Join(t.TempDir(), "caps.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open a node: %v", err)
-	}
+	node, replicated := openReplicated(t, filepath.Join(t.TempDir(), "caps.db"), store.Options{}, 1)
 	defer func() { _ = node.Close() }()
 
 	want := node.Caps().MaxVariables
@@ -476,8 +473,8 @@ func TestEveryEstateReportsTheProbedVariableLimit(t *testing.T) {
 		t.Fatalf("the node estate probed MaxVariables = %d, so this test can "+
 			"prove nothing about the peer", want)
 	}
-	if got := node.Replicated().Caps().MaxVariables; got != want {
-		t.Errorf("the replicated peer reports MaxVariables = %d, want the node's "+
+	if got := replicated.Caps().MaxVariables; got != want {
+		t.Errorf("the replicated estate reports MaxVariables = %d, want the node's "+
 			"probed %d — every applier sizes its multi-row inserts from this, "+
 			"and a zero is one statement per row", got, want)
 	}

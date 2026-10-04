@@ -18,7 +18,7 @@
  * nothing has ever been filed into says so from its own record rather than
  * falling through to a grid reporting that no item matched filters nobody set.
  *
- * # Three lenses, and each is a different question
+ * # Four lenses, and each is a different question
  *
  * ITEMS is the work, which is why it is the default and why it is the same
  * component the company-wide list is — drawn first thing in the page, as the
@@ -29,6 +29,7 @@
  * owns it, its target, how far along it is, its vocabulary, its tags and the
  * findings on its own record — which a board can say none of. HISTORY is what
  * has happened, ordered by the log rather than by anything the rows sort on.
+ * FILES is what the work produced and keeps beside it.
  *
  * A LENS IS A SECTION, so each pushes history: a reader who walked Items →
  * About → History and pressed Back three times walks out through them.
@@ -94,12 +95,13 @@ import { describeChange, foldChartReapplies, reapplySentence } from "~/lib/work.
 import { filed, ProjectCensus } from "./census.tsx";
 import { ItemsView } from "./ItemsView.tsx";
 import { HistoryView } from "./History.tsx";
+import { ProjectFiles } from "./Files.tsx";
 import { FEED_PAGE } from "./feed.tsx";
 import { statusDot } from "./shapes/group.tsx";
 import type { WorkGroup, WorkProjectDetail } from "~/protocol/index.ts";
 
 /** The lenses, in the order the strip draws them; the first is the default. */
-const LENSES = ["items", "about", "history"] as const;
+const LENSES = ["items", "about", "history", "files"] as const;
 
 /**
  * The region the lenses control. The row is on the page bar and the panel is
@@ -192,6 +194,9 @@ export function Project({ projectKey }: { projectKey: string }) {
               },
               { value: "about", label: "About" },
               { value: "history", label: "History" },
+              // FILES IS A COLLECTION, but a paged one, so it takes no count
+              // for History's reason.
+              { value: "files", label: "Files" },
             ]}
           />
         </PageLenses>
@@ -237,6 +242,7 @@ export function Project({ projectKey }: { projectKey: string }) {
               ))}
             {lens === "about" && <ProjectAbout detail={detail} chrome={chrome} />}
             {lens === "history" && <HistoryView container={`project:${projectKey}`} embedded />}
+            {lens === "files" && <ProjectFiles project={projectKey} />}
           </TabPanel>
         )}
       </QueryState>

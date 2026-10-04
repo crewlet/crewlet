@@ -17,7 +17,7 @@ import (
 // exactly once.
 func TestTheFollowsHandoffSourceReadsAndDrainsRealRows(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

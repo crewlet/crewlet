@@ -1,5 +1,5 @@
 /**
- * One project: the facts a container has that its rows do not, and the three
+ * One project: the facts a container has that its rows do not, and the four
  * lenses over them.
  *
  * The screen used to open with the same four-number strip and stacked census
@@ -209,17 +209,17 @@ test("a project whose work was all removed still opens its trash", async () => {
 
 // THE LENS SAYS HOW MUCH IS BEHIND IT, from the count the header already
 // holds — waiting and started together, 9 + 3. About is a description
-// rather than a collection and History is paged, so neither takes one — a
-// count of a loaded page would read as a count of the lens.
-test("the Items lens carries the unfinished count, and the other two carry none", async () => {
+// rather than a collection and History and Files are paged, so none of them
+// takes one — a count of a loaded page would read as a count of the lens.
+test("the Items lens carries the unfinished count, and the other three carry none", async () => {
   serving({ work_project: detail(), work_items: { items: [], groups: [], complete: true } });
   mount();
   // THE LENS ROW BY NAME. The Items lens draws the list's own view strip
   // whether or not anybody has saved a view, so "every tab on the screen" is
-  // more than these three and is not what this case is about.
+  // more than these four and is not what this case is about.
   await waitFor(() => expect(screen.getByRole("tablist", { name: "Lens" })).toBeTruthy());
   const tabs = within(screen.getByRole("tablist", { name: "Lens" })).getAllByRole("tab");
-  expect(tabs.length).toBe(3);
+  expect(tabs.length).toBe(4);
   // SAID AS WHAT IT COUNTS — open tasks — to a pointer and a screen reader,
   // because the bar a row below counts its own scope ("… in Recent").
   expect(tabs[0]?.textContent).toMatch(/^Items12/);
@@ -227,6 +227,7 @@ test("the Items lens carries the unfinished count, and the other two carry none"
   expect(within(tabs[0]!).getByTitle("12 open")).toBeTruthy();
   expect(tabs[1]?.textContent).toBe("About");
   expect(tabs[2]?.textContent).toBe("History");
+  expect(tabs[3]?.textContent).toBe("Files");
 });
 
 // A PROJECT'S CENSUS IS A SHAPE AS WELL AS THREE NUMBERS — its work split
@@ -285,7 +286,7 @@ test("the work is the lens a project opens on, scoped to this project", async ()
     within(lenses)
       .getAllByRole("tab")
       .map((el) => el.textContent),
-  ).toEqual(["Items1212 open", "About", "History"]);
+  ).toEqual(["Items1212 open", "About", "History", "Files"]);
   expect(screen.getByRole("button", { name: "All in this project", pressed: true })).toBeTruthy();
 });
 

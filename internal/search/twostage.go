@@ -113,8 +113,10 @@ func FloorAt(n int) float64 {
 	return BinaryRecallFloor[sizes[len(sizes)-1]]
 }
 
-// Stage1 is the candidate pool: the depth nearest codes by Hamming distance,
-// in ascending distance with the index breaking ties.
+// CandidatePool is the full scan's first stage as a pure function: the depth
+// nearest codes by Hamming distance, in ascending distance with the index
+// breaking ties. [IVFCandidates] is the same selection over the lists an index
+// probes, and [Stage1] is either of them in SQL.
 //
 // THE TIE BREAK IS THE INDEX, deliberately and to match the SQL, which orders
 // by `vector_distance_cos(bits, :qb), source_id`. Hamming distance over a
@@ -122,7 +124,7 @@ func FloorAt(n int) float64 {
 // size, so ties are the common case rather than the corner: without a
 // declared tie break the candidate pool would depend on the scan's own row
 // order and two nodes would rerank different pools.
-func Stage1(codes [][]uint64, query []uint64, depth int) []int {
+func CandidatePool(codes [][]uint64, query []uint64, depth int) []int {
 	if depth <= 0 || len(codes) == 0 {
 		return nil
 	}
@@ -163,7 +165,7 @@ func Rerank(candidates []int, similarity func(int) float64, depth int) []int {
 func TwoStage(codes [][]uint64, query []uint64, similarity func(int) float64,
 	stage1Depth, returnDepth int) []int {
 
-	return Rerank(Stage1(codes, query, stage1Depth), similarity, returnDepth)
+	return Rerank(CandidatePool(codes, query, stage1Depth), similarity, returnDepth)
 }
 
 // Exact is the ground truth: the top depth by the same similarity, over the

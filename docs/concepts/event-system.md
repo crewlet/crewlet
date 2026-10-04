@@ -36,6 +36,10 @@ crewlet.agent.{handle}.control       # Sandbox starts and completions. Separate,
                                      #   completion riding the inbox would be
                                      #   parked behind the very busy state it
                                      #   exists to clear
+crewlet.agent.{handle}.reflect       # A finished turn, put in front of post-turn
+                                     #   reflection on the node HOLDING the
+                                     #   seat, whose store is the one its
+                                     #   memory is written to and carried from
 
 # Fleet-wide work queues — ONE consumer group each, so whichever node wins a
 # delivery is the node that has to route it
@@ -48,9 +52,8 @@ crewlet.notifications.inbound        # Inbound webhooks from external systems.
                                      #   call on the node already running it
 crewlet.events.{type}                # What the engine records about itself:
                                      #   the event store's listener, the live
-                                     #   projection and reflection's
-                                     #   turn_completed group read it. Nothing
-                                     #   routes work from here (see Routing)
+                                     #   projection read it. Nothing routes
+                                     #   work from here (see Routing)
 
 # Control plane. Best-effort nudges: losing one costs a poll interval, never a
 # revision, because the authoritative path polls the activation pointer
@@ -169,6 +172,8 @@ flowchart TD
 **Conversation identities** (`notify.Prompt.ConversationIdentity`, namespaced the same way) are the SECOND key, and the one that outlives the drain. Coalescing merges the messages of one partition that arrive *together*; [conversation sessions](conversation-sessions.md) carry what the seat did about them into that conversation's **next** turn, and the episode row and the turn's telemetry are stamped with the identity so history can be asked for by thread rather than only by agent and time. The `event:{uuid}` fallback above serves both keys, which is exactly why those consumers store nothing for a trigger without a real conversation: no later message could ever reproduce that key to read the row back.
 
 For every source but chat the two are the same string — an issue key, a page id, a monitor id and a task key are each one object that is both the merge unit and the durable thread. **Chat is where they differ, and only for a direct message**: a DM is one conversation however it is threaded, so its identity is the bare channel (`slack:D1`) while a reply in a thread still partitions on that thread (`slack:D1:1718.001`). In a shared channel a thread IS the conversation and the two coincide again. The rule that decides it is that **a partition key is always the identity or a finer cut of it**, so every event in one partition carries one identity: a turn is a partition and its ledger entry is written once, and constituents that disagreed about the identity would file it under whichever event sorted first. Before the two were separated, one value answered both questions — so a DM's first turn was filed under the channel, its thread reply looked its history up under the thread, and a seat re-read its own 1:1 line as a first turn every time.
+
+A notification the engine's own tracker or knowledge base raised also carries `trigger_position` — where on its log the change that caused it was committed, as a position token (`<stream>@<generation>:<sequence>`). The turn it wakes hands that position to its node's read-your-writes floors before its first read, so whatever the seat then reads from that domain — a tracker list or item, a page or a listing of pages — on whichever node answers it, is no older than the change it was woken for. The ranked searches are the exception: they read an index each node builds behind its own rows, so they carry no floor and may not find a change made a moment ago (see [Read-your-trigger](../guides/consistency.md#read-your-trigger-is-a-floor-not-the-mechanism)). A vendor's notification carries none.
 
 On the wire of an inbound notification the partition key rides the payload field `conversation_key` and the identity rides `conversation_identity`. The first keeps its older name deliberately: a rolling upgrade has two builds partitioning each other's wakes by it, and an event from a build that predates the split carries only that field — which readers of the identity fall back to. That trade is local to the notification payload, and it is the opposite of the one the engine's own events make: everywhere else `conversation_key` is the **identity**, because that is what a turn's events are tagged with in the event store, and the one event whose subject is a batch spells it `partition_key` instead (below).
 

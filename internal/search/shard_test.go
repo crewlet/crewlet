@@ -17,7 +17,7 @@ import (
 func TestASearchScansOnlyItsAssignedBuckets(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, db.Replicated().Reader())
 
 	// One document per bucket, each carrying the same word, so a search
 	// over an assignment returns exactly the documents in it.
@@ -167,7 +167,7 @@ func TestSearchShardsAreEvenAndStable(t *testing.T) {
 func TestOneReplicaScansEverythingExactlyAsToday(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, db.Replicated().Reader())
 	for i := range 40 {
 		page(t, db, fmt.Sprintf("p.%02d", i), "ENG", fmt.Sprintf("Doc %02d", i),
 			"the migration plan is here", 1)
@@ -210,7 +210,7 @@ func TestOneReplicaScansEverythingExactlyAsToday(t *testing.T) {
 func TestBothEstatesAgreeOnADocumentsBucket(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, db.Replicated().Reader())
 	const id = "p.agree"
 	page(t, db, id, "ENG", "Agreement", "the migration plan is here", 1)
 	indexAll(t, x)
@@ -248,7 +248,7 @@ func TestTheCandidatePoolIsNarrowedByTheAssignment(t *testing.T) {
 		var hits []search.SemanticHit
 		if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 			var err error
-			hits, err = search.Semantic(t.Context(), tx, search.SemanticQuery{
+			hits, _, err = search.Semantic(t.Context(), tx, search.SemanticQuery{
 				Vector: query, Model: model, Dim: dim,
 				Limit: 500, Candidates: 500, Shards: a,
 			})
@@ -358,7 +358,7 @@ func TestTheVectorsTwoRowsCarryOneBucket(t *testing.T) {
 func TestALexicalQueryIsNotADegradedOne(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, db.Replicated().Reader())
 	page(t, db, "p.1", "ENG", "Doc", "the migration plan is here", 1)
 	indexAll(t, x)
 	scanner := search.NodeScanner{Index: x}
@@ -414,7 +414,7 @@ func TestALexicalQueryIsNotADegradedOne(t *testing.T) {
 func TestTheLexicalStatisticsAreGlobalWhateverWasScanned(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, db.Replicated().Reader())
 
 	// A CORPUS WITH A LOPSIDED TERM: "retention" is in almost every
 	// document, "migration" in a handful. Split by bucket, a slice's own

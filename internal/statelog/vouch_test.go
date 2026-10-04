@@ -308,9 +308,9 @@ const shortWindow = 200 * time.Millisecond
 type shortWindowDomain struct{ probeDomain }
 
 func (shortWindowDomain) Stream() statelog.StreamSpec {
-	spec := probeDomain{}.Stream()
-	spec.Duplicates = shortWindow
-	return spec
+	shape := probeDomain{}.Stream()
+	shape.Duplicates = shortWindow
+	return shape
 }
 
 // A REFUSAL IS NOT RETURNED FOR AN OPERATION THE LEDGER CANNOT VOUCH FOR —

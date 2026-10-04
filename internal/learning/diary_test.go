@@ -15,9 +15,9 @@ import (
 
 func diary(t *testing.T) *learning.Diary {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "d.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "d.db"), store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return learning.NewDiary(db)
@@ -297,9 +297,9 @@ func TestMetadataAlwaysHoldsAJSONObject(t *testing.T) {
 	t.Parallel()
 	// The column is NOT NULL with a '{}' default, and a nil map marshals to
 	// the four characters "null", which then fails every JSON query.
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "m.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "m.db"), store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	d := learning.NewDiary(db)

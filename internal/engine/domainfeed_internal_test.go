@@ -23,7 +23,7 @@ func TestEveryRegisteredDomainsFeedIsTheOneItDeclares(t *testing.T) {
 	for _, domain := range registeredDomains() {
 		t.Run(domain.Name(), func(t *testing.T) {
 			t.Parallel()
-			translator, _, err := e.feedFor(&runningDomain{domain: domain})
+			translator, _, err := e.feedFor(&runningLog{domain: domain})
 			if err != nil {
 				t.Fatalf("feedFor: %v", err)
 			}
@@ -66,19 +66,19 @@ func TestAFeedThatDisagreesWithItsDeclarationIsRefused(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
 	for name, tc := range map[string]struct {
-		running *runningDomain
+		running *runningLog
 		names   string
 	}{
 		"a feed running under another domain's group": {
-			running: &runningDomain{domain: pagesOnTrackersGroup{}},
+			running: &runningLog{domain: pagesOnTrackersGroup{}},
 			names:   "its feed runs as",
 		},
 		"a feed running with no declaration": {
-			running: &runningDomain{domain: pagesWithoutFeed{}},
+			running: &runningLog{domain: pagesWithoutFeed{}},
 			names:   "declares no wake feed",
 		},
 		"a declaration no feed runs": {
-			running: &runningDomain{domain: vectorsWithFeed{}},
+			running: &runningLog{domain: vectorsWithFeed{}},
 			names:   "runs none",
 		},
 	} {

@@ -744,14 +744,20 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 		}
 		// A REFUSAL NAMES WHAT TO DO AS ACTIONS, which this command renders
 		// as the flags it has: the node's own sentence names no surface's
-		// controls, because the dashboard renders the same refusal.
+		// controls, because the dashboard renders the same refusal. It is
+		// the node's JUDGEMENT of the gesture, a 503 included
+		// ([nodeRefusal.asJudgement]), and what an action means can turn on
+		// which refusal it came with ([gateAdviceContext.refusal]).
 		var refused *nodeRefusal
 		if errors.As(err, &refused) {
+			refused = refused.asJudgement()
 			advice := gateAdvice(refused.Actions, gateAdviceContext{
-				again: again, forced: forced, readmit: !evict, node: node})
+				again: again, forced: forced, readmit: !evict, node: node,
+				refusal: refused.Code})
 			if len(advice) > 0 {
-				return fmt.Errorf("%w\n  %s", err, strings.Join(advice, "\n  "))
+				return fmt.Errorf("%w\n  %s", refused, strings.Join(advice, "\n  "))
 			}
+			return refused
 		}
 		return err
 	}
@@ -918,6 +924,12 @@ type gateAdviceContext struct {
 	node    string
 	stream  string
 
+	// refusal is the code of the refusal the actions came with — empty
+	// for a log's line under a 200 — because one action names a
+	// different thing to wait for under each refusal that sends it
+	// ([waitAdvice]).
+	refusal string
+
 	// perLog is a line under one log of a 200, where the same gesture
 	// again is said once below for every log it finishes rather than on
 	// each.
@@ -960,32 +972,53 @@ func gateAdvice(actions []string, c gateAdviceContext) []string {
 			out = append(out, "crewlet retention set-capacity "+c.stream+
 				" <bytes> -confirm <bytes>, then run this again with "+c.again)
 		case statelog.GateWait:
-			if c.readmit {
-				out = append(out, "its SEQ in `crewlet retention status`, at the "+
-					"domain's own GEN, says when it has caught up, and `crewlet "+
-					"retention snapshots` whether a peer can donate one; then run this "+
-					"again")
-			} else {
-				out = append(out, "its LIVE column in `crewlet retention status` reads "+
-					"no once the lease has lapsed; then run this again")
+			if line := waitAdvice(c.refusal); line != "" {
+				out = append(out, line)
 			}
 		}
 	}
 	return out
 }
 
+// waitAdvice is where to watch what a refusal's `wait` waits on — keyed on the
+// REFUSAL, never on the verb, because three refusals send it and each waits on
+// something else: an eviction's on the node's lease lapsing, a readmission's on
+// the node catching up, and either gesture's `not_publishing` on the fleet
+// leaving a capacity window. Keyed on the verb, a gesture refused
+// `not_publishing` was told to watch a lease or a position that had nothing to
+// do with it.
+//
+// Nothing for a refusal this build does not know: the node's own hint above
+// the line still says what it waits on, and a guess here would contradict it.
+func waitAdvice(refusal string) string {
+	switch refusal {
+	case "eviction_refused":
+		return "its LIVE column in `crewlet retention status` reads no once the " +
+			"lease has lapsed; then run this again"
+	case "readmission_refused":
+		return "its SEQ in `crewlet retention status`, at the domain's own GEN, " +
+			"says when it has caught up, and `crewlet retention snapshots` whether " +
+			"a peer can donate one; then run this again"
+	case "not_publishing":
+		return "`crewlet retention status` leads with the capacity window while it " +
+			"is open; once the fleet has been restarted into normal mode, run this " +
+			"again"
+	}
+	return ""
+}
+
 // gateRequestTimeout is how long `retention evict` and `readmit` wait for the
 // node's answer.
 //
-// SEVENTY-FIVE SECONDS: the node bounds a gesture at a minute from its first
-// record to its last answer (engine.GateBudget), and the judgement before it
-// and the round trip around it are a coordination read and a request. Waiting
-// past the node's own bound is what makes its answer — every log's outcome and
-// what to do about the ones it could not finish — reach the operator rather
-// than a client timeout that knows none of it. The ten seconds every other
-// verb waits was two of the five-second resolutions a gesture legitimately
-// makes, back to back.
-const gateRequestTimeout = 75 * time.Second
+// ONE MINUTE: the node answers one gesture within engine.GateAnswerBudget —
+// fifty seconds: twenty to judge it and thirty to write every log — and the
+// ten beyond it are the request's round trip. Waiting past the node's own
+// bound is what makes its answer — every log's outcome and what to do about
+// the ones it could not finish — reach the operator rather than a client
+// timeout that knows none of it. The ten seconds every other verb waits was
+// two of the five-second resolutions a gesture legitimately makes, back to
+// back.
+const gateRequestTimeout = time.Minute
 
 // evictionFenceWindow is how long an evicted node stays counted, as this
 // command says it.

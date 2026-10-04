@@ -30,27 +30,29 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 	t.Parallel()
 
 	runner, err := NewRunner(RunnerDeps{
-		Domain: loggerProbe{}, Applier: struct{ Applier }{},
+		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Applier: struct{ Applier }{},
 		Fetch: struct{ Fetcher }{}, Log: struct{ CheckpointLog }{},
-		Node: struct{ NodeEstate }{}, DB: struct{ Estate }{},
+		Node: nodeProbe{}, DB: struct{ Estate }{},
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
 	publisher, err := NewPublisher(Deps{
-		Domain: loggerProbe{}, Log: struct{ Appender }{}, Rows: struct{ Rows }{},
+		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Log: struct{ Appender }{},
+		Records: struct{ LogReader }{}, Rows: struct{ Rows }{},
 		Fence: struct{ Fence }{}, Gates: struct{ Gates }{},
-		Waiter: struct{ Waiter }{}, Identity: struct{ Identity }{},
+		Waiter: struct{ Waiter }{}, Voids: struct{ Voids }{}, Identity: struct{ Identity }{},
 		NodeID: "node-a", Generation: func() uint32 { return 1 },
 	})
 	if err != nil {
 		t.Fatalf("NewPublisher: %v", err)
 	}
 	snapshotter, err := NewSnapshotter(SnapshotDeps{
-		Domains: []Registered{{Domain: loggerProbe{}}}, DB: &store.DB{},
-		Dir: t.TempDir(), NodeID: "node-a",
-		Counted:  func(context.Context) (int, error) { return 2, nil },
-		Interval: time.Hour,
+		Domains: []Registered{{Domain: loggerProbe{}, Spec: loggerProbeSpec()}},
+		File:    (&store.DB{}).Replicated(),
+		Dir:     t.TempDir(), NodeID: "node-a",
+		Recipients: func(context.Context) (int, error) { return 1, nil },
+		Interval:   time.Hour,
 	})
 	if err != nil {
 		t.Fatalf("NewSnapshotter: %v", err)
@@ -65,7 +67,7 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 		t.Fatalf("NewDonor: %v", err)
 	}
 	adopter, err := NewAdopter(AdoptDeps{
-		Domains:  map[string]Registered{loggerProbe{}.Name(): {Domain: loggerProbe{}}},
+		Domains:  map[string]Registered{loggerProbe{}.Name(): {Domain: loggerProbe{}, Spec: loggerProbeSpec()}},
 		LivePath: "replicated.db", NodeID: "node-a", Conn: &nats.Conn{},
 		Need: func(context.Context) (OfferRequest, error) { return OfferRequest{}, nil },
 		Hold: func(context.Context, map[string]uint64) (func(), error) {
@@ -123,6 +125,9 @@ func (loggerProbe) Stream() StreamSpec {
 	}
 }
 
+// loggerProbeSpec is the probe's stream, as a runner is handed it.
+func loggerProbeSpec() StreamSpec { return loggerProbe{}.Stream() }
+
 func (loggerProbe) RecordVersion() int                { return 1 }
 func (loggerProbe) Envelope([]byte) (Envelope, error) { return Envelope{}, nil }
 func (loggerProbe) InstallsGate(Envelope) bool        { return false }
@@ -134,3 +139,10 @@ func (loggerProbe) OpsTable() string                  { return "" }
 func (loggerProbe) ReadinessInput() bool              { return false }
 func (loggerProbe) ClaimsIdentity() bool              { return false }
 func (loggerProbe) FeedGroup() string                 { return "" }
+
+// nodeProbe is a node estate that is nothing but its kind: a runner checks it
+// was handed the node's own file, and the tests that use this never reach a
+// row of it.
+type nodeProbe struct{ NodeEstate }
+
+func (nodeProbe) Estate() store.Estate { return store.EstateNode }

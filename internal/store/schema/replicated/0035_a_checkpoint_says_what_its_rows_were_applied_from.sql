@@ -1,0 +1,33 @@
+-- A checkpoint says the highest record version its rows were applied from.
+--
+-- # What was missing
+--
+-- A snapshot's manifest carried, per log, the record version its DONOR'S BUILD
+-- reads, and a joiner refused any artefact whose donor read a version above its
+-- own: "its checkpoint sits above records this node cannot read". That is true
+-- only if a record of that version was ever applied into the rows. A build that
+-- reads a new version publishes nothing at it until something needs it, so for
+-- the whole of a rolling upgrade — and for good, where the new kind is one the
+-- fleet never writes — every upgraded donor was refused by every node still on
+-- the older build, over records that did not exist.
+--
+-- # What a value says
+--
+-- `applied_version` is the highest record version of any record this file's
+-- rows were APPLIED from on the stream — by the live loop, or by a build that
+-- reprocessed what an earlier one retained — raised in the transaction that
+-- applied it, beside the checkpoint that transaction commits. A record a gate
+-- dropped or that was retained wrote no row and does not count. It travels
+-- inside every snapshot and backup of the file, which is what lets a manifest
+-- state what the rows hold rather than what the donor's build could read.
+--
+-- # Why an existing row is NULL, and stays NULL
+--
+-- Nothing recorded what an existing row's rows were applied from, and no read
+-- of the file can recover it: the records are on the log, and may be trimmed.
+-- NULL is that unknown, and it is STICKY — a later record cannot make it known,
+-- because a maximum over some of the records is not a bound on all of them. A
+-- manifest reads NULL as the donor build's own version, the bound the claim
+-- always used, so a file that predates this column is judged exactly as before
+-- for the life of the file. A row created after it starts at zero.
+ALTER TABLE statelog_cursor ADD COLUMN applied_version INTEGER;

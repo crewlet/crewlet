@@ -134,7 +134,7 @@ func (s BudgetSource) Valid() bool { return slices.Contains(BudgetSources, s) }
 // stated (an embedded member whose account an operator limited), the one with
 // less room is the one a reservation meets first.
 func (q *Queue) StreamBudget(ctx context.Context) (StorageBudget, error) {
-	return q.budget(ctx, q.embedded != nil)
+	return q.budget(ctx, q.embedded.holdsStreams())
 }
 
 // GrowthBudget is how far a running stream's ceiling may be raised before the
@@ -152,7 +152,7 @@ func (q *Queue) StreamBudget(ctx context.Context) (StorageBudget, error) {
 // account's limit, which every server shares, is held against a raise. A
 // number this node cannot read exactly would refuse raises the broker grants.
 func (q *Queue) GrowthBudget(ctx context.Context) (StorageBudget, error) {
-	return q.budget(ctx, q.embedded != nil && !q.embedded.clustered)
+	return q.budget(ctx, q.embedded.holdsStreams() && !q.embedded.clustered)
 }
 
 // budget is the account's stated limit and, when withServer says the embedded

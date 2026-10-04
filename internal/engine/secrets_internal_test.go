@@ -33,9 +33,9 @@ func testKeyring(t *testing.T) (secrets.Keyring, secrets.Cipher) {
 
 func engineWithSecrets(t *testing.T) (*Engine, *store.SecretValues) {
 	t.Helper()
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
+	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	_, cipher := testKeyring(t)
@@ -86,9 +86,9 @@ func TestTheEnvironmentStillAnswersWhatTheStoreDoesNot(t *testing.T) {
 // that is the pre-store behaviour and a supported deployment, not a
 // degraded one.
 func TestANodeWithNoKeyringUsesTheEnvironmentAlone(t *testing.T) {
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
+	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	e := &Engine{backends: &Backends{Store: db}}
@@ -179,9 +179,9 @@ func TestOnlyARealStoreProducesASnapshot(t *testing.T) {
 		t.Error("a node with no store reported that it loaded a snapshot")
 	}
 
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
+	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	if (&Engine{backends: &Backends{Store: db}}).refreshSecrets(t.Context()) {
@@ -199,9 +199,9 @@ func TestOnlyARealStoreProducesASnapshot(t *testing.T) {
 // has them: its own table and the fleet's shared bucket.
 func engineWithFleetSecrets(t *testing.T) (*Engine, *store.SecretValues, *fleetsecrets.Store) {
 	t.Helper()
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
+	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	_, cipher := testKeyring(t)

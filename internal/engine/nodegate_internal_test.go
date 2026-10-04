@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -98,19 +99,19 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 		point := coord.BackupPoint{Owner: self, At: at, Verified: true,
 			Streams: map[string]coord.Position{}}
 		for _, running := range identity {
-			stream := running.domain.Stream().Name
+			stream := running.spec.Name
 			point.Streams[stream] = coord.Position{Stream: stream,
 				Generation: running.runner.Committed().Generation,
 				Seq:        targets[running.domain.Name()]}
 		}
 		shared.backups = []coord.BackupPoint{point}
 		for _, running := range identity {
-			if err := r.domain(t.Context(), running.domain.Name(), shared); err != nil {
+			if err := r.domain(t.Context(), running, shared); err != nil {
 				t.Fatalf("the tick on %s: %v", running.domain.Name(), err)
 			}
 		}
 	}
-	counted := func(running *runningDomain, at time.Time) bool {
+	counted := func(running *runningLog, at time.Time) bool {
 		t.Helper()
 		gen := running.runner.Committed().Generation
 		tombs, read := r.tombstones(t.Context(), running, gen)
@@ -226,7 +227,7 @@ func TestAReadmissionWritesTheInverseCommitToEveryLog(t *testing.T) {
 		if d.Domain != name || d.Outcome != statelog.OutcomeApplied {
 			t.Fatalf("the readmission's answer for %s is %+v, want applied", name, d)
 		}
-		rows, err := running.domain.(evictionLister).Evictions(t.Context(), back.Store)
+		rows, err := running.domain.(evictionLister).Evictions(t.Context(), back.Store.Replicated().Reader())
 		if err != nil {
 			t.Fatalf("read %s's evictions: %v", name, err)
 		}
@@ -251,7 +252,7 @@ func TestAnEvictionOfALiveNodeIsRefusedBeforeAnyLogIsWritten(t *testing.T) {
 	gate := e.native.Load().gate
 	identity := identityLogs(t, s)
 	const live = "node-live"
-	if _, err := back.Coord.TryAcquire(t.Context(), coord.NodeResource(live),
+	if _, _, err := back.Coord.TryAcquire(t.Context(), coord.NodeResource(live),
 		coord.AcquireOptions{Owner: live, TTL: time.Minute}); err != nil {
 		t.Fatalf("hold %s's presence lease: %v", live, err)
 	}
@@ -286,11 +287,11 @@ func TestAnEvictionOfALiveNodeIsRefusedBeforeAnyLogIsWritten(t *testing.T) {
 
 // identityLogs is every identity-claiming domain this node runs, in the
 // register's own order.
-func identityLogs(t *testing.T, s *stateLog) []*runningDomain {
+func identityLogs(t *testing.T, s *stateLog) []*runningLog {
 	t.Helper()
-	var out []*runningDomain
-	for _, name := range s.order {
-		if running := s.domains[name]; running.domain.ClaimsIdentity() {
+	var out []*runningLog
+	for _, running := range s.running() {
+		if running.domain.ClaimsIdentity() {
 			out = append(out, running)
 		}
 	}
@@ -339,18 +340,52 @@ func TestTheReportShowsANodeEvictedOnlyOnceEveryLogHoldsIt(t *testing.T) {
 	tomb := func(node string, offset time.Duration) statelog.Tombstone {
 		return statelog.Tombstone{NodeID: node, At: at.Add(offset), By: "operator"}
 	}
+	// THE LATEST IS TAKEN WHOLE: the eviction that reached the last log is
+	// the one that made it the fleet's, so it names who ran that one.
+	latest := tomb("both", 30*time.Second)
+	latest.By = "ops-2"
 	got := fleetTombstones([][]statelog.Tombstone{
 		{tomb("both", 0), tomb("tracker-only", 0), tomb("both", 0)},
-		{tomb("both", 30*time.Second), tomb("pages-only", 0)},
+		{latest, tomb("pages-only", 0)},
 	})
 	if len(got) != 1 || got[0].NodeID != "both" {
 		t.Fatalf("tombstones = %+v, want only the node every log holds", got)
 	}
-	if !got[0].At.Equal(at.Add(30 * time.Second)) {
-		t.Fatalf("the tombstone is dated %s, want the latest of the logs' %s",
-			got[0].At, at.Add(30*time.Second))
+	if !got[0].At.Equal(at.Add(30*time.Second)) || got[0].By != "ops-2" {
+		t.Fatalf("the tombstone is %+v, want the latest of the logs' — the "+
+			"eviction at %s, by ops-2", got[0], at.Add(30*time.Second))
 	}
 	if got := fleetTombstones(nil); got != nil {
 		t.Fatalf("no log at all produced tombstones %+v", got)
+	}
+}
+
+// THE GATE'S BUDGETS COVER WHAT EACH PHASE WAITS ON.
+//
+// The judgement reads coordination — which one complete election of the
+// coordination store's group may stall once, for jsprovision's clustered ask
+// term — and then this node's own copy. Each log is one append through this
+// node's own write authority, whose two waits are each a resolve budget, behind
+// at most one election of the log's stream group. A budget at or under what
+// its phase waits on cuts short a gesture that would have finished — for the
+// logs, one left half-written — and the answer budget, which the command line
+// and the dashboard wait past, is the two phases end to end.
+func TestTheGateBudgetsCoverWhatEachPhaseWaitsOn(t *testing.T) {
+	t.Parallel()
+	election := jsprovision.AskTerm(true)
+	if GateJudgeBudget <= election {
+		t.Errorf("GateJudgeBudget is %v, which one election's stall (%v) spends before "+
+			"the judgement's first read answers", GateJudgeBudget, election)
+	}
+	if waits := election + 2*statelog.DefaultResolveBudget; GateLogBudget <= waits {
+		t.Errorf("GateLogBudget is %v, and one log's append behind an election waits %v",
+			GateLogBudget, waits)
+	}
+	if GateBudget != GateLogBudget {
+		t.Errorf("GateBudget is %v, want the logs' own budget %v", GateBudget, GateLogBudget)
+	}
+	if want := GateJudgeBudget + GateLogBudget; GateAnswerBudget != want {
+		t.Errorf("GateAnswerBudget is %v, want the judgement and the logs end to end, %v",
+			GateAnswerBudget, want)
 	}
 }

@@ -98,12 +98,17 @@ func TestAConfiguredEmbedderIsBuiltAtItsDeclaredWidth(t *testing.T) {
 // only part of Backends any of this reads.
 func engineOverStore(t *testing.T, width int) *Engine {
 	t.Helper()
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db",
+	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db",
 		store.Options{EmbeddingDim: width})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
+	// A DATA NODE'S REPLICATED ESTATE, which it opens at boot and every
+	// domain-level reader here reads through.
+	if _, err := db.OpenReplicated(t.Context(), estateLogs()); err != nil {
+		t.Fatalf("open the replicated estate: %v", err)
+	}
 	return &Engine{backends: &Backends{Store: db}}
 }
 

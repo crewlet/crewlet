@@ -34,7 +34,8 @@ import (
 // give.
 const EvictionFenceWindow = 4 * coord.ReconcileInterval
 
-// Tombstone is an eviction as coordination holds it.
+// Tombstone is an operator's eviction of a node from a log, as the counted set
+// and the report read it.
 type Tombstone struct {
 	// NodeID is who was evicted.
 	NodeID string
@@ -85,15 +86,16 @@ type EvictionRow struct {
 	Back       bool
 }
 
-// Presence is a node holding a live lease, whether or not it has reported a
-// position yet.
+// Presence is a node the fleet says is there, whether or not it has reported a
+// position yet: a data node holding a live presence lease, which the eviction
+// gate refuses to evict and every log's counted set counts.
 type Presence struct {
 	NodeID string
 }
 
-// CountedSet is who the trim counts: the positions register's own keys, UNION
-// the live presence leases, MINUS any eviction tombstone older than the fence
-// window.
+// CountedSet is who the trim counts on ONE LOG: the positions register's rows
+// naming the log, UNION every live data node, MINUS any eviction tombstone
+// older than the fence window.
 //
 // # Each of the three does something the others cannot
 //
@@ -101,11 +103,14 @@ type Presence struct {
 // is deliberate, and is why an offline node pins the floor rather than
 // vanishing from it.
 //
-// The presence leases are what catch a node between boot and its first
+// The live data nodes are what catch a node between boot and its first
 // heartbeat — which is exactly a node adopting a snapshot. It counts at
 // position ZERO and blocks every term derived from the set, for at most one
 // heartbeat, and the operator surface renders it as counted with no position
-// yet so the block has a visible cause.
+// yet so the block has a visible cause. DATA nodes, because they are the nodes
+// that apply the log — every one of them applies every log from boot — and a
+// node without `data` applies none: counted at zero, it would pin every log
+// for as long as it ran.
 //
 // The tombstones are what let an operator advance a floor an absent node is
 // pinning, and they take effect only after the window — because a node that
@@ -117,11 +122,11 @@ func CountedSet(now time.Time, reported []NodePosition, live []Presence, tombs [
 	}
 	for _, p := range live {
 		if _, known := byID[p.NodeID]; !known {
-			// A NODE WITH A LIVE LEASE AND NO POSITION YET COUNTS AT
-			// ZERO and blocks. It is a node between boot and its first
-			// heartbeat — which is a node adopting a snapshot — and
-			// treating it as absent would let the trim advance past
-			// the tail it is about to replay.
+			// A LIVE DATA NODE WITH NO POSITION YET COUNTS AT ZERO and
+			// blocks. It is a node between boot and its first report —
+			// which is a node adopting a snapshot — and treating it as
+			// absent would let the trim advance past the tail it is
+			// about to replay.
 			byID[p.NodeID] = NodePosition{NodeID: p.NodeID}
 		}
 	}
@@ -135,6 +140,24 @@ func CountedSet(now time.Time, reported []NodePosition, live []Presence, tombs [
 		out = append(out, n)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
+	return out
+}
+
+// Readers is the record version every node of a counted set reads on its log,
+// zero for one that has not said: the set a writer asks before it publishes a
+// record an older build cannot even defer.
+//
+// THE TRIM'S COUNTED SET, and deliberately the same one. It is every node that
+// applies the log — a node between boot and its first report counts, at zero,
+// because it is about to replay — and a node on an old build that is offline
+// but not evicted applies the log the moment it returns: a record it cannot
+// read would stop it then, so it holds such a writer back exactly as it holds
+// back the trim, and an operator's eviction releases both.
+func Readers(counted []NodePosition) map[string]int {
+	out := make(map[string]int, len(counted))
+	for _, n := range counted {
+		out[n.NodeID] = n.RecordVersion
+	}
 	return out
 }
 
@@ -157,9 +180,10 @@ func (e *EvictionRefusal) Error() string {
 // running. Its position is advancing, so it pins nothing its own progress will
 // not release — and evicting it drops everything it writes above the eviction
 // on every applier, stops its own writes the moment its applier reaches the
-// eviction, and moves its seats. Eviction is the gesture for a node that is NOT
-// coming back, and a live lease is the fleet's own evidence that this one is;
-// the refusal is what stops a mistyped node id taking a healthy machine out.
+// eviction, and takes its copy out of service. Eviction is the gesture for a
+// node that is NOT coming back, and a live lease is the fleet's own evidence
+// that this one is; the refusal is what stops a mistyped node id taking a
+// healthy machine out.
 //
 // It is about safety rather than permission, and an operator can know something
 // the lease does not say — a node wedged in a way that still renews — which is
@@ -180,8 +204,8 @@ func PermitEviction(nodeID string, live []Presence, force bool) error {
 		return &EvictionRefusal{NodeID: nodeID, Detail: "it holds a live presence " +
 			"lease, so it is still reaching coordination and almost certainly " +
 			"running — an eviction drops every record it writes on every node and " +
-			"moves its seats, which is the gesture for a node that is not coming " +
-			"back"}
+			"takes its copy out of service, which is the gesture for a node that " +
+			"is not coming back"}
 	}
 	return nil
 }

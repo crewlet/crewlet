@@ -133,7 +133,7 @@ func TestADependentWithASecondOpenBlockerIsNotTold(t *testing.T) {
 
 func scanUnblocked(t *testing.T, r *roundTrip, since uint64) tracker.UnblockScan {
 	t.Helper()
-	scan, err := tracker.ScanUnblocked(t.Context(), r.db, since, 64)
+	scan, err := tracker.ScanUnblocked(t.Context(), r.db.Reader(), since, 64)
 	if err != nil {
 		t.Fatalf("ScanUnblocked: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestTheUnblockedScanIsIndexServed(t *testing.T) {
 	r := newRoundTrip(t)
 
 	var plan string
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(), `
 			EXPLAIN QUERY PLAN
 			SELECT COALESCE(MAX(log_seq), 0) FROM tracker_history

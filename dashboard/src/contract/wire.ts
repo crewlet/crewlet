@@ -43,6 +43,22 @@ export type PushKind =
 export const MAX_EVENTS = 400;
 
 /**
+ * How long a query waits for its answer ONCE SENT.
+ *
+ * The clock starts when the frame goes out, not when the query is made, so time
+ * spent waiting for a socket is not counted against the server. Ten seconds is
+ * far beyond the slowest query's normal latency and still short enough that a
+ * screen shows an error rather than an eternal skeleton.
+ *
+ * AND LONGER THAN THE ENGINE'S OWN READ OF THE BROKER GROUP
+ * (`engine.BrokerReadWait`), held there by `internal/api`'s
+ * `TestTheDashboardWaitsPastAReadOfTheGroup`: the `fleet_broker` query asks a
+ * member for the metadata group and may spend that long on it, and a screen
+ * that gave up first would report a slow answer as a failed one.
+ */
+export const QUERY_TIMEOUT_MS = 10_000;
+
+/**
  * The longest text `colleague{q}` resolves, in UTF-8 bytes.
  *
  * EXACTLY THE ENGINE'S OWN (`queries.ColleagueQueryMax`), held there by

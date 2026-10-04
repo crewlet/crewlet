@@ -33,44 +33,133 @@ So every call returns `(value, error)`, never a bare bool — and **each contrac
 
 **A listing obeys the same rule**, and it is the place it is easiest to lose.
 Reading a whole bucket — the fleet's node statuses, the open channels, every
-node's log position — carries each key together with its value, ends on one
-explicit marker and only on it, and a read that stops before that marker is
-`unknown`, never a shorter list. The alternative is not hypothetical: a listing
-that reports what it managed to read, with no error, hands every caller "there
-are no more records" when the truth is "the store stopped answering". For the
-trim's published floor that reads as a fleet needing nothing, which deletes
-records a node is still replaying.
+node's log position — either answers every key that was live throughout the
+read or answers `unknown`, never a shorter list, on one broker or a cluster of
+them alike; its one bound is a size, the 100,000 keys under one filter spelled
+out below. The alternative is not
+hypothetical: a listing that reports what it managed to read, with no error,
+hands every caller "there are no more records" when the truth is "the store
+stopped answering". For the trim's published floor that reads as a fleet
+needing nothing, which deletes records a node is still replaying.
 
-It is also why a listing is not a name list followed by a fetch per name. That
-shape costs a round trip per key on top of an ephemeral consumer created and
-destroyed per call — paid continuously, since several of a node's fifteen-second
-duty loops read a bucket on every tick, and the state-log write fence lists the
-trim's published floors on every write at an expectation of zero, a subject's
-first write among them. That listing is the floors' own key class in the
+**A listing is one ordered pass, certified against the stream's own key
+index.** The pass carries each key together with its value — never a name
+list followed by a fetch per name, which is what it was. That shape costs a
+round trip per key on top of an ephemeral consumer created and destroyed per
+call — paid continuously, since several of a node's fifteen-second duty loops
+read a bucket on every tick, and the state-log write fence lists the trim's
+published floors on every write at an expectation of zero, a subject's first
+write among them. That listing is the floors' own key class in the
 `positions` bucket, not the per-node positions beside it: the fence compares
 this node's checkpoint against the higher of the published floor and the log's
 first surviving sequence, which it reads from the stream itself.
 
-**A listing is ONE ORDERED PASS, carrying each key and its value together** —
-never a name list followed by a fetch per name, which is what it was. The
-batched direct get that would remove even the consumer is deliberately not
+A pass on its own **cannot tell that it is complete**. The marker that ends it
+is the client's guess from a pending count, and every bucket here keeps one
+revision per key, so rewriting a key the pass has not reached yet removes the
+revision it was about to deliver and appends the replacement *behind* the
+marker. A renew is exactly that rewrite, and every live lease takes one on
+every heartbeat: measured against the embedded broker, with five presence
+leases and three of them renewed in tight loops, 848 of 3,634 membership reads
+missed at least one lease that was live the whole time — a live node that
+looks gone to placement, or a positions row the trim's minimum never saw. So
+every listing also reads the stream's per-subject index, narrowed by the same
+filter and answered by the stream leader from the index its store keeps under
+its own lock, and reads by itself any key the index names that the pass never
+delivered. That read is the **stream leader's** too — `$JS.API.STREAM.MSG.GET`
+for the last message on the key's subject, which only the leader answers —
+never the bucket's own `Get`: on these buckets that is a direct get, served by
+any replica in the direct-get group, and a replica that has fallen behind stays
+in that group and answers "not found" for a key the leader's index just named,
+which silently undid the certification it was there to perform. An index read
+while the stream **has no leader** is refused rather than trusted: during an
+election every member answers from its own store, and one that is behind names
+fewer keys than the quorum holds, so a listing during a bucket's leader
+election is **unavailable** — the third answer — rather than short.
+
+One copy that is behind still answers as the leader, and the bound on it is
+stated rather than removed. A member cut off from its peers while it leads a
+stream goes on answering that stream's leader reads from its own copy until it
+notices it has lost them — about **ten seconds**, the broker's lost-quorum
+interval — while the majority elects a leader of its own and moves on. So
+through a node on the minority side of a partition, a bucket its member led
+reads up to that far behind, and a record the majority wrote reads as absent.
+Nothing written through that node lands, since a write needs its quorum, and a
+lease is fenced by its epoch, so what the window can mislead is a decision that
+writes nothing. Closing it would take a read that proves a quorum — a barrier
+append per read, as the state log's linearizable read is — which would turn
+every lease heartbeat's read into a write.
+
+A **tombstone** the pass delivered is not taken as the key's answer either.
+The pass is served by whichever replica the broker placed its consumer on, so
+on a clustered bucket a key that was deleted and re-created before the listing
+began, read by a pass on a replica that has applied the delete but not yet the
+re-creation, comes back as a delete marker although it was live throughout. So
+a marker the pass delivered, for a key the index names, is read again from the
+stream leader exactly as a key the pass lost is, and the leader's answer — the
+live value, a marker, or nothing — is what the listing holds. A marker for a
+key the index does *not* name needs no read: the leader held nothing on that
+key at an instant inside the listing, so the key was not live throughout, and
+absent is a correct answer for it.
+
+A key live from before the listing began until after it ended is therefore in
+it, however often it was rewritten in between and whichever replica served the
+pass. A listing that fails at any step hands its caller nothing rather than the
+half it read, and each key is handed over once, at the newest revision the
+listing read. What a listing may do is **lag** — a key claimed or deleted while
+it ran can be seen late, which is a placement that converges one tick later.
+
+The certification costs one index read — two API requests, run beside the
+pass rather than after it so their round trips overlap — and one leader read
+for each key the pass lost or delivered as a marker. The lost keys are zero
+without concurrent writes and bounded by the keys written while the listing
+ran. The markers are bounded by the [marker sweep](#removal-markers-are-swept):
+a bucket with no age would otherwise keep the marker of every record it ever
+removed, and every listing whose pass met one would read it again, so without
+the sweep a listing's cost grew with every record the company had ever
+removed. It is never a read per key.
+
+Its one bound is the broker's page size for that index: **100,000 keys under
+one filter**. Past it the client reads the index in pages by offset into a list
+the server re-sorts for every page, so a key removed before a page boundary
+between two page reads shifts a later key across that boundary and leaves it
+uncertified — which loses the key only if the pass lost it too.
+
+The batched direct get that would remove even the consumer is deliberately not
 used here: it is served by any replica, so a follower behind an acknowledged
 write can hide a row, and the trim floor is a *minimum* across rows — a row it
 cannot see raises the floor and deletes records a node still needs. Measured
 against a single-node broker it also returned empty answers for populated key
 classes, because a KV bucket keeps one message per subject and that churn
-leaves the server's per-subject index stale. An empty answer is the one this
-estate cannot survive, since "no rows" is legitimate everywhere it is asked.
+leaves the per-subject *last-block* index it is resolved through stale. An
+empty answer is the one this estate cannot survive, since "no rows" is
+legitimate everywhere it is asked.
 
 That is why a **resource name is segmented**. A lease is named
-`seat:{handle}`, `node:{id}` or `worker:{duty}`, and the part before the colon
-is the **class**; the key it becomes carries that class as a subject token of
-its own, so `seat` is a wildcard and the seats are addressable without the
-nodes. The two reads that pay for it run on a ticker: the membership read asks
-for the presence leases instead of every lease in the fleet, and the sweep's
+`seat:{handle}`, `node:{id}` or `worker:{duty}`, and the part before the colon is the **class**; the key it becomes carries that class as a
+subject token of its own, so `seat` is a wildcard and the seats are addressable
+without the nodes. The reads that pay for it run on a ticker: the fleet's
+membership read asks for the presence leases — one class instead of every
+lease in the fleet — and the sweep's
 placement hints come from the `epochs` bucket — the one with no expiry at all,
 holding a record for every resource the deployment has ever leased, which used
 to be read whole every five seconds to find one node's seats.
+
+**Every read of one key is the leader's too**, not only a certification's. A
+claim reads its own write back to learn the store's deadline, a renew and a
+release read the lease before they write, and the fleet's records are read by
+key — and each of those, answered by a replica that had not applied the write
+yet, told its caller the write was never made. On a three-member cluster with
+a hundred nodes claiming at once, 743 of 10,000 claims on fresh seats answered
+"not held" for a lease that was then theirs until its TTL — a singleton duty
+dark on every node, since the one that won believed a peer had it — and a
+renew through a member that was behind answered "no longer yours", which a
+node acts on by shedding the seat. So every single-key read goes to the stream
+leader, and one the leader cannot answer — none elected, none reachable — is
+**unavailable**, never "absent". It costs the hop to the leader: measured
+in-process, 40–220 µs at the median where a replica's read took 25–135 µs, and
+about half the read throughput through one node's connection — a few percent
+of it spent by ten thousand seats renewing on the fifteen-second heartbeat.
 
 There is deliberately **no all-classes listing**. A class is one segment of a
 name, so the empty one addresses nothing, and a read of it would answer with
@@ -99,11 +188,14 @@ flowchart LR
         B[("budgets<br/>org · per-seat spend per window")]
         CH[("channels<br/>agent-to-agent asks")]
         F[("fires<br/>scheduled dispatch claims")]
+        RB[("rebases<br/>where old work's writes are minted")]
         SR[("sandbox runs<br/>detached coding jobs")]
         SEC[("secrets<br/>the company's sealed credentials")]
         INT[("integrations<br/>reconcile status per surface")]
         MB[("mailboxes<br/>seat mailboxes that may exist")]
         POS[("positions<br/>what the state log may delete · seat pauses")]
+        OBJ[("objects<br/>the file store · collector report")]
+        CK[("chunk locks<br/>one file chunk at a time")]
     end
     subgraph NODE["node — its own database"]
         DB[("events · episodes · diary<br/>conversations<br/>company payload · secrets")]
@@ -127,11 +219,14 @@ flowchart LR
 | `budgets` | Org and per-seat token spend **per calendar window** — one record per scope with a slot for the day, the ISO week and the month on the company's clock, each carrying the window's label, its spend and when it last refused a charge (cleared by the next charge the scope admits, and by the window turning over). Caps stay config-derived in memory; only *usage* is shared, because a counter per node makes an org cap of 500 000 into N × 500 000. The refusal is kept beside the counter because it is the gate's own decision and every node reports it: a refusal one node remembered would flicker on a dashboard as different nodes reported. See [Token budgets are windows](#token-budgets-are-windows) | [Deployment § Token budgets](../guides/deployment.md#token-budgets) |
 | `channels` | Who is asking whom, and whether the ask is still open. The record authorizing an answer is read by the node that owns the *answering* seat — never the one that opened it | [Event System § Agent-to-agent](event-system.md) |
 | `fires` | Has this scheduled dispatch already been claimed. The scheduler is a singleton *duty*, so it moves — and a successor reading its own database found an empty ledger and gave every company two standups | [Scheduling § At-most-once](scheduling.md#at-most-once) |
+| `rebases` | Which instant a unit of work's tracker and knowledge-base writes are minted at, for the work that began longer ago than the [operation ledger](../guides/replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted) remembers — a trigger dispatched a month late, a turn resumed a month after it parked. The attempt that finds its work's start past that horizon mints at its own instant and records it here, and every later attempt at the same work — a crash re-run, a retried resume, the next half of the turn — inherits it. Company-wide because the next attempt runs wherever the seat's delivery is taken next: a successor reading its own database found nothing and wrote every write of the attempt before it a second time | [Turn Engine § A turn's two identities](turn-engine.md#a-turns-two-identities) |
 | `sandbox runs` | Every detached coding run: its box, its suspended conversation, its owner and fencing epoch, and whether its tokens are already charged. A run outlives its turn, its process and sometimes its node, and is recovered by whichever node owns the seat *next* | [Code Sandbox](code-sandbox.md) |
 | `secrets` | The company's credentials, one sealed envelope per `${VAR}` name. Coordination holds bytes it has no key for; the Tier A keyring opens them at the edge. It was the last kind of company-wide state living in a node's own database, so `crewlet secrets set` reached one node and a rotation half-landed | [Secret Store](secret-store.md) |
 | `integrations` | Where each external surface's reconcile pass got to: its phase, its findings, the address it was set up against, and whether a disconnect has been asked for. It is company-wide because the loop is a fleet singleton and moves — a status in a node's own database would be a screen that changed answer depending on which node served the page | [Integration Reconcile](integration-reconcile.md) |
 | `mailboxes` | Which seat mailboxes may exist, and since when a seat has been missing from the active revision. Every node records a handle before it creates the seat's durable subscription, because a removed seat's handle is gone from the org every node derives names from and the retirement's absence stamp and mark have nowhere else to live. A mailbox that escaped the record is found by listing the broker's subscriptions. Every change is a compare-and-set, since a returning seat's registration and the sweep that retires a mailbox write the same record | [Seat Ownership § Singleton duties](seat-ownership.md#singleton-duties) |
 | `follows` | Which chat threads each seat is following, one record per (backend, seat, channel, thread). It is company-wide because an inbound chat message is claimed and parsed by ONE node — `notify-inbound` is a competing consumer group — and the next reply in the same thread by whichever node wins that time: a follow only one node could see made a non-mention reply reach its seat by chance, less often the more nodes ran. It was the last table in a node's own database answering a question the company has to agree on. Rows written before the move are carried here at the next start rather than dropped — the local table survives, permanently empty, as that handoff's source, because a migration runs before any Go code and cannot reach this store | [Slack](../integrations/slack.md#thread-routing) |
+| `objects` | Which store the company's files are in — `nats`, or `s3:<endpoint>/<bucket>/<prefix>` — recorded create-only by the first node to boot and compared by every node after it, which refuses to boot on a mismatch rather than split the files between two stores; and what the `object-collector` duty last found, because the duty moves and every node's `/fleet` reports the latest pass whoever ran it | [Object Store § One store per fleet](object-store.md#one-store-per-fleet), [§ Collection and audit](object-store.md#collection-and-audit) |
+| `chunk locks` | Who may touch one file chunk right now: the collector deleting a chunk no row names, and a writer storing a chunk that already exists, take the chunk's lock around their check and their write, so a deletion can never land between a re-upload and the row that names it | [Object Store § Why a deletion takes a lock](object-store.md#why-a-deletion-takes-a-lock) |
 | `positions` | **What the state log may delete**, in four key classes: where every node stands per domain, the live pins a backup or a joining node holds, what each owner's newest backup covers, and the floor the trim itself published with the term that is holding it. Four classes in one bucket because all four answer one question and all four need the same retention, which is none. Four more share it for that retention alone — a log's capacity operation, each node's admission to publish, each node's acknowledgement that it restarted for the operation, and the **seat pauses** (`seat_pause`): which seats a person has paused, by whom, why, and whether they also stopped the running turn — because each must outlive any clock: an expiring operation admits publishers, an expiring admission hides one, an expiring acknowledgement un-seals a barrier that has already run, and an expiring pause is a resume nobody chose. Every listing filters by class | [Retention](../guides/retention.md), [Changing a log's ceiling](../guides/retention.md#changing-a-logs-ceiling), [Agent Runtime § Pausing a seat](agent-runtime.md#pausing-a-seat) |
 
 **The page and work-item embeddings are not here.** They were a slot of their
@@ -171,7 +266,7 @@ A single node shares nothing, because there is no peer to tell. Cooldowns stay i
 
 ## Retention is a bucket's age
 
-Every slot above except `epochs`, `config`, `channels`, `sandbox runs`, `secrets`, `integrations`, `mailboxes` and `positions` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write. `leases` is in that group and is the load-bearing case: a lease does not expire because something deletes it, it expires because the bucket's age *is* the lease TTL, which is exactly what makes a dead node's seat reclaimable with nobody around to release it. `duties` is in it too, with one difference that matters: its age only reaps a record, and a duty ends at the deadline its own record carries, judged by every reader against the broker's clock (see [Duties have a bucket of their own](#duties-have-a-bucket-of-their-own)). That deadline is data in the record rather than a per-key TTL, so the create-only rule below does not reach it.
+Every slot above except `epochs`, `config`, `channels`, `sandbox runs`, `secrets`, `integrations`, `mailboxes`, `objects` and `positions` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write. `leases` is in that group and is the load-bearing case: a lease does not expire because something deletes it, it expires because the bucket's age *is* the lease TTL, which is exactly what makes a dead node's seat reclaimable with nobody around to release it. `duties` is in it too, with one difference that matters: its age only reaps a record, and a duty ends at the deadline its own record carries, judged by every reader against the broker's clock (see [Duties have a bucket of their own](#duties-have-a-bucket-of-their-own)). That deadline is data in the record rather than a per-key TTL, so the create-only rule below does not reach it.
 
 That is a constraint rather than a preference. On the default embedded backend a per-key TTL is *create-only*: an update clears it, leaving the key immortal. A rate window that is incremented four times would therefore never expire — the one key in the system guaranteed to be written more than once. So each retention is fixed when its bucket is created, which is why they are **separate buckets** rather than prefixes in one:
 
@@ -192,17 +287,30 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `config` | none | The pointer is the fencing sequence, and a fence that restarts is not a fence |
 | `budgets` | 32 days | The longest calendar window a counter has a slot for is a month — 31 days, and at most an hour of clock change — and every charge rewrites the record, so a record older than that counts nothing a current window can be refused against. The age is **not** the reset: a window's allowance comes back when the window turns over, rolled inside the charge that crosses the boundary (see [Token budgets are windows](#token-budgets-are-windows)) |
 | `fires` | 7 days | Must outlast the scheduler's catchup ceiling, for a sharper reason than the ledger's: a completion that expired early makes a turn re-run, while a claim that expired early makes the catchup pass dispatch a fire the fleet already ran |
+| `rebases` | 30 days | The operation ledger's own retention, a day past the horizon a recorded instant is inherited within: an attempt inherits one only while it lies within that horizon of the attempt's own clock, and the age counts from the write, which is no earlier than the instant recorded — so the bucket forgets a record exactly when no attempt could still inherit it. Forgotten sooner, the next attempt would mint anew and write again what the attempt before it wrote |
 | `sandbox runs` | none | The sharpest version of the channel case: a run parked on a person's answer waits **days**, and its record is the only thing that knows a billed box exists. Its own pause reaper and its terminal delete are what end it: a run's record is deleted the moment the run settles, done or failed, once its box is reclaimed, and a removed seat's runs are ended when its mailbox is retired. No settled run is left for the completion poll and every seat recovery to read again |
 | `channels` | none | A bucket's age cannot tell an **open** channel from a closed one, so a TTL would reap the authorization record of an ask still waiting for its answer. Closing an idle channel and deleting a closed one are decisions instead, taken by the [maintenance duty](seat-ownership.md#singleton-duties) |
 | `secrets` | none | A credential is not short-horizon state, and **an expiring secret is an outage on a timer** — one that arrives at the moment a vendor rejects a token every node believes it still has. A secret leaves when an operator unsets it |
 | `integrations` | none | A status is standing state, not a recent event: it says what the last pass found, and it is true until the next one. One that expired would make a converged surface read as never-reconciled and send the loop to re-provision what is already there. It is bounded by the number of surfaces a company has rather than by a horizon, and a row leaves when its block leaves the company document |
 | `follows` | 90 days | The one aged slot whose horizon is a **last-activity** stamp rather than a window: every re-assert — a mention, a collective address, the seat posting into the thread — rewrites the record, so the bucket's age tracks the conversation. Ninety days is where a chat thread stops being live on every backend that ships one, and the asymmetry makes it safe: a dropped follow costs at most one missed non-mention reply, which the next mention re-establishes, while keeping every follow for ever grows a record read on the hot path of every inbound message |
 | `mailboxes` | none | A record's age cannot tell a seat that is still in the company from one that left, so an age would forget a mailbox that still exists and leave it retaining mail for a seat nobody runs. It is bounded by the handles a company has ever used, and a record leaves when the [maintenance duty](seat-ownership.md#singleton-duties) retires its mailbox |
+| `objects` | none | The backend record is standing state for the life of the deployment, and one that expired would let the next node to boot record a different store — the company's files split between two places with nothing failing. The collector's report beside it is replaced by every pass, so it needs no age either |
+| `chunk locks` | 1 minute | The age **is** the lock's lifetime: what anybody does under one is one check and one delete, or one write of at most a mebibyte, so a lock lapses only under a holder that has already abandoned its request — and a holder that died holding one is let go by the bucket rather than by anybody's clock. Longer is how long a writer waits behind a collector that died |
 | `positions` | none | The sharpest case in the table. A node's position is what the trim reads to decide what every other node may delete, so a key that expired would read as a node that has applied **nothing** — which either pins the trim for ever or, read the other way round, lets it delete records that node still needs. A node stops being counted by an operator's audited eviction, never by a clock — and its row stays even then, because a readmission is judged by the position it holds |
 
 Putting two of those in one bucket gives one of them the other's retention, and **every such mistake is silent** — a cooldown that expired in a second, a fleet view showing a node that died last week.
 
-This is also why the retention sweep in the [maintenance duty](seat-ownership.md#singleton-duties) has no jobs for the aged buckets: the broker expires those records, so there is nothing left for a sweep to delete, and a job that swept an empty table every tick would only report that it had. Every **ageless** bucket is the exception, for the reason its row gives — nothing expires them, so removal is a decision somebody takes, and each names a different somebody. `channels` and `mailboxes` are the maintenance duty's own decision, the one closing an idle ask and the other retiring a removed seat's inbox; `integrations` is the reconcile loop's, which forgets a surface whose block has left the company document on the tick that notices; `secrets` wait for an operator's unset; a node's own `positions` row is never removed at all — an audited eviction stops the trim counting it, and the row is kept because a readmission is judged by it; and `sandbox runs` end at their own pause reaper or a terminal delete.
+This is also why the retention sweep in the [maintenance duty](seat-ownership.md#singleton-duties) has no jobs for the aged buckets: the broker expires those records, so there is nothing left for a sweep to delete, and a job that swept an empty table every tick would only report that it had. Every **ageless** bucket is the exception, for the reason its row gives — nothing expires them, so removal is a decision somebody takes, and each names a different somebody. `channels` and `mailboxes` are the maintenance duty's own decision, the one closing an idle ask and the other retiring a removed seat's inbox; `integrations` is the reconcile loop's, which forgets a surface whose block has left the company document on the tick that notices; `secrets` wait for an operator's unset; the `objects` backend record is removed only by an operator moving the company to another store, and the collector's report beside it is replaced by each pass; a node's own `positions` row is never removed at all — an audited eviction stops the trim counting it, and the row is kept because a readmission is judged by it; and `sandbox runs` end at their own pause reaper or a terminal delete.
+
+### Removal markers are swept
+
+Removing a record does not remove it from the bucket's stream: a delete or a purge appends a **marker** that says the key was removed, and on these buckets — one revision per key — the marker replaces the value. An aged bucket takes its markers with everything else. An ageless one keeps each for the life of the deployment, and every [listing](#the-three-valued-answer) whose pass meets one reads it again from the stream leader, so without a sweep a listing's cost would grow with every record the company had ever removed.
+
+So the [maintenance duty](seat-ownership.md#singleton-duties) sweeps them, as the job `coordination_markers`: on one node for the whole fleet, every 15-minute maintenance tick, from **every shared-state bucket with no age** — `config`, `budgets`, `channels`, `sandbox runs`, `secrets`, `integrations`, `mailboxes`, `objects` and `positions`. That set is derived from the retention each bucket is opened with rather than listed, so a new ageless bucket is covered without anybody remembering to add it, and one that never removes a record costs a pass that finds nothing. `epochs` is the one ageless bucket outside it, and needs nothing: a fencing counter is never removed, so it holds no marker. The sweep removes the markers written more than **three hours** (`coord.MarkerRetention`) before the tick, and a bucket it could not sweep is retried on the next tick without stopping the others.
+
+Three hours is not what keeps an answer right. Nothing in the engine takes a marker as an answer: a listing asks the leader about each one its pass delivered, and a create over a removed key asks the leader what the key holds before it writes — a live value is the key existing, a marker is the revision to write over, and nothing at all is a key never written. The contract suite sweeps every marker, however new, and holds each record family to the answers it gave before. The horizon decides how long a removal stays visible in the bucket against what that costs: a listing reads again each marker its pass meets, so it pays for the removals of the last three hours and a quarter — the horizon plus one tick — where without the sweep it paid for every removal the deployment had ever made; and three hours is the longest claim any operation on these records can hold (`coord.MaxDutyTTL`), so nothing that read a record before it was removed can still be acting on that read when its marker goes.
+
+The sweep removes only what it saw. It purges each key **through the marker's own revision**, and the broker applies that bound, so a record created again after the sweep's pass saw the marker has a later revision and is untouched. The client library's own sweep (`PurgeDeletes`) purges a key outright, and would take that new record with the marker.
 
 ---
 
@@ -329,3 +437,4 @@ That distinction was not always drawn, and each consequence was silent. The toke
 - [Scaling Out](scaling.md) — the five kinds of coupling a fleet had to resolve, and which one a lock actually fixes
 - [Deployment](../guides/deployment.md) — running more than one node
 - [Event System](event-system.md) — the queue this sits beside, and what it is not
+

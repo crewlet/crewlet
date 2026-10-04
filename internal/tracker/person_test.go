@@ -488,7 +488,7 @@ func TestAnOlderAppliersPersonRowIsRederivedPacked(t *testing.T) {
 	rederive := func() int {
 		t.Helper()
 		var rows int
-		if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 			var err error
 			rows, err = r.applier.Rederive(t.Context(), tx, statelog.ApplyOptions{})
 			return err
@@ -502,7 +502,7 @@ func TestAnOlderAppliersPersonRowIsRederivedPacked(t *testing.T) {
 	}
 
 	// THE PREDECESSOR'S ROWS: the bare sequence, and a caller's zero.
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(),
 			`UPDATE tracker_persons SET seen_through = 7 WHERE handle = 'cy'`); err != nil {
 			return err
@@ -838,7 +838,7 @@ func TestABareSequenceRowReadsAsGenerationZero(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	stream := tracker.Domain{}.Stream().Name
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `INSERT INTO tracker_persons
 			(handle, seen_through, seen_through_stream, version)
 			VALUES ('old', 42, ?, 1)`, stream)

@@ -494,7 +494,7 @@ func TestATaskRecordFromAnOlderBuildAppliesItsRankAsThatBuildDid(t *testing.T) {
 		t.Helper()
 		var column string
 		var document []byte
-		if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
 			return tx.QueryRowContext(t.Context(),
 				`SELECT rank, document FROM tracker_tasks WHERE id = 't-1'`).
 				Scan(&column, &document)

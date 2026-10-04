@@ -1,8 +1,8 @@
 package engine
 
 import (
-	"context"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -23,14 +23,18 @@ func TestEveryRunsToolsSeeACallLogOfTheirOwn(t *testing.T) {
 	seat := &org.Role{Name: "Engineer", DeclaredHandle: "swe"}
 	company := &Company{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{seat}}}
 
-	dispatched := (&Engine{}).describeTurn(context.Background(), company, Request{
-		Handle: "swe", RunID: "run-1", WorkKey: "wk-1",
+	// BEGUN AN HOUR AGO, so neither half is past the ledger's horizon and
+	// nothing needs a coordination store to record where it mints.
+	began := time.Now().UTC().Add(-time.Hour)
+	dispatched := mustDescribeTurn(t, &Engine{}, company, Request{
+		Handle: "swe", RunID: "run-1", WorkKey: "wk-1", WorkSince: began,
 	})
 	first := dispatched.runnerTurn(company, 0, nil, "the task", turn.ToolReply(""))
 	rerun := dispatched.runnerTurn(company, 0, nil, "the task", turn.ToolReply(""))
-	resumed := (&Engine{}).describeResume(context.Background(), company, resumeInput{
-		Run:  sandbox.PendingRun{TurnID: "run-1", WorkKey: "wk-1", AgentHandle: "swe"},
-		Turn: &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: seat},
+	resumed := mustDescribeResume(t, &Engine{}, company, resumeInput{
+		Run: sandbox.PendingRun{TurnID: "run-1", WorkKey: "wk-1", WorkSince: began,
+			AgentHandle: "swe"},
+		Turn: &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", WorkSince: began, Seat: seat},
 	}).runnerTurn(company, 0, nil, "the task", turn.ToolReply(""))
 
 	for name, got := range map[string]*turnctx.Turn{

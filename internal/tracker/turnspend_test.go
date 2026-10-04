@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 
@@ -18,7 +19,7 @@ func (r *roundTrip) taskSpend(id string) map[string]int64 {
 	r.t.Helper()
 	columns := append(append([]string{}, tracker.SpendColumns...), "reopens")
 	out := map[string]int64{}
-	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(r.t.Context(), func(tx *sql.Tx) error {
 		values := make([]int64, len(columns))
 		targets := make([]any, len(columns))
 		for i := range values {
@@ -83,7 +84,7 @@ func TestTheWriterAndApplierShareOneTurnShape(t *testing.T) {
 	}
 
 	var seat, turnID, trigger, outcome, phases string
-	if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), `
 			SELECT seat, turn_id, trigger, outcome, phases_json
 			FROM tracker_turns WHERE id = ?`, "turn/run-1/dispatch").
@@ -200,7 +201,7 @@ func TestATurnOnAPurgedTaskIsReadPastNotFatal(t *testing.T) {
 	}
 	r.drain() // Fails the test if the applier stops on the turn.
 
-	reason, gated, err := tracker.NewGates(r.db).GatedAt(t.Context(),
+	reason, gated, err := tracker.NewGates(r.db.Reader()).GatedAt(t.Context(),
 		statelog.Subject{Kind: string(tracker.KindTurn), ID: "t-1"}, "node-a",
 		"turn/late", turn.Position)
 	if err != nil {
@@ -220,7 +221,7 @@ func TestATurnOnAPurgedTaskIsReadPastNotFatal(t *testing.T) {
 func (r *roundTrip) count(query string, args ...any) int {
 	r.t.Helper()
 	var n int
-	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(r.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(r.t.Context(), query, args...).Scan(&n)
 	}); err != nil {
 		r.t.Fatalf("%s: %v", query, err)
@@ -309,7 +310,7 @@ func TestTheReopenBackfillEqualsAReplay(t *testing.T) {
 	}
 
 	// THE PREDECESSOR'S ROWS: the column as a build without it left it.
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(), `UPDATE tracker_tasks SET reopens = 0`); err != nil {
 			return err
 		}
@@ -418,5 +419,51 @@ func TestADetailReadsTheSpendItsTurnsAdded(t *testing.T) {
 	if detail.Task.Spend != want {
 		t.Fatalf("the task reads spend %+v after two turns, want %+v — the columns "+
 			"the turns added to", detail.Task.Spend, want)
+	}
+}
+
+// A TURN THAT LANDS AFTER ITS TASK'S PURGE IS REFUSED `deleted`, ON THE NODE
+// THAT WROTE IT, WHEN THAT NODE APPLIES WHILE IT WAITS.
+//
+// The applier drops the turn under the task's deletion marker and writes no
+// ledger row, so the write's resolution asks the gate reader why — and a
+// reader that covered only the task's own subject answered "nothing gates
+// it" about the turn's, which the resolution can only read as a ledger that
+// lost a row it vouched for: the writer was told the store broke a contract,
+// and its refusal was counted under `error` rather than `deleted`. The two
+// sides of the gate read one rule ([tracker.Applier.Gated] and
+// [tracker.Gates.GatedAt] over the same subjects), and this is the case the
+// other turn test cannot reach, because there nothing applies until the
+// write has already answered `pending`.
+func TestATurnLandingAfterItsTasksPurgeIsRefusedDeleted(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	task := r.createTask("Short lived")
+
+	// THE PURGE IS PUBLISHED AND NOT YET APPLIED, so the turn's own
+	// decision still sees the task and appends above the purge; from here
+	// the applier runs inside the write's own wait, as a live node's does.
+	if _, err := r.writer.PurgeTask(t.Context(), "op-purge", task.ID, task.Project,
+		"filed by mistake"); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	r.applyWhileWriting()
+	_, err := r.writer.RecordTurn(t.Context(), "op-late-turn", tracker.TurnRecord{
+		Task: task.ID, Seat: "swe", TurnID: "run-late",
+		Spend: tracker.TurnSpend{Turns: 1, Rounds: 1, Input: 10, Output: 1},
+	})
+	var refused *statelog.Unavailable
+	switch {
+	case !errors.As(err, &refused):
+		t.Fatalf("a turn landing after its task's purge answered %v, want a "+
+			"refusal naming the gate that dropped it", err)
+	case refused.Reason != statelog.ReasonDeleted:
+		t.Fatalf("a turn landing after its task's purge was refused %q, want %q",
+			refused.Reason, statelog.ReasonDeleted)
+	case refused.OpID != "op-late-turn":
+		t.Fatalf("the refusal names the operation %q, want op-late-turn", refused.OpID)
+	}
+	if got := r.strings(`SELECT id FROM tracker_turns WHERE task_id = ?`, task.ID); len(got) != 0 {
+		t.Fatalf("a turn that landed after its task's purge wrote %v", got)
 	}
 }

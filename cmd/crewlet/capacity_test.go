@@ -399,7 +399,9 @@ func TestVerifyRestoreExitsNonZeroPastItsCadence(t *testing.T) {
 	if err := verifyRestore(root, 30*24*time.Hour, taken.Add(72*time.Hour), &out); err != nil {
 		t.Fatalf("a three-day-old artefact was refused: %v", err)
 	}
-	for _, want := range []string{"CREWLET_TRACKER_LOG", "generation 2", "sequence 918280001"} {
+	// THE STORE COPY BY ITS ESTATE, as `crewlet backup` names it.
+	for _, want := range []string{"CREWLET_TRACKER_LOG", "generation 2", "sequence 918280001",
+		"STORE replicated"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report never mentions %q:\n%s", want, out.String())
 		}

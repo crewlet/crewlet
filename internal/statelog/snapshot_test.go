@@ -3,16 +3,20 @@ package statelog_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // liveStreamCreatedAt is the instant the probe stream was created, as both
@@ -26,6 +30,7 @@ var liveStreamCreatedAt = time.Unix(1_700_000_000, 0).UTC()
 type snapHarness struct {
 	t      *testing.T
 	db     *store.DB
+	estate store.ReplicatedHandle
 	dir    string
 	health statelog.Health
 	nodes  int
@@ -47,16 +52,13 @@ type snapHarness struct {
 func newSnapHarness(t *testing.T) *snapHarness {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := store.Open(t.Context(), filepath.Join(dir, "node.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	db, estate := storetest.OpenEstate(t, filepath.Join(dir, "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
 		}
 	})
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), probeDDL)
 		return err
 	}); err != nil {
@@ -66,6 +68,7 @@ func newSnapHarness(t *testing.T) *snapHarness {
 	h := &snapHarness{
 		t:       t,
 		db:      db,
+		estate:  estate,
 		dir:     filepath.Join(dir, "snapshots"),
 		nodes:   3,
 		created: liveStreamCreatedAt,
@@ -94,7 +97,7 @@ func newSnapHarness(t *testing.T) *snapHarness {
 // is what a real applier does with every batch.
 func (h *snapHarness) cursor(seq uint64) {
 	h.t.Helper()
-	if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(h.t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(h.t.Context(), `
 			INSERT INTO statelog_cursor
 				(stream, generation, seq, stream_created_at, updated_at)
@@ -112,14 +115,14 @@ func (h *snapHarness) rebuild(interval time.Duration) {
 	h.t.Helper()
 	s, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
 		Domains: []statelog.Registered{{
-			Domain: probeDomain{},
+			Domain: probeDomain{}, Spec: specOf(probeDomain{}),
 			Health: func() statelog.Health { return h.health },
 		}},
-		DB:            h.db,
+		File:          h.estate,
 		Dir:           h.dir,
 		NodeID:        "node-a",
 		EngineVersion: "v0.0.0-test",
-		Counted:       func(context.Context) (int, error) { return h.nodes, nil },
+		Recipients:    func(context.Context) (int, error) { return h.nodes - 1, nil },
 		Interval:      interval,
 		Now:           func() time.Time { return h.clock },
 	})
@@ -217,7 +220,7 @@ func TestADonorScrubsItsOwnTablesBeforeItOffersAnything(t *testing.T) {
 	h := newSnapHarness(t)
 	// A row in the replicated table, a row in the ledger, both of which
 	// travel, and one in a table the domain classes Local.
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO probe_rows (position, kind, stored_at) VALUES (1, 'edit', 0);
 			INSERT INTO probe_ops (op_id, subject, position, applied_at)
@@ -373,7 +376,7 @@ func TestEverySnapshotPreconditionSaysWhyItSkipped(t *testing.T) {
 		if _, err := h.snap.Take(t.Context()); err != nil {
 			t.Fatalf("the first take: %v", err)
 		}
-		seedCursor(t, h.db, probeStream,
+		seedCursor(t, h.estate, probeStream,
 			statelog.Position{Stream: probeStream, Generation: 2, Seq: 10}, h.created)
 		h.health.Position = statelog.Position{Stream: probeStream, Generation: 2, Seq: 10}
 		h.clock = h.clock.Add(time.Minute)
@@ -601,7 +604,7 @@ func TestASnapshotNamesThePositionTheFileKeeps(t *testing.T) {
 func TestADomainWithNoCheckpointIsSnapshottedAtZero(t *testing.T) {
 	t.Parallel()
 	h := newSnapHarness(t)
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `DELETE FROM statelog_cursor`)
 		return err
 	}); err != nil {
@@ -683,14 +686,14 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 			Replay:          statelog.ReplayStrict,
 		}},
 	}}
-	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}}}
+	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Spec: specOf(probeDomain{})}}
 
 	req := statelog.OfferRequest{
 		Need:            map[string]uint64{"probe": 1},
 		Generations:     map[string]uint32{"probe": 1},
 		StreamCreatedAt: map[string]time.Time{"probe": liveStreamCreatedAt},
 	}
-	err := offer.Usable(req, build)
+	err := offer.Usable(req, build, nil)
 	if err == nil {
 		t.Fatal("an artefact from a stream this node's log is not was accepted " +
 			"— its sequences name a history this stream does not have, and " +
@@ -703,7 +706,7 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 	// AND THE SAME OFFER IS USABLE when the instants agree, so this is a
 	// refusal of a mismatch rather than of the term's presence.
 	req.StreamCreatedAt["probe"] = liveStreamCreatedAt.Add(-72 * time.Hour)
-	if err := offer.Usable(req, build); err != nil {
+	if err := offer.Usable(req, build, nil); err != nil {
 		t.Errorf("an artefact from this node's own stream was refused: %v", err)
 	}
 
@@ -722,7 +725,7 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 		Replay:          statelog.ReplayStrict,
 	}
 	req.StreamCreatedAt["probe"] = liveStreamCreatedAt.Add(37 * time.Nanosecond)
-	if err := offer.Usable(req, build); err != nil {
+	if err := offer.Usable(req, build, nil); err != nil {
 		t.Errorf("an artefact whose instant differs by 37ns was refused: %v — "+
 			"the column keeps microseconds and the broker reports "+
 			"nanoseconds, so this refuses every real snapshot", err)
@@ -731,7 +734,7 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 	// AND A JOINER THAT COULD NOT READ ITS OWN INSTANT ASKS WITHOUT ONE
 	// rather than refusing every donor.
 	delete(req.StreamCreatedAt, "probe")
-	if err := offer.Usable(req, build); err != nil {
+	if err := offer.Usable(req, build, nil); err != nil {
 		t.Errorf("a joiner naming no instant refused an otherwise usable "+
 			"artefact: %v", err)
 	}
@@ -797,5 +800,88 @@ func TestASecondTakeAtTheSamePositionDoesNotPublishOverTheFirst(t *testing.T) {
 	if back.Artifact != second.Artifact {
 		t.Errorf("the manifest on disk names %q and the take reported %q",
 			back.Artifact, second.Artifact)
+	}
+}
+
+// A TAKE WRITES THE MANIFEST EVERY BUILD READS, AND NAMES EVERY LOG.
+//
+// The manifest is a peer's payload as much as this node's file: a donor offers
+// it to a joiner of whichever build shares the fleet through a rolling upgrade,
+// and a node upgraded in place offers the one it wrote before. So what a take
+// writes is pinned field for field — the ten keys of the artefact's claim and
+// the position fields of each log — rather than whatever the struct happens to
+// hold, because a field added here is one every reader of an earlier shape
+// meets, and one removed is a refusal a recipient could no longer make. And a
+// snapshotter over no estate file has nothing to copy, so it is refused.
+func TestATakeWritesTheManifestEveryBuildReads(t *testing.T) {
+	t.Parallel()
+	h := newSnapHarness(t)
+	m, err := h.snap.Take(t.Context())
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(h.dir, strings.TrimSuffix(m.Artifact, ".db")+".json"))
+	if err != nil {
+		t.Fatalf("read the manifest: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("decode the manifest: %v", err)
+	}
+	want := []string{"artifact", "bytes", "domains", "engine_version", "migrations",
+		"node_id", "scrubbed", "sha256", "taken_at", "v"}
+	if got := slices.Sorted(maps.Keys(fields)); !slices.Equal(got, want) {
+		t.Errorf("a take writes the manifest keys %v, want exactly %v", got, want)
+	}
+	var domains map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(fields["domains"], &domains); err != nil {
+		t.Fatalf("decode the manifest's logs: %v", err)
+	}
+	if got := slices.Sorted(maps.Keys(domains)); !slices.Equal(got, []string{"probe"}) {
+		t.Fatalf("the manifest names the logs %v, want every registered one: [probe]", got)
+	}
+	wantPos := []string{"first_seq_at_take", "generation", "last_seq_at_take",
+		"record_version", "replay", "seq", "stream", "stream_created_at"}
+	if got := slices.Sorted(maps.Keys(domains["probe"])); !slices.Equal(got, wantPos) {
+		t.Errorf("a log's position is written as %v, want exactly %v", got, wantPos)
+	}
+
+	reg := statelog.Registered{Domain: probeDomain{}, Spec: specOf(probeDomain{}),
+		Health: func() statelog.Health { return h.health }}
+	if _, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
+		Domains: []statelog.Registered{reg}, Dir: h.dir, NodeID: "node-a", Interval: time.Hour,
+		Recipients: func(context.Context) (int, error) { return 2, nil },
+	}); err == nil {
+		t.Error("a snapshotter over no estate file was built")
+	}
+}
+
+// A MANIFEST IS READ ONLY AT THE VERSION THIS BUILD READS.
+//
+// The version is what a reader must refuse, so one of another version is
+// nobody's artefact here — no donor offers it and no loop counts it as this
+// node's current one — and so is one that does not decode. One at this
+// version is read whatever else it carries: an earlier build wrote exactly
+// this shape, and a node upgraded in place still offers what it took before.
+func TestAManifestIsReadOnlyAtTheVersionThisBuildReads(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for name, tc := range map[string]struct {
+		body string
+		read bool
+	}{
+		"this version": {read: true,
+			body: `{"v":2,"artifact":"snapshot-1-1.db","domains":{"probe":{"seq":1}}}`},
+		"version 1": {body: `{"v":1,"domains":{}}`},
+		"version 3": {body: `{"v":3,"artifact":"snapshot-1-1.db","domains":{}}`},
+		"no JSON":   {body: `snapshot`},
+	} {
+		path := filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+".json")
+		if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := statelog.ReadManifest(path); (err == nil) != tc.read {
+			t.Errorf("a manifest of %s was read %v (%v), want %v", name, err == nil, err, tc.read)
+		}
 	}
 }

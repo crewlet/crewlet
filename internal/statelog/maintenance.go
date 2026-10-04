@@ -65,7 +65,8 @@ const (
 	// ModeMaintenance starts the broker, its cluster routes, the
 	// coordination estate and a read-only store — and NO publisher: no
 	// seats, no duties, no scheduler, no applier write side, no change
-	// feed, no API write routes.
+	// feed, no API write routes, and no barrier, so a linearizable read is
+	// refused [RefuseMaintenance] ([ReaderDeps.Mode]).
 	//
 	// FLEET-WIDE. One node of three has no majority, so a single
 	// maintenance node can commit neither the configuration update nor

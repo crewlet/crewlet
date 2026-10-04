@@ -51,6 +51,11 @@ import (
 // says how long this has been going on — would reset on every tick. So it is a
 // duty like the sweep, on the `worker:{duty}` lease, and a fleet whose nodes
 // all declare `roles: [seats]` deliberately does not trim.
+//
+// ONLY A DATA NODE ARMS IT, because the trim reads the applied eviction rows
+// of the estate ([retention.tombstones]) and only a node running the logs has
+// them: [Engine.startRetention] is reached only where a state log runs, so a
+// node without `data` never competes for the lease it could not use.
 
 // RetentionInterval is how often the trim evaluates.
 //
@@ -94,12 +99,22 @@ const retentionDutyTTL = 3 * RetentionInterval
 
 // retention is the trim loop.
 type retention struct {
-	fleet  coord.Fleet
-	leases coord.Backend
-	state  *stateLog
-	db     *store.DB
-	cfg    config.TrackerRetention
-	claim  schedule.DutyFunc
+	fleet coord.Fleet
+	state *stateLog
+
+	// holders is the live data nodes, the half of every log's counted set
+	// that is not the positions register ([liveData]). Nil counts nobody
+	// beyond the register.
+	holders liveData
+
+	db  *store.DB
+	cfg config.TrackerRetention
+
+	// claim answers whether this node holds the trim's duty this tick
+	// ([Engine.workerDuty]). Nil answers yes — a node with no coordination
+	// store, which is nobody's singleton.
+	claim schedule.DutyFunc
+
 	nodeID string
 
 	// backupOwner is `retention.backup_owner` — read here rather than
@@ -112,6 +127,10 @@ type retention struct {
 	// percentiles rather than states. Nil records nothing, which every
 	// condition reads as "nothing to report".
 	metrics *metrics.Recorder
+
+	// volumes identifies the volume a directory is on and measures what it
+	// has free ([measureVolume], nil); a parameter for the tests.
+	volumes func(dir string) (volume string, free int64, err error)
 
 	// alarms turns each evaluation into the two surfaces that are not a
 	// screen — the `crewlet.alarm.active{kind}` gauge a collector scrapes,
@@ -129,6 +148,32 @@ type retention struct {
 	// Nil on a node that cannot measure it, which reads as "nothing to
 	// report" rather than as no coverage.
 	coverage func(context.Context) (float64, bool, error)
+
+	// index fills the semantic index's half of a reading: the recall its
+	// last training measured and the floor for the size it measured at.
+	// Nil on an engine that holds no vectors, which reads as nothing to
+	// report.
+	index func(context.Context, *statelog.Reading)
+
+	// objects fills the object store's half of a reading — its health and
+	// what its passes found. Nil on an engine built without one, which
+	// reads as nothing to report.
+	objects func(now time.Time, out *statelog.Reading)
+
+	// seats is the running company's agent-seat count, which the census a
+	// log's read rate is held against scales with
+	// ([statelog.Census]). READ AT EVERY EVALUATION, because a
+	// revision that hires or retires seats moves it and the trim is not
+	// rebuilt for one. Nil counts no seat, which the expectation reads as
+	// the one seat it never goes below.
+	seats func() int
+
+	// background is the barrier records a day the engine's OWN periodic
+	// reads put on the domain's log, whatever the seats do
+	// ([statelog.Census.Background], [Engine.backgroundBarriers]). Read at
+	// every evaluation too, because the data nodes that make them join and
+	// leave. Nil puts none.
+	background func(domain string) int
 
 	// mu guards the coverage cache below. The tick and every API request
 	// assemble a report, on different goroutines.
@@ -171,12 +216,12 @@ type poolCounters struct {
 // loop that ran there would publish a floor derived from streams it does not
 // have.
 func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *stateLog) {
-	if s == nil || len(s.domains) == 0 || e.backends == nil || e.backends.Fleet == nil {
+	if s == nil || len(s.running()) == 0 || e.backends == nil || e.backends.Fleet == nil {
 		return
 	}
 	r := &retention{
 		fleet:       e.backends.Fleet,
-		leases:      e.backends.Coord,
+		holders:     e.holdersOf(),
 		state:       s,
 		db:          e.backends.Store,
 		cfg:         boot.Stream.TrackerRetention,
@@ -186,6 +231,10 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		nodeID:      s.nodeID,
 		alarms:      statelog.NewTracker(e.metrics, nil),
 		coverage:    e.vectorCoverage,
+		index:       e.indexReading,
+		objects:     e.objectsReading,
+		seats:       func() int { return seatCount(e.Company()) },
+		background:  e.backgroundBarriers,
 		pooled:      map[string]poolCounters{},
 		done:        make(chan struct{}),
 	}
@@ -279,7 +328,7 @@ func (r *retention) run(ctx context.Context) {
 	}
 }
 
-// tick evaluates every domain once, if this node holds the duty.
+// tick evaluates every log once, if this node holds the duty.
 func (r *retention) tick(ctx context.Context) {
 	// FIRST, AND ON EVERY NODE — before the duty claim, deliberately.
 	//
@@ -318,6 +367,7 @@ func (r *retention) tick(ctx context.Context) {
 			return
 		}
 	}
+	// ONE READ FOR EVERY LOG THIS TICK EVALUATES — see [retention.read].
 	shared, err := r.read(ctx)
 	if err != nil {
 		// EVERY TERM DERIVED FROM THE REGISTER IS UNKNOWN, which blocks
@@ -330,9 +380,9 @@ func (r *retention) tick(ctx context.Context) {
 		log.WarnContext(ctx, "retention_inputs_unreadable", "err", err)
 		return
 	}
-	for _, name := range r.state.order {
-		if err := r.domain(ctx, name, shared); err != nil {
-			log.WarnContext(ctx, "retention_trim_failed", "domain", name, "err", err)
+	for _, running := range r.state.running() {
+		if err := r.domain(ctx, running, shared); err != nil {
+			log.WarnContext(ctx, "retention_trim_failed", "domain", running.domain.Name(), "err", err)
 		}
 	}
 }
@@ -349,15 +399,21 @@ func (r *retention) evaluate(ctx context.Context) {
 	r.alarms.Observe(ctx, r.Report(ctx).Alarms)
 }
 
-// fleetInputs is what one tick reads once and every domain shares.
+// fleetInputs is what one tick reads once and every log shares.
 type fleetInputs struct {
 	at        time.Time
 	positions []coord.NodePositions
 	readable  bool
 	holds     []coord.TrimHold
 	backups   []coord.BackupPoint
-	live      []statelog.Presence
 	previous  map[string]coord.TrimFloor
+
+	// holders is the live data nodes, read once for every log the tick
+	// evaluates — and holdersUnknown why they could not be listed, which
+	// leaves every log's counted set UNKNOWN: its trim blocks, and says so
+	// on the floor it publishes.
+	holders        []statelog.Presence
+	holdersUnknown string
 }
 
 // read fetches the fleet-wide half of the inputs.
@@ -388,24 +444,35 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	for _, f := range floors {
 		in.previous[f.Domain] = f
 	}
-	// THE PRESENCE LEASES ARE WHAT CATCH A NODE BETWEEN BOOT AND ITS
-	// FIRST HEARTBEAT — which is exactly a node adopting a snapshot. It
-	// counts at position zero and blocks, which is correct: trimming past
-	// a node that is joining is deleting what it is about to replay.
-	if r.leases != nil {
-		if in.live, err = livePresences(ctx, r.leases); err != nil {
-			return in, err
+	// THE LIVE DATA NODES ARE WHAT CATCH A NODE BETWEEN BOOT AND ITS FIRST
+	// HEARTBEAT — which is exactly a node adopting a snapshot. It counts at
+	// position zero and blocks, which is correct: trimming past a node that
+	// is joining is deleting what it is about to replay.
+	//
+	// UNKNOWN IS NOT FATAL TO THE TICK, unlike the register: the logs are
+	// still evaluated, each reading its counted set as UNKNOWN, so every
+	// floor is published BLOCKED on the applied term with the reason — a
+	// presence listing that did not answer, say — rather than left standing
+	// unexplained.
+	if r.holders != nil {
+		if in.holders, err = r.holders.LiveData(ctx); err != nil {
+			in.holdersUnknown = fmt.Sprintf("the live data nodes could not be listed (%v)", err)
 		}
 	}
 	return in, nil
 }
 
-// domain evaluates and applies one domain's trim.
-func (r *retention) domain(ctx context.Context, name string, shared fleetInputs) error {
-	running := r.state.domains[name]
-	if running == nil {
-		return nil
-	}
+// counted is who the trim counts on one log: the positions register's rows
+// naming it, every live data node, less the log's own tombstones past their
+// window ([statelog.CountedSet]).
+func (shared fleetInputs) counted(running *runningLog, tombs []statelog.Tombstone) []statelog.NodePosition {
+	return statelog.CountedSet(shared.at, reportedPositions(shared.positions, running.domain.Name()),
+		shared.holders, tombs)
+}
+
+// domain evaluates and applies one log's trim.
+func (r *retention) domain(ctx context.Context, running *runningLog, shared fleetInputs) error {
+	name := running.domain.Name()
 	stats, err := running.log.Stats(ctx)
 	if err != nil {
 		// THE STREAM ITSELF IS UNREADABLE, so there is no ceiling to
@@ -421,7 +488,8 @@ func (r *retention) domain(ctx context.Context, name string, shared fleetInputs)
 	in := statelog.TrimInputs{
 		Generation:      generation,
 		Now:             shared.at,
-		CountedReadable: shared.readable,
+		CountedReadable: shared.readable && shared.holdersUnknown == "",
+		CountedUnknown:  shared.holdersUnknown,
 		HoldsReadable:   true,
 		BackupMaxAge:    r.cfg.BackupMaxAge(),
 		HoldStale:       statelog.TrimHoldStale,
@@ -430,11 +498,10 @@ func (r *retention) domain(ctx context.Context, name string, shared fleetInputs)
 	// direction for the trim: a node it could not establish was gone stays
 	// counted. The report is the one reader that has to say so as well.
 	tombs, _ := r.tombstones(ctx, running, generation)
-	in.Counted = statelog.CountedSet(shared.at,
-		reportedPositions(shared.positions, name), shared.live, tombs)
-	in.Holds = holdsFor(shared.holds, running.domain.Stream().Name)
+	in.Counted = shared.counted(running, tombs)
+	in.Holds = holdsFor(shared.holds, running.spec.Name)
 	in.BackupFloor, in.BackupAt, in.BackupFloorGen, in.HasBackupFloor =
-		r.backupTerm(shared.backups, running.domain.Stream().Name)
+		r.backupTerm(shared.backups, running.spec.Name)
 	in.FeedAckFloor, in.HasFeed, in.FeedReadable = r.feedTerm(ctx, running)
 	in.AgeFloor, err = r.ageFloor(ctx, running.log, stats, r.cfg.MinAge(), shared.at)
 	if err != nil {
@@ -600,7 +667,8 @@ func (r *retention) publish(ctx context.Context, name string, generation uint32,
 	return nil
 }
 
-// reportedPositions is every node's committed position in one domain.
+// reportedPositions is every node's committed position on one log, keyed as
+// the register keys it: every register row that names the log.
 func reportedPositions(rows []coord.NodePositions, domain string) []statelog.NodePosition {
 	out := make([]statelog.NodePosition, 0, len(rows))
 	for _, row := range rows {
@@ -613,7 +681,7 @@ func reportedPositions(rows []coord.NodePositions, domain string) []statelog.Nod
 		}
 		out = append(out, statelog.NodePosition{
 			NodeID: row.NodeID, Generation: at.Generation, Seq: at.Seq,
-			SnapshotSeq: at.SnapshotSeq,
+			SnapshotSeq: at.SnapshotSeq, RecordVersion: at.RecordVersion,
 			// FROM THE INSTANT RATHER THAN THE SEQUENCE. A snapshot
 			// taken while a domain's log was still empty covers it
 			// at position zero, which is a real artefact a joiner
@@ -694,7 +762,7 @@ func (r *retention) newestCounted(points []coord.BackupPoint) (coord.BackupPoint
 // exist — so the lookup below answered "never created", the term permitted
 // nothing, and that log was blocked on `feed_ack_floor` for the life of the
 // deployment while its own feed acknowledged every record.
-func (r *retention) feedTerm(ctx context.Context, running *runningDomain) (
+func (r *retention) feedTerm(ctx context.Context, running *runningLog) (
 	seq uint64, has, readable bool) {
 
 	group := running.domain.FeedGroup()
@@ -740,7 +808,7 @@ func (r *retention) feedTerm(ctx context.Context, running *runningDomain) (
 // refuses a registered identity-claiming domain that does not answer this,
 // and the statelogtest suite certifies that every one answers it correctly.
 type evictionLister interface {
-	Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error)
+	Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error)
 }
 
 // The two identity-claiming domains this build registers, held to the
@@ -749,6 +817,12 @@ type evictionLister interface {
 var (
 	_ evictionLister = tracker.Domain{}
 	_ evictionLister = pages.Domain{}
+
+	// AND BOTH READ THEIR GATE RECORDS OFF THE LOG — an eviction and the
+	// readmission that lifts it — which [stateLog.startLog] refuses a
+	// registered identity-claiming domain for lacking.
+	_ statelog.EvictionProbe = tracker.Domain{}
+	_ statelog.EvictionProbe = pages.Domain{}
 )
 
 // tombstones is every eviction this node has applied for one domain's log.
@@ -767,28 +841,38 @@ var (
 // evicted on that log, and a reader that took that for a readmission released
 // an eviction it had just made. A domain that claims no identity carries no
 // evictions and was read in full, trivially.
-func (r *retention) tombstones(ctx context.Context, running *runningDomain,
+func (r *retention) tombstones(ctx context.Context, running *runningLog,
 	generation uint32) (tombs []statelog.Tombstone, read bool) {
 
-	if !running.domain.ClaimsIdentity() {
+	return logTombstones(ctx, r.db, running.domain, generation)
+}
+
+// logTombstones is every eviction this node has applied on domain's log, each
+// stamped with generation — see [retention.tombstones], which the snapshot
+// loop's count reads through too ([Engine.counted]), so the two subtract one
+// set of tombstones.
+func logTombstones(ctx context.Context, db *store.DB, domain statelog.Domain,
+	generation uint32) (tombs []statelog.Tombstone, read bool) {
+
+	if !domain.ClaimsIdentity() {
 		// ONLY AN IDENTITY-CLAIMING DOMAIN CARRIES EVICTIONS. A domain
 		// that does not claim identity has no say in who the fleet
 		// counts on its log.
 		return nil, true
 	}
-	if r.db == nil {
+	if db == nil {
 		return nil, false
 	}
-	lister, ok := running.domain.(evictionLister)
+	lister, ok := domain.(evictionLister)
 	if !ok {
 		// UNREACHABLE ON A NODE THAT BOOTED — [Engine.startStateLog]
 		// refuses such a domain — and logged rather than assumed, on the
 		// conservative side: nobody is uncounted.
 		log.ErrorContext(ctx, "retention_evictions_unlisted",
-			"domain", running.domain.Name())
+			"domain", domain.Name())
 		return nil, false
 	}
-	rows, err := lister.Evictions(ctx, r.db)
+	rows, err := lister.Evictions(ctx, db.Replicated().Reader())
 	switch {
 	case errors.Is(err, store.ErrNoEstate) || errors.Is(err, context.Canceled):
 		// A STOP THIS PROCESS ASKED FOR IS NOT AN UNREADABLE TABLE. The
@@ -800,7 +884,7 @@ func (r *retention) tombstones(ctx context.Context, running *runningDomain,
 		return nil, false
 	case err != nil:
 		log.WarnContext(ctx, "retention_evictions_unreadable",
-			"domain", running.domain.Name(), "err", err)
+			"domain", domain.Name(), "err", err)
 		return nil, false
 	}
 	out := make([]statelog.Tombstone, 0, len(rows))

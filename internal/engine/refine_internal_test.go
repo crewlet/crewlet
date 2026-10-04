@@ -115,9 +115,9 @@ func engineOver(t *testing.T) *Engine {
 
 func refinementStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
+	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db

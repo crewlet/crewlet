@@ -2,6 +2,8 @@ package statelog
 
 import (
 	"fmt"
+	"iter"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -656,6 +658,12 @@ type DomainInputs struct {
 	// SnapshotSkip is this node's snapshot loop's own reason for taking
 	// none, empty when it is taking them.
 	SnapshotSkip SkipReason
+
+	// Tombstones is this log's own evictions: with the register's rows
+	// naming the log and the live data nodes ([ReportInputs.Live]), the
+	// three inputs the trim counts the log's nodes from, which the node
+	// block's counted mark is taken from ([ReportInputs.nodes]).
+	Tombstones []Tombstone
 }
 
 // ReportInputs is everything the report is assembled from, already read.
@@ -683,7 +691,15 @@ type ReportInputs struct {
 	Register         []coord.NodePositions
 	RegisterReadable bool
 
-	Live       []Presence
+	// Live is every live data node, which the node block marks live and
+	// every log's counted set counts ([CountedSet]) — nil where they could
+	// not be listed, when the mark counts the rows alone and each log's
+	// published floor says its counted set was unknown.
+	Live []Presence
+
+	// Tombstones is one per node evicted on EVERY identity log, as of the
+	// latest — what the node block renders as evicted. Each log's own are its
+	// [DomainInputs.Tombstones].
 	Tombstones []Tombstone
 
 	Replica ReplicaReport
@@ -927,29 +943,34 @@ func (in ReportInputs) nodes() []NodeReport {
 	}
 
 	// THE COUNTED SET IS NOT RE-DERIVED HERE. It is the same function the
-	// trim itself calls, over the same three inputs, so the screen can
-	// never name a different fleet from the one the gate is waiting for.
-	var flat []NodePosition
-	for id, row := range reported {
-		flat = append(flat, NodePosition{NodeID: id, At: row.At})
-	}
+	// trim itself calls, LOG BY LOG over the same three inputs — the rows
+	// naming the log, the live data nodes and the log's own tombstones —
+	// and a node is marked counted where some log's set holds it, so the
+	// screen can never name a different fleet from the one the gate is
+	// waiting for. Folded into one set over every log's rows, it counted a
+	// node evicted on a log beside another it never ran.
 	counted := make(map[string]bool)
-	for _, n := range CountedSet(in.At, flat, in.Live, in.Tombstones) {
-		counted[n.NodeID] = true
-	}
-
-	ids := make([]string, 0, len(reported)+len(live)+len(tombs))
-	for id := range reported {
-		ids = append(ids, id)
-	}
-	for id := range live {
-		if _, seen := reported[id]; !seen {
-			ids = append(ids, id)
+	for _, d := range in.Domains {
+		var named []NodePosition
+		for _, row := range in.Register {
+			if _, runs := row.Domains[d.Domain]; runs {
+				named = append(named, NodePosition{NodeID: row.NodeID, At: row.At})
+			}
+		}
+		for _, n := range CountedSet(in.At, named, in.Live, d.Tombstones) {
+			counted[n.NodeID] = true
 		}
 	}
-	for id := range tombs {
-		if _, seen := reported[id]; !seen && !live[id] {
-			ids = append(ids, id)
+
+	named := map[string]bool{}
+	ids := make([]string, 0, len(reported)+len(live)+len(counted)+len(tombs))
+	for _, group := range []iter.Seq[string]{maps.Keys(reported), maps.Keys(live),
+		maps.Keys(counted), maps.Keys(tombs)} {
+		for id := range group {
+			if !named[id] {
+				named[id] = true
+				ids = append(ids, id)
+			}
 		}
 	}
 	slices.Sort(ids)

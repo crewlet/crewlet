@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -135,6 +136,29 @@ func TestAFailedBackupIsAnEngineError(t *testing.T) {
 	}
 	if body["error"] != "backup_failed" {
 		t.Errorf("error = %v", body["error"])
+	}
+}
+
+// A copy naming chunks no data node could supply is the FLEET's condition, and
+// one that clears: a 500 would send an operator to this node's logs for a node
+// that is down somewhere else, and the chunk list stays in the log.
+func TestUnreachableChunksAreTheFleetsStateNotTheNodes(t *testing.T) {
+	t.Parallel()
+	taker := &fakeBackup{err: fmt.Errorf("%w: 3 of 40 chunks (ab12…)", backup.ErrObjectsUnreachable)}
+	a := newApp(t, api.Options{Bootstrap: guarded(), Backup: taker})
+
+	status, body := post(t, a, "/backup?dir=/tmp/x", "t0ken")
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", status)
+	}
+	if body["error"] != "objects_unreachable" {
+		t.Errorf("error = %v, want objects_unreachable", body["error"])
+	}
+	if body["detail"] != nil {
+		t.Errorf("the chunk list reached the caller: %v", body["detail"])
+	}
+	if body["hint"] == nil {
+		t.Error("the caller was not told what to do about it")
 	}
 }
 

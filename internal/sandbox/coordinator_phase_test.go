@@ -298,3 +298,41 @@ func TestARunLaunchedByAnOlderBuildStatesNoClock(t *testing.T) {
 			rec.StartedAt, rec.DurationMS, rec.Iteration)
 	}
 }
+
+// WHAT A RUN SAYS IT SPENT IS NEVER A REFUND.
+//
+// A run's usage is parsed out of its coding CLI's last line, printed in a box
+// its own agent can run any command in. Taken as given, a negative count was
+// subtracted from the seat's budget counter by the charge and from every
+// rollup by the phase record — headroom a run could print for itself. It is
+// read as nothing spent; the counts beside it stand.
+func TestARunsNegativeUsageIsReadAsNothingSpent(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{
+		Success: true, Text: "done",
+		InputTokens: -50_000, OutputTokens: 700, CacheReadTokens: -1, CacheWriteTokens: 300,
+		CostUSD: -4.2,
+	})
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := rig.accountant.total(); got != 700 {
+		t.Errorf("the budget counter moved by %d, want the run's 700 output tokens "+
+			"and nothing taken off for the negative input", got)
+	}
+	recs := rig.phases()
+	if len(recs) != 1 {
+		t.Fatalf("published %d phase records, want 1", len(recs))
+	}
+	rec := recs[0]
+	if rec.InputTokens != 0 || rec.OutputTokens != 700 || rec.TotalTokens != 700 ||
+		rec.CacheReadTokens != 0 || rec.CacheWriteTokens != 300 || rec.CostUSD != 0 {
+		t.Errorf("the record reads %d in / %d out / %d total, cache %d/%d, $%v; want "+
+			"0/700/700, 0/300, $0", rec.InputTokens, rec.OutputTokens, rec.TotalTokens,
+			rec.CacheReadTokens, rec.CacheWriteTokens, rec.CostUSD)
+	}
+}

@@ -88,9 +88,11 @@ func (s *Searcher) CanSearch(seat *org.Role, o *org.Organization) bool {
 
 // Search implements [knowledge.Searcher].
 //
-// BEST EFFORT: it never reports an error. Every failure path is an empty
-// result and the prefetch degrades to an empty block — a turn must not die
-// because a wiki was slow.
+// BEST EFFORT: it never reports an error. Every failure path answers no hits
+// and serves no mode, which the turn-start block and search_knowledge both
+// render as "the knowledge base could not be searched" — a turn must not die
+// because a wiki was slow, and a seat must not read a site that never answered
+// as one that has nothing written down.
 //
 // KEYWORD ONLY, AND IT SAYS SO. The site ranks by its own CQL text search and
 // the engine embeds nothing here, so `semantic` answers nothing with
@@ -128,7 +130,8 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Resu
 	pages, err := client.Search(ctx, cql, q.Hits()+overfetch)
 	if err != nil {
 		log.WarnContext(ctx, "confluence_search_failed", "error", err.Error(),
-			"detail", "the turn gets an empty knowledge block")
+			"detail", "the turn's knowledge block says the knowledge base could "+
+				"not be searched")
 		// NOT COMPLETE: the site was asked and did not answer, which is
 		// a different fact from a site that answered nothing.
 		return out

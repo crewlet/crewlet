@@ -1,9 +1,11 @@
 package config
 
 import (
+	"fmt"
 	"log/slog"
 	"maps"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -238,8 +240,10 @@ func (r *Resolver) Map(path string, in map[string]string) (map[string]string, []
 	return out, missing
 }
 
-// Document expands every string in a parsed YAML document IN PLACE and
-// reports what went unresolved, with the path of each site.
+// Document expands every string in a parsed YAML document IN PLACE, reading
+// each resolved value as the field it lands in reads one, and reports what
+// went unresolved with the path of each site. into is the Go type the document
+// will be decoded into, which is what decides that reading.
 //
 // This is the Tier A load path: the DSN, the broker URL and the API tokens
 // are needed the instant the process starts, so Tier A is resolved once
@@ -247,55 +251,112 @@ func (r *Resolver) Map(path string, in map[string]string) (map[string]string, []
 // references are stored verbatim and resolved at the moment a provider or
 // transport is built, which is what keeps an exported revision free of
 // resolved secrets.
-func (r *Resolver) Document(node *yaml.Node) []Unresolved {
-	var missing []Unresolved
-	r.resolveNode(node, nil, &missing)
-	return missing
+//
+// # A resolved value is read as the field reads a literal
+//
+// Into TEXT, the resolved value is the string, character for character —
+// it is data, never YAML, so a value of `null`, `~` or `8080` is that text
+// and not an absence or a number. Into a NUMBER or a SWITCH it is read
+// exactly as the same characters written in the file would be: `port:
+// ${API_PORT}` with API_PORT=8080 is `port: 8080`, and `debug: ${DEBUG}`
+// with DEBUG=true is `debug: true` — trimmed of the space around it first,
+// because what it came out of so often ends in a newline that the same
+// characters written in the file would not carry. It used to be text
+// everywhere, so no number field could take a reference at all and a switch
+// took only the YAML 1.1 words — while the documentation promised a reference
+// anywhere in Tier A.
+//
+// Two shapes are refused there rather than guessed at, each as a fault on
+// the field:
+//
+//   - A reference that is not the WHOLE value (`80${N}`). A number or a
+//     switch is one value from one variable; composing one out of text
+//     would make its type a property of how two strings concatenate.
+//   - A reference that resolves to NOTHING. The empty value is how a file
+//     says "unset", and a number that silently fell back to its default
+//     because a variable was missing would boot on a port nobody chose. A
+//     text field keeps its own reading of empty, where empty is often a
+//     real setting — the log file's is guarded where it is decided (see
+//     [refuseUnresolvedLogFile]).
+func (r *Resolver) Document(node *yaml.Node, into reflect.Type) ([]Unresolved, error) {
+	var (
+		missing []Unresolved
+		refused problems
+	)
+	eachScalar(node, into, nil, func(n *yaml.Node, t reflect.Type, path Path) {
+		if n.Tag != "" && n.Tag != "!!str" {
+			// Substituting into a number or a boolean the author wrote
+			// could only corrupt it; a quoted reference is a string.
+			return
+		}
+		if !envref.Has(n.Value) {
+			return
+		}
+		literal := literalKind(t)
+		if literal && !wholeReference(n.Value) {
+			refused = append(refused, &Fault{Path: path, Kind: ErrShape, Line: n.Line, Detail: fmt.Sprintf(
+				"%q mixes a reference with other text, and this setting is a %s: write "+
+					"the whole value as one ${VAR}, whose value is read as if it were "+
+					"written here", n.Value, kindNoun(t))})
+			return
+		}
+		expanded, names := r.Expand(n.Value)
+		if len(names) > 0 {
+			missing = append(missing, Unresolved{Path: path.String(), Names: names})
+		}
+		if literal && strings.TrimSpace(expanded) == "" {
+			refused = append(refused, &Fault{Path: path, Kind: ErrMissing, Line: n.Line, Detail: fmt.Sprintf(
+				"%s resolved to nothing, and a %s cannot be empty: set the variable, "+
+					"or write the value", n.Value, kindNoun(t))})
+			return
+		}
+		if literal {
+			// TRIMMED FIRST, as every Tier A string is (see [normalize]
+			// for where the whitespace comes from): the same characters
+			// written plain in the file never carry the space around them
+			// — `port: 8080` ends at the 0 — while a value out of a mounted
+			// file, a .env line or a captured command routinely keeps a
+			// trailing newline. Kept, it made the text unwritable plain, so
+			// the encoder quoted it and the field refused it as a word: a
+			// port read from a file failed the boot where a host name read
+			// the same way did not.
+			//
+			// READ AS A LITERAL: no tag, plain style, so the decoder
+			// resolves the text as it resolves the same characters in a
+			// file. Text that still cannot be written plain (a flow
+			// indicator, a line break inside it) is quoted by the encoder
+			// and reaches the field as a string, which it refuses — so a
+			// value is never read as YAML syntax it merely contains.
+			n.Value = strings.TrimSpace(expanded)
+			n.Tag = ""
+			n.Style = 0
+			return
+		}
+		n.Value = expanded
+		// TEXT STAYS TEXT, whatever it looks like: an unquoted ${PORT}
+		// resolving to "8080" into a string field must stay a string, or
+		// re-encoding would retag it as an integer — and one resolving to
+		// "null" must not become an absence.
+		n.Tag = "!!str"
+		n.Style = yaml.DoubleQuotedStyle
+	})
+	return missing, refused.err()
 }
 
-// resolveNode walks the document, rewriting scalars. Only string scalars
-// are touched: substituting into a number or a boolean could only ever
-// corrupt it, and a quoted reference is still a string scalar.
-func (r *Resolver) resolveNode(node *yaml.Node, path Path, missing *[]Unresolved) {
-	if node == nil {
-		return
+// wholeReference reports whether value is exactly one ${VAR} and nothing
+// else — not even surrounding space, which in a quoted scalar is part of the
+// value and would make the resolved text something no number is.
+func wholeReference(value string) bool {
+	_, whole := envref.Whole(value)
+	return whole && strings.TrimSpace(value) == value
+}
+
+// kindNoun names what a field holds, for a refusal an operator reads.
+func kindNoun(t reflect.Type) string {
+	if t != nil && t.Kind() == reflect.Bool {
+		return "switch (true or false)"
 	}
-	switch node.Kind {
-	case yaml.DocumentNode:
-		for _, child := range node.Content {
-			r.resolveNode(child, path, missing)
-		}
-	case yaml.MappingNode:
-		for i := 0; i+1 < len(node.Content); i += 2 {
-			key, value := node.Content[i], node.Content[i+1]
-			// The KEY is never resolved. A config's key space is its
-			// schema, and a schema that changes with the environment is
-			// not one — this is also why the ${VAR} grammar deliberately
-			// does not match shell parameter expansions.
-			r.resolveNode(value, entry(path, key.Value), missing)
-		}
-	case yaml.SequenceNode:
-		for i, child := range node.Content {
-			r.resolveNode(child, idx(path, i), missing)
-		}
-	case yaml.ScalarNode:
-		if node.Tag != "" && node.Tag != "!!str" {
-			return
-		}
-		if !envref.Has(node.Value) {
-			return
-		}
-		expanded, names := r.Expand(node.Value)
-		node.Value = expanded
-		// A substituted value is no longer whatever style it was written
-		// in: an unquoted ${PORT} that resolves to "8080" must stay a
-		// string, or re-encoding would retag it as an integer.
-		node.Tag = "!!str"
-		node.Style = yaml.DoubleQuotedStyle
-		if len(names) > 0 {
-			*missing = append(*missing, Unresolved{Path: path.String(), Names: names})
-		}
-	}
+	return "number"
 }
 
 // LogUnresolved emits one warning per unresolved site: the path and the

@@ -530,7 +530,7 @@ func TestASearchRanksByMeaningOverWhatTheDutyEmbedded(t *testing.T) {
 		t.Fatalf("tick: %v", err)
 	}
 	h.drain()
-	x := search.NewIndexerOver(h.db, []search.LexicalSource{search.TaskSource{}})
+	x := search.NewIndexerOver(h.db, h.db.Replicated().Reader(), []search.LexicalSource{search.TaskSource{}})
 	indexAll(t, x)
 
 	fan := &search.FanOut{Self: "n1", Local: search.NodeScanner{Index: x},

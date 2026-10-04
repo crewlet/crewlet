@@ -147,7 +147,7 @@ func (x *Indexer) LinkedFrom(ctx context.Context, pageID string) (Backlinks, err
 	// THROUGH THE HANDLE, for [Indexer.staleIn]'s reason: a replicated
 	// estate that is not open answers [store.ErrNoEstate] rather than a nil
 	// pool that panics.
-	err = x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err = x.estate.Read(ctx, func(tx *sql.Tx) error {
 		related, readErr := relatedTasks(ctx, tx, target)
 		if readErr != nil {
 			return readErr

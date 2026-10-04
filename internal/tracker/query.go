@@ -272,7 +272,11 @@ type Query struct {
 	// something a caller can write, so [ParseQuery] neither reads nor
 	// refuses a key for it, and a surface sets it beside the read level it
 	// resolves.
-	Units Units
+	//
+	// NOT SERIALISED: an interface a JSON encoder writes as `{}` and
+	// cannot decode back. A surface that sends this across a wire has the
+	// far side attach ITS OWN chart — see internal/estate.
+	Units Units `json:"-"`
 
 	Tags TagFilter
 
@@ -1288,7 +1292,7 @@ func (q Query) Wants(field RowField) bool { return slices.Contains(q.RowFields, 
 func ParseFreshness(p Params) (statelog.Freshness, error) {
 	var out statelog.Freshness
 	if raw := strings.TrimSpace(p.String("min_position")); raw != "" {
-		at, err := ParseLogPosition(raw)
+		at, err := statelog.ParsePosition(raw)
 		if err != nil {
 			return out, fmt.Errorf("min_position: %w", err)
 		}

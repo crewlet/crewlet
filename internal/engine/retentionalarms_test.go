@@ -104,7 +104,7 @@ func TestTheAlarmEvaluationLeavesTheHardwareMeasurementToTheTrimTick(t *testing.
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
 	}
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
+	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}

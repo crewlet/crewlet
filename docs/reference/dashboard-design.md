@@ -754,7 +754,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/tools` · `#/settings/tools/{tool}` · `#/settings/tools/servers/{name}` | **Tools & MCP** — every MCP server with what each node did with it, and every tool a seat can call, by origin. Not guarded: the registry and who holds each tool are pushes every reader gets; only the servers' status (`mcp_servers_status`) is the operator's, and its section says so in its own place. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` · `add=server` (the add form) |
 | `#/settings/models` · `#/settings/models/{id}` | **Models & keys** — every `providers.llm` entry, the keys it rotates through by variable name, which a vendor is refusing and when each comes back (`credential_pool`), and the seats whose chain names it; one model's keys whole and its seats, and its **Edit** *(operator)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(operator)* | |
-| `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes** — leases (each seat's holder and **since** when), duties and config rollout *(operator)* | |
+| `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes** — leases (each seat's holder and **since** when), duties, config rollout, the fleet broker's members as the nodes advertise them and as its metadata group counts them, and where the company's files are kept (the object store's backend and its collector's last passes) *(operator)* | |
 | `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(operator)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
 | `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(operator)*. Domains live only under `backups/` | |
 | `#/settings/audit` | **Audit log** — every write a person or a token made, every call they made at runtime, and every configuration revision labelled with the kind of writer it recorded (`operator` or `node`) *(operator)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime` |
@@ -5176,8 +5176,8 @@ Settings is the one workspace that draws its sections as a **column** beside
 the screen rather than as tabs in the page bar, in three groups: **Company**
 (General, People & access, and Budgets as a cross-link — it lives once, under Spend, and its
 arrow says pressing it leaves Settings), **Connect** (Integrations, Tools &
-MCP, Models & keys, Secrets) and **Engine** (Nodes, Configuration, Backups & retention, Audit
-log). A guarded section draws a key and **is never hidden**: a section that
+MCP, Models & keys, Secrets) and **Engine** (Nodes, Configuration, Backups &
+retention, Audit log). A guarded section draws a key and **is never hidden**: a section that
 vanished for a reader without an operator credential is one they cannot know
 exists. The landing page is one of the column's sections, so its trail reads
 **Settings › General** rather than "Settings" alone. **On a phone the column
@@ -5392,17 +5392,22 @@ the page's title uses — never the mono face kept for a key still waiting for
 the name a screen publishes. A tool's trail follows its title, as its header
 does.
 
-**Nodes** is every live node's lease, posture, config epoch and uptime. **The
+**Nodes** is every live node's lease, broker kind, posture, config epoch and uptime. **The
 node is the table's one flexible column and every fact beside it is its content's
 width** — the role chips on one line, a count as wide as its head — so no column
 is a share of the row: three shared columns once put a single digit in 150px of
 air while the chips wrapped onto three lines, and under a peek fell to a letter
 ("R.", "S.", "I.") with the chips as empty pills. Where the row cannot hold every
 fact, whole columns give way, in this order: **Lease** (every listed node's is
-unexpired by definition), **Up since**, **Roles**, then **In flight** — each one
-a fact the node's peek carries, **Roles** among its header facts — and the grid
-names what it hid. At 1280 only Lease gives way; beside a peek at 1440, Node,
-Seats, In flight, Posture and Config stay. Then
+unexpired by definition), **Broker** (a kind that changes with a restart at
+most, named again by the Broker members panel), **Up since**, **Roles**, then
+**In flight** — each one a fact the node's peek carries, **Roles** and
+**Broker** among its header facts — and the grid names what it hid. At 1280
+Lease and Broker give way; beside a peek at 1440, Node, Seats, In flight,
+Posture and Config stay. The **Broker** column is the kind the node's presence
+advertises — `member`, `leaf` or `client` as a neutral tag, `unknown` as a
+warning since it is the one reading that is a guess, and nothing at all from a
+build older than the field. Then
 **Seat placement** — each seat, the node holding it, its lease and **Since**:
 the tenure's start (`acquired_at`), stamped when the epoch is minted and
 carried through every renewal, so "since 2h ago" means the seat has not moved
@@ -5418,6 +5423,22 @@ the seat or the duty stays the strongest text in its row. A node's build
 version is one token in its header, on one line with the whole string in its
 title. Neither screen repeats a count in its page bar that a tile below
 already shows. See [seat ownership](../concepts/seat-ownership.md).
+
+Below the lease tables, **File storage** is the object store: which store the
+company's files are in — the fleet's own NATS bucket, or the S3 bucket it names
+— in the header, then one row for each of the collector's passes (the hourly
+collection and the daily audit) with when it ran and what it found. It reads
+the fleet's record rather than this node, so it says the same thing whichever
+node served the screen. **Missing chunks** are the one reading an operator
+opens it for: when the last audit found any, a danger callout above the passes
+names the first of them — parts of files nobody can download, to restore from a
+backup. A record the coordination store would not give up is said as that, not
+as a fleet whose collector has not run. There is nothing to press: the store
+keeps its own copies, so there is no gesture on it. **Broker members** is
+the fleet broker's membership twice — as the nodes advertise it and as the
+metadata group counts it — with every disagreement named and the removal of a
+dead member behind a typed confirmation. See [the object
+store](../concepts/object-store.md) and [the fleet guide](../guides/fleet.md).
 
 **Backups & retention** reads `backups` beside the retention panels. **Take a
 backup** asks the node serving the page for a copy (`POST /backup`) in a

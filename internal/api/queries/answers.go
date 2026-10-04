@@ -96,6 +96,16 @@ type Sources struct {
 	// Plane is the control plane, for the config columns of the fleet view.
 	Plane coord.Plane
 
+	// Objects is the fleet's record of the object store, for the fleet
+	// view's file-storage card. Nil leaves the card out of the answer rather
+	// than reporting a fleet whose collector never ran.
+	Objects ObjectsReader
+
+	// FleetBroker is the fleet broker's membership — what every live node
+	// advertises against what the metadata group counts. Nil leaves the
+	// question unregistered.
+	FleetBroker BrokerLister
+
 	// Runs is the schedule dispatch ledger. Nil still answers the
 	// schedules question — the configured schedules are a projection of
 	// the org — with an empty history, because "no ledger" and "nothing
@@ -222,6 +232,12 @@ type Sources struct {
 	Work  WorkReader
 	Pages PageReader
 
+	// Files is a project's files — the rows, never the bytes, which the
+	// download route streams. SEPARATE from [Sources.Work] for the reason
+	// [Sources.WorkSearch] is: a node can answer one and not the other,
+	// and a screen needs to know which. Nil leaves `work_files`
+	// unregistered.
+	Files FileReader
 	// Backlinks is which pages and tasks link to a page — this node's
 	// lexical index, which derives the links from the bodies it reads
 	// ([search.Backlinks]). Nil leaves the `page` answer without
@@ -459,6 +475,12 @@ func Register(r *Registry, s Sources) {
 		// credential to take, and of when. See [Sources.credentialPool].
 		r.RegisterOperator("credential_pool", s.credentialPool)
 	}
+	if s.FleetBroker != nil {
+		// OPERATOR-ONLY, for the fleet question's reason: node ids, their
+		// roles and which member the broker counts are the deployment's
+		// shape, not the company's work.
+		r.RegisterOperator("fleet_broker", s.fleetBroker)
+	}
 	// WHO IS ASKING. Registered unconditionally: a process with no company
 	// still has a credential presented to it, and "this token resolves to
 	// no seat" is the answer a screen needs in order to say what to bind.
@@ -626,6 +648,13 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.Channels != nil {
 		r.Register("a2a_channels", s.a2aChannels)
+	}
+	if s.Files != nil {
+		// A PROJECT'S FILES, a page at a time in path order. The bytes are
+		// not an answer on this channel — a download streams from its own
+		// route — so this is everything a file list draws and nothing a
+		// reader opens.
+		r.Register("work_files", s.workFiles)
 	}
 	if s.WorkSearch != nil {
 		// SEARCH IS A QUESTION, not a filter on the board, and it is

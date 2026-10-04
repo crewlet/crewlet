@@ -65,6 +65,7 @@ import { useNow } from "~/lib/clock.ts";
 import { apiToken } from "~/protocol/authToken.ts";
 import type {
   RetentionDomain,
+  RetentionEviction,
   RetentionMaintenance,
   RetentionNode,
   RetentionNodeDomain,
@@ -261,25 +262,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
                   <KeyCell value={n.node_id} path={["settings", "nodes", n.node_id]} />
                   {n.node_id === thisNode && <Tag variant="brand">this one</Tag>}
                   {n.counted && !n.live && <Tag variant="warning">counted · not live</Tag>}
-                  {/* THE FENCE WINDOW IS THE POINT. An eviction is not
-                      immediate — the node stays counted until effective_at so
-                      a live one is certain to have noticed — and an operator
-                      who cannot see that runs the gesture twice. */}
-                  {n.evicted && !n.evicted.effective && (
-                    <Tag
-                      variant="warning"
-                      title={`evicted by ${n.evicted.by}; takes effect ${fmtDateTime(
-                        n.evicted.effective_at,
-                      )}`}
-                    >
-                      evicted in {fmtDuration(Date.parse(n.evicted.effective_at) - now)}
-                    </Tag>
-                  )}
-                  {n.evicted?.effective && (
-                    <Tag variant="danger" title={`evicted by ${n.evicted.by}`}>
-                      evicted
-                    </Tag>
-                  )}
+                  {n.evicted && <Tombstone evicted={n.evicted} now={now} />}
                 </span>
               ),
             },
@@ -482,6 +465,29 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
         />
       )}
     </>
+  );
+}
+
+/**
+ * A node's tombstone on its row.
+ *
+ * THE FENCE WINDOW IS THE POINT. An eviction is not immediate — the node stays
+ * counted until `effective_at` so a live one is certain to have noticed — and
+ * an operator who cannot see that runs the gesture twice.
+ */
+export function Tombstone({ evicted, now }: { evicted: RetentionEviction; now: number }) {
+  const who = `evicted by ${evicted.by}`;
+  if (!evicted.effective) {
+    return (
+      <Tag variant="warning" title={`${who}; takes effect ${fmtDateTime(evicted.effective_at)}`}>
+        evicted in {fmtDuration(Date.parse(evicted.effective_at) - now)}
+      </Tag>
+    );
+  }
+  return (
+    <Tag variant="danger" title={who}>
+      evicted
+    </Tag>
   );
 }
 
@@ -695,8 +701,12 @@ function firstDomain(n: RetentionNode) {
   return domains.length ? domains[0] : undefined;
 }
 
-/** donorsCounted is how many nodes hold a snapshot at all. */
-function donorsCounted(snapshots: RetentionSnapshot[]): number {
+/**
+ * donorsCounted is how many nodes hold a snapshot at all: one row per node,
+ * since every data node keeps the one estate and an artefact is a copy of all
+ * of it.
+ */
+export function donorsCounted(snapshots: RetentionSnapshot[]): number {
   return snapshots.filter((s) => s.at && s.domains).length;
 }
 

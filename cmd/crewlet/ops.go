@@ -71,12 +71,28 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err = refuseScratchStore(boot, "crewlet migrate",
+		"There is nothing to migrate: `crewlet run` creates it fresh, at this "+
+			"binary's schema, every time it starts."); err != nil {
+		return err
+	}
 	opts := store.Options{
 		MaxOpenConns: boot.Store.MaxOpenConns,
-		BusyTimeout:  boot.Store.BusyTimeout(),
+		// WHERE THE ENGINE PUTS IT. Left out, the store derives the
+		// replicated estate's path from store.path alone — so on a node whose
+		// store.replicated_path names another volume, this command
+		// reported and migrated a fresh database it created beside
+		// store.path, and left the one the engine opens exactly as far
+		// behind as it found it.
+		ReplicatedPath: boot.Store.ReplicatedPath,
+		BusyTimeout:    boot.Store.BusyTimeout(),
 	}
 	ctx := context.Background()
-
+	// BOTH FILES — the node's own and the replicated estate `crewlet run`
+	// opens beside it. Every node that reaches here holds both: the only
+	// node that holds no replicated estate is one without `data`, whose
+	// store Tier A requires to be scratch, and the scratch store is refused
+	// above — so this creates no file for a node that would never open it.
 	schemas, err := store.Pending(ctx, boot.Store.Path, opts)
 	if err != nil {
 		// READING IS ALSO A SECOND PROCESS ON THE FILE, and until Pending
@@ -91,9 +107,9 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 				"already applied every migration this binary carries, so a node "+
 				"that is up is a node with nothing pending.")
 	}
-	// BOTH ESTATES, ALWAYS BOTH. A node is two databases with two
-	// independent sequences, and a report that named one of them would be
-	// a deploy gate that passes while the other is behind.
+	// BOTH FILES, ALWAYS BOTH. A node is two databases with two independent
+	// sequences, and a report that named one of them would be a deploy gate
+	// that passes while the other is behind.
 	var waiting int
 	for _, sch := range schemas {
 		waiting += len(sch.Pending)
@@ -124,9 +140,10 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 
 	// OPENING IS WHAT MIGRATES. There is deliberately no second code path
 	// that applies files: a migrator the engine does not use is one that
-	// can disagree with it about what "applied" means. One Open brings up
-	// both estates, so both sequences run here.
-	db, err := store.Open(ctx, boot.Store.Path, opts)
+	// can disagree with it about what "applied" means. The node's own file
+	// and its replicated estate are opened through the store's own opens,
+	// as `crewlet run` opens them, so both sequences run here.
+	db, err := store.OpenNode(ctx, boot.Store.Path, opts)
 	if err != nil {
 		// NO ROUTE AROUND THIS ONE, and that is correct: migrating the
 		// schema under a live engine is what the lock exists to prevent,
@@ -137,10 +154,20 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	}
 	defer func() { _ = db.Close() }()
 
+	// ONE LOG'S POOL, because this command runs no apply loop: the count
+	// sizes the writers the engine's apply loops pin, none of which run
+	// here, and the schema a file migrates to is the same whatever it is.
+	replicated, err := db.OpenReplicated(ctx, 1)
+	if err != nil {
+		return engineHoldsTheStore(err, bootstrapPath,
+			"Stop `crewlet run` on this node and re-run — a schema change "+
+				"under a live engine is exactly what the lock prevents.")
+	}
+
 	for _, sch := range schemas {
 		handle := db
 		if sch.Estate == store.EstateReplicated {
-			handle = db.Replicated()
+			handle = replicated
 		}
 		now, err := handle.AppliedMigrations(ctx)
 		if err != nil {

@@ -50,7 +50,7 @@ type node struct {
 
 func newNode(t *testing.T, b *memory.Broker, id string) node {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), id+".db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), id+".db"), store.Options{})
 	if err != nil {
 		t.Fatalf("open %s: %v", id, err)
 	}

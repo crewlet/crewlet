@@ -97,9 +97,9 @@ func (n NodeScanner) lexical(ctx context.Context, q FanQuery, shards Assignment,
 // a failure marks the slice rather than failing it.
 func (n NodeScanner) semantic(ctx context.Context, q FanQuery, shards Assignment, out *Slice) {
 	var vectors []SemanticHit
-	if err := n.Index.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := n.Index.estate.Read(ctx, func(tx *sql.Tx) error {
 		var err error
-		vectors, err = Semantic(ctx, tx, SemanticQuery{
+		vectors, _, err = Semantic(ctx, tx, SemanticQuery{
 			Vector: q.Vector, Model: q.Model, Dim: q.Dim,
 			Containers: q.Containers,
 			Sources:    sourcesOf(q.Sources),

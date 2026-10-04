@@ -186,7 +186,7 @@ func chunkTask(id string) tracker.Task {
 func dumpTable(t *testing.T, h *applyHarness, table, order string) []string {
 	t.Helper()
 	var out []string
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Read(h.t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(h.t.Context(),
 			`SELECT * FROM `+table+` ORDER BY `+order)
 		if err != nil {

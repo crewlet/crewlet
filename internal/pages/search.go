@@ -3,6 +3,7 @@ package pages
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -167,6 +168,32 @@ func (s *Searcher) Building(_ context.Context) bool {
 // now holds [knowledge.Outcome.Coverage] and decides what to say; the log line
 // went with the reason for it.
 func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Result {
+	answer, err := s.Answer(ctx, q)
+	if err != nil {
+		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),
+			"detail", "the knowledge block says the search did not run; a turn "+
+				"must not die because an index was slow")
+		return s.failed(err)
+	}
+	return answer
+}
+
+// Answer is [Searcher.Search] with its failure kept: an ERROR rather than the
+// empty result Search degrades to, for a caller that answers somebody else —
+// the estate router, which carries a search between nodes and has to tell the
+// asking node "the knowledge base could not be searched" rather than hand it
+// an empty answer that reads as "nothing matched". The two send a seat to
+// different places: one to try again, the other to write down what it was
+// looking for, duplicating a page that exists.
+//
+// THE FUSED ORDER IS WALKED PAST WHAT CANNOT BE SHOWN, rather than cut first
+// and filtered after: a tool-skill page among the leaders, or one the index
+// named and could not read back, costs the answer that page and never a place,
+// so a company with many skills is not handed a short list. That is what the
+// over-fetch factor this replaced only approximated — three times the limit,
+// cut, then filtered — and a company whose skills filled two thirds of the cut
+// got the short list anyway.
+func (s *Searcher) Answer(ctx context.Context, q knowledge.Query) (knowledge.Result, error) {
 	if s.index == nil || strings.TrimSpace(q.Text) == "" {
 		// THE PROBE: nothing runs and nothing is read, but the answer
 		// still says which modes this node would serve as asked and how
@@ -176,7 +203,7 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Resu
 			Modes:    s.fan.Modes(),
 			Degraded: s.fan.ProbeDegradation(q.Mode),
 			Coverage: knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}},
-		}}
+		}}, nil
 	}
 	scope := knowledge.Scope(scopeOf(q.Org))
 	answer, err := s.fan.Search(ctx, search.FanQuery{
@@ -184,42 +211,47 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Resu
 		Containers: scope,
 		Sources:    []string{string(search.SourcePage)},
 		Mode:       q.Mode,
-		// OVER-FETCHED, because the exclusions below drop hits after
-		// ranking: asking for exactly the limit and then removing three
-		// skill pages would return five results where eight were
-		// available.
-		Limit: q.Hits() * searchOverfetch,
+		// NOT THE CALLER'S LIMIT: what is walked below is the candidates,
+		// each method's top FuseN whatever the limit, and the fused cut
+		// the fan-out also makes is not read here.
+		Limit: search.FuseN,
 	})
 	if err != nil {
-		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),
-			"detail", "the knowledge block degrades to empty; a turn must not "+
-				"die because an index was slow")
-		return s.failed(err)
+		return knowledge.Result{}, err
 	}
-	hits, err := s.index.Hydrate(ctx, answer.Hits, q.Text)
+	out := knowledge.Result{Hits: make([]knowledge.Hit, 0, q.Hits()), Outcome: answer.Outcome()}
+	keys := answer.Candidates.Keys()
+	if len(keys) == 0 {
+		return out, nil
+	}
+	hits, err := s.index.Hydrate(ctx, keys, q.Text)
 	if err != nil {
-		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),
-			"detail", "the fused answer could not be read back")
-		return s.failed(err)
+		return knowledge.Result{}, fmt.Errorf("pages: read back the search's candidates: %w", err)
 	}
-
-	out := make([]knowledge.Hit, 0, q.Hits())
+	shown := make(map[string]knowledge.Hit, len(hits))
 	for _, hit := range hits {
 		if s.isExcluded(hit.Container) {
 			continue
 		}
-		out = append(out, knowledge.Hit{
+		shown[hit.Key] = knowledge.Hit{
 			Title:     hit.Title,
 			Container: hit.Container,
 			PageID:    hit.ID,
 			Snippet:   hit.Snippet,
 			Backend:   Backend,
-		})
-		if len(out) == q.Hits() {
+		}
+	}
+	for _, key := range answer.Candidates.Fused() {
+		hit, ok := shown[key]
+		if !ok {
+			continue
+		}
+		out.Hits = append(out.Hits, hit)
+		if len(out.Hits) == q.Hits() {
 			break
 		}
 	}
-	return knowledge.Result{Hits: out, Outcome: answer.Outcome()}
+	return out, nil
 }
 
 // failed is the answer to a search this node could not run at all: no hits,
@@ -236,13 +268,6 @@ func (s *Searcher) failed(err error) knowledge.Result {
 		},
 	}}
 }
-
-// searchOverfetch is how many times the limit is asked for before exclusions.
-//
-// Three. The exclusions drop a bounded fraction — tool-skill pages in one
-// reserved container — so a wider factor buys nothing and a narrower one
-// returns short result sets on a company with many skills.
-const searchOverfetch = 3
 
 // isExcluded reports a container a search never returns.
 func (s *Searcher) isExcluded(container string) bool {

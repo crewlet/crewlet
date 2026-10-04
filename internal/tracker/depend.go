@@ -412,7 +412,7 @@ func (p parties) wakeFor(subject Task, dependents []TaskParty, leads Leads) *Not
 // any blocker full, tombstoned or absent — and a read per edge would answer
 // each question against a different instant.
 func (w *Writer) readParties(ctx context.Context, change DependencyChange) (parties, error) {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return parties{}, fmt.Errorf("tracker: this writer has no replicated " +
 			"estate, so it cannot read the counterparties a dependency has to " +
 			"have checked before its first append")
@@ -446,14 +446,13 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 	}
 	required := append(slices.Clone(change.WaitingOnAdd), change.BlockingAdd...)
 	out := parties{byID: make(map[string]Task, len(wanted))}
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		self, held, err := readTask(ctx, tx, change.Task)
 		if err != nil {
 			return err
 		}
 		if !held {
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				change.Task, statelog.ErrUnavailable)
+			return missingTask(ctx, tx, change.Task, "no dependency can be changed on it")
 		}
 		out.self = self
 		for _, id := range wanted {

@@ -34,7 +34,7 @@ func TestASecondProcessIsRefused(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "index.db")
 
-	first, err := store.Open(t.Context(), path, store.Options{})
+	first, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestTheLockIsFreedWhenTheHolderIsGone(t *testing.T) {
 	if out, err := runHelper(t, path, "abandon"); err != nil {
 		t.Fatalf("helper: %v: %s", err, out)
 	}
-	db, err := store.Open(t.Context(), path, store.Options{})
+	db, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("open after the holder exited: %v — the lock outlived its "+
 			"process and nothing can clear it", err)
@@ -81,11 +81,11 @@ func TestTwoHandlesInOneProcessShareTheLock(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "index.db")
 
-	a, err := store.Open(t.Context(), path, store.Options{})
+	a, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
-	b, err := store.Open(t.Context(), path, store.Options{})
+	b, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("second handle in the same process was refused: %v", err)
 	}
@@ -149,7 +149,7 @@ func runHelper(t *testing.T, path, mode string) (string, error) {
 // runLockHelper opens the database and reports what happened. Called from
 // TestMain in store_test.go, which is this binary's single entry point.
 func runLockHelper(path, mode string) int {
-	db, err := store.Open(context.Background(), path, store.Options{})
+	db, err := store.OpenNode(context.Background(), path, store.Options{Scratch: mode == "scratch"})
 	if err != nil {
 		if errors.Is(err, store.ErrLocked) {
 			fmt.Printf("%s %v\n", lockedMarker, err)

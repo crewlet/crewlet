@@ -54,9 +54,11 @@ const SearchShards = 64
 // indexed document and once per embedded one, and it must produce the same
 // answer on every node for the life of the deployment.
 //
-// The SOURCE KIND is in the hash because the ids are not one namespace: a page
-// is a uuid and a work item is a project key, and two corpora hashed
-// separately would each be even while their union was not.
+// The SOURCE KIND is in the hash because a document's identity is the PAIR:
+// both corpora mint their own uuids, independently, and every table that
+// carries a document keys it on (source, id). Hashing the id alone would make
+// the bucket a function of something narrower than the identity it is filed
+// under — and hashing the pair costs one byte of input.
 func ShardOf(source, id string) int {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(source))

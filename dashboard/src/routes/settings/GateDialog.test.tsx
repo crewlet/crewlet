@@ -13,6 +13,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { engineFile } from "~/test/engineFiles.ts";
+import { GATE_REQUEST_TIMEOUT_MS } from "~/contract/gate.ts";
 import type { RetentionGateResult } from "~/protocol/index.ts";
 import { finishable, GateDialog, GateOutcome } from "./GateDialog.tsx";
 import type { GateGesture } from "./GateDialog.tsx";
@@ -266,9 +267,44 @@ test("a refused readmission renders its reason and its remedy, and no outcome", 
   expect(screen.queryByText(/is readmitted/)).toBeNull();
 });
 
-// A REQUEST NOBODY ANSWERED KEEPS ITS ID. The engine allows a gesture a minute
-// and finishes it whatever the connection does; the dialog gave up at thirty
-// seconds holding nothing, and the only way on was a second gesture.
+// A READMISSION NOBODY COULD JUDGE renders the engine's sentence and its way
+// past — the same request again, here or on another node — and never the
+// catch-up advice a refusal below the floor gets: the node's position is not
+// what is wrong, a read the judgement needed is.
+test("an unjudged readmission offers to ask again, not to wait for the node", async () => {
+  const refusal = golden.refusals["readmission_unjudged"]!;
+  engine(refusal);
+  render(<GateDialog node="node-4" evict={false} onHeld={() => {}} onClose={() => {}} />);
+  confirmAndPress("node-4", "Readmit");
+  await waitFor(() => expect(screen.getByText(String(refusal.body.hint))).toBeTruthy());
+  expect(screen.getByText(/Send it again once what stopped it has cleared/)).toBeTruthy();
+  expect(screen.getByText(/Open this dashboard on a node the fleet still counts/)).toBeTruthy();
+  expect(screen.queryByText(/Wait for it to catch up/)).toBeNull();
+  expect(screen.queryByText(/is readmitted/)).toBeNull();
+});
+
+// A GESTURE REFUSED IN A CAPACITY WINDOW WAITS ON THE WINDOW. Keyed on the
+// gesture, the dialog told an eviction refused `not_publishing` to wait for a
+// lease to lapse and a readmission to wait for a position to catch up — neither
+// of which is what the fleet's maintenance mode waits on.
+test("a gesture refused in a capacity window says it waits on the window", async () => {
+  for (const evict of [true, false]) {
+    const refusal = golden.refusals["not_publishing"]!;
+    engine(refusal);
+    render(<GateDialog node="node-4" evict={evict} onHeld={() => {}} onClose={() => {}} />);
+    confirmAndPress("node-4", evict ? "Evict" : "Readmit");
+    await waitFor(() => expect(screen.getByText(String(refusal.body.hint))).toBeTruthy());
+    expect(screen.getByText(/back in normal mode/)).toBeTruthy();
+    expect(screen.queryByText(/presence lease to lapse/)).toBeNull();
+    expect(screen.queryByText(/Wait for it to catch up/)).toBeNull();
+    cleanup();
+  }
+});
+
+// A REQUEST NOBODY ANSWERED KEEPS ITS ID. The engine allows a gesture its own
+// answer budget and finishes it whatever the connection does; the dialog gave
+// up at thirty seconds holding nothing, and the only way on was a second
+// gesture.
 test("a gesture that times out keeps its op id and offers to finish it", async () => {
   vi.useFakeTimers();
   const sent: Sent[] = [];
@@ -295,7 +331,7 @@ test("a gesture that times out keeps its op id and offers to finish it", async (
   expect(screen.queryByText(/No answer/)).toBeNull();
 
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(45_000);
+    await vi.advanceTimersByTimeAsync(GATE_REQUEST_TIMEOUT_MS - 31_000 + 1_000);
   });
   expect(screen.getByText(/No answer/)).toBeTruthy();
   const opId = sent[0]!.query.get("op_id")!;
@@ -307,12 +343,12 @@ test("a gesture that times out keeps its op id and offers to finish it", async (
   expect(sent[1]!.query.get("op_id")).toBe(opId);
 });
 
-// AN ANSWER THE ENGINE DID NOT WRITE IS NOT A REFUSAL. A reverse proxy's read
-// timeout is a minute by default — the node's own budget for a gesture past its
-// judgement — so a slow eviction reached the browser as a gateway's 504 with an
-// HTML page, and a 200 can be cut off part way through. Read as a refusal, the
-// dialog never held the gesture, offered no Finish, and closing it lost the id
-// of a gesture the node went on to finish.
+// AN ANSWER THE ENGINE DID NOT WRITE IS NOT A REFUSAL. A reverse proxy whose
+// read timeout is shorter than the fifty seconds the node takes to answer a
+// gesture (`engine.GateAnswerBudget`) hands a slow eviction to the browser as a
+// gateway's 504 with an HTML page, and a 200 can be cut off part way through.
+// Read as a refusal, the dialog never held the gesture, offered no Finish, and
+// closing it lost the id of a gesture the node went on to finish.
 test("a gateway's answer or a cut-off one keeps the op id and offers to finish it", async () => {
   for (const reply of [
     () =>

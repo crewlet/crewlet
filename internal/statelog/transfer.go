@@ -24,8 +24,23 @@ const (
 	// SubjectFetchPrefix plus a donor's node id is where that donor
 	// streams its artefact from. Per donor rather than shared, because a
 	// joiner picks ONE offer and fetching from a shared subject would
-	// race every other donor into the same reply inbox.
+	// race every other donor into the same reply inbox. The body is the
+	// subject to deliver to, and the artefact chosen travels in a header
+	// ([HeaderFetchArtifact]).
 	SubjectFetchPrefix = "crewlet.statelog.snapshot.fetch."
+
+	// HeaderFetchArtifact names, on a fetch, the artefact the joiner chose
+	// from the offer — so the donor streams that copy or refuses, rather
+	// than whatever it holds by the time the fetch arrives.
+	//
+	// A HEADER, NOT THE BODY, because the body has always been the deliver
+	// subject alone, and a build from before it — a peer on the same fleet
+	// through a rolling upgrade — reads it as exactly that: a body of
+	// another shape was a subject no joiner listens on to that build's
+	// donor, and a fetch this build's donor could not read at all. A fetch
+	// naming none is that build's, and is streamed the newest artefact,
+	// which is what that build has always been streamed.
+	HeaderFetchArtifact = "Crewlet-Snapshot-Artifact"
 )
 
 // TransferChunkWait bounds the wait for the NEXT chunk, not the transfer.
@@ -88,16 +103,36 @@ type Offer struct {
 }
 
 // Usable reports whether this offer can serve the request, and why not.
+// known is every migration of the replicated estate this binary carries
+// ([store.KnownMigrations]).
 //
 // # Every clause is a refusal a joiner must make BEFORE it transfers
 //
 // A gigabyte-scale transfer that ends in a refusal is a gigabyte-scale
 // transfer nobody needed, and the refusals here are all answerable from the
-// manifest alone.
-func (o Offer) Usable(req OfferRequest, build map[string]Registered) error {
+// manifest alone. That includes the SCHEMA: the adoption refuses a file
+// carrying a migration this binary does not have once it holds the file, and
+// the manifest lists the file's migrations — so an offer from a donor on a
+// newer schema is refused here, from that list, rather than fetched whole and
+// refused after. The file is still checked against its own list once it
+// arrives, which is what makes the list a claim worth reading.
+func (o Offer) Usable(req OfferRequest, build map[string]Registered, known []string) error {
 	if o.Manifest.V != ManifestVersion {
 		return fmt.Errorf("the artefact is a version %d manifest and this build "+
 			"reads %d", o.Manifest.V, ManifestVersion)
+	}
+	// EXACTLY THE LOGS THIS BUILD REGISTERS: one the artefact names that
+	// this build does not run is a copy of rows no applier here keeps, and
+	// the loop below refuses one that is missing.
+	for name := range o.Manifest.Domains {
+		if _, ours := build[name]; !ours {
+			return fmt.Errorf("the artefact names the log %q, which this build does "+
+				"not register — its rows are a history no applier here keeps", name)
+		}
+	}
+	if ahead := aheadOf(o.Manifest.Migrations, known); len(ahead) > 0 {
+		return fmt.Errorf("the artefact carries migrations this binary does not: "+
+			"%v — its rows are shaped by code this node does not run", ahead)
 	}
 	for name, reg := range build {
 		pos, ok := o.Manifest.Domains[name]
@@ -112,12 +147,12 @@ func (o Offer) Usable(req OfferRequest, build map[string]Registered) error {
 				"up on", name)
 		}
 		if want := reg.Domain.RecordVersion(); pos.RecordVersion > want {
-			return fmt.Errorf("%s was written by a build reading record version "+
-				"%d and this one reads %d — its checkpoint sits above records "+
+			return fmt.Errorf("%s's rows were applied from records up to version "+
+				"%d and this build reads %d — its checkpoint sits above records "+
 				"this node cannot read, and once those sequences are trimmed it "+
 				"never can", name, pos.RecordVersion, want)
 		}
-		if spec := reg.Domain.Stream(); pos.Replay != spec.Replay {
+		if spec := reg.Spec; pos.Replay != spec.Replay {
 			return fmt.Errorf("%s was written under the %q replay protocol and "+
 				"this build declares %q — adopting a compacted position into a "+
 				"strict loop is a permanent stall", name, pos.Replay, spec.Replay)
@@ -176,9 +211,9 @@ type DonorDeps struct {
 	// Dial opens the transfer's own connection.
 	Dial Dialer
 
-	// Newest answers this node's current offer, reporting false when it
-	// has nothing to donate. It is a function rather than a value because
-	// a node's newest artefact changes under it.
+	// Newest answers this node's current artefact, reporting false when it
+	// has none to donate. It is a function rather than a value because a
+	// node's newest artefact changes under it.
 	Newest func() (Manifest, bool)
 
 	// Path answers where an artefact's bytes are, given its manifest.
@@ -245,6 +280,11 @@ func (d *Donor) Serve(ctx context.Context) error {
 // SILENT RATHER THAN A REFUSAL, because a joiner collects for a window and
 // takes the best answer: a node with nothing to donate has nothing to say, and
 // an explicit "no" would only make the joiner wait for it.
+//
+// THE REQUEST IS NOT READ. Every data node keeps the one replicated estate, so
+// there is only one thing a joiner can be asking for, and what makes an offer
+// usable — its generations, its floor, its record versions — is the joiner's
+// to judge from the manifest ([Offer.Usable]), never the donor's to guess.
 func (d *Donor) answerOffer(ctx context.Context, msg *nats.Msg) {
 	m, ok := d.deps.Newest()
 	if !ok {
@@ -262,15 +302,31 @@ func (d *Donor) answerOffer(ctx context.Context, msg *nats.Msg) {
 	}
 }
 
-// stream sends the artefact to the deliver subject the request names.
+// stream sends the artefact the fetch names to the deliver subject its body
+// names.
+//
+// THE ARTEFACT THE JOINER CHOSE, OR NONE: the joiner accepted an offer from its
+// manifest, so a copy taken since is refused with 410 rather than streamed and
+// refused only after the transfer, by a checksum it could never match. A fetch
+// naming no artefact is a build from before the header ([HeaderFetchArtifact])
+// and is streamed the newest, as that build always has been.
 func (d *Donor) stream(ctx context.Context, nc *nats.Conn, msg *nats.Msg) {
 	deliver := string(msg.Data)
 	if deliver == "" {
 		return
 	}
+	var artifact string
+	if msg.Header != nil {
+		artifact = msg.Header.Get(HeaderFetchArtifact)
+	}
 	m, ok := d.deps.Newest()
-	if !ok {
-		d.terminate(nc, deliver, 500, "this node holds no snapshot")
+	switch {
+	case !ok:
+		d.terminate(nc, deliver, 404, "this node holds no snapshot")
+		return
+	case artifact != "" && m.Artifact != artifact:
+		d.terminate(nc, deliver, 410, fmt.Sprintf("the artefact %s was replaced by "+
+			"%s since it was offered; ask for offers again", artifact, m.Artifact))
 		return
 	}
 	path := d.deps.Path(m)
@@ -503,8 +559,14 @@ func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 		return 0, fmt.Errorf("statelog: size the transfer buffer: %w", err)
 	}
 
+	// THE BODY IS THE DELIVER SUBJECT, as every build reads it, and the
+	// artefact chosen rides in a header ([HeaderFetchArtifact]).
+	fetch := nats.NewMsg(offer.Fetch)
+	fetch.Reply = nats.NewInbox()
+	fetch.Data = []byte(deliver)
+	fetch.Header.Set(HeaderFetchArtifact, offer.Manifest.Artifact)
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := nc.PublishRequest(offer.Fetch, nats.NewInbox(), []byte(deliver)); err != nil {
+	if err := nc.PublishMsg(fetch); err != nil {
 		return 0, fmt.Errorf("statelog: ask %s for the artefact: %w", offer.Fetch, err)
 	}
 	// THE FLUSH TAKES THE CALLER'S CONTEXT, and the patience every other

@@ -85,6 +85,25 @@ const PartitionField = "conversation_key"
 // with that.
 const ConversationField = "conversation_identity"
 
+// TriggerField carries where on its log the record a first-party notification
+// was derived from was committed — the position token
+// ([types.RawWebhook.Trigger]) — stamped on the wake's envelope bag beside the
+// partition key, and on its metadata copy for a person reading it. The woken
+// turn hands it to its node's read-your-writes floors before its first read
+// ([TriggerOf]). Absent on every vendor's wake, and on a wake from an older
+// build, whose turn reads as it always did.
+const TriggerField = "trigger_position"
+
+// TriggerOf is the trigger position an event carries ([TriggerField]), or
+// empty.
+func TriggerOf(ev *events.Event) string {
+	if ev == nil {
+		return ""
+	}
+	token, _ := ev.Payload[TriggerField].(string)
+	return token
+}
+
 // RecipientField carries the handle a notification was resolved to.
 //
 // Stamped by the inbound service after the recipient cascade, because it is

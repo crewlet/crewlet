@@ -119,7 +119,7 @@ func HoldNamedDuty(backend coord.Backend, duty, owner, nodeID string, ttl time.D
 	}
 	resource := coord.WorkerResource(duty)
 	return func(ctx context.Context) (func(), bool, error) {
-		lease, err := backend.TryAcquire(ctx, resource, coord.AcquireOptions{
+		lease, _, err := backend.TryAcquire(ctx, resource, coord.AcquireOptions{
 			Owner:     owner,
 			TTL:       ttl,
 			Preferred: nodeID,
@@ -168,7 +168,7 @@ func ClaimNamedDuty(backend coord.Backend, duty, owner, nodeID string, ttl time.
 	}
 	resource := coord.WorkerResource(duty)
 	return func(ctx context.Context) (bool, error) {
-		lease, err := backend.TryAcquire(ctx, resource, coord.AcquireOptions{
+		lease, _, err := backend.TryAcquire(ctx, resource, coord.AcquireOptions{
 			Owner:     owner,
 			TTL:       ttl,
 			Preferred: nodeID,

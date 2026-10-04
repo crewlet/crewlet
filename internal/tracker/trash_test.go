@@ -320,3 +320,44 @@ func TestTheTrashCanBeAskedForTheOldestRemovalFirst(t *testing.T) {
 		}
 	}
 }
+
+// A REMOVAL OR A RESTORE NAMING ANOTHER PROJECT IS REFUSED.
+//
+// Its record is filed and probed under the project the caller named, so a
+// removal naming the wrong one was written under a container the task is not
+// in: a record deferred on the task's real project did not hold it back, and
+// one deferred on the named project held back a record that never touched it.
+// An edit already refused this; a removal and a restore did not.
+func TestARemovalOrARestoreNamingAnotherProjectIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.CreateTask(t.Context(), "op-create", newTask("t-here"), nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	seedProject(t, r, tracker.Project{Key: "OPS", Name: "Operations"})
+
+	_, err := r.writer.RemoveTask(t.Context(), "op-remove-ops", "t-here", "OPS", false, nil)
+	if err == nil || !strings.Contains(err.Error(), "is in project ENG, not OPS") {
+		t.Fatalf("a removal naming OPS for a task in ENG answered %v, want it refused "+
+			"naming the project the task is in", err)
+	}
+	r.drain()
+	if removed(t, r, "t-here") {
+		t.Fatal("a removal refused for naming the wrong project removed the task")
+	}
+
+	if _, err := r.writer.RemoveTask(t.Context(), "op-remove", "t-here", "ENG", false, nil); err != nil {
+		t.Fatalf("RemoveTask: %v", err)
+	}
+	r.drain()
+	_, err = r.writer.RestoreTask(t.Context(), "op-restore-ops", "t-here", "OPS", nil)
+	if err == nil || !strings.Contains(err.Error(), "is in project ENG, not OPS") {
+		t.Fatalf("a restore naming OPS for a task in ENG answered %v, want it refused "+
+			"naming the project the task is in", err)
+	}
+	r.drain()
+	if !removed(t, r, "t-here") {
+		t.Fatal("a restore refused for naming the wrong project restored the task")
+	}
+}

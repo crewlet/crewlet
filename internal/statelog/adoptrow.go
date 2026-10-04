@@ -105,7 +105,11 @@ func RecordAdoption(ctx context.Context, db *store.DB, startedAt time.Time,
 // with no transaction across them: a crash between them folds the same rows
 // again at the next boot, which the watermark's own monotonicity makes a
 // no-op. The other order would mark rows whose loss was never recorded.
-func FoldLegacyAdoptions(ctx context.Context, db *store.DB, domains []Domain) error {
+//
+// db is the node's own estate, where the adoption history is kept, and estate
+// the replicated estate whose ledgers the history is folded into — the one
+// file every adoption has ever installed.
+func FoldLegacyAdoptions(ctx context.Context, db *store.DB, estate Estate, domains []Domain) error {
 	if db == nil {
 		return fmt.Errorf("statelog: no store to fold an adoption history in")
 	}
@@ -124,7 +128,7 @@ func FoldLegacyAdoptions(ctx context.Context, db *store.DB, domains []Domain) er
 	}
 	before := store.DecodeTime(bound.Int64)
 	for _, d := range domains {
-		if err := RecordLedgerLoss(ctx, db.Replicated(), d, before); err != nil {
+		if err := RecordLedgerLoss(ctx, estate, d, before); err != nil {
 			return err
 		}
 	}

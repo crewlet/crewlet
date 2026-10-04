@@ -9,26 +9,27 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// engineOperatorWriter is the node's tracker writer acting as one operator.
+// engineOperatorWriter is the tracker's writer acting as one operator, through
+// this node's estate router ([engine.OperatorWorkWriter]).
 //
 // ONE HELPER FOR THE TEN SEAMS BELOW, because turning a tool-layer actor
 // into a writer is a single rule and ten hand-copied spellings of it are
 // ten chances for one seam to carry an identity the other nine do not —
 // which is exactly what happened to [tracker.Provenance.Seat], the field that
 // decides whose person record a write lands on.
-func engineOperatorWriter(w *tracker.Writer, actor builtin.Actor) *tracker.Writer {
+func engineOperatorWriter(as func(estate.Actor) estate.WorkWriter, actor builtin.Actor) estate.WorkWriter {
 	// THE CREDENTIAL AND THE PERSON IT NAMES, which are two different
 	// facts: the author stays the token, and the seat is only ever the
 	// subject of that person's own state. Through the actor's own
 	// provenance, the one construction a seat's writers use too, so the two
 	// surfaces cannot carry different trails for one actor.
-	return w.As(actor.Handle, actor.Kind, actor.Provenance())
+	return as(estate.Actor{Handle: actor.Handle, Kind: actor.Kind, Provenance: actor.Provenance()})
 }
 
 // NewEngineOperator builds the operator surface — the one tool catalogue every
@@ -56,7 +57,18 @@ func engineOperatorWriter(w *tracker.Writer, actor builtin.Actor) *tracker.Write
 // named. It used to be stamped from the caller's own team, which an operator
 // has not got — so every item filed here read "Filed into: no unit" beside a
 // project page naming its unit.
+//
+// THROUGH THIS NODE'S ESTATE ROUTER, every read and every write, as a seat's
+// tools are ([engine.OperatorWork]) — so an operator's assistant on a node
+// whose copy is out of service is answered from a peer's, not from the copy
+// this node stopped serving.
 func NewEngineOperator(e *engine.Engine) (*operator.Server, error) {
+	return operator.New(EngineOperatorOptions(e))
+}
+
+// EngineOperatorOptions is what [NewEngineOperator] builds the surface from —
+// separate so a test can see which seams the operator's transports are handed.
+func EngineOperatorOptions(e *engine.Engine) operator.Options {
 	// EVERY CALL THAT MAY WRITE is audited onto this node's own queue, so
 	// the event store here holds who did what through either transport.
 	opts := operator.Options{Audit: e.Backends().Queue}
@@ -110,7 +122,9 @@ func NewEngineOperator(e *engine.Engine) (*operator.Server, error) {
 		Asker: e.Backends().Queue,
 		Actor: operator.WorkActor(opts.Org),
 	}
-	if reader, writer := e.Tracker(), e.TrackerWriter(); reader != nil && writer != nil {
+	reader, readable := engine.OperatorWork(e)
+	writer, writable := engine.OperatorWorkWriter(e)
+	if readable && writable {
 		opts.Work = builtin.WorkDeps{
 			Reader: reader,
 			// THE OPERATOR'S OWN CREDENTIAL IS THE PARTY, and it comes
@@ -141,6 +155,13 @@ func NewEngineOperator(e *engine.Engine) (*operator.Server, error) {
 			Moves: func(actor builtin.Actor) builtin.WorkMover {
 				return engineOperatorWriter(writer, actor)
 			},
+			// AND THE PROJECT'S FILES — the rows through the estate
+			// router, the bytes through this node's object client.
+			Files: reader,
+			FileWriter: func(actor builtin.Actor) builtin.FileWriter {
+				return engineOperatorWriter(writer, actor)
+			},
+			Objects: e.ObjectStore(),
 			// AND THE RANKED SEARCH. It reads, so it takes no actor —
 			// the corpus is the same for everybody and there is nothing
 			// to attribute — and without it the operator catalogue
@@ -238,17 +259,23 @@ func NewEngineOperator(e *engine.Engine) (*operator.Server, error) {
 			// own resolved on the company's zone. Read per call, because
 			// this surface is built once and an apply can move the clock
 			// (ADR-0018).
-			Zone:  e.Zone,
-			Await: e.WaitCommitted,
+			Zone: e.Zone,
+			// THE ROUTER'S SESSION FLOOR, which every write above
+			// raises — never this node's own applier, which is not the
+			// one that answers the next read once its copy is out of
+			// service.
+			Await: e.AwaitEstate,
 		}
 	}
-	if reader, writer := e.Pages(), e.PagesStore(); reader != nil && writer != nil {
+	pageReader, pagesReadable := engine.OperatorPages(e)
+	pageWriter, pagesWritable := engine.OperatorPageWriter(e)
+	if pagesReadable && pagesWritable {
 		opts.Pages = builtin.PageDeps{
-			Reader: reader, Writer: writer,
+			Reader: pageReader, Writer: pageWriter,
 			Actor:    operator.PageActor,
 			Mentions: engine.LiveMentions(e),
 			Reserved: engineReserved(e),
-			Await:    e.WaitCommitted,
+			Await:    e.AwaitEstate,
 		}
 	}
 	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
@@ -277,7 +304,7 @@ func NewEngineOperator(e *engine.Engine) (*operator.Server, error) {
 	// AND THE PROJECT'S OWN LEAD, which is a different question: one is
 	// about a person's line, the other about who plans a container's work.
 	opts.LeadsProject = engine.LeadsProjectOf(e)
-	return operator.New(opts)
+	return opts
 }
 
 // engineLeads answers whether one handle leads another, walking the chart's own

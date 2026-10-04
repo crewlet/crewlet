@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -20,13 +21,15 @@ import (
 
 // fleet answers the fleet question.
 func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
-	// The three listings through ONE error path. Written out, they were
+	// The listings through ONE error path. Written out, they were
 	// three identical checks of which a test could only ever exercise the
 	// first — and three copies of "the lease table IS the fleet, so an
 	// unreadable one must not answer an empty company" is three chances
 	// for one of them to stop saying it.
+	//
+	classes := []coord.Class{coord.ClassNode, coord.ClassSeat, coord.ClassWorker}
 	live := map[coord.Class][]coord.Lease{}
-	for _, class := range []coord.Class{coord.ClassNode, coord.ClassSeat, coord.ClassWorker} {
+	for _, class := range classes {
 		leases, err := s.Coord.ListLive(ctx, class)
 		if err != nil {
 			return nil, err
@@ -70,8 +73,13 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		id := nameIn(coord.ClassNode, lease.Resource)
 		profile := placement.FromMeta(id, lease.Meta)
 		row := map[string]any{
-			"id":         id,
-			"roles":      profile.Roles.Names(),
+			"id":    id,
+			"roles": profile.Roles.Names(),
+			// HOW ITS BROKER TAKES PART — member, leaf, client, or
+			// `unknown` for a row that does not say (a build older than
+			// the field) — which the roles no longer imply: a node's
+			// broker is what its stream block makes it.
+			"broker":     profile.Broker.String(),
 			"labels":     profile.Labels,
 			"owner":      lease.Owner,
 			"protocol":   lease.Protocol,
@@ -142,7 +150,7 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		return cmp.Compare(a["duty"].(string), b["duty"].(string))
 	})
 
-	return map[string]any{
+	out := map[string]any{
 		"nodes": nodeRows, "seats": seatRows, "duties": dutyRows,
 		"unplaceable":    s.unplaceable(nodeRows, seatRows),
 		"unmanned_roles": unmannedRoles(nodeRows),
@@ -163,7 +171,28 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		// never existed.
 		"target_epoch": target.epoch,
 		"activation":   target.detail,
-	}, nil
+	}
+	if s.Objects != nil {
+		out["objects"] = s.objects(ctx)
+	}
+	return out, nil
+}
+
+// BrokerLister is the fleet broker's membership as the fleet_broker question
+// reads it — see [engine.FleetBroker.List]. Declared here, by the consumer.
+type BrokerLister interface {
+	List(ctx context.Context) (engine.BrokerView, error)
+}
+
+// fleetBroker answers the fleet_broker question.
+//
+// A PRESENCE LISTING THAT FAILED IS AN ERROR, never an empty answer: with no
+// presence rows there is nothing to hold the metadata group against, and an
+// answer with no nodes would read as a broker nobody is a member of. A lease
+// table that could not be reached is the coordination contract's own third
+// answer and reaches the caller as unavailable — a blip to ask again about.
+func (s Sources) fleetBroker(ctx context.Context, _ Params) (any, error) {
+	return s.FleetBroker.List(ctx)
 }
 
 // applyStatus is each node's last config outcome, keyed by node id.

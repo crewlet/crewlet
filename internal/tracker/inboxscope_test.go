@@ -348,7 +348,7 @@ func TestAnOlderRecordsSeatIsNeverStored(t *testing.T) {
 				t.Fatalf("apply: %v", err)
 			}
 			var got string
-			if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+			if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
 				return tx.QueryRowContext(t.Context(),
 					`SELECT actor_seat FROM tracker_history`).Scan(&got)
 			}); err != nil {

@@ -95,30 +95,34 @@ const MinDomainCeiling int64 = 1 << 30
 // and what this costs is that a new domain fails here, at boot, naming itself,
 // rather than reserving a default outside the budget.
 //
-// # Why the mutation log's is DERIVED and the vector changelog's is capped
+// # Why each is DERIVED, and from what
 //
 // A fixed default for the mutation log is wrong in both directions: the same
 // number is five years of history at the modelled write rate and one boot on a
 // small disk. So an unset value takes a quarter of the stream volume's free
-// space, clamped, and the knowledge base's log takes a quarter of that for the
-// ratio its corpus grows at.
+// space, clamped.
 //
-// The vector changelog's default is fixed because its peak is not a function
-// of the disk: the stream keeps one message per source and bounds their age, so
-// a week's minting is small, but changing the embedding model rewrites every
-// source in a few hours, and for the following week every source's current
-// message is inside the window. The default is sized for that operation and
-// capped only by the disk, because sizing it from the steady state would refuse
-// the one operation it exists to survive.
+// The knowledge base's log holds the same kind of thing as the mutation log — a
+// trailing window of records, as long as a blocked trim lasts — at about a
+// quarter of the rate, so an unset one takes a quarter of the mutation log's
+// ceiling, set or derived, and a blocked trim fills both in the same time.
+//
+// The vector changelog holds something else: its peak is not its steady state
+// but the whole corpus, because the stream keeps one message per source and
+// bounds their age, so a week's minting is small, but changing the embedding
+// model rewrites every source in a few hours, and for the following week every
+// source's current message is inside the window. No ratio relates that to a
+// trailing window — the corpus grows every year the company exists — so an
+// unset one takes the same share of the volume the mutation log derives,
+// whatever the mutation log is set to (config.Stream.VectorsMaxBytes).
 func tierACeiling(stream config.Stream, domain statelog.Domain, free int64) (domainCeiling, error) {
 	switch domain.Name() {
 	case tracker.Domain{}.Name():
 		bytes, derived := stream.LogMaxBytes(free)
 		return domainCeiling{Bytes: bytes, Field: "stream.tracker_log_max_bytes", Explicit: !derived}, nil
 	case search.Domain{}.Name():
-		bytes, _ := stream.VectorsMaxBytes(free)
-		return domainCeiling{Bytes: bytes, Field: "stream.tracker_vectors_max_bytes",
-			Explicit: stream.TrackerVectorsMaxBytes > 0}, nil
+		bytes, derived := stream.VectorsMaxBytes(free)
+		return domainCeiling{Bytes: bytes, Field: "stream.tracker_vectors_max_bytes", Explicit: !derived}, nil
 	case pages.Domain{}.Name():
 		bytes, derived := stream.PagesMaxBytes(free)
 		return domainCeiling{Bytes: bytes, Field: "stream.pages_log_max_bytes", Explicit: !derived}, nil
@@ -134,8 +138,8 @@ func tierACeiling(stream config.Stream, domain statelog.Domain, free int64) (dom
 		"outside the budget every other state log is sized into", domain.Name())
 }
 
-// ceilingsFor sizes every registered domain's stream ceiling from Tier A and
-// the broker's own budget.
+// ceilingsFor sizes every registered domain's byte budget from Tier A and the
+// broker's own budget.
 func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap) (map[string]domainCeiling, error) {
 	if boot == nil {
 		return nil, errors.New("engine: a state log's ceilings are sized from Tier A, and this node was given none")
@@ -460,7 +464,8 @@ func streamVolume(boot *config.Bootstrap) string {
 	return filepath.Dir(boot.Store.Path)
 }
 
-// ceilingFor is the ceiling a domain's stream was sized at.
+// ceilingFor is the ceiling a domain's log was sized at: its whole Tier A
+// budget, fitted into the broker's pool.
 func (s *stateLog) ceilingFor(domain statelog.Domain) (domainCeiling, error) {
 	ceiling, sized := s.ceilings[domain.Name()]
 	if !sized || ceiling.Bytes <= 0 {
@@ -469,6 +474,21 @@ func (s *stateLog) ceilingFor(domain statelog.Domain) (domainCeiling, error) {
 			"refuses a boot", domain.Name())
 	}
 	return ceiling, nil
+}
+
+// specOf is the domain's stream as this node creates it: the domain's own
+// ([statelog.Domain.Stream]) at the ceiling Tier A sized
+// ([stateLog.ceilingFor]) rather than the domain's declared default — so the
+// spec a log is built from and the ceiling its stream is created with are one
+// number.
+func (s *stateLog) specOf(domain statelog.Domain) (statelog.StreamSpec, domainCeiling, error) {
+	ceiling, err := s.ceilingFor(domain)
+	if err != nil {
+		return statelog.StreamSpec{}, domainCeiling{}, err
+	}
+	spec := domain.Stream()
+	spec.MaxBytes = ceiling.Bytes
+	return spec, ceiling, nil
 }
 
 // storageRefused is the error a boot returns when the broker will not reserve
@@ -496,7 +516,7 @@ func (s *stateLog) ceilingFor(domain statelog.Domain) (domainCeiling, error) {
 // the logs created before this one have reserved since, and the number that
 // matters is what the broker had when it said no.
 func (s *stateLog) storageRefused(ctx context.Context, host domainHost,
-	domain statelog.Domain, ceiling domainCeiling, cause error) error {
+	spec statelog.StreamSpec, domain statelog.Domain, ceiling domainCeiling, cause error) error {
 
 	budget, err := host.StreamBudget(ctx)
 	had := roomLeft(budget, err, s.volume)
@@ -517,7 +537,7 @@ func (s *stateLog) storageRefused(ctx context.Context, host domainHost,
 		"ceiling: %s needed %d bytes and %s. %s. %s; the state logs that already "+
 		"exist keep the ceilings they were created with, and no Tier A setting "+
 		"changes them: %w",
-		domain.Name(), domain.Stream().Name, ceiling.Bytes, had, from, remedy, cause)
+		domain.Name(), spec.Name, ceiling.Bytes, had, from, remedy, cause)
 }
 
 // roomLeft is what the broker had to reserve when it refused, in the terms an
@@ -634,10 +654,6 @@ func limitSource(source jetstream.BudgetSource, volume string) string {
 	return fmt.Sprintf("the broker's limit comes from %q, which this build does "+
 		"not know", source)
 }
-
-// freeSpace is what an unprivileged process may actually use on the volume
-// holding the file at path.
-func freeSpace(path string) (int64, error) { return volumeFree(filepath.Dir(path)) }
 
 // volumeFree is what an unprivileged process may actually use on the volume
 // holding dir.

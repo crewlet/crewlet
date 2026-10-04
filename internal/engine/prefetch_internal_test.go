@@ -254,10 +254,13 @@ var _ = learning.Subject{}
 
 // ── the prefetch's only signal ──
 
-// EVERY BLOCK DEGRADES TO EMPTY BY DESIGN (internal/agent/prefetch), so a
-// seat whose diary is unreachable, whose auxiliary model is misconfigured and
-// whose knowledge base genuinely has nothing to say all build the same
-// prompt. Without this event an operator has no way to tell them apart —
+// EVERY BLOCK BUT TWO DEGRADES SILENTLY BY DESIGN (internal/agent/prefetch):
+// only the knowledge and chat-thread blocks say in words when their source
+// could not be read. So a seat whose diary is unreachable and one whose
+// auxiliary model is misconfigured both start their turns with no memory,
+// exactly like a seat that has never stored one, and nothing the seat then
+// does says which. Without this event an operator has no way to tell them
+// apart —
 // which is what the type spent its whole life doing: it was registered,
 // categorised and documented as "published once per turn", and nothing ever
 // published it.

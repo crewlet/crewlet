@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -230,6 +231,38 @@ func TestACommittedChangeBecomesAWake(t *testing.T) {
 	}
 	if w.Handle != "eng" {
 		t.Errorf("the actor did not travel: %q", w.Handle)
+	}
+}
+
+// A WAKE CARRIES WHERE THE CHANGE THAT CAUSED IT WAS COMMITTED — the record's
+// own position, as the token a turn reads back — so the seat it wakes reads
+// no older than what woke it. A delivery from an estate with no log position
+// carries none, rather than a position that names nothing.
+func TestAWakeCarriesThePositionOfTheChangeThatCausedIt(t *testing.T) {
+	t.Parallel()
+	docs, pub, cl := newEstate(), &capture{}, newClaims()
+	run(t, docs, pub, cl, newProbe())
+
+	docs.deliver(changefeed.Record{ID: "u1", Key: "item/u1", Payload: []byte(`{}`),
+		Position: 42, Stream: "CREWLET_TRACKER_LOG", Gen: 3})
+	settle(t, func() bool { return pub.count() == 1 }, "the change never became a wake")
+	w, ok := events.DataAs[*types.RawWebhook](pub.first(t))
+	if !ok || w == nil {
+		t.Fatal("the published event is not a raw webhook")
+	}
+	at, err := statelog.ParsePosition(w.Trigger)
+	want := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 3, Seq: 42}
+	if err != nil || at != want {
+		t.Fatalf("the wake carries trigger %q (%v), want %v", w.Trigger, err, want)
+	}
+
+	writeChange(t, docs, "u2")
+	settle(t, func() bool { return pub.count() == 2 }, "the second change never became a wake")
+	pub.mu.Lock()
+	second := pub.sent[1]
+	pub.mu.Unlock()
+	if w, _ := events.DataAs[*types.RawWebhook](second); w == nil || w.Trigger != "" {
+		t.Errorf("a delivery with no log position carries trigger %q, want none", w.Trigger)
 	}
 }
 

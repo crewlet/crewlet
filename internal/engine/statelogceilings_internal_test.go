@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -350,6 +353,40 @@ func (h sizingHost) DomainStreamCeiling(_ context.Context, stream string) (int64
 	return holds, exists, nil
 }
 
+// THE VECTOR CHANGELOG A FIRST BOOT CREATES HOLDS A MODEL CHANGE, on the volume
+// most deployments have.
+//
+// Its peak is the whole corpus — a model change republishes every source, and
+// for a week all of them are in the window — which is 8.46 GB for the reference
+// company in its fifth year. On a 64 GiB volume under an embedded broker (whose
+// limit is three quarters of the free space, so the logs share 24 GiB) that is
+// what the created ceiling must hold, whatever the mutation log is set to: the
+// rule that took half the mutation log's ceiling asked for 8 GiB there and the
+// share scaled it to 6.9 GiB, under the peak — and beside an operator's 4 GiB
+// mutation log it asked for 2 GiB.
+func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
+	t.Parallel()
+	const free = 64 * gib
+	const yearFivePeak = int64(8_460_000_000)
+	host := sizingHost{budget: jetstream.StorageBudget{Limit: free / 4 * 3,
+		Source: jetstream.BudgetServerStore}}
+	for name, stream := range map[string]config.Stream{
+		"every ceiling derived":                  {},
+		"a 4 GiB mutation log an operator wrote": {TrackerLogMaxBytes: 4 * gib},
+	} {
+		sized, err := sizeCeilings(t.Context(), host, stream, free,
+			"/var/lib/crewlet/stream")
+		if err != nil {
+			t.Fatalf("%s: sizeCeilings: %v", name, err)
+		}
+		if got := sized[search.Domain{}.Name()].Bytes; got < yearFivePeak {
+			t.Errorf("%s: the vector changelog is created at %d bytes on %d free, "+
+				"under the reference company's fifth-year model change (%d)",
+				name, got, free, yearFivePeak)
+		}
+	}
+}
+
 // A LOG CREATED BESIDE ONES THAT EXIST FITS THE SHARE, on every reading of the
 // broker's budget.
 //
@@ -361,10 +398,15 @@ func (h sizingHost) DomainStreamCeiling(_ context.Context, stream string) (int64
 // they hold again.
 func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 	t.Parallel()
-	// 64 GiB free: the tracker and the vector changelog each ask for
-	// 16 GiB and the knowledge base's log for 4. The tracker's stream
-	// already holds 16.
-	const free = 64 * gib
+	// 40 GiB free: the tracker and the vector changelog each ask for 10 GiB
+	// and the knowledge base's log for 2.5. The tracker's stream already
+	// holds 16 — more than its ask, so what the other two asked for does not
+	// fit what it leaves of any share below, and a sizing that counted the
+	// tracker at its ask, or added what it holds to free space, would hand
+	// them all of it. (At a volume where the tracker's ask equals what it
+	// holds, counting it at either reads the same, and neither mistake
+	// shows.)
+	const free = 40 * gib
 	const trackerHolds = 16 * gib
 	for name, tc := range map[string]struct {
 		budget jetstream.StorageBudget
@@ -838,5 +880,69 @@ func TestTheRoomClauseNeverSpellsAnUnknownAsANumber(t *testing.T) {
 	}
 	if strings.Contains(unstated, "-1") {
 		t.Errorf("an unstated limit reaches an operator as the number -1: %s", unstated)
+	}
+}
+
+// recordingHost is a broker that provisions nothing and remembers every stream
+// it was asked to create, so a refusal that must come before the broker is
+// asked can be seen to.
+type recordingHost struct {
+	domainHost
+	ensured []string
+}
+
+func (h *recordingHost) EnsureDomainStream(_ context.Context, spec jetstream.DomainStream) error {
+	h.ensured = append(h.ensured, spec.Name)
+	return nil
+}
+
+func (*recordingHost) DomainLog(context.Context, string) (*jetstream.DomainLog, error) {
+	return nil, nil
+}
+
+// A LOG NOBODY SIZED IS NOT CREATED AT THE DOMAIN'S DEFAULT.
+//
+// A domain's declared ceiling is what its stream would be created at if this
+// node took it as given, and that is a reservation no Tier A budget counted —
+// the reservation that refuses a boot on a broker sized for the logs it was
+// told about. So a domain the sizing left out, or sized at nothing, refuses by
+// name before the broker is asked to create its stream at all.
+func TestALogNobodySizedIsRefusedBeforeItsStreamIsCreated(t *testing.T) {
+	t.Parallel()
+	unsized := pages.Domain{}
+	for name, ceiling := range map[string]*domainCeiling{
+		"left out of the sizing": nil,
+		"sized at zero bytes":    {Bytes: 0, Field: "stream.pages_log_max_bytes"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ceilings := map[string]domainCeiling{}
+			for _, d := range registeredDomains() {
+				ceilings[d.Name()] = domainCeiling{Bytes: gib, Field: "stream." + d.Name()}
+			}
+			delete(ceilings, unsized.Name())
+			if ceiling != nil {
+				ceilings[unsized.Name()] = *ceiling
+			}
+			s := &stateLog{ceilings: ceilings}
+
+			_, _, err := s.specOf(unsized)
+			if err == nil || !strings.Contains(err.Error(), "was never sized") ||
+				!strings.Contains(err.Error(), unsized.Name()) {
+				t.Fatalf("specOf(%s) = %v, want the refusal naming the unsized domain",
+					unsized.Name(), err)
+			}
+
+			host := &recordingHost{}
+			_, err = s.provisionAll(t.Context(), host)
+			if err == nil || !strings.Contains(err.Error(), "was never sized") ||
+				!strings.Contains(err.Error(), unsized.Name()) {
+				t.Fatalf("provisionAll = %v, want the refusal naming %s", err, unsized.Name())
+			}
+			if slices.Contains(host.ensured, unsized.Stream().Name) {
+				t.Errorf("the unsized %s log's stream %s was created anyway (asked for %v)",
+					unsized.Name(), unsized.Stream().Name, host.ensured)
+			}
+		})
 	}
 }

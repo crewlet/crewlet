@@ -168,3 +168,54 @@ turn_engine:
 		}
 	}
 }
+
+// A FRACTION IN A WHOLE-NUMBER FIELD IS REFUSED, NAMING THE FIELD — never
+// truncated.
+//
+// The decoder read `api.port: 8080.9` as 8080 and `max_tool_rounds: 3.7` as 3
+// without a word, so a config ran on a value its author never wrote. A number
+// that IS whole in another spelling (`8080.0`, `1e3`) is the number it spells,
+// and a field that takes fractions takes one.
+func TestAFractionInAWholeNumberFieldIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		parse func() error
+		path  string
+	}{
+		{"a Tier A port", func() error {
+			_, err := ParseBootstrap([]byte("api:\n  port: 8080.9\n"), NewResolver(MapSource{}))
+			return err
+		}, "api.port"},
+		{"a Tier B round cap", func() error {
+			_, err := ParseCompany([]byte("name: Acme\nturn_engine:\n  max_tool_rounds: 3.7\n"))
+			return err
+		}, "turn_engine.max_tool_rounds"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.parse()
+			if !errors.Is(err, ErrShape) {
+				t.Fatalf("err = %v, want a wrong shape — the fraction would be dropped", err)
+			}
+			problems := Problems(err)
+			if len(problems) != 1 || problems[0].Path != tc.path || problems[0].Line == 0 {
+				t.Fatalf("problems = %+v, want one at %s with its line", problems, tc.path)
+			}
+			if !strings.Contains(problems[0].Message, "not a whole number") {
+				t.Errorf("message = %q, want it to say the value is not a whole number", problems[0].Message)
+			}
+		})
+	}
+
+	for _, whole := range []string{"8080.0", "8.08e3"} {
+		cfg, err := ParseBootstrap([]byte("api:\n  port: "+whole+"\n"), NewResolver(MapSource{}))
+		if err != nil || cfg.API.Port != 8080 {
+			t.Errorf("api.port: %s = (%v, %v), want 8080 — a whole number in another spelling", whole, cfg, err)
+		}
+	}
+	cfg, err := ParseBootstrap([]byte("coordination:\n  lease_ttl_seconds: 12.5\n"), NewResolver(MapSource{}))
+	if err != nil || cfg.Coordination.LeaseTTLSeconds != 12.5 {
+		t.Errorf("a fractional lease TTL = (%v, %v), want 12.5 — that field takes fractions", cfg, err)
+	}
+}

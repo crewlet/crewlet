@@ -96,6 +96,10 @@ func TestOnePublishHasFiveAnswersAndTellsThemApart(t *testing.T) {
 		if refusal.Position.Seq == 0 {
 			t.Error("a gated refusal must name the position the record is durable at")
 		}
+		if refusal.CopyWriter != "" {
+			t.Errorf("a refusal of this node's own record names %q as the copy's "+
+				"writer — the reason is this node's standing", refusal.CopyWriter)
+		}
 	})
 
 	t.Run("unknown", func(t *testing.T) {

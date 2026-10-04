@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/maintenance"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -33,7 +34,7 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 		t.Fatalf("bob's inbox holds %d notices, want 2", len(before.Notices))
 	}
 
-	jobs := tracker.InboxJobs(r.db, 365*24*time.Hour)
+	jobs := tracker.InboxJobs(r.db, maintenance.Fixed(365*24*time.Hour))
 	if len(jobs) != 1 {
 		t.Fatalf("InboxJobs returned %d jobs, want 1", len(jobs))
 	}
@@ -45,9 +46,8 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 		t.Fatalf("the inbox sweep has scope %q, so it tidies one node's "+
 			"rows and lets every peer's grow for ever", jobs[0].Scope)
 	}
-	if jobs[0].Horizon != 365*24*time.Hour {
-		t.Fatalf("the job's horizon is %s, want the retention it was given",
-			jobs[0].Horizon)
+	if got := jobs[0].Horizon(); got != 365*24*time.Hour {
+		t.Fatalf("the job's horizon is %s, want the retention it was given", got)
 	}
 
 	// THE SWEEP RUNS BESIDE A LIVE APPLIER, which holds the estate's pin
@@ -95,11 +95,12 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 	}
 }
 
-// TestTheInboxSweepDeclinesWithNoStore keeps the nil guard honest: a node with
-// no store contributes no job rather than a job that panics on its first tick.
+// TestTheInboxSweepDeclinesWithNoStore keeps the zero guard honest: a node
+// with no tracker to sweep contributes no job rather than a job that fails on
+// its first tick.
 func TestTheInboxSweepDeclinesWithNoStore(t *testing.T) {
 	t.Parallel()
-	if jobs := tracker.InboxJobs(nil, time.Hour); jobs != nil {
-		t.Fatalf("a node with no store contributed %d sweep jobs", len(jobs))
+	if jobs := tracker.InboxJobs(store.ReplicatedHandle{}, maintenance.Fixed(time.Hour)); jobs != nil {
+		t.Fatalf("a node with no tracker contributed %d sweep jobs", len(jobs))
 	}
 }

@@ -172,7 +172,12 @@ func reflectOnce(r *learning.Reflector, tc types.TurnCompleted) learning.Reflect
 
 // --- delivery -------------------------------------------------------------
 
-func TestACompletedTurnReachesTheWorkersThroughTheQueue(t *testing.T) {
+// A TURN'S WAKE ON THE SEAT'S OWN SUBJECT REACHES THE WORKERS through the
+// queue, with the turn's own trace — and a turn_completed does not: the
+// dispatcher is attached to the seat's reflection subject, which only the
+// seat's holder attaches, never to the fleet-wide event subject every node
+// could take it from.
+func TestADueReflectionReachesTheWorkersThroughTheSeatsOwnSubject(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	q := memory.New()
@@ -180,16 +185,18 @@ func TestACompletedTurnReachesTheWorkersThroughTheQueue(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	w := &stubWorker{name: "w"}
-	if err := reflector(t, devOrg(), q, w).Start(ctx, q); err != nil {
-		t.Fatalf("Start: %v", err)
+	r := reflector(t, devOrg(), q, w)
+	handle := settledTurn().AgentHandle
+	if err := q.Subscribe(ctx, topics.AgentReflect(handle), topics.AgentReflectGroup(handle), r.Handle); err != nil {
+		t.Fatalf("Subscribe: %v", err)
 	}
 
-	ev := events.New(settledTurn(), events.NewTrace())
-	if err := q.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+	ev := due(settledTurn(), events.NewTrace())
+	if err := q.Publish(ctx, topics.AgentReflect(handle), ev); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	if w.ran() != 1 {
-		t.Fatalf("worker ran %d times; the dispatcher is attached to the wrong subject", w.ran())
+		t.Fatalf("worker ran %d times; the dispatcher did not take the seat's wake", w.ran())
 	}
 	got := w.turns()[0]
 	if got.Event.TurnID != "t1" || got.Role == nil || got.Role.Name != "Dev" {
@@ -199,15 +206,20 @@ func TestACompletedTurnReachesTheWorkersThroughTheQueue(t *testing.T) {
 		t.Errorf("trace = %q, want the turn's own %q", got.Trace.TraceID, ev.TraceID)
 	}
 
-	// Counterfactual: a different event type on the same subject space is
-	// not a completed turn and must reach nobody.
-	other := events.New(types.EpisodeWritten{TurnID: "t2"}, events.NewTrace())
+	// Counterfactual: the completed turn itself, on the fleet-wide event
+	// subject, reaches nobody.
+	other := events.New(settledTurn(), events.NewTrace())
 	if err := q.Publish(ctx, topics.Event(other.Type), other); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	if w.ran() != 1 {
-		t.Errorf("worker ran %d times; it is consuming somebody else's subject", w.ran())
+		t.Errorf("worker ran %d times; it is consuming the fleet-wide event subject", w.ran())
 	}
+}
+
+// due is a turn's reflection wake, as the node that ran it publishes it.
+func due(turn types.TurnCompleted, tr events.TraceContext) *events.Event {
+	return events.New(types.ReflectionDue{Turn: turn}, tr)
 }
 
 func TestAnUnreadableDeliveryIsAckedRatherThanRedelivered(t *testing.T) {
@@ -219,7 +231,8 @@ func TestAnUnreadableDeliveryIsAckedRatherThanRedelivered(t *testing.T) {
 		ev   *events.Event
 	}{
 		{"nothing at all", nil},
-		{"an envelope with no body", &events.Event{Type: "turn_completed"}},
+		{"an envelope with no body", &events.Event{Type: "reflection_due"}},
+		{"the completed turn rather than its wake", events.New(settledTurn(), events.TraceContext{})},
 		{"another type entirely", events.New(types.EpisodeWritten{}, events.TraceContext{})},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -242,7 +255,7 @@ func TestAFailingPassStillAcks(t *testing.T) {
 	t.Parallel()
 	w := &stubWorker{name: "w", err: errors.New("the vendor is down")}
 	r := reflector(t, devOrg(), &recordingPub{err: errors.New("broker refused")}, w)
-	ev := events.New(settledTurn(), events.TraceContext{})
+	ev := due(settledTurn(), events.TraceContext{})
 	if res := r.Handle(context.Background(), ev); res.Outcome != queue.OutcomeAck {
 		t.Errorf("outcome = %v, want an ack", res.Outcome)
 	}
@@ -300,7 +313,7 @@ func TestAPanickingWorkerCostsThePassNeitherItsPeersNorItsSentinel(t *testing.T)
 func TestAPanickingPublisherDoesNotEscapeTheHandler(t *testing.T) {
 	t.Parallel()
 	r := reflector(t, devOrg(), &recordingPub{panics: true}, &stubWorker{name: "w"})
-	res := r.Handle(context.Background(), events.New(settledTurn(), events.TraceContext{}))
+	res := r.Handle(context.Background(), due(settledTurn(), events.TraceContext{}))
 	if res.Outcome != queue.OutcomeAck {
 		t.Errorf("outcome = %v, want an ack; the panic must not reach the consumer goroutine", res.Outcome)
 	}
@@ -545,7 +558,7 @@ func TestLifecycleEventsHangOffTheTurnThatCausedThem(t *testing.T) {
 	pub := &recordingPub{}
 	r := reflector(t, devOrg(), pub, w)
 
-	ev := events.New(settledTurn(), events.NewTrace())
+	ev := due(settledTurn(), events.NewTrace())
 	ev.ParentSpanID = "aaaaaaaaaaaaaaaa"
 	r.Handle(context.Background(), ev)
 
@@ -621,7 +634,7 @@ func TestConcurrentDeliveriesAreSafe(t *testing.T) {
 			if i%2 == 0 {
 				turn.TurnID = fmt.Sprintf("t%d", i)
 			}
-			r.Handle(context.Background(), events.New(turn, events.TraceContext{}))
+			r.Handle(context.Background(), due(turn, events.TraceContext{}))
 		})
 	}
 	wg.Wait()

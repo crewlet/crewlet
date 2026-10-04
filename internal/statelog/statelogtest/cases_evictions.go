@@ -18,7 +18,7 @@ import (
 // it too — the one that makes a later domain answer it before the trim ever
 // runs against that domain's log.
 type evictionLister interface {
-	Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error)
+	Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error)
 }
 
 // runEvictions reports what [Evictions] found.
@@ -80,7 +80,7 @@ func Evictions(t *testing.T, new Factory) error {
 	}
 
 	db := openEstate(t, c)
-	w, pinErr := db.Replicated().Writer(t.Context())
+	w, pinErr := db.Writer(t.Context())
 	if pinErr != nil {
 		t.Fatalf("pin a writer: %v", pinErr)
 	}
@@ -104,12 +104,12 @@ func Evictions(t *testing.T, new Factory) error {
 			t.Fatalf("%s's gate record is not declared as installing a gate, "+
 				"so a build that cannot decode it would defer it", name)
 		}
-		at := statelog.Position{Stream: c.Domain.Stream().Name, Generation: 1, Seq: seq}
+		at := statelog.Position{Stream: c.spec().Name, Generation: 1, Seq: seq}
 		stored := base.Add(time.Duration(seq) * time.Minute)
 		rec := statelog.Record{Envelope: env, Position: at, Payload: body, StoredAt: stored}
 		opts := statelog.ApplyOptions{
 			Now: stored, StoredAt: stored,
-			ArbitratedKinds: c.Domain.Stream().ArbitratedKinds,
+			ArbitratedKinds: c.spec().ArbitratedKinds,
 			MaxVariables:    db.Caps().MaxVariables,
 		}
 		if err := w.Tx(t.Context(), func(tx *sql.Tx) error {
@@ -120,7 +120,7 @@ func Evictions(t *testing.T, new Factory) error {
 		return at, stored
 	}
 	standing := func() (statelog.EvictionRow, error) {
-		rows, err := lister.Evictions(t.Context(), db)
+		rows, err := lister.Evictions(t.Context(), db.Reader())
 		if err != nil {
 			return statelog.EvictionRow{}, fmt.Errorf("%s could not list its "+
 				"evictions: %w", name, err)

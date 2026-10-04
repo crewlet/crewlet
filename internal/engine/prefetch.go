@@ -174,12 +174,14 @@ func (e *Engine) publishPrefetchRead(ctx context.Context, seat *org.Role,
 
 // publishPrefetchSummary reports what each block actually surfaced.
 //
-// THE ONLY SIGNAL THIS PIPELINE HAS. Every block degrades to empty rather
-// than failing (see internal/agent/prefetch), so a seat whose diary is
-// unreachable, whose auxiliary model is misconfigured and whose knowledge
-// base has nothing to say all produce the same prompt — and nothing else
-// distinguishes them. Per-block hit and rendered size, once per turn, is what
-// lets an operator see the difference.
+// THE ONLY SIGNAL THIS PIPELINE HAS. Every block but the knowledge and
+// chat-thread ones — which say in words when their source could not be read —
+// degrades silently rather than failing (see internal/agent/prefetch), so a
+// seat whose diary is unreachable and one whose auxiliary model is
+// misconfigured both start their turns with no memory, exactly like a seat
+// that has never stored one — and nothing else distinguishes them. Per-block
+// hit and rendered size, once per turn, is what lets an operator see the
+// difference.
 //
 // Best effort, and deliberately so: this is measurement, and a turn must not
 // fail because its telemetry could not be published.

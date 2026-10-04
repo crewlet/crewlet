@@ -1,6 +1,9 @@
 package config
 
 import (
+	"errors"
+	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -117,7 +120,10 @@ api:
 `), &doc); err != nil {
 		t.Fatal(err)
 	}
-	missing := NewResolver(MapSource{}).Document(&doc)
+	missing, err := NewResolver(MapSource{}).Document(&doc, reflect.TypeFor[Bootstrap]())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(missing) != 1 {
 		t.Fatalf("missing = %#v", missing)
 	}
@@ -137,7 +143,9 @@ func TestDocumentResolutionNeverTouchesKeys(t *testing.T) {
 	if err := yaml.Unmarshal([]byte("\"${KEYNAME}\": 1\n"), &doc); err != nil {
 		t.Fatal(err)
 	}
-	EnvOnly().Document(&doc)
+	if _, err := EnvOnly().Document(&doc, reflect.TypeFor[map[string]any]()); err != nil {
+		t.Fatal(err)
+	}
 	var out map[string]any
 	if err := doc.Decode(&out); err != nil {
 		t.Fatal(err)
@@ -263,6 +271,156 @@ func TestResolvableTestsTheReferencesNotTheValue(t *testing.T) {
 	for _, tc := range cases {
 		if got := r.Resolvable(tc.value); got != tc.want {
 			t.Fatalf("Resolvable(%q) = %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}
+
+// A RESOLVED VALUE IS READ AS THE FIELD IT LANDS IN READS A LITERAL.
+//
+// Into a number or a switch, the resolved text is read exactly as the same
+// characters written in the file would be — which is what "a reference works
+// anywhere in Tier A" promised and what was not true: the value was a string
+// everywhere, so no number field decoded one and a switch took only the YAML
+// 1.1 words. Into TEXT it is the string, character for character, even when
+// it spells a number or YAML's null — the value is data, never syntax.
+func TestAReferenceIsReadAsTheFieldReadsALiteral(t *testing.T) {
+	t.Parallel()
+	cfg, err := ParseBootstrap([]byte(`api:
+  port: ${API_PORT}
+stream:
+  debug: "${STREAM_DEBUG}"
+node:
+  max_concurrent: ${MAX}
+coordination:
+  lease_ttl_seconds: "${LEASE}"
+store:
+  path: ${STORE_NAME}
+logging:
+  level: ${LEVEL}
+`), NewResolver(MapSource{
+		"API_PORT": "9090", "STREAM_DEBUG": "true", "MAX": "0x10",
+		"LEASE": "12.5", "STORE_NAME": "null", "LEVEL": "debug",
+	}))
+	if err != nil {
+		t.Fatalf("a Tier A file taking every kind of field from the environment was refused: %v", err)
+	}
+	if cfg.API.Port != 9090 {
+		t.Errorf("api.port = %d, want 9090", cfg.API.Port)
+	}
+	if !cfg.Stream.Debug {
+		t.Error("stream.debug is false; ${STREAM_DEBUG}=true is `debug: true`")
+	}
+	if cfg.Node.MaxConcurrent != 16 {
+		t.Errorf("node.max_concurrent = %d, want 16 — 0x10 is read as the literal it spells", cfg.Node.MaxConcurrent)
+	}
+	if cfg.Coordination.LeaseTTLSeconds != 12.5 {
+		t.Errorf("coordination.lease_ttl_seconds = %v, want 12.5", cfg.Coordination.LeaseTTLSeconds)
+	}
+	if cfg.Store.Path != "null" {
+		t.Errorf("store.path = %q, want the text \"null\": a resolved value is data, "+
+			"and reading it as YAML would have made it an absence", cfg.Store.Path)
+	}
+}
+
+// A NUMBER OR A SWITCH READS WHAT A FILE CARRIED THE WAY A TEXT FIELD DOES: the
+// space around it is not part of the value. A variable read out of a mounted
+// secret, a .env line or a captured command routinely ends in a newline, every
+// Tier A text field is trimmed of it (normalize.go), and `port: 8080` written
+// in the file carries none — so a port read that way booted nothing while a
+// host name read the same way booted fine. Space INSIDE the value is still the
+// value, and still refused.
+func TestATypedReferenceIsTrimmedAsTextIs(t *testing.T) {
+	t.Parallel()
+	cfg, err := ParseBootstrap([]byte("api:\n  port: ${API_PORT}\nstream:\n  debug: ${STREAM_DEBUG}\n"+
+		"node:\n  max_concurrent: ${MAX}\nstore:\n  path: ${STORE}\n"),
+		NewResolver(MapSource{"API_PORT": "9090\n", "STREAM_DEBUG": " true\r\n", "MAX": "\t8 ",
+			"STORE": "/var/lib/crewlet/company.db\n"}))
+	if err != nil {
+		t.Fatalf("values carrying the newline a file ends in were refused: %v", err)
+	}
+	if cfg.API.Port != 9090 || !cfg.Stream.Debug || cfg.Node.MaxConcurrent != 8 {
+		t.Errorf("api.port = %d, stream.debug = %v, node.max_concurrent = %d; want 9090, true, 8",
+			cfg.API.Port, cfg.Stream.Debug, cfg.Node.MaxConcurrent)
+	}
+	if cfg.Store.Path != "/var/lib/crewlet/company.db" {
+		t.Errorf("store.path = %q: the text field beside them must trim the same way", cfg.Store.Path)
+	}
+
+	_, err = ParseBootstrap([]byte("api:\n  port: ${API_PORT}\n"), NewResolver(MapSource{"API_PORT": "80 80"}))
+	if !errors.Is(err, ErrShape) {
+		t.Fatalf("api.port from %q: err = %v, want %v — only the space AROUND a value goes", "80 80", err, ErrShape)
+	}
+}
+
+// A NUMBER OR A SWITCH TAKES A WHOLE REFERENCE WITH A VALUE, or the file is
+// refused naming the field.
+//
+// Text around a reference would make a number's type a property of how two
+// strings concatenate, so it is refused rather than spliced. A reference that
+// resolves to NOTHING is refused too: empty is how a file says "unset", and a
+// port that silently fell back to its default because a variable was missing
+// would boot a node on a port nobody chose. And a value that is not the
+// field's kind — a word, a fraction, YAML syntax — is refused as the literal
+// would be, never read as the syntax it contains.
+func TestATypedFieldRefusesWhatItCannotRead(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, yaml string
+		env        MapSource
+		kind       error
+		path       string
+	}{
+		{"text around a number's reference", "api:\n  port: \"80${TAIL}\"\n",
+			MapSource{"TAIL": "80"}, ErrShape, "api.port"},
+		{"text around a switch's reference", "stream:\n  debug: \"y${TAIL}\"\n",
+			MapSource{"TAIL": "es"}, ErrShape, "stream.debug"},
+		{"a number's reference nothing answered", "api:\n  port: ${API_PORT}\n",
+			MapSource{}, ErrMissing, "api.port"},
+		{"a switch's reference set to nothing", "stream:\n  debug: ${STREAM_DEBUG}\n",
+			MapSource{"STREAM_DEBUG": ""}, ErrMissing, "stream.debug"},
+		{"a number that is a word", "api:\n  port: ${API_PORT}\n",
+			MapSource{"API_PORT": "http"}, ErrShape, "api.port"},
+		{"a number that is YAML syntax", "api:\n  port: ${API_PORT}\n",
+			MapSource{"API_PORT": "[8080]"}, ErrShape, "api.port"},
+		{"a number with a comment in it", "api:\n  port: ${API_PORT}\n",
+			MapSource{"API_PORT": "8080 # the default"}, ErrShape, "api.port"},
+		{"a whole number that is a fraction", "api:\n  port: ${API_PORT}\n",
+			MapSource{"API_PORT": "8080.5"}, ErrShape, "api.port"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseBootstrap([]byte(tc.yaml), NewResolver(tc.env))
+			if !errors.Is(err, tc.kind) {
+				t.Fatalf("err = %v, want %v", err, tc.kind)
+			}
+			problems := Problems(err)
+			if len(problems) != 1 || problems[0].Path != tc.path {
+				t.Fatalf("problems = %+v, want one at %s", problems, tc.path)
+			}
+		})
+	}
+
+	// AND TEXT STILL SPLICES: a text field takes a reference anywhere in
+	// its value, which is what `edge-${ZONE}` as a node id needs.
+	cfg, err := ParseBootstrap([]byte("node:\n  id: \"edge-${ZONE}\"\n"), NewResolver(MapSource{"ZONE": "eu"}))
+	if err != nil || cfg.Node.ID != "edge-eu" {
+		t.Fatalf("node.id = (%q, %v), want edge-eu", cfg.Node.ID, err)
+	}
+}
+
+// THE WHOLE-REFERENCE PATTERN IS THE RESOLVER'S. The schema restates the rule a
+// number or a switch is held to, so the two are held to one verdict over the
+// shapes around it: surrounding text, surrounding space, two references, the
+// names the grammar refuses.
+func TestWholeReferencePatternIsTheResolvers(t *testing.T) {
+	t.Parallel()
+	schemaSays := regexp.MustCompile(wholeReferencePattern)
+	for _, value := range []string{
+		"${A}", "${a_b1}", "${_X}", "${A}${B}", "x${A}", "${A}x", " ${A}", "${A} ",
+		"${A}\n", "${1}", "${}", "$A", "${A", "", "8080",
+	} {
+		if got, want := schemaSays.MatchString(value), wholeReference(value); got != want {
+			t.Errorf("%q: the schema's pattern says %v, the resolver %v", value, got, want)
 		}
 	}
 }

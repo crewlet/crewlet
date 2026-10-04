@@ -11,7 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/crewlet/crewlet/internal/coord"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -205,6 +208,9 @@ func TestADomainSnapshottedWhileEmptyStillCountsAsADonor(t *testing.T) {
 // beside it, because [newestSnapshot] refuses one without the other on the
 // rule the backup manifest states: the manifest is written last, so a
 // directory entry without its file is the debris of a run that did not finish.
+//
+// THE MANIFEST NAMES ITS FILE, as a take's does: written before the name was
+// set, it named none, and the bytes check passed on the directory itself.
 func writeTestSnapshot(t *testing.T, dir string, m statelog.Manifest) {
 	t.Helper()
 	m.V = statelog.ManifestVersion
@@ -214,11 +220,12 @@ func writeTestSnapshot(t *testing.T, dir string, m statelog.Manifest) {
 			newest = at.Seq
 		}
 	}
+	base := filepath.Join(dir, fmt.Sprintf("snapshot-%d", newest))
+	m.Artifact = filepath.Base(base) + ".db"
 	body, err := json.Marshal(m)
 	if err != nil {
 		t.Fatalf("encode the manifest: %v", err)
 	}
-	base := filepath.Join(dir, fmt.Sprintf("snapshot-%d", newest))
 	if err := os.WriteFile(base+".db", []byte("store bytes"), 0o600); err != nil {
 		t.Fatalf("write the artefact: %v", err)
 	}
@@ -439,7 +446,7 @@ func TestANudgeWakesTheSnapshotLoopOutOfEitherWait(t *testing.T) {
 			}
 			s.nudgeSnapshot()
 			taker.await(t, "the nudged tick")
-			if held := s.snapshot.Load(); held == nil {
+			if s.snapshot.Load() == nil {
 				t.Fatal("the nudged tick published nothing to the register row")
 			}
 		})
@@ -486,7 +493,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 			e, js := aRunningNode(t)
 			return e, func() {
 				running := e.native.Load().log.Domain(tracker.Domain{}.Name())
-				spec := running.domain.Stream()
+				spec := running.spec
 				if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 					res.Outcome != statelog.OutcomeApplied {
 					t.Fatalf("a write before the rebuild: %+v, %v", res, err)
@@ -507,7 +514,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 		}},
 		{"an adoption", func(t *testing.T) (*Engine, func()) {
 			e, back, q := bootRejoinNode(t)
-			waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+			waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 			quietHeartbeat(e.native.Load().log)
 			return e, func() {
 				running, at, last := pushBelowTheFloor(t, e, q)
@@ -523,7 +530,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 		}},
 		{"the restore of an estate a failed adoption left closed", func(t *testing.T) (*Engine, func()) {
 			e, back, _ := bootRejoinNode(t)
-			waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+			waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 			quietHeartbeat(e.native.Load().log)
 			return e, func() {
 				s := e.native.Load().log
@@ -553,7 +560,8 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 // interval — a day — behind a snapshot it has just taken, and returns what that
 // tick published. From then on nothing but a nudge runs the loop again.
 //
-// A PEER IS COUNTED so the tick can take one: a node alone declines as
+// A PEER IS COUNTED so the tick can take one — a row naming the tracker's
+// log, which is what the trim counts it on: a node alone declines as
 // `sole_node` and retries every thirty seconds, which would put a tick of its
 // own inside any window a test watched. And the loop is NOT nudged here: a
 // nudge that arrived while a tick was taking would run it again at once, and
@@ -562,20 +570,113 @@ func parkSnapshotLoop(t *testing.T, e *Engine) *snapshotHeld {
 	t.Helper()
 	s := e.native.Load().log
 	counted := time.Now().UTC()
+	// AT THIS NODE'S OWN GENERATION: a peer's row a generation ahead reads as
+	// a peer that re-anchored the log, which strands this node's rows.
+	generation := s.Domain(tracker.Domain{}.Name()).runner.Committed().Generation
 	if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
 		NodeID: "a-counted-peer", At: counted,
+		Domains: map[string]coord.DomainPosition{
+			tracker.Domain{}.Name(): {Generation: generation}},
 	}); err != nil {
 		t.Fatalf("publish a counted peer: %v", err)
 	}
 	var parked *snapshotHeld
 	waitUntil(t, 75*time.Second, "the snapshot loop to take one and park", func() bool {
 		held := s.snapshot.Load()
-		if held == nil || !held.Have || held.Skip != "" ||
-			held.Manifest.TakenAt.Before(counted) {
+		if held == nil || !held.Have || held.Skip != "" || held.Manifest.TakenAt.Before(counted) {
 			return false
 		}
 		parked = held
 		return true
 	})
 	return parked
+}
+
+// THE DONOR OFFERS THE NEWEST ARTEFACT IN THE SNAPSHOT ROOT, BY THE NAME ITS
+// MANIFEST CARRIES.
+//
+// Every data node keeps the one estate, so the donor has one thing to offer:
+// the newest complete artefact in the directory its loop writes to, never one
+// whose bytes are gone, and fetched from the file the manifest names rather
+// than a name derived beside it. And it is told nothing of this node's write
+// standing: a barred machine back with its files serves no writes from the
+// copy it keeps, and that copy may be the fleet's only one.
+func TestTheDonorOffersTheNewestArtefactInTheRoot(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	s := &stateLog{nodeID: "node-x"}
+	deps := s.donorDeps(root, func(context.Context) (*nats.Conn, error) {
+		return nil, errors.New("no transfer in this case")
+	})
+	if _, err := statelog.NewDonor(deps); err != nil {
+		t.Fatalf("the donor's deps are refused: %v", err)
+	}
+	if m, found := deps.Newest(); found {
+		t.Fatalf("an empty root offers %+v", m)
+	}
+	writeTestSnapshot(t, root, statelog.Manifest{
+		TakenAt: time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC),
+		Domains: map[string]statelog.DomainPosition{"tracker": {Seq: 120, Generation: 3}},
+	})
+	writeTestSnapshot(t, root, statelog.Manifest{
+		TakenAt: time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC),
+		Domains: map[string]statelog.DomainPosition{"tracker": {Seq: 140, Generation: 3}},
+	})
+	m, found := deps.Newest()
+	if !found || m.Domains["tracker"].Seq != 140 {
+		t.Fatalf("the donor offers (%+v, %v), want the newest artefact", m, found)
+	}
+	if got, want := deps.Path(m), filepath.Join(root, m.Artifact); got != want {
+		t.Errorf("the donor streams %s, want the file its manifest names: %s", got, want)
+	}
+	// AN ARTEFACT WHOSE BYTES ARE GONE IS NOT OFFERED: a joiner choosing it
+	// over every other offer would fail after the transfer began.
+	if err := os.Remove(deps.Path(m)); err != nil {
+		t.Fatal(err)
+	}
+	if again, found := deps.Newest(); !found || again.Domains["tracker"].Seq != 120 {
+		t.Errorf("with the newest artefact's bytes gone the donor offers (%+v, %v), "+
+			"want the one before it", again, found)
+	}
+}
+
+// A SNAPSHOT'S RECIPIENTS ARE THE COUNTED NODES OTHER THAN THIS ONE — and this
+// one need not be counted at all.
+//
+// A machine an eviction barred, back with its files, is not counted on the logs
+// its eviction gates once the fence window has passed, and the copy it keeps
+// may be the fleet's only one. Judged as "fewer than two counted", the one
+// joiner beside it read as nobody to donate to: no artefact was taken, and the
+// joiner waited on a donor that never had one. So the count subtracts this node
+// only where it is counted: one joiner is one recipient whether or not the node
+// asking is counted beside it, and a node counted alone has none.
+func TestASnapshotsRecipientsAreTheCountedNodesOtherThanThisOne(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	backend := coordmem.New()
+	claimPresences(t, backend, map[string][]string{"node-j": {"data", "seats"}})
+	view, err := coord.NewLeaseView(backend, coord.ClassNode,
+		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = view.Run(runCtx)
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	e := &Engine{backends: &Backends{Coord: backend}, dataView: view}
+	fleet := coordmem.NewFleet()
+	for node, want := range map[string]int{
+		"node-x": 1, // counted on nothing: its one recipient is the joiner
+		"node-j": 0, // the joiner itself, counted alone: nobody to donate to
+	} {
+		s := &stateLog{fleet: fleet, nodeID: node}
+		waitUntil(t, 10*time.Second, "the presence view to name node-j", func() bool {
+			got, err := e.recipients(ctx, s, time.Now())
+			return err == nil && got == want
+		})
+	}
 }

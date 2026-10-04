@@ -304,6 +304,50 @@ func (s *suite) runCore(t *testing.T) {
 		j.staysAt(t, 3, "an acknowledged event")
 	})
 
+	// A HANDLER RUNS UNDER ITS CONSUMER'S LIFETIME, NEVER ITS PUBLISHER'S.
+	// The publisher is routinely another node, and one that stops cancels
+	// the context it published with: on a real broker nothing carries that
+	// to a consumer, and a twin that dispatched under it ran every
+	// redelivery after the cancellation on a dead context — each failing
+	// at its first database call — until the message was dead-lettered.
+	t.Run("a_publishers_cancellation_never_reaches_a_handler", func(t *testing.T) {
+		t.Parallel()
+		q := s.start(ctx, t)
+		j := newJournal()
+		published, stopPublisher := context.WithCancel(ctx)
+		defer stopPublisher()
+		var attempts atomic.Int32
+		subscribe(ctx, t, q, "topic.publisher_stops", "grp", func(hctx context.Context, _ *events.Event) queue.Result {
+			if attempts.Add(1) == 1 {
+				// The publisher stops while its first delivery is in hand.
+				stopPublisher()
+				return queue.Nak(errors.New("once"))
+			}
+			if hctx.Err() != nil {
+				j.record("cancelled")
+			} else {
+				j.record("live")
+			}
+			return queue.Ack()
+		})
+
+		// The publish may itself report the publisher's cancellation: a
+		// broker may deliver BEFORE it acknowledges the publish, so the
+		// handler can stop the publisher while Publish still waits for its
+		// acknowledgement. That is the case being certified, and only that
+		// is excused — a cancellation before the delivery was in hand, or
+		// any other error, means nothing was published.
+		if err := q.Publish(published, "topic.publisher_stops", newEvent("t")); err != nil &&
+			(!errors.Is(err, context.Canceled) || attempts.Load() == 0) {
+			t.Fatalf("Publish(topic.publisher_stops): %v", err)
+		}
+
+		j.await(t, "the redelivery", func(seen []string) bool { return len(seen) == 1 })
+		j.await(t, "the redelivery to run under a live context", func(seen []string) bool {
+			return len(seen) == 1 && seen[0] == "live"
+		})
+	})
+
 	t.Run("nak_returns_the_event_to_the_front_of_the_mailbox", func(t *testing.T) {
 		t.Parallel()
 		if !s.caps.HeadReplayOnNak {

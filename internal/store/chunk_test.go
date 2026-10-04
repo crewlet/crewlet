@@ -44,7 +44,7 @@ func TestMultiRowChunksRespectTheProbedLimit(t *testing.T) {
 // unprepared one with extra steps.
 func TestTheProbedVariableLimitBoundsARealInsert(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "vars.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "vars.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

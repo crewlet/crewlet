@@ -97,7 +97,9 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -177,6 +179,10 @@ type Manifest struct {
 	// are backed up at that cluster (see [Options.Conn]).
 	Streams []StreamArtifact `json:"streams,omitempty"`
 
+	// Objects describes the chunks the store copy names, carried beside it
+	// — absent when it names none.
+	Objects *ObjectArtifact `json:"objects,omitempty"`
+
 	// Domains is where each state-log domain's applier stood IN THE COPY,
 	// keyed by domain stream.
 	//
@@ -194,10 +200,10 @@ type Manifest struct {
 
 // StoreArtifact describes one database copy inside a backup.
 //
-// ONE PER ESTATE, and a backup carries every estate or it carries none: a node
-// is two databases, and a restore holding one of them has a company whose
-// tracker and whose audit log are from different moments — which is not a
-// partial restore, it is an inconsistent one.
+// ONE PER ESTATE THE NODE HOLDS, and a backup carries every one of them or it
+// carries none: a data node is two databases, and a restore holding one of
+// them has a company whose tracker and whose audit log are from different
+// moments — which is not a partial restore, it is an inconsistent one.
 type StoreArtifact struct {
 	// Estate is which of the node's databases this copy is.
 	Estate store.Estate `json:"estate"`
@@ -230,6 +236,21 @@ type Options struct {
 	// [New] refuses to build without it.
 	Store *store.DB
 
+	// Estate is which of the node's databases it HOLDS — the engine's
+	// answer for its configuration ([HoldingFor] over
+	// engine.HoldsEstate), never whether the replicated estate happens to
+	// be open. Required: the zero value is refused.
+	//
+	// WHY NOT WHAT IS OPEN: a replicated estate an adoption holds closed
+	// between its rename and its reopen, or one whose reopen failed, is
+	// still one the node holds, with rows no other artefact of this backup
+	// carries — and read off what is open it simply was not there, so the
+	// backup left it out and wrote a manifest claiming to be complete.
+	// Asked of the holding, it is an estate that must be copied and cannot
+	// be right now, which is a refusal ([store.ErrNoEstate]) rather than a
+	// smaller backup.
+	Estate EstateHolding
+
 	// Conn is the broker connection the streams are snapshotted over.
 	//
 	// Nil on a node that DIALLED an external NATS cluster, which is a real
@@ -237,6 +258,12 @@ type Options struct {
 	// backed up there, with `nats account backup`, so the manifest holds
 	// the store copies and no streams. The CLI says so when it prints one.
 	Conn *nats.Conn
+
+	// API is the JetStream API the streams are addressed in over Conn —
+	// the embedded fleet's domain (see internal/jsapi). Required with a
+	// Conn: a snapshot is a raw request past the client library, and one
+	// sent to the wrong API is answered by nothing.
+	API jsapi.API
 
 	// NodeID is this node's RESOLVED id (config.ResolveNodeID), never the
 	// raw `node.id` field. Required, and [New] refuses a blank one.
@@ -269,6 +296,11 @@ type Options struct {
 	// behind it — the most confusing shape this gate has.
 	Backups coord.BackupRegister
 
+	// Objects is how the chunks the copy names are reached. Nil is a node
+	// that runs no object store, which is refused only when the copy names
+	// a chunk — see [ErrObjectsUnreachable].
+	Objects *Objects
+
 	// Metrics is where the copy's duration is recorded. Nil records
 	// nothing, which is a legal deployment and leaves the `backup_taken`
 	// log line as the only account of how long it took.
@@ -278,13 +310,44 @@ type Options struct {
 	Now func() time.Time
 }
 
+// EstateHolding is which of a node's two databases it holds, and therefore
+// which a backup of it copies.
+type EstateHolding string
+
+const (
+	// HoldsNodeOnly is a node without the `data` role: its own file, and no
+	// replicated estate at all.
+	HoldsNodeOnly EstateHolding = "node_only"
+
+	// HoldsReplicated is a data node: its own file and the replicated
+	// estate beside it.
+	HoldsReplicated EstateHolding = "replicated"
+)
+
+// Valid reports whether h is one of the two. The zero value is not: a holding
+// nobody declared is not quietly the node's own file alone, which would be a
+// data node's backup without its tracker.
+func (h EstateHolding) Valid() bool { return h == HoldsNodeOnly || h == HoldsReplicated }
+
+// HoldingFor is the holding of a node that does, or does not, hold the
+// replicated estate — engine.HoldsEstate's answer for its configuration.
+func HoldingFor(replicated bool) EstateHolding {
+	if replicated {
+		return HoldsReplicated
+	}
+	return HoldsNodeOnly
+}
+
 // Service takes backups.
 type Service struct {
 	store   *store.DB
+	holding EstateHolding
 	conn    *nats.Conn
+	api     jsapi.API
 	holds   coord.HoldRegister
 	backups coord.BackupRegister
 	nodeID  string
+	objects *Objects
 	metrics *metrics.Recorder
 	now     func() time.Time
 }
@@ -319,20 +382,29 @@ func New(opts Options) (*Service, error) {
 	case opts.Store == nil:
 		return nil, errors.New("backup: Options.Store is required: a node's " +
 			"backup starts with its own store, which the engine opens")
+	case !opts.Estate.Valid():
+		return nil, fmt.Errorf("backup: Options.Estate is %q, and it is required: "+
+			"a backup copies every database the node holds, and only the engine "+
+			"can say whether that includes the replicated estate — pass "+
+			"backup.HoldingFor(engine.HoldsEstate(boot))", opts.Estate)
 	case opts.Holds == nil:
 		return nil, errors.New("backup: Options.Holds is required: without the " +
 			"fleet's trim-hold register the trim can delete what the copy needs")
 	case opts.Backups == nil:
 		return nil, errors.New("backup: Options.Backups is required: a copy the " +
 			"fleet is never told about is one the trim can never advance against")
+	case opts.Conn != nil && !opts.API.Named():
+		return nil, errors.New("backup: Options.API is required with a Conn: the " +
+			"stream snapshots are raw requests, and only the API names where " +
+			"they are answered")
 	}
 	now := opts.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{store: opts.Store, conn: opts.Conn, holds: opts.Holds,
-		backups: opts.Backups, nodeID: opts.NodeID, metrics: opts.Metrics,
-		now: now}, nil
+	return &Service{store: opts.Store, holding: opts.Estate, conn: opts.Conn, api: opts.API, holds: opts.Holds,
+		backups: opts.Backups, nodeID: opts.NodeID, objects: opts.Objects,
+		metrics: opts.Metrics, now: now}, nil
 }
 
 // Take writes a complete backup into dir and returns its manifest.
@@ -370,12 +442,23 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		EngineVersion: version.String(),
 	}
 
+	// EVERY ESTATE THE NODE HOLDS, and none of them is optional. A data
+	// node's backup with the node estate alone has every credential and no
+	// tracker; with the replicated estate alone it has the tracker and no
+	// audit log, no memory and no secret bootstrap. Either one restores
+	// into a company that is missing half of itself while looking like a
+	// backup.
+	files, err := s.estates()
+	if err != nil {
+		return Manifest{}, err
+	}
+
 	// THE HOLD IS TAKEN BEFORE THE FIRST BYTE IS COPIED, at the position
 	// this node's appliers stand at NOW — the live cursor, deliberately,
 	// because the pin has to cover everything the copy is about to include
 	// and the copy has not happened yet. A pin at the copy's own position
 	// would be taken after the window it is meant to protect.
-	release, err := s.hold(ctx)
+	release, err := s.hold(ctx, files.replicated)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -385,12 +468,7 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	// convenience — see the package doc. A store copy older than the
 	// stream estate makes a restore repeat work; the other way round makes
 	// it lose work.
-	// BOTH ESTATES, and neither is optional. A backup with the node
-	// estate alone has every credential and no tracker; with the
-	// replicated estate alone it has the tracker and no audit log, no
-	// memory and no secret bootstrap. Either one restores into a company
-	// that is missing half of itself while looking like a backup.
-	for _, db := range estates(s.store) {
+	for _, db := range files.all() {
 		name := storeFileNames[db.Estate()]
 		info, err := db.Backup(ctx, filepath.Join(dir, name))
 		if err != nil {
@@ -426,6 +504,26 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		for stream, cursor := range cursors {
 			manifest.Domains[stream] = cursor.Position
 		}
+		// THE CHUNKS THE COPY NAMES, read from the copy for the reason
+		// the positions are: the rows a restore brings back are the
+		// ones in this file, and a file created after the copy is one
+		// whose record the restore replays and whose bytes the fleet
+		// still holds.
+		hashes, err := referencedIn(ctx, path, references.All)
+		if err != nil {
+			return Manifest{}, err
+		}
+		prev := s.previousObjects(ctx, dir)
+		if manifest.Objects, err = copyObjects(ctx, dir, hashes, s.objects, prev); err != nil {
+			return Manifest{}, err
+		}
+		if lost := manifest.Objects; lost != nil && len(lost.Lost) > 0 {
+			log.WarnContext(ctx, "backup_objects_lost",
+				"dir", dir, "lost", len(lost.Lost), "chunks", len(hashes),
+				"detail", "the copy names chunks the object store does not hold; "+
+					"the backup carries everything else and lists them in its "+
+					"manifest, and the objects_missing alarm counts them")
+		}
 		// READING A DATABASE CREATES SIDECARS, even for a read, so the
 		// copy is folded back into one file — a -wal left inside the
 		// artefact is debris carrying the reader's own umask rather
@@ -458,7 +556,7 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	}
 
 	if s.conn != nil {
-		streams, err := snapshotStreams(ctx, s.conn, dir)
+		streams, err := snapshotStreams(ctx, s.conn, s.api, dir)
 		if err != nil {
 			return Manifest{}, err
 		}
@@ -494,23 +592,63 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	// not exist. See [Service.announce] for why a failure here does not
 	// fail the backup.
 	s.announce(ctx, dir, manifest)
+	var chunks, reused int
+	if manifest.Objects != nil {
+		chunks, reused = manifest.Objects.Chunks, manifest.Objects.Reused
+	}
 	log.InfoContext(ctx, "backup_taken",
 		"dir", dir,
 		"store_bytes", storeBytes(manifest),
 		"streams", len(manifest.Streams),
 		"stream_bytes", snapshotSize(manifest.Streams),
+		"chunks", chunks,
+		"chunks_reused", reused,
+		"object_bytes", objectBytes(manifest),
 		"took", manifest.FinishedAt.Sub(started).String())
 	return manifest, nil
 }
 
-// estates is every database handle a node holds, in copy order: its own store,
-// then the replicated estate beside it.
-func estates(db *store.DB) []*store.DB {
-	out := []*store.DB{db}
-	if peer := db.Replicated(); peer != nil {
-		out = append(out, peer)
+// held is the database handles a backup copies: the node's own store, and the
+// replicated estate beside it on a node that holds one.
+type held struct {
+	node       *store.DB
+	replicated *store.DB
+}
+
+// all is every handle, in copy order: the node's own first.
+func (h held) all() []*store.DB {
+	if h.replicated == nil {
+		return []*store.DB{h.node}
 	}
-	return out
+	return []*store.DB{h.node, h.replicated}
+}
+
+// estates is every database a backup copies: the node's own store, and the
+// replicated estate where the node HOLDS one.
+//
+// WHAT THE NODE HOLDS, NOT WHAT HAPPENS TO BE OPEN (see [Options.Estate]). A
+// held estate that is not open is REFUSED with [store.ErrNoEstate]: the backup
+// would otherwise be missing every replicated row and say nothing. And an open
+// estate on a node that holds none is refused too, because a backup that copied
+// what the engine says and skipped what is actually open would be as silent the
+// other way.
+func (s *Service) estates() (held, error) {
+	replicated, err := s.store.ReplicatedDB()
+	switch {
+	case s.holding == HoldsNodeOnly && err == nil:
+		return held{}, fmt.Errorf("backup: the replicated estate is open on this "+
+			"node, which is configured to hold none — a backup copies what the "+
+			"node holds, and this one would leave an open file (%s) out",
+			replicated.Path())
+	case s.holding == HoldsNodeOnly:
+		return held{node: s.store}, nil
+	case err != nil:
+		return held{}, fmt.Errorf("backup: this node holds the replicated estate "+
+			"and it is not open — an adoption is replacing its file, or reopening "+
+			"it failed; take the backup again once the node reports its estate "+
+			"serving: %w", err)
+	}
+	return held{node: s.store, replicated: replicated}, nil
 }
 
 // storeRefusal classifies a store copy that failed, copied estates into.
@@ -651,14 +789,14 @@ func storeBytes(m Manifest) int64 {
 // treated as a crashed holder, which is exactly right for a crashed holder and
 // exactly wrong for a 40-minute copy of a large store.
 //
-// A handle with no replicated peer (one that IS the replicated estate, rather
-// than the node's own store) gets a no-op release and no pin: there is no
-// applier cursor to read a position from, so there is nothing to pin at.
-func (s *Service) hold(ctx context.Context) (func(), error) {
-	if s.store.Replicated() == nil {
+// A node holding no replicated estate — replicated is nil — gets a no-op
+// release and no pin: there is no applier cursor to read a position from, so
+// there is nothing to pin at.
+func (s *Service) hold(ctx context.Context, replicated *store.DB) (func(), error) {
+	if replicated == nil {
 		return func() {}, nil
 	}
-	live, err := s.livePositions(ctx)
+	live, err := s.livePositions(ctx, replicated)
 	if err != nil {
 		return nil, err
 	}
@@ -720,9 +858,9 @@ func (s *Service) hold(ctx context.Context) (func(), error) {
 	}, nil
 }
 
-// livePositions is where this node's appliers stand right now.
-func (s *Service) livePositions(ctx context.Context) (map[string]coord.Position, error) {
-	replicated := s.store.Replicated()
+// livePositions is where the appliers of the replicated estate a backup copies
+// stand right now.
+func (s *Service) livePositions(ctx context.Context, replicated *store.DB) (map[string]coord.Position, error) {
 	out := map[string]coord.Position{}
 	if err := replicated.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
@@ -812,6 +950,33 @@ func assertReplayable(m Manifest) error {
 	return nil
 }
 
+// previousObjects is the chunk directory of this node's previous backup, when
+// it is still on this host and is not dir itself — the source a backup takes
+// the chunks it already holds from — or empty.
+//
+// THIS NODE'S OWN ROW of the backup register, whose Dir is a path on this
+// host: another owner's names a directory on another machine. A register that
+// cannot be read costs the reuse and nothing else, since every chunk can still
+// be fetched.
+func (s *Service) previousObjects(ctx context.Context, dir string) string {
+	points, err := s.backups.BackupPoints(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "backup_previous_unknown", "error", err,
+			"detail", "every chunk is fetched from the fleet rather than reused")
+		return ""
+	}
+	for _, p := range points {
+		if p.Owner != s.nodeID || p.Dir == "" || filepath.Clean(p.Dir) == filepath.Clean(dir) {
+			continue
+		}
+		prev := filepath.Join(p.Dir, objectsDirName)
+		if info, err := os.Stat(prev); err == nil && info.IsDir() {
+			return prev
+		}
+	}
+	return ""
+}
+
 // announce publishes what this backup covers, so the fleet's trim can see it.
 //
 // # Why a failure here does not fail the backup
@@ -844,10 +1009,11 @@ func (s *Service) announce(ctx context.Context, dir string, manifest Manifest) {
 		Dir:      dir,
 		Streams:  map[string]coord.Position{},
 		Verified: true,
-		// THE WHOLE ARTEFACT, the same two sums the `backup_taken` line
+		// THE WHOLE ARTEFACT, the same three sums the `backup_taken` line
 		// logs: what an operator weighs against the disk it went to and
-		// the link it is about to be shipped over.
-		Bytes: storeBytes(manifest) + snapshotSize(manifest.Streams),
+		// the link it is about to be shipped over. The chunks were left
+		// out, which for a company with files is most of it.
+		Bytes: storeBytes(manifest) + snapshotSize(manifest.Streams) + objectBytes(manifest),
 	}
 	for stream, at := range manifest.Domains {
 		point.Streams[stream] = coord.Position{

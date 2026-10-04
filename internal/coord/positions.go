@@ -86,6 +86,21 @@ type DomainPosition struct {
 	// beside AppliedThrough to tell a lagging node from a stalled one.
 	Deferred int `json:"deferred,omitempty"`
 
+	// RecordVersion is the highest record version this node's build reads
+	// on the domain's log — what a writer asks before it publishes a record
+	// no older build can even DEFER.
+	//
+	// Deferral is a rolling upgrade's contract for a record a peer cannot
+	// apply, and it rests on the peer reading the record's ENVELOPE; a kind
+	// a build's envelope refuses stops that build's applier instead. So a
+	// writer about to publish such a kind reads this across every node the
+	// log counts, and waits for the last to advertise a build that reads it.
+	//
+	// ZERO IS "NOT ADVERTISED" — a row written by a build that predates the
+	// field — and a reader weighs it as a build that reads nothing newer
+	// than the field, never as one that reads everything.
+	RecordVersion int `json:"record_version,omitempty"`
+
 	// LogDiverged reports that the log holds, at this node's checkpoint,
 	// another record than the one it consumed there: a broker restored from
 	// an older copy and written past this node's rows, so they hold history
@@ -111,13 +126,17 @@ type DomainPosition struct {
 // trim asks "what has every node applied", and it asks it about every domain
 // at once.
 type NodePositions struct {
-	NodeID        string                    `json:"node_id"`
-	At            time.Time                 `json:"at"`
-	EngineVersion string                    `json:"engine_version,omitempty"`
-	Domains       map[string]DomainPosition `json:"domains"`
+	NodeID        string    `json:"node_id"`
+	At            time.Time `json:"at"`
+	EngineVersion string    `json:"engine_version,omitempty"`
+
+	// Domains is this node's position on each log it runs, keyed by the
+	// log's domain name.
+	Domains map[string]DomainPosition `json:"domains"`
 
 	// SnapshotBytes is the size of the artefact those per-domain snapshot
-	// positions came from.
+	// positions came from — the node's one artefact of the replicated
+	// estate.
 	//
 	// ON THE ROW RATHER THAN ON EACH DOMAIN, because a snapshot is ONE
 	// file covering every domain: a byte count per domain would be the

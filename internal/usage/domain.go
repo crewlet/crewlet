@@ -78,7 +78,8 @@ const (
 	LogDuplicates = 2 * time.Minute
 )
 
-// Stream is the usage domain's compacted changelog.
+// Stream is the usage domain's compacted changelog, at the domain's whole
+// budget.
 func (Domain) Stream() statelog.StreamSpec {
 	return statelog.StreamSpec{
 		Name:          topics.UsageLogStream,
@@ -185,8 +186,10 @@ func (Domain) FeedGroup() string { return "" }
 // The guards answer FALSE for both, and that is this domain's answer rather
 // than an omission: an object is created by its first record and there is no
 // deletion marker, since a day leaves by the horizon rather than by a record.
-func NewRows(db *store.DB) (statelog.Rows, error) {
-	return statelog.NewRows(db, Domain{},
+//
+// spec is the log the publisher writes, whose checkpoint the seam reads.
+func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows, error) {
+	return statelog.NewRows(db, Domain{}, spec,
 		func(context.Context, *sql.Tx, statelog.Subject) (bool, bool, error) {
 			return false, false, nil
 		})

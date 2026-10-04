@@ -93,7 +93,7 @@ func (f *FleetStore) FollowIfAbsent(ctx context.Context, backend, handle, channe
 	if err != nil {
 		return false, fmt.Errorf("coord/kv: encode the follow: %w", err)
 	}
-	_, err = f.follows.Create(ctx, followKey(backend, handle, channel, thread), raw)
+	_, err = f.create(ctx, f.follows, followKey(backend, handle, channel, thread), raw)
 	switch {
 	case err == nil:
 		return true, nil
@@ -115,7 +115,7 @@ func (f *FleetStore) Following(ctx context.Context, backend, handle, channel, th
 	if backend == "" || handle == "" || thread == "" {
 		return "", false, nil
 	}
-	entry, err := f.follows.Get(ctx, followKey(backend, handle, channel, thread))
+	entry, err := f.get(ctx, f.follows, followKey(backend, handle, channel, thread))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return "", false, nil
 	}
@@ -178,7 +178,7 @@ func (f *FleetStore) Unfollow(ctx context.Context, backend, handle, channel, thr
 	}
 	key := followKey(backend, handle, channel, thread)
 	for range fleetCASRetries {
-		entry, err := f.follows.Get(ctx, key)
+		entry, err := f.get(ctx, f.follows, key)
 		switch {
 		case errors.Is(err, jetstream.ErrKeyNotFound):
 			return false, nil

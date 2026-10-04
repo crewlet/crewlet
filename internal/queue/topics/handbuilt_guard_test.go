@@ -12,6 +12,7 @@ import (
 	"go/parser"
 	"go/token"
 
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -81,10 +82,10 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 	markers := subjectMarkers(t, filepath.Join(root, "internal", "queue", "topics"))
 
 	// A guard asserting an ABSENCE passes identically when the thing is
-	// absent and when the guard has stopped working. These four assertions
-	// are what tell those apart, and the last is the strongest: it runs the
-	// matcher on strings whose verdict is known, so a matcher that has gone
-	// inert fails here rather than certifying a clean tree.
+	// absent and when the guard has stopped working. These assertions are
+	// what tell those apart, and the controls are the strongest: they run
+	// the matcher on strings whose verdict is known, so a matcher that has
+	// gone inert fails here rather than certifying a clean tree.
 	for _, want := range []string{
 		"crewlet.agent", "crewlet.events", "crewlet.notifications",
 		"crewlet.config", "dlq.", ".inbox", ".control", "agent-",
@@ -98,9 +99,27 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.agent.alice.inbox", "crewlet.agent.", "crewlet.events.>",
 		"crewlet.notifications.inbound", "crewlet.config.>", "dlq.x.y",
 		"agent-", "agent-alice", "agent-alice-control",
+		// The state logs: a leaf, a wildcard, and a format string a
+		// hand-built subject would come from.
+		"crewlet.tracker.log.task.x", "crewlet.tracker.vectors.>",
+		"crewlet.pages.log.%s.%s", "crewlet.usage.log.day",
 	} {
 		if _, hit := violation(markers, positive); !hit {
 			t.Errorf("control: %q is a hand-built name and the matcher did not flag it", positive)
+		}
+	}
+	// AND WHAT THE BUILDERS THEMSELVES PRODUCE, so a grammar change that
+	// moved a log's subjects out from under the markers fails here rather
+	// than leaving every hand-written copy of the new shape unseen.
+	for _, built := range []string{
+		topics.TrackerLogSubject("task", "x"),
+		topics.PagesLogSubject("page", "x"),
+		topics.LogSubject(topics.UsageLogPrefix, "day", "x"),
+		topics.TrackerVectorsWildcard,
+	} {
+		if _, hit := violation(markers, built); !hit {
+			t.Errorf("control: the builder's own output %q is not flagged when "+
+				"written as a literal", built)
 		}
 	}
 	for _, negative := range []string{
@@ -116,6 +135,12 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.agent_handle=",
 		"crewlet.agent_handle",
 		"crewlet.events_seen",
+		// Names that begin like a log's subject and are not one: the
+		// engine's own environment variables, and words.
+		"CREWLET_LOG_LEVEL",
+		"CREWLET_LOG_FILE",
+		"crewlet.log",
+		"crewlet.tracker.logged",
 	} {
 		if marker, hit := violation(markers, negative); hit {
 			t.Errorf("control: %q is not a subject but the matcher flagged it on %q",
@@ -174,20 +199,13 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 // while removing it does.
 type driftKey struct{ pkg, literal string }
 
-// acknowledgedDrift is the closed set of hand-built names that predate this
-// guard and live in packages this change does not own. It is a ratchet, not a
-// permission: nothing may be added without fixing the cause, and an entry
-// whose drift is gone fails the test above.
-//
-// Both entries have the same cause and the same one-word fix, now that
-// topics.go names the two domains: jetstream/stream.go builds three of its
-// five stream subjects as topics.AgentInboxPrefix+">",
-// topics.EventsPrefix+">" and topics.DeadLetterPrefix+">", and hand-writes
-// the other two only because there was no constant to reach for.
-var acknowledgedDrift = map[driftKey]string{
-	{"jetstream", "crewlet.notifications.>"}: "stream topology; use topics.NotificationsPrefix + \">\"",
-	{"jetstream", "crewlet.config.>"}:        "stream topology; use topics.ConfigPrefix + \">\"",
-}
+// acknowledgedDrift is the closed set of hand-built names the guard excuses.
+// It is a ratchet, not a permission: nothing may be added without fixing the
+// cause, and an entry whose drift is gone fails the test above. EMPTY: the
+// last two — the notification and control-plane stream subjects jetstream
+// spelled by hand — are built from topics.NotificationsPrefix and
+// topics.ConfigPrefix now, like the other three stream subjects beside them.
+var acknowledgedDrift = map[driftKey]string{}
 
 type hit struct {
 	pos     string
@@ -213,7 +231,7 @@ type walkResult struct {
 // A support package is recognised by its own directory name, so a nested
 // package underneath one would read as production. None exists; if one
 // appears, this is where it has to be taught.
-func walkForLiterals(t *testing.T, root string, markers map[string]bool, tests bool) walkResult {
+func walkForLiterals(t *testing.T, root string, markers markerSet, tests bool) walkResult {
 	t.Helper()
 
 	topicsDir := filepath.Join(root, "internal", "queue", "topics")
@@ -294,9 +312,13 @@ func walkForLiterals(t *testing.T, root string, markers map[string]bool, tests b
 // it parsed files and found literals rather than trusting its own reach.
 func isSupportPackage(dir string) bool { return strings.HasSuffix(dir, "test") }
 
+// markerSet is what the guard looks for: a dotted marker matched by
+// [containsSubject], a dotless one by shape.
+type markerSet map[string]bool
+
 // violation reports whether a string literal names a subject or a consumer
 // group, and on which marker.
-func violation(markers map[string]bool, value string) (string, bool) {
+func violation(markers markerSet, value string) (string, bool) {
 	for marker := range markers {
 		if strings.Contains(marker, ".") {
 			if containsSubject(value, marker) {
@@ -378,14 +400,14 @@ func isWireName(s string) bool {
 // A constant's value is reduced to the prefix it COMMITS to, with any
 // trailing wildcard stripped, so a hand-written wildcard over a domain is
 // caught as readily as a hand-written leaf. See [markersFor].
-func subjectMarkers(t *testing.T, dir string) map[string]bool {
+func subjectMarkers(t *testing.T, dir string) markerSet {
 	t.Helper()
 
 	values := constStrings(t, dir)
 	if len(values) == 0 {
 		t.Fatal("derived no constants from the topics package; the guard has nothing to look for")
 	}
-	markers := map[string]bool{}
+	markers := markerSet{}
 	for _, v := range values {
 		for _, m := range markersFor(v) {
 			markers[m] = true

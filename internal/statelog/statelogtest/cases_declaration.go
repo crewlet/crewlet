@@ -57,9 +57,16 @@ func Declaration(c Candidate) []error {
 	// detect its own mismatch: a strict loop over a compacted stream
 	// stalls on the first ordinary write, and a compacted loop over a log
 	// accepts a hole that is data loss.
-	spec := c.Domain.Stream()
+	spec := c.spec()
 	if err := spec.Validate(); err != nil {
 		add("%s declares a stream its own protocol refuses: %w", name, err)
+	}
+	// AND IT MUST BE ONE DECLARATION. Every runner, publisher and reader
+	// asks the domain for its stream separately and is held to what a
+	// second ask answers ([statelog.StreamSpec.Instantiates]), so a domain
+	// whose answer moves between two asks builds nothing at all.
+	if err := spec.Instantiates(c.Domain); err != nil {
+		add("%s answers a different stream each time it is asked: %w", name, err)
 	}
 
 	// AN ARBITRATED KIND IS A KIND THIS DOMAIN ACTUALLY PUBLISHES. A kind

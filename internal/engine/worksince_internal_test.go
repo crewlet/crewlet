@@ -24,12 +24,15 @@ import (
 // derive different ids for the second half of a turn than the first half used.
 func TestWhenTheWorkBeganTravelsWithTheWorkKey(t *testing.T) {
 	t.Parallel()
-	began := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	// A WEEK AGO, off the clock the turn is judged by: inside the ledger's
+	// horizon, so the start is what every hop carries (a start past it is
+	// rebased — see rebase_internal_test.go).
+	began := time.Now().UTC().Add(-7 * 24 * time.Hour).Truncate(time.Millisecond)
 	seat := &org.Role{Name: "Engineer", DeclaredHandle: "swe"}
 	company := &Company{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{seat}}}
 
 	// THE DISPATCH'S OWN TURN, handed to every tool.
-	dispatched := (&Engine{}).describeTurn(context.Background(), company, Request{
+	dispatched := mustDescribeTurn(t, &Engine{}, company, Request{
 		Handle: "swe", RunID: "run-1", WorkKey: "wk-1", WorkSince: began,
 	})
 	live := dispatched.runnerTurn(company, 0, nil, "the task", turn.ToolReply(""))
@@ -47,7 +50,7 @@ func TestWhenTheWorkBeganTravelsWithTheWorkKey(t *testing.T) {
 	}
 
 	// AND BACK OUT, into the turn that resumes it.
-	resumedTel := (&Engine{}).describeResume(context.Background(), company, resumeInput{
+	resumedTel := mustDescribeResume(t, &Engine{}, company, resumeInput{
 		Run: sandbox.PendingRun{
 			TurnID: "run-1", WorkKey: "wk-1", WorkSince: ref.WorkSince,
 			AgentHandle: "swe",
@@ -73,7 +76,7 @@ func TestARunAnOlderBuildParkedResumesWithAnInstant(t *testing.T) {
 	t.Parallel()
 	seat := &org.Role{Name: "Engineer", DeclaredHandle: "swe"}
 	company := &Company{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{seat}}}
-	launched := time.Date(2026, 9, 1, 8, 10, 0, 0, time.UTC)
+	launched := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
 	run := sandbox.PendingRun{
 		TurnID: "run-1", WorkKey: "wk-1", AgentHandle: "swe", CreatedAt: launched,
 	}
@@ -84,7 +87,7 @@ func TestARunAnOlderBuildParkedResumesWithAnInstant(t *testing.T) {
 			"%s — a zero instant answers every write unknown", resumed.WorkKey,
 			resumed.WorkSince, launched)
 	}
-	described := (&Engine{}).describeResume(context.Background(), company, resumeInput{
+	described := mustDescribeResume(t, &Engine{}, company, resumeInput{
 		Run: run, Turn: resumed,
 	}).runnerTurn(company, 0, nil, "the task", turn.ToolReply(""))
 	if described.Context == nil || !described.Context.WorkSince.Equal(launched) {

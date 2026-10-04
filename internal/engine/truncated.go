@@ -47,7 +47,7 @@ import (
 // A READ THAT FAILS IS AN ERROR, and the caller leaves the verdict where it was:
 // a register nobody could list, or a log that could not be asked, is neither a
 // peer that holds more nor one that does not.
-func (s *stateLog) truncation(ctx context.Context, running *runningDomain,
+func (s *stateLog) truncation(ctx context.Context, running *runningLog,
 	rows []coord.NodePositions, at statelog.Position, last uint64) (*statelog.Truncation, error) {
 
 	if !running.domain.ClaimsIdentity() {
@@ -77,7 +77,7 @@ func (s *stateLog) truncation(ctx context.Context, running *runningDomain,
 	// A STABLE ORDER, so the peer a refusal names does not flip between
 	// beats while several hold more.
 	slices.Sort(candidates)
-	evicted, err := s.evictedOn(ctx, running.domain, running.log, candidates)
+	evicted, err := s.evictedOn(ctx, running.domain, running.spec, running.log, candidates)
 	if err != nil {
 		return nil, err
 	}

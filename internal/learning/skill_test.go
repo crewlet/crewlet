@@ -34,9 +34,9 @@ func skillStore(t *testing.T, opts ...func(*store.Options)) (*learning.Skills, *
 	for _, fn := range opts {
 		fn(&o)
 	}
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "s.db"), o)
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "s.db"), o)
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return learning.NewSkills(db), db

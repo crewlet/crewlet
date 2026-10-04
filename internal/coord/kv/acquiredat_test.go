@@ -74,7 +74,7 @@ func TestTheTenureStartIsTheWinningWritesOwnTimestamp(t *testing.T) {
 	s := openStore(t, embeddedNATS(t), time.Minute)
 	seat := coord.SeatResource("ceo")
 
-	lease, err := s.TryAcquire(ctx, seat, coord.AcquireOptions{Owner: "new:1", TTL: time.Minute})
+	lease, _, err := s.TryAcquire(ctx, seat, coord.AcquireOptions{Owner: "new:1", TTL: time.Minute})
 	if err != nil || lease == nil {
 		t.Fatalf("claim = (%v, %v)", lease, err)
 	}

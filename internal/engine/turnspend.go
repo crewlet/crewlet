@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
@@ -185,19 +186,31 @@ type turnRecorder interface {
 // already the caller's answer. A charge that could not be written is logged
 // naming the item and the segment — the spend is still on the seat's counters
 // and in the usage domain; what is lost is the task's share of it.
+//
+// # Through the router, as every tool's write is
+//
+// The writer is [Engine.trackerHalves]' own: a data node's router answers from
+// its own copy and a node without `data` asks one that holds the task. It was
+// this node's LOCAL writer once, which a stateless node does not have — so on
+// exactly the topology where seats run apart from the estate, every turn's
+// charge to the task that woke it was dropped without a word, and a task's
+// spend read zero however much was spent on it.
 func (e *Engine) recordTurnSpend(ctx context.Context, charge segmentCharge) {
 	if !charge.native() {
 		return
 	}
-	writer := e.TrackerWriter()
-	if writer == nil {
-		// A NATIVE ITEM ON A NODE WITH NO NATIVE TRACKER is a company that
-		// moved its tracker off the engine while the turn ran: there are
-		// no rows here to charge.
+	halves, ok := e.trackerHalves()
+	if !ok {
+		// A NATIVE ITEM ON A NODE THAT HANDS OUT NO TRACKER WRITER is a
+		// company that moved its tracker off the engine while the turn ran,
+		// or a data node in a maintenance mode, which publishes nothing:
+		// there is nowhere to charge.
 		return
 	}
-	e.chargeSegment(ctx, writer.As(charge.record.Seat, tracker.AuthorAgent,
-		tracker.Provenance{TurnID: charge.record.TurnID}), charge)
+	e.chargeSegment(ctx, halves.as(builtin.Actor{
+		Handle: charge.record.Seat, Kind: tracker.AuthorAgent,
+		TurnID: charge.record.TurnID,
+	}), charge)
 }
 
 // chargeSegment is [Engine.recordTurnSpend] over the write it needs.

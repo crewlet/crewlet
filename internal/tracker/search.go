@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -64,11 +65,12 @@ type Ranked struct {
 	Snippet string `json:"snippet,omitempty"`
 }
 
-// RankedDoc is one hit as the INDEX knows it, before this package says what it
-// is a hit ON.
+// RankedDoc is one candidate as the INDEX knows it, before this package says
+// what it is a hit ON.
 //
-// NO SCORE, for [Ranked.Rank]'s reason: the order IS the ranking by the time a
-// fused answer reaches a caller.
+// NO SCORE, for [Ranked.Rank]'s reason: the scores travel in the candidates
+// beside it ([search.Candidates]), and what a hit carries out of a fusion is
+// its place.
 type RankedDoc struct {
 	ID      string
 	Snippet string
@@ -90,15 +92,19 @@ type SearchQuery struct {
 }
 
 // SearchAnswer is a ranked item search's hits and what the search did — the
-// mode it served, what it covered, why it served less than was asked.
+// mode it served, what it covered and why it served less than was asked
+// ([knowledge.Outcome]).
 type SearchAnswer struct {
-	Hits []Ranked
+	Hits []Ranked `json:"hits"`
 	knowledge.Outcome
 }
 
-// RankedDocs is the index's answer: the hits in rank order and the outcome.
-type RankedDocs struct {
-	Docs []RankedDoc
+// RankedCandidates is the index's answer over one corpus: each method's top
+// candidates with their scores, the item behind every key, and what the
+// ranking did.
+type RankedCandidates struct {
+	Candidates search.Candidates
+	Docs       map[string]RankedDoc
 	knowledge.Outcome
 }
 
@@ -108,9 +114,11 @@ type RankedDocs struct {
 // two halves of this search are two reads rather than a join — the same estate
 // boundary every other reader here crosses the same way.
 type Ranker interface {
-	// RankItems returns work-item ids in rank order, best first, and
+	// Candidates is each method the query's mode runs, its top candidates
+	// for the text with their scores, by the index's own document key —
+	// the work item behind each key with the index's excerpt of it — and
 	// what the ranking did.
-	RankItems(ctx context.Context, q SearchQuery) (RankedDocs, error)
+	Candidates(ctx context.Context, q SearchQuery) (RankedCandidates, error)
 
 	// Building reports an index that has not caught up with this node's
 	// own rows, so a caller can tell "nothing matched" from "not indexed
@@ -129,14 +137,14 @@ const SearchLimit = 20
 // MaxSearchLimit caps what a caller may ask for.
 const MaxSearchLimit = 50
 
-// Searcher answers a ranked item search.
+// Searcher answers a ranked item search over this node's corpus.
 type Searcher struct {
-	db   *store.DB
+	db   store.ReplicatedReader
 	rank Ranker
 }
 
 // NewSearcher builds one over this node's store and its index.
-func NewSearcher(db *store.DB, rank Ranker) *Searcher {
+func NewSearcher(db store.ReplicatedReader, rank Ranker) *Searcher {
 	return &Searcher{db: db, rank: rank}
 }
 
@@ -148,26 +156,35 @@ func NewSearcher(db *store.DB, rank Ranker) *Searcher {
 // is nothing" — which it would otherwise act on by filing a duplicate.
 var ErrIndexBuilding = fmt.Errorf("tracker: the search index is still building")
 
-// Search ranks the company's work items against plain text.
+// Search ranks the company's work items against plain text, up to q's limit
+// items, best first.
+//
+// THE FUSED ORDER IS WALKED PAST AN ITEM REMOVED SINCE IT WAS INDEXED, rather
+// than cut first and filtered after: the index is behind this node's rows by
+// design, so a removed leader costs the answer that item and never a place. And
+// THE PLACE IS COUNTED OVER WHAT SURVIVES, so the numbering has no gap a reader
+// would take for a result that went missing.
 func (s *Searcher) Search(ctx context.Context, q SearchQuery) (SearchAnswer, error) {
 	switch {
-	case s == nil || s.rank == nil || s.db == nil:
+	case s == nil || s.rank == nil || s.db.IsZero():
 		return SearchAnswer{}, fmt.Errorf("tracker: this node has no search index")
 	case !q.Mode.Valid():
 		return SearchAnswer{}, fmt.Errorf("tracker: unknown search mode %q — "+
 			"the modes are hybrid, keyword and semantic", q.Mode)
-	case q.Limit <= 0:
-		q.Limit = SearchLimit
-	case q.Limit > MaxSearchLimit:
-		q.Limit = MaxSearchLimit
 	}
-	ranked, err := s.rank.RankItems(ctx, q)
+	limit := q.Limit
+	switch {
+	case limit <= 0:
+		limit = SearchLimit
+	case limit > MaxSearchLimit:
+		limit = MaxSearchLimit
+	}
+	ranked, err := s.rank.Candidates(ctx, q)
 	if err != nil {
 		return SearchAnswer{}, err
 	}
-	answer := SearchAnswer{Outcome: ranked.Outcome}
-	docs := ranked.Docs
-	if len(docs) == 0 {
+	answer := SearchAnswer{Hits: make([]Ranked, 0, limit), Outcome: ranked.Outcome}
+	if len(ranked.Docs) == 0 {
 		// THE GATE IS ASKED ONLY ON AN EMPTY ANSWER, because that is the
 		// only answer it changes: a search that found something has
 		// found it whether or not the index is still catching up, and
@@ -185,29 +202,29 @@ func (s *Searcher) Search(ctx context.Context, q SearchQuery) (SearchAnswer, err
 		}
 		return answer, nil
 	}
-	rows, err := s.itemsByID(ctx, docs)
+	rows, err := s.itemsByID(ctx, ranked.Docs)
 	if err != nil {
 		return SearchAnswer{}, err
 	}
-	// IN THE INDEX'S ORDER, not the database's. The rank is the whole
-	// answer here, and a SQL read returns rows in whatever order suits it.
-	out := make([]Ranked, 0, len(docs))
-	for _, doc := range docs {
+	for _, key := range ranked.Candidates.Fused() {
+		doc, named := ranked.Docs[key]
+		if !named {
+			continue
+		}
 		row, held := rows[doc.ID]
 		if !held {
 			// INDEXED AND GONE. The index is behind this node's own
 			// rows by design — see the indexer's own orphan sweep —
-			// so a hit whose item has been removed since is dropped
-			// rather than reported as an item nobody can open.
+			// so a hit whose item has been removed since is walked
+			// past rather than reported as an item nobody can open.
 			continue
 		}
-		// THE PLACE IS COUNTED OVER WHAT SURVIVES, so a hit dropped
-		// above leaves no gap in the numbering a reader would take for
-		// a result that went missing.
-		row.Snippet, row.Rank = doc.Snippet, len(out)+1
-		out = append(out, row)
+		row.Snippet, row.Rank = doc.Snippet, len(answer.Hits)+1
+		answer.Hits = append(answer.Hits, row)
+		if len(answer.Hits) == limit {
+			break
+		}
 	}
-	answer.Hits = out
 	return answer, nil
 }
 
@@ -218,18 +235,18 @@ func lexicalRan(served knowledge.Mode) bool {
 	return served != "" && served.Lexical()
 }
 
-// itemsByID reads what a ranked hit has to carry, for one batch of ids.
+// itemsByID reads what a ranked hit has to carry, for one batch of candidates.
 //
-// ONE QUERY over the whole batch rather than a read per hit: the ids come from
-// a ranking that is already bounded by [MaxSearchLimit], and a read per hit
-// would answer each from a different instant.
-func (s *Searcher) itemsByID(ctx context.Context, docs []RankedDoc) (map[string]Ranked, error) {
+// ONE QUERY over the whole batch rather than a read per hit: the candidates
+// are bounded by twice [search.FuseN], and a read per hit would answer each
+// from a different instant.
+func (s *Searcher) itemsByID(ctx context.Context, docs map[string]RankedDoc) (map[string]Ranked, error) {
 	ids := make([]any, 0, len(docs))
 	for _, doc := range docs {
 		ids = append(ids, doc.ID)
 	}
 	out := make(map[string]Ranked, len(ids))
-	err := s.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := s.db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id, key, project_key, type, title, status, assignee, priority
 			  FROM tracker_tasks

@@ -52,8 +52,15 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	if positions, err := r.fleet.Positions(ctx); err == nil {
 		in.Register, in.RegisterReadable = positions, true
 	}
-	if r.leases != nil {
-		if live, err := livePresences(ctx, r.leases); err == nil {
+	// THE LIVE DATA NODES, LISTED ONCE and from the trim's own source: they
+	// are both who the node block marks live and the half of every log's
+	// counted set that is not the register ([statelog.ReportInputs.Live]).
+	// Listed once for each question, every node's every tick paid a second
+	// certified listing a round trip after the first, and the two could
+	// disagree about who is there. Unread, each log's mark counts its rows
+	// alone.
+	if r.holders != nil {
+		if live, err := r.holders.LiveData(ctx); err == nil {
 			in.Live = live
 		}
 	}
@@ -80,17 +87,15 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	// alarm reading below rather than read again there: both are one
 	// node's answer about the same instant, and two reads a broker round
 	// trip apart could disagree about it.
-	healths := make(map[string]domainHealth, len(r.state.order))
-	for _, name := range r.state.order {
-		running := r.state.domains[name]
-		if running == nil {
-			continue
-		}
+	held := r.state.running()
+	healths := make(map[string]domainHealth, len(held))
+	for _, running := range held {
+		name := running.domain.Name()
 		d := statelog.DomainInputs{
 			Domain:     name,
-			Stream:     running.domain.Stream().Name,
+			Stream:     running.spec.Name,
 			Generation: running.runner.Committed().Generation,
-			Replay:     running.domain.Stream().Replay,
+			Replay:     running.spec.Replay,
 			Reserved:   statelog.KeepsGateReserve(running.domain),
 		}
 		if stats, err := running.log.Stats(ctx); err == nil {
@@ -162,8 +167,9 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			tombs, read := r.tombstones(ctx, running, d.Generation)
 			perLog = append(perLog, tombs)
 			d.EvictionsUnreadable = !read
+			d.Tombstones = tombs
 		}
-		d.SnapshotSkip = r.skipFor(in.Register, name)
+		d.SnapshotSkip = r.skipFor(in.Register, running)
 		in.Domains = append(in.Domains, d)
 	}
 	in.Tombstones = fleetTombstones(perLog)
@@ -191,6 +197,8 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 // The window is measured from the latest tombstone because the node stops
 // being counted on every log only once the last of them has aged past it; the
 // earliest would call the eviction effective while one log still counts it.
+// And the latest is taken WHOLE, so the operator it names is the one whose
+// gesture made the eviction the fleet's.
 //
 // No log at all — a report assembled with no identity-claiming domain — is no
 // tombstone.
@@ -240,12 +248,11 @@ func (r *retention) openMaintenance(ctx context.Context) *statelog.MaintenanceRe
 		return nil
 	}
 	var oldest *statelog.MaintenanceReport
-	for _, name := range r.state.order {
-		running := r.state.domains[name]
+	for _, running := range r.state.running() {
 		if running == nil {
 			continue
 		}
-		op, open, err := r.fleet.Maintenance(ctx, running.domain.Stream().Name)
+		op, open, err := r.fleet.Maintenance(ctx, running.spec.Name)
 		if err != nil || !open {
 			continue
 		}
@@ -318,15 +325,16 @@ func decisionOf(floor coord.TrimFloor) statelog.TrimDecision {
 	return d
 }
 
-// skipFor is this node's own snapshot skip reason for one domain, read back
-// off the register it published rather than held in memory — so the answer is
-// the same one every peer can see.
-func (r *retention) skipFor(register []coord.NodePositions, domain string) statelog.SkipReason {
+// skipFor is this node's own snapshot skip reason for one log — the estate's,
+// since an artefact is a copy of the estate's file and covers every log — read
+// back off the register it published rather than held in memory, so the
+// answer is the same one every peer can see.
+func (r *retention) skipFor(register []coord.NodePositions, running *runningLog) statelog.SkipReason {
 	for _, row := range register {
 		if row.NodeID != r.nodeID {
 			continue
 		}
-		if _, runs := row.Domains[domain]; runs {
+		if _, runs := row.Domains[running.domain.Name()]; runs {
 			return statelog.SkipReason(row.SnapshotSkip)
 		}
 	}
@@ -338,9 +346,13 @@ func (r *retention) replica() statelog.ReplicaReport {
 	out := statelog.ReplicaReport{
 		RejoinWindowSeconds: r.cfg.RejoinWindow().Seconds(),
 	}
-	if r.db != nil {
-		if info, err := os.Stat(r.db.Replicated().Path()); err == nil {
-			out.StoreBytes = info.Size()
+	// THE REPLICATED ESTATE'S FILE, because replacing the node is adopting
+	// it. Measured at its path whether or not it is open at this instant:
+	// an adoption holding it closed is replacing it, and the file the node
+	// would have to be given again is still the one at that name.
+	if path := r.db.ReplicatedFile(); path != "" {
+		if info, err := os.Stat(path); err == nil {
+			out.StoreBytes += info.Size()
 		}
 	}
 	out.ProjectedJoinSeconds = statelog.ProjectJoinSeconds(out.StoreBytes)
@@ -372,8 +384,8 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	// alarm then told a company four seconds old that its newest verified
 	// backup was twenty-five hours old, one line above the trim term
 	// reporting that no backup had been recorded at all.
-	for _, name := range r.state.order {
-		running := r.state.domains[name]
+	for _, running := range r.state.running() {
+		name := running.domain.Name()
 		if running == nil {
 			continue
 		}
@@ -397,6 +409,12 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		}
 	}
 	out.SemanticCoverage = r.semanticCoverage(ctx, now)
+	if r.index != nil {
+		r.index(ctx, &out)
+	}
+	if r.objects != nil {
+		r.objects(now, &out)
+	}
 	r.space(&out)
 	r.maintenance(ctx, now, &out)
 	r.observed(&out)
@@ -423,12 +441,11 @@ func (r *retention) maintenance(ctx context.Context, now time.Time, out *statelo
 	if r.fleet == nil {
 		return
 	}
-	for _, name := range r.state.order {
-		running := r.state.domains[name]
+	for _, running := range r.state.running() {
 		if running == nil {
 			continue
 		}
-		op, open, err := r.fleet.Maintenance(ctx, running.domain.Stream().Name)
+		op, open, err := r.fleet.Maintenance(ctx, running.spec.Name)
 		if err != nil || !open || op.EnteredAt.IsZero() {
 			continue
 		}
@@ -444,7 +461,7 @@ func (r *retention) maintenance(ctx context.Context, now time.Time, out *statelo
 // AT THE MEASURED DRAIN, so the number an alarm fires on is a duration rather
 // than a count: "this node is 4m12s behind" is actionable and "this node is
 // 500 000 records behind" is a number an operator has to divide.
-func applyLagOf(health statelog.Health, running *runningDomain) time.Duration {
+func applyLagOf(health statelog.Health, running *runningLog) time.Duration {
 	if health.Lag == nil || *health.Lag == 0 {
 		return 0
 	}
@@ -512,12 +529,7 @@ func (r *retention) observed(out *statelog.Reading) {
 	if reads > 0 {
 		out.HistoryPartialFraction = float64(partial) / float64(reads)
 	}
-
-	// THE DECLARED RATE, beside the observed one below. It is a constant
-	// rather than a configured value because it is a term in the log's own
-	// sizing: an operator who could set it would be silencing the alarm
-	// rather than resizing the deployment it is about.
-	out.LinearizableReadsExpected = statelog.LinearizableReadsPerDay
+	r.census(reading, out)
 
 	for _, snapshot := range reading {
 		switch snapshot.Name {
@@ -534,12 +546,6 @@ func (r *retention) observed(out *statelog.Reading) {
 			out.RecordsGated += int(snapshot.Total)
 		case metrics.TrackerFeedUnreadable:
 			out.FeedUnreadable += int(snapshot.Total)
-		case metrics.StatelogBarrierAppends:
-			// THE BARRIER APPEND IS THE LINEARIZABLE READ. One is
-			// appended per read that asks for the level, so the
-			// counter and the census input are the same quantity —
-			// which is exactly why the drift is checkable at all.
-			out.LinearizableReads += int(snapshot.Total)
 		case metrics.StatelogReadRefusals:
 			// ANY REFUSAL AT ALL IS ONE, and the alarm's own
 			// condition is a DURATION rather than a count — so what
@@ -549,6 +555,64 @@ func (r *retention) observed(out *statelog.Reading) {
 			if snapshot.Total > 0 && !refusalIsOrdinaryLag(snapshot) {
 				out.RefusalsSince = max(out.RefusalsSince, statelog.RefusalAlarmFloor)
 			}
+		}
+	}
+}
+
+// census fills the reading's census half: of every log this node applies, the
+// one whose read rate is furthest past its census, with that rate and that
+// census.
+//
+// # The rate is the LOG'S, read where it is applied
+//
+// A barrier record is what a linearizable read costs the log, so the census
+// input is the barrier records a log received — and every node applies every
+// record, so the count this node's applier took of them is the whole fleet's,
+// not this node's. What this replaced summed the barriers THIS NODE appended,
+// which on a fleet of several serving nodes is only its share of the reads: a
+// three-node fleet exceeding its census threefold read as a company exactly at
+// it, and the alarm could not fire until the company was six times past what
+// its logs were sized for.
+//
+// # The census is per seat, plus the engine's own
+//
+// Declared rather than configured — it is a term in the log's own sizing, so
+// an operator who could set it would be silencing the alarm rather than
+// resizing the deployment it is about — scaled by the company's own seats,
+// plus what the engine's own periodic reads put on the log whatever the seats
+// do ([statelog.Census]).
+func (r *retention) census(reading []metrics.Snapshot, out *statelog.Reading) {
+	received := map[string]int{}
+	for _, snapshot := range reading {
+		if snapshot.Name == metrics.StatelogBarriersApplied {
+			received[snapshot.Attrs["stream"]] += int(snapshot.Total)
+		}
+	}
+	seats := 0
+	if r.seats != nil {
+		seats = r.seats()
+	}
+	background := func(string) int { return 0 }
+	if r.background != nil {
+		background = r.background
+	}
+	worst := -1.0
+	for _, running := range r.state.running() {
+		if barrierEncoder(running.domain) == nil {
+			// A LOG NO READ APPENDS TO has no census to drift from: its
+			// domain has no read index, so nothing it receives is a
+			// linearizable read.
+			continue
+		}
+		expected := statelog.Census{
+			Seats:      seats,
+			Background: background(running.domain.Name()),
+		}.Expected()
+		got := received[running.spec.Name]
+		if ratio := float64(got) / float64(expected); ratio > worst {
+			worst = ratio
+			out.LinearizableReads, out.LinearizableReadsExpected = got, expected
+			out.CensusLog = running.domain.Name()
 		}
 	}
 }

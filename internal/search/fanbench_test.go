@@ -65,7 +65,7 @@ import (
 func BenchmarkSearchFanOut(b *testing.B) {
 	const corpus = 4_000
 	db := openStore(b)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, db.Replicated().Reader())
 	for i := range corpus {
 		container := "ENG"
 		if i%3 == 0 {

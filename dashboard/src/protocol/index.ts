@@ -18,6 +18,17 @@ export { api } from "./api.ts";
 export { rest, RestError, REQUEST_TIMEOUT_MS, isAbort, retryAfterSeconds } from "./rest.ts";
 export { keepsOperation, layoutOpID, newGateOpID } from "./gate.ts";
 export type { GateAction } from "./gate.ts";
+export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS } from "./broker.ts";
+export type {
+  BrokerFinding,
+  BrokerFindingKind,
+  BrokerKind,
+  BrokerNode,
+  BrokerRemoved,
+  FleetBrokerAnswer,
+  MetaGroup,
+  MetaPeer,
+} from "./broker.ts";
 export type { RequestOptions, RestResponse, QueryValue } from "./rest.ts";
 export {
   apiToken,

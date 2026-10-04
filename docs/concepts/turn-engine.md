@@ -547,7 +547,7 @@ Every invariant is enforced in code, not in prompts (`internal/agent/turn/guards
 > **Known gap.** Nothing takes a pause hold on the seat's inbox while it is parked on a sandbox run. The requeued copies therefore land back on a topic the seat is still consuming and are re-parked immediately, so a seat parked on a long run spins on republish-and-ack for the length of the run. The work is not lost (the same-id dedupe and the completion ledger hold) but the loop is real. Fixing it means a pause taken at the park AND released when the run settles; a pause without the release is strictly worse, because a seat that never resumes is deaf until the process restarts. `ResumeTopic` has no caller today, so both halves land together or neither does. The no-provider park is the model: it pauses the inbox, and the apply that adds a provider releases it.
 10. **A phase that breaks is not one case.** `turn.Run` returns an error only when a *phase itself* broke; a failed turn, an exhausted round budget and a not-done review are all results. What the dispatcher does with that error depends on what broke and on what the turn's own record proves it already did: a turn that **panicked** is **recorded and acked** whatever its record says, because a redelivery runs the same defect on the same input; a turn that reached outside the engine (an MCP write, a colleague ask, a coding run) is **recorded and acked** too, because a redelivery would repeat writes it cannot take back; one that proved nothing is **redelivered** exactly as before, which keeps the retry for every pre-effect failure — except a refused budget, whose delivery is deferred and its seat [parked](agent-runtime.md#the-budget-park) until the window turns over, because a redelivery would only be refused again. `turn.Abandon` is that one rule, read by the dispatcher and by the sandbox resume alike. See [A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway) for the predicate and why it is deliberately narrow.
 
-11. **A suspended turn's seat is marked busy from the store.** A turn whose executor suspended for a detached sandbox run writes its conversation to the run's row before its frame unwinds (`Engine.persistSuspension`, which is also what opens the run to the completion poll). The launch publishes `sandbox_run_started` to the seat's control topic, and the coordinator sets the seat's busy count from the pending store's own list of the seat's active runs (`Coordinator.syncBusy`), so a redelivered start, a restart and a seat takeover converge on the same answer. That handling is asynchronous, and nothing orders it before the suspended turn returns, so a delivery the inbox hands out in that window can start a turn beside the run. A run parked on a clarification question does not hold the seat at all, because the answer arrives on its inbox. On completion the coordinator claims the row and marks the seat busy through result collection; a resume that fails un-claims the row so a redelivery can retry (the suspended executor loop is never lost), unless the resumed turn must not be resumed again (`sandbox.ErrResumeAbandoned`: it had already written outside the engine, or it panicked), in which case the run is settled instead of un-claimed (its box reclaimed, its record deleted and the seat's busy count recounted), so the completion is not redelivered into a conversation a retry must not re-enter and the seat is not left parked on a turn that is over. **A claim that cannot be given back is settled too**, and for a reason that has nothing to do with repeated writes: a row left in the claim is read by no completion poll, re-claimed by no redelivery, matched by no answer and expired by no pause reaper, so "leave it for the next attempt" is a turn destroyed in silence with its box paused and billed until the seat happens to change hands. That covers both writes the claim is given back for — the park a completion asked for and the revert a failed resume makes — and it is announced as `sandbox_run_failed` with reason `claim_unreverted`.
+11. **A suspended turn's seat is marked busy from the store.** A turn whose executor suspended for a detached sandbox run writes its conversation to the run's row before its frame unwinds (`Engine.persistSuspension`, which is also what opens the run to the completion poll). The launch publishes `sandbox_run_started` to the seat's control topic, and the coordinator sets the seat's busy count from the pending store's own list of the seat's active runs (`Coordinator.syncBusy`), so a redelivered start, a restart and a seat takeover converge on the same answer. That handling is asynchronous, and nothing orders it before the suspended turn returns, so a delivery the inbox hands out in that window can start a turn beside the run. A run parked on a clarification question does not hold the seat at all, because the answer arrives on its inbox. On completion the coordinator claims the row and marks the seat busy through result collection; a resume that fails un-claims the row so a redelivery can retry (the suspended executor loop is never lost), unless the resumed turn must not be resumed again (`sandbox.ErrResumeAbandoned`: it had already written outside the engine, or it panicked), in which case the run is settled instead of un-claimed (its box reclaimed, its record deleted and the seat's busy count recounted), so the completion is not redelivered into a conversation a retry must not re-enter and the seat is not left parked on a turn that is over. **A claim that cannot be given back is settled too**, and for a reason that has nothing to do with repeated writes: a row left in the claim is read by no completion poll, re-claimed by no redelivery, matched by no answer and expired by no pause reaper, so "leave it for the next attempt" is a turn destroyed in silence with its box paused and billed until the seat happens to change hands. That covers every write the claim is given back for — the park a completion asked for, the revert a failed resume makes, and the hand-back of a collect held because what the run spent is not yet recorded — and it is announced as `sandbox_run_failed` with reason `claim_unreverted`.
 
 ---
 
@@ -751,6 +751,41 @@ every copy of it — a change-feed redelivery, a delivery retried after a failed
 publish — carries the same instant as well as the same id, and a re-run woken
 by a later copy derives the first run's ids.
 
+**A unit of work older than the ledger is rebased.** The instant an id carries
+is only useful while every node's operation ledger still covers it: the ledger
+keeps its rows thirty days, and an id minted before what a node's ledger swept,
+whose row is gone, is answered `unknown` and never published. Two things put a
+turn past that point. A trigger can be **dispatched** a month after it arrived
+— a seat's mailbox keeps what is published while nothing consumes it, so a seat
+nobody placed for a month, or a fleet that was down, is handed a backlog that
+old — and a turn can be **resumed** a month after it parked (below). Minted at
+the start, every write such a turn made would be lost on every node. So an
+attempt that finds its work's start **more than twenty-nine days** behind its
+own clock is rebased: its writes are minted at the attempt instead, and that
+instant is recorded in the fleet's [coordination store](coordination.md) under
+the unit of work — or under the run, for a turn with none — and logged as
+`turn_rebased`. A later attempt at the same work — the re-run a redelivery is,
+a retried resume, the next half of a turn a coding run parked, on whichever
+node takes it — inherits the recorded instant while it lies within the same
+twenty-nine days of its own clock, so a write the attempt before it made still
+collapses onto the first copy; past that it is rebased again. Every attempt is
+judged against its **own** clock, never against a decision an earlier attempt
+took: a retry weeks later is exactly as far past the ledger as if nobody had
+judged it before. The line sits a day short of the thirty because an attempt is
+judged when it starts and goes on deciding writes while it runs, and a day is
+far more than one attempt's rounds. What the rebase costs is the collapse
+across the line: an attempt judged just short of it and a retry judged just past
+it write under two instants, so a write the first made and the second repeats
+is written twice — the cheaper failure by far against every write lost. The
+ordinary turn pays nothing for any of this: the coordination store is read only
+by an attempt whose start is past the line, since no earlier attempt can have
+rebased before it. An attempt that needs the store and cannot read it does not
+run; its delivery is handed back and retried. During a rolling upgrade a build
+from before the rebase mints every attempt at the start, so a retry that
+crosses between the two builds in the retention's last day writes the earlier
+attempt's writes a second time, and past the retention the older build's writes
+are lost as they always were on that build.
+
 **A re-run is recognised call for call, and only when its calls are the same.**
 Everything a derived id is made of — the work, the verb, the item, the
 arguments, the count — is something a re-run reproduces only by making the
@@ -769,7 +804,12 @@ changes nothing either way.
 A **resumed** turn is not a re-run. A detached coding job re-enters the run
 that parked it, carrying that run's id, its work key and when that work began
 on its own row, so a suspend/resume pair is one turn on every screen and writes
-under the same ids in both halves. A run parked by a build from before the row
+under the same ids in both halves — unless the resume comes **more than
+twenty-nine days after that work began**, when it is rebased like any other
+attempt (above): every attempt at the resume is judged against its own clock,
+and a resumed half whose earlier half was rebased inherits that instant rather
+than taking one of its own (see
+[Code Sandbox](code-sandbox.md#how-a-coding-task-runs)). A run parked by a build from before the row
 carried that instant resumes with the row's own creation instant instead —
 fixed, so every resume of it derives the same ids — rather than with no instant
 at all, which would answer every write the resumed half made `unknown` on any

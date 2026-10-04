@@ -147,6 +147,8 @@ export const CHANGES = [
   { kind: "catalogue_updated", mark: "settings", phrase: "changed the catalogue" },
   { kind: "prioritised", mark: "arrow-up", phrase: "reordered somebody's priorities" },
   { kind: "person_updated", mark: "inbox", phrase: "changed their own bookkeeping" },
+  { kind: "file_written", mark: "file-text", phrase: "wrote a file" },
+  { kind: "file_removed", mark: "minus", phrase: "removed a file" },
 ] as const satisfies readonly { kind: string; mark: string; phrase: string }[];
 
 /**

@@ -23,7 +23,7 @@ func (f *FleetStore) SeatPause(ctx context.Context, handle string) (coord.SeatPa
 	if handle == "" {
 		return coord.SeatPause{}, false, errors.New("coord/kv: a seat pause needs a handle")
 	}
-	entry, err := f.positions.Get(ctx, coord.SeatPauseKey(handle))
+	entry, err := f.get(ctx, f.positions, coord.SeatPauseKey(handle))
 	switch {
 	case errors.Is(err, jetstream.ErrKeyNotFound):
 		return coord.SeatPause{}, false, nil
@@ -66,10 +66,10 @@ func (f *FleetStore) ListSeatPauses(ctx context.Context) ([]coord.SeatPause, err
 // CreateSeatPause writes a pause for a seat that has none.
 //
 // Create rather than Put, so the first writer wins and every other is told the
-// seat was already paused. A key a resume purged is created again, which the
-// client does by conditioning on the purge marker's own revision — and a
-// racing creator that lost over that marker is reported the same way, by
-// [lostCreateRace].
+// seat was already paused. A key a resume purged is created again through
+// [createKey], which asks the stream leader what the key holds rather than
+// conditioning on a marker a sweep may already have removed, and reports a
+// racing creator that won as the one shape, [jetstream.ErrKeyExists].
 func (f *FleetStore) CreateSeatPause(ctx context.Context, p coord.SeatPause) (coord.SeatPause, bool, error) {
 	if err := p.Validate(); err != nil {
 		return coord.SeatPause{}, false, err
@@ -78,9 +78,9 @@ func (f *FleetStore) CreateSeatPause(ctx context.Context, p coord.SeatPause) (co
 	if err != nil {
 		return coord.SeatPause{}, false, err
 	}
-	revision, err := f.positions.Create(ctx, coord.SeatPauseKey(p.Handle), raw)
+	revision, err := f.create(ctx, f.positions, coord.SeatPauseKey(p.Handle), raw)
 	switch {
-	case err != nil && lostCreateRace(err):
+	case errors.Is(err, jetstream.ErrKeyExists):
 		return coord.SeatPause{}, false, nil
 	case err != nil:
 		return coord.SeatPause{}, false, unavailable("pause seat "+p.Handle, err)

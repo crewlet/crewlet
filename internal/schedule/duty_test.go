@@ -142,7 +142,7 @@ func TestTheDutyClaimIsUngated(t *testing.T) {
 
 	// A peer holding an unrelated resource at protocol 1 — the situation the
 	// gate exists for.
-	if _, err := backend.TryAcquire(ctx, coord.SeatResource("legacy"), coord.AcquireOptions{
+	if _, _, err := backend.TryAcquire(ctx, coord.SeatResource("legacy"), coord.AcquireOptions{
 		Owner: "old-node#1", TTL: time.Minute, Protocol: 1,
 	}); err != nil {
 		t.Fatalf("seed the old lease: %v", err)
@@ -173,8 +173,8 @@ func TestTheDutyClaimIsUngated(t *testing.T) {
 // ever changes.
 type faultyBackend struct{ err error }
 
-func (f faultyBackend) TryAcquire(context.Context, string, coord.AcquireOptions) (*coord.Lease, error) {
-	return nil, f.err
+func (f faultyBackend) TryAcquire(context.Context, string, coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
+	return nil, "", f.err
 }
 func (f faultyBackend) Renew(context.Context, string, string, int64, time.Duration) (bool, error) {
 	return false, f.err

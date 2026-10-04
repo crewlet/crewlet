@@ -30,7 +30,7 @@ func census(t *testing.T, r *roundTrip, key string) tracker.TaskCounts {
 func recountedActive(t *testing.T, r *roundTrip, key string) int {
 	t.Helper()
 	var n int
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), `
 			SELECT COUNT(*) FROM tracker_tasks
 			WHERE project_key = ? AND status_group = 'active'
@@ -162,7 +162,7 @@ func TestTheActiveBackfillEqualsTheMaintainedCount(t *testing.T) {
 	}
 
 	// THE PREDECESSOR'S ROWS: the column as the migration left it.
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(),
 			`UPDATE tracker_projects SET active_count = 0`); err != nil {
 			return err

@@ -51,15 +51,15 @@ export const GATE_ACTIONS_KEEPING_OPERATION = [
 
 /**
  * How long one gesture's request may take before the dialog gives up on it,
- * held above `engine.GateBudget` by
+ * held above `engine.GateAnswerBudget` by
  * `internal/api.TestTheDashboardWaitsPastTheGateBudget`.
  *
- * SEVENTY-FIVE SECONDS, the command line's own `gateRequestTimeout` and for its
- * reason: the engine bounds a gesture at a minute from its first record to its
- * last answer (`engine.GateBudget`), and the judgement before it and the round
- * trip around it are a coordination read and a request. Waiting past the
- * node's own bound is what makes its answer — every log's outcome — reach the
- * operator rather than a client timeout that knows none of it. The default
- * thirty seconds gave up on a gesture the node went on to finish.
+ * ONE MINUTE, the command line's own `gateRequestTimeout` and for its reason:
+ * the engine answers one gesture within `engine.GateAnswerBudget` — fifty
+ * seconds: twenty to judge it and thirty to write every log — and the ten
+ * beyond it are the request's round trip. Waiting past the node's own bound is
+ * what makes its answer — every log's outcome — reach the operator rather than
+ * a client timeout that knows none of it. The default thirty seconds gave up on
+ * a gesture the node went on to finish.
  */
-export const GATE_REQUEST_TIMEOUT_MS = 75_000;
+export const GATE_REQUEST_TIMEOUT_MS = 60_000;

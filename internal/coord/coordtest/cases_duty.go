@@ -57,16 +57,16 @@ var dutyCases = []testCase{
 		// Refused on EVERY backend, including one that could keep the
 		// deadline: a twin that accepted what the embedded KV refuses is
 		// exactly how the long duties passed every single-node test. An
-		// error, because nobody holds the duty and (nil, nil) would say
+		// error, because nobody holds the duty and a refusal would say
 		// somebody does.
 		duty := coord.WorkerResource("maintenance")
 		over := coord.MaxDutyTTL + time.Second
-		lease, err := h.b.TryAcquire(h.ctx, duty, coord.AcquireOptions{
+		lease, refused, err := h.b.TryAcquire(h.ctx, duty, coord.AcquireOptions{
 			Owner: "node-a:1", TTL: over, Ungated: true,
 		})
 		if !errors.Is(err, coord.ErrTTLTooLong) {
-			h.t.Fatalf("TryAcquire(%q, ttl=%v) = (%v, %v), want an error wrapping coord.ErrTTLTooLong",
-				duty, over, lease, err)
+			h.t.Fatalf("TryAcquire(%q, ttl=%v) = (%v, %q, %v), want an error wrapping coord.ErrTTLTooLong",
+				duty, over, lease, refused, err)
 		}
 		if lease != nil {
 			h.t.Fatalf("TryAcquire(%q, ttl=%v) granted a lease beside its error", duty, over)
@@ -113,7 +113,7 @@ var dutyCases = []testCase{
 		// a seat nobody claimed counted into capacity.
 		//
 		// So every assertion below names the class it asked for and the
-		// exact set it must get, on a fleet holding all three at once.
+		// exact set it must get, on a fleet holding all four at once.
 		//
 		// The duties are claimed at coord.MaxDutyTTL rather than at
 		// LongTTL deliberately. That is the TTL a backend cannot keep
@@ -128,6 +128,9 @@ var dutyCases = []testCase{
 		h.claim(coord.NodeResource("node-a"), coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
 		})
+		h.claim(callerClass.Resource("node-a"), coord.AcquireOptions{
+			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
+		})
 
 		// EVERY duty, and no seat. Both halves matter: a listing that
 		// reached the duty store but stopped at the first record would
@@ -140,6 +143,9 @@ var dutyCases = []testCase{
 		// a duty counted into it is every node believing the fleet is
 		// larger than it is and leaving seats dark.
 		h.requireResources("live nodes", h.listLive(coord.ClassNode), "node:node-a")
+		// And a class a caller owns, read the same way: a duty or a
+		// presence lease counted into it is a claim nobody made.
+		h.requireResources("live claims", h.listLive(callerClass), "claim:node-a")
 
 		// ListOwned narrows by nothing at all, because the owner is in the
 		// record rather than in the key, so it is the one read that has to
@@ -147,7 +153,8 @@ var dutyCases = []testCase{
 		// converge to empty: a duty it never listed is a node that reports
 		// itself drained while its duty is still running.
 		h.requireResources("everything node-a:1 holds", h.listOwned("node-a:1"),
-			"node:node-a", "seat:ceo", "worker:scheduler", "worker:sandbox-waiter")
+			"claim:node-a", "node:node-a", "seat:ceo", "worker:scheduler",
+			"worker:sandbox-waiter")
 	}},
 
 	{"a_released_duty_is_free_at_once_and_its_epoch_keeps_climbing", func(h *harness) {

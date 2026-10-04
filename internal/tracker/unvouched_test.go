@@ -172,7 +172,7 @@ func TestACreateTheLedgerCannotVouchForIsAnsweredFromItsTaskRow(t *testing.T) {
 // cutoff may have.
 func (r *roundTrip) sweepLedger(cutoff time.Time) {
 	r.t.Helper()
-	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(r.t.Context(), `DELETE FROM tracker_ops`)
 		return err
 	}); err != nil {
@@ -185,7 +185,7 @@ func (r *roundTrip) sweepLedger(cutoff time.Time) {
 // nothing — a loss whose rows were not these.
 func (r *roundTrip) markLedgerLost(cutoff time.Time) {
 	r.t.Helper()
-	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(r.t.Context(), `
 			INSERT INTO statelog_ops_lost (ops_table, lost_before) VALUES (?, ?)
 			ON CONFLICT (ops_table) DO UPDATE SET

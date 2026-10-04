@@ -98,11 +98,14 @@ func TestTheDeferredScopeIsTheSameRowsAtEveryChunkWidth(t *testing.T) {
 // reads its scope index back in path order.
 func scopeRowsAt(ctx context.Context, t *testing.T, rec Record, limit int) []string {
 	t.Helper()
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "scope.db"), store.Options{})
+	db, err := store.OpenNode(ctx, filepath.Join(t.TempDir(), "scope.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.OpenReplicated(ctx, 1); err != nil {
+		t.Fatalf("open the replicated estate: %v", err)
+	}
 	rep := db.Replicated()
 
 	tbl := tables{stream: "TEST", deferred: "probe_deferred", scope: "probe_scope"}

@@ -21,6 +21,7 @@ import { apiToken } from "./authToken.ts";
 import type { Store } from "./store.ts";
 import type { Frame, QueryMap, QueryName } from "./types.ts";
 import type { QueryErrorCode } from "../contract/errors.ts";
+import { QUERY_TIMEOUT_MS } from "../contract/wire.ts";
 
 const PATH = "/ws/stream";
 
@@ -46,16 +47,6 @@ const PING_MS = 25_000;
 
 /** Degraded-mode poll — only ever runs while the socket is down. */
 const FALLBACK_MS = 5_000;
-
-/**
- * How long a query waits for its answer ONCE SENT.
- *
- * The clock starts when the frame goes out, not when the query is made, so time
- * spent waiting for a socket is not counted against the server. Ten seconds is
- * far beyond the slowest query's normal latency and still short enough that a
- * screen shows an error rather than an eternal skeleton.
- */
-const QUERY_TIMEOUT_MS = 10_000;
 
 /**
  * Every {@link QueryErrorCode}, as a value a rejection's message can be tested

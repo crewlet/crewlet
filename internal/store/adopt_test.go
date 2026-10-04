@@ -30,7 +30,7 @@ func TestAdoptFileReplacesALiveDatabase(t *testing.T) {
 
 	seed := func(path, mark string) {
 		t.Helper()
-		db, err := store.Open(t.Context(), path, store.Options{})
+		db, err := store.OpenNode(t.Context(), path, store.Options{})
 		if err != nil {
 			t.Fatalf("open %s: %v", path, err)
 		}
@@ -70,7 +70,7 @@ func TestAdoptFileReplacesALiveDatabase(t *testing.T) {
 		}
 	}
 
-	adopted, err := store.Open(t.Context(), live, store.Options{})
+	adopted, err := store.OpenNode(t.Context(), live, store.Options{})
 	if err != nil {
 		t.Fatalf("open the adopted database: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestAdoptFileWithNoLiveDatabase(t *testing.T) {
 	live := filepath.Join(dir, "absent.db")
 	prepared := filepath.Join(dir, "prepared.db")
 
-	db, err := store.Open(t.Context(), prepared, store.Options{})
+	db, err := store.OpenNode(t.Context(), prepared, store.Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

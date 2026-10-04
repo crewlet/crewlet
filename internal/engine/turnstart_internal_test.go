@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -34,7 +35,12 @@ func starting(t *testing.T, models *phase.Registry) (*Engine, *pub) {
 	t.Helper()
 	seat := &org.Role{Name: "SWE", DeclaredHandle: "swe", LLM: org.ProviderKeys{"only"}}
 	p := &pub{}
-	e := &Engine{backends: &Backends{Queue: p}}
+	// A COORDINATION STORE, as every engine `crewlet run` builds has one
+	// (local coordination is an in-memory fleet): a turn whose identity
+	// carries no start — these cases' literal run ids carry none — rebases
+	// there (rebase.go), and an engine with nowhere to record that refuses
+	// the turn rather than guess.
+	e := &Engine{backends: &Backends{Queue: p, Fleet: coordmem.NewFleet()}}
 	e.epoch.current.Store(&Company{
 		Org:    &org.Organization{Name: "Acme", Roles: []*org.Role{seat}},
 		Models: models,

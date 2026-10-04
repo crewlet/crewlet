@@ -190,6 +190,17 @@ var excluded = map[string]string{
 		"sandbox_run_answered, and that a person gave it is their " +
 		"operator_acted row, so categorising this would write a third row " +
 		"for one answer — the reason a2a_request is kept out above",
+	"reflection_due": "the WAKE that puts a finished turn in front of " +
+		"reflection on the seat's holder. The turn is already a row " +
+		"(turn_completed), and what reflecting on it did is its own row " +
+		"(reflection_completed), so categorising this would write the turn a " +
+		"second time — the reason a2a_request is kept out above",
+	"custody_batch": "a CARRIER, not an event: a node without `data` keeps " +
+		"no event log, so it publishes its events in batches and one data " +
+		"node writes each event inside as the row it is (ADR-0025). A row " +
+		"for the batch would describe the transport and repeat every event " +
+		"in it — and on the node that published it, it would be handed to " +
+		"custody in a batch of its own",
 	"raw_webhook": "the delivery is ALREADY a row, written by the webhook " +
 		"receiver under its own id with the raw provider bytes as its payload. " +
 		"This event is the wake it publishes onto a seat's inbox, so " +

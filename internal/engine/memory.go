@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // memorySyncInterval is how often a node carries what its seats have just
@@ -121,4 +123,15 @@ func (e *Engine) syncSeatMemory(ctx context.Context) {
 				"seat", handle, "error", err)
 		}
 	}
+}
+
+// brokerJetStream is the queue's own JetStream client, or nil for a queue
+// that has none — the memory twin, in a test, which has no broker to carry
+// memory over.
+func brokerJetStream(q any) jetstream.JetStream {
+	broker, ok := q.(interface{ JetStream() jetstream.JetStream })
+	if !ok {
+		return nil
+	}
+	return broker.JetStream()
 }

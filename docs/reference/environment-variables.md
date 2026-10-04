@@ -305,7 +305,7 @@ The coding agent's LLM credential derives from the role's resolved `providers.ll
 
 ## Usage in YAML
 
-All string values in YAML support `${ENV_VAR}` references:
+A `${ENV_VAR}` reference works in both config files, and the two resolve it at different moments, from different places:
 
 ```yaml
 providers:
@@ -317,8 +317,11 @@ providers:
     api_key: "${OPENAI_API_KEY}"  # embeddings still take a single scalar
 ```
 
-Variables are resolved at startup from the [secret store](../concepts/secret-store.md) first (when one is configured and holds the name), then the process environment. An unanswered reference resolves to the empty string.
+- **The company (Tier B)** keeps a reference verbatim — in the store, in an export, on `GET /config` — and resolves it where the provider, transport or integration that uses it is built: from the [secret store](../concepts/secret-store.md) first (when one is configured and holds the name), then the process environment.
+- **`crewlet.yaml` (Tier A)** resolves every reference at startup, from the process environment alone — it holds the keyring that opens the secret store, so it cannot read a value out of it. Into a text field a reference works whole or embedded; into a number or a switch it must be the whole value, and what it resolves to is read as the same characters written there would be. [Environment Variable References](../getting-started/configuration.md#environment-variable-references) has the rules for both tiers.
 
-**Tier A trims what a reference carries.** A value out of a file, a `--from-file` secret, a `.env` line or a captured command's output routinely keeps a trailing newline, so every string in `crewlet.yaml` is trimmed of the whitespace around it before a single rule reads one — which is also what the engine then runs. That matters because the two used to differ: `stream.cluster.advertise: " "` validated as *unset* and reached the broker as a space, where nats-server refuses it while starting, and a `node.labels` key with a stray space passed its own check and then matched no `role.placement` selector. Two keys in one map that are the same key once trimmed are refused rather than collapsed, since which survived would be decided by map order. Tier B is left alone: it carries the company's prompts and personas, where the whitespace around a fragment is the author's.
+An unanswered reference resolves to the empty string — except in a Tier A number or switch, where a reference that resolves to nothing is refused by name rather than read as unset.
+
+**Tier A trims what a reference carries.** A value out of a file, a `--from-file` secret, a `.env` line or a captured command's output routinely keeps a trailing newline, so every string in `crewlet.yaml` is trimmed of the whitespace around it before a single rule reads one — which is also what the engine then runs — and so is what a reference into a number or a switch resolves to, before it is read. That matters because the two used to differ: `stream.cluster.advertise: " "` validated as *unset* and reached the broker as a space, where nats-server refuses it while starting, and a `node.labels` key with a stray space passed its own check and then matched no `role.placement` selector. Two keys in one map that are the same key once trimmed are refused rather than collapsed, since which survived would be decided by map order. Tier B is left alone: it carries the company's prompts and personas, where the whitespace around a fragment is the author's.
 
 Only the braced identifier form is substituted — `${NAME}` where `NAME` matches `[A-Za-z_][A-Za-z0-9_]*`. Bare `$NAME` and shell parameter expansions (`${1:-x}`, `${line#host=}`) are left untouched, so config-authored script content — a sandbox setup step's helper script, say — survives intact.

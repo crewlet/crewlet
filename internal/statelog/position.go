@@ -3,6 +3,8 @@ package statelog
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 // GenerationStride is the sequence space one generation owns in the packed
@@ -129,9 +131,51 @@ func (p Position) Before(q Position) (bool, error) {
 }
 
 // String renders a position the way an operator surface and a log line both
-// want it.
+// want it — the token [ParsePosition] reads back.
 func (p Position) String() string {
 	return fmt.Sprintf("%s@%d:%d", p.Stream, p.Generation, p.Seq)
+}
+
+// ParsePosition reads back the `stream@generation:seq` token [Position.String]
+// writes — a cursor, a `since`, a `min_position`, a wake's trigger.
+//
+// BESIDE THE WRITER, because a token is one vocabulary and its reader belongs
+// with the rule that writes it: the reader lived in the tracker, so a wake
+// carrying a knowledge base's position, or a node reading one back, had to ask
+// the tracker how a position is spelled.
+//
+// THE TRIPLE RATHER THAN A BARE SEQUENCE, because a sequence names no stream
+// and no generation: handed one from a previous generation, a reader cannot
+// tell a position that is behind from one that is impossibly far ahead — and
+// the whole reason the public token carries all three is that it then never
+// needs a migration.
+func ParsePosition(raw string) (Position, error) {
+	refuse := func() (Position, error) {
+		return Position{}, fmt.Errorf("statelog: %q is not a log position — one "+
+			"reads `<stream>@<generation>:<sequence>`, and the answer that "+
+			"produced it carries the value to send back", raw)
+	}
+	stream, rest, found := strings.Cut(raw, "@")
+	if !found || stream == "" {
+		return refuse()
+	}
+	generation, sequence, found := strings.Cut(rest, ":")
+	if !found {
+		return refuse()
+	}
+	gen, err := strconv.ParseUint(generation, 10, 32)
+	if err != nil {
+		return refuse()
+	}
+	seq, err := strconv.ParseUint(sequence, 10, 64)
+	if err != nil {
+		return refuse()
+	}
+	at := Position{Stream: stream, Generation: uint32(gen), Seq: seq}
+	if err := at.Valid(); err != nil {
+		return Position{}, fmt.Errorf("statelog: %q is not a usable log position: %w", raw, err)
+	}
+	return at, nil
 }
 
 // Valid reports whether this position survives the packed form, and is called

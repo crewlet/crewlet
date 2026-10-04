@@ -723,6 +723,75 @@ func TestARefusedEvictionNamesTheFlagThatForcesIt(t *testing.T) {
 	}
 }
 
+// A REFUSAL'S `wait` SAYS WHAT THAT REFUSAL WAITS ON, NOT WHAT ITS VERB USUALLY
+// DOES.
+//
+// Three refusals carry `wait`, each for something different. Rendered by the
+// verb, either gesture refused `not_publishing` was sent to a lease or a
+// position that had nothing to do with the capacity window it was waiting out.
+// Each is rendered here by the route's own renderer from the engine's own
+// error, so the codes this command switches on are the codes a node sends —
+// and a refusal that carries no `wait` carries none of their lines.
+//
+// AND A 503 GATE REFUSAL IS THE NODE'S ANSWER, not "this node cannot serve
+// that": a readmission whose register nobody could read is the judgement's
+// own answer, and its hint says how to get past it.
+func TestAGateRefusalsWaitNamesWhatItWaitsOn(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	// advice is each refusal's own line, which no other refusal's answer
+	// may carry.
+	advice := map[string]string{
+		"eviction_refused":    "LIVE column in `crewlet retention status`",
+		"readmission_refused": "says when it has caught up",
+		"not_publishing":      "leads with the capacity window",
+	}
+	for _, c := range []struct {
+		name, verb, code string
+		err              error
+	}{
+		{"a live lease", "evict", "eviction_refused", fmt.Errorf("engine: evict node node-4: %w",
+			statelog.PermitEviction("node-4", []statelog.Presence{{NodeID: "node-4"}}, false))},
+		{"a node below a floor", "readmit", "readmission_refused",
+			fmt.Errorf("engine: readmit node node-4: %w", &statelog.ReadmissionRefusal{
+				NodeID: "node-4", Domain: "tracker", Published: true, Generation: 1, Seq: 1200,
+				Bound: statelog.ReadmissionBound{Domain: "tracker", Generation: 1,
+					Floor: 9000, First: 8800}})},
+		{"a register nobody could read", "readmit", "readmission_unjudged",
+			fmt.Errorf("engine: readmit node node-4: %w", &engine.ReadmissionUnjudged{
+				Node: "node-4",
+				Err:  errors.New("read the positions register: coordination is unreachable")})},
+		{"an eviction in a capacity window", "evict", "not_publishing",
+			fmt.Errorf("%w: an eviction appends a record to the state log, and this "+
+				"node runs in seal mode", engine.ErrNotPublishing)},
+		{"a readmission in a capacity window", "readmit", "not_publishing",
+			fmt.Errorf("%w: a readmission appends a record to the state log, and this "+
+				"node runs in seal mode", engine.ErrNotPublishing)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			node.mu.Lock()
+			node.gateErr = c.err
+			node.mu.Unlock()
+			_, _, err := cli(t, "retention", c.verb, "node-4", base, "-confirm", "node-4")
+			if err == nil {
+				t.Fatalf("a refused %s exited zero", c.verb)
+			}
+			said := err.Error()
+			if !strings.HasPrefix(said, "the node answered ") ||
+				!strings.Contains(strings.SplitN(said, "\n", 2)[0], c.code) {
+				t.Errorf("the refusal is not introduced as the node's %s answer:\n%s",
+					c.code, said)
+			}
+			for code, line := range advice {
+				if got := strings.Contains(said, line); got != (code == c.code) {
+					t.Errorf("a %s refusal carries %s's advice %q: %v\n%s", c.code,
+						code, line, got, said)
+				}
+			}
+		})
+	}
+}
+
 // A GESTURE THE NODE NEVER ANSWERED STILL NAMES THE OPERATION THAT FINISHES
 // IT — WHICH THE COMMAND MINTED BEFORE ASKING.
 //
@@ -759,16 +828,16 @@ func TestAGateTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 
 	// AND THE NODE'S OWN BOUND IS INSIDE THE WAIT, so its answer — not a
 	// client timeout that knows none of it — is what reaches the operator.
-	if gateRequestTimeout <= engine.GateBudget {
-		t.Fatalf("the command waits %s for a gesture the node bounds at %s",
-			gateRequestTimeout, engine.GateBudget)
+	if gateRequestTimeout <= engine.GateAnswerBudget {
+		t.Fatalf("the command waits %s for a gesture the node answers within %s",
+			gateRequestTimeout, engine.GateAnswerBudget)
 	}
 }
 
 // AN ANSWER THE NODE DID NOT WRITE IS NOT A REFUSAL. A reverse proxy's read
-// timeout — a 504 with an HTML page, at a minute, which is also the budget the
-// node gives a gesture past its judgement — and a 200 cut off part way through
-// both leave what the node did unknown, and the node finishes a gesture
+// timeout — a 504 with an HTML page, from a proxy set shorter than the fifty
+// seconds the node takes to answer a gesture — and a 200 cut off part way
+// through both leave what the node did unknown, and the node finishes a gesture
 // whatever happens to the connection. Read as a refusal, the eviction printed
 // no -op-id, and the only way on was a second gesture over every log the first
 // one reached.
@@ -869,7 +938,7 @@ func TestReadmittingANodeBelowTheFloorIsRefused(t *testing.T) {
 	base := "http://127.0.0.1:" + strconv.Itoa(boot.API.Port)
 	node := []string{"-url", base, "-token", "a-test-token"}
 	deadline := time.Now().Add(20 * time.Second)
-	for !e.NativeHydrated() {
+	for !e.NativeHydrated(t.Context()) {
 		if time.Now().After(deadline) {
 			t.Fatal("the node never established its state log")
 		}

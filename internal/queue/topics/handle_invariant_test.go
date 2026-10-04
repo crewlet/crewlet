@@ -108,6 +108,7 @@ func requireSafeSubject(t *testing.T, handle string) {
 	}{
 		{"AgentInbox", topics.AgentInbox(handle), []string{"crewlet", "agent", handle, "inbox"}},
 		{"AgentControl", topics.AgentControl(handle), []string{"crewlet", "agent", handle, "control"}},
+		{"AgentReflect", topics.AgentReflect(handle), []string{"crewlet", "agent", handle, "reflect"}},
 	} {
 		got := strings.Split(tc.subject, ".")
 		if len(got) != len(tc.want) {
@@ -138,6 +139,7 @@ func requireSafeSubject(t *testing.T, handle string) {
 	for _, tc := range []struct{ what, group string }{
 		{"AgentInboxGroup", topics.AgentInboxGroup(handle)},
 		{"AgentControlGroup", topics.AgentControlGroup(handle)},
+		{"AgentReflectGroup", topics.AgentReflectGroup(handle)},
 	} {
 		if i := strings.IndexAny(tc.group, separators); i >= 0 {
 			t.Errorf("%s(%q) = %q contains %q", tc.what, handle, tc.group, tc.group[i:i+1])

@@ -15,13 +15,33 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/period"
 )
+
+// jsOf is a JetStream client over nc in the API these tests' own brokers
+// speak: they are started raw, with no domain, so a client addresses the
+// account's own JetStream.
+func jsOf(nc *nats.Conn) jetstream.JetStream {
+	js, err := jsapi.Account().Client(nc)
+	if err != nil {
+		panic(err)
+	}
+	return js
+}
 
 // embeddedNATS starts a nats-server inside the test process with no listener,
 // the same topology internal/queue/jetstream boots for a solo node. Nothing
 // outside this process can reach it, and it dies with the test.
 func embeddedNATS(t *testing.T) *nats.Conn {
+	t.Helper()
+	_, nc := embeddedServer(t)
+	return nc
+}
+
+// embeddedServer is [embeddedNATS] with the server beside the connection, for
+// a case that reads what the broker itself counts.
+func embeddedServer(t testing.TB) (*server.Server, *nats.Conn) {
 	t.Helper()
 	dir := t.TempDir()
 	ns, err := server.NewServer(&server.Options{
@@ -48,7 +68,7 @@ func embeddedNATS(t *testing.T) *nats.Conn {
 		t.Fatalf("connect to embedded server: %v", err)
 	}
 	t.Cleanup(nc.Close)
-	return nc
+	return ns, nc
 }
 
 // bucketSeq gives every store its own set of buckets.
@@ -56,8 +76,14 @@ var bucketSeq atomic.Int64
 
 func openStore(t *testing.T, nc *nats.Conn, ttl time.Duration) *Store {
 	t.Helper()
+	return openStoreVia(t, jsOf(nc), ttl)
+}
+
+// openStoreVia is [openStore] over a client in any API.
+func openStoreVia(t *testing.T, client jetstream.JetStream, ttl time.Duration) *Store {
+	t.Helper()
 	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
-	s, err := Open(context.Background(), nc, Config{TTL: ttl, BucketPrefix: prefix})
+	s, err := Open(context.Background(), client, Config{TTL: ttl, BucketPrefix: prefix})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -86,6 +112,28 @@ func TestContract(t *testing.T) {
 	nc := embeddedNATS(t)
 	coordtest.Run(t, func(t *testing.T) coord.Backend {
 		return openStore(t, nc, coordtest.LongTTL)
+	})
+}
+
+// TestSharedContract runs the shared cases over three handles on one
+// single-member broker — the easy case, since every read is answered by the
+// one copy there is. shared_cluster_test.go is the one that means something:
+// the same cases with the handles on three members of a cluster.
+func TestSharedContract(t *testing.T) {
+	nc := embeddedNATS(t)
+	coordtest.RunShared(t, func(t *testing.T) []coord.Backend {
+		prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
+		out := make([]coord.Backend, 3)
+		for i := range out {
+			s, err := Open(t.Context(), jsOf(nc), Config{
+				TTL: coordtest.LongTTL, BucketPrefix: prefix,
+			})
+			if err != nil {
+				t.Fatalf("Open handle %d: %v", i, err)
+			}
+			out[i] = s
+		}
+		return out
 	})
 }
 
@@ -180,7 +228,7 @@ func TestAwkwardResourceNamesSurviveTheStore(t *testing.T) {
 	dotted := coord.SeatResource("alice.smith")
 	plain := coord.SeatResource("alice")
 	for _, r := range []string{dotted, plain} {
-		if _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
+		if _, _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
 			Owner: "node-a:1", TTL: time.Minute, Preferred: "node-a",
 		}); err != nil {
 			t.Fatalf("claim %q: %v", r, err)
@@ -240,7 +288,7 @@ func TestConfigIsValidated(t *testing.T) {
 		{"too many replicas", Config{TTL: time.Minute, Replicas: 9}},
 	}
 	for _, c := range cases {
-		if _, err := Open(context.Background(), nc, c.cfg); err == nil {
+		if _, err := Open(context.Background(), jsOf(nc), c.cfg); err == nil {
 			t.Fatalf("Open with %s was accepted", c.name)
 		}
 	}
@@ -257,7 +305,7 @@ func TestATTLLongerThanTheBucketIsRefused(t *testing.T) {
 
 	// The refusal is an ERROR, not a (nil, nil) refusal: nobody else holds
 	// the seat, the caller asked for something the bucket cannot promise.
-	lease, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: 2 * time.Minute})
+	lease, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: 2 * time.Minute})
 	if err == nil {
 		t.Fatalf("TryAcquire with a TTL above the bucket's = (%v, nil), want an error", lease)
 	}
@@ -271,7 +319,7 @@ func TestATTLLongerThanTheBucketIsRefused(t *testing.T) {
 		t.Fatalf("Renew with a TTL above the bucket's = %v", err)
 	}
 	// Exactly the configured TTL is the normal case and must be accepted.
-	if _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: time.Minute}); err != nil {
+	if _, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: time.Minute}); err != nil {
 		t.Fatalf("TryAcquire at exactly the bucket TTL: %v", err)
 	}
 }
@@ -286,7 +334,7 @@ func TestServerSideExpiryHandsTheSeatOver(t *testing.T) {
 	const ttl = time.Second
 	s := openStore(t, nc, ttl)
 
-	first, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
+	first, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 		Owner: "node-a:1", TTL: ttl, Preferred: "node-a",
 	})
 	if err != nil || first == nil {
@@ -316,7 +364,7 @@ func TestServerSideExpiryHandsTheSeatOver(t *testing.T) {
 	}
 
 	// The peer's claim lands through Create, on a key the broker removed.
-	taken, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-b:1", TTL: ttl})
+	taken, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-b:1", TTL: ttl})
 	if err != nil || taken == nil {
 		t.Fatalf("takeover after a server-side expiry = (%v, %v)", taken, err)
 	}
@@ -346,7 +394,7 @@ func TestReleaseExpiresInPlaceAndKeepsTheKey(t *testing.T) {
 	nc := embeddedNATS(t)
 	s := openStore(t, nc, time.Minute)
 
-	lease, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: time.Minute})
+	lease, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: time.Minute})
 	if err != nil || lease == nil {
 		t.Fatalf("claim = (%v, %v)", lease, err)
 	}
@@ -376,12 +424,12 @@ func TestUngatedClaimsDoNotScanTheFleet(t *testing.T) {
 	// An older peer holds a seat. A presence registration must still land —
 	// membership is not work, and a newer node invisible in the membership
 	// read makes every peer divide the seats by a fleet that excludes it.
-	if _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
+	if _, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 		Owner: "old:1", TTL: time.Minute, Protocol: 1,
 	}); err != nil {
 		t.Fatalf("old claim: %v", err)
 	}
-	presence, err := s.TryAcquire(ctx, coord.NodeResource("new"), coord.AcquireOptions{
+	presence, _, err := s.TryAcquire(ctx, coord.NodeResource("new"), coord.AcquireOptions{
 		Owner: "new:1", TTL: time.Minute, Protocol: coord.ProtocolVersion, Ungated: true,
 		Meta: map[string]any{"roles": []any{"seats"}},
 	})
@@ -399,34 +447,14 @@ func TestUngatedClaimsDoNotScanTheFleet(t *testing.T) {
 
 // TestFleetContract runs the shared-state suite against the real broker.
 //
-// The retentions are the suite's, not production's: every case reasons about
-// a window or a claim it names both sides of, and a bucket sized for the
-// production ledger's seven days would make a "this has lapsed" case wait
-// seven days. What the broker is being certified for is the SEMANTICS — an
-// atomic increment, a Create that only one caller wins, a Put whose revision
-// is the epoch — and those do not vary with the retention.
+// The retentions are the suite's ([openFleetVia]): what the broker is being
+// certified for is the SEMANTICS — an atomic increment, a Create that only one
+// caller wins, a Put whose revision is the epoch — and those do not vary with
+// the retention.
 func TestFleetContract(t *testing.T) {
 	nc := embeddedNATS(t)
 	coordtest.RunFleet(t, func(t *testing.T) coord.Fleet {
-		prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
-		store, err := OpenFleet(context.Background(), nc, FleetConfig{
-			BucketPrefix: prefix,
-			// Every one of these is above the broker's 100 ms floor and
-			// far longer than a case takes, so nothing lapses under a
-			// case that did not ask it to.
-			RateWindow:      time.Minute,
-			ClaimTTL:        10 * time.Minute,
-			LedgerRetention: 10 * time.Minute,
-			FireRetention:   10 * time.Minute,
-			FollowRetention: 10 * time.Minute,
-			CooldownMax:     time.Hour,
-			BudgetRetention: time.Hour,
-			StatusFreshness: 10 * time.Minute,
-		})
-		if err != nil {
-			t.Fatalf("OpenFleet: %v", err)
-		}
-		return store
+		return openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
 	})
 }
 
@@ -442,13 +470,15 @@ func TestFleetContract(t *testing.T) {
 func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
-	store, err := OpenFleet(context.Background(), nc, FleetConfig{
+	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
 		RateWindow: time.Minute, ClaimTTL: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
-		FollowRetention: time.Minute,
-		CooldownMax:     time.Minute, StatusFreshness: time.Minute,
-		BudgetRetention: time.Minute,
-		BucketPrefix:    prefix,
+		FollowRetention: time.Minute, RebaseRetention: time.Minute,
+		CooldownMax: time.Minute, StatusFreshness: time.Minute,
+		CustodyRetention: time.Minute,
+		ChunkLockTTL:     time.Minute,
+		BudgetRetention:  time.Minute,
+		BucketPrefix:     prefix,
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)
@@ -571,13 +601,13 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 	ctx := context.Background()
 
 	for _, r := range []string{"seat:ceo", "seat:eng", "seat:ops", "worker:scheduler"} {
-		if _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
+		if _, _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
 			Owner: "node-a", TTL: time.Minute, Preferred: "node-a",
 		}); err != nil {
 			t.Fatalf("claim %s: %v", r, err)
 		}
 	}
-	if _, err := s.TryAcquire(ctx, coord.NodeResource("node-a"), coord.AcquireOptions{
+	if _, _, err := s.TryAcquire(ctx, coord.NodeResource("node-a"), coord.AcquireOptions{
 		Owner: "node-a:1", TTL: time.Minute, Ungated: true,
 	}); err != nil {
 		t.Fatalf("claim presence: %v", err)
@@ -658,7 +688,7 @@ func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
 	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
 
 	const inForce = 90 * time.Second
-	first, err := Open(context.Background(), nc, Config{TTL: inForce, BucketPrefix: prefix})
+	first, err := Open(context.Background(), jsOf(nc), Config{TTL: inForce, BucketPrefix: prefix})
 	if err != nil {
 		t.Fatalf("the first Open: %v", err)
 	}
@@ -669,7 +699,7 @@ func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
 
 	// THE SECOND NODE ASKS FOR SOMETHING ELSE, which is what N nodes
 	// holding possibly-different Tier A files actually do.
-	second, err := Open(context.Background(), nc, Config{TTL: 30 * time.Second, BucketPrefix: prefix})
+	second, err := Open(context.Background(), jsOf(nc), Config{TTL: 30 * time.Second, BucketPrefix: prefix})
 	if err != nil {
 		t.Fatalf("a second Open against an existing bucket: %v", err)
 	}
@@ -715,13 +745,13 @@ func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 
 	// THE FLEET STARTED AT ONE REPLICA, which is what a single-node
 	// deployment or an early cluster actually has.
-	if _, err := Open(context.Background(), nc, Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
+	if _, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
 		t.Fatalf("the first Open: %v", err)
 	}
 
 	// AND THE OPERATOR RAISED IT. The buckets are still the ones made at
 	// one replica, and no node rewrites them.
-	_, err := Open(context.Background(), nc, Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 3})
+	_, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 3})
 	if err == nil {
 		t.Fatal("a node configured for 3 replicas adopted single-replica " +
 			"coordination and reported itself healthy — the leases, the " +
@@ -742,7 +772,7 @@ func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 
 	// AND EQUAL OR HIGHER STILL STARTS, so a single-replica development
 	// node against a replicated fleet's buckets is not locked out.
-	if _, err := Open(context.Background(), nc, Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
+	if _, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
 		t.Errorf("a node configured for fewer replicas than the bucket has "+
 			"was refused: %v", err)
 	}
@@ -1084,13 +1114,15 @@ func TestTheCounterRecordNamesEachSlotByItsLabel(t *testing.T) {
 // reach inside one rather than run the contract suite over it.
 func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
 	t.Helper()
-	store, err := OpenFleet(context.Background(), nc, FleetConfig{
+	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
 		RateWindow: time.Minute, ClaimTTL: time.Minute,
 		LedgerRetention: time.Minute, FireRetention: time.Minute,
-		FollowRetention: time.Minute,
-		CooldownMax:     time.Minute, StatusFreshness: time.Minute,
-		BudgetRetention: time.Minute,
-		BucketPrefix:    fmt.Sprintf("f%d", bucketSeq.Add(1)),
+		FollowRetention: time.Minute, RebaseRetention: time.Minute,
+		CooldownMax: time.Minute, StatusFreshness: time.Minute,
+		CustodyRetention: time.Minute,
+		ChunkLockTTL:     time.Minute,
+		BudgetRetention:  time.Minute,
+		BucketPrefix:     fmt.Sprintf("f%d", bucketSeq.Add(1)),
 	})
 	if err != nil {
 		t.Fatalf("OpenFleet: %v", err)
