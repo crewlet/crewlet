@@ -27,6 +27,10 @@ import "context"
 // So an implementation returns an error for "I cannot tell" and NEVER false.
 // [Decide] turns that into [Decision.Err], which is UNKNOWN rather than a
 // refusal, and a surface answers 503 rather than 403.
+//
+// THE RELATIONS ARE ANSWERED OVER ONE TREE by internal/authz/orgchart — the
+// running company's, for every surface asking about the company as it is, and
+// the two documents a /config write compares, for the org chart's own write.
 type Chart interface {
 	// Leads reports whether actor is above subject in the chart — the
 	// management chain, or the effective lead of a unit subject sits in.
