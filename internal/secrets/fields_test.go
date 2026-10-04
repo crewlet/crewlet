@@ -25,28 +25,26 @@ func TestMaskShowsOnlyAWholeReference(t *testing.T) {
 	}
 }
 
-// A CONTENT FIELD IS A CREDENTIAL, OF THE CONTENT KIND.
+// A CONTENT FIELD IS A CREDENTIAL.
 //
 // A setup step's file and its env are both credentials, and they are read
 // differently where they are used — a `${…}` in an env value is the engine's,
-// one in a file's body belongs to whatever reads the file. So the content tag
-// answers both questions: it is a credential to every surface that masks one,
-// and content to the launch that reads it.
-func TestAContentFieldIsACredentialOfTheContentKind(t *testing.T) {
+// one in a file's body belongs to whatever reads the file. Either tag is a
+// credential to every surface that masks one; a surface that masked only the
+// setting kind would serve a registry's auth file.
+//
+// The control is the untagged field, which is no credential.
+func TestAContentFieldIsACredential(t *testing.T) {
 	t.Parallel()
 	type box struct {
 		Files map[string]string `json:"files,omitempty" secret:"content"`
 		Env   map[string]string `json:"env,omitempty" secret:"true"`
 		Note  string            `json:"note,omitempty"`
 	}
-	for name, want := range map[string][2]bool{
-		"Files": {true, true}, "Env": {true, false}, "Note": {false, false},
-	} {
+	for name, want := range map[string]bool{"Files": true, "Env": true, "Note": false} {
 		f, _ := reflect.TypeOf(box{}).FieldByName(name)
-		if got := [2]bool{Field(f), ContentField(f)}; got != want {
-			t.Errorf("%s reads as Field %v, ContentField %v, want %v — a "+
-				"surface that masked by the one and not the other would serve "+
-				"a registry's auth file", name, got[0], got[1], want)
+		if got := Field(f); got != want {
+			t.Errorf("%s reads as a credential %v, want %v", name, got, want)
 		}
 	}
 }

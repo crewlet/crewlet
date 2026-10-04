@@ -67,10 +67,6 @@ func Field(f reflect.StructField) bool {
 	return false
 }
 
-// ContentField reports whether a struct field holds a credential that is
-// CONTENT ([TagContent]).
-func ContentField(f reflect.StructField) bool { return f.Tag.Get(FieldTag) == TagContent }
-
 // ReadContent is a content credential's value as the place it is written to
 // must receive it: a value that is exactly one whole `${VAR}` names the
 // content kept elsewhere and reads as that variable's value, BYTE FOR BYTE and
