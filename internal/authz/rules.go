@@ -125,23 +125,17 @@ const (
 
 	// --- the org chart ---------------------------------------------- //
 	//
-	// THE SPLIT IS THE DOMAIN'S OWN, not a taxonomy invented here. Half of
-	// every chart object is OPAQUE to the chart domain and travels on the
-	// row's `document` — a seat's model chain, its credentials, its sandbox
-	// cell, its worker grants and schedules, an mcp_env block — because
-	// internal/chart can say what a unit key and a parent mean and cannot
-	// say what an `mcp_env` key is for. That half is equivalent to shell on
-	// every engine host: a stdio MCP server is exec.Command with the
-	// config's command. So it is decided as an operator surface, and so
-	// are the RELATIONS somebody's authority is derived from — a seat's
-	// project, space and email, a unit's project, space and channel —
-	// which internal/chart refuses below the company's grant because only
-	// its decide can see whether a write changes one. The PROSE — a name,
-	// a purpose, a goal — is decided by whoever leads the object
-	// ([ActionChartContent]). Whom a seat manages is STRUCTURE
-	// ([ActionChartStructure]): a rename moves the entries naming its
-	// object on the chart's structural subject, and a list restated on the
-	// seat's own subject could put a renamed entry back.
+	// The org chart is the company document's `roles:` and `units:`, and a
+	// seat's RUNTIME settings — its model chain, its credentials, its
+	// sandbox cell, its worker grants and schedules, an mcp_env block — are
+	// equivalent to shell on every engine host: a stdio MCP server is
+	// exec.Command with the config's command. So they are decided as an
+	// operator surface, and so are the RELATIONS somebody's authority is
+	// derived from — a seat's project, space and email, a unit's project,
+	// space and channel. The PROSE — a name, a purpose, a goal — is decided
+	// by whoever leads the object ([ActionChartContent]). Whom a seat
+	// manages is STRUCTURE ([ActionChartStructure]), because it is a
+	// reporting line rather than a fact about the seat.
 	ActionChartRead        Action = "chart.read"
 	ActionChartReadRuntime Action = "chart.runtime.read"
 	ActionChartContent     Action = "chart.content.write"
@@ -487,47 +481,36 @@ var rules = map[Action]rule{
 	ActionWorkCommentEdit: {class: ClassAuthored, recency: iam.RecencyAny},
 
 	ActionChartRead: {class: ClassRead, recency: iam.RecencyAny},
-	// THE RUNTIME HALF IS THE COMPANY DOCUMENT by another name — the same
+	// A SEAT'S RUNTIME SETTINGS ARE THE COMPANY DOCUMENT — the same
 	// credentials, the same MCP commands, the same shape of every secret
-	// the company holds — so it takes the grant that reads that document
-	// rather than the one that reads the board.
+	// the company holds — so reading them takes the grant that reads that
+	// document rather than the one that reads the board.
 	ActionChartReadRuntime: {class: ClassOperator, grant: iam.GrantConfigRead, recency: iam.RecencyAny},
 	// A CONTENT EDIT IS THE OBJECT'S LEAD'S, which is what makes the chart
 	// writable by somebody other than whoever holds the deployment: a lead
 	// renaming their own team, restating its purpose or correcting a seat's
 	// goal is not a configuration change. It admits the lead to the WRITE;
-	// what the body turns out to change — the runtime half, a relation
-	// leadership is derived from — is asked again with the company's grant,
-	// by the route where the body shows it and by internal/chart where only
-	// the row does.
+	// what the body turns out to change — a seat's runtime settings, a
+	// relation leadership is derived from — is asked again with the
+	// company's grant.
 	ActionChartContent: {class: ClassChartObject, recency: iam.RecencyStepUp},
-	// STRUCTURE IS THE COMPANY'S. The domain serialises every structural
-	// record on ONE subject for the whole chart, deliberately, because two
-	// reparents through a common ancestor can each be locally valid and
-	// jointly produce a cycle — so a move is never a fact about one unit
-	// and is not one lead's to make.
+	// STRUCTURE IS THE COMPANY'S. Two reparents through a common ancestor
+	// can each be locally valid and jointly produce a cycle — so a move is
+	// never a fact about one unit and is not one lead's to make.
 	ActionChartStructure: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
-	// A REMOVAL TAKES BOTH HATS, the design's rule and the one
-	// internal/chart's own record holds too: the company's grant, because
-	// a removal is structure like any other, AND the deployment's, because
-	// it is the one structural change nothing can undo. A removed address
-	// is tombstoned for ever — no create, rename or import may take it
-	// again — the seat's mailbox, lease and diary go with it, and every
-	// node's removal gate drops whatever is still in flight to the object.
-	// That is a purge's blast radius, and a purge is whoever runs the
-	// deployment's to make. Admitted on the company's grant alone, an
-	// automation that applies a configuration could dissolve a team
-	// between two pipeline runs, and nothing a later run wrote would bring
-	// its address back.
+	// A REMOVAL TAKES BOTH HATS: the company's grant, because a removal is
+	// structure like any other, AND the deployment's, because it is the
+	// one structural change whose effects outlive an undo — the seat's
+	// mailbox is retired and whatever was still in flight to it goes with
+	// it. That is a purge's blast radius, and a purge is whoever runs the
+	// deployment's to make.
 	ActionChartRemove: {class: ClassOperator, grant: iam.GrantFleetOperate,
 		also: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
-	// A RENAME IS THE COMPANY'S, as every structural change is — the domain
-	// publishes it as a one-operation batch on the structure's one subject.
-	// Its own verb because its route is its own, and the reason it takes
-	// the company's grant is not the subject: an address is how every other
-	// domain refers to a thing — a `manages:` entry, a lead, a channel
-	// binding, the account name a vendor holds — so reassigning one inside
-	// a namespace the whole company shares is not a fact about one team.
+	// A RENAME IS THE COMPANY'S, as every structural change is, because an
+	// address is how every other domain refers to a thing — a `manages:`
+	// entry, a lead, a channel binding, the account name a vendor holds —
+	// so reassigning one inside a namespace the whole company shares is not
+	// a fact about one team.
 	ActionChartRename:  {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
 	ActionChartRuntime: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
 

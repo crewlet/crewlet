@@ -284,8 +284,8 @@ func TestAnUndecidableRequestIsNotAForbiddenOne(t *testing.T) {
 
 // THE ROUTER'S OWN REFUSAL IS THE ENGINE'S ENVELOPE, not net/http's plain text.
 //
-// The /iam and /chart surfaces state no wording of their own, so every
-// refusal they make is this one — and it was `http.Error`: `text/plain` with
+// The /iam surface states no wording of its own, so every refusal it makes
+// is this one — and it was `http.Error`: `text/plain` with
 // `nosniff`, a sentence rather than a code, and a 503 with no Retry-After.
 // A client of the rest of this API could not branch on it, could not name the
 // grant it lacked, and could not tell "try again" from "this node is gone".

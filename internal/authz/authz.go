@@ -383,8 +383,8 @@ const adminGrant = iam.GrantFleetOperate
 // project's policy, a remark — and whoever runs the deployment is the right
 // party to unstick it. The chart is the company's own structure and the text
 // every seat's prompt is built from, which is what `config:write` already
-// governs: that grant writes the runtime half, every relation leadership is
-// derived from, and every structural change. Its admin path was
+// governs: that grant writes every seat's runtime settings, every relation
+// leadership is derived from, and every structural change. Its admin path was
 // `fleet:operate`, which was wrong in both directions — an SRE holding only
 // the deployment's grant could rewrite what any seat is told to do, while an
 // administrator holding the company's grant and leading nobody could not

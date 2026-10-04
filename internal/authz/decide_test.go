@@ -336,10 +336,10 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 			authz.ActionChartContent,
 			authz.Object{Kind: authz.KindUnit, Container: "PLATFORM"},
 			false, authz.ReasonNotLead},
-		// THE RUNTIME HALF IS THE COMPANY'S, whoever leads the team: a
-		// seat's model chain, its credentials and its mcp_env are
+		// A SEAT'S RUNTIME SETTINGS ARE THE COMPANY'S, whoever leads the
+		// team: a seat's model chain, its credentials and its mcp_env are
 		// exec.Command on every engine host.
-		{"a unit's lead does not write the runtime half", personLeading("cto"),
+		{"a unit's lead does not write runtime settings", personLeading("cto"),
 			authz.ActionChartRuntime, authz.Object{Kind: authz.KindCompany},
 			false, authz.ReasonNoGrant},
 		{"the company's own grant does",
@@ -565,7 +565,7 @@ func TestFlippingTheChartInvertsEveryLeadAnswer(t *testing.T) {
 // and sends somebody to ask for an authority they already hold.
 func TestAChartReadErrorIsUnknownNotARefusal(t *testing.T) {
 	t.Parallel()
-	behind := errors.New("this node is behind the chart log")
+	behind := errors.New("this node has not applied the running company")
 	for _, c := range []struct {
 		name   string
 		action authz.Action
@@ -637,7 +637,7 @@ func TestTheAdminPathDecidesWithNoChartAtAll(t *testing.T) {
 // `Decision.Grants` is what a person refused reads as the remedy, so a lead
 // refused a seat they do not lead is told `config:write` — the grant that
 // admits them — and not `fleet:operate`, which no longer does. And the admin
-// path is decided before the relation, so a node behind its chart log never
+// path is decided before the relation, so a node that cannot read its org never
 // tells an administrator holding the company's grant that it cannot tell.
 // Mutation: put the deployment's grant back as this class's admin path and
 // every assertion here goes red.
@@ -827,7 +827,7 @@ func TestANameNobodyResolvedIsDecidedBeforeTheDirectoryIsAsked(t *testing.T) {
 	stranger := person("pat.nobody", iam.GrantWorkWrite, iam.GrantStateRead)
 	lead := personLeading("cto", iam.GrantWorkWrite, iam.GrantStateRead)
 	admin := person("ops.admin", iam.GrantFleetOperate)
-	blind := chart{err: errors.New("the chart view is behind")}
+	blind := chart{err: errors.New("the running org is not built yet")}
 
 	for _, c := range []struct {
 		name   string
