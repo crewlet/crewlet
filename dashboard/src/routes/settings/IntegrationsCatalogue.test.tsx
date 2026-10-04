@@ -106,7 +106,7 @@ const listing: SetupListing = {
     tool("datadog", { configured: true, enabled: true, satisfied: true }),
     ...["slack", "mattermost", "atlassian", "jira", "confluence", "github"].map((k) => tool(k)),
   ],
-  public_base_url: { present: true, resolved: true, value: "https://engine.example.com" },
+  external_url: { value: "https://engine.example.com", config_path: "api.external_url" },
 } as unknown as SetupListing;
 
 function stubFetch(setup: { status: number; body: unknown }) {
