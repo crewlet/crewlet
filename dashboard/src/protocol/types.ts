@@ -466,12 +466,11 @@ export interface AgentRow extends Overlay {
   /** The seat's HANDLE — what every screen addresses it by. */
   id: string;
   /**
-   * The seat's AGENT ID: derived from the handle it was CREATED under, so a
-   * rename does not move it and no two seats share it (`adr/0026`). THE key
-   * a live overlay, a sandbox run, a spend row and a phase record pair with
-   * this row by — never `role`, which is prose two seats may share, and never
-   * `handle`, which a rename moves while the events already in flight still
-   * carry the old one.
+   * The seat's AGENT ID, which the engine derives from its handle (ADR-0013):
+   * a handle never changes, so neither does this, and no two seats share it.
+   * THE key a live overlay, a sandbox run, a spend row and a phase record
+   * carry and pair with this row by — never `role`, which is prose two seats
+   * may share.
    */
   agent_id: string;
   /** The seat's name. Display only: nothing pairs a row by it. */
@@ -686,9 +685,9 @@ export interface Rollup {
   from?: string;
   to?: string;
   days?: number;
-  /** The one seat this answer was narrowed to, by agent id — the identity it
-   *  was filtered by, which a rename does not move. Absent for the whole
-   *  company. */
+  /** The one seat this answer was narrowed to, by agent id — the identity
+   *  the usage domain records a seat under, and so the one it was filtered
+   *  by. Absent for the whole company. */
   agent_id?: string;
   /** That seat's handle NOW, read off the chart for a link to it — never the
    *  handle the request typed. Absent for the whole company and for a seat

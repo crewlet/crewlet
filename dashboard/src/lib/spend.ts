@@ -102,8 +102,8 @@ export interface Band {
  * "other" cannot be mistaken for it.
  *
  * A SEAT OR UNIT BAND IS LABELLED WITH THE ENGINE'S `label`. The engine keys
- * a seat band on its agent id — the identity a rename does not move — and a
- * unit band on its key, and sends the NAME beside each, resolved against the
+ * a seat band on its agent id — the identity the usage domain records a seat
+ * under — and a unit band on its key, and sends the NAME beside each, resolved against the
  * chart where it answered: a legend of ids beside a table of names names one
  * seat two ways on one screen, and a resolver here would be a second, later
  * reading of the chart than the one the figures were cut against.

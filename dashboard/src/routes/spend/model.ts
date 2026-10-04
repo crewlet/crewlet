@@ -139,10 +139,11 @@ export interface AgentLine {
  * says so in its heading rather than dividing a thirty-day spend into one
  * day's allowance.
  *
- * PAIRED BY AGENT ID, never by handle: a rename moves a handle, and a spend
- * row the usage domain wrote before it named the seat by its old one — so
- * paired by handle, a renamed seat's row met nobody's meter, or a newcomer
- * who took the freed handle met the renamed seat's.
+ * PAIRED BY AGENT ID, never by handle: the usage domain records a seat under
+ * its agent id, which the engine derives from the seat's handle, and carries
+ * the handle only as a label for a seat the company no longer holds. The
+ * agent id is the one key a spend row and a live row are both certain to
+ * carry.
  */
 export function agentLines(
   rollup: Rollup | null | undefined,
