@@ -695,11 +695,11 @@ func BySeat(bindings []SeatBinding) (map[string]SeatBinding, error) {
 //
 // # Why not a walk of [Reader.People]
 //
-// The dangling-binding alarm asks about bindings on every heartbeat, and a
-// directory page reads every person — bound or not — and decodes each row's
-// document to answer it. This reads the binding columns of the bound rows and
-// nothing else, over the seat index, so its cost is the number of people
-// bound to a seat rather than the size of the company.
+// A directory page reads every person — bound or not — and decodes each row's
+// document, and the seat listing and every company write that takes a human
+// seat away ask only who holds which seat. This reads the binding columns of
+// the bound rows and nothing else, over the seat index, so its cost is the
+// number of people bound to a seat rather than the size of the company.
 //
 // Three-valued like everything here: an error is the unknown arm, and an
 // empty answer is a real one.

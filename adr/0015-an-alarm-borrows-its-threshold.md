@@ -50,6 +50,12 @@ for interactive search is a promise nothing else makes, so it is named here and
 is the threshold. What is forbidden is a SECOND number for an event that
 already has one.
 
+It does not make every fact worth knowing an alarm. An alarm answers whether a
+NODE is doing its job; a fact about the company's CONTENT — a person bound to a
+seat the company no longer holds — is a finding in the report that names it,
+never an alarm, because every node would raise it at once for a state no node
+can repair.
+
 It does not decide the alarm table's contents, its severity vocabulary or how a
 surface renders it. And it does not extend to metrics: a counter or a histogram
 records what happened at whatever resolution it has, and the thresholds are

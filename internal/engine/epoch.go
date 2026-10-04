@@ -33,11 +33,6 @@ import (
 // lock because there is only ever one writer — see [Engine.Apply].
 type epoch struct {
 	current atomic.Pointer[Company]
-
-	// installed counts the epochs this node has published, so a reader
-	// that derives something from the org can tell the org moved without
-	// comparing two companies ([SeatView.Version]).
-	installed atomic.Uint64
 }
 
 // Company is the epoch this engine is running.
@@ -105,7 +100,6 @@ func (e *Engine) installEpoch(ctx context.Context, c *Company) {
 		e.refreshParties(ctx, c)
 	}
 	e.epoch.current.Store(c)
-	e.epoch.installed.Add(1)
 	if c != nil && c.Models == nil {
 		// Said here, once per epoch, because it is the only line that
 		// reaches the operator of a company nobody has messaged yet: with

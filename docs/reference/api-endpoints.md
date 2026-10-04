@@ -953,9 +953,10 @@ what to do.
 `binding_dangling` is decided by the **request path's own seat table**, so it
 names exactly the people a request would refuse or hold off for want of their
 seat: a seat the company this node runs no longer holds, or holds as an agent
-seat. The `detail` says which. The same evaluation raises the
-`iam_binding_dangling` [alarm](alarms.md) once a residue has persisted past the
-60-second stall grace.
+seat. The `detail` says which. This report is the one place a dangling binding
+is said — no [alarm](alarms.md) raises it, because it is a fact about the
+company's content rather than about a node — and a Tier A token's row is
+reported here like anybody's, under its `token:<id>` login.
 
 `bindings_unchecked` counts the bound people whose seat this node **could not
 judge** — it runs no company yet. They are neither reported as dangling nor
@@ -982,22 +983,22 @@ ask each node whose Tier A you want checked.
 ```json
 {
   "tokens": [
-    {"id": "ci", "login": "token:ci", "row": "none", "binding": "unbound"},
+    {"id": "ci", "login": "token:ci", "row": "none"},
     {"id": "ops", "login": "token:ops", "row": "held", "person": "018f3a9c-…",
-     "stage": "active", "seat": "platform-lead", "binding": "bound"}
+     "stage": "active", "seat": "platform-lead"}
   ]
 }
 ```
 
 **Labels, never values**: `id` is the token's label in this node's Tier A.
-`row` is `none` when nobody holds the login (the token acts as itself),
-`reserved` for an enrolment that stopped after claiming it, and `held` for a
-row — whose `person`, `stage` and `seat` follow, the seat named by its
-handle. `binding` is `bound`, `unbound` (a row naming no seat),
-`dangling` with a `detail` saying why — the same judgement `/iam/check` reports
-a dangling binding from — or `unknown` where this node could not tell. A
-directory read that fails answers `503` with a `Retry-After`, never a list
-missing a row. It backs the token half of **Settings › People & access**.
+`row` is `none` when nobody holds the login (the token acts as itself) and
+`held` for a row — whose `person`, `stage` and `seat` follow, the seat named
+by its handle and absent when the row binds the token to none. **What the row
+holds, never a verdict on it**: whether that seat is still one the company
+holds is [`/iam/check`](#get-iamcheck-walks-the-whole-directory)'s
+`binding_dangling` finding about the same row. A directory read that fails
+answers `503` with a `Retry-After`, never a list missing a row. It backs the
+token half of **Settings › People & access**.
 
 #### `GET /iam/audit` pages by position, never by time
 

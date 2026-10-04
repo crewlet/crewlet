@@ -17,17 +17,14 @@ import (
 // must not give is "no seat" — [session.ResolveSeat] reads that as the
 // seatless arm and hands somebody bound to a lead's seat an empty handle,
 // which is the silent fall-through the whole three-valued shape exists to
-// prevent. Both methods error, and a person is then 503 rather than served.
+// prevent. Seat errors and HumanSeats reports no running company, so a person
+// is then 503 rather than served.
 func TestASeatViewWithNoCompanyRefusesRatherThanAnsweringSeatless(t *testing.T) {
 	t.Parallel()
 	var view SeatView
 	if _, found, err := view.Seat(t.Context(), "platform-lead"); err == nil {
 		t.Errorf("Seat answered found=%v with no error, so a view with no "+
 			"company would report every seat in the company as gone", found)
-	}
-	if _, err := view.Version(t.Context()); err == nil {
-		t.Error("Version answered with no error, so a view with no company " +
-			"would read as one the binding watch may classify against")
 	}
 	if seats, running := view.HumanSeats(); running {
 		t.Errorf("HumanSeats answered %v as a running company's seats, so a "+
@@ -50,9 +47,7 @@ func TestASeatViewWithNoCompanyRefusesRatherThanAnsweringSeatless(t *testing.T) 
 //
 // The running company is what every surface on this node routes, attributes
 // and authorizes by, so a seat it does not hold is conclusively absent — not
-// "not yet": there is no log this node can be behind on. The version moves
-// with the epoch, which is what lets the dangling-binding watch skip a beat on
-// which nothing moved.
+// "not yet": there is no log this node can be behind on.
 //
 // The control is the seat before the apply: found, and human.
 func TestTheSeatViewAnswersFromTheRunningCompany(t *testing.T) {
@@ -69,10 +64,6 @@ func TestTheSeatViewAnswersFromTheRunningCompany(t *testing.T) {
 	if seat, found, err := view.Seat(t.Context(), "ceo"); err != nil || !found ||
 		seat.Kind == session.SeatKindHuman {
 		t.Errorf("the CEO reads %+v (found %v, %v), want an agent seat", seat, found, err)
-	}
-	before, err := view.Version(t.Context())
-	if err != nil {
-		t.Fatalf("Version: %v", err)
 	}
 	if handles := humanHandles(t, view); !slices.Contains(handles, founderSeat) ||
 		slices.Contains(handles, "ceo") {
@@ -94,10 +85,6 @@ func TestTheSeatViewAnswersFromTheRunningCompany(t *testing.T) {
 	if seat, found, err := view.Seat(t.Context(), founderSeat); err != nil || found {
 		t.Errorf("the removed seat reads %+v (found %v, %v), want it absent — a "+
 			"leaver's seat is refused at once", seat, found, err)
-	}
-	if after, err := view.Version(t.Context()); err != nil || after == before {
-		t.Errorf("the version reads %d (%v) after an apply, the same as before: "+
-			"the binding watch would skip the beat that changed every answer", after, err)
 	}
 	if handles := humanHandles(t, view); slices.Contains(handles, founderSeat) {
 		t.Errorf("the human seats are %v after the founder's seat left", handles)

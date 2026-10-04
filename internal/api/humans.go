@@ -293,8 +293,15 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine) (guardedMounter,
 		// declared grants against: it is applied at decision time and
 		// never written, so a fleet mid-rollout legally disagrees and
 		// nothing else would say so.
-		Ceiling:  boot.API.Auth.MaxGrants,
-		Bindings: danglingBindings(e),
+		Ceiling: boot.API.Auth.MaxGrants,
+		// THE ENGINE'S RULE, not one written here: the request path's own
+		// seat table applied to a person's row, which the report asks and
+		// nothing restates. The seam it replaced asked only whether the
+		// chart held a row by that handle, which is how a person bound to
+		// an AGENT seat went unreported while every request they made was
+		// refused. A node running no company yet answers the unknown arm
+		// per row, which the report counts rather than guesses at.
+		Bindings: e.DanglingBinding,
 		// The company this node runs, whose human seats `/iam/seats`
 		// lists beside who holds each.
 		Seats: engine.SeatViewOf(e),
@@ -312,24 +319,6 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine) (guardedMounter,
 		return nil, fmt.Errorf("api: the identity directory: %w", err)
 	}
 	return surface, nil
-}
-
-// danglingBindings is the dangling-binding arm of the directory report, or nil
-// where this node cannot run it.
-//
-// THE ENGINE'S RULE, not one written here: [engine.Engine.DanglingBinding] is
-// the request path's own seat table applied to a person's row, and the
-// `iam_binding_dangling` alarm asks the same function — so the report and the
-// alarm cannot disagree about which binding dangles. The seam it replaced
-// asked only whether the chart held a row by that handle, which is how a
-// person bound to an AGENT seat went unreported while every request they made
-// was refused. A node running no company yet answers the unknown arm per row,
-// which the report counts rather than guesses at.
-func danglingBindings(e *engine.Engine) iamapi.Bindings {
-	return func(ctx context.Context, row iamdomain.PersonRow) (bool, string, error) {
-		residue, dangling, err := e.DanglingBinding(ctx, row)
-		return dangling, residue.Detail, err
-	}
 }
 
 // errNoIdentityEstate is a human surface asked of an engine that holds no

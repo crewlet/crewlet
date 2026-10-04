@@ -12,7 +12,7 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { BINDING_WORDS, PeopleAndAccess, STAGE_WORDS, TOKEN_ROW_WORDS } from "./Access.tsx";
+import { PeopleAndAccess, STAGE_WORDS, TOKEN_ROW_WORDS } from "./Access.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -66,15 +66,8 @@ const SEATS = {
 
 const TOKENS = {
   tokens: [
-    {
-      id: "deploy",
-      login: "token:deploy",
-      row: "held",
-      person: "p-deploy",
-      seat: "jane",
-      binding: "bound",
-    },
-    { id: "spare", login: "token:spare", row: "none", binding: "unbound" },
+    { id: "deploy", login: "token:deploy", row: "held", person: "p-deploy", seat: "jane" },
+    { id: "spare", login: "token:spare", row: "none" },
   ],
 };
 
@@ -195,17 +188,23 @@ test("a row this node cannot open is drawn as sealed", async () => {
 });
 
 // FROM BOTH ENDS: the seat with whoever holds it, and each of this node's
-// tokens with the row its login names and the seat that row binds it to.
-test("a seat names who holds it and a token what it acts as", async () => {
+// tokens with the row its login names and the seat that row binds it to — what
+// the row holds, with the report alone saying whether a seat is gone.
+test("a seat names who holds it and a token the seat its row binds", async () => {
   stubIam();
   mount();
   const deploy = (await screen.findByText("token:deploy")).closest(".grid-row") as HTMLElement;
   expect(within(deploy).getByText(TOKEN_ROW_WORDS.held!.label)).toBeTruthy();
-  expect(within(deploy).getByText(BINDING_WORDS.bound!.label)).toBeTruthy();
   expect(within(deploy).getByRole("link", { name: /Jane Founder/ })).toBeTruthy();
   const spare = screen.getByText("token:spare").closest(".grid-row") as HTMLElement;
   expect(within(spare).getByText(TOKEN_ROW_WORDS.none!.label)).toBeTruthy();
-  expect(within(spare).getByText(BINDING_WORDS.unbound!.label)).toBeTruthy();
+  expect(within(spare).getByText("Bound to no seat")).toBeTruthy();
+  const tokensTile = screen
+    .getByText("API tokens on this node", {
+      selector: ".crewlet-statcard *",
+    })
+    .closest(".crewlet-statcard") as HTMLElement;
+  expect(within(tokensTile).getByText("1 bound to a seat")).toBeTruthy();
   // The directory's own finding, in the engine's words.
   expect(screen.getByText("The seat removed-seat is not in the org chart.")).toBeTruthy();
   // A SEAT IS HELD BY ONE PERSON OR BY NOBODY: two of the three are vacant.

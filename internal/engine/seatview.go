@@ -78,17 +78,6 @@ func (v SeatView) HumanSeats() ([]session.Seat, bool) {
 	return seats, true
 }
 
-// Version names the organisation [SeatView.Seat] answers from: it moves on
-// every epoch this node publishes, so two equal readings answer every seat
-// alike — which is what lets the dangling-binding watch skip a beat on which
-// nothing moved.
-func (v SeatView) Version(context.Context) (uint64, error) {
-	if v.company() == nil {
-		return 0, errNoOrg
-	}
-	return v.engine.epoch.installed.Load(), nil
-}
-
 // company is the epoch this view answers from, or nil with no engine or no
 // company.
 func (v SeatView) company() *Company {

@@ -21,10 +21,10 @@ import (
 // company document, and the two are written by different gestures. A revision
 // that removes a seat a colleague is bound to — or turns it into an agent seat
 // — leaves that person bound to nothing: every request they make is refused
-// `403 seat_unavailable`, and the dangling-binding alarm names it a minute
-// later. That is the ordinary mistake, removing a seat somebody still uses,
-// and the write is where it can carry that person's name rather than surface
-// as an alarm.
+// `403 seat_unavailable`, and `/iam/check` names it once somebody asks. That is
+// the ordinary mistake, removing a seat somebody still uses, and the write is
+// where it can carry that person's name rather than surface as a finding
+// after the fact.
 //
 // # Any stage short of removal
 //
@@ -36,8 +36,8 @@ import (
 //
 // The directory is read before the activation, so a bind landing between the
 // two is not seen; and an offline `crewlet config import` or `activate` writes
-// the store with no directory to ask. Both leave the residue
-// `iam_binding_dangling` reports, which one record repairs.
+// the store with no directory to ask. Both leave the residue `/iam/check`
+// reports as `binding_dangling`, which one record repairs.
 //
 // # An unreadable directory refuses, and only a write that needs it
 //

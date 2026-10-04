@@ -595,29 +595,20 @@ would serialise every configuration change against every sign-in.
 What decides a binding is dangling is the [seat table the request path
 uses](#validation-is-three-valued-twice) — a binding dangles
 exactly when that table would refuse its person or hold them off for want of
-the seat — and one evaluation feeds every surface that reports it:
+the seat — and **one report says so**: `crewlet iam check` and
+[`GET /iam/check`](../reference/api-endpoints.md) list each one as
+`binding_dangling`, with the seat and which form it is in. A binding a node
+that runs no company yet **cannot judge** is counted as `bindings_unchecked`
+rather than reported either way, so a report printed before the node's first
+apply never reads as a clean directory.
 
-- `crewlet iam check` and [`GET /iam/check`](../reference/api-endpoints.md)
-  list each one as `binding_dangling`, with the seat and which form it is in.
-  A binding a node that runs no company yet **cannot judge** is counted as
-  `bindings_unchecked` rather than reported either way, so a report printed
-  before the node's first apply never reads as a clean directory.
-- The **`iam_binding_dangling`** alarm fires once a residue has persisted past
-  the same 60 seconds every other alarm uses. The age is how long this node's
-  own evaluations — on the alarm heartbeat, every fifteen seconds, on every node
-  — have kept finding it, from the first that did to the latest: nothing records
-  when a binding began to dangle, so the alarm never claims a persistence
-  nobody saw. A bind racing a removal, or a revision a node applies a few seconds
-  late, clears before it can fire. A beat that cannot read the directory, or
-  on a node that runs no company yet, changes nothing: a firing alarm stays up and a
-  residue keeps its first sighting, so an outage neither clears the alarm nor
-  restarts its clock. A read that fails is logged the way an alarm is — one
-  `iam_binding_walk_failed` when the run of failed beats starts and one
-  `iam_binding_walk_recovered` when it ends, carrying how long the alarm stood
-  on its old reading — rather than once a beat. And a beat re-reads the
-  directory only when the directory's applied position or the running
-  company has moved since the last, or a binding went unjudged, so a quiet
-  company's heartbeat costs a position read. See [Alarms](../reference/alarms.md).
+It is a finding and never an [alarm](../reference/alarms.md). An alarm says a
+node is not doing its job; a person bound to a seat the company no longer
+holds is a fact about the company's content, which every node would raise at
+once and none could repair. What stops the residue doing harm is enforcement,
+not reporting: the request path refuses its person `403 seat_unavailable`
+naming the seat, and a company write that would strand somebody is refused
+`409 seat_held` naming them.
 
 **A node that cannot read the directory refuses a write that would remove a
 held seat rather than allowing it** — `503`, and only a write that takes a
@@ -635,8 +626,10 @@ working as itself, unbound, while its operator believes it acts as a seat:
 nothing dangles, so `GET /iam/check` has nothing to name, and no directory
 read can reach a node's configuration. **`GET /iam/node-tokens`** answers it
 per node: each of the answering node's labels — never a value — joined to the
-row holding its login (none, or a row with its stage), and for a
-held row whether it binds the token to a seat and which. It is decided like
+row holding its login (none, or a row with its stage and the seat it binds the
+token to, if any). It reports what the row holds and passes no verdict on it:
+whether that seat is still the company's is `GET /iam/check`'s finding about
+the same row, whose login is `token:<id>`. It is decided like
 every other directory listing, on `people:manage` or `audit:read`, and it is
 what Settings › People & access reads.
 

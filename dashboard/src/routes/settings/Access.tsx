@@ -154,10 +154,11 @@ export interface NodeToken {
   row: string;
   person?: string;
   stage?: string;
+  /**
+   * The seat the row binds the token to, by handle — what the row holds, never
+   * a verdict: whether the company still holds it is `/iam/check`'s finding.
+   */
   seat?: string;
-  /** `bound`, `unbound`, `dangling` or `unknown`. */
-  binding: string;
-  detail?: string;
 }
 
 /** One row of `GET /iam/check`. */
@@ -233,30 +234,6 @@ export const TOKEN_ROW_WORDS: Record<string, Words> = {
     hint: "Nobody in the directory holds this login, so the token acts as itself and is bound to no seat. Bind it with crewlet iam if it should act as one.",
   },
   held: { label: "Row", tone: "success", hint: "A directory row holds this login." },
-};
-
-/** Whether a token's row names a seat the chart still holds. */
-export const BINDING_WORDS: Record<string, Words> = {
-  bound: {
-    label: "Acts as its seat",
-    tone: "success",
-    hint: "The row names a human seat the chart holds, so what this token writes is recorded as that seat.",
-  },
-  unbound: {
-    label: "Acts as itself",
-    tone: "neutral",
-    hint: "The row names no seat, so the token writes under its own login.",
-  },
-  dangling: {
-    label: "Seat gone",
-    tone: "warning",
-    hint: "The row names a seat this node's chart no longer holds as a human seat, so the token is refused acting as it.",
-  },
-  unknown: {
-    label: "Could not tell",
-    tone: "neutral",
-    hint: "This node could not read the chart just now to say whether the seat is still there.",
-  },
 };
 
 /** The directory report's kinds, in the engine's order (`iamapi.FindingKinds`). */
@@ -386,7 +363,7 @@ export function PeopleAndAccess() {
   const seatRows = useMemo(() => seats.data ?? [], [seats.data]);
   const unheld = seatRows.filter((s) => !s.holder).length;
   const tokenRows = useMemo(() => tokens.data ?? [], [tokens.data]);
-  const boundTokens = tokenRows.filter((t) => t.binding === "bound").length;
+  const boundTokens = tokenRows.filter((t) => t.seat).length;
   const openedRow = people.find((p) => p.id === opened) ?? null;
 
   return (
@@ -447,7 +424,7 @@ export function PeopleAndAccess() {
                 icon={<KeyGlyph size="xs" />}
                 label="API tokens on this node"
                 value={tokens.data ? tokenRows.length : EMPTY_VALUE}
-                sub={tokens.data ? `${boundTokens} acting as a seat` : "not read"}
+                sub={tokens.data ? `${boundTokens} bound to a seat` : "not read"}
               />
             </StatGroup>
           </Card>
@@ -503,11 +480,7 @@ export function PeopleAndAccess() {
                   key: "seat",
                   header: "Seat",
                   sortValue: (p) => p.seat ?? "",
-                  cell: (p) => {
-                    if (!p.seat) return <EmptyValue label="Bound to no seat" />;
-                    const seat = index.byHandle.get(p.seat);
-                    return <SeatCell handle={p.seat} name={seat?.name ?? p.seat} kind="human" />;
-                  },
+                  cell: (p) => <BoundSeat seat={p.seat} index={index} />,
                 },
                 {
                   key: "grants",
@@ -622,11 +595,11 @@ export function PeopleAndAccess() {
                     cell: (t) => <WordTag words={TOKEN_ROW_WORDS[t.row]} fallback={t.row} />,
                   },
                   {
-                    key: "binding",
-                    header: "Acts as",
+                    key: "seat",
+                    header: "Seat",
                     floor: "10rem",
-                    sortValue: (t) => t.binding,
-                    cell: (t) => <TokenBinding token={t} index={index} />,
+                    sortValue: (t) => t.seat ?? "",
+                    cell: (t) => <BoundSeat seat={t.seat} index={index} />,
                   },
                 ]}
               />
@@ -719,26 +692,14 @@ function Contacts({ contact }: { contact: ConfigRole["contact"] }) {
   );
 }
 
-/** What a token acts as: the seat it is bound to, or why it is not. */
-function TokenBinding({ token, index }: { token: NodeToken; index: ReturnType<typeof indexOrg> }) {
-  const words = BINDING_WORDS[token.binding];
-  const tag = (
-    <Tag
-      size="sm"
-      variant={words?.tone ?? "neutral"}
-      title={token.detail ? sentence(token.detail) : words?.hint}
-    >
-      {words?.label ?? token.binding}
-    </Tag>
-  );
-  if (token.binding !== "bound" || !token.seat) return tag;
-  const seat = index.byHandle.get(token.seat);
-  return (
-    <span className="row gap-2">
-      <SeatCell handle={token.seat} name={seat?.name ?? token.seat} kind="human" />
-      {tag}
-    </span>
-  );
+/**
+ * The seat a directory row binds — a person's or a token's — or the plain fact
+ * that it binds none. What the row holds, never a verdict on it: a seat the
+ * company no longer holds is the report's finding, below.
+ */
+function BoundSeat({ seat, index }: { seat?: string; index: ReturnType<typeof indexOrg> }) {
+  if (!seat) return <EmptyValue label="Bound to no seat" />;
+  return <SeatCell handle={seat} name={index.byHandle.get(seat)?.name ?? seat} kind="human" />;
 }
 
 /**

@@ -283,7 +283,7 @@ at any stage short of their removal, is refused `409 seat_held` naming them unde
 unbind or remove them first. A node that cannot read the directory refuses
 such a write `503 identity_unavailable` rather than allowing it. An offline `crewlet config import`
 has no directory to ask, so the binding it strands is reported by
-`crewlet iam check` and the `iam_binding_dangling` alarm.
+`crewlet iam check`.
 
 ### A lead editing their own team
 

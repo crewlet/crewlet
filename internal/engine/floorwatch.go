@@ -23,10 +23,9 @@ import (
 // its floor was skipped before the branch was reached. The alarm could not
 // fire.
 //
-// So the age is this node's own observation, taken on the alarm heartbeat
-// exactly as the dangling bindings' is (see bindings.go): first failing beat
-// to latest, never a persistence nobody saw, and in memory because "can this
-// node read the floor" is a fact about this node alone.
+// So the age is this node's own observation, taken on the alarm heartbeat:
+// first failing beat to latest, never a persistence nobody saw, and in memory
+// because "can this node read the floor" is a fact about this node alone.
 //
 // # What a read is
 //
@@ -130,10 +129,10 @@ func (w *floorWatch) observe(ctx context.Context, now time.Time, subjects []floo
 // log; a coordination outage that fails every domain at once raises one per
 // log, each saying so.
 //
-// FIRST SIGHTING TO LATEST OBSERVATION, never to now, for the binding watch's
-// reason: a report assembled between two beats knows only what the last one
-// found, and measuring to now would fire on a screen an alarm the gauge beside
-// it, set at the beat, does not.
+// FIRST SIGHTING TO LATEST OBSERVATION, never to now: a report assembled
+// between two beats knows only what the last one found, and measuring to now
+// would fire on a screen an alarm the gauge beside it, set at the beat, does
+// not.
 func (w *floorWatch) of(domain string) (time.Duration, string) {
 	if w == nil {
 		return 0, ""

@@ -201,9 +201,9 @@ func assertHolders(t *testing.T, got, want map[string]iamdomain.SeatHolder) {
 // THE BINDINGS READ IS EXACTLY THE BOUND PEOPLE, with what the seat table
 // needs of each and the same values a directory page carries.
 //
-// It is what the dangling-binding alarm reads on every heartbeat instead of
+// It is what the seat listing and the seat-holder check read instead of
 // walking the whole directory, so it must neither miss a binding the page walk
-// would have classified nor answer for somebody bound to nothing.
+// would have found nor answer for somebody bound to nothing.
 func TestSeatBindingsIsEveryBindingAndNothingElse(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

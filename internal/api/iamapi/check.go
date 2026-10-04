@@ -34,9 +34,9 @@ const (
 	// hire. A LEGAL RESIDUE rather than corruption — the directory and the
 	// company are written apart, so a bind and a revision removing its
 	// seat can both land — and the repair is an unbind or a rebind, which
-	// is one record. The same evaluation raises the
-	// `iam_binding_dangling` alarm once one has persisted past the stall
-	// grace.
+	// is one record. This report is the one place it is said: it is a fact
+	// about the company's content, which every node would raise at once as
+	// an alarm and none could repair (ADR-0015).
 	KindDanglingBinding FindingKind = "binding_dangling"
 
 	// KindClampedGrant is a grant a person's row declares that this
@@ -67,11 +67,11 @@ type Finding struct {
 //
 // ASKED, NEVER RESTATED. The rule is the request path's own seat table — a
 // binding dangles exactly when that table would refuse the person or hold them
-// off for want of the seat — and the engine applies it once, for this report
-// and for the `iam_binding_dangling` alarm alike. The predicate it replaced
-// asked only whether the chart held a row by that handle, so a person bound to
-// an AGENT seat, refused on every request they made, was one this report said
-// nothing about.
+// off for want of the seat — and the engine applies it: internal/engine's
+// Engine.DanglingBinding has this type's shape and is what a node wires. The
+// predicate it replaced asked only whether the chart held a row by that handle,
+// so a person bound to an AGENT seat, refused on every request they made, was
+// one this report said nothing about.
 //
 // THREE-VALUED: an error is a node that cannot tell — one running no company
 // yet — and the report counts it as unchecked
