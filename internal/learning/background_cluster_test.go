@@ -64,19 +64,13 @@ func TestTheClusterLoopTicksAtTheConfiguredInterval(t *testing.T) {
 	}
 }
 
-// A RENAMED SEAT IS CLUSTERED OVER THE WORK IT DID BEFORE THE RENAME, on its
-// own role.
-//
-// The roster lists roles, and the pass reads a seat's episodes by the handle
-// it was CREATED under. It used to be handed the seat's current handle, so a
-// seat renamed after a fortnight of the same procedure clustered nothing: its
-// episodes are filed under the handle it had when it did the work.
+// THE CLUSTER LOOP READS EACH SEAT'S EPISODES BY ITS HANDLE, on its own role.
 //
 // Proven by the MODEL LOOKUP, which the pass reaches only once it has found a
 // qualifying cluster — and by the seat beside it with no episodes at all,
 // which must not reach it, so the case is about whose episodes were read
 // rather than about a pass that asks the model for everyone.
-func TestTheClusterLoopReadsARenamedSeatsEpisodesByItsOrigin(t *testing.T) {
+func TestTheClusterLoopReadsEachSeatsEpisodesByItsHandle(t *testing.T) {
 	t.Parallel()
 	db := openTestStore(t)
 	writeClusterableTurns(t, db, "dev")
@@ -88,19 +82,17 @@ func TestTheClusterLoopReadsARenamedSeatsEpisodesByItsOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSynthesizer: %v", err)
 	}
-	renamed := &org.Role{Name: "Dev", DeclaredHandle: "dev-two",
-		OriginHandle: "dev", FormerHandles: []string{"dev"}}
+	dev := &org.Role{Name: "Dev", DeclaredHandle: "dev"}
 	idle := &org.Role{Name: "Ops", DeclaredHandle: "ops"}
 	b := NewBackground(BackgroundOptions{
 		Passes: BackgroundPasses{Cluster: syn},
-		Seats:  func() []*org.Role { return []*org.Role{idle, renamed} },
+		Seats:  func() []*org.Role { return []*org.Role{idle, dev} },
 	})
 	b.clusterPass(t.Context(), syn)
 
 	if got := models.roles(); len(got) != 1 || got[0] != "Dev" {
-		t.Fatalf("model lookups = %v, want exactly the renamed seat's role — its "+
-			"episodes are filed under the handle it was created under, and a "+
-			"pass that read them by its new handle found no cluster to draft", got)
+		t.Fatalf("model lookups = %v, want exactly the role of the seat whose "+
+			"episodes cluster", got)
 	}
 }
 

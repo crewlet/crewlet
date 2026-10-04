@@ -52,12 +52,9 @@ import (
 // A FACT, NOT A VERDICT: whether that holder may be reached is this package's
 // rule ([Standing]), stated once beside the registry it governs.
 type Holder struct {
-	// Seat is the seat's IDENTITY — the handle it was CREATED under, which
-	// no rename moves and the chart never issues twice (ADR-0027) — and never
-	// the handle it answers to now. A [Standing] finds the seat by it in the
-	// organization it is applied to ([org.Role.Origin]), exactly as the
-	// request path finds the same binding's seat, rather than comparing it
-	// to a handle.
+	// Seat is the bound seat's HANDLE, which is its identity (ADR-0013): a
+	// [Standing] finds the seat by it in the organization it is applied to,
+	// exactly as the request path finds the same binding's seat.
 	Seat string
 
 	// Stage is the bound person's stage. Empty for a reservation — an
@@ -178,19 +175,13 @@ func withholding(h Holder) (Withholding, bool) {
 // Standing is one reading of the identity directory: which bindings withhold
 // their seat's contact identities, and why. See the package notes above.
 //
-// # Keyed on the BINDING, found in an organization by IDENTITY
+// # Keyed on the BINDING, found in an organization by HANDLE
 //
-// A binding names its seat by the handle the seat was CREATED under (ADR-0027),
-// which is the one name a rename never moves. So a reading states what each
-// binding says, and [Standing.Seats] is what turns that into seats: it finds
-// every binding's seat in the organization a registry is being built from by
-// that identity ([org.Role.Origin]), which is the seat the request path finds
-// for the same binding. It used to resolve the handle a binding was made with
-// as an ADDRESS — live handles first, retired ones after — and both halves of
-// that went wrong: a suspended person whose seat had been renamed was withheld
-// only while nothing else took the old handle, and once a new seat did, THAT
-// seat was withheld for the stranger's suspension while the renamed seat went
-// on routing the suspended person's accounts.
+// A binding names its seat by the seat's handle, which is immutable
+// (ADR-0013). So a reading states what each binding says, and [Standing.Seats]
+// is what turns that into seats: it finds every binding's seat in the
+// organization a registry is being built from by that handle, which is the
+// seat the request path finds for the same binding.
 //
 // ITS ZERO VALUE IS CHART-ONLY: nothing consulted, nothing withheld.
 type Standing struct {
@@ -271,13 +262,11 @@ func (s Standing) Withheld() []string {
 }
 
 // Seats applies this reading to one organization: which of its seats are
-// withheld and why, keyed on each seat's CURRENT handle.
+// withheld and why, keyed on each seat's handle.
 //
-// A binding whose identity names no seat in o withholds nothing here — there
-// is no contact map for it to withdraw — and is the dangling residue the
-// identity duties report. A binding names the seat it was made to however that
-// seat has been renamed since, and never a seat that merely took an address it
-// used to answer to: the same seat the request path finds for the same person.
+// A binding whose handle names no seat in o withholds nothing here — there is
+// no contact map for it to withdraw — and is the dangling residue the identity
+// duties report.
 func (s Standing) Seats(o *org.Organization) map[string]Withholding {
 	out := map[string]Withholding{}
 	if o == nil {
@@ -294,30 +283,9 @@ func (s Standing) Seats(o *org.Organization) map[string]Withholding {
 	if len(s.withheld) == 0 {
 		return out
 	}
-	seats := seatsByIdentity(o)
 	for bound, why := range s.withheld {
-		for _, handle := range seats[bound] {
-			out[handle] = harder(out[handle], why)
-		}
-	}
-	return out
-}
-
-// seatsByIdentity maps every seat identity in o to the handle that seat answers
-// to now.
-//
-// A LIST PER IDENTITY, and every seat on it is withheld. The chart never issues
-// an identity twice, so a list longer than one is an organization built by
-// hand or a restore's residue — and the two ways to be wrong about it are not
-// symmetric: withholding both makes one person briefly unreachable, while
-// picking one could route a suspended person's accounts to the seat that was
-// not picked.
-func seatsByIdentity(o *org.Organization) map[string][]string {
-	out := map[string][]string{}
-	for role := range o.AllRoles() {
-		if h := role.Handle(); h != "" {
-			identity := role.Origin()
-			out[identity] = append(out[identity], h)
+		if o.Role(bound) != nil {
+			out[bound] = harder(out[bound], why)
 		}
 	}
 	return out

@@ -502,15 +502,6 @@ func (s Sources) feedSchedules(ctx context.Context, names scopeNames, actor,
 	position string, limit int) (feedPageOf, error) {
 
 	var src feedPageOf
-	// THE RUNNER BY THE HANDLE IT ANSWERS TO NOW: the ledger records the
-	// handle a fire was dispatched to, so a name typed from an older link —
-	// a handle a rename retired — is resolved through the chart first, or
-	// it would match only the fires from before the rename. Fires recorded
-	// before a rename still carry the handle of their day, which is what
-	// the ledger knows.
-	if actor != "" {
-		actor = currentHandle(names.organization, actor)
-	}
 	q := usage.ScheduleRunsQuery{Target: actor, Outcome: string(schedule.OutcomeFired), Limit: limit}
 	if position != "" {
 		at, key, ok := strings.Cut(position, "|")
@@ -529,7 +520,7 @@ func (s Sources) feedSchedules(ctx context.Context, names scopeNames, actor,
 			Schedule: &FeedScheduleRun{
 				ScopeType: run.ScopeType, ScopeID: run.ScopeID,
 				ScopeName: names.of(types.ScheduleScope(run.ScopeType), run.ScopeID),
-				Name:      run.Name, Target: currentHandle(names.organization, run.Target),
+				Name:      run.Name, Target: run.Target,
 				Outcome: run.Outcome, TraceID: run.TraceID, TurnID: run.TurnID, Runs: 1,
 			}})
 		src.positions = append(src.positions,
@@ -566,9 +557,6 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	// ONE CHART READING for the whole answer: the handle it names the
-	// person by and every run it matches against them.
-	organization := s.organization()
 	var items []DecisionItem
 	total, capped := 0, false
 	var oldest *time.Time
@@ -577,7 +565,7 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 			oldest = &at
 		}
 	}
-	answer := map[string]any{"handle": currentHandle(organization, handle)}
+	answer := map[string]any{"handle": handle}
 	if s.Work != nil {
 		fresh, err := freshness(p)
 		if err != nil {
@@ -612,7 +600,7 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 			// WAITING ON AN ANSWER — [sandbox.Awaiting], a reseeded run
 			// included, since its answer can still arrive — and put to
 			// this person.
-			if !slices.Contains(sandbox.Awaiting, run.Status) || !putTo(organization, run, handle) {
+			if !slices.Contains(sandbox.Awaiting, run.Status) || !slices.Contains(run.AudienceHandles, handle) {
 				continue
 			}
 			at := waitingSince(run)

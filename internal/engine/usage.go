@@ -43,8 +43,7 @@ func (e *Engine) startUsage(ctx context.Context, s *stateLog) {
 		NodeID: s.nodeID,
 		// THE CLOCK AND THE CHART ARE READ PER TICK, from whichever epoch
 		// is current: an apply that moves the company's timezone moves
-		// the next day's cut with it, and a seat renamed today is named
-		// by its new handle from the next flush.
+		// the next day's cut with it.
 		Zone:   e.Zone,
 		Handle: e.seatHandle,
 		// NO LOGGER: the publisher's own lines carry `component=usage`,

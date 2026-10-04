@@ -51,7 +51,7 @@ type Ranked struct {
 	Project  string `json:"project"`
 	Type     string `json:"type"`
 	Status   Status `json:"status"`
-	Assignee string `json:"assignee,omitempty" person:"seat"`
+	Assignee string `json:"assignee,omitempty"`
 	// Priority is the item's own, so a ranked answer says how much a hit
 	// matters beside what it is — the palette draws it as the Board does,
 	// and a seat weighing which of twenty hits to open reads it as the
@@ -142,11 +142,6 @@ const MaxSearchLimit = 50
 type Searcher struct {
 	db   *store.DB
 	rank Ranker
-
-	// Identities is how a hit's assignee is shown — the handle the seat
-	// answers to now, like every reader's answer. See people.go. Set once,
-	// before the searcher is shared.
-	Identities Identities
 }
 
 // NewSearcher builds one over this node's store and its index.
@@ -221,7 +216,7 @@ func (s *Searcher) Search(ctx context.Context, q SearchQuery) (SearchAnswer, err
 		row.Snippet, row.Rank = doc.Snippet, len(out)+1
 		out = append(out, row)
 	}
-	answer.Hits = shown(pinOf(s.Identities), out)
+	answer.Hits = out
 	return answer, nil
 }
 

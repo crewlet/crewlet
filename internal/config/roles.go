@@ -852,7 +852,8 @@ func (u *Unit) requireIDs(path Path) error {
 // document, at any depth, where it declares none: a unit's key minted from its
 // name ([MintUnitID]) and a seat's the handle its name derives ([org.Slugify]),
 // so a unit or a seat whose name is later corrected IN THE STORED DOCUMENT
-// keeps the identity it was created under. A file is minted afresh on every
+// keeps its key or its handle, which are immutable (ADR-0013). A file is
+// minted afresh on every
 // import, from the names it holds then, which is why a file somebody keeps
 // should state both.
 //

@@ -29,7 +29,7 @@ const separators = ".*>"
 // what made that safe lived entirely on the other side of the tree:
 // org.ValidHandle enforces ^[a-z0-9][a-z0-9-]*$, which happens to exclude
 // every character the subject grammar treats as syntax. The subject carries
-// the seat's ID now (ADR-0026), so that particular dependency is gone — and
+// the seat's ID now (ADR-0013), so that particular dependency is gone — and
 // the invariant it protected is not. It simply moved: what has to be a safe,
 // single, canonical token is whatever [org.Organization.AgentIDFor] derives.
 //
@@ -328,13 +328,13 @@ var suffixReaders = map[string]bool{
 // AgentInboxSuffix`, a Sprintf over them, a piece held in a variable to be
 // joined later.
 //
-// THE TYPE ALREADY REFUSES A HANDLE: [topics.AgentInbox] takes a uuid, so the
-// call a rename breaks does not compile (ADR-0026). This is the other door.
+// THE TYPE ALREADY REFUSES A HANDLE: [topics.AgentInbox] takes a uuid, so a
+// call handing it a handle does not compile. This is the other door.
 // The grammar's pieces are exported — the stream topology and the mailbox
 // sweep need the all-seats wildcard — and a site handed a handle where the
 // type wants an id could reach past the constructor and concatenate the
-// subject itself. That compiles, routes by an address a rename moves, and
-// fails silently: the publish lands on a subject nobody is attached to, and
+// subject itself. That compiles, routes by an address no consumer is named
+// by, and fails silently: the publish lands on a subject nobody is attached to, and
 // [TestNoPackageBuildsASubjectByHand] cannot see it, because no literal in it
 // names a subject.
 //
@@ -441,8 +441,8 @@ func TestNoPackageBuildsASeatsMailboxFromAString(t *testing.T) {
 	for _, at := range builds {
 		t.Errorf("%s: builds a seat's mailbox name out of the grammar's pieces.\n"+
 			"\tcall topics.AgentInbox / AgentInboxGroup / AgentControl / "+
-			"AgentControlGroup with the seat's id — a name composed from an "+
-			"address a rename moves is a mailbox nobody is attached to", at)
+			"AgentControlGroup with the seat's id — a name composed from "+
+			"anything else is a mailbox nobody is attached to", at)
 	}
 	t.Logf("scanned %d files: %d legal readings of the seat grammar, %d builds",
 		files, readings, len(builds))

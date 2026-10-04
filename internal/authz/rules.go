@@ -156,9 +156,9 @@ const (
 	// the SEAT the gesture is about, by the owner-or-lead class — the
 	// seat's holder, whoever leads it, or the deployment's grant — and
 	// each is decided INSIDE its tool, because the seat is never simply
-	// what the arguments state: a typed handle resolves through the chart
-	// (a retired alias, an origin), a turn names the seat only the node
-	// running it can say, and a run names the seat its row recorded.
+	// what the arguments state: a typed handle resolves through the org
+	// (`@sre`), a turn names the seat only the node running it can say,
+	// and a run names the seat its row recorded.
 	ActionSeatPause  Action = "pause_seat"
 	ActionSeatResume Action = "resume_seat"
 	ActionTurnSteer  Action = "steer_turn"

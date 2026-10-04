@@ -7,7 +7,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -32,13 +31,8 @@ func loginHeldBy(login, seat string, stage iam.Stage) iamdomain.Sighting {
 func TestALoginNamesTheRecordItsHolderActsUnder(t *testing.T) {
 	t.Parallel()
 	chart := companyChart()
-	// A RENAME IS FOLLOWED: the binding names the handle the seat had,
-	// and the chart answers the one it has now.
-	chart.seats["platform-old"] = session.Seat{Handle: "platform-lead",
-		Kind: session.SeatKindHuman}
 	dir := fakeBindings{rows: map[string]iamdomain.Sighting{
 		"jane.doe":  loginHeldBy("jane.doe", "platform-lead", iam.StageActive),
-		"ren.amed":  loginHeldBy("ren.amed", "platform-old", iam.StageActive),
 		"bo.smith":  loginHeldBy("bo.smith", "", iam.StageActive),
 		"away.gone": loginHeldBy("away.gone", "platform-lead", iam.StageSuspended),
 		"half.done": {ID: "018f3a9c-0000-7000-8000-0000000000aa",
@@ -54,7 +48,6 @@ func TestALoginNamesTheRecordItsHolderActsUnder(t *testing.T) {
 		name, login, want string
 	}{
 		{"a bound person's login is their seat's record", "jane.doe", "platform-lead"},
-		{"a renamed seat is followed", "ren.amed", "platform-lead"},
 		{"an unbound person's login is their own record", "bo.smith", "bo.smith"},
 		// SUSPENSION DOES NOT MOVE A RECORD: unsticking the queue of
 		// somebody who is away is what writing another's record is for.

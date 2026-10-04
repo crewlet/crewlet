@@ -109,7 +109,7 @@ type FeedQuery struct {
 	// Actor narrows to one writer: the name a commit was made under — a
 	// seat (a person bound to one writes AS it, see iam.ActorFor), or the
 	// login of somebody bound to none.
-	Actor string `person:"seat"`
+	Actor string
 
 	// Before resumes a scroll; nil is the newest page.
 	Before *FeedCursor
@@ -137,7 +137,7 @@ type FeedRow struct {
 	Kind   FeedKind   `json:"kind"`
 	At     time.Time  `json:"at"`
 	Cursor string     `json:"cursor"`
-	Actor  string     `json:"actor,omitempty" person:"seat"`
+	Actor  string     `json:"actor,omitempty"`
 	ActorK AuthorKind `json:"actor_kind,omitempty"`
 
 	Task string `json:"task"`
@@ -165,8 +165,8 @@ type FeedRow struct {
 	// From, To, Reassignments and ReassignmentBudget ride a hand-off: who
 	// held the task and who holds it now, the task's hand-off counter as
 	// that commit left it, and the budget it counts against.
-	From               string `json:"from,omitempty" person:"seat"`
-	To                 string `json:"to,omitempty" person:"seat"`
+	From               string `json:"from,omitempty"`
+	To                 string `json:"to,omitempty"`
 	Reassignments      *int   `json:"reassignments,omitempty"`
 	ReassignmentBudget int    `json:"reassignment_budget,omitempty"`
 }
@@ -207,14 +207,6 @@ var feedKindSQL = map[FeedKind]string{
 
 // CompanyFeed answers one page of the tracker's half of the company feed.
 func (r *Reader) CompanyFeed(ctx context.Context, q FeedQuery) (FeedPage, error) {
-	call := r.pinned()
-	got, err := call.companyFeed(ctx, identified(call.chart, q))
-	return shown(call.chart, got), err
-}
-
-// companyFeed is [Reader.CompanyFeed] once every person the question names is
-// their seat's identity — see people.go.
-func (r *Reader) companyFeed(ctx context.Context, q FeedQuery) (FeedPage, error) {
 	switch {
 	case q.Level == "":
 		return FeedPage{}, fmt.Errorf("tracker: this feed read names no level " +

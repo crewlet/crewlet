@@ -17,8 +17,7 @@ import (
 // A SEAT'S ARRIVAL IS KEYED BY ITS AGENT ID, the one field the live
 // projection reads its key from on every seat-level event. It carried the
 // HANDLE on `agent_spawned` and `agent_terminated` alone, so a seat's arrival
-// and its first turn landed under two identities — and a seat renamed after
-// it was created arrived under a key none of its own turns carried.
+// and its first turn landed under two identities.
 func TestASeatsLifecycleEventNamesTheSeatByItsAgentID(t *testing.T) {
 	t.Parallel()
 	q := memory.New()
@@ -38,12 +37,9 @@ func TestASeatsLifecycleEventNamesTheSeatByItsAgentID(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	// Two seats sharing a name, and the second one RENAMED: it answers to
-	// `eng-b` now and was created as `builder`, which is what its id is
-	// derived from.
+	// Two seats sharing a name, told apart by their handles.
 	a := &org.Role{Name: "Engineer", DeclaredHandle: "eng-a"}
-	b := &org.Role{Name: "Engineer", DeclaredHandle: "eng-b", OriginHandle: "builder",
-		FormerHandles: []string{"builder"}}
+	b := &org.Role{Name: "Engineer", DeclaredHandle: "eng-b"}
 	company := &Company{
 		Config: &config.Company{},
 		Org:    &org.Organization{Name: "Nimbus", Roles: []*org.Role{a, b}},
@@ -61,11 +57,11 @@ func TestASeatsLifecycleEventNamesTheSeatByItsAgentID(t *testing.T) {
 	select {
 	case p := <-got:
 		if p.Agent != idB.String() {
-			t.Errorf("agent_id = %q, want the renamed seat's derived id %s — "+
-				"not its handle, and not its namesake's id %s", p.Agent, idB, idA)
+			t.Errorf("agent_id = %q, want the seat's derived id %s — not its "+
+				"handle, and not its namesake's id %s", p.Agent, idB, idA)
 		}
 		if p.AgentHandle != "eng-b" || p.RoleName != "Engineer" {
-			t.Errorf("the event names handle %q and role %q, want the seat's current ones",
+			t.Errorf("the event names handle %q and role %q, want the seat's own",
 				p.AgentHandle, p.RoleName)
 		}
 	case <-time.After(5 * time.Second):

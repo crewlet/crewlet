@@ -207,20 +207,13 @@ type Turn struct {
 	Task  string
 	Reply string
 
-	// Requester is the seat whose message, notice or ask woke this turn,
-	// as the handle that seat was CREATED under ([org.Role.Origin]), and
-	// empty when no seat did — a schedule, a sender the chart does not
-	// know. Carried for the reason Task and Reply are: a coding run this
-	// turn detaches can stop to ask "the requester" a question days later,
-	// on another node, and the launch is the only frame that can put who
-	// that is on the run's row.
-	//
-	// THE ORIGIN AND NEVER THE CURRENT HANDLE, because the row outlives a
-	// rename: who may answer the run's question is decided against it, and
-	// a handle the seat gave up between the launch and the question names
-	// nobody — or whoever the chart later gave that handle to. A reader
-	// resolves it through [org.Organization.Role], which answers an origin
-	// for ever, and shows the seat by its current handle.
+	// Requester is the handle of the seat whose message, notice or ask woke
+	// this turn, and empty when no seat did — a schedule, a sender the org
+	// does not know. Carried for the reason Task and Reply are: a coding run
+	// this turn detaches can stop to ask "the requester" a question days
+	// later, on another node, and the launch is the only frame that can put
+	// who that is on the run's row. A handle is immutable (ADR-0013), so the
+	// row names the same seat for as long as the seat exists.
 	Requester string
 
 	// Phase is the phase session this value was bound for, and empty on
@@ -293,22 +286,6 @@ func (t *Turn) Handle() string {
 		return ""
 	}
 	return t.Seat.Handle()
-}
-
-// Origin is the handle the acting seat was CREATED under ([org.Role.Origin]),
-// or "" when there is no seat.
-//
-// It is what the seat's memory is keyed on — its episodes, its synthesized
-// skills, its counterparty profiles and its thread history — and [Turn.Handle]
-// is not: a handle is an address a founder retypes, and a tool that read the
-// seat's memory under it found nothing the seat learned before a rename. So a
-// tool reads and writes memory with this and speaks to people with Handle.
-// See internal/learning's package doc.
-func (t *Turn) Origin() string {
-	if t == nil {
-		return ""
-	}
-	return t.Seat.Origin()
 }
 
 // Role is the acting seat's role name, or "".

@@ -200,111 +200,46 @@ func TestReadingTheDirectoryIsThreeValued(t *testing.T) {
 	}
 }
 
-// A SUSPENSION FINDS A SEAT THE CHART HAS RENAMED SINCE THE BIND.
+// A BINDING WITHHOLDS THE SEAT ITS HANDLE NAMES, AND NO OTHER.
 //
-// A binding names its seat by the handle the seat was CREATED under (ADR-0027),
-// which a rename never moves. The control is the reading applied to that name
-// as a live handle — what the registry did before the binding was an identity —
-// which names a handle no seat answers to, so the suspended founder's Slack
-// account went on resolving to their renamed seat.
-func TestASuspensionAfterARenameStillWithholdsTheSeat(t *testing.T) {
-	t.Parallel()
-	o := renamedCompany()
-	suspended := notify.StandingOf([]notify.Holder{
-		{Seat: "dana-founder", Stage: iam.StageSuspended},
-	})
-
-	// THE CONTROL: no seat answers to the bound identity as its own handle.
-	for role := range o.AllRoles() {
-		if role.Handle() == "dana-founder" {
-			t.Fatal("the fixture's seat still answers to its old handle, so " +
-				"nothing below is about a rename")
-		}
-	}
-
-	r := notify.NewRegistry(o, nil)
-	rec := r.ReconcileHumanContacts(o, env(nil), suspended)
-	if p, ok := r.ByExternalID("slack", "U0FOUNDER"); ok {
-		t.Errorf("a suspended holder's account still resolves to %q after the "+
-			"seat was renamed", p.Handle)
-	}
-	if why, ok := r.Withholding("dana"); !ok || why != notify.WithheldSuspended {
-		t.Errorf("the renamed seat reports %q/%v, want suspended", why, ok)
-	}
-	if rec.Withheld != 2 {
-		t.Errorf("withheld %d identities, want both of the founder's", rec.Withheld)
-	}
-	if got := r.Withheld(); len(got) != 1 || got[0] != "dana" {
-		t.Errorf("the registry withholds %v, want the seat by its current handle", got)
-	}
-}
-
-// A BINDING FOLLOWS ITS SEAT, AND NEVER THE ADDRESS IT WAS MADE WITH.
-//
-// The founder's seat was created as `founder`, renamed to `dana-founder` and
-// then to `dana`, and a new seat for somebody else has since taken the retired
-// alias `dana-founder` — which the chart allows, because an alias is not an
-// identity. The founder is suspended. Their binding names `founder`, so it is
-// THEIR seat that is withheld, under its current handle, and the stranger's
-// seat routes: resolved as an address the other way round, the stranger was
-// silenced for somebody else's suspension while the suspended person's own
-// Slack messages went on being attributed to their seat.
-func TestABindingFollowsItsSeatAndNeverTheAddressItWasMadeWith(t *testing.T) {
+// A binding names its seat by the seat's handle, which is immutable
+// (ADR-0013), so the reading applies to exactly the seat answering to it: a
+// second human seat routes, and a binding naming a handle no seat answers to
+// withholds nothing. The control is that second seat's own suspension, which
+// does withhold it — so its routing below is about the handle, not about a
+// seat the fixture could never withhold.
+func TestABindingWithholdsTheSeatItNames(t *testing.T) {
 	t.Parallel()
 	o := company()
-	for _, role := range o.Roles {
-		if role.Name == "Dana Founder" {
-			role.DeclaredHandle = "dana"
-			role.OriginHandle = "founder"
-			role.FormerHandles = []string{"dana-founder", "founder"}
-		}
-	}
 	o.Roles = append(o.Roles, &org.Role{
-		Name: "Dana Founder Two", Kind: org.KindHuman, DeclaredHandle: "dana-founder",
-		Contact: &org.HumanContact{SlackUserID: "U0SECOND"},
-	})
-	o.Normalize()
-
-	r := notify.NewRegistry(o, nil)
-	r.ReconcileHumanContacts(o, env(nil), notify.StandingOf([]notify.Holder{
-		{Seat: "founder", Stage: iam.StageSuspended},
-		{Seat: "dana-founder", Stage: iam.StageActive},
-	}))
-	if p, ok := r.ByExternalID("slack", "U0FOUNDER"); ok {
-		t.Errorf("the suspended founder's account still resolves to %q", p.Handle)
-	}
-	if why, ok := r.Withholding("dana"); !ok || why != notify.WithheldSuspended {
-		t.Errorf("the founder's renamed seat reports %q/%v, want suspended", why, ok)
-	}
-	if p, ok := r.ByExternalID("slack", "U0SECOND"); !ok || p.Handle != "dana-founder" {
-		t.Errorf("the seat that took the retired alias was withheld for "+
-			"somebody else's suspension (%+v, %v)", p, ok)
-	}
-}
-
-// TWO SEATS CLAIMING ONE IDENTITY ARE BOTH WITHHELD.
-//
-// The chart never issues an identity twice, so this is an organization built by
-// hand or a restore's residue. Picking one of the two could route a suspended
-// person's accounts through the seat not picked; withholding both makes one
-// person briefly unreachable, which is the direction to be wrong in.
-func TestTwoSeatsClaimingOneIdentityAreBothWithheld(t *testing.T) {
-	t.Parallel()
-	o := renamedCompany()
-	o.Roles = append(o.Roles, &org.Role{
-		Name: "Dana Founder Two", Kind: org.KindHuman, DeclaredHandle: "dana-founder",
+		Name: "Sam Second", Kind: org.KindHuman, DeclaredHandle: "sam",
 		Contact: &org.HumanContact{SlackUserID: "U0SECOND"},
 	})
 	o.Normalize()
 
 	seats := notify.StandingOf([]notify.Holder{
 		{Seat: "dana-founder", Stage: iam.StageSuspended},
+		{Seat: "dana", Stage: iam.StageSuspended},
+		{Seat: "sam", Stage: iam.StageActive},
 	}).Seats(o)
-	for _, handle := range []string{"dana", "dana-founder"} {
-		if why := seats[handle]; why != notify.WithheldSuspended {
-			t.Errorf("%s reads %q, want suspended — both seats carry the "+
-				"suspended binding's identity", handle, why)
-		}
+	if why := seats["dana-founder"]; why != notify.WithheldSuspended {
+		t.Errorf("the suspended holder's seat reads %q, want suspended", why)
+	}
+	if why, ok := seats["sam"]; ok {
+		t.Errorf("an active holder's seat is withheld (%q)", why)
+	}
+	if len(seats) != 1 {
+		t.Errorf("the reading withholds %v, want only the seat the suspended "+
+			"binding names: a handle no seat answers to names nobody", seats)
+	}
+
+	// THE CONTROL: the second seat's own suspension withholds it.
+	control := notify.StandingOf([]notify.Holder{
+		{Seat: "sam", Stage: iam.StageSuspended},
+	}).Seats(o)
+	if why := control["sam"]; why != notify.WithheldSuspended {
+		t.Errorf("a suspended binding on the second seat reads %q, so the "+
+			"routing above proves nothing", why)
 	}
 }
 
@@ -333,22 +268,6 @@ func TestAnUnreadDirectoryWithholdsEveryHumanSeat(t *testing.T) {
 	if unread.Equal(notify.Standing{}) || unread.Equal(notify.StandingOf(nil)) {
 		t.Error("an unread reading equals one that routes everybody")
 	}
-}
-
-// renamedCompany is the fixture company after the founder's seat was renamed
-// from `dana-founder` to `dana` — the shape the chart gives a renamed seat: the
-// handle it was created under frozen as its origin, and retired as an alias.
-func renamedCompany() *org.Organization {
-	o := company()
-	for _, role := range o.Roles {
-		if role.Name == "Dana Founder" {
-			role.DeclaredHandle = "dana"
-			role.OriginHandle = "dana-founder"
-			role.FormerHandles = []string{"dana-founder"}
-		}
-	}
-	o.Normalize()
-	return o
 }
 
 // directoryFunc adapts a function to the seam.

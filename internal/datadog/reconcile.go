@@ -67,7 +67,7 @@ type Result struct {
 	// that match no seat this engine plans for.
 	//
 	// REPORTED AND NEVER TOUCHED, which is the whole of it. A live
-	// organization accumulates these: a seat renamed, a handle changed, an
+	// organization accumulates these: a seat removed, a handle changed, an
 	// older naming scheme this engine no longer derives — measured on one,
 	// 36 disabled accounts under `agent-cs-…@agents.crewlet.invalid` that
 	// match nothing a current pass would ask for. Every one is an identity
@@ -341,7 +341,7 @@ func provisionSeat(
 		return out
 	default:
 		created, err := opts.Client.CreateServiceAccount(
-			ctx, opts.Creds, seat.Email, AccountName(seat.Role, seat.Origin), roleID)
+			ctx, opts.Creds, seat.Email, AccountName(seat.Role, seat.Handle), roleID)
 		if err != nil {
 			out.Err = fmt.Errorf("create the account for %s: %w", seat.Handle,
 				integration.Reject(err, Status(err)))
@@ -606,8 +606,9 @@ func roleIDOf(ctx context.Context, opts Options, name string) (string, error) {
 // either half of "disable or delete" does.
 //
 // THE ENABLED ONES ARE THE WHOLE FINDING and they still report. That is the
-// account that can still act — a renamed seat's identity, live, holding
-// whatever it held, matching nothing any pass will ever ask for again.
+// account that can still act — a changed handle's old identity, live,
+// holding whatever it held, matching nothing any pass will ever ask for
+// again.
 func orphanedAccounts(existing []User, plan *provision.Plan, domain string) []User {
 	if plan == nil {
 		return nil
@@ -771,7 +772,7 @@ func (r *Result) Findings() []integration.Finding {
 			Detail: "Crewlet made " +
 				integration.Count(len(addresses), "enabled service account") +
 				" at this company's own email domain matching no seat it " +
-				"provisions for — a renamed seat, a changed handle, or an " +
+				"provisions for — a removed seat, a changed handle, or an " +
 				"older naming scheme",
 			Remedy: "Disable or delete the ones you do not want, at Datadog. " +
 				"Nothing here removes them: an account is a colleague there, " +

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -125,9 +124,6 @@ type PlaceResult struct {
 func (w *Writer) PlaceTask(ctx context.Context, opID string, place Place,
 	notify *Notify) (PlaceResult, error) {
 
-	// ONE READING OF THE CHART for every name this write resolves and
-	// every name it is worded with — see [Writer.pinned].
-	w = w.pinned()
 	switch {
 	case place.Task == "":
 		return PlaceResult{}, invalid("a drop names no task")
@@ -199,7 +195,7 @@ func (w *Writer) PlaceTask(ctx context.Context, opID string, place Place,
 	var rank Rank
 	order, err := placer.publishOrder(ctx, stepID(opID, "order"), place.Project,
 		func(tx *sql.Tx) ([]Placement, error) {
-			placements, err := decidePlace(ctx, tx, w.chart(), place, ifMatch)
+			placements, err := decidePlace(ctx, tx, place, ifMatch)
 			rank = ""
 			for _, p := range placements {
 				if p.Task == place.Task {
@@ -220,9 +216,8 @@ func (w *Writer) PlaceTask(ctx context.Context, opID string, place Place,
 }
 
 // decidePlace reads the gap inside the order's own snapshot and decides the
-// placements — see [PlaceInGap]. chart is the write's one reading, which a
-// refusal names a remover by.
-func decidePlace(ctx context.Context, tx *sql.Tx, chart seatnames.Chart, place Place,
+// placements — see [PlaceInGap].
+func decidePlace(ctx context.Context, tx *sql.Tx, place Place,
 	ifMatch uint64) ([]Placement, error) {
 	current, held, err := readTask(ctx, tx, place.Task)
 	switch {
@@ -234,7 +229,7 @@ func decidePlace(ctx context.Context, tx *sql.Tx, chart seatnames.Chart, place P
 	case current.Removed != nil:
 		return nil, invalid("task %s was removed by %s at %s; "+
 			"restore it first", place.Task,
-			seatnames.CurrentOf(chart, current.Removed.By),
+			current.Removed.By,
 			current.Removed.At.Format(time.RFC3339))
 	case ifMatch != 0 && current.Version != ifMatch:
 		return nil, fmt.Errorf("%w: task %s is at version %d and the drop "+

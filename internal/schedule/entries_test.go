@@ -62,14 +62,12 @@ func TestDescribeShapeAndDefaults(t *testing.T) {
 	nightly := byName["nightly"]
 	// THE NAME IS WHAT A SCREEN READS; the id is the identity the fire
 	// ledger keys on, and for a role scope it is the seat's agent id rather
-	// than its handle — which is what keeps a renamed seat's history and
-	// its dedupe in one place.
+	// than its handle.
 	if nightly.ScopeType != types.ScheduleScopeRole || nightly.ScopeName != "ops" {
 		t.Errorf("nightly scope = %s/%s, want role/ops", nightly.ScopeType, nightly.ScopeName)
 	}
 	if want, _ := describeOrg().AgentIDFor(describeOrg().AgentSeatByHandle("ops")); nightly.ScopeID != want.String() {
-		t.Errorf("nightly scope id = %q, want the seat's own id %s — a row keyed on "+
-			"anything a rename moves splits that schedule's history in two",
+		t.Errorf("nightly scope id = %q, want the seat's own id %s",
 			nightly.ScopeID, want)
 	}
 	// A role schedule's target is not "each" — it is meaningless, and
@@ -414,51 +412,9 @@ func TestSortRowsIsTotalAndStable(t *testing.T) {
 	}
 }
 
-// A RENAME KEEPS A SCHEDULE'S IDENTITY, so its at-most-once history and its
-// dedupe stay in one place.
-//
-// The scope used to be the role's handle and the unit's display NAME, and
-// both moved the moment somebody retyped one: the ledger's key changed, so
-// the schedule's history split in two and the minute it was renamed in could
-// fire twice.
-func TestARenamedScopeKeepsTheIdentityItsFiresAreKeyedOn(t *testing.T) {
-	t.Parallel()
-	before := &org.Organization{Name: "Acme",
-		Roles: []*org.Role{{Name: "Ops", DeclaredHandle: "ops",
-			Schedules: []org.Schedule{{Name: "nightly", Cron: "0 2 * * *"}}}},
-		Units: []*org.Unit{{Name: "Quality", ID: "quality",
-			Schedules: []org.Schedule{{Name: "standup", Cron: "0 9 * * *"}}}},
-	}
-	after := &org.Organization{Name: "Acme",
-		Roles: []*org.Role{{Name: "Operations", DeclaredHandle: "operations",
-			OriginHandle: "ops", FormerHandles: []string{"ops"},
-			Schedules: []org.Schedule{{Name: "nightly", Cron: "0 2 * * *"}}}},
-		Units: []*org.Unit{{Name: "Reliability", ID: "reliability",
-			OriginKey: "quality", FormerKeys: []string{"quality"},
-			Schedules: []org.Schedule{{Name: "standup", Cron: "0 9 * * *"}}}},
-	}
-
-	was, is := scopeIDs(t, before), scopeIDs(t, after)
-	for _, name := range []string{"nightly", "standup"} {
-		if was[name] != is[name] {
-			t.Errorf("%s moved from scope %q to %q over a rename: its history "+
-				"splits in two and its at-most-once dedupe resets",
-				name, was[name], is[name])
-		}
-	}
-
-	// AND THE NAME FOLLOWS THE RENAME, which is the other half: an
-	// identity nothing moves is only useful beside a label that does.
-	names := scopeNames(t, after)
-	if names["nightly"] != "operations" || names["standup"] != "reliability" {
-		t.Errorf("after the rename the scopes read as %v, want the addresses "+
-			"they answer to now", names)
-	}
-}
-
 // TWO UNITS OF ONE NAME ARE TWO SCOPES.
 //
-// A unit's display name is prose the org chart lets any two units share, and
+// A unit's display name is prose the document lets any two units share, and
 // while the fire key was that name, one team's standup claimed the other's
 // minute and the other never fired at all.
 func TestTwoUnitsOfOneNameDoNotShareAFireKey(t *testing.T) {
@@ -477,23 +433,4 @@ func TestTwoUnitsOfOneNameDoNotShareAFireKey(t *testing.T) {
 		t.Errorf("both teams' standups are keyed on %q, so one of them claims "+
 			"the other's minute and the other never fires", entries[0].ScopeID)
 	}
-}
-
-// scopeIDs and scopeNames index one org's schedules by name.
-func scopeIDs(t *testing.T, o *org.Organization) map[string]string {
-	t.Helper()
-	out := map[string]string{}
-	for _, e := range schedule.Entries(o) {
-		out[e.Schedule.Name] = e.ScopeID
-	}
-	return out
-}
-
-func scopeNames(t *testing.T, o *org.Organization) map[string]string {
-	t.Helper()
-	out := map[string]string{}
-	for _, e := range schedule.Entries(o) {
-		out[e.Schedule.Name] = e.ScopeName
-	}
-	return out
 }

@@ -50,15 +50,14 @@ func newNode(t *testing.T, owner string) *node {
 }
 
 // seatOf is the seat a case calls handle, as the asker resolves it: a stable
-// id derived from the handle, and the handle as both its origin and its
-// current name. A case about a rename builds its seat by hand.
+// id derived from the handle, and the handle.
 func seatOf(handle string) memread.Seat {
-	return memread.Seat{ID: seatID(handle), Origin: handle, Handle: handle}
+	return memread.Seat{ID: seatID(handle), Handle: handle}
 }
 
 // seatID is a stable id for a fixture seat. The engine's is a UUIDv5 over the
-// company and the origin handle; any stable function of the handle is one for
-// a test.
+// company and the handle; any stable function of the handle is one for a
+// test.
 func seatID(handle string) uuid.UUID {
 	return uuid.NewSHA1(uuid.MustParse("3c0a5d2e-7b1f-4e8a-9c6d-1f2e3a4b5c6d"), []byte(handle))
 }
@@ -706,49 +705,5 @@ func TestTheSkillPageIsBoundedInTheStore(t *testing.T) {
 	}
 	if len(whole) != held {
 		t.Errorf("the zero Limit read %d of %d: it is the unbounded setting", len(whole), held)
-	}
-}
-
-// A SEAT'S MEMORY FOLLOWS ITS IDENTITY, never the handle it answers to.
-//
-// Rows are keyed on the seat's id (the diary) and on the handle it was created
-// under (the episodes), so a seat renamed since reads everything it learned,
-// shown under its new handle — and a colleague hired onto the handle it gave
-// up, a different seat with a different id and origin, reads none of it.
-//
-// Mutation: key the diary or the episodes on Seat.Handle, and both halves
-// fail.
-func TestASeatsMemoryFollowsItsIdentityAcrossARename(t *testing.T) {
-	t.Parallel()
-	n := newNode(t, "solo:1")
-	n.remember(t, "swe", "before-the-rename", 3)
-	read := &memread.Reader{Owner: n.owner, Local: n.stores}
-
-	renamed := memread.Seat{ID: seatID("swe"), Origin: "swe", Handle: "swe-lead"}
-	got, err := read.Memory(t.Context(), renamed, 0)
-	if err != nil {
-		t.Fatalf("Memory: %v", err)
-	}
-	if got.ID != "swe-lead" || got.DiaryTotal != 3 || got.EpisodesTotal != 3 ||
-		len(got.Diary) != 3 || len(got.Episodes) != 3 {
-		t.Fatalf("the renamed seat read %q with %d/%d notes and %d/%d episodes, want "+
-			"swe-lead with all 3 of each, paged and counted", got.ID, len(got.Diary),
-			got.DiaryTotal, len(got.Episodes), got.EpisodesTotal)
-	}
-	for _, ep := range got.Episodes {
-		if ep.AgentHandle != "swe-lead" {
-			t.Errorf("an episode is shown under %q, want the handle the seat answers to now",
-				ep.AgentHandle)
-		}
-	}
-
-	stranger := memread.Seat{ID: seatID("swe-2"), Origin: "swe-2", Handle: "swe"}
-	got, err = read.Memory(t.Context(), stranger, 0)
-	if err != nil {
-		t.Fatalf("Memory: %v", err)
-	}
-	if got.DiaryTotal != 0 || got.EpisodesTotal != 0 {
-		t.Errorf("a seat hired onto a freed handle read %d notes and %d episodes of "+
-			"the seat that held it before", got.DiaryTotal, got.EpisodesTotal)
 	}
 }

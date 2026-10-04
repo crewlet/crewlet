@@ -262,7 +262,7 @@ type Spend struct {
 // walk behind it. There is no expiry and no purge horizon: a restore works at
 // any age.
 type Tombstone struct {
-	By          string     `json:"by" person:"seat"`
+	By          string     `json:"by"`
 	Kind        AuthorKind `json:"kind"`
 	At          time.Time  `json:"at"`
 	RemovedWith *string    `json:"removed_with,omitempty"`
@@ -304,7 +304,7 @@ type Relation struct {
 	Kind      RelationKind `json:"kind"`
 	Other     string       `json:"other"`
 	Note      string       `json:"note,omitempty"`
-	CreatedBy string       `json:"created_by,omitempty" person:"seat"`
+	CreatedBy string       `json:"created_by,omitempty"`
 	CreatedAt time.Time    `json:"created_at,omitzero"`
 
 	// OneSidedFinal marks an edge whose mirror was refused PERMANENTLY —
@@ -326,7 +326,7 @@ type ChecklistItem struct {
 	ID       string  `json:"id"`
 	Name     string  `json:"name"`
 	Done     bool    `json:"done,omitempty"`
-	Assignee string  `json:"assignee,omitempty" person:"seat"`
+	Assignee string  `json:"assignee,omitempty"`
 	Parent   *string `json:"parent,omitempty"`
 	Order    int     `json:"order,omitempty"`
 }
@@ -391,7 +391,7 @@ type Task struct {
 	// and are copied into the revision the next write replaces — so every
 	// revision's bytes are a pure function of the state it replaced.
 	BodyVersion int       `json:"body_version,omitempty"`
-	BodyAuthor  string    `json:"body_author,omitempty" person:"seat"`
+	BodyAuthor  string    `json:"body_author,omitempty"`
 	BodyAt      time.Time `json:"body_at,omitzero"`
 
 	Status      Status      `json:"status"`
@@ -406,16 +406,16 @@ type Task struct {
 	Priority Priority `json:"priority"`
 	Rank     Rank     `json:"rank,omitempty"`
 
-	Reporter      string   `json:"reporter,omitempty" person:"seat"`
-	Assignee      string   `json:"assignee,omitempty" person:"seat"`
-	Collaborators []string `json:"collaborators,omitempty" person:"seat"`
+	Reporter      string   `json:"reporter,omitempty"`
+	Assignee      string   `json:"assignee,omitempty"`
+	Collaborators []string `json:"collaborators,omitempty"`
 
 	// Watchers is the set and Muted the subtraction, and BOTH travel:
 	// carrying only the difference would make "not a watcher" and
 	// "watching but muted" the same row, and a replay would silently
 	// re-add every unwatched person on the next mention.
-	Watchers []string `json:"watchers,omitempty" person:"seat"`
-	Muted    []string `json:"muted,omitempty" person:"seat"`
+	Watchers []string `json:"watchers,omitempty"`
+	Muted    []string `json:"muted,omitempty"`
 
 	Tags []string `json:"tags,omitempty"`
 
@@ -467,7 +467,7 @@ type Task struct {
 	Moving bool `json:"moving,omitempty"`
 
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
-	ArchivedBy string     `json:"archived_by,omitempty" person:"seat"`
+	ArchivedBy string     `json:"archived_by,omitempty"`
 
 	Removed *Tombstone `json:"removed,omitempty"`
 
@@ -518,21 +518,21 @@ func (t Task) Delivered() bool { return Delivered(t.Status) }
 type Comment struct {
 	ID         string     `json:"id"`
 	Task       string     `json:"task"`
-	Author     string     `json:"author" person:"seat"`
+	Author     string     `json:"author"`
 	AuthorKind AuthorKind `json:"author_kind"`
 	Body       string     `json:"body"`
 
 	// Mentions are resolved at WRITE — a unit to its effective lead, and
 	// the assignee and watcher shorthands expanded — because a mention
 	// resolved at read time would name whoever holds the role later.
-	Mentions []string `json:"mentions,omitempty" person:"seat"`
+	Mentions []string `json:"mentions,omitempty"`
 
 	ReplyTo *string `json:"reply_to,omitempty"`
 
 	// Ask is set only at creation: a comment becomes a question when it is
 	// written, and turning an old remark into one retroactively would wake
 	// somebody for a conversation that has moved on.
-	Ask     string  `json:"ask,omitempty" person:"seat"`
+	Ask     string  `json:"ask,omitempty"`
 	Answers *string `json:"answers,omitempty"`
 
 	// Decision is the structure an ask carries when it needs somebody to
@@ -546,7 +546,7 @@ type Comment struct {
 	Choice string `json:"choice,omitempty"`
 
 	Resolved   bool       `json:"resolved,omitempty"`
-	ResolvedBy string     `json:"resolved_by,omitempty" person:"seat"`
+	ResolvedBy string     `json:"resolved_by,omitempty"`
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
 
 	// Removed blanks the body and KEEPS the row, so replies still resolve
@@ -567,7 +567,7 @@ type BodyRevision struct {
 	Task       string     `json:"task"`
 	Version    int        `json:"version"`
 	Body       string     `json:"body"`
-	Author     string     `json:"author,omitempty" person:"seat"`
+	Author     string     `json:"author,omitempty"`
 	AuthorKind AuthorKind `json:"author_kind,omitempty"`
 	At         time.Time  `json:"at"`
 }
@@ -674,7 +674,7 @@ type TaskPatch struct {
 	Status      *Status   `json:"status,omitempty"`
 	Priority    *Priority `json:"priority,omitempty"`
 	Type        *string   `json:"type,omitempty"`
-	Assignee    *string   `json:"assignee,omitempty" person:"seat"`
+	Assignee    *string   `json:"assignee,omitempty"`
 	RoutingUnit *string   `json:"routing_unit,omitempty"`
 	Parent      *string   `json:"parent,omitempty"`
 	Project     *string   `json:"project,omitempty"`
@@ -792,9 +792,9 @@ type TaskPatch struct {
 	Checklist *ChecklistIntent `json:"-"`
 
 	// The collections, carried WHOLE when touched.
-	Collaborators *[]string                   `json:"collaborators,omitempty" person:"seat"`
-	Watchers      *[]string                   `json:"watchers,omitempty" person:"seat"`
-	Muted         *[]string                   `json:"muted,omitempty" person:"seat"`
+	Collaborators *[]string                   `json:"collaborators,omitempty"`
+	Watchers      *[]string                   `json:"watchers,omitempty"`
+	Muted         *[]string                   `json:"muted,omitempty"`
 	Tags          *[]string                   `json:"tags,omitempty"`
 	Fields        *map[string]json.RawMessage `json:"fields,omitempty"`
 	Relations     *[]Relation                 `json:"relations,omitempty"`
@@ -836,7 +836,7 @@ func (p TaskPatch) Empty() bool { return reflect.ValueOf(p).IsZero() }
 // is whether THEY watch, and the set as a whole belongs to whoever is looking
 // at all of it. [settleWatch] turns it into that set.
 type WatchIntent struct {
-	Handle string `person:"seat"`
+	Handle string
 	Watch  bool
 
 	// Auto marks a watch nobody asked for — the one a commenter picks up
@@ -1065,7 +1065,7 @@ type FieldDef struct {
 	// [stampFields]. They are served on every catalogue read, and nothing
 	// wrote them: a tag records who declared it and a field did not, which
 	// is the same column on the same kind of vocabulary.
-	CreatedBy string    `json:"created_by,omitempty" person:"seat"`
+	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at,omitzero"`
 }
 
@@ -1103,7 +1103,7 @@ type Tag struct {
 	Color       string    `json:"color,omitempty"`
 	Description string    `json:"description,omitempty"`
 	Archived    bool      `json:"archived,omitempty"`
-	CreatedBy   string    `json:"created_by,omitempty" person:"seat"`
+	CreatedBy   string    `json:"created_by,omitempty"`
 	CreatedAt   time.Time `json:"created_at,omitzero"`
 }
 
@@ -1170,7 +1170,7 @@ type Project struct {
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 
 	Fields          []FieldDef `json:"fields,omitempty"`
-	DefaultAssignee string     `json:"default_assignee,omitempty" person:"seat"`
+	DefaultAssignee string     `json:"default_assignee,omitempty"`
 
 	// TargetDate is when the project's LEAD means it to be finished: a day
 	// on the company's clock, `YYYY-MM-DD`, empty for no target.
@@ -1291,13 +1291,13 @@ type View struct {
 	Params    map[string]string `json:"params,omitempty"`
 
 	// Owner empty means a SHARED view; a handle makes it personal.
-	Owner     string `json:"owner,omitempty" person:"seat"`
+	Owner     string `json:"owner,omitempty"`
 	Protected bool   `json:"protected,omitempty"`
 	Default   bool   `json:"default,omitempty"`
 
 	Rank      Rank      `json:"rank,omitempty"`
 	Icon      string    `json:"icon,omitempty"`
-	CreatedBy string    `json:"created_by,omitempty" person:"seat"`
+	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
@@ -1341,7 +1341,7 @@ type Person struct {
 	V       int    `json:"v"`
 	Version uint64 `json:"version"`
 
-	Handle string `json:"handle" person:"seat"`
+	Handle string `json:"handle"`
 
 	// Generation is anchored to the stream's own identity, and it is the
 	// THIRD belt behind the identity refusal and the wrong-stream read
@@ -1368,7 +1368,7 @@ type Person struct {
 	// made visible — see the type doc — and it is cleared by the person's
 	// own next write, because taking your queue back is the gesture that
 	// says you have seen it.
-	PrioritiesSetBy string    `json:"priorities_set_by,omitempty" person:"seat"`
+	PrioritiesSetBy string    `json:"priorities_set_by,omitempty"`
 	PrioritiesSetAt time.Time `json:"priorities_set_at,omitzero"`
 
 	UpdatedAt time.Time `json:"updated_at"`

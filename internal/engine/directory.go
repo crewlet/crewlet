@@ -58,9 +58,8 @@ type iamDirectory struct{ reader *iamdomain.Reader }
 
 // SeatHolders is the directory's bindings in notify's vocabulary.
 //
-// THE SEAT IDENTITY EACH BINDING NAMES, passed through as the row stores it:
-// the handle the seat was CREATED under (ADR-0027). It is internal/notify that
-// finds the seat by it in the organization a registry is built from — as the
+// THE SEAT EACH BINDING NAMES, passed through as the row stores it: the seat's
+// handle (ADR-0013). It is internal/notify that finds the seat by it in the organization a registry is built from — as the
 // request path does — because that is where the organization is, and a copy
 // resolved here against some other company would be a second answer about
 // whose seat a binding is.

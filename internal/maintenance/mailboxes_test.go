@@ -386,7 +386,7 @@ func TestARemovedSeatsMailboxSurvivesTheGracePeriod(t *testing.T) {
 
 // Past the grace period the removed seat's mailbox is deleted, mail and all,
 // and so is its sandbox control subscription. A seat still in the company is
-// untouched, and a seat added again under the retired handle starts empty
+// untouched, and a seat added again under the removed seat's handle starts empty
 // rather than working the old backlog under a new role.
 func TestARemovedSeatsMailboxIsRetiredAfterTheGracePeriod(t *testing.T) {
 	h := newMailboxHarness(t, nil)
@@ -415,7 +415,7 @@ func TestARemovedSeatsMailboxIsRetiredAfterTheGracePeriod(t *testing.T) {
 	}
 	h.ensure("swe")
 	if got := h.held("swe"); got != 0 {
-		t.Fatalf("a seat added under a retired handle inherited %d letters of its predecessor", got)
+		t.Fatalf("a seat added under a removed seat's handle inherited %d letters of its predecessor", got)
 	}
 }
 

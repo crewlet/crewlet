@@ -57,3 +57,43 @@ func TestDeriveAgentIDRefusesEmptyInput(t *testing.T) {
 		}
 	}
 }
+
+// TestTheDocumentChangeOfAHandleRemovesAndCreates pins ADR-0013's rule that a
+// handle is IMMUTABLE: there is no rename. A document that changes a seat's
+// handle holds a different seat — a different agent id, so a different
+// mailbox, lease and memory — and the handle it gave up names nobody, rather
+// than resolving to the seat now standing under the new one. Correcting the
+// seat's NAME, with the handle declared, keeps the seat.
+func TestTheDocumentChangeOfAHandleRemovesAndCreates(t *testing.T) {
+	t.Parallel()
+	before := &Organization{Name: "Acme", Roles: []*Role{
+		{Name: "Sarah Chen", DeclaredHandle: "sarah-chen"}}}
+	wasID, ok := before.AgentIDFor(before.Roles[0])
+	if !ok {
+		t.Fatal("the seat has no agent id")
+	}
+
+	changed := &Organization{Name: "Acme", Roles: []*Role{
+		{Name: "Sarah Chen", DeclaredHandle: "sarah-okonkwo"}}}
+	isID, _ := changed.AgentIDFor(changed.Roles[0])
+	if isID == wasID {
+		t.Error("a changed handle kept the old seat's agent id: a handle is " +
+			"the seat's identity, so a new one is a new seat")
+	}
+	if got := changed.Role("sarah-chen"); got != nil {
+		t.Errorf("the handle the document gave up still resolves, to %q: a "+
+			"handle no seat answers to names nobody", got.Handle())
+	}
+
+	// THE CONTROL: the same handle under a corrected name is the same seat.
+	renamed := &Organization{Name: "Acme", Roles: []*Role{
+		{Name: "Sarah Okonkwo", DeclaredHandle: "sarah-chen"}}}
+	keptID, _ := renamed.AgentIDFor(renamed.Roles[0])
+	if keptID != wasID {
+		t.Errorf("correcting the display name moved the agent id from %s to "+
+			"%s: only the handle is the identity", wasID, keptID)
+	}
+	if got := renamed.Role("sarah-chen"); got != renamed.Roles[0] {
+		t.Errorf("the declared handle resolves to %v", got)
+	}
+}

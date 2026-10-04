@@ -96,8 +96,8 @@ type TurnRef struct {
 	// trigger to resolve it from — see [PendingRun.WorkItem].
 	WorkItem *types.WorkItem
 
-	// Requester is the seat whose wake started the turn, by the handle it
-	// was created under, "" for none — what a question addressed to
+	// Requester is the seat whose wake started the turn, by its handle,
+	// "" for none — what a question addressed to
 	// "requester" is put to. See [PendingRun.Requester].
 	Requester string
 }

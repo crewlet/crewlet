@@ -178,33 +178,24 @@ func TestTheDispatcherHandsAnAnswerByTurnToTheCoordinator(t *testing.T) {
 	}
 }
 
-// THE REQUESTER IS KEPT BY ITS SEAT'S IDENTITY, and answered under the handle
-// the seat has now. A run waits on its row for as long as it is parked, and the
-// requester may be renamed in the meantime: stored by the handle typed at the
-// wake, "requester" then named nobody, or a colleague hired onto the freed
-// handle.
-//
-// Mutation: store the current handle in [requesterIdentity], or resolve the
-// row's requester by current handle alone, and this fails.
-func TestTheRequesterFollowsItsSeatAcrossARename(t *testing.T) {
+// THE REQUESTER IS KEPT BY ITS SEAT'S HANDLE, and a sender the org does not
+// hold is nobody: a seat the company does not have is nobody to put a question
+// to, and the run's "requester" then resolves to nobody rather than to a name.
+func TestTheRequesterIsKeptByItsSeatsHandle(t *testing.T) {
 	t.Parallel()
 	o := audienceChart(t)
-	ada := o.SeatByHandle("ada")
-	ada.OriginHandle, ada.DeclaredHandle = "ada", "ada-okonkwo"
-	o.Normalize()
 	company := &Company{Org: o}
 
-	if got := requesterIdentity(company, "ada-okonkwo"); got != "ada" {
-		t.Fatalf("the requester was recorded as %q, want the handle the seat was "+
-			"created under", got)
+	if got := requesterIdentity(company, "ada"); got != "ada" {
+		t.Fatalf("the requester was recorded as %q, want ada", got)
 	}
 	if got := requesterIdentity(company, "nobody-we-know"); got != "" {
-		t.Errorf("a sender the chart does not hold was recorded as %q, want nobody", got)
+		t.Errorf("a sender the org does not hold was recorded as %q, want nobody", got)
 	}
 	got := resolveAudience(o, nil, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe",
 		Requester: "ada"}, "requester")
-	if !slices.Equal(got.Handles, []string{"ada-okonkwo"}) || got.Fallback {
-		t.Errorf("a renamed requester resolved to %v (fallback %v), want the seat "+
-			"under its new handle", got.Handles, got.Fallback)
+	if !slices.Equal(got.Handles, []string{"ada"}) || got.Fallback {
+		t.Errorf("the requester resolved to %v (fallback %v), want ada",
+			got.Handles, got.Fallback)
 	}
 }

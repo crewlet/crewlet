@@ -95,9 +95,8 @@ type ChecklistIntent struct {
 	Done bool
 
 	// Assignee is `assign_item`'s handle, "" giving the item to nobody, and
-	// the optional owner of the item `add_item` adds. Recorded by the seat's
-	// IDENTITY, like every person the patch names — see people.go.
-	Assignee string `person:"seat"`
+	// the optional owner of the item `add_item` adds.
+	Assignee string
 }
 
 // grows reports whether the gesture can make the collection larger, which is

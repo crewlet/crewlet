@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -97,7 +97,6 @@ func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	organization := s.organization()
 	who, filtered := "", false
 	if asked := strings.TrimSpace(p.String("audience")); asked != "" {
 		if who, err = s.audienceOf(ctx, asked); err != nil {
@@ -107,7 +106,7 @@ func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 	}
 	out := make([]any, 0, len(runs))
 	for _, run := range runs {
-		if filtered && !putTo(organization, run, who) {
+		if filtered && !slices.Contains(run.AudienceHandles, who) {
 			continue
 		}
 		out = append(out, serialiseRun(run))
@@ -146,50 +145,6 @@ func (s Sources) audienceOf(ctx context.Context, asked string) (string, error) {
 		return "", errNoRecord
 	}
 	return owner, nil
-}
-
-// putTo reports whether a run's question is put to the seat a record names.
-//
-// COMPARED BY IDENTITY, through one chart reading: a run's audience was
-// resolved to handles when it parked, and a seat renamed since answers to its
-// old handle as an alias — so the two names are matched on the handle each
-// seat was CREATED under ([org.Role.Origin]), never on their spelling, which a
-// rename between the park and the read would have made two people.
-func putTo(organization *org.Organization, run sandbox.PendingRun, who string) bool {
-	if who == "" {
-		return false
-	}
-	want := seatIdentity(organization, who)
-	for _, handle := range run.AudienceHandles {
-		if seatIdentity(organization, handle) == want {
-			return true
-		}
-	}
-	return false
-}
-
-// seatIdentity is the handle the seat a name addresses was created under — its
-// identity — or the name itself for one no seat on this chart answers to: a
-// login, or a seat the company no longer has, which nothing else can have been
-// given.
-func seatIdentity(organization *org.Organization, name string) string {
-	if organization != nil {
-		if role := organization.Role(name); role != nil {
-			return role.Origin()
-		}
-	}
-	return name
-}
-
-// currentHandle is the handle the seat a name addresses answers to NOW, or
-// the name itself for one no seat on this chart answers to.
-func currentHandle(organization *org.Organization, name string) string {
-	if organization != nil {
-		if role := organization.Role(name); role != nil {
-			return role.Handle()
-		}
-	}
-	return name
 }
 
 func serialiseRun(run sandbox.PendingRun) map[string]any {

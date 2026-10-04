@@ -537,8 +537,7 @@ func TestWorkCommentsPagesPastTheDetailsTwenty(t *testing.T) {
 // Bound to a seat, a person writes AS it (iam.ActorFor): the reporter and the
 // comment's author ARE the seat, and the token is the operator id the history
 // keeps beside the actor. There is no second "the seat behind the token" field
-// a screen must prefer over the record, and a seat renamed since is drawn as
-// it is called now, from the one reading of the chart the answer takes.
+// a screen must prefer over the record.
 func TestATaskFiledThroughAPersonsTokenNamesThePerson(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -561,24 +560,23 @@ func TestATaskFiledThroughAPersonsTokenNamesThePerson(t *testing.T) {
 	}
 	r.drain()
 
-	r.reader.Identities = renamed{"jane": "jane-founder"}
 	got, err := r.reader.Task(t.Context(), filed.ID, tracker.DetailWants{
 		Comments: true, History: true,
 	}, statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if got.Task.Reporter != "jane" {
-		t.Errorf("reporter %q, want the person as she is called now", got.Task.Reporter)
+	if got.Task.Reporter != "jane-founder" {
+		t.Errorf("reporter %q, want the person's seat", got.Task.Reporter)
 	}
-	if len(got.Comments) != 1 || got.Comments[0].Author != "jane" {
-		t.Errorf("the thread is %+v, want one remark by jane", got.Comments)
+	if len(got.Comments) != 1 || got.Comments[0].Author != "jane-founder" {
+		t.Errorf("the thread is %+v, want one remark by jane-founder", got.Comments)
 	}
 	if len(got.History) == 0 {
 		t.Fatal("the task has no history")
 	}
 	for _, entry := range got.History {
-		if entry.Actor != "jane" || entry.ActorKind != tracker.AuthorHuman ||
+		if entry.Actor != "jane-founder" || entry.ActorKind != tracker.AuthorHuman ||
 			entry.OperatorID != "pat:jane-laptop" {
 			t.Errorf("history row %s is %q (%s) via %q, want jane as a person "+
 				"through her token", entry.Kind, entry.Actor, entry.ActorKind,

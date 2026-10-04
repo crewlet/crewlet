@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -47,7 +46,7 @@ type ViewRow struct {
 
 	// Owner empty is a SHARED view; a handle makes it personal. Protected
 	// says only its owner may change it.
-	Owner     string `json:"owner,omitempty" person:"seat"`
+	Owner     string `json:"owner,omitempty"`
 	Protected bool   `json:"protected,omitempty"`
 
 	// Default is the container's landing tab, and at most one row carries
@@ -90,7 +89,7 @@ type ViewQuery struct {
 	// Viewer is whose pins order the saved half, and whose personal views
 	// join it. Empty asks for the shared strip: no pins, and no personal
 	// views but the shared ones.
-	Viewer string `person:"seat"`
+	Viewer string
 
 	// Units resolves a UNIT container's two spellings, so a strip asked
 	// for by a team's id carries the views saved against its name and the
@@ -158,14 +157,6 @@ const (
 // ONE READ TRANSACTION for the saved rows and the viewer's pins — so the strip
 // describes one instant rather than two reads' worth of them.
 func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
-	call := r.pinned()
-	got, err := call.views(ctx, identified(call.chart, q))
-	return shown(call.chart, got), err
-}
-
-// views is [Reader.Views] once every person the question names is their seat's
-// identity — see people.go.
-func (r *Reader) views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 	if q.Level == "" {
 		return ViewListing{}, fmt.Errorf("tracker: this view read names no " +
 			"level — a surface resolves an absent read_level to its own " +
@@ -229,7 +220,7 @@ func (r *Reader) views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 		// whatever spare capacity the first has, which is a bug the day
 		// somebody reads `implicit` after this line.
 		if q.Counts {
-			if err = countPinned(ctx, tx, r.chart, q, saved); err != nil {
+			if err = countPinned(ctx, tx, q, saved); err != nil {
 				return err
 			}
 		}
@@ -289,19 +280,14 @@ func stripScope(q ViewQuery) statelog.ScopeSet {
 // statement that answers that read's `total_hint`. It is not a second
 // definition of what a view selects, and a sidebar number that disagreed with
 // the list it opens would be exactly that.
-//
-// chart is the ONE reading the caller's call holds, and every person a view's
-// saved parameters name is read through it exactly as [Reader.Tasks] reads a
-// board's — a view saved naming a seat by a handle a rename has since retired
-// still counts that seat's work, as the board it opens shows it.
-func countPinned(ctx context.Context, tx *sql.Tx, chart seatnames.Chart,
+func countPinned(ctx context.Context, tx *sql.Tx,
 	q ViewQuery, rows []ViewRow) error {
 
 	for i := range rows {
 		if !rows[i].Pinned {
 			continue
 		}
-		count, capped, err := countView(ctx, tx, chart, q, rows[i])
+		count, capped, err := countView(ctx, tx, q, rows[i])
 		switch {
 		case errors.Is(err, errUncountable):
 			rows[i].CountRefused = err.Error()
@@ -326,7 +312,7 @@ var errUncountable = errors.New("this view cannot be counted")
 // nothing else in the answer could be trusted either. The first is wrapped in
 // [errUncountable] and the second is not, which is the whole of how
 // [countPinned] tells them apart.
-func countView(ctx context.Context, tx *sql.Tx, chart seatnames.Chart,
+func countView(ctx context.Context, tx *sql.Tx,
 	q ViewQuery, view ViewRow) (int, bool, error) {
 
 	// THE CONTAINER THE VIEW WAS SAVED IN, as the caller's key, which is
@@ -350,9 +336,6 @@ func countView(ctx context.Context, tx *sql.Tx, chart seatnames.Chart,
 	if err != nil {
 		return 0, false, fmt.Errorf("%w: %w", errUncountable, err)
 	}
-	// THE BOARD'S PERSON RULE TOO — see [Reader.Tasks]: every person the
-	// view names read as their seat's identity, by the caller's reading.
-	parsed = identified(chart, parsed)
 	parsed.Units = q.Units
 	// FLAT, as every surface that RUNS a view runs it. The dashboard's
 	// shapes send `subtasks=separate` over whatever a view carries (none of
@@ -371,7 +354,6 @@ func countView(ctx context.Context, tx *sql.Tx, chart seatnames.Chart,
 	case err != nil:
 		return 0, false, err
 	}
-	parsed = identifiedByType(chart, parsed, fields)
 	if parsed.PriorityListOf != "" {
 		if parsed.PriorityList, err = readPriorityList(ctx, tx,
 			parsed.PriorityListOf); err != nil {

@@ -13,7 +13,7 @@ import (
 )
 
 // The chat thread-follows, as one record per (backend, seat, channel, thread),
-// the seat named by the handle it was created under — see [coord.Follows].
+// the seat named by its handle — see [coord.Follows].
 //
 // # Why the key is four segments and not a composed string
 //

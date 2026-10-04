@@ -83,10 +83,10 @@ func TestTheDiaryIsPrivateToOneAgent(t *testing.T) {
 	}
 }
 
-func TestAKeyedByDerivedIDSoARenameOrphansCleanly(t *testing.T) {
+func TestAKeyedByDerivedIDSoAChangedHandleOrphansCleanly(t *testing.T) {
 	t.Parallel()
-	// Keyed by the derived uuid rather than the handle, so renaming a
-	// handle orphans the old rows instead of mixing them into the new
+	// Keyed by the derived uuid, so a changed handle — a new seat
+	// (ADR-0013) — orphans the old rows instead of mixing them into the new
 	// identity's memory.
 	d := diary(t)
 	mustWrite(t, d, longEntry("a", "uuid-old", "from the old identity", base))

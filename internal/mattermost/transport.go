@@ -56,9 +56,6 @@ type Config struct {
 // that could not tell the difference.
 type SeatConfig struct {
 	Handle string
-	// Origin is the handle the seat was CREATED under — what its thread
-	// follows are keyed on ([Seat.Identity]).
-	Origin string
 	Token  string
 	// Username defaults to the handle. Set only when the account already
 	// exists under another name.
@@ -263,8 +260,7 @@ func (t *Transport) startSeat(ctx context.Context, cfg SeatConfig) error {
 	if err != nil {
 		return fmt.Errorf("resolving identity: %w", err)
 	}
-	seat := Seat{Handle: cfg.Handle, Origin: cfg.Origin, Username: me.Username,
-		UserID: me.ID}
+	seat := Seat{Handle: cfg.Handle, Username: me.Username, UserID: me.ID}
 	if seat.Username == "" {
 		// The server knows better, but if it said nothing the
 		// configured name is the only one anybody can address.
@@ -588,7 +584,6 @@ func SeatsFrom(o *org.Organization, lookup org.EnvLookup) []SeatConfig {
 		}
 		out = append(out, SeatConfig{
 			Handle:   role.Handle(),
-			Origin:   role.Origin(),
 			Token:    token,
 			Username: envref.Resolve(role.Mattermost.Username, lookup),
 		}.Resolve())

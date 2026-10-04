@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/learning"
-	"github.com/crewlet/crewlet/internal/org"
 )
 
 // Personal memory: what this seat has learned and kept.
@@ -361,20 +360,6 @@ func (f *Fetcher) embed(ctx context.Context, text string) ([]float32, bool) {
 		return nil, false
 	}
 	return vector, true
-}
-
-// originOf is the handle the seat at this address was created under — what a
-// profile of a colleague is keyed on — or the handle as given when the org
-// does not know it: there is then no identity left to find, and the handle the
-// sender was known by is the only name a profile of them could be under.
-func originOf(o *org.Organization, handle string) string {
-	if handle == "" || o == nil {
-		return handle
-	}
-	if origin := o.Role(handle).Origin(); origin != "" {
-		return origin
-	}
-	return handle
 }
 
 // subjectLabel renders a counterparty as the filter and the profile block

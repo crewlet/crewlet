@@ -30,12 +30,11 @@
 //
 // Their IDENTITIES, never their names, because a day is kept for half a year
 // and a name is prose somebody retypes: a seat by its agent id — derived from
-// the handle it was created under, so a rename leaves its history where it was
-// (ADR-0026) — and a schedule by its scope's identity (`scope_type`,
+// its handle (ADR-0013) — and a schedule by its scope's identity (`scope_type`,
 // `scope_id`) and its name within that scope, the key the dispatch ledger
 // keys a fire on. A seat's handle rides its record as a LABEL only, for a seat
-// the organisation no longer holds; a reader resolves a seat's id and a
-// schedule's scope id to the names they answer to now.
+// the organisation no longer holds; a reader resolves a seat's id to its
+// handle.
 //
 // # What a record holds
 //

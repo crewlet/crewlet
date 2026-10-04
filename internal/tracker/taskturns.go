@@ -64,9 +64,8 @@ type TaskTurn struct {
 	// Ordinal is the task's own count: "Turn n". Zero for a turn with no
 	// counted segment on this task.
 	Ordinal int `json:"ordinal"`
-	// Seat is the seat whose turn it was, shown by the handle it answers to
-	// now — the row holds its identity, see people.go.
-	Seat string `json:"seat" person:"seat"`
+	// Seat is the seat whose turn it was, by its handle.
+	Seat string `json:"seat"`
 	// Trigger is what woke it.
 	Trigger string `json:"trigger,omitempty"`
 	// Segments is how many completions were charged here: one for a turn
@@ -128,17 +127,6 @@ type TaskTurns struct {
 // id or key; the cursor is a previous page's [TaskTurns.Next], or empty for the
 // newest page; limit is held to [MaxTaskTurns].
 func (r *Reader) TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
-	fresh statelog.Freshness) (TaskTurns, error) {
-
-	// ONE READING OF THE CHART for every seat the page names — see
-	// [Reader.pinned].
-	call := r.pinned()
-	got, err := call.turnsOf(ctx, idOrKey, cursor, limit, fresh)
-	return shown(call.chart, got), err
-}
-
-// turnsOf is [Reader.TurnsOf] under the call's one reading of the chart.
-func (r *Reader) turnsOf(ctx context.Context, idOrKey, cursor string, limit int,
 	fresh statelog.Freshness) (TaskTurns, error) {
 
 	idOrKey = strings.TrimSpace(idOrKey)

@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/org"
@@ -162,49 +161,6 @@ func TestTheUnitSeamAnswersEitherSpellingWithTheKey(t *testing.T) {
 	}
 }
 
-// A RENAMED UNIT IS HANDED TO THE TRACKER WITH EVERY KEY IT HAS HELD.
-//
-// A unit's key is an ADDRESS in the org chart: a rename moves it, and the key
-// the unit was created under and each key it answered to since go on resolving
-// to it. The tracker holds no org, so the spellings a stored row may hold reach
-// its filters and its board only through this seam — and a seam that answered
-// the current key and the name alone left every task a renamed team filed
-// before its rename out of the team's own `unit=` filter, and drew it as a
-// second column. See [tracker.ChartUnit.FormerKeys].
-func TestARenamedUnitsEveryKeyReachesTheTracker(t *testing.T) {
-	t.Parallel()
-	unit := &org.Unit{
-		ID: "platform", Name: "Platform", Lead: "ada",
-		OriginKey: "plat", FormerKeys: []string{"infra", "plat"},
-		Roles: []*org.Role{{Name: "Ada Okonkwo", DeclaredHandle: "ada", Kind: org.KindHuman}},
-	}
-	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{unit}}
-	o.Normalize()
-
-	for _, ref := range []string{"platform", "plat", "infra", "INFRA", "Platform"} {
-		got, found := ChartUnits(o).ResolveUnit(ref)
-		switch {
-		case !found:
-			t.Errorf("%q did not resolve, and rows filed under it belong to nobody", ref)
-		case got.Key != "platform":
-			t.Errorf("%q resolved to key %q, want the key the unit holds now", ref, got.Key)
-		case got.OriginKey != "plat" || !slices.Equal(got.FormerKeys, []string{"infra", "plat"}):
-			t.Errorf("%q resolved without the keys the unit held before: origin %q, "+
-				"former %v", ref, got.OriginKey, got.FormerKeys)
-		}
-	}
-	// AND THE ENUMERATION THE BOARD FOLDS BY CARRIES THEM TOO.
-	all := ChartUnits(o).AllUnits()
-	if len(all) != 1 || !slices.Equal(all[0].FormerKeys, []string{"infra", "plat"}) {
-		t.Errorf("AllUnits = %+v, want the one unit with its former keys", all)
-	}
-	// A COPY, so a board folding them cannot reach into the chart's own slice.
-	all[0].FormerKeys[0] = "mutated"
-	if unit.FormerKeys[0] != "infra" {
-		t.Error("the tracker was handed the chart's own slice of former keys")
-	}
-}
-
 // THE UNIT-LEAD FALLBACK RESOLVES ON A UNIT THE CHART GAVE NO ID, whose key is
 // its name.
 //
@@ -233,15 +189,13 @@ func TestAUnitsLeadResolvesByItsNameWhenItHasNoID(t *testing.T) {
 	}
 }
 
-// AND BY EVERY SPELLING A ROW MAY HOLD: its key, a key it answered to before a
-// rename, and its name. A task's routing unit is a record of what was true and
-// nothing rewrites it, so every one of them has to reach the lead — or renaming
-// a team silences the fallback for every task already routed to it.
+// AND BY EVERY SPELLING A ROW MAY HOLD: its key, the key folded, and its name.
+// A task's routing unit is a record of what was true and nothing rewrites it,
+// so every one of them has to reach the lead.
 func TestAUnitsLeadResolvesByEverySpellingARowMayHold(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
 		ID: "platform", Name: "Platform", Lead: "ada",
-		OriginKey: "plat", FormerKeys: []string{"plat"},
 		Roles: []*org.Role{
 			{Name: "Ada Okonkwo", DeclaredHandle: "ada", Kind: org.KindHuman},
 		},
@@ -251,7 +205,7 @@ func TestAUnitsLeadResolvesByEverySpellingARowMayHold(t *testing.T) {
 	}}}
 	o.Normalize()
 
-	for _, unit := range []string{"platform", "Platform", "PLATFORM", "plat", "nav", "Navigation"} {
+	for _, unit := range []string{"platform", "Platform", "PLATFORM", "nav", "Navigation"} {
 		if got := UnitLeadOf(o, unit); got != "ada" {
 			t.Errorf("the lead of %q is %q, want ada", unit, got)
 		}
@@ -263,8 +217,8 @@ func TestAUnitsLeadResolvesByEverySpellingARowMayHold(t *testing.T) {
 //
 // The project row is what every task filed into it takes its filed unit from,
 // and a filed unit is never rewritten. So writing the NAME here filed the
-// company's work under a spelling that moves the day somebody renames the
-// team, on the one path that writes most of it.
+// company's work under a spelling that moves the day somebody corrects the
+// team's name, on the one path that writes most of it.
 func TestTheChartFilesAProjectUnderTheUnitsKey(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{

@@ -593,24 +593,6 @@ type Role struct {
 	// this field is the config, not the identity.
 	DeclaredHandle string `yaml:"handle,omitempty" json:"handle,omitempty"`
 
-	// OriginHandle is the handle this seat was CREATED under, and
-	// FormerHandles are the handles it has answered to since, newest first.
-	// A seat built from a document has neither, because a document has no
-	// rename history.
-	//
-	// THEY ARE TWO DIFFERENT JOBS, which is why one list does not serve for
-	// both. FormerHandles is what keeps a REFERENCE somebody wrote — a
-	// `manages:` entry, a `lead:` — resolving after a rename, and it is
-	// capped, because a reference nobody has followed in sixteen renames is
-	// not worth a row growing for ever. OriginHandle is the seat's
-	// IDENTITY: [Role.Origin] is what the agent id is derived from, and an
-	// identity that a cap could drop would be no identity at all.
-	//
-	// Not part of the wire form: a document neither carries nor may author
-	// them.
-	OriginHandle  string   `yaml:"-" json:"-"`
-	FormerHandles []string `yaml:"-" json:"-"`
-
 	// Email is the seat's address AS WRITTEN in the company document: a
 	// literal, or a `${VAR}` reference to one. Anything that MATCHES on it
 	// reads [Role.ResolvedEmail].
@@ -780,33 +762,16 @@ func (r *Role) IsAgent() bool { return !r.IsHuman() }
 // inbox topics, plus-addressed email, external-id registration, the derived
 // agent id — so a caller reading the raw field would be identifying a
 // different seat from the one the engine runs.
+//
+// IT IS IMMUTABLE in the company document (ADR-0013): every stored seat
+// carries it ([config.MintIdentities]), and a document that changes it has
+// removed one seat and created another — a new agent id, an empty mailbox
+// and an empty memory.
 func (r *Role) Handle() string {
 	if r.DeclaredHandle != "" {
 		return r.DeclaredHandle
 	}
 	return Slugify(r.Name)
-}
-
-// Origin is the handle this seat was created under — its IDENTITY, where
-// [Role.Handle] is only its address. A seat that has never been renamed
-// answers to the handle it was created under, so an empty [Role.OriginHandle]
-// reads as the current handle.
-//
-// EVERYTHING DURABLE IS KEYED ON WHAT THIS ANCHORS — the mailbox, the seat
-// lease, the diary, the schedule ledger — through [Organization.AgentIDFor],
-// and the rest of the seat's memory (its episodes, skills, counterparty
-// profiles and thread history, see internal/learning) on this handle itself.
-// A handle is prose a founder types and re-types, so it could never be that
-// anchor: keying on it made every rename a new seat with no memory, no
-// mailbox and no history.
-func (r *Role) Origin() string {
-	if r == nil {
-		return ""
-	}
-	if r.OriginHandle != "" {
-		return r.OriginHandle
-	}
-	return r.Handle()
 }
 
 // ResolvedEmail is the address this seat declares, ready to match on: a whole

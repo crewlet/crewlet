@@ -566,14 +566,13 @@ func convergedDatadog(t *testing.T, tb integrationtest.TB) *datadogWorld {
 	plan := &provision.Plan{}
 	for _, handle := range handles {
 		plan.Add(provision.Seat{
-			Handle: handle, Origin: provision.Origin(handle),
-			Role:     strings.ToUpper(handle),
+			Handle: handle, Role: strings.ToUpper(handle),
 			TokenVar: strings.ToUpper(handle) + "_DD_KEY",
 			// FROM THE PACKAGE'S OWN DERIVATION rather than spelled out
 			// here. The address is Datadog's key for a seat's identity,
 			// and a harness that wrote its own would certify a pass
 			// against accounts the real plan would never find.
-			Email: datadog.AccountEmail(cfg.Provisioning, provision.Origin(handle)),
+			Email: datadog.AccountEmail(cfg.Provisioning, handle),
 		})
 	}
 
@@ -777,7 +776,7 @@ func TestTheWriteCounterCountsBothHalves(t *testing.T) {
 	before, vendorBefore, storeBefore := world.mutations(), world.org.mutations(), world.keys.writes
 
 	world.opts.Plan.Add(provision.Seat{
-		Handle: "dba", Origin: "dba", Role: "DBA", TokenVar: "DBA_DD_KEY",
+		Handle: "dba", Role: "DBA", TokenVar: "DBA_DD_KEY",
 		Email: datadog.AccountEmail(world.opts.Config.Provisioning, "dba"),
 	})
 	if _, err := world.Reconcile(context.Background()); err != nil {

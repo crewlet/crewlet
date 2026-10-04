@@ -15,11 +15,8 @@
 // and the one the roster row it is merged onto carries too — and the one the
 // seat's lease, its runs and its meters are named by. It was the ROLE NAME,
 // which is prose: two seats may share one, so two "Engineer"s shared one
-// overlay and each rendered whatever the other was last doing. The handle is
-// not the answer either, because a rename moves it — events already in flight
-// would land under an address the roster no longer carries. The id is derived
-// from the handle the seat was CREATED under (ADR-0026), so it is unique and a
-// rename does not move it.
+// overlay and each rendered whatever the other was last doing. The id is
+// derived from the seat's handle (ADR-0013), so it is unique.
 //
 // It solves two problems, and both are worth stating because they are why this
 // exists at all rather than the dashboard querying the store.

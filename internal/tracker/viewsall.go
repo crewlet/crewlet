@@ -40,7 +40,7 @@ import (
 type EveryViewQuery struct {
 	// Viewer is whose personal views join the shared ones and whose pins
 	// come first. Empty reads the shared views alone.
-	Viewer string `person:"seat"`
+	Viewer string
 	// Units resolves a unit's two spellings when a pinned unit view is
 	// counted — see [ViewQuery.Units].
 	Units Units
@@ -67,14 +67,6 @@ type EveryViewQuery struct {
 // Its closure is the whole domain: the rows span every container and a
 // count's own closure is not known until its row is read.
 func (r *Reader) EveryView(ctx context.Context, q EveryViewQuery) (ViewListing, error) {
-	call := r.pinned()
-	got, err := call.everyView(ctx, identified(call.chart, q))
-	return shown(call.chart, got), err
-}
-
-// everyView is [Reader.EveryView] once every person the question names is
-// their seat's identity — see people.go.
-func (r *Reader) everyView(ctx context.Context, q EveryViewQuery) (ViewListing, error) {
 	if q.Level == "" {
 		return ViewListing{}, fmt.Errorf("tracker: this view read names no " +
 			"level — a surface resolves an absent read_level to its own " +
@@ -116,7 +108,7 @@ func (r *Reader) everyView(ctx context.Context, q EveryViewQuery) (ViewListing, 
 			return err
 		}
 		if q.Counts {
-			if err = countPinned(ctx, tx, r.chart, counting, rows); err != nil {
+			if err = countPinned(ctx, tx, counting, rows); err != nil {
 				return err
 			}
 		}

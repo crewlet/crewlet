@@ -33,7 +33,7 @@ type DecisionsQuery struct {
 	// Handle is the person — their record name (iam.RecordOwner), which
 	// for a person bound to a seat is that seat whatever credential they
 	// hold, so an ask put to them under any credential is one row here.
-	Handle string `person:"seat"`
+	Handle string
 
 	Level       statelog.ReadLevel
 	Session     statelog.Position
@@ -65,15 +65,6 @@ type DecisionsAnswer struct {
 
 // Decisions answers the open asks put to one person.
 func (r *Reader) Decisions(ctx context.Context, q DecisionsQuery, now time.Time,
-	loc *time.Location) (DecisionsAnswer, error) {
-	call := r.pinned()
-	got, err := call.decisions(ctx, identified(call.chart, q), now, loc)
-	return shown(call.chart, got), err
-}
-
-// decisions is [Reader.Decisions] once every person the question names is
-// their seat's identity — see people.go.
-func (r *Reader) decisions(ctx context.Context, q DecisionsQuery, now time.Time,
 	loc *time.Location) (DecisionsAnswer, error) {
 
 	switch {

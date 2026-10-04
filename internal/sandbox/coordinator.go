@@ -1159,9 +1159,7 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 		// row it was accepted against ([AnswerDesk.Deliver]), so this is a
 		// delivery this seat must not act on — resuming it here would
 		// re-enter another seat's conversation as this one. Compared by
-		// the seat's ID and never its handle: a rename between the answer
-		// and its consumption moves the handle and not the seat
-		// (ADR-0026).
+		// the seat's agent id, which its inbox is named by.
 		log.ErrorContext(ctx, "sandbox_answer_misrouted",
 			"turn_id", given.TurnID, "addressed_to", given.Agent,
 			"run_seat", run.AgentID,

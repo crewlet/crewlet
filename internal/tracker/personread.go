@@ -27,7 +27,7 @@ import (
 
 // PersonState is one human's own state, plus what a screen needs beside it.
 type PersonState struct {
-	Handle string `json:"handle" person:"seat"`
+	Handle string `json:"handle"`
 
 	// Unread, Read and Snoozed are the inbox's EXCEPTIONS to the
 	// seen-through position: Read holds notices above it marked read out
@@ -48,7 +48,7 @@ type PersonState struct {
 
 	// PrioritiesSetBy is who last set the list when it was not this
 	// person, and empty when it was theirs. See [Person].
-	PrioritiesSetBy string    `json:"priorities_set_by,omitempty" person:"seat"`
+	PrioritiesSetBy string    `json:"priorities_set_by,omitempty"`
 	PrioritiesSetAt time.Time `json:"priorities_set_at,omitzero"`
 
 	SeenThrough Position `json:"seen_through,omitzero"`
@@ -76,7 +76,7 @@ type PersonState struct {
 
 // PersonQuery asks for one.
 type PersonQuery struct {
-	Handle string `person:"seat"`
+	Handle string
 
 	Level       statelog.ReadLevel
 	Session     statelog.Position
@@ -92,14 +92,6 @@ type PersonQuery struct {
 
 // Person answers one human's own state.
 func (r *Reader) Person(ctx context.Context, q PersonQuery, now time.Time) (PersonState, error) {
-	call := r.pinned()
-	got, err := call.person(ctx, identified(call.chart, q), now)
-	return shown(call.chart, got), err
-}
-
-// person is [Reader.Person] once every person the question names is their seat's
-// identity — see people.go.
-func (r *Reader) person(ctx context.Context, q PersonQuery, now time.Time) (PersonState, error) {
 	switch {
 	case q.Level == "":
 		return PersonState{}, fmt.Errorf("tracker: this person read names no " +

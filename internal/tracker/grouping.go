@@ -69,9 +69,9 @@ import (
 // # Two axes group on something other than their column
 //
 // Every axis above is its column's own value. The two UNIT axes are not: a
-// unit answers to several spellings — its key, the keys it answered to before
-// a rename, and its name — and which one a row holds is whatever was true when
-// it was filed, so grouping on the string drew one team as several columns.
+// unit answers to two spellings — its key and its name — and which one a row
+// holds is whatever was true when it was filed, so grouping on the string drew
+// one team as two columns.
 // They group on the unit's KEY instead, folded in SQL, and a caller's
 // `group=` is folded the same way so any spelling narrows to the one column.
 // [unitAxis] is the expression and [groupAxis.Canonical] is the caller's half.
@@ -186,7 +186,7 @@ type groupAxis struct {
 
 	// Labels is what a person reads where the stored value is not the
 	// word: a custom field's option ids, the relative due bands' slugs,
-	// and a unit key that is an id the chart chose to survive a rename.
+	// and a unit key, which is an id rather than the team's name.
 	// Absent on every axis that stores the word already, because a label
 	// derived where none is needed would be a second name for one value.
 	//
@@ -202,8 +202,7 @@ type groupAxis struct {
 	// Only the unit axes have one, and it is what lets `group=` and
 	// `subgroup=` take any of a team's spellings: that expression folds
 	// every spelling onto the unit's KEY, so a narrowing written with the
-	// name or a former key would compare against a value the column never
-	// emits — a board with a column and a narrowing to it that answers
+	// name would compare against a value the column never emits — a board with a column and a narrowing to it that answers
 	// nothing.
 	//
 	// It is applied to a key that came from an ANSWER too, where it is a
@@ -696,14 +695,12 @@ func labelsOf(table map[string]string) func(string) string {
 
 // unitAxis is a unit column grouped on the TEAM rather than on the string.
 //
-// A unit answers to several spellings — its key, the key it was created under,
-// every key it has answered to since a rename, and its name — and which one a
-// row holds is decided by when it was written, because a filed unit is a record
-// of what was true and nothing rewrites it. Grouped on the column, a company
-// that renamed a team therefore drew that ONE team as TWO columns, both headed
-// with its name, splitting its counts down the middle: everything filed before
-// the rename under one, everything after it under the other. That is the
-// defect the `unit=` filter was fixed for, one surface along.
+// A unit answers to two spellings — its key and its name — and which one a row
+// holds is decided by when it was written, because a filed unit is a record of
+// what was true and nothing rewrites it: a row filed before the document gave
+// the unit an id holds its name. Grouped on the column, that ONE team was TWO
+// columns, both headed with its name, splitting its counts down the middle.
+// That is the defect the `unit=` filter was fixed for, one surface along.
 //
 // So the expression folds every spelling onto the unit's KEY, in SQL, with the
 // spellings BOUND rather than written into the statement — a unit's name is
@@ -715,10 +712,9 @@ func labelsOf(table map[string]string) func(string) string {
 // no unit — and a subgroup's), so the driver's own variable ceiling (2 000 on
 // the driver this build ships; see `store.Capabilities.MaxVariables`) allows
 // about five hundred bound values per expression: a unit whose name differs
-// from its key costs two, and one renamed the chart's maximum sixteen times
-// costs nineteen. That is a few hundred teams at the ordinary rate — an order
-// of magnitude past any org chart — and a loud refusal rather than a wrong
-// answer if one ever arrives.
+// from its key costs two. That is a couple of hundred teams — an order of
+// magnitude past any org chart — and a loud refusal rather than a wrong answer
+// if one ever arrives.
 //
 // A COMPANY WHOSE UNITS ANSWER ONLY TO THEIR KEYS GETS NO CASE AT ALL: every
 // arm would be `WHEN x THEN x`, which the ELSE already answers, so the
@@ -760,8 +756,8 @@ func unitAxis(column string, units Units) groupAxis {
 		axis.Expr = "CASE" + arms.String() + " ELSE " + column + " END"
 	}
 	// AND A CALLER'S OWN VALUE IS SPELLED THE WAY THE EXPRESSION SPELLS
-	// IT, so `group=Engineering`, `group=eng` and a former key narrow to
-	// the one column the board draws — see [groupAxis.Canonical].
+	// IT, so `group=Engineering` and `group=eng` narrow to the one column
+	// the board draws — see [groupAxis.Canonical].
 	axis.Canonical = func(key string) string {
 		if unit, found := units.ResolveUnit(key); found {
 			return unit.Key
@@ -775,8 +771,8 @@ func unitAxis(column string, units Units) groupAxis {
 //
 // A COLUMN HEADING IS READ BY A PERSON and what these rows hold is the unit's
 // KEY, which is an id on any company that gave its units one — a word chosen
-// to survive a rename precisely because nobody reads it. Without this, giving
-// a unit an id silently re-headed every board in the company with a slug.
+// to stay fixed precisely because nobody reads it. Without this, giving a unit
+// an id silently re-headed every board in the company with a slug.
 //
 // THE CHART IS ASKED PER KEY rather than enumerated, because the keys are
 // whatever the rows hold: a column may name a team the chart no longer has,

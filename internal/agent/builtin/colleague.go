@@ -65,7 +65,6 @@ package builtin
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/colleague"
@@ -196,11 +195,6 @@ func Corpus(o *org.Organization, withheld func(handle string) bool) []colleague.
 	for role := range o.AllRoles() {
 		seat := colleague.Seat{
 			Handle: role.Handle(), Name: role.Name, Kind: string(role.Kind),
-			// AND WHAT IT USED TO BE CALLED. A model addresses a
-			// colleague by the name it remembers, and a rename does not
-			// reach what an earlier turn wrote down — see
-			// [colleague.Seat.Former].
-			Former:   retiredHandles(role),
 			External: map[string]string{},
 		}
 		if seat.Kind == "" {
@@ -228,23 +222,6 @@ func Corpus(o *org.Organization, withheld func(handle string) bool) []colleague.
 			seat.External[string(id.Transport)] = id.ExternalID
 		}
 		out = append(out, seat)
-	}
-	return out
-}
-
-// retiredHandles is every address role answered to and no longer does: the
-// capped list of the handles it has had, and the one it was CREATED under.
-//
-// THE ORIGIN TOO, because the list is capped and the origin is not: after
-// enough renames it falls off the list's end, while [org.Organization.Role]
-// resolves it for ever — so a colleague asked for by their first handle was
-// "no such colleague" here and a seat everywhere else. It can be nobody
-// else's alias, since the chart never issues it twice.
-func retiredHandles(role *org.Role) []string {
-	out := slices.Clone(role.FormerHandles)
-	if origin := role.OriginHandle; origin != "" && origin != role.Handle() &&
-		!slices.Contains(out, origin) {
-		out = append(out, origin)
 	}
 	return out
 }

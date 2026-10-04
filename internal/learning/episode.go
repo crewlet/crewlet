@@ -6,29 +6,15 @@
 // so a failed write is logged and a failed read answers empty. The one
 // exception is stated at the call site that makes it.
 //
-// # A seat's memory is keyed on the handle it was CREATED under
+// # A seat's memory is keyed on its handle or its agent id
 //
 // Every table here that names its seat by a handle — episodes.agent_handle,
 // counterparty_profiles.observer_handle and subject_handle, the two skill
 // tables' agent_handle, and the conversation ledger's
 // conversation_sessions.agent_handle in internal/agent/ledger/ledgerstore —
-// holds the seat's ORIGIN ([org.Role.Origin]), never its current address
-// ([org.Role.Handle]). A handle is prose a founder retypes; keyed on it, a
-// renamed seat read none of the episodes, skills, profiles or thread history
-// it had before the rename, while its diary and onboarding marker — keyed on
-// the id derived from the same origin (ADR-0026) — followed it. So every
-// writer and every reader passes the origin, which the chart never issues to
-// another seat, and a surface that DISPLAYS a stored value (a memory view, an
-// event, a drafted page) resolves it back to the seat's current handle
-// through the org rather than showing an address the seat has retired.
-//
-// THE COLUMNS KEEP THEIR NAMES, and that is deliberate rather than an
-// oversight. The value is still a handle — the one the seat was created
-// under — and for every seat never renamed it IS the handle it answers to, so
-// every row already written is keyed correctly and no migration re-keys
-// anything. Renaming a column would also change internal/learning/memsync's
-// wire contract, which carries rows between peers by column name. Do not
-// "fix" a writer back to the current handle, and do not rename the column.
+// holds its [org.Role.Handle], and the diary and the onboarding marker hold
+// the agent id derived from it. A handle is immutable (ADR-0013): a document
+// that changes one has created a new seat, with no memory.
 package learning
 
 import (
@@ -60,8 +46,7 @@ const (
 type Episode struct {
 	ID string
 
-	// Handle is the seat's ORIGIN — the handle it was created under — and
-	// not the address it answers to now. See the package doc.
+	// Handle is the seat's handle. See the package doc.
 	Handle string
 	Role   string
 	// WorkItem is the work item the turn was charged to, as its

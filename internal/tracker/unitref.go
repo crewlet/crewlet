@@ -26,10 +26,9 @@ import "strings"
 // honest, rather than as an empty unit, which is a claim the row names none;
 // and a filter matches the reference literally rather than widening.
 type Units interface {
-	// ResolveUnit answers the unit a reference names — any of its
-	// spellings (its key, the key it was created under, a former key, its
-	// name), however it is cased — and false where the chart has no such
-	// unit.
+	// ResolveUnit answers the unit a reference names — either of its
+	// spellings (its key or its name), however it is cased — and false
+	// where the chart has no such unit.
 	ResolveUnit(ref string) (ChartUnit, bool)
 
 	// AllUnits is every unit the chart holds, for the one question
@@ -56,31 +55,14 @@ type Units interface {
 // a write stores the Key, a screen renders the Name, a wake reaches the Lead,
 // and a filter or a board matches every spelling a row may hold.
 type ChartUnit struct {
-	// Key is the unit's CURRENT address — `org.Unit.Key`: its id where the
-	// chart gave it one, its name where it did not. IT IS WHAT EVERY WRITE
-	// HERE STORES, and what a board column is keyed on, so the rows a
-	// rename leaves under a former key fold onto the one the unit answers
-	// to now.
+	// Key is the unit's key — `org.Unit.Key`: its id where the document
+	// gave it one, its name where it did not. IT IS WHAT EVERY WRITE HERE
+	// STORES, and what a board column is keyed on.
 	Key string
 
 	// Name is what a person reads: the unit's name as the chart spells it,
 	// whatever spelling the reference used.
 	Name string
-
-	// OriginKey is the key the unit was CREATED under — its identity, which
-	// no rename moves and the chart never issues twice — and FormerKeys the
-	// keys it has answered to since, newest first (`org.Unit.OriginKey`,
-	// `org.Unit.FormerKeys`). EMPTY FOR A UNIT NEVER RENAMED, whose origin
-	// is its key.
-	//
-	// THEY ARE SPELLINGS A ROW MAY HOLD. A task filed before a rename keeps
-	// the key the unit had then, and nothing rewrites a record — so a
-	// `unit=` filter, a board column and a narrowing that knew only the key
-	// and the name matched none of the work a renamed team did before its
-	// rename, and drew it as a second column headed with the team's own
-	// name. See [unitSpellings] and [unitAxis].
-	OriginKey  string
-	FormerKeys []string
 
 	// Lead is who hears about this unit's work — the EFFECTIVE lead, so a
 	// unit that declares none but sits under a unit that does reports the
@@ -90,7 +72,7 @@ type ChartUnit struct {
 
 // LeadRef is who leads a unit.
 type LeadRef struct {
-	Handle string     `json:"handle,omitempty" person:"seat"`
+	Handle string     `json:"handle,omitempty"`
 	Kind   AuthorKind `json:"kind,omitempty"`
 }
 
@@ -156,10 +138,10 @@ func taskUnits(units Units, task Task) *TaskUnits {
 // A CONTAINER IS AN ADDRESS, and every kind but one is already canonical by
 // construction: a project key is upper-cased wherever it is minted — which is
 // exactly this rule, spelled at each parser — and a person is a handle. A UNIT
-// is the one with several spellings, so the same team addressed by its key, by
-// a key it answered to before a rename and by its name was that many strips: a
-// view saved from one was invisible from the others, and neither surface could
-// tell that from a container nobody has saved a view in.
+// is the one with two spellings, so the same team addressed by its key and by
+// its name was two strips: a view saved from one was invisible from the other,
+// and neither surface could tell that from a container nobody has saved a view
+// in.
 //
 // A REFERENCE THE CHART CANNOT RESOLVE IS LEFT ALONE, for the reason
 // [unitSpellings] leaves one alone: a strip saved against a team since
@@ -177,14 +159,12 @@ func CanonicalContainer(units Units, container Container) Container {
 // unitSpellings is every spelling a row may hold for the units these
 // references name.
 //
-// THE READ HALF OF THE SPELLINGS. A write stores a unit's key as it is at that
-// moment, and a record is never rewritten: rows written before a rename hold a
-// key the unit answered to then, and rows written before the chart gave the
-// unit a key at all hold its name — so a filter that compared against the one
-// string somebody typed would answer with part of the team's work, silently,
-// exactly when the team is renamed. Each reference is resolved through the
-// chart and contributes the SET its unit answers to: its key, the key it was
-// created under, every former key and its name.
+// THE READ HALF OF THE SPELLINGS. A write stores a unit's key, and a record is
+// never rewritten: rows written before the document gave the unit a key at all
+// hold its name — so a filter that compared against the one string somebody
+// typed would answer with part of the team's work, silently. Each reference is
+// resolved through the org and contributes the SET its unit answers to: its
+// key and its name.
 //
 // EXACT VALUES RATHER THAN A FOLDED COMPARISON. Both columns this filters
 // have an index over their stored text (`tracker_tasks_filed_unit_idx`,
@@ -231,20 +211,17 @@ func unitSpellings(units Units, refs []string) []string {
 	return out
 }
 
-// spellings is every string a stored row may hold for this unit, its current
-// key first: the key, the key it was created under, each former key newest
-// first, and its name. Trimmed, since that is how every reference reaches the
+// spellings is every string a stored row may hold for this unit, its key
+// first, then its name. Trimmed, since that is how every reference reaches the
 // chart; blanks are left out, and duplicates for the caller to fold.
 //
 // ONE LIST FOR THE FILTER AND THE BOARD, so the two can never disagree about
 // which rows are a team's: [unitSpellings] matches them and [unitAxis] folds
 // them onto the key.
 func (u ChartUnit) spellings() []string {
-	out := make([]string, 0, 3+len(u.FormerKeys))
-	for _, s := range append([]string{u.Key, u.OriginKey}, u.FormerKeys...) {
-		if s = strings.TrimSpace(s); s != "" {
-			out = append(out, s)
-		}
+	out := make([]string, 0, 2)
+	if key := strings.TrimSpace(u.Key); key != "" {
+		out = append(out, key)
 	}
 	if name := strings.TrimSpace(u.Name); name != "" {
 		out = append(out, name)

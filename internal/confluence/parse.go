@@ -163,16 +163,10 @@ type ParserOptions struct {
 // registry then has to resolve — including every human, who resolve to
 // nothing.
 //
-// A SEAT IS NAMED BY ITS IDENTITY — the handle it was CREATED under
-// ([notify.Party.Identity], ADR-0026) — and never by the one it answers to
-// now. A subscription is the seat's own memory of the pages it touched, and
-// keyed on its address a rename made it deaf to every one of them: the page it
-// edited as `swe` went on being tested for `platform-swe`, found nobody, and
-// fell through to the space lead. For every seat never renamed the two are
-// the same handle, so every subscription already recorded is keyed correctly.
+// A SEAT IS NAMED BY ITS HANDLE, which is immutable (ADR-0013).
 type Watchers interface {
 	// Watching returns the subset of seats subscribed to the page, each
-	// named by its identity.
+	// named by its handle.
 	//
 	// FAILS OPEN AS EMPTY, deliberately: not knowing who is subscribed
 	// must fall through to the space lead, which is where the event went
@@ -331,11 +325,11 @@ func (p *Parser) subscribed(ctx context.Context, base notify.Inbound, pageID, ac
 	if len(seats) == 0 {
 		return nil
 	}
-	identities := make([]string, 0, len(seats))
+	handles := make([]string, 0, len(seats))
 	for _, party := range seats {
-		identities = append(identities, party.Identity())
+		handles = append(handles, party.Handle)
 	}
-	watching, err := p.watchers.Watching(ctx, pageID, identities)
+	watching, err := p.watchers.Watching(ctx, pageID, handles)
 	if err != nil {
 		// EMPTY, so the event falls through to the space lead — where it
 		// went before subscriptions existed. Waking every seat instead
@@ -364,10 +358,9 @@ func (p *Parser) subscribed(ctx context.Context, base notify.Inbound, pageID, ac
 	out := make([]notify.Routed, 0, len(watching))
 	// IN HANDLE ORDER, because a map walk would order one page's recipients
 	// differently on every delivery — and the order is what a reader of
-	// the feed compares two events by. Each copy is addressed to the handle
-	// the seat answers to NOW, whatever it was subscribed under.
+	// the feed compares two events by.
 	for _, party := range seats {
-		if !watching[party.Identity()] || seen[party.Handle] {
+		if !watching[party.Handle] || seen[party.Handle] {
 			continue
 		}
 		// The actor already knows what it just did. Its own external id
@@ -428,8 +421,7 @@ func (p *Parser) subscribe(ctx context.Context, pageID string, mentioned []strin
 			continue
 		}
 		seen[party.Handle] = true
-		// BY ITS IDENTITY, which a rename does not move — see [Watchers].
-		if err := p.watchers.Watch(ctx, pageID, party.Identity(), at); err != nil {
+		if err := p.watchers.Watch(ctx, pageID, party.Handle, at); err != nil {
 			log.WarnContext(ctx, "confluence_watch_not_recorded", "page", pageID,
 				"seat", party.Handle, "error", err.Error(),
 				"detail", "this seat will not be woken by later activity on the page")

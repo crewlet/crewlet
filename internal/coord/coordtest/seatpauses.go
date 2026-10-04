@@ -11,8 +11,8 @@ import (
 // ---- seat pauses -------------------------------------------------------- //
 
 // The seat a case names is filed under [seatID] of that name, which is what
-// the engine's derived agent id is to a real seat: a uuid a rename never
-// moves.
+// the engine's derived agent id is to a real seat: a uuid derived from its
+// handle.
 
 func (h *fleetHarness) pauseOf(handle string) (coord.SeatPause, bool) {
 	h.t.Helper()

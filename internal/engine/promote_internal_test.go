@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -53,8 +54,8 @@ func TestPromotionUnitsCarryTheirSeatsAndContainer(t *testing.T) {
 	if units[0].ID != "platform" || units[0].Container != "ENG" {
 		t.Fatalf("unit = %+v", units[0])
 	}
-	if len(units[0].Seats) != 2 {
-		t.Fatalf("seats = %v, want both of the unit's seats", units[0].Seats)
+	if !slices.Equal(units[0].Handles, []string{"eng", "sre"}) {
+		t.Fatalf("handles = %v, want both of the unit's seats", units[0].Handles)
 	}
 }
 
@@ -115,9 +116,9 @@ func TestAParentUnitDoesNotPoolItsChildrensSeats(t *testing.T) {
 			continue
 		}
 		found = true
-		if len(unit.Seats) != 1 || unit.Seats[0].Handle() != "vp" {
+		if !slices.Equal(unit.Handles, []string{"vp"}) {
 			t.Fatalf("the parent pooled %v, want only its own direct seat",
-				unit.Seats)
+				unit.Handles)
 		}
 	}
 	if !found {

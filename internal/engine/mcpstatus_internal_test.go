@@ -99,7 +99,7 @@ func TestAFailedMCPStartReachesTheHeartbeatAndLeavesWithItsOwner(t *testing.T) {
 // per seat this node holds, and a row per child would put the company's seat
 // count on a payload re-sent every heartbeat. The reported failure is the
 // first by the seat's agent id, so two beats with the same facts send the same
-// bytes — and name the seat by what a rename does not move.
+// bytes.
 func TestMCPStatusIsOneRowPerServerWithItsInstancesCounted(t *testing.T) {
 	t.Parallel()
 	// Ids ordered swe < pm, the reverse of their handles, so a first

@@ -29,7 +29,7 @@ func orphansFinding(t *testing.T, res *datadog.Result) (integration.Finding, boo
 
 // ACCOUNTS THIS ENGINE MADE AND NO LONGER MANAGES ARE REPORTED.
 //
-// A live organization accumulates them: a seat renamed, a handle changed, an
+// A live organization accumulates them: a seat removed, a handle changed, an
 // older naming scheme. Measured on one — 36 disabled accounts under
 // `agent-cs-…@agents.crewlet.invalid`, matching nothing a current pass would
 // ask for. They are absent from the plan by construction, so no seat's result
@@ -246,7 +246,7 @@ func TestARealDomainNeedsTheCrewletPrefix(t *testing.T) {
 	}}
 	plan := &provision.Plan{}
 	plan.Add(provision.Seat{
-		Handle: "sre", Origin: "sre", Role: "SRE", TokenVar: "SRE_DD_KEY",
+		Handle: "sre", Role: "SRE", TokenVar: "SRE_DD_KEY",
 		Email: "crewlet-sre@acme.example",
 	})
 

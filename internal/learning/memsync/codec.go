@@ -183,12 +183,10 @@ func decodeCell(cell any) (any, error) {
 
 // subject is the row's address on the changelog.
 //
-// THE SEAT IS ITS ID, never its handle. The changelog is COMPACTED — one
-// message retained per subject — so the subject IS a row's durable address,
-// and a handle is one somebody types: renaming a seat moved every one of its
-// subjects at once, which left the node that took the seat next replaying an
-// empty prefix and every row the seat had learned stranded under an address
-// nothing would ask for again. See ADR-0026.
+// THE SEAT IS ITS AGENT ID, the UUIDv5 over (org name, handle) (ADR-0013).
+// The changelog is COMPACTED — one message retained per subject — so the
+// subject IS a row's durable address, and the id is a fixed-width token that
+// carries no character a subject cannot.
 //
 // The table is readable; the key is HASHED. A natural key can be anything a
 // counterparty is called on a chat platform — with dots, spaces, wildcards —
@@ -255,32 +253,15 @@ func upsert(ctx context.Context, tx *sql.Tx, t table, row Row) error {
 	return nil
 }
 
-// seatRef is one seat, in both spellings the schema uses for it.
-//
-// TWO SPELLINGS, BOTH STABLE ACROSS NODES AND ACROSS A RENAME, because both
-// are anchored on the handle the seat was CREATED under (ADR-0026). The id is
-// a UUIDv5 over (org name, that handle), which is why the changelog's subjects
-// are built from it. The handle is that ORIGIN itself — never the address the
-// seat answers to now — and it is what the handle-keyed tables (episodes,
-// counterparty profiles, the two skill tables, the conversation ledger) hold,
-// because every writer and reader in internal/learning and the ledger passes
-// the origin. So a rename moves neither: the rows the seat wrote before it
-// travel under the same subjects, land under the same handle, and are read by
-// the seat under the handle it still has.
-//
-// THE COLUMN IS STILL CALLED agent_handle (observer_handle for a profile),
-// and that is deliberate. Its value IS a handle — the one the seat was created
-// under, which for every seat never renamed is the one it answers to — so
-// every row already written is keyed correctly and nothing re-keys it; and a
-// carried row is encoded BY COLUMN NAME, so renaming the column would change
-// this package's wire contract between peers mid-upgrade. Do not "fix" either
-// back: keyed on the current handle, a renamed seat hydrated and published
-// none of what it learned before the rename.
+// seatRef is one seat, in both spellings the schema uses for it: its handle,
+// which the handle-keyed tables (episodes, counterparty profiles, the two
+// skill tables, the conversation ledger) hold, and the agent id derived from
+// it, which the changelog's subjects and the id-keyed tables are built from.
+// Both are stable across nodes because a handle is immutable (ADR-0013).
 type seatRef struct {
-	// Handle is the seat's ORIGIN handle — see above.
 	Handle string
 
-	// AgentID is the derived UUIDv5 over (org name, origin handle).
+	// AgentID is the derived UUIDv5 over (org name, handle).
 	// Derived rather than looked up, so every node computes the same value
 	// with no database and no running instance — which is exactly what
 	// makes a row written on one node addressable from another.

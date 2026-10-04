@@ -39,8 +39,8 @@ func pausingEngine(t *testing.T) (*Engine, *memory.Queue, *coordmem.Fleet) {
 	return e, q.(*memory.Queue), fleet
 }
 
-// seatOf is the id the engineOn company ("Acme") derives for a seat it was
-// created as — what a pause, a hold and a mailbox are keyed by.
+// seatOf is the id the engineOn company ("Acme") derives for a seat's handle —
+// what a pause, a hold and a mailbox are keyed by.
 func seatOf(handle string) uuid.UUID {
 	id, _ := org.DeriveAgentID("Acme", handle)
 	return id
@@ -434,17 +434,16 @@ func TestUnreadPausesAreUnknownNotUnpaused(t *testing.T) {
 	}
 }
 
-// A PAUSE FOLLOWS ITS SEAT ACROSS A RENAME, AND NOT ITS OLD HANDLE.
+// A PAUSE IS KEYED ON ITS SEAT'S AGENT ID, and holds that seat alone.
 //
-// The record, the hold and the screening all key on the seat's id: renamed
-// while paused, the seat is still paused under its new handle, and a colleague
-// hired onto the handle it gave up — a different seat, with a different id —
-// inherits nothing. Keyed on the handle, the rename read as a resume and the
-// hire arrived paused by somebody who had paused somebody else.
+// The record, the hold and the screening all key on the id derived from the
+// seat's handle (ADR-0013): a colleague beside the paused seat — a different
+// handle, so a different id — is not paused, and the paused seat reads paused
+// by its handle, which is the control.
 //
-// Mutation: answer the screening by handle, or key the copy on it, and this
+// Mutation: answer the screening by anything but the seat's id, and this
 // fails.
-func TestAPauseFollowsItsSeatAcrossARename(t *testing.T) {
+func TestAPauseHoldsItsSeatAlone(t *testing.T) {
 	t.Parallel()
 	e, _, fleet := pausingEngine(t)
 	pauseSeat(t, fleet, ceoSeat, false)
@@ -452,27 +451,19 @@ func TestAPauseFollowsItsSeatAcrossARename(t *testing.T) {
 		_, paused, _ := e.pauseOf(ceoSeat)
 		return paused
 	})
-	// THE RENAME: the seat created as `ceo` answers to `chief` now, and a
-	// new hire took the freed handle.
 	e.epoch.current.Store(companyFor(t, `
 name: Acme
 roles:
   - name: CEO
-    handle: chief
-  - name: Hire
     handle: ceo
+  - name: Chief
+    handle: chief
 `))
-	renamed := e.Company()
-	chief := renamed.Org.SeatByHandle("chief")
-	chief.OriginHandle = "ceo"
-	hire := renamed.Org.SeatByHandle("ceo")
-	hire.OriginHandle = "ceo-2"
-	renamed.Org.Normalize()
 
-	if paused, known := e.pauseOfHandle("chief"); !known || !paused {
-		t.Errorf("the renamed seat reads paused=%v known=%v, want still paused", paused, known)
+	if paused, known := e.pauseOfHandle("ceo"); !known || !paused {
+		t.Errorf("the paused seat reads paused=%v known=%v, want paused", paused, known)
 	}
-	if paused, _ := e.pauseOfHandle("ceo"); paused {
-		t.Error("a seat hired onto the freed handle inherited the leaver's pause")
+	if paused, _ := e.pauseOfHandle("chief"); paused {
+		t.Error("a colleague beside the paused seat reads paused")
 	}
 }

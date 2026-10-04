@@ -61,15 +61,15 @@ type Page struct {
 	Status Status   `json:"status"`
 	Labels []string `json:"labels,omitempty"`
 
-	Watchers []string `json:"watchers,omitempty" person:"seat"`
-	Muted    []string `json:"muted,omitempty" person:"seat"`
+	Watchers []string `json:"watchers,omitempty"`
+	Muted    []string `json:"muted,omitempty"`
 
 	// Version is a monotonic integer a save must state. It is what makes
 	// "somebody else edited this while you were writing" a refusal rather
 	// than a silent overwrite.
 	Version int `json:"version"`
 
-	Author string `json:"author,omitempty" person:"seat"`
+	Author string `json:"author,omitempty"`
 
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
@@ -96,7 +96,7 @@ type Revision struct {
 	// Message is the author's one-line note about the edit.
 	Message string `json:"message,omitempty"`
 
-	Author    string    `json:"author,omitempty" person:"seat"`
+	Author    string    `json:"author,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 
 	Extra map[string]json.RawMessage `json:"-"`
@@ -109,11 +109,11 @@ type Comment struct {
 	ID     string `json:"id"`
 	PageID string `json:"page_id"`
 
-	Author     string     `json:"author" person:"seat"`
+	Author     string     `json:"author"`
 	AuthorKind AuthorKind `json:"author_kind"`
 
 	Body     string   `json:"body"`
-	Mentions []string `json:"mentions,omitempty" person:"seat"`
+	Mentions []string `json:"mentions,omitempty"`
 	ReplyTo  string   `json:"reply_to,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
@@ -155,7 +155,7 @@ type Change struct {
 	PageID string     `json:"page_id"`
 	Kind   ChangeKind `json:"kind"`
 
-	Actor      string     `json:"actor,omitempty" person:"seat"`
+	Actor      string     `json:"actor,omitempty"`
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
 
@@ -166,7 +166,7 @@ type Change struct {
 	// Excerpt is at most [MaxExcerpt] bytes of what a card should show.
 	Excerpt string `json:"excerpt,omitempty"`
 
-	Mentions []string `json:"mentions,omitempty" person:"seat"`
+	Mentions []string `json:"mentions,omitempty"`
 
 	TurnID string   `json:"turn_id,omitempty"`
 	Chain  []string `json:"chain,omitempty"`
@@ -195,12 +195,12 @@ type Snapshot struct {
 	Container string `json:"container"`
 	Title     string `json:"title"`
 	Status    Status `json:"status"`
-	Author    string `json:"author,omitempty" person:"seat"`
+	Author    string `json:"author,omitempty"`
 	Version   int    `json:"version"`
 
 	// Watchers is the set MINUS the muted, computed once at write time so
 	// the feed never has to subtract and can never forget to.
-	Watchers []string `json:"watchers,omitempty" person:"seat"`
+	Watchers []string `json:"watchers,omitempty"`
 }
 
 // ErrUnknownVersion reports a document a newer build wrote.

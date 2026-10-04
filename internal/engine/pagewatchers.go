@@ -50,8 +50,7 @@ func (w pageWatchers) watchScope(pageID string) string {
 }
 
 // Watching returns the subset of seats subscribed to the page, each named by
-// the handle it was CREATED under — see [confluence.Watchers], which is why a
-// renamed seat still hears the pages it touched.
+// its handle — see [confluence.Watchers].
 func (w pageWatchers) Watching(ctx context.Context, pageID string, seats []string) (map[string]bool, error) {
 	if w.ledger == nil || strings.TrimSpace(pageID) == "" || len(seats) == 0 {
 		return nil, nil
@@ -59,8 +58,7 @@ func (w pageWatchers) Watching(ctx context.Context, pageID string, seats []strin
 	return w.ledger.Worked(ctx, w.watchScope(pageID), seats)
 }
 
-// Watch subscribes one seat, named by the handle it was created under, to a
-// page.
+// Watch subscribes one seat, named by its handle, to a page.
 //
 // The DETAIL is what subscribed the seat, which is the only thing an operator
 // reading the coordination store could otherwise not reconstruct: a seat that

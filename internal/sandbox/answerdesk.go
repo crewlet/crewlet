@@ -40,9 +40,8 @@ func (d AnswerDesk) Run(ctx context.Context, turnID string) (PendingRun, bool, e
 //
 // THE RUN'S OWN ROW DECIDES THE INBOX, read here by the turn the answer names,
 // and the answer is stamped with that row's seat ([types.SandboxAnswerGiven]
-// .Agent): the caller's copy of the run may be a read from before a rename,
-// and an inbox is addressed by the seat's ID, which no rename moves
-// (ADR-0026). The dispatcher that consumes it compares the same ID against
+// .Agent): an inbox is addressed by the seat's agent id, derived from its
+// handle (ADR-0013). The dispatcher that consumes it compares the same ID against
 // the row again ([Coordinator.AnswerByTurn]), so an answer that somehow lands
 // on another seat's inbox is dropped rather than resumed there.
 //

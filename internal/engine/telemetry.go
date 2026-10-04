@@ -83,11 +83,8 @@ type turnTelemetry struct {
 
 	// requester is the seat whose wake started this turn — see
 	// [turnctx.Turn.Requester] — resolved off the same first event the
-	// trigger is described from, or off the parked row on a resume. BY THE
-	// HANDLE THAT SEAT WAS CREATED UNDER, its identity (ADR-0026): it rides a
-	// parked run's row for as long as the run waits, and a current handle
-	// stored there named nobody — or a stranger hired onto the freed
-	// handle — once the requester was renamed.
+	// trigger is described from, or off the parked row on a resume, by the
+	// seat's handle (ADR-0013).
 	requester string
 
 	// skills is the synthesized-skill ids offered to this turn's prompt.
@@ -724,21 +721,6 @@ func seatAgentID(company *Company, handle string) (string, bool) {
 	return id.String(), true
 }
 
-// seatOrigin names the handle the seat answering to handle was CREATED under
-// — the one every memory table keys it on (see internal/learning's package
-// doc) — or "" for a handle no seat in the company answers to, and for a node
-// with no active company.
-//
-// THROUGH [org.Organization.Role], which resolves a seat's current handle, the
-// handle it was created under and any alias it retired alike, so whichever
-// address a caller holds lands on the one identity.
-func seatOrigin(company *Company, handle string) string {
-	if company == nil || company.Org == nil {
-		return ""
-	}
-	return company.Org.Role(handle).Origin()
-}
-
 // skipDecision maps the turn's decision onto the one plan_decision value
 // anything still reads.
 //
@@ -753,15 +735,14 @@ func skipDecision(decision string) types.PlanDecision {
 	return ""
 }
 
-// requesterIdentity is a requester's handle as the identity it is kept by — the
-// handle its seat was created under — or "" for one the chart does not hold:
-// a seat the company does not have is nobody to put a question to.
+// requesterIdentity is a requester's handle, or "" for one the org does not
+// hold: a seat the company does not have is nobody to put a question to.
 func requesterIdentity(company *Company, handle string) string {
 	if handle == "" || company == nil || company.Org == nil {
 		return ""
 	}
 	if seat := company.Org.Role(handle); seat != nil {
-		return seat.Origin()
+		return seat.Handle()
 	}
 	return ""
 }

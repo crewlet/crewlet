@@ -72,12 +72,7 @@ type MentionGrammar interface {
 // restart makes every seat deaf to every thread it was following, with no
 // way back but for somebody to mention it again.
 //
-// THE SEAT IS NAMED BY THE HANDLE IT WAS CREATED UNDER (ADR-0026), never by
-// the one it answers to now: a follow is the seat's own memory of a
-// conversation, and keyed on its address a rename made it deaf to every thread
-// it had been following, with no way back but for somebody to mention it
-// again. The value is still a handle, and for every seat never renamed its
-// origin IS its handle, so every follow already written is keyed correctly.
+// THE SEAT IS NAMED BY ITS HANDLE, which is immutable (ADR-0013).
 type FollowStore interface {
 	Follow(ctx context.Context, backend, seat, channel, thread, reason string, at time.Time) error
 	Following(ctx context.Context, backend, seat, channel, thread string) (string, bool, error)
@@ -194,8 +189,7 @@ type Delivery struct {
 // bot sits in, which is a burst of turns nobody asked for and cannot be
 // taken back. The error rides along so the caller can log it.
 //
-// seat is the handle the seat was CREATED under — see [FollowStore] — and
-// never the address the delivery came in on.
+// seat is the seat's handle.
 func (t *ThreadTracker) Reaches(ctx context.Context, seat, selfIdentity string, m ChatMessage, at time.Time) (Delivery, error) {
 	reason, triggered := t.trigger(m, selfIdentity)
 
@@ -274,8 +268,7 @@ func (t *ThreadTracker) Participated(ctx context.Context, seat, channel, thread 
 		string(FollowParticipated), at)
 }
 
-// Follow subscribes a seat to a thread explicitly. seat is the handle it was
-// created under — see [FollowStore].
+// Follow subscribes a seat, by handle, to a thread explicitly.
 func (t *ThreadTracker) Follow(ctx context.Context, seat, channel, thread string, at time.Time) error {
 	return t.store.Follow(ctx, t.Backend(), seat, channel, thread,
 		string(FollowExplicit), at)

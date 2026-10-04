@@ -314,14 +314,14 @@ func (s *Stores) Overview(ctx context.Context, seats []Seat) ([]OverviewSeat, er
 			}
 		}
 		if s.Episodes != nil {
-			n, err := s.Episodes.Count(ctx, seat.Origin)
+			n, err := s.Episodes.Count(ctx, seat.Handle)
 			if err != nil {
 				return nil, err
 			}
 			row.EpisodesTotal = n
 		}
 		if s.Skills != nil {
-			n, err := s.Skills.Count(ctx, seat.Origin, learning.ListOptions{})
+			n, err := s.Skills.Count(ctx, seat.Handle, learning.ListOptions{})
 			if err != nil {
 				return nil, err
 			}

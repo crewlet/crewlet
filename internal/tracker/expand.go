@@ -108,7 +108,7 @@ var expansionRefused = []string{
 // the SURFACE's own credential, and neither can be read from the tracker,
 // which holds no org.
 type Viewer struct {
-	Handle string `person:"seat"`
+	Handle string
 
 	// Project is the viewer's home container, empty where their unit owns
 	// none — which narrows `my_queue` to their own assignments rather than

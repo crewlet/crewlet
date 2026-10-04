@@ -224,13 +224,6 @@ type Party struct {
 	Handle string
 	Name   string
 
-	// Origin is the handle the seat was CREATED under ([org.Role.Origin],
-	// ADR-0026) — its identity, where Handle is only the address it answers
-	// to now. What a party's own memory is filed under is keyed on it (see
-	// [Party.Identity]), because keyed on the address a rename forgot it.
-	// Empty on a party the registry did not build from a seat.
-	Origin string
-
 	// AgentID is the seat's derived runtime id, and the ZERO VALUE is
 	// meaningful twice over: a human seat never has one, and neither does
 	// a party the registry could not derive one for. Both mean "not
@@ -238,8 +231,8 @@ type Party struct {
 	// it — so the two need not be told apart here.
 	//
 	// Derived rather than looked up (a UUIDv5 over the org name and the
-	// handle the seat was created under), which is what lets one node
-	// address a seat another node is running.
+	// handle, ADR-0013), which is what lets one node address a seat another
+	// node is running.
 	AgentID uuid.UUID
 
 	// Human marks a seat that is addressable and never spawned. It changes
@@ -248,17 +241,6 @@ type Party struct {
 	// ask — so a prompt that rendered a person as an agent would send the
 	// seat looking for a tool that will never answer.
 	Human bool
-}
-
-// Identity is the name a party's own records are filed under: the handle its
-// seat was created under, never the one it answers to now — the rule
-// [org.Role.Origin] states, with the same fallback for the same empty value.
-// A party with no origin recorded answers to the handle it was created under.
-func (p Party) Identity() string {
-	if p.Origin != "" {
-		return p.Origin
-	}
-	return p.Handle
 }
 
 // Label renders a party as a prompt names them.

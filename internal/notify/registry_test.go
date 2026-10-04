@@ -42,8 +42,7 @@ func registry(t *testing.T) *notify.Registry {
 // assertion over it would pass by being empty.
 //
 // Derived rather than read off an org, so it answers for a seat a case adds
-// mid-test as well. That is the same value the org would give — a seat nobody
-// has renamed has its own handle as its origin.
+// mid-test as well. That is the same value the org would give.
 func inbox(handle string) string {
 	id, _ := org.DeriveAgentID(company().Name, handle)
 	return topics.AgentInbox(id)

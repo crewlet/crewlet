@@ -184,12 +184,7 @@ func (p *Profiler) observe(ctx context.Context, t Turn, s subjectMessages) (even
 	// identical value while LastCorroboratedAt moves — which reports a
 	// counterparty as freshly learned about when nothing was learned.
 	//
-	// BOTH ENDS BY THE HANDLE THEY WERE CREATED UNDER: the observer is
-	// [Turn.Seat], and a colleague is s.key rather than the address they
-	// spoke under. Keyed on either address, a rename of the observer lost
-	// every profile it held and a rename of the colleague started a second,
-	// empty profile of the same person.
-	existing, _, err := p.counterparts.Get(ctx, t.Seat(), s.key)
+	existing, _, err := p.counterparts.Get(ctx, t.Seat(), s.subject)
 	if err != nil {
 		// Degraded rather than skipped, the same trade the persist
 		// decider makes for its dedup block: a patch written without the
@@ -210,7 +205,7 @@ func (p *Profiler) observe(ctx context.Context, t Turn, s subjectMessages) (even
 
 	counted, err := p.counterparts.Record(ctx, Observation{
 		Observer: t.Seat(),
-		Subject:  s.key,
+		Subject:  s.subject,
 		Traits:   traits,
 		// THE UNIT OF WORK, not the run: the count is an unconditional
 		// increment, and a trigger that legitimately re-runs must not
@@ -317,18 +312,8 @@ func (p *Profiler) prompt(s subjectMessages, existing Profile) string {
 
 // subjectMessages is one party and everything they said this turn.
 type subjectMessages struct {
-	// subject is the party as the turn named them — the address a colleague
-	// spoke under — which is what the prompt and the event show.
 	subject Subject
-
-	// key is the same party as their profile is STORED: a colleague by the
-	// handle they were created under ([Turn.originOf]), everybody else
-	// exactly as subject. Two spellings because they answer two readers,
-	// and folding them would either show a model an address the colleague
-	// has retired or file their profile under one they will retire.
-	key Subject
-
-	bodies []string
+	bodies  []string
 }
 
 // subjectsOf groups a turn's interactions by the party who sent them.
@@ -359,26 +344,21 @@ func (p *Profiler) subjectsOf(t Turn) []subjectMessages {
 			// every one of them under one profile.
 			continue
 		}
-		key := s
-		key.Handle = t.originOf(s.Handle)
-		if key.Handle != "" && key.Handle == t.Seat() {
+		if s.Handle != "" && s.Handle == t.Seat() {
 			// A SEAT DOES NOT PROFILE ITSELF. Its own echoed post can
 			// reach it as an interaction, and a self-profile is a bag of
-			// traits nothing ever reads. Compared by ORIGIN, so a post it
-			// made under an address it has since retired is still its own.
+			// traits nothing ever reads.
 			continue
 		}
-		// GROUPED BY THE KEY, so one colleague who spoke under two of their
-		// addresses in one coalesced trigger is one party.
-		if at, ok := index[key]; ok {
+		if at, ok := index[s]; ok {
 			out[at].bodies = append(out[at].bodies, in.Body)
 			continue
 		}
 		if len(out) >= p.maxSubjects {
 			continue
 		}
-		index[key] = len(out)
-		out = append(out, subjectMessages{subject: s, key: key, bodies: []string{in.Body}})
+		index[s] = len(out)
+		out = append(out, subjectMessages{subject: s, bodies: []string{in.Body}})
 	}
 	return out
 }

@@ -109,30 +109,6 @@ func TestABoundTokenActsAsTheSeatTheChartHolds(t *testing.T) {
 	}
 }
 
-// A TOKEN FOLLOWS ITS SEAT THROUGH A RENAME.
-//
-// The row holds the handle as it was written; the chart resolves a former
-// handle to the seat it names now. Taking the row's handle raw — what the
-// lookup this replaced did — wrote every audit row under a handle nothing
-// answers to, and once the chart gave that old handle to a NEW seat, carried
-// the new seat's lead relations.
-func TestABoundTokenFollowsItsSeatThroughARename(t *testing.T) {
-	t.Parallel()
-	dir, chart := boundOps()
-	chart.seats = map[string]session.Seat{
-		sessionSeat: {Handle: "platform-director", Kind: "human", Unit: "platform"},
-	}
-	got := asOps(t, tokenGuard(t, auth.SeatBindings{Directory: dir, Chart: chart}),
-		http.MethodGet, "/agents")
-	if got.status != http.StatusOK {
-		t.Fatalf("status %d, want 200 (body %v)", got.status, got.body)
-	}
-	if got.principal.Seat != "platform-director" {
-		t.Errorf("acts as %q, want the seat's current handle platform-director",
-			got.principal.Seat)
-	}
-}
-
 // A TOKEN BOUND TO A SEAT THE CHART WILL NOT LET IT ACT AS IS REFUSED, NAMING
 // IT — exactly as a signed-in person bound there is.
 //

@@ -24,9 +24,9 @@ import (
 // a seat that LEAVES the company's agent seats — removed from the chart, or
 // made a person's — is a leak: nothing consumes its mailbox again, nothing
 // deletes it, and every event still addressed to the seat is kept for the
-// life of the deployment. No other seat ever attaches to it: the mailbox is
-// named by an id derived from the handle the seat was created under, which
-// the chart never issues twice (ADR-0026).
+// life of the deployment. The mailbox is named by the agent id derived from
+// the seat's handle (ADR-0013), so a seat created again under the same handle
+// attaches to it, and one under any other handle never does.
 //
 // So a mailbox is retired once its seat has been absent from the active
 // revision for [MailboxRetirementGrace]. The pieces, and why each is shaped

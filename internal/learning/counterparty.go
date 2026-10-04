@@ -21,11 +21,7 @@ import (
 // NULL here would make every such row distinct from every other, which is the
 // exact opposite of what the key is for.
 type Subject struct {
-	// Handle is the seat, when the counterparty resolved to one — STORED as
-	// the handle that seat was created under, like every seat this package
-	// keys on (see the package doc), so a colleague's rename does not start
-	// a second, empty profile of the same person. A caller rendering a
-	// stored profile resolves it back to the colleague's current handle.
+	// Handle is the seat's handle, when the counterparty resolved to one.
 	Handle string
 	// ExternalID and Platform identify an unmapped external human.
 	ExternalID string
@@ -45,8 +41,7 @@ func (s Subject) Valid() bool {
 
 // Profile is what one observer has learned about one subject.
 type Profile struct {
-	// Observer is the observing seat's ORIGIN — the handle it was created
-	// under, not the one it answers to now. See the package doc.
+	// Observer is the observing seat's handle.
 	Observer string
 	Subject  Subject
 
@@ -86,8 +81,8 @@ func NewCounterparties(db *store.DB) *Counterparties { return &Counterparties{db
 
 // Observation is one interaction's worth of what was learned.
 type Observation struct {
-	// Observer and Subject are keyed as [Profile]'s are: a seat by the
-	// handle it was created under.
+	// Observer and Subject are keyed as [Profile]'s are: a seat by its
+	// handle.
 	Observer string
 	Subject  Subject
 
@@ -266,12 +261,6 @@ func (c *Counterparties) Get(ctx context.Context, observer string, subject Subje
 
 // List returns every profile one observer holds, most recently updated first.
 //
-// THE OBSERVER IS THE SEAT'S ORIGIN — the handle it was created under — which
-// is what every writer keys `observer_handle` on (see the package doc). A
-// reader that passed the handle the seat answers to now would list nothing
-// for a renamed seat, and a reader that passed a retired one would list the
-// profiles of a seat that no longer holds it.
-//
 // THE ONLY MEMORY OBJECT THAT IS ABOUT SOMEBODY ELSE. A diary is what a seat
 // thought, an episode is what it did, a skill is what it learnt to do — and a
 // counterparty profile is what it learnt about a person it works with. It was
@@ -349,8 +338,7 @@ func (c *Counterparties) List(ctx context.Context, observer string, limit int) (
 
 // Count is how many people one seat holds a profile of — the set
 // [Counterparties.List] returns at most [MaxProfilesListed] of, so a listing
-// that was cut can say what it was cut from. Asked by the seat's ORIGIN, for
-// [Counterparties.List]'s reason.
+// that was cut can say what it was cut from. Asked by the seat's handle.
 func (c *Counterparties) Count(ctx context.Context, observer string) (int, error) {
 	if c == nil || c.db == nil || observer == "" {
 		return 0, nil

@@ -308,10 +308,8 @@ type SandboxAnswerGiven struct {
 	// Agent is the seat that run belongs to, by its derived id, and its
 	// inbox is the one this travels on (topics.AgentInbox) — carried in
 	// the payload as well so the dispatcher that routes it can refuse one
-	// that reached the wrong seat. The ID and never the handle, because a
-	// handle is an address a rename moves (ADR-0026): addressed by it, an
-	// answer given while its seat was renamed reached nobody, and one
-	// given after a hire took the freed handle reached a stranger.
+	// that reached the wrong seat. The id, because the inbox is named by
+	// it (ADR-0013).
 	Agent string `json:"agent_id"`
 
 	// AgentHandle is the seat's handle when the answer was given, for a

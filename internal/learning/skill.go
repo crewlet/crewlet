@@ -130,10 +130,7 @@ const (
 type Skill struct {
 	ID string
 
-	// AgentHandle is the owning seat's ORIGIN — the handle it was created
-	// under — so a rename leaves the catalogue where the seat looks. A
-	// surface showing it resolves it to the seat's current handle first.
-	// See the package doc.
+	// AgentHandle is the owning seat's handle. See the package doc.
 	AgentHandle string
 	Name        string
 
@@ -207,7 +204,7 @@ type SkillVersion struct {
 	ID      string
 	SkillID string
 
-	// AgentHandle is the owning seat's origin, as on [Skill].
+	// AgentHandle is the owning seat's handle, as on [Skill].
 	AgentHandle      string
 	Name             string
 	Description      string

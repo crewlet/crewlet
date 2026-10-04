@@ -50,8 +50,7 @@ type Chart interface {
 
 // Seat is what the chart says about one seat, as narrowly as this needs it.
 type Seat struct {
-	// Handle is the seat as it is addressed NOW, which is what an author
-	// column records — not the identity the binding named it by.
+	// Handle is the seat's handle, which is what an author column records.
 	Handle string
 
 	// Kind is agent or human. A person may only be bound to a human seat:
@@ -205,12 +204,6 @@ func ResolveSeat(ctx context.Context, chart Chart, person PersonRow) Binding {
 	// so no amount of waiting changes either, and 503 is reserved for what
 	// waiting can fix.
 	detail := fmt.Sprintf("seat %q", person.Seat)
-	if found && seat.Handle != "" && seat.Handle != person.Seat {
-		// THE NAME AN ADMINISTRATOR KNOWS IT BY, beside the identity the
-		// binding holds: a refusal naming only the handle a seat was
-		// created under sends somebody looking for a seat renamed long ago.
-		detail = fmt.Sprintf("seat %q (created as %q)", seat.Handle, person.Seat)
-	}
 	if !found {
 		return Binding{Row: SeatRowGone, Detail: detail +
 			" is not a seat of the company this node runs"}

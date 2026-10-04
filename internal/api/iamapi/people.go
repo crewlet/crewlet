@@ -56,9 +56,8 @@ type personView struct {
 	// do not recognise.
 	Reserved bool `json:"reserved,omitempty"`
 
-	// Seat is the bound seat's IDENTITY — the handle it was created under,
-	// which is what a binding records (ADR-0027) and which always resolves to
-	// the seat however it has been renamed.
+	// Seat is the bound seat's handle, which is what a binding records
+	// (ADR-0013).
 	Seat string `json:"seat,omitempty"`
 
 	Grants []iam.Grant `json:"grants,omitempty"`

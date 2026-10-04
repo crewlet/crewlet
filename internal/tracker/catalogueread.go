@@ -79,14 +79,6 @@ type CatalogueQuery struct {
 
 // Catalogue answers what a task may be and what it may carry.
 func (r *Reader) Catalogue(ctx context.Context, q CatalogueQuery) (CatalogueAnswer, error) {
-	call := r.pinned()
-	got, err := call.catalogue(ctx, identified(call.chart, q))
-	return shown(call.chart, got), err
-}
-
-// catalogue is [Reader.Catalogue] once every person the question names is their seat's
-// identity — see people.go.
-func (r *Reader) catalogue(ctx context.Context, q CatalogueQuery) (CatalogueAnswer, error) {
 	if q.Level == "" {
 		return CatalogueAnswer{}, fmt.Errorf("tracker: this catalogue read " +
 			"names no level — a surface resolves an absent read_level to its " +

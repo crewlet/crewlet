@@ -72,8 +72,7 @@ import (
 // does not hold as a human seat.
 type BindingResidue struct {
 	// Person is the directory id, Login the name the dashboard prints and
-	// Seat the seat their row names, by its IDENTITY — the handle it was
-	// created under (ADR-0027).
+	// Seat the seat their row names, by its handle.
 	Person, Login, Seat string
 
 	// Detail is the sentence every surface prints: which seat, why, and

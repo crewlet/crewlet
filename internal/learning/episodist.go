@@ -179,10 +179,7 @@ func (w *Episodist) episodeOf(t Turn) Episode {
 		started = ended.Add(-time.Duration(t.Event.DurationMS) * time.Millisecond)
 	}
 	return Episode{
-		ID: w.newID(),
-		// THE HANDLE THE SEAT WAS CREATED UNDER, not the one on the event:
-		// keyed on the address, a rename left every episode before it
-		// where the seat's own recall no longer looks. See [Turn.Seat].
+		ID:     w.newID(),
 		Handle: t.Seat(),
 		Role:   t.Event.RoleName,
 		// THE ITEM THE TURN WAS CHARGED TO, as its backend-qualified

@@ -74,8 +74,8 @@ func roster(company func() (*config.Company, *org.Organization)) []map[string]an
 			//
 			// The agent id rides along under its own name for the callers
 			// that genuinely need it: the live overlay is merged onto the
-			// row by it (a handle moves with a rename, a name is shared),
-			// and a budget scope is keyed by it.
+			// row by it, as the projection keys seats, and a budget scope is
+			// keyed by it.
 			"id":       handle,
 			"agent_id": id.String(),
 			"role":     role.Name,

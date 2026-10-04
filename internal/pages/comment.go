@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -39,7 +38,7 @@ type NewComment struct {
 
 	// Mentions are handles this comment named. Each is woken whether or
 	// not they watch, and each is subscribed.
-	Mentions []string `person:"seat"`
+	Mentions []string
 
 	// TurnKey makes a comment made from a turn idempotent: a re-run turn
 	// posts once.
@@ -73,17 +72,6 @@ type NewComment struct {
 
 // Comment adds one remark to a page.
 func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
-	in NewComment) (Comment, Written, error) {
-
-	call := s.pinned()
-	comment, written, err := call.comment(ctx, identified(call.chart, actor), pageID,
-		identified(call.chart, in))
-	return shown(call.chart, comment), shown(call.chart, written), err
-}
-
-// comment is [Store.Comment] once the actor and everybody the remark mentions
-// are their seats' identities — see people.go.
-func (s *Store) comment(ctx context.Context, actor Actor, pageID string,
 	in NewComment) (Comment, Written, error) {
 
 	if err := actor.validate(); err != nil {
@@ -166,17 +154,6 @@ func (s *Store) comment(ctx context.Context, actor Actor, pageID string,
 func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 	commentID, body string) (Comment, Written, error) {
 
-	call := s.pinned()
-	comment, written, err := call.editComment(ctx, identified(call.chart, actor),
-		pageID, commentID, body)
-	return shown(call.chart, comment), shown(call.chart, written), err
-}
-
-// editComment is [Store.EditComment] once the actor is its seat's identity,
-// which is what a remark's author is compared with. See people.go.
-func (s *Store) editComment(ctx context.Context, actor Actor, pageID,
-	commentID, body string) (Comment, Written, error) {
-
 	if err := actor.validate(); err != nil {
 		return Comment{}, Written{}, err
 	}
@@ -228,7 +205,7 @@ func (s *Store) editComment(ctx context.Context, actor Actor, pageID,
 					"comment %s was written by %s and only its author may edit "+
 						"it — a remark somebody else can rewrite is a remark "+
 						"attributed to a person who did not make it",
-					commentID, seatnames.CurrentOf(s.chart, held.Author))
+					commentID, held.Author)
 			}
 			if held.Body == body {
 				out = held
@@ -293,17 +270,6 @@ type CommentAuthority struct {
 func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
 	commentID string, authority CommentAuthority) (Written, error) {
 
-	call := s.pinned()
-	got, err := call.removeComment(ctx, identified(call.chart, actor), pageID,
-		commentID, authority)
-	return shown(call.chart, got), err
-}
-
-// removeComment is [Store.RemoveComment] once the actor is its seat's
-// identity, which is what a remark's author is compared with.
-func (s *Store) removeComment(ctx context.Context, actor Actor, pageID,
-	commentID string, authority CommentAuthority) (Written, error) {
-
 	if err := actor.validate(); err != nil {
 		return Written{}, err
 	}
@@ -345,7 +311,7 @@ func (s *Store) removeComment(ctx context.Context, actor Actor, pageID,
 					"comment %s was written by %s — a remark is taken down by "+
 						"whoever made it, and by nobody else without the "+
 						"deployment grant", commentID,
-					seatnames.CurrentOf(s.chart, held.Author))
+					held.Author)
 			}
 			scope := ScopeSet{Subject: true, Container: head.Container}
 			notify := s.notifyOf(true, ChangeCommentEdited, head, "", nil)
@@ -453,13 +419,6 @@ const commentNamespace = "crewlet.pages.comment"
 // wrote a comment reads the thread back to render it — and routing that
 // through the reader would mean two seams for one question.
 func (s *Store) Thread(ctx context.Context, pageID string) ([]Comment, error) {
-	call := s.pinned()
-	got, err := call.thread(ctx, pageID)
-	return shown(call.chart, got), err
-}
-
-// thread is [Store.Thread] as the rows hold it.
-func (s *Store) thread(ctx context.Context, pageID string) ([]Comment, error) {
 	var out []Comment
 	err := s.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
@@ -494,22 +453,11 @@ func (s *Store) thread(ctx context.Context, pageID string) ([]Comment, error) {
 // being both "this node has applied nothing for this page" and "nobody
 // answered". See [Store.headAt] for which number it is and why.
 func (s *Store) Page(ctx context.Context, pageID string) (Page, uint64, error) {
-	call := s.pinned()
-	page, revision, err := call.headAt(ctx, pageID)
-	return shown(call.chart, page), revision, err
+	return s.headAt(ctx, pageID)
 }
 
 // Revision is one immutable body.
 func (s *Store) Revision(ctx context.Context, pageID string, version int) (
-	Revision, error) {
-
-	call := s.pinned()
-	got, err := call.revision(ctx, pageID, version)
-	return shown(call.chart, got), err
-}
-
-// revision is [Store.Revision] as the rows hold it.
-func (s *Store) revision(ctx context.Context, pageID string, version int) (
 	Revision, error) {
 
 	var out Revision

@@ -2521,8 +2521,7 @@ var ErrOperationReused = errors.New("iamdomain: that operation key already " +
 // an invitation on the same address that confers other grants or another
 // seat was issued by a different request that reused the key — and
 // answering it as this one's would hand out a link to what somebody else
-// offered. The seat is compared by its IDENTITY, so a retry naming the seat by
-// a handle it was renamed to since is still the same request.
+// offered. The seat is compared by its handle.
 func (w *Writer) issuedBefore(ctx context.Context, tx *sql.Tx, id, blind, seat string,
 	in InviteMint, expiresAt *time.Time) error {
 
@@ -2635,10 +2634,8 @@ type InviteMint struct {
 	// offered.
 	Grants []iam.Grant
 
-	// Seat is a seat redeeming it BINDS the new person to, by any address
-	// the chart answers to it by, or empty. It must be a human seat nobody
-	// holds; the invitation records its IDENTITY, so a rename between the
-	// issue and the redemption binds the same seat. See [Writer.Invite].
+	// Seat is a seat redeeming it BINDS the new person to, by its handle,
+	// or empty. It must be a human seat nobody holds. See [Writer.Invite].
 	Seat string
 
 	// ExpiresAt is when it stops being redeemable. REQUIRED.

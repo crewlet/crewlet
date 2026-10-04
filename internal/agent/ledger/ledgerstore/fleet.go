@@ -40,12 +40,7 @@ var log = logging.Get("agent.ledgerstore")
 
 // Completions answers "has this trigger already been worked?".
 //
-// THE SEAT IS NAMED BY THE HANDLE IT WAS CREATED UNDER (ADR-0026), never by the
-// one it answers to now: a trigger worked before a rename is redelivered after
-// it under the new handle, and keyed on that it found nothing and ran again.
-// The engine's dispatcher resolves it ([engine.Dispatcher.Origin]); the column
-// is still a handle, and for every seat never renamed its origin IS its
-// handle, so every record already written is keyed correctly.
+// THE SEAT IS NAMED BY ITS HANDLE, which is immutable (ADR-0013).
 type Completions interface {
 	// Worked returns the subset of keys already recorded for this seat.
 	//

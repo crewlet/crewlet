@@ -49,11 +49,8 @@ import (
 // # Keyed on the seat's ID
 //
 // Every pause, every hold and every question here is about a seat's derived
-// agent id, never its handle (ADR-0026): the record is keyed on it, the
-// mailbox a hold sits on is named by it, and the scheduler and the dispatcher
-// ask by it. Keyed on the handle, a rename read as a resume — the record named
-// an address the seat no longer answered to — and a hire on the freed handle
-// arrived paused by somebody who had paused a different colleague. The handle
+// agent id (ADR-0013): the record is keyed on it, the mailbox a hold sits on is
+// named by it, and the scheduler and the dispatcher ask by it. The handle
 // appears only in log lines, resolved from the running company.
 //
 // # Who has to agree on it
@@ -459,9 +456,7 @@ func (e *Engine) liftPauseHold(ctx context.Context, seat uuid.UUID, why string) 
 // the version this node read, so one wins and the rest find it gone, which the
 // watch then tells every copy.
 //
-// ASKED BY THE SEAT'S ID, which a rename does not move, so a renamed seat
-// keeps its pause; a seat removed and a new one hired under the freed handle
-// have different ids, so the hire never inherits the leaver's pause.
+// ASKED BY THE SEAT'S ID, the agent id derived from its handle (ADR-0013).
 //
 // CALLED WHEREVER THE ROSTER CAN CHANGE, which is every published company
 // ([Engine.followCompany]) — and ONLY ON THE FLEET'S CURRENT ONE

@@ -365,27 +365,26 @@ func TestAUnitSeatHasAHandleInTheRollup(t *testing.T) {
 	}
 }
 
-// A SEAT IS ASKED FOR BY THE HANDLE IT ANSWERS TO NOW, and answered from the
-// days filed under the id derived from the handle it was CREATED under. Asked
-// by deriving an id from the handle as typed — which is what `seat=` did — a
-// renamed seat named an id no row was ever filed under, and its spend read as
-// a seat that had done nothing.
-//
-// Mutation: derive the id from `seat=` as typed, and chief's day is lost.
-func TestASeatIsAskedByTheHandleItAnswersToNow(t *testing.T) {
+// A SEAT IS ASKED FOR BY ITS HANDLE, and answered from the days filed under the
+// agent id derived from it (ADR-0013).
+func TestASeatIsAskedByItsHandle(t *testing.T) {
 	t.Parallel()
 	f := newSpendFixture(t)
-	// Recorded under ceo, the handle the seat was created under.
 	f.day("node-a", "2026-09-25", "ceo", 1, 0, spent("execute", "sonnet", 40))
 	sources := f.sources()
-	sources.Company = renamedRoster()
-	got := rollupOf(t, registryOver(t, sources), map[string]any{"days": 7, "seat": "chief"})
+	roster := &org.Organization{Name: "Acme", Roles: []*org.Role{
+		{Name: "Chief", DeclaredHandle: "ceo"},
+	}}
+	sources.Company = func() (*config.Company, *org.Organization) {
+		return &config.Company{Name: "Acme"}, roster
+	}
+	got := rollupOf(t, registryOver(t, sources), map[string]any{"days": 7, "seat": "ceo"})
 	if got.AgentID != f.agentID("ceo") || got.Totals.TotalTokens != 40 {
-		t.Errorf("seat=chief answered agent %q and %d tokens, want ceo's id and its 40",
+		t.Errorf("seat=ceo answered agent %q and %d tokens, want ceo's id and its 40",
 			got.AgentID, got.Totals.TotalTokens)
 	}
-	if got.Seat != "chief" {
-		t.Errorf("the rollup names the seat %q, want the handle it answers to now", got.Seat)
+	if got.Seat != "ceo" {
+		t.Errorf("the rollup names the seat %q, want its handle", got.Seat)
 	}
 	// A PERSON'S SEAT IS REFUSED rather than matched: the engine runs no
 	// turn for a human, so an empty answer would read as one who did

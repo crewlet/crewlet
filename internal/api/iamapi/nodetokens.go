@@ -50,8 +50,7 @@ type NodeToken struct {
 	Row TokenRow `json:"row"`
 
 	// Person, Stage and Seat are the row's, where there is one: the seat
-	// by its IDENTITY, the handle it was created under, as every other
-	// binding here is named.
+	// by its handle, as every other binding here is named.
 	Person string    `json:"person,omitempty"`
 	Stage  iam.Stage `json:"stage,omitempty"`
 	Seat   string    `json:"seat,omitempty"`

@@ -59,7 +59,7 @@ func eachAuthoredSeat(c *config.Company, visit func(*config.Role)) {
 // seatLease is the resource name of a seat's lease in this company.
 //
 // A SEAT LEASE IS NAMED BY THE SEAT'S ID, which a fixture cannot write out:
-// the derivation takes the company's own name and the seat's origin handle,
+// the derivation takes the company's own name and the seat's handle,
 // so a case seeding a held seat has to ask the company rather than invent one.
 // A lease under an invented id is a lease for nobody, and the row it produces
 // reads exactly like a real one.

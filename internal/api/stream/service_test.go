@@ -76,10 +76,9 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 		opts.Holders = blindDirectory{}
 	}
 	if opts.SeatOf == nil {
-		// A PUBLISHED COMPANY HOLDING EVERY SEAT, under the handle it was
-		// created under.
-		opts.SeatOf = func(name string) (stream.SeatState, bool) {
-			return stream.SeatState{Origin: name, Handle: name, Human: true}, true
+		// A PUBLISHED COMPANY HOLDING EVERY SEAT as a human seat.
+		opts.SeatOf = func(string) (stream.SeatState, bool) {
+			return stream.SeatState{Human: true}, true
 		}
 	}
 	if opts.Placement == nil {

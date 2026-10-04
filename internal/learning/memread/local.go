@@ -65,11 +65,9 @@ type Profiles interface {
 // Stores is this node's own copy of seats' memory. A nil store answers its
 // half empty, which is how a node that keeps no such half says so.
 //
-// KEYED AS EACH HALF IS WRITTEN (ADR-0026): the diary and the onboarding
-// marker on the seat's id, and the episodes, skills, profiles and
-// conversation ledger on the handle it was created under — both off the
-// [Seat] the asker resolved, so nothing here derives an identity from a
-// handle that may have been renamed.
+// KEYED AS EACH HALF IS WRITTEN: the diary and the onboarding marker on the
+// seat's id, and the episodes, skills, profiles and conversation ledger on its
+// handle — both off the [Seat] the asker resolved.
 type Stores struct {
 	Diary         *learning.Diary
 	Episodes      *learning.Episodes
@@ -195,9 +193,8 @@ type SkillRow struct {
 
 // ProfileRow is what one seat learned about one colleague.
 //
-// A COLLEAGUE IS NAMED BY THE HANDLE IT WAS CREATED UNDER ([SubjectRow.Handle]),
-// as the profile was stored: the asker relabels it through its own reading of
-// the chart, because the node answering may hold a different one.
+// A COLLEAGUE IS NAMED BY THEIR HANDLE ([SubjectRow.Handle]), as the profile
+// was stored.
 //
 // BOTH INSTANTS, because they measure different cadences: `last_updated_at`
 // moves on every interaction and `last_corroborated_at` only when the traits
@@ -292,18 +289,14 @@ func (s *Stores) Memory(ctx context.Context, seat Seat, limit int) (Memory, erro
 		}
 	}
 	if s.Episodes != nil {
-		episodes, err := s.Episodes.Recent(ctx, seat.Origin, limit)
+		episodes, err := s.Episodes.Recent(ctx, seat.Handle, limit)
 		if err != nil {
 			return Memory{}, err
 		}
 		for _, e := range episodes {
-			// THE SEAT'S OWN EPISODE, shown under the handle it answers
-			// to now rather than the one the row is keyed by.
-			row := episodeRow(e)
-			row.AgentHandle = seat.Handle
-			out.Episodes = append(out.Episodes, row)
+			out.Episodes = append(out.Episodes, episodeRow(e))
 		}
-		if out.EpisodesTotal, err = s.Episodes.Count(ctx, seat.Origin); err != nil {
+		if out.EpisodesTotal, err = s.Episodes.Count(ctx, seat.Handle); err != nil {
 			return Memory{}, err
 		}
 	}
@@ -312,12 +305,12 @@ func (s *Stores) Memory(ctx context.Context, seat Seat, limit int) (Memory, erro
 		// describe the same set: archived hidden, stale shown — a stale
 		// skill still works and still revives on use.
 		opts := learning.ListOptions{}
-		total, err := s.Skills.Count(ctx, seat.Origin, opts)
+		total, err := s.Skills.Count(ctx, seat.Handle, opts)
 		if err != nil {
 			return Memory{}, err
 		}
 		opts.Limit = limit
-		skills, err := s.Skills.List(ctx, seat.Origin, opts)
+		skills, err := s.Skills.List(ctx, seat.Handle, opts)
 		if err != nil {
 			return Memory{}, err
 		}
@@ -327,7 +320,7 @@ func (s *Stores) Memory(ctx context.Context, seat Seat, limit int) (Memory, erro
 		}
 	}
 	if s.Profiles != nil {
-		profiles, err := s.Profiles.List(ctx, seat.Origin, limit)
+		profiles, err := s.Profiles.List(ctx, seat.Handle, limit)
 		if err != nil {
 			return Memory{}, fmt.Errorf("memread: read what %s learned about its "+
 				"colleagues: %w", seat.Handle, err)
@@ -335,7 +328,7 @@ func (s *Stores) Memory(ctx context.Context, seat Seat, limit int) (Memory, erro
 		for _, p := range profiles {
 			out.Counterparties = append(out.Counterparties, profileRow(p))
 		}
-		if out.CounterpartiesTotal, err = s.Profiles.Count(ctx, seat.Origin); err != nil {
+		if out.CounterpartiesTotal, err = s.Profiles.Count(ctx, seat.Handle); err != nil {
 			return Memory{}, err
 		}
 	}
@@ -364,7 +357,7 @@ func (s *Stores) Threads(ctx context.Context, seat Seat, conversation string, li
 		return out, nil
 	}
 	limit = ThreadPage(limit)
-	threads, err := s.Conversations.Threads(ctx, seat.Origin, limit)
+	threads, err := s.Conversations.Threads(ctx, seat.Handle, limit)
 	if err != nil {
 		return Threads{}, err
 	}
@@ -372,11 +365,11 @@ func (s *Stores) Threads(ctx context.Context, seat Seat, conversation string, li
 		out.Conversations = append(out.Conversations,
 			ThreadRow{Key: t.Key, Turns: t.Entries, LastAt: t.LastAt})
 	}
-	if out.ConversationsTotal, err = s.Conversations.ThreadCount(ctx, seat.Origin); err != nil {
+	if out.ConversationsTotal, err = s.Conversations.ThreadCount(ctx, seat.Handle); err != nil {
 		return Threads{}, err
 	}
 	if conversation != "" {
-		entries, err := s.Conversations.History(ctx, seat.Origin, conversation, limit)
+		entries, err := s.Conversations.History(ctx, seat.Handle, conversation, limit)
 		if err != nil {
 			return Threads{}, err
 		}

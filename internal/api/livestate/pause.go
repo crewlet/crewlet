@@ -52,8 +52,7 @@ func (p *Paused) clone() *Paused {
 
 // SeedPause is one paused seat as the coordination record holds it, named by
 // the AGENT ID this projection keys seats by — which is what the record itself
-// is keyed on (coord.SeatPause.Seat), so a pause follows its seat through a
-// rename rather than staying with the handle it was taken under.
+// is keyed on (coord.SeatPause.Seat).
 type SeedPause struct {
 	AgentID string
 	Paused  Paused

@@ -18,8 +18,8 @@ import (
 // whatever case — and `filed_unit` is written once and never rewritten. So a
 // tool that stored the argument verbatim left one team's work under as many
 // spellings as its colleagues have ways of writing it, each of them a filter
-// the others miss, and the id a founder added to survive a rename went
-// unwritten by the surface that files most of the company's work.
+// the others miss, and the id a founder added to survive a corrected name
+// went unwritten by the surface that files most of the company's work.
 func TestACreateStoresTheUnitsOwnKey(t *testing.T) {
 	t.Parallel()
 	for _, typed := range []string{"platform", "Platform", "PLAT", "plat"} {
@@ -67,8 +67,8 @@ func TestACreateRefusesAUnitTheChartDoesNotHave(t *testing.T) {
 }
 
 // A RE-ROUTE STORES THE KEY FOR THE SAME REASON: the wake resolves the stored
-// value back to a lead, and a spelling the chart did not choose is one a
-// rename walks away from.
+// value back to a lead, and a spelling the document did not choose is one a
+// corrected name walks away from.
 func TestARerouteStoresTheUnitsOwnKey(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()

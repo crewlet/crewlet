@@ -48,7 +48,7 @@ type ProjectEdit struct {
 
 	// DefaultAssignee is who unassigned work in this project lands on. The
 	// empty string is a real setting: it means triage.
-	DefaultAssignee *string `person:"seat"`
+	DefaultAssignee *string
 
 	// TargetDate is when the lead means the project to be finished: a
 	// calendar date, or an instant, which is stored as the day it falls on
@@ -107,12 +107,7 @@ type ProjectAuthority struct {
 func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 	edit ProjectEdit, authority ProjectAuthority) (WriteResult, error) {
 
-	// ONE READING OF THE CHART for every name this write resolves and
-	// every name it is worded with — see [Writer.pinned].
-	w = w.pinned()
 	key = ProjectKey(key)
-	// THE DEFAULT ASSIGNEE BY THEIR IDENTITY — see people.go.
-	edit = identified(w.chart(), edit)
 	switch {
 	case key == "":
 		return WriteResult{}, invalid("a project edit names no project")

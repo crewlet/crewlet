@@ -142,7 +142,7 @@ type EventRecord struct {
 	WorkKey string `json:"work_key,omitempty"`
 
 	// AgentID is the agent seat the event is about, when it is about one:
-	// the derived id (ADR-0026) that neither a rename nor a namesake moves.
+	// the derived id (ADR-0013), which a namesake does not share.
 	// Named on the row rather than left for a reader to dig out of Tags
 	// because a feed narrowed to one seat filters its LIVE rows the same way
 	// the store filtered these, and livestate.FeedRow carries it under the
@@ -245,12 +245,12 @@ type ListQuery struct {
 	ChannelID string
 
 	// AgentID selects the events about ONE agent seat, by the id every node
-	// derives for it ([org.DeriveAgentID], ADR-0026) — the promoted and
+	// derives for it ([org.DeriveAgentID], ADR-0013) — the promoted and
 	// indexed `agent_id` column. It is what a seat's own "all activity" view
 	// asks by: it used to ask by Actor with the seat's NAME, which two seats
-	// may share and a rename changes, so a namesake's events were listed as
-	// this seat's. NOT [ListQuery.RelatedAgent], which also matches the
-	// events that merely name the seat as a party and pulls in their traces.
+	// may share, so a namesake's events were listed as this seat's. NOT
+	// [ListQuery.RelatedAgent], which also matches the events that merely
+	// name the seat as a party and pulls in their traces.
 	AgentID string
 
 	// Suspended selects by whether a completion record PARKED its turn — the
@@ -506,10 +506,9 @@ const partyInsertSQL = `
 INSERT INTO crewlet_event_parties (party, event_time, event_id) VALUES (?, ?, ?)
 ON CONFLICT (party, event_time, event_id) DO NOTHING`
 
-// SeatResolver answers the AGENT id of the seat a handle names — any handle it
-// answers to: its current one, the one it was created under, or one it has
-// given up — and false for a handle no agent seat answers to, which is a human
-// seat, a stranger or nobody.
+// SeatResolver answers the AGENT id of the seat a handle names, and false for a
+// handle no agent seat answers to, which is a human seat, a stranger or
+// nobody.
 type SeatResolver func(handle string) (agentID string, ok bool)
 
 // SetEventSeats installs what the event log resolves a handle an event names
@@ -519,10 +518,9 @@ type SeatResolver func(handle string) (agentID string, ok bool)
 // # Why the store is handed it
 //
 // Because it cannot compute the answer. An agent id is a UUIDv5 over the
-// company's name and the handle the seat was created under (ADR-0026), and
-// which seat a handle names — after a rename, after a retired handle was
-// taken — is the org chart's to say. Only a process holding the chart can say
-// it, and the engine installs one reading its live epoch, so the row is keyed
+// company's name and the seat's handle (ADR-0013), and whether a handle names
+// an agent seat at all is the org's to say. Only a process holding the org can
+// say it, and the engine installs one reading its live epoch, so the row is keyed
 // on what the chart said when the event was written.
 //
 // A handle that is not open takes it as nothing, like every other setter here:
@@ -555,9 +553,8 @@ func (d *DB) eventSeatsNow() SeatResolver {
 //
 // The index was keyed on NAMES — the actor, the `agent_role` tag and the
 // participant tags as they came — and a seat's name is prose two seats may
-// share: a seat's related events listed every namesake's work as its own,
-// and a retired handle kept answering for whichever seat took it next. An
-// agent id is one seat's for the life of the company, so it is what the index
+// share: a seat's related events listed every namesake's work as its own. An
+// agent id names exactly one seat, so it is what the index
 // holds: the event's own `agent_id`, and each seat a participant tag names,
 // resolved through seats.
 //

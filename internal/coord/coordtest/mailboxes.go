@@ -205,7 +205,7 @@ var mailboxCases = []fleetCase{{
 		if h.deleteMailbox("swe", stored.Version) {
 			h.t.Error("a second delete of one version reported success")
 		}
-		// A seat added again under the handle of a retired one.
+		// A seat added again under the handle of a removed one.
 		again, created := h.createMailbox(seat("swe"))
 		if !created {
 			h.t.Fatal("a handle whose record was deleted cannot be registered again")

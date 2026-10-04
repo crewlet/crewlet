@@ -149,8 +149,7 @@ func leadsAnyoneInChart(o *org.Organization, actor string) bool {
 
 // leadsAUnit reports whether role is some unit's effective lead, BY THE SEAT
 // [org.Organization.EffectiveLead] resolves rather than by the handle a unit
-// wrote — so a unit naming a handle the seat has since been renamed from still
-// counts, exactly as it does in [leadsInChart].
+// wrote, exactly as it does in [leadsInChart].
 func leadsAUnit(o *org.Organization, role *org.Role) bool {
 	for unit := range o.AllUnits() {
 		if o.EffectiveLead(unit) == role {

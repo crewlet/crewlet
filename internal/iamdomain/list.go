@@ -61,8 +61,8 @@ type PersonRow struct {
 	NameSealed  []byte
 	EmailSealed []byte
 
-	// Seat is the IDENTITY of the seat this person is bound to — the handle
-	// it was created under, which no rename moves (ADR-0027).
+	// Seat is the handle of the seat this person is bound to, which is
+	// immutable (ADR-0013).
 	Seat string
 
 	Grants []iam.Grant
@@ -636,8 +636,7 @@ type SeatBinding struct {
 	// Person is the directory id, Login the name the dashboard prints.
 	Person, Login string
 
-	// Seat is the seat's IDENTITY — the handle it was created under, which
-	// no rename moves (ADR-0027).
+	// Seat is the seat's handle, which is immutable (ADR-0013).
 	Seat string
 
 	// Stage is the bound person's stage, from the column; empty for a

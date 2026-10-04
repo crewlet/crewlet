@@ -51,7 +51,7 @@ type PageChange struct {
 	Container string `json:"container,omitempty"`
 
 	Kind      ChangeKind `json:"kind"`
-	Actor     string     `json:"actor,omitempty" person:"seat"`
+	Actor     string     `json:"actor,omitempty"`
 	ActorKind string     `json:"actor_kind,omitempty"`
 
 	// OperatorID is the CREDENTIAL the change was made through, recorded
@@ -135,12 +135,9 @@ type PageActivityQuery struct {
 	// and one audit surface reads both.
 	ActorKinds []AuthorKind
 
-	// Actor narrows to one writer's changes — the company feed's `actor=`.
-	// A SEAT is asked by the handle it answers to now and matched on its
-	// identity, which is what every change records ([identified]): matched
-	// on the handle as typed, a renamed seat's own changes — every one
-	// recorded under the handle it was created as — were not its own.
-	Actor string `person:"seat"`
+	// Actor narrows to one writer's changes — the company feed's `actor=`,
+	// a seat by its handle.
+	Actor string
 
 	// Since is a lower bound as a composed log position.
 	Since uint64
@@ -156,17 +153,6 @@ type PageActivityQuery struct {
 
 // Activity answers a page of what has happened to the company's pages.
 func (r *Reader) Activity(ctx context.Context, q PageActivityQuery) (PageActivity, error) {
-	call := r.pinned()
-	// TRIMMED BEFORE IT IS RESOLVED, or a padded handle would miss the seat
-	// and be matched as a name nobody answers to.
-	q.Actor = strings.TrimSpace(q.Actor)
-	got, err := call.activity(ctx, identified(call.chart, q))
-	return shown(call.chart, got), err
-}
-
-// activity is [Reader.Activity] once the actor it filters on is their seat's
-// identity — see people.go.
-func (r *Reader) activity(ctx context.Context, q PageActivityQuery) (PageActivity, error) {
 	if q.Freshness.Level == "" {
 		return PageActivity{}, fmt.Errorf("pages: this activity read names no " +
 			"level — a surface resolves an absent read_level to its own " +
@@ -342,15 +328,6 @@ func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 // applier wrote into them. A revision has no other identity than its page and
 // its number.
 func (r *Reader) Revision(ctx context.Context, pageID string, version int,
-	fresh statelog.Freshness) (Revision, bool, error) {
-
-	call := r.pinned()
-	got, held, err := call.revisionAt(ctx, pageID, version, fresh)
-	return shown(call.chart, got), held, err
-}
-
-// revisionAt is [Reader.Revision] as the rows hold it.
-func (r *Reader) revisionAt(ctx context.Context, pageID string, version int,
 	fresh statelog.Freshness) (Revision, bool, error) {
 
 	if fresh.Level == "" {

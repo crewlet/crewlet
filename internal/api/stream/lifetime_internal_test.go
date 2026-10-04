@@ -81,12 +81,11 @@ type served struct {
 }
 
 // newDecidingService builds a service whose watches are decided through chart,
-// over a published company that holds every seat as a human seat under the
-// handle it was created under.
+// over a published company that holds every seat as a human seat.
 func newDecidingService(t *testing.T, chart authz.Chart) *Service {
 	t.Helper()
-	return newServiceOver(t, chart, func(name string) (SeatState, bool) {
-		return SeatState{Origin: name, Handle: name, Human: true}, true
+	return newServiceOver(t, chart, func(string) (SeatState, bool) {
+		return SeatState{Human: true}, true
 	})
 }
 
@@ -554,23 +553,22 @@ func TestAnEndTheGuardStillServesIsDecidedAgain(t *testing.T) {
 
 // A PUBLISHED COMPANY DECIDES EACH SOCKET IN MEMORY, and reads no identity.
 //
-// The org chart a seat binding resolves through may have moved — a seat
-// removed under the person bound to it, turned over to an agent, renamed — and
-// nothing on the identity log says so. Every apply — a hire or any other edit
-// of the org chart among them — publishes a company, so deciding every socket
-// by the guard there would be an identity read per open tab on each: the
-// socket is decided against the company just published instead. A seat this socket saw that company hold and
-// no longer a human seat is what the guard refuses `seat_unavailable` (4403);
-// a seat that answers to another handle now, or one the socket never saw the
-// published company hold, is the handshake's to resolve (1013). The control is
-// a seat still held under the handle it was opened with: the socket stays
-// open. In every case the guard is never asked again.
+// The org a seat binding resolves through may have moved — a seat removed under
+// the person bound to it, or turned over to an agent — and nothing on the
+// identity log says so. Every apply — a hire or any other edit of the org
+// among them — publishes a company, so deciding every socket by the guard
+// there would be an identity read per open tab on each: the socket is decided
+// against the company just published instead. A seat this socket saw that
+// company hold and no longer a human seat is what the guard refuses
+// `seat_unavailable` (4403); one the socket never saw the published company
+// hold is the handshake's to resolve (1013). The control is a seat still held:
+// the socket stays open. In every case the guard is never asked again.
 //
-// Mutation: close every seat that fails to match 4403, and the renamed and
-// unseen seats are told access was withdrawn.
+// Mutation: close every seat that fails to match 4403, and the unseen seat is
+// told access was withdrawn.
 func TestAPublishedCompanyDecidesEachSocketInMemory(t *testing.T) {
 	t.Parallel()
-	held := SeatState{Origin: "ana", Handle: "ana", Human: true}
+	held := SeatState{Human: true}
 	for _, c := range []struct {
 		name          string
 		before, after map[string]SeatState
@@ -581,11 +579,7 @@ func TestAPublishedCompanyDecidesEachSocketInMemory(t *testing.T) {
 		{"removed", map[string]SeatState{"ana": held}, map[string]SeatState{},
 			CloseUnauthorized},
 		{"turned over to an agent", map[string]SeatState{"ana": held},
-			map[string]SeatState{"ana": {Origin: "ana", Handle: "ana"}},
-			CloseUnauthorized},
-		{"renamed", map[string]SeatState{"ana": held},
-			map[string]SeatState{"ana": {Origin: "ana", Handle: "ana-lee", Human: true}},
-			CloseUndecided},
+			map[string]SeatState{"ana": {}}, CloseUnauthorized},
 		{"never seen published", map[string]SeatState{}, map[string]SeatState{},
 			CloseUndecided},
 	} {
@@ -617,28 +611,28 @@ func TestAPublishedCompanyDecidesEachSocketInMemory(t *testing.T) {
 	}
 }
 
-// A DECISION LEARNS THE SEAT'S IDENTITY AGAIN ONLY WHEN IT MOVED THE SEAT.
+// A DECISION LEARNS WHETHER THE SEAT WAS HELD AGAIN ONLY WHEN IT MOVED THE SEAT.
 //
-// The published-company decision finds the seat by the identity the company
-// gave it when this socket saw it there. A decision by the guard that leaves
-// the principal on the same seat cannot have given that seat a new identity,
-// so it reads nothing: learned again after every decision, it was read from
-// whatever company was published as the decision ended, and a company that had
-// just dropped the seat left the socket knowing no identity for it — the
-// publish that followed closed it 1013 for the handshake to resolve rather
-// than 4403 `seat_unavailable`. A decision that moves the principal to another
-// seat does learn that seat's identity, or the removal of the seat it now acts
-// as would read as a rename.
+// The published-company decision tells a seat removed (4403) from one the
+// company has not been seen to hold yet (1013) by whether this socket saw it
+// held. A decision by the guard that leaves the principal on the same seat
+// cannot change that, so it reads nothing: learned again after every decision,
+// it was read from whatever company was published as the decision ended, and a
+// company that had just dropped the seat left the socket believing it had
+// never been held — the publish that followed closed it 1013 rather than 4403
+// `seat_unavailable`. A decision that moves the principal to another seat does
+// learn it again, or a seat the company has not published yet would be taken
+// for one it removed.
 //
-// Mutation: learn the identity after every decision, and the dropped seat
-// closes 1013; never learn it again, and the moved seat's removal closes 1013.
+// Mutation: learn it after every decision, and the dropped seat closes 1013;
+// never learn it again, and the seat not yet published closes 4403.
 func TestADecisionLearnsTheSeatAgainOnlyWhenItMovedIt(t *testing.T) {
 	t.Parallel()
 	ana := person("ana")
 	bo := ana
 	bo.Seat = "bo"
-	anaSeat := SeatState{Origin: "ana", Handle: "ana", Human: true}
-	boSeat := SeatState{Origin: "bo", Handle: "bo", Human: true}
+	anaSeat := SeatState{Human: true}
+	boSeat := SeatState{Human: true}
 	for _, c := range []struct {
 		name string
 		// resolved is whom the decision at registration resolves.
@@ -649,12 +643,17 @@ func TestADecisionLearnsTheSeatAgainOnlyWhenItMovedIt(t *testing.T) {
 		// asks is how often the company has been asked by the time the
 		// decision has done with it.
 		asks int
+		// code is how the publish closes the socket.
+		code websocket.StatusCode
 	}{
 		{"the same seat, dropped as it was decided", ana,
-			map[string]SeatState{}, map[string]SeatState{}, 1},
+			map[string]SeatState{}, map[string]SeatState{}, 1, CloseUnauthorized},
 		{"moved to another seat, then removed", bo,
 			map[string]SeatState{"ana": anaSeat, "bo": boSeat},
-			map[string]SeatState{"ana": anaSeat}, 2},
+			map[string]SeatState{"ana": anaSeat}, 2, CloseUnauthorized},
+		{"moved to a seat not published yet", bo,
+			map[string]SeatState{"ana": anaSeat},
+			map[string]SeatState{"ana": anaSeat}, 2, CloseUndecided},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -667,19 +666,19 @@ func TestADecisionLearnsTheSeatAgainOnlyWhenItMovedIt(t *testing.T) {
 				}})
 			s.settled(t, 1)
 			waitUntil(t, func() bool { return book.asked() >= c.asks },
-				"the decision never learned the identity of the seat it moved "+
-					"the socket to")
+				"the decision never learned whether the company holds the seat "+
+					"it moved the socket to")
 			book.set(c.after)
 			svc.CompanyPublished()
-			if got := s.closedWith(t); got != CloseUnauthorized {
-				t.Fatalf("the socket closed %d, want %d", got, CloseUnauthorized)
+			if got := s.closedWith(t); got != c.code {
+				t.Fatalf("the socket closed %d, want %d", got, c.code)
 			}
 		})
 	}
 }
 
-// seatBook is a published company's seats by any name, changeable while
-// sockets are open, counting how often it was asked.
+// seatBook is a published company's seats by handle, changeable while sockets
+// are open, counting how often it was asked.
 type seatBook struct {
 	mu    sync.Mutex
 	seats map[string]SeatState

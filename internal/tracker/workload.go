@@ -55,7 +55,7 @@ const MaxWorkloadHandles = 256
 
 // WorkloadRow is one person's load.
 type WorkloadRow struct {
-	Handle string `json:"handle" person:"seat"`
+	Handle string `json:"handle"`
 
 	// Open is how many open tasks they hold.
 	Open int `json:"open"`
@@ -96,15 +96,6 @@ type WorkloadAnswer struct {
 // `now` and `loc` are the instant and the company's clock the overdue count is
 // cut on — see [Reader.MyWork], which cuts the same day.
 func (r *Reader) Workload(ctx context.Context, q WorkloadQuery, now time.Time,
-	loc *time.Location) (WorkloadAnswer, error) {
-	call := r.pinned()
-	got, err := call.workload(ctx, identified(call.chart, q), now, loc)
-	return shown(call.chart, got), err
-}
-
-// workload is [Reader.Workload] once every person the question names is their
-// seat's identity — see people.go.
-func (r *Reader) workload(ctx context.Context, q WorkloadQuery, now time.Time,
 	loc *time.Location) (WorkloadAnswer, error) {
 
 	if q.Level == "" {

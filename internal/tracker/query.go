@@ -253,11 +253,11 @@ type Query struct {
 	StatusNot    []Status
 	StatusGroups []StatusGroup
 
-	Assignee          []string `person:"seat"`
-	Collaborator      []string `person:"seat"`
-	Reporter          []string `person:"seat"`
-	Watcher           []string `person:"seat"`
-	ChecklistAssignee []string `person:"seat"`
+	Assignee          []string
+	Collaborator      []string
+	Reporter          []string
+	Watcher           []string
+	ChecklistAssignee []string
 
 	Unit        []string
 	RoutingUnit []string
@@ -285,7 +285,7 @@ type Query struct {
 	// `Person.Priorities` and `update_priorities` are what a person calls
 	// their list, and renaming it here would leave one word meaning two
 	// things across the API.
-	PriorityListOf string `person:"seat"`
+	PriorityListOf string
 
 	// PriorityList is that list, RESOLVED — filled inside the read's own
 	// transaction, because it lives on another object and a parser that
@@ -328,14 +328,14 @@ type Query struct {
 	HasChildren     *bool
 	HasParent       *bool
 	HasOpenAsks     *bool
-	AskedOf         string `person:"seat"`
+	AskedOf         string
 
 	// AskedBy is whose open questions to narrow to — the work a person is
 	// WAITING on. ONE NAME, the asker's record name: a person bound to a
 	// seat writes AS that seat whatever credential they hold (see
 	// iam.ActorFor), so an ask they put through their own token and one
 	// they put from the dashboard carry the same author.
-	AskedBy string `person:"seat"`
+	AskedBy string
 
 	LinkedPage string
 	References string

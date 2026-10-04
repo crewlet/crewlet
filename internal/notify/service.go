@@ -613,8 +613,8 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	// groups on and what the ledger keys off.
 	Stamp(wake, partition, conversation)
 	// THE PARTY'S ID, never its handle: a seat's mailbox is keyed on the
-	// one name a rename cannot move. A party with no id never reaches here
-	// — the addressability guard above has already skipped it.
+	// agent id derived from the handle (ADR-0013). A party with no id never
+	// reaches here — the addressability guard above has already skipped it.
 	if err := s.queue.Publish(ctx, topics.AgentInbox(party.AgentID), wake); err != nil {
 		return fmt.Errorf("notify: wake %s: %w", party.Handle, err)
 	}

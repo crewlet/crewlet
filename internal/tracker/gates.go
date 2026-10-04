@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -399,9 +398,6 @@ func purgeExcerpt(task Task, collision bool, reason, actor string) string {
 // purge that did not happen, and re-running it is the operator's own gesture
 // rather than a repair somebody's cron performs on their behalf.
 func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string) (WriteResult, error) {
-	// ONE READING OF THE CHART for every name this write resolves and
-	// every name it is worded with — see [Writer.pinned].
-	w = w.pinned()
 	switch {
 	case id == "":
 		return WriteResult{}, fmt.Errorf("tracker: a purge names no task")
@@ -440,17 +436,11 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 				return statelog.Decision{}, fmt.Errorf("tracker: read whether "+
 					"key %s opens task %s: %w", current.Key, current.ID, err)
 			}
-			// THE PURGER AS THEY ARE CALLED NOW, because the excerpt is
-			// prose the lead reads and nothing rewrites afterwards: the
-			// writer's actor is the seat's IDENTITY (people.go), and "purged
-			// by cto" about a seat that answers to chief names somebody the
-			// lead cannot find — the rule [Writer.prioritisedWake]'s own
-			// excerpt follows.
 			decision, err := w.decide(ctx, tx, stamp, subject, OpPurge, ChangePurged, scope, opID, struct {
 				V      int    `json:"v"`
 				Reason string `json:"reason,omitempty"`
 			}{V: GateRecordVersion, Reason: reason}, purgeWake(current, collision,
-				reason, seatnames.CurrentOf(w.chart(), w.Actor), w.Leads), at)
+				reason, w.Actor, w.Leads), at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}

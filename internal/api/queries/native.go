@@ -470,8 +470,8 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 		// THE CHART, so `container=unit:engineering` and
 		// `container=unit:eng` reach one strip — the same rule that
 		// upper-cases a project key, for the container kind a person
-		// can spell more than one way: by key, by a key a rename
-		// retired, or by name. See [tracker.Units].
+		// can spell more than one way: by key or by name. See
+		// [tracker.Units].
 		Units: s.chartUnits(),
 		// THE CALLER'S OWN, resolved to this surface's default when they
 		// said nothing — which is `stale`, like every other dashboard

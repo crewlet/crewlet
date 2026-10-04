@@ -123,11 +123,11 @@ type ThreadParties struct {
 	// [MaxThreadParticipants] by the caller's own query; this package
 	// cuts what arrives longer, deterministically, so two nodes reading
 	// one record agree.
-	Participants []string `person:"seat"`
+	Participants []string
 
 	// Asked is the handle THIS comment asks, which is a question somebody
 	// now owes an answer to.
-	Asked string `person:"seat"`
+	Asked string
 
 	// AnsweredAuthor is the author of the comment this one ANSWERS.
 	//
@@ -135,7 +135,7 @@ type ThreadParties struct {
 	// it would wake the seat that just replied and leave the person who
 	// asked unwoken. That is why this is a snapshot field and not a
 	// lookup at the wake.
-	AnsweredAuthor string `person:"seat"`
+	AnsweredAuthor string
 }
 
 // Notify builds the record's routing snapshot, or nil when this change wakes

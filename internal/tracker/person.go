@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -181,8 +180,7 @@ func (g InboxGesture) Empty() bool {
 // ONLY ON BEHALF OF THAT PERSON, or by the admin path — see
 // [Writer.ownRecord]. The handle is whoever's record it is as
 // [iam.RecordOwner] names it: a bound person's seat, a credential's own login
-// otherwise. Resolved to the seat's identity here, so a renamed seat marks its
-// own inbox.
+// otherwise.
 //
 // RESOLVED INSIDE THE DECIDE: every notice named is looked up there for the
 // position it sits at, and the gesture is applied to the lists that snapshot
@@ -193,10 +191,6 @@ func (g InboxGesture) Empty() bool {
 func (w *Writer) MarkInbox(ctx context.Context, opID, handle string,
 	gesture InboxGesture, authority PersonAuthority) (WriteResult, error) {
 
-	// ONE READING OF THE CHART for every name this write resolves and
-	// every name it is worded with — see [Writer.pinned].
-	w = w.pinned()
-	handle = seatnames.IdentityOf(w.chart(), handle)
 	if err := w.ownRecord(handle, "inbox", authority); err != nil {
 		return WriteResult{}, err
 	}
@@ -315,15 +309,10 @@ type PinGesture struct {
 func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 	gesture PinGesture, authority PersonAuthority) (WriteResult, error) {
 
-	// ONE READING OF THE CHART for every name this write resolves and
-	// every name it is worded with — see [Writer.pinned].
-	w = w.pinned()
-	chart := w.chart()
-	handle = seatnames.IdentityOf(chart, handle)
 	if err := w.ownRecord(handle, "pins", authority); err != nil {
 		return WriteResult{}, err
 	}
-	named := seatnames.CurrentOf(chart, handle)
+	named := handle
 	gesture.Views = gesture.Views.mapped(strings.TrimSpace)
 	switch {
 	case gesture.Views.Empty() && gesture.Favorites.Empty():
@@ -409,16 +398,9 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 	priorities []string, ifMatch *uint64,
 	authority PersonAuthority) (WriteResult, error) {
 
-	// ONE READING OF THE CHART for every name this write resolves and
-	// every name it is worded with — see [Writer.pinned].
-	w = w.pinned()
 	priorities = cleanHandles(priorities)
-	// THE PERSON BY THEIR IDENTITY, and so is the actor ([Writer.As]): a
-	// renamed seat setting its own list is its own list.
-	chart := w.chart()
-	handle = seatnames.IdentityOf(chart, handle)
 	own := w.Actor == handle
-	actor, named := seatnames.CurrentOf(chart, w.Actor), seatnames.CurrentOf(chart, handle)
+	actor, named := w.Actor, handle
 	switch {
 	case !own && (!authority.Authorized || authority.Agent):
 		return WriteResult{}, forbidden("%s is a seat, is not %s and does not "+
@@ -535,7 +517,7 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 			Position:      1,
 		},
 		Excerpt: fmt.Sprintf("%s put %s at position 1 of your priorities",
-			seatnames.CurrentOf(w.chart(), w.Actor),
+			w.Actor,
 			ItemNamed(top.ID, top.Key, collision)),
 	}, nil
 }
@@ -550,9 +532,8 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 // read is a gesture nobody asked a lead to make, which is exactly the line
 // [authz.ClassOwnRecord] draws.
 //
-// BOTH SIDES ARE IDENTITIES — the writer's actor ([Writer.As]) and the
-// record's handle as each verb resolved it — so a renamed seat's own record is
-// its own, and the refusal names both as they are called now.
+// BOTH SIDES ARE HANDLES — the writer's actor ([Writer.As]) and the record's
+// handle as each verb resolved it — and the refusal names both.
 func (w *Writer) ownRecord(handle, what string, authority PersonAuthority) error {
 	switch {
 	case w.Actor == handle:
@@ -560,11 +541,10 @@ func (w *Writer) ownRecord(handle, what string, authority PersonAuthority) error
 	case authority.Authorized && !authority.Agent:
 		return nil
 	}
-	chart := w.chart()
 	return forbidden("%s cannot write %s's %s — it is written on behalf of "+
 		"the person whose it is, and somebody else's hand in it is the one "+
 		"thing it must never allow",
-		seatnames.CurrentOf(chart, w.Actor), seatnames.CurrentOf(chart, handle), what)
+		w.Actor, handle, what)
 }
 
 // checkInboxGesture refuses a gesture no record could honour, before anything
@@ -766,9 +746,8 @@ func applyInboxGesture(p *Person, g InboxGesture,
 		what    string
 	}{{p.Read, "read"}, {p.Unread, "unread"}, {p.Snoozed, "snoozed"}} {
 		if len(part.entries) > MaxInboxEntries {
-			// THE LIST AND NOT THE PERSON: the record's handle is the
-			// seat's identity, which a renamed seat no longer answers to,
-			// and the caller named whose inbox this is in the call.
+			// THE LIST AND NOT THE PERSON: the caller named whose inbox
+			// this is in the call.
 			return fmt.Errorf("tracker: this inbox's %s list would hold %d "+
 				"notices and the maximum is %d — mark everything you have "+
 				"seen with `read_through`, which moves the position the lists "+

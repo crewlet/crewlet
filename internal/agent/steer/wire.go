@@ -61,8 +61,8 @@ type Request struct {
 // Reply is the running node's answer. Only the node holding the turn sends
 // one.
 //
-// Agent is the turn's seat by its derived agent id, which a rename does not
-// move, and AgentHandle that seat's handle when the turn was opened, for a
+// Agent is the turn's seat by its derived agent id, and AgentHandle that
+// seat's handle, for a
 // person reading the answer. An authority decision is taken on Agent; the
 // handle is a label. Empty where the running node could not resolve the seat.
 type Reply struct {
