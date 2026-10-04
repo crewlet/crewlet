@@ -98,9 +98,8 @@ type Finding struct {
 // rather than reporting a dangling binding it could not establish, which
 // would send an administrator to unbind somebody whose seat is there.
 //
-// NIL-ABLE, AND THE ABSENCE IS THE THIRD VALUE too — the same shape
-// internal/api/chartapi's `Held` takes, one estate the other way round. A node
-// that cannot ask skips the arm rather than guessing.
+// NIL-ABLE, AND THE ABSENCE IS THE THIRD VALUE too: a node that cannot ask
+// skips the arm rather than guessing.
 type Bindings func(ctx context.Context, row iamdomain.PersonRow) (
 	dangling bool, detail string, err error)
 

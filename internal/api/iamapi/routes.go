@@ -25,7 +25,7 @@ import (
 // guards its listing.
 const Prefix = "/iam/"
 
-// Routes registers the sixteen on a mux.
+// Routes registers the seventeen on a mux.
 //
 // EVERY ROUTE CARRIES ITS OWN POLICY, stated where it is mounted, through
 // [authz.Router] — which is the only reader of the matched pattern, because a
@@ -114,6 +114,9 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("POST /iam/invalidate-all",
 		at(authz.ActionSessionInvalidate), s.PostInvalidateAll)
 	mount("GET /iam/check", at(authz.ActionDirectoryRead), s.GetCheck)
+	// WHO SITS WHERE: every human seat of the running company and who
+	// holds it. A listing, read like the directory — see seats.go.
+	mount("GET /iam/seats", at(authz.ActionDirectoryRead), s.GetSeats)
 	// THIS NODE'S Tier A labels, joined to the rows their logins name: the
 	// one binding question no directory read can reach, since the labels
 	// are a node's configuration. See nodetokens.go.

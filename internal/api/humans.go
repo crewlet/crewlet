@@ -276,6 +276,9 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine) (guardedMounter,
 		// nothing else would say so.
 		Ceiling:  boot.API.Auth.MaxGrants,
 		Bindings: danglingBindings(e),
+		// The company this node runs, whose human seats `/iam/seats`
+		// lists beside who holds each.
+		Seats: engine.SeatViewOf(e),
 		// THIS NODE'S Tier A labels — never their values — for
 		// `GET /iam/node-tokens`, read off a guard built from the same Tier
 		// A the request guard is: which bearer authenticates is a pure

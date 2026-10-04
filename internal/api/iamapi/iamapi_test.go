@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -81,6 +82,9 @@ func newRig(t *testing.T, options ...func(*iamapi.Options)) *rig {
 		Bindings: func(context.Context, iamdomain.PersonRow) (bool, string, error) {
 			return false, "", nil
 		},
+		Seats: fakeSeats{seats: []session.Seat{
+			{Handle: "founder", Name: "Founder", Kind: "human"},
+		}},
 		Now: func() time.Time { return at },
 	}
 	for _, apply := range options {
@@ -200,7 +204,28 @@ type fakeDirectory struct {
 
 	// history is the trail `GET /iam/audit` pages.
 	history []iamdomain.HistoryRow
+
+	// bindings is who the directory binds to which seat, and bindingsErr
+	// a directory this node could not read them from.
+	bindings    []iamdomain.SeatBinding
+	bindingsErr error
 }
+
+func (d *fakeDirectory) SeatBindings(context.Context) ([]iamdomain.SeatBinding, error) {
+	if d.bindingsErr != nil {
+		return nil, d.bindingsErr
+	}
+	return d.bindings, nil
+}
+
+// fakeSeats is the company a case's node runs: its human seats, or none
+// running at all.
+type fakeSeats struct {
+	seats   []session.Seat
+	missing bool
+}
+
+func (f fakeSeats) HumanSeats() ([]session.Seat, bool) { return f.seats, !f.missing }
 
 func (d *fakeDirectory) People(_ context.Context, q iamdomain.PeopleQuery) (
 	iamdomain.PeoplePage, error) {
@@ -559,6 +584,7 @@ func TestEveryIamReadIsGuarded(t *testing.T) {
 		"/iam/people/" + alice.String(),
 		"/iam/people/" + alice.String() + "/sessions",
 		"/iam/check",
+		"/iam/seats",
 		"/iam/audit",
 	} {
 		if got := r.as(ordinary(), http.MethodGet, target, nil); got.status != http.StatusForbidden {
@@ -1072,6 +1098,7 @@ func TestEveryRouteMountsWithAVerbTheTableKnows(t *testing.T) {
 		Opener:       fakeOpener{},
 		ExternalBase: "https://crewlet.example.com",
 		TokenIDs:     func() []string { return nil },
+		Seats:        fakeSeats{},
 	})
 	if err != nil {
 		t.Fatalf("build: %v", err)

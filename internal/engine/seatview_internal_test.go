@@ -29,6 +29,10 @@ func TestASeatViewWithNoCompanyRefusesRatherThanAnsweringSeatless(t *testing.T) 
 		t.Error("Version answered with no error, so a view with no company " +
 			"would read as one the binding watch may classify against")
 	}
+	if seats, running := view.HumanSeats(); running {
+		t.Errorf("HumanSeats answered %v as a running company's seats, so a "+
+			"node with none would list a company with no people", seats)
+	}
 	// AND THROUGH THE RESOLVER, which is where it matters: the row must
 	// be `stalled` rather than `seatless`.
 	binding := session.ResolveSeat(t.Context(), view,
@@ -70,6 +74,10 @@ func TestTheSeatViewAnswersFromTheRunningCompany(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Version: %v", err)
 	}
+	if handles := humanHandles(t, view); !slices.Contains(handles, founderSeat) ||
+		slices.Contains(handles, "ceo") {
+		t.Errorf("the human seats are %v, want the founder's and no agent's", handles)
+	}
 
 	// THE FOUNDER'S SEAT LEAVES THE COMPANY in one apply.
 	without := directoryConfig(t)
@@ -91,6 +99,26 @@ func TestTheSeatViewAnswersFromTheRunningCompany(t *testing.T) {
 		t.Errorf("the version reads %d (%v) after an apply, the same as before: "+
 			"the binding watch would skip the beat that changed every answer", after, err)
 	}
+	if handles := humanHandles(t, view); slices.Contains(handles, founderSeat) {
+		t.Errorf("the human seats are %v after the founder's seat left", handles)
+	}
+}
+
+// humanHandles is the running company's human seats, by handle.
+func humanHandles(t *testing.T, view SeatView) []string {
+	t.Helper()
+	seats, running := view.HumanSeats()
+	if !running {
+		t.Fatal("HumanSeats: the node runs no company")
+	}
+	handles := make([]string, 0, len(seats))
+	for _, seat := range seats {
+		if seat.Kind != session.SeatKindHuman {
+			t.Errorf("HumanSeats listed %+v, which is not a human seat", seat)
+		}
+		handles = append(handles, seat.Handle)
+	}
+	return handles
 }
 
 // SeatViewOf OVER A NIL ENGINE IS THE ZERO VALUE, not a panic: the wiring

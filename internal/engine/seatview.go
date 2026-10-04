@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // SeatView answers [session.Chart] — which seat a signed-in person acts as —
@@ -53,6 +54,28 @@ func (v SeatView) Seat(_ context.Context, handle string) (session.Seat, bool, er
 		seat.Unit = unit.Key()
 	}
 	return seat, true, nil
+}
+
+// HumanSeats is every human seat of the running organisation, in the order the
+// company declares them, and false on a node that runs no company yet.
+func (v SeatView) HumanSeats() ([]session.Seat, bool) {
+	company := v.company()
+	if company == nil {
+		return nil, false
+	}
+	var seats []session.Seat
+	for role := range company.Org.AllRoles() {
+		if role.EffectiveKind() != org.KindHuman {
+			continue
+		}
+		seat := session.Seat{Handle: role.Handle(), Name: role.Name,
+			Kind: string(role.EffectiveKind())}
+		if unit := company.Org.UnitFor(role); unit != nil {
+			seat.Unit = unit.Key()
+		}
+		seats = append(seats, seat)
+	}
+	return seats, true
 }
 
 // Version names the organisation [SeatView.Seat] answers from: it moves on
