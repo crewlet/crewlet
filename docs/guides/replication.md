@@ -270,8 +270,8 @@ made during a burst.
 
 ### `applied` is not permanent
 
-Three gates can drop a record **after** a node has applied it, and all three
-are deliberate:
+Two gates can drop a record **after** a node has applied it, and both are
+deliberate:
 
 - **The eviction gate.** A record written by a node the fleet evicted before
   the record's own position is dropped everywhere. A node that applied it
@@ -282,15 +282,8 @@ are deliberate:
 - **The deletion gate.** A record about a task a purge destroyed applies
   nowhere, for ever. This is what stops a redelivery months later resurrecting
   rows an operator deliberately removed.
-- **The retirement gate.** A record naming a kind the engine once published and
-  no longer applies is read past rather than faulted on. It is the only one of
-  the three that is about the *build* rather than about the fleet or an
-  operator's decision — see [the other direction](#the-other-direction-a-kind-that-was-removed).
-
-None is a bug being worked around. The first two are what make an eviction and
-a purge mean something on a system where the log outlives the decision; the
-third is what lets the engine stop writing a kind without stranding the nodes
-that still have to read past one.
+Neither is a bug being worked around: they are what make an eviction and a
+purge mean something on a system where the log outlives the decision.
 
 ### A record whose scope meets a deferred scope is deferred too
 
@@ -605,29 +598,10 @@ for ever: a version whose field is gone is **retired** and stays empty rather
 than being given to the next field. The conformance suite every domain passes
 holds each table to the records its encoder actually writes.
 
-In the **tracker**, versions 2 to 13 each carry something a later build added,
-and one of them is retired:
-
-| Version | What a record at it carries |
-|---|---|
-| 2 | A turn's charge to its task that counts delegated workers or reviews that sent the work back |
-| 3 | A person's own record when their read position is in a generation after a reanchor — a build reading 2 stored that position as the bare sequence and lost the generation |
-| 4 | A comment that asks for a decision, or answers one with a choice |
-| 5 | **Retired** — it named a second seat beside a change's author, and this build has no such field: a change is written by one name, [the seat a person is bound to, or the credential's own login](../concepts/identity-and-access.md#a-person-with-a-seat-acts-as-themselves) |
-| 6 | A task filed as a question — the create carries the ask, which a build reading 5 would file as a bare task |
-| 7 | A project carrying a target date, which a build reading 6 has no column for |
-| 8 | Every edit, removal and restore of a task: a build reading 8 keeps a card where its board was last dragged to, while one reading 7 re-files it at the place it was created the next time anybody changes it |
-| 9 | A task filed from a chat conversation, whose create says which surface and conversation it came from |
-| 10 | A turn's account of what it did on its task — its summary, its review, the tools it called and the phase it failed in |
-| 11 | A task change carrying a cross-project move's mark: only the root of the subtree being moved, and only until the move's walk is done |
-| 12 | A project's chart stamp — the activation instant of the revision its name, purpose and unit were derived from |
-| 13 | A wake whose task key opens another task, which says so rather than handing the seat a key that opens the wrong one |
-
-So a card keeps its dragged place only through a change written at version 8 —
-a change an older build wrote re-files the card on every node, whichever build
-applies it, exactly as it always did — and an old node holds back the records
-at any version above its own, with the task, the person or the project they are
-about, and applies every other write as it arrives.
+In the **tracker**, the table is empty: version 1 is everything it writes, so
+every tracker record is stamped 1. The first release that adds a field to one
+gives it version 2, and from then on an older node holds back exactly the
+records carrying it.
 
 In the **knowledge base**, one kind of record does: a container's settings, at
 version 3, because they carry the activation instant of the revision that
@@ -657,63 +631,14 @@ from the rows it holds, in the same transaction that records which rules the
 rows now follow, before it applies anything new. It happens once per change,
 on every node, including a node that just adopted a snapshot from a peer on a
 different build; the `statelog_rederived` log line names the domain, the rule
-versions it moved between and how many rows it wrote. The tracker's first such
-column is a task's `reopens`, recomputed from its history rows the first time a
-build that counts it boots.
+versions it moved between and how many rows it wrote.
 
-The second is a person's inbox positions. An earlier build stored how far a
-person had read as a bare sequence number, dropping the generation, and kept
-each read, unread or snoozed mark at whatever position the caller sent. The
-first boot of a build that stores them in full rewrites every person's row
-from what the node already holds: how far they have read comes from the change
-record that last wrote the row, and each mark's position from the history row
-of the notice it names. Where that last record had itself already lost the
-generation, the node has nothing truer to recover, and the person's next
-"read through here" restores it.
-
-The third is a project's count of **started** work (`task_counts.active`),
-which splits what used to be one "open" number into work waiting and work in
-progress. The first boot of a build that keeps it counts each project's tasks
-in the `active` status group, removed ones excluded, and the task apply keeps
-the number from then on.
-
-The fourth is the **hand-off count on each history row** — how many times
-agents had handed the task on as of that change, which is what lets an item's
-history say "hand-off 3 of 8". The count is the value the change's own record
-states when it moved it, or the one the row before it holds, so the first boot
-of a build that keeps it walks every task's history in log order and fills
-every row, and the apply carries it forward from then on.
-
-The fifth is a task's `updated_at` — the instant of the newest record that
-changed it, which only a task's create had ever written. The sixth is who a
-change's notices are written for: everybody it concerned **but its own
-author**, who had been told about their own change in their own inbox. The
-seventh is which task each notice is about, beside the subject it was written
-on, so an inbox entry names its task without reading the history behind it.
-
-### The other direction: a kind that was removed
-
-The deferral above handles a **newer** peer's records, and it is keyed on the
-record *version*. The mirror case is a record from an **older** peer naming a
-kind the new build has removed, and the version gate cannot see it: the record
-is at a version the new build reads perfectly, and it is the *kind* that is
-gone. It would reach the applier's dispatch, match nothing, and fault.
-
-So a removed kind is **retired** rather than deleted. It stops being
-publishable — nothing mints a subject for it and no table is classified for
-it — and it goes on being consumable, producing no rows, which is what the
-retirement gate does. Without that, one old peer publishing during an upgrade,
-or one old record still inside the log's retention window, stops the *newest*
-node's applier at that position for as long as the record is in the log:
-`stream.tracker_retention` bounds that, and nothing does where the trim cannot
-advance.
-
-A retired record is reported like any other gated one — a
-`statelog_record_gated` line naming `retired`, and the
-`crewlet.statelog.records_gated` counter under the same `gate` value. A kind
-that was never published is not retired and still faults, which is what keeps
-this from hiding a writer publishing a kind it never declared. Sprints, removed
-from the work tracker, are the first retired kind.
+The tracker computes four: a task's `reopens`, recomputed from its history
+rows; a project's count of **started** work (`task_counts.active`); the
+**hand-off count on each history row** — how many times agents had handed the
+task on as of that change, which is what lets an item's history say "hand-off
+3 of 8"; and a task's `updated_at`, the instant of the newest record that
+changed it. They are all at rule set 1, the one this build applies as it goes.
 
 ## Two compacted domains: the embeddings and each node's day
 

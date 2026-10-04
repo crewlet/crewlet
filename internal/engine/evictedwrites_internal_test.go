@@ -207,7 +207,7 @@ func evictedView(id string) tracker.View {
 func trackerEviction(t *testing.T, node string) []byte {
 	t.Helper()
 	body, err := json.Marshal(tracker.Eviction{
-		V: tracker.GateRecordVersion, NodeID: node, EvictedBy: "operator",
+		V: tracker.DocumentVersion, NodeID: node, EvictedBy: "operator",
 		EvictedAt: time.Now().UTC(),
 	})
 	if err != nil {
@@ -215,7 +215,7 @@ func trackerEviction(t *testing.T, node string) []byte {
 	}
 	payload, err := tracker.MutationRecord{
 		RecordEnvelope: tracker.RecordEnvelope{
-			V: tracker.GateRecordVersion, OpID: "op-evict-" + node,
+			V: tracker.RecordVersion, OpID: "op-evict-" + node,
 			Subject: tracker.EvictionSubject(node), Op: tracker.OpEviction,
 			Writer: "node-peer", Scope: tracker.ScopeSet{Subject: true},
 		},

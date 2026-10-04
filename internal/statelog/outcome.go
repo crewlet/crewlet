@@ -277,17 +277,6 @@ const (
 	// not permission to recreate it.
 	ReasonDeleted Reason = "deleted"
 
-	// ReasonRetired — the record names a kind the domain once published
-	// and no longer applies, so it produces no rows anywhere.
-	//
-	// THE VERSION GATE CANNOT CATCH THIS ONE, which is why it is a reason
-	// of its own: a retired kind arrives at a record version this build
-	// reads perfectly, so nothing defers it, and the kind is simply gone
-	// from the applier's dispatch. A rolling upgrade makes an older
-	// peer's records ordinary traffic for as long as one takes, and
-	// faulting on them wedges the newest node in the fleet.
-	ReasonRetired Reason = "retired"
-
 	// ReasonAbandoned — the record was written in a generation a reanchor
 	// ABANDONED: one only a node the fleet has since evicted held, whose
 	// history is on no disk the fleet still has. It was decided from rows
@@ -395,15 +384,15 @@ const (
 // is checked against this list ([TestEveryRefusalReasonIsInTheMetricsReference]).
 //
 // A RECORD A GATE DROPPED is refused under the gate that dropped it — evicted,
-// deleted, retired, abandoned or overtaken — rather than under a generic word,
-// because the gate is what says why: which is why there is no `gated` here.
+// deleted, abandoned or overtaken — rather than under a generic word, because
+// the gate is what says why: which is why there is no `gated` here.
 func Reasons() []Reason {
 	return []Reason{
 		ReasonEvicted, ReasonEvictionUnknown, ReasonDeferred, ReasonBehind,
-		ReasonBelowFloor, ReasonFloorUnknown, ReasonDeleted, ReasonRetired,
-		ReasonAbandoned, ReasonOvertaken, ReasonLogFull, ReasonRecordTooLarge,
-		ReasonBrokerRefused, ReasonSkew, ReasonOpReused, ReasonLogTruncated,
-		ReasonWrongStream, ReasonSuperseded,
+		ReasonBelowFloor, ReasonFloorUnknown, ReasonDeleted, ReasonAbandoned,
+		ReasonOvertaken, ReasonLogFull, ReasonRecordTooLarge, ReasonBrokerRefused,
+		ReasonSkew, ReasonOpReused, ReasonLogTruncated, ReasonWrongStream,
+		ReasonSuperseded,
 	}
 }
 

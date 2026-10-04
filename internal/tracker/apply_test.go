@@ -137,9 +137,12 @@ func (h *applyHarness) value(query string, args ...any) int64 {
 	return n.Int64
 }
 
+// taskRecord is one record about task id, as a writer would publish it: a
+// record that wakes somebody states the same kind its notification does, as
+// [tracker.Writer] requires of every history-writing record.
 func taskRecord(id string, op tracker.OpKind, payload any, notify *tracker.Notify) tracker.MutationRecord {
 	body, _ := json.Marshal(payload)
-	return tracker.MutationRecord{
+	rec := tracker.MutationRecord{
 		RecordEnvelope: tracker.RecordEnvelope{
 			V: tracker.RecordVersion, OpID: id + "-" + string(op),
 			Subject: tracker.TaskSubject(id), Op: op,
@@ -149,6 +152,10 @@ func taskRecord(id string, op tracker.OpKind, payload any, notify *tracker.Notif
 		Mutation: body, Actor: "ana", ActorKind: tracker.AuthorHuman,
 		Notify: notify,
 	}
+	if notify != nil {
+		rec.Kind = notify.Kind
+	}
+	return rec
 }
 
 // filedTask files one plain task into ENG under its own id.
@@ -279,7 +286,7 @@ func TestTheEvictionGateDropsOnlyWhatFollowsIt(t *testing.T) {
 
 	eviction := tracker.MutationRecord{
 		RecordEnvelope: tracker.RecordEnvelope{
-			V: tracker.GateRecordVersion, OpID: "evict-1",
+			V: tracker.RecordVersion, OpID: "evict-1",
 			Subject: tracker.EvictionSubject("node-b"), Op: tracker.OpEviction,
 			Writer: "node-a", Scope: tracker.ScopeSet{Subject: true},
 		},

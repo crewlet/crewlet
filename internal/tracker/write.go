@@ -1507,9 +1507,10 @@ func chargeable(ctx context.Context, tx *sql.Tx, id, project string) error {
 // operation is all the applier has.
 //
 // It used to guess, from the operation and the moved fields, whenever a record
-// carried no [Notify]. The guess is still there for records an older build
-// wrote ([fallbackKind]) and it is no longer allowed to answer with a
-// non-[ChangeKind]; but a build that can state the fact states it.
+// carried no [Notify] — and the guess answered `patch` and `purge`, which are
+// operations rather than [ChangeKind]s, so no feed filter could name them. A
+// build that can state the fact states it, and the applier files the row under
+// exactly what the record says.
 //
 // THE THIRD RULE IS THE ONE WORTH THE FUNCTION: when a record carries both a
 // kind and a notification, they must AGREE. One fact with two carriers is one
@@ -1571,8 +1572,7 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 	// existed at all, and a wake that left it to each path would be one path
 	// forgetting it from naming the claimant to the seat woken about the
 	// duplicate. See [Snapshot.KeyCollision].
-	notify, err := collided(ctx, tx, subject, notify,
-		RecordEnvelope{Subject: subject, Op: op}.readByEveryBuild())
+	notify, err := collided(ctx, tx, subject, notify)
 	if err != nil {
 		return statelog.Decision{}, err
 	}
@@ -1605,13 +1605,6 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 		Actor:      w.Actor,
 		ActorKind:  w.ActorKind,
 		OperatorID: w.OperatorID,
-		// EVERY TASK WRITE THAT MERGES INTO A HELD ROW keeps the place
-		// the project's order gave it, and says so — which is what
-		// stamps it at a version a build still re-writing the filed rank
-		// retains rather than applies. See [keepsPlaceVersion]. A create
-		// mints its rank and a purge removes the row, so neither carries
-		// it.
-		KeepsPlace: mergesIntoRow(subject, op),
 		TurnID:     w.TurnID,
 		Chain:      w.Chain,
 		Notify:     notify,
@@ -1639,24 +1632,9 @@ func (w *Writer) decide(ctx context.Context, tx *sql.Tx, stamp statelog.Stamp,
 // A COPY, because a decide runs again on every rejected round and the caller's
 // wake is the value each round starts from: written in place, a round's
 // answer would be read as the caller's statement by the next one.
-//
-// PINNED says the record is one every build must read
-// ([RecordEnvelope.readByEveryBuild]), and such a record carries the flag
-// UNSET: it is a version-13 field and the record is stamped at the base
-// version for ever, so carrying it would refuse the write. The one pinned
-// record that wakes anybody is a purge, whose task is gone from every node —
-// there is no address left to open, which is all the flag steers — and whose
-// excerpt names a duplicate by its id ([ItemNamed]) for the person reading it.
-func collided(ctx context.Context, tx *sql.Tx, subject Subject,
-	notify *Notify, pinned bool) (*Notify, error) {
-
+func collided(ctx context.Context, tx *sql.Tx, subject Subject, notify *Notify) (*Notify, error) {
 	if notify == nil {
 		return nil, nil
-	}
-	if pinned {
-		out := *notify
-		out.Snapshot.KeyCollision = false
-		return &out, nil
 	}
 	task := notify.Snapshot.TaskID(subject)
 	held, err := keyHeldByAnother(ctx, tx, notify.Snapshot.Key, task)

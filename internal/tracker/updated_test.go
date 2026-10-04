@@ -133,9 +133,6 @@ func TestTheLastChangedBackfillEqualsAReplay(t *testing.T) {
 			t.Errorf("%s re-derives to %d (document %d) and the replay wrote %d", id, column, document, want)
 		}
 	}
-	if tracker.DerivationVersion < 5 {
-		t.Error("the last-changed stamp is a derived column and the derivation version did not move")
-	}
 }
 
 // A LATE RECORD MOVES THE LAST-CHANGED INSTANT AS A REPLAY WOULD.

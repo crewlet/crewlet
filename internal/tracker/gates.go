@@ -267,23 +267,6 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 	return reason, gated, nil
 }
 
-// GateRecordVersion is the version every gate-installing record carries, FOR
-// EVER.
-//
-// # Why this one number never moves
-//
-// A record whose version this build does not know is normally RETAINED and
-// applied later by a build that does. That is exactly wrong for a gate: a node
-// that deferred an eviction would leave its own gate table empty and go on
-// applying every record the evicted node appends, and there is no inverse that
-// repairs it. So an un-decodable gate record STOPS that build's applier
-// instead — which only works if a gate record is decodable by every build
-// there will ever be, and that is what pinning the version at one buys.
-//
-// The consequence is deliberate: a gate record's SHAPE can only ever grow by
-// addition, never by reshaping, for the life of the deployment.
-const GateRecordVersion = 1
-
 // PurgeResult is what an operator is told after a purge, in THREE SIBLING
 // GROUPS.
 //
@@ -439,7 +422,7 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 			decision, err := w.decide(ctx, tx, stamp, subject, OpPurge, ChangePurged, scope, opID, struct {
 				V      int    `json:"v"`
 				Reason string `json:"reason,omitempty"`
-			}{V: GateRecordVersion, Reason: reason}, purgeWake(current, collision,
+			}{V: DocumentVersion, Reason: reason}, purgeWake(current, collision,
 				reason, w.Actor, w.Leads), at)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -517,7 +500,7 @@ func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool
 		},
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return w.decide(ctx, tx, stamp, subject, OpEviction, "", scope, opID, Eviction{
-				V: GateRecordVersion, NodeID: nodeID,
+				V: DocumentVersion, NodeID: nodeID,
 				EvictedBy: w.Actor, EvictedAt: at, Readmitted: readmit,
 			}, nil, at)
 		},

@@ -386,10 +386,9 @@ landed, or the executor's artifact), the notes of the newest review that sent
 the work back for another pass, and each tool its executor called with how
 many times — each account cut to 600 bytes and at most sixteen tools, bounds
 the writer refuses to exceed rather than cutting for you — and, for a segment
-that failed because one of its phases did, which phase that was. They are record
-version 10: a node on an older build holds such a record back until it is
-upgraded rather than applying it without them. The arguments and results of
-every call stay on the turn's trace, which a task's turn card links to.
+that failed because one of its phases did, which phase that was. The arguments
+and results of every call stay on the turn's trace, which a task's turn card
+links to.
 
 The counters are `spend_turns`, `spend_rounds`, `spend_input`, `spend_output`,
 `spend_cache_read`, `spend_cache_write`, `spend_wall_ms`, `spend_tokens`
@@ -1008,11 +1007,6 @@ leaves it in the lane it went to and says the place was not taken. `Alt` with
 an arrow key moves a focused card the same way — up and down past its
 neighbours of the same project, left and right to the top of the next lane.
 
-During a rolling upgrade a card keeps its dragged place only through edits
-written by an upgraded node; an edit an older node writes puts it back where it
-was filed, on every node alike — see
-[Which records an upgrade holds back](replication.md#which-records-an-upgrade-holds-back).
-
 Repeated insertion at the same point makes keys grow, and a drop that would
 mint a key past 64 characters re-spreads the cards around it in the same
 record instead — widening the window until the keys are short again, up to 256
@@ -1357,9 +1351,8 @@ turns, and whether a reviewer ever sent it back), work **filed**, work **handed
 on** (the task's hand-off count against its budget), pages published and
 schedules run. A create says where it was filed from — its **origin**, the chat
 surface and conversation the filing turn was woken on ("from Slack") — which
-the create record states for itself (record version 9), so an older build
-holds such a create back rather than applying it without the field. One
-cursor resumes every source exactly where the last page stopped.
+the create record states for itself. One cursor resumes every source exactly
+where the last page stopped.
 
 A schedule's entries are its **runs** — the ticks the scheduler dispatched. A
 tick it deliberately skipped (a missed run outside the catch-up window, or one
@@ -1815,11 +1808,6 @@ surfaces are never merged into one turn that could keep only one of them. If
 the seat has since lost every tool on that surface, there is nothing it could
 post with and the obligation falls back to any delivery, like every other
 surface the seat cannot reach.
-
-A record carrying a decision or a choice on a comment is **record version 4**,
-and a create carrying the question it was filed as is **version 6**: a node
-still reading an older version retains it rather than applying it with the
-options — or the whole question — dropped, until it is upgraded.
 
 A comment from somebody who is not the assignee, naming nobody and asking
 nobody, still wakes the assignee — unaddressed, which a turn may absorb without

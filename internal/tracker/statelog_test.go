@@ -3,7 +3,6 @@ package tracker_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -42,12 +41,12 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 			// kind nothing writes is a row nothing ever reads — so a
 			// partial list here would report the FIXTURE as the fault.
 			Kinds: suiteKinds(),
-			// THE PRODUCTION TABLE, and a record carrying each of its
-			// fields built through the writer's own encoder — which is
-			// what proves each row's path is where that field is
-			// actually written.
+			// THE PRODUCTION TABLE, which is empty: the base format is
+			// every field this build writes. A row added to it needs a
+			// Carrying here that builds a record carrying the field
+			// through the writer's own encoder, and the suite refuses
+			// a table without one.
 			Fields:     tracker.VersionedFields(),
-			Carrying:   carryingSuiteField,
 			Rows:       tracker.NewRows,
 			Write:      suiteWrite,
 			EncodeGate: encodeSuiteGate,
@@ -55,257 +54,12 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 	})
 }
 
-// carryingSuiteField builds a valid record carrying exactly one versioned
-// field, with its version left for the encoder to stamp.
-//
-// EVERY FIELD THE TABLE NAMES HAS A CASE, and a field without one fails here
-// rather than passing unexamined: the suite reads the version this returns,
-// and a record that did not carry the field would be stamped at 1 and reported
-// as the path being wrong, which is a fixture fault dressed as a domain one.
-func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
-	at := time.Unix(1_700_000_000, 0).UTC()
-	spend := tracker.TurnSpend{Turns: 1, Input: 100, Output: 50}
-	turn := tracker.TurnRecord{
-		Task: "suite-task", Seat: "dev", TurnID: "run-1", Outcome: "done",
-		Phases: []string{"execute"},
-	}
-	switch field.Name {
-	case "TurnSpend.Workers":
-		spend.Workers = 2
-	case "TurnSpend.SentBack":
-		spend.SentBack = 1
-	case "TurnRecord.Summary":
-		turn.Summary = "added the retry and its test"
-	case "TurnRecord.Review":
-		spend.SentBack = 1
-		turn.Review = "the timeout path has no test"
-	case "TurnRecord.Tools":
-		turn.Tools = []tracker.TurnTool{{Name: "run_sandbox", Calls: 2}}
-	case "TurnRecord.FailedIn":
-		turn.Outcome = "failed"
-		turn.FailedIn = "review"
-	case "Person.SeenThrough.Generation":
-		// A PERSON PAST A REANCHOR: the one record whose position carries
-		// a generation the older applier stored as the bare sequence.
-		body, err := json.Marshal(tracker.Person{
-			V: tracker.DocumentVersion, Handle: "suite-person",
-			SeenThrough: tracker.Position{
-				Stream: tracker.Domain{}.Stream().Name, Generation: 1, Seq: 2,
-			},
-			UpdatedAt: at,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return tracker.MutationRecord{
-			RecordEnvelope: tracker.RecordEnvelope{
-				OpID: "suite-carrying", Subject: tracker.PersonSubject("suite-person"),
-				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
-				Scope: tracker.ScopeSet{Subject: true},
-			},
-			Kind: tracker.ChangePersonUpdated, Mutation: body,
-			Actor: "suite-person", ActorKind: tracker.AuthorHuman,
-		}.Encode()
-	case "Comment.Decision", "Comment.Choice":
-		// A COMMENT ON A TASK PATCH, the only record a comment rides.
-		comment := tracker.Comment{
-			ID: "suite-comment", Task: "suite-task", Author: "dev",
-			AuthorKind: tracker.AuthorAgent, Body: "ship or hold?",
-			CreatedAt: at,
-		}
-		if field.Name == "Comment.Decision" {
-			comment.Ask = "pm"
-			comment.Decision = decisionFixture()
-		} else {
-			answers := "suite-ask"
-			comment.Answers = &answers
-			comment.Choice = "ship"
-		}
-		body, err := json.Marshal(tracker.TaskPatch{Comment: &comment})
-		if err != nil {
-			return nil, err
-		}
-		return tracker.MutationRecord{
-			RecordEnvelope: tracker.RecordEnvelope{
-				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
-				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
-				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
-			},
-			Kind: tracker.ChangeComment, Mutation: body,
-			Actor: "dev", ActorKind: tracker.AuthorAgent,
-		}.Encode()
-	case "TaskCreate.Comment":
-		// A TASK FILED AS A QUESTION: the create carries the ask.
-		body, err := json.Marshal(tracker.TaskCreate{
-			Task: tracker.Task{
-				V: tracker.DocumentVersion, ID: "suite-task", Key: "SUITE-1",
-				Project: "SUITE", Title: "ship or hold?", Type: "task",
-				Status: tracker.StatusTodo, StatusGroup: tracker.GroupNotStarted,
-				Priority: tracker.PriorityNone, Reporter: "dev",
-				CreatedAt: at, UpdatedAt: at,
-			},
-			Comment: &tracker.Comment{
-				ID: "suite-ask", Task: "suite-task", Author: "dev",
-				AuthorKind: tracker.AuthorAgent, Body: "ship or hold?",
-				Ask: "pm", CreatedAt: at,
-			},
-		})
-		if err != nil {
-			return nil, err
-		}
-		return tracker.MutationRecord{
-			RecordEnvelope: tracker.RecordEnvelope{
-				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
-				Op: tracker.OpCreate, CreatedAt: at, Writer: "suite-node",
-				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
-			},
-			Kind: tracker.ChangeCreated, Mutation: body,
-			Actor: "dev", ActorKind: tracker.AuthorAgent,
-		}.Encode()
-	case "TaskCreate.Origin":
-		// A TASK FILED FROM A CHAT THREAD: the create says where.
-		body, err := json.Marshal(tracker.TaskCreate{
-			Task: tracker.Task{
-				V: tracker.DocumentVersion, ID: "suite-task", Key: "SUITE-1",
-				Project: "SUITE", Title: "from the thread", Type: "task",
-				Status: tracker.StatusTodo, StatusGroup: tracker.GroupNotStarted,
-				Priority: tracker.PriorityNone, Reporter: "dev",
-				CreatedAt: at, UpdatedAt: at,
-			},
-			Origin: &tracker.Origin{Surface: "slack", Conversation: "slack:C1:1.2"},
-		})
-		if err != nil {
-			return nil, err
-		}
-		return tracker.MutationRecord{
-			RecordEnvelope: tracker.RecordEnvelope{
-				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
-				Op: tracker.OpCreate, CreatedAt: at, Writer: "suite-node",
-				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
-			},
-			Kind: tracker.ChangeCreated, Mutation: body,
-			Actor: "dev", ActorKind: tracker.AuthorAgent,
-		}.Encode()
-	case "MutationRecord.KeepsPlace":
-		// AN ORDINARY EDIT OF A TASK: every task patch this build writes
-		// keeps the place its project's order gave it, and says so.
-		body, err := json.Marshal(tracker.TaskPatch{Title: new("suite, renamed")})
-		if err != nil {
-			return nil, err
-		}
-		return tracker.MutationRecord{
-			RecordEnvelope: tracker.RecordEnvelope{
-				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
-				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
-				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
-			},
-			Kind: tracker.ChangeFields, Mutation: body,
-			Actor: "dev", ActorKind: tracker.AuthorAgent, KeepsPlace: true,
-		}.Encode()
-	case "TaskPatch.Moving":
-		// A ROOT'S CROSS-PROJECT MOVE: the append that re-homes it carries
-		// the mark its walk is still running under.
-		moving := true
-		body, err := json.Marshal(tracker.TaskPatch{Moving: &moving})
-		if err != nil {
-			return nil, err
-		}
-		return tracker.MutationRecord{
-			RecordEnvelope: tracker.RecordEnvelope{
-				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
-				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
-				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
-			},
-			Kind: tracker.ChangeMoved, Mutation: body,
-			Actor: "lead", ActorKind: tracker.AuthorAgent,
-		}.Encode()
-	case "Project.TargetDate":
-		// A LEAD SETTING THE PROJECT'S TARGET: the whole document, as
-		// both the lead's edit and a chart apply carrying it through write.
-		body, err := json.Marshal(tracker.Project{
-			V: tracker.DocumentVersion, Key: "SUITE", Name: "Suite",
-			TargetDate: "2026-12-18", CreatedAt: at, UpdatedAt: at,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return tracker.MutationRecord{
-			RecordEnvelope: tracker.RecordEnvelope{
-				OpID: "suite-carrying", Subject: tracker.ProjectSubject("SUITE"),
-				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
-				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
-			},
-			Kind: tracker.ChangeProjectUpdated, Mutation: body,
-			Actor: "lead", ActorKind: tracker.AuthorAgent,
-		}.Encode()
-	case "Project.ChartEpoch":
-		// THE CHART APPLY STAMPING A PROJECT: the whole document, with the
-		// activation its chart fields came from.
-		body, err := json.Marshal(tracker.Project{
-			V: tracker.DocumentVersion, Key: "SUITE", Name: "Suite",
-			Unit: "eng", ChartEpoch: 7, CreatedAt: at, UpdatedAt: at,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return tracker.MutationRecord{
-			RecordEnvelope: tracker.RecordEnvelope{
-				OpID: "suite-carrying", Subject: tracker.ProjectSubject("SUITE"),
-				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
-				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
-			},
-			Kind: tracker.ChangeProjectUpdated, Mutation: body,
-			Actor: "chart", ActorKind: tracker.AuthorSystem,
-		}.Encode()
-	case "Snapshot.KeyCollision":
-		// A WAKE ABOUT THE DUPLICATE OF A KEY: the snapshot says the key
-		// opens the task that claimed it first, so this one is reached by
-		// its id.
-		body, err := json.Marshal(tracker.TaskPatch{Title: new("suite, renamed")})
-		if err != nil {
-			return nil, err
-		}
-		return tracker.MutationRecord{
-			RecordEnvelope: tracker.RecordEnvelope{
-				OpID: "suite-carrying", Subject: tracker.TaskSubject("suite-task"),
-				Op: tracker.OpPatch, CreatedAt: at, Writer: "suite-node",
-				Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
-			},
-			Kind: tracker.ChangeFields, Mutation: body,
-			Actor: "dev", ActorKind: tracker.AuthorAgent,
-			Notify: &tracker.Notify{
-				Kind: tracker.ChangeFields,
-				Snapshot: tracker.Snapshot{
-					Key: "SUITE-1", Project: "SUITE", Title: "suite, renamed",
-					KeyCollision: true,
-				},
-			},
-		}.Encode()
-	default:
-		return nil, fmt.Errorf("the suite has no record carrying %s — add one "+
-			"beside the field's row", field.Name)
-	}
-	turn.Spend = spend
-	body, err := json.Marshal(turn)
-	if err != nil {
-		return nil, err
-	}
-	return tracker.MutationRecord{
-		RecordEnvelope: tracker.RecordEnvelope{
-			OpID: "suite-carrying", Subject: tracker.TurnSubject("suite-task"),
-			Op: tracker.OpTurn, CreatedAt: at, Writer: "suite-node",
-			Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
-		},
-		Mutation: body, Actor: "dev", ActorKind: tracker.AuthorAgent,
-	}.Encode()
-}
-
 // encodeSuiteGate is the eviction record a peer's writer publishes onto this
 // log — or, with readmit, the inverse commit that takes the node back.
 func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 	at := time.Unix(1_700_000_000, 0).UTC()
 	body, err := json.Marshal(tracker.Eviction{
-		V: tracker.GateRecordVersion, NodeID: node, EvictedBy: "suite",
+		V: tracker.DocumentVersion, NodeID: node, EvictedBy: "suite",
 		EvictedAt: at, Readmitted: readmit,
 	})
 	if err != nil {
@@ -317,9 +71,9 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 	}
 	return tracker.MutationRecord{
 		RecordEnvelope: tracker.RecordEnvelope{
-			// PINNED, as the production writer pins it: a gate is read
-			// by every build there will ever be ([tracker.GateRecordVersion]).
-			V: tracker.GateRecordVersion, OpID: op,
+			// NO VERSION, as the production writer leaves it: the
+			// encoder stamps the base one every build reads.
+			OpID:    op,
 			Subject: tracker.EvictionSubject(node), Op: tracker.OpEviction,
 			CreatedAt: at, Writer: "suite-peer",
 			Scope: tracker.ScopeSet{Subject: true},
@@ -454,7 +208,7 @@ func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
 			Purge: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(tracker.TaskSubject(id), tracker.OpPurge,
 					writer, opID, map[string]any{
-						"v": tracker.GateRecordVersion, "reason": "the gate suite",
+						"v": tracker.DocumentVersion, "reason": "the gate suite",
 					})
 			},
 			Evict: func(node, writer, opID string) ([]byte, error) {
@@ -494,7 +248,7 @@ func gateSuiteRecord(subject tracker.Subject, op tracker.OpKind, writer, opID st
 // gateSuiteEviction is an eviction of node, or its readmission.
 func gateSuiteEviction(node string, readmitted bool) tracker.Eviction {
 	return tracker.Eviction{
-		V: tracker.GateRecordVersion, NodeID: node, EvictedBy: "suite",
+		V: tracker.DocumentVersion, NodeID: node, EvictedBy: "suite",
 		EvictedAt: time.Unix(1_700_000_000, 0).UTC(), Readmitted: readmitted,
 	}
 }

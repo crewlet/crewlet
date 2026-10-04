@@ -4412,8 +4412,8 @@ route answers here — it used to be this surface's alone, and the same
 argument sent through either of the other two was dropped. A body over 1 MiB (twice a page at its own cap, for JSON escaping) is
 refused `413` before it is read.
 
-**Not here, and deliberately:** sprints and goals. The tracker has neither —
-both left the domain — so there is nothing to route.
+**Not here, and deliberately:** sprints and goals. The tracker has neither,
+so there is nothing to route.
 
 ### What a request answers
 

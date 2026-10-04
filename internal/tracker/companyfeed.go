@@ -60,8 +60,7 @@ func (k FeedKind) Valid() bool { return slices.Contains(FeedKinds, k) }
 // STATED BY THE WRITER on the create record ([TaskCreate.Origin]), because it
 // is a fact about the turn that filed the task and the turn is gone by the time
 // anything reads it. Absent for a task filed by anything that was not woken on
-// a chat surface — a schedule, an assignment, a person at the dashboard — and
-// on every create a build before record version 9 wrote.
+// a chat surface — a schedule, an assignment, a person at the dashboard.
 type Origin struct {
 	// Surface is the chat backend's transport name (`slack`, `mattermost`)
 	// — the value [notify.TransportField] carries.

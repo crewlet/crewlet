@@ -96,11 +96,6 @@ func TestAssigneeHistoryCarriesReassignmentsAfter(t *testing.T) {
 			"upgraded node would disagree with one that applied the records",
 			rederived, assignee)
 	}
-	if tracker.DerivationVersion < 4 {
-		t.Error("the applier derives the history hand-off count and its " +
-			"derivation version does not say so — an upgraded node would never " +
-			"fill the column")
-	}
 }
 
 // AN ASSIGNMENT'S REASON IS THE HAND-OFF ROW'S EXCERPT — the line the history
