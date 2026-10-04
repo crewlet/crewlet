@@ -2503,7 +2503,6 @@ is the `fleet:operate` [`fleet`](#get-fleet) answer, and what each alarm measure
   "applied_epoch": 41,
   "seats": ["ceo", "cto"],
   "identity_duty_seconds": {"iam_sweep": 3600, "iam_claims": 3600},
-  "consistency": {"evaluated": true, "findings": 0},
   "unproven_seconds": {"eng": 312.5},
   "nodes": 3,
   "alarms": {"count": 1, "worst": "trim_blocked", "worst_domain": "tracker"},
