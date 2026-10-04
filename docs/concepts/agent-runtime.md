@@ -10,15 +10,15 @@ The agent runtime (`internal/agent`, wired together by `internal/engine`) runs a
 
 Each **agent seat** (`kind: agent`, the default) is one `roles:` entry, and there is no long-lived agent object behind it. The authored `config.Role` becomes an `org.Role` in the epoch's `Organization`, and every turn builds a fresh **runner** for that seat from the epoch it pinned. [Human seats](humans-in-the-org.md) are never run: they exist in the `Organization` and resolve through the party registry (`notify.Registry`).
 
-**Identity is deterministic, and it is not the handle.** A seat's agent id is `org.DeriveAgentID(company name, origin handle)`: a UUIDv5 over `"<company name>:<origin handle>"` in a fixed namespace (`org.Organization.AgentIDFor` applies it to an agent seat). The **origin handle** is the handle the seat was created under, frozen on the seat's chart row by its first rename and never moved again — so the id is the same across processes, machines, restarts *and renames*, which is what lets any node address a seat another node is running and what lets a founder rename a colleague without retiring them. The seat's memory is keyed by that id or by the origin handle itself, and never by the handle it answers to now: `agent_diary` and `agent_onboarding_markers` rows by the agent id; `episodes`, `synthesized_skills` and their versions, and the conversation ledger by the origin handle (in a column still called `agent_handle`, because for a seat never renamed it *is* the handle it answers to); and `counterparty_profiles` by the observing seat's origin handle and, where the person observed is a colleague, theirs. All of it survives engine restarts and a rename of either end; a surface that shows a stored row names the seat by the handle it answers to now.
+**Identity is deterministic.** A seat's agent id is `org.DeriveAgentID(company name, handle)`: a UUIDv5 over `"<company name>:<handle>"` in a fixed namespace (`org.Organization.AgentIDFor` applies it to an agent seat). The same seat in the same company lands on the same UUID across processes, machines and restarts, which is what lets any node address a seat another node is running. A handle is immutable: a document that changes one removes the seat and creates another ([ADR-0013](https://github.com/crewlet/crewlet/blob/main/adr/0013-a-seats-identity-is-derived.md)). The seat's memory is keyed by that id or by the handle itself: `agent_diary` and `agent_onboarding_markers` rows by the agent id; `episodes`, `synthesized_skills` and their versions, and the conversation ledger by the handle; and `counterparty_profiles` by the observing seat's handle and, where the person observed is a colleague, theirs. All of it survives engine restarts.
 
-> **Company-rename caveat.** A seat's handle is not an input to its id,
-> but the company's `name` is: changing it gives *every* agent seat a
-> new id at once, and what is keyed on the id — each seat's mailbox,
-> its diary, its onboarding markers and the memory changelog that
-> carries its rows between nodes — is left under the old one. The
-> seats keep working; they have simply lost that half of their memory,
-> so settle `name` before the company runs. Nothing pins it.
+> **Company-rename caveat.** The company's `name` is the other input to
+> the id: changing it gives *every* agent seat a new id at once, and
+> what is keyed on the id — each seat's mailbox, its diary, its
+> onboarding markers and the memory changelog that carries its rows
+> between nodes — is left under the old one. The seats keep working;
+> they have simply lost that half of their memory, so settle `name`
+> before the company runs. Nothing pins it.
 
 ```mermaid
 flowchart LR
@@ -369,10 +369,8 @@ stateDiagram-v2
 ```
 
 - **The pause is one record for the whole company.** It lives in the
-  coordination store (`seat_pause`), keyed by the seat's **id** — the one
-  derived from the handle it was created under — never by the handle it
-  answers to, so a rename keeps the pause and a seat hired later under a freed
-  handle is never born paused. It has no age: it ends when somebody resumes
+  coordination store (`seat_pause`), keyed by the seat's **id**, as its
+  mailbox is. It has no age: it ends when somebody resumes
   the seat, or when the seat leaves the company — the apply that
   removes a seat clears its pause. It is written by
   compare-and-set, so two people pausing one seat at once make one change: the

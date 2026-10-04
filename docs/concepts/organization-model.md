@@ -311,7 +311,7 @@ Custom types are welcome — use whatever fits your org. The type is information
 
 ### Role = Seat
 
-Each Role defines a unique **seat** with its own backstory, skills, personality, and domain expertise. A seat is held by an AI agent (`kind: agent`, the default) or a **human teammate** (`kind: human`). Each agent seat is one agent, identified by an id derived from the company name and the handle it was created under; human seats participate in the same hierarchy (manages, unit lead, rosters, escalation) but are addressable-only: no runtime, no inbox, no LLM. The founder defines each seat individually, and seats are not interchangeable. See [Humans in the Org Chart](humans-in-the-org.md).
+Each Role defines a unique **seat** with its own backstory, skills, personality, and domain expertise. A seat is held by an AI agent (`kind: agent`, the default) or a **human teammate** (`kind: human`). Each agent seat is one agent, identified by an id derived from the company name and its handle; human seats participate in the same hierarchy (manages, unit lead, rosters, escalation) but are addressable-only: no runtime, no inbox, no LLM. The founder defines each seat individually, and seats are not interchangeable. See [Humans in the Org Chart](humans-in-the-org.md).
 
 ### What a signed-in reader can see about a seat
 
@@ -371,7 +371,7 @@ Handle uniqueness is a **runnable** rule: a document breaking it is refused ever
 - **Applied with a warning.** A stored revision that breaks one is applied by every node and a node boots on it; each logs `org_admission_warning` once per violation when it applies the epoch. The vendor commands that act on a company file without storing it (`crewlet gitlab provision`, `crewlet slack provision` and their siblings, `crewlet llm status`) read one as it stands.
 - **Always readable.** `GET /config`, the revision reads, diffs, `crewlet config show` and `crewlet config export` serve the stored document as it is, so a violation can be seen and corrected.
 
-### A unit's key is what survives a rename
+### A unit's key is its identity
 
 A unit's **name** is what people read — in a prompt, on a board, in a channel
 topic — so it is renamed for the reasons prose is renamed. Its **key** (`id`)
@@ -583,13 +583,13 @@ The engine reports them rather than letting them pass silently. **Each node logs
 | `lead` | A unit's own `lead` is no seat's handle | The unit | The handle as written |
 | `unit` | A root seat's `unit` is no unit's key | The seat | The key as written |
 | `manages` | A `manages` entry is neither a seat's handle nor a unit's key | The seat | The entry as written |
-| `gitlab_access_level` | A key of `integrations.gitlab.provisioning.access_levels` names no seat — no seat answers to it, by its current handle or one it used to have | `integrations.gitlab.provisioning.access_levels` | The handle |
+| `gitlab_access_level` | A key of `integrations.gitlab.provisioning.access_levels` names no seat — no seat's handle is the key | `integrations.gitlab.provisioning.access_levels` | The handle |
 
 Each line also carries `epoch`, `revision` and a `detail` sentence saying what the engine does meanwhile and how to resolve it.
 
 **What was written is reported, once.** A dangling lead is reported on the unit that declares it, never on the child units that inherit it: they wrote nothing, and there is nothing to fix on them. A child unit that writes the same name itself is reported separately, because it is a second place to correct. A `manages` entry keying a unit that holds no seats resolves to nobody but is not a misspelling, so it is not reported.
 
-**A stale GitLab access level is worth removing promptly.** An override follows the seat its key names — through a rename, by the handles the seat used to answer to — so it is dangling only when no seat answers to the key at all, and then it grants its level to whichever seat is next given that handle. It is reported whether or not GitLab is currently enabled, since re-enabling it is exactly when the stale grant would take effect.
+**A stale GitLab access level is worth removing promptly.** An override names a seat by its handle, so it is dangling only when no seat holds the key, and then it grants its level to whichever seat is next given that handle. It is reported whether or not GitLab is currently enabled, since re-enabling it is exactly when the stale grant would take effect.
 
 ---
 

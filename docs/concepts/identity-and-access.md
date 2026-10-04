@@ -504,9 +504,7 @@ link then binds the person it creates to that seat — onboarding somebody into
 their seat with one link rather than an invitation and a bind afterwards. A seat
 the running company does not hold, an agent's seat and a seat somebody is
 already bound to are refused when the invitation is issued, naming the seat. The invitation
-records the seat's **identity** — the handle it was created under — so a rename
-before the redemption binds the same seat, and the invitation's page shows it
-as the chart calls it then. The redemption claims the seat **first**, before the
+records the seat's handle. The redemption claims the seat **first**, before the
 address and the login: a seat is the one thing a configuration change can move in the
 week a link is open, and a refusal at the first claim leaves nothing behind, where one
 after the address would hold that address against the next invitation to the
@@ -579,18 +577,16 @@ write the other is making.
 
 What that means in practice:
 
-- **A binding names the seat by the handle it was created under.** An
-  administrator names a seat by any handle it answers to, and the bind
-  resolves that name against the company this node runs and records the
-  seat's **identity**: the handle it was *created* under, which no rename
-  moves. Every reader turns it back into a seat the same way — the request
-  path, the dangling-binding check, contact routing. See
-  [ADR-0027](https://github.com/crewlet/crewlet/blob/main/adr/0027-a-seat-binding-names-the-seat-it-was-created-as.md).
-  The check against the running company is **advisory**: a revision applied
-  elsewhere first is one this node has not seen.
-- **The bind arbitrates.** `iam.seat.<identity>` is a claim, create-only at an
-  expectation of zero, so two people cannot be bound to one seat, under any of
-  its names: they contend at the broker and exactly one wins.
+- **A binding names the seat by its handle**, which is immutable
+  ([ADR-0013](https://github.com/crewlet/crewlet/blob/main/adr/0013-a-seats-identity-is-derived.md)).
+  The bind checks the handle against the company this node runs, and every
+  reader turns it back into a seat the same way — the request path, the
+  dangling-binding check, contact routing. The check against the running
+  company is **advisory**: a revision applied elsewhere first is one this node
+  has not seen.
+- **The bind arbitrates.** `iam.seat.<handle>` is a claim, create-only at an
+  expectation of zero, so two people cannot be bound to one seat: they contend
+  at the broker and exactly one wins.
 - **The seat's removal does not.** A configuration write that removes a human
   seat, or makes it an agent's, reads the directory first and is refused
   `409 seat_held` naming whoever holds it — at any stage short of their

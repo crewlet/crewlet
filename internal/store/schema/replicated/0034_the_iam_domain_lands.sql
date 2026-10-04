@@ -125,22 +125,11 @@ CREATE TABLE iam_people (
     -- already addresses a seat by — the mailbox, the external accounts, and
     -- every `lead:` and `manages:` entry in the chart.
     --
-    -- THE HANDLE AND NOT A DERIVED ID, because there is nothing else to bind
-    -- to: chart_seats is keyed on the handle and stores no derived id, and a
-    -- binding to a value no table carries would resolve to nothing on every
-    -- node. A rename is survived the way every other reference to a seat
-    -- survives one, through chart_seats.former_keys_json — and the residue is
-    -- the chart's own stated residue, that a former handle goes on resolving
-    -- until something else claims it.
-    --
-    -- SUPERSEDED BY ADR-0027, and the paragraphs above describe what this
-    -- column held when this file was written, not what it holds. It is the
-    -- seat's IDENTITY — the handle the seat was CREATED under, which chart
-    -- rows carry as `origin_handle` and which no rename moves and the chart
-    -- never issues twice — because a binding that followed an address came to
-    -- name a stranger's seat, or one seat twice. (A COMMENT ONLY. Nothing
-    -- about the shape this file creates has changed, and nothing may: an
-    -- applied migration is history.)
+    -- THE HANDLE AND NOT A DERIVED ID, because the handle IS the seat's
+    -- identity: it is immutable (ADR-0013), so changing one is a removal and
+    -- a creation, and a binding names its seat for as long as the seat
+    -- exists. (A COMMENT ONLY. Nothing about the shape this file creates has
+    -- changed, and nothing may: an applied migration is history.)
     seat_id            TEXT    NOT NULL DEFAULT '',
     -- The CHART POSITION the bind's decide read that seat row at.
     --

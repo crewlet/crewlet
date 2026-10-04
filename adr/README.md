@@ -112,7 +112,7 @@ six false statements by the time anybody checked.
 | [0010](0010-tracing-is-configured-by-the-standard-otel-environment.md) | Tracing is configured by the standard OTel environment, not by Tier A | nothing — declared |
 | [0011](0011-tier-a-is-the-root-of-trust.md) | Tier A resolves from the environment and nothing else | `TestTierAIsNeverResolvedFromTheSecretStore` |
 | [0012](0012-a-wake-is-derived-not-published.md) | A wake is derived from a durable record, never published by the writer | `TestAnUnreachableClaimStorePublishesAnyway` |
-| [0013](0013-a-seats-identity-is-derived.md) | A seat's identity is derived, never looked up — **superseded by 0026** | `TestDeriveAgentIDIsStable` |
+| [0013](0013-a-seats-identity-is-derived.md) | A seat's identity is derived, never looked up, and a handle is immutable | `TestDeriveAgentIDIsStable` |
 | [0014](0014-a-compacted-changelog-is-the-fourth-answer.md) | A compacted changelog is the fourth answer to "who has to agree on it?" | `TestASeatsMemoryCrossesToANodeThatHasNeverRunIt` |
 | [0015](0015-an-alarm-borrows-its-threshold.md) | An alarm fires at a threshold another decision already made | `TestTheBackupAlarmFiresAtTheAgeThePolicyNames` |
 | [0016](0016-a-protocol-bump-refuses-where-an-envelope-round-trips.md) | A coordination protocol bump refuses where an event envelope round-trips | nothing — declared |
@@ -125,5 +125,3 @@ six false statements by the time anybody checked.
 | [0023](0023-a-decision-is-a-structured-ask.md) | A decision is a structured ask, and the engine enforces only its shape, its answer and its promise | `TestADecisionRecordIsRetainedByABuildThatCannotReadIt`, `TestAChoiceMustNameAnOptionOfTheAskItAnswers`, `TestAnInformedAnswerOwesTheChatSurface` |
 | [0024](0024-the-dashboard-acts-as-the-principal-its-session-resolves-to.md) | The dashboard acts as the principal its session resolves to: a person or a bound token as its seat, any other credential under its own login, and nobody refused for being unbound | `TestAnActWriteIsMadeAsItsPrincipal`, `TestACallIsMadeAndAuditedAsThePrincipalItWasAdmittedAs`, `TestAnyResolvedPrincipalMayAct` |
 | [0025](0025-every-state-log-record-is-signed.md) | Every state-log record is signed, and the framework verifies before a domain decodes | `TestATamperedRecordIsRefusedPermanently` |
-| [0026](0026-a-seats-identity-is-derived-from-the-handle-it-was-created-under.md) | A seat's identity is derived from the handle it was CREATED under, so a rename moves only its address | `TestARenameKeepsTheIDTheLeaseTheMailboxAndTheDiary` |
-| [0027](0027-a-seat-binding-names-the-seat-it-was-created-as.md) | A seat binding names the seat by the handle it was CREATED under, never by the address typed at the time | `TestABindingFollowsItsSeatAndNeverTheAddressItWasMadeWith` |

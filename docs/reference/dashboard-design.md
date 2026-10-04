@@ -6300,8 +6300,7 @@ brings that carries a design-system rule.
 - **A seat is never paired by its name.** A seat's name is prose and two
   seats may share one. The roster row, every `agents` overlay, a sandbox run,
   a phase record, a turn row and a spend row all carry the seat's `agent_id`
-  — derived from the handle it was created under, so neither a rename nor a
-  namesake moves it — and the store merges an overlay onto its row by that id
+  — derived from its handle, which no namesake shares — and the store merges an overlay onto its row by that id
   alone (`protocol/store.ts`), dropping one for a seat the roster does not
   carry. A seat of the org index pairs with its roster row by HANDLE
   (`lib/seats.ts`' `liveRowFor`), since the two are cut from one chart view

@@ -246,7 +246,7 @@ item has.
 A unit is named by its **key** — the `id` the org chart gives it, which a
 company file that declares none has minted from the unit's name — or by its
 name, where exactly one unit carries it; see
-[the org chart's unit keys](../concepts/organization-model.md#a-units-key-is-what-survives-a-rename).
+[the org chart's unit keys](../concepts/organization-model.md#a-units-key-is-its-identity).
 **Both spellings work everywhere a unit is named**, in any case: the `unit`
 argument on `create_work_item`, `routing_unit` on `update_work_item`, the
 `unit=` and `routing_unit=` filters, the `unit` a project listing is narrowed
@@ -1653,40 +1653,18 @@ misspelling is indistinguishable from a colleague who is simply quiet.
 A name is **resolved**, not merely checked — so a caller that typed a role's
 name rather than its handle gets the handle back rather than a refusal.
 
-### A renamed seat keeps its work
+### A seat is named by its handle
 
-What the tracker **stores** for a seat is the handle the seat was **created
-under** — its identity, which a rename never moves (see
-[ADR-0026](https://github.com/crewlet/crewlet/blob/main/adr/0026-a-seats-identity-is-derived-from-the-handle-it-was-created-under.md)).
-That holds for every value that names somebody: an item's assignee, reporter,
-collaborators and watchers, a checklist line's owner, a comment's author and
-the people it asks and mentions, whose inbox, priority list and pins a
-person's record is, a view's owner, a project's default assignee, and a
-`people` custom field, whether it names one colleague or several. What every
-answer **shows** is the handle the seat answers to now — and so does a
-purge's notice to the project lead, which names whoever purged the item as
-they are called at the time.
-
-So a seat renamed from `cto` to `chief` keeps its day: `my_work` and
-`work_inbox` for `chief` list the work, the questions and the notices it had
-as `cto`, its priority list and pins are still its own, a filter or a board
-column for `chief` finds its work, and it may still edit the comments it wrote
-before. Any handle the seat answers to — the current one, the one it was
-created under, or one a rename retired — names the same seat on the way in.
-Nothing already written is migrated, and nothing needs to be: for every seat
-that was never renamed, its identity **is** its handle.
-
-Two places show what is **stored** instead. An item's raw `task.fields` map is
-the record itself, keyed by field id, and holds the identity; the resolved
-`fields` list beside it is what a reader renders. And a history row's `fields`
-delta is the one-line text every node's applier wrote for the custom values
-that moved — `reviewer=cto → reviewer=bob` — which no applier may resolve
-against a chart and no reader can take apart again, since a text field's own
-value may carry the very separators the line is built from. The item itself,
-and every other delta, name the seat as it is called now.
-
-A name no seat answers to — a person's login, a Tier A token, a seat since
-removed — is stored and shown exactly as written.
+What the tracker **stores** for a seat is its handle, in every value that
+names somebody: an item's assignee, reporter, collaborators and watchers, a
+checklist line's owner, a comment's author and the people it asks and
+mentions, whose inbox, priority list and pins a person's record is, a view's
+owner, a project's default assignee, and a `people` custom field. A handle is
+immutable ([ADR-0013](https://github.com/crewlet/crewlet/blob/main/adr/0013-a-seats-identity-is-derived.md)):
+a document that changes one removes the seat and creates another, so the work
+filed under the old handle stays the old seat's and the new handle starts with
+an empty day. A name no seat answers to — a person's login, a Tier A token, a
+seat since removed — is stored and shown exactly as written.
 
 ### Dependencies, and the set-valued arguments
 
