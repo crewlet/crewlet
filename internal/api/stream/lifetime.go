@@ -94,6 +94,13 @@ import (
 //
 // # Residual
 //
+// A move naming nobody closes every socket on the node, and one of them is a
+// batch that RETAINED a record — which, during a rolling upgrade, is every
+// batch an older node applies in a bucket a newer peer's record already holds
+// there. Its open tabs reconnect once per such batch until it is upgraded;
+// each reconnect is one handshake, which is the price of never reading on a
+// move that names nobody.
+//
 // The published-company decision finds the seat by the identity the company
 // gave it when this socket first saw it there. A socket opened on a seat the
 // published company did not yet hold (a hire inside the publish's coalescing
