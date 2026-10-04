@@ -781,19 +781,21 @@ old, a little over six times the slowest rebase seen. A run started by a person'
 merge sleeps out the difference, and reads the tip again after every sleep,
 because the merges that matter most are the bumps' own, which start no workflow
 and so cannot cancel a run that is already waiting: if `main` moved while it
-slept, it sleeps again, up to an hour in all, and then leaves the bumps to the
-next run. (A newer push by a person does cancel it and starts the wait from its
-own tip.) Asking within seconds would race Dependabot's own rebase and put a
+slept, it sleeps again, up to ninety minutes in all (the longest run of bump
+merges seen here took 36, and the grace comes after its last), and then leaves
+the bumps to the next run. (A newer push by a person does cancel it and starts
+the wait from its own tip.) Asking within seconds would race Dependabot's own rebase and put a
 second command, and a second force-push, on every bump it was about to fix.
 
-**It runs on every push to `main` and every six hours**, and the schedule is
-not decoration. A bump that merges itself is queued with `GITHUB_TOKEN`, and
-GitHub starts no workflow for an event that token caused — the merge commits of
-#167, #170, #171 and #173 have no push-event run — so the push trigger sees what
-a person merges and is blind to what the bumps merge. The schedule is what
-covers those, and it is best effort: GitHub may delay or drop a scheduled run
-under load, and turns scheduled workflows off after 60 days without repository
-activity in a public repository (Actions → the workflow → Enable puts it back).
+**It runs on every push to `main`, and by hand** (Actions → the workflow → Run
+workflow). There is no schedule: a conflict is made by a merge, so looking when
+`main` moves is the whole of it. The blind spot is the merges the bumps make
+themselves. A bump that merges itself is queued with `GITHUB_TOKEN`, and GitHub
+starts no workflow for an event that token caused — the merge commits of #167,
+#170, #171 and #173 have no push-event run — so a conflict a bump's merge makes
+is not looked at until a person merges next or someone runs it by hand. That is
+acceptable because those are the conflicts Dependabot rebases on its own within
+minutes; what it misses waits.
 
 **It comments `rebase` and not `recreate`**, because rebase is the one that
 cannot destroy anything. `recreate` throws away every commit on the branch, and

@@ -247,36 +247,37 @@ doing the thing, or starts doing more — so read the file when you touch it:
 - **`.github/workflows/dependabot-rebase.yml`'s grace, its token and its
   environment.** It comments `@dependabot rebase` on a bump still in conflict
   after Dependabot has had its chance. The command stays `rebase`: `recreate`
-  throws away every commit on the branch, and `rebase` makes Dependabot check the
-  branch when it acts and refuse rather than overwrite. The `GRACE_SECONDS` wait,
-  re-read after every sleep, is what stops it racing Dependabot's own rebase
-  (about 20 seconds to four and a half minutes in this repository's history, so
-  thirty minutes); drop it, or the re-read, and every conflicted bump can get a
-  second command and a second force-push, with nothing red. The comment has to be
-  made by a user account (Dependabot ignores a bot or an App) with
-  `DEPENDABOT_REBASE_TOKEN`, a fine-grained token for this repository alone at
-  **Pull requests: read and write** (Issues alone has been reported refused for a
-  comment on a pull request). That scope also approves and dismisses reviews,
-  which count toward `main`'s required review, so what contains it is that the
-  secret is a secret of the `dependabot-rebase` ENVIRONMENT limited to the
-  selected branch `main`, that only the `ask` job declares the environment, that
-  the `find` job holds no secret and hands over numbers and SHAs only, and that
-  the `find` job fails unless the environment's deployment-branch policy is
+  throws away every commit on the branch, and `rebase` makes Dependabot check
+  the branch when it acts and refuse rather than overwrite. The `GRACE_SECONDS`
+  wait, re-read after every sleep, is what stops it racing Dependabot's own
+  rebase (about 20 seconds to four and a half minutes in this repository's
+  history, so thirty minutes); drop it, or the re-read, and every conflicted
+  bump can get a second command and a second force-push, with nothing red. The
+  comment has to be made by a user account (Dependabot ignores a bot or an App)
+  with `DEPENDABOT_REBASE_TOKEN`, a fine-grained token for this repository alone
+  at **Pull requests: read and write** (Issues alone has been reported refused
+  for a comment on a pull request). That scope also approves and dismisses
+  reviews, which count toward `main`'s required review, so what contains it is
+  that the secret is a secret of the `dependabot-rebase` ENVIRONMENT limited to
+  the selected branch `main`, that only the `ask` job declares the environment,
+  that the `find` job holds no secret and hands over numbers and SHAs only, and
+  that the `find` job fails unless the environment's deployment-branch policy is
   exactly `main` (a workflow that names a missing environment creates it open to
   every branch). That is only as strong as `main`'s ruleset: while *require
   approval of the most recent push* is off, a writer can land a workflow nobody
-  else saw. Never reuse the bundle token: it can push. The `schedule` trigger is
-  load-bearing, and still best effort: bumps merge with `GITHUB_TOKEN`, GitHub
-  starts no `push` workflow for that, and GitHub may drop a scheduled run and
-  disables scheduled workflows after 60 days without repository activity in a
-  public repository. The `jq` filter that spares a branch holding a person's
-  commit only saves a refused command from being posted. Loud: an empty or
-  expired secret, a token GitHub refuses to let comment, an environment that is
-  missing or not limited to `main` (that check can be edited out, and nothing
-  notices), deleting the `environment:` line (the secret is then empty) and a
-  request nobody acted on for twelve hours. Silent: dropping the schedule, the
-  grace or its re-read, widening the token's scope, deleting the environment
-  check, or moving the token to a repository Actions secret.
+  else saw. Never reuse the bundle token: it can push. There is no `schedule`
+  trigger on purpose, and the consequence is a blind spot: bumps merge with
+  `GITHUB_TOKEN`, GitHub starts no `push` workflow for that, so a conflict a
+  bump's merge makes is not looked at until a person merges or someone runs the
+  workflow by hand (they are the conflicts Dependabot rebases itself). The `jq`
+  filter that spares a branch holding a person's commit only saves a refused
+  command from being posted. Loud: an empty or expired secret, a token GitHub
+  refuses to let comment, an environment that is missing or not limited to
+  `main` (that check can be edited out, and nothing notices), deleting the
+  `environment:` line (the secret is then empty) and a request nobody acted on
+  for twelve hours. Silent: dropping the `push` trigger, the grace or its
+  re-read, widening the token's scope, deleting the environment check, or moving
+  the token to a repository Actions secret.
 - **`.github/workflows/dependabot-dashboard.yml`'s guard, its two-job split, its
   pins and the token's scope.** The `push` job holds a personal access token that
   can write to a branch, and its `if:` (author AND actor both Dependabot,

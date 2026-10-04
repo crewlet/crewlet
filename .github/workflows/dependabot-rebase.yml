@@ -76,15 +76,15 @@ name: dependabot-rebase
 # Dependabot secrets so that only Dependabot's own runs see it, and has to stay
 # out of anything a branch can reach.
 #
-# WHEN IT RUNS. On every push to `main` and every six hours. The schedule is
-# not decoration, and it is not a guarantee either: a bump merges itself
-# through `GITHUB_TOKEN`, and GitHub starts no workflow for an event that token
-# caused (the merge commits of #167, #170, #171 and #173 have no push-event
-# run), so the push trigger sees what a person merges and is blind to what the
-# bumps merge. The schedule is what covers those, on a best-effort basis:
-# GitHub may delay or drop a scheduled run under load, and turns scheduled
-# workflows off after 60 days without repository activity in a public
-# repository (Actions -> this workflow -> Enable puts it back).
+# WHEN IT RUNS. On every push to `main`, and by hand (Actions -> this workflow
+# -> Run workflow). There is deliberately no schedule: a conflict is made by a
+# merge, so looking when `main` moves is the whole of it. The blind spot is the
+# merges the bumps make themselves. A bump merges itself through `GITHUB_TOKEN`,
+# and GitHub starts no workflow for an event that token caused (the merge
+# commits of #167, #170, #171 and #173 have no push-event run), so a conflict a
+# bump's merge makes is not looked at until a person merges next, or someone
+# runs this by hand. That is acceptable because those are exactly the conflicts
+# Dependabot rebases on its own, within minutes; what it misses waits.
 #
 # ASKING IS ONCE PER HEAD. A request from an owner, member or collaborator,
 # newer than the head commit, means the question has been put (a maintainer's
@@ -104,9 +104,6 @@ name: dependabot-rebase
 on:
   push:
     branches: [main]
-  schedule:
-    # Off the hour, where scheduled workflows queue.
-    - cron: "17 */6 * * *"
   workflow_dispatch:
 
 # Nothing by default; each job asks for what it uses.
@@ -143,7 +140,7 @@ jobs:
     # A hang detector, sized to the work: the wait for a quiet `main` (at most
     # WAIT_LIMIT_SECONDS), the mergeability rounds (POLL_TRIES x POLL_SECONDS)
     # and a few API reads per open bump.
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     outputs:
       candidates: ${{ steps.scan.outputs.candidates }}
@@ -191,11 +188,13 @@ jobs:
           # Dependabot has been seen to make after a merge here (four and a
           # half minutes).
           GRACE_SECONDS: "1800"
-          # An hour: bumps merge in runs of three or four ten to forty minutes
-          # apart, so a tip that is fresh when a run wakes is usually followed
-          # by a quiet half hour within the next one. Past it the run gives up
-          # and the next one looks; it is not worth holding a runner longer.
-          WAIT_LIMIT_SECONDS: "3600"
+          # Ninety minutes: bumps merge in runs of three or four, ten to forty
+          # minutes apart, and the longest run seen here took 36 minutes (10:54
+          # to 11:30 on 2026-09-22), so a run that wakes into one has to wait for
+          # its last merge and then the grace: about 66 minutes. Past ninety it
+          # gives up, and with no schedule behind it the bumps wait for the next
+          # merge by a person or a manual run, so it is not given up lightly.
+          WAIT_LIMIT_SECONDS: "5400"
           # GitHub computes mergeability when it is first asked and answers
           # null until it has, and asking again is what finds the result. The
           # rounds cover every bump at once, so the wait is POLL_TRIES - 1
@@ -341,7 +340,7 @@ jobs:
           if [ -z "$GH_TOKEN" ]; then
             echo "::error::DEPENDABOT_REBASE_TOKEN must be a secret of the dependabot-rebase ENVIRONMENT."
             echo "Settings -> Environments -> dependabot-rebase -> Environment secrets, with deployment branches limited to main."
-            echo "It is not a Dependabot secret: this workflow is started by a merge or the schedule, not by Dependabot."
+            echo "It is not a Dependabot secret: this workflow is started by a merge, not by Dependabot."
             echo "The token is a fine-grained personal access token for this repository only, with Pull requests: read and write and nothing else, owned by an account with Write access."
             echo "See the header of .github/workflows/dependabot-rebase.yml."
             exit 1
@@ -363,8 +362,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.DEPENDABOT_REBASE_TOKEN }}
           CANDIDATES: ${{ needs.find.outputs.candidates }}
-          # Twelve hours: two full passes of the schedule over one unanswered
-          # request, against a Dependabot that answers in minutes.
+          # Twelve hours: Dependabot answers a command in minutes, so a request
+          # still standing after twelve has been ignored, not queued. It is
+          # judged only when a run happens, so being tighter would buy nothing.
           UNANSWERED_HOURS: "12"
         run: |
           set -uo pipefail
