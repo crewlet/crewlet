@@ -107,14 +107,21 @@ func TestAParentUnitDoesNotPoolItsChildrensSeats(t *testing.T) {
             llm: gateway
 `))
 	wireConfluence(e)
+	// BY THE UNIT'S KEY, which is what PromotionUnit.ID carries: matched on
+	// the display name, the loop skipped every unit and asserted nothing.
+	var found bool
 	for _, unit := range e.promotionUnits() {
-		if unit.ID != "Engineering" {
+		if unit.ID != "engineering" {
 			continue
 		}
+		found = true
 		if len(unit.Seats) != 1 || unit.Seats[0].Handle() != "vp" {
 			t.Fatalf("the parent pooled %v, want only its own direct seat",
 				unit.Seats)
 		}
+	}
+	if !found {
+		t.Fatal("the parent unit is not among the promotion units")
 	}
 }
 
