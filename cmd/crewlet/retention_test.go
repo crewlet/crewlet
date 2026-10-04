@@ -1021,7 +1021,7 @@ func TestRetentionStatusPrintsEachLogsDailyIntake(t *testing.T) {
 	tracked := report.Domains[0]
 	tracked.BytesPerDay = &measured
 	idle := tracked
-	idle.Domain, idle.Stream, idle.BytesPerDay = "chart", "CREWLET_CHART_LOG", &nothing
+	idle.Domain, idle.Stream, idle.BytesPerDay = "pages", "CREWLET_PAGES_LOG", &nothing
 	unmeasured := tracked
 	unmeasured.Domain, unmeasured.Stream, unmeasured.BytesPerDay =
 		"vectors", "CREWLET_VECTORS_LOG", nil
@@ -1033,7 +1033,7 @@ func TestRetentionStatusPrintsEachLogsDailyIntake(t *testing.T) {
 		t.Fatalf("the domain table has no daily intake column:\n%s", stdout)
 	}
 	for domain, want := range map[string]string{
-		"tracker": "3.0 MiB", "chart": "0 B", "vectors": " - ",
+		"tracker": "3.0 MiB", "pages": "0 B", "vectors": " - ",
 	} {
 		row := lineStarting(stdout, domain+" ")
 		if !strings.Contains(row, want) {

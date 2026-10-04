@@ -88,12 +88,10 @@ func roster(company func() (*config.Company, *org.Organization)) []map[string]an
 // agentOrganization is the active company's org, or nil when there is none to
 // read seats from.
 //
-// THE COMPANY'S OWN ORG, composed from this node's chart rows rather than
-// re-resolved from the document: a stored revision carries no seats at all,
-// so a derivation from the document answered an EMPTY roster for every
-// running company. Both halves come from ONE read of the epoch, so a node with
-// no company and a node with no chart view are the same answer — no seats —
-// and the screen says so.
+// THE COMPANY'S OWN ORG, the one this node built when it applied the epoch,
+// rather than one re-derived from the document per read. Both halves come from
+// ONE read of the epoch, so a node with no company answers no seats, and the
+// screen says so.
 func agentOrganization(company func() (*config.Company, *org.Organization)) *org.Organization {
 	if company == nil {
 		return nil

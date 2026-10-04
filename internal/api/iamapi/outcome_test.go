@@ -236,7 +236,7 @@ func TestAnEditStopsAtAStepNobodyCanConfirm(t *testing.T) {
 // record too large for the broker, a full log, a refusal the broker named, an
 // evicted node — carried the identity hint too, telling a client to come back
 // in two seconds for a write that could never land here, where the same
-// refusal on /chart or /work carries none. A node that is behind is the
+// refusal on /work carries none. A node that is behind is the
 // control, and keeps the hint.
 func TestARefusedWriteSaysWhenAndWhatToRetry(t *testing.T) {
 	t.Parallel()
@@ -317,8 +317,7 @@ func TestAnInvitationWithNoExternalURLIsAFault(t *testing.T) {
 // httpjson.Unavailable and httpjson.UnavailableWith — which pair it with the
 // header — are the only ways to answer one. And no file names the bare hint:
 // every site asks auth.RetryIdentity with the 503's cause, so a refusal no
-// wait clears carries no Retry-After here as it carries none on /chart and
-// /work.
+// wait clears carries no Retry-After here as it carries none on /work.
 func TestEveryUnavailableAnswerHereSaysWhetherToComeBack(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")

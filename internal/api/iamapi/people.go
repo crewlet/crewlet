@@ -19,8 +19,7 @@ import (
 
 // MaxBodyBytes bounds one directory write.
 //
-// 32 KiB, an order of magnitude below /chart's, because nothing here is
-// prose: a person is a name, an address, a login, a seat and two short lists.
+// 32 KiB, because nothing here is prose: a person is a name, an address, a login, a seat and two short lists.
 // The largest legitimate body is an enrolment carrying every grant the
 // vocabulary has, which is a few hundred bytes — so the bound is generous by
 // two orders of magnitude and still refuses a body that is being used as a

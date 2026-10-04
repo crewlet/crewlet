@@ -1712,10 +1712,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Bootstrap: boot,
 		// THE COMPANY'S HALF OF A TIER A PRINCIPAL: the identity
 		// directory's binding for a token's login, resolved through the
-		// SAME chart view a signed-in person's seat is — so a token bound
-		// to a removed seat is refused it exactly as a cookie is, and one
-		// bound to a renamed seat follows the rename. The zero SeatView
-		// on a node with no chart domain answers 503, never seatless.
+		// SAME seat view a signed-in person's seat is — so a token bound
+		// to a removed seat is refused it exactly as a cookie is. The seat
+		// view on a node running no company yet answers 503, never
+		// seatless.
 		SeatBindings: auth.SeatBindings{
 			Directory: e, Chart: engine.SeatViewOf(e),
 		},

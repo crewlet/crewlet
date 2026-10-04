@@ -46,7 +46,7 @@ func TestEachOutcomeIsItsOwnStatus(t *testing.T) {
 			create, nil, http.StatusForbidden},
 		// A ROW-DECIDED VERB on a chart that could not answer: the route
 		// admitted a reader and the tool's own ask could not decide.
-		{"the chart could not answer", chart{err: errors.New("behind the chart log")},
+		{"the chart could not answer", chart{err: errors.New("this node runs no company yet")},
 			as(colleague("ana")), http.MethodDelete, "/work/items/ENG-1", nil, nil,
 			http.StatusServiceUnavailable},
 		{"the item does not exist", chart{}, as(admin("ana")),

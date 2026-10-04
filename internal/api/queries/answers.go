@@ -803,17 +803,17 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 }
 
 // agentSeat resolves a handle — current, created-under or retired — to the
-// AGENT seat answering to it on this node's chart, and that seat's agent id.
-// Nil for a handle no agent seat answers to, and on a node with no chart view
-// to ask.
+// AGENT seat answering to it in the company this node runs, and that seat's
+// agent id. Nil for a handle no agent seat answers to, and on a node running
+// no company.
 func (s Sources) agentSeat(handle string) (*org.Role, string) {
 	if handle == "" || s.Company == nil {
 		return nil, ""
 	}
 	company, roster := s.Company()
-	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
-	// than re-resolved from the document: a stored revision carries no
-	// seats at all.
+	// THE COMPANY'S OWN ORG, the one this node built when it applied the
+	// epoch, rather than one re-derived from the document per read: both
+	// come from ONE read of the epoch, so they never describe two revisions.
 	if company == nil || roster == nil {
 		return nil, ""
 	}

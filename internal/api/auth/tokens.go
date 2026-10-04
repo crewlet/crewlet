@@ -64,9 +64,9 @@ type TokensDeps struct {
 	// Directory reads one token and its owner. REQUIRED.
 	Directory TokenDirectory
 
-	// Chart resolves a bound owner's seat. REQUIRED, and the ZERO VALUE of
-	// the engine's adapter is what a node with no chart domain passes: it
-	// answers every seat question UNKNOWN, never the seatless arm.
+	// Chart resolves a bound owner's seat. REQUIRED, and the engine's
+	// adapter on a node running no company yet answers every seat question
+	// UNKNOWN, never the seatless arm.
 	Chart session.Chart
 
 	// Now is the clock. Nil takes UTC wall time.

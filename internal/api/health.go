@@ -61,12 +61,11 @@ const (
 // PUBLIC on /health, like every probe — an orchestrator has no credential, so
 // the route is on the guard's exemption list — while the push goes only to a
 // socket whose principal holds `state:read` (stream.KindHealth's grant). The
-// probe is the wider audience and this body is shaped for it: the fleet, the
-// alarm table and the continuous report appear here as COUNTS — how many
-// nodes, how many alarms and the one longest unanswered, how many findings of
-// each kind — and never as their rows: which nodes hold what, what each alarm
-// measured and what each finding says are the `fleet`, `work_retention` and
-// `/chart/check` answers, each behind its own grant.
+// probe is the wider audience and this body is shaped for it: the fleet and
+// the alarm table appear here as COUNTS — how many nodes, how many alarms and
+// the one longest unanswered — and never as their rows: which nodes hold what
+// and what each alarm measured are the `fleet` and `work_retention` answers,
+// each behind its own grant.
 type Health struct {
 	Status string `json:"status"`
 

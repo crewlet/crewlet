@@ -311,10 +311,9 @@ func (s Sources) unplaceable(nodes, seats []map[string]any) []map[string]any {
 	if company == nil {
 		return []map[string]any{}
 	}
-	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
-	// than re-resolved from the document: a stored revision carries no
-	// seats at all, so the derivation this replaced answered an EMPTY
-	// organization for every running company.
+	// THE COMPANY'S OWN ORG, the one this node built when it applied the
+	// epoch, rather than one re-derived from the document per read: both
+	// come from ONE read of the epoch, so they never describe two revisions.
 	if roster == nil {
 		return []map[string]any{}
 	}

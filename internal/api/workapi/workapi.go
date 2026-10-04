@@ -778,8 +778,7 @@ func outcomeOf(receipt map[string]any) statelog.Outcome {
 
 // answer writes a write that was MADE, under its outcome.
 //
-// THE THREE SUCCESSES ARE THREE ANSWERS, for chartapi's reason: only
-// `applied` means the next read on this node sees the write, so only it is a
+// THE THREE SUCCESSES ARE THREE ANSWERS: only `applied` means the next read on this node sees the write, so only it is a
 // 200. `pending` is durable and not yet here — 202 with the position to read
 // at. `unknown` is a write this node cannot account for —
 // [operator.UnknownOutcome].

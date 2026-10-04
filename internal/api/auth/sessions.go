@@ -244,7 +244,7 @@ const RetryIdentitySeconds = 2
 // IT TAKES THE CAUSE because the identity surfaces answered every state-log
 // refusal with the constant: an identity write refused `record_too_large` or
 // `log_full` told a client to come back in two seconds for a write that could
-// never land, which the same refusal on /chart or /work did not. /iam and
+// never land, which the same refusal on /work did not. /iam and
 // /auth are held to naming the cause at every 503 by a gate in each package,
 // which refuses the constant there — a site with nothing in hand passes nil,
 // so the absence of a cause is written down rather than defaulted.
@@ -330,9 +330,9 @@ type SessionsDeps struct {
 	// iam token -login`'s mint is exactly that — is a 503 on every node.
 	Applier Applier
 
-	// Chart resolves a bound person's seat. REQUIRED, and the zero value
-	// of the engine's adapter is what a node with no chart domain passes:
-	// it answers UNKNOWN to every seat question, which is 503 — never the
+	// Chart resolves a bound person's seat. REQUIRED, and the engine's
+	// adapter on a node running no company yet answers UNKNOWN to every
+	// seat question, which is 503 — never the
 	// seatless arm, which would hand somebody bound to a lead's seat an
 	// empty handle and serve the request.
 	Chart session.Chart

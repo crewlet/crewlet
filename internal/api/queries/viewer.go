@@ -264,7 +264,7 @@ func (s Sources) mayRead(ctx context.Context, principal iam.Principal,
 	switch {
 	case d.Unknown():
 		// THIS NODE COULD NOT TELL, which a surface renders as 503 and
-		// never as a refusal: a node behind the chart log telling a lead
+		// never as a refusal: a node running no company yet telling a lead
 		// they lead nobody sends them to ask for authority they hold.
 		return fmt.Errorf("%w: this node cannot decide %s on %s's record "+
 			"yet: %w", ErrUnavailable, action, handle, d.Err)

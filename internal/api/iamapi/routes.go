@@ -390,10 +390,10 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 // landed answers — `200`, or `201` for one that hands the caller something it
 // created.
 //
-// # Six answers, the same six /chart gives
+// # Six answers
 //
-// THREE ARE FAILURES and [chartapi.Service.answerWrite] states why each is a
-// different thing to do next. What is particular here is [iamdomain.ErrRefused]
+// THREE ARE FAILURES, each a different thing to do next. What is particular
+// here is [iamdomain.ErrRefused]
 // and [iamdomain.ErrClaimed]: the first is authority (403, and it will never
 // land however often it is retried) and the second is a lost race on an
 // address, a login or a seat (409, naming who holds it). An estate that could

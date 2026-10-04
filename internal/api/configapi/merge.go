@@ -35,8 +35,8 @@ import (
 //
 // RFC 7396 has no way to address a list element, so a list in a patch
 // replaces the whole list. That is exactly the edit the per-entity routes
-// exist for — `PUT /config/mcp-servers/{name}` changes one tool server, and a
-// seat is the org chart's, changed by `PATCH /chart/seats/{handle}` — and
+// exist for — `PUT /config/mcp-servers/{name}` changes one tool server and
+// `PUT /config/roles/{handle}` one seat, wherever in the tree it sits — and
 // inventing a list syntax here would give two answers to one question.
 //
 // That is an argument about THIS format, and the obvious reply is to reach for

@@ -175,9 +175,9 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 //
 // There is no `reset`, and no route for one (ADR-0019). Each ceiling is per
 // calendar window, and a window's allowance comes back when the window turns
-// over; room before then is made by raising the ceiling — a seat's through its
-// org chart runtime (`PATCH /chart/seats/{handle}`), the company's through
-// `/config` — which is a write like any other, recorded under its author.
+// over; room before then is made by raising the ceiling — a seat's through
+// `PUT /config/roles/{handle}`, the company's through `PATCH /config` — which
+// is a write like any other, recorded under its author.
 func runBudgets(args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {

@@ -622,8 +622,8 @@ const (
 	// attempt as on every retry.
 	//
 	// ONE CODE WHEREVER THE ID ARRIVED — the node gate's `?op_id=` and
-	// every surface's `Idempotency-Key` (`/work`, `/pages`, `/chart`,
-	// `/iam`) — so a client branches on one spelling for one mistake. A
+	// every surface's `Idempotency-Key` (`/work`, `/pages`, `/iam`) — so a
+	// client branches on one spelling for one mistake. A
 	// refusal of a header also carries `field`, naming it.
 	CodeOpIDInvalid Code = "op_id_invalid"
 	// CodeInvalidGate is an eviction or readmission naming a node id no
@@ -1261,8 +1261,8 @@ const (
 // they send a client opposite ways: the first is retried under the same
 // operation and never under a fresh one, which would make a second change if
 // the first landed; the second wrote nothing. Every surface wrote the unknown
-// for itself, and they had drifted — `/chart` and `/iam` said it only in a
-// sentence, `/work` said it on some routes because the tool's receipt happened
+// for itself, and they had drifted — `/iam` said it only in a sentence,
+// `/work` said it on some routes because the tool's receipt happened
 // to carry an `outcome` and not on others — so `crewlet work purge`, which
 // branches on the field, told an operator whose purge may have destroyed the
 // item that the attempt "wrote nothing". One writer, and the three keys are

@@ -939,10 +939,9 @@ func TestTheDanglingArmReportsWhatTheRuleSays(t *testing.T) {
 	}
 }
 
-// A BINDING THE CHART CANNOT JUDGE IS COUNTED, NEVER REPORTED AND NEVER HIDDEN.
+// A BINDING THE NODE CANNOT JUDGE IS COUNTED, NEVER REPORTED AND NEVER HIDDEN.
 //
-// A node whose chart applier is past the stall grace cannot say whether a seat
-// exists. Reporting the binding as dangling would send an administrator to
+// A node running no company yet cannot say whether a seat exists. Reporting the binding as dangling would send an administrator to
 // unbind somebody whose seat is there; saying nothing at all would print
 // "nothing to report" during exactly the stall that hides a real residue. So
 // the answer carries how many it could not check.
@@ -950,7 +949,7 @@ func TestABindingTheChartCannotJudgeIsCountedAsUnchecked(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, func(o *iamapi.Options) {
 		o.Bindings = func(context.Context, iamdomain.PersonRow) (bool, string, error) {
-			return false, "", errors.New("the chart applier is 4m0s behind")
+			return false, "", errors.New("this node runs no company yet")
 		}
 	})
 	got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
@@ -1168,8 +1167,7 @@ func TestAWriteThatLostItsRaceIsStale(t *testing.T) {
 	}
 }
 
-// A BODY OVER THE CAP IS ANSWERED 413, not abandoned — for chartapi's reason:
-// the handler returned without writing a status, and an empty 200 reads as a
+// A BODY OVER THE CAP IS ANSWERED 413, not abandoned: the handler returned without writing a status, and an empty 200 reads as a
 // person created.
 func TestAnOversizedWriteIsAnsweredRatherThanDropped(t *testing.T) {
 	t.Parallel()
