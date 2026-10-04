@@ -80,6 +80,13 @@ import (
 // change that sets, clears or alters one is listed apart ([OrgChange.Keys]) for
 // the company grant.
 //
+// A REMOVAL TAKES ITS KEYS WITH IT, judged by where the object was and nothing
+// else, and that is the one residual: a lead may remove a sub-team or a seat
+// that declares a project or a space, and what it declared stays in the
+// tracker with its tasks, or the knowledge base with its pages, declared by
+// nothing in the document — an orphan nobody leads, which only the company
+// grant may declare again. It takes authority away and gives none.
+//
 // PURE, over two documents and never the running company: a node behind on
 // applies decides a write exactly as a current one does.
 

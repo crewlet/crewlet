@@ -1731,7 +1731,13 @@ subtree:
 Only what a write **changes** is judged: a reference or a key the object
 already carried was somebody else's decision, and judging it again would make a
 team an administrator wired to another team's channel uneditable by its own
-lead. A seat edited within the lead's subtree may otherwise change anything —
+lead. A removal is judged by where the object was and nothing else, which
+leaves one residual: a lead may remove a sub-team or a seat that declares a
+project or a space, and the project stays in the tracker with its tasks, or the
+space in the knowledge base with its pages, declared by nothing in the company
+document — an orphan nobody leads until somebody holding `config:write`
+declares it again, since a lead may not. It takes authority away and gives
+none. A seat edited within the lead's subtree may otherwise change anything —
 its model chain, its sandbox, its schedules — among what the company's settings
 offer, which stay `config:write`'s: whether a `cli-agent` provider or a sandbox
 cell on the engine host exists for a lead to choose is the administrator's
