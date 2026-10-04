@@ -62,26 +62,9 @@ writes FAIL OPEN: `ON CONFLICT DO NOTHING` simply stops firing. A retry would
 write a second episode, re-count an interaction, post a second comment and
 file a second tracker operation, and nothing would report it.
 
-## What a rolling upgrade sees
+## The event store's history
 
-Two builds on one stream disagree about `turn_id` for the length of a rollout,
-and the consequence is bounded duplication rather than corruption.
-
-A NEW node reading an OLD node's `turn_completed` is covered: the payload
-carries no `work_key` and its `turn_id` IS one, so `learning.Turn.WorkKey`
-falls back to it and the episode and the interaction count still collapse.
-
-An OLD node reading a NEW node's event is not, and cannot be: it reads
-`turn_id` as the work key, and that is now a per-run value, so two attempts at
-one trigger write two episodes and count two interactions. The window is the
-rollout, the effect is a duplicate row the recall and the synthesis then weight
-twice, and nothing reports it. It is the same bounded duplication
-`internal/learning` already promises in place of exactly-once, which is why
-this is stated rather than engineered around: the alternative is a second
-identity on the wire for old readers to mistake in some other way.
-
-One piece of STATE outlives the rollout rather than crossing it. The event
-store's `work_key` COLUMN is backfilled from `turn_id` by
+The event store's `work_key` COLUMN is backfilled from `turn_id` by
 `schema/0029`; the `tags` blob beside it is not, because that blob records
 what the writer extracted from an event whose JSON carried no such field, and
 rewriting every one would restate history and still leave the stored payload

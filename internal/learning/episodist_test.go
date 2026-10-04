@@ -202,27 +202,20 @@ func TestTwoRunsOfOneTriggerCollapseToOneEpisode(t *testing.T) {
 	}
 }
 
-// AND THE TWO ERAS ARE TOLD APART BY SHAPE, because the wire cannot tell them
-// apart at all.
-//
-// A `turn_completed` from a build before the split carries no work key and its
-// turn id IS one; a post-split turn with no ledgerable trigger carries no work
-// key either, and its turn id is a RUN. The field is `omitempty`, so both
-// arrive as absent — and the two want opposite answers. Falling back for both
-// arms the counterparty guard with a value that means nothing, which is the
-// exact disarming [Counterparties.Record] keeps the last KEYED unit of work to
-// avoid.
-func TestTheWorkKeyFallbackReadsTheGrammarNotTheAbsence(t *testing.T) {
+// A TURN WITH NO WORK KEY HAS NO UNIT OF WORK, even when its turn id has a
+// work key's shape: falling back to the run id would arm the counterparty
+// guard with a value that means nothing, which is the exact disarming
+// [Counterparties.Record] keeps the last KEYED unit of work to avoid.
+func TestATurnWithNoWorkKeyHasNoUnitOfWork(t *testing.T) {
 	t.Parallel()
-	// An older build's event: the turn id is a derived key, so it IS one.
-	old := epTurn()
-	old.Event.TurnID, old.Event.WorkKey = workkey.Derive([]string{"evt-a"}), ""
-	if got := old.WorkKey(); got != old.Event.TurnID {
-		t.Errorf("work key = %q, want the turn id an older build carried it in", got)
+	keyShaped := epTurn()
+	keyShaped.Event.TurnID, keyShaped.Event.WorkKey = workkey.Derive([]string{"evt-a"}), ""
+	if got := keyShaped.WorkKey(); got != "" {
+		t.Errorf("work key = %q, want empty: the turn id is a run whatever its shape", got)
 	}
 
-	// A post-split turn with no trigger key: the turn id is a run, and
-	// there is no unit of work to answer with.
+	// A turn with no trigger key: the turn id is a run, and there is no
+	// unit of work to answer with.
 	unkeyed := epTurn()
 	unkeyed.Event.TurnID, unkeyed.Event.WorkKey = uuid.NewString(), ""
 	if got := unkeyed.WorkKey(); got != "" {
@@ -263,7 +256,7 @@ func TestAFailedTurnIsStillRecorded(t *testing.T) {
 func TestASelfPersistedTurnIsStillRecorded(t *testing.T) {
 	t.Parallel()
 	turn := epTurn()
-	turn.Event.PlanToolSequence = []string{learning.ReflectTool}
+	turn.Event.AllToolNames = []string{learning.ReflectTool}
 	if reason := episodist(t, episodes(t)).Skip(turn); reason != "" {
 		t.Fatalf("skipped a self-persisted turn: %s", reason)
 	}

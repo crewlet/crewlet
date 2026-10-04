@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/crewlet/crewlet/internal/workkey"
 )
 
 // ReflectGroup is the dispatcher's consumer group.
@@ -27,10 +26,7 @@ const ReflectGroup = "reflect-engine"
 //
 // The dispatcher reads it as "the LLM already handled persistence this turn".
 // It is an executor builtin, so a call lands in the executor-scoped
-// [types.TurnCompleted.ToolSequence]. [Turn.SelfPersisted] reads
-// [types.TurnCompleted.PlanToolSequence] too, which this build never writes: an
-// older build recorded its planning phase's calls there, and a turn one of its
-// nodes completed during a rolling upgrade must not be persisted twice.
+// [types.TurnCompleted.ToolSequence].
 const ReflectTool = "reflect_and_persist"
 
 // ReflectSeen bounds the dispatcher's memory of turns it has already handled.
@@ -91,21 +87,7 @@ func (t Turn) Seat() string {
 // last KEYED unit of work precisely so an unkeyed observation cannot disarm
 // the next redelivery's dedupe, and a fabricated key walks straight through
 // that.
-//
-// FALLING BACK ONLY ON SHAPE. A `turn_completed` from a build before the split
-// carries no work key and its turn id IS one, and a rolling upgrade guarantees
-// some of those — but so does a post-split turn with no trigger key, and the
-// wire cannot tell the two apart because the field is `omitempty`. The GRAMMAR
-// can: see [workkey.IsDerived].
-func (t Turn) WorkKey() string {
-	if t.Event.WorkKey != "" {
-		return t.Event.WorkKey
-	}
-	if workkey.IsDerived(t.Event.TurnID) {
-		return t.Event.TurnID
-	}
-	return ""
-}
+func (t Turn) WorkKey() string { return t.Event.WorkKey }
 
 // DedupeKey is what the redelivery guard remembers, and it is a DIFFERENT
 // question from [Turn.WorkKey].
@@ -158,9 +140,12 @@ func Settled(outcome string) bool {
 func (t Turn) Settled() bool { return Settled(t.Event.ReviewOutcome) }
 
 // SelfPersisted reports whether the turn already wrote its own memory.
+//
+// Off the WHOLE turn's calls, never the last round's: a self_iterate loop
+// keeps only its final round in ToolSequence, and a memory written in an
+// earlier round is still written.
 func (t Turn) SelfPersisted() bool {
-	return slices.Contains(t.Event.PlanToolSequence, ReflectTool) ||
-		slices.Contains(t.Event.ToolSequence, ReflectTool)
+	return slices.Contains(t.Event.AllToolNames, ReflectTool)
 }
 
 // Engaged reports whether the agent actually acted on the trigger.
