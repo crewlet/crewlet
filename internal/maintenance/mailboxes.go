@@ -400,13 +400,7 @@ func (m *Mailboxes) Register(ctx context.Context, seat placement.Seat) error {
 					"budget; the seat is in the active revision again, so its record is reclaimed "+
 					"and the mailbox created afresh")
 		}
-		// THE HANDLE IS REFRESHED with the registration, because it is a
-		// LABEL: a seat that was renamed while its record sat absent would
-		// otherwise keep answering to the name it had then, in every log
-		// line a later retirement writes.
-		returning := presentRecord(rec)
-		returning.Handle = handle
-		cleared, ok, err := m.records.UpdateMailbox(ctx, returning)
+		cleared, ok, err := m.records.UpdateMailbox(ctx, presentRecord(rec))
 		if err != nil {
 			return fmt.Errorf("maintenance: register the mailbox of seat %q: %w", handle, err)
 		}
