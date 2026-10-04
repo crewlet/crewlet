@@ -58,10 +58,11 @@ const (
 	RoleSeats NodeRole = "seats"
 
 	// RoleWorkers runs the company-wide singleton duties behind
-	// worker:{duty} leases — the scheduler tick, the retention sweep, the
-	// sandbox waiter, skill clustering and curation, seat-subscription
-	// creation. Exactly one node does each at a time; a fleet with none of
-	// these does none of them.
+	// worker:{duty} leases — the scheduler tick, the maintenance sweep, the
+	// sandbox waiter, the integration reconcile, the learning passes, the
+	// state logs' trim, the embedding duty and the identity sweep. Exactly
+	// one node does each at a time; a fleet with none of these does none of
+	// them.
 	RoleWorkers NodeRole = "workers"
 )
 
