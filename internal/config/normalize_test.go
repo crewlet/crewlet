@@ -186,7 +186,6 @@ func TestTheReferenceIndexDoesNotRewriteWhatItWalks(t *testing.T) {
 	c := &config.Company{Name: "  Nimbus  "}
 
 	config.References(c)
-	config.ReferencedNames(c)
 
 	if got, want := c.Name, "  Nimbus  "; got != want {
 		t.Errorf("name = %q after a read-only walk, want %q unchanged", got, want)

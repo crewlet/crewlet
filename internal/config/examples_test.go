@@ -211,9 +211,10 @@ func TestQuickstartExportsEveryVariableItReferences(t *testing.T) {
 	for _, m := range regexp.MustCompile(`export\s+([A-Za-z_][A-Za-z0-9_]*)=`).FindAllStringSubmatch(page, -1) {
 		exported[m[1]] = true
 	}
-	for _, name := range ReferencedNames(cfg) {
-		if !exported[name] {
-			t.Fatalf("the quickstart config references ${%s} but the page never exports it", name)
+	for _, ref := range References(cfg) {
+		if !exported[ref.Name] {
+			t.Fatalf("the quickstart config references ${%s} at %s but the page never "+
+				"exports it", ref.Name, ref.Path)
 		}
 	}
 }

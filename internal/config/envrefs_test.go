@@ -90,29 +90,6 @@ func TestALiteralIsNotAReference(t *testing.T) {
 	}
 }
 
-// TestTheTwoAnswersNeverDisagreeAboutWhatIsReachable is why there is one
-// walk. The fingerprint half decides whether a config change is a change at
-// all; a second traversal that missed a field one of them reaches would fail
-// silently on exactly that.
-func TestTheTwoAnswersNeverDisagreeAboutWhatIsReachable(t *testing.T) {
-	t.Parallel()
-	cfg := referenceCompany(t)
-	seen := map[string]struct{}{}
-	for _, ref := range References(cfg) {
-		seen[ref.Name] = struct{}{}
-	}
-	names := ReferencedNames(cfg)
-	if len(names) != len(seen) {
-		t.Fatalf("ReferencedNames = %v, but References found %d distinct names",
-			names, len(seen))
-	}
-	for _, name := range names {
-		if _, ok := seen[name]; !ok {
-			t.Errorf("ReferencedNames reported %q, which References never saw", name)
-		}
-	}
-}
-
 // TestAnEmptyDocumentReferencesNothing pins the answer a company with no
 // credentials gets: an empty list rather than a nil the caller has to guess
 // the meaning of.
