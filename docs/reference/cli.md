@@ -274,7 +274,9 @@ back to any earlier id.
 
 **Idempotent by content**, the same rule the [boot seed](#crewlet-run) follows:
 a file that already matches the active revision imports nothing and says so, an
-edited one imports once. The audit note is `imported from <path>`, `created_by`
+edited one imports once. An active revision stored **without a seal** is never
+compared — nothing vouches for what it says — and the import replaces it, which
+is why every command that refuses such a revision names this one. The audit note is `imported from <path>`, `created_by`
 is the invoking operator (of the `operator` kind, with no credential beside
 them: none made the write) and `source` is `file` — all three are recorded for
 you and none is settable from the command line. (`PUT /config` takes an
