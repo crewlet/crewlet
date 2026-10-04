@@ -240,28 +240,21 @@ doing the thing, or starts doing more — so read the file when you touch it:
   so a skip on doubt would stall every bump with nothing red to show. Loosening
   the `if:` makes the workflow run *more*; narrowing the approval silently stops
   it approving.
-- **`.github/workflows/dependabot-recreate.yml`'s command, its concurrency group
-  and its environment.** It comments `@dependabot recreate` on a bump in conflict
-  right after a person's merge, without waiting for Dependabot's own rebase (up to
-  about four and a half minutes here): a bump Dependabot would have rebased is
-  recreated instead, which costs one redundant force-push and CI run and nothing
-  else. The command is `recreate` because Dependabot refuses `rebase` on a branch
-  holding somebody else's commit, and the price is that `recreate` overwrites
-  every commit on the branch. The concurrency group is what stops two quick merges'
-  runs overlapping and both asking about one bump; a newer merge cancels the older
-  run, which loses nothing because what it posted is on the pull requests' own
-  comments for the next run to read. The comment must come from a user account, with
-  `DEPENDABOT_RECREATE_TOKEN`:
-  fine-grained, this repository alone, Pull requests: read and write. That scope
-  also approves pull requests, which counts toward `main`'s required review, so
-  the secret must stay a secret of the `dependabot-recreate` ENVIRONMENT limited
-  to the selected branch `main` (an ordinary Actions secret is readable by every
-  writer). Nothing checks that setting, and a workflow that names a missing
-  environment creates it open to every branch, so create it first; never reuse
-  the bundle token, which can push. A bump merges with `GITHUB_TOKEN`, which
-  starts no `push` workflow, so a conflict a bump's merge makes waits for the
-  next person's merge or a manual run. An empty or expired secret fails the run;
-  weakening the concurrency group, the environment or the token's scope leaves it
+- **`.github/workflows/dependabot-recreate.yml`'s filter, its command and its
+  environment.** It comments `@dependabot recreate` on a bump in
+  conflict that Dependabot will not rebase by itself: one holding a commit that is
+  neither Dependabot's nor marked `[dependabot skip]`. Widen that and it races
+  Dependabot on bumps it rebases itself; narrow it and a stuck bump is never
+  asked. `recreate` overwrites every commit on the branch. Each request carries the head
+  it was made for in a hidden marker, which keeps it to one request per head and
+  three per bump. The comment must come from a user account, with
+  `DEPENDABOT_RECREATE_TOKEN`: fine-grained, this repository alone, Pull requests:
+  read and write, as a secret of the `dependabot-recreate` ENVIRONMENT limited to
+  the selected branch `main`, because that scope can also approve pull requests.
+  Create the environment first (a workflow that names a missing one creates it
+  open to every branch) and never reuse the bundle token, which can push. An empty
+  secret fails the run, and so does Dependabot answering "only users with push
+  access"; weakening the filter, the environment or the token's scope leaves it
   green.
 - **`.github/workflows/dependabot-dashboard.yml`'s guard, its two-job split and
   the token's scope.** The `push` job holds a personal access token that can
