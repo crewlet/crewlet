@@ -1,47 +1,51 @@
 name: dependabot-recreate
 
-# When a person merges to `main`, ask Dependabot to recreate every bump that is
-# in conflict, once per head commit. It does not wait for Dependabot's own rebase
-# (a few minutes: #167, two minutes after #168 merged), so a bump Dependabot
-# would have rebased by itself is recreated instead, which ends in the same
-# branch for the price of one more force-push and CI run. A wait would only save
-# that, and a job that sleeps ten minutes printing nothing reads as hung.
+# Ask Dependabot to recreate the bumps in conflict that it will not fix by
+# itself. Dependabot rebases a conflicted bump on its own while every commit on
+# it is its own or marked `[dependabot skip]` (the bundle commit is) and the bump
+# is under 30 days old, so those are left to it. A bump holding any other commit
+# it never rebases again, and `@dependabot rebase` is refused there, so this
+# comments `@dependabot recreate`, which rebuilds the branch and OVERWRITES EVERY
+# COMMIT ON IT, a person's included. A bump over 30 days old that is
+# Dependabot's alone is named for a person instead.
 #
-# It comments `recreate`, not `rebase`, because the bumps that stay stuck are
-# the ones Dependabot will not touch: once a branch holds a commit that is
-# neither Dependabot's nor marked `[dependabot skip]`, Dependabot skips the
-# automatic rebase and answers `@dependabot rebase` with "edited by someone
-# other than Dependabot", so the bump stays stuck for good. Recreate is the
-# command that works on it, and it OVERWRITES EVERY COMMIT ON THE BRANCH, a
-# person's included. That is the price, paid by any bump in conflict after a
-# merge.
+# The comment has to come from a user account: Dependabot ignores commands from
+# `github-actions[bot]` and from GitHub Apps (dependabot-core#9147). So it is made
+# with DEPENDABOT_RECREATE_TOKEN, a fine-grained personal access token for this
+# repository with Pull requests: read and write, owned by an account with Write
+# access. That scope can also approve pull requests, so the secret lives in the
+# `dependabot-recreate` ENVIRONMENT, limited to the branch `main`.
 #
-# The comment has to come from a person. Dependabot ignores commands written by
-# `github-actions[bot]` or by a GitHub App (dependabot-core#9147). So it is made
-# with DEPENDABOT_RECREATE_TOKEN: a fine-grained personal access token for this
-# repository, Pull requests: read and write, owned by an account with Write
-# access. That scope can also approve pull requests, so the secret belongs to an
-# ENVIRONMENT limited to the branch `main` (Settings -> Environments), which
-# releases it to a run on `main` and to no other branch a writer can push. Create
-# the environment BEFORE this reaches `main`: a workflow that names one that does
-# not exist creates it, open to every branch.
-#
-# Not covered: a bump merges itself with GITHUB_TOKEN, and GitHub starts no
-# workflow for an event that token caused (#167, #170, #171 and #173 have no push
-# run), so a conflict a bump's merge makes waits for the next merge by a person,
-# or for "Run workflow". Those are the conflicts Dependabot rebases itself.
+# Not covered: a bump merges itself with GITHUB_TOKEN, which starts no push
+# workflow, so a conflict a bump's merge makes waits for the next merge by a
+# person, or for "Run workflow".
 
 on:
   push:
     branches: [main]
+    # A conflict needs both sides to change one file, so only a merge touching
+    # something a Dependabot bump touches can make one. These are the manifests
+    # .github/dependabot.yml watches, plus the bundle a dashboard bump rebuilds.
+    paths:
+      - go.mod
+      - go.sum
+      - dashboard/package.json
+      - dashboard/package-lock.json
+      - static/dashboard/**
+      - Dockerfile
+      - docker-compose.yml
+      - .github/workflows/**
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Report what would be commented, without commenting
+        type: boolean
+        default: false
 
 permissions: {}
 
-# A newer merge cancels a run still in flight. That run listed the bumps before
-# the merge, and what it already posted is on the pull requests' own comments,
-# which the newer run reads, so nothing is lost by stopping it. At worst a comment
-# was sent as the cancel arrived and the bump is asked twice.
+# Superseding a run in flight is safe: each request is keyed on the bump's head
+# commit, so the newer run redoes whatever the cancelled one left.
 concurrency:
   group: dependabot-recreate
   cancel-in-progress: true
@@ -53,53 +57,190 @@ jobs:
     # A fork has no secret and would fail on every push to its own `main`.
     if: ${{ !github.event.repository.fork }}
     environment: dependabot-recreate
-    # A hang detector: two minutes of retries at most, plus a few API calls.
     timeout-minutes: 5
     steps:
-      - run: |
-          set -euo pipefail
-
-          # An empty secret is the failure this job is expected to meet on its
-          # first run, and gh's own message for it names neither the secret nor
-          # the environment it has to live in.
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::error::DEPENDABOT_RECREATE_TOKEN is empty. It is a secret of the dependabot-recreate ENVIRONMENT (Settings -> Environments), not an ordinary Actions secret. See the header of .github/workflows/dependabot-recreate.yml."
+      - name: the token is configured
+        env:
+          TOKEN: ${{ secrets.DEPENDABOT_RECREATE_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::DEPENDABOT_RECREATE_TOKEN is empty. It is a secret of the dependabot-recreate ENVIRONMENT (Settings -> Environments), not an ordinary Actions secret."
             exit 1
           fi
 
-          # GitHub works out whether a pull request conflicts when it is first
-          # asked, and answers UNKNOWN until it has. Ask until every bump has an
-          # answer, two minutes at most; one still UNKNOWN waits for the next merge.
-          #
-          # Only the number and the answer are listed. GraphQL refuses a query that
-          # could reach more than 500,000 nodes, and one that also asks for every
-          # pull request's commits and each commit's authors is a hundred times a
-          # hundred times a hundred. Each conflicting bump is read on its own below.
-          for _ in 1 2 3 4 5 6 7 8; do
-            prs="$(gh pr list --author app/dependabot --base main --limit 1000 \
-              --json number,mergeable)"
-            jq -e 'all(.[]; .mergeable != "UNKNOWN")' <<<"$prs" >/dev/null && break
-            sleep 15
-          done
-
-          jq -r '.[] | select(.mergeable == "CONFLICTING") | .number' <<<"$prs" |
-            while read -r n; do
-              # Nobody has asked for a recreate since the branch last changed. A
-              # refused `rebase` does not count: it left the branch as it was. Both
-              # timestamps are UTC ISO-8601, which compares as text.
-              asked="$(gh pr view "$n" --json commits,comments | jq '
-                (.commits[-1].committedDate) as $head
-                | any(.comments[];
-                    (.body | test("^@dependabot recreate"))
-                    and .createdAt > $head)')"
-              if [ "$asked" = true ]; then
-                echo "#$n is in conflict, and Dependabot was already asked since its last commit"
-                continue
-              fi
-              gh api "repos/$GITHUB_REPOSITORY/issues/$n/comments" \
-                -f body='@dependabot recreate' --silent
-              echo "asked Dependabot to recreate #$n"
-            done
+      - name: ask Dependabot to recreate the bumps it will not rebase
+        uses: actions/github-script@v9
         env:
-          GH_TOKEN: ${{ secrets.DEPENDABOT_RECREATE_TOKEN }}
-          GH_REPO: ${{ github.repository }}
+          # Empty on a push; "true" or "false" on a manual run.
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        with:
+          github-token: ${{ secrets.DEPENDABOT_RECREATE_TOKEN }}
+          # A genuine rejection (400, 401, 403, 404, 422) is not retried.
+          retries: 3
+          script: |
+            const { owner, repo } = context.repo;
+            const MARKER = 'dependabot-recreate';
+            const COMMENT_WINDOW = 50; // comments read per bump
+            const MAX_ATTEMPTS = 3;    // requests per bump, ever
+            const STALE_DAYS = 30;     // Dependabot stops rebasing after this
+            const DRY_RUN = process.env.DRY_RUN === 'true';
+
+            // GraphQL calls Dependabot "dependabot", REST "dependabot[bot]".
+            const DEPENDABOT_LOGINS = new Set(['dependabot', 'dependabot[bot]']);
+            const DEPENDABOT_ID = 49699333;
+            // A commit carrying this is one Dependabot force-pushes over, so it
+            // does not stop Dependabot rebasing (dependabot-dashboard.yml's is one).
+            const SKIP_MARKER = /\[(dependabot[ -]skip|skip[ -]dependabot)\]/i;
+            const isDependabot = (a) =>
+              !!a && (DEPENDABOT_LOGINS.has((a.login || '').toLowerCase()) ||
+                      a.databaseId === DEPENDABOT_ID);
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+            // One request per 100 open pull requests. Nothing nested beyond the
+            // last comments: commits are read per candidate, over REST, below.
+            const SWEEP = `
+              query($owner: String!, $name: String!, $cursor: String) {
+                repository(owner: $owner, name: $name) {
+                  pullRequests(states: OPEN, first: 100, after: $cursor) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes {
+                      id number isDraft createdAt headRefOid mergeable body
+                      author { __typename login ... on Bot { databaseId } }
+                      comments(last: ${COMMENT_WINDOW}) {
+                        totalCount
+                        nodes { createdAt body author { login } }
+                      }
+                    }
+                  }
+                }
+              }`;
+            const RECHECK = `
+              query($ids: [ID!]!) {
+                nodes(ids: $ids) {
+                  ... on PullRequest { id number headRefOid mergeable }
+                }
+              }`;
+
+            const prs = [];
+            let cursor = null;
+            do {
+              const res = await github.graphql(SWEEP, { owner, name: repo, cursor });
+              const conn = res.repository.pullRequests;
+              prs.push(...conn.nodes.filter((p) => isDependabot(p.author)));
+              cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
+            } while (cursor);
+            core.info(`${prs.length} open Dependabot pull request(s).`);
+
+            // GitHub works out mergeability when it is first asked and answers
+            // UNKNOWN until then, so ask again for those, a minute at most.
+            const byId = new Map(prs.map((p) => [p.id, p]));
+            for (let round = 0; round < 4; round += 1) {
+              const unresolved = prs.filter((p) => p.mergeable === 'UNKNOWN');
+              if (unresolved.length === 0) break;
+              await sleep(15000);
+              const res = await github.graphql(RECHECK, { ids: unresolved.map((p) => p.id) });
+              for (const n of res.nodes || []) {
+                if (n && byId.has(n.id)) {
+                  Object.assign(byId.get(n.id), { headRefOid: n.headRefOid, mergeable: n.mergeable });
+                }
+              }
+            }
+
+            const asked = [];
+            const needsHuman = [];
+            const rejected = [];
+
+            for (const pr of prs) {
+              const tag = `#${pr.number}`;
+              const markers = pr.comments.nodes.filter((c) => (c.body || '').includes(MARKER));
+              const lastAsk = markers.length
+                ? Math.max(...markers.map((c) => new Date(c.createdAt).getTime()))
+                : null;
+
+              // Dependabot refusing one of our requests: the token's account
+              // cannot command it, which is otherwise a silent no-op.
+              if (lastAsk !== null && pr.comments.nodes.some(
+                    (c) => isDependabot(c.author) &&
+                           new Date(c.createdAt).getTime() >= lastAsk &&
+                           /only users with push access/i.test(c.body || ''))) {
+                rejected.push(pr.number);
+              }
+
+              if (pr.mergeable === 'UNKNOWN') {
+                core.info(`${tag}: mergeability still UNKNOWN, the next run will look again.`);
+                continue;
+              }
+              if (pr.mergeable !== 'CONFLICTING') continue;
+              if (pr.isDraft) {
+                core.info(`${tag}: a draft, left alone.`);
+                continue;
+              }
+              if (/Dependabot is rebasing this PR/i.test(pr.body || '')) {
+                core.info(`${tag}: Dependabot is already rebasing it.`);
+                continue;
+              }
+              if (markers.some((c) => (c.body || '').includes(pr.headRefOid))) {
+                core.info(`${tag}: already asked for ${pr.headRefOid.slice(0, 7)}.`);
+                continue;
+              }
+              if (markers.length >= MAX_ATTEMPTS) {
+                core.warning(`${tag}: still in conflict after ${markers.length} requests to recreate it. A person has to resolve it.`);
+                needsHuman.push(pr.number);
+                continue;
+              }
+              if (markers.length === 0 && pr.comments.totalCount > COMMENT_WINDOW) {
+                core.warning(`${tag}: only the last ${COMMENT_WINDOW} of ${pr.comments.totalCount} comments were read, so an earlier request cannot be ruled out. A person has to look.`);
+                needsHuman.push(pr.number);
+                continue;
+              }
+
+              // Who wrote the commits on the branch.
+              const commits = await github.paginate(github.rest.pulls.listCommits, {
+                owner, repo, pull_number: pr.number, per_page: 100,
+              });
+              const foreign = new Set();
+              for (const c of commits) {
+                const login = ((c.author && c.author.login) || '').toLowerCase();
+                const name = ((c.commit && c.commit.author && c.commit.author.name) || '').toLowerCase();
+                if (DEPENDABOT_LOGINS.has(login) || DEPENDABOT_LOGINS.has(name)) continue;
+                if (SKIP_MARKER.test((c.commit && c.commit.message) || '')) continue;
+                foreign.add(login || name || 'unknown');
+              }
+
+              if (foreign.size === 0) {
+                const ageDays = (Date.now() - new Date(pr.createdAt)) / 86400000;
+                if (ageDays > STALE_DAYS) {
+                  core.warning(`${tag}: in conflict and ${Math.floor(ageDays)} days old, past the ${STALE_DAYS} days Dependabot rebases for. Close it or rebase it by hand.`);
+                  needsHuman.push(pr.number);
+                } else {
+                  core.info(`${tag}: in conflict, and Dependabot rebases it by itself.`);
+                }
+                continue;
+              }
+
+              core.info(`${tag}: in conflict at ${pr.headRefOid.slice(0, 7)} with commits by ${[...foreign].join(', ')}, which Dependabot will not rebase over. Asking it to recreate (request ${markers.length + 1} of ${MAX_ATTEMPTS}).`);
+              if (DRY_RUN) {
+                core.info(`${tag}: dry run, not commenting.`);
+                continue;
+              }
+              // The command has to be the first line; the marker after it is an
+              // HTML comment, which the pull request page does not show.
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pr.number,
+                body: `@dependabot recreate\n\n<!-- ${MARKER}: ${pr.headRefOid} -->`,
+              });
+              asked.push(pr.number);
+              // GitHub asks for at least a second between requests that create content.
+              await sleep(1500);
+            }
+
+            const list = (ns) => (ns.length ? [...new Set(ns)].map((n) => `#${n}`).join(', ') : 'none');
+            core.summary.addRaw(
+              `${prs.length} open Dependabot pull request(s)${DRY_RUN ? ' (dry run)' : ''}.\n\n` +
+              `- asked to recreate: ${list(asked)}\n` +
+              `- needs a person: ${list(needsHuman)}\n`);
+            await core.summary.write();
+
+            if (rejected.length) {
+              core.setFailed(`Dependabot answered "only users with push access can use that command" on ${list(rejected)}. The account that owns DEPENDABOT_RECREATE_TOKEN needs Write access to this repository.`);
+            }

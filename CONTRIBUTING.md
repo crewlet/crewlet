@@ -691,65 +691,61 @@ token's scope on any diff that touches
 ### A conflicted bump is asked to recreate
 
 [`.github/workflows/dependabot-recreate.yml`](.github/workflows/dependabot-recreate.yml)
-runs when a person merges to `main`, or by hand from the Actions tab. It comments
-`@dependabot recreate` on every open Dependabot pull request that is in conflict,
-once per head commit, so a bump that stays stuck is not asked again until its
-branch changes. The only waiting it does is for GitHub to work out which pull
-requests conflict, which takes seconds.
+runs when a merge to `main` touches something a Dependabot bump touches (a
+manifest `.github/dependabot.yml` watches, or the dashboard bundle), and by hand
+from the Actions tab, where a **dry run** box reports what it would comment
+without commenting.
 
-It does not wait for Dependabot's own rebase. Dependabot rebases a conflicted
-bump by itself within minutes (up to about four and a half in this repository's
-history), so a bump it would have rebased is recreated instead. That ends in the
-same branch, a Dependabot commit and a fresh bundle commit, for the price of one
-more force-push and CI run. Waiting out the rebase would only save that, and
-would leave a job that sleeps for minutes printing nothing, which reads as hung.
+Dependabot rebases a conflicted bump by itself while every commit on it is its
+own or carries `[dependabot skip]`, as the bundle commit does, and while the bump
+is under 30 days old (#172 went into conflict when #165 merged, and Dependabot
+rebased it on its own). The workflow leaves those to it. A bump holding any other
+commit Dependabot never rebases again, and it refuses `@dependabot rebase` there
+("edited by someone other than Dependabot"), so the workflow comments
+`@dependabot recreate`, which rebuilds the branch and **overwrites every commit on
+it, a person's included**. If you have work on a Dependabot branch you mean to
+keep, move it to a branch of your own. A bump over 30 days old that is
+Dependabot's alone is named in the run's summary as needing a person. Drafts are
+left alone, and so is a bump Dependabot says it is rebasing.
 
-It comments `recreate` and not `rebase` because the bumps that stay stuck are the
-ones holding somebody else's commit, and Dependabot answers `@dependabot rebase`
-on those with "edited by someone other than Dependabot" and does nothing.
-`recreate` is the command that works there, and **it overwrites every commit on
-the branch, a person's included**. That is the price, and it falls on any bump in
-conflict after a merge. The force-push is recorded in the pull request's timeline
-and the old head is still in the clone of whoever pushed it, but if you have work
-on a Dependabot branch you mean to keep, move it to a branch of your own before
-you merge anything to `main`.
+Each request carries the head commit it was made for in an HTML comment the pull
+request page does not show, so a bump is asked once per head; after three
+requests it is named as needing a person instead. If Dependabot answers a request
+with "only users with push access can use that command", the run fails.
 
-The comment has to come from a user account. Dependabot answers a command from
-`github-actions[bot]`, or from any GitHub App, with "Sorry, only users with push
-access can use that command"
-([dependabot-core#9147](https://github.com/dependabot/dependabot-core/issues/9147)),
-and obeys an account with push access. So it is made with a second credential,
-`DEPENDABOT_RECREATE_TOKEN`, and deliberately not `DASHBOARD_BUNDLE_TOKEN`: one
-token that could both push to a branch and approve could land anything on its own.
-Two things outside this repository's files have to exist:
+The comment has to come from a user account: Dependabot ignores commands from
+`github-actions[bot]` and from GitHub Apps
+([dependabot-core#9147](https://github.com/dependabot/dependabot-core/issues/9147)).
+So it is made with `DEPENDABOT_RECREATE_TOKEN`, and deliberately not
+`DASHBOARD_BUNDLE_TOKEN`: one token that could both push to a branch and approve
+could land anything on its own. Two things outside this repository's files have
+to exist:
 
 - **A fine-grained personal access token**: resource owner the organisation, this
   repository only, **Pull requests: read and write** and nothing else, owned by an
-  account with Write access (the bundle token's account will do). Not Issues: a
-  comment on a pull request has been reported refused to a token that held only
-  Issues. This scope also covers approving and dismissing reviews, and an
-  approval from an account with write access counts toward `main`'s required
-  review, which is why the next item is not optional.
+  account with Write access. This scope also covers approving pull requests, and
+  such an approval counts toward `main`'s required review, which is why the next
+  item is not optional.
 - **An environment**, `dependabot-recreate`, whose deployment branches are limited
   to the selected branch `main`, holding the token as its secret (Settings →
-  Environments). An ordinary Actions secret can be read by anyone who can push a
-  branch and run a workflow from it, which is every writer; an environment secret
-  is released only to a run on `main`. Create it **before** the workflow reaches
-  `main`: a workflow that names an environment that does not exist creates it,
-  open to every branch. It does not keep the token from a workflow that reaches
-  `main` unreviewed, which the ruleset allows today (see the section above).
+  Environments). An ordinary Actions secret can be read by any writer's branch;
+  an environment secret only by a run on `main`. Create it **before** the
+  workflow reaches `main`: a workflow that names a missing environment creates
+  it, open to every branch.
 
-An empty secret fails the run at once, with a message naming the secret and the
-environment. The workflow cannot see the environment's branch setting, so check
-that yourself. Not covered: a bump merges itself with `GITHUB_TOKEN`, and GitHub
-starts no workflow for an event that token caused (the merge commits of #167,
-#170, #171 and #173 have no push-event run), so a conflict a bump's merge makes
-waits for the next merge by a person, or for a manual run. Those are the
-conflicts Dependabot rebases itself.
+A `Resource not accessible by personal access token (HTTP 403)` on the comment
+means the token can read but not write. The repository is public, so a token
+reads it whatever it was granted. Check that the token's repository access
+includes this repository, that Pull requests is Read and write, that an
+organisation owner has approved it if the organisation requires that, and that
+its account has Write access.
 
-Nothing checks any of this for you. Read the command it posts, the concurrency
-group (a newer merge cancels a run still in flight, so two runs never overlap and
-ask about one bump twice), the environment and the token's scope on any diff that
+Not covered: a bump merges itself with `GITHUB_TOKEN`, and GitHub starts no
+workflow for an event that token caused, so a conflict a bump's merge makes waits
+for the next merge by a person, or for a manual run.
+
+Nothing checks any of this for you. Read which bumps it comments on, the command
+and marker it posts, the environment and the token's scope on any diff that
 touches
 [`.github/workflows/dependabot-recreate.yml`](.github/workflows/dependabot-recreate.yml).
 
