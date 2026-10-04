@@ -385,23 +385,6 @@ The consequences worth stating plainly:
   that reshaped it answers with its own version and nothing else, which
   the answer's `coverage` names rather than merging rows it cannot read.
 
-**An activation during a rollout reaches both builds.** A revision reaches
-every node through the activation pointer, which carries the sealed document
-inside its own record. A build from before that change reads the document only
-from a key beside the pointer, so every activation writes it there too, just
-after the pointer. The fleet activates during a rollout even when nobody edits
-the company: the integration loop re-activates the revision when it seals a
-credential, and a node whose revision is newer than the pointer publishes it
-at boot. A node on the earlier build that polls between the two writes records
-one failed attempt and applies the revision on its next poll. The one race the
-mirror cannot close is the earlier build's own: one of its nodes activating in
-the same instant as an upgraded node can leave the older nodes unable to reach
-that epoch (they shed their work to an upgraded peer and, three attempts
-later, fail `/ready`, visible on the **Settings › Nodes** screen). Two nodes
-of the earlier build racing always had that outcome, and the next activation
-ends it. See
-[Control Plane § The design](../concepts/control-plane.md#the-design).
-
 **Adding a state-log domain is a coordinated upgrade**, and it sits beside the
 seat-protocol rule for the same reason: the fleet is briefly running two
 builds that disagree about what a node must hold.
