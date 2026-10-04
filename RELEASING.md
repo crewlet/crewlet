@@ -233,14 +233,17 @@ doing the thing, or starts doing more — so read the file when you touch it:
   the reviews API; its `if:` is the only thing stopping it approving a commit a
   person pushed onto a Dependabot branch, the `commit_id` it names is the only
   thing stopping a late or re-run job approving whatever the head has become
-  (`gh pr review --approve` names none), and `--auto` is the only thing holding
-  the merge until the checks `main` requires have reported. It approves only
-  while `reviewDecision` is neither `APPROVED` nor `CHANGES_REQUESTED`, and an
-  EMPTY decision must keep approving: GitHub leaves it empty when no review is
-  required and has been reported to stay empty for a requirement that comes from
-  a ruleset, so a skip on doubt would stall every bump with nothing red to show. Loosening the `if:`, the `commit_id` or `--auto` makes the
-  workflow run *more*; narrowing the approval (skipping on an empty decision, or
-  on anything but a positive `APPROVED`) makes it silently stop approving.
+  (`gh pr review --approve` names none), and `--auto` queues the merge behind the
+  checks `main` requires. It approves only while `reviewDecision` is neither
+  `APPROVED` nor `CHANGES_REQUESTED`, and an EMPTY decision must keep approving:
+  GitHub leaves it empty when no review is required and has been reported to stay
+  empty for a requirement that comes from a ruleset, so a skip on doubt would
+  stall every bump with nothing red to show. Loosening the `if:` or the
+  `commit_id` makes the workflow run *more*; dropping `--auto` fails loudly while
+  `main` requires its checks (the step goes red and nothing merges, because the
+  hold is the ruleset's, and it would merge before a check reported only with no
+  such rule); narrowing the approval (skipping on an empty decision, or on
+  anything but a positive `APPROVED`) makes it silently stop approving.
 - **`.github/workflows/dependabot-rebase.yml`'s grace, its token and its
   environment.** It comments `@dependabot rebase` on a bump still in conflict
   after Dependabot has had its chance, and it was built to ask `recreate` first:

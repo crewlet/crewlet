@@ -591,7 +591,8 @@ Dependabot did not write, and it will not rebase a branch that holds one.)
 
 The approval is given only while GitHub still says one is needed. The guard
 lets through only what Dependabot itself does to a pull request: it opens it,
-and then rebases or recreates it each time `main` moves under it. (The bundle
+and then rebases or recreates it each time a push to `main` puts it in conflict.
+(The bundle
 commit [`dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml)
 pushes is made by another account, so the run it triggers is skipped.) Under a
 rule that keeps approvals across pushes, the one `main` has today, every one of
@@ -633,8 +634,10 @@ Nothing checks any of that for you. `internal/version` used to assert both
 halves of the author/actor guard and the `--auto --squash` flags; those tests
 were dropped, and no linter in this repository reads a workflow file. Every one
 of them fails silently — the workflow keeps running, it just starts running on
-the wrong pull requests or merging before a check has reported — and the job
-holds `contents: write` and `pull-requests: write`. Read the `if:`, the commit
+the wrong pull requests (drop `--auto` and, while `main` requires the checks, the
+merge step goes red instead, because the hold is the rule's; with no such rule it
+would merge before a check has reported) — and the job holds `contents: write`
+and `pull-requests: write`. Read the `if:`, the commit
 the approval names and the merge command on any diff that touches
 [`.github/workflows/dependabot-merge.yml`](.github/workflows/dependabot-merge.yml).
 
