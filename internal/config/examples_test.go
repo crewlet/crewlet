@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -187,14 +188,45 @@ func TestQuickstartCompanyLoads(t *testing.T) {
 		t.Fatal("no seat carries an enabled schedule, so nothing would ever run")
 	}
 
-	// The page tells the reader handles are effectively permanent and to
-	// set them explicitly; the example has to model that rather than rely
-	// on derivation from a name they may rename.
-	for r := range o.AllRoles() {
-		if r.IsAgent() && r.DeclaredHandle == "" {
-			t.Fatalf("agent seat %q has no explicit handle", r.Name)
+	// The page tells the reader handles are permanent and to set them; the
+	// block has to model that rather than rely on derivation from a name
+	// they are about to replace with their own.
+	if missing := undeclaredIdentities(t, []byte(block)); len(missing) > 0 {
+		t.Errorf("the quickstart's company leaves identities to be minted "+
+			"from names, which a re-import of an edited file mints again:\n  %s",
+			strings.Join(missing, "\n  "))
+	}
+}
+
+// undeclaredIdentities names every seat in a company FILE that declares no
+// `handle:` and every unit that declares no `id:`, read as the file is
+// written.
+//
+// NOT FROM THE PARSED COMPANY: [ParseCompany] writes both in where they are
+// missing ([MintIdentities]), so a check of what it returns can never see one
+// missing — this case asked the parsed seats for one and passed whatever the
+// page said. And the file is what matters: an edit of the STORED document
+// keeps the identity minted for it, but a file is minted afresh from its names
+// on every import, so a seat renamed in a file that left its handle out comes
+// back as a different seat.
+func undeclaredIdentities(t *testing.T, data []byte) []string {
+	t.Helper()
+	var written Company
+	if err := yaml.Unmarshal(data, &written); err != nil {
+		t.Fatalf("decode the company as written: %v", err)
+	}
+	var missing []string
+	for role, at := range written.EachRole() {
+		if strings.TrimSpace(role.Handle) == "" {
+			missing = append(missing, fmt.Sprintf("seat %q (%s) declares no handle", role.Name, at))
 		}
 	}
+	for unit, at := range written.EachUnit() {
+		if strings.TrimSpace(unit.ID) == "" {
+			missing = append(missing, fmt.Sprintf("unit %q (%s) declares no id", unit.Name, at))
+		}
+	}
+	return missing
 }
 
 // A reader follows the page top to bottom, so every ${VAR} the config

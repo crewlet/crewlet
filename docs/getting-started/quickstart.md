@@ -154,6 +154,7 @@ roles:
   # reached through the dashboard only, and agents cannot @-mention you on
   # chat; scope `manages` to the top seat so you aren't copied on everything.
   - name: Your Name
+    handle: founder             # see the note under this block — set these now
     kind: human
     manages: [ceo]              # BY HANDLE. A `manages:` entry names a seat by
                                 # its handle and a unit by its key — never by a
@@ -164,7 +165,7 @@ roles:
       mattermost_user_id: "${MATTERMOST_FOUNDER_USERNAME}"   # your chat username
 
   - name: CEO
-    handle: ceo                 # see the note under this block — set these now
+    handle: ceo
     goal: "Set product vision, prioritize initiatives, and make final calls"
     backstory: "Experienced founder who balances speed with quality"
     manages: [cto, pm]
@@ -459,13 +460,12 @@ how it is drawn: a board, a table, a calendar or a timeline over the same rows.
 **Bind your token to your seat** and the personal screens become yours. The
 binding lives in the engine's identity directory rather than in either config
 file: your token acts under the login `token:founder`, so enrol that login as a
-machine and bind it to the human seat above (`your-name`, the handle derived
-from `name: Your Name`):
+machine and bind it to the human seat above by its handle, `founder`:
 
 ```bash
 export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"   # what `crewlet iam` authenticates with
 crewlet iam create -kind machine -login token:founder   # prints the new row's id
-crewlet iam bind <that id> your-name
+crewlet iam bind <that id> founder
 ```
 
 Both commands take `people:manage`, which is why the token above carries it.
@@ -515,7 +515,7 @@ carries `people:manage`, which issuing takes — and prints its link **once**:
 
 ```bash
 export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
-crewlet iam invite you@example.com -seat your-name \
+crewlet iam invite you@example.com -seat founder \
   -grants state:read,audit:read,config:read,config:write,work:write,knowledge:write,people:manage
 ```
 
