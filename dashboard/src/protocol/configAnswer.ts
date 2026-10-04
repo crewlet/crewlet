@@ -195,13 +195,21 @@ export function refusedSentence(entry: Record<string, unknown>): string {
       return `${subject}: ${value} is how another system finds it, and changing it ${grant}.`;
     case "self":
       return `${subject}'s own lead and place decide who may change it, so changing them ${grant}.`;
+    // A REFERENCE AT THE ROOT names a root seat or nothing at all: the engine
+    // places both there, so neither is said to be a seat.
     case "lead":
-      return `${subject}'s lead would be a seat ${where}, outside the units you lead.`;
+      return place
+        ? `${subject}'s lead would be ${value}, in ${place}, outside the units you lead.`
+        : `${subject}'s lead would be ${value}, which names no seat inside the units you lead.`;
     case "manages":
-      return `${subject} would manage ${value}, ${where}, outside the units you lead.`;
+      return place
+        ? `${subject} would manage ${value}, in ${place}, outside the units you lead.`
+        : `${subject} would manage ${value}, which names nothing inside the units you lead.`;
+    // The ADDED object, and where an entry already naming its id sits.
     case "named":
+      return `${subject}: a lead or manages entry ${where} already names ${value}, outside the units you lead, so adding it ${grant}.`;
     case "duplicate":
-      return `${subject} would name ${value}, ${where}, outside the units you lead.`;
+      return `${value} answers to two seats or units, and only the config:write grant can change them.`;
     default:
       return text(entry.side) === "after"
         ? `${subject} would sit ${where}, outside the units you lead.`

@@ -332,6 +332,18 @@ describe("one reading of a /config refusal", () => {
           { kind: "unit", id: "platform", side: "after", place: "platform", why: "self" },
           { kind: "unit", id: "tooling", why: "key", value: "project" },
           { kind: "setting", id: "mission" },
+          {
+            kind: "seat",
+            id: "ghost",
+            op: "added",
+            side: "before",
+            place: "sales",
+            why: "named",
+            value: "ghost",
+          },
+          { kind: "unit", id: "ops", side: "after", why: "duplicate", value: "ops" },
+          { kind: "unit", id: "tooling", side: "after", why: "lead", value: "nobody" },
+          { kind: "seat", id: "qa", side: "after", why: "manages", value: "ceo" },
         ],
       },
     });
@@ -361,6 +373,30 @@ describe("one reading of a /config refusal", () => {
         undefined,
         undefined,
         "The company's mission setting takes the config:write grant.",
+      ],
+      [
+        "refused",
+        "ghost",
+        undefined,
+        "@ghost: a lead or manages entry in sales already names ghost, outside the units you lead, so adding it takes the config:write grant.",
+      ],
+      [
+        "refused",
+        undefined,
+        "ops",
+        "ops answers to two seats or units, and only the config:write grant can change them.",
+      ],
+      [
+        "refused",
+        undefined,
+        "tooling",
+        "Unit tooling's lead would be nobody, which names no seat inside the units you lead.",
+      ],
+      [
+        "refused",
+        "qa",
+        undefined,
+        "@qa would manage ceo, which names nothing inside the units you lead.",
       ],
     ]);
     // A 403 naming no part is a refusal of the person, as before.
