@@ -728,7 +728,7 @@ func gateLogFor(running *runningLog, publisher *statelog.Publisher, db store.Rep
 	nodeID string, rec *metrics.Recorder) (gateLog, error) {
 
 	name := running.domain.Name()
-	gl := gateLog{domain: running.key, stream: running.spec.Name,
+	gl := gateLog{domain: running.domain.Name(), stream: running.spec.Name,
 		duplicates: running.spec.Duplicates}
 	switch name {
 	case tracker.Domain{}.Name():

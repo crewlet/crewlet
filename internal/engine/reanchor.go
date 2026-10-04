@@ -118,7 +118,7 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 	if err != nil {
 		return statelog.ReanchorPlan{}, err
 	}
-	name := running.key
+	name := running.domain.Name()
 
 	// ONE RECOVERY AT A TIME, with a runtime adoption: that replaces the
 	// replicated file whole, and this writes a checkpoint in it.
@@ -318,7 +318,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 		// node's own: every node re-anchors its own copy of such a log.
 		return in, nil, nil
 	}
-	domain := running.key
+	domain := running.domain.Name()
 	self := n.nodeID
 
 	// UNREADABLE IS NOT "no peers". A register nobody could list is exactly
@@ -517,7 +517,7 @@ func (e *Engine) runningStream(stream string) (*runningLog, error) {
 	running := n.log.logOf(stream)
 	if running == nil {
 		return nil, fmt.Errorf("%w: %q — the streams this build runs are %v",
-			ErrUnknownStream, stream, maintenanceStreams(n.log.layout))
+			ErrUnknownStream, stream, maintenanceStreams())
 	}
 	return running, nil
 }

@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE DUTY TRAINS AN INDEX, AND ITS ROLLOUT CONVERGES — through the real record
@@ -359,7 +358,7 @@ func indexDuty(t *testing.T, h *embedHarness, embedder topicalEmbedder, standing
 func boundedDuty(t *testing.T, h *embedHarness, embedder topicalEmbedder, standing func(context.Context) (search.LogStanding, error), now func() time.Time, budget search.Budget) *search.Embedder {
 	t.Helper()
 	duty, err := search.NewEmbedder(search.EmbedDeps{
-		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: statelog.EstateStream(search.Domain{}).Name,
+		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: search.Domain{}.Stream().Name,
 		Standing: standing, Embedder: embedder, Model: embedModel,
 		Corpora: []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
 		Now:     now,

@@ -186,7 +186,7 @@ const ApplyRetryBudget = StallGrace / 2
 
 // Health is one registered domain's readiness.
 //
-// # FIFTEEN FIELDS, DECLARED ONCE
+// # SEVENTEEN FIELDS, DECLARED ONCE
 //
 // This struct is cited from the framework's contracts, from the readiness
 // gate, from the operator surface and from the register's own heartbeat, and
@@ -194,6 +194,9 @@ const ApplyRetryBudget = StallGrace / 2
 // aesthetic: written out per reader it becomes three lists that disagree —
 // and the fields most likely to be dropped are the nilable ones, which are
 // precisely the ones carrying "this is unknown" rather than "this is zero".
+// The count in that heading is asserted by
+// TestHealthCarriesEveryFieldItsContractsCite, so a field added here moves the
+// heading and that test in the same change.
 //
 // [Health.AppliedThrough] is a RAW sequence within [Health.Position]'s own
 // generation, where Position is composed. That is why the two have different

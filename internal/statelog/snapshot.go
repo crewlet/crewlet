@@ -263,19 +263,17 @@ type Manifest struct {
 	Artifact string `json:"artifact"`
 }
 
-// Registered is one LOG as the framework holds it — a domain on one of its
-// logs — for the surfaces that walk every log rather than serving one.
+// Registered is one domain's log as the framework holds it, for the surfaces
+// that walk every log rather than serving one.
 //
-// All three of Domain, Log and Spec, and they must agree ([Registered.Check]):
-// a manifest names a position by the log's key and reads it out of the copy by
-// the spec's stream, so a registration whose two named different logs would
-// stamp one log's checkpoint under another's key.
+// Domain and Spec must agree ([Registered.Check]): a manifest names a position
+// by the domain's name and reads it out of the copy by the spec's stream, so a
+// registration whose two named different logs would stamp one log's
+// checkpoint under another's key.
 type Registered struct {
 	Domain Domain
 
-	// Log is which log this is, and its key ([LogID.String]) is what a
-	// manifest and an offer name it by. Spec is that log's stream.
-	Log  LogID
+	// Spec is the domain's stream as this node runs it.
 	Spec StreamSpec
 
 	// Health is this node's readiness for that domain, which is what the
@@ -291,14 +289,10 @@ type Registered struct {
 	// which is exactly what a reanchor under a running node did to it.
 }
 
-// Check refuses a registration whose domain, log and stream are not one log.
+// Check refuses a registration whose domain and stream are not one log.
 func (r Registered) Check() error {
-	switch {
-	case r.Domain == nil:
+	if r.Domain == nil {
 		return fmt.Errorf("statelog: a registered log has no domain")
-	case r.Log.Domain != r.Domain.Name():
-		return fmt.Errorf("statelog: the %s domain is registered as the log %q, "+
-			"which is not one of its logs", r.Domain.Name(), r.Log)
 	}
 	return r.Spec.Instantiates(r.Domain)
 }
@@ -624,7 +618,7 @@ func (s *Snapshotter) positionsIn(ctx context.Context, path string) (map[string]
 		if h.Lag != nil {
 			pos.LastSeqAtTake = h.Position.Seq + *h.Lag
 		}
-		positions[reg.Log.String()] = pos
+		positions[reg.Domain.Name()] = pos
 	}
 	return positions, nil
 }
@@ -644,7 +638,7 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 
 	for _, reg := range s.deps.Domains {
 		h := reg.Health()
-		name := reg.Log.String()
+		name := reg.Domain.Name()
 		if h.Deferred > 0 {
 			return &ErrSkipped{Reason: SkipDeferred, Detail: fmt.Sprintf(
 				"this node holds %d record(s) of %s it cannot decode, from "+
@@ -780,7 +774,7 @@ func (s *Snapshotter) newest() (Manifest, bool, error) {
 // generation a joiner asking this node would accept it at.
 func (s *Snapshotter) current(m Manifest) bool {
 	for _, reg := range s.deps.Domains {
-		at, named := m.Domains[reg.Log.String()]
+		at, named := m.Domains[reg.Domain.Name()]
 		if !named || at.Generation != reg.Health().Position.Generation {
 			return false
 		}

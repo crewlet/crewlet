@@ -112,12 +112,8 @@ func (s *stateLog) fleetGenerations(ctx context.Context, rows []coord.NodePositi
 			"establish which generation each domain is on: %w", err)
 	}
 	newest := map[string]uint32{}
-	for _, id := range s.layout.AllLogs() {
-		name := id.String()
-		domain, err := registeredDomain(id.Domain)
-		if err != nil {
-			return nil, err
-		}
+	for _, domain := range registeredDomains() {
+		name := domain.Name()
 		var candidates []string
 		for _, row := range rows {
 			if at, runs := row.Domains[name]; runs && at.Generation > above[name] &&
@@ -138,7 +134,7 @@ func (s *stateLog) fleetGenerations(ctx context.Context, rows []coord.NodePositi
 				return nil, fmt.Errorf("engine: %s's log is not open, so whether the "+
 					"nodes ahead of this one on it are evicted cannot be read", name)
 			}
-			if evicted, err = s.evictedOn(ctx, domain, s.layout.StreamSpec(domain, id),
+			if evicted, err = s.evictedOn(ctx, domain, domain.Stream(),
 				log, candidates); err != nil {
 				return nil, err
 			}
@@ -163,7 +159,7 @@ func (s *stateLog) openLogs() map[string]*jetstream.DomainLog {
 	running := s.running()
 	logs := make(map[string]*jetstream.DomainLog, len(running))
 	for _, r := range running {
-		logs[r.key] = r.log
+		logs[r.domain.Name()] = r.log
 	}
 	return logs
 }

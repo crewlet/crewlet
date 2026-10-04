@@ -44,7 +44,7 @@ func (f *spendFixture) reads(node, day, handle string, elided int, rs ...usage.R
 		f.t.Fatalf("envelope: %v", err)
 	}
 	rec := statelog.Record{Envelope: env, Payload: body, Position: statelog.Position{
-		Stream: statelog.EstateStream(usage.Domain{}).Name, Generation: 1, Seq: f.seq}}
+		Stream: usage.Domain{}.Stream().Name, Generation: 1, Seq: f.seq}}
 	if err := f.db.Replicated().Tx(f.t.Context(), func(tx *sql.Tx) error {
 		_, err := usage.NewApplier().Apply(f.t.Context(), tx, rec, statelog.ApplyOptions{
 			MaxVariables: f.db.Replicated().Caps().MaxVariables})

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -43,12 +44,15 @@ const TrackerLogMaxBytes = 16 << 30
 // every message in the window costs memory on the server.
 const TrackerLogDuplicates = 2 * time.Minute
 
-// StreamShape is what every one of the mutation domain's logs is.
-func (Domain) StreamShape() statelog.StreamShape {
-	return statelog.StreamShape{
-		MaxBytes:   TrackerLogMaxBytes,
-		Duplicates: TrackerLogDuplicates,
-		Replay:     statelog.ReplayStrict,
+// Stream is the mutation log, at the domain's whole budget.
+func (Domain) Stream() statelog.StreamSpec {
+	return statelog.StreamSpec{
+		Name:          topics.TrackerLogStream,
+		Subjects:      []string{topics.TrackerLogWildcard},
+		SubjectPrefix: topics.TrackerLogPrefix,
+		MaxBytes:      TrackerLogMaxBytes,
+		Duplicates:    TrackerLogDuplicates,
+		Replay:        statelog.ReplayStrict,
 		// EVERY KIND BUT TWO. A turn is additive and races
 		// nobody; a barrier shares one subject across the whole company,
 		// so an expectation there would serialise every linearizable

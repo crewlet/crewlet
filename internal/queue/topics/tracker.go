@@ -47,14 +47,14 @@ const (
 // package that switches on them; what lives here is the GRAMMAR they are
 // composed into, which is the half two processes have to agree about.
 
-// TrackerLogSubject builds the subject for one object on layout 0's mutation
-// log: [LogSubject] under [TrackerLogPrefix], and refused wherever that is.
+// TrackerLogSubject builds the subject for one object on the mutation log:
+// [LogSubject] under [TrackerLogPrefix], and refused wherever that is.
 func TrackerLogSubject(kind, id string) string {
 	return LogSubject(TrackerLogPrefix, kind, id)
 }
 
-// TrackerLogPath recovers the kind and the id from a subject on layout 0's
-// mutation log, reporting whether the subject was one: [LogPath] under
+// TrackerLogPath recovers the kind and the id from a subject on the mutation
+// log, reporting whether the subject was one: [LogPath] under
 // [TrackerLogPrefix], the exact inverse of [TrackerLogSubject].
 func TrackerLogPath(subject string) (kind, id string, ok bool) {
 	return LogPath(TrackerLogPrefix, subject)

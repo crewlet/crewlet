@@ -84,7 +84,7 @@ func Stamped(t *testing.T, new Factory) error {
 	}
 	log := &recordingLog{last: map[string]uint64{}}
 	deps := statelog.Deps{
-		Domain: c.Domain, Spec: c.spec(), Layout: c.layout(), LogID: c.log(),
+		Domain: c.Domain, Spec: c.spec(),
 		Log: log, Records: log, Rows: rows,
 		Fence: openFence{}, Gates: openGates{},
 		Waiter: suiteWaiter{at: at}, Voids: suiteWaiter{at: at}, Identity: suiteWaiter{at: at},

@@ -478,7 +478,7 @@ func TestAnOlderBuildRetainsAMoveMark(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode a barrier: %v", err)
 	}
-	if _, _, err := r.log.Append(t.Context(), statelog.EstateStream(tracker.Domain{}).SubjectPrefix+
+	if _, _, err := r.log.Append(t.Context(), tracker.Domain{}.Stream().SubjectPrefix+
 		"."+tracker.BarrierSubject().String(), "", nil, barrier); err != nil {
 		t.Fatalf("append a barrier: %v", err)
 	}
@@ -487,7 +487,7 @@ func TestAnOlderBuildRetainsAMoveMark(t *testing.T) {
 	olderNode, older := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "older.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = olderNode.Close() })
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: beforeMoveMark{markAt: moveMarkVersion(t)}, Spec: statelog.EstateStream(tracker.Domain{}), Layout: statelog.EstateLayout(tracker.Domain{}.Name()), LogID: statelog.EstateLog(tracker.Domain{}),
+		Domain: beforeMoveMark{markAt: moveMarkVersion(t)}, Spec: tracker.Domain{}.Stream(),
 		Applier: tracker.NewApplier("node-older"),
 		Fetch:   &trackerLogFetch{log: r.log, next: 1},
 		Log:     r.log,

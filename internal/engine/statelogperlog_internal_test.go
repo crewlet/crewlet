@@ -20,26 +20,23 @@ import (
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
-// THE RUNNING LAYOUT-0 RUNTIME IS TODAY'S ESTATE: its streams, its keys and its
-// coordination records are the ones a fleet running the build before logs had
-// layouts holds, byte for byte.
+// THE RUNNING ESTATE IS TODAY'S ESTATE: its streams, its keys and its
+// coordination records are the ones every fleet already holds, byte for byte.
 //
-// Every surface the per-log runtime rekeyed has a layout-0 answer that must be
-// the old one, or a node upgraded into a running fleet provisions a second,
-// empty stream beside the real one, publishes a register row nobody else's
-// trim reads, or writes a floor under a key the fleet's fences never look at.
-// So this boots a node the way `crewlet run` does and reads each surface back:
+// Each surface here is named in more than one place — the domain's own
+// declaration, the topics constants, the positions register, the floors — and
+// a node whose answer drifted from the fleet's provisions a second, empty
+// stream beside the real one, publishes a register row nobody else's trim
+// reads, or writes a floor under a key the fleet's fences never look at. So
+// this boots a node the way `crewlet run` does and reads each surface back:
 // the logs it runs and their order, each log's stream on the broker, the
 // consumer each is applied through, the row its heartbeat writes and the floor
 // its trim publishes.
-func TestTheRunningLayoutZeroRuntimeIsTodaysEstate(t *testing.T) {
+func TestTheRunningEstateIsTodaysEstate(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
 	s := e.native.Load().log
 
-	if got, want := s.layout.AllLogs(), LayoutZero().AllLogs(); !slices.Equal(got, want) {
-		t.Fatalf("the node runs the logs %v, and layout 0 is %v", got, want)
-	}
 	today := map[string][3]string{
 		tracker.Domain{}.Name(): {topics.TrackerLogStream, topics.TrackerLogPrefix, topics.TrackerLogWildcard},
 		search.Domain{}.Name():  {topics.TrackerVectorsStream, topics.TrackerVectorsPrefix, topics.TrackerVectorsWildcard},
@@ -56,10 +53,6 @@ func TestTheRunningLayoutZeroRuntimeIsTodaysEstate(t *testing.T) {
 	for _, running := range s.running() {
 		name := running.domain.Name()
 		want := today[name]
-		if running.key != name {
-			t.Errorf("the %s log is keyed %q; the register, the floors and every "+
-				"manifest key it %q", name, running.key, name)
-		}
 		if running.spec.Name != want[0] || running.spec.SubjectPrefix != want[1] ||
 			!slices.Equal(running.spec.Subjects, []string{want[2]}) {
 			t.Errorf("the %s log runs on (%q, %q, %v); the fleet's stream is (%q, %q, %q)",
@@ -89,11 +82,19 @@ func TestTheRunningLayoutZeroRuntimeIsTodaysEstate(t *testing.T) {
 				"its stream: %v", name, running.consumer.Name(), err)
 		}
 	}
-	// NO PARTITIONED STREAM: layout 0 names only the three.
+	// NO OTHER STREAM OF A DOMAIN'S: every stream on the broker that names
+	// one of the state logs' families is one of the four, so nothing beside
+	// them holds a second copy of a domain's records.
+	logStreams := []string{}
+	for _, names := range today {
+		logStreams = append(logStreams, names[0])
+	}
 	names := js.StreamNames(t.Context())
 	for name := range names.Name() {
-		if strings.HasPrefix(name, "CREWLET_L") && name != "CREWLET_LOG" {
-			t.Errorf("the layout-0 node created %s, a partitioned layout's stream", name)
+		family := strings.Contains(name, "TRACKER") || strings.Contains(name, "PAGES") ||
+			strings.Contains(name, "USAGE")
+		if family && !slices.Contains(logStreams, name) {
+			t.Errorf("the node created %s beside the state logs %v", name, logStreams)
 		}
 	}
 	if err := names.Err(); err != nil {
@@ -170,7 +171,7 @@ func TestTheRunningLayoutZeroRuntimeIsTodaysEstate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the tick's inputs: %v", err)
 	}
-	running := s.Log(tracker.Domain{}.Name())
+	running := s.Domain(tracker.Domain{}.Name())
 	if err := r.domain(t.Context(), running, shared); err != nil {
 		t.Fatalf("the tracker's tick: %v", err)
 	}
@@ -223,4 +224,11 @@ func lastSeq(t *testing.T, js natsjs.JetStream, stream string) uint64 {
 		t.Fatalf("read %s: %v", stream, err)
 	}
 	return info.State.LastSeq
+}
+
+// runsLogs makes running every log s runs, in the order given — for a case
+// that builds a state log by hand rather than booting one.
+func runsLogs(s *stateLog, running ...*runningLog) *stateLog {
+	s.logs = newLogSet(running)
+	return s
 }

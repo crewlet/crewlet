@@ -70,6 +70,13 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		"the projection_keys table",
 		"coord.FamilyPages",
 		"a frozen read is served from",
+		"func (Domain) PartitionOf(env Envelope) (PartitionID, bool)",
+		"the partitionOf helper",
+		"statelog.EstateStream(tracker.Domain{})",
+		"the estate map names the holders",
+		"CREWLET_L1_TRACKER_TRACKER_007",
+		"crewlet.l1.tracker.007.tracker.>",
+		"map_epoch",
 	} {
 		if hits := matchWithdrawn(positive); len(hits) == 0 {
 			t.Errorf("control: %q carries a withdrawn name and the matcher did "+
@@ -90,7 +97,16 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		"An item promotion marks its parent LAST",
 		"LimitMarkerTTL: time.Minute",
 		"tracker_rank_duplicates_cleared",
-		"PartitionOf(l Layout, env Envelope) (PartitionID, bool)",
+		// Live senses of the same words: an owed wake partitioning a
+		// task's notices, the cluster harness's partitioned broker, the
+		// notification key, a struct field named for its state, and the
+		// engine's own environment variables.
+		"func TestAnOwedWakeIsItsOwnPartitionOfTheTask(t *testing.T)",
+		"jetstreamtest.PartitionDB(t, i)",
+		"Prompt.PartitionKey",
+		"ExecuteState map[string]any",
+		"CREWLET_LOG_LEVEL",
+		"crewlet.log",
 	} {
 		if hits := matchWithdrawn(negative); len(hits) > 0 {
 			t.Errorf("control: %q is live and the matcher flagged it on %v",
@@ -202,44 +218,36 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 // the compound forms of `partition` are gone and the word itself is not, so
 // each is anchored to the compound that left.
 //
-// # The partitioned estate brought one of these back, and not the rest
+// # Two designs divided the estate, and both are gone
 //
-// A withdrawn design once divided the tracker's log; its vocabulary was retired
-// here when that design was. The partitioned estate is a different design, and
-// it reintroduced exactly one of those names under a meaning it can defend:
-// `partitionOf` was withdrawn because "nothing maps an object to a partition",
-// and [statelog.Domain.PartitionOf] now does — so it left this list, and a
-// live method is its negative control above. Every other entry below was
-// re-read against the new design and stays, with the reason it is STILL wrong
-// written beside it: the new design names an object's partition by its key and
-// its id's birth partition, never by a stored home, and it keeps one log per
-// domain per partition, so a record never straddles two.
+// A withdrawn design once divided the tracker's log, and a later one divided
+// the whole replicated estate into numbered partitions under a layout, each
+// with its own file, its own logs and an estate map saying which node held
+// which. Every data node holds the ONE estate whole now, every domain names
+// its own stream, and nothing maps an object, a record or a log to a part of
+// it — so both vocabularies are listed here, each with the reason it stays
+// gone.
 var withdrawn = map[string]string{
-	// A partition count is RECORDED in the layout — in the estate map and
-	// every partition file's cursor rows — and changing it is a new layout
-	// drained and split, never an edit. A configuration field for it would
-	// let a restart repartition a company by accident.
-	`tracker\.partitions`: "a partition count is a layout's, recorded and never configured",
-	// The four read levels are per LOG, unchanged by partitioning; a read
-	// across partitions reports the cut it was answered at rather than
-	// adding a fifth level.
-	`partition_linearizable`: "the read levels are per log; a gather reports its cut",
+	// THE ESTATE IS ONE, held whole by every data node: there is no count
+	// of parts to configure, and a field for one would describe a division
+	// nothing performs.
+	`tracker\.partitions`: "the estate is not divided, so there is no partition count",
+	// The four read levels are per LOG, and every log is read whole.
+	`partition_linearizable`: "the read levels are per log, and a log is not divided",
 	`partitions_answered`:    "the search fan-out's coverage is buckets_answered",
 	`partitions_missing`:     "as above; buckets_missing survives",
-	// An object's partition is DERIVED — from its key, and a task's from
-	// the birth partition its id carries — and never stored as a home a
-	// move would have to keep consistent with the rows.
-	`home_partition`:           "an object's partition is derived from its key, never stored",
+	// Nothing homes an object anywhere: every row of the estate is on
+	// every data node.
+	`home_partition`:           "an object has no home; every data node holds every row",
 	`tracker_task_home`:        "as above",
 	`tracker_task_placement`:   "as above",
 	`scoped_through_partition`: "scoped_through survives; its partition sibling does not",
 	`\bhome partition\b`:       "prose for the same withdrawn idea",
 	`\bhome stream\b`:          "prose for the same withdrawn idea",
 	`\bmixed-home\b`:           "prose for the same withdrawn idea",
-	// A record's scope lies inside its own partition — a path in another's
-	// is a deferral that partition's probe never sees — so no WRITE crosses
-	// a partition: an effect elsewhere travels as a write decided there.
-	`\bcross-partition\b`: "no write crosses a partition; its scope lies inside its own",
+	// A record is on its domain's one log, and the estate it lands in is
+	// not divided, so there is no second part for a write to cross into.
+	`\bcross-partition\b`: "the estate is one; there is nothing for a write to cross",
 
 	// The search planner: withdrawn entirely, because every query
 	// consults every bucket and there is nothing to plan.
@@ -268,6 +276,31 @@ var withdrawn = map[string]string{
 
 	// Read levels: four, and `frozen` is not one of them.
 	`\bfrozen\b\s+read|read\s+level\s+.?frozen`: "the level is consistent_prefix",
+
+	// THE PARTITIONED ESTATE: a layout of numbered partitions, each a file
+	// with one log per domain, placed on nodes by an estate map. Every data
+	// node holds the one estate whole, and a domain declares its own
+	// stream ([Domain.Stream]), so nothing names a part of it.
+	`\bpartitionOf\b`:     "nothing maps an object or a record to a part of the estate",
+	`ScopePartition`:      "a record's scope is checked against its own log, which is the domain's",
+	`OnlyPartition`:       "a domain has one log, so there is no partition to look one up by",
+	`LogShare`:            "a domain's log carries its whole budget; nothing divides it",
+	`RunPartitioned`:      "the engine runs one estate; there is no partitioned mode",
+	`wrong_partition`:     "a copy is out of service or it serves; it is never another part's",
+	`EvictionKindRelease`: "a node never releases a log: every data node keeps the estate whole",
+	`ReleaseLog`:          "as above",
+	`PartitionHandle`:     "the replicated estate is one file, reached through ReplicatedHandle",
+	`PartitionReader`:     "as above; ReplicatedReader",
+	`OpenPartition`:       "as above; OpenReplicated",
+	`PartitionFile`:       "as above; ReplicatedFile",
+	`EstateLayout`:        "there is no layout; a domain declares its own stream",
+	`EstateStream`:        "as above; a domain's stream is Domain.Stream()",
+	`LayoutZero`:          "as above",
+	`DefaultLayoutOne`:    "as above",
+	`\bestate map\b`:      "every data node holds the estate, so nothing records who holds what",
+	`map_epoch`:           "as above",
+	`CREWLET_L[0-9]`:      "a state log's stream is its domain's own name, never a layout's",
+	`crewlet\.l[0-9]`:     "as above, for its subjects",
 }
 
 // listFile is this file, which cannot be its own violation.
@@ -362,7 +395,7 @@ func cores() []string {
 // literally, lowercased.
 func literalCore(pattern string) string {
 	plain := strings.NewReplacer(
-		`\b`, "\x00", `\s+`, "\x00", `\.`, ".", `.?`, "\x00",
+		`\b`, "\x00", `\s+`, "\x00", `\.`, ".", `.?`, "\x00", `[0-9]`, "\x00",
 		"(", "\x00", ")", "\x00", "|", "\x00",
 	).Replace(pattern)
 	best := ""

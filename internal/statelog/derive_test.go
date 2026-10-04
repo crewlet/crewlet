@@ -66,8 +66,7 @@ func (h *applyHarness) restartWith(applier statelog.Applier, probe *probeApplier
 		checkpoint.At.Generation = 1
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Layout: layoutOf(probeDomain{}),
-		LogID: logOf(probeDomain{}), Applier: applier, Fetch: h.fetch, Log: h.fetch,
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Applier: applier, Fetch: h.fetch, Log: h.fetch,
 		Node: h.db, DB: h.estate,
 		Checkpoint: checkpoint.At, CheckpointStoredAt: checkpoint.StoredAt,
 		Metrics: recorder,
@@ -207,8 +206,7 @@ func TestAFreshCheckpointIsStampedWithTheRulesThatDerivedIt(t *testing.T) {
 	// this asks about: a runner missing its stream is refused first, and
 	// that refusal says nothing about a Deriver.
 	_, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Layout: layoutOf(probeDomain{}),
-		LogID:   logOf(probeDomain{}),
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
 		Applier: &derivingApplier{probeApplier: newProbeApplier()},
 		Fetch:   fetch, Log: fetch, Node: h.db, DB: h.estate,
 		Checkpoint: statelog.Position{Generation: 1},

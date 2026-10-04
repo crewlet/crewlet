@@ -467,7 +467,7 @@ func (d *embedDuty) standing(ctx context.Context) (search.LogStanding, error) {
 		return out, err
 	}
 	out.Readers = statelog.Readers(statelog.CountedSet(time.Now().UTC(),
-		reportedPositions(rows, d.log.key), live, tombs))
+		reportedPositions(rows, d.log.domain.Name()), live, tombs))
 	return out, nil
 }
 

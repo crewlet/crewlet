@@ -177,7 +177,7 @@ func TestAPositionTokenReadsBackAsThePositionItNames(t *testing.T) {
 	for _, at := range []statelog.Position{
 		{Stream: "CREWLET_TRACKER_LOG", Generation: 0, Seq: 1},
 		{Stream: "CREWLET_TRACKER_LOG", Generation: 7, Seq: 4_000_000},
-		{Stream: "CREWLET_L1_TRACKER_TRACKER_007", Generation: statelog.MaxGeneration,
+		{Stream: "CREWLET_TRACKER_VECTORS", Generation: statelog.MaxGeneration,
 			Seq: statelog.MaxSeq},
 	} {
 		got, err := statelog.ParsePosition(at.String())

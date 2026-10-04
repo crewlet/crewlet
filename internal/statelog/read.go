@@ -392,9 +392,10 @@ type readStore interface {
 type ReaderDeps struct {
 	Domain Domain
 
-	// Spec is the log this reader answers for: the domain's shape on one of
-	// its logs ([Layout.StreamSpec]). A read's positions, its barrier and
-	// the deferrals its coverage probe reads are all that one log's.
+	// Spec is the stream this reader answers for: the domain's own
+	// ([Domain.Stream]) with this node's ceiling. A read's positions, its
+	// barrier and the deferrals its coverage probe reads are all that
+	// stream's.
 	Spec StreamSpec
 
 	// Mode is what this node started for, and it decides whether a read

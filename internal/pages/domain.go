@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -61,12 +62,15 @@ const PagesLogMaxBytes = 4 << 30
 // on the server.
 const PagesLogDuplicates = 2 * time.Minute
 
-// StreamShape is what every one of the knowledge base's logs is.
-func (Domain) StreamShape() statelog.StreamShape {
-	return statelog.StreamShape{
-		MaxBytes:   PagesLogMaxBytes,
-		Duplicates: PagesLogDuplicates,
-		Replay:     statelog.ReplayStrict,
+// Stream is the knowledge base's log, at the domain's whole budget.
+func (Domain) Stream() statelog.StreamSpec {
+	return statelog.StreamSpec{
+		Name:          topics.PagesLogStream,
+		Subjects:      []string{topics.PagesLogWildcard},
+		SubjectPrefix: topics.PagesLogPrefix,
+		MaxBytes:      PagesLogMaxBytes,
+		Duplicates:    PagesLogDuplicates,
+		Replay:        statelog.ReplayStrict,
 		// FIVE OF THE SIX KINDS. A barrier shares one subject across
 		// the whole domain, so an expectation there would serialise
 		// every linearizable read behind every other one and write an

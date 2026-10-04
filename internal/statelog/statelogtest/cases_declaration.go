@@ -56,15 +56,17 @@ func Declaration(c Candidate) []error {
 	// THE STREAM AND ITS REPLAY PROTOCOL MUST AGREE, and neither loop can
 	// detect its own mismatch: a strict loop over a compacted stream
 	// stalls on the first ordinary write, and a compacted loop over a log
-	// accepts a hole that is data loss. Asked of the SHAPE, which every one
-	// of the domain's logs is, and of the log the suite runs it on.
-	if err := c.Domain.StreamShape().Validate(name); err != nil {
-		add("%s declares a stream shape its own protocol refuses: %w", name, err)
-	}
+	// accepts a hole that is data loss.
 	spec := c.spec()
+	if err := spec.Validate(); err != nil {
+		add("%s declares a stream its own protocol refuses: %w", name, err)
+	}
+	// AND IT MUST BE ONE DECLARATION. Every runner, publisher and reader
+	// asks the domain for its stream separately and is held to what a
+	// second ask answers ([statelog.StreamSpec.Instantiates]), so a domain
+	// whose answer moves between two asks builds nothing at all.
 	if err := spec.Instantiates(c.Domain); err != nil {
-		add("%s is certified on %s of layout %d, which the layout does not "+
-			"instantiate as a log of it: %w", name, c.log(), c.layout().Number, err)
+		add("%s answers a different stream each time it is asked: %w", name, err)
 	}
 
 	// AN ARBITRATED KIND IS A KIND THIS DOMAIN ACTUALLY PUBLISHES. A kind

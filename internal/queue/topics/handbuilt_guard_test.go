@@ -51,17 +51,6 @@ import (
 // English hyphenation and "agent-only field set on a human seat" is a
 // sentence, not a consumer group.
 //
-// A third kind is a ROOT: the committed head of a partitioned log's name,
-// which a LAYOUT NUMBER continues — crewlet.l1.tracker.007.tracker and
-// CREWLET_L1_TRACKER_007_TRACKER begin with the roots "crewlet.l" and
-// "CREWLET_L" followed by a digit, not by a separator. Neither ordinary rule
-// can see that: a digit is no subject boundary, and a stream name is not a
-// consumer group's shape. So the grammar declares a root as a constant whose
-// NAME ends in Root, and a root is flagged wherever a digit, a formatting
-// verb (`%`) or the end of the literal follows it — which is
-// what tells "crewlet.l1." and "crewlet.l%d." from "crewlet.log", and
-// "CREWLET_L1_" from the environment variable CREWLET_LOG_LEVEL.
-//
 // # Coverage boundary
 //
 // It sees a subject that is WRITTEN as a literal, in a package the glob
@@ -101,45 +90,36 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.agent", "crewlet.events", "crewlet.notifications",
 		"crewlet.config", "dlq.", ".inbox", ".control", "agent-",
 	} {
-		if !markers.plain[want] {
+		if !markers[want] {
 			t.Errorf("marker %q was not derived from topics.go's constants; the "+
 				"derivation no longer recognises the grammar it is meant to cover", want)
-		}
-	}
-	for _, want := range []string{"crewlet.l", "CREWLET_L"} {
-		if !markers.roots[want] {
-			t.Errorf("root %q was not derived from the package's …Root constants; a "+
-				"partitioned log's name written by hand would no longer be found", want)
 		}
 	}
 	for _, positive := range []string{
 		"crewlet.agent.alice.inbox", "crewlet.agent.", "crewlet.events.>",
 		"crewlet.notifications.inbound", "crewlet.config.>", "dlq.x.y",
 		"agent-", "agent-alice", "agent-alice-control",
-		// The partitioned logs: whole names, a wildcard, the format
-		// strings a hand-built name would come from, and a bare root
-		// as the base of a concatenation.
-		"crewlet.l1.tracker.007.tracker", "crewlet.l12.pages.003.vectors.>",
-		"crewlet.l%d.%s.%03d.%s", "crewlet.l",
-		"CREWLET_L1_TRACKER_007_TRACKER", "CREWLET_L%d_%s_%03d_%s", "CREWLET_L",
+		// The state logs: a leaf, a wildcard, and a format string a
+		// hand-built subject would come from.
+		"crewlet.tracker.log.task.x", "crewlet.tracker.vectors.>",
+		"crewlet.pages.log.%s.%s", "crewlet.usage.log.day",
 	} {
 		if _, hit := violation(markers, positive); !hit {
 			t.Errorf("control: %q is a hand-built name and the matcher did not flag it", positive)
 		}
 	}
 	// AND WHAT THE BUILDERS THEMSELVES PRODUCE, so a grammar change that
-	// moved a name out from under its root fails here rather than leaving
-	// every hand-written copy of the new shape unseen.
-	for _, space := range []string{"tracker", "pages", "company"} {
-		for _, built := range []string{
-			topics.PartitionLogStream(1, space, 7, "vectors"),
-			topics.PartitionLogPrefix(1, space, 7, "vectors"),
-			topics.PartitionLogWildcard(3, space, 0, "tracker"),
-		} {
-			if _, hit := violation(markers, built); !hit {
-				t.Errorf("control: the builder's own output %q is not flagged when "+
-					"written as a literal", built)
-			}
+	// moved a log's subjects out from under the markers fails here rather
+	// than leaving every hand-written copy of the new shape unseen.
+	for _, built := range []string{
+		topics.TrackerLogSubject("task", "x"),
+		topics.PagesLogSubject("page", "x"),
+		topics.LogSubject(topics.UsageLogPrefix, "day", "x"),
+		topics.TrackerVectorsWildcard,
+	} {
+		if _, hit := violation(markers, built); !hit {
+			t.Errorf("control: the builder's own output %q is not flagged when "+
+				"written as a literal", built)
 		}
 	}
 	for _, negative := range []string{
@@ -155,12 +135,12 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.agent_handle=",
 		"crewlet.agent_handle",
 		"crewlet.events_seen",
-		// Names that begin like a root and are not partitioned logs:
-		// the engine's own environment variables, and a word.
+		// Names that begin like a log's subject and are not one: the
+		// engine's own environment variables, and words.
 		"CREWLET_LOG_LEVEL",
 		"CREWLET_LOG_FILE",
 		"crewlet.log",
-		"crewlet.links",
+		"crewlet.tracker.logged",
 	} {
 		if marker, hit := violation(markers, negative); hit {
 			t.Errorf("control: %q is not a subject but the matcher flagged it on %q",
@@ -219,20 +199,13 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 // while removing it does.
 type driftKey struct{ pkg, literal string }
 
-// acknowledgedDrift is the closed set of hand-built names that predate this
-// guard and live in packages this change does not own. It is a ratchet, not a
-// permission: nothing may be added without fixing the cause, and an entry
-// whose drift is gone fails the test above.
-//
-// Both entries have the same cause and the same one-word fix, now that
-// topics.go names the two domains: jetstream/stream.go builds three of its
-// five stream subjects as topics.AgentInboxPrefix+">",
-// topics.EventsPrefix+">" and topics.DeadLetterPrefix+">", and hand-writes
-// the other two only because there was no constant to reach for.
-var acknowledgedDrift = map[driftKey]string{
-	{"jetstream", "crewlet.notifications.>"}: "stream topology; use topics.NotificationsPrefix + \">\"",
-	{"jetstream", "crewlet.config.>"}:        "stream topology; use topics.ConfigPrefix + \">\"",
-}
+// acknowledgedDrift is the closed set of hand-built names the guard excuses.
+// It is a ratchet, not a permission: nothing may be added without fixing the
+// cause, and an entry whose drift is gone fails the test above. EMPTY: the
+// last two — the notification and control-plane stream subjects jetstream
+// spelled by hand — are built from topics.NotificationsPrefix and
+// topics.ConfigPrefix now, like the other three stream subjects beside them.
+var acknowledgedDrift = map[driftKey]string{}
 
 type hit struct {
 	pos     string
@@ -339,22 +312,14 @@ func walkForLiterals(t *testing.T, root string, markers markerSet, tests bool) w
 // it parsed files and found literals rather than trusting its own reach.
 func isSupportPackage(dir string) bool { return strings.HasSuffix(dir, "test") }
 
-// markerSet is what the guard looks for, by the rule each is matched under:
-// plain markers by [containsSubject] or by shape, roots by [containsRoot].
-type markerSet struct {
-	plain map[string]bool
-	roots map[string]bool
-}
+// markerSet is what the guard looks for: a dotted marker matched by
+// [containsSubject], a dotless one by shape.
+type markerSet map[string]bool
 
 // violation reports whether a string literal names a subject or a consumer
 // group, and on which marker.
 func violation(markers markerSet, value string) (string, bool) {
-	for root := range markers.roots {
-		if containsRoot(value, root) {
-			return root, true
-		}
-	}
-	for marker := range markers.plain {
+	for marker := range markers {
 		if strings.Contains(marker, ".") {
 			if containsSubject(value, marker) {
 				return marker, true
@@ -412,31 +377,6 @@ func containsSubject(value, marker string) bool {
 	}
 }
 
-// containsRoot reports a root appearing where a partitioned log's name could
-// continue it: before a digit (the layout number), a `%` (a formatting verb
-// standing in for it) or the end of the value (the base of a concatenation).
-//
-// A root has no separator of its own to anchor on — "crewlet.l" is followed
-// by the layout's digits — so it is bounded by what may FOLLOW it instead,
-// and exactly those three are what the grammar can put there. That is what
-// keeps "crewlet.log" and CREWLET_LOG_LEVEL unflagged.
-func containsRoot(value, root string) bool {
-	for at := 0; ; {
-		i := strings.Index(value[at:], root)
-		if i < 0 {
-			return false
-		}
-		end := at + i + len(root)
-		if end == len(value) {
-			return true
-		}
-		if c := value[end]; (c >= '0' && c <= '9') || c == '%' {
-			return true
-		}
-		at = end
-	}
-}
-
 // isWireName reports whether every character could appear in a consumer group
 // the grammar mints: a handle is ^[a-z0-9][a-z0-9-]*$ and the group affixes
 // add nothing else.
@@ -459,9 +399,7 @@ func isWireName(s string) bool {
 //
 // A constant's value is reduced to the prefix it COMMITS to, with any
 // trailing wildcard stripped, so a hand-written wildcard over a domain is
-// caught as readily as a hand-written leaf. See [markersFor]. A constant
-// whose NAME ends in Root is the head of a partitioned log's name and is
-// matched as a root instead — see [containsRoot] and partition.go.
+// caught as readily as a hand-written leaf. See [markersFor].
 func subjectMarkers(t *testing.T, dir string) markerSet {
 	t.Helper()
 
@@ -469,16 +407,10 @@ func subjectMarkers(t *testing.T, dir string) markerSet {
 	if len(values) == 0 {
 		t.Fatal("derived no constants from the topics package; the guard has nothing to look for")
 	}
-	markers := markerSet{plain: map[string]bool{}, roots: map[string]bool{}}
-	for name, v := range values {
-		if strings.HasSuffix(name, "Root") {
-			if v != "" {
-				markers.roots[v] = true
-			}
-			continue
-		}
+	markers := markerSet{}
+	for _, v := range values {
 		for _, m := range markersFor(v) {
-			markers.plain[m] = true
+			markers[m] = true
 		}
 	}
 	return markers

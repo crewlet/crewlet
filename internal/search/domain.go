@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -82,9 +83,13 @@ const (
 	VectorLogDuplicates = 2 * time.Minute
 )
 
-// StreamShape is what every one of the vector domain's compacted changelogs is.
-func (Domain) StreamShape() statelog.StreamShape {
-	return statelog.StreamShape{
+// Stream is the vector domain's compacted changelog, at the domain's whole
+// budget.
+func (Domain) Stream() statelog.StreamSpec {
+	return statelog.StreamSpec{
+		Name:          topics.TrackerVectorsStream,
+		Subjects:      []string{topics.TrackerVectorsWildcard},
+		SubjectPrefix: topics.TrackerVectorsPrefix,
 		MaxBytes:      VectorLogMaxBytes,
 		MaxPerSubject: 1,
 		MaxAge:        VectorLogMaxAge,

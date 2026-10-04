@@ -11,23 +11,21 @@ import "strings"
 //
 // # Why the builder takes the prefix rather than knowing it
 //
-// Layout 0 has one log per domain under a fixed prefix, and
-// [TrackerLogSubject] and [PagesLogSubject] are this grammar bound to those
-// prefixes. A partitioned layout gives a domain one log PER PARTITION, each
-// under a prefix of its own ([PartitionLogPrefix]), so a record's subject is a
-// function of which log it is published on — and a builder that knew one
-// prefix could only ever name layout 0's. Written once here over any prefix,
-// the publisher, the wake filter and the applier's dispatch agree about every
-// log's subjects for the reason they agree about layout 0's: none of them
-// spells the grammar itself.
+// Every state log is a domain's own stream under a prefix of its own, and the
+// framework publishes, filters and dispatches records for every domain it
+// runs — including a test's, under a prefix no constant here names. Written
+// once over any prefix, the publisher, the wake filter and the applier's
+// dispatch agree about every log's subjects because none of them spells the
+// grammar itself; [TrackerLogSubject] and [PagesLogSubject] are this grammar
+// bound to those two logs' prefixes.
 //
 // # What the prefix is
 //
-// A log's subject prefix as the grammar produces it — a layout-0 constant or
-// [PartitionLogPrefix]'s answer — and never re-derived here. An EMPTY prefix
-// is the grammar's "no such stream" and is answered as one: a subject under
-// no prefix would be `kind.id`, a path in no log's subject space that the
-// broker delivers to nobody.
+// A log's subject prefix as its domain declares it — one of the constants
+// here, for a production domain — and never re-derived. An EMPTY prefix is
+// "no such stream" and is answered as one: a subject under no prefix would be
+// `kind.id`, a path in no log's subject space that the broker delivers to
+// nobody.
 
 // LogSubject builds the subject for one object on the log whose subject prefix
 // is prefix.

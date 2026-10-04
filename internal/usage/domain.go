@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -77,9 +78,13 @@ const (
 	LogDuplicates = 2 * time.Minute
 )
 
-// StreamShape is what every one of the usage domain's compacted changelogs is.
-func (Domain) StreamShape() statelog.StreamShape {
-	return statelog.StreamShape{
+// Stream is the usage domain's compacted changelog, at the domain's whole
+// budget.
+func (Domain) Stream() statelog.StreamSpec {
+	return statelog.StreamSpec{
+		Name:          topics.UsageLogStream,
+		Subjects:      []string{topics.UsageLogWildcard},
+		SubjectPrefix: topics.UsageLogPrefix,
 		MaxBytes:      LogMaxBytes,
 		MaxPerSubject: 1,
 		// THE STREAM FORGETS A DAY WHEN THE ROWS DO. A message older than

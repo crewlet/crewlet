@@ -32,14 +32,14 @@ const (
 // which is the package that switches on them; what lives here is the GRAMMAR
 // they are composed into, which is the half two processes have to agree about.
 
-// PagesLogSubject builds the subject for one object on layout 0's pages log:
+// PagesLogSubject builds the subject for one object on the pages log:
 // [LogSubject] under [PagesLogPrefix], and refused wherever that is.
 func PagesLogSubject(kind, id string) string {
 	return LogSubject(PagesLogPrefix, kind, id)
 }
 
-// PagesLogPath recovers the kind and the id from a subject on layout 0's pages
-// log, reporting whether the subject was one: [LogPath] under
+// PagesLogPath recovers the kind and the id from a subject on the pages log,
+// reporting whether the subject was one: [LogPath] under
 // [PagesLogPrefix], the exact inverse of [PagesLogSubject].
 func PagesLogPath(subject string) (kind, id string, ok bool) {
 	return LogPath(PagesLogPrefix, subject)

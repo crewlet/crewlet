@@ -48,7 +48,7 @@ func TestAnApplierThatStopsIsWrittenOnceAndByTheStateLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	stream := estateSpec(tracker.Domain{}).Name
+	stream := tracker.Domain{}.Stream().Name
 
 	// FIRST BOOT, and a checkpoint committed under the stream it ran on.
 	back, err := OpenBackends(t.Context(), &b, cfg)

@@ -149,10 +149,10 @@ func NewAdopter(d AdoptDeps) (*Adopter, error) {
 		return nil, err
 	}
 	for key, r := range d.Domains {
-		if key != r.Log.String() {
-			return nil, fmt.Errorf("statelog: a join registers the log %s under "+
-				"the key %q — a manifest names every log by its own key, so this "+
-				"one would be read as missing from every artefact", r.Log, key)
+		if key != r.Domain.Name() {
+			return nil, fmt.Errorf("statelog: a join registers the %s domain under "+
+				"the key %q — a manifest names every log by its domain's name, so "+
+				"this one would be read as missing from every artefact", r.Domain.Name(), key)
 		}
 	}
 	logger := loggerOr(d.Logger)

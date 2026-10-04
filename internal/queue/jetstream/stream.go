@@ -294,7 +294,7 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 		},
 		{
 			name:      streamNotifications,
-			subjects:  []string{"crewlet.notifications.>"},
+			subjects:  []string{topics.NotificationsPrefix + ">"},
 			retention: jetstream.InterestPolicy,
 		},
 		{
@@ -310,7 +310,7 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 			// bound keeps a restarted node from replaying a week of
 			// stale activation announcements.
 			name:      streamConfig,
-			subjects:  []string{"crewlet.config.>"},
+			subjects:  []string{topics.ConfigPrefix + ">"},
 			retention: jetstream.LimitsPolicy,
 			maxAge:    time.Hour,
 		},

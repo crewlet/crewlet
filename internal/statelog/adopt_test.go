@@ -159,7 +159,7 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 	lag := uint64(0)
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
 		Domains: []statelog.Registered{{
-			Domain: from.domain, Log: logOf(from.domain), Spec: specOf(from.domain),
+			Domain: from.domain, Spec: specOf(from.domain),
 			Health: func() statelog.Health {
 				return statelog.Health{
 					Position: statelog.Position{Stream: probeStream, Generation: 1, Seq: 4_200},
@@ -220,7 +220,7 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 	t.Helper()
 	h.answered.Store(0)
 	a, err := statelog.NewAdopter(statelog.AdoptDeps{
-		Domains:  map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{})}},
+		Domains:  map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Spec: specOf(probeDomain{})}},
 		LivePath: h.joinPath,
 		NodeID:   "joiner",
 		Conn:     h.nc,

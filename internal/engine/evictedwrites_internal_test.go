@@ -194,7 +194,7 @@ func appendRecord(t *testing.T, running *runningLog, subject string, payload []b
 func relaunch(t *testing.T, s *stateLog) {
 	t.Helper()
 	for _, running := range s.running() {
-		name := running.key
+		name := running.domain.Name()
 		if err := running.consumer.Reset(t.Context(), running.runner.Committed().Seq); err != nil {
 			t.Fatalf("move %s's consumer to its checkpoint: %v", name, err)
 		}

@@ -77,8 +77,6 @@ var sentinels = []sentinel{
 	{"statelog.ErrEstateNotRestored", statelog.ErrEstateNotRestored},
 	{"statelog.ErrExists", statelog.ErrExists},
 	{"statelog.ErrGenerationPassed", statelog.ErrGenerationPassed},
-	{"statelog.ErrInvalidLayout", statelog.ErrInvalidLayout},
-	{"statelog.ErrInvalidPartitionID", statelog.ErrInvalidPartitionID},
 	{"statelog.ErrLogDiverged", statelog.ErrLogDiverged},
 	{"statelog.ErrLogTruncated", statelog.ErrLogTruncated},
 	{"statelog.ErrNoDecision", statelog.ErrNoDecision},
@@ -88,7 +86,6 @@ var sentinels = []sentinel{
 	{"statelog.ErrStopped", statelog.ErrStopped},
 	{"statelog.ErrStreamRecreated", statelog.ErrStreamRecreated},
 	{"statelog.ErrUnavailable", statelog.ErrUnavailable},
-	{"statelog.ErrUnplacedLog", statelog.ErrUnplacedLog},
 	{"statelog.ErrWaitAbandoned", statelog.ErrWaitAbandoned},
 	{"statelog.ErrWrongStream", statelog.ErrWrongStream},
 

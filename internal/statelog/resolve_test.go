@@ -325,7 +325,6 @@ func TestAPublisherIsNotBuiltWithoutAReaderOfItsLog(t *testing.T) {
 	t.Parallel()
 	deps := statelog.Deps{
 		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
-		Layout: layoutOf(probeDomain{}), LogID: logOf(probeDomain{}),
 		Log: struct{ statelog.Appender }{}, Rows: struct{ statelog.Rows }{},
 		Fence: struct{ statelog.Fence }{}, Gates: struct{ statelog.Gates }{},
 		Waiter: struct{ statelog.Waiter }{}, Voids: struct{ statelog.Voids }{},
@@ -527,7 +526,6 @@ func TestAPublisherIsNotBuiltWithoutItsReanchorRules(t *testing.T) {
 	t.Parallel()
 	deps := statelog.Deps{
 		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
-		Layout: layoutOf(probeDomain{}), LogID: logOf(probeDomain{}),
 		Log: struct{ statelog.Appender }{}, Records: struct{ statelog.LogReader }{},
 		Rows: struct{ statelog.Rows }{}, Fence: struct{ statelog.Fence }{},
 		Gates: struct{ statelog.Gates }{}, Waiter: struct{ statelog.Waiter }{},

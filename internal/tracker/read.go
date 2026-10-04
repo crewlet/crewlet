@@ -1916,11 +1916,10 @@ func anyOf[T ~string](values []T) []any {
 	return out
 }
 
-// trackerStream is the name of the one log this domain's rows are keyed to —
-// its layout-0 log, read from the layout's grammar rather than written again —
-// one spelling, so the framework and every reader compare against the same
-// one. The tracker has one log, so the log its rows answer for is that one.
-var trackerStream = statelog.EstateStream(Domain{}).Name
+// trackerStream is the name of the log this domain's rows are keyed to, read
+// from the domain's own declaration rather than written again — one
+// spelling, so the framework and every reader compare against the same one.
+var trackerStream = Domain{}.Stream().Name
 
 // placeholders is a bound-parameter list of n slots.
 //

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -373,7 +375,7 @@ func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
 		"a 4 GiB mutation log an operator wrote": {TrackerLogMaxBytes: 4 * gib},
 	} {
 		sized, err := sizeCeilings(t.Context(), host, stream, free,
-			"/var/lib/crewlet/stream", LayoutZero())
+			"/var/lib/crewlet/stream")
 		if err != nil {
 			t.Fatalf("%s: sizeCeilings: %v", name, err)
 		}
@@ -432,9 +434,9 @@ func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			host := sizingHost{budget: tc.budget, unread: tc.unread, held: map[string]int64{
-				estateSpec(tracker.Domain{}).Name: trackerHolds,
+				tracker.Domain{}.Stream().Name: trackerHolds,
 			}}
-			sized, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream", LayoutZero())
+			sized, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
 			if err != nil {
 				t.Fatalf("sizeCeilings: %v", err)
 			}
@@ -477,15 +479,15 @@ func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) 
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			host := sizingHost{budget: tc.budget, unread: tc.unread}
-			first, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream", LayoutZero())
+			first, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
 			if err != nil {
 				t.Fatalf("sizeCeilings: %v", err)
 			}
 			host.held = map[string]int64{}
 			for _, domain := range registeredDomains() {
-				host.held[estateSpec(domain).Name] = first[domain.Name()].Bytes
+				host.held[domain.Stream().Name] = first[domain.Name()].Bytes
 			}
-			again, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream", LayoutZero())
+			again, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
 			if err != nil {
 				t.Fatalf("sizeCeilings: %v", err)
 			}
@@ -520,7 +522,7 @@ func TestAnInterruptedFirstBootLeavesLogsARestartReportsAsMade(t *testing.T) {
 	}}
 	boot := func() map[string]domainCeiling {
 		t.Helper()
-		sized, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream", LayoutZero())
+		sized, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
 		if err != nil {
 			t.Fatalf("sizeCeilings: %v", err)
 		}
@@ -529,7 +531,7 @@ func TestAnInterruptedFirstBootLeavesLogsARestartReportsAsMade(t *testing.T) {
 	create := func(name string, bytes int64) {
 		for _, domain := range registeredDomains() {
 			if domain.Name() == name {
-				host.held[estateSpec(domain).Name] = bytes
+				host.held[domain.Stream().Name] = bytes
 				host.budget.Committed += bytes
 				return
 			}
@@ -551,7 +553,7 @@ func TestAnInterruptedFirstBootLeavesLogsARestartReportsAsMade(t *testing.T) {
 
 	again := boot()
 	for _, domain := range registeredDomains() {
-		holds := host.held[estateSpec(domain).Name]
+		holds := host.held[domain.Stream().Name]
 		if reported := again[domain.Name()].Bytes; reported != holds {
 			t.Errorf("%s's stream holds %d and every boot now reports it against "+
 				"%d — a capacity difference nobody made", domain.Name(), holds, reported)
@@ -598,11 +600,11 @@ func brokerWithHeadroom(t *testing.T, headroom int64) *jetstream.Queue {
 // and provisions each against q, as a boot does.
 func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, free int64) error {
 	t.Helper()
-	ceilings, err := sizeCeilings(t.Context(), q, stream, free, "/var/lib/crewlet/stream", LayoutZero())
+	ceilings, err := sizeCeilings(t.Context(), q, stream, free, "/var/lib/crewlet/stream")
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
-	s := &stateLog{layout: LayoutZero(), ceilings: ceilings, volume: "/var/lib/crewlet/stream"}
+	s := &stateLog{ceilings: ceilings, volume: "/var/lib/crewlet/stream"}
 	_, err = s.provisionAll(t.Context(), q)
 	return err
 }
@@ -627,7 +629,7 @@ func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	}
 	var reserved int64
 	for _, domain := range registeredDomains() {
-		held, found, err := q.DomainStreamCeiling(t.Context(), estateSpec(domain).Name)
+		held, found, err := q.DomainStreamCeiling(t.Context(), domain.Stream().Name)
 		if err != nil || !found {
 			t.Fatalf("%s's stream = (found %v, %v)", domain.Name(), found, err)
 		}
@@ -635,33 +637,6 @@ func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	}
 	if reserved > brokerCap {
 		t.Errorf("the state logs reserved %d bytes of a %d-byte cap", reserved, brokerCap)
-	}
-}
-
-// A NODE ASKED TO PROVISION NO LAYOUT IS REFUSED, NOT TOLD ITS LOGS EXIST.
-//
-// The logs a node provisions are its layout's, so a node holding the zero
-// layout — a recorded layout that decoded to nothing — would walk no log and
-// answer that every one it was asked for exists. It is refused naming the
-// layout instead, and the broker is left as it was.
-func TestAZeroLayoutProvisionsNothingAndSaysSo(t *testing.T) {
-	t.Parallel()
-	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("open the broker: %v", err)
-	}
-	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
-	s := &stateLog{}
-	logs, err := s.provisionAll(t.Context(), q)
-	if !errors.Is(err, statelog.ErrInvalidLayout) {
-		t.Fatalf("provisioning the zero layout answered (%d logs, %v), want its refusal",
-			len(logs), err)
-	}
-	for _, id := range LayoutZero().AllLogs() {
-		name, _ := LayoutZero().Stream(id)
-		if _, found, err := q.DomainStreamCeiling(t.Context(), name); err != nil || found {
-			t.Errorf("the refused provision created %s (found %v, %v)", name, found, err)
-		}
 	}
 }
 
@@ -675,15 +650,15 @@ func TestARestartSizesTheLogsAsTheFirstBootDid(t *testing.T) {
 	t.Parallel()
 	const free = 64 * gib
 	q := brokerWithHeadroom(t, 12*gib)
-	first, err := sizeCeilings(t.Context(), q, config.Stream{}, free, "/var/lib/crewlet/stream", LayoutZero())
+	first, err := sizeCeilings(t.Context(), q, config.Stream{}, free, "/var/lib/crewlet/stream")
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
-	s := &stateLog{layout: LayoutZero(), ceilings: first}
+	s := &stateLog{ceilings: first}
 	if _, err := s.provisionAll(t.Context(), q); err != nil {
 		t.Fatalf("provision: %v", err)
 	}
-	again, err := sizeCeilings(t.Context(), q, config.Stream{}, free, "/var/lib/crewlet/stream", LayoutZero())
+	again, err := sizeCeilings(t.Context(), q, config.Stream{}, free, "/var/lib/crewlet/stream")
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
@@ -905,5 +880,69 @@ func TestTheRoomClauseNeverSpellsAnUnknownAsANumber(t *testing.T) {
 	}
 	if strings.Contains(unstated, "-1") {
 		t.Errorf("an unstated limit reaches an operator as the number -1: %s", unstated)
+	}
+}
+
+// recordingHost is a broker that provisions nothing and remembers every stream
+// it was asked to create, so a refusal that must come before the broker is
+// asked can be seen to.
+type recordingHost struct {
+	domainHost
+	ensured []string
+}
+
+func (h *recordingHost) EnsureDomainStream(_ context.Context, spec jetstream.DomainStream) error {
+	h.ensured = append(h.ensured, spec.Name)
+	return nil
+}
+
+func (*recordingHost) DomainLog(context.Context, string) (*jetstream.DomainLog, error) {
+	return nil, nil
+}
+
+// A LOG NOBODY SIZED IS NOT CREATED AT THE DOMAIN'S DEFAULT.
+//
+// A domain's declared ceiling is what its stream would be created at if this
+// node took it as given, and that is a reservation no Tier A budget counted —
+// the reservation that refuses a boot on a broker sized for the logs it was
+// told about. So a domain the sizing left out, or sized at nothing, refuses by
+// name before the broker is asked to create its stream at all.
+func TestALogNobodySizedIsRefusedBeforeItsStreamIsCreated(t *testing.T) {
+	t.Parallel()
+	unsized := pages.Domain{}
+	for name, ceiling := range map[string]*domainCeiling{
+		"left out of the sizing": nil,
+		"sized at zero bytes":    {Bytes: 0, Field: "stream.pages_log_max_bytes"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ceilings := map[string]domainCeiling{}
+			for _, d := range registeredDomains() {
+				ceilings[d.Name()] = domainCeiling{Bytes: gib, Field: "stream." + d.Name()}
+			}
+			delete(ceilings, unsized.Name())
+			if ceiling != nil {
+				ceilings[unsized.Name()] = *ceiling
+			}
+			s := &stateLog{ceilings: ceilings}
+
+			_, _, err := s.specOf(unsized)
+			if err == nil || !strings.Contains(err.Error(), "was never sized") ||
+				!strings.Contains(err.Error(), unsized.Name()) {
+				t.Fatalf("specOf(%s) = %v, want the refusal naming the unsized domain",
+					unsized.Name(), err)
+			}
+
+			host := &recordingHost{}
+			_, err = s.provisionAll(t.Context(), host)
+			if err == nil || !strings.Contains(err.Error(), "was never sized") ||
+				!strings.Contains(err.Error(), unsized.Name()) {
+				t.Fatalf("provisionAll = %v, want the refusal naming %s", err, unsized.Name())
+			}
+			if slices.Contains(host.ensured, unsized.Stream().Name) {
+				t.Errorf("the unsized %s log's stream %s was created anyway (asked for %v)",
+					unsized.Name(), unsized.Stream().Name, host.ensured)
+			}
+		})
 	}
 }

@@ -212,7 +212,7 @@ func TestTheReportAndTheGaugeMeasureHeadroomAgainstTheOrdinaryCeiling(t *testing
 		rows[d.Domain] = d
 	}
 	for _, running := range s.running() {
-		name := running.key
+		name := running.domain.Name()
 		reserved := statelog.KeepsGateReserve(running.domain)
 		stats, err := running.log.Stats(t.Context())
 		if err != nil {

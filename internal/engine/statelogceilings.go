@@ -139,9 +139,8 @@ func tierACeiling(stream config.Stream, domain statelog.Domain, free int64) (dom
 }
 
 // ceilingsFor sizes every registered domain's byte budget from Tier A and the
-// broker's own budget, over the logs layout gives each domain.
-func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap,
-	layout statelog.Layout) (map[string]domainCeiling, error) {
+// broker's own budget.
+func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap) (map[string]domainCeiling, error) {
 	if boot == nil {
 		return nil, errors.New("engine: a state log's ceilings are sized from Tier A, and this node was given none")
 	}
@@ -158,7 +157,7 @@ func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap,
 				"set stream.tracker_log_max_bytes, stream.tracker_vectors_max_bytes, "+
 				"stream.pages_log_max_bytes and stream.usage_log_max_bytes to choose them")
 	}
-	return sizeCeilings(ctx, host, boot.Stream, free, volume, layout)
+	return sizeCeilings(ctx, host, boot.Stream, free, volume)
 }
 
 // sizeCeilings is [ceilingsFor] on a volume already measured.
@@ -189,49 +188,28 @@ func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap,
 // of what the logs hold, and a log created beside them was handed that half on
 // top of the share.
 func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
-	free int64, volume string, layout statelog.Layout) (map[string]domainCeiling, error) {
+	free int64, volume string) (map[string]domainCeiling, error) {
 
 	asked := map[string]domainCeiling{}
 	held := map[string]int64{}
 	var holding int64
 	for _, domain := range registeredDomains() {
-		logs := layout.LogsOf(domain.Name())
-		if len(logs) == 0 {
-			// A DOMAIN THE LAYOUT GIVES NO LOG reserves nothing, so it
-			// takes no share of the pool.
-			continue
-		}
 		ceiling, err := tierACeiling(stream, domain, free)
 		if err != nil {
 			return nil, err
 		}
 		asked[domain.Name()] = ceiling
-		// WHAT THE DOMAIN'S LOGS HOLD, TOGETHER, and only when every one
-		// of them exists: a domain some of whose logs are missing is
-		// sized as though it were being created, so those it creates
-		// take their share of what the pool leaves rather than of a
-		// budget its existing logs are counted against twice.
-		var holds int64
-		every := true
-		for _, id := range logs {
-			bytes, found, err := host.DomainStreamCeiling(ctx, layout.StreamSpec(domain, id).Name)
-			switch {
-			case err != nil:
-				// CARRIED AS ABSENT. The provision that follows asks
-				// the same broker the same question and fails with its
-				// own answer if it still cannot give one; counted here
-				// as absent, the stream is merely sized as though this
-				// boot were creating it.
-				log.WarnContext(ctx, "statelog_ceiling_unread",
-					"log", id.String(), "error", err.Error())
-				every = false
-			case found:
-				holds += bytes
-			default:
-				every = false
-			}
-		}
-		if every {
+		holds, found, err := host.DomainStreamCeiling(ctx, domain.Stream().Name)
+		switch {
+		case err != nil:
+			// CARRIED AS ABSENT. The provision that follows asks the
+			// same broker the same question and fails with its own
+			// answer if it still cannot give one; counted here as
+			// absent, the stream is merely sized as though this boot
+			// were creating it.
+			log.WarnContext(ctx, "statelog_ceiling_unread",
+				"domain", domain.Name(), "error", err.Error())
+		case found:
 			held[domain.Name()] = holds
 			holding += holds
 		}
@@ -486,48 +464,29 @@ func streamVolume(boot *config.Bootstrap) string {
 	return filepath.Dir(boot.Store.Path)
 }
 
-// ceilingFor is the budget a domain's logs were sized at, together.
+// ceilingFor is the ceiling a domain's log was sized at: its whole Tier A
+// budget, fitted into the broker's pool.
 func (s *stateLog) ceilingFor(domain statelog.Domain) (domainCeiling, error) {
 	ceiling, sized := s.ceilings[domain.Name()]
 	if !sized || ceiling.Bytes <= 0 {
-		return domainCeiling{}, fmt.Errorf("engine: %s's logs were never sized, and a "+
+		return domainCeiling{}, fmt.Errorf("engine: %s's log was never sized, and a "+
 			"stream created at a default nobody budgeted is the reservation that "+
 			"refuses a boot", domain.Name())
 	}
 	return ceiling, nil
 }
 
-// logCeiling is one log's ceiling: its even share of its domain's budget under
-// the running layout ([statelog.Layout.LogShare]), with the Tier A field the
-// budget came from. Under layout 0 each domain has one log, and its ceiling is
-// the budget.
-func (s *stateLog) logCeiling(domain statelog.Domain, id statelog.LogID) (domainCeiling, error) {
+// specOf is the domain's stream as this node creates it: the domain's own
+// ([statelog.Domain.Stream]) at the ceiling Tier A sized
+// ([stateLog.ceilingFor]) rather than the domain's declared default — so the
+// spec a log is built from and the ceiling its stream is created with are one
+// number.
+func (s *stateLog) specOf(domain statelog.Domain) (statelog.StreamSpec, domainCeiling, error) {
 	ceiling, err := s.ceilingFor(domain)
-	if err != nil {
-		return domainCeiling{}, err
-	}
-	ceiling.Bytes = s.layout.LogShare(id.Domain, ceiling.Bytes)
-	if ceiling.Bytes <= 0 {
-		return domainCeiling{}, fmt.Errorf("engine: %s is not a log of layout %d, "+
-			"so it has no share of %s's budget", id, s.layout.Number, domain.Name())
-	}
-	return ceiling, nil
-}
-
-// specOf is one log's stream as this node creates it: the domain's shape under
-// the names the running layout gives the log, at the log's share of the budget
-// Tier A sized ([stateLog.logCeiling]) rather than of the domain's declared
-// default — so the spec a log is built from and the ceiling its stream is
-// created with are one number.
-func (s *stateLog) specOf(domain statelog.Domain, id statelog.LogID) (statelog.StreamSpec, domainCeiling, error) {
-	spec := s.layout.StreamSpec(domain, id)
-	if err := spec.Instantiates(domain); err != nil {
-		return statelog.StreamSpec{}, domainCeiling{}, fmt.Errorf("engine: %s: %w", id, err)
-	}
-	ceiling, err := s.logCeiling(domain, id)
 	if err != nil {
 		return statelog.StreamSpec{}, domainCeiling{}, err
 	}
+	spec := domain.Stream()
 	spec.MaxBytes = ceiling.Bytes
 	return spec, ceiling, nil
 }

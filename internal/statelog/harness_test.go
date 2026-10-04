@@ -32,8 +32,11 @@ type probeDomain struct{}
 
 func (probeDomain) Name() string { return "probe" }
 
-func (probeDomain) StreamShape() statelog.StreamShape {
-	return statelog.StreamShape{
+func (probeDomain) Stream() statelog.StreamSpec {
+	return statelog.StreamSpec{
+		Name:            probeStream,
+		Subjects:        []string{probePrefix + ".>"},
+		SubjectPrefix:   probePrefix,
 		MaxBytes:        16 << 20,
 		Duplicates:      2 * time.Minute,
 		Replay:          statelog.ReplayStrict,
@@ -41,38 +44,11 @@ func (probeDomain) StreamShape() statelog.StreamShape {
 	}
 }
 
-// logOf is a fake domain's one log, in layout 0's estate — keyed, as every
-// such log is, by the domain's name alone.
-func logOf(d statelog.Domain) statelog.LogID {
-	return statelog.EstateLog(d)
-}
-
-// layoutOf is the layout that log sits in: layout 0 carrying the one fake
-// domain. The grammar names no fake's log there, so a runner or a publisher
-// built on it takes the hand-named stream [specOf] gives rather than holding it
-// to a name ([statelog.Layout.Places]) — the partitioned names are certified by
-// statelogtest's control, whose logs the grammar does name.
-func layoutOf(d statelog.Domain) statelog.Layout {
-	return statelog.EstateLayout(d.Name())
-}
-
-// specOf is a fake domain's one log's stream: its shape under the name the cases here
-// were written against. Named by hand rather than by a layout, because what
-// these cases vary is what a domain DECLARES — its replay, its window, its
-// ceiling — and a partitioned name would change every position they assert on
-// and none of what they are about. The partitioned grammar is certified by
-// statelogtest's control and by the layout's own tests.
+// specOf is a fake domain's stream as a node runs it — its own declaration,
+// at its own ceiling, because a fake's runner and publisher are held to that
+// declaration in everything but the ceiling ([statelog.StreamSpec.Instantiates]).
 func specOf(d statelog.Domain) statelog.StreamSpec {
-	name, prefix := probeStream, probePrefix
-	if d.Name() == (secondProbeDomain{}).Name() {
-		name, prefix = secondProbeStream, secondProbePrefix
-	}
-	return statelog.StreamSpec{
-		Name:          name,
-		Subjects:      []string{prefix + ".>"},
-		SubjectPrefix: prefix,
-		StreamShape:   d.StreamShape(),
-	}
+	return d.Stream()
 }
 
 func (probeDomain) RecordVersion() int { return 1 }
@@ -791,7 +767,7 @@ func newHarnessLogging(t *testing.T, domain statelog.Domain, logger *slog.Logger
 	}
 
 	deps := statelog.Deps{
-		Domain: domain, Spec: specOf(domain), Layout: layoutOf(domain), LogID: logOf(domain),
+		Domain: domain, Spec: specOf(domain),
 		Log:           h.appends,
 		Records:       h.records,
 		Rows:          h.rows,

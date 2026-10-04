@@ -155,7 +155,7 @@ func TestEveryWithdrawalShowsTheTicksBoundItsProgress(t *testing.T) {
 	budget := &countedBudget{}
 	duty, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: h.publisher, Estate: h.db.Replicated().Reader(),
-		Log:      statelog.EstateStream(search.Domain{}).Name,
+		Log:      search.Domain{}.Stream().Name,
 		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
 		Embedder: h.embedder, Model: embedModel,
 		Corpora: []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
@@ -198,7 +198,7 @@ func TestEveryEmbeddedVectorShowsTheTicksBoundItsProgress(t *testing.T) {
 	budget := &countedBudget{}
 	duty, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: h.publisher, Estate: h.db.Replicated().Reader(),
-		Log:      statelog.EstateStream(search.Domain{}).Name,
+		Log:      search.Domain{}.Stream().Name,
 		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
 		Embedder: h.embedder, Model: embedModel,
 		Corpora: []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
@@ -394,7 +394,7 @@ func TestTheDutyRefusesAWiringWithNoBudget(t *testing.T) {
 	t.Parallel()
 	h := newEmbedHarness(t)
 	_, err := search.NewEmbedder(search.EmbedDeps{
-		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: statelog.EstateStream(search.Domain{}).Name,
+		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: search.Domain{}.Stream().Name,
 		Standing: h.standing(nil), Embedder: h.embedder, Model: embedModel,
 		Corpora: []search.Corpus{search.TaskCorpus{DB: h.db.Replicated().Reader()}},
 	})
@@ -417,7 +417,7 @@ func TestTheDutyRefusesMoreCorporaThanATickCanServe(t *testing.T) {
 		corpora[i] = &scriptedCorpus{source: search.SourceTask, backlog: -1}
 	}
 	_, err := search.NewEmbedder(search.EmbedDeps{
-		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: statelog.EstateStream(search.Domain{}).Name,
+		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: search.Domain{}.Stream().Name,
 		Standing: h.standing(nil),
 		Embedder: h.embedder, Model: embedModel, Corpora: corpora,
 		// EVERY OTHER FIELD WIRED, so the refusal is the corpora's.
@@ -537,7 +537,7 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 			t.Errorf("stop the broker: %v", err)
 		}
 	})
-	spec := statelog.EstateStream(search.Domain{})
+	spec := search.Domain{}.Stream()
 	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES: the shipped
 	// default is sized for the declared supported corpus, and an embedded
 	// broker in a temporary directory refuses to reserve it.
@@ -559,12 +559,12 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 		t: t, db: db, log: log, applier: search.NewApplier(),
 		embedder: &scriptedEmbedder{Fake: embeddings.NewFake(64), poisonID: -1},
 	}
-	rows, err := search.NewRows(db.Replicated().Reader(), statelog.EstateStream(search.Domain{}))
+	rows, err := search.NewRows(db.Replicated().Reader(), search.Domain{}.Stream())
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: search.Domain{}, Spec: statelog.EstateStream(search.Domain{}), Layout: statelog.EstateLayout(search.Domain{}.Name()), LogID: statelog.EstateLog(search.Domain{}), Log: log, Records: log, Rows: rows,
+		Domain: search.Domain{}, Spec: search.Domain{}.Stream(), Log: log, Records: log, Rows: rows,
 		Fence: search.NewFence(), Gates: search.NewGates(), Waiter: &embedWaiter{}, Voids: embedWaiter{},
 		NodeID: "node-a", Generation: func() uint32 { return 0 }, Identity: &embedWaiter{},
 		ResolveBudget: 2 * time.Second,
@@ -583,7 +583,7 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 func (h *embedHarness) dutyOver(corpora ...search.Corpus) *search.Embedder {
 	h.t.Helper()
 	duty, err := search.NewEmbedder(search.EmbedDeps{
-		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: statelog.EstateStream(search.Domain{}).Name,
+		Publisher: h.publisher, Estate: h.db.Replicated().Reader(), Log: search.Domain{}.Stream().Name,
 		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
 		Embedder: h.embedder, Model: embedModel, Corpora: corpora,
 		Now:    func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
@@ -689,7 +689,7 @@ func (h *embedHarness) drain() {
 		record := statelog.Record{
 			Envelope: env,
 			Position: statelog.Position{
-				Stream: statelog.EstateStream(search.Domain{}).Name, Generation: env.Gen, Seq: seq,
+				Stream: search.Domain{}.Stream().Name, Generation: env.Gen, Seq: seq,
 			},
 			Payload: payload, StoredAt: storedAt,
 		}

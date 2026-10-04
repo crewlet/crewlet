@@ -90,7 +90,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	held := r.state.running()
 	healths := make(map[string]domainHealth, len(held))
 	for _, running := range held {
-		name := running.key
+		name := running.domain.Name()
 		d := statelog.DomainInputs{
 			Domain:     name,
 			Stream:     running.spec.Name,
@@ -334,7 +334,7 @@ func (r *retention) skipFor(register []coord.NodePositions, running *runningLog)
 		if row.NodeID != r.nodeID {
 			continue
 		}
-		if _, runs := row.Domains[running.key]; runs {
+		if _, runs := row.Domains[running.domain.Name()]; runs {
 			return statelog.SkipReason(row.SnapshotSkip)
 		}
 	}
@@ -385,7 +385,7 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	// backup was twenty-five hours old, one line above the trim term
 	// reporting that no backup had been recorded at all.
 	for _, running := range r.state.running() {
-		name := running.key
+		name := running.domain.Name()
 		if running == nil {
 			continue
 		}
@@ -612,7 +612,7 @@ func (r *retention) census(reading []metrics.Snapshot, out *statelog.Reading) {
 		if ratio := float64(got) / float64(expected); ratio > worst {
 			worst = ratio
 			out.LinearizableReads, out.LinearizableReadsExpected = got, expected
-			out.CensusLog = running.key
+			out.CensusLog = running.domain.Name()
 		}
 	}
 }

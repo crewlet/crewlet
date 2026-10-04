@@ -194,7 +194,7 @@ func TestAnAbandonedTransferIsNeverReportedAsASnapshot(t *testing.T) {
 // manifest alone.
 func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 	t.Parallel()
-	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{})}}
+	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Spec: specOf(probeDomain{})}}
 	base := func() statelog.Offer {
 		return statelog.Offer{Manifest: statelog.Manifest{
 			V: statelog.ManifestVersion,
@@ -617,7 +617,7 @@ func TestAFetchWhoseCallerHasGivenUpAsksNobody(t *testing.T) {
 // name, is [TestAnUnusableOfferIsRefusedBeforeTheTransfer]'s.
 func TestAnArtefactNamingALogThisBuildDoesNotRegisterIsRefused(t *testing.T) {
 	t.Parallel()
-	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{})}}
+	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Spec: specOf(probeDomain{})}}
 	req := statelog.OfferRequest{Need: map[string]uint64{"probe": 1}}
 	offer := func(change func(*statelog.Manifest)) statelog.Offer {
 		m := statelog.Manifest{V: statelog.ManifestVersion,

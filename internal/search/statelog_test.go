@@ -72,7 +72,7 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 // nothing certifies nothing.
 func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	duty, err := search.NewEmbedder(search.EmbedDeps{
-		Publisher: pub, Estate: db, Log: statelog.EstateStream(search.Domain{}).Name,
+		Publisher: pub, Estate: db, Log: search.Domain{}.Stream().Name,
 		// THE SUITE'S ONE NODE, applied through its own end: the corpus is
 		// one document, below the index's minimum, so the step decides
 		// nothing whatever it reads.

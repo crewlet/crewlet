@@ -279,10 +279,10 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	recorder.Add(metrics.StatelogRecordsGated, 2,
 		metrics.Attrs{"gate": "deleted", "subject_kind": "task"})
 	recorder.Add(metrics.TrackerFeedUnreadable, 3, metrics.Attrs{"source": "tracker"})
-	trackerLog := estateLog(tracker.Domain{})
+	trackerLog := statelog.Domain(tracker.Domain{})
 	recorder.Add(metrics.StatelogBarriersApplied,
 		uint64(3*statelog.Census{Seats: 100}.Expected()),
-		metrics.Attrs{"domain": "tracker", "stream": estateSpec(tracker.Domain{}).Name})
+		metrics.Attrs{"domain": "tracker", "stream": tracker.Domain{}.Stream().Name})
 
 	r := &retention{metrics: recorder, state: censusLogs(trackerLog),
 		seats: func() int { return 100 }}
@@ -301,7 +301,7 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 			reading.FeedUnreadable)
 	}
 	if reading.LinearizableReadsExpected != (statelog.Census{Seats: 100}).Expected() ||
-		reading.CensusLog != trackerLog.String() {
+		reading.CensusLog != trackerLog.Name() {
 		t.Errorf("the declared read rate reached the reading as %d on %q, so "+
 			"`census_drift` compares against nothing",
 			reading.LinearizableReadsExpected, reading.CensusLog)
@@ -388,21 +388,14 @@ func TestTheAlarmTableIsEvaluatedOnANodeThatHoldsNoDuty(t *testing.T) {
 	}
 }
 
-// censusLogs is a state log running the given logs of layout, with nothing
-// behind them but what the census reads: which log each is, and its stream.
-func censusLogs(ids ...statelog.LogID) *stateLog {
-	layout := LayoutZero()
-	s := &stateLog{layout: layout}
-	var running []*runningLog
-	for _, id := range ids {
-		d, err := registeredDomain(id.Domain)
-		if err != nil {
-			panic(err)
-		}
-		running = append(running, &runningLog{domain: d, id: id, key: id.String(),
-			spec: layout.StreamSpec(d, id)})
+// censusLogs is a state log running the given domains' logs, with nothing
+// behind them but what the census reads: which domain each is, and its stream.
+func censusLogs(domains ...statelog.Domain) *stateLog {
+	running := make([]*runningLog, 0, len(domains))
+	for _, d := range domains {
+		running = append(running, &runningLog{domain: d, spec: d.Stream()})
 	}
-	return runsLogs(s, running...)
+	return runsLogs(&stateLog{}, running...)
 }
 
 // A LOG IS HELD TO ITS OWN CENSUS, AT THE RATE IT RECEIVES.
@@ -422,15 +415,14 @@ func censusLogs(ids ...statelog.LogID) *stateLog {
 // smaller it was.
 func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 	t.Parallel()
-	trackerLog, vectorLog := estateLog(tracker.Domain{}), estateLog(search.Domain{})
-	stream := func(id statelog.LogID) string { name, _ := LayoutZero().Stream(id); return name }
+	var trackerLog, vectorLog statelog.Domain = tracker.Domain{}, search.Domain{}
 
 	for _, tc := range []struct {
 		name       string
-		logs       []statelog.LogID
+		logs       []statelog.Domain
 		seats      int
 		background map[string]int
-		applied    map[statelog.LogID]int
+		applied    map[statelog.Domain]int
 		appended   int
 		fires      bool
 		log        string
@@ -442,48 +434,48 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 			// beside it: counted in the census, so the seat's own
 			// reads are measured against what the log really
 			// carries.
-			logs: []statelog.LogID{trackerLog}, seats: 1,
+			logs: []statelog.Domain{trackerLog}, seats: 1,
 			background: map[string]int{"tracker": collect.PinsPerDay},
-			applied:    map[statelog.LogID]int{trackerLog: 125 + collect.PinsPerDay},
+			applied:    map[statelog.Domain]int{trackerLog: 125 + collect.PinsPerDay},
 			fires:      false, log: "tracker", expected: 125 + collect.PinsPerDay,
 		},
 		{
 			name: "the collector is no cover past twice the whole census",
-			logs: []statelog.LogID{trackerLog}, seats: 1,
+			logs: []statelog.Domain{trackerLog}, seats: 1,
 			background: map[string]int{"tracker": collect.PinsPerDay},
-			applied:    map[statelog.LogID]int{trackerLog: 2*(125+collect.PinsPerDay) + 1},
+			applied:    map[statelog.Domain]int{trackerLog: 2*(125+collect.PinsPerDay) + 1},
 			fires:      true, log: "tracker", expected: 125 + collect.PinsPerDay,
 		},
 		{
 			name: "a 200-seat company at 1.2 times its per-seat census",
 			// 30 000 a day: past twice the fixed 12 500, inside twice
 			// this company's 25 000.
-			logs: []statelog.LogID{trackerLog}, seats: 200,
-			applied: map[statelog.LogID]int{trackerLog: 30_000},
+			logs: []statelog.Domain{trackerLog}, seats: 200,
+			applied: map[statelog.Domain]int{trackerLog: 30_000},
 			fires:   false, log: "tracker", expected: 25_000,
 		},
 		{
 			name: "a 100-seat company at three times its census",
-			logs: []statelog.LogID{trackerLog}, seats: 100,
-			applied: map[statelog.LogID]int{trackerLog: 37_501},
+			logs: []statelog.Domain{trackerLog}, seats: 100,
+			applied: map[statelog.Domain]int{trackerLog: 37_501},
 			fires:   true, log: "tracker", expected: 12_500,
 		},
 		{
 			name: "this node's own appends, however many, are not the log's rate",
-			logs: []statelog.LogID{trackerLog}, seats: 100,
+			logs: []statelog.Domain{trackerLog}, seats: 100,
 			appended: 100_000,
 			fires:    false, log: "tracker", expected: 12_500,
 		},
 		{
 			name: "the log's rate, from every node, past this node's own appends",
-			logs: []statelog.LogID{trackerLog}, seats: 100,
-			applied: map[statelog.LogID]int{trackerLog: 30_000}, appended: 10_000,
+			logs: []statelog.Domain{trackerLog}, seats: 100,
+			applied: map[statelog.Domain]int{trackerLog: 30_000}, appended: 10_000,
 			fires: true, log: "tracker", expected: 12_500,
 		},
 		{
 			name: "the vector log, which no read appends to",
-			logs: []statelog.LogID{vectorLog, trackerLog}, seats: 1,
-			applied: map[statelog.LogID]int{vectorLog: 1_000_000},
+			logs: []statelog.Domain{vectorLog, trackerLog}, seats: 1,
+			applied: map[statelog.Domain]int{vectorLog: 1_000_000},
 			fires:   false, log: "tracker", expected: 125,
 		},
 	} {
@@ -493,9 +485,9 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 			if err != nil {
 				t.Fatalf("recorder: %v", err)
 			}
-			for id, n := range tc.applied {
+			for d, n := range tc.applied {
 				recorder.Add(metrics.StatelogBarriersApplied, uint64(n),
-					metrics.Attrs{"domain": id.Domain, "stream": stream(id)})
+					metrics.Attrs{"domain": d.Name(), "stream": d.Stream().Name})
 			}
 			if tc.appended > 0 {
 				recorder.Add(metrics.StatelogBarrierAppends, uint64(tc.appended),

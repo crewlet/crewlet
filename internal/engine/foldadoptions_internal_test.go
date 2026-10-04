@@ -55,7 +55,7 @@ func TestAnUpgradedNodeBootsWithItsEarlierAdoptionInTheWatermark(t *testing.T) {
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
 
-	rows, err := tracker.NewRows(back.Store.Replicated().Reader(), estateSpec(tracker.Domain{}))
+	rows, err := tracker.NewRows(back.Store.Replicated().Reader(), tracker.Domain{}.Stream())
 	if err != nil {
 		t.Fatalf("build the tracker's read seam: %v", err)
 	}

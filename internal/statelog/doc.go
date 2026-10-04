@@ -1,7 +1,7 @@
 // Package statelog is the engine's replicated state-log framework: one
-// ordered stream per LOG — a domain's records in one partition of the layout
-// — one deterministic applier each, N identical copies in N node databases,
-// with the checkpoint committed in the same transaction as the rows.
+// ordered stream per domain, one deterministic applier, N identical copies in
+// N node databases, with the checkpoint committed in the same transaction as
+// the rows.
 //
 // This is ADR-0002, and the sentence above is the whole of it: the stream is
 // the write-ahead log and the SQL estate is derived. A write that reaches
@@ -357,8 +357,7 @@
 // generation on the live stream and re-keys the runner to it, so every number
 // above is in one space again. A generation is per LOG for exactly this
 // reason: it is a coordinate in one stream's number space, and moving another
-// log's — another domain's, or the same domain's in another partition — would
-// key it to a stream it never read.
+// domain's log would key it to a stream it never read.
 //
 // The instant is not the only way the premise fails. A broker restored from a
 // copy older than this node's rows keeps its stream, instant and all, and the
@@ -424,17 +423,17 @@
 // ([Request.NodeGate]), and a reanchor then opens the generation after the
 // abandoned one with its records void ([ReanchorAbandoned]).
 //
-// # A domain is declared once; a log is what runs
+// # A domain declares its own stream
 //
-// A [Domain] declares what every one of its logs shares — its [StreamShape],
-// its tables, its gates — and a [Layout] instantiates it once per partition
-// that carries it ([Layout.StreamSpec]). Every piece of per-stream machinery
-// here is therefore PER LOG: a runner, a publisher, a reader and a read index
-// each take one log's [StreamSpec]; the checkpoint, the generation, the
-// anchors and the stream identity are that log's; and a barrier proves where
-// that one log ends, single-flighted per node per log ([ReadIndex]). Under
-// layout 0 each domain has one log, named and keyed as it always was, so a
-// node running it holds exactly the records a fleet before layouts held.
+// A [Domain] declares its stream ([Domain.Stream]) beside its tables and its
+// gates, and a node runs exactly that stream at the byte ceiling its own Tier A
+// sized — held to the declaration in everything else
+// ([StreamSpec.Instantiates]). Every piece of per-stream machinery here is the
+// domain's log's: a runner, a publisher, a reader and a read index each take
+// its [StreamSpec]; the checkpoint, the generation, the anchors and the stream
+// identity are keyed by the stream's name; a position row, a floor and a
+// manifest name the log by the domain's; and a barrier proves where that one
+// log ends, single-flighted per node per log ([ReadIndex]).
 //
 // # Who may write a log: every writer is counted by construction
 //

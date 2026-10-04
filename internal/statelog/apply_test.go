@@ -345,7 +345,7 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 		t.Fatalf("recorder: %v", err)
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: domain, Spec: specOf(domain), Layout: layoutOf(domain), LogID: logOf(domain),
+		Domain: domain, Spec: specOf(domain),
 		Applier:    applier,
 		Fetch:      fetch,
 		Log:        fetch,
@@ -393,7 +393,7 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 		checkpoint.At.Generation = 1
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: domain, Spec: specOf(domain), Layout: layoutOf(domain), LogID: logOf(domain),
+		Domain: domain, Spec: specOf(domain),
 		Applier:            h.applier,
 		Fetch:              h.fetch,
 		Log:                h.fetch,
@@ -960,8 +960,8 @@ func TestACompactedDomainStepsOverHolesAndSupersedesItsDeferrals(t *testing.T) {
 // compactedDomain is the other replay protocol.
 type compactedDomain struct{ probeDomain }
 
-func (compactedDomain) StreamShape() statelog.StreamShape {
-	s := probeDomain{}.StreamShape()
+func (compactedDomain) Stream() statelog.StreamSpec {
+	s := probeDomain{}.Stream()
 	s.Replay = statelog.ReplayCompacted
 	s.MaxPerSubject = 1
 	s.MaxAge = time.Hour
@@ -2364,7 +2364,7 @@ func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 	h := newApplyHarness(t, probeDomain{})
 	flaky := &flakyEstate{inner: h.estate, refusals: 3}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Layout: layoutOf(probeDomain{}), LogID: logOf(probeDomain{}),
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
 		Applier:    h.applier,
 		Fetch:      h.fetch,
 		Log:        h.fetch,
@@ -2568,8 +2568,8 @@ func TestTheOperationSweepRecordsWhatItForgot(t *testing.T) {
 // The census a log is held against is its linearizable reads, and a barrier
 // record is what each one costs it. Every node applies every record, so the
 // applier's count is the whole fleet's — which is the number `census_drift`
-// needs and a node's own appends are not. Keyed by the stream, because a
-// domain with a log per partition has a rate per partition; counted from the
+// needs and a node's own appends are not. Labelled with the stream, which is
+// what an operator finds the log by on the broker; counted from the
 // batch that committed, so a record redelivered below the checkpoint is not a
 // second read; and filed in the rolling window at the hour the BROKER stored
 // it, so a node replaying days of backlog — back from an outage, or past a

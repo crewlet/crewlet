@@ -58,7 +58,7 @@ func TestANodeInACapacityWindowAppendsNothingToItsLogs(t *testing.T) {
 				if running.reader == nil {
 					continue
 				}
-				waitUntil(t, 20*time.Second, running.key+" to serve a stale read",
+				waitUntil(t, 20*time.Second, running.domain.Name()+" to serve a stale read",
 					func() bool {
 						_, err := running.reader.Read(t.Context(), statelog.Query{
 							Level: statelog.ReadStale,
@@ -73,7 +73,7 @@ func TestANodeInACapacityWindowAppendsNothingToItsLogs(t *testing.T) {
 				var refusal *statelog.Refused
 				if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseMaintenance {
 					t.Errorf("a linearizable read on %s answered %v, want %q",
-						running.key, err, statelog.RefuseMaintenance)
+						running.domain.Name(), err, statelog.RefuseMaintenance)
 				}
 			}
 

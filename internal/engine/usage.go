@@ -5,7 +5,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/usage"
 )
@@ -35,7 +34,7 @@ func (e *Engine) startUsage(ctx context.Context, s *stateLog) {
 	if s == nil || e.backends == nil || e.backends.Store == nil {
 		return
 	}
-	running := s.Log(usageLog(s.layout).String())
+	running := s.Domain(usage.Domain{}.Name())
 	if running == nil || running.publisher == nil {
 		return
 	}
@@ -96,15 +95,6 @@ func (e *Engine) seatHandle(agentID string) (string, bool) {
 		return "", false
 	}
 	return seat.Handle(), true
-}
-
-// usageLog is the usage domain's one log under a layout: the partition that
-// carries it ([statelog.Layout.OnlyPartition]), or the zero partition where the
-// layout divides it, which no log carries — so nothing is published or read
-// there rather than a guess.
-func usageLog(l statelog.Layout) statelog.LogID {
-	name := usage.Domain{}.Name()
-	return statelog.LogID{Domain: name, Partition: l.OnlyPartition(name)}
 }
 
 // UsageEstate is the replicated estate as a reader of the usage domain's rows

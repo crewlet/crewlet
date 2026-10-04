@@ -85,7 +85,7 @@ func (l *loopback) Publish(ctx context.Context, req statelog.Request) (statelog.
 	l.seq++
 	rec := statelog.Record{
 		Envelope: env,
-		Position: statelog.Position{Stream: statelog.EstateStream(usage.Domain{}).Name,
+		Position: statelog.Position{Stream: usage.Domain{}.Stream().Name,
 			Generation: 1, Seq: l.seq},
 		Payload: decision.Payload,
 	}
@@ -125,7 +125,7 @@ func recordAt(t *testing.T, r usage.Record, seq uint64) statelog.Record {
 	}
 	return statelog.Record{
 		Envelope: env,
-		Position: statelog.Position{Stream: statelog.EstateStream(usage.Domain{}).Name,
+		Position: statelog.Position{Stream: usage.Domain{}.Stream().Name,
 			Generation: 1, Seq: seq},
 		Payload: body,
 	}

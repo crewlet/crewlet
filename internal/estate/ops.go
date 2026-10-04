@@ -218,16 +218,16 @@ var errNoHalf = errors.New("estate: this node runs no native backend for this op
 // ([Backend.Admits]): nothing ran, and the asker moves on.
 var errNotAdmitting = errors.New("estate: this copy admits no seat yet")
 
-// The domains an operation's floor may be on, and each one's log — named as it
-// has always been, the one log the estate keeps of the domain. An operation's
-// floor is on its OWN domain's log and no other: see [ready].
+// The domains an operation's floor may be on, and each one's stream, from the
+// domain's own declaration. An operation's floor is on its OWN domain's log and
+// no other: see [ready].
 var (
 	trackerDomain = tracker.Domain{}.Name()
 	pagesDomain   = pages.Domain{}.Name()
 
 	floorStreams = map[string]string{
-		trackerDomain: statelog.EstateStream(tracker.Domain{}).Name,
-		pagesDomain:   statelog.EstateStream(pages.Domain{}).Name,
+		trackerDomain: tracker.Domain{}.Stream().Name,
+		pagesDomain:   pages.Domain{}.Stream().Name,
 	}
 )
 

@@ -57,7 +57,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	var registered []statelog.Registered
 	for _, domain := range registeredDomains() {
 		registered = append(registered, statelog.Registered{
-			Domain: domain, Log: estateLog(domain), Spec: estateSpec(domain),
+			Domain: domain, Spec: domain.Stream(),
 			Health: func() statelog.Health { return statelog.Health{Drained: true, Lag: &lag} },
 		})
 	}
@@ -143,7 +143,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	// adopter holds its donor's rows and inherits its donor's watermark —
 	// which says nothing lost, on a donor that never swept. An adopter that
 	// recorded a loss here would answer its own backlog `unknown`.
-	rows, err := tracker.NewRows(back.Store.Replicated().Reader(), estateSpec(tracker.Domain{}))
+	rows, err := tracker.NewRows(back.Store.Replicated().Reader(), tracker.Domain{}.Stream())
 	if err != nil {
 		t.Fatalf("build the tracker's read seam: %v", err)
 	}
@@ -300,7 +300,7 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 	running *runningLog, at statelog.Position, log *jetstream.DomainLog, last uint64) {
 
 	t.Helper()
-	spec := estateSpec(tracker.Domain{})
+	spec := tracker.Domain{}.Stream()
 	log, err := q.DomainLog(t.Context(), spec.Name)
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
@@ -386,7 +386,7 @@ func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 			VALUES (?, ?, ?, ?, ?)
 			ON CONFLICT (stream) DO UPDATE SET
 				seq = excluded.seq, stream_created_at = excluded.stream_created_at`,
-			estateSpec(tracker.Domain{}).Name, int64(at.Generation), int64(last),
+			tracker.Domain{}.Stream().Name, int64(at.Generation), int64(last),
 			store.EncodeTime(running.runner.StreamCreatedAt()), store.EncodeTime(time.Now().UTC()))
 		return err
 	}); err != nil {
@@ -546,7 +546,7 @@ func TestAnInstalledArtefactMovesTheConsumersWhicheverStepOpensIt(t *testing.T) 
 			if err != nil {
 				t.Fatalf("open a JetStream handle: %v", err)
 			}
-			cons, err := js.Consumer(t.Context(), estateSpec(tracker.Domain{}).Name,
+			cons, err := js.Consumer(t.Context(), tracker.Domain{}.Stream().Name,
 				running.consumer.Name())
 			if err != nil {
 				t.Fatalf("look up the tracker's consumer: %v", err)
@@ -606,7 +606,7 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 		ctx, cancel := context.WithCancel(t.Context())
 		// THE NODE'S STORE IS WHAT A HEARTBEAT ASKS whether the replicated
 		// estate is open, so the harness's state log runs over this one.
-		h := &harness{s: &stateLog{nodeID: "node-0", layout: LayoutZero(), db: db,
+		h := &harness{s: &stateLog{nodeID: "node-0", db: db,
 			run: ctx, stop: cancel}}
 		t.Cleanup(h.s.Stop)
 		h.s.rejoin = func(context.Context) error {

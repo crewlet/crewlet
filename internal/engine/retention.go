@@ -382,7 +382,7 @@ func (r *retention) tick(ctx context.Context) {
 	}
 	for _, running := range r.state.running() {
 		if err := r.domain(ctx, running, shared); err != nil {
-			log.WarnContext(ctx, "retention_trim_failed", "domain", running.key, "err", err)
+			log.WarnContext(ctx, "retention_trim_failed", "domain", running.domain.Name(), "err", err)
 		}
 	}
 }
@@ -466,13 +466,13 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 // naming it, every live data node, less the log's own tombstones past their
 // window ([statelog.CountedSet]).
 func (shared fleetInputs) counted(running *runningLog, tombs []statelog.Tombstone) []statelog.NodePosition {
-	return statelog.CountedSet(shared.at, reportedPositions(shared.positions, running.key),
+	return statelog.CountedSet(shared.at, reportedPositions(shared.positions, running.domain.Name()),
 		shared.holders, tombs)
 }
 
 // domain evaluates and applies one log's trim.
 func (r *retention) domain(ctx context.Context, running *runningLog, shared fleetInputs) error {
-	name := running.key
+	name := running.domain.Name()
 	stats, err := running.log.Stats(ctx)
 	if err != nil {
 		// THE STREAM ITSELF IS UNREADABLE, so there is no ceiling to

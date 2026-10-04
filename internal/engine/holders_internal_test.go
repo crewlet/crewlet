@@ -40,11 +40,11 @@ func TestEveryLogCountsTheLiveDataNodes(t *testing.T) {
 			if n.NodeID == "node-joining" && (n.Seq != 0 || n.Generation != 0) {
 				t.Errorf("%s counts the joining data node at %d@%d, want zero — it "+
 					"has reported nothing, and the tail it is about to replay is what "+
-					"the trim must keep", running.key, n.Seq, n.Generation)
+					"the trim must keep", running.domain.Name(), n.Seq, n.Generation)
 			}
 		}
 		if want := slices.Sorted(slices.Values([]string{e.id, "node-joining"})); !slices.Equal(ids, want) {
-			t.Errorf("%s counts %v, want every live data node %v", running.key, ids, want)
+			t.Errorf("%s counts %v, want every live data node %v", running.domain.Name(), ids, want)
 		}
 	}
 }

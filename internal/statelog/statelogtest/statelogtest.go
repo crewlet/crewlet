@@ -78,15 +78,6 @@ type Candidate struct {
 	// Domain is the declaration under test.
 	Domain statelog.Domain
 
-	// Layout and Log are the layout the domain is certified under and the
-	// one of its logs every case runs it on. Both zero take the domain's
-	// layout-0 log ([statelog.EstateLayout]), which is where a domain of
-	// this build runs; a candidate named for no layout-0 log names a
-	// partitioned one, which is how the suite certifies the framework on a
-	// log whose names the partition grammar gives.
-	Layout statelog.Layout
-	Log    statelog.LogID
-
 	// Applier is its state machine.
 	Applier statelog.Applier
 
@@ -138,25 +129,9 @@ type Candidate struct {
 	EncodeGate func(nodeID string, readmit bool) ([]byte, error)
 }
 
-// layout is the layout the candidate is certified under.
-func (c Candidate) layout() statelog.Layout {
-	if c.Layout.Spaces == nil {
-		return statelog.EstateLayout(c.Domain.Name())
-	}
-	return c.Layout
-}
-
-// log is the log every case runs the candidate on.
-func (c Candidate) log() statelog.LogID {
-	if c.Log == (statelog.LogID{}) {
-		return statelog.LogID{Domain: c.Domain.Name(), Partition: statelog.EstatePartition}
-	}
-	return c.Log
-}
-
-// spec is that log's stream, as the layout names it.
+// spec is the domain's own stream, which every case runs the candidate on.
 func (c Candidate) spec() statelog.StreamSpec {
-	return c.layout().StreamSpec(c.Domain, c.log())
+	return c.Domain.Stream()
 }
 
 // Factory builds a fresh candidate for one case.

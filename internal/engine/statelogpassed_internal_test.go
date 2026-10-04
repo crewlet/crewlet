@@ -160,7 +160,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("jetstream: %v", err)
 	}
-	rebuildLog(t, js, estateSpec(tracker.Domain{}))
+	rebuildLog(t, js, tracker.Domain{}.Stream())
 	stats, err := running.log.Stats(t.Context())
 	if err != nil {
 		t.Fatalf("read the rebuilt log: %v", err)
@@ -356,7 +356,7 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 	var registered []statelog.Registered
 	for _, domain := range registeredDomains() {
 		registered = append(registered, statelog.Registered{
-			Domain: domain, Log: estateLog(domain), Spec: estateSpec(domain),
+			Domain: domain, Spec: domain.Stream(),
 			Health: func() statelog.Health { return statelog.Health{Drained: true, Lag: &lag} },
 		})
 	}

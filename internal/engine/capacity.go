@@ -83,7 +83,7 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 		return coord.MaintenanceOperation{}, fmt.Errorf(
 			"engine: %q is not a domain log this build runs — the streams a "+
 				"capacity change applies to are %v",
-			req.Stream, maintenanceStreams(n.log.layout))
+			req.Stream, maintenanceStreams())
 	}
 	if req.TargetMaxBytes == 0 {
 		return coord.MaintenanceOperation{}, errors.New(
@@ -161,17 +161,14 @@ func (e *Engine) growthRoom(ctx context.Context) jetstream.StorageBudget {
 	return room
 }
 
-// streamKeepsGateReserve reports whether the log of layout whose stream this
-// is keeps a gate reserve under its ceiling ([statelog.KeepsGateReserve]) — a
-// property of the log's domain, so read from the layout rather than from a
-// running log.
-func streamKeepsGateReserve(layout statelog.Layout, stream string) bool {
-	for _, id := range layout.AllLogs() {
-		if name, _ := layout.Stream(id); name != stream {
-			continue
+// streamKeepsGateReserve reports whether the domain log named stream keeps a
+// gate reserve under its ceiling ([statelog.KeepsGateReserve]) — a property of
+// the domain, so read from the register rather than from a running log.
+func streamKeepsGateReserve(stream string) bool {
+	for _, domain := range registeredDomains() {
+		if domain.Stream().Name == stream {
+			return statelog.KeepsGateReserve(domain)
 		}
-		domain, err := registeredDomain(id.Domain)
-		return err == nil && statelog.KeepsGateReserve(domain)
 	}
 	return false
 }
@@ -257,7 +254,7 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 	// A resume is not asked again: its target was accepted when the window
 	// opened, and refusing it now would strand a window whose request may
 	// already be in flight.
-	reserved := streamKeepsGateReserve(e.layout(), req.Stream)
+	reserved := streamKeepsGateReserve(req.Stream)
 	if ordinary := statelog.OrdinaryCeiling(req.TargetMaxBytes, reserved); ordinary <= current.Bytes {
 		held := ""
 		if reserved {

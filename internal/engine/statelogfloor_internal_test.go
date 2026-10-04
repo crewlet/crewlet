@@ -83,8 +83,8 @@ func TestTheFloorIsThePublishedFloorRatherThanTheTicksConclusion(t *testing.T) {
 // replaying: its reads are told to come back, it admits no seats until it has
 // caught up, and nothing sends it to adopt a snapshot of records it can read.
 // Only once the purge lands is its next record gone, and only then is it below
-// the log, refused as `below_floor`, taken out of serving its partition (its
-// seats stay, and read it from another holder), and sent to adopt.
+// the log, refused as `below_floor`, its copy taken out of service (its seats
+// stay, and read from another data node), and sent to adopt.
 func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
@@ -313,7 +313,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 
 	s := e.native.Load().log
 	name := tracker.Domain{}.Name()
-	spec := estateSpec(tracker.Domain{})
+	spec := tracker.Domain{}.Stream()
 	running := s.Domain(name)
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
@@ -470,7 +470,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 	artefactAt := func(seq uint64) statelog.Manifest {
 		m := statelog.Manifest{Domains: map[string]statelog.DomainPosition{}}
 		for _, domain := range registeredDomains() {
-			m.Domains[domain.Name()] = statelog.DomainPosition{Stream: estateSpec(domain).Name}
+			m.Domains[domain.Name()] = statelog.DomainPosition{Stream: domain.Stream().Name}
 		}
 		m.Domains[name] = statelog.DomainPosition{Stream: spec.Name, Seq: seq}
 		return m

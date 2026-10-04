@@ -488,17 +488,12 @@ const DefaultResolveBudget = 5 * time.Second
 type Deps struct {
 	Domain Domain
 
-	// Spec is the log this publisher writes: the domain's shape on one of
-	// its logs ([Layout.StreamSpec]). One publisher per LOG — its prefix is
-	// every subject's, and its arbitration is against that stream's own
-	// sequences, which mean nothing on a sibling partition's log.
+	// Spec is the stream this publisher writes: the domain's own
+	// ([Domain.Stream]) with the byte ceiling this node's Tier A sized,
+	// held to the domain's declaration in everything else
+	// ([StreamSpec.Instantiates]) — its prefix is every subject's, and its
+	// arbitration is against that stream's own sequences.
 	Spec StreamSpec
-
-	// Layout and LogID are where Spec's log sits: the layout this node runs
-	// and which of its logs this is. REQUIRED, and held to Spec
-	// ([Layout.Places]).
-	Layout Layout
-	LogID  LogID
 
 	Log Appender
 
@@ -595,9 +590,6 @@ func NewPublisher(d Deps) (*Publisher, error) {
 	spec := d.Spec
 	if err := spec.Instantiates(d.Domain); err != nil {
 		return nil, err
-	}
-	if err := d.Layout.Places(d.Domain, d.LogID, spec); err != nil {
-		return nil, fmt.Errorf("statelog: %s's publisher: %w", d.Domain.Name(), err)
 	}
 	logger := loggerOr(d.Logger)
 	budget := d.ResolveBudget

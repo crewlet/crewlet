@@ -42,7 +42,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	stream := estateSpec(tracker.Domain{}).Name
+	stream := tracker.Domain{}.Stream().Name
 
 	// FIRST BOOT: the running domain carries what the broker reports.
 	back, err := OpenBackends(t.Context(), &b, cfg)
@@ -195,7 +195,7 @@ func TestAStreamRebuiltUnderARunningNodeIsNamed(t *testing.T) {
 
 	// THE REBUILD, under a node that never stops: the same name, a new
 	// creation instant, and sequences counting from 1 again.
-	rebuildLog(t, js, estateSpec(tracker.Domain{}))
+	rebuildLog(t, js, tracker.Domain{}.Stream())
 
 	// THE HEARTBEAT IS WHAT SEES IT, on the round trip it already makes.
 	s.publishPositions(t.Context())
@@ -273,7 +273,7 @@ func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 		t.Fatalf("read node-x's record back (held %v): %v", held, err)
 	}
 
-	rebuildLog(t, js, estateSpec(tracker.Domain{}))
+	rebuildLog(t, js, tracker.Domain{}.Stream())
 
 	// THE RETRY AT ZERO, BEFORE ANY HEARTBEAT HAS SEEN THE REBUILD. The
 	// zero fence's own read of the log carries the stream's creation
@@ -361,7 +361,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	stream := estateSpec(tracker.Domain{}).Name
+	stream := tracker.Domain{}.Stream().Name
 
 	// FIRST BOOT: an object with history on the log, and the log's end.
 	back, err := OpenBackends(t.Context(), &b, cfg)
@@ -505,7 +505,7 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 			s, q, appendTo := aProvisionedTrackerLog(t)
 			// Records nobody will apply — the loop never starts here —
 			// so their bytes do not matter, only where the log ends.
-			subject := estateSpec(tracker.Domain{}).SubjectPrefix + ".probe.x"
+			subject := tracker.Domain{}.Stream().SubjectPrefix + ".probe.x"
 			for i := range 2 {
 				if _, _, err := appendTo.Append(t.Context(), subject,
 					fmt.Sprintf("op-%d", i), nil, []byte("{}")); err != nil {
@@ -521,7 +521,7 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 					INSERT INTO statelog_cursor
 						(stream, generation, seq, stream_created_at, updated_at)
 					VALUES (?, 0, ?, ?, ?)`,
-					estateSpec(tracker.Domain{}).Name, stats.LastSeq+tc.past,
+					tracker.Domain{}.Stream().Name, stats.LastSeq+tc.past,
 					store.EncodeTime(stats.CreatedAt.UTC()),
 					store.EncodeTime(time.Now().UTC()))
 				return err
@@ -530,7 +530,7 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 			}
 
 			running, err := s.start(t.Context(), t.Context(), q, tracker.Domain{},
-				estateLog(tracker.Domain{}), appendTo, nil)
+				appendTo, nil)
 			if err != nil {
 				t.Fatalf("start: %v", err)
 			}
@@ -566,12 +566,12 @@ func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstre
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	ceilings, err := sizeCeilings(t.Context(), q, config.DefaultBootstrap().Stream,
-		64<<30, "/var/lib/crewlet/stream", LayoutZero())
+		64<<30, "/var/lib/crewlet/stream")
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
 	s := &stateLog{
-		layout: LayoutZero(), mode: statelog.ModeNormal, nodeID: "node-a", db: db,
+		mode: statelog.ModeNormal, nodeID: "node-a", db: db,
 		ceilings: ceilings, run: t.Context(),
 	}
 	// THE REPLICATED ESTATE FIRST, as the runtime's own start opens it
@@ -579,7 +579,7 @@ func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstre
 	if err := s.reopenEstate(t.Context()); err != nil {
 		t.Fatalf("open the replicated estate: %v", err)
 	}
-	appendTo, err := s.provision(t.Context(), q, tracker.Domain{}, estateLog(tracker.Domain{}))
+	appendTo, err := s.provision(t.Context(), q, tracker.Domain{})
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}

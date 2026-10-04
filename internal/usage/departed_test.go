@@ -28,7 +28,7 @@ type fleetNode struct {
 // joinFleet brings a node up on cluster member q, applying the whole log.
 func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 	t.Helper()
-	spec := statelog.EstateStream(usage.Domain{})
+	spec := usage.Domain{}.Stream()
 	db := openStore(t)
 
 	// RETRIED UNTIL THE STREAM HAS A LEADER: a node that joins just after a
@@ -65,10 +65,9 @@ func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 	if !found {
 		checkpoint.At.Generation = 1
 	}
-	// LAYOUT 0's LOG, as the engine runs the domain.
+	// THE DOMAIN'S OWN STREAM, as the engine runs it.
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: usage.Domain{}, Spec: spec,
-		Layout: statelog.EstateLayout(usage.Domain{}.Name()), LogID: statelog.EstateLog(usage.Domain{}),
 		Applier: usage.NewApplier(), Fetch: consumer,
 		Log: log, Node: db, DB: db.Replicated(),
 		Checkpoint: checkpoint.At, CheckpointStoredAt: checkpoint.StoredAt,
@@ -77,14 +76,13 @@ func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 	if err != nil {
 		t.Fatalf("%s: build the applier: %v", id, err)
 	}
-	rows, err := usage.NewRows(db.Replicated().Reader(), statelog.EstateStream(usage.Domain{}))
+	rows, err := usage.NewRows(db.Replicated().Reader(), usage.Domain{}.Stream())
 	if err != nil {
 		t.Fatalf("%s: build the read seam: %v", id, err)
 	}
 	// ON THE SAME LOG, which the publisher writes and the runner applies.
 	authority, err := statelog.NewPublisher(statelog.Deps{
 		Domain: usage.Domain{}, Spec: spec,
-		Layout: statelog.EstateLayout(usage.Domain{}.Name()), LogID: statelog.EstateLog(usage.Domain{}),
 		Log: log, Records: log, Rows: rows, Fence: usage.NewFence(),
 		Gates: usage.NewGates(), Waiter: runner, Voids: runner, Identity: runner, NodeID: id,
 		Generation:    func() uint32 { return runner.Committed().Generation },
@@ -163,7 +161,7 @@ func (n *fleetNode) spendOf(t *testing.T, day string, want int) []usage.SpendRow
 func TestADepartedNodesSpendIsStillAnswered(t *testing.T) {
 	t.Parallel()
 	c := jetstreamtest.StartPartitionableCluster(t, 3, js.Config{})
-	spec := statelog.EstateStream(usage.Domain{})
+	spec := usage.Domain{}.Stream()
 	// THE CEILING IS THE ONE FIELD OVERRIDDEN: a member in a temporary
 	// directory will not reserve the shipped gibibyte three times over, and
 	// the size is not what is under test.

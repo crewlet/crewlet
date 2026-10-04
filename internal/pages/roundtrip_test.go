@@ -49,7 +49,7 @@ func newRoundTrip(t *testing.T) *roundTrip {
 			t.Errorf("stop the broker: %v", err)
 		}
 	})
-	spec := statelog.EstateStream(pages.Domain{})
+	spec := pages.Domain{}.Stream()
 	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES, and it is not a
 	// property under test: the shipped default is sized for years of a real
 	// company's growth, and an embedded broker in a temporary directory
@@ -86,7 +86,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
 	nodeID string) *roundTrip {
 
 	t.Helper()
-	rows, err := pages.NewRows(db.Reader(), statelog.EstateStream(pages.Domain{}))
+	rows, err := pages.NewRows(db.Reader(), pages.Domain{}.Stream())
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
@@ -108,7 +108,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
 	fence.Committed = waiter.Committed
 	// THE LOG'S GATE RESERVE, reading its usage from the stream as the
 	// engine's does, so every write here is admitted as a production one is.
-	reserve, err := statelog.NewReserve(statelog.EstateStream(pages.Domain{}).Name,
+	reserve, err := statelog.NewReserve(pages.Domain{}.Stream().Name,
 		func(ctx context.Context) (statelog.Usage, error) {
 			stats, err := log.Stats(ctx)
 			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
@@ -117,7 +117,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
 		t.Fatalf("build the gate reserve: %v", err)
 	}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: pages.Domain{}, Spec: statelog.EstateStream(pages.Domain{}), Layout: statelog.EstateLayout(pages.Domain{}.Name()), LogID: statelog.EstateLog(pages.Domain{}), Log: log, Records: log, Rows: rows, Fence: fence,
+		Domain: pages.Domain{}, Spec: pages.Domain{}.Stream(), Log: log, Records: log, Rows: rows, Fence: fence,
 		Gates: pages.NewGates(db.Reader()), Waiter: waiter, Voids: waiter, Identity: waiter, NodeID: nodeID,
 		Admission:     reserve,
 		Generation:    func() uint32 { return 0 },
@@ -165,7 +165,7 @@ func (r *roundTrip) drain() {
 	if err != nil {
 		r.t.Fatalf("read the log's end: %v", err)
 	}
-	spec := statelog.EstateStream(pages.Domain{})
+	spec := pages.Domain{}.Stream()
 	for seq := r.consumed + 1; seq <= last; seq++ {
 		_, payload, storedAt, ok, err := r.log.At(r.t.Context(), seq)
 		if err != nil {

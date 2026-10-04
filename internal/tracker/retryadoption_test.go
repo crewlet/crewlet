@@ -161,7 +161,7 @@ func commentOn(r *roundTrip, taskID, op, id string) (tracker.WriteResult, error)
 // over what arrived, resuming at the artefact's position.
 func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundTrip {
 	t.Helper()
-	stream := statelog.EstateStream(tracker.Domain{}).Name
+	stream := tracker.Domain{}.Stream().Name
 	at, _, _, err := statelog.CursorFor(t.Context(), donor.db, stream)
 	if err != nil {
 		t.Fatalf("read the donor's checkpoint: %v", err)
@@ -170,8 +170,7 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 	dir := t.TempDir()
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
 		Domains: []statelog.Registered{{
-			Domain: declared, Spec: statelog.EstateStream(declared),
-			Log: statelog.LogID{Domain: declared.Name(), Partition: statelog.EstatePartition},
+			Domain: declared, Spec: declared.Stream(),
 			Health: func() statelog.Health {
 				return statelog.Health{Position: at, Drained: true, Lag: &lag}
 			},
@@ -208,8 +207,7 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 	t.Cleanup(func() { _ = joinerNode.Close() })
 	adopter, err := statelog.NewAdopter(statelog.AdoptDeps{
 		Domains: map[string]statelog.Registered{"tracker": {
-			Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}),
-			Log: statelog.LogID{Domain: tracker.Domain{}.Name(), Partition: statelog.EstatePartition},
+			Domain: tracker.Domain{}, Spec: tracker.Domain{}.Stream(),
 		}},
 		LivePath: storetest.ReplicatedDB(t, joiner).Path(),
 		NodeID:   "node-b",
@@ -285,7 +283,7 @@ func TestAWriteRetriedAfterItsLedgerRowWasSweptIsNotAppliedTwice(t *testing.T) {
 	// THE SWEEP, with a cutoff past the row — the arithmetic of a month
 	// passing, done by the job that runs it.
 	sweep, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Layout: statelog.EstateLayout(tracker.Domain{}.Name()), LogID: statelog.EstateLog(tracker.Domain{}), Applier: r.applier, Fetch: noFetch{}, Log: r.log, Node: r.node,
+		Domain: tracker.Domain{}, Spec: tracker.Domain{}.Stream(), Applier: r.applier, Fetch: noFetch{}, Log: r.log, Node: r.node,
 		DB: r.db,
 	})
 	if err != nil {

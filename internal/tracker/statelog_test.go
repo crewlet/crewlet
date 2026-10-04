@@ -90,7 +90,7 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 		body, err := json.Marshal(tracker.Person{
 			V: tracker.DocumentVersion, Handle: "suite-person",
 			SeenThrough: tracker.Position{
-				Stream: statelog.EstateStream(tracker.Domain{}).Name, Generation: 1, Seq: 2,
+				Stream: tracker.Domain{}.Stream().Name, Generation: 1, Seq: 2,
 			},
 			UpdatedAt: at,
 		})

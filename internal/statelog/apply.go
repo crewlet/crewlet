@@ -130,18 +130,13 @@ type RunnerDeps struct {
 	Applier Applier
 	Fetch   Fetcher
 
-	// Spec is the log this runner applies: the domain's shape on one of
-	// its logs ([Layout.StreamSpec]). One runner per LOG, because every
-	// per-stream thing it keeps — the checkpoint row, the generation, the
-	// anchors, the stream identity — is the log's, and a domain with a log
-	// in each of two partitions has two of each.
+	// Spec is the stream this runner applies: the domain's own
+	// ([Domain.Stream]) with the byte ceiling this node's Tier A sized.
+	// Held to the domain's declaration in everything but that ceiling
+	// ([StreamSpec.Instantiates]), because every per-stream thing the
+	// runner keeps — the checkpoint row, the generation, the anchors, the
+	// stream identity — is keyed by its name.
 	Spec StreamSpec
-
-	// Layout and LogID are where Spec's log sits: the layout this node runs
-	// and which of its logs this is. REQUIRED, and held to Spec
-	// ([Layout.Places]).
-	Layout Layout
-	LogID  LogID
 
 	// Log is the same stream read by position, which is how the applier
 	// establishes that the log still holds, at its checkpoint's sequence,
@@ -519,9 +514,6 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 	spec := d.Spec
 	if err := spec.Instantiates(d.Domain); err != nil {
 		return nil, err
-	}
-	if err := d.Layout.Places(d.Domain, d.LogID, spec); err != nil {
-		return nil, fmt.Errorf("statelog: %s's applier: %w", d.Domain.Name(), err)
 	}
 	checkpoint := d.Checkpoint
 	switch checkpoint.Stream {
@@ -3195,8 +3187,8 @@ func (r *Runner) observe(started time.Time, rows int, boundBy string, tally resu
 	// counted after the transaction that consumed them committed — so an
 	// attempt the store rolled back and ran again counts once — and filed
 	// in the window at the hour each was COMMITTED ([results.barrier]).
-	// Keyed by the STREAM, which names one log in every layout, because a
-	// domain with a log per partition has a rate per partition.
+	// Labelled with the STREAM beside the domain, because the stream is
+	// what an operator finds the log by on the broker.
 	for hour, n := range tally.barriers {
 		r.metrics.AddAt(metrics.StatelogBarriersApplied, n, hour,
 			metrics.Attrs{"domain": domain, "stream": r.spec.Name})

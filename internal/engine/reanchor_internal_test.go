@@ -38,7 +38,7 @@ func TestAReanchorsInputsNameTheStreamTheyWereReadFrom(t *testing.T) {
 		t.Fatal("the node runs no domain, so nothing below is checked")
 	}
 	for _, running := range s.running() {
-		name := running.key
+		name := running.domain.Name()
 		want := running.spec.Name
 		in, _, err := e.reanchorInputs(t.Context(), running)
 		if err != nil {
@@ -196,7 +196,7 @@ func TestOnlyAPeerHoldingHistoryTheLogDoesNotCountsAsAhead(t *testing.T) {
 func TestAReanchorOfAStreamThatCannotBeReadRefuses(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	stream := estateSpec(search.Domain{}).Name
+	stream := search.Domain{}.Stream().Name
 	if err := js.DeleteStream(t.Context(), stream); err != nil {
 		t.Fatalf("delete the stream: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	trackerStream := estateSpec(tracker.Domain{}).Name
+	trackerStream := tracker.Domain{}.Stream().Name
 
 	// FIRST BOOT: history on the tracker's log.
 	e, back := bootNode(t, &b, cfg)
@@ -413,7 +413,7 @@ func TestARestoredBrokerIsReanchoredAtItsEndReplayingNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	trackerStream := estateSpec(tracker.Domain{}).Name
+	trackerStream := tracker.Domain{}.Stream().Name
 	watched := &tracker.Notify{
 		Kind:     tracker.ChangeStatus,
 		Snapshot: tracker.Snapshot{Key: "ENG-1", Assignee: "ceo", Watchers: []string{"cfo"}},
@@ -609,7 +609,7 @@ func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 	lost := running.runner.StreamCreatedAt()
 	own := running.runner.Committed()
 
-	rebuildLog(t, js, estateSpec(tracker.Domain{}))
+	rebuildLog(t, js, tracker.Domain{}.Stream())
 	s.publishPositions(t.Context())
 	if err := running.runner.StreamIdentity(); !errors.Is(err, statelog.ErrStreamRecreated) {
 		t.Fatalf("after the rebuild the tracker's identity is %v, want the rebuild", err)
@@ -735,7 +735,7 @@ func TestALogRebuiltUnderARunningNodeIsReanchoredWithTheInstantItsRefusalNames(t
 		t.Fatalf("a write before the rebuild: %+v, %v", res, err)
 	}
 
-	rebuildLog(t, js, estateSpec(tracker.Domain{}))
+	rebuildLog(t, js, tracker.Domain{}.Stream())
 	s.publishPositions(t.Context())
 	_, err := e.native.Load().writer.EvictNode(t.Context(), "op-refused", "node-y")
 	requireRebuiltLogRefusal(t, err)
@@ -743,7 +743,7 @@ func TestALogRebuiltUnderARunningNodeIsReanchoredWithTheInstantItsRefusalNames(t
 	if named == nil {
 		t.Fatalf("the refusal names no live instant: %v", err)
 	}
-	view, err := e.ReanchorStatus(t.Context(), estateSpec(tracker.Domain{}).Name)
+	view, err := e.ReanchorStatus(t.Context(), tracker.Domain{}.Stream().Name)
 	if err != nil {
 		t.Fatalf("ReanchorStatus: %v", err)
 	}
@@ -755,7 +755,7 @@ func TestALogRebuiltUnderARunningNodeIsReanchoredWithTheInstantItsRefusalNames(t
 	}
 
 	plan, err := e.Reanchor(t.Context(), ReanchorRequest{
-		Stream: estateSpec(tracker.Domain{}).Name, Confirm: named[1], By: "ops-1",
+		Stream: tracker.Domain{}.Stream().Name, Confirm: named[1], By: "ops-1",
 	})
 	if err != nil {
 		t.Fatalf("Reanchor confirming the instant the refusal named: %v", err)
@@ -805,9 +805,9 @@ func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 	}
 	trackerBefore := readCursorRow(t, e, tracker.Domain{}.Name())
 
-	rebuildLog(t, js, estateSpec(pages.Domain{}))
+	rebuildLog(t, js, pages.Domain{}.Stream())
 	s.publishPositions(t.Context())
-	stream := estateSpec(pages.Domain{}).Name
+	stream := pages.Domain{}.Stream().Name
 	view, err := e.ReanchorStatus(t.Context(), stream)
 	if err != nil {
 		t.Fatalf("ReanchorStatus: %v", err)
@@ -908,7 +908,7 @@ func TestARefusedReanchorLeavesTheDomainServing(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
 	_, err := e.Reanchor(t.Context(), ReanchorRequest{
-		Stream: estateSpec(tracker.Domain{}).Name, Confirm: "2020-01-01T00:00:00Z",
+		Stream: tracker.Domain{}.Stream().Name, Confirm: "2020-01-01T00:00:00Z",
 		By: "ops-1",
 	})
 	if !errors.Is(err, statelog.ErrReanchorRefused) {

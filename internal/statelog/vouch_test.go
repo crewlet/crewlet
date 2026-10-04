@@ -307,8 +307,8 @@ const shortWindow = 200 * time.Millisecond
 // operation id after [shortWindow].
 type shortWindowDomain struct{ probeDomain }
 
-func (shortWindowDomain) StreamShape() statelog.StreamShape {
-	shape := probeDomain{}.StreamShape()
+func (shortWindowDomain) Stream() statelog.StreamSpec {
+	shape := probeDomain{}.Stream()
 	shape.Duplicates = shortWindow
 	return shape
 }

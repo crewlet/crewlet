@@ -62,7 +62,7 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 	e.stopRetention()
 
 	name := tracker.Domain{}.Name()
-	stream := estateSpec(tracker.Domain{}).Name
+	stream := tracker.Domain{}.Stream().Name
 
 	// THE FLEET HAS RE-ANCHORED: an operator moved it to generation 3, and
 	// the trim has published a floor there.

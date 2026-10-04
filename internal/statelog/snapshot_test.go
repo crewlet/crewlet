@@ -115,7 +115,7 @@ func (h *snapHarness) rebuild(interval time.Duration) {
 	h.t.Helper()
 	s, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
 		Domains: []statelog.Registered{{
-			Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{}),
+			Domain: probeDomain{}, Spec: specOf(probeDomain{}),
 			Health: func() statelog.Health { return h.health },
 		}},
 		File:          h.estate,
@@ -686,7 +686,7 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 			Replay:          statelog.ReplayStrict,
 		}},
 	}}
-	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{})}}
+	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Spec: specOf(probeDomain{})}}
 
 	req := statelog.OfferRequest{
 		Need:            map[string]uint64{"probe": 1},
@@ -846,7 +846,7 @@ func TestATakeWritesTheManifestEveryBuildReads(t *testing.T) {
 		t.Errorf("a log's position is written as %v, want exactly %v", got, wantPos)
 	}
 
-	reg := statelog.Registered{Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{}),
+	reg := statelog.Registered{Domain: probeDomain{}, Spec: specOf(probeDomain{}),
 		Health: func() statelog.Health { return h.health }}
 	if _, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
 		Domains: []statelog.Registered{reg}, Dir: h.dir, NodeID: "node-a", Interval: time.Hour,

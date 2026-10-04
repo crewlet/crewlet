@@ -76,25 +76,9 @@ func controlWrite(stampOf func(statelog.Stamp) statelog.Stamp) func(context.Cont
 	}
 }
 
-// controlLayout is the partitioned layout the control is certified under, and
-// controlLog its log there — so the suite runs the framework on a log whose
-// names the partition grammar gives, which no production domain's layout-0
-// log exercises.
-func controlLayout() statelog.Layout {
-	return statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
-		{Space: statelog.SpaceTracker, Partitions: 1, Domains: []string{"control"}},
-	}}
-}
-
-var controlLog = statelog.LogID{
-	Domain: "control", Partition: statelog.PartitionID{Space: statelog.SpaceTracker},
-}
-
 func control() statelogtest.Candidate {
 	return statelogtest.Candidate{
 		Domain:     controlDomain{},
-		Layout:     controlLayout(),
-		Log:        controlLog,
 		Applier:    controlApplier{},
 		Kinds:      []string{"widget"},
 		Rows:       rowsOver(controlDomain{}),
@@ -244,8 +228,19 @@ type controlBase struct{}
 
 func (controlBase) Name() string { return "control" }
 
-func (controlBase) StreamShape() statelog.StreamShape {
-	return statelog.StreamShape{
+// controlStream is the control's own stream — named here rather than taken
+// from a production domain's topics constants, because a fake that took one
+// would certify the framework under a name a real domain owns.
+const (
+	controlStream = "CREWLET_CONTROL_LOG"
+	controlPrefix = "crewlet.control.log"
+)
+
+func (controlBase) Stream() statelog.StreamSpec {
+	return statelog.StreamSpec{
+		Name:            controlStream,
+		Subjects:        []string{controlPrefix + ".>"},
+		SubjectPrefix:   controlPrefix,
 		ArbitratedKinds: []string{"widget"},
 		MaxBytes:        16 << 20,
 		Duplicates:      2 * time.Minute,
@@ -352,8 +347,8 @@ func (controlDomain) Evictions(ctx context.Context, db store.ReplicatedReader) (
 // than a fault.
 type compactedControl struct{ controlBase }
 
-func (c compactedControl) StreamShape() statelog.StreamShape {
-	s := c.controlBase.StreamShape()
+func (c compactedControl) Stream() statelog.StreamSpec {
+	s := c.controlBase.Stream()
 	s.Replay = statelog.ReplayCompacted
 	s.MaxPerSubject = 1
 	s.MaxAge = time.Hour
@@ -796,8 +791,8 @@ func (readsAhead) RecordVersion() int { return 3 }
 
 type brokenStream struct{ controlDomain }
 
-func (b brokenStream) StreamShape() statelog.StreamShape {
-	s := b.controlDomain.StreamShape()
+func (b brokenStream) Stream() statelog.StreamSpec {
+	s := b.controlDomain.Stream()
 	s.MaxPerSubject = 1 // a strict log that keeps one message per subject
 	return s
 }

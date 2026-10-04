@@ -53,7 +53,7 @@ func (s *stateLog) truncation(ctx context.Context, running *runningLog,
 	if !running.domain.ClaimsIdentity() {
 		return nil, nil
 	}
-	name := running.key
+	name := running.domain.Name()
 	keyed := running.runner.KeyedTo()
 	ahead := map[string]coord.DomainPosition{}
 	var candidates []string
