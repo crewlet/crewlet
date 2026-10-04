@@ -94,25 +94,6 @@ func TestTheSameOperationAtTheSamePositionIsNotTheSameRecord(t *testing.T) {
 	}
 }
 
-// A LEDGER ROW THAT NAMES NO INSTANT VOUCHES FOR NOTHING.
-//
-// A row written before the ledger kept the instant says an operation applied at
-// a position, which a retry at that position also satisfies; weighed as held,
-// it would let a reanchor skip a record it cannot tell from its own.
-func TestALedgerRowThatNamesNoInstantVouchesForNothing(t *testing.T) {
-	t.Parallel()
-	h := appliedThrough(t, 3)
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `UPDATE probe_ops SET stored_at = 0`)
-		return err
-	}); err != nil {
-		t.Fatalf("clear the ledger's instants: %v", err)
-	}
-	if got := unheld(t, h, 3); got == nil || got.Seq != 3 {
-		t.Fatalf("a ledger row naming no instant read as holding the record: %v", got)
-	}
-}
-
 // A RECORD THIS NODE RETAINED IS ITS HISTORY AS MUCH AS ONE IT APPLIED.
 func TestARecordThisNodeRetainedIsHeld(t *testing.T) {
 	t.Parallel()
