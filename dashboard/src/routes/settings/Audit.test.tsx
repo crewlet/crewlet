@@ -25,7 +25,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Audit, auditCsv, writerOf } from "./Audit.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
-import type { QueryName } from "~/protocol/index.ts";
+import { QueryError, type QueryName } from "~/protocol/index.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -115,8 +115,13 @@ function commit(over: Record<string, unknown> = {}) {
   };
 }
 
+/** The socket's answers, one per question; an Error is the question refused. */
 function serving(answers: Partial<Record<QueryName, unknown>> = {}) {
-  const query = vi.fn(async (what: string) => answers[what as QueryName] ?? {});
+  const query = vi.fn(async (what: string) => {
+    const answer = answers[what as QueryName];
+    if (answer instanceof Error) throw answer;
+    return answer ?? {};
+  });
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
   vi.mocked(useOrg).mockReturnValue({
@@ -661,6 +666,55 @@ test("a refused identity trail names the grant, and the other sources stand", as
     expect(screen.getByText(/Reading the identity trail needs audit:read/)).toBeTruthy(),
   );
   expect(screen.getByText("took it off the board")).toBeTruthy();
+});
+
+// A SOURCE REFUSED ON AUTHORITY IS WITHHELD, AND THE REST STAND.
+//
+// The section opens on the audit grant, and the configuration's revisions
+// answer to another. An auditor without it was shown the refusal banner alone,
+// which hid every row of the sources they may read.
+test("a source refused on authority names its grant, and the other sources stand", async () => {
+  serving({
+    work_activity: { records: [commit()], complete: true },
+    config_audit: new QueryError("unauthorized", { reason: "no_grant", grants: ["config:read"] }),
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
+  expect(screen.getByText(/Reading the configuration's revisions needs config:read/)).toBeTruthy();
+  expect(screen.queryByText(/You may not read this/)).toBeNull();
+});
+
+// AND A REFUSAL REPLACES WHAT IT REFUSED: rows read before a grant was taken
+// away are not drawn under the sentence saying they are withheld.
+test("a source refused after it answered takes its rows off the grid", async () => {
+  clockMidMinute();
+  const query = serving();
+  let asked = 0;
+  query.mockImplementation(async (what: string) => {
+    if (what !== "config_audit") return {};
+    if (asked++ > 0) {
+      throw new QueryError("unauthorized", { reason: "no_grant", grants: ["config:read"] });
+    }
+    return [
+      {
+        revision_id: "rev-seed0001",
+        summary: "seeded from company.yaml",
+        source: "file",
+        created_by: "node-a",
+        created_by_kind: "system",
+        created_at: RECENTLY,
+      },
+    ];
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("seeded from company.yaml")).toBeTruthy());
+  for (let second = 0; second < 61; second++) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+  }
+  expect(screen.getByText(/Reading the configuration's revisions needs config:read/)).toBeTruthy();
+  expect(screen.queryByText("seeded from company.yaml")).toBeNull();
 });
 
 // THE WINDOW IS NOT THE SECOND HAND.

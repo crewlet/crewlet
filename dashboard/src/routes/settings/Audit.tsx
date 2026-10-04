@@ -102,7 +102,7 @@ import { QueryState } from "~/components/common.tsx";
 import { DownloadButton } from "~/ui/primitives.tsx";
 import { toCsv } from "~/lib/csv.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
-import { useQuery } from "~/lib/useQuery.ts";
+import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
@@ -110,7 +110,7 @@ import { OPERATOR_SOURCE, RUNTIME_AUDIT_TYPES } from "~/contract/audit.ts";
 import { useNow } from "~/lib/clock.ts";
 import { indexOrg, kindOfAuthor, type SeatKind } from "~/lib/seats.ts";
 import { useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
-import { rest, RestError } from "~/protocol/index.ts";
+import { isLogRefusal, rest, RestError } from "~/protocol/index.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { needsSentence } from "~/lib/refusal.ts";
 import { throughOf } from "~/lib/attribution.ts";
@@ -385,6 +385,19 @@ function list<T>(value: T[] | null | undefined): T[] {
 }
 
 /**
+ * A socket read's answer, or none where the engine refused it on authority.
+ *
+ * `useQuery` keeps its last answer through a failed ask, which is right for a
+ * node that blinked and wrong for a refusal: a source whose grant was taken
+ * away mid-session would go on drawing its rows under the sentence saying it
+ * is withheld. A refusal replaces what was on screen, as it does for a REST
+ * read.
+ */
+function held<T>(read: QueryResult<T>): T | null {
+  return read.error === "unauthorized" ? null : read.data;
+}
+
+/**
  * Who a row's writer IS, as the Who column draws them.
  *
  * A LOGIN IS NOT A SEAT. An `operator` write carries a credential's whole
@@ -545,14 +558,32 @@ export function Audit() {
   );
   const secrets = useSecrets();
   const identity = useIdentityTrail(windowParam(range.window), since);
-  // The first of the socket's reads that failed, whose code and refusal the
-  // banner shows together. The two REST reads are best effort, and each says
-  // what it withheld in a sentence of its own.
-  const failed = [work, knowledge, config, runtime].find((read) => read.error !== null);
+  // A REFUSAL ON AUTHORITY WITHHOLDS ONE SOURCE; IT DOES NOT FAIL THE SCREEN.
+  // The section opens on `audit:read`, and the sources answer to different
+  // grants — the tracker's and the wiki's history to one, the configuration's
+  // revisions to another — so a reader holding some of them is an ordinary
+  // auditor. The banner replaces the whole grid, so one refused source hid
+  // every row of the sources the reader may read and had already read; each
+  // says what it withheld instead, as the two REST reads do. The banner is for
+  // the first read that failed for any other reason, its code and refusal
+  // shown together.
+  const reads = [
+    { read: work, gesture: "Reading the tracker's history" },
+    { read: knowledge, gesture: "Reading the knowledge base's history" },
+    { read: config, gesture: "Reading the configuration's revisions" },
+    { read: runtime, gesture: "Reading the runtime audit" },
+  ];
+  const failed = reads
+    .map(({ read }) => read)
+    .find((read) => read.error !== null && read.error !== "unauthorized");
+  const workData = held(work);
+  const knowledgeData = held(knowledge);
+  const configData = held(config);
+  const runtimeData = held(runtime);
 
   const rows = useMemo<AuditEntry[]>(() => {
     const out: AuditEntry[] = [];
-    for (const record of list(work.data?.records)) {
+    for (const record of list(workData?.records)) {
       out.push({
         id: `work:${record.id}`,
         at: record.at,
@@ -568,7 +599,7 @@ export function Audit() {
         detail: plainText(record.excerpt ?? ""),
       });
     }
-    for (const change of list(knowledge.data?.changes)) {
+    for (const change of list(knowledgeData?.changes)) {
       out.push({
         id: `page:${change.id}`,
         at: change.at,
@@ -584,7 +615,7 @@ export function Audit() {
         detail: plainText(change.excerpt ?? ""),
       });
     }
-    for (const revision of list(config.data)) {
+    for (const revision of list(configData)) {
       out.push({
         id: `config:${revision.revision_id}`,
         at: revision.created_at,
@@ -627,7 +658,7 @@ export function Audit() {
         detail: row.source ? `from ${row.source}` : "",
       });
     }
-    for (const event of list(runtime.data?.events)) {
+    for (const event of list(runtimeData?.events)) {
       // A TYPE THIS BUILD DOES NOT KNOW is a newer node's record: drawn under
       // its own type name rather than dropped, because an audit that loses
       // a row during an upgrade is the wrong way round.
@@ -664,7 +695,7 @@ export function Audit() {
       });
     }
     return out;
-  }, [work.data, knowledge.data, config.data, secrets.rows, runtime.data, identity.page]);
+  }, [workData, knowledgeData, configData, secrets.rows, runtimeData, identity.page]);
 
   /** Newest first, narrowed to the window and to what the reader asked. */
   const shown = useMemo(() => {
@@ -698,25 +729,25 @@ export function Audit() {
     // A WINDOWED PAGE CAN FILL TOO. Every row it holds is inside the window,
     // so a full one whose oldest row is still after the window's start is a
     // busy week reaching further back than a page — the same test.
-    oldest(list(work.data?.records), PAGE.work, "Work");
+    oldest(list(workData?.records), PAGE.work, "Work");
     oldest(
       list(identity.page?.events).map((entry) => ({ at: entry.at ?? "" })),
       PAGE.identity,
       "Identity",
     );
     oldest(
-      list(runtime.data?.events).map((event) => ({ at: event.timestamp })),
+      list(runtimeData?.events).map((event) => ({ at: event.timestamp })),
       PAGE.runtime,
       "Runtime",
     );
-    oldest(list(knowledge.data?.changes), PAGE.pages, "Knowledge");
+    oldest(list(knowledgeData?.changes), PAGE.pages, "Knowledge");
     oldest(
-      list(config.data).map((revision) => ({ at: revision.created_at })),
+      list(configData).map((revision) => ({ at: revision.created_at })),
       PAGE.config,
       "Configuration",
     );
     return short;
-  }, [work.data, identity.page, runtime.data, knowledge.data, config.data, since]);
+  }, [workData, identity.page, runtimeData, knowledgeData, configData, since]);
 
   const columns = useMemo<GridColumn<AuditEntry>[]>(
     () => [
@@ -826,8 +857,20 @@ export function Audit() {
     [now, seatOf],
   );
 
-  // WHAT THE TWO BEST-EFFORT REST READS WITHHELD, each said by its source.
-  const withheld = [secrets.withheld, identity.withheld].filter((sentence) => sentence !== "");
+  // WHAT EACH SOURCE WITHHELD, said by its source: a socket read refused on
+  // authority, with the grants its refusal named, and the two REST reads.
+  const withheld = [
+    ...reads
+      .filter(({ read }) => read.error === "unauthorized")
+      .map(({ read, gesture }) =>
+        needsSentence(
+          gesture,
+          read.refusal && !isLogRefusal(read.refusal) ? read.refusal.grants : [],
+        ),
+      ),
+    secrets.withheld,
+    identity.withheld,
+  ].filter((sentence) => sentence !== "");
 
   const loading = work.loading || knowledge.loading || config.loading || runtime.loading;
   return (
@@ -883,7 +926,7 @@ export function Audit() {
       {loading && shown.length === 0 && (
         <Skeleton variant="text" rows={6} label="Loading what was done" />
       )}
-      <CoverageNote coverage={[runtime.data?.coverage]} what="the runtime rows" />
+      <CoverageNote coverage={[runtimeData?.coverage]} what="the runtime rows" />
       {/* A PAGE THAT STOPPED SHORT OF THE WINDOW IS A NOTICE OF ITS OWN, not
           the card's subtitle: a header line is one line, and the sentence was
           cut at "those rows are the newest, n…" — its whole point, lost at
