@@ -425,7 +425,12 @@ seat…**, beside the handle in the editor, gives the role a new handle by doing
 exactly that, and says so before it records anything. The new seat takes the
 old one's place and fields, and every unit lead, `manages` entry, Datadog
 fallback and GitLab access level that named the old handle moves to the new
-one. The old seat's work, memory and history stay with its handle, and its
+one. A credential the old seat holds as a value rather than a `${NAME}`
+reference does not come along: the engine fills a masked value back in by the
+seat's handle, which the new seat does not share, and the builder never holds
+the value to copy it, so the replacement names each one it leaves behind and
+the review lists them again. A reference carries over as written. The old
+seat's work, memory and history stay with its handle, and its
 mailbox is retired like any removed seat's
 ([Deleting a node](#deleting-a-node)). The replacement is one step: one undo
 puts the old seat back. It waits while the editor holds changes of its own;
@@ -599,12 +604,14 @@ would do before it does it:
   that onboard again (and why), reporting lines and leads that move
   (including a reorder that only changes which manager comes first),
   channels, where unrouted work goes, the tool credentials a seat gains or
-  loses (names only), fields a kind change removes, references a removal
-  clears, the Datadog fallback seat and GitLab access levels.
+  loses (names only), fields a kind change removes, credentials a replaced
+  seat leaves behind, references a removal clears, the Datadog fallback seat
+  and GitLab access levels.
 - **Warnings** the engine gave for exactly this save.
 
-A company rename, a kind change, a change of tool credentials and removing
-more than half of the seats each need an
+A company rename, a kind change, a change of tool credentials (a credential a
+kind change or a replacement leaves behind included) and removing more than
+half of the seats each need an
 acknowledgement before **Save** enables. While the engine reports problems
 the review opens so you can read it, with Save disabled until they are fixed.
 While a check is out, Save waits for it. If the engine could not be reached to

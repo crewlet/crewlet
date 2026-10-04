@@ -479,6 +479,7 @@ describe("seat fields", () => {
       screen.getByText(/This is a new seat: a new mailbox, new memory and a new agent id/),
     ).toBeDefined();
     expect((field("New handle") as HTMLInputElement).value).toBe("dev-2");
+    expect(screen.queryByText(/These credentials do not carry over/)).toBeNull();
     const replace = () => screen.getByRole("button", { name: "Replace seat" }) as HTMLButtonElement;
     type("New handle", "ceo");
     expect(screen.getByText("ceo already names a seat or a unit.")).toBeDefined();
@@ -490,6 +491,18 @@ describe("seat fields", () => {
       expect.objectContaining({ type: "replaceSeat", target: "seat:dev", handle: "developer" }),
     ]);
     expect(locate(view.state().draft, "seat:dev")).toBeUndefined();
+  });
+
+  test("replacing a seat names each credential it holds as a masked value, which does not carry over", () => {
+    const company = fixtureCompany();
+    company.units![0]!.roles![1]!.mcp_env = {
+      git: { TOKEN: "__redacted__", HOST: "${GIT_HOST}" },
+    };
+    edit(keyedState(company), "seat:dev");
+    fireEvent.click(screen.getByRole("button", { name: "Replace this seat…" }));
+    expect(
+      screen.getByText(/These credentials do not carry over: mcp_env\.git\.TOKEN\./),
+    ).toBeDefined();
   });
 
   test("a seat with changes in its form is not replaced until they are applied or discarded", () => {

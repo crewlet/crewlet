@@ -391,6 +391,35 @@ describe("what only the log says", () => {
     expect(changes.acknowledgements).toEqual(["kind_change", "credential_servers"]);
   });
 
+  test("credentials a replaced seat held as masked values, named and acknowledged, and none for a reference", () => {
+    const masked = fixtureCompany();
+    masked.units![0]!.roles![1]!.mcp_env = { git: { TOKEN: "__redacted__", HOST: "${GIT_HOST}" } };
+    masked.units![0]!.roles![1]!.integrations = {
+      github: { tier: "review", private_key: "__redacted__" },
+    };
+    const replace: Intent = {
+      type: "replaceSeat",
+      target: "seat:dev",
+      key: "new:d",
+      handle: "developer",
+    };
+    const changes = changesOf(scenario([replace], masked));
+    expect(changes.uncarriedCredentials).toEqual([
+      {
+        ref: { key: "new:d", kind: "seat", name: "Dev" },
+        from: "dev",
+        fields: ["mcp_env.git.TOKEN", "integrations.github.private_key"],
+      },
+    ]);
+    expect(changes.acknowledgements).toEqual(["credential_servers"]);
+
+    const referenced = fixtureCompany();
+    referenced.units![0]!.roles![1]!.mcp_env = { git: { TOKEN: "${GIT_TOKEN}" } };
+    const plain = changesOf(scenario([replace], referenced));
+    expect(plain.uncarriedCredentials).toEqual([]);
+    expect(plain.acknowledgements).toEqual([]);
+  });
+
   test("references a removal cleared, and the integration entries keyed by handle", () => {
     const s = scenario([{ type: "remove", target: "seat:sre", routeTo: "dev" }]);
     const changes = changesOf(s);

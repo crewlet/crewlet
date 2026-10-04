@@ -48,7 +48,7 @@
  */
 
 import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
-import { plural } from "~/lib/format.ts";
+import { REDACTED, plural } from "~/lib/format.ts";
 import { cloneJson, getPath, isRecord, jsonEqual, setPath } from "./json.ts";
 import { COMPANY_KEY, isMintedKey, type NodeKey } from "./keys.ts";
 import {
@@ -182,7 +182,8 @@ export interface Remove {
  * lead, a `manages` entry, the Datadog fallback) moves to the new one, as does
  * its GitLab access level. One operation rather than a removal and an
  * addition, so one undo puts the old seat back and a removal never clears the
- * references the addition was meant to take over.
+ * references the addition was meant to take over. Every field comes along but
+ * a credential the configuration read masked, which cannot ([withoutMasked]).
  */
 export interface ReplaceSeat {
   readonly type: "replaceSeat";
@@ -625,6 +626,55 @@ function forbiddenFor(data: ConfigRole, kind: SeatKind): FieldChange[] {
     if (value !== undefined) out.push({ path: rule.path, before: cloneJson(value) });
   }
   return out;
+}
+
+/**
+ * A seat's data without the credentials the configuration read MASKED, and
+ * the authored name of each one left behind: what a [ReplaceSeat] copies.
+ *
+ * A mask is filled back on save from the revision it replaces, matched by the
+ * seat's HANDLE (`config.Company.RestoreRedacted`), and a replacement's handle
+ * is one no revision holds. Copied, the mask would stand and the engine would
+ * refuse the document over a field the builder lets nobody edit, so undo was
+ * the only way out. The value itself cannot be copied, since the builder
+ * never holds one, so it is left behind, and so is any block that held only
+ * masks. A whole `${VAR}` reference names a credential rather than being one,
+ * and carries over as written — so a Slack app written half as a literal and
+ * half as a reference keeps only the reference, and the check refuses it
+ * naming the credential it lost, as it refuses any app missing one.
+ */
+export function withoutMasked(data: ConfigRole): {
+  readonly data: ConfigRole;
+  readonly masked: readonly string[];
+} {
+  const masked: string[] = [];
+  const kept = dropMasked(data, [], masked);
+  return { data: (kept === MASK_DROPPED ? {} : kept) as ConfigRole, masked };
+}
+
+const MASK_DROPPED = Symbol("masked");
+
+/** `value` without its masks, or [MASK_DROPPED] for a mask or a container that held only masks. */
+function dropMasked(value: unknown, at: readonly string[], masked: string[]): unknown {
+  if (value === REDACTED) {
+    masked.push(fieldName(at));
+    return MASK_DROPPED;
+  }
+  if (Array.isArray(value)) {
+    const kept = value
+      .map((v, i) => dropMasked(v, [...at, String(i)], masked))
+      .filter((v) => v !== MASK_DROPPED);
+    return value.length > 0 && kept.length === 0 ? MASK_DROPPED : kept;
+  }
+  if (isRecord(value)) {
+    const kept = Object.entries(value)
+      .map(([k, v]) => [k, dropMasked(v, [...at, k], masked)] as const)
+      .filter(([, v]) => v !== MASK_DROPPED);
+    return Object.keys(value).length > 0 && kept.length === 0
+      ? MASK_DROPPED
+      : Object.fromEntries(kept);
+  }
+  return value;
 }
 
 // ---------------------------------------------------------------------------
@@ -1822,7 +1872,7 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
       const from = handleOf(found.node as DraftSeat);
       const seat: DraftSeat = {
         key: op.key,
-        data: { ...cloneJson((found.node as DraftSeat).data), handle: op.handle },
+        data: { ...withoutMasked((found.node as DraftSeat).data).data, handle: op.handle },
       };
       let next = attach(detach(draft, op.target)!.draft, placementOf(found), seat, "seat");
       const followed: ReferenceEffect[] = [];

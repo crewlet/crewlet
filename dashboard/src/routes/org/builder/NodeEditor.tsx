@@ -104,7 +104,7 @@ import {
 import { mintHandle } from "./model/identity.ts";
 import { getPath, isRecord, jsonEqual } from "./model/json.ts";
 import { COMPANY_KEY, isMintedKey, mintKey, type NodeKey } from "./model/keys.ts";
-import { kindOf, type EditPartIntent } from "./model/operations.ts";
+import { kindOf, withoutMasked, type EditPartIntent } from "./model/operations.ts";
 import type { PlacedProblem } from "./model/problems.ts";
 import { recordIntent } from "./model/reducer.ts";
 import { scopeLimit } from "./model/scope.ts";
@@ -1175,6 +1175,7 @@ function HandleFact({
   const taken = takenIdentities(state, api.identities);
   const next = typed ?? mintHandle(seat.data.name, taken);
   const problem = identityProblemOf(taken, "seat", next, "");
+  const uncarried = withoutMasked(seat.data).masked;
 
   function replace() {
     if (problem !== null || api.readOnly) return;
@@ -1222,6 +1223,13 @@ function HandleFact({
           hint={`This is a new seat: a new mailbox, new memory and a new agent id. ${seat.data.name || "This seat"}'s work, memory and history stay with ${handleLabel(handle)}, which stops running once the change is saved. The new seat takes its place and fields, and every lead, manages entry and Datadog fallback naming ${handleLabel(handle)} moves to it.`}
         >
           <Refusal message={refusal} />
+          {uncarried.length > 0 && (
+            <Callout variant="warning">
+              These credentials do not carry over: {uncarried.join(", ")}. {handleLabel(handle)}{" "}
+              holds them as values the dashboard never shows, so the new seat starts without them. A{" "}
+              <InlineCode>${"{NAME}"}</InlineCode> reference carries over as written.
+            </Callout>
+          )}
           <ConfigField
             label="New handle"
             kind="id"

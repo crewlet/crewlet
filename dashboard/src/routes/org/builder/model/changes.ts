@@ -11,7 +11,8 @@
  * DRAFT as the engine derived them (each side's `derived` block, placed on
  * nodes through that side's own path index) and reads the operation log only
  * for what no document can say afterwards: the fields a kind change removed,
- * and the references an operation cleared.
+ * the credentials a replaced seat left behind, and the references an
+ * operation cleared.
  *
  * Nodes are matched by key, which is the node's identity (see `keys.ts`), so
  * "the same seat" here means what it means to the engine's memory and
@@ -26,7 +27,13 @@
  * organization needs no derivation to be known.
  */
 
-import type { CompanyDocument, Derived, DerivedSeat, DerivedUnit } from "~/protocol/index.ts";
+import type {
+  CompanyDocument,
+  ConfigRole,
+  Derived,
+  DerivedSeat,
+  DerivedUnit,
+} from "~/protocol/index.ts";
 import { plural } from "~/lib/format.ts";
 import { COMPANY_KEY, type NodeKey } from "./keys.ts";
 import { allSeats, allUnits, type Draft } from "./draft.ts";
@@ -43,6 +50,7 @@ import {
   fieldName,
   isCredentialField,
   kindOf,
+  withoutMasked,
   type ApplyReport,
   type Operation,
   type ReferenceEffect,
@@ -149,6 +157,16 @@ export interface ChangeSet {
   readonly strippedFields: readonly {
     readonly ref: EntityRef;
     readonly fields: readonly { readonly name: string; readonly credential: boolean }[];
+  }[];
+  /**
+   * The credentials a replacing seat does not carry over from the seat it
+   * replaced, by authored name: values the configuration read masked, which
+   * the builder never holds (`operations.withoutMasked`).
+   */
+  readonly uncarriedCredentials: readonly {
+    readonly ref: EntityRef;
+    readonly from: string;
+    readonly fields: readonly string[];
   }[];
   readonly clearedReferences: readonly {
     readonly kind: ReferenceEffect["kind"];
@@ -449,6 +467,16 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
       fields: [...fields].map(([name, credential]) => ({ name, credential })),
     }));
 
+  const uncarriedCredentials: ChangeSet["uncarriedCredentials"][number][] = [];
+  for (const op of inputs.ops) {
+    if (op.type !== "replaceSeat" || !next.refs.has(op.key)) continue;
+    const old = op.snapshot.json as ConfigRole;
+    const fields = withoutMasked(old).masked;
+    if (fields.length > 0) {
+      uncarriedCredentials.push({ ref: ref(next, op.key), from: old.handle ?? "", fields });
+    }
+  }
+
   const clearedReferences = inputs.reports.flatMap((report) =>
     report.cleared.map((effect) => ({
       kind: effect.kind,
@@ -495,7 +523,8 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
   if (kindChanged) acknowledgements.push("kind_change");
   if (
     credentialServers.length > 0 ||
-    strippedFields.some((s) => s.fields.some((f) => f.credential))
+    strippedFields.some((s) => s.fields.some((f) => f.credential)) ||
+    uncarriedCredentials.length > 0
   ) {
     acknowledgements.push("credential_servers");
   }
@@ -518,6 +547,7 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
     routing,
     credentialServers,
     strippedFields,
+    uncarriedCredentials,
     clearedReferences,
     datadogFallback,
     gitlabAccessLevels,

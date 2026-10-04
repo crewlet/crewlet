@@ -20,6 +20,7 @@
 
 import { useState } from "react";
 import { plural } from "~/lib/format.ts";
+import { handleLabel } from "~/lib/seats.ts";
 import type { ConfigWarning } from "~/protocol/index.ts";
 import { ConfigField } from "~/components/ConfigField.tsx";
 import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
@@ -113,6 +114,11 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
       .map((f) => (f.credential ? `${f.name} (a credential, not recoverable)` : f.name))
       .join(", ");
     follow.push(`${s.ref.name} loses fields its new kind cannot hold: ${fields}.`);
+  }
+  for (const u of changes.uncarriedCredentials) {
+    follow.push(
+      `${u.ref.name} starts without ${handleLabel(u.from)}'s credentials ${u.fields.join(", ")}: the dashboard never holds their values, so they do not carry over.`,
+    );
   }
   for (const c of changes.clearedReferences) {
     const what =

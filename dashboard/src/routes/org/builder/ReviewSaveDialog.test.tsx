@@ -8,6 +8,11 @@
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
+import { deriveChanges } from "./model/changes.ts";
+import { fromDocument, toDocument } from "./model/document.ts";
+import { apply, record } from "./model/operations.ts";
+import { fixtureCompany, fixtureDerived } from "./model/testkit.ts";
+import { changeSentences } from "./ReviewSaveDialog.tsx";
 import { company, Engine, json, mountBuilder, refusal, type SentRequest } from "./testkit.tsx";
 import { toastHost, toastText } from "~/testing.tsx";
 
@@ -517,6 +522,34 @@ describe("the review", () => {
         "1 seat onboards again because a unit it belongs to is renamed: Dev.",
       ),
     ).toBeDefined();
+  });
+
+  // A REPLACED SEAT'S MASKED CREDENTIALS are gone once the save lands, and the
+  // review is the last place that says so.
+  test("a replacement names the credentials it does not carry over", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.roles![1]!.mcp_env = { git: { TOKEN: "__redacted__" } };
+    const base = fromDocument(doc);
+    const recorded = record(base, {
+      type: "replaceSeat",
+      target: "seat:dev",
+      key: "new:d",
+      handle: "developer",
+    });
+    if (!recorded.ok) throw new Error(recorded.message);
+    const applied = apply(base, recorded.op);
+    const changes = deriveChanges({
+      base: { draft: base, derived: fixtureDerived(doc) },
+      next: {
+        draft: applied.draft,
+        derived: fixtureDerived(toDocument(applied.draft).document),
+      },
+      ops: [recorded.op],
+      reports: [applied.report],
+    });
+    expect(changeSentences(changes).consequences).toContain(
+      "Dev starts without @dev's credentials mcp_env.git.TOKEN: the dashboard never holds their values, so they do not carry over.",
+    );
   });
 
   test("an empty audit summary cannot be saved", async () => {

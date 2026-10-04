@@ -28,6 +28,7 @@ import {
   malformedReason,
   record,
   touchedKeys,
+  withoutMasked,
   type Intent,
   type Operation,
 } from "./operations.ts";
@@ -437,6 +438,42 @@ describe("replacing a saved seat", () => {
       handle: "reliability",
     }).draft;
     expect(getPath(doc(sre), ["integrations", "datadog", "route_to"])).toBe("reliability");
+  });
+
+  // A MASK IS FILLED BACK BY ITS SEAT'S HANDLE, which a replacement does not
+  // share: copied, it would stand, and the engine would refuse the document
+  // over a field nobody can edit here.
+  test("a credential the read masked is left behind with any block it emptied, and a reference carries over", () => {
+    const company = fixtureCompany();
+    const dev = company.units![0]!.roles![1]!;
+    dev.mcp_env = {
+      git: { TOKEN: "__redacted__", HOST: "${GIT_HOST}" },
+      jira: { TOKEN: "__redacted__" },
+    };
+    dev.integrations = {
+      slack: { bot_token: "__redacted__", signing_secret: "__redacted__" },
+      github: { tier: "review", private_key: "${GH_KEY}" },
+    };
+    const { draft: next } = run(fixture(company), {
+      type: "replaceSeat",
+      target: "seat:dev",
+      key: "new:d",
+      handle: "developer",
+    });
+    const { mcp_env: _mcp, integrations: _apps, ...rest } = dev;
+    expect(seat(next, "new:d")).toEqual({
+      ...rest,
+      handle: "developer",
+      mcp_env: { git: { HOST: "${GIT_HOST}" } },
+      integrations: { github: { tier: "review", private_key: "${GH_KEY}" } },
+    });
+    expect(JSON.stringify(doc(next))).not.toContain("__redacted__");
+    expect(withoutMasked(dev).masked).toEqual([
+      "mcp_env.git.TOKEN",
+      "mcp_env.jira.TOKEN",
+      "integrations.slack.bot_token",
+      "integrations.slack.signing_secret",
+    ]);
   });
 
   test("only a saved seat is replaced, under a handle that is new, well formed and free", () => {
