@@ -431,7 +431,8 @@ func TestARestampIsHeldBackRatherThanAppliedWithoutItsStamp(t *testing.T) {
 }
 
 // A VERSION-1 CONTAINER RECORD — an older node's — APPLIES AS EPOCH 0, older
-// than every chart this build stamps, so the next chart's write replaces it.
+// than every activation this build stamps, so the next activation's write
+// replaces it.
 func TestAnOlderNodesContainerRecordAppliesAsEpochZero(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

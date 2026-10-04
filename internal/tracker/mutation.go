@@ -221,11 +221,11 @@ var versionedFields = statelog.RecordFields{
 	// carry, and neither is a task.
 	{Name: "TaskPatch.Moving", Since: 11, Op: string(OpPatch),
 		Path: []string{"mutation", "moving"}},
-	// A PROJECT'S CHART STAMP AS A LOG POSITION, at version 12. The chart
-	// apply stamps a project with the packed position on the org chart's
-	// log its name, purpose and unit were derived from, and the position
-	// guard in [Writer.ApplyChart] compares it: a build reading 11 has no
-	// field for it, so it would decode the project document around the
+	// A PROJECT'S CHART STAMP, at version 12. The chart apply stamps a
+	// project with the instant the fleet activated the revision its name,
+	// purpose and unit were derived from, and the guard in
+	// [Writer.ApplyChart] compares it: a build reading 11 has no field for
+	// it, so it would decode the project document around the
 	// stamp, write a row with none and admit every later chart apply as
 	// newer — its copy of the project would follow whichever derivation
 	// reached it last, where every upgraded node follows the newest. EVERY

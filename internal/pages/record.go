@@ -66,20 +66,21 @@ const baseRecordVersion = 1
 // VERSION 2 HAS NO ROW: it is retired (see [RecordVersion]), and a row naming
 // a field this build does not have would stamp nothing and certify nothing.
 var versionedFields = statelog.RecordFields{
-	// A CONTAINER'S CHART POSITION, at version 3. A build that cannot
-	// read it decodes a container's settings around it and applies the
-	// rest: its row then says nothing about which chart wrote it, so on
-	// that node the position guard ([Store.EnsureContainer]) has nothing
-	// to refuse an older chart with — the walk-back the stamp exists to
+	// A CONTAINER'S CHART STAMP, at version 3: the instant the fleet
+	// activated the revision its settings were derived from. A build that
+	// cannot read it decodes a container's settings around it and applies
+	// the rest: its row then says nothing about which revision wrote it, so
+	// on that node the stamp guard ([Store.EnsureContainer]) has nothing to
+	// refuse an older revision with — the walk-back the stamp exists to
 	// stop, open on the very node that could not read it — and its
 	// document differs from every other node's.
 	//
-	// EVERY RECORD THAT CARRIES ONE, A RE-STAMP INCLUDED. A later chart
-	// position over the settings a row already holds carries nothing new
+	// EVERY RECORD THAT CARRIES ONE, A RE-STAMP INCLUDED. A later
+	// activation over the settings a row already holds carries nothing new
 	// but the stamp, and writing it at a version an older build applies
 	// whole — so as not to hold back the page writes in that space — leaves
 	// the row unstamped on that node while every peer holds the stamp: the
-	// first stale chart that node applies before re-stamping then walks
+	// first stale revision that node applies before re-stamping then walks
 	// the settings back for the whole fleet, because appliers apply what a
 	// writer decided. Retained, it is applied with its stamp the moment the
 	// node reads version 3. The price is the one every row here states: a

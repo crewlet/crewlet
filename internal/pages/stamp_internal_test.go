@@ -77,8 +77,8 @@ func TestAPagesRecordIsStampedWithTheLowestVersionThatReadsIt(t *testing.T) {
 }
 
 // THE PRODUCTION TABLE STAMPS A CONTAINER'S SETTINGS AT THE VERSION THAT ADDED
-// THEIR CHART POSITION — a re-stamp of unchanged settings included, since the
-// bytes are the same — and leaves every record that carries no position at 1.
+// THEIR CHART STAMP — a re-stamp of unchanged settings included, since the
+// bytes are the same — and leaves every record that carries no stamp at 1.
 //
 // Version 2 is retired (see [RecordVersion]), so nothing this build writes is
 // stamped there: a container's settings go from 1 straight to 3.
@@ -94,7 +94,7 @@ func TestTheContainerChartEpochIsStampedAtVersionThree(t *testing.T) {
 		rec  MutationRecord
 		want int
 	}{
-		"settings carrying their chart position": {
+		"settings carrying their chart stamp": {
 			container(`{"v":1,"key":"ENG","name":"Engineering","chart_epoch":1767603600000}`), 3},
 		"settings an older build wrote, with none": {
 			container(`{"v":1,"key":"ENG","name":"Engineering"}`), 1},
