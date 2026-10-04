@@ -691,25 +691,28 @@ token's scope on any diff that touches
 ### A conflicted bump is asked to recreate
 
 [`.github/workflows/dependabot-recreate.yml`](.github/workflows/dependabot-recreate.yml)
-runs when a person merges to `main`, or by hand from the Actions tab. It waits ten
-minutes, then comments `@dependabot recreate` on every open Dependabot pull
-request that is still in conflict. The wait is the point: Dependabot rebases a
-conflicted bump itself within minutes (up to about four and a half in this
-repository's history), so what is still conflicting after ten is a bump it
-missed, one past its 30 days, or one holding a commit it will not touch. It asks
+runs when a person merges to `main`, or by hand from the Actions tab. It comments
+`@dependabot recreate` on every open Dependabot pull request that is in conflict,
 once per head commit, so a bump that stays stuck is not asked again until its
-branch changes.
+branch changes. The only waiting it does is for GitHub to work out which pull
+requests conflict, which takes seconds.
 
-It comments `recreate` and not `rebase` because the bumps still stuck after ten
-minutes are mostly the ones holding somebody else's commit, and Dependabot
-answers `@dependabot rebase` on those with "edited by someone other than
-Dependabot" and does nothing. `recreate` is the command that works there, and
-**it overwrites every commit on the branch, a person's included**. That is the
-price, and it falls on a bump that is still conflicting ten minutes after a
-merge. The force-push is recorded in the pull request's timeline and the old head
-is still in the clone of whoever pushed it, but if you have work on a Dependabot
-branch you mean to keep, move it to a branch of your own before you merge
-anything to `main`.
+It does not wait for Dependabot's own rebase. Dependabot rebases a conflicted
+bump by itself within minutes (up to about four and a half in this repository's
+history), so a bump it would have rebased is recreated instead. That ends in the
+same branch, a Dependabot commit and a fresh bundle commit, for the price of one
+more force-push and CI run. Waiting out the rebase would only save that, and
+would leave a job that sleeps for minutes printing nothing, which reads as hung.
+
+It comments `recreate` and not `rebase` because the bumps that stay stuck are the
+ones holding somebody else's commit, and Dependabot answers `@dependabot rebase`
+on those with "edited by someone other than Dependabot" and does nothing.
+`recreate` is the command that works there, and **it overwrites every commit on
+the branch, a person's included**. That is the price, and it falls on any bump in
+conflict after a merge. The force-push is recorded in the pull request's timeline
+and the old head is still in the clone of whoever pushed it, but if you have work
+on a Dependabot branch you mean to keep, move it to a branch of your own before
+you merge anything to `main`.
 
 The comment has to come from a user account. Dependabot answers a command from
 `github-actions[bot]`, or from any GitHub App, with "Sorry, only users with push
@@ -736,14 +739,18 @@ Two things outside this repository's files have to exist:
   open to every branch. It does not keep the token from a workflow that reaches
   `main` unreviewed, which the ruleset allows today (see the section above).
 
-The workflow cannot see inside that setting, so check it yourself. Not covered: a
-bump merges itself with `GITHUB_TOKEN`, and GitHub starts no workflow for an event
-that token caused (the merge commits of #167, #170, #171 and #173 have no push-event
-run), so a conflict a bump's merge makes waits for the next merge by a person, or
-for a manual run. Those are the conflicts Dependabot rebases itself.
+An empty secret fails the run at once, with a message naming the secret and the
+environment. The workflow cannot see the environment's branch setting, so check
+that yourself. Not covered: a bump merges itself with `GITHUB_TOKEN`, and GitHub
+starts no workflow for an event that token caused (the merge commits of #167,
+#170, #171 and #173 have no push-event run), so a conflict a bump's merge makes
+waits for the next merge by a person, or for a manual run. Those are the
+conflicts Dependabot rebases itself.
 
-Nothing checks any of this for you. Read the wait, the command it posts, the
-environment and the token's scope on any diff that touches
+Nothing checks any of this for you. Read the command it posts, the concurrency
+group (a newer merge cancels a run still in flight, so two runs never overlap and
+ask about one bump twice), the environment and the token's scope on any diff that
+touches
 [`.github/workflows/dependabot-recreate.yml`](.github/workflows/dependabot-recreate.yml).
 
 ## Releasing
