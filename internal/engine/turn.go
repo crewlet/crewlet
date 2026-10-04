@@ -1484,9 +1484,9 @@ func (d *Dispatcher) now() time.Time {
 // on every turn: the ledger, the telemetry, the episodes and a parked run's
 // answer match want the identity, while the coalescing record wants the
 // partition — it records that N events MERGED, which is what the partition
-// decides. The answer match takes both, and only because a row parked by a
-// build that predates the identity holds nothing else to match on. One value
-// answering every question is what filed a seat's own prior turn on a direct
+// decides. The answer match takes both: the identity admits a parked run and
+// the partition picks between several it admits. One value answering every
+// question is what filed a seat's own prior turn on a direct
 // message under a key its next turn never looked up, and what lost every
 // clarification a seat was told to ask for in a thread.
 //

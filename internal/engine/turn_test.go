@@ -85,10 +85,9 @@ func said(sender, body string, at time.Time) *events.Event {
 }
 
 // notifyStamp writes both keys the way internal/notify does — THROUGH THE
-// CONSTANTS, never the literals they hold: with the identity read falling back
-// to the partition field for an older peer's event, a test spelling
-// "conversation_key" out keeps passing whichever field production reads, which
-// is the blind spot node/concurrency_test.go records having shipped once.
+// CONSTANTS, never the literals they hold, so a test cannot keep passing on a
+// field production no longer reads, which is the blind spot
+// node/concurrency_test.go records having shipped once.
 func notifyStamp(e *events.Event, partition, conversation string) {
 	if e.Payload == nil {
 		e.Payload = map[string]any{}
@@ -1316,10 +1315,8 @@ func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 	if rec.Count != 2 || rec.AgentHandle != "ceo" {
 		t.Errorf("record = %+v", rec)
 	}
-	// THE PARTITION, on the field that says so. The record's subject is the
-	// batch that merged, and it rode `conversation_key` until that made the
-	// promoted tag of that name mean the identity on every other event and
-	// the batch on this one.
+	// THE PARTITION, on the field that says so: the record's subject is the
+	// batch that merged, and `conversation_key` is the identity's tag.
 	if rec.PartitionKey != "slack:C1/T1" {
 		t.Errorf("partition = %q", rec.PartitionKey)
 	}
