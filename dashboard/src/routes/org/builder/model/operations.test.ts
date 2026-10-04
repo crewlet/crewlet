@@ -2,17 +2,20 @@
 /**
  * Operations: recorded with their preconditions, evaluated, applied.
  *
- * The invariants: recording captures what each change replaced; applying
- * changes only what the operation names and follows or clears the references
- * that named what it renamed or removed, reporting each; an operation whose
- * preconditions no longer hold is refused with every value a person needs; and
- * a field another operation owns cannot be written around its rules.
+ * The invariants: recording captures what each change replaced; a new node
+ * carries an identity of the engine's grammar that no other node holds;
+ * applying changes only what the operation names, clears the references that
+ * named what it removed and moves those that named a new node whose identity
+ * was chosen again, reporting each, while a rename moves nothing; an operation
+ * whose preconditions no longer hold is refused with every value a person
+ * needs; and a field another operation owns cannot be written around its
+ * rules.
  */
 
 import { describe, expect, test } from "vitest";
 import type { CompanyDocument } from "~/protocol/index.ts";
 import { cloneJson, getPath } from "./json.ts";
-import { COMPANY_KEY, mintKey, seatPathKey, unitPathKey, type NodeKey } from "./keys.ts";
+import { COMPANY_KEY, mintKey, type NodeKey } from "./keys.ts";
 import { locate, type Draft } from "./draft.ts";
 import { fromDocument, toDocument } from "./document.ts";
 import {
@@ -27,23 +30,22 @@ import {
   touchedKeys,
   type Intent,
   type Operation,
-  type RecordContext,
 } from "./operations.ts";
-import { countingKeys, fixtureCompany, fixtureDerived } from "./testkit.ts";
+import { countingKeys, fixtureCompany } from "./testkit.ts";
 
 function fixture(doc: CompanyDocument = fixtureCompany()): Draft {
-  return fromDocument(doc, fixtureDerived(doc));
+  return fromDocument(doc);
 }
 
-function recordOk(draft: Draft, intent: Intent, ctx: RecordContext = {}): Operation {
-  const result = record(draft, intent, ctx);
+function recordOk(draft: Draft, intent: Intent): Operation {
+  const result = record(draft, intent);
   if (!result.ok)
     throw new Error(`expected ${intent.type} to record: ${result.refusal}: ${result.message}`);
   return result.op;
 }
 
-function run(draft: Draft, intent: Intent, ctx: RecordContext = {}) {
-  const op = recordOk(draft, intent, ctx);
+function run(draft: Draft, intent: Intent) {
+  const op = recordOk(draft, intent);
   return { op, ...apply(draft, op) };
 }
 
@@ -66,24 +68,67 @@ describe("adding", () => {
     const { draft: next } = run(draft, {
       type: "addSeat",
       key,
-      placement: { parent: "unit:Engineering", after: "seat:vp-engineering" },
-      data: { name: "QA" },
+      placement: { parent: "unit:engineering", after: "seat:vp-engineering" },
+      data: { name: "QA", handle: "qa" },
     });
     expect(doc(next).units![0]!.roles!.map((r) => r.name)).toEqual(["VP Engineering", "QA", "Dev"]);
-    expect(locate(next, key)?.parent).toBe("unit:Engineering");
+    expect(locate(next, key)?.parent).toBe("unit:engineering");
   });
 
   test("a key that was not minted, or already names a node, is refused", () => {
     const draft = fixture();
     const placement = { parent: COMPANY_KEY, after: null };
     expect(
-      record(draft, { type: "addSeat", key: "seat:x", placement, data: { name: "X" } }),
+      record(draft, {
+        type: "addSeat",
+        key: "seat:x",
+        placement,
+        data: { name: "X", handle: "x" },
+      }),
     ).toMatchObject({ refusal: "not_minted" });
     const key = mintKey(countingKeys());
-    const added = run(draft, { type: "addSeat", key, placement, data: { name: "X" } }).draft;
-    expect(record(added, { type: "addSeat", key, placement, data: { name: "Y" } })).toMatchObject({
-      refusal: "key_in_use",
-    });
+    const added = run(draft, {
+      type: "addSeat",
+      key,
+      placement,
+      data: { name: "X", handle: "x" },
+    }).draft;
+    expect(
+      record(added, { type: "addSeat", key, placement, data: { name: "Y", handle: "y" } }),
+    ).toMatchObject({ refusal: "key_in_use" });
+  });
+
+  // A NEW NODE IS ADDRESSED FROM THE MOMENT IT EXISTS. A lead or a `manages`
+  // entry may name it before any check answers, so it is given its handle or
+  // key as it is added — the engine's grammar, and no other node's — and the
+  // engine never derives one from a name the person may still change.
+  test("a new node carries an identity of the engine's grammar that no other node holds", () => {
+    const draft = fixture();
+    const seat = (data: Record<string, unknown>) =>
+      record(draft, {
+        type: "addSeat",
+        key: "new:s",
+        placement: { parent: COMPANY_KEY, after: null },
+        data: { name: "S", ...data },
+      });
+    const unitWith = (data: Record<string, unknown>) =>
+      record(draft, {
+        type: "addUnit",
+        key: "new:u",
+        placement: { parent: COMPANY_KEY, after: null },
+        data: { name: "U", ...data },
+      });
+    expect(seat({})).toMatchObject({ refusal: "bad_identity" });
+    expect(seat({ handle: "Not A Handle" })).toMatchObject({ refusal: "bad_identity" });
+    // Held by a seat, and by a unit: one namespace, since a manages entry may
+    // name either.
+    expect(seat({ handle: "dev" })).toMatchObject({ refusal: "bad_identity" });
+    expect(seat({ handle: "sales" })).toMatchObject({ refusal: "bad_identity" });
+    expect(seat({ handle: "s-1" }).ok).toBe(true);
+    expect(unitWith({})).toMatchObject({ refusal: "bad_identity" });
+    expect(unitWith({ id: "1st" })).toMatchObject({ refusal: "bad_identity" });
+    expect(unitWith({ id: "ceo" })).toMatchObject({ refusal: "bad_identity" });
+    expect(unitWith({ id: "legal" }).ok).toBe(true);
   });
 
   test("a unit never carries lists into its own data", () => {
@@ -91,9 +136,9 @@ describe("adding", () => {
       type: "addUnit",
       key: "new:u",
       placement: { parent: COMPANY_KEY, after: null },
-      data: { name: "Legal", roles: [{ name: "Counsel" }] },
+      data: { name: "Legal", id: "legal", roles: [{ name: "Counsel" }] },
     });
-    expect(op.type === "addUnit" && op.data).toEqual({ name: "Legal" });
+    expect(op.type === "addUnit" && op.data).toEqual({ name: "Legal", id: "legal" });
   });
 
   test("a neighbour that is not beside the slot is refused, or with leniency lands at the end", () => {
@@ -101,13 +146,13 @@ describe("adding", () => {
     const intent: Intent = {
       type: "addSeat",
       key: "new:s",
-      placement: { parent: "unit:Sales", after: "seat:dev" },
-      data: { name: "S" },
+      placement: { parent: "unit:sales", after: "seat:dev" },
+      data: { name: "S", handle: "s" },
     };
     expect(record(draft, intent)).toMatchObject({ refusal: "missing_neighbour" });
-    const lenient = record(draft, intent, {}, { lenientPlacement: true });
+    const lenient = record(draft, intent, { lenientPlacement: true });
     expect(lenient.ok && lenient.op.type === "addSeat" && lenient.op.placement).toEqual({
-      parent: "unit:Sales",
+      parent: "unit:sales",
       after: "seat:account-executive",
     });
   });
@@ -121,9 +166,9 @@ describe("removing", () => {
       draft: next,
       report,
     } = run(draft, { type: "remove", target: "seat:vp-engineering" });
-    expect(unit(next, "unit:Engineering").lead).toBeUndefined();
+    expect(unit(next, "unit:engineering").lead).toBeUndefined();
     expect(report.cleared).toEqual([
-      { kind: "lead", holder: "unit:Engineering", from: "VP Engineering" },
+      { kind: "lead", holder: "unit:engineering", from: "vp-engineering" },
     ]);
     expect(op.type === "remove" && op.snapshot.json).toEqual(fixtureCompany().units![0]!.roles![0]);
 
@@ -133,72 +178,63 @@ describe("removing", () => {
       getPath(doc(dev.draft), ["integrations", "gitlab", "provisioning", "access_levels", "dev"]),
     ).toBeUndefined();
     expect(dev.report.cleared).toEqual([
-      { kind: "manages", holder: "seat:vp-engineering", from: "Dev" },
+      { kind: "manages", holder: "seat:vp-engineering", from: "dev" },
       { kind: "gitlab_access_level", holder: COMPANY_KEY, from: "dev" },
     ]);
   });
 
   test("a unit's removal takes its subtree, clears manages entries naming it, and keeps or removes seats placed in it", () => {
     const draft = fixture();
-    const kept = run(draft, { type: "remove", target: "unit:Engineering", placedSeats: "keep" });
+    const kept = run(draft, { type: "remove", target: "unit:engineering", placedSeats: "keep" });
     expect(locate(kept.draft, "seat:sre")).toBeUndefined();
-    expect(seat(kept.draft, "seat:ceo").manages).toEqual(["Designer"]);
+    expect(seat(kept.draft, "seat:ceo").manages).toEqual(["designer"]);
     expect(seat(kept.draft, "seat:designer").unit).toBeUndefined();
     expect(kept.report.cleared).toEqual(
       expect.arrayContaining([
-        { kind: "manages", holder: "seat:ceo", from: "Engineering" },
-        { kind: "unit", holder: "seat:designer", from: "Platform" },
+        { kind: "manages", holder: "seat:ceo", from: "engineering" },
+        { kind: "unit", holder: "seat:designer", from: "platform" },
         { kind: "gitlab_access_level", holder: COMPANY_KEY, from: "sre" },
       ]),
     );
 
     const removed = run(draft, {
       type: "remove",
-      target: "unit:Engineering",
+      target: "unit:engineering",
       placedSeats: "remove",
     });
     expect(locate(removed.draft, "seat:designer")).toBeUndefined();
     expect(seat(removed.draft, "seat:ceo").manages).toBeUndefined();
   });
 
-  test("a root seat whose unit reference another unit of that name still resolves is not placed in the removed one", () => {
-    // Before unit names had to be unique: the engine resolves `unit:` to the
-    // FIRST unit of that name, so removing a later twin neither takes the
-    // seat with it nor clears its reference.
-    const base: CompanyDocument = {
-      name: "X",
-      roles: [{ name: "Floater", unit: "Platform" }],
-      units: [{ name: "Platform" }, { name: "Ops", children: [{ name: "Platform" }] }],
-    };
-    const draft = fixture(base);
-    const twin = unitPathKey("units[1].children[0]");
-    const { op, draft: next } = run(draft, { type: "remove", target: twin, placedSeats: "remove" });
-    expect(op).toMatchObject({ placed: [] });
-    expect(seat(next, "seat:floater").unit).toBe("Platform");
-  });
-
-  test("an entry that named a removed SEAT is cleared even when a unit of that name remains", () => {
+  // A MANAGES ENTRY NAMES A SEAT FIRST. The engine resolves an entry to the
+  // seat holding that handle before the unit holding that key, so the two
+  // removals below leave what the entry still names and clear what it no
+  // longer can.
+  test("an entry that named a removed SEAT is cleared even when a unit of that key remains", () => {
     const base: CompanyDocument = {
       name: "X",
       roles: [
-        { name: "Boss", manages: ["Ops"] },
-        { name: "Ops", goal: "a seat named like a unit" },
+        { name: "Boss", handle: "boss", manages: ["ops"] },
+        { name: "Ops", handle: "ops", goal: "a seat keyed like a unit" },
       ],
-      units: [{ name: "Ops", roles: [{ name: "Worker" }] }],
+      units: [{ name: "Ops", id: "ops", roles: [{ name: "Worker", handle: "worker" }] }],
     };
     const { draft, report } = run(fixture(base), { type: "remove", target: "seat:ops" });
     expect(seat(draft, "seat:boss").manages).toBeUndefined();
-    expect(report.cleared).toEqual([{ kind: "manages", holder: "seat:boss", from: "Ops" }]);
+    expect(report.cleared).toEqual([{ kind: "manages", holder: "seat:boss", from: "ops" }]);
   });
 
-  test("a removed unit's name still carried by a seat is the seat's entry and stays", () => {
+  test("a removed unit's key still held by a seat is the seat's entry and stays", () => {
     const base: CompanyDocument = {
       name: "X",
-      roles: [{ name: "Boss", manages: ["Ops"] }, { name: "Ops" }],
-      units: [{ name: "Ops" }],
+      roles: [
+        { name: "Boss", handle: "boss", manages: ["ops"] },
+        { name: "Ops", handle: "ops" },
+      ],
+      units: [{ name: "Ops", id: "ops" }],
     };
-    const { draft } = run(fixture(base), { type: "remove", target: "unit:Ops" });
-    expect(seat(draft, "seat:boss").manages).toEqual(["Ops"]);
+    const { draft } = run(fixture(base), { type: "remove", target: "unit:ops" });
+    expect(seat(draft, "seat:boss").manages).toEqual(["ops"]);
   });
 
   test("replacing the Datadog fallback travels with the removal", () => {
@@ -208,123 +244,241 @@ describe("removing", () => {
 });
 
 describe("renaming", () => {
-  test("a seat of the base keeps its identity: the engine's handle is pinned and references follow", () => {
+  // A NAME IS PROSE. Every reference names a seat by its handle and a unit by
+  // its key, so a rename touches the name and nothing else: no reference
+  // follows, because none named the name.
+  test("a seat's rename changes its name and nothing else: its handle and every reference stay", () => {
     const { op, draft, report } = run(fixture(), {
       type: "renameSeat",
       target: "seat:vp-engineering",
       name: " Head of Engineering ",
     });
-    expect(op).toMatchObject({
+    expect(op).toEqual({
+      type: "renameSeat",
+      target: "seat:vp-engineering",
       before: "VP Engineering",
       after: "Head of Engineering",
-      pin: "vp-engineering",
     });
     expect(seat(draft, "seat:vp-engineering")).toMatchObject({
       name: "Head of Engineering",
       handle: "vp-engineering",
     });
-    expect(unit(draft, "unit:Engineering").lead).toBe("Head of Engineering");
-    expect(report.followed).toEqual([
-      {
-        kind: "lead",
-        holder: "unit:Engineering",
-        from: "VP Engineering",
-        to: "Head of Engineering",
-      },
-    ]);
+    expect(unit(draft, "unit:engineering").lead).toBe("vp-engineering");
+    expect(report).toEqual({ cleared: [], followed: [], stripped: [] });
   });
 
-  test("a seat keyed by path takes the handle the last check reported, and is refused without one", () => {
-    const base: CompanyDocument = { name: "X", roles: [{ name: "A" }] };
-    const draft = fromDocument(base, null);
-    const target = seatPathKey("roles[0]");
-    expect(record(draft, { type: "renameSeat", target, name: "B" })).toMatchObject({
-      refusal: "unknown_handle",
+  test("a unit's rename changes its name and nothing else", () => {
+    const { draft, report } = run(fixture(), {
+      type: "renameUnit",
+      target: "unit:platform",
+      name: "Infrastructure",
     });
-    const op = recordOk(
-      draft,
-      { type: "renameSeat", target, name: "B" },
-      { handleOf: (k) => (k === target ? "a" : undefined) },
-    );
-    expect(op).toMatchObject({ pin: "a" });
+    expect(unit(draft, "unit:platform")).toMatchObject({ name: "Infrastructure", id: "platform" });
+    expect(seat(draft, "seat:designer").unit).toBe("platform");
+    expect(seat(draft, "seat:ceo").manages).toEqual(["engineering", "designer"]);
+    expect(report.followed).toEqual([]);
   });
 
-  test("a created seat is renamed without a pin, and the access level of its old handle is cleared", () => {
-    const base = fixtureCompany();
-    const draft = fixture(base);
-    const added = run(draft, {
+  test("a created seat's rename leaves its handle and its access level where they are", () => {
+    const added = run(fixture(), {
       type: "addSeat",
       key: "new:q",
       placement: { parent: COMPANY_KEY, after: null },
-      data: { name: "QA" },
+      data: { name: "QA", handle: "qa" },
     }).draft;
-    const withLevel = run(
-      added,
-      { type: "updateSeat", target: "new:q", set: [], accessLevel: "developer" },
-      { handleOf: () => "qa" },
-    ).draft;
-    const { op, draft: renamed } = run(
-      withLevel,
-      { type: "renameSeat", target: "new:q", name: "Quality" },
-      { handleOf: () => "qa" },
-    );
-    expect(op).toMatchObject({ accessLevels: [{ handle: "qa", before: "developer" }] });
-    expect("pin" in op).toBe(false);
+    const withLevel = run(added, {
+      type: "updateSeat",
+      target: "new:q",
+      set: [],
+      accessLevel: "developer",
+    }).draft;
+    const renamed = run(withLevel, { type: "renameSeat", target: "new:q", name: "Quality" }).draft;
+    expect(seat(renamed, "new:q")).toMatchObject({ name: "Quality", handle: "qa" });
     expect(
       getPath(doc(renamed), ["integrations", "gitlab", "provisioning", "access_levels", "qa"]),
-    ).toBeUndefined();
-  });
-
-  test("a unit rename follows root unit references and manages entries, but not an entry a seat of that name owns", () => {
-    const { draft, report } = run(fixture(), {
-      type: "renameUnit",
-      target: "unit:Platform",
-      name: "Infrastructure",
-    });
-    expect(seat(draft, "seat:designer").unit).toBe("Infrastructure");
-    expect(report.followed).toEqual([
-      { kind: "unit", holder: "seat:designer", from: "Platform", to: "Infrastructure" },
-    ]);
-
-    const shadowed: CompanyDocument = {
-      name: "X",
-      roles: [{ name: "Boss", manages: ["Ops"] }, { name: "Ops" }],
-      units: [{ name: "Ops" }],
-    };
-    const renamed = run(fixture(shadowed), {
-      type: "renameUnit",
-      target: "unit:Ops",
-      name: "Operations",
-    }).draft;
-    expect(seat(renamed, "seat:boss").manages).toEqual(["Ops"]);
-  });
-
-  test("a seat renamed away from a name another seat still holds leaves the references to that name alone", () => {
-    // A stored revision from before seat names had to be unique: "Dup" in a
-    // lead or a manages entry still names the seat that keeps the name.
-    const base: CompanyDocument = {
-      name: "X",
-      roles: [
-        { name: "Dup", handle: "a" },
-        { name: "Dup", handle: "b" },
-        { name: "Boss", manages: ["Dup"] },
-      ],
-      units: [{ name: "U", lead: "Dup" }],
-    };
-    const { draft, report } = run(fixture(base), {
-      type: "renameSeat",
-      target: "seat:a",
-      name: "Solo",
-    });
-    expect(seat(draft, "seat:boss").manages).toEqual(["Dup"]);
-    expect(unit(draft, "unit:U").lead).toBe("Dup");
-    expect(report.followed).toEqual([]);
+    ).toBe("developer");
   });
 
   test("an unchanged name records nothing", () => {
     expect(
-      record(fixture(), { type: "renameUnit", target: "unit:Sales", name: "Sales " }),
+      record(fixture(), { type: "renameUnit", target: "unit:sales", name: "Sales " }),
     ).toMatchObject({ refusal: "no_change" });
+  });
+});
+
+// A NEW NODE'S IDENTITY MAY STILL BE CHOSEN, and nothing outside the draft
+// names it yet, so choosing it again moves every reference the draft holds
+// to it. A node the saved company holds keeps its identity for good.
+describe("choosing a new node's identity again", () => {
+  test("a created seat's new handle moves every lead, manages entry and fallback naming it", () => {
+    let draft = run(fixture(), {
+      type: "addSeat",
+      key: "new:q",
+      placement: { parent: "unit:sales", after: null },
+      data: { name: "QA", handle: "qa" },
+    }).draft;
+    draft = run(draft, { type: "setLead", target: "unit:sales", lead: "qa" }).draft;
+    draft = run(draft, {
+      type: "setManages",
+      target: "seat:ceo",
+      manages: ["engineering", "designer", "qa"],
+    }).draft;
+    draft = run(draft, { type: "setDatadogRouteTo", routeTo: "qa" }).draft;
+    const { draft: next, report } = run(draft, {
+      type: "updateSeat",
+      target: "new:q",
+      set: [{ path: ["handle"], value: "quality" }],
+    });
+    expect(seat(next, "new:q").handle).toBe("quality");
+    expect(unit(next, "unit:sales").lead).toBe("quality");
+    expect(seat(next, "seat:ceo").manages).toEqual(["engineering", "designer", "quality"]);
+    expect(getPath(doc(next), ["integrations", "datadog", "route_to"])).toBe("quality");
+    expect(report.followed).toEqual([
+      { kind: "lead", holder: "unit:sales", from: "qa", to: "quality" },
+      { kind: "manages", holder: "seat:ceo", from: "qa", to: "quality" },
+    ]);
+  });
+
+  test("a created unit's new key moves every manages entry naming it", () => {
+    let draft = run(fixture(), {
+      type: "addUnit",
+      key: "new:l",
+      placement: { parent: COMPANY_KEY, after: null },
+      data: { name: "Legal", id: "legal" },
+    }).draft;
+    draft = run(draft, {
+      type: "setManages",
+      target: "seat:ceo",
+      manages: ["engineering", "legal"],
+    }).draft;
+    const { draft: next, report } = run(draft, {
+      type: "updateUnit",
+      target: "new:l",
+      set: [{ path: ["id"], value: "law" }],
+    });
+    expect(seat(next, "seat:ceo").manages).toEqual(["engineering", "law"]);
+    expect(report.followed).toEqual([
+      { kind: "manages", holder: "seat:ceo", from: "legal", to: "law" },
+    ]);
+  });
+
+  test("a saved node's identity is not written, and a new one must be free and well formed", () => {
+    const draft = fixture();
+    expect(
+      record(draft, {
+        type: "updateUnit",
+        target: "unit:sales",
+        set: [{ path: ["id"], value: "x" }],
+      }),
+    ).toMatchObject({ refusal: "forbidden_field" });
+    const added = run(draft, {
+      type: "addSeat",
+      key: "new:q",
+      placement: { parent: COMPANY_KEY, after: null },
+      data: { name: "QA", handle: "qa" },
+    }).draft;
+    for (const value of [undefined, "dev", "Not Valid"]) {
+      expect(
+        record(added, {
+          type: "updateSeat",
+          target: "new:q",
+          set: [{ path: ["handle"], ...(value === undefined ? {} : { value }) }],
+        }),
+        String(value),
+      ).toMatchObject({ refusal: "bad_identity" });
+    }
+  });
+});
+
+// A SAVED SEAT'S HANDLE NEVER CHANGES: another handle is another seat. So
+// the role is moved to a new one, in one step that one undo takes back.
+describe("replacing a saved seat", () => {
+  test("the new seat takes the old one's place and fields under its own handle, and every reference follows", () => {
+    const draft = fixture();
+    const {
+      op,
+      draft: next,
+      report,
+    } = run(draft, {
+      type: "replaceSeat",
+      target: "seat:dev",
+      key: "new:d",
+      handle: "developer",
+    });
+    expect(locate(next, "seat:dev")).toBeUndefined();
+    expect(locate(next, "new:d")).toMatchObject({ parent: "unit:engineering", index: 1 });
+    expect(seat(next, "new:d")).toEqual({ ...seat(draft, "seat:dev"), handle: "developer" });
+    expect(seat(next, "seat:vp-engineering").manages).toEqual(["developer"]);
+    expect(getPath(doc(next), ["integrations", "gitlab", "provisioning", "access_levels"])).toEqual(
+      { developer: "developer", sre: "maintainer" },
+    );
+    expect(report).toEqual({
+      cleared: [],
+      followed: [{ kind: "manages", holder: "seat:vp-engineering", from: "dev", to: "developer" }],
+      stripped: [],
+    });
+    expect(describeOperation(op, draft)).toBe(
+      "Replaced seat Dev (@dev) with a new seat, @developer.",
+    );
+    expect(touchedKeys(op)).toEqual(["new:d", "seat:dev"]);
+    expect(intentOf(op)).toEqual({
+      type: "replaceSeat",
+      target: "seat:dev",
+      key: "new:d",
+      handle: "developer",
+    });
+
+    // The Datadog fallback follows too: an alert naming nobody wakes the
+    // seat that took the role, rather than a handle no seat holds.
+    const sre = run(draft, {
+      type: "replaceSeat",
+      target: "seat:sre",
+      key: "new:s",
+      handle: "reliability",
+    }).draft;
+    expect(getPath(doc(sre), ["integrations", "datadog", "route_to"])).toBe("reliability");
+  });
+
+  test("only a saved seat is replaced, under a handle that is new, well formed and free", () => {
+    const draft = fixture();
+    const replace = (target: string, handle: string, key = "new:r") =>
+      record(draft, { type: "replaceSeat", target, key, handle });
+    expect(replace("seat:dev", "dev")).toMatchObject({ refusal: "no_change" });
+    expect(replace("seat:dev", "ceo")).toMatchObject({ refusal: "bad_identity" });
+    expect(replace("seat:dev", "engineering")).toMatchObject({ refusal: "bad_identity" });
+    expect(replace("seat:dev", "Not Valid")).toMatchObject({ refusal: "bad_identity" });
+    expect(replace("seat:dev", "developer", "seat:developer")).toMatchObject({
+      refusal: "not_minted",
+    });
+    expect(replace("unit:sales", "sales-2")).toMatchObject({ refusal: "wrong_kind" });
+    const added = run(draft, {
+      type: "addSeat",
+      key: "new:q",
+      placement: { parent: COMPANY_KEY, after: null },
+      data: { name: "QA", handle: "qa" },
+    }).draft;
+    expect(
+      record(added, { type: "replaceSeat", target: "new:q", key: "new:r", handle: "quality" }),
+    ).toMatchObject({ refusal: "not_editable" });
+  });
+
+  test("a seat changed or removed upstream is held as a conflict or gone", () => {
+    const draft = fixture();
+    const op = recordOk(draft, {
+      type: "replaceSeat",
+      target: "seat:dev",
+      key: "new:d",
+      handle: "developer",
+    });
+    const theirs = cloneJson(fixtureCompany());
+    theirs.units![0]!.roles![1]!.goal = "Ship";
+    expect(evaluate(fixture(theirs), op)).toMatchObject({
+      kind: "conflict",
+      conflicts: [{ subject: "the whole seat", shape: "snapshot" }],
+    });
+    theirs.units![0]!.roles!.splice(1, 1);
+    expect(evaluate(fixture(theirs), op).kind).toBe("gone");
+    expect(malformedReason({ ...op, key: "seat:developer" } as Operation)).not.toBeNull();
   });
 });
 
@@ -333,11 +487,11 @@ describe("moving", () => {
     const { op, draft } = run(fixture(), {
       type: "move",
       target: "seat:dev",
-      to: { parent: "unit:Sales", after: null },
+      to: { parent: "unit:sales", after: null },
     });
     expect(op).toMatchObject({
-      from: { parent: "unit:Engineering", after: "seat:vp-engineering" },
-      to: { parent: "unit:Sales", after: null },
+      from: { parent: "unit:engineering", after: "seat:vp-engineering" },
+      to: { parent: "unit:sales", after: null },
     });
     expect(doc(draft).units![1]!.roles!.map((r) => r.name)).toEqual(["Dev", "Account Executive"]);
   });
@@ -346,15 +500,15 @@ describe("moving", () => {
     const placed = run(fixture(), {
       type: "move",
       target: "seat:designer",
-      to: { parent: "unit:Platform", after: null },
+      to: { parent: "unit:platform", after: null },
     });
     expect(seat(placed.draft, "seat:designer").unit).toBeUndefined();
     expect(placed.report.cleared).toEqual([
-      { kind: "unit", holder: "seat:designer", from: "Platform" },
+      { kind: "unit", holder: "seat:designer", from: "platform" },
     ]);
 
     const base = fixtureCompany();
-    base.units![1]!.roles![0]!.unit = "Engineering";
+    base.units![1]!.roles![0]!.unit = "engineering";
     const nested = run(fixture(base), {
       type: "move",
       target: "seat:account-executive",
@@ -368,13 +522,13 @@ describe("moving", () => {
     const op = recordOk(fixture(), {
       type: "move",
       target: "seat:designer",
-      to: { parent: "unit:Sales", after: null },
+      to: { parent: "unit:sales", after: null },
     });
     const theirs = fixtureCompany();
-    theirs.roles![1]!.unit = "Sales";
+    theirs.roles![1]!.unit = "sales";
     expect(evaluate(fixture(theirs), op)).toMatchObject({
       kind: "conflict",
-      conflicts: [{ subject: "unit reference", base: "Platform", theirs: "Sales" }],
+      conflicts: [{ subject: "unit reference", base: "platform", theirs: "sales" }],
     });
   });
 
@@ -383,8 +537,8 @@ describe("moving", () => {
     expect(
       record(draft, {
         type: "move",
-        target: "unit:Engineering",
-        to: { parent: "unit:Platform", after: null },
+        target: "unit:engineering",
+        to: { parent: "unit:platform", after: null },
       }),
     ).toMatchObject({
       refusal: "into_itself",
@@ -393,7 +547,7 @@ describe("moving", () => {
       record(draft, {
         type: "reorder",
         target: "seat:dev",
-        to: { parent: "unit:Sales", after: null },
+        to: { parent: "unit:sales", after: null },
       }),
     ).toMatchObject({
       refusal: "across_parents",
@@ -404,14 +558,14 @@ describe("moving", () => {
     const { draft, report } = run(fixture(), {
       type: "move",
       target: "seat:vp-engineering",
-      to: { parent: "unit:Sales", after: null },
-      clearLeads: ["unit:Engineering"],
+      to: { parent: "unit:sales", after: null },
+      clearLeads: ["unit:engineering"],
     });
-    expect(unit(draft, "unit:Engineering").lead).toBeUndefined();
+    expect(unit(draft, "unit:engineering").lead).toBeUndefined();
     expect(report.cleared).toContainEqual({
       kind: "lead",
-      holder: "unit:Engineering",
-      from: "VP Engineering",
+      holder: "unit:engineering",
+      from: "vp-engineering",
     });
   });
 
@@ -419,7 +573,7 @@ describe("moving", () => {
     const { draft } = run(fixture(), {
       type: "reorder",
       target: "seat:vp-engineering",
-      to: { parent: "unit:Engineering", after: "seat:dev" },
+      to: { parent: "unit:engineering", after: "seat:dev" },
     });
     expect(doc(draft).units![0]!.roles!.map((r) => r.name)).toEqual(["Dev", "VP Engineering"]);
   });
@@ -470,11 +624,11 @@ describe("editing", () => {
     ).toMatchObject({
       refusal: "forbidden_field",
     });
-    for (const field of ["name", "lead", "roles", "children", "schedules"]) {
+    for (const field of ["name", "lead", "roles", "children", "schedules", "id"]) {
       expect(
         record(draft, {
           type: "updateUnit",
-          target: "unit:Sales",
+          target: "unit:sales",
           set: [{ path: [field], value: "x" }],
         }),
         field,
@@ -492,25 +646,20 @@ describe("editing", () => {
       type: "addSeat",
       key: "new:q",
       placement: { parent: COMPANY_KEY, after: null },
-      data: { name: "QA" },
+      data: { name: "QA", handle: "qa" },
     }).draft;
-    const leveled = run(
-      added,
-      { type: "updateSeat", target: "new:q", set: [], accessLevel: "developer" },
-      { handleOf: () => "qa" },
-    ).draft;
-    const { draft } = run(
-      leveled,
-      {
-        type: "updateSeat",
-        target: "new:q",
-        set: [{ path: ["handle"], value: "quality" }],
-        accessLevel: "maintainer",
-      },
-      {
-        handleOf: () => "qa",
-      },
-    );
+    const leveled = run(added, {
+      type: "updateSeat",
+      target: "new:q",
+      set: [],
+      accessLevel: "developer",
+    }).draft;
+    const { draft } = run(leveled, {
+      type: "updateSeat",
+      target: "new:q",
+      set: [{ path: ["handle"], value: "quality" }],
+      accessLevel: "maintainer",
+    });
     const levels = getPath(doc(draft), ["integrations", "gitlab", "provisioning", "access_levels"]);
     expect(levels).toMatchObject({ quality: "maintainer" });
     expect(levels).not.toHaveProperty("qa");
@@ -521,78 +670,25 @@ describe("editing", () => {
       type: "addSeat",
       key: "new:q",
       placement: { parent: COMPANY_KEY, after: null },
-      data: { name: "QA" },
+      data: { name: "QA", handle: "qa" },
     }).draft;
-    const leveled = run(
-      added,
-      { type: "updateSeat", target: "new:q", set: [], accessLevel: "developer" },
-      { handleOf: () => "qa" },
-    ).draft;
+    const leveled = run(added, {
+      type: "updateSeat",
+      target: "new:q",
+      set: [],
+      accessLevel: "developer",
+    }).draft;
     const intent: Intent = {
       type: "updateSeat",
       target: "new:q",
       set: [{ path: ["handle"], value: "quality" }],
     };
-    const { op, draft } = run(leveled, intent, { handleOf: () => "qa" });
+    const { op, draft } = run(leveled, intent);
     const levels = getPath(doc(draft), ["integrations", "gitlab", "provisioning", "access_levels"]);
     expect(levels).toMatchObject({ quality: "developer" });
     expect(levels).not.toHaveProperty("qa");
     // Recording it again from its intent says the same thing.
-    expect(recordOk(leveled, intentOf(op), { handleOf: () => "qa" })).toEqual(op);
-
-    // Removing the handle leaves the engine to derive one nobody knows yet:
-    // the level is cleared rather than guessed onto a handle.
-    const cleared = run(
-      leveled,
-      { type: "updateSeat", target: "new:q", set: [{ path: ["handle"] }] },
-      { handleOf: () => "qa" },
-    );
-    expect(cleared.op).toMatchObject({ accessLevels: [{ handle: "qa", before: "developer" }] });
-  });
-
-  test("a seat whose handle is unknown waits for the check before an operation that must clear its access level", () => {
-    const added = (company: CompanyDocument) =>
-      run(fixture(company), {
-        type: "addSeat",
-        key: "new:q",
-        placement: { parent: "unit:Sales", after: null },
-        data: { name: "QA" },
-      }).draft;
-    const withLevels = added(fixtureCompany());
-    const intents: Intent[] = [
-      { type: "remove", target: "new:q" },
-      { type: "remove", target: "unit:Sales" },
-      { type: "renameSeat", target: "new:q", name: "Quality" },
-      { type: "updateSeat", target: "new:q", set: [{ path: ["handle"], value: "quality" }] },
-    ];
-    for (const intent of intents) {
-      expect(record(withLevels, intent), intent.type).toMatchObject({
-        ok: false,
-        refusal: "unknown_handle",
-      });
-      // Once the check reports the handle, each one records.
-      expect(record(withLevels, intent, { handleOf: () => "qa" }).ok, intent.type).toBe(true);
-    }
-
-    // With no access levels there is nothing to leave behind.
-    const company = fixtureCompany();
-    delete (company.integrations as Record<string, unknown>).gitlab;
-    const withoutLevels = added(company);
-    for (const intent of intents) {
-      expect(record(withoutLevels, intent).ok, intent.type).toBe(true);
-    }
-  });
-
-  test("an access level needs a handle the engine reported", () => {
-    const added = run(fixture(), {
-      type: "addSeat",
-      key: "new:q",
-      placement: { parent: COMPANY_KEY, after: null },
-      data: { name: "QA" },
-    }).draft;
-    expect(
-      record(added, { type: "updateSeat", target: "new:q", set: [], accessLevel: "developer" }),
-    ).toMatchObject({ refusal: "unknown_handle" });
+    expect(recordOk(leveled, intentOf(op))).toEqual(op);
   });
 
   test("the charter, the lead and the reports are edited through their own operations", () => {
@@ -601,13 +697,13 @@ describe("editing", () => {
       type: "updateCompany",
       set: [{ path: ["vision"], value: "Everywhere" }],
     }).draft;
-    draft = run(draft, { type: "setLead", target: "unit:Sales", lead: "Account Executive" }).draft;
-    draft = run(draft, { type: "setManages", target: "seat:ceo", manages: ["Designer"] }).draft;
+    draft = run(draft, { type: "setLead", target: "unit:sales", lead: "account-executive" }).draft;
+    draft = run(draft, { type: "setManages", target: "seat:ceo", manages: ["designer"] }).draft;
     draft = run(draft, { type: "setManages", target: "seat:vp-engineering", manages: [] }).draft;
     const out = doc(draft);
     expect(out.vision).toBe("Everywhere");
-    expect(out.units![1]!.lead).toBe("Account Executive");
-    expect(out.roles![0]!.manages).toEqual(["Designer"]);
+    expect(out.units![1]!.lead).toBe("account-executive");
+    expect(out.roles![0]!.manages).toEqual(["designer"]);
     expect(out.units![0]!.roles![0]).not.toHaveProperty("manages");
   });
 
@@ -616,7 +712,7 @@ describe("editing", () => {
     expect(
       record(draft, {
         type: "setScheduleEnabled",
-        target: "unit:Engineering",
+        target: "unit:engineering",
         schedule: "standup",
         enabled: true,
       }),
@@ -625,17 +721,17 @@ describe("editing", () => {
     });
     const { draft: off } = run(draft, {
       type: "setScheduleEnabled",
-      target: "unit:Engineering",
+      target: "unit:engineering",
       schedule: "standup",
       enabled: false,
     });
-    expect(unit(off, "unit:Engineering").schedules).toEqual([
+    expect(unit(off, "unit:engineering").schedules).toEqual([
       { name: "standup", cron: "0 9 * * 1-5", task: "Run standup", target: "lead", enabled: false },
     ]);
     expect(
       record(draft, {
         type: "setScheduleEnabled",
-        target: "unit:Engineering",
+        target: "unit:engineering",
         schedule: "nope",
         enabled: false,
       }),
@@ -836,33 +932,33 @@ describe("evaluating", () => {
     const moveDev = recordOk(draft, {
       type: "move",
       target: "seat:dev",
-      to: { parent: "unit:Sales", after: null },
+      to: { parent: "unit:sales", after: null },
     });
     const movedUp = run(draft, {
       type: "move",
       target: "seat:dev",
-      to: { parent: "unit:Platform", after: null },
+      to: { parent: "unit:platform", after: null },
     }).draft;
     expect(shapes(movedUp, moveDev)).toContainEqual(["where it sits", "parent"]);
 
     const reorderDev = recordOk(draft, {
       type: "reorder",
       target: "seat:dev",
-      to: { parent: "unit:Engineering", after: null },
+      to: { parent: "unit:engineering", after: null },
     });
     const addedAhead = run(draft, {
       type: "addSeat",
       key: mintKey(countingKeys("a")),
-      placement: { parent: "unit:Engineering", after: "seat:vp-engineering" },
-      data: { name: "QA" },
+      placement: { parent: "unit:engineering", after: "seat:vp-engineering" },
+      data: { name: "QA", handle: "qa" },
     }).draft;
     expect(shapes(addedAhead, reorderDev)).toEqual([["position", "placement"]]);
 
     const addAfterDev = recordOk(draft, {
       type: "addSeat",
       key: mintKey(countingKeys("b")),
-      placement: { parent: "unit:Engineering", after: "seat:dev" },
-      data: { name: "QA" },
+      placement: { parent: "unit:engineering", after: "seat:dev" },
+      data: { name: "QA", handle: "qa" },
     });
     const devGone = run(draft, { type: "remove", target: "seat:dev" }).draft;
     expect(shapes(devGone, addAfterDev)).toEqual([["position", "sibling"]]);
@@ -888,10 +984,10 @@ describe("evaluating", () => {
     const draft = fixture();
     const op = recordOk(draft, {
       type: "setLead",
-      target: "unit:Sales",
-      lead: "Account Executive",
+      target: "unit:sales",
+      lead: "account-executive",
     });
-    const removed = run(draft, { type: "remove", target: "unit:Sales" }).draft;
+    const removed = run(draft, { type: "remove", target: "unit:sales" }).draft;
     expect(evaluate(removed, op).kind).toBe("gone");
   });
 
@@ -918,7 +1014,7 @@ describe("an operation as data", () => {
     const intents: Intent[] = [
       {
         type: "remove",
-        target: "unit:Engineering",
+        target: "unit:engineering",
         placedSeats: "remove",
         routeTo: "account-executive",
       },
@@ -926,14 +1022,14 @@ describe("an operation as data", () => {
       {
         type: "move",
         target: "seat:vp-engineering",
-        to: { parent: "unit:Sales", after: null },
-        clearLeads: ["unit:Engineering"],
+        to: { parent: "unit:sales", after: null },
+        clearLeads: ["unit:engineering"],
       },
       { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"] }], accessLevel: null },
       { type: "changeKind", target: "seat:dev", kind: "human", contact: { slack_user_id: "U1" } },
       {
         type: "setScheduleEnabled",
-        target: "unit:Engineering",
+        target: "unit:engineering",
         schedule: "standup",
         enabled: false,
       },
@@ -983,38 +1079,40 @@ describe("an operation as data", () => {
     ).not.toBeNull();
     expect(
       malformedReason({
-        type: "renameSeat",
-        target: "seat:dev",
-        before: "Dev",
-        after: "Developer",
-        pin: "someone-else",
-        accessLevels: [],
+        type: "updateUnit",
+        target: "unit:sales",
+        changes: [{ path: ["id"], after: "x" }],
       }),
     ).not.toBeNull();
     expect(
       malformedReason({
-        type: "renameSeat",
-        target: "new:a",
-        before: "A",
-        after: "B",
-        pin: "a",
-        accessLevels: [],
-      }),
-    ).not.toBeNull();
-    expect(
-      malformedReason({
-        type: "renameSeat",
-        target: "seat:dev",
-        before: "Dev",
-        after: "Developer",
-        pin: "dev",
-        accessLevels: [],
+        type: "updateUnit",
+        target: "new:u",
+        changes: [{ path: ["id"], after: "x" }],
       }),
     ).toBeNull();
     expect(
       malformedReason({
         type: "addSeat",
         key: "seat:x",
+        placement: { parent: COMPANY_KEY, after: null },
+        data: { name: "X", handle: "x" },
+      }),
+    ).not.toBeNull();
+    // A stored log whose created node carries no identity could never have
+    // been recorded by this build, which always writes one.
+    expect(
+      malformedReason({
+        type: "addSeat",
+        key: "new:x",
+        placement: { parent: COMPANY_KEY, after: null },
+        data: { name: "X" },
+      }),
+    ).not.toBeNull();
+    expect(
+      malformedReason({
+        type: "addUnit",
+        key: "new:x",
         placement: { parent: COMPANY_KEY, after: null },
         data: { name: "X" },
       }),
@@ -1023,19 +1121,19 @@ describe("an operation as data", () => {
 
   test("describes itself in one sentence and names what to focus", () => {
     const draft = fixture();
-    const op = recordOk(draft, { type: "remove", target: "unit:Engineering" });
+    const op = recordOk(draft, { type: "remove", target: "unit:engineering" });
     expect(describeOperation(op, draft)).toBe("Removed unit Engineering and 3 seats in it.");
-    expect(touchedKeys(op)).toEqual(["unit:Engineering"]);
+    expect(touchedKeys(op)).toEqual(["unit:engineering"]);
     const move = recordOk(draft, {
       type: "move",
       target: "seat:dev",
-      to: { parent: "unit:Sales", after: null },
+      to: { parent: "unit:sales", after: null },
     });
     expect(describeOperation(move, draft)).toBe("Moved Dev to Sales.");
 
     const withPlaced = recordOk(draft, {
       type: "remove",
-      target: "unit:Engineering",
+      target: "unit:engineering",
       placedSeats: "remove",
     });
     expect(describeOperation(withPlaced, draft)).toBe(
@@ -1045,7 +1143,7 @@ describe("an operation as data", () => {
       type: "addUnit",
       key: "new:legal",
       placement: { parent: COMPANY_KEY, after: null },
-      data: { name: "Legal" },
+      data: { name: "Legal", id: "legal" },
     }).draft;
     expect(describeOperation(recordOk(added, { type: "remove", target: "new:legal" }), added)).toBe(
       "Removed unit Legal.",
@@ -1090,43 +1188,22 @@ describe("an operation as data", () => {
         type: "move",
         target: "seat:member",
         to: { parent: COMPANY_KEY, after: null },
-        clearLeads: ["unit:Spaced"],
+        clearLeads: ["unit:spaced"],
       },
-      { type: "setScheduleEnabled", target: "unit:Spaced", schedule: "weekly", enabled: false },
+      { type: "setScheduleEnabled", target: "unit:spaced", schedule: "weekly", enabled: false },
     ];
     for (const intent of intents) {
       const op = recordOk(draft, intent);
       expect(evaluate(draft, op), intent.type).toEqual({ kind: "applies" });
       expect(() => apply(draft, op), intent.type).not.toThrow();
     }
-    expect(seat(run(draft, intents[0]!).draft, "seat:blank-handle").handle).toBe("blank-handle");
-  });
-
-  test("a rename recorded while the seat declared its handle conflicts once that declaration is gone, and keeping it pins", () => {
-    const base: CompanyDocument = { name: "X", roles: [{ name: "Dev", handle: "dev" }] };
-    const op = recordOk(fixture(base), {
-      type: "renameSeat",
-      target: "seat:dev",
-      name: "Developer",
-    });
-    expect("pin" in op).toBe(false);
-
-    const theirs: CompanyDocument = { name: "X", roles: [{ name: "Dev" }] };
-    const upstream = fixture(theirs);
-    expect(evaluate(upstream, op)).toMatchObject({
-      kind: "conflict",
-      conflicts: [{ subject: "handle" }],
-    });
-    const again = recordOk(upstream, intentOf(op));
-    expect(again).toMatchObject({ pin: "dev" });
-    expect(seat(apply(upstream, again).draft, "seat:dev").handle).toBe("dev");
   });
 
   test("applying never mutates the draft it was given", () => {
     const draft = fixture();
     const before = cloneJson(doc(draft));
-    run(draft, { type: "remove", target: "unit:Engineering", placedSeats: "remove" });
-    run(draft, { type: "renameUnit", target: "unit:Platform", name: "Infra" });
+    run(draft, { type: "remove", target: "unit:engineering", placedSeats: "remove" });
+    run(draft, { type: "renameUnit", target: "unit:platform", name: "Infra" });
     run(draft, { type: "changeKind", target: "seat:dev", kind: "human" });
     expect(doc(draft)).toEqual(before);
   });
@@ -1139,11 +1216,11 @@ describe("editing a node in one operation", () => {
     intents: [
       { type: "renameSeat", target: "seat:dev", name: "Developer" },
       { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Ship" }] },
-      { type: "setManages", target: "seat:dev", manages: ["SRE"] },
+      { type: "setManages", target: "seat:dev", manages: ["sre"] },
     ],
   });
 
-  test("a form's changes to one seat record as one edit that applies every part and follows references", () => {
+  test("a form's changes to one seat record as one edit that applies every part", () => {
     const draft = fixture();
     const { op, draft: next, report } = run(draft, devEdit());
     expect(op.type === "edit" && op.ops.map((part) => part.type)).toEqual([
@@ -1155,12 +1232,11 @@ describe("editing a node in one operation", () => {
       name: "Developer",
       handle: "dev",
       goal: "Ship",
-      manages: ["SRE"],
+      manages: ["sre"],
     });
-    expect(seat(next, "seat:vp-engineering").manages).toEqual(["Developer"]);
-    expect(report.followed).toEqual([
-      { kind: "manages", holder: "seat:vp-engineering", from: "Dev", to: "Developer" },
-    ]);
+    // The rename moved no reference: the VP still manages the seat by its handle.
+    expect(seat(next, "seat:vp-engineering").manages).toEqual(["dev"]);
+    expect(report.followed).toEqual([]);
     expect(describeOperation(op, draft)).toBe("Edited Dev: renamed to Developer, goal, manages.");
     expect(touchedKeys(op)).toEqual(["seat:dev"]);
   });
@@ -1169,24 +1245,24 @@ describe("editing a node in one operation", () => {
     const draft = fixture();
     const { op, draft: next } = run(draft, {
       type: "edit",
-      target: "unit:Engineering",
+      target: "unit:engineering",
       intents: [
         {
           type: "updateUnit",
-          target: "unit:Engineering",
+          target: "unit:engineering",
           set: [{ path: ["purpose"], value: "Build" }],
         },
-        { type: "setLead", target: "unit:Engineering", lead: "Dev" },
+        { type: "setLead", target: "unit:engineering", lead: "dev" },
         {
           type: "setScheduleEnabled",
-          target: "unit:Engineering",
+          target: "unit:engineering",
           schedule: "standup",
           enabled: false,
         },
       ],
     });
-    expect(unit(next, "unit:Engineering")).toMatchObject({ purpose: "Build", lead: "Dev" });
-    expect(unit(next, "unit:Engineering").schedules![0]!.enabled).toBe(false);
+    expect(unit(next, "unit:engineering")).toMatchObject({ purpose: "Build", lead: "dev" });
+    expect(unit(next, "unit:engineering").schedules![0]!.enabled).toBe(false);
     expect(describeOperation(op, draft)).toBe(
       "Edited Engineering: purpose, lead, disabled schedule standup.",
     );
@@ -1202,33 +1278,24 @@ describe("editing a node in one operation", () => {
     expect(describeOperation(charter, draft)).toBe("Edited the charter: mission, vision.");
   });
 
-  test("what every part cleared is reported together", () => {
-    const ctx: RecordContext = { handleOf: (key) => (key === "new:qa" ? "qa" : undefined) };
+  test("what every part moved is reported together", () => {
     const added = run(fixture(), {
       type: "addSeat",
       key: "new:qa",
-      placement: { parent: "unit:Engineering", after: null },
-      data: { name: "QA" },
+      placement: { parent: "unit:engineering", after: null },
+      data: { name: "QA", handle: "qa" },
     }).draft;
-    const levelled = run(
-      added,
-      { type: "updateSeat", target: "new:qa", set: [], accessLevel: "maintainer" },
-      ctx,
-    ).draft;
-    const { report } = run(
-      levelled,
-      {
-        type: "edit",
-        target: "new:qa",
-        intents: [
-          { type: "renameSeat", target: "new:qa", name: "Quality" },
-          { type: "updateSeat", target: "new:qa", set: [{ path: ["goal"], value: "Test" }] },
-        ],
-      },
-      ctx,
-    );
-    expect(report.cleared).toEqual([
-      { kind: "gitlab_access_level", holder: COMPANY_KEY, from: "qa" },
+    const led = run(added, { type: "setLead", target: "unit:sales", lead: "qa" }).draft;
+    const { report } = run(led, {
+      type: "edit",
+      target: "new:qa",
+      intents: [
+        { type: "renameSeat", target: "new:qa", name: "Quality" },
+        { type: "updateSeat", target: "new:qa", set: [{ path: ["handle"], value: "quality" }] },
+      ],
+    });
+    expect(report.followed).toEqual([
+      { kind: "lead", holder: "unit:sales", from: "qa", to: "quality" },
     ]);
   });
 
@@ -1315,7 +1382,7 @@ describe("editing a node in one operation", () => {
       target: "seat:dev",
       set: [{ path: ["goal"], value: "Theirs" }],
     }).draft;
-    const both = run(goal, { type: "setManages", target: "seat:dev", manages: ["CEO"] }).draft;
+    const both = run(goal, { type: "setManages", target: "seat:dev", manages: ["ceo"] }).draft;
     const outcome = evaluate(both, op);
     expect(outcome.kind).toBe("conflict");
     expect(outcome.kind === "conflict" && outcome.conflicts.map((c) => c.subject)).toEqual([

@@ -113,7 +113,7 @@ export function addSections(api: BuilderApi, view: NodeView): AddPillSection[] {
 
 /** A seat's saved screen, when the saved company has the seat. */
 function seatScreen(view: SeatView): string[] | null {
-  return view.saved ? seatPath({ handle: view.saved.handle ?? "", name: view.saved.name }) : null;
+  return view.saved ? seatPath({ handle: view.saved.handle, name: view.saved.name }) : null;
 }
 
 /** Every action of a node, in the order every surface offers them. */
@@ -404,7 +404,8 @@ export function leadSentence(unit: UnitView): string {
  * announced, for a choice that is exactly what the operator sees.
  */
 export function leadMenu(api: BuilderApi, structure: Structure, unit: UnitView): MenuEntry[] {
-  const declared = unit.lead && !unit.lead.inherited ? unit.lead.name : null;
+  // ANSWERED BY HANDLE, the value a lead writes; named as the seat is.
+  const declared = unit.lead && !unit.lead.inherited ? unit.lead.handle : null;
   const answer = (key: string, label: string, lead: string | null): MenuEntry => {
     const checked = declared === lead;
     return {
@@ -424,19 +425,29 @@ export function leadMenu(api: BuilderApi, structure: Structure, unit: UnitView):
   const members = unit.seats
     .map((key) => structure.nodes.get(key))
     .filter((v): v is SeatView => v?.type === "seat");
-  const names = [...new Set(members.map((m) => m.name))];
+  // Two members may share a name; the one the reader picks is told apart by
+  // its handle, which is what the lead writes.
+  const shared = new Set(
+    members.map((m) => m.name).filter((name, i, all) => all.indexOf(name) !== i),
+  );
   const entries: MenuEntry[] = [
     answer(
       "none",
       unit.inheritable ? `No lead (inherits ${unit.inheritable.name})` : "No lead",
       null,
     ),
-    ...names.map((name) => answer(`seat:${name}`, name, name)),
+    ...members.map((m) =>
+      answer(
+        `seat:${m.handle}`,
+        shared.has(m.name) ? `${m.name} (@${m.handle})` : m.name,
+        m.handle,
+      ),
+    ),
   ];
-  // A declared lead drawn nowhere in the unit (a seat elsewhere, or a name
+  // A declared lead drawn nowhere in the unit (a seat elsewhere, or a handle
   // no seat holds) is still the current answer, and says so.
-  if (declared !== null && !names.includes(declared)) {
-    entries.push(answer("declared", declared, declared));
+  if (declared !== null && !members.some((m) => m.handle === declared)) {
+    entries.push(answer("declared", unit.lead!.name, declared));
   }
   entries.push(
     { kind: "separator", key: "sep" },

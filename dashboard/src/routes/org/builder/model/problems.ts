@@ -19,13 +19,15 @@
  * mapped or not, with a link to the Schedules screen, because the builder
  * toggles schedules and authors none.
  *
- * A problem with no segments but a seat handle is placed through the
- * derivation that came with the same answer, which carries each seat's path;
- * without one it stays at document level rather than being matched by name.
+ * A problem with no segments but a seat handle is placed on the seat holding
+ * that handle in the document that was sent — through the derivation that came
+ * with the same answer where it carries one, and otherwise by the seat's own
+ * key, which is its handle. A seat the document no longer holds (one the write
+ * removes) leaves the problem at document level, never matched by name.
  */
 
 import type { ConfigProblem, ConfigWarning, Derived } from "~/protocol/index.ts";
-import { COMPANY_KEY, type NodeKey } from "./keys.ts";
+import { COMPANY_KEY, seatKey, type NodeKey } from "./keys.ts";
 import {
   CHARTER_FIELDS,
   pathOfSegments,
@@ -82,10 +84,8 @@ export function placeProblems(sent: IndexedDocument, findings: Findings): Proble
   const byNode = new Map<NodeKey, PlacedProblem[]>();
   const document: PlacedProblem[] = [];
   const { keyOfHandle } = placeDerivation(sent.index, findings.derived ?? null);
-  const seatPath = (handle: string): readonly Segment[] => {
-    const key = keyOfHandle.get(handle);
-    return (key === undefined ? undefined : sent.index.segmentsOf.get(key)) ?? [];
-  };
+  const seatPath = (handle: string): readonly Segment[] =>
+    sent.index.segmentsOf.get(keyOfHandle.get(handle) ?? seatKey(handle)) ?? [];
 
   const place = (severity: PlacedProblem["severity"], source: ConfigProblem | ConfigWarning) => {
     let segments: readonly Segment[] = source.segments ?? [];

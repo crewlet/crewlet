@@ -326,7 +326,7 @@ export async function readyToUpdate(
     mode: "edit",
     baseRevision: active,
     base: document,
-    sent: toDocument(fromDocument(document, null)),
+    sent: toDocument(fromDocument(document)),
   });
   const checked = classifyCheck(await transport.send(request, signal), "edit", active);
   if ((checked.status === "clean" || checked.status === "problems") && checked.derived) {

@@ -44,7 +44,7 @@ describe("requests", () => {
   const base = fixtureCompany();
   const draftDoc = (): IndexedDocument => {
     const changed: CompanyDocument = { ...base, mission: "Changed" };
-    return toDocument(fromDocument(changed, null));
+    return toDocument(fromDocument(changed));
   };
 
   test("an edit-mode check is the merge patch a save sends, conditional on the base, without a summary", () => {
@@ -70,7 +70,7 @@ describe("requests", () => {
   });
 
   test("a create-mode check puts the whole document, only where no company exists", () => {
-    const sent = toDocument(fromDocument({ name: "New", roles: [{ name: "A" }] }, null));
+    const sent = toDocument(fromDocument({ name: "New", roles: [{ name: "A" }] }));
     expect(checkRequest({ mode: "create", baseRevision: null, base: null, sent })).toEqual({
       method: "PUT",
       path: "/config",
@@ -453,7 +453,7 @@ function harness() {
     transport,
     prepare: (g) => {
       if (g !== generation) return null;
-      const sent = toDocument(fromDocument({ name: `generation ${g}` }, null));
+      const sent = toDocument(fromDocument({ name: `generation ${g}` }));
       return {
         request: checkRequest({ mode: "create", baseRevision: null, base: null, sent }),
         sent,

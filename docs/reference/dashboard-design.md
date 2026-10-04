@@ -6308,15 +6308,11 @@ brings that carries a design-system rule.
   the engine by the agent id that handle pairs with (`seatFilter`). Every one
   of these used to match on the name, so the second "Engineer" in a company
   wore the first one's state, live call, sandbox, turns and spend.
-- **A link kept before a rename still opens what it named.** A seat's page and
-  peek resolve an address through `lib/seats.ts`' `seatByAddress`, and a
-  unit's through `unitByKey`, in the engine's own order: every current handle
-  (or key) first, then the one each object was created under, then every one a
-  rename retired — the aliases the `org` projection's `derived` block states.
-  Once resolved, the route is REPLACED with the current address (the page by
-  `nav.replace`, a peek by the rail's replacing move), so every link the
-  screen builds keys on what the object is called now and Back does not land
-  on the old spelling. A name is never an address, except for a seat the
+- **A link kept before a rename still opens what it named.** A seat is
+  addressed by its handle and a unit by its key (`lib/seats.ts`' `seatPath`
+  and `unitByKey`), and a rename moves neither: both are the object's
+  identity, which the engine never changes, so there is no alias to resolve
+  and no route to rewrite. A name is never an address, except for a seat the
   engine gave no handle, which `seatPath` links to by name.
 - **What a redacted document holds is shown as what it is.** A credential
   field arrives as one whole `${VAR}` reference, shown as the name it is, or
@@ -6758,8 +6754,8 @@ while the screen binds the real chart, table, editor and dialogs, and
   selects it, a new address rewrites it, and a removed node clears it. **The address the
   builder was MOUNTED on is also a request**: `seat=` or `unit=` opens that
   node's editor and `add=unit|agent|human` opens the Add (under `unit=`, or at
-  the top level), once, as soon as the builder can edit — loaded, keyed by the
-  engine's handles, in edit mode and not paused — and `add=` then leaves the
+  the top level), once, as soon as the builder can edit — loaded, in edit
+  mode and not paused — and `add=` then leaves the
   address. Only the arrival does it, because the builder writes `seat=` and
   `unit=` on every selection and a Back restores an older one; a reader who
   selects another node first has spent the link (`editWiring.test.tsx`). The
@@ -6767,10 +6763,12 @@ while the screen binds the real chart, table, editor and dialogs, and
   may contain no tab stops of its own, and they are the card's and the row's
   own list (`nodeActions.nodeMenu`) rather than a copy: the same entries,
   order, names and icons, Edit reports included. Open seat is offered only for
-  a seat the saved company has. A node's key is its IDENTITY — the address the
-  chart created it under — so a rename never moves it; only a node the draft
-  created moves, from the key the draft minted to its identity, once a save
-  has created it. The reducer lists what moved (`state.rekeyed`), and the
+  a seat the saved company has. A node's key is its IDENTITY — a seat's
+  handle, a unit's key, both carried by every node the engine stores — so the
+  base is keyed as it loads and a rename never moves a key; only a node the
+  draft created moves, from the key the draft minted to the handle or key it
+  was given, once a save has created it. The reducer lists what moved
+  (`state.rekeyed`), and the
   selection and an open dialog read their node through that list in the very
   render the keys change. Each dialog is mounted once per opening, never keyed
   by its node, so a key that moves under an open editor keeps its drawer, its

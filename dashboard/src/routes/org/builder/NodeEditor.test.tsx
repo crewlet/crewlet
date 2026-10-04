@@ -17,7 +17,8 @@ import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import { locate } from "./model/draft.ts";
 import type { BuilderState } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
-import { builderReducer } from "./model/reducer.ts";
+import { builderReducer, INITIAL_BUILDER } from "./model/reducer.ts";
+import { getPath } from "./model/json.ts";
 import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
 import type { EditorSectionName } from "./BuilderContext.tsx";
 import { NodeEditor } from "./NodeEditor.tsx";
@@ -27,7 +28,6 @@ import {
   checkWithWarnings,
   keyedState,
   problemAt,
-  recheck,
   warningAt,
 } from "./testState.ts";
 import { Callout } from "@crewlethq/ui";
@@ -164,24 +164,15 @@ describe("applying", () => {
   });
 
   test("a refused edit stays open with the reducer's reason, and nothing is recorded", () => {
-    // A seat added in this draft has no handle until the next check, and the
-    // company holds GitLab access levels keyed by handle, so renaming it now
-    // is refused rather than leaving a level behind.
-    const state = builderReducer(keyedState(fixtureCompany()), {
-      type: "record",
-      intent: {
-        type: "addSeat",
-        key: "new:qa",
-        placement: { parent: "unit:Sales", after: null },
-        data: { name: "QA" },
-      },
-    });
-    const view = edit(state, "new:qa");
-    type("Name", "Quality");
+    // Before the company has loaded, the reducer records nothing against it:
+    // the charter's editor is the one with a node to open on an empty draft.
+    const view = edit(INITIAL_BUILDER, COMPANY_KEY);
+    // A company with no name yet is named, not renamed: nothing to acknowledge.
+    type("Company name", "Acme");
     apply();
     expect(view.onClose).not.toHaveBeenCalled();
-    expect(screen.getByText(/has not reported this seat's handle yet/)).toBeDefined();
-    expect(view.state().log.ops).toHaveLength(1);
+    expect(screen.getByText(/has not loaded yet/)).toBeDefined();
+    expect(view.state().log.ops).toHaveLength(0);
   });
 
   test("a read-only builder applies nothing", () => {
@@ -207,7 +198,7 @@ describe("applying", () => {
     expect(enabled()).toEqual([]);
     cleanup();
 
-    edit(keyedState(fixtureCompany()), "unit:Engineering", readOnly);
+    edit(keyedState(fixtureCompany()), "unit:engineering", readOnly);
     expect(field("Type")).toBeDefined();
     expect(enabled()).toEqual([]);
     cleanup();
@@ -253,7 +244,7 @@ describe("the head", () => {
     human.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
     const cases: [CompanyDocument, NodeKey][] = [
       [fixtureCompany(), COMPANY_KEY],
-      [fixtureCompany(), "unit:Engineering"],
+      [fixtureCompany(), "unit:engineering"],
       [fixtureCompany(), "seat:dev"],
       [human, "seat:dev"],
     ];
@@ -280,7 +271,7 @@ test("no node's editor states or offers a colour", () => {
   for (const [doc, key] of [
     [fixtureCompany(), "seat:dev"],
     [human, "seat:dev"],
-    [fixtureCompany(), "unit:Engineering"],
+    [fixtureCompany(), "unit:engineering"],
   ] as const) {
     edit(keyedState(doc), key);
     expect(screen.queryByText("Colour"), key).toBeNull();
@@ -401,7 +392,7 @@ describe("the unsaved-changes prompt", () => {
   });
 
   test("a schedule toggle is a change too", () => {
-    const view = edit(keyedState(fixtureCompany()), "unit:Engineering");
+    const view = edit(keyedState(fixtureCompany()), "unit:engineering");
     fireEvent.click(screen.getByRole("checkbox", { name: "Enabled: standup" }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByRole("alertdialog", { name: "Discard your changes?" })).toBeDefined();
@@ -428,82 +419,91 @@ describe("seat fields", () => {
   test("an existing seat's handle is read-only with the reason; a new seat's is editable", () => {
     edit(keyedState(fixtureCompany()), "seat:dev");
     expect(screen.queryByLabelText(labelled("Handle"))).toBeNull();
-    expect(
-      screen.getByText(/keeps its handle: it is the identity its memory and mailbox attach to/),
-    ).toBeDefined();
+    expect(screen.getByText(/A seat's handle is its identity/)).toBeDefined();
     cleanup();
     const state = builderReducer(keyedState(fixtureCompany()), {
       type: "record",
       intent: {
         type: "addSeat",
         key: "new:qa",
-        placement: { parent: "unit:Sales", after: null },
-        data: { name: "QA" },
+        placement: { parent: "unit:sales", after: null },
+        data: { name: "QA", handle: "qa" },
       },
     });
     edit(state, "new:qa");
-    expect(field("Handle")).toBeDefined();
+    expect((field("Handle") as HTMLInputElement).value).toBe("qa");
   });
 
-  // The engine derives an undeclared handle from the seat's own name, so a
-  // check vouches for it exactly while the seat keeps the name that check saw,
-  // whatever else changed since; the reducer reads the same rule, so an access
-  // level offered here is one it records.
-  test("a new seat's derived handle is the one a check reported for the name it has now", () => {
+  // A SEAT WITH ANOTHER HANDLE IS ANOTHER SEAT, so the editor never retypes a
+  // saved seat's handle: it replaces the seat, in one recorded step, after
+  // saying what a new seat means.
+  test("a saved seat is replaced under a new handle, after saying what that means", () => {
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
+    fireEvent.click(screen.getByRole("button", { name: "Replace this seat…" }));
+    expect(
+      screen.getByText(/This is a new seat: a new mailbox, new memory and a new agent id/),
+    ).toBeDefined();
+    expect((field("New handle") as HTMLInputElement).value).toBe("dev-2");
+    const replace = () => screen.getByRole("button", { name: "Replace seat" }) as HTMLButtonElement;
+    type("New handle", "ceo");
+    expect(screen.getByText("ceo already names a seat or a unit.")).toBeDefined();
+    expect(replace().disabled).toBe(true);
+    type("New handle", "developer");
+    fireEvent.click(replace());
+    expect(view.onClose).toHaveBeenCalledTimes(1);
+    expect(view.state().log.ops).toEqual([
+      expect.objectContaining({ type: "replaceSeat", target: "seat:dev", handle: "developer" }),
+    ]);
+    expect(locate(view.state().draft, "seat:dev")).toBeUndefined();
+  });
+
+  test("a seat with changes in its form is not replaced until they are applied or discarded", () => {
+    edit(keyedState(fixtureCompany()), "seat:dev");
+    type("Goal", "Ship");
+    const button = screen.getByRole("button", { name: "Replace this seat…" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(
+      screen.getByText(/Apply or discard the changes in this form before replacing it/),
+    ).toBeDefined();
+  });
+
+  // A NEW SEAT'S HANDLE IS ITS OWN from the add, so its access level is
+  // offered at once, kept under that handle and moved with it when the handle
+  // is retyped before the save.
+  test("a new seat's handle is checked as it is typed, and its access level follows it", () => {
     const added = builderReducer(keyedState(fixtureCompany()), {
       type: "record",
       intent: {
         type: "addSeat",
         key: "new:qa",
-        placement: { parent: "unit:Sales", after: null },
-        data: { name: "QA" },
+        placement: { parent: "unit:sales", after: null },
+        data: { name: "QA", handle: "qa" },
       },
     });
-    const checked = recheck(added, { seats: { "units[1].roles[0]": { handle: "qa" } } });
-    edit(checked, "new:qa");
-    expect(
-      screen.getByText("Empty uses the handle the engine derives from the name: qa."),
-    ).toBeDefined();
+    const view = edit(added, "new:qa");
     expect((field("Access level") as HTMLSelectElement).disabled).toBe(false);
     expect(
       screen.getByText(
         "Kept by handle: choosing a handle for this seat carries its level with it.",
       ),
     ).toBeDefined();
-    type("Name", "Quality");
+    type("Handle", "dev");
+    expect(shownReason("dev already names a seat or a unit.")).toBeDefined();
+    expect(applyRefuses()).toBe(true);
+    type("Handle", "Quality");
+    expect(applyRefuses()).toBe(true);
+    type("Handle", "quality");
+    choose("Access level", "Maintainer");
+    apply();
+    expect(seatData(view.state(), "new:qa").handle).toBe("quality");
     expect(
-      screen.getByText(
-        "Empty uses the handle the engine derives from the name, shown here after the next check.",
-      ),
-    ).toBeDefined();
-    cleanup();
-
-    // Another node edited since: the check is of an older draft, and still
-    // saw this seat's name.
-    const later = builderReducer(checked, {
-      type: "record",
-      intent: {
-        type: "updateUnit",
-        target: "unit:Sales",
-        set: [{ path: ["purpose"], value: "Sell" }],
-      },
-    });
-    edit(later, "new:qa");
-    expect((field("Access level") as HTMLSelectElement).disabled).toBe(false);
-    cleanup();
-
-    // Renamed in the draft: no check has seen the name it derives from now.
-    const renamed = builderReducer(later, {
-      type: "record",
-      intent: { type: "renameSeat", target: "new:qa", name: "Quality" },
-    });
-    edit(renamed, "new:qa");
-    expect((field("Access level") as HTMLSelectElement).disabled).toBe(true);
-    expect(
-      screen.getByText(
-        "Access levels are kept by handle, so this is available once the check reports this seat's handle.",
-      ),
-    ).toBeDefined();
+      getPath(view.state().draft.company, [
+        "integrations",
+        "gitlab",
+        "provisioning",
+        "access_levels",
+      ]),
+    ).toEqual({ dev: "developer", sre: "maintainer", quality: "maintainer" });
   });
 
   // THE ORDER IS THE CHAIN, read first to last, so it is MOVED rather than
@@ -537,7 +537,7 @@ describe("seat fields", () => {
   test("a seat, a unit and the charter each need a name before Apply", () => {
     const cases: [NodeKey, string, string][] = [
       ["seat:dev", "Name", "A seat needs a name."],
-      ["unit:Engineering", "Name", "A unit needs a name."],
+      ["unit:engineering", "Name", "A unit needs a name."],
       [COMPANY_KEY, "Company name", "The company needs a name."],
     ];
     for (const [key, label, reason] of cases) {
@@ -913,7 +913,7 @@ describe("problems", () => {
         "units[0].mcp_env.tracker.TOKEN: names no secret",
       ),
     ]);
-    edit(unit, "unit:Engineering");
+    edit(unit, "unit:engineering");
     const unitAlerts = screen.getAllByRole("alert");
     expect(unitAlerts).toHaveLength(1);
     expect(describesAControl(unitAlerts[0]!)).toBe(false);
@@ -926,7 +926,7 @@ describe("problems", () => {
         "units[0].schedules[0]: schedule has no runner: the effective lead is a human seat",
       ),
     ]);
-    edit(state, "unit:Engineering");
+    edit(state, "unit:engineering");
     const panel = screen.getByRole("heading", { name: "Schedules" }).closest("section")!;
     expect(within(panel as HTMLElement).getByRole("alert").textContent).toContain(
       "schedule has no runner",
@@ -965,7 +965,7 @@ describe("problems", () => {
     const warned = checkWithWarnings(keyedState(fixtureCompany()), [
       warningAt(["units", 0, "children", 0, "lead"], "units[0].children[0].lead: names no seat"),
     ]);
-    edit(warned, "unit:Platform");
+    edit(warned, "unit:platform");
     const lead = field("Lead");
     expect(lead.getAttribute("aria-invalid")).toBeNull();
     expect(errorOf(lead)).toBeNull();
@@ -1023,17 +1023,45 @@ describe("problems", () => {
 describe("a unit", () => {
   test("the lead shows the lead it would inherit, and a lead change applies with the rest", () => {
     const state = keyedState(fixtureCompany());
-    const view = edit(state, "unit:Platform");
+    const view = edit(state, "unit:platform");
     expect(field("Lead").textContent).toBe("No lead (inherits VP Engineering from Engineering)");
     choose("Lead", "SRE");
     type("Purpose", "Keep it running");
     apply();
     expect(view.state().log.ops).toHaveLength(1);
-    const found = locate(view.state().draft, "unit:Platform");
+    const found = locate(view.state().draft, "unit:platform");
+    // The lead is written as the seat's handle, which is what the engine reads.
     expect(found?.kind === "unit" && found.node.data).toMatchObject({
-      lead: "SRE",
+      lead: "sre",
       purpose: "Keep it running",
     });
+  });
+
+  // A unit's key is shown and never edited once saved; a unit this draft
+  // created takes its key until the save, held to the grammar and the
+  // company's identities as it is typed.
+  test("an existing unit's key is read-only; a new unit's is checked as it is typed", () => {
+    edit(keyedState(fixtureCompany()), "unit:platform");
+    expect(screen.queryByLabelText(labelled("Key"))).toBeNull();
+    expect(screen.getByText(/A unit's key is its identity/)).toBeDefined();
+    cleanup();
+    const added = builderReducer(keyedState(fixtureCompany()), {
+      type: "record",
+      intent: {
+        type: "addUnit",
+        key: "new:ops",
+        placement: { parent: COMPANY_KEY, after: null },
+        data: { name: "Ops", id: "ops" },
+      },
+    });
+    const view = edit(added, "new:ops");
+    type("Key", "sales");
+    expect(shownReason("sales already names a seat or a unit.")).toBeDefined();
+    expect(applyRefuses()).toBe(true);
+    type("Key", "operations");
+    apply();
+    const found = locate(view.state().draft, "new:ops");
+    expect(found?.kind === "unit" && found.node.data.id).toBe("operations");
   });
 
   /*
@@ -1044,44 +1072,44 @@ describe("a unit", () => {
    * accepts.
    */
   test("a unit type the engine does not name is typed in the same one box", () => {
-    const view = edit(keyedState(fixtureCompany()), "unit:Platform");
+    const view = edit(keyedState(fixtureCompany()), "unit:platform");
     expect(screen.queryByLabelText(labelled("Custom type"))).toBeNull();
     type("Type", "tribe");
     apply();
-    const found = locate(view.state().draft, "unit:Platform");
+    const found = locate(view.state().draft, "unit:platform");
     expect(found?.kind === "unit" && found.node.data.type).toBe("tribe");
   });
 
   test("the nine names the engine knows are offered in that same box", () => {
-    const view = edit(keyedState(fixtureCompany()), "unit:Platform");
+    const view = edit(keyedState(fixtureCompany()), "unit:platform");
     choose("Type", "Department");
     apply();
-    const found = locate(view.state().draft, "unit:Platform");
+    const found = locate(view.state().draft, "unit:platform");
     expect(found?.kind === "unit" && found.node.data.type).toBe("department");
   });
 
-  test("renaming a unit names its masked literal credentials and links to Secrets", () => {
+  // A MASK IS RESTORED BY THE UNIT'S KEY, which a rename does not move, so a
+  // unit holding a literal credential renames like any other.
+  test("renaming a unit with a masked literal credential asks nothing and keeps the mask", () => {
     const doc = fixtureCompany();
     doc.units![0]!.mcp_env = { tracker: { TOKEN: "__redacted__" } };
-    const view = edit(keyedState(doc), "unit:Engineering");
-    expect(screen.queryByText(/stored as literals/)).toBeNull();
+    const view = edit(keyedState(doc), "unit:engineering");
     type("Name", "Product Engineering");
-    expect(
-      screen.getByText(
-        "These credentials are stored as literals. Move each one to the secret store and reference it as ${NAME} before renaming, or the engine will refuse the save.",
-      ),
-    ).toBeDefined();
-    expect(screen.getByText("units[0].mcp_env.tracker.TOKEN")).toBeDefined();
-    expect(screen.getByRole("link", { name: "Open Secrets" }).getAttribute("href")).toBe(
-      "#/settings/secrets",
-    );
-    expect(view.container.ownerDocument.body.innerHTML).not.toContain("__redacted__");
+    expect(screen.queryByText(/stored as literals/)).toBeNull();
+    expect(applyRefuses()).toBe(false);
+    apply();
+    const found = locate(view.state().draft, "unit:engineering");
+    expect(found?.kind === "unit" && found.node.data).toMatchObject({
+      name: "Product Engineering",
+      id: "engineering",
+      mcp_env: { tracker: { TOKEN: "__redacted__" } },
+    });
   });
 
   test("a unit's schedule says when it runs and who runs it", () => {
     const doc = fixtureCompany();
     doc.units![0]!.schedules!.push({ name: "triage", cron: "0 * * * *", task: "Triage the queue" });
-    edit(keyedState(doc), "unit:Engineering");
+    edit(keyedState(doc), "unit:engineering");
     const standup = screen.getByRole("checkbox", { name: "Enabled: standup" });
     const triage = screen.getByRole("checkbox", { name: "Enabled: triage" });
     const described = (box: HTMLElement) =>
@@ -1093,17 +1121,17 @@ describe("a unit", () => {
   test("an empty channel says what the unit inherits, as the check reported it", () => {
     const doc = fixtureCompany();
     doc.units![0]!.channel = "eng";
-    edit(keyedState(doc, { units: { "units[0]": { channel: "eng" } } }), "unit:Platform");
+    edit(keyedState(doc, { units: { "units[0]": { channel: "eng" } } }), "unit:platform");
     const channel = field("Channel") as HTMLInputElement;
     expect(channel.placeholder).toBe("eng");
     expect(screen.getByText("Empty inherits eng from Engineering.")).toBeDefined();
   });
 
   test("a unit schedule is toggled as part of the edit", () => {
-    const view = edit(keyedState(fixtureCompany()), "unit:Engineering");
+    const view = edit(keyedState(fixtureCompany()), "unit:engineering");
     fireEvent.click(screen.getByRole("checkbox", { name: "Enabled: standup" }));
     apply();
-    const found = locate(view.state().draft, "unit:Engineering");
+    const found = locate(view.state().draft, "unit:engineering");
     expect(found?.kind === "unit" && found.node.data.schedules?.[0]?.enabled).toBe(false);
     expect(screen.getByText(/^Knowledge$/)).toBeDefined();
     expect(screen.getByText("Free-text references, not a read scope.")).toBeDefined();
@@ -1123,7 +1151,7 @@ describe("opening at a part of the form", () => {
   });
 
   test("a unit opened at its leadership starts on its lead", () => {
-    edit(keyedState(fixtureCompany()), "unit:Sales", {}, "leadership");
+    edit(keyedState(fixtureCompany()), "unit:sales", {}, "leadership");
     expect(document.activeElement).toBe(field("Lead"));
   });
 });

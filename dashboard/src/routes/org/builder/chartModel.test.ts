@@ -3,10 +3,11 @@
  * The charts' reading of a draft.
  *
  * What these protect: a root seat is drawn in a unit only where the engine
- * placed it and the draft still names that unit, and a reference the engine
- * resolved to nothing is drawn at the root and marked; an inherited lead is
- * the engine's, and is never shown after the unit declares or clears its own
- * or moves under another parent; a seat's handle, running identity and
+ * placed it and the draft still names that unit's key, and a reference the
+ * engine resolved to nothing is drawn at the root and marked; a lead and a
+ * reference name a node by its identity, never by its name; an inherited lead
+ * is the engine's, and is never shown after the unit declares or clears its
+ * own or moves under another parent; a seat's handle, running identity and
  * Datadog fallback are read from the right source; a seat's manager is read
  * only from a check of the draft as it stands; and the reporting chart is the
  * model's forest with every seat under its current name, keyed by node, with
@@ -43,26 +44,27 @@ describe("structure", () => {
     const chart = structure(chartInputs(state));
     const company = chart.nodes.get(COMPANY_KEY);
     expect(company).toMatchObject({ type: "company", name: "Acme", seats: [seatKey("ceo")] });
-    expect(unitOf(state, unitKey("Platform")).seats).toEqual([seatKey("sre"), seatKey("designer")]);
+    expect(unitOf(state, unitKey("platform")).seats).toEqual([seatKey("sre"), seatKey("designer")]);
     expect(seatOf(state, seatKey("designer"))).toMatchObject({
       placedByRef: true,
       danglingUnitRef: null,
-      parent: unitKey("Platform"),
+      parent: unitKey("platform"),
     });
     // The tree the views navigate holds the same placement.
     const platform = chart.tree[0]!.children![1]!.children![2]!;
-    expect(platform.id).toBe(unitKey("Platform"));
+    expect(platform.id).toBe(unitKey("platform"));
     expect(platform.children!.map((c) => c.id)).toEqual([seatKey("sre"), seatKey("designer")]);
   });
 
-  test("a unit rename the reference followed keeps the seat in the unit", () => {
+  // A REFERENCE NAMES A KEY, and a rename moves no key.
+  test("a unit renamed keeps the seat its reference placed in it", () => {
     const state = checkedEdit(fixtureCompany());
     const renamed = record(state, {
       type: "renameUnit",
-      target: unitKey("Platform"),
+      target: unitKey("platform"),
       name: "Infrastructure",
     });
-    expect(seatOf(renamed, seatKey("designer")).parent).toBe(unitKey("Platform"));
+    expect(seatOf(renamed, seatKey("designer")).parent).toBe(unitKey("platform"));
   });
 
   test("a reference the draft no longer holds is not drawn where the engine last placed it", () => {
@@ -74,17 +76,17 @@ describe("structure", () => {
     });
     const designer = seatOf(moved, seatKey("designer"));
     expect(designer).toMatchObject({ parent: COMPANY_KEY, placedByRef: false });
-    expect(unitOf(moved, unitKey("Platform")).seats).toEqual([seatKey("sre")]);
+    expect(unitOf(moved, unitKey("platform")).seats).toEqual([seatKey("sre")]);
   });
 
   test("a reference the engine resolved to no unit is drawn at the root and marked", () => {
     const doc = fixtureCompany();
-    doc.roles![1]!.unit = "Ghost";
+    doc.roles![1]!.unit = "ghost";
     const state = checkedEdit(doc, {});
     expect(seatOf(state, seatKey("designer"))).toMatchObject({
       parent: COMPANY_KEY,
       placedByRef: false,
-      danglingUnitRef: "Ghost",
+      danglingUnitRef: "ghost",
     });
     // Without a derivation the chart claims nothing either way.
     const unchecked = run(INITIAL_BUILDER, {
@@ -100,26 +102,26 @@ describe("structure", () => {
     expect(designer).toMatchObject({ parent: COMPANY_KEY, danglingUnitRef: null });
   });
 
-  test("a reference is not called dangling once the draft holds a unit of that name", () => {
+  test("a reference is not called dangling once the draft holds a unit of that key", () => {
     const doc = fixtureCompany();
-    doc.roles![1]!.unit = "Ghost";
+    doc.roles![1]!.unit = "ghost";
     const state = checkedEdit(doc, {});
     // Added since the check, the unit is one the reference will resolve to:
     // where the seat is placed is the next check's to say.
     const added = record(state, {
       type: "addUnit",
       key: "new:ghost",
-      placement: { parent: COMPANY_KEY, after: unitKey("Sales") },
-      data: { name: "Ghost" },
+      placement: { parent: COMPANY_KEY, after: unitKey("sales") },
+      data: { name: "Haunt", id: "ghost" },
     });
     expect(seatOf(added, seatKey("designer"))).toMatchObject({
       parent: COMPANY_KEY,
       placedByRef: false,
       danglingUnitRef: null,
     });
-    // So is a unit renamed to it.
-    const renamed = record(state, { type: "renameUnit", target: unitKey("Sales"), name: "Ghost" });
-    expect(seatOf(renamed, seatKey("designer")).danglingUnitRef).toBeNull();
+    // A unit merely CALLED it is no unit the reference names.
+    const renamed = record(state, { type: "renameUnit", target: unitKey("sales"), name: "ghost" });
+    expect(seatOf(renamed, seatKey("designer")).danglingUnitRef).toBe("ghost");
   });
 
   test("an inherited lead is the engine's, and goes when the unit declares its own", () => {
@@ -128,18 +130,18 @@ describe("structure", () => {
       ...PLACED,
       units: { "units[0].children[0]": { lead: "vp-engineering", lead_inherited: true } },
     });
-    expect(unitOf(state, unitKey("Platform"))).toMatchObject({
-      lead: { name: "VP Engineering", inherited: true },
+    expect(unitOf(state, unitKey("platform"))).toMatchObject({
+      lead: { name: "VP Engineering", handle: "vp-engineering", inherited: true },
       inheritable: { name: "VP Engineering", inherited: true },
     });
-    expect(unitOf(state, unitKey("Engineering"))).toMatchObject({
-      lead: { name: "VP Engineering", inherited: false },
+    expect(unitOf(state, unitKey("engineering"))).toMatchObject({
+      lead: { name: "VP Engineering", handle: "vp-engineering", inherited: false },
       inheritable: null,
     });
 
-    const declared = record(state, { type: "setLead", target: unitKey("Platform"), lead: "SRE" });
-    expect(unitOf(declared, unitKey("Platform"))).toMatchObject({
-      lead: { name: "SRE", inherited: false },
+    const declared = record(state, { type: "setLead", target: unitKey("platform"), lead: "sre" });
+    expect(unitOf(declared, unitKey("platform"))).toMatchObject({
+      lead: { name: "SRE", handle: "sre", inherited: false },
       // With a lead of its own it would inherit its parent's again.
       inheritable: { name: "VP Engineering", inherited: true },
     });
@@ -150,26 +152,26 @@ describe("structure", () => {
       ...PLACED,
       units: { "units[0].children[0]": { lead: "vp-engineering", lead_inherited: true } },
     });
-    const cleared = record(state, { type: "setLead", target: unitKey("Engineering") });
+    const cleared = record(state, { type: "setLead", target: unitKey("engineering") });
     // The check saw a declared lead, so it says nothing about what the unit
     // inherits now, and Platform no longer inherits what the check saw.
-    expect(unitOf(cleared, unitKey("Engineering")).lead).toBeUndefined();
-    expect(unitOf(cleared, unitKey("Platform"))).toMatchObject({
+    expect(unitOf(cleared, unitKey("engineering")).lead).toBeUndefined();
+    expect(unitOf(cleared, unitKey("platform"))).toMatchObject({
       lead: undefined,
       inheritable: null,
     });
-    const changed = record(state, { type: "setLead", target: unitKey("Engineering"), lead: "Dev" });
-    expect(unitOf(changed, unitKey("Platform")).lead).toBeUndefined();
+    const changed = record(state, { type: "setLead", target: unitKey("engineering"), lead: "dev" });
+    expect(unitOf(changed, unitKey("platform")).lead).toBeUndefined();
     // A unit the check never saw has no known inherited lead either.
     const added = record(state, {
       type: "addUnit",
       key: "new:u1",
-      placement: { parent: unitKey("Sales"), after: null },
-      data: { name: "Partners" },
+      placement: { parent: unitKey("sales"), after: null },
+      data: { name: "Partners", id: "partners" },
     });
     expect(unitOf(added, "new:u1").lead).toBeUndefined();
     // A unit the check saw with no lead at all, and nothing above it, has none.
-    expect(unitOf(state, unitKey("Sales")).lead).toBeNull();
+    expect(unitOf(state, unitKey("sales")).lead).toBeNull();
   });
 
   test("a unit moved under another parent inherits from it, so the checked lead is unknown", () => {
@@ -181,30 +183,31 @@ describe("structure", () => {
     // Platform declare none, as before); only where Platform sits changed.
     const moved = record(state, {
       type: "move",
-      target: unitKey("Platform"),
-      to: { parent: unitKey("Sales"), after: null },
+      target: unitKey("platform"),
+      to: { parent: unitKey("sales"), after: null },
     });
-    expect(unitOf(moved, unitKey("Platform"))).toMatchObject({
+    expect(unitOf(moved, unitKey("platform"))).toMatchObject({
       lead: undefined,
       inheritable: null,
     });
     // A reorder among the same siblings moves no unit to another parent.
     const reordered = record(state, {
       type: "reorder",
-      target: unitKey("Sales"),
+      target: unitKey("sales"),
       to: { parent: COMPANY_KEY, after: null },
     });
-    expect(unitOf(reordered, unitKey("Platform")).lead).toEqual({
+    expect(unitOf(reordered, unitKey("platform")).lead).toEqual({
       name: "VP Engineering",
+      handle: "vp-engineering",
       inherited: true,
     });
   });
 
   test("a derived placement or dangling reference holds only while the seat still writes what was checked", () => {
     const doc = fixtureCompany();
-    doc.roles!.push({ name: "Scout", unit: "Ghost" });
+    doc.roles!.push({ name: "Scout", handle: "scout", unit: "ghost" });
     const derived = fixtureDerived(doc, PLACED);
-    const checkedDraft = fromDocument(doc, derived);
+    const checkedDraft = fromDocument(doc);
     const sent = toDocument(checkedDraft);
     // Not `current`: the drafts below are compared with a check of another.
     const inputs = (draft: Draft) => ({
@@ -226,12 +229,12 @@ describe("structure", () => {
     });
 
     const asChecked = structure(inputs(checkedDraft)).nodes;
-    expect(asChecked.get(seatKey("designer"))).toMatchObject({ parent: unitKey("Platform") });
-    expect(asChecked.get(seatKey("scout"))).toMatchObject({ danglingUnitRef: "Ghost" });
+    expect(asChecked.get(seatKey("designer"))).toMatchObject({ parent: unitKey("platform") });
+    expect(asChecked.get(seatKey("scout"))).toMatchObject({ danglingUnitRef: "ghost" });
 
     // Both references rewritten since the check (as a rebase onto somebody
     // else's edit can): the engine's verdicts were about other values.
-    const since = structure(inputs(rewrite({ designer: "Sales", scout: "Platform" }))).nodes;
+    const since = structure(inputs(rewrite({ designer: "sales", scout: "platform" }))).nodes;
     expect(since.get(seatKey("designer"))).toMatchObject({
       parent: COMPANY_KEY,
       placedByRef: false,
@@ -282,62 +285,57 @@ describe("structure", () => {
       running: false,
     });
 
-    // A new seat has no saved identity, and no handle until a check reports one.
+    // A new seat has no saved identity, and carries the handle it was given.
     const added = record(state, {
       type: "addSeat",
       key: "new:a1",
-      placement: { parent: unitKey("Sales"), after: null },
-      data: { name: "Closer" },
+      placement: { parent: unitKey("sales"), after: null },
+      data: { name: "Closer", handle: "closer" },
     });
     expect(seatOf(added, "new:a1")).toMatchObject({
       saved: null,
       running: false,
-      handle: undefined,
+      handle: "closer",
     });
   });
 
   test("a unit's type is the one it writes, else the engine's while the check saw none written", () => {
     const doc = fixtureCompany();
     const state = checkedEdit(doc);
-    expect(unitOf(state, unitKey("Engineering")).unitType).toBe("department");
+    expect(unitOf(state, unitKey("engineering")).unitType).toBe("department");
     // Sales writes none, so the engine's effective type stands in.
-    expect(unitOf(state, unitKey("Sales")).unitType).toBe("unit");
+    expect(unitOf(state, unitKey("sales")).unitType).toBe("unit");
     // Cleared since the check: the check reported the type it wrote.
     const cleared = record(state, {
       type: "updateUnit",
-      target: unitKey("Engineering"),
+      target: unitKey("engineering"),
       set: [{ path: ["type"] }],
     });
-    expect(unitOf(cleared, unitKey("Engineering")).unitType).toBe("");
+    expect(unitOf(cleared, unitKey("engineering")).unitType).toBe("");
   });
 
-  test("a created seat's checked handle holds only while it is still called what the check saw", () => {
+  // A HANDLE IS NOT DERIVED FROM A NAME: the draft carries it from the add,
+  // so it is known before any check and a rename does not move it.
+  test("a seat's handle is the draft's, before any check and after a rename", () => {
     const added = record(checkedEdit(fixtureCompany()), {
       type: "addSeat",
       key: "new:a1",
-      placement: { parent: unitKey("Sales"), after: null },
-      data: { name: "Closer" },
+      placement: { parent: unitKey("sales"), after: null },
+      data: { name: "Closer", handle: "closer" },
     });
-    const checked = answered(added, {
+    const renamed = record(added, { type: "renameSeat", target: "new:a1", name: "Deal Closer" });
+    expect(seatOf(renamed, "new:a1")).toMatchObject({ name: "Deal Closer", handle: "closer" });
+    const checked = answered(renamed, {
       status: "clean",
       warnings: [],
-      derived: fixtureDerived(toDocument(added.draft).document, PLACED),
+      derived: fixtureDerived(toDocument(renamed.draft).document, PLACED),
     });
-    expect(seatOf(checked, "new:a1").handle).toBe("closer");
-    // The engine derives an undeclared handle from the name, so after a
-    // rename the handle is the next check's to report.
-    const renamed = record(checked, { type: "renameSeat", target: "new:a1", name: "Deal Closer" });
-    expect(seatOf(renamed, "new:a1").handle).toBeUndefined();
-    // The reporting chart, still drawn from that check, reads it the same way.
-    expect(reporting(chartInputs(checked)).items.get("new:a1")?.handle).toBe("closer");
-    expect(reporting(chartInputs(renamed)).items.get("new:a1")).toMatchObject({
+    expect(reporting(chartInputs(checked)).items.get("new:a1")).toMatchObject({
       name: "Deal Closer",
-      handle: undefined,
+      handle: "closer",
     });
-    // A seat of the saved company keeps the handle its key carries, even
-    // when the last check could not describe the draft at all.
-    const saved = record(checked, { type: "renameSeat", target: seatKey("dev"), name: "Builder" });
-    expect(seatOf(saved, seatKey("dev")).handle).toBe("dev");
+    // A seat of the saved company keeps its handle when the last check could
+    // not describe the draft at all.
     const unreachable = answered(checked, { status: "unreachable", detail: "offline" });
     expect(seatOf(unreachable, seatKey("sre")).handle).toBe("sre");
   });
@@ -394,10 +392,10 @@ describe("reporting", () => {
     const doc: CompanyDocument = {
       name: "Loop",
       roles: [
-        { name: "Chief", manages: ["Ops"] },
-        { name: "Ops" },
-        { name: "A", manages: ["B"] },
-        { name: "B", manages: ["A"] },
+        { name: "Chief", handle: "chief", manages: ["ops"] },
+        { name: "Ops", handle: "ops" },
+        { name: "A", handle: "a", manages: ["b"] },
+        { name: "B", handle: "b", manages: ["a"] },
       ],
     };
     const state = checkedEdit(doc, {
@@ -414,7 +412,7 @@ describe("reporting", () => {
     });
     const chart = reporting(chartInputs(renamed));
     expect(chart.known).toBe(true);
-    // Its handle is read as the structure chart reads it: pinned by its key.
+    // Its handle is the draft's, as the structure chart reads it.
     expect(chart.items.get(seatKey("ops"))).toMatchObject({ name: "Operations", handle: "ops" });
     expect(chart.roots.map((r) => [r.id, r.root, r.reports.map((c) => c.name)])).toEqual([
       [seatKey("chief"), true, ["Operations"]],
@@ -448,10 +446,19 @@ describe("what every surface reads about a node", () => {
     expect(datadogFallback({})).toBeUndefined();
   });
 
-  test("a reported handle is read as the seat of the draft the check gave it", () => {
+  test("a reported handle is read as the seat of the draft that carries it", () => {
     const state = checkedEdit(fixtureCompany());
     expect(keyOfHandle(state, "sre")).toBe(seatKey("sre"));
     expect(keyOfHandle(state, "nobody")).toBeUndefined();
+    // A seat this draft created is found by the handle it was given, with no
+    // check in between.
+    const added = record(state, {
+      type: "addSeat",
+      key: "new:qa",
+      placement: { parent: COMPANY_KEY, after: null },
+      data: { name: "QA", handle: "qa" },
+    });
+    expect(keyOfHandle(added, "qa")).toBe("new:qa");
     // A seat removed since the check is no node of the draft.
     const removed = record(state, { type: "remove", target: seatKey("dev") });
     expect(keyOfHandle(removed, "dev")).toBeUndefined();
@@ -468,12 +475,12 @@ describe("the engine's marks", () => {
     seat: "",
     unit: "Sales",
     from: "Sales",
-    to: "Ghost",
-    message: "Unit Sales names lead Ghost, which is no seat.",
+    to: "ghost",
+    message: "Unit Sales names lead ghost, which is no seat.",
   };
   const warned = () => {
     const doc = fixtureCompany();
-    doc.units![1]!.lead = "Ghost";
+    doc.units![1]!.lead = "ghost";
     return answered(checkedEdit(doc), {
       status: "clean",
       warnings: [leadWarning],
@@ -486,9 +493,9 @@ describe("the engine's marks", () => {
   // twice per edit.
   test("a lead that names no seat is marked while the unit still writes it, through later checks", () => {
     const state = warned();
-    expect(unitOf(state, unitKey("Sales"))).toMatchObject({
-      danglingLead: "Ghost",
-      danglingNote: "Unit Sales names lead Ghost, which is no seat.",
+    expect(unitOf(state, unitKey("sales"))).toMatchObject({
+      danglingLead: "ghost",
+      danglingNote: "Unit Sales names lead ghost, which is no seat.",
     });
     // Another node edited: a check of this draft is out, and the mark holds.
     const later = record(state, {
@@ -496,29 +503,29 @@ describe("the engine's marks", () => {
       target: seatKey("dev"),
       set: [{ path: ["goal"], value: "Ship" }],
     });
-    expect(unitOf(later, unitKey("Sales")).danglingLead).toBe("Ghost");
-    // The lead changed, or a seat of that name added: the next check's to say.
-    const relead = record(state, { type: "setLead", target: unitKey("Sales"), lead: "CEO" });
-    expect(unitOf(relead, unitKey("Sales"))).toMatchObject({
+    expect(unitOf(later, unitKey("sales")).danglingLead).toBe("ghost");
+    // The lead changed, or a seat of that handle added: the next check's to say.
+    const relead = record(state, { type: "setLead", target: unitKey("sales"), lead: "ceo" });
+    expect(unitOf(relead, unitKey("sales"))).toMatchObject({
       danglingLead: null,
       danglingNote: undefined,
     });
-    // Another name that is no seat either: the warning was about Ghost, so
-    // what the new name resolves to is the next check's to say.
-    const other = record(state, { type: "setLead", target: unitKey("Sales"), lead: "Phantom" });
-    expect(unitOf(other, unitKey("Sales")).danglingLead).toBeNull();
+    // Another handle that is no seat either: the warning was about ghost, so
+    // what the new one resolves to is the next check's to say.
+    const other = record(state, { type: "setLead", target: unitKey("sales"), lead: "phantom" });
+    expect(unitOf(other, unitKey("sales")).danglingLead).toBeNull();
     const added = record(state, {
       type: "addSeat",
       key: "new:ghost",
-      placement: { parent: unitKey("Sales"), after: null },
-      data: { name: "Ghost" },
+      placement: { parent: unitKey("sales"), after: null },
+      data: { name: "Casper", handle: "ghost" },
     });
-    expect(unitOf(added, unitKey("Sales")).danglingLead).toBeNull();
+    expect(unitOf(added, unitKey("sales")).danglingLead).toBeNull();
   });
 
   test("a seat's dangling reference keeps the engine's sentence through a later check", () => {
     const doc = fixtureCompany();
-    doc.roles!.push({ name: "Scout", unit: "Nowhere" });
+    doc.roles!.push({ name: "Scout", handle: "scout", unit: "nowhere" });
     const state = answered(checkedEdit(doc), {
       status: "clean",
       warnings: [
@@ -530,8 +537,8 @@ describe("the engine's marks", () => {
           seat: "scout",
           unit: "",
           from: "Scout",
-          to: "Nowhere",
-          message: "Seat Scout names unit Nowhere, which is no unit.",
+          to: "nowhere",
+          message: "Seat Scout names unit nowhere, which is no unit.",
         },
       ],
       derived: fixtureDerived(doc, PLACED),
@@ -542,8 +549,8 @@ describe("the engine's marks", () => {
       set: [{ path: ["goal"], value: "Ship" }],
     });
     expect(seatOf(later, seatKey("scout"))).toMatchObject({
-      danglingUnitRef: "Nowhere",
-      danglingNote: "Seat Scout names unit Nowhere, which is no unit.",
+      danglingUnitRef: "nowhere",
+      danglingNote: "Seat Scout names unit nowhere, which is no unit.",
     });
   });
 });

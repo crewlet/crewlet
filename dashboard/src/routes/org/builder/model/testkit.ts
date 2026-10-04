@@ -2,12 +2,12 @@
  * Fixtures for the builder core's suites. Imported by tests only.
  *
  * THE DERIVATIONS HERE ARE FIXTURE DATA, NOT A PORT OF THE ENGINE. A suite
- * that needs the engine's `derived` block states the handles, managers and
- * leads it wants, and [fixtureDerived] only lays them out in the wire shape
- * with each seat's authored path. Its default handle is a plain ASCII
- * lower-case-and-hyphen form of the name, which is correct for the ASCII
- * names these fixtures use and is never used outside a test: the dashboard
- * does not derive handles (see `keys.ts`).
+ * that needs the engine's `derived` block states the managers and leads it
+ * wants, and [fixtureDerived] only lays them out in the wire shape with each
+ * seat's authored path. A seat's handle and a unit's key are the ones it
+ * declares, as every document the engine stores declares them; a fixture
+ * that declares none gets the builder's own minting rule's (`identity.ts`),
+ * which is what keys such a node in the draft too.
  */
 
 import type {
@@ -18,6 +18,7 @@ import type {
   DerivedSeat,
   DerivedUnit,
 } from "~/protocol/index.ts";
+import { mintHandle, mintUnitKey } from "./identity.ts";
 import type { KeySource } from "./keys.ts";
 
 /** A key source that counts: `k1`, `k2`, and so on, with a prefix per source. */
@@ -26,14 +27,16 @@ export function countingKeys(prefix = "k"): KeySource {
   return { next: () => `${prefix}${++n}` };
 }
 
-/** The fixture's handle for a seat: its declared handle, or its ASCII name in lower case with hyphens. */
+/** The fixture's handle for a seat: its declared handle, or the one minted from its name. */
 export function fixtureHandle(role: ConfigRole): string {
   if (typeof role.handle === "string" && role.handle !== "") return role.handle;
-  return role.name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  return mintHandle(role.name, new Set());
+}
+
+/** The fixture's key for a unit: its declared key, or the one minted from its name. */
+export function fixtureUnitKey(unit: ConfigUnit): string {
+  if (typeof unit.id === "string" && unit.id !== "") return unit.id;
+  return mintUnitKey(unit.name, new Set());
 }
 
 /** Per-seat and per-unit overrides of a fixture derivation, by authored path. */
@@ -45,26 +48,13 @@ export interface DerivedOverrides {
 /**
  * A `derived` block for a document: every seat at its authored path with the
  * fixture handle and its structural home unit, every unit at its path with
- * its declared lead's handle, and nobody managing anybody unless an override
- * says so. Root seats come first, then each unit's seats depth-first, which
- * is the engine's own seat order for a document with no `unit:` references.
+ * the lead it declares, and nobody managing anybody unless an override says
+ * so. Root seats come first, then each unit's seats depth-first, which is the
+ * engine's own seat order for a document with no `unit:` references.
  */
 export function fixtureDerived(doc: CompanyDocument, overrides: DerivedOverrides = {}): Derived {
   const seats: DerivedSeat[] = [];
   const units: DerivedUnit[] = [];
-  const handleByName = new Map<string, string>();
-  const collect = (roles: readonly ConfigRole[] | undefined) => {
-    for (const r of roles ?? [])
-      if (!handleByName.has(r.name)) handleByName.set(r.name, fixtureHandle(r));
-  };
-  collect(doc.roles);
-  const collectUnits = (list: readonly ConfigUnit[] | undefined) => {
-    for (const u of list ?? []) {
-      collect(u.roles);
-      collectUnits(u.children);
-    }
-  };
-  collectUnits(doc.units);
 
   const seat = (role: ConfigRole, path: string, unitPath: string, chain: string[]) => {
     seats.push({
@@ -89,12 +79,10 @@ export function fixtureDerived(doc: CompanyDocument, overrides: DerivedOverrides
       const here = [...chain, u.name];
       units.push({
         path,
-        // THE KEY, as the engine derives it: the unit's `id`, or its name
-        // where it declares none (`config.DerivedUnit.ID`).
-        id: u.id ?? u.name,
+        id: fixtureUnitKey(u),
         name: u.name,
         type: u.type ?? "unit",
-        lead: u.lead ? (handleByName.get(u.lead) ?? "") : "",
+        lead: u.lead ?? "",
         lead_inherited: false,
         channel: u.channel ?? "",
         channel_inherited: false,
@@ -113,7 +101,9 @@ export function fixtureDerived(doc: CompanyDocument, overrides: DerivedOverrides
  * A small company exercising what the operations touch: root seats (one
  * placed in a unit by reference), nested units, a lead, `manages` naming a
  * seat and a unit, schedules, a unit's tool credentials, a key this build does
- * not model, and the two integration entries keyed by handle.
+ * not model, and the two integration entries keyed by handle. Every seat
+ * declares its handle and every unit its key, and every reference names them,
+ * as in every document the engine stores.
  */
 export function fixtureCompany(): CompanyDocument {
   return {
@@ -126,35 +116,42 @@ export function fixtureCompany(): CompanyDocument {
       gitlab: { provisioning: { access_levels: { dev: "developer", sre: "maintainer" } } },
     },
     roles: [
-      { name: "CEO", goal: "Lead", manages: ["Engineering", "Designer"] },
-      { name: "Designer", unit: "Platform", goal: "Design" },
+      { name: "CEO", handle: "ceo", goal: "Lead", manages: ["engineering", "designer"] },
+      { name: "Designer", handle: "designer", unit: "platform", goal: "Design" },
     ],
     units: [
       {
         name: "Engineering",
+        id: "engineering",
         type: "department",
-        lead: "VP Engineering",
+        lead: "vp-engineering",
         mcp_env: { tracker: { TOKEN: "${TRACKER_TOKEN}" } },
         schedules: [{ name: "standup", cron: "0 9 * * 1-5", task: "Run standup", target: "lead" }],
         roles: [
-          { name: "VP Engineering", goal: "Run engineering", manages: ["Dev"] },
-          { name: "Dev", goal: "Build", unknown_role_key: 7 },
+          {
+            name: "VP Engineering",
+            handle: "vp-engineering",
+            goal: "Run engineering",
+            manages: ["dev"],
+          },
+          { name: "Dev", handle: "dev", goal: "Build", unknown_role_key: 7 },
         ],
         children: [
           {
             name: "Platform",
+            id: "platform",
             type: "team",
-            roles: [
-              { name: "SRE", goal: "Keep it up", integrations: { jira: { project: "OPS" } } },
-            ],
+            roles: [{ name: "SRE", handle: "sre", goal: "Keep it up", project: "OPS" }],
           },
         ],
       },
       {
         name: "Sales",
+        id: "sales",
         roles: [
           {
             name: "Account Executive",
+            handle: "account-executive",
             goal: "Sell",
             schedules: [{ name: "pipeline", cron: "0 8 * * 1", task: "Review" }],
           },

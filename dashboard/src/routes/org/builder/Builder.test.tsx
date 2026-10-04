@@ -504,16 +504,20 @@ test("a company with no model provider is told so, and one with a provider is no
 });
 
 describe("the selection in the URL", () => {
-  test("a selected unit is named in the URL, and a rename rewrites it", async () => {
+  // A LINK NAMES THE UNIT BY ITS KEY, which is its identity: a rename moves
+  // nothing a link was made from, so a link shared before it opens the same
+  // unit after.
+  test("a selected unit is named in the URL by its key, which a rename leaves alone", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Select Engineering" }));
-    await waitFor(() => expect(location.hash).toContain("unit=Engineering"));
+    await waitFor(() => expect(location.hash).toContain("unit=engineering"));
 
     fireEvent.click(screen.getByRole("button", { name: "Rename Engineering" }));
-    // The key is the unit's identity, so the name in the URL follows the draft.
-    await waitFor(() => expect(location.hash).toContain("unit=Engineering+Two"));
+    await screen.findByRole("button", { name: "Select Engineering Two" });
+    expect(location.hash).toContain("unit=engineering");
+    expect(location.hash).not.toContain("Engineering");
   });
 
   // THE COMPANY IS A NODE TOO, and the only one the draft's tree cannot

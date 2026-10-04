@@ -67,15 +67,13 @@ import {
   type ChartKind,
   type EditorSectionName,
 } from "./BuilderContext.tsx";
-import { allUnits, locate, type Draft } from "./model/draft.ts";
+import { allSeats, allUnits, handleOf, locate, unitIdOf, type Draft } from "./model/draft.ts";
 import { COMPANY_KEY, seatKey, type NodeKey } from "./model/keys.ts";
 import type { PlacedProblem } from "./model/problems.ts";
 import {
   builderReducer,
-  handlesOf,
   hasChanges,
   INITIAL_BUILDER,
-  isBaseKeyed,
   type BuilderAction,
   type BuilderState,
   type LastChange,
@@ -99,7 +97,7 @@ import {
 import type { DraftStorage } from "./model/persistence.ts";
 import { clearDraft } from "./model/persistence.ts";
 import { deriveChanges } from "./model/changes.ts";
-import { seatsNeedingContact } from "./model/templates.ts";
+import { seatsWithoutContact } from "./model/templates.ts";
 import type { KeySource } from "./model/keys.ts";
 import { ReviewSaveDialog } from "./ReviewSaveDialog.tsx";
 import { AfterSaveStrip } from "./AfterSaveStrip.tsx";
@@ -396,7 +394,7 @@ function conflictOf(state: BuilderState): Extract<CheckOutcome, { status: "confl
 // Selection in the URL
 // ---------------------------------------------------------------------------
 
-/** The URL filters that name a node: a unit by name, a seat by handle. */
+/** The URL filters that name a node: a unit by its key, a seat by its handle. */
 interface SelectionParams {
   readonly unit: string;
   readonly seat: string;
@@ -421,10 +419,10 @@ function paramsOf(state: BuilderState, key: NodeKey): SelectionParams | null {
   const found = locate(state.draft, key);
   if (!found) return null;
   if (found.kind === "unit") {
-    const name = found.node.data.name;
-    return name ? { unit: name, seat: "" } : null;
+    const id = unitIdOf(found.node);
+    return id ? { unit: id, seat: "" } : null;
   }
-  const handle = handlesOf(state).get(key);
+  const handle = handleOf(found.node);
   return handle ? { unit: "", seat: handle } : null;
 }
 
@@ -433,12 +431,13 @@ function keyOfParams(state: BuilderState, params: SelectionParams): NodeKey | nu
   if (params.seat) {
     const direct = seatKey(params.seat);
     if (locate(state.draft, direct)) return direct;
-    for (const [key, handle] of handlesOf(state)) if (handle === params.seat) return key;
+    for (const { seat } of allSeats(state.draft))
+      if (handleOf(seat) === params.seat) return seat.key;
     return null;
   }
   if (params.unit) {
     for (const { unit } of allUnits(state.draft)) {
-      if (unit.data.name === params.unit) return unit.key;
+      if (unitIdOf(unit) === params.unit) return unit.key;
     }
   }
   return null;
@@ -479,8 +478,7 @@ function addKindOf(value: string): AddKind | null {
  * sets and this removes, as `add=` is), which is a change to the section's
  * URL grammar rather than to this effect.
  *
- * AND ONLY WHEN THE BUILDER CAN EDIT. The draft has to be loaded, keyed by the
- * engine's handles (a link names a seat by the handle it runs under), in edit
+ * AND ONLY WHEN THE BUILDER CAN EDIT. The draft has to be loaded, in edit
  * mode and not paused — a kept draft waiting for Keep or Discard, a save whose
  * outcome is unknown, a conflict. The request waits through all of those
  * rather than opening a form that could not be applied, and a reader who
@@ -847,19 +845,8 @@ function BuilderScreen({
     if (keeping.offer) return "A kept draft is waiting for Keep or Discard.";
     if (guarded) return signedIn ? configGuardedReason(guardedCode) : "Nobody is signed in.";
     if (status === "conflict") return "The configuration changed since this draft was started.";
-    if (loaded && !isBaseKeyed(state)) return "The engine has not described this company yet.";
     return null;
-  }, [
-    save.unsettled,
-    keeping.unsettled,
-    keeping.offer,
-    guarded,
-    guardedCode,
-    status,
-    loaded,
-    state,
-    signedIn,
-  ]);
+  }, [save.unsettled, keeping.unsettled, keeping.offer, guarded, guardedCode, status, signedIn]);
   const readOnly = !loaded || readOnlyReason !== null;
 
   const dispatch = useCallback(
@@ -937,10 +924,9 @@ function BuilderScreen({
     [],
   );
 
-  // A NODE HELD ACROSS A KEYING OF THE BASE KEEPS ITS PLACE. Until the first
-  // check answers, a seat that declares no handle is keyed by its path, and
-  // the answer re-keys the base by the engine's handles; a save re-keys the
-  // nodes it created. The reducer lists what moved (`state.rekeyed`), and an
+  // A NODE HELD ACROSS A SAVE KEEPS ITS PLACE. A save re-keys the nodes it
+  // created, from the keys they were minted with to their handles and unit
+  // keys. The reducer lists what moved (`state.rekeyed`), and an
   // open dialog or the selection reads its node through that list in the
   // very render the keys change: followed a render later, an open editor was
   // drawn as gone ("This node is no longer in the draft") for that render and
@@ -1711,12 +1697,6 @@ function BuilderScreen({
             {updateNote.message && <span className="org-builder-note">{updateNote.message}</span>}
           </Callout>
         )}
-        {loaded && !isBaseKeyed(state) && status === "unreachable" && (
-          <Callout variant="warning" icon={<PlugGlyph />}>
-            The engine could not be reached to describe this company. Editing starts once it
-            answers.
-          </Callout>
-        )}
         {keeping.offer && (
           <Callout
             variant="info"
@@ -1974,9 +1954,9 @@ function ReviewPanel({
     [state, current],
   );
   const outcome = current ? state.check.outcome : null;
-  const needsContact = useMemo(
+  const withoutContact = useMemo(
     () =>
-      seatsNeedingContact(state.draft).map((key) => locate(state.draft, key)?.node.data.name ?? ""),
+      seatsWithoutContact(state.draft).map((key) => locate(state.draft, key)?.node.data.name ?? ""),
     [state.draft],
   );
   return (
@@ -1988,7 +1968,7 @@ function ReviewPanel({
       warnings={outcome?.status === "clean" ? outcome.warnings : []}
       problemCount={current ? state.check.problems.problemCount : 0}
       documentProblems={current ? state.check.problems.document : []}
-      needsContact={needsContact}
+      withoutContact={withoutContact}
       writeId={writeId}
       phase={phase}
       onSave={onSave}
@@ -2029,7 +2009,7 @@ function DialogHost({
   onDiscard,
 }: {
   dialog: OpenDialog;
-  /** Reads a key the dialog holds through the base's last keying (`state.rekeyed`). */
+  /** Reads a key the dialog holds through the last save's keying (`state.rekeyed`). */
   follow: (key: NodeKey) => NodeKey;
   surfaces: BuilderSurfaces;
   onClose: () => void;

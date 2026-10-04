@@ -91,6 +91,20 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
   const body = isRecord(answer.body) ? answer.body : {};
   const code = text(body.error);
   if (answer.status === 401 || answer.status === 403) return { kind: "guarded", code };
+  // A 409 THAT IS NOT A RACE. `seat_held` refuses a write taking a human seat
+  // out of the company while somebody is bound to it: nothing about it moves
+  // with a newer revision, so reading it as one offered to update a draft
+  // onto the very revision it was built on, for ever. It is a problem with
+  // the draft, one per held seat, which unbinding the person clears.
+  if (answer.status === 409 && code === "seat_held") {
+    return {
+      kind: "problems",
+      problems: heldSeatProblems(body.held, text(body.detail) || code),
+      derived: null,
+      code,
+      hint: text(body.hint),
+    };
+  }
   if (answer.status === 409 || answer.status === 412) {
     const reason: ConfigConflictReason =
       code === "no_active_revision"
@@ -123,6 +137,37 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
     code,
     hint: text(body.hint),
   };
+}
+
+/**
+ * One problem per seat a `409 seat_held` names, each about that seat (by its
+ * handle) and naming everybody bound to it with the command that unbinds
+ * them, which takes the person's id. A body that names none is one problem at
+ * document level carrying the refusal's own sentence.
+ */
+function heldSeatProblems(held: unknown, detail: string): ConfigProblem[] {
+  const seats = isRecord(held) ? Object.entries(held).sort(([a], [b]) => a.localeCompare(b)) : [];
+  const problems = seats.map(([seat, holders]): ConfigProblem => {
+    const people = (Array.isArray(holders) ? holders : []).filter(isRecord);
+    const names = people.map((h) => text(h.login) || text(h.person)).filter((n) => n !== "");
+    const unbind = people
+      .map((h) => text(h.person))
+      .filter((id) => id !== "")
+      .map((id) => `crewlet iam unbind ${id}`);
+    return {
+      path: "",
+      segments: null,
+      kind: "seat_held",
+      seat,
+      message:
+        `@${seat} is held by ${names.join(", ") || "somebody"}: unbind them first` +
+        (unbind.length > 0 ? ` (${unbind.join("; ")})` : "") +
+        ", then save again. People & access shows who holds each seat.",
+    };
+  });
+  return problems.length > 0
+    ? problems
+    : [{ path: "", segments: null, kind: "seat_held", message: detail }];
 }
 
 /**

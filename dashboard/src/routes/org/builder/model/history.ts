@@ -31,10 +31,10 @@
  * confirmation will adopt.
  *
  * WHAT "THE SAME ENTITY" MEANS is the engine's identity, carried by the key
- * (see `keys.ts`): a seat's handle and a unit's name. An operation recorded
+ * (see `keys.ts`): a seat's handle and a unit's key. An operation recorded
  * against a seat never lands on a different seat that merely shares its name,
  * because a different seat has a different handle and therefore a different
- * key. A seat the engine gives the SAME handle is, to every subsystem that
+ * key. A seat holding the SAME handle is, to every subsystem that
  * attaches to a seat (its memory, its mailbox, its masked credentials), the
  * same seat, and an operation on it is held to its recorded values like any
  * other.
@@ -53,7 +53,6 @@ import {
   type ApplyReport,
   type Conflict,
   type Operation,
-  type RecordContext,
 } from "./operations.ts";
 
 /** Every operation applied, and every operation undone (most recent last). */
@@ -177,15 +176,11 @@ export interface Rebased {
 /**
  * Sorts a log against a newer base, applying what still applies and the
  * conflicts a person resolved. See the module doc for the rules.
- *
- * `ctx` is the recording context of the NEWER base (the handles its last
- * check reported), used when "keep mine" records an operation again.
  */
 export function rebase(
   base: Draft,
   ops: readonly Operation[],
   choices: ReadonlyMap<number, Choice> = new Map(),
-  ctx: RecordContext = {},
 ): Rebased {
   let draft = base;
   const applied: Operation[] = [];
@@ -225,7 +220,7 @@ export function rebase(
     // now. A placement whose neighbour moved lands at the end of the list,
     // which is the only reading of "put it where I put it" a changed list
     // still supports.
-    const again = record(draft, intentOf(op), ctx, { lenientPlacement: true });
+    const again = record(draft, intentOf(op), { lenientPlacement: true });
     if (again.ok) {
       adopt(again.op);
       entries.push({

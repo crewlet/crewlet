@@ -24,16 +24,21 @@
  * differ from the form's initial values and nothing else, so a field somebody
  * else changed upstream and this operator never touched survives a rebase.
  *
- * WHAT FOLLOWS FROM NAMES IS DECIDED AT APPLY TIME. A unit's `lead`, a
- * `manages` entry and a root seat's `unit:` name another entity by its name.
- * When an operation renames or removes that entity, the references that named
- * it are followed or cleared as the operation applies, against the draft it
- * applies to, and reported. A reference somebody added upstream is therefore
- * followed too, instead of being left pointing at a name that no longer
- * exists. GitLab access levels are the exception: they are keyed by HANDLE,
- * which the client never derives, so the entries an operation clears are
- * resolved when it is recorded and carried, with their values, as
- * preconditions.
+ * A REFERENCE NAMES AN IDENTITY, SO A RENAME FOLLOWS NOTHING. A unit's
+ * `lead`, a `manages` entry and a root seat's `unit:` name a seat by its
+ * handle and a unit by its key (`identity.ts`), neither of which a rename
+ * touches, so renaming a node changes its name and nothing else. What an
+ * operation leaves naming nothing is decided at apply time: a removal clears
+ * every reference to what it removed, against the draft it applies to, and
+ * reports each, so a reference somebody added upstream is cleared too rather
+ * than left naming nothing. The one identity that may still change is that of
+ * a node this draft created, which nothing outside the draft can name yet:
+ * choosing its handle or key moves every reference the draft holds to it. A
+ * saved seat's handle never changes: giving the role another one is
+ * [ReplaceSeat], a removal and an addition recorded as one step.
+ * GitLab access levels are keyed by handle as well, and the entries an
+ * operation clears or carries are resolved when it is recorded and carried,
+ * with their values, as preconditions.
  *
  * The seat rules mirrored here are the ones an operation's own meaning needs
  * and nothing more: which fields a kind forbids (a kind change strips them,
@@ -45,19 +50,25 @@
 import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
 import { plural } from "~/lib/format.ts";
 import { cloneJson, getPath, isRecord, jsonEqual, setPath } from "./json.ts";
-import { COMPANY_KEY, handleOfKey, isMintedKey, type NodeKey } from "./keys.ts";
+import { COMPANY_KEY, isMintedKey, type NodeKey } from "./keys.ts";
 import {
   allSeats,
   allUnits,
   attach,
+  declaredHandle,
+  declaredUnitKey,
   detach,
+  handleOf,
+  identitiesOf,
   isWithin,
   locate,
   mapSeatData,
   mapUnitData,
   placementOf,
+  seatWithHandle,
   siblingsAt,
   subtreeKeys,
+  unitIdOf,
   updateSeatData,
   updateUnitData,
   type Draft,
@@ -66,12 +77,8 @@ import {
   type Located,
   type Placement,
 } from "./draft.ts";
-import {
-  CHARTER_FIELDS,
-  DATADOG_ROUTE_TO,
-  GITLAB_ACCESS_LEVELS,
-  declaredHandle,
-} from "./document.ts";
+import { CHARTER_FIELDS, DATADOG_ROUTE_TO, GITLAB_ACCESS_LEVELS } from "./document.ts";
+import { handleProblem, unitKeyProblem } from "./identity.ts";
 
 // ---------------------------------------------------------------------------
 // Shapes
@@ -81,9 +88,11 @@ import {
  * The version of the operation shapes below. A persisted log carries it, and a
  * log of any other version is discarded on restore rather than interpreted:
  * replaying an operation under a meaning it was not recorded with is exactly
- * the silent corruption preconditions exist to stop.
+ * the silent corruption preconditions exist to stop. Version 2 is the one
+ * whose references name handles and unit keys; a version 1 log named seats
+ * and units by their names.
  */
-export const OPERATIONS_VERSION = 1;
+export const OPERATIONS_VERSION = 2;
 
 /** Who holds a seat. An absent or unrecognised `kind` is an agent seat, as the engine reads it. */
 export type SeatKind = "agent" | "human";
@@ -161,21 +170,42 @@ export interface Remove {
   readonly routeTo?: RouteToChange;
 }
 
+/**
+ * A saved seat replaced by a new one under another handle, as ONE step.
+ *
+ * A SEAT WITH ANOTHER HANDLE IS ANOTHER SEAT: its agent id, mailbox and memory
+ * derive from the handle, so the engine reads the result as the old seat's
+ * removal and a new seat's creation, and the old seat's work stays with the
+ * old handle. What the person asked for is the same role under a new
+ * identity, so the new seat takes the old one's place and fields, and every
+ * reference to the old handle the draft holds when this applies (a unit's
+ * lead, a `manages` entry, the Datadog fallback) moves to the new one, as does
+ * its GitLab access level. One operation rather than a removal and an
+ * addition, so one undo puts the old seat back and a removal never clears the
+ * references the addition was meant to take over.
+ */
+export interface ReplaceSeat {
+  readonly type: "replaceSeat";
+  readonly target: NodeKey;
+  /** The seat replaced, as it stood. */
+  readonly snapshot: NodeSnapshot;
+  /** The new seat's key, minted. */
+  readonly key: NodeKey;
+  /** The new seat's handle. */
+  readonly handle: string;
+  /** The old handle's GitLab access level, cleared there and set on the new one. */
+  readonly accessLevels: readonly AccessLevelChange[];
+}
+
+/** A seat's display name changed. Its handle, and so everything naming it, stays. */
 export interface RenameSeat {
   readonly type: "renameSeat";
   readonly target: NodeKey;
   readonly before: string;
   readonly after: string;
-  /**
-   * The engine-reported handle written as the seat's declared handle, so a
-   * rename keeps the identity its memory and mailbox attach to. Set for a seat
-   * of the base that declared none.
-   */
-  readonly pin?: string;
-  /** For a seat created in this draft: the entry its old derived handle held, cleared. */
-  readonly accessLevels: readonly AccessLevelChange[];
 }
 
+/** A unit's display name changed. Its key, and so everything naming it, stays. */
 export interface RenameUnit {
   readonly type: "renameUnit";
   readonly target: NodeKey;
@@ -217,7 +247,7 @@ export interface UpdateUnit {
 export interface SetLead {
   readonly type: "setLead";
   readonly target: NodeKey;
-  /** Seat NAMES, as the document writes a lead. Omitted for none. */
+  /** Seat HANDLES, as the document writes a lead. Omitted for none. */
   readonly before?: string;
   readonly after?: string;
 }
@@ -225,7 +255,7 @@ export interface SetLead {
 export interface SetManages {
   readonly type: "setManages";
   readonly target: NodeKey;
-  /** The explicit list, seat or unit names. Omitted for none. */
+  /** The explicit list: seat handles and unit keys. Omitted for none. */
   readonly before?: readonly string[];
   readonly after?: readonly string[];
 }
@@ -329,6 +359,7 @@ export type Operation =
   | AddUnit
   | AddSeat
   | Remove
+  | ReplaceSeat
   | RenameSeat
   | RenameUnit
   | Move
@@ -387,6 +418,13 @@ type SingleIntent =
       /** The replacement Datadog fallback handle, when a removed seat is it. */
       readonly routeTo?: string;
     }
+  | {
+      readonly type: "replaceSeat";
+      readonly target: NodeKey;
+      /** The new seat's key, minted in the handler. */
+      readonly key: NodeKey;
+      readonly handle: string;
+    }
   | { readonly type: "renameSeat"; readonly target: NodeKey; readonly name: string }
   | { readonly type: "renameUnit"; readonly target: NodeKey; readonly name: string }
   | {
@@ -429,16 +467,6 @@ type SingleIntent =
       readonly units: readonly DraftUnit[];
     };
 
-/**
- * What recording needs that the draft cannot say: the handle the engine
- * derived for a seat that declares none, from a check that saw the seat under
- * the name it has now (`document.knownHandles`). Existing seats carry their
- * handle in their key and need no lookup.
- */
-export interface RecordContext {
-  readonly handleOf?: (key: NodeKey) => string | undefined;
-}
-
 /** Why an intent could not be recorded against the draft. */
 export type RecordRefusal =
   | "missing_target"
@@ -450,7 +478,7 @@ export type RecordRefusal =
   | "into_itself"
   | "across_parents"
   | "forbidden_field"
-  | "unknown_handle"
+  | "bad_identity"
   | "no_schedule"
   | "no_datadog"
   | "no_gitlab"
@@ -605,15 +633,15 @@ function forbiddenFor(data: ConfigRole, kind: SeatKind): FieldChange[] {
 
 /**
  * The seat fields `updateSeat` may not write, each because another operation
- * owns it and carries what that change means: a rename pins the handle and
- * follows references, a kind change strips forbidden fields, `manages` is
- * compared whole, a move replaces `unit:` with a placement, and a schedule is
- * only ever toggled here. `handle` is refused on a seat of the base, whose
- * handle is its identity; a seat this draft created may still choose one.
+ * owns it and carries what that change means: a rename is a name and nothing
+ * else, a kind change strips forbidden fields, `manages` is compared whole, a
+ * move replaces `unit:` with a placement, and a schedule is only ever toggled
+ * here. `handle` is refused on a seat of the base, whose handle is its
+ * identity; a seat this draft created may still choose one.
  */
 const SEAT_OWNED = new Set(["name", "kind", "manages", "unit", "schedules"]);
 
-/** The unit fields `updateUnit` may not write. */
+/** The unit fields `updateUnit` may not write; `id` as `handle` is for a seat. */
 const UNIT_OWNED = new Set(["name", "lead", "roles", "children", "schedules"]);
 
 /** Whether `updateSeat` may write a field of a seat; `minted` says the seat was created in this draft. */
@@ -623,10 +651,11 @@ function seatFieldWritable(path: readonly string[], minted: boolean): boolean {
   return head !== "handle" || minted;
 }
 
-/** Whether `updateUnit` may write a field of a unit. */
-function unitFieldWritable(path: readonly string[]): boolean {
+/** Whether `updateUnit` may write a field of a unit; `minted` says the unit was created in this draft. */
+function unitFieldWritable(path: readonly string[], minted: boolean): boolean {
   const head = path[0];
-  return head !== undefined && !UNIT_OWNED.has(head);
+  if (head === undefined || UNIT_OWNED.has(head)) return false;
+  return head !== "id" || minted;
 }
 
 /** Whether `updateCompany` may write a field: the charter, and nothing else. */
@@ -649,23 +678,21 @@ function charterFieldWritable(path: readonly string[]): boolean {
 export function malformedReason(op: Operation): string | null {
   switch (op.type) {
     case "addUnit":
+      if (!isMintedKey(op.key)) return "a created node has no minted key";
+      return declaredUnitKey(op.data) === undefined ? "a created unit has no key" : null;
     case "addSeat":
-      return isMintedKey(op.key) ? null : "a created node has no minted key";
-    case "renameSeat":
-      // A pin keeps the handle the seat already had. A created seat has none
-      // to keep, and a seat keyed by its handle can only keep that one: any
-      // other pin would hand the seat a new identity under a rename.
-      if (op.pin === undefined) return null;
-      if (isMintedKey(op.target)) return "a created seat's rename pins a handle";
-      return handleOfKey(op.target) === undefined || handleOfKey(op.target) === op.pin
-        ? null
-        : "a rename pins a handle other than the seat's own";
+      if (!isMintedKey(op.key)) return "a created node has no minted key";
+      return declaredHandle(op.data) === undefined ? "a created seat has no handle" : null;
+    case "replaceSeat":
+      if (!isMintedKey(op.key)) return "a created node has no minted key";
+      if (isMintedKey(op.target)) return "a seat this draft created is not replaced";
+      return op.handle === "" ? "a created seat has no handle" : null;
     case "updateSeat":
       return op.changes.every((c) => seatFieldWritable(c.path, isMintedKey(op.target)))
         ? null
         : "a seat edit writes a field its own action owns";
     case "updateUnit":
-      return op.changes.every((c) => unitFieldWritable(c.path))
+      return op.changes.every((c) => unitFieldWritable(c.path, isMintedKey(op.target)))
         ? null
         : "a unit edit writes a field its own action owns";
     case "updateCompany":
@@ -673,9 +700,10 @@ export function malformedReason(op: Operation): string | null {
         ? null
         : "a company edit writes outside the charter";
     case "applyTemplate":
-      return templateKeys(op.roles, op.units).every(isMintedKey)
-        ? null
-        : "a template node has no minted key";
+      if (!templateKeys(op.roles, op.units).every(isMintedKey)) {
+        return "a template node has no minted key";
+      }
+      return templateIdentified(op.roles, op.units) ? null : "a template node has no identity";
     case "edit": {
       // Recording yields a single change as its own operation, so an edit of
       // fewer than two parts is not something this build writes.
@@ -714,43 +742,10 @@ function writtenKind(data: ConfigRole): string | undefined {
   return typeof data.kind === "string" ? data.kind : undefined;
 }
 
-/** The handle of a seat in the draft: its key's, its declared one, or the last check's. */
-function seatHandle(seat: DraftSeat, ctx: RecordContext): string | undefined {
-  return declaredHandle(seat.data) ?? handleOfKey(seat.key) ?? ctx.handleOf?.(seat.key);
-}
-
 /** The access level entry for a handle in the draft, when there is one. */
 function accessLevel(draft: Draft, handle: string): string | undefined {
   const value = getPath(draft.company, [...GITLAB_ACCESS_LEVELS, handle]);
   return typeof value === "string" ? value : undefined;
-}
-
-/** Whether the draft holds any GitLab access level entry at all. */
-function hasAccessLevels(draft: Draft): boolean {
-  const levels = getPath(draft.company, GITLAB_ACCESS_LEVELS);
-  return isRecord(levels) && Object.keys(levels).length > 0;
-}
-
-/**
- * The refusal for an operation that would leave a seat's GitLab access level
- * behind because the seat's handle is not known.
- *
- * A LEVEL NOBODY CAN FIND IS A GRANT WAITING FOR A SEAT. Access levels are
- * keyed by handle, the client never derives one, and the handle of a seat this
- * draft created is only known from a check that saw the seat under the name
- * it has now (`document.knownHandles`), so a rename leaves it unknown until
- * the next check answers. Removing or renaming such a seat in that window
- * would clear nothing, and the entry it held would grant its level to the
- * next seat the engine gives that handle.
- * So while the draft holds access levels, an operation that must clear one by
- * an unknown handle waits for the check instead of guessing; a draft with no
- * access levels has nothing to leave behind and is not held up.
- */
-function unknownHandleForLevels(action: string): Recorded {
-  return refuse(
-    "unknown_handle",
-    `The engine has not reported this seat's handle yet, and GitLab access levels are keyed by it. Wait for the check to finish, then ${action}.`,
-  );
 }
 
 /** The GitLab provisioning block that holds the access levels. */
@@ -813,24 +808,38 @@ function unitJson(unit: DraftUnit): ConfigUnit {
   return out;
 }
 
-/**
- * The root seats a unit's subtree holds by reference: each root seat whose
- * `unit:` names a unit in the subtree, when no unit outside it carries that
- * name (a duplicate outside would still resolve the reference).
- */
+/** The root seats a unit's subtree holds by reference: each whose `unit:` is the key of a unit in it. */
 function placedByReference(draft: Draft, unit: DraftUnit): DraftSeat[] {
   const inside = new Set(subtreeKeys(unit));
-  const insideNames = new Set<string>();
-  const outsideNames = new Set<string>();
-  for (const { unit: u } of allUnits(draft)) {
-    (inside.has(u.key) ? insideNames : outsideNames).add(u.data.name);
-  }
-  return draft.roles.filter(
-    (s) =>
-      typeof s.data.unit === "string" &&
-      insideNames.has(s.data.unit) &&
-      !outsideNames.has(s.data.unit),
-  );
+  const keys = new Set<string>();
+  for (const { unit: u } of allUnits(draft)) if (inside.has(u.key)) keys.add(unitIdOf(u));
+  return draft.roles.filter((s) => typeof s.data.unit === "string" && keys.has(s.data.unit));
+}
+
+/**
+ * Why a new node's identity cannot be recorded, or `null` when it can: the
+ * engine's grammar, and no other seat or unit of the draft holding it. `self`
+ * is the identity the node already has, which choosing it again does not take.
+ */
+function identityProblem(
+  draft: Draft,
+  kind: "seat" | "unit",
+  value: unknown,
+  self?: string,
+): string | null {
+  const taken = identitiesOf(draft);
+  if (self !== undefined) taken.delete(self);
+  const text = typeof value === "string" ? value : "";
+  return kind === "seat" ? handleProblem(text, taken) : unitKeyProblem(text, taken);
+}
+
+/** Whether every node a template fragment creates carries its identity. */
+function templateIdentified(roles: readonly DraftSeat[], units: readonly DraftUnit[]): boolean {
+  const unit = (u: DraftUnit): boolean =>
+    declaredUnitKey(u.data) !== undefined &&
+    u.roles.every((s) => declaredHandle(s.data) !== undefined) &&
+    u.children.every(unit);
+  return roles.every((s) => declaredHandle(s.data) !== undefined) && units.every(unit);
 }
 
 function routeToChange(draft: Draft, after: string | undefined): RouteToChange | undefined {
@@ -865,7 +874,6 @@ function placementOrEnd(
 export function record(
   draft: Draft,
   intent: Intent,
-  ctx: RecordContext = {},
   options: { lenientPlacement?: boolean } = {},
 ): Recorded {
   const seatAt = (key: NodeKey) => {
@@ -907,6 +915,12 @@ export function record(
       }
       if (locate(draft, intent.key)) return refuse("key_in_use", "That key already names a node.");
       const kind = intent.type === "addUnit" ? "unit" : "seat";
+      const identity = identityProblem(
+        draft,
+        kind,
+        kind === "unit" ? intent.data.id : intent.data.handle,
+      );
+      if (identity !== null) return refuse("bad_identity", identity);
       const placement = checkPlacement(intent.placement, kind);
       if (isRecorded(placement)) return placement;
       if (intent.type === "addUnit") {
@@ -937,11 +951,7 @@ export function record(
             ];
       const accessLevels: AccessLevelChange[] = [];
       for (const seat of removedSeats) {
-        const handle = seatHandle(seat, ctx);
-        if (handle === undefined) {
-          if (hasAccessLevels(draft)) return unknownHandleForLevels("remove it");
-          continue;
-        }
+        const handle = handleOf(seat);
         const level = accessLevel(draft, handle);
         if (level !== undefined) accessLevels.push({ handle, before: level });
       }
@@ -963,50 +973,53 @@ export function record(
       });
     }
 
+    case "replaceSeat": {
+      const found = seatAt(intent.target);
+      if (!found) return missing(intent.target);
+      if (isMintedKey(intent.target)) {
+        return refuse(
+          "not_editable",
+          "A seat this draft created takes another handle in its editor: nothing outside the draft names it yet.",
+        );
+      }
+      if (!isMintedKey(intent.key)) {
+        return refuse("not_minted", "A new node needs a key minted for it.");
+      }
+      if (locate(draft, intent.key)) return refuse("key_in_use", "That key already names a node.");
+      const old = handleOf(found.node);
+      if (intent.handle === old) return refuse("no_change", "The handle is unchanged.");
+      const identity = identityProblem(draft, "seat", intent.handle);
+      if (identity !== null) return refuse("bad_identity", identity);
+      const level = accessLevel(draft, old);
+      return recorded({
+        type: "replaceSeat",
+        target: intent.target,
+        snapshot: { key: found.node.key, json: cloneJson(found.node.data) },
+        key: intent.key,
+        handle: intent.handle,
+        accessLevels:
+          level === undefined
+            ? []
+            : [
+                { handle: old, before: level },
+                {
+                  handle: intent.handle,
+                  ...(accessLevel(draft, intent.handle) !== undefined
+                    ? { before: accessLevel(draft, intent.handle) }
+                    : {}),
+                  after: level,
+                },
+              ],
+      });
+    }
+
     case "renameSeat": {
       const found = seatAt(intent.target);
       if (!found) return missing(intent.target);
       const before = found.node.data.name;
       const after = intent.name.trim();
       if (after === before) return refuse("no_change", "The name is unchanged.");
-      const accessLevels: AccessLevelChange[] = [];
-      let pin: string | undefined;
-      if (declaredHandle(found.node.data) === undefined) {
-        if (isMintedKey(found.node.key)) {
-          // A seat this draft created runs under whatever the engine derives
-          // from its name, so the handle changes with it: an access level set
-          // for the old handle would be left keyed to a seat that no longer
-          // exists and grant its level to the next seat deriving that handle.
-          const handle = ctx.handleOf?.(found.node.key);
-          if (handle === undefined) {
-            if (hasAccessLevels(draft)) return unknownHandleForLevels("rename it");
-          } else {
-            const level = accessLevel(draft, handle);
-            if (level !== undefined) accessLevels.push({ handle, before: level });
-          }
-        } else {
-          // The key names the engine's handle for a seat of the base. A seat
-          // keyed by its path (the base had not been checked when it was
-          // keyed) takes the handle the last check of this draft reported:
-          // that is still the engine's derivation, of the name the seat has
-          // held since the base, because every rename pins.
-          pin = handleOfKey(found.node.key) ?? ctx.handleOf?.(found.node.key);
-          if (pin === undefined) {
-            return refuse(
-              "unknown_handle",
-              "The engine has not reported this seat's handle yet, so renaming it could change its identity. Wait for the check to finish, then rename it.",
-            );
-          }
-        }
-      }
-      return recorded({
-        type: "renameSeat",
-        target: intent.target,
-        before,
-        after,
-        ...(pin !== undefined ? { pin } : {}),
-        accessLevels,
-      });
+      return recorded({ type: "renameSeat", target: intent.target, before, after });
     }
 
     case "renameUnit": {
@@ -1092,22 +1105,18 @@ export function record(
           );
         }
         if (head === "handle") {
-          // Choosing a handle takes a new seat's access level off the handle
-          // it had, for the reason renameSeat gives, and onto the handle it
-          // chose: the operator changed what the seat is called, not what it
-          // may do. With no handle chosen the engine derives one, which is
-          // not known until the next check, so the level is cleared and the
-          // review lists it.
-          const old = seatHandle(found.node, ctx);
-          if (old === undefined) {
-            if (hasAccessLevels(draft)) return unknownHandleForLevels("choose its handle");
-          } else {
-            const level = accessLevel(draft, old);
-            if (level !== undefined && old !== set.value) {
-              accessLevels.push({ handle: old, before: level });
-              if (typeof set.value === "string" && set.value !== "")
-                carried = { handle: set.value, level };
-            }
+          // A NEW SEAT'S HANDLE IS CHOSEN, never cleared: the engine would
+          // derive one from the name, which nothing in the draft could name
+          // until the next check. Choosing one takes the seat's access level
+          // off the handle it had and onto the one it chose: the operator
+          // changed what the seat is addressed as, not what it may do.
+          const old = handleOf(found.node);
+          const problem = identityProblem(draft, "seat", set.value, old);
+          if (problem !== null) return refuse("bad_identity", problem);
+          const level = accessLevel(draft, old);
+          if (level !== undefined && old !== set.value) {
+            accessLevels.push({ handle: old, before: level });
+            carried = { handle: set.value as string, level };
           }
         }
         const before = getPath(found.node.data, set.path);
@@ -1122,14 +1131,7 @@ export function record(
       }
       if (intent.accessLevel !== undefined) {
         const renamed = intent.set.find((s) => jsonEqual(s.path, ["handle"]));
-        const handle =
-          typeof renamed?.value === "string" ? renamed.value : seatHandle(found.node, ctx);
-        if (handle === undefined) {
-          return refuse(
-            "unknown_handle",
-            "The engine has not reported this seat's handle yet, and the access level is keyed by it. Wait for the check to finish, then set it.",
-          );
-        }
+        const handle = typeof renamed?.value === "string" ? renamed.value : handleOf(found.node);
         const before = accessLevel(draft, handle);
         const after = intent.accessLevel ?? undefined;
         if (before !== after && !accessLevels.some((a) => a.handle === handle)) {
@@ -1159,11 +1161,17 @@ export function record(
       if (!found) return missing(intent.target);
       const changes: FieldChange[] = [];
       for (const set of intent.set) {
-        if (!unitFieldWritable(set.path)) {
+        if (!unitFieldWritable(set.path, isMintedKey(found.node.key))) {
           return refuse(
             "forbidden_field",
-            `The ${fieldName(set.path)} field is changed by its own action.`,
+            set.path[0] === "id"
+              ? "An existing unit keeps its key: it is the identity its schedules, work and every reference to it are filed under."
+              : `The ${fieldName(set.path)} field is changed by its own action.`,
           );
+        }
+        if (set.path[0] === "id") {
+          const problem = identityProblem(draft, "unit", set.value, unitIdOf(found.node));
+          if (problem !== null) return refuse("bad_identity", problem);
         }
         const before = getPath(found.node.data, set.path);
         if (!jsonEqual(before, set.value)) changes.push(fieldChange(set.path, before, set.value));
@@ -1311,7 +1319,7 @@ export function record(
             "An edit changes the fields of one node. Add, remove, move or change the kind of a node on its own.",
           );
         }
-        const result = record(at, part, ctx, options);
+        const result = record(at, part, options);
         if (!result.ok) {
           // A field the form left as it was is no change, not a failure:
           // the rest of the edit still stands.
@@ -1371,6 +1379,8 @@ export function intentOf(op: Operation): Intent {
         placedSeats: op.placedSeats,
         ...(op.routeTo?.after !== undefined ? { routeTo: op.routeTo.after } : {}),
       };
+    case "replaceSeat":
+      return { type: "replaceSeat", target: op.target, key: op.key, handle: op.handle };
     case "renameSeat":
       return { type: "renameSeat", target: op.target, name: op.after };
     case "renameUnit":
@@ -1566,32 +1576,21 @@ export function evaluate(draft: Draft, op: Operation): Outcome {
       return finish();
     }
 
+    case "replaceSeat": {
+      const found = locate(draft, op.target);
+      if (found?.kind !== "seat") return gone("It is no longer in the organization.");
+      if (locate(draft, op.key)) return gone("It has already been added.");
+      expect("the whole seat", op.snapshot.json, found.node.data, undefined, "snapshot");
+      expectAccessLevels(op.accessLevels);
+      return finish();
+    }
+
     case "renameSeat":
     case "renameUnit": {
       const found = locate(draft, op.target);
       const kind = op.type === "renameSeat" ? "seat" : "unit";
       if (found?.kind !== kind) return gone("It is no longer in the organization.");
       expect("name", op.before, found.node.data.name, op.after);
-      if (op.type === "renameSeat") {
-        const declared = declaredHandle(found.node.data);
-        if (op.pin !== undefined) {
-          if (declared !== undefined && declared !== op.pin) {
-            conflicts.push({ subject: "handle", base: undefined, theirs: declared, mine: op.pin });
-          }
-        } else if (!isMintedKey(op.target) && declared === undefined) {
-          // Recorded without a pin because the seat declared its handle then.
-          // Somebody has since removed that declaration, so renaming it now
-          // would hand the seat a handle derived from the new name, and with
-          // it a new identity, memory and mailbox. Recording it again pins.
-          conflicts.push({
-            subject: "handle",
-            base: handleOfKey(op.target),
-            theirs: undefined,
-            mine: handleOfKey(op.target),
-          });
-        }
-        expectAccessLevels(op.accessLevels);
-      }
       return finish();
     }
 
@@ -1787,28 +1786,29 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
 
     case "remove": {
       const found = locate(draft, op.target)!;
-      const removedSeatNames: string[] = [];
-      const removedUnitNames: string[] = [];
+      const removedHandles = new Set<string>();
+      const removedUnits = new Set<string>();
       if (found.kind === "seat") {
-        removedSeatNames.push(found.node.data.name);
+        removedHandles.add(handleOf(found.node));
       } else {
         for (const key of subtreeKeys(found.node)) {
           const inner = locate(draft, key)!;
-          (inner.kind === "seat" ? removedSeatNames : removedUnitNames).push(inner.node.data.name);
+          if (inner.kind === "seat") removedHandles.add(handleOf(inner.node));
+          else removedUnits.add(unitIdOf(inner.node));
         }
       }
       let next = detach(draft, op.target)!.draft;
       if (found.kind === "unit" && op.placedSeats === "remove") {
         for (const placed of op.placed) {
           const seat = locate(next, placed.key);
-          if (seat) {
-            removedSeatNames.push(seat.node.data.name);
+          if (seat?.kind === "seat") {
+            removedHandles.add(handleOf(seat.node));
             next = detach(next, placed.key)!.draft;
           }
         }
       }
       const cleared: ReferenceEffect[] = [];
-      next = clearReferences(next, new Set(removedSeatNames), new Set(removedUnitNames), cleared);
+      next = clearReferences(next, removedHandles, removedUnits, cleared);
       for (const change of op.accessLevels) {
         next = { ...next, company: withAccessLevel(next.company, change.handle, undefined) };
         cleared.push({ kind: "gitlab_access_level", holder: COMPANY_KEY, from: change.handle });
@@ -1817,34 +1817,33 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
       return { draft: next, report: { cleared, followed: [], stripped: [] } };
     }
 
-    case "renameSeat": {
-      let next = updateSeatData(draft, op.target, (data) => {
-        const renamed: ConfigRole = { ...data, name: op.after };
-        if (op.pin !== undefined && declaredHandle(data) === undefined) renamed.handle = op.pin;
-        return renamed;
-      });
-      const cleared: ReferenceEffect[] = [];
+    case "replaceSeat": {
+      const found = locate(draft, op.target)!;
+      const from = handleOf(found.node as DraftSeat);
+      const seat: DraftSeat = {
+        key: op.key,
+        data: { ...cloneJson((found.node as DraftSeat).data), handle: op.handle },
+      };
+      let next = attach(detach(draft, op.target)!.draft, placementOf(found), seat, "seat");
+      const followed: ReferenceEffect[] = [];
+      next = followHandle(next, from, op.handle, followed);
       for (const change of op.accessLevels) {
-        next = { ...next, company: withAccessLevel(next.company, change.handle, undefined) };
-        cleared.push({ kind: "gitlab_access_level", holder: COMPANY_KEY, from: change.handle });
+        next = { ...next, company: withAccessLevel(next.company, change.handle, change.after) };
       }
-      const followed: ReferenceEffect[] = [];
-      const others = [...allSeats(next)].some(
-        ({ seat }) => seat.key !== op.target && seat.data.name === op.before,
-      );
-      if (!others) next = followSeatName(next, op.before, op.after, followed);
-      return { draft: next, report: { cleared, followed, stripped: [] } };
-    }
-
-    case "renameUnit": {
-      let next = updateUnitData(draft, op.target, (data) => ({ ...data, name: op.after }));
-      const followed: ReferenceEffect[] = [];
-      const others = [...allUnits(next)].some(
-        ({ unit }) => unit.key !== op.target && unit.data.name === op.before,
-      );
-      if (!others) next = followUnitName(next, op.before, op.after, followed);
       return { draft: next, report: { cleared: [], followed, stripped: [] } };
     }
+
+    case "renameSeat":
+      return {
+        draft: updateSeatData(draft, op.target, (data) => ({ ...data, name: op.after })),
+        report: NO_EFFECTS,
+      };
+
+    case "renameUnit":
+      return {
+        draft: updateUnitData(draft, op.target, (data) => ({ ...data, name: op.after })),
+        report: NO_EFFECTS,
+      };
 
     case "move":
     case "reorder": {
@@ -1870,25 +1869,37 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
     }
 
     case "updateSeat": {
+      const was = locate(draft, op.target)!;
       let next = updateSeatData(draft, op.target, (data) =>
         op.changes.reduce((acc, c) => setPath(acc, c.path, cloneJson(c.after)) as ConfigRole, data),
       );
       for (const change of op.accessLevels) {
         next = { ...next, company: withAccessLevel(next.company, change.handle, change.after) };
       }
-      return { draft: next, report: NO_EFFECTS };
+      const followed: ReferenceEffect[] = [];
+      const now = locate(next, op.target)!;
+      if (was.kind === "seat" && now.kind === "seat") {
+        const from = handleOf(was.node);
+        const to = handleOf(now.node);
+        if (from !== to) next = followHandle(next, from, to, followed);
+      }
+      return { draft: next, report: { cleared: [], followed, stripped: [] } };
     }
 
-    case "updateUnit":
-      return {
-        draft: updateUnitData(draft, op.target, (data) =>
-          op.changes.reduce(
-            (acc, c) => setPath(acc, c.path, cloneJson(c.after)) as ConfigUnit,
-            data,
-          ),
-        ),
-        report: NO_EFFECTS,
-      };
+    case "updateUnit": {
+      const was = locate(draft, op.target)!;
+      let next = updateUnitData(draft, op.target, (data) =>
+        op.changes.reduce((acc, c) => setPath(acc, c.path, cloneJson(c.after)) as ConfigUnit, data),
+      );
+      const followed: ReferenceEffect[] = [];
+      const now = locate(next, op.target)!;
+      if (was.kind === "unit" && now.kind === "unit") {
+        const from = unitIdOf(was.node);
+        const to = unitIdOf(now.node);
+        if (from !== to) next = followUnitKey(next, from, to, followed);
+      }
+      return { draft: next, report: { cleared: [], followed, stripped: [] } };
+    }
 
     case "setLead":
       return {
@@ -1997,30 +2008,28 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
 }
 
 /**
- * Clears the references a removal left naming something else or nothing: a
- * unit's `lead` that named a removed seat, `manages` entries that named a
- * removed seat or unit, and a root seat's `unit:` that named a removed unit.
+ * Clears the references a removal left naming nothing: a unit's `lead` that
+ * named a removed seat, a `manages` entry that named a removed seat or unit,
+ * and a root seat's `unit:` that named a removed unit.
  *
  * WHAT AN ENTRY NAMED IS DECIDED AS THE ENGINE READS IT, before the removal:
- * a `manages` entry matching both a seat and a unit named the SEAT. So an
- * entry that named a removed seat is cleared even when a unit of that name
- * remains, because leaving it would silently widen it to the whole unit. An
- * entry is kept only when what it named still exists under that name.
+ * a `manages` entry matching both a seat's handle and a unit's key names the
+ * SEAT. So an entry that named a removed seat is cleared even when a unit of
+ * that key remains, because leaving it would silently widen it to the whole
+ * unit; and an entry naming a removed unit's key is kept while a seat of that
+ * handle remains, since it named the seat all along.
  */
 function clearReferences(
   draft: Draft,
-  seatNames: Set<string>,
-  unitNames: Set<string>,
+  handles: ReadonlySet<string>,
+  units: ReadonlySet<string>,
   cleared: ReferenceEffect[],
 ): Draft {
-  const remainingSeats = new Set([...allSeats(draft)].map(({ seat }) => seat.data.name));
-  const remainingUnits = new Set([...allUnits(draft)].map(({ unit }) => unit.data.name));
-  const namedRemovedSeat = (entry: string) => seatNames.has(entry) && !remainingSeats.has(entry);
+  const seatsLeft = new Set([...allSeats(draft)].map(({ seat }) => handleOf(seat)));
+  const unitsLeft = new Set([...allUnits(draft)].map(({ unit }) => unitIdOf(unit)));
+  const namedRemovedSeat = (entry: string) => handles.has(entry) && !seatsLeft.has(entry);
   const namedRemovedUnit = (entry: string) =>
-    unitNames.has(entry) &&
-    !seatNames.has(entry) &&
-    !remainingSeats.has(entry) &&
-    !remainingUnits.has(entry);
+    units.has(entry) && !handles.has(entry) && !seatsLeft.has(entry) && !unitsLeft.has(entry);
   let next = mapUnitData(draft, (data, key) => {
     const lead = data.lead;
     if (typeof lead !== "string" || !namedRemovedSeat(lead)) return data;
@@ -2028,42 +2037,33 @@ function clearReferences(
     return setPath(data, ["lead"], undefined) as ConfigUnit;
   });
   next = mapSeatData(next, (data, key) => {
-    let out = data;
-    if (Array.isArray(data.manages)) {
-      const kept = data.manages.filter((entry) => {
-        const dangling = namedRemovedSeat(entry) || namedRemovedUnit(entry);
-        if (dangling) cleared.push({ kind: "manages", holder: key, from: entry });
-        return !dangling;
-      });
-      if (kept.length !== data.manages.length) {
-        out = setPath(out, ["manages"], kept.length > 0 ? kept : undefined) as ConfigRole;
-      }
-    }
-    return out;
+    if (!Array.isArray(data.manages)) return data;
+    const kept = data.manages.filter((entry) => {
+      const dangling = namedRemovedSeat(entry) || namedRemovedUnit(entry);
+      if (dangling) cleared.push({ kind: "manages", holder: key, from: entry });
+      return !dangling;
+    });
+    if (kept.length === data.manages.length) return data;
+    return setPath(data, ["manages"], kept.length > 0 ? kept : undefined) as ConfigRole;
   });
   const roots = new Set(next.roles.map((s) => s.key));
-  next = mapSeatData(next, (data, key) => {
+  return mapSeatData(next, (data, key) => {
     const ref = data.unit;
-    if (
-      !roots.has(key) ||
-      typeof ref !== "string" ||
-      !unitNames.has(ref) ||
-      remainingUnits.has(ref)
-    )
+    if (!roots.has(key) || typeof ref !== "string" || !units.has(ref) || unitsLeft.has(ref)) {
       return data;
+    }
     cleared.push({ kind: "unit", holder: key, from: ref });
     return setPath(data, ["unit"], undefined) as ConfigRole;
   });
-  return next;
 }
 
-/** Follows a seat rename in every `lead` and `manages` entry that named the seat. */
-function followSeatName(
-  draft: Draft,
-  from: string,
-  to: string,
-  followed: ReferenceEffect[],
-): Draft {
+/**
+ * Moves every reference to a seat's handle onto another: each unit `lead`,
+ * each `manages` entry and the Datadog fallback that named the old one. A seat
+ * this draft created gets here when its handle is chosen again, which nothing
+ * outside the draft can name yet, and a saved seat when it is REPLACED.
+ */
+function followHandle(draft: Draft, from: string, to: string, followed: ReferenceEffect[]): Draft {
   let next = mapUnitData(draft, (data, key) => {
     if (data.lead !== from) return data;
     followed.push({ kind: "lead", holder: key, from, to });
@@ -2074,21 +2074,20 @@ function followSeatName(
     followed.push({ kind: "manages", holder: key, from, to });
     return { ...data, manages: data.manages.map((m) => (m === from ? to : m)) };
   });
+  if (getPath(next.company, DATADOG_ROUTE_TO) === from) {
+    next = { ...next, company: withRouteTo(next.company, to) };
+  }
   return next;
 }
 
 /**
- * Follows a unit rename in every root seat's `unit:` and every `manages` entry
- * that named the unit. An entry that also names a seat named the SEAT (a seat
- * name wins over a unit name), so it is not the unit's to follow.
+ * Moves every reference to a new unit's key when its key is chosen again: each
+ * root seat's `unit:` and each `manages` entry that named the old one. An
+ * entry that also names a seat named the SEAT (a handle wins over a unit
+ * key), so it is not the unit's to move.
  */
-function followUnitName(
-  draft: Draft,
-  from: string,
-  to: string,
-  followed: ReferenceEffect[],
-): Draft {
-  const seatHoldsName = [...allSeats(draft)].some(({ seat }) => seat.data.name === from);
+function followUnitKey(draft: Draft, from: string, to: string, followed: ReferenceEffect[]): Draft {
+  const seatHolds = seatWithHandle(draft, from) !== undefined;
   const roots = new Set(draft.roles.map((s) => s.key));
   return mapSeatData(draft, (data, key) => {
     let out = data;
@@ -2096,7 +2095,7 @@ function followUnitName(
       followed.push({ kind: "unit", holder: key, from, to });
       out = { ...out, unit: to };
     }
-    if (!seatHoldsName && Array.isArray(data.manages) && data.manages.includes(from)) {
+    if (!seatHolds && Array.isArray(data.manages) && data.manages.includes(from)) {
       followed.push({ kind: "manages", holder: key, from, to });
       out = { ...out, manages: data.manages.map((m) => (m === from ? to : m)) };
     }
@@ -2118,6 +2117,8 @@ export function touchedKeys(op: Operation): NodeKey[] {
     case "addUnit":
     case "addSeat":
       return [op.key, op.placement.parent];
+    case "replaceSeat":
+      return [op.key, op.target];
     case "remove":
       return [op.target];
     case "move":
@@ -2144,6 +2145,8 @@ export function describeOperation(op: Operation, before: Draft): string {
     return found ? found.node.data.name || "an unnamed node" : "a node no longer in the draft";
   };
   const where = (parent: NodeKey) => (parent === COMPANY_KEY ? "the company" : nameOf(parent));
+  /** A seat a lead names, by its name where the draft holds it, else by its handle. */
+  const seatNamed = (handle: string): string => seatWithHandle(before, handle)?.data.name || handle;
   switch (op.type) {
     case "addUnit":
       return `Added unit ${op.data.name} to ${where(op.placement.parent)}.`;
@@ -2162,6 +2165,11 @@ export function describeOperation(op: Operation, before: Draft): string {
           : `Removed unit ${found.node.data.name} and ${plural(seats, "seat")} in it.`;
       }
       return `Removed seat ${nameOf(op.target)}.`;
+    }
+    case "replaceSeat": {
+      const found = locate(before, op.target);
+      const old = found?.kind === "seat" ? handleOf(found.node) : "";
+      return `Replaced seat ${nameOf(op.target)}${old ? ` (@${old})` : ""} with a new seat, @${op.handle}.`;
     }
     case "renameSeat":
       return `Renamed seat ${op.before} to ${op.after}.`;
@@ -2183,7 +2191,7 @@ export function describeOperation(op: Operation, before: Draft): string {
     case "setLead":
       return op.after === undefined
         ? `Cleared the lead of ${nameOf(op.target)}.`
-        : `Set the lead of ${nameOf(op.target)} to ${op.after}.`;
+        : `Set the lead of ${nameOf(op.target)} to ${seatNamed(op.after)}.`;
     case "setManages":
       return `Changed whom ${nameOf(op.target)} manages.`;
     case "changeKind":

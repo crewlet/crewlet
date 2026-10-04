@@ -1024,7 +1024,7 @@ export interface ConfigProblem {
   kind: ConfigProblemKind;
   /** The full line, exactly as the refusal's `detail` carries it. */
   message: string;
-  /** The engine-derived handle of the seat it is about. */
+  /** The handle of the seat it is about. */
   seat?: string;
   unit?: string;
   /** 1-based line in the submitted text, for parse failures only. */

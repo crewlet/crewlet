@@ -24,7 +24,15 @@
 
 import type { ScheduleSpec } from "~/protocol/index.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
-import { allSeats, allUnits, type Draft, type DraftSeat, type DraftUnit } from "./model/draft.ts";
+import {
+  allSeats,
+  allUnits,
+  seatWithHandle,
+  unitIdOf,
+  type Draft,
+  type DraftSeat,
+  type DraftUnit,
+} from "./model/draft.ts";
 import { isRecord } from "./model/json.ts";
 import {
   apply,
@@ -70,27 +78,18 @@ export interface StrandedSchedule {
 /** Every enabled unit schedule in the draft that nothing could run, in the document's order. */
 export function strandedSchedules(draft: Draft): StrandedSchedule[] {
   const units = [...allUnits(draft)];
-  const firstUnitNamed = (name: string) => units.find(({ unit }) => unit.data.name === name)?.unit;
+  const unitKeyed = (key: string) => units.find(({ unit }) => unitIdOf(unit) === key)?.unit;
 
   // Root seats the engine places in a unit by their `unit:` reference are
   // that unit's direct members (`attachRootSeats`), and leave the root.
   const attached = new Map<NodeKey, DraftSeat[]>();
-  const placed = new Set<NodeKey>();
   for (const seat of draft.roles) {
     const ref = seat.data.unit;
-    const target = typeof ref === "string" && ref !== "" ? firstUnitNamed(ref) : undefined;
+    const target = typeof ref === "string" && ref !== "" ? unitKeyed(ref) : undefined;
     if (!target) continue;
     attached.set(target.key, [...(attached.get(target.key) ?? []), seat]);
-    placed.add(seat.key);
   }
   const membersOf = (unit: DraftUnit) => [...unit.roles, ...(attached.get(unit.key) ?? [])];
-
-  // A lead names a seat by its name, the first seat of that name in the
-  // engine's order: root seats that stayed at the root, then each unit's
-  // members depth-first.
-  const seatNamed = (name: string): DraftSeat | undefined =>
-    draft.roles.find((s) => !placed.has(s.key) && s.data.name === name) ??
-    units.flatMap(({ unit }) => membersOf(unit)).find((s) => s.data.name === name);
 
   const parentOf = new Map(units.map(({ unit, parent }) => [unit.key, parent]));
   const byKey = new Map(units.map(({ unit }) => [unit.key, unit]));
@@ -112,8 +111,7 @@ export function strandedSchedules(draft: Draft): StrandedSchedule[] {
       const stranded = (reason: StrandedSchedule["reason"]) =>
         out.push({ unit: unit.key, unitName: unit.data.name, schedule: schedule.name, reason });
       if (schedule.target === "lead") {
-        const leadName = effectiveLead(unit);
-        const lead = leadName === "" ? undefined : seatNamed(leadName);
+        const lead = seatWithHandle(draft, effectiveLead(unit));
         if (lead && kindOf(lead.data) === "human") stranded("lead");
       } else if (!membersOf(unit).some((seat) => kindOf(seat.data) === "agent")) {
         stranded("members");

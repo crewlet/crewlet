@@ -102,7 +102,7 @@ const COLUMNS: readonly TreeGridColumn[] = [
   // scrolls sideways there, and five and a quarter shares of it was 417px on a
   // 356px screen, so every seat's state pill sat cut in half at the edge.
   { key: "name", header: "Name", width: "var(--btable-name-track, minmax(0, 5.25fr))" },
-  { key: "handle", header: "Handle", width: "minmax(0, 1.75fr)" },
+  { key: "handle", header: "Handle or key", width: "minmax(0, 1.75fr)" },
   { key: "lead", header: "Lead or reports to", width: "minmax(0, 1.75fr)" },
   { key: "problems", header: "Problems", width: "minmax(0, 1fr)" },
   // Read but not seen: the strip at the end of a row is drawn where every
@@ -224,12 +224,9 @@ export function TableView() {
          * from the different fact that no check has answered yet.
          */
         case HANDLE:
-          if (view.type !== "seat") return <EmptyValue label="Not applicable" />;
-          return view.handle ? (
-            handleLabel(view.handle)
-          ) : (
-            <span className="muted">{handleLabel(undefined)}</span>
-          );
+          if (view.type === "seat") return handleLabel(view.handle);
+          if (view.type === "unit") return view.id;
+          return <EmptyValue label="Not applicable" />;
         case LEAD:
           if (view.type === "unit") return leadLabel(view);
           if (view.type !== "seat") return <EmptyValue label="Not applicable" />;

@@ -264,6 +264,51 @@ describe("one reading of a /config refusal", () => {
     );
   });
 
+  // A 409 THAT NO NEWER REVISION CLEARS. A write taking a human seat out of
+  // the company while somebody is bound to it is refused `seat_held`; read
+  // as a revision race it offered to update the draft onto the revision it
+  // was built on, for ever. It is a problem per seat, which unbinding clears.
+  test("a held seat is a problem on that seat naming who holds it and how to unbind them", () => {
+    const refusal = classifyConfigRefusal({
+      status: 409,
+      body: {
+        error: "seat_held",
+        detail: "configapi: this write removes a human seat somebody is bound to",
+        held: {
+          sre: [{ person: "p-2", login: "sam", stage: "active" }],
+          dev: [
+            { person: "p-1", login: "ada", stage: "active" },
+            { person: "p-3", login: "", stage: "invited" },
+          ],
+        },
+        hint: "unbind each person",
+      },
+    });
+    expect(refusal).toMatchObject({ kind: "problems", code: "seat_held", derived: null });
+    if (refusal.kind !== "problems") throw new Error(refusal.kind);
+    expect(refusal.problems.map((p) => [p.kind, p.seat, p.message])).toEqual([
+      [
+        "seat_held",
+        "dev",
+        "@dev is held by ada, p-3: unbind them first (crewlet iam unbind p-1; crewlet iam unbind p-3), then save again. People & access shows who holds each seat.",
+      ],
+      [
+        "seat_held",
+        "sre",
+        "@sre is held by sam: unbind them first (crewlet iam unbind p-2), then save again. People & access shows who holds each seat.",
+      ],
+    ]);
+    // A body naming no seat still refuses, in the engine's own sentence.
+    const bare = classifyConfigRefusal({
+      status: 409,
+      body: { error: "seat_held", detail: "held" },
+    });
+    expect(bare).toMatchObject({
+      kind: "problems",
+      problems: [{ kind: "seat_held", message: "held" }],
+    });
+  });
+
   test("a refusal with no problems of its own gets one from its detail", () => {
     const refusal = classifyConfigRefusal({
       status: 400,

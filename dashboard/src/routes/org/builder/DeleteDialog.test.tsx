@@ -20,7 +20,7 @@ import { builderReducer } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import { toDocument } from "./model/document.ts";
 import { renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
-import { keyedState, recheck } from "./testState.ts";
+import { keyedState } from "./testState.ts";
 import { pick } from "~/testing.tsx";
 
 afterEach(cleanup);
@@ -37,21 +37,21 @@ const replaceFallback = (name: string) => pick(screen.getByLabelText("Datadog fa
 
 describe("a unit", () => {
   test("counts what goes with it, lists the references it clears, and removes it on Delete", () => {
-    const view = open(keyedState(fixtureCompany()), "unit:Engineering");
+    const view = open(keyedState(fixtureCompany()), "unit:engineering");
     expect(
       screen.getByText(/Deletes the unit Engineering with 1 unit and 3 seats inside it./),
     ).toBeDefined();
     expect(screen.getByText("CEO no longer manages Engineering.")).toBeDefined();
     replaceFallback("CEO");
     fireEvent.click(deleteButton());
-    expect(view.state().log.ops[0]).toMatchObject({ type: "remove", target: "unit:Engineering" });
-    expect(locate(view.state().draft, "unit:Engineering")).toBeUndefined();
+    expect(view.state().log.ops[0]).toMatchObject({ type: "remove", target: "unit:engineering" });
+    expect(locate(view.state().draft, "unit:engineering")).toBeUndefined();
     expect(view.onClose).toHaveBeenCalledTimes(1);
   });
 
   test("seats placed in it by a unit reference are kept at the top level unless the operator says otherwise", () => {
     const state = keyedState(fixtureCompany());
-    const view = open(state, "unit:Platform");
+    const view = open(state, "unit:platform");
     const section = screen
       .getByRole("heading", { name: "Seats placed here by unit reference" })
       .closest("section") as HTMLElement;
@@ -65,7 +65,7 @@ describe("a unit", () => {
     expect(getPath(toDocument(view.state().draft).document, ["roles"]) !== undefined).toBe(true);
     cleanup();
 
-    const second = open(state, "unit:Platform");
+    const second = open(state, "unit:platform");
     fireEvent.click(screen.getByRole("radio", { name: "Delete them too" }));
     expect(screen.getByText(/Deletes the unit Platform with 2 seats inside it./)).toBeDefined();
     replaceFallback("CEO");
@@ -76,8 +76,8 @@ describe("a unit", () => {
 
 test("an empty unit is said to hold nothing", () => {
   const doc = fixtureCompany();
-  doc.units!.push({ name: "Legal" });
-  open(keyedState(doc), "unit:Legal");
+  doc.units!.push({ name: "Legal", id: "legal" });
+  open(keyedState(doc), "unit:legal");
   expect(screen.getByText(/Deletes the unit Legal, which holds nothing./)).toBeDefined();
 });
 
@@ -118,7 +118,7 @@ describe("outside the chart", () => {
   // its reference and then deleting the placed seats too would otherwise write
   // a fallback naming a seat this removal deletes, which the engine refuses.
   test("a replacement the removal then takes is no longer chosen", () => {
-    const view = open(keyedState(fixtureCompany()), "unit:Platform");
+    const view = open(keyedState(fixtureCompany()), "unit:platform");
     replaceFallback("Designer");
     expect(deleteButton().disabled).toBe(false);
     fireEvent.click(screen.getByRole("radio", { name: "Delete them too" }));
@@ -224,13 +224,15 @@ describe("outside the chart", () => {
       intent: {
         type: "addSeat",
         key: "new:closer",
-        placement: { parent: "unit:Sales", after: "seat:account-executive" },
-        data: { name: "Closer", mcp_env: { gitlab: { GITLAB_TOKEN: "${CLOSER_GITLAB}" } } },
+        placement: { parent: "unit:sales", after: "seat:account-executive" },
+        data: {
+          name: "Closer",
+          handle: "closer",
+          mcp_env: { gitlab: { GITLAB_TOKEN: "${CLOSER_GITLAB}" } },
+        },
       },
     });
-    // Checked, so the removal records (the company keeps GitLab access levels
-    // by handle) and the dialog has the seat to describe.
-    open(recheck(added, { seats: { "units[1].roles[1]": { handle: "closer" } } }), "new:closer");
+    open(added, "new:closer");
     expect(screen.getByText(/Deletes the agent seat Closer./)).toBeDefined();
     expect(screen.queryByText(/These stay until you decommission them/)).toBeNull();
   });
@@ -298,7 +300,7 @@ describe("before the seats go", () => {
       },
       { id: "2", agent_id: "2", role: "SRE", handle: "sre", activity: "working" },
     ];
-    open(keyedState(fixtureCompany()), "unit:Engineering", { agents });
+    open(keyedState(fixtureCompany()), "unit:engineering", { agents });
     const notes = screen.getAllByText(/is working now/);
     expect(notes.map((n) => n.textContent?.split(" is working")[0])).toEqual([
       "VP Engineering",
@@ -311,11 +313,18 @@ describe("before the seats go", () => {
     const doc: CompanyDocument = {
       name: "X",
       units: [
-        { name: "Ops", roles: [{ name: "Runner" }, { name: "Second" }] },
-        { name: "Other", roles: [{ name: "Keeper" }] },
+        {
+          name: "Ops",
+          id: "ops",
+          roles: [
+            { name: "Runner", handle: "runner" },
+            { name: "Second", handle: "second" },
+          ],
+        },
+        { name: "Other", id: "other", roles: [{ name: "Keeper", handle: "keeper" }] },
       ],
     };
-    const view = open(keyedState(doc), "unit:Ops");
+    const view = open(keyedState(doc), "unit:ops");
     const ack = screen.getByRole("checkbox", { name: "Delete 2 of the 3 seats the company has" });
     expect(deleteButton().disabled).toBe(true);
     fireEvent.click(ack);

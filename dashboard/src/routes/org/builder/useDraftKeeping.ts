@@ -7,9 +7,8 @@
  * NOTHING IS WRITTEN UNTIL THE KEPT DRAFT IS DECIDED. A freshly loaded
  * Builder has an empty log, and the storage plan for an empty log is to
  * clear, so writing before the decision would erase the very draft about to
- * be offered. The decision waits for a base the engine has keyed (in edit
- * mode, the first check's derivation), because a log recorded against
- * handles replays onto nothing else.
+ * be offered. The decision waits for the company to load, since a log
+ * recorded against its handles and unit keys replays onto nothing else.
  *
  * WHAT THE DECISION IS (spec 3.3):
  * - the same revision offers Keep or Discard, and the Builder records nothing
@@ -22,8 +21,9 @@
  *   somebody may have walked away from, not for a trip away and back.
  *
  * WHAT CLEARS IT: whatever makes the plan say so (a save, a discard, an empty
- * log), and a state that may no longer be kept (`keep` false after a token
- * change or a refused token), which also withdraws an offer still on screen.
+ * log), and a state that may no longer be kept (`keep` false after a change
+ * of reader or a refused credential), which also withdraws an offer still on
+ * screen.
  *
  * A KEPT DRAFT A SAVE WAS SENT FOR IS SETTLED BEFORE IT IS DECIDED. A save
  * marks the kept log with its write id before it goes (`markWrite`), and
@@ -46,7 +46,7 @@ import {
   type DraftStorage,
   type KeptDraft,
 } from "./model/persistence.ts";
-import { isBaseKeyed, type BuilderAction, type BuilderState } from "./model/reducer.ts";
+import type { BuilderAction, BuilderState } from "./model/reducer.ts";
 import type { SaveAttempt } from "./model/writes.ts";
 
 /**
@@ -135,8 +135,7 @@ export function useDraftKeeping({
 
   // Decide the kept draft once the base can take it.
   useEffect(() => {
-    if (decided || offer || unsettled || restoringFrom.current || !loaded || !isBaseKeyed(state))
-      return;
+    if (decided || offer || unsettled || restoringFrom.current || !loaded) return;
     const restored = restoreDraft(storage);
     switch (restored.kind) {
       case "none":
@@ -238,7 +237,7 @@ export function useDraftKeeping({
           : null,
     );
     // `state.log`, `keep`, `mode` and the base revision are what the plan
-    // reads; a check answer, or the base being keyed, moves none of them.
+    // reads; a check answer moves none of them.
   }, [loaded, decided, state.log, state.keep, state.mode, state.base.revision, storage, now]);
 
   const keep = useCallback(() => {

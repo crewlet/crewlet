@@ -42,7 +42,7 @@ const warning = (segments: (string | number)[] | null): ConfigWarning => ({
 
 function sentFixture() {
   const doc = fixtureCompany();
-  const draft = fromDocument(doc, fixtureDerived(doc));
+  const draft = fromDocument(doc);
   return { doc, draft, sent: toDocument(draft) };
 }
 
@@ -62,7 +62,7 @@ describe("placeProblems", () => {
       link: null,
       severity: "problem",
     });
-    expect(index.byNode.get("unit:Sales")?.[0]?.field).toEqual([]);
+    expect(index.byNode.get("unit:sales")?.[0]?.field).toEqual([]);
     expect(index.document).toEqual([]);
     expect(index.problemCount).toBe(3);
   });
@@ -72,7 +72,7 @@ describe("placeProblems", () => {
     const moved = record(draft, {
       type: "reorder",
       target: "seat:dev",
-      to: { parent: "unit:Engineering", after: null },
+      to: { parent: "unit:engineering", after: null },
     });
     if (!moved.ok) throw new Error(moved.message);
     const now = toDocument(apply(draft, moved.op).draft);
@@ -115,17 +115,22 @@ describe("placeProblems", () => {
         problem(["units", 0, "mcp_env", "schedules", "TOKEN"]),
       ],
     });
-    expect(index.byNode.get("unit:Engineering")?.map((p) => p.link)).toEqual(["schedules", null]);
+    expect(index.byNode.get("unit:engineering")?.map((p) => p.link)).toEqual(["schedules", null]);
   });
 
-  test("a problem naming only a seat is placed through the derivation that came with it", () => {
+  // A refusal that names only a seat (a seat a person still holds, from a
+  // write's 409) comes with no derivation at all, and is still placed on the
+  // seat: a saved seat is keyed by its handle. A seat this draft created is
+  // keyed by a minted token, so its handle is read through the derivation.
+  test("a problem naming only a seat is placed on the seat with that handle", () => {
     const { doc, sent } = sentFixture();
-    const derived = fixtureDerived(doc);
     const answer = { problems: [problem([], { seat: "sre" }), problem(null, { seat: "nobody" })] };
-    const index = placeProblems(sent, { ...answer, derived });
-    expect(index.byNode.get("seat:sre")).toHaveLength(1);
-    expect(index.document).toHaveLength(1);
-    expect(placeProblems(sent, answer).document).toHaveLength(2);
+    const bare = placeProblems(sent, answer);
+    expect(bare.byNode.get("seat:sre")).toHaveLength(1);
+    expect(bare.document).toHaveLength(1);
+    const derived = fixtureDerived(doc, { seats: { "roles[0]": { handle: "chief" } } });
+    const created = placeProblems(sent, { problems: [problem([], { seat: "chief" })], derived });
+    expect(created.byNode.get("seat:ceo")).toHaveLength(1);
   });
 
   test("warnings are placed the same way and counted apart from problems", () => {
@@ -141,6 +146,6 @@ describe("placeProblems", () => {
       "warning",
     ]);
     expect(problemCountOf(index, "seat:account-executive")).toBe(1);
-    expect(problemCountOf(index, "unit:Sales")).toBe(0);
+    expect(problemCountOf(index, "unit:sales")).toBe(0);
   });
 });

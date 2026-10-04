@@ -138,8 +138,8 @@ describe("a conflict's values", () => {
   const names: Record<string, string> = {
     "seat:dev": "Dev",
     "seat:qa": "QA",
-    "unit:Engineering": "Engineering",
-    "unit:Sales": "Sales",
+    "unit:engineering": "Engineering",
+    "unit:sales": "Sales",
   };
   const nameOf = (key: string) => names[key] ?? null;
   const cells = (conflict: Conflict) => conflictCells(conflict, nameOf);
@@ -172,18 +172,18 @@ describe("a conflict's values", () => {
       cells({
         subject: "where it sits",
         shape: "parent",
-        base: "unit:Engineering",
+        base: "unit:engineering",
         theirs: COMPANY_KEY,
-        mine: "unit:Sales",
+        mine: "unit:sales",
       }),
     ).toEqual({ base: "Engineering", theirs: "The top of the organization", mine: "Sales" });
     expect(
       cells({
         subject: "position",
         shape: "placement",
-        base: { parent: "unit:Engineering", after: null },
-        theirs: { parent: "unit:Engineering", after: "seat:qa" },
-        mine: { parent: "unit:Engineering", after: "new:gone" },
+        base: { parent: "unit:engineering", after: null },
+        theirs: { parent: "unit:engineering", after: "seat:qa" },
+        mine: { parent: "unit:engineering", after: "new:gone" },
       }),
     ).toEqual({
       base: "Engineering, first",

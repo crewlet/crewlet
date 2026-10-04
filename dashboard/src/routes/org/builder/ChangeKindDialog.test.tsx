@@ -3,9 +3,10 @@
  *
  * What these protect: the fields the change removes are named before it is
  * recorded, with the credential ones called out as unrecoverable; a human seat
- * cannot be made without a contact identity, nor out of the Datadog fallback
- * without a replacement; the consequences say what the seat becomes; and a
- * schedule the change strands is named first.
+ * carries the contact identity typed for it, or none, since the engine admits
+ * one without; the Datadog fallback cannot become human without a
+ * replacement; the consequences say what the seat becomes; and a schedule the
+ * change strands is named first.
  */
 
 import { cleanup, fireEvent, screen } from "@testing-library/react";
@@ -85,9 +86,10 @@ test("what stays at the vendors and in the secret store is named, and nothing fo
     intent: {
       type: "addSeat",
       key: "new:qa",
-      placement: { parent: "unit:Sales", after: null },
+      placement: { parent: "unit:sales", after: null },
       data: {
         name: "QA",
+        handle: "qa",
         mcp_env: { tracker: { TOKEN: "${QA_TRACKER}" } },
         integrations: { slack: { channel: "C9" } },
       },
@@ -103,12 +105,19 @@ test("what stays at the vendors and in the secret store is named, and nothing fo
   ).toBeDefined();
 });
 
-test("a human seat is not made without a contact identity, and the change records one operation", () => {
+// A CONTACT IS OPTIONAL: the engine admits a human seat with none and warns
+// about it, and the person is then reached through the dashboard only.
+test("a human seat is made with no contact identity, or with the one typed, in one operation", () => {
+  const bare = open(keyedState(withFields()), "seat:dev");
+  expect(toHuman().disabled).toBe(false);
+  fireEvent.click(toHuman());
+  const unreached = locate(bare.state().draft, "seat:dev");
+  expect(unreached?.kind === "seat" && unreached.node.data.contact).toBeUndefined();
+  cleanup();
+
   const view = open(keyedState(withFields()), "seat:dev");
-  expect(toHuman().disabled).toBe(true);
   pick(screen.getByLabelText("Contact"), "GitHub login");
   fireEvent.change(screen.getByLabelText("GitHub login"), { target: { value: "dev" } });
-  expect(toHuman().disabled).toBe(false);
   fireEvent.click(toHuman());
   expect(view.state().log.ops[0]).toMatchObject({
     type: "changeKind",
@@ -179,9 +188,13 @@ test("a schedule the change strands, and the seat's work in flight, are said fir
     units: [
       {
         name: "Team",
-        lead: "Lead",
+        id: "team",
+        lead: "lead",
         schedules: [{ name: "standup", cron: "0 9 * * *", task: "Standup", target: "lead" }],
-        roles: [{ name: "Lead" }, { name: "Member" }],
+        roles: [
+          { name: "Lead", handle: "lead" },
+          { name: "Member", handle: "member" },
+        ],
       },
     ],
   };

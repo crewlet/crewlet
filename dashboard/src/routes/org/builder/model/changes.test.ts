@@ -35,12 +35,12 @@ function scenario(
   overrides: DerivedOverrides = {},
 ): Scenario {
   const baseDerived = fixtureDerived(doc, overrides);
-  const base = fromDocument(doc, baseDerived);
+  const base = fromDocument(doc);
   let draft = base;
   const ops: Operation[] = [];
   const reports: ApplyReport[] = [];
   for (const intent of intents) {
-    const result = record(draft, intent, { handleOf: () => "new-seat" });
+    const result = record(draft, intent);
     if (!result.ok) throw new Error(`${intent.type}: ${result.message}`);
     const applied = apply(draft, result.op);
     ops.push(result.op);
@@ -72,12 +72,12 @@ describe("structure", () => {
       {
         type: "addSeat",
         key: "new:qa",
-        placement: { parent: "unit:Engineering", after: null },
-        data: { name: "QA" },
+        placement: { parent: "unit:engineering", after: null },
+        data: { name: "QA", handle: "qa" },
       },
-      { type: "remove", target: "unit:Sales" },
+      { type: "remove", target: "unit:sales" },
       { type: "renameSeat", target: "seat:dev", name: "Developer" },
-      { type: "move", target: "seat:sre", to: { parent: "unit:Engineering", after: null } },
+      { type: "move", target: "seat:sre", to: { parent: "unit:engineering", after: null } },
       {
         type: "updateSeat",
         target: "seat:ceo",
@@ -106,21 +106,20 @@ describe("structure", () => {
           ref: { key: "seat:ceo", kind: "seat", name: "CEO" },
           fields: ["goal", "integrations.github"],
         },
-        { ref: { key: "seat:dev", kind: "seat", name: "Developer" }, fields: ["handle"] },
-        // Its Jira project is untouched, so only the tool that changed is named.
+        // Its project is untouched, so only the tool that changed is named.
         { ref: { key: "seat:sre", kind: "seat", name: "SRE" }, fields: ["integrations.github"] },
       ]),
     );
     expect(changes.charter).toEqual(["mission"]);
     expect(changes.summary).toBe(
-      "Added 1 seat, removed 1 seat and 1 unit, renamed 1 seat, moved 1 seat, edited 4 seats, edited the charter",
+      "Added 1 seat, removed 1 seat and 1 unit, renamed 1 seat, moved 1 seat, edited 2 seats, edited the charter",
     );
   });
 
   test("a root seat whose unit reference became the same physical placement has not moved", () => {
     const placedBase = { seats: { "roles[1]": { unit_path: "units[0].children[0]" } } };
     const s = scenario(
-      [{ type: "move", target: "seat:designer", to: { parent: "unit:Platform", after: null } }],
+      [{ type: "move", target: "seat:designer", to: { parent: "unit:platform", after: null } }],
       fixtureCompany(),
       placedBase,
     );
@@ -130,7 +129,7 @@ describe("structure", () => {
       {
         kind: "unit",
         holder: { key: "seat:designer", kind: "seat", name: "Designer" },
-        from: "Platform",
+        from: "platform",
       },
     ]);
   });
@@ -138,14 +137,14 @@ describe("structure", () => {
   test("more than half the base's seats removed asks for acknowledgement", () => {
     const changes = changesOf(
       scenario([
-        { type: "remove", target: "unit:Engineering" },
-        { type: "remove", target: "unit:Sales" },
+        { type: "remove", target: "unit:engineering" },
+        { type: "remove", target: "unit:sales" },
       ]),
     );
     expect(changes.massRemoval).toEqual({ removed: 4, total: 6 });
     expect(changes.acknowledgements).toContain("mass_removal");
     expect(
-      changesOf(scenario([{ type: "remove", target: "unit:Engineering" }])).massRemoval,
+      changesOf(scenario([{ type: "remove", target: "unit:engineering" }])).massRemoval,
     ).toBeNull();
   });
 });
@@ -166,31 +165,33 @@ describe("identity and onboarding", () => {
     const changes = changesOf(
       scenario([{ type: "renameSeat", target: "seat:dev", name: "Developer" }]),
     );
-    expect(changes.handleChanges).toEqual([]);
+    expect(changes.edited).toEqual([]);
+    expect(changes.acknowledgements).toEqual([]);
     expect(changes.onboarding).toEqual([
       { cause: "seat_rename", seats: [{ key: "seat:dev", kind: "seat", name: "Developer" }] },
     ]);
   });
 
-  test("a unit rename re-onboards its subtree, re-keys its schedules and reads onboarding pages under the new name", () => {
+  // A unit's schedules are filed under its key, which a rename does not
+  // move: only the onboarding pages, found by names, follow the new name.
+  test("a unit rename re-onboards its subtree and reads onboarding pages under the new name", () => {
     const changes = changesOf(
-      scenario([{ type: "renameUnit", target: "unit:Engineering", name: "Platform Engineering" }]),
+      scenario([{ type: "renameUnit", target: "unit:engineering", name: "Platform Engineering" }]),
     );
     expect(changes.onboarding).toEqual([{ cause: "unit_rename", seats: expect.any(Array) }]);
     expect(names(changes.onboarding[0]!.seats)).toEqual(["VP Engineering", "Dev", "SRE"]);
     expect(changes.unitRenames).toEqual([
       {
-        ref: { key: "unit:Engineering", kind: "unit", name: "Platform Engineering" },
+        ref: { key: "unit:engineering", kind: "unit", name: "Platform Engineering" },
         before: "Engineering",
         after: "Platform Engineering",
-        schedules: ["standup"],
       },
     ]);
   });
 
   test("a move re-onboards the seat and changes the tool credential servers it inherits", () => {
     const changes = changesOf(
-      scenario([{ type: "move", target: "seat:dev", to: { parent: "unit:Sales", after: null } }]),
+      scenario([{ type: "move", target: "seat:dev", to: { parent: "unit:sales", after: null } }]),
     );
     expect(changes.onboarding).toEqual([
       { cause: "move", seats: [{ key: "seat:dev", kind: "seat", name: "Dev" }] },
@@ -201,38 +202,23 @@ describe("identity and onboarding", () => {
     expect(changes.acknowledgements).toContain("credential_servers");
   });
 
-  test("a handle the engine derives differently is a handle change", () => {
-    const s = scenario([
-      { type: "updateSeat", target: "seat:ceo", set: [{ path: ["goal"], value: "x" }] },
-    ]);
-    const changes = changesOf(s, { seats: { "roles[0]": { handle: "chief" } } });
-    expect(changes.handleChanges).toEqual([
-      { ref: { key: "seat:ceo", kind: "seat", name: "CEO" }, before: "ceo", after: "chief" },
-    ]);
-    expect(changes.acknowledgements).toContain("handle_change");
-  });
-
-  test("an added seat given a removed seat's handle reuses its memory, from this draft or recent history", () => {
+  // A SEAT WITH ANOTHER HANDLE IS ANOTHER SEAT. Nodes are matched by key,
+  // which is the handle, so the review lists a removal and an addition and
+  // nothing a person could read as one seat's identity moving.
+  test("a seat replaced under another handle is a removal and an addition", () => {
     const s = scenario([
       { type: "remove", target: "seat:dev" },
       {
         type: "addSeat",
         key: "new:dev",
-        placement: { parent: "unit:Sales", after: null },
-        data: { name: "Dev" },
-      },
-      {
-        type: "addSeat",
-        key: "new:old",
-        placement: { parent: "unit:Sales", after: null },
-        data: { name: "Old Hand" },
+        placement: { parent: "unit:engineering", after: "seat:vp-engineering" },
+        data: { name: "Dev", handle: "developer" },
       },
     ]);
-    const changes = changesOf(s, {}, { recentlyRemoved: new Map([["old-hand", "Old Hand"]]) });
-    expect(changes.memoryReuse.map((m) => [m.ref.name, m.handle, m.previous])).toEqual([
-      ["Old Hand", "old-hand", "Old Hand"],
-      ["Dev", "dev", "Dev"],
-    ]);
+    const changes = changesOf(s);
+    expect(names(changes.removed)).toEqual(["Dev"]);
+    expect(names(changes.added)).toEqual(["Dev"]);
+    expect(changes.renamed).toEqual([]);
   });
 });
 
@@ -265,7 +251,7 @@ describe("reporting, leads, channels and routing", () => {
   });
 
   test("effective lead and channel changes are reported with whether each was inherited", () => {
-    const s = scenario([{ type: "setLead", target: "unit:Engineering" }], fixtureCompany(), {
+    const s = scenario([{ type: "setLead", target: "unit:engineering" }], fixtureCompany(), {
       units: {
         "units[0].children[0]": {
           lead: "vp-engineering",
@@ -320,7 +306,7 @@ describe("reporting, leads, channels and routing", () => {
     ).toEqual([["Engineering", "VP Engineering", false, "VP Engineering", true]]);
     expect(changes.channels).toEqual([
       {
-        ref: { key: "unit:Platform", kind: "unit", name: "Platform" },
+        ref: { key: "unit:platform", kind: "unit", name: "Platform" },
         before: "eng",
         beforeInherited: true,
         after: "",
@@ -343,7 +329,7 @@ describe("reporting, leads, channels and routing", () => {
       {
         owns: "project",
         scope: "OPS",
-        holder: { key: "unit:Platform", kind: "unit", name: "Platform" },
+        holder: { key: "unit:platform", kind: "unit", name: "Platform" },
         before: { key: "seat:sre", kind: "seat", name: "SRE" },
         after: { key: "seat:vp-engineering", kind: "seat", name: "VP Engineering" },
         shared: false,
@@ -363,8 +349,8 @@ describe("reporting, leads, channels and routing", () => {
     const doc = fixtureCompany();
     doc.units![0]!.children![0]!.project = "OPS";
     doc.units![1]!.project = "ops";
-    doc.units![1]!.lead = "Account Executive";
-    const s = scenario([{ type: "setLead", target: "unit:Sales" }], doc, {
+    doc.units![1]!.lead = "account-executive";
+    const s = scenario([{ type: "setLead", target: "unit:sales" }], doc, {
       units: { "units[0].children[0]": { lead: "sre" } },
     });
     const changes = changesOf(s, {
@@ -374,7 +360,7 @@ describe("reporting, leads, channels and routing", () => {
       expect.objectContaining({
         owns: "project",
         scope: "OPS",
-        holder: { key: "unit:Sales", kind: "unit", name: "Sales" },
+        holder: { key: "unit:sales", kind: "unit", name: "Sales" },
         before: { key: "seat:account-executive", kind: "seat", name: "Account Executive" },
         after: null,
         shared: true,
@@ -426,7 +412,7 @@ describe("without a derivation", () => {
   test("structure is still reported and every derived consequence is left out, not guessed", () => {
     const s = scenario([
       { type: "updateCompany", set: [{ path: ["name"], value: "Renamed" }] },
-      { type: "move", target: "seat:dev", to: { parent: "unit:Sales", after: null } },
+      { type: "move", target: "seat:dev", to: { parent: "unit:sales", after: null } },
     ]);
     const changes = deriveChanges({
       base: { draft: s.base, derived: s.baseDerived },

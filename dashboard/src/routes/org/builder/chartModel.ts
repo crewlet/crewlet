@@ -7,10 +7,10 @@
  * leads this unit" and "who does this seat report to" must have one answer,
  * or the two views of one draft disagree. So both read this module, and so do
  * the editor and the dialogs for two facts a card also shows: the seat a
- * reported handle names, and the Datadog fallback. The third, a seat's
- * handle, is the model's (`document.knownHandles`), because the reducer
- * records operations by it; this module reads it there like every other
- * surface. It is pure: no React, no DOM, tested in a node environment.
+ * reported handle names, and the Datadog fallback. A seat's handle and a
+ * unit's key are the draft's own (`draft.handleOf`, `draft.unitIdOf`), carried
+ * by every node from the moment it exists. It is pure: no React, no DOM,
+ * tested in a node environment.
  *
  * THE DOCUMENT GIVES THE SHAPE, THE ENGINE GIVES THE MEANING. Units, their
  * seats and their children are drawn as the draft holds them, because that is
@@ -26,8 +26,8 @@
  * unit now. And because the draft may have changed since that check, a
  * derived fact is used only while the fields it was derived from still hold
  * the values the check saw. A root seat is drawn in the unit its reference
- * resolved to only while it still names that unit by its current name; an
- * inherited lead is shown only while the unit still declares none and every
+ * resolved to only while it still names that unit's key; an inherited lead is
+ * shown only while the unit still declares none and every
  * unit above it still sits and declares as it did, because the engine hands
  * a unit its parent's lead, and a unit moved under another parent inherits
  * another one. A seat's primary manager follows from the whole organization
@@ -48,17 +48,19 @@
 import type { CompanyDocument, ConfigWarning, DerivedSeat, DerivedUnit } from "~/protocol/index.ts";
 import type { TreeInput } from "@crewlethq/ui";
 import { checkedDocument, type BuilderState } from "./model/reducer.ts";
-import { COMPANY_KEY, handleOfKey, type NodeKey } from "./model/keys.ts";
+import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import {
+  allSeats,
   allUnits,
+  handleOf,
   locate,
-  seatNames as draftSeatNames,
+  seatWithHandle,
+  unitIdOf,
   type Draft,
   type DraftSeat,
 } from "./model/draft.ts";
 import {
   DATADOG_ROUTE_TO,
-  knownHandles,
   NO_DERIVATION,
   nodeDataIn,
   pathOfSegments,
@@ -111,8 +113,10 @@ export function chartInputs(
 
 /** A unit's lead as the chart shows it. */
 export interface LeadView {
-  /** The seat name, as a lead is written. */
+  /** The seat's name, or its handle where the draft holds no seat of it. */
   readonly name: string;
+  /** The seat's handle, which is what the unit's `lead` writes. */
+  readonly handle: string;
   /** Inherited from an ancestor unit rather than declared by this one. */
   readonly inherited: boolean;
 }
@@ -130,6 +134,8 @@ export interface UnitView {
   readonly type: "unit";
   readonly key: NodeKey;
   readonly name: string;
+  /** Its key: what every `manages` entry and seat placement names it by, and its identity. */
+  readonly id: string;
   /**
    * The type as written; else the engine's effective type, while the check
    * saw the unit write none either; else "".
@@ -145,7 +151,7 @@ export interface UnitView {
   readonly inheritable: LeadView | null;
   /**
    * The lead the unit declares that the last check found no seat for, while
-   * the unit still declares it and no seat of that name has been added since.
+   * the unit still declares it and no seat of that handle has been added since.
    */
   readonly danglingLead: string | null;
   /** The engine's sentence about `danglingLead`, when that check gave one. */
@@ -161,18 +167,14 @@ export interface SeatView {
   readonly key: NodeKey;
   readonly name: string;
   readonly kind: SeatKind;
+  /** Its handle: what every reference names it by, and its identity. */
+  readonly handle: string;
   /**
-   * The handle the engine runs it under: declared, carried by its key, or
-   * reported by the last check while the seat is still called what that
-   * check saw. `undefined` while no check has said.
+   * The seat as the saved company holds it: the handle its own screen and its
+   * live state are found by, and the name it is saved under, which a rename in
+   * this draft has not changed yet. `null` for a seat this draft created.
    */
-  readonly handle: string | undefined;
-  /**
-   * The seat as the saved company holds it: the handle and name its own
-   * screen and its live state are found by, which a rename or a handle chosen
-   * in this draft has not changed yet. `null` for a seat this draft created.
-   */
-  readonly saved: { readonly handle: string | undefined; readonly name: string } | null;
+  readonly saved: { readonly handle: string; readonly name: string } | null;
   /** A saved agent seat that is still an agent seat in the draft: it has a live state to show. */
   readonly running: boolean;
   /** A root seat the engine placed in the unit it is drawn in, by its `unit:` reference. */
@@ -205,21 +207,17 @@ export interface Structure {
 // ---------------------------------------------------------------------------
 
 /**
- * The key of the seat of the draft the last check gave `handle`, for reading
- * a handle the engine reported (a manager, a lead, an automatic report) as a
- * node. `undefined` when that check named no such seat or the seat is gone.
- * Whether the fact the handle came from still holds is the caller's to judge:
- * a manager only from a check of the draft as it stands, a lead while the
- * chain above it is as checked.
+ * The key of the seat of the draft a handle names, for reading a handle the
+ * engine reported (a manager, a lead, an automatic report) as a node.
+ * `undefined` when the draft holds no seat of it. Whether the fact the handle
+ * came from still holds is the caller's to judge: a manager only from a check
+ * of the draft as it stands, a lead while the chain above it is as checked.
  */
 export function keyOfHandle(
-  state: Pick<BuilderState, "draft" | "check">,
+  state: Pick<BuilderState, "draft">,
   handle: string,
 ): NodeKey | undefined {
-  const checked = checkedDocument(state.check);
-  if (!checked) return undefined;
-  const key = placeDerivation(checked.sent.index, checked.derived).keyOfHandle.get(handle);
-  return key !== undefined && locate(state.draft, key)?.kind === "seat" ? key : undefined;
+  return seatWithHandle(state.draft, handle)?.key;
 }
 
 /**
@@ -254,8 +252,6 @@ interface Engine {
   readonly seatByKey: ReadonlyMap<NodeKey, DerivedSeat>;
   readonly unitByKey: ReadonlyMap<NodeKey, DerivedUnit>;
   readonly keyOfHandle: ReadonlyMap<string, NodeKey>;
-  /** The handle each seat of the draft runs under, where known (`document.knownHandles`). */
-  readonly handles: ReadonlyMap<NodeKey, string>;
   /** The node's JSON in the document that was checked. */
   readonly sentData: (key: NodeKey) => Record<string, unknown> | undefined;
   /** The node it sat under in the document that was checked: a unit, the company, or unknown. */
@@ -263,11 +259,10 @@ interface Engine {
   readonly checked: CheckedDocument | null;
 }
 
-function engineOf({ draft, checked }: ChartInputs): Engine {
+function engineOf({ checked }: ChartInputs): Engine {
   const placed = checked ? placeDerivation(checked.sent.index, checked.derived) : NO_DERIVATION;
   return {
     ...placed,
-    handles: knownHandles(draft, checked),
     sentData: (key) => (checked ? nodeDataIn(checked.sent, key) : undefined),
     sentParent: (key) => {
       // `units[i]` and `roles[i]` sit under the company; anything deeper sits
@@ -291,10 +286,16 @@ export function structure(inputs: ChartInputs): Structure {
   const nodes = new Map<NodeKey, NodeView>();
   const routeTo = datadogFallback(draft.company);
 
-  const unitName = new Map<NodeKey, string>();
-  for (const { unit } of allUnits(draft)) unitName.set(unit.key, unit.data.name);
-  const unitNames = new Set(unitName.values());
-  const seatNames = new Set(draftSeatNames(draft));
+  const unitId = new Map<NodeKey, string>();
+  for (const { unit } of allUnits(draft)) unitId.set(unit.key, unitIdOf(unit));
+  const unitIds = new Set(unitId.values());
+  const handles = new Set([...allSeats(draft)].map(({ seat }) => handleOf(seat)));
+  /** A lead as the chart shows it: the seat a handle names, by its name. */
+  const leadView = (handle: string, inherited: boolean): LeadView => ({
+    name: seatWithHandle(draft, handle)?.data.name || handle,
+    handle,
+    inherited,
+  });
   /** The last check's warning about one of a node's references, by the reference it names. */
   const warningOn = (key: NodeKey, ref: ConfigWarning["ref"]) =>
     inputs.warnings.get(key)?.find((w) => w.kind === "dangling_reference" && w.ref === ref);
@@ -302,8 +303,8 @@ export function structure(inputs: ChartInputs): Structure {
   // WHERE A ROOT SEAT IS DRAWN. The engine says whether its reference placed
   // it, and in which unit; the draft says whether that is still true. A
   // reference the check found no unit for is dangling only while the draft
-  // still holds none of that name: a unit added or renamed to it since is
-  // one the engine will place the seat in, which the next check says.
+  // still holds no unit of that key: one added since is a unit the engine
+  // will place the seat in, which the next check says.
   const placedIn = new Map<NodeKey, NodeKey[]>();
   const rootSeats: NodeKey[] = [];
   const placement = new Map<NodeKey, { unit: NodeKey | null; dangling: string | null }>();
@@ -316,12 +317,12 @@ export function structure(inputs: ChartInputs): Structure {
     if (ref !== "" && derived) {
       if (derived.placed_by_ref && derived.unit_path) {
         const target = engine.checked?.sent.index.byPath.get(derived.unit_path);
-        if (target !== undefined && unitName.get(target) === ref) unit = target;
+        if (target !== undefined && unitId.get(target) === ref) unit = target;
       } else if (
         !derived.placed_by_ref &&
         checked &&
         text(checked.unit) === ref &&
-        !unitNames.has(ref)
+        !unitIds.has(ref)
       ) {
         dangling = ref;
       }
@@ -339,22 +340,15 @@ export function structure(inputs: ChartInputs): Structure {
     const derived = inputs.current ? engine.seatByKey.get(key) : undefined;
     if (!derived) return undefined;
     if (!derived.manager) return null;
-    const managerKey = engine.keyOfHandle.get(derived.manager);
-    const found = managerKey === undefined ? undefined : locate(draft, managerKey);
-    return found?.kind === "seat" ? found.node.data.name : undefined;
+    return seatWithHandle(draft, derived.manager)?.data.name;
   };
 
   const seatView = (seat: DraftSeat, parent: NodeKey): SeatView => {
     const kind = kindOf(seat.data);
-    const handle = engine.handles.get(seat.key);
+    const handle = handleOf(seat);
     const base = locate(baseDraft, seat.key);
     const savedSeat =
-      base?.kind === "seat"
-        ? {
-            handle: text(base.node.data.handle) || handleOfKey(seat.key),
-            name: base.node.data.name,
-          }
-        : null;
+      base?.kind === "seat" ? { handle: handleOf(base.node), name: base.node.data.name } : null;
     const running = base?.kind === "seat" && kindOf(base.node.data) === "agent" && kind === "agent";
     const placed = placement.get(seat.key);
     return {
@@ -388,11 +382,9 @@ export function structure(inputs: ChartInputs): Structure {
     const derived = engine.unitByKey.get(key);
     if (!derived || !chainAsChecked) return undefined;
     if (!derived.lead || !derived.lead_inherited) return null;
-    const leadKey = engine.keyOfHandle.get(derived.lead);
-    const found = leadKey === undefined ? undefined : locate(draft, leadKey);
     // The inherited lead removed since the check: what the unit inherits now
     // is the next check's to say.
-    return found?.kind === "seat" ? { name: found.node.data.name, inherited: true } : undefined;
+    return handles.has(derived.lead) ? leadView(derived.lead, true) : undefined;
   };
 
   const tree: TreeInput[] = [];
@@ -411,23 +403,23 @@ export function structure(inputs: ChartInputs): Structure {
         engine.sentParent(unit.key) === parent &&
         text(checked.lead) === declared;
       const lead: LeadView | null | undefined =
-        declared !== "" ? { name: declared, inherited: false } : inheritedLead(unit.key, asChecked);
+        declared !== "" ? leadView(declared, false) : inheritedLead(unit.key, asChecked);
       // A LEAD THAT NAMES NO SEAT is marked while the unit still declares the
-      // lead the check warned about and no seat of that name has come since,
-      // which the next check would resolve.
+      // lead the check warned about and no seat of that handle has come
+      // since, which the next check would resolve.
       const leadWarning = warningOn(unit.key, "lead");
       const danglingLead =
         leadWarning &&
         declared !== "" &&
         checked !== undefined &&
         text(checked.lead) === declared &&
-        !seatNames.has(declared)
+        !handles.has(declared)
           ? declared
           : null;
       // With a lead of its own, the unit would inherit its parent's; without
       // one, it already does.
       const source = declared !== "" ? parentLead : lead;
-      const inheritable: LeadView | null = source ? { name: source.name, inherited: true } : null;
+      const inheritable: LeadView | null = source ? { ...source, inherited: true } : null;
       const seats = [...unit.roles.map((s) => s.key), ...(placedIn.get(unit.key) ?? [])];
       const own = unit.roles.map((s) => seatView(s, unit.key));
       const placed = (placedIn.get(unit.key) ?? []).map((k) =>
@@ -440,6 +432,7 @@ export function structure(inputs: ChartInputs): Structure {
         type: "unit",
         key: unit.key,
         name: unit.data.name,
+        id: unitIdOf(unit),
         // The engine's type stands in for one the unit does not write only
         // while the check saw none written either: a type cleared since is
         // not the type that check reported.
@@ -506,12 +499,8 @@ export interface ReportingItem {
   readonly key: NodeKey | null;
   readonly name: string;
   readonly kind: SeatKind;
-  /**
-   * The handle, read as the structure chart reads it for a seat still in the
-   * draft (`undefined` while no check has reported it), else the one the
-   * derivation carries.
-   */
-  readonly handle: string | undefined;
+  /** The handle of a seat still in the draft, else the one the derivation carries. */
+  readonly handle: string;
   /** No manager: a top of the forest. */
   readonly root: boolean;
   /** How many seats the cycle it belongs to holds; absent outside a cycle. */
@@ -537,7 +526,6 @@ export interface Reporting {
  */
 export function reporting(inputs: ChartInputs): Reporting {
   const { checked, draft } = inputs;
-  const engine = engineOf(inputs);
   const items = new Map<string, ReportingItem>();
   if (!checked) {
     return { known: false, roots: [], cycles: [], tree: [], items };
@@ -553,7 +541,7 @@ export function reporting(inputs: ChartInputs): Reporting {
       key: current ? key! : null,
       name: current?.data.name ?? node.seat.name,
       kind: current ? kindOf(current.data) : node.seat.kind === "human" ? "human" : "agent",
-      handle: current ? engine.handles.get(current.key) : node.seat.handle,
+      handle: current ? handleOf(current) : node.seat.handle,
       root,
       ...(node.cycle ? { cycleSize: node.cycle.length } : {}),
       reports: node.reports.map((r) => convert(r, false)),

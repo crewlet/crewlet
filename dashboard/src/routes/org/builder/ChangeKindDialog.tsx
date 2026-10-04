@@ -14,12 +14,14 @@
  * App key are gone from the document once the change is saved. That is called
  * out on the fields that hold them.
  *
- * WHAT THE SEAT BECOMES. A human seat needs one contact identity, which the
- * dialog collects, because the engine refuses a human seat without one and the
- * refusal would otherwise arrive at the next check with no field to fix. A
- * seat that is the Datadog fallback cannot become human (an alert would wake
- * nobody), so a replacement is chosen here too, and the schedules the change
- * strands are named as they are for a move or a removal.
+ * WHAT THE SEAT BECOMES. A human seat is reached through a contact identity,
+ * which the dialog offers to collect. It is optional — the engine admits a
+ * human seat with none, warns about it, and the person is then reached through
+ * the dashboard only — but this is where somebody turning a seat over to a
+ * person knows the answer. A seat that is the Datadog fallback cannot become
+ * human (an alert would wake nobody), so a replacement is chosen here too, and
+ * the schedules the change strands are named as they are for a move or a
+ * removal.
  *
  * WHAT IT LEAVES BEHIND. Stripping a field tears nothing down at a vendor:
  * the seat's GitHub App, its chat bots and the accounts it was enrolled for
@@ -42,10 +44,10 @@ import {
   WorkingNotes,
   type LeftBehind,
 } from "./dialogParts.tsx";
-import { allSeats, locate } from "./model/draft.ts";
+import { allSeats, handleOf, locate } from "./model/draft.ts";
 import { isMintedKey, type NodeKey } from "./model/keys.ts";
 import { fieldName, isCredentialField, kindOf, type Intent } from "./model/operations.ts";
-import { handlesOf, recordIntent } from "./model/reducer.ts";
+import { recordIntent } from "./model/reducer.ts";
 import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
@@ -85,15 +87,12 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
   const seat = found.node;
   const name = seat.data.name;
   const becoming = kindOf(seat.data) === "human" ? "agent" : "human";
-  const handles = handlesOf(state);
-  const handle = handles.get(nodeKey);
-  const isFallback =
-    becoming === "human" && handle !== undefined && datadogFallback(state.draft.company) === handle;
+  const handle = handleOf(seat);
+  const isFallback = becoming === "human" && datadogFallback(state.draft.company) === handle;
   const replacements = [...allSeats(state.draft)]
     .map(({ seat: other }) => other)
     .filter((other) => other.key !== nodeKey && kindOf(other.data) === "agent")
-    .map((other) => ({ value: handles.get(other.key) ?? "", label: other.data.name }))
-    .filter((choice) => choice.value !== "");
+    .map((other) => ({ value: handleOf(other), label: other.data.name }));
 
   const intent: Intent = {
     type: "changeKind",
@@ -126,11 +125,7 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
   // seat is becoming an agent.
   const working = isWorking(handle, api.agents, api.sandboxes) ? [name] : [];
 
-  const blocked =
-    !preview.ok ||
-    api.readOnly ||
-    (becoming === "human" && contact.trim() === "") ||
-    (isFallback && routeTo === "");
+  const blocked = !preview.ok || api.readOnly || (isFallback && routeTo === "");
 
   function change() {
     if (blocked) return;
@@ -205,7 +200,7 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
       {becoming === "human" && (
         <EditorSection
           title="Contact identity"
-          hint="A human seat is reached through a person's own identity, and the engine refuses one without it."
+          hint="Optional. Without one, no agent can mention this person and they are reached through the dashboard only."
         >
           <ContactField
             identity={identity}

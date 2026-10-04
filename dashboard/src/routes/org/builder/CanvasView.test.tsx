@@ -208,13 +208,13 @@ describe("the tree", () => {
     expect(shape).toEqual([
       [COMPANY_KEY, "1", "1", "1", "true"],
       [seatKey("ceo"), "2", "1", "3", null],
-      [unitKey("Engineering"), "2", "2", "3", "true"],
+      [unitKey("engineering"), "2", "2", "3", "true"],
       [seatKey("vp-engineering"), "3", "1", "3", null],
       [seatKey("dev"), "3", "2", "3", null],
-      [unitKey("Platform"), "3", "3", "3", "true"],
+      [unitKey("platform"), "3", "3", "3", "true"],
       [seatKey("sre"), "4", "1", "2", null],
       [seatKey("designer"), "4", "2", "2", null],
-      [unitKey("Sales"), "2", "3", "3", "true"],
+      [unitKey("sales"), "2", "3", "3", "true"],
       [seatKey("account-executive"), "3", "1", "1", null],
     ]);
   });
@@ -464,19 +464,19 @@ describe("keys", () => {
     press("ArrowDown");
     expect(focused()).toBe(seatKey("ceo"));
     press("ArrowDown");
-    expect(focused()).toBe(unitKey("Engineering"));
+    expect(focused()).toBe(unitKey("engineering"));
     press("ArrowLeft");
     expect(item("Engineering").getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryAllByText("Dev")).toHaveLength(0);
     press("ArrowDown");
-    expect(focused()).toBe(unitKey("Sales"));
+    expect(focused()).toBe(unitKey("sales"));
     press("ArrowUp");
     press("ArrowRight");
     expect(item("Engineering").getAttribute("aria-expanded")).toBe("true");
     press("ArrowRight");
     expect(focused()).toBe(seatKey("vp-engineering"));
     press("ArrowLeft");
-    expect(focused()).toBe(unitKey("Engineering"));
+    expect(focused()).toBe(unitKey("engineering"));
     press("End");
     expect(focused()).toBe(seatKey("account-executive"));
     press("Home");
@@ -492,9 +492,9 @@ describe("keys", () => {
     mount();
     item("Acme").focus();
     press("p");
-    expect(focused()).toBe(unitKey("Platform"));
+    expect(focused()).toBe(unitKey("platform"));
     press("0");
-    expect(focused()).toBe(unitKey("Platform"));
+    expect(focused()).toBe(unitKey("platform"));
   });
 
   test("Enter edits, Delete and Backspace delete, and the company is never deleted", () => {
@@ -660,9 +660,9 @@ describe("what a node offers a pointer", () => {
       "Add to Engineering",
     ]);
     pointerPress("Edit Engineering");
-    expect(spies.openEditor).toHaveBeenCalledWith(unitKey("Engineering"));
+    expect(spies.openEditor).toHaveBeenCalledWith(unitKey("engineering"));
     pointerPress("Delete Engineering");
-    expect(spies.openDelete).toHaveBeenCalledWith(unitKey("Engineering"));
+    expect(spies.openDelete).toHaveBeenCalledWith(unitKey("engineering"));
   });
 
   /* The company cannot be deleted, so it is not offered and does not refuse. */
@@ -889,7 +889,7 @@ describe("menus", () => {
       ),
     ).toBe(true);
     press("Add human seat to Platform");
-    expect(spies.openAdd).toHaveBeenLastCalledWith(unitKey("Platform"), "human");
+    expect(spies.openAdd).toHaveBeenLastCalledWith(unitKey("platform"), "human");
     press("Add to Acme");
     press("Add unit to Acme");
     expect(spies.openAdd).toHaveBeenLastCalledWith(null, "unit");
@@ -911,15 +911,15 @@ describe("menus", () => {
       "Add human seat",
     ]);
     fireEvent.click(screen.getByRole("menuitem", { name: "Add human seat" }));
-    expect(spies.openAdd).toHaveBeenLastCalledWith(unitKey("Platform"), "human");
+    expect(spies.openAdd).toHaveBeenLastCalledWith(unitKey("platform"), "human");
   });
 
   test("a seat this draft created has no screen to open, and read-only disables every change", () => {
     const added = record(checkedEdit(fixtureCompany()), {
       type: "addSeat",
       key: "new:s1",
-      placement: { parent: unitKey("Sales"), after: null },
-      data: { name: "Closer" },
+      placement: { parent: unitKey("sales"), after: null },
+      data: { name: "Closer", handle: "closer" },
     });
     mount(added, { readOnly: true });
     item("Closer").focus();
@@ -965,7 +965,7 @@ describe("menus", () => {
     ]);
     fireEvent.click(screen.getByRole("menuitemradio", { name: "SRE" }));
     const platform = probe.state.draft.units[0]!.children[0]!;
-    expect(platform.data.lead).toBe("SRE");
+    expect(platform.data.lead).toBe("sre");
     expect(within(item("Platform")).getByText("Lead: SRE.")).toBeDefined();
     // Engineering's own lead is unchanged, and so is what the check said of it.
     expect(within(item("Engineering")).getByText("Lead: VP Engineering.")).toBeDefined();
@@ -987,7 +987,7 @@ describe("menus", () => {
     act(() =>
       probe.dispatch({
         type: "record",
-        intent: { type: "setLead", target: unitKey("Engineering") },
+        intent: { type: "setLead", target: unitKey("engineering") },
       }),
     );
     expect(within(item("Engineering")).getByText("Lead after the check.")).toBeDefined();
@@ -1011,7 +1011,7 @@ describe("menus", () => {
     expect(spies.dispatched).toEqual([
       {
         type: "record",
-        intent: { type: "setLead", target: unitKey("Engineering"), lead: undefined },
+        intent: { type: "setLead", target: unitKey("engineering"), lead: undefined },
       },
     ]);
   });
@@ -1055,7 +1055,7 @@ describe("menus", () => {
     ]);
     fireEvent.click(screen.getByRole("menuitem", { name: /Choose another seat/ }));
     // At the unit's Leadership, where a lead outside the unit is chosen.
-    expect(spies.openEditor).toHaveBeenCalledWith(unitKey("Sales"), "leadership");
+    expect(spies.openEditor).toHaveBeenCalledWith(unitKey("sales"), "leadership");
   });
 
   test("choosing the answer already chosen records nothing and is refused nowhere", () => {
@@ -1287,8 +1287,8 @@ describe("focus", () => {
         intent: {
           type: "addSeat",
           key: "new:s1",
-          placement: { parent: unitKey("Sales"), after: seatKey("account-executive") },
-          data: { name: "Closer" },
+          placement: { parent: unitKey("sales"), after: seatKey("account-executive") },
+          data: { name: "Closer", handle: "closer" },
         },
       }),
     );
@@ -1308,7 +1308,7 @@ describe("focus", () => {
         intent: {
           type: "move",
           target: seatKey("sre"),
-          to: { parent: unitKey("Sales"), after: null },
+          to: { parent: unitKey("sales"), after: null },
         },
       }),
     );
@@ -1354,7 +1354,7 @@ describe("focus", () => {
           type: "addSeat",
           key: "new:s9",
           placement: { parent: COMPANY_KEY, after: null },
-          data: { name: "Advisor" },
+          data: { name: "Advisor", handle: "advisor" },
         },
       }),
     );
@@ -1535,7 +1535,7 @@ describe("a surface opened about one node", () => {
   test("the chart is pushed back while it is open and drawn plainly when it is not", () => {
     const { show } = mountAbout(null);
     expect(canvas().getAttribute("data-dimmed")).toBe("false");
-    show(unitKey("Engineering"));
+    show(unitKey("engineering"));
     expect(canvas().getAttribute("data-dimmed")).toBe("true");
     show(null);
     expect(canvas().getAttribute("data-dimmed")).toBe("false");
@@ -1545,7 +1545,7 @@ describe("a surface opened about one node", () => {
     const { container, show } = mountAbout(null);
     const view = () => canvasWorld(container).style.transform;
     const before = view();
-    show(unitKey("Engineering"));
+    show(unitKey("engineering"));
     const onIt = view();
     expect(onIt).not.toBe(before);
     show(null);
@@ -1591,7 +1591,7 @@ describe("adding a node in the chart", () => {
     const view = mount();
     const branches = () => chartLinks(view.container).querySelectorAll("path").length;
     const before = branches();
-    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    view.rerender({ adding: adding(unitKey("engineering")).request });
     const form = ghost("Add to Engineering");
     // No dialog: the chart itself is where the question is asked, so the
     // picture behind it is neither covered nor pushed back.
@@ -1620,13 +1620,13 @@ describe("adding a node in the chart", () => {
         );
     const view = mount();
     const before = shape();
-    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    view.rerender({ adding: adding(unitKey("engineering")).request });
     expect(ghost("Add to Engineering")).toBeDefined();
     expect(shape()).toEqual(before);
   });
 
   test("no key of the chart lands on the ghost", () => {
-    mount(undefined, { adding: adding(unitKey("Engineering")).request });
+    mount(undefined, { adding: adding(unitKey("engineering")).request });
     item("Engineering").focus();
     press("ArrowDown");
     const reached: (string | null | undefined)[] = [];
@@ -1647,7 +1647,7 @@ describe("adding a node in the chart", () => {
   test("focus goes into the form and back to the node it was added to", () => {
     const view = mount();
     item("Engineering").focus();
-    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    view.rerender({ adding: adding(unitKey("engineering")).request });
     /*
      * ON THE KIND, which is the question the add is asking. Everything else in
      * the form follows from the answer: the name is pre-filled with one free
@@ -1665,11 +1665,11 @@ describe("adding a node in the chart", () => {
       within(ghost("Add to Engineering")).getByRole("radio", { name: "Agent seat" }),
     );
     view.rerender({ adding: null });
-    expect(focused()).toBe(unitKey("Engineering"));
+    expect(focused()).toBe(unitKey("engineering"));
   });
 
   test("Escape in the form closes the add", () => {
-    const { request, closed } = adding(unitKey("Engineering"));
+    const { request, closed } = adding(unitKey("engineering"));
     mount(undefined, { adding: request });
     fireEvent.keyDown(within(ghost("Add to Engineering")).getByLabelText("Name"), {
       key: "Escape",
@@ -1681,7 +1681,7 @@ describe("adding a node in the chart", () => {
     const view = mount();
     const world = () => canvasWorld(view.container).style.transform;
     const before = world();
-    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    view.rerender({ adding: adding(unitKey("engineering")).request });
     expect(world()).not.toBe(before);
     view.rerender({ adding: null });
     expect(world()).toBe(before);
@@ -1694,7 +1694,7 @@ describe("adding a node in the chart", () => {
    * exactly what this arrangement must not become.
    */
   test("the form records the add and closes", () => {
-    const { request, closed } = adding(unitKey("Engineering"), "unit");
+    const { request, closed } = adding(unitKey("engineering"), "unit");
     const view = mount(undefined, { adding: request });
     const form = ghost("Add to Engineering");
     fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Tooling" } });
@@ -1703,27 +1703,32 @@ describe("adding a node in the chart", () => {
     const recorded = view.spies.dispatched.at(-1);
     expect(recorded).toMatchObject({
       type: "record",
-      intent: { type: "addUnit", placement: { parent: unitKey("Engineering") } },
+      intent: { type: "addUnit", placement: { parent: unitKey("engineering") } },
     });
   });
 
   /*
-   * EVERY REFUSAL THE DIALOG COULD SHOW IS STILL SHOWN. The collision
-   * suggestion is the one a reader meets most, and it is a CONTROL rather than
-   * a sentence: it has to be in the ghost or the way out of a name clash is
-   * gone from the chart's add.
+   * EVERY REFUSAL THE DIALOG COULD SHOW IS STILL SHOWN. A name may be shared,
+   * and the handle offered from it is free of every one the company holds; a
+   * handle typed over it that some seat already answers to is refused in the
+   * ghost, or the chart's add would record what the dialog refuses.
    */
-  test("a name already taken offers the next free one, in the ghost", () => {
-    mount(undefined, { adding: adding(unitKey("Engineering")).request });
+  test("a shared name offers a free handle, and a held handle is refused, in the ghost", () => {
+    mount(undefined, { adding: adding(unitKey("engineering")).request });
     const form = ghost("Add to Engineering");
     fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Dev" } });
-    expect(within(form).getByText(/A seat named Dev already exists/)).toBeDefined();
-    fireEvent.click(within(form).getByRole("button", { name: "Use Dev 2" }));
-    expect((within(form).getByLabelText("Name") as HTMLInputElement).value).toBe("Dev 2");
+    const handle = within(form).getByLabelText("Handle") as HTMLInputElement;
+    expect(handle.value).toBe("dev-2");
+    fireEvent.change(handle, { target: { value: "dev" } });
+    expect(within(form).getByText("dev already names a seat or a unit.")).toBeDefined();
+    expect(within(form).getByRole("button", { name: "Add agent seat" })).toHaveProperty(
+      "disabled",
+      true,
+    );
   });
 
   test("a read-only draft says so in the ghost and records nothing", () => {
-    const { request } = adding(unitKey("Engineering"));
+    const { request } = adding(unitKey("engineering"));
     const view = mount(undefined, { adding: request, readOnly: true });
     const form = ghost("Add to Engineering");
     expect(within(form).getByRole("button", { name: "Add agent seat" })).toHaveProperty(
@@ -1742,7 +1747,7 @@ describe("adding a node in the chart", () => {
   test("no ghost where the parent has left the draft", () => {
     const view = mount();
     const cards = chartCards(view.container).length;
-    view.rerender({ adding: adding(unitKey("Gone")).request });
+    view.rerender({ adding: adding(unitKey("gone")).request });
     /*
      * NOT ONE MORE CARD ON THE CHART, which is the only honest way to ask
      * this. A ghost whose parent is no card of the chart hangs off nothing, so
@@ -1773,7 +1778,7 @@ describe("adding a node in the chart", () => {
     const view = mount(undefined, { adding: adding(null).request });
     const said = within(ghost("Add to Acme")).getByText("Add to Acme");
     expect(said.getAttribute("aria-hidden")).toBe("true");
-    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    view.rerender({ adding: adding(unitKey("engineering")).request });
     expect(within(ghost("Add to Engineering")).getByText("Add to Engineering")).toBeDefined();
   });
 });

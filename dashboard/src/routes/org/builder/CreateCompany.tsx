@@ -8,11 +8,11 @@
  * `applyTemplate` operation, so the whole start is a single undo and is
  * checked by the engine exactly like any other draft.
  *
- * NO INVENTED IDENTITY. A human seat reaches people through a contact
+ * NO INVENTED CONTACT. A human seat reaches people through a contact
  * identity, and a template never writes one it was not given: the only
- * identity here is the one the operator types for their own seat. The
+ * identity here is the one the operator may type for their own seat. The
  * "Leads are people" option therefore creates human leads without identities,
- * and the review lists each one until it has one.
+ * which the engine admits, and the review lists each one.
  *
  * WHAT A CREATE CANNOT DO. The dashboard writes no model provider (that is
  * `providers.llm`, which no screen edits), so the next steps after a
@@ -152,7 +152,7 @@ export function CreateCompany({
             />
             <span className="t-caption">
               {leads === "people"
-                ? "Each unit lead is a human seat. Every one needs a contact identity before the company can be created."
+                ? "Each unit lead is a human seat, created with no contact identity: until one is added in its editor, no agent can mention that person."
                 : "Each unit lead is an agent seat the engine runs."}
             </span>
           </div>
@@ -187,7 +187,9 @@ export function CreateCompany({
               label={CONTACT_IDENTITIES.find((c) => c.key === identity)!.label}
               value={value}
               onChange={setValue}
+              required={false}
               disabled={disabled}
+              help="Leave it empty if you will work only through the dashboard: no agent can then mention you."
             />
           </div>
         )}
@@ -261,7 +263,7 @@ crewlet config import company.yaml
 
 # Or: patch the running configuration
 curl -X PATCH "$CREWLET_URL/config" \\
-  -H "Authorization: Bearer $CREWLET_TOKEN" \\
+  -H "Authorization: Bearer $CREWLET_API_TOKEN" \\
   -H "Content-Type: application/merge-patch+json" \\
   -H "X-Summary: add a model provider" \\
   -d '{"providers":{"llm":{"default":{"type":"anthropic",

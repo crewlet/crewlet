@@ -5,7 +5,8 @@
  * - the rows are the TREE, in the chart's own order, and where a node sits is
  *   its level rather than a path written out on every line;
  * - a row says what the engine knows about it: what it IS, once, under its
- *   name and in the chart's own wording; the handle it runs under; who leads
+ *   name and in the chart's own wording; its identity, a seat's handle or a
+ *   unit's key, which is what every reference to it names; who leads
  *   or manages it; and what the last dry run placed on it, with a cell that
  *   cannot hold a value saying so once in the design system's own mark;
  * - a row acts through the same one list of a node's actions the chart's cards
@@ -176,12 +177,12 @@ describe("the rows", () => {
     expect(names().some((name) => name.includes("/"))).toBe(false);
   });
 
-  test("a row says its kind, its handle and who leads or manages it", () => {
+  test("a row says its kind, its handle or key and who leads or manages it", () => {
     mount();
     expect(cells("Dev")[0]).toMatch(/^DevAgent seat/);
     expect(cells("Dev")).toEqual(expect.arrayContaining(["@dev"]));
     expect(cells("Engineering")).toEqual(
-      expect.arrayContaining(["EngineeringDepartment", "VP Engineering"]),
+      expect.arrayContaining(["EngineeringDepartment", "engineering", "VP Engineering"]),
     );
   });
 
@@ -197,7 +198,7 @@ describe("the rows", () => {
     const headers = screen
       .getAllByRole("columnheader")
       .map((head) => head.textContent?.trim() ?? "");
-    expect(headers).toEqual(["Name", "Handle", "Lead or reports to", "Problems", "Actions"]);
+    expect(headers).toEqual(["Name", "Handle or key", "Lead or reports to", "Problems", "Actions"]);
     const said = (name: string, word: string) =>
       (cells(name).join(" ").match(new RegExp(word, "g")) ?? []).length;
     expect(said("Dev", "Agent seat")).toBe(1);
@@ -387,7 +388,7 @@ describe("acting on a row", () => {
     const { spies } = mount();
     fireEvent.click(within(row("Engineering")).getByRole("button", { name: "Add to Engineering" }));
     fireEvent.click(await screen.findByRole("button", { name: "Add human seat to Engineering" }));
-    expect(spies.openAdd).toHaveBeenLastCalledWith("unit:Engineering", "human");
+    expect(spies.openAdd).toHaveBeenLastCalledWith("unit:engineering", "human");
 
     fireEvent.click(within(row("Acme")).getByRole("button", { name: "Add to Acme" }));
     fireEvent.click(await screen.findByRole("button", { name: "Add unit to Acme" }));

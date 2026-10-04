@@ -9,10 +9,9 @@
  * placing every reader shares). A node the last check has not described (one
  * added since) has no answer here, and the screens say so rather than guess.
  * What a card also shows is read where the card reads it, so a card and the
- * dialog it opens can never name a seat two ways: a seat's handle through the
- * one rule the reducer records by (`model/document.knownHandles`, read as
- * `reducer.handlesOf`), and the seat a reported handle names and the Datadog
- * fallback from `chartModel.ts`.
+ * dialog it opens can never name a seat two ways: a seat's handle is the one
+ * its node carries (`model/draft.handleOf`), and the seat a reported handle
+ * names and the Datadog fallback come from `chartModel.ts`.
  *
  * ONLY A CHECK OF THE DRAFT AS IT STANDS. A check still out, or one that
  * answered for an older draft, describes a company the operator has since
@@ -53,7 +52,17 @@ import { activityOf } from "~/lib/seats.ts";
 import { keyOfHandle } from "./chartModel.ts";
 import { placeDerivation, type CheckedDocument, type PlacedDerivation } from "./model/document.ts";
 import { COMPANY_KEY, isMintedKey, type NodeKey } from "./model/keys.ts";
-import { allUnits, locate, type Draft, type DraftSeat, type DraftUnit } from "./model/draft.ts";
+import {
+  allSeats,
+  allUnits,
+  handleOf,
+  identitiesOf,
+  locate,
+  type Draft,
+  type DraftSeat,
+  type DraftUnit,
+} from "./model/draft.ts";
+import { handleProblem, unitKeyProblem } from "./model/identity.ts";
 import { getPath, isRecord } from "./model/json.ts";
 import { checkedDocument, type BuilderState } from "./model/reducer.ts";
 
@@ -108,9 +117,45 @@ export function homeUnitOf(state: BuilderState, key: NodeKey): DraftUnit | undef
   return found?.kind === "unit" ? found.node : undefined;
 }
 
-/** The units whose DECLARED lead names this seat, in the document's order. */
-export function unitsLedBy(draft: Draft, seatName: string): DraftUnit[] {
-  return [...allUnits(draft)].map(({ unit }) => unit).filter((unit) => unit.data.lead === seatName);
+/**
+ * How each seat of the draft is offered where a person picks one, by handle:
+ * its name, and its handle beside the name where another seat shares it.
+ * A pick is written as the handle, so two seats called "Engineer" have to read
+ * apart in the list they are picked from.
+ */
+export function seatLabels(draft: Draft): Map<string, string> {
+  const seats = [...allSeats(draft)].map(({ seat }) => seat);
+  const count = new Map<string, number>();
+  for (const seat of seats) count.set(seat.data.name, (count.get(seat.data.name) ?? 0) + 1);
+  return new Map(
+    seats.map((seat) => {
+      const handle = handleOf(seat);
+      const name = seat.data.name || handle;
+      return [handle, (count.get(seat.data.name) ?? 0) > 1 ? `${name} (@${handle})` : name];
+    }),
+  );
+}
+
+/**
+ * Why `value` cannot be the identity of a node this draft created, or `null`
+ * when it can: the engine's grammar, and every handle and key the draft and
+ * the saved company hold — a removed node's included, since its memory and
+ * mailbox still answer to it — except `self`, the node's own.
+ */
+export function identityProblemOf(
+  state: BuilderState,
+  kind: "seat" | "unit",
+  value: string,
+  self: string,
+): string | null {
+  const taken = new Set([...identitiesOf(state.draft), ...identitiesOf(state.baseDraft)]);
+  taken.delete(self);
+  return kind === "seat" ? handleProblem(value, taken) : unitKeyProblem(value, taken);
+}
+
+/** The units whose DECLARED lead names this seat's handle, in the document's order. */
+export function unitsLedBy(draft: Draft, handle: string): DraftUnit[] {
+  return [...allUnits(draft)].map(({ unit }) => unit).filter((unit) => unit.data.lead === handle);
 }
 
 // ---------------------------------------------------------------------------

@@ -9,30 +9,31 @@
  * FOUR PROMISES, each tested:
  *
  * - ONE REPORTING ROOT. Every template seat except the top one is listed by
- *   name in exactly one `manages`, and nothing else would give it a manager: an
- *   entry never names a UNIT (which would claim that unit's members as well,
- *   and the first-listed rule would then pick a different manager), and every
- *   unit's only direct member is its own lead (so a lead's automatic
+ *   handle in exactly one `manages`, and nothing else would give it a manager:
+ *   an entry never names a UNIT (which would claim that unit's members as
+ *   well, and the first-listed rule would then pick a different manager), and
+ *   every unit's only direct member is its own lead (so a lead's automatic
  *   management adds nobody). The chart a new company starts with is therefore
  *   one tree, rather than a root per unit, which is what a template that only
  *   set unit leads produced: the engine's lead manages that unit's direct
  *   members and never the lead of a child unit.
- * - NEVER AN INVENTED IDENTITY. A human seat reaches people through the
+ * - NEVER AN INVENTED CONTACT. A human seat reaches people through the
  *   contact identity it holds, and a made-up one would mention a stranger. The
  *   only identity a template writes is the one the operator typed for their
- *   own seat; a "Leads are people" lead is created without one, and
- *   [seatsNeedingContact] lists it until the operator supplies it.
+ *   own seat, if any; a "Leads are people" lead is created without one, and
+ *   [seatsWithoutContact] lists it in the review: the engine admits it, and
+ *   until it has one the person is reached through the dashboard only.
  * - NEUTRAL TITLES. Seats are named for the role ("Chief Executive"), never a
- *   person, because a seat's name derives its handle and outlives whoever
- *   holds it.
- * - UNIQUE NAMES. The operator's own seat keeps the name they typed; a
- *   template seat that would collide with it takes the next free name, and
- *   every `manages` entry and lead names the seat as it was finally named.
+ *   person, because a seat outlives whoever holds it.
+ * - EVERY NODE CARRIES ITS IDENTITY. Each seat is given a handle and each unit
+ *   a key minted from its name (`identity.ts`), free of every other, and every
+ *   `lead` and `manages` entry names them: the operator's own seat and a
+ *   template seat may share a name, and never a handle.
  */
 
 import type { HumanContactKey } from "~/protocol/index.ts";
-import { suggestUniqueName } from "./document.ts";
 import { allSeats, type Draft, type DraftSeat, type DraftUnit } from "./draft.ts";
+import { mintHandle, mintUnitKey } from "./identity.ts";
 import { mintKey, type KeySource, type NodeKey } from "./keys.ts";
 import type { Intent, TemplateId } from "./operations.ts";
 
@@ -54,7 +55,7 @@ export type LeadsAre = "people" | "agents";
 /** The operator's own seat, from "Your seat" in the create form. */
 export interface FounderSeat {
   readonly name: string;
-  /** Exactly one identity. */
+  /** At most one contact identity: `value` empty for none. */
   readonly identity: HumanContactKey;
   readonly value: string;
 }
@@ -70,12 +71,12 @@ export interface TemplateOptions {
 export type TemplateBuilt =
   { readonly ok: true; readonly intent: Intent } | { readonly ok: false; readonly message: string };
 
-/** One seat of a template, before names are made unique and keys minted. */
+/** One seat of a template, before its handle and key are minted. */
 interface SeatSpec {
   readonly name: string;
   readonly kind: "agent" | "human";
   readonly goal: string;
-  /** Seat names, as written before uniqueness. */
+  /** The names of the template seats it manages, each unique within its template. */
   readonly manages?: readonly string[];
 }
 
@@ -199,16 +200,8 @@ export function templateIntent(options: TemplateOptions, keys: KeySource): Templ
   const name = options.charter.name.trim();
   if (name === "") return { ok: false, message: "Enter the company name." };
   const founder = options.founder;
-  if (founder) {
-    if (founder.name.trim() === "")
-      return { ok: false, message: "Enter a name for your seat, or leave your seat out." };
-    if (founder.value.trim() === "") {
-      return {
-        ok: false,
-        message: "Enter one contact identity for your seat, so agents can reach you.",
-      };
-    }
-  }
+  if (founder && founder.name.trim() === "")
+    return { ok: false, message: "Enter a name for your seat, or leave your seat out." };
 
   let shape: Shape;
   switch (options.template) {
@@ -225,51 +218,66 @@ export function templateIntent(options: TemplateOptions, keys: KeySource): Templ
       break;
   }
 
-  // Final names first, so every reference can be rewritten to them.
+  // Every identity first, so every reference can name one. The operator's own
+  // seat is minted first and keeps the handle its name gives; a template
+  // seat that shares its name takes the next free one.
   const taken = new Set<string>();
-  const founderName = founder?.name.trim();
-  if (founderName) taken.add(founderName);
-  const renamed = new Map<string, string>();
-  const claim = (spec: SeatSpec) => {
-    const unique = suggestUniqueName(taken, spec.name);
-    taken.add(unique);
-    renamed.set(spec.name, unique);
+  const claimHandle = (name: string) => {
+    const handle = mintHandle(name, taken);
+    taken.add(handle);
+    return handle;
   };
-  if (shape.top) claim(shape.top);
+  const founderName = founder?.name.trim();
+  const founderHandle = founderName ? claimHandle(founderName) : undefined;
+  const handles = new Map<string, string>();
+  if (shape.top) handles.set(shape.top.name, claimHandle(shape.top.name));
+  const unitKeys = new Map<UnitSpec, string>();
   const walkSpecs = (units: readonly UnitSpec[]) => {
     for (const unit of units) {
-      claim(unit.lead);
+      handles.set(unit.lead.name, claimHandle(unit.lead.name));
+      const key = mintUnitKey(unit.name, taken);
+      taken.add(key);
+      unitKeys.set(unit, key);
       walkSpecs(unit.children ?? []);
     }
   };
   walkSpecs(shape.units);
-  const final = (seat: string) => renamed.get(seat) ?? seat;
+  const handleOf = (name: string) => handles.get(name)!;
 
   const seat = (spec: SeatSpec): DraftSeat => ({
     key: mintKey(keys),
     data: {
-      name: final(spec.name),
+      name: spec.name,
+      handle: handleOf(spec.name),
       ...(spec.kind === "human" ? { kind: "human" } : {}),
       goal: spec.goal,
-      ...(spec.manages && spec.manages.length > 0 ? { manages: spec.manages.map(final) } : {}),
+      ...(spec.manages && spec.manages.length > 0 ? { manages: spec.manages.map(handleOf) } : {}),
     },
   });
   const unit = (spec: UnitSpec): DraftUnit => ({
     key: mintKey(keys),
-    data: { name: spec.name, type: spec.type, purpose: spec.purpose, lead: final(spec.lead.name) },
+    data: {
+      name: spec.name,
+      id: unitKeys.get(spec)!,
+      type: spec.type,
+      purpose: spec.purpose,
+      lead: handleOf(spec.lead.name),
+    },
     roles: [seat(spec.lead)],
     children: (spec.children ?? []).map(unit),
   });
 
   const roles: DraftSeat[] = [];
-  if (founder && founderName) {
+  if (founder && founderName && founderHandle) {
+    const contact = founder.value.trim();
     roles.push({
       key: mintKey(keys),
       data: {
         name: founderName,
+        handle: founderHandle,
         kind: "human",
-        contact: { [founder.identity]: founder.value.trim() },
-        ...(shape.top ? { manages: [final(shape.top.name)] } : {}),
+        ...(contact ? { contact: { [founder.identity]: contact } } : {}),
+        ...(shape.top ? { manages: [handleOf(shape.top.name)] } : {}),
       },
     });
   }
@@ -291,11 +299,12 @@ export function templateIntent(options: TemplateOptions, keys: KeySource): Templ
 /**
  * The human seats of a draft that hold no contact identity, in walk order.
  *
- * A checklist for the create flow, not a validator: the engine refuses a human
- * seat with no identity, and this lets the review name each one before the
- * operator finds out from a refused check.
+ * A NOTICE, NOT A RULE. The engine admits a human seat with no contact
+ * identity — a person who works only through the dashboard has no chat
+ * account to declare — and warns about it on every write; the review names
+ * each one, because until it has one no agent can @-mention that person.
  */
-export function seatsNeedingContact(draft: Draft): NodeKey[] {
+export function seatsWithoutContact(draft: Draft): NodeKey[] {
   const out: NodeKey[] = [];
   for (const { seat } of allSeats(draft)) {
     if (seat.data.kind !== "human") continue;

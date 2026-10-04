@@ -45,11 +45,18 @@ import {
   WorkingNotes,
   type LeftBehind,
 } from "./dialogParts.tsx";
-import { allSeats, locate, type DraftSeat } from "./model/draft.ts";
+import {
+  allSeats,
+  handleOf,
+  locate,
+  managedBy,
+  seatWithHandle,
+  type DraftSeat,
+} from "./model/draft.ts";
 import { isRecord } from "./model/json.ts";
 import { COMPANY_KEY, isMintedKey, type NodeKey } from "./model/keys.ts";
 import { kindOf, type Intent, type ReferenceEffect } from "./model/operations.ts";
-import { handlesOf, recordIntent, type BuilderState } from "./model/reducer.ts";
+import { recordIntent, type BuilderState } from "./model/reducer.ts";
 import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { massRemoval, newlyStranded, removedSeats, removedUnits, simulate } from "./preflight.ts";
@@ -95,17 +102,13 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
   // replacement cannot be one of the seats it removes.
   const bare = simulate(state, { type: "remove", target: nodeKey, placedSeats });
   const removing = bare.ok ? removedSeats(state.draft, bare.after) : [];
-  const handles = handlesOf(state);
   const fallback = datadogFallback(company);
   const fallbackSeat =
-    fallback === undefined
-      ? undefined
-      : removing.find((seat) => handles.get(seat.key) === fallback);
+    fallback === undefined ? undefined : removing.find((seat) => handleOf(seat) === fallback);
   const replacements = [...allSeats(state.draft)]
     .map(({ seat }) => seat)
     .filter((seat) => kindOf(seat.data) === "agent" && !removing.includes(seat))
-    .map((seat) => ({ seat, handle: handles.get(seat.key) }))
-    .filter((c): c is { seat: DraftSeat; handle: string } => c.handle !== undefined);
+    .map((seat) => ({ seat, handle: handleOf(seat) }));
   // A CHOICE COUNTS ONLY WHILE IT IS STILL ON OFFER. The replacements follow
   // the removal, and "Delete them too" can take the seat that was chosen, so
   // a stale choice would write a fallback naming a seat this very removal
@@ -128,7 +131,7 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
   const mass = preview.ok ? massRemoval(state.baseDraft, after) : null;
   const agents = seats.filter((seat) => kindOf(seat.data) === "agent");
   const working = seats
-    .filter((seat) => isWorking(handles.get(seat.key), api.agents, api.sandboxes))
+    .filter((seat) => isWorking(handleOf(seat), api.agents, api.sandboxes))
     .map((seat) => seat.data.name);
 
   const blocked =
@@ -270,15 +273,18 @@ function ClearedReferences({
   cleared: readonly ReferenceEffect[];
 }) {
   if (cleared.length === 0) return null;
+  // A REFERENCE NAMES AN IDENTITY, a handle or a unit key, which is said as
+  // the name of what it named in the draft before the removal.
+  const named = (from: string): string => managedBy(state.draft, from)?.node.data.name || from;
   const sentence = (effect: ReferenceEffect): string => {
     const holder = holderName(state, effect.holder);
     switch (effect.kind) {
       case "lead":
-        return `${holder} no longer has ${effect.from} as its lead.`;
+        return `${holder} no longer has ${seatWithHandle(state.draft, effect.from)?.data.name || effect.from} as its lead.`;
       case "manages":
-        return `${holder} no longer manages ${effect.from}.`;
+        return `${holder} no longer manages ${named(effect.from)}.`;
       case "unit":
-        return `${holder} loses its unit reference to ${effect.from} and stays at the top level.`;
+        return `${holder} loses its unit reference to ${named(effect.from)} and stays at the top level.`;
       default:
         return `${holder} no longer refers to ${effect.from}.`;
     }

@@ -67,10 +67,18 @@ export function company(): CompanyDocument {
     name: "Acme",
     providers: { llm: { default: { type: "anthropic", model: "claude-sonnet-5" } } },
     roles: [
-      { name: "CEO", goal: "Lead", manages: ["Engineering"] },
-      { name: "Designer", goal: "Design" },
+      { name: "CEO", handle: "ceo", goal: "Lead", manages: ["engineering"] },
+      { name: "Designer", handle: "designer", goal: "Design" },
     ],
-    units: [{ name: "Engineering", type: "department", lead: "Dev", roles: [{ name: "Dev" }] }],
+    units: [
+      {
+        name: "Engineering",
+        id: "engineering",
+        type: "department",
+        lead: "dev",
+        roles: [{ name: "Dev", handle: "dev" }],
+      },
+    ],
   };
 }
 
@@ -252,7 +260,7 @@ export function FakeView() {
               // Minted in the handler, as every view mints a new node's key.
               key: "new:analyst",
               placement: { parent: COMPANY_KEY, after: null },
-              data: { name: "Analyst", goal: "Analyse" },
+              data: { name: "Analyst", handle: "analyst", goal: "Analyse" },
             },
           })
         }

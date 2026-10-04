@@ -2,8 +2,10 @@
 /**
  * Keys, the draft and the document, in both directions.
  *
- * What these protect: a node's key is the engine's identity and survives a
- * reload of the same document; the draft keeps every key it does not model;
+ * What these protect: a node's key is its identity — the handle or unit key
+ * its document carries — and survives a reload of the same document; keying
+ * writes nothing into the document; the draft keeps every key it does not
+ * model;
  * the path index names exactly the document it was built beside; and a merge
  * patch names only what changed, removing a key with an explicit `null`
  * because a merge patch keeps every key it does not name.
@@ -11,7 +13,6 @@
 
 import { describe, expect, test } from "vitest";
 import type { CompanyDocument } from "~/protocol/index.ts";
-import { REDACTED } from "~/lib/format.ts";
 import { cloneJson, getPath, jsonEqual, setPath } from "./json.ts";
 import {
   COMPANY_KEY,
@@ -20,32 +21,29 @@ import {
   isNodeKey,
   mintKey,
   seatKey,
-  seatPathKey,
+  unitIdOfKey,
   unitKey,
-  unitPathKey,
 } from "./keys.ts";
-import { allSeats, allUnits, locate } from "./draft.ts";
+import { allSeats, allUnits, handleOf, locate, unitIdOf } from "./draft.ts";
 import {
   buildPatch,
   fromDocument,
-  knownHandles,
-  maskedCredentialPaths,
   NO_DERIVATION,
   pathOfSegments,
   placeDerivation,
   rekeying,
-  suggestUniqueName,
   toDocument,
 } from "./document.ts";
 import { countingKeys, fixtureCompany, fixtureDerived } from "./testkit.ts";
 
 describe("keys", () => {
-  test("an existing node is keyed by the engine's identity, a created one by a minted token", () => {
+  test("an existing node is keyed by its identity, a created one by a minted token", () => {
     expect(seatKey("dev")).toBe("seat:dev");
-    expect(unitKey("Engineering")).toBe("unit:Engineering");
+    expect(unitKey("engineering")).toBe("unit:engineering");
     expect(handleOfKey("seat:dev")).toBe("dev");
     expect(handleOfKey(unitKey("dev"))).toBeUndefined();
-    expect(handleOfKey(seatPathKey("roles[0]"))).toBeUndefined();
+    expect(unitIdOfKey("unit:engineering")).toBe("engineering");
+    expect(unitIdOfKey(seatKey("dev"))).toBeUndefined();
     const key = mintKey(countingKeys("n"));
     expect(key).toBe("new:n1");
     expect(isMintedKey(key)).toBe(true);
@@ -59,20 +57,14 @@ describe("keys", () => {
   });
 
   test("only shapes this module produces are keys", () => {
-    for (const good of [
-      COMPANY_KEY,
-      "seat:a",
-      "unit:A b",
-      "seat@roles[0]",
-      "unit@units[1]",
-      "new:abc_-1",
-    ]) {
+    for (const good of [COMPANY_KEY, "seat:a", "unit:a_b", "new:abc_-1"]) {
       expect(isNodeKey(good), good).toBe(true);
     }
     for (const bad of [
       "",
       "seat:",
       "unit:",
+      "seat@roles[0]",
       "new:",
       "new:a b",
       "company2",
@@ -132,35 +124,41 @@ describe("json", () => {
 });
 
 describe("fromDocument", () => {
-  test("keys seats by the handle the engine derived, and units by name", () => {
+  test("keys seats by the handle they declare, and units by their key", () => {
     const doc = fixtureCompany();
-    const draft = fromDocument(doc, fixtureDerived(doc));
+    const draft = fromDocument(doc);
     expect(draft.roles.map((s) => s.key)).toEqual(["seat:ceo", "seat:designer"]);
     expect([...allUnits(draft)].map(({ unit }) => unit.key)).toEqual([
-      "unit:Engineering",
-      "unit:Platform",
-      "unit:Sales",
+      "unit:engineering",
+      "unit:platform",
+      "unit:sales",
     ]);
     expect([...allSeats(draft)].map(({ seat }) => seat.key)).toContain("seat:vp-engineering");
   });
 
   test("the same document keys identically every time it is read", () => {
     const doc = fixtureCompany();
-    const a = fromDocument(doc, fixtureDerived(doc));
-    const b = fromDocument(cloneJson(doc), fixtureDerived(doc));
-    expect(b).toEqual(a);
+    expect(fromDocument(cloneJson(doc))).toEqual(fromDocument(doc));
   });
 
-  test("without a derivation a seat is keyed by its declared handle, or else by its path", () => {
+  // EVERY DOCUMENT THE ENGINE STORES DECLARES BOTH. One that does not (a
+  // fixture, a hand-written file) is keyed by the builder's own minting rule,
+  // so its nodes still have keys, and keying writes nothing into it.
+  test("a node that declares no identity is keyed by one minted from its name, and its data is left alone", () => {
     const doc: CompanyDocument = {
       name: "X",
       roles: [{ name: "A", handle: "alpha" }, { name: "B" }],
+      units: [{ name: "Legal Team" }],
     };
-    const draft = fromDocument(doc, null);
-    expect(draft.roles.map((s) => s.key)).toEqual(["seat:alpha", seatPathKey("roles[1]")]);
+    const draft = fromDocument(doc);
+    expect(draft.roles.map((s) => s.key)).toEqual(["seat:alpha", "seat:b"]);
+    expect(draft.units.map((u) => u.key)).toEqual(["unit:legal-team"]);
+    expect(handleOf(draft.roles[1]!)).toBe("b");
+    expect(unitIdOf(draft.units[0]!)).toBe("legal-team");
+    expect(toDocument(draft).document).toEqual(doc);
   });
 
-  test("a repeated unit name or handle is keyed by path, so neither twin silently wins the identity", () => {
+  test("an identity held twice keys the second node apart, so neither twin silently takes the other's key", () => {
     const doc: CompanyDocument = {
       name: "X",
       roles: [
@@ -168,43 +166,40 @@ describe("fromDocument", () => {
         { name: "B", handle: "same" },
       ],
       units: [
-        { name: "Platform" },
-        { name: "Ops", children: [{ name: "Platform" }] },
+        { name: "Platform", id: "platform" },
+        { name: "Ops", id: "ops", children: [{ name: "Platform", id: "platform" }] },
         { name: "" },
       ],
     };
-    const draft = fromDocument(doc, null);
-    expect(draft.roles.map((s) => s.key)).toEqual([
-      seatPathKey("roles[0]"),
-      seatPathKey("roles[1]"),
-    ]);
+    const draft = fromDocument(doc);
+    expect(draft.roles.map((s) => s.key)).toEqual(["seat:same", "seat:b"]);
     expect([...allUnits(draft)].map(({ unit }) => unit.key)).toEqual([
-      unitPathKey("units[0]"),
-      unitKey("Ops"),
-      unitPathKey("units[1].children[0]"),
-      unitPathKey("units[2]"),
+      "unit:platform",
+      "unit:ops",
+      "unit:platform-2",
+      "unit:unit",
     ]);
   });
 
   test("every key the builder does not model survives into the draft and back out", () => {
     const doc = fixtureCompany();
-    const out = toDocument(fromDocument(doc, fixtureDerived(doc))).document;
+    const out = toDocument(fromDocument(doc)).document;
     expect(out).toEqual(doc);
     expect(out.future_setting).toEqual({ kept: true });
   });
 
   test("a null document is the empty draft of create mode", () => {
-    expect(fromDocument(null, null)).toEqual({ company: {}, roles: [], units: [] });
+    expect(fromDocument(null)).toEqual({ company: {}, roles: [], units: [] });
   });
 });
 
 describe("toDocument", () => {
   test("indexes every node at the path the engine reports a problem at, both ways", () => {
     const doc = fixtureCompany();
-    const { index } = toDocument(fromDocument(doc, fixtureDerived(doc)));
+    const { index } = toDocument(fromDocument(doc));
     expect(index.byPath.get("")).toBe(COMPANY_KEY);
     expect(index.byPath.get("roles[1]")).toBe("seat:designer");
-    expect(index.byPath.get("units[0].children[0]")).toBe("unit:Platform");
+    expect(index.byPath.get("units[0].children[0]")).toBe("unit:platform");
     expect(index.byPath.get("units[0].children[0].roles[0]")).toBe("seat:sre");
     expect(index.pathOf.get("seat:dev")).toBe("units[0].roles[1]");
     expect(index.segmentsOf.get("seat:dev")).toEqual(["units", 0, "roles", 1]);
@@ -213,7 +208,7 @@ describe("toDocument", () => {
   });
 
   test("an empty list is left out, as the engine writes a document", () => {
-    const draft = fromDocument({ name: "X", units: [{ name: "U" }] }, null);
+    const draft = fromDocument({ name: "X", units: [{ name: "U" }] });
     expect(toDocument(draft).document).toEqual({ name: "X", units: [{ name: "U" }] });
   });
 });
@@ -221,11 +216,11 @@ describe("toDocument", () => {
 describe("placeDerivation", () => {
   test("places each derived seat and unit on the node at its path in the sent document", () => {
     const doc = fixtureCompany();
-    const sent = toDocument(fromDocument(doc, null));
+    const sent = toDocument(fromDocument(doc));
     const placed = placeDerivation(sent.index, fixtureDerived(doc));
-    expect(placed.seatByKey.get(seatPathKey("roles[0]"))?.handle).toBe("ceo");
-    expect(placed.keyOfHandle.get("ceo")).toBe(seatPathKey("roles[0]"));
-    expect(placed.unitByKey.get(unitKey("Sales"))?.name).toBe("Sales");
+    expect(placed.seatByKey.get("seat:ceo")?.handle).toBe("ceo");
+    expect(placed.keyOfHandle.get("ceo")).toBe("seat:ceo");
+    expect(placed.unitByKey.get("unit:sales")?.name).toBe("Sales");
     expect(placeDerivation(sent.index, null)).toEqual(NO_DERIVATION);
   });
 
@@ -233,69 +228,28 @@ describe("placeDerivation", () => {
   // reported handle as a node must not change with the order a map is built.
   test("a handle two seats share names the first", () => {
     const doc: CompanyDocument = { name: "X", roles: [{ name: "Dev" }, { name: "dev" }] };
-    const sent = toDocument(fromDocument(doc, null));
+    const sent = toDocument(fromDocument(doc));
     const placed = placeDerivation(sent.index, fixtureDerived(doc));
     expect(placed.keyOfHandle.get("dev")).toBe(sent.index.byPath.get("roles[0]"));
   });
 });
 
 describe("rekeying", () => {
-  test("follows each path key to the handle the engine gave the node at that path", () => {
-    const doc = fixtureCompany();
-    const before = fromDocument(doc, null);
-    const after = fromDocument(doc, fixtureDerived(doc));
-    const moved = rekeying(before, after);
-    expect(moved.get(seatPathKey("roles[0]"))).toBe(seatKey("ceo"));
-    // A unit is keyed by its name either way, and is not listed.
-    expect(moved.has(unitKey("Sales"))).toBe(false);
-    expect(rekeying(after, after).size).toBe(0);
-  });
-});
-
-describe("knownHandles", () => {
-  const checkedOf = (draft: ReturnType<typeof fromDocument>) => {
-    const sent = toDocument(draft);
-    return { sent, derived: fixtureDerived(sent.document) };
-  };
-
-  test("a declared handle, then the one a key carries, then the one a check derived", () => {
-    const doc = fixtureCompany();
-    const draft = fromDocument(doc, fixtureDerived(doc));
-    const withNew = {
-      ...draft,
-      roles: [
-        ...draft.roles,
-        { key: "new:a", data: { name: "Quality Lead" } },
-        { key: "new:b", data: { name: "Ops", handle: "ops-lead" } },
-      ],
+  // A SAVE MOVES THE NODES IT CREATED. The draft it sent keys them by the
+  // tokens they were minted with; the base it becomes keys them by the
+  // identities they were given, at the same paths.
+  test("follows each created node from its minted key to the identity at its path", () => {
+    const base = fromDocument(fixtureCompany());
+    const sent = {
+      ...base,
+      roles: [...base.roles, { key: "new:a", data: { name: "QA", handle: "qa" } }],
     };
-    const handles = knownHandles(withNew, null);
-    expect(handles.get(seatKey("ceo"))).toBe("ceo");
-    expect(handles.get("new:b")).toBe("ops-lead");
-    // No check has described the created seat, and the client never derives one.
-    expect(handles.has("new:a")).toBe(false);
-    expect(knownHandles(withNew, checkedOf(withNew)).get("new:a")).toBe("quality-lead");
-  });
-
-  // The engine derives an undeclared handle from the seat's own name and
-  // nothing else, so a check of an older draft still names it while the name
-  // holds, and names nothing once the seat is renamed or declares a handle.
-  test("a checked handle holds exactly while the seat keeps the name that check saw", () => {
-    const base = fromDocument({ name: "X", roles: [{ name: "CEO" }] }, null);
-    const draft = { ...base, roles: [{ key: "new:a", data: { name: "Quality Lead" } }] };
-    const checked = checkedOf(draft);
-    const edited = {
-      ...draft,
-      roles: [{ key: "new:a", data: { name: "Quality Lead", goal: "Test it" } }],
-    };
-    expect(knownHandles(edited, checked).get("new:a")).toBe("quality-lead");
-    const renamed = { ...draft, roles: [{ key: "new:a", data: { name: "QA Lead" } }] };
-    expect(knownHandles(renamed, checked).has("new:a")).toBe(false);
-    const declaredSince = {
-      ...draft,
-      roles: [{ key: "new:a", data: { name: "Quality Lead", handle: "qa" } }],
-    };
-    expect(knownHandles(declaredSince, checked).get("new:a")).toBe("qa");
+    const saved = fromDocument(toDocument(sent).document);
+    const moved = rekeying(sent, saved);
+    expect(moved.get("new:a")).toBe(seatKey("qa"));
+    // A node that kept its key is not listed.
+    expect(moved.has("seat:ceo")).toBe(false);
+    expect(rekeying(saved, saved).size).toBe(0);
   });
 });
 
@@ -360,41 +314,13 @@ describe("buildPatch", () => {
   });
 });
 
-describe("suggestUniqueName", () => {
-  test("keeps a free name and numbers a taken one past every number in use", () => {
-    expect(suggestUniqueName(["A"], " Software Engineer ")).toBe("Software Engineer");
-    expect(suggestUniqueName(["Software Engineer"], "Software Engineer")).toBe(
-      "Software Engineer 2",
-    );
-    expect(
-      suggestUniqueName(["Software Engineer", "Software Engineer 2"], "Software Engineer"),
-    ).toBe("Software Engineer 3");
-    expect(suggestUniqueName(["Team 2"], "Team 2")).toBe("Team 3");
-  });
-});
-
-describe("maskedCredentialPaths", () => {
-  test("lists the renamed unit's own masked credentials by path, never a value, and nothing a seat inside restores by handle", () => {
-    const doc = fixtureCompany();
-    const engineering = doc.units![0]!;
-    engineering.mcp_env = { tracker: { TOKEN: REDACTED, URL: "${TRACKER_URL}" } };
-    engineering.roles![1]!.mcp_env = { tracker: { TOKEN: REDACTED } };
-    const draft = fromDocument(doc, fixtureDerived(doc));
-    expect(maskedCredentialPaths(draft, "unit:Engineering")).toEqual([
-      "units[0].mcp_env.tracker.TOKEN",
-    ]);
-    expect(maskedCredentialPaths(draft, "unit:Sales")).toEqual([]);
-    expect(maskedCredentialPaths(draft, "seat:dev")).toEqual([]);
-  });
-});
-
 describe("locate", () => {
   test("finds a node anywhere with the list it sits in", () => {
     const doc = fixtureCompany();
-    const draft = fromDocument(doc, fixtureDerived(doc));
+    const draft = fromDocument(doc);
     const found = locate(draft, "seat:sre");
     expect(found?.kind).toBe("seat");
-    expect(found?.parent).toBe("unit:Platform");
+    expect(found?.parent).toBe("unit:platform");
     expect(found?.index).toBe(0);
     expect(locate(draft, "seat:nobody")).toBeUndefined();
   });

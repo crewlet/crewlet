@@ -336,11 +336,14 @@ the reporting chart, which have no place to draw it, the same form opens as a
 dialog. A name is prose, and two seats or two units may share one: every
 reference names a seat by its **handle** and a unit by its **key**, and the
 form asks for that address beside the name. It follows the name until you
-type one, and it is never an address a node of the saved chart or the draft
-holds — one this draft removes included. A human seat's contact identity is optional: the form
-offers it (to a reader shown the runtime half), it can be added later in the
-seat's editor, and without one the person is reached through the dashboard
-only.
+type one (lowercase letters, digits and hyphens for a handle; a unit's key
+starts with a letter and may hold underscores; at most 64 characters), and it
+is never an address a seat or unit of the saved company or the draft holds —
+one this draft removes included, because a new seat under a removed seat's
+handle would be that seat again, its memory and mailbox included. The address
+is fixed once the draft is saved. A human seat's contact identity is optional:
+the form offers it, it can be added later in the seat's editor, and without
+one the person is reached through the dashboard only.
 
 ## Editing a node
 
@@ -404,7 +407,7 @@ half, which `crewlet config import` writes from a company file.
 | You can change | Notes |
 |---|---|
 | Name | Prose; two seats may share a name. An agent seat that is renamed keeps its handle, its memory and its mailbox. |
-| Handle | The address every lead, `manages` entry and mention names the seat by, and the seat's identity: its mailbox, schedules and everything it has learned (its diary, episodes, skills, profiles of colleagues and thread history) are keyed on it. A different handle on a saved seat is a different seat: the old one is removed and a new one added, with an empty mailbox and no memory. |
+| Handle | The address every lead, `manages` entry and mention names the seat by, and the seat's identity: its mailbox, schedules and everything it has learned (its diary, episodes, skills, profiles of colleagues and thread history) are keyed on it. Editable on a seat this draft added, and shown and not edited on a saved one, where **Replace this seat…** gives the role another handle (see [Replacing a seat](#replacing-a-seat)). |
 | Email | The address inbound Jira and GitHub payloads identify the seat by. A field of the company document like the name, written as typed. |
 | Goal, backstory, responsibilities | |
 | Behavioral guidelines | Agent seats. |
@@ -427,6 +430,21 @@ not edit.
 A seat's kind is changed with **Change to human seat** or **Change to agent
 seat**, in its menu or in the editor, which is its own step because it
 removes fields.
+
+#### Replacing a seat
+
+A saved seat's handle never changes, because a seat with another handle is
+another seat: a new mailbox, new memory and a new agent id. **Replace this
+seat…**, beside the handle in the editor, gives the role a new handle by doing
+exactly that, and says so before it records anything. The new seat takes the
+old one's place and fields, and every unit lead, `manages` entry, Datadog
+fallback and GitLab access level that named the old handle moves to the new
+one. The old seat's work, memory and history stay with its handle, and its
+mailbox is retired like any removed seat's
+([Deleting a node](#deleting-a-node)). The replacement is one step: one undo
+puts the old seat back. It waits while the editor holds changes of its own;
+apply or discard them first. A seat this draft added has nothing to replace:
+its handle is edited in place until the save.
 
 A seat has no skills to edit. A skill is a knowledge base page the engine
 admits and injects per phase, and the learning subsystem drafts new ones from
@@ -503,11 +521,18 @@ with until the engine applies the change.
 ## Deleting a node
 
 **Delete** removes a seat, or a unit with every unit and seat inside it, from
-the draft. Undo brings it back until the draft is saved. Once saved, a removal
-is the one change nothing undoes: the chart **retires the address** and never
-gives it to anything again. The dialog lists what the removal clears inside
-the chart (a unit's lead, a `manages` entry), the unit schedules it would
-leave with no runner, and the seats that are working now.
+the draft. Undo brings it back until the draft is saved. The dialog lists what
+the removal clears inside the organization (a unit's lead, a `manages` entry),
+the unit schedules it would leave with no runner, and the seats that are
+working now.
+
+A human seat somebody is bound to cannot be removed while they are: the
+engine refuses the save with `409 seat_held`, naming each person who holds
+the seat. The builder places that refusal on the seat — "@pat is held by
+pat.doe: unbind them first (`crewlet iam unbind <person id>`), then save
+again" — and keeps the draft; there is nothing to retry until the person is
+unbound (People & access shows who holds each seat). The same refusal meets a
+held human seat made an agent's, and a held seat replaced.
 
 Removing more than half of the saved company's seats asks for an
 acknowledgement first.
@@ -537,7 +562,8 @@ seat goes:
 - **The mailbox, coding runs and memory.** A removed agent seat's mailbox, and
   the mail still addressed to it, is kept for 24 hours after the engine
   applies the removal and then retired, together with any coding runs it still
-  has. Its memory is kept, under an identity no later seat can have. See
+  has. Its memory is kept under its handle, so a seat added again later
+  under the same handle reattaches to it. See
   [Seat Ownership](../concepts/seat-ownership.md#the-removed-seat).
 
 ## Changing a seat's kind
@@ -571,9 +597,10 @@ would do before it does it:
 
 - **What changes:** the units and seats added, removed, renamed, moved and
   edited, and the charter fields.
-- **What follows:** the consequences a reader can work out from the chart's
-  own rows: a changed handle or unit key (which removes the seat or unit and
-  creates another, carrying nothing over), seats that onboard again and why,
+- **What follows:** the consequences a reader can work out from the
+  organization's own rows: a replaced seat (listed as the old seat removed and
+  the new one added, since the new seat carries none of the old one's memory
+  or mail), seats that onboard again and why,
   the tool credentials a seat gains or loses (names only), fields a kind change
   removes, references a removal clears, the Datadog fallback seat and GitLab
   access levels. Who reports to whom, the lead and channel a unit inherits

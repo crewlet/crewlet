@@ -30,7 +30,7 @@ import {
   type KeptDraft,
 } from "./persistence.ts";
 import { templateIntent } from "./templates.ts";
-import { countingKeys, fixtureCompany, fixtureDerived } from "./testkit.ts";
+import { countingKeys, fixtureCompany } from "./testkit.ts";
 
 class MemoryStorage implements DraftStorage {
   readonly items = new Map<string, string>();
@@ -60,50 +60,50 @@ class RefusingStorage implements DraftStorage {
 /**
  * One operation of every type this build records, from the fixture company.
  * A renamed node keeps its key, so the later operations on `seat:dev` and
- * `unit:Sales` address the renamed seat and unit.
+ * `unit:sales` address the renamed seat and unit.
  */
 function everyOperation(): Operation[] {
   const doc = fixtureCompany();
-  let draft: Draft = fromDocument(doc, fixtureDerived(doc));
+  let draft: Draft = fromDocument(doc);
   const ops: Operation[] = [];
   const intents: Intent[] = [
     {
       type: "addUnit",
       key: "new:u1",
       placement: { parent: "company", after: null },
-      data: { name: "Legal" },
+      data: { name: "Legal", id: "legal" },
     },
     {
       type: "addSeat",
       key: "new:s1",
       placement: { parent: "new:u1", after: null },
-      data: { name: "Counsel" },
+      data: { name: "Counsel", handle: "counsel" },
     },
     { type: "renameSeat", target: "seat:dev", name: "Developer" },
-    { type: "renameUnit", target: "unit:Sales", name: "Revenue" },
+    { type: "renameUnit", target: "unit:sales", name: "Revenue" },
     {
       type: "move",
       target: "seat:designer",
-      to: { parent: "unit:Platform", after: null },
+      to: { parent: "unit:platform", after: null },
       clearLeads: [],
     },
-    { type: "reorder", target: "seat:dev", to: { parent: "unit:Engineering", after: null } },
+    { type: "reorder", target: "seat:dev", to: { parent: "unit:engineering", after: null } },
     {
       type: "updateSeat",
       target: "seat:sre",
       set: [{ path: ["goal"], value: "Automate" }],
       accessLevel: "developer",
     },
-    { type: "updateUnit", target: "unit:Platform", set: [{ path: ["purpose"], value: "Run it" }] },
-    { type: "setLead", target: "unit:Sales", lead: "Account Executive" },
-    { type: "setManages", target: "seat:ceo", manages: ["Engineering"] },
+    { type: "updateUnit", target: "unit:platform", set: [{ path: ["purpose"], value: "Run it" }] },
+    { type: "setLead", target: "unit:sales", lead: "account-executive" },
+    { type: "setManages", target: "seat:ceo", manages: ["engineering"] },
     {
       type: "changeKind",
       target: "seat:account-executive",
       kind: "human",
       contact: { slack_user_id: "U1" },
     },
-    { type: "setScheduleEnabled", target: "unit:Engineering", schedule: "standup", enabled: false },
+    { type: "setScheduleEnabled", target: "unit:engineering", schedule: "standup", enabled: false },
     { type: "setDatadogRouteTo", routeTo: "dev" },
     { type: "updateCompany", set: [{ path: ["vision"], value: "Everywhere" }] },
     {
@@ -114,7 +114,8 @@ function everyOperation(): Operation[] {
         { type: "updateSeat", target: "seat:sre", set: [{ path: ["goal"], value: "Automate it" }] },
       ],
     },
-    { type: "remove", target: "unit:Sales" },
+    { type: "remove", target: "unit:sales" },
+    { type: "replaceSeat", target: "seat:sre", key: "new:s2", handle: "reliability" },
   ];
   for (const intent of intents) {
     const result = record(draft, intent);
@@ -152,7 +153,7 @@ describe("isOperation", () => {
   test("accepts every operation type this build records, after a trip through JSON", () => {
     const ops = [...everyOperation(), templateOperation()];
     const types = new Set(ops.map((op) => op.type));
-    expect(types.size).toBe(17);
+    expect(types.size).toBe(18);
     for (const op of ops) expect(isOperation(JSON.parse(JSON.stringify(op))), op.type).toBe(true);
   });
 

@@ -356,15 +356,16 @@ export function isOperation(v: unknown): v is Operation {
         list(v.accessLevels, isAccessLevelChange) &&
         (v.routeTo === undefined || isRouteToChange(v.routeTo))
       );
-    case "renameSeat":
+    case "replaceSeat":
       return (
-        exactKeys(v, ["type", "target", "before", "after", "accessLevels"], ["pin"]) &&
+        exactKeys(v, ["type", "target", "snapshot", "key", "handle", "accessLevels"]) &&
         isNodeKey(v.target) &&
-        typeof v.before === "string" &&
-        typeof v.after === "string" &&
-        (v.pin === undefined || isNonEmptyString(v.pin)) &&
+        isSnapshot(v.snapshot) &&
+        isMintedKey(v.key) &&
+        typeof v.handle === "string" &&
         list(v.accessLevels, isAccessLevelChange)
       );
+    case "renameSeat":
     case "renameUnit":
       return (
         exactKeys(v, ["type", "target", "before", "after"]) &&
