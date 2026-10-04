@@ -25,15 +25,13 @@ import (
 //
 // # The rules a ceiling must meet are HERE, and nowhere else
 //
-// config.TokenBudget.Ceilings makes one from a `token_budget:` mapping, and
-// a seat's chart runtime half decodes straight into one, so this is the one
-// type both doors reach — which is why [TokenCeilings.Faults] is the one
-// statement of what a ceiling may be. A company file's `token_budget` and every
-// seat's are refused through it, and so is a runtime write to the org chart,
-// which no config validation ever sees. This is the shape everything
-// downstream of the configuration reads — one period to one number — so no
-// reader has to know that the authored form holds pointers to tell an absent
-// key from a 0.
+// config.TokenBudget.Ceilings makes one from a company's `token_budget:`
+// mapping, and a seat's decodes straight into one, so this is the one type both
+// reach — which is why [TokenCeilings.Faults] is the one statement of what a
+// ceiling may be. A company file's `token_budget` and every seat's are refused
+// through it. This is the shape everything downstream of the configuration
+// reads — one period to one number — so no reader has to know that the
+// authored form holds pointers to tell an absent key from a 0.
 //
 // The windows are the company calendar's ([period]), cut on the company's one
 // clock: a day ceiling is what one local day may spend, a week ceiling one ISO

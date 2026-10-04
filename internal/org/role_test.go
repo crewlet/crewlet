@@ -220,8 +220,8 @@ func TestAHumanSeatNeedsNoContactIdentity(t *testing.T) {
 
 // A ${VAR} REFERENCE IS A DECLARED IDENTITY. The id is instance specific and
 // lives in the environment rather than in a committed file, so a seat whose
-// ids are all references is reachable — which is what keeps the chart check
-// from reporting it unreachable before the variable is even read.
+// ids are all references is reachable — which is what keeps the company's
+// warnings from reporting it unreachable before the variable is even read.
 func TestAReferenceIsADeclaredContactIdentity(t *testing.T) {
 	t.Parallel()
 	c := &HumanContact{GitLabUsername: "${GL_FOUNDER_USERNAME}"}

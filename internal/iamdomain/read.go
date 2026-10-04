@@ -585,7 +585,7 @@ func (r *Reader) PersonByLogin(ctx context.Context, login string) (Sighting, err
 // THE BLIND AND NOT THE ADDRESS, because this read runs before anybody is
 // authenticated and an address is personal data. iam.NormalizeEmail and this
 // domain's blind are what a surface computes it with — and they must agree
-// with the chart's own derivation or one address would reach a seat and a
+// with the party registry's fold or one address would reach a seat and a
 // different person.
 func (r *Reader) PersonByEmailBlind(ctx context.Context, blind string) (Sighting, error) {
 	return r.sighting(ctx, "email_blind", blind)

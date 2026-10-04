@@ -204,8 +204,7 @@ type SeatLeases interface {
 type SeatRunRetirer func(ctx context.Context, handle, owner string, epoch int64) error
 
 // SeatRoster reads the agent seats of the company the fleet is running: the
-// settings revision it is pointed at, and every record the org chart's own log
-// holds — the seats are the chart's, and a hire moves it with no revision.
+// revision the activation pointer names.
 //
 // THE WHOLE SEAT rather than its handle, because everything this sweep names
 // about a mailbox — the registry key, the subscriptions, the lease it claims
