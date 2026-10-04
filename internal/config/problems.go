@@ -547,7 +547,35 @@ func (c *Company) AdvisoryWarnings() []Warning {
 					"host's value on", unsupplied.name)))
 		}
 	}
+	out = append(out, c.unreachableWarnings()...)
 	return append(out, c.budgetWarnings()...)
+}
+
+// unreachableWarnings is every human seat that declares no contact identity:
+// nothing addressed to it on a chat surface reaches anybody.
+//
+// A WARNING AND NOT A RULE, because the state is legitimate: a person who
+// works only through the dashboard has no chat account to declare, and
+// refusing the seat refused them. So this is the one signal an operator gets
+// that nobody can be @-mentioned there — agents hand such a person work by
+// assigning it in the tracker instead.
+//
+// AT THE SEAT'S `contact`, which is where the remedy is written.
+func (c *Company) unreachableWarnings() []Warning {
+	var out []Warning
+	for role, path := range c.EachRole() {
+		if role.Kind != org.KindHuman || !role.Contact.IsEmpty() {
+			continue
+		}
+		handle := role.IdentityKey()
+		w := advisory(at(path, "contact"), fmt.Sprintf("%s is a human seat with "+
+			"no contact identity, so nothing addressed to it on a chat surface "+
+			"reaches anybody. Give it one for the surface this company runs, or "+
+			"leave it for a person who works only through the dashboard", handle))
+		w.Seat = handle
+		out = append(out, w)
+	}
+	return out
 }
 
 // Warnings is everything valid about this bootstrap that its author should

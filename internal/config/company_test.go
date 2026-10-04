@@ -572,13 +572,32 @@ roles:
 // Refusing the document refused them — and the chart's own writes never asked
 // for a contact, so a company holding such a seat ran, and was refused the
 // moment it went back through a document (`crewlet config import` of its own
-// export). That nobody can be MESSAGED at the seat is the chart check's to
-// say (`seat_unreachable`).
+// export). That nobody can be MESSAGED at the seat is a warning, at the seat's
+// `contact` — and the control is the same seat with an identity, which warns
+// about nothing.
 func TestAHumanSeatWithNoContactIsAValidCompany(t *testing.T) {
 	t.Parallel()
 	cfg := mustCompany(t, "name: Acme\nroles:\n  - name: Founder\n    kind: human\n")
 	if err := cfg.ValidateAdmission(); err != nil {
 		t.Fatalf("ValidateAdmission() = %v, want nil", err)
+	}
+	var unreachable []Warning
+	for _, w := range cfg.AdvisoryWarnings() {
+		if w.Seat == "founder" {
+			unreachable = append(unreachable, w)
+		}
+	}
+	if len(unreachable) != 1 || unreachable[0].Path != "roles[0].contact" ||
+		unreachable[0].Kind != WarningAdvisory {
+		t.Errorf("the founder's warnings = %+v, want one advisory at "+
+			"roles[0].contact saying nobody can be messaged there", unreachable)
+	}
+	reachable := mustCompany(t, "name: Acme\nroles:\n  - name: Founder\n"+
+		"    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n")
+	for _, w := range reachable.AdvisoryWarnings() {
+		if w.Seat == "founder" {
+			t.Errorf("a seat with a contact identity is warned about: %+v", w)
+		}
 	}
 	o, err := cfg.Organization()
 	if err != nil {
