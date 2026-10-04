@@ -25,8 +25,8 @@
  * Every tab is a link to its own address, never a `tab=` on this one: a
  * section is a place, and a place has a URL a reader can paste. What travels
  * between sections is the workspace's own query (`WorkspaceRow.keep` — whose
- * day My work is reading), and nothing else: a filter on the Turns list is not
- * a filter on the Event log.
+ * day My work is reading, the window Spend is reading over), and nothing
+ * else: a filter on the Turns list is not a filter on the Event log.
  *
  * # A figure on a tab is the screen's
  *
