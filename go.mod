@@ -3,7 +3,7 @@ module github.com/crewlet/crewlet
 go 1.27.0
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.75.0
+	github.com/anthropics/anthropic-sdk-go v1.78.0
 	github.com/aws/aws-sdk-go-v2 v1.47.1
 	github.com/aws/aws-sdk-go-v2/config v1.33.6
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.6
@@ -16,9 +16,9 @@ require (
 	github.com/nats-io/nats-server/v2 v2.15.0
 	github.com/nats-io/nats.go v1.54.0
 	github.com/nats-io/nkeys v0.4.16
-	github.com/openai/openai-go/v3 v3.46.0
+	github.com/openai/openai-go/v3 v3.68.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
-	github.com/tursodatabase/turso-go-platform-libs v0.8.0-pre.14
+	github.com/tursodatabase/turso-go-platform-libs v0.8.1
 	github.com/yuin/goldmark v1.8.6
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.46.0
@@ -34,7 +34,7 @@ require (
 	golang.org/x/term v0.46.0
 	golang.org/x/text v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
-	turso.tech/database/tursogo v0.8.0-pre.14
+	turso.tech/database/tursogo v0.8.1
 )
 
 require (

@@ -2,7 +2,7 @@
 
 The app bundles dependencies which contain the following licenses:
 
-## @crewlethq/icons - 0.5.0 (MIT AND ISC)
+## @crewlethq/icons - 0.5.8 (MIT AND ISC)
 
 MIT License
 
@@ -26,7 +26,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## @crewlethq/tokens - 0.5.0 (MIT AND OFL-1.1)
+## @crewlethq/tokens - 0.5.8 (MIT AND OFL-1.1)
 
 MIT License
 
@@ -50,7 +50,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## @crewlethq/ui - 0.5.0 (MIT)
+## @crewlethq/ui - 0.5.8 (MIT)
 
 MIT License
 
