@@ -126,10 +126,10 @@ func TestAPresentedTokenIsDecidedByTheTable(t *testing.T) {
 //
 // The mint refuses `secrets:read` and `people:manage`, and this is the half the
 // request path relies on: a token is fresh by construction for the ordinary
-// step-up window, and no token may reach the gestures those grants open. A row carrying one — from a peer whose decide did not refuse
-// it — whose owner holds it too is the case that matters, because the owner
-// check alone would let it through. Mutation: drop the filter and the reveal
-// grant is carried.
+// step-up window, and no token may reach the gestures those grants open. A row
+// carrying one — from a peer whose decide did not refuse it — whose owner holds
+// it too is the case that matters, because the owner check alone would let it
+// through. Mutation: drop the filter and the reveal grant is carried.
 func TestATokenNeverCarriesAGrantThatNeedsAPersonPresent(t *testing.T) {
 	t.Parallel()
 	token, verifier := mintToken(t, 5)

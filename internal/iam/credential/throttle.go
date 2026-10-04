@@ -165,8 +165,9 @@ const Window = 15 * time.Minute
 
 // The curve.
 const (
-	// DelayFloor is the wait a pair's first failure costs: one second, which is invisible to a person who mistyped and
-	// is already a sixty-fold cut in what a script gets through.
+	// DelayFloor is the wait a pair's first failure costs: one second,
+	// which is invisible to a person who mistyped and is already a
+	// sixty-fold cut in what a script gets through.
 	DelayFloor = time.Second
 
 	// DelayCeiling is the most one failure ever costs: thirty seconds,

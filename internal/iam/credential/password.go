@@ -106,9 +106,10 @@ type Hasher struct {
 	// away leaves ([Hasher.take]). It was a set of per-address lanes
 	// served in turn, each address holding one slot at most, which bought
 	// fairness between addresses under a flood and a timing equalisation
-	// the sign-in pad no longer needs — at the price of a scheduler of its
-	// own. Under a flood every arm of a sign-in queues here alike, which is
-	// what keeps the queue from saying which names exist.
+	// that only a refusal pad needed — a pad every failed sign-in was once
+	// held to, and which is gone — at the price of a scheduler of its own.
+	// Under a flood every arm of a sign-in queues here alike, which is what
+	// keeps the queue from saying which names exist.
 	slots chan struct{}
 
 	// dummySalt and dummyDigest are the verifier a subject with nothing to

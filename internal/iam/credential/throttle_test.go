@@ -32,9 +32,10 @@ func (c *clockOf) advance(d time.Duration) {
 }
 
 // counting records what each sleep was asked for — the curve's — so the
-// timing properties are asserted on the DECISION rather than on the wall clock, and a test that measured real sleeps would be the flakiest thing
-// in this tree. It does not move the clock: a case moves it itself where the
-// time a wait took is the point.
+// timing properties are asserted on the DECISION rather than on the wall
+// clock, and a test that measured real sleeps would be the flakiest thing in
+// this tree. It does not move the clock: a case moves it itself where the time
+// a wait took is the point.
 type counting struct {
 	mu    sync.Mutex
 	slept []time.Duration
