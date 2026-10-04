@@ -3,9 +3,9 @@
  *
  * TWO HALVES, AND THEY ARE NOT THE SAME READ. The list is `work_items
  * {assignee}`, which is ungated: every reader of this page gets it, and it is
- * the floor. The blocks under it are `work_my_work`, which the engine scopes
- * to the caller's own record, so they are asked for a person reading their
- * own page and for a `fleet:operate` holder. One tab, because the question a
+ * the floor. The blocks under it are `work_my_work`, which the engine answers
+ * to the record's owner, to whoever leads them and to `fleet:operate`, so they
+ * are asked for those readers ([mayReadRecord]). One tab, because the question a
  * reader has is "what is this seat doing", and the answer is simply fuller
  * when they are entitled to more of it.
  *
@@ -30,28 +30,31 @@ import {
 import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import type { Seat } from "~/lib/seats.ts";
+import type { OrgIndex, Seat } from "~/lib/seats.ts";
+import { mayReadRecord } from "./profile.ts";
 import type { WorkItemsAnswer } from "~/protocol/index.ts";
 import { itemPath } from "~/lib/work.ts";
 
 export function Work({
   seat,
+  index,
   work,
   chrome,
   now,
 }: {
   seat: Seat;
+  index: OrgIndex;
   work: QueryResult<WorkItemsAnswer>;
   chrome: RowChrome;
   now: number;
 }) {
   const handle = seat.handle;
   const viewer = useViewer();
-  // THE SEVEN CLAIMS, and only where the reader may have them — the same
-  // rule the person record follows: its owner, and `fleet:operate`, the
-  // admin path of the owner-or-lead rule (never `people:manage`, which opens
-  // directory rows and nobody's work). A lead is answered by the engine.
-  const mayRead = viewer.operatesFleet || (viewer.handle !== "" && viewer.handle === handle);
+  // THE SEVEN CLAIMS, and only where the reader may have them — the rule the
+  // person record follows: its owner, whoever leads them, and `fleet:operate`,
+  // the admin path of the owner-or-lead rule (never `people:manage`, which
+  // opens directory rows and nobody's work).
+  const mayRead = mayReadRecord(viewer, index, handle);
   const mine = useQuery(
     "work_my_work",
     { handle },

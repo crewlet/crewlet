@@ -89,6 +89,7 @@ import {
   failedIn,
   feedRows,
   fortnight,
+  mayReadRecord,
   placementWords,
   roundWords,
   sandboxWords,
@@ -970,10 +971,10 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
   // A PERSON RECORD IS THEIRS: their unread notices, the order they mean to
   // work in and who set it. The engine answers it to its owner, to whoever
   // leads them and to a `fleet:operate` holder — so it is asked where this
-  // page can tell it will be answered, and WITHHELD by a sentence elsewhere
-  // rather than drawn as a person with nothing to do.
+  // page can tell it will be answered ([mayReadRecord]), and WITHHELD by a
+  // sentence elsewhere rather than drawn as a person with nothing to do.
   const self = viewer.handle !== "" && viewer.handle === seat.handle;
-  const mayRead = viewer.operatesFleet || self;
+  const mayRead = mayReadRecord(viewer, index, seat.handle);
   const person = useQuery(
     "work_person",
     { handle: seat.handle },

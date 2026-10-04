@@ -336,7 +336,9 @@ export function SeatScreen({ handle }: { handle: string }) {
               now={now}
             />
           )}
-          {tab === "work" && <Work seat={seat} work={work} chrome={chrome} now={now} />}
+          {tab === "work" && (
+            <Work seat={seat} index={index} work={work} chrome={chrome} now={now} />
+          )}
           {tab === "turns" && !human && <Turns seat={seat} agent={agent} now={now} />}
           {tab === "memory" && !human && <Memory seat={seat} now={now} />}
           {tab === "schedules" && !human && <Schedules seat={seat} now={now} />}

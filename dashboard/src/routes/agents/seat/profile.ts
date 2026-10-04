@@ -8,7 +8,15 @@ import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { fmtCount, tsKey } from "~/lib/format.ts";
 import { callWords } from "~/lib/turnsteps.ts";
-import { activityOf, roundOf, type OrgIndex, type Seat, type SeatState } from "~/lib/seats.ts";
+import {
+  activityOf,
+  leadsInLine,
+  roundOf,
+  type OrgIndex,
+  type Seat,
+  type SeatState,
+} from "~/lib/seats.ts";
+import type { ViewerState } from "~/lib/viewer.ts";
 import type {
   AgentRow,
   BudgetWindow,
@@ -70,6 +78,28 @@ export function findSeat(index: OrgIndex, handle: string): Seat | null {
     [...index.byHandle.values()].find((s) => s.handle.toLowerCase() === handle.toLowerCase()) ??
     null
   );
+}
+
+/**
+ * Whether this page asks for a person's own record — their inbox, the order
+ * they mean to work in, the claims on their plate — which the engine answers
+ * to its owner, to whoever leads them and to `fleet:operate`.
+ *
+ * THE LEAD IS ASKED FOR TOO, on the chart's own reading of who is in their
+ * line, the rule My work reads a report's day by. Asked only on the grant and
+ * the owner, a lead opening a report's page was told the record needs
+ * `fleet:operate` "or leading them" about somebody they lead, and their day
+ * was never drawn. And where this client holds no hierarchy it cannot tell
+ * ([leadsInLine]'s null), so it asks and the engine decides.
+ */
+export function mayReadRecord(
+  viewer: Pick<ViewerState, "operatesFleet" | "handle">,
+  index: OrgIndex,
+  handle: string,
+): boolean {
+  if (viewer.operatesFleet) return true;
+  if (viewer.handle !== "" && viewer.handle === handle) return true;
+  return leadsInLine(index, viewer.handle, handle) !== false;
 }
 
 /**

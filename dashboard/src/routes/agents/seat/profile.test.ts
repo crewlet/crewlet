@@ -12,6 +12,7 @@ import {
   HUMAN_TABS,
   feedRows,
   fortnight,
+  mayReadRecord,
   pillWord,
   placementWords,
   sandboxWords,
@@ -21,6 +22,7 @@ import {
   turnTokens,
   workersWords,
 } from "./profile.ts";
+import { indexOrg } from "~/lib/seats.ts";
 import type {
   AgentRow,
   BudgetWindow,
@@ -236,5 +238,49 @@ describe("the company's ceilings", () => {
     );
     expect(companyCeilingShort({ week: 5_000_000 })).toBe("company cap 5M/week");
     expect(companyCeilingShort({})).toBe("");
+  });
+});
+
+describe("whose record this page asks for", () => {
+  const seat = (handle: string, reports: string[], managers: string[]) => ({
+    handle,
+    name: handle,
+    kind: "human",
+    placed_by_ref: false,
+    manager: managers[0] ?? "",
+    managers: managers.length ? managers : null,
+    reports: reports.length ? reports : null,
+    auto_reports: null,
+    onboarding_chain: null,
+  });
+  const roles = ["ana", "ceo", "bo"].map((handle) => ({ name: handle, handle, kind: "human" }));
+  // Ana leads the CEO; Bo leads nobody.
+  const led = indexOrg({
+    roles,
+    units: [],
+    derived: {
+      units: [],
+      seats: [seat("ana", ["ceo"], []), seat("ceo", [], ["ana"]), seat("bo", [], [])],
+    },
+  } as never);
+  const reader = (handle: string, operatesFleet = false) => ({ handle, operatesFleet });
+
+  // THE ENGINE'S RULE, all three arms: the owner, whoever leads them, and
+  // `fleet:operate`.
+  test("is the owner's, a lead's and fleet:operate's", () => {
+    expect(mayReadRecord(reader("ceo"), led, "ceo")).toBe(true);
+    expect(mayReadRecord(reader("ana"), led, "ceo")).toBe(true);
+    expect(mayReadRecord(reader("", true), led, "ceo")).toBe(true);
+  });
+
+  test("is not asked by a colleague who leads them not, nor by nobody", () => {
+    expect(mayReadRecord(reader("bo"), led, "ceo")).toBe(false);
+    expect(mayReadRecord(reader(""), led, "ceo")).toBe(false);
+  });
+
+  // NULL IS NOT FALSE: with no hierarchy this client cannot tell who leads
+  // whom, so it asks and the engine decides.
+  test("is asked where the chart does not say who leads whom", () => {
+    expect(mayReadRecord(reader("bo"), indexOrg({ roles } as never), "ceo")).toBe(true);
   });
 });
