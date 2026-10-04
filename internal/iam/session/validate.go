@@ -243,8 +243,8 @@ const (
 	// NeedWrite is anything that changes state.
 	NeedWrite Need = "write"
 
-	// NeedStepUp is a step-up surface: /config, /chart's writes, /setup,
-	// /secrets, /iam and the fleet write routes.
+	// NeedStepUp is a step-up surface: /config, /setup, /secrets, /iam and
+	// the fleet write routes.
 	NeedStepUp Need = "step_up"
 )
 

@@ -40,14 +40,12 @@
 // either direction, by construction rather than by a uniqueness check some
 // later writer has to remember to run.
 //
-// ALL THREE GRAMMARS LIVE HERE, the seat handle's included. It used to be
-// internal/org's alone, and "by construction" held only where org's rule was
-// asked: the org chart's own write path imports this leaf and cannot import
-// org (org is built from the chart's rows), so it validated a handle by the
-// chart's looser address rule — and `jane.doe`, `ci:release` and `token:ops`
-// were each accepted as a seat, after which [OwnerOf] sent every name of that
-// shape to the identity directory rather than to the seat. One definition,
-// here, is what every path that creates or renames a seat asks.
+// ALL THREE GRAMMARS LIVE HERE, the seat handle's included, so "by
+// construction" holds wherever a name is asked about: a second copy of the
+// seat rule that disagreed by one character would accept `jane.doe`,
+// `ci:release` or `token:ops` as a seat, after which [OwnerOf] sent every name
+// of that shape to the identity directory rather than to the seat. One
+// definition, here, is what every path that creates a seat asks.
 //
 // AND BOTH ARE BOUNDED AT [MaxLogin], a seat handle's own width: a login is a
 // subject token the broker indexes for the life of the deployment and the
@@ -159,19 +157,15 @@ var handlePattern = regexp.MustCompile(`^` + segment + `(?::` + segment + `)+$`)
 // MaxLogin bounds a person's login and a machine's handle, in bytes — which
 // is characters too, since both grammars admit ASCII alone.
 //
-// SIXTY-FOUR, which is the bound a seat handle already has (internal/chart's
-// MaxKey), for the reasons that bound it — restated here because this package
-// is a leaf and cannot import the chart, and HELD to it by the chart's own
-// suite (TestALoginIsExactlyAsWideAsASeatHandle), because a restatement
-// nothing compares is one that drifts the day the other side moves:
+// SIXTY-FOUR, the one width a seat handle ([ValidSeatHandle]), a person's
+// login and a machine's handle share, for the reasons that bound all three:
 //
 //   - a login is a SUBJECT TOKEN: `iam.login.<login>` is the claim it
 //     arbitrates on, so the broker keeps it in a per-subject index for the
 //     life of the deployment, and a Tier A token's `token:<id>` is one too;
 //   - it lands in the same author column a seat handle does — the tracker's,
-//     the knowledge base's, the chart's and the identity trail's — so the
-//     three names share one width wherever a screen renders who did
-//     something;
+//     the knowledge base's and the identity trail's — so the three names
+//     share one width wherever a screen renders who did something;
 //   - and the directory prints it on every row.
 //
 // Nothing bounded it before, so a login was whatever length somebody typed,
@@ -198,14 +192,13 @@ var seatHandlePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // at most [MaxLogin] bytes.
 //
 // THE ONE DEFINITION of the shape. internal/org's ValidHandle is this, so a
-// document, the party registry and the chart's write path refuse exactly the
-// same names — a second copy that disagreed by one character would accept a
-// seat at one of them and refuse it at the next.
+// document and the party registry refuse exactly the same names — a second
+// copy that disagreed by one character would accept a seat at one of them and
+// refuse it at the next.
 //
-// BOUNDED AT [MaxLogin], a handle's own width: a handle is a subject token and
-// a scope path segment on the chart's log and sits in the same author column a
-// login does, so the three share one width. The chart's MaxKey is held to it
-// by that package's own suite.
+// BOUNDED AT [MaxLogin], a handle's own width: a handle is a subject token on
+// the identity log's seat claim and sits in the same author column a login
+// does, so the three share one width.
 func ValidSeatHandle(s string) bool {
 	return len(s) <= MaxLogin && seatHandlePattern.MatchString(s)
 }

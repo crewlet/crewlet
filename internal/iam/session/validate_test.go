@@ -588,13 +588,13 @@ func TestOnlyTheSeatlessArmEverAnswersWithNoHandle(t *testing.T) {
 			t.Errorf("%q serves with the handle %q", row, b.Handle())
 		}
 	}
-	// And a node with no chart seam at all is the unknown arm rather than
+	// And a node with no org seam at all is the unknown arm rather than
 	// the seatless one.
 	got := session.ResolveSeat(t.Context(), nil, session.PersonRow{
 		Found: true, Seat: "platform-lead",
 	})
 	if got.Row != session.SeatRowStalled {
-		t.Errorf("a node with no chart view landed on %q, want %q", got.Row,
+		t.Errorf("a node with no org seam landed on %q, want %q", got.Row,
 			session.SeatRowStalled)
 	}
 }

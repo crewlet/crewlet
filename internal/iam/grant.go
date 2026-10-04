@@ -109,8 +109,9 @@ const (
 
 	// GrantConfigWrite changes the company: PATCH /config and the epoch
 	// activation that follows, which rebuilds every seat's tools,
-	// providers and MCP children — and the org chart's structure, its
-	// runtime half and the relations authority is derived from.
+	// providers and MCP children — the org chart included: its structure,
+	// every seat's runtime settings and the relations authority is derived
+	// from.
 	//
 	// IT IS HOST ACCESS, and it is ONE grant by decision rather than by
 	// oversight. The configuration it writes runs code: an `mcp_servers`
