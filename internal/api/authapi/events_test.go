@@ -299,17 +299,26 @@ func (r *signInRig) login(t *testing.T, login, pass, code string) int {
 }
 
 // signIn posts one sign-in and answers the whole response.
+//
+// ON A CONTEXT THAT ENDS WHEN THE HANDLER RETURNS, as net/http's server ends
+// every request's. A sign-in leaves work running once it has answered — the
+// rewrite of a stale verifier — and work that inherited the request's context
+// dies with it in production; served on httptest's background context it lived
+// on here, and a rewrite that rode the request's context passed.
 func (r *signInRig) signIn(t *testing.T, login, pass, code string) *httptest.ResponseRecorder {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{
 		"login": login, "password": pass, "code": code,
 	})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(string(body)))
+	ctx, answered := context.WithCancel(t.Context())
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/auth/login",
+		strings.NewReader(string(body)))
 	req.RemoteAddr = "203.0.113.9:4711"
 	rec := httptest.NewRecorder()
 	mux := http.NewServeMux()
 	r.svc.Routes(mux)
 	mux.ServeHTTP(rec, req)
+	answered()
 	return rec
 }
 

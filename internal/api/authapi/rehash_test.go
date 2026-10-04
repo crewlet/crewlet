@@ -103,10 +103,13 @@ func TestAPasswordIsRehashedUpByTheSignInThatPresentsItAndNeverDown(t *testing.T
 // verifier was never rewritten, and every such sign-in paid for a second
 // derivation. The suite above runs at a cost a test can afford and could not
 // see it. This one's hasher is the SHIPPED cost ([credential.Default]) over a
-// verifier stored at a cheaper one, and the rewrite has budgets of its own.
+// verifier stored at a cheaper one, and the rewrite has budgets of its own:
+// none of the request's, which ends when the sign-in answers — as the rig's
+// does ([signInRig.signIn]) — and nothing spent before the write.
 //
-// Mutation: bound the rewrite by the refusal pad again and the verifier stays
-// at the cheaper cost.
+// Mutation: run the rewrite on the request's context rather than one detached
+// from it, and the write meets a cancelled context and the verifier stays at
+// the cheaper cost.
 func TestAStaleVerifierIsRewrittenAtTheCostThatShips(t *testing.T) {
 	t.Parallel()
 	r := newSignInRigWith(t, func(o *authapi.Options) {
