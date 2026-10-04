@@ -1178,7 +1178,7 @@ stored.
     {"kind": "unit", "id": "platform", "op": "changed", "side": "after",
      "place": "data", "why": "lead", "value": "data-lead", "reason": "not_lead"},
     {"kind": "seat", "id": "staff-eng", "op": "changed", "place": "",
-     "why": "credential", "value": "mcp_env.github.GITHUB_TOKEN", "reason": "no_grant"},
+     "why": "credential", "value": "mcp_env", "reason": "no_grant"},
     {"kind": "setting", "id": "mission", "place": "", "reason": "no_grant"}
   ]
 }
@@ -1190,7 +1190,7 @@ stored.
 | `op` | What the write does to the seat or unit: `added`, `removed`, `moved` or `changed` |
 | `side` | `before` (the revision replaced) or `after` (the one proposed): which document the place was read in |
 | `place` | The key of the unit the change reaches; `""` is the company root, which is nobody's subtree |
-| `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), a claimed key (`project`, `space`, `channel`, `email`, `contact`, with the key in `value`), `named` (another object's `lead:` or `manages:` entry that already states the id an added seat or unit takes, with the id in `value`), `duplicate` (two objects on one id, which only the company grant may write), `credential` (a credential field, or a `${VAR}` in any field, with the field's path in `value`), or `unchanged` (the `document` itself) |
+| `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), a claimed key (`project`, `space`, `channel`, `email`, `contact`, with the key in `value`), `named` (another object's `lead:` or `manages:` entry that already states the id an added seat or unit takes, with the id in `value`), `duplicate` (two objects on one id, which only the company grant may write), `credential` (a credential field, compared whole so an `mcp_env` key with nothing under it counts, or a `${VAR}` in any other field, with the field's path in `value`), or `unchanged` (the `document` itself) |
 | `reason` | The authority table's reason: `not_lead` for a place outside the caller's subtree, the company root included, or `no_grant` for a credential, a setting or an unchanged document |
 
 A lead reads what they may write the same way: `GET /config/roles/{handle}`

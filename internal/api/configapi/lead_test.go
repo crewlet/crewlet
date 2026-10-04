@@ -202,15 +202,17 @@ func takeSeat(t *testing.T, list []any, handle string) ([]any, any) {
 // either side of the write: handing Platform to somebody else, removing or
 // moving the unit they lead, moving a seat out, making a seat manage somebody
 // outside, claiming another team's project, touching a root seat, changing
-// a credential, or naming a `${VAR}` anywhere — a contact id or an address
-// that names one is resolved from the engine's own environment and recited to
-// whoever looks the seat up.
+// a credential — an `mcp_env` key with nothing under it among them, since the
+// key alone starts that tool server for the seat — or naming a `${VAR}`
+// anywhere — a contact id or an address that names one is resolved from the
+// engine's own environment and recited to whoever looks the seat up.
 //
 // Mutation: decide every place against the document being replaced alone and
 // the cases that only the proposed document refuses — clearing the unit's
 // lead, a seat moved out — are admitted; drop the claim check and the project
 // case is admitted; list only credential fields and the contact id and the
-// address naming a variable are admitted.
+// address naming a variable are admitted; compare a credential field's
+// strings alone and the empty server blocks are admitted.
 func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -285,6 +287,14 @@ func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 				e["mcp_env"] = map[string]any{"github": map[string]any{
 					"GITHUB_TOKEN": "${CEO_GITHUB_TOKEN}"}}
 			}, false, "seat/staff-eng///credential/no_grant"},
+		{"a tool server attached to a seat by an empty block", configapi.EntityRoles, "sre",
+			func(_ *testing.T, e map[string]any) {
+				e["mcp_env"] = map[string]any{"github": map[string]any{}}
+			}, false, "seat/sre///credential/no_grant"},
+		{"a tool server attached to a team by an empty block", configapi.EntityUnits,
+			"tooling", func(_ *testing.T, e map[string]any) {
+				e["mcp_env"] = map[string]any{"github": map[string]any{"GITHUB_TOKEN": ""}}
+			}, false, "unit/tooling///credential/no_grant"},
 		{"a contact id naming a variable on their own seat", configapi.EntityRoles,
 			"platform-lead", func(_ *testing.T, e map[string]any) {
 				e["contact"] = map[string]any{"slack_user_id": "${CREWLET_KEYRING}"}

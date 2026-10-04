@@ -400,29 +400,19 @@ func (c *Company) UnresolvedMasks() []Path {
 		return nil
 	}
 	var found []Path
-	eachCredential(reflect.ValueOf(*c), nil, false, func(path Path, value string) {
-		if value == Redacted {
-			found = append(found, path)
-		}
-	})
+	findMasks(reflect.ValueOf(*c), nil, false, &found)
 	return found
 }
 
-// eachCredential visits every string reachable from v that a credential field
-// holds — under a `secret` tag, at any depth beneath it — with its path.
-//
-// ONE WALK, read by the mask check above and by what a write changes in the
-// org chart ([DiffOrg]): the two have to agree about which values are
-// credentials, and the tag ([secrets.Field]) is the only thing that says so.
-func eachCredential(v reflect.Value, path Path, secret bool, visit func(Path, string)) {
+func findMasks(v reflect.Value, path Path, secret bool, found *[]Path) {
 	switch v.Kind() {
 	case reflect.String:
-		if secret {
-			visit(path, v.String())
+		if secret && v.String() == Redacted {
+			*found = append(*found, path)
 		}
 	case reflect.Pointer, reflect.Interface:
 		if !v.IsNil() {
-			eachCredential(v.Elem(), path, secret, visit)
+			findMasks(v.Elem(), path, secret, found)
 		}
 	case reflect.Struct:
 		for i := range v.NumField() {
@@ -430,16 +420,16 @@ func eachCredential(v reflect.Value, path Path, secret bool, visit func(Path, st
 			if !field.IsExported() {
 				continue
 			}
-			eachCredential(v.Field(i), at(path, jsonName(field)),
-				secret || secrets.Field(field), visit)
+			findMasks(v.Field(i), at(path, jsonName(field)),
+				secret || secrets.Field(field), found)
 		}
 	case reflect.Slice, reflect.Array:
 		for i := range v.Len() {
-			eachCredential(v.Index(i), idx(path, i), secret, visit)
+			findMasks(v.Index(i), idx(path, i), secret, found)
 		}
 	case reflect.Map:
 		for _, mapKey := range v.MapKeys() {
-			eachCredential(v.MapIndex(mapKey), entry(path, mapKey.String()), secret, visit)
+			findMasks(v.MapIndex(mapKey), entry(path, mapKey.String()), secret, found)
 		}
 	}
 }

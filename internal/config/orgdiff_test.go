@@ -389,16 +389,40 @@ func TestANewObjectReachesWhoAlreadyNamesIt(t *testing.T) {
 //
 // Setting, altering and clearing a credential are all changes; carrying it
 // through untouched is not, and neither is a credential block with nothing in
-// it. A `${VAR}` anywhere in the object is listed as one too.
+// it. A credential field is compared WHOLE, keys included, and a `${VAR}`
+// anywhere else in the object is listed as one too.
 //
 // Mutation: list only the credential fields and the address naming a
-// variable is no change a lead is refused.
+// variable is no change a lead is refused; compare a credential field's
+// strings alone and the server blocks holding none are no change either.
 func TestACredentialChangeIsListedApart(t *testing.T) {
 	t.Parallel()
 	base := parse(t, diffBase)
 	altered := only(t, config.DiffOrg(base, edit(t, "${PLATFORM_GITHUB}", "${CEO_GITHUB}")))
-	if !slices.Equal(altered.Credentials, []string{"mcp_env.github.GITHUB_TOKEN"}) {
+	if !slices.Equal(altered.Credentials, []string{"mcp_env"}) {
 		t.Errorf("an altered credential listed %v", altered.Credentials)
+	}
+	// A KEY WITH NOTHING UNDER IT IS A CREDENTIAL CHANGE: an `mcp_env`
+	// block naming a per-seat server starts that server for the seat, with
+	// the template's own environment, whatever the block holds.
+	for _, block := range []string{"{github: {}}", "{github: {GITHUB_TOKEN: \"\"}}"} {
+		keyed := only(t, config.DiffOrg(base, edit(t, "            handle: sre\n",
+			"            handle: sre\n            mcp_env: "+block+"\n")))
+		if !slices.Equal(keyed.Credentials, []string{"mcp_env"}) {
+			t.Errorf("mcp_env %s on a seat listed %v, want mcp_env", block, keyed.Credentials)
+		}
+	}
+	unitKeyed := only(t, config.DiffOrg(base, edit(t, "        purpose: keep the lights on\n",
+		"        purpose: keep the lights on\n        mcp_env: {github: {}}\n")))
+	if !slices.Equal(unitKeyed.Credentials, []string{"mcp_env"}) {
+		t.Errorf("mcp_env naming a server on a unit listed %v, want mcp_env",
+			unitKeyed.Credentials)
+	}
+	// AND AN EMPTY BLOCK HOLDS NOTHING: no key, no server.
+	empty := only(t, config.DiffOrg(base, edit(t, "            handle: sre\n",
+		"            handle: sre\n            goal: ship\n            mcp_env: {}\n")))
+	if len(empty.Credentials) != 0 {
+		t.Errorf("an empty mcp_env listed credentials %v", empty.Credentials)
 	}
 	goal := only(t, config.DiffOrg(base, edit(t, "            handle: staff-eng\n",
 		"            handle: staff-eng\n            goal: ship\n")))
@@ -409,8 +433,7 @@ func TestACredentialChangeIsListedApart(t *testing.T) {
 		"          - name: Intern\n            handle: intern\n            llm: zulu\n"+
 			"            mcp_env:\n              github:\n                GITHUB_TOKEN: ${ANY}\n"+
 			"          - name: SRE\n"))
-	if change := only(t, added); !slices.Equal(change.Credentials,
-		[]string{"mcp_env.github.GITHUB_TOKEN"}) {
+	if change := only(t, added); !slices.Equal(change.Credentials, []string{"mcp_env"}) {
 		t.Errorf("a seat added with a credential listed %v", change.Credentials)
 	}
 	// A BLOCK WHOSE CREDENTIAL FIELDS ARE UNSET HOLDS NONE: a seat's own

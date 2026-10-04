@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // What a write changes in the company document, judged object by object.
@@ -58,9 +59,10 @@ import (
 // make an admin-wired team uneditable by its own lead.
 //
 // A CREDENTIAL IS NEVER A LEAD'S, AND NEITHER IS A `${VAR}`. Every credential
-// field a change sets, clears or alters, and every `${VAR}` reference it sets,
-// clears or alters in ANY field, is listed apart ([OrgChange.Credentials]) and
-// is the company grant's. A reference names any variable the engine's process
+// field a change sets, clears or alters — compared whole, so a key with nothing
+// under it counts, since an `mcp_env` key alone starts its server for the seat
+// — and every `${VAR}` reference it sets, clears or alters in ANY field, is
+// listed apart ([OrgChange.Credentials]) and is the company grant's. A reference names any variable the engine's process
 // can resolve — the company's secrets and Tier A's own keyring and tokens alike
 // — and a credential field is not the only place one is resolved: a human
 // seat's `email` and contact identities resolve a whole `${VAR}` too, and are
@@ -135,9 +137,10 @@ type OrgChange struct {
 	// child units are not its fields: each is an object of its own.
 	Fields []string
 
-	// Credentials is every credential the change sets, clears or alters,
-	// and every `${VAR}` reference it sets, clears or alters in any field,
-	// by its path inside the object, sorted.
+	// Credentials is every credential field whose value the change sets,
+	// clears or alters — compared whole, its keys included — and every
+	// `${VAR}` reference it sets, clears or alters in any other field, by
+	// its path inside the object, sorted.
 	Credentials []string
 
 	// Touches is every place the change reaches.
@@ -504,21 +507,63 @@ func settingsChanged(before, after *Company) []string {
 	return differingKeys(b, a)
 }
 
-// credentialsOf is every credential value v holds, and every string anywhere
-// in v that carries a `${VAR}`, by its path inside v. An empty credential is
+// credentialsOf is everything in v only the company's grant may change, by
+// its path inside v: the WHOLE VALUE of every credential field — its keys as
+// much as its strings — and every other string that carries a `${VAR}`.
+//
+// THE WHOLE VALUE, because a credential field's key is a grant of its own. An
+// `mcp_env` block naming a per-seat server is what starts that server for the
+// seat, with the template's own resolved environment and headers, whatever the
+// block holds — `{github: {}}` and `{github: {TOKEN: ""}}` included — so a walk
+// of the strings alone, which finds nothing in either, admitted a lead
+// attaching any per-seat tool server to their agents.
+//
+// A credential field holding nothing — an empty string, map or list — is
 // none, so a block whose credential fields are unset holds none.
 func credentialsOf(v any) map[string]string {
 	out := map[string]string{}
-	eachCredential(reflect.ValueOf(v), nil, false, func(path Path, value string) {
-		if value != "" {
-			out[path.String()] = value
+	var walk func(v reflect.Value, path Path)
+	walk = func(v reflect.Value, path Path) {
+		switch v.Kind() {
+		case reflect.String:
+			if envref.Has(v.String()) {
+				out[path.String()] = v.String()
+			}
+		case reflect.Pointer, reflect.Interface:
+			if !v.IsNil() {
+				walk(v.Elem(), path)
+			}
+		case reflect.Struct:
+			for i := range v.NumField() {
+				field := v.Type().Field(i)
+				if !field.IsExported() {
+					continue
+				}
+				value, inner := v.Field(i), at(path, jsonName(field))
+				if !secrets.Field(field) {
+					walk(value, inner)
+					continue
+				}
+				if empty := value.IsZero() || (value.Kind() == reflect.Map ||
+					value.Kind() == reflect.Slice) && value.Len() == 0; !empty {
+					out[inner.String()] = string(encodeFields(value.Interface()))
+				}
+			}
+		case reflect.Slice, reflect.Array:
+			for i := range v.Len() {
+				walk(v.Index(i), idx(path, i))
+			}
+		case reflect.Map:
+			// A KEY IS TEXT AS MUCH AS A VALUE, and the reference index
+			// reads both ([References]).
+			for _, key := range v.MapKeys() {
+				inner := entry(path, key.String())
+				walk(key, inner)
+				walk(v.MapIndex(key), inner)
+			}
 		}
-	})
-	walkStrings(reflect.ValueOf(v), nil, func(path Path, value string) {
-		if envref.Has(value) {
-			out[path.String()] = value
-		}
-	})
+	}
+	walk(reflect.ValueOf(v), nil)
 	return out
 }
 
