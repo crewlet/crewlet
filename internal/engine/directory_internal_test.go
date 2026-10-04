@@ -23,7 +23,7 @@ import (
 )
 
 // A SUSPENSION WITHDRAWS A SEAT'S CONTACT IDENTITIES WITHIN ONE APPLY, with no
-// org-chart record anywhere.
+// configuration change anywhere.
 //
 // The whole path, from the identity applier the register builds to the
 // registry every inbound delivery resolves through: one status record is
@@ -66,7 +66,7 @@ func TestASuspensionWithdrawsContactIdentitiesWithinOneApply(t *testing.T) {
 }
 
 // REINSTATING THEM RESTORES THEIR IDENTITIES, through the same trigger and
-// again with no chart record: the withdrawal is a reading of the directory,
+// again with no configuration change: the withdrawal is a reading of the directory,
 // not a state the registry was left in.
 func TestUnsuspendingRestoresThem(t *testing.T) {
 	t.Parallel()

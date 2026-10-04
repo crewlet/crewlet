@@ -18,7 +18,7 @@
 // identity [Directory]: the org says which seats exist and which contact
 // identities a human seat declares, and the directory says whether the person
 // holding that seat may still be reached through them. A suspended or removed
-// holder's identities are withheld, with no org-chart record at all — see
+// holder's identities are withheld, with no configuration change at all — see
 // directory.go. Both inputs are fixed for a registry's life, and either moving
 // is a new registry built whole and swapped by the engine.
 package notify
