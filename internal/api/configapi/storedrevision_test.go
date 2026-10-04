@@ -14,13 +14,8 @@ import (
 // REPLACEABLE through this surface, and nothing that would RUN it accepts it.
 
 // refusedByThisBuild makes a stored document this build's validator refuses:
-// a delegate template naming a model provider the company does not configure.
-//
-// A SETTINGS RULE, deliberately. It used to be a SEAT naming a missing
-// provider, which was the same rule one field along — but a seat is the org
-// chart's now and a stored revision carries none, so the fixture was making a
-// document this surface can no longer be given. A worker template is the same
-// shape of mistake in the half a revision still holds.
+// a delegate template naming a model provider the company does not configure,
+// which is the rule a seat naming one breaks, one field along.
 func refusedByThisBuild(document map[string]any) {
 	document["workers"] = map[string]any{
 		"researcher": map[string]any{

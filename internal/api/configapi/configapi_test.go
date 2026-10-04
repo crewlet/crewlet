@@ -48,11 +48,9 @@ const (
 // GitLab because its signing secret has a SHAPE the validator checks, which
 // makes it the one whose redaction cannot be faked by a fixture.
 //
-// IT HAS NO ORG CHART, and that is what a company this surface writes looks
-// like now: `roles:` and `units:` are the chart's own domain, and a body
-// carrying either is refused at the door (see chartdoor.go). A fixture that
-// kept them would exercise that refusal on every case rather than the write
-// each case is about.
+// IT HAS NO ORG CHART: the cases written over it are about the settings
+// around one, and the seats and units have a fixture of their own (orgDoc, in
+// seatentity_test.go).
 const companyDoc = `
 name: Acme
 providers:

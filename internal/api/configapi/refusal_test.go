@@ -80,6 +80,11 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 		if body.Hint == "" {
 			t.Errorf("hint = %q, want one", body.Hint)
 		}
+		// AND THE HIERARCHY the refused document derives, which a builder
+		// places the problems on.
+		if body.Derived == nil {
+			t.Error("a document the validator refused carries no derived hierarchy")
+		}
 	})
 
 	t.Run("a put that does not parse", func(t *testing.T) {
@@ -94,8 +99,7 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 			t.Errorf("problem = %+v, want an unknown_field on line %d", p, want)
 		}
 		if body.Derived != nil {
-			t.Errorf("a refusal carries a derived hierarchy, which this surface "+
-				"stopped answering when the chart left the document: %+v", body.Derived)
+			t.Errorf("a document that did not parse carries a hierarchy: %+v", body.Derived)
 		}
 	})
 
