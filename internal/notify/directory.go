@@ -57,8 +57,8 @@ type Holder struct {
 	// exactly as the request path finds the same binding's seat.
 	Seat string
 
-	// Stage is the bound person's stage. Empty for a reservation — an
-	// enrolment whose content record has not landed — and for a removal.
+	// Stage is the bound person's stage. Empty for a removal, which has no
+	// row left to have one.
 	Stage iam.Stage
 
 	// Removed marks a seat whose holder was removed while holding it, and
@@ -146,12 +146,13 @@ func harder(a, b Withholding) Withholding {
 //
 // # An ALLOWLIST of the stages that route, like internal/iam's own
 //
-// ACTIVE routes, and so do INVITED, ENROLLING and a reservation's empty stage:
-// each is somebody the company has put in the seat who has not finished
-// signing up, the seat's contact map names them, and silencing a new hire
-// until they complete an enrolment would read as a colleague who never answers.
-// Those three mean "not yet"; SUSPENDED and RETIRED mean "no longer", and a
-// removal is the permanent form of the second.
+// ACTIVE routes, and so do INVITED and ENROLLING: each is somebody the company
+// has put in the seat who has not finished signing up, the seat's contact map
+// names them, and silencing a new hire until they complete an enrolment would
+// read as a colleague who never answers. Those two mean "not yet"; SUSPENDED
+// and RETIRED mean "no longer", and a removal is the permanent form of the
+// second. An empty stage on a holder that is not a removal is no stage at all,
+// and withholds like any other this build cannot name.
 //
 // A STAGE THIS BUILD CANNOT NAME WITHHOLDS. It is one a newer peer wrote during
 // a rolling upgrade, and the two ways to be wrong are not symmetric: withheld,
@@ -162,7 +163,7 @@ func withholding(h Holder) (Withholding, bool) {
 		return WithheldRemoved, true
 	}
 	switch h.Stage {
-	case iam.StageActive, iam.StageInvited, iam.StageEnrolling, "":
+	case iam.StageActive, iam.StageInvited, iam.StageEnrolling:
 		return "", false
 	case iam.StageSuspended:
 		return WithheldSuspended, true

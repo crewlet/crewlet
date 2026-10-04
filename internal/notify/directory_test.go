@@ -116,11 +116,12 @@ func TestTheStandingRuleRoutesOnlyWhatMayBeReached(t *testing.T) {
 		{"active", notify.Holder{Stage: iam.StageActive}, ""},
 		{"invited", notify.Holder{Stage: iam.StageInvited}, ""},
 		{"enrolling", notify.Holder{Stage: iam.StageEnrolling}, ""},
-		{"a reservation mid-enrolment", notify.Holder{}, ""},
 		{"suspended", notify.Holder{Stage: iam.StageSuspended}, notify.WithheldSuspended},
 		{"retired", notify.Holder{Stage: iam.StageRetired}, notify.WithheldRetired},
 		{"removed", notify.Holder{Removed: true}, notify.WithheldRemoved},
 		{"a stage from a newer build", notify.Holder{Stage: "on_sabbatical"},
+			notify.WithheldUnrecognised},
+		{"no stage on a binding that is not a removal", notify.Holder{},
 			notify.WithheldUnrecognised},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
