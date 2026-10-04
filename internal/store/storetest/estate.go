@@ -1,7 +1,6 @@
 package storetest
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/store"
@@ -30,14 +29,6 @@ func OpenEstate(t testing.TB, path string, opts store.Options, logs int) (*store
 		t.Fatalf("open %s beside %s: %v", file.Name, path, err)
 	}
 	return node, node.PartitionHandle(file.Name)
-}
-
-// Estate is [OpenEstate] in a fresh directory, closed when the test ends.
-func Estate(t testing.TB, logs int) (*store.DB, store.PartitionHandle) {
-	t.Helper()
-	node, estate := OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, logs)
-	t.Cleanup(func() { _ = node.Close() })
-	return node, estate
 }
 
 // Partition is the open handle behind estate, failing the test when it is

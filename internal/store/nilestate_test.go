@@ -171,10 +171,7 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 				t.Error("a handle that is not open opened a partition")
 			}
 		},
-		"ClosePartition": func(t *testing.T) { wantErrNoEstate(t, d.ClosePartition("estate.000")) },
-		"DropPartition": func(t *testing.T) {
-			wantErrNoEstate(t, d.DropPartition(ctx, storetest.LayoutZero(1)))
-		},
+		"ClosePartition":    func(t *testing.T) { wantErrNoEstate(t, d.ClosePartition("estate.000")) },
 		"LearnEmbeddingDim": func(t *testing.T) { d.LearnEmbeddingDim(768) },
 
 		// ---- the sub-handles: BUILDING one must not panic -----------------

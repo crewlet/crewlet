@@ -62,27 +62,6 @@
 // has no control domain of its own, so it bends the candidate's own reader and
 // domain each way either could break its rule and requires every bend to be
 // reported.
-//
-// # A divided domain, on a divided layout
-//
-// [RunPartitioned] is the third family, for a domain a layout DIVIDES — its
-// log in several partitions, each held by several nodes. The floor theorem is
-// held per log by three gates (the statelog package doc's "who may write a
-// log"), and each is a rule about a write or a record that no single-log case
-// reaches: a scope naming another partition's object, a record on another
-// partition's log, a node writing a partition it does not serve, and the
-// release that stops a leaving node's in-flight write. So the family runs the
-// domain's own write path and applier through the framework's publisher and
-// apply loop on real logs of a divided layout, several nodes to a partition,
-// and reads every record back off the logs besides — holding the domain's
-// partition function to its own declaration too, since a function that
-// placed an object's path in no partition would disarm gate 1 without failing
-// any other case. Its control divides the control domain by the partition
-// each object's id names, and comes back clean; a domain whose write declares
-// a scope in another partition, one whose writes are routed to a partition its
-// records do not belong to, one whose partition function places no scope
-// path, and an applier that drops no record for its writer's release are each
-// reported.
 package statelogtest
 
 import (

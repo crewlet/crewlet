@@ -128,13 +128,11 @@ func partitionPath(nodePath, configured string, f PartitionFile) string {
 
 // Pool and page-cache sizing for partition files.
 //
-// A node holding every partition of a small fleet's layout opens 81 files at
-// a tracker count of 64 and 321 at 256. The pool and the per-connection page
-// cache were sized when the replicated estate was ONE file, so each file taking
-// that one file's share would multiply both by the partition count. These are
-// the numbers that divide them instead; BenchmarkANodeOpensEveryPartition is
-// the measurement they were checked against, and its result is recorded
-// there.
+// The pool and the per-connection page cache were sized when the replicated
+// estate was ONE file, so each of several open files taking that one file's
+// share would multiply both by the number of files. These are the numbers
+// that divide them instead, so a node holding one partition — every data node,
+// under layout 0 — keeps exactly the one file's share.
 const (
 	// PartitionReadConns is the fewest readers a partition file's pool
 	// holds, beside the writers its apply loops pin.
@@ -150,10 +148,8 @@ const (
 	// partitionCacheKiB is the page cache the node's partition files share,
 	// per connection: 32 MiB, which is what each connection on the one
 	// replicated file had before the estate was divided. A node holding one
-	// partition therefore sizes it exactly as before, and a node holding many
-	// DIVIDES the same memory rather than multiplying it — at 321 files and
-	// four connections each, 32 MiB apiece would be 40 GiB of cache a node
-	// could fill.
+	// partition therefore sizes it exactly as before, and a node holding
+	// several DIVIDES the same memory rather than multiplying it.
 	partitionCacheKiB = nodeCacheKiB
 
 	// partitionCacheFloorKiB is the least any open partition file's
@@ -169,11 +165,8 @@ const (
 	// engine, so a driver that moves its minimum fails there first.
 	//
 	// Past 40 open files the floors alone exceed [partitionCacheKiB] and
-	// every file gets the floor — which the default layout's 81 and 321
-	// files both are, so on a node holding every partition the budget is
-	// the engine's minimum times the connections rather than 32 MiB, about
-	// 1 GiB at 321 files. BenchmarkANodeOpensEveryPartition measured it
-	// against the node footprint the partition count was chosen under.
+	// every file gets the floor, so the budget is then the engine's minimum
+	// times the connections rather than 32 MiB.
 	partitionCacheFloorKiB = 800
 )
 
@@ -229,7 +222,7 @@ func divide(sizes map[string]int64, readers int) map[string]allotment {
 
 // partitionSet is the partitions a node handle holds open.
 type partitionSet struct {
-	// mu serialises every change to the set — an open, a close, a drop — and
+	// mu serialises every change to the set — an open or a close — and
 	// the division that follows each, so two changes cannot each divide the
 	// node across a set that lacks the other's file.
 	mu sync.Mutex
@@ -310,8 +303,8 @@ func (d *DB) PartitionPath(f PartitionFile) string {
 
 // OpenPartition opens one partition's file — creating it, and migrating it to
 // this binary's schema, when it is absent or behind — under this process's
-// exclusive lock, and holds it on this node until [DB.ClosePartition],
-// [DB.DropPartition] or [DB.Close].
+// exclusive lock, and holds it on this node until [DB.ClosePartition] or
+// [DB.Close].
 //
 // IDEMPOTENT for the file already open under that name, which answers the
 // handle it is open as: a join that retries after a partial failure opens
@@ -504,48 +497,6 @@ func (d *DB) ClosePartition(name string) error {
 	}
 	if err := held.close(); err != nil {
 		return fmt.Errorf("store: close the partition %s: %w", name, err)
-	}
-	return nil
-}
-
-// DropPartition stops holding f and DELETES its file, with the file's -wal
-// and -shm, under this process's lock on it — the last step of leaving a
-// partition, once every loop that wrote it has stopped.
-//
-// A FILE IT DOES NOT HOLD IS DELETED ALL THE SAME, which is what a leave
-// interrupted between its close and its delete needs from its retry. A file
-// another process holds is refused naming the holder, and one another handle
-// in THIS process holds is refused too — see [discard].
-func (d *DB) DropPartition(ctx context.Context, f PartitionFile) error {
-	if err := d.node("drop a partition"); err != nil {
-		return err
-	}
-	if err := f.Validate(); err != nil {
-		return err
-	}
-	d.parts.mu.Lock()
-	defer d.parts.mu.Unlock()
-	if err := d.stillOpen("drop a partition"); err != nil {
-		return err
-	}
-	// ANOTHER FILE UNDER THIS NAME IS REFUSED BEFORE THE SET IS TOUCHED:
-	// deleting the one open here would delete what the caller did not ask
-	// for, and taking it out of the set to look at it first — then putting
-	// it back — would answer ErrNoEstate, for a partition that stayed open
-	// throughout, to every lookup in between. The runtime reads that answer
-	// as a lost file and restores it.
-	if held := d.parts.held()[f.Name]; held != nil && held.file != f {
-		return fmt.Errorf("store: the partition %s is open on this node as %+v, "+
-			"not %+v — nothing was dropped", f.Name, held.file, f)
-	}
-	if held := d.release(f.Name); held != nil {
-		if err := held.close(); err != nil {
-			return fmt.Errorf("store: close the partition %s before dropping it: %w", f.Name, err)
-		}
-	}
-	path := d.PartitionPath(f)
-	if err := discard(path); err != nil {
-		return fmt.Errorf("store: drop the partition %s at %s: %w", f.Name, path, err)
 	}
 	return nil
 }

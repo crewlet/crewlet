@@ -53,7 +53,7 @@ func TestBrokerMembershipComesFromTheStreamBlock(t *testing.T) {
 	} {
 		// EVERY ROLE SET, the refused pairings included: the kind of a
 		// stream block is no less definite for Tier A refusing what the
-		// roles pair it with under the single-file layout.
+		// roles pair it with.
 		for _, roles := range [][]string{nil, {"data"}, {"seats"}, {"ingress", "workers"}} {
 			t.Run(fmt.Sprintf("%s/%v", tc.name, roles), func(t *testing.T) {
 				t.Parallel()
@@ -74,11 +74,12 @@ func TestBrokerMembershipComesFromTheStreamBlock(t *testing.T) {
 
 // EVERY BROKER KIND × EVERY ROLE SET, with exactly the refusals each earns.
 //
-// The table is the rule set §E3 names, stated as outcomes. Three pairings are
-// what the partitioned estate is built from and are refused until it is live —
-// a data node on a leaf, a member without data, and ingress or workers without
-// data — and each of those refusals has to SAY that it lasts only that long, or
-// an operator reads a permanent rule into a temporary one.
+// The table is the rule set [Bootstrap.checkRolesAndBroker] states, written as
+// outcomes. Three pairings are refused — a data node on a leaf, a member
+// without data, and ingress or workers without data — because every data node
+// holds the whole estate as a member of the broker and a node without data
+// holds none; and each refusal has to NAME the data role it turns on, or an
+// operator is told what is wrong and not which of the two ways out is theirs.
 func TestEveryBrokerKindAndRoleCombination(t *testing.T) {
 	t.Parallel()
 	type refusal struct{ path, kind string }
@@ -91,8 +92,8 @@ func TestEveryBrokerKindAndRoleCombination(t *testing.T) {
 	for _, kind := range placement.BrokerKinds() {
 		for _, tc := range []struct {
 			roles string
-			// want is the refusals this pairing earns under the single-file
-			// layout, every one of them naming the partitioned estate.
+			// want is the refusals this pairing earns, every one of them
+			// naming the data role.
 			want map[placement.BrokerKind][]refusal
 		}{
 			{"", map[placement.BrokerKind][]refusal{

@@ -799,26 +799,21 @@ func (l *opsLedger) PurgeOps(context.Context, time.Time) (int64, error) {
 	return l.rows, l.err
 }
 
-// THE OPERATION-LEDGER SWEEP SWEEPS THE LOGS RUNNING AT THE SWEEP.
+// THE OPERATION-LEDGER SWEEP IS ONE NODE-LOCAL JOB PER LEDGER.
 //
-// A domain has a log — and a ledger — in each partition of its space, and a
-// node joins and leaves partitions while it runs. A job per log fixed when the
-// sweep was built never swept a partition joined after it and swept a stopped
-// runner's ledger for ever; so there is one job per DOMAIN, named as the
-// single-file estate's always were, and it asks for the domain's ledgers at
-// every run — summing them, and sweeping every one even when another fails.
-func TestTheOpsSweepSweepsTheLogsRunningAtTheSweep(t *testing.T) {
+// Each node owns its own copy of every ledger, so a job swept under the fleet
+// singleton would tidy one node's and let the rest grow for ever. Each job is
+// named `<domain>_ops` after the ledger it sweeps, in one order on every node
+// whatever order the map iterates in, and sweeps exactly that ledger —
+// answering its count and its failure, never a neighbour's.
+func TestTheOpsSweepIsOneNodeLocalJobPerLedger(t *testing.T) {
 	t.Parallel()
-	first, joined := &opsLedger{rows: 2}, &opsLedger{rows: 5}
-	broken := &opsLedger{err: errors.New("the file is gone")}
-	running := map[string][]maintenance.OpsLedger{"tracker": {first}}
-	var mu sync.Mutex
-	jobs := maintenance.StatelogJobs([]string{"tracker", "pages", "tracker"},
-		func(domain string) []maintenance.OpsLedger {
-			mu.Lock()
-			defer mu.Unlock()
-			return running[domain]
-		}, maintenance.Fixed(30*24*time.Hour))
+	tracker := &opsLedger{rows: 2}
+	pages := &opsLedger{rows: 5, err: errors.New("the file is gone")}
+	horizon := maintenance.Fixed(30 * 24 * time.Hour)
+	jobs := maintenance.StatelogJobs(map[string]maintenance.OpsLedger{
+		"tracker": tracker, "pages": pages,
+	}, horizon)
 
 	var names []string
 	for _, j := range jobs {
@@ -826,25 +821,23 @@ func TestTheOpsSweepSweepsTheLogsRunningAtTheSweep(t *testing.T) {
 		if j.Scope != maintenance.NodeLocal {
 			t.Errorf("%s has scope %q; each node owns its own ledgers", j.Name, j.Scope)
 		}
+		if j.Horizon == nil || j.Horizon() != horizon() {
+			t.Errorf("%s keeps rows for %v, want the ledgers' retention %v",
+				j.Name, j.Horizon, horizon())
+		}
 	}
 	if !slices.Equal(names, []string{"pages_ops", "tracker_ops"}) {
-		t.Fatalf("the sweep's jobs are %v, want one per domain", names)
+		t.Fatalf("the sweep's jobs are %v, want one per ledger in name order", names)
 	}
-	tracker := jobs[1]
-	if n, err := tracker.Run(t.Context(), base, base); err != nil || n != 2 {
-		t.Fatalf("the tracker sweep of one log swept %d (%v), want 2", n, err)
+	if n, err := jobs[1].Run(t.Context(), base, base); err != nil || n != 2 {
+		t.Errorf("the tracker sweep swept %d (%v), want its ledger's 2", n, err)
 	}
-
-	// A PARTITION JOINED SINCE THE SWEEP WAS BUILT, and one that fails.
-	mu.Lock()
-	running["tracker"] = []maintenance.OpsLedger{first, broken, joined}
-	mu.Unlock()
-	n, err := tracker.Run(t.Context(), base, base)
-	if n != 7 || err == nil || !strings.Contains(err.Error(), "the file is gone") {
-		t.Fatalf("the sweep of three logs swept %d (%v), want 7 and the failure", n, err)
+	if n, err := jobs[0].Run(t.Context(), base, base); n != 5 ||
+		err == nil || !strings.Contains(err.Error(), "the file is gone") {
+		t.Errorf("the pages sweep swept %d (%v), want its ledger's 5 and its failure", n, err)
 	}
-	if joined.calls.Load() != 1 {
-		t.Errorf("the ledger of the log joined since was swept %d times, want once",
-			joined.calls.Load())
+	if tracker.calls.Load() != 1 || pages.calls.Load() != 1 {
+		t.Errorf("the ledgers were swept %d and %d times, want each once by its own job",
+			tracker.calls.Load(), pages.calls.Load())
 	}
 }

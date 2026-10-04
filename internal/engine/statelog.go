@@ -193,25 +193,17 @@ type stateLog struct {
 	// copy, and sometimes a partition's only one ([copiesOf]).
 	copies statelog.Copies
 
-	// logs is every log this node runs NOW, as one immutable [logSet]: a
-	// log is started and stopped while the node runs ([stateLog.startLogs],
-	// [stateLog.stopLogs]), so every reader takes the whole set at once
-	// rather than reading a map another goroutine is writing.
-	//
-	// SWAPPED, NEVER MUTATED. A reader that walks the set it took sees a
-	// log it may be about to lose, and each per-log loop tolerates that —
-	// a stopped log's reads refuse and its writes fail — where a reader
-	// walking a map mid-write sees a half-assembled log or crashes.
-	logs atomic.Pointer[logSet]
-
-	// membership serialises starting and stopping logs, so two changes to
-	// the set cannot each swap in a set that lacks the other's log.
-	membership sync.Mutex
-
-	// host and epoch are what a log started after boot is provisioned on
-	// and handed, the same the boot's own logs were.
-	host  domainHost
-	epoch map[string]any
+	// logs is every log this node runs ([logSet]), WRITTEN ONCE: where the
+	// runtime is built, after every log has started and before any loop
+	// that reads the set — an applier, the heartbeat, the snapshot loop,
+	// the donor — is launched. Nothing starts or stops a log while the node
+	// runs: an adoption halts and relaunches the APPLIERS, over the same
+	// logs, and a reanchor re-keys one log's runner in place. So the set is
+	// fixed for the runtime's life and a reader needs no lock to walk it,
+	// and every surface built over a log may hold it rather than look it
+	// up again. Nil on a runtime whose boot failed before it was written,
+	// which reads as running nothing ([stateLog.held]).
+	logs *logSet
 
 	nodeID string
 	db     *store.DB
@@ -305,14 +297,14 @@ type stateLog struct {
 	applyDone sync.WaitGroup
 
 	// recovering serialises, PER PARTITION, the operations that rewrite a
-	// log's checkpoint, re-key its runner or build one over its rows under
-	// a running node: a runtime adoption, which replaces the replicated
-	// file whole; the restore of an estate a failed adoption left closed,
-	// which reopens it and re-keys every runner to it; a reanchor, which
-	// moves one log's checkpoint to a stream it adopts; and starting or
-	// stopping a log. Any two interleaved on one partition write into a
-	// file the other is replacing, re-key a runner to a checkpoint the
-	// other has just moved, or relaunch a loop the other has just halted.
+	// log's checkpoint or re-key its runner under a running node: a runtime
+	// adoption, which replaces the replicated file whole; the restore of an
+	// estate a failed adoption left closed, which reopens it and re-keys
+	// every runner to it; and a reanchor, which moves one log's checkpoint
+	// to a stream it adopts. Any two interleaved on one partition write
+	// into a file the other is replacing, re-key a runner to a checkpoint
+	// the other has just moved, or relaunch a loop the other has just
+	// halted.
 	//
 	// Per partition, so work on one partition never waits on work on
 	// another — and each operation takes exactly the partitions whose rows
@@ -374,13 +366,29 @@ func (l *partitionLocks) lock(ps ...statelog.PartitionID) (unlock func()) {
 	}
 }
 
-// logSet is the logs this node runs at one instant: each by its key, and every
-// key in the layout's own order ([statelog.Layout.AllLogs]), so every surface
-// that walks them renders them the same way. A map's iteration order would
-// make one screen's rows move between refreshes.
+// logSet is the logs this node runs: each by its key, and every key in the
+// layout's own order ([statelog.Layout.AllLogs]), so every surface that walks
+// them renders them the same way. A map's iteration order would make one
+// screen's rows move between refreshes.
 type logSet struct {
 	byKey map[string]*runningLog
 	order []string
+}
+
+// newLogSet is the set of runs, each placed where layout orders it. A run of a
+// log the layout does not carry is keyed and never walked — which no runtime
+// builds, since every log it starts is one of its layout's.
+func newLogSet(layout statelog.Layout, runs []*runningLog) *logSet {
+	set := &logSet{byKey: make(map[string]*runningLog, len(runs))}
+	for _, running := range runs {
+		set.byKey[running.key] = running
+	}
+	for _, log := range layout.AllLogs() {
+		if _, held := set.byKey[log.String()]; held {
+			set.order = append(set.order, log.String())
+		}
+	}
+	return set
 }
 
 // running is the set's logs in its order.
@@ -395,51 +403,16 @@ func (set *logSet) running() []*runningLog {
 	return out
 }
 
-// with is the set plus the given logs, each placed where the layout orders it.
-func (set *logSet) with(layout statelog.Layout, add []*runningLog) *logSet {
-	next := &logSet{byKey: map[string]*runningLog{}}
-	if set != nil {
-		maps.Copy(next.byKey, set.byKey)
-	}
-	for _, running := range add {
-		next.byKey[running.key] = running
-	}
-	for _, log := range layout.AllLogs() {
-		if _, held := next.byKey[log.String()]; held {
-			next.order = append(next.order, log.String())
-		}
-	}
-	return next
-}
-
-// without is the set less the logs keyed in drop.
-func (set *logSet) without(drop map[string]bool) *logSet {
-	next := &logSet{byKey: map[string]*runningLog{}}
-	if set == nil {
-		return next
-	}
-	for _, key := range set.order {
-		if !drop[key] {
-			next.byKey[key] = set.byKey[key]
-			next.order = append(next.order, key)
-		}
-	}
-	return next
-}
-
-// held is the logs this node runs now — never nil, so a node that has started
-// none walks an empty set.
+// held is the logs this node runs — never nil, so a runtime that started none
+// walks an empty set.
 func (s *stateLog) held() *logSet {
-	if s == nil {
+	if s == nil || s.logs == nil {
 		return &logSet{}
 	}
-	if set := s.logs.Load(); set != nil {
-		return set
-	}
-	return &logSet{}
+	return s.logs
 }
 
-// running is every log this node runs now, in the layout's order.
+// running is every log this node runs, in the layout's order.
 func (s *stateLog) running() []*runningLog { return s.held().running() }
 
 // Log answers one running log by its key, or nil.
@@ -812,7 +785,7 @@ func (e *Engine) startStateLogAt(ctx context.Context, boot *config.Bootstrap,
 	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s := &stateLog{
-		layout: layout, mode: e.Mode(), host: host, epoch: epoch,
+		layout: layout, mode: e.Mode(),
 		holding: holdingOf(boot, layout), copies: copiesOf(boot, layout),
 		nodeID: nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
 		metrics: e.metrics,
@@ -900,7 +873,7 @@ func (e *Engine) startStateLogAt(ctx context.Context, boot *config.Bootstrap,
 
 	started := make([]*runningLog, 0, len(logs))
 	for _, id := range layout.AllLogs() {
-		running, err := s.startLog(ctx, consumerCtx, id, logs[id.String()])
+		running, err := s.startLog(ctx, consumerCtx, host, id, logs[id.String()], epoch)
 		if err != nil {
 			// EVERY LOG OR NONE. A node running half its layout serves
 			// rows derived from one log while another's records pile
@@ -914,7 +887,10 @@ func (e *Engine) startStateLogAt(ctx context.Context, boot *config.Bootstrap,
 		}
 		started = append(started, running)
 	}
-	s.logs.Store(s.held().with(layout, started))
+	// THE SET, ONCE AND BEFORE ANY LOOP THAT READS IT: the appliers, the
+	// heartbeat, the snapshot loop and the donor all start below, and the set
+	// is never written again ([stateLog.logs]).
+	s.logs = newLogSet(layout, started)
 	// THE STATE LOG'S OWN CONTEXT, never the boot call's: an applier is
 	// joined by [stateLog.Stop], which ends that one.
 	//nolint:contextcheck // s.run is [context.WithoutCancel] of the boot
@@ -952,10 +928,10 @@ func registeredDomain(name string) (statelog.Domain, error) {
 }
 
 // startLog builds one log of the running layout on the stream
-// [stateLog.provision] opened, after checking what its domain must be able to
-// answer. Its applier is not launched here.
-func (s *stateLog) startLog(ctx, consumerCtx context.Context, id statelog.LogID,
-	appendTo *jetstream.DomainLog) (*runningLog, error) {
+// [stateLog.provision] opened on host, after checking what its domain must be
+// able to answer. Its applier is not launched here.
+func (s *stateLog) startLog(ctx, consumerCtx context.Context, host domainHost,
+	id statelog.LogID, appendTo *jetstream.DomainLog, epoch map[string]any) (*runningLog, error) {
 
 	domain, err := registeredDomain(id.Domain)
 	if err != nil {
@@ -985,140 +961,7 @@ func (s *stateLog) startLog(ctx, consumerCtx context.Context, id statelog.LogID,
 		return nil, fmt.Errorf("engine: %s's stream was not provisioned before "+
 			"its log was started", id)
 	}
-	return s.start(ctx, consumerCtx, s.host, domain, id, appendTo, s.epoch)
-}
-
-// startLogs brings up logs of the running layout WHILE THE NODE RUNS — the
-// half of a partition's join that makes its logs live on this node — and
-// launches each one's applier. A log already running is left as it is, so a
-// retry after a partial failure starts only what is missing.
-//
-// ALL OR NONE, as at boot: a failure stops every log this call started and
-// leaves the set as it was, because a partition half of whose logs run is one
-// whose rows are derived from some of its records and not others.
-//
-// Under the partitions' recovery locks, so no adoption replaces the file a
-// runner is being built over, and no reanchor moves a checkpoint it reads.
-//
-// A LOG NAMED TWICE IS STARTED ONCE. What is already running is judged against
-// the set as it stood before this call started anything, so a second mention
-// of a log this call is starting would have provisioned and started it again:
-// two runners and two consumer handles on one durable consumer, the set
-// keeping the second and the first's handle never closed.
-func (s *stateLog) startLogs(ctx context.Context, ids []statelog.LogID) error {
-	ids = distinctLogs(ids)
-	partitions := make([]statelog.PartitionID, 0, len(ids))
-	for _, id := range ids {
-		if name, _ := s.layout.Stream(id); name == "" {
-			return fmt.Errorf("engine: %s is not a log of layout %d, so there is "+
-				"no stream to start it on", id, s.layout.Number)
-		}
-		partitions = append(partitions, id.Partition)
-	}
-	defer s.recovering.lock(partitions...)()
-	s.membership.Lock()
-	defer s.membership.Unlock()
-
-	held := s.held()
-	provisionCtx, cancelProvision := context.WithTimeout(ctx, s.clustered.SequenceBudget())
-	defer cancelProvision()
-	var started []*runningLog
-	for _, id := range ids {
-		if held.byKey[id.String()] != nil {
-			continue
-		}
-		domain, err := registeredDomain(id.Domain)
-		if err == nil {
-			var appendTo *jetstream.DomainLog
-			if appendTo, err = s.provision(provisionCtx, s.host, domain, id); err == nil {
-				var running *runningLog
-				if running, err = s.startLog(ctx, provisionCtx, id, appendTo); err == nil {
-					started = append(started, running)
-					continue
-				}
-			}
-		}
-		for _, r := range started {
-			r.consumer.Close()
-		}
-		return fmt.Errorf("engine: start %s: %w", id, err)
-	}
-	s.logs.Store(held.with(s.layout, started))
-	for _, running := range started {
-		s.launchApplier(running.key)
-	}
-	return nil
-}
-
-// stopLogs ends logs WHILE THE NODE RUNS — the half of a partition's leave
-// that stops this node applying it: each is taken out of the set first, so no
-// loop or reader picks it up again, then its applier is ended and waited for,
-// then its consumer is given back to the broker. A log not running is
-// ignored.
-//
-// # A log of layout 0's one partition is never stopped
-//
-// Refused, naming it, before anything stops. Every DOMAIN surface of this node
-// — the tracker's writer and reader, the knowledge base's store and reader, the
-// embedding duty, the change feeds — is wired to its domain's log in
-// `estate.000` ([stateLog.Domain]) when the native runtime is built, and holds
-// that log's publisher, reader and runner from then on. Stopped, they would
-// write through a publisher waiting on a runner that no longer applies and read
-// rows nothing advances — and started again, through the halted instance
-// rather than the new one. What surfaces the FRAMEWORK builds over every log it
-// runs — the snapshot registrations, the node gate — look the running set up
-// at every use and follow a restart; the domain surfaces key nothing to a
-// partition yet, so under layout 0 the partition a node holds is its whole
-// estate for the life of the process, which is what this rule says. A
-// partitioned layout's logs have no such surface bound to them and are stopped
-// and started freely.
-func (s *stateLog) stopLogs(ids []statelog.LogID) error {
-	ids = distinctLogs(ids)
-	partitions := make([]statelog.PartitionID, 0, len(ids))
-	for _, id := range ids {
-		if id.Partition == statelog.EstatePartition {
-			return fmt.Errorf("engine: %s is a log of layout 0's one partition, "+
-				"which every domain surface of this node writes and reads "+
-				"through for the life of the process; it is not stopped while "+
-				"the node runs", id)
-		}
-		partitions = append(partitions, id.Partition)
-	}
-	defer s.recovering.lock(partitions...)()
-	s.membership.Lock()
-	defer s.membership.Unlock()
-
-	held := s.held()
-	drop := map[string]bool{}
-	var stopping []*runningLog
-	for _, id := range ids {
-		if running := held.byKey[id.String()]; running != nil {
-			drop[running.key] = true
-			stopping = append(stopping, running)
-		}
-	}
-	s.logs.Store(held.without(drop))
-	for _, running := range stopping {
-		s.haltApplier(running.key)
-		if running.consumer != nil {
-			running.consumer.Close()
-		}
-	}
-	return nil
-}
-
-// distinctLogs is ids with every log after its first mention dropped, in the
-// order they were named.
-func distinctLogs(ids []statelog.LogID) []statelog.LogID {
-	seen := make(map[string]bool, len(ids))
-	out := make([]statelog.LogID, 0, len(ids))
-	for _, id := range ids {
-		if key := id.String(); !seen[key] {
-			seen[key] = true
-			out = append(out, id)
-		}
-	}
-	return out
+	return s.start(ctx, consumerCtx, host, domain, id, appendTo, epoch)
 }
 
 // Stop ends every loop this node started and waits for them.
@@ -1262,11 +1105,6 @@ func (s *stateLog) haltApplier(name string) bool {
 // said.
 func (s *stateLog) resumeApplier(ctx context.Context, name string) {
 	running := s.Log(name)
-	if running == nil {
-		// STOPPED WHILE IT WAS HALTED, which is a leave and not a fault:
-		// there is no loop to resume.
-		return
-	}
 	at, _, _, err := statelog.CursorFor(ctx, s.estate(running.id.Partition).Reader(), running.spec.Name)
 	if err == nil {
 		err = running.consumer.Reset(ctx, at.Seq)
@@ -1283,15 +1121,11 @@ func (s *stateLog) resumeApplier(ctx context.Context, name string) {
 
 // launchApplier starts ONE log's loop again under the set's context. A no-op
 // while the set is halted — the launch that ends that halt starts every log —
-// while the log already has a loop running, and for a log no longer running.
+// and while the log already has a loop running.
 func (s *stateLog) launchApplier(name string) {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
 	if s.applyStop == nil {
-		return
-	}
-	running := s.Log(name)
-	if running == nil {
 		return
 	}
 	if run := s.applying[name]; run != nil {
@@ -1305,7 +1139,7 @@ func (s *stateLog) launchApplier(name string) {
 	// outlives the reanchor or the resume that restarted it, and one started
 	// under that caller's context would stop the moment it returned — and
 	// ending the set is what must end it, as it ends every other domain's.
-	s.startApplierLocked(s.applyCtx, running)
+	s.startApplierLocked(s.applyCtx, s.Log(name))
 }
 
 // haltAppliers ends every apply loop and waits for them, releasing the pinned
@@ -1338,23 +1172,6 @@ func registeredNames() []string {
 	out := make([]string, 0, len(domains))
 	for _, d := range domains {
 		out = append(out, d.Name())
-	}
-	return out
-}
-
-// ledgeredNames is every registered domain that keeps an operation ledger —
-// the domains the maintenance sweep runs a `<domain>_ops` job for.
-//
-// NOT [registeredNames]: a compacted domain declares no ledger
-// ([statelog.Domain.OpsTable] empty), and a job for one is named after a table
-// that does not exist, purges nothing every tick, and is listed beside the
-// real sweeps as though it were one.
-func ledgeredNames() []string {
-	var out []string
-	for _, d := range registeredDomains() {
-		if d.OpsTable() != "" {
-			out = append(out, d.Name())
-		}
 	}
 	return out
 }
@@ -2943,12 +2760,7 @@ func (s *stateLog) restoreEstate(ctx context.Context) error {
 	// named by the next heartbeat's reading, which asks for the join that
 	// re-keys it ([statelog.Runner.RecreationStale]).
 	s.resetConsumers(ctx, func(name string) (time.Time, error) {
-		running := s.Log(name)
-		if running == nil {
-			return time.Time{}, fmt.Errorf("engine: %s stopped while its estate "+
-				"was being restored", name)
-		}
-		stats, err := running.log.Stats(ctx)
+		stats, err := s.Log(name).log.Stats(ctx)
 		if err != nil {
 			return time.Time{}, err
 		}
@@ -3414,9 +3226,9 @@ func (s *stateLog) holdTail(ctx context.Context, at map[string]uint64) (func(), 
 }
 
 // registered is every log of the running layout, as the framework's own
-// surfaces want it: by key, with the health this node reports for each —
-// read off the log running under that key at the moment it is asked, and the
-// zero health, which vouches for nothing, while none is.
+// surfaces want it: by key, with the health this node reports for each — read
+// off the log running under that key, and the zero health, which vouches for
+// nothing, for a log the layout carries and this runtime does not run.
 //
 // The health is what a SNAPSHOT gates on — a node donates only what it can
 // vouch for — and the artefact's acceptance is what a join gates on. Both walk
@@ -3435,17 +3247,20 @@ func (s *stateLog) registered() map[string]statelog.Registered {
 		entry := statelog.Registered{
 			Domain: domain, Log: id, Spec: s.layout.StreamSpec(domain, id),
 		}
-		if running := s.Log(name); running != nil {
-			entry.Spec = running.spec
+		running := s.Log(name)
+		if running == nil {
+			// A LOG THIS NODE DOES NOT RUN IS ONE IT CANNOT VOUCH FOR,
+			// which the zero value says.
+			entry.Health = func() statelog.Health { return statelog.Health{} }
+			out[name] = entry
+			continue
 		}
-		// THE LOG AS IT RUNS AT EACH CALL, looked up by its key rather than
-		// captured here: the snapshot loop and the adopter keep this
-		// registration for the life of the process, and the logs a node
-		// runs change while it runs ([stateLog.stopLogs],
-		// [stateLog.startLogs]). A captured log vouched, after a stop, for
-		// rows nothing applies any more — and after a restart for the
-		// halted runner's frozen checkpoint against a growing log end,
-		// declining every snapshot as catching up for ever.
+		entry.Spec = running.spec
+		// THE RUNNING LOG, CAPTURED: the snapshot loop and the adopter keep
+		// this registration for the life of the process, which is the life
+		// of the set it was read from ([stateLog.logs]) — and the runner the
+		// health reads through is the one an adoption relaunches and a
+		// reanchor re-keys in place, so every call reads the live checkpoint.
 		//
 		// THIS NODE'S OWN CONTEXT, for [stateLog.readerFor]'s reason: the
 		// snapshot loop and the adopter call this closure on their own
@@ -3453,12 +3268,6 @@ func (s *stateLog) registered() map[string]statelog.Registered {
 		// no caller's context to inherit — and [stateLog.run] is the one
 		// that ends when the domain being vouched for does.
 		entry.Health = func() statelog.Health {
-			running := s.Log(name)
-			if running == nil {
-				// A LOG THIS NODE DOES NOT RUN IS ONE IT CANNOT VOUCH
-				// FOR, which the zero value says.
-				return statelog.Health{}
-			}
 			health, err := s.health(s.run, running)
 			if err != nil {
 				// AN UNREADABLE HEALTH IS NOT A HEALTHY ONE: the zero
@@ -3663,9 +3472,7 @@ func (s *stateLog) donorDeps(root string, dial statelog.Dialer) statelog.DonorDe
 }
 
 // snapshotterOf is the snapshotter of partition p, over the logs of p this node
-// runs NOW: built afresh for each take, because a partition's logs are started
-// and stopped while the node runs, and a snapshotter holding a stopped log's
-// health would judge a runner that no longer applies anything.
+// runs, for the take the loop's plan names.
 func (e *Engine) snapshotterOf(s *stateLog, p statelog.PartitionID, dir string,
 	interval time.Duration) (snapshotTaker, error) {
 
@@ -4489,8 +4296,6 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	// change before it.
 	s.publishing.Lock()
 	defer s.publishing.Unlock()
-	// ONE READING OF THE SET, for the whole beat: a log started or stopped
-	// mid-beat is described by the next one, never half by this one.
 	held := s.running()
 	// THE LAYOUT BESIDE THE KEYS, because a log's key does not carry it
 	// (see the statelog package doc on which log a record is about): layout
@@ -4801,9 +4606,8 @@ func (s *stateLog) deferralGauges(now time.Time) {
 
 // logOf is the running log whose stream this is, or nil.
 //
-// A REVERSE LOOKUP over the set rather than a stored map, because the set is
-// replaced whole whenever a log starts or stops and a second map is a second
-// thing to keep in step with it.
+// A REVERSE LOOKUP over the set rather than a second map beside it: the set
+// holds a handful of logs, and one index is one thing to build.
 func (s *stateLog) logOf(stream string) *runningLog {
 	for _, running := range s.running() {
 		if running.spec.Name == stream {
@@ -4813,28 +4617,34 @@ func (s *stateLog) logOf(stream string) *runningLog {
 	return nil
 }
 
-// opsLedgers is the operation ledger of every log of the named domain this node
-// runs NOW, in the layout's order — what the domain's sweep walks at each run
-// ([maintenance.StatelogJobs]), asked afresh because the logs a node runs
-// change while it runs.
-func (s *stateLog) opsLedgers(domain string) []maintenance.OpsLedger {
-	var out []maintenance.OpsLedger
+// opsLedgers is the operation ledger of every log this node runs, keyed as the
+// log is — by its domain's name, which is what names the sweep's
+// `<domain>_ops` job ([maintenance.StatelogJobs]).
+//
+// THE RUNNING SET RATHER THAN A HAND-WRITTEN LIST, which is the whole point of
+// building it here: a domain added to the register and forgotten in a sweep
+// list is a table that grows for ever with nothing to notice, and that is
+// exactly how the ledgers came to be unswept. Read once, where the sweep is
+// built: the set is fixed for the runtime's life ([stateLog.logs]), and each
+// runner is the one an adoption relaunches and a reanchor re-keys in place.
+func (s *stateLog) opsLedgers() map[string]maintenance.OpsLedger {
+	out := map[string]maintenance.OpsLedger{}
 	for _, r := range s.running() {
 		// A DOMAIN THAT KEEPS NO LEDGER HAS NOTHING TO SWEEP. The compacted
 		// domains declare none, and handing their runners over anyway put a
 		// `vectors_ops` job on every node's sweep — named after a table that
 		// does not exist, purging nothing every tick, and listed beside the
 		// real sweeps as though it were one.
-		if r.domain.Name() == domain && r.runner != nil && r.domain.OpsTable() != "" {
-			out = append(out, r.runner)
+		if r.runner != nil && r.domain.OpsTable() != "" {
+			out[r.key] = r.runner
 		}
 	}
 	return out
 }
 
 // filesOf is the file of every partition carrying a log of the named domain
-// that this node runs NOW, once each, in the layout's order — what a per-node
-// sweep of one of that domain's tables walks.
+// that this node runs, once each, in the layout's order — what a per-node sweep
+// of one of that domain's tables walks.
 func (s *stateLog) filesOf(domain string) []store.PartitionHandle {
 	var out []store.PartitionHandle
 	seen := map[statelog.PartitionID]bool{}

@@ -1065,12 +1065,14 @@ func TestWhoTakesPartInACapacitySealIsTheEstateAndTheBrokerMembers(t *testing.T)
 // is a participant, and restarted into seal mode it acknowledges — so the seal
 // holds once it has, and not before.
 //
-// The pairing is the partitioned estate's dedicated broker member, which Tier A
-// refuses while the single-file layout runs; the profile is built here so the
-// engine's half of the handshake is certified before the configuration can
-// produce one. Left out of the participants, its broker could still hold a
-// queued request to resize the log after the seal passed; named but unable to
-// acknowledge, it would wedge every seal for ever.
+// Tier A refuses a broker member without `data`, so this node's own
+// configuration never produces the pairing — but [Engine.capacityParticipants]
+// reads every OTHER node's presence, not this node's configuration, and a
+// presence advertising one is a participant it cannot rule out, so it is
+// waited for. The profile is built here to certify the engine's half of the
+// handshake against that presence. Left out of the participants, its broker
+// could still hold a queued request to resize the log after the seal passed;
+// named but unable to acknowledge, it would wedge every seal for ever.
 //
 // ITS PARTICIPATION IS FOUND FROM WHAT A SEAL-MODE NODE LEAVES BEHIND, never
 // from a lease the case writes for it: such a node has no position and no

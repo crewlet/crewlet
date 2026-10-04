@@ -111,8 +111,6 @@ func everySeam(t *testing.T) queries.Sources {
 		Retention: func(context.Context) any { return nil },
 		// THE FLEET BROKER'S MEMBERSHIP, which every engine serves.
 		FleetBroker: emptyBroker{},
-		// THE ESTATE MAP, which every node with a coordination store
-		// serves: none stored, at the layout this build runs.
 		// THE GUARD'S POSTURE, which the API always supplies from the
 		// guard it mounts.
 		Access: &queries.AccessPosture{},

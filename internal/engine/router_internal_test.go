@@ -522,10 +522,12 @@ func TestANodeServingItsSeatsItselfNeedsNoViewToKeepOrClaimThem(t *testing.T) {
 
 // ADMISSION WAITS FOR THE PARTITION A SEAT CANNOT DO WITHOUT, under every
 // layout: the tracker's CATALOGUE, which every create reads — the one
-// partition under layout 0, the company space's under a divided layout — and
-// the knowledge base's one partition where there is one. A layout that gives a
-// native half nothing to wait for is refused rather than read as nothing to
-// wait for, which would admit a seat onto a company nobody checked.
+// partition under layout 0, the company space's where a layout divides the
+// tracker — and the knowledge base's one partition where there is one. A
+// knowledge base divided by container adds nothing to wait for, since no one
+// of its partitions is the one every seat reads. A layout that gives a native
+// half nothing to wait for is refused rather than read as nothing to wait for,
+// which would admit a seat onto a company nobody checked.
 func TestSeatAdmissionWaitsForThePartitionsASeatCannotDoWithout(t *testing.T) {
 	t.Parallel()
 	company := statelog.PartitionID{Space: statelog.SpaceCompany}
@@ -549,9 +551,9 @@ func TestSeatAdmissionWaitsForThePartitionsASeatCannotDoWithout(t *testing.T) {
 		{name: "layout 0, the wiki alone", layout: LayoutZero(), wiki: true,
 			want: []seatNeed{{partition: statelog.EstatePartition, pages: true}}},
 		{name: "layout 0, nothing native", layout: LayoutZero()},
-		{name: "layout 1, both halves", layout: DefaultLayoutOne(), runTracker: true, wiki: true,
+		{name: "a company space holds the catalogue", layout: noPages, runTracker: true,
 			want: []seatNeed{{partition: company, tracker: true}}},
-		{name: "layout 1, the wiki alone", layout: DefaultLayoutOne(), wiki: true},
+		{name: "a knowledge base divided by container", layout: noCompany, wiki: true},
 		{name: "no company space", layout: noCompany, runTracker: true, unaddressed: true},
 		{name: "no pages log", layout: noPages, wiki: true, unaddressed: true},
 	} {

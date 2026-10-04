@@ -31,8 +31,8 @@ import (
 // # What it reports
 //
 // Every call in a non-test file under internal/ or cmd/ to one of the store's
-// partition methods — `OpenPartition`, `ClosePartition`, `DropPartition`,
-// `OpenPartitions`, `PartitionDB`, `PartitionHandle`, `PartitionPath` — on a
+// partition methods — `OpenPartition`, `ClosePartition`, `OpenPartitions`,
+// `PartitionDB`, `PartitionHandle`, `PartitionPath` — on a
 // receiver that is not an imported package, and every call through the store
 // package itself that names a partition's file: `ReplicatedPath` (layout 0's)
 // and `OpenEstate` of `EstatePartition`.
@@ -49,7 +49,6 @@ func TestOnlyTheRuntimeReachesAPartition(t *testing.T) {
 	for _, positive := range []string{
 		`node.OpenPartition(ctx, f)`,
 		`s.db.ClosePartition(name)`,
-		`node.DropPartition(ctx, f)`,
 		`names := node.OpenPartitions()`,
 		`part, err := node.PartitionDB(name)`,
 		`r := node.PartitionHandle(name).Reader()`,
@@ -167,7 +166,6 @@ func reachAllowanceFor(file string) (string, bool) {
 var partitionReachMethods = map[string]int{
 	"OpenPartition":   2,
 	"ClosePartition":  1,
-	"DropPartition":   2,
 	"OpenPartitions":  0,
 	"PartitionDB":     1,
 	"PartitionHandle": 1,

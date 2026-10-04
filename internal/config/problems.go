@@ -662,10 +662,9 @@ func (b *Bootstrap) Warnings() []Warning {
 	// fixed few members; a fleet that grows past them adds leaves.
 	//
 	// A WARNING RATHER THAN A REFUSAL: the fleet works, it only pays for
-	// consensus nothing is bought with. And under the single-file layout a
-	// node that holds data is a member, so a fleet of more than five data
-	// nodes has no other shape yet — the warning says so rather than
-	// recommending one this build refuses.
+	// consensus nothing is bought with. And a node that holds data is always
+	// a member, so a fleet of more than five data nodes has no other shape —
+	// the warning says so rather than recommending one this build refuses.
 	if kind := b.BrokerKind(); kind == placement.BrokerMember {
 		if others := len(b.Stream.Cluster.members().Others); others > MaxStreamReplicas-1 {
 			out = append(out, advisory(field("stream.cluster.peers"), fmt.Sprintf(

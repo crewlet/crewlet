@@ -709,14 +709,10 @@ func (d DomainGate) landedNowhere(at statelog.Position, who string) string {
 type NodeGate struct {
 	// logs is every identity-claiming log the gesture concerns AT THE
 	// GESTURE ([countedGateLogs]), each with this node's writer or the route
-	// to a node that writes it:
-	// looked up at every call rather than captured when the gate was
-	// built, because the logs a node runs change while it runs
-	// ([stateLog.startLogs], [stateLog.stopLogs]). A captured set wrote
-	// through the publisher of a log that had stopped — waiting, for the
-	// whole [GateBudget], on a runner that no longer applies — and never
-	// reached a log started after the gate was built, which the trim then
-	// went on counting the evicted node on.
+	// to a node that writes it: asked at every call rather than fixed when
+	// the gate was built, because the logs an eviction concerns are the ones
+	// the named node is COUNTED on, which is a reading of the fleet at the
+	// gesture ([stateLog.countedOnLogs]).
 	logs func(ctx context.Context, node string, readmit bool) ([]gateLog, error)
 
 	// live lists the nodes holding a presence lease, which an eviction is

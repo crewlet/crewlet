@@ -12,9 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// The layouts these tests read. The domain names are the three domains'
-// Name()s, which this package cannot import; internal/engine's own tests hold
-// its LayoutZero and DefaultLayoutOne against the registered domains.
+// The layouts these tests read. The domain names are the domains' Name()s,
+// which this package cannot import; internal/engine's own tests hold its
+// LayoutZero against the registered domains.
 func layoutZero() statelog.Layout {
 	return statelog.Layout{Number: 0, Spaces: []statelog.SpaceLayout{
 		{Space: statelog.SpaceEstate, Partitions: 1, Domains: []string{"tracker", "vectors", "pages"}},

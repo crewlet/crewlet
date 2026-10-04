@@ -787,7 +787,7 @@ func TestTheLoopsScopeIsWhatThisNodeRunsAndKeeps(t *testing.T) {
 	}
 	scopeOf := func(c partitionAnswers) snapshotScope {
 		s := &stateLog{run: t.Context(), layout: layout, holding: statelog.ServesOnly(), copies: c}
-		s.logs.Store((&logSet{}).with(layout, runs))
+		s.logs = newLogSet(layout, runs)
 		return s.keptPartitions()
 	}
 	stale := errors.New("the estate view is stale")
