@@ -359,17 +359,12 @@ type Task struct {
 
 	// FiledUnit is IMMUTABLE and is a RECORD OF WHAT WAS TRUE: nothing
 	// rewrites it, and it may legitimately name a unit the chart no longer
-	// has, or a spelling it no longer uses.
+	// has.
 	//
 	// WHAT A WRITE STORES IS THE UNIT'S KEY — `org.Unit.Key`, resolved
 	// through [Units] by whoever holds the chart — so a rename does not
-	// move the work. WHAT A READ MATCHES IS BOTH OF THE UNIT'S SPELLINGS,
-	// through [unitSpellings], and that is the whole repair for the rows
-	// already written: these are REPLICATED rows derived from an ordered
-	// log, so nothing may rewrite them in place, and a repair record per
-	// task would rewrite history to say a team was called something it was
-	// not. The rows stay as they were written, the stored form is the key
-	// from here on, and every reader resolves the set.
+	// move the work, and a read resolves what it was asked for to the same
+	// key ([unitKeys]).
 	FiledUnit string `json:"filed_unit,omitempty"`
 	// RoutingUnit is the mutable half — whose lead hears about this task
 	// NOW — and is the only unit field any write touches. It takes the
@@ -1145,10 +1140,7 @@ type Project struct {
 	// it one, its name where it did not) rather than its display name,
 	// because a task filed into this project takes its own filed unit from
 	// here and never rewrites it. A reader renders the key back to the
-	// team's current name through [Units], and being chart-owned this
-	// column re-settles on the current key at the next chart apply — which
-	// is why a company that adds an id holds the older spelling only in
-	// TASK rows, and only those need reading through [unitSpellings].
+	// team's current name through [Units].
 	Name    string `json:"name"`
 	Purpose string `json:"purpose,omitempty"`
 	Unit    string `json:"unit,omitempty"`

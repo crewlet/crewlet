@@ -264,8 +264,7 @@ is **marked** on each of those rather than printed as a name — it is a team
 that has left the chart, which is something to correct.
 
 **A team is one column whichever way you name it**: every spelling above
-resolves to the team, and a filter or a board's `unit` axis matches the work
-filed under its key and its name alike — see
+resolves to the team's key, which is what the work is filed under — see
 [what a board groups on](#what-a-board-groups-on).
 
 **Changing a team's key does not rewrite the work already filed.** A task's
@@ -743,13 +742,11 @@ each column into swimlanes:
 Every axis draws the absent value as its own labelled column — "nobody is
 assigned" is a question a board answers, not a row it hides.
 
-**`unit` and `routing_unit` group on the team, not on the string.** A unit
-answers to its key and to its name, and a filed unit is a record of what was
-true when it was written, so a row can hold either. The team is still **one
-column**, headed with its current name and counting what is stored under
-both. Loading that column further takes either spelling — `group=eng` and
-`group=Engineering` reach the same one. A stored unit the chart no longer has keeps its own column under the
-literal the items hold, marked as a team that has left the chart.
+**`unit` and `routing_unit` group on the team's key**, which is what every
+write stores, and each column is headed with the team's current name. Loading
+a column further takes either spelling — `group=eng` and `group=Engineering`
+reach the same one. A stored unit the chart no longer has keeps its own column
+under the literal the items hold, marked as a team that has left the chart.
 
 **`due:bucket` is the one that reads a calendar rather than a column.** Its six
 bands are the question somebody opens their own work to ask:
