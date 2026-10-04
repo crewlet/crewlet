@@ -1906,6 +1906,19 @@ test("a person's settings carry their contacts and no model, budget or credentia
   expect(screen.queryByText("slack user id")).toBeNull();
 });
 
+// A CONTACT IS OPTIONAL: a person with none is reached through the dashboard,
+// and the tab says that rather than that one is required.
+test("a person with no contact identity is said to be reached through the dashboard only", async () => {
+  const document = structuredClone(DOCUMENT);
+  delete document.roles![1]!.contact;
+  mount("#/agents/seats/jane?tab=settings", { answers: { viewer: OPERATOR, config: document } });
+  expect(
+    await screen.findByText(
+      "No contact identity is declared, so this person is reached through the dashboard only: activity on Slack, GitHub or the tracker is not attributed to them.",
+    ),
+  ).toBeTruthy();
+});
+
 test("a contact key is labelled by the table, and one a newer engine added in sentence case", () => {
   expect(contactLabel("github_login")).toBe("GitHub login");
   expect(contactLabel("teams_user_id")).toBe("Teams user id");
