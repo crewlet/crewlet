@@ -120,8 +120,8 @@ the hierarchy fields (`manages`, unit `lead`). Every runtime-only field is
 **rejected at validation time**, and the refusal names each one as it is
 written: `llm` and every per-phase `llm_*` chain, `sandbox`, `token_budget`,
 `workers`, `learning_enabled`, `schedules`, `integrations.slack` and
-`integrations.mattermost` (a seat's own chat app), `integrations.jira` and
-`integrations.confluence` (the project and space a seat owns), `mcp_env` and
+`integrations.mattermost` (a seat's own chat app), `project` and `space`
+(the tracker project and knowledge space a seat owns), `mcp_env` and
 `behavioral_guidelines`. A seat's own GitHub App (`integrations.github`) is
 refused on a human seat as well, because a person acts on GitHub as their
 own `contact.github_login`. That refusal is an [admission
