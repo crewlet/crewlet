@@ -71,10 +71,9 @@ func DutyTTL(tick time.Duration) time.Duration {
 // restarted node tends to get its own duty back.
 //
 // The claim is UNGATED against the protocol floor, deliberately, and for the
-// reason coord's own doc gives: a duty record left at an older protocol by a
-// build that predates the gate would block every seat claim fleet-wide the
-// moment the version moved. A duty claim carries this build's protocol, so it
-// never becomes the thing that blocks.
+// reason coord's own doc gives ([coord.AcquireOptions.Ungated]): the gate is
+// about what holding a SEAT means, and gating a duty claimed per tick would
+// stop it for the length of a rolling upgrade for nothing.
 //
 // TryAcquire doubles as a renew for the current owner and keeps its epoch, so
 // the per-tick claim is one store round trip and the holder stays the holder

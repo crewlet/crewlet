@@ -415,8 +415,7 @@ type Backend interface {
 	// Refuses — the same (nil, nil) — while any live lease is held at a
 	// lower protocol, unless Ungated. Ask FleetProtocolFloor once per
 	// claim sweep to tell a protocol refusal apart from a peer simply
-	// holding the resource. A duty claim may also be refused, Ungated or
-	// not, during the storage-layout upgrade [MaxDutyTTL] describes.
+	// holding the resource.
 	//
 	// A duty (a `worker:` resource) is honoured at any TTL up to
 	// [MaxDutyTTL] whatever TTL the backend's seat leases run on, and
