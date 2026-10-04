@@ -11,8 +11,8 @@ import (
 
 // How this binary's node clients render a refusal.
 //
-// ONE RENDERER, because there are five of them — [configClient.refusal],
-// [secretsClient.refusal], [nodeError], [chartRefusal] and [iamRefusal] —
+// ONE RENDERER, because there are four of them — [configClient.refusal],
+// [secretsClient.refusal], [nodeError] and [iamRefusal] —
 // each talking to the same [httpjson] surface, and the rule they share is not
 // the interesting part of any of them. Written twice and about to be written a
 // third time, it was already asymmetric: the node client decoded `error`
@@ -28,7 +28,7 @@ import (
 // not reach this verb — and the body names the grants that would have. The
 // node client answered both with "the node refused the token: check it
 // against the api.auth.tokens entry you meant to use", which sent an operator
-// whose token works to look for a typo in it, and the other four rendered the
+// whose token works to look for a typo in it, and the other three rendered the
 // 403 as a bare code or a bare reason with the grants dropped: the one fact
 // that says whom to ask for what.
 //
