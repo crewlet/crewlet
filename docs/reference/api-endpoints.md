@@ -889,7 +889,7 @@ and redeems with `POST /auth/invite/{id}` carrying it in the body. It used to be
 the JSON route itself, which a person clicking it in their mail saw as a JSON
 document with no form.
 
-`POST /iam/invitations` takes `{email, grants, colleague, seat, reason}`.
+`POST /iam/invitations` takes `{email, grants, seat, reason}`.
 `seat` names a seat redeeming the invitation **binds** the person to — by any
 handle it answers to — and must be a **human** seat nobody is bound to: a
 seat the running company does not hold and an agent's seat are `400`, and one
