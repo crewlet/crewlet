@@ -9,7 +9,7 @@
  * in does not land on the screen that could not be drawn.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { CHUNKS, loadChunk } from "./lazyScreen.ts";
 import { App } from "./App.tsx";

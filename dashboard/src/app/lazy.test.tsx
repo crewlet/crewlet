@@ -9,7 +9,7 @@
  * `boundaries.test.tsx`.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   CHUNKS,
@@ -76,23 +76,6 @@ describe("which chunk draws a screen", () => {
     expect(item.resolved && chunkOf(item)).toBe("work");
   });
 
-  // THE SIGN-IN SCREENS ARE A CHUNK OF THEIR OWN, and the one the idle
-  // prefetch leaves alone: a reader who is signed in never needs it, and a
-  // reader who does is already on it. Its own screens and the user block's
-  // two proof dialogs are all it exports — a static import of any of them
-  // from the frame would put the sign-in code back in every reader's entry.
-  test("a sign-in screen is drawn by the sign-in chunk, which nothing prefetches", async () => {
-    for (const path of [["login"], ["enrol"], ["invite", "id.secret"]]) {
-      const where = resolve(path);
-      expect(where.resolved && chunkOf(where), path.join("/")).toBe("signin");
-    }
-    expect(CHUNKS).not.toContain("signin");
-    const module = await loadChunk("signin");
-    expect(Object.keys(module).sort()).toEqual(
-      ["AuthenticatorDialog", "Enrol", "Invite", "RecoveryCodesDialog", "SignIn"].sort(),
-    );
-  });
-
   // Every place the sidebar and the palette can send a reader has a chunk that
   // loads — a `routes/<workspace>/index.ts` that stopped exporting a screen
   // would compile (the dispatch picks by name) and fail here.
@@ -134,46 +117,6 @@ describe("a chunk that does not load", () => {
     await expect(loadChunk("spend")).rejects.toBeInstanceOf(ChunkLoadError);
     await expect(loadChunk("spend")).resolves.toHaveProperty("Spend");
     expect(calls).toBe(2);
-  });
-
-  // REACT DELIVERS A REJECTION BY REPLAYING THE RENDER THAT SUSPENDED, and the
-  // replay asks the cache again. Forgotten as it failed, the load was fetched
-  // a second time for nobody — and React, handed a promise it had never seen,
-  // said the screen made an uncached promise. Kept until the boundary has
-  // drawn it, it is one request; drawn, Try again really asks again.
-  test("a screen waited on is one request, and forgotten once its failure is drawn", async () => {
-    // React reports the failure its boundary caught, which this case causes on
-    // purpose — and nothing else may be said (`test/console.ts`).
-    const said: unknown[][] = [];
-    const quiet = vi.spyOn(console, "error").mockImplementation((...args) => said.push(args));
-    let calls = 0;
-    let fail = true;
-    serve("spend", () => {
-      calls++;
-      return fail
-        ? Promise.reject(new TypeError("Failed to fetch dynamically imported module"))
-        : Promise.resolve({ Spend: () => <p>the spend screen</p> });
-    });
-    const Spend = lazyScreen("spend", (m) => m.Spend);
-    await act(async () => {
-      render(
-        <ScreenBoundary resetKey="spend">
-          <Spend />
-        </ScreenBoundary>,
-      );
-    });
-    expect(await screen.findByText("The Spend screens could not be loaded")).toBeDefined();
-    expect(calls).toBe(1);
-    fail = false;
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    });
-    expect(await screen.findByText("the spend screen")).toBeDefined();
-    expect(calls).toBe(2);
-    quiet.mockRestore();
-    expect(said.map((args) => args.find((a) => a instanceof ChunkLoadError))).toEqual([
-      expect.any(ChunkLoadError),
-    ]);
   });
 
   test("while a load that arrived is fetched once, however often it is asked", async () => {

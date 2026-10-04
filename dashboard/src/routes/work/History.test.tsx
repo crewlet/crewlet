@@ -15,7 +15,7 @@
  * for somebody else.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { History, HistoryView } from "./History.tsx";
@@ -24,13 +24,6 @@ import { Router } from "~/app/router.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkActivityRecord } from "~/protocol/index.ts";
-import {
-  CLAIMANT,
-  CLAIMANT_HREF,
-  DUPLICATE,
-  DUPLICATE_HREF,
-  SHARED_KEY,
-} from "~/test/keyCollision.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
@@ -158,10 +151,10 @@ test("a write an operator made is marked as one", async () => {
       records: [
         record({ id: "r1", actor: "founder", actor_kind: "operator" }),
         record({ id: "r2", actor: "ada", actor_kind: "agent" }),
-        // A PERSON THE DIRECTORY BINDS TO A SEAT writes AS the seat, so the
-        // row names them as every other screen does, and keeps the
-        // credential the write came through on the title.
-        record({ id: "r3", actor: "ada", actor_kind: "human", operator_id: "pat:0193a8" }),
+        // A PERSON THE DIRECTORY BINDS TO A SEAT writes AS the seat
+        // (`iam.ActorFor`), and the credential they wrote through rides on
+        // the title.
+        record({ id: "r3", actor: "ada", actor_kind: "human", operator_id: "pat:t-1" }),
       ],
       complete: true,
     },
@@ -177,10 +170,8 @@ test("a write an operator made is marked as one", async () => {
   // AN AGENT'S WRITE IS THE ORDINARY CASE, so only the others are marked.
   expect(who[1]).not.toContain("agent");
   expect(who[2]).toContain("Ada Okonkwo");
-  expect(who[2]).toContain("human");
-  expect(rows[2]!.querySelector("[title]")?.getAttribute("title")).toBe(
-    "Written through pat:0193a8",
-  );
+  expect(who[2]).not.toContain("pat:t-1");
+  expect(rows[2]!.querySelector("[title]")?.getAttribute("title")).toBe("Written through pat:t-1");
 });
 
 // A HANDLE IS THE DATABASE'S WORD FOR A PERSON, resolved through the chart
@@ -336,43 +327,6 @@ test("a window with nothing in it says so and offers the way out", async () => {
   expect(screen.getByText(/Widen the window/)).toBeTruthy();
 });
 
-// NOTHING HAPPENED AND NOTHING COULD BE READ ARE OPPOSITE FACTS. A node
-// holding records this build cannot decode answers an empty window too, and
-// "Nothing changed" over that told a reader their company had been quiet when
-// the changes were there and unread.
-test("an empty window this node could not read is not a quiet one", async () => {
-  serving({
-    work_activity: {
-      records: [],
-      complete: false,
-      incomplete: {
-        records: 3,
-        version: 14,
-        from: { seq: 41, generation: 1, stream: "CREWLET_WORK_LOG" },
-        scope: ["project:ENG"],
-      },
-    },
-  });
-  mount();
-  await waitFor(() => expect(screen.getByText("No change here could be read")).toBeTruthy());
-  expect(screen.queryByText("Nothing changed in this window")).toBeNull();
-  expect(screen.getByText(/3 record\(s\) this build cannot read/)).toBeTruthy();
-  expect(screen.getByText(/not a refresh/)).toBeTruthy();
-});
-
-// AND A NODE BEHIND ITS LOG says how far it applied, in the position words
-// every coverage surface uses, rather than that nothing happened.
-test("an empty window on a node behind its log says how far it has applied", async () => {
-  serving({
-    work_activity: { records: [], complete: true, applied_through: 41, log_seq: 88 },
-  });
-  mount();
-  await waitFor(() =>
-    expect(screen.getByText("Nothing in this window has been applied here")).toBeTruthy(),
-  );
-  expect(screen.getByText(/applied through 41 of 88/)).toBeTruthy();
-});
-
 /** An answer from a node that is behind, which is the only state coverage draws in. */
 const behind = (records: WorkActivityRecord[]) => ({
   records,
@@ -453,12 +407,21 @@ test("a queue somebody else's is named as theirs", async () => {
   serving({
     work_activity: { records: [prioritised()], complete: true },
     viewer: {
-      login: "ada.okonkwo",
-      grants: ["state:read"],
+      login: "op-1",
+      grants: [
+        "config:read",
+        "config:write",
+        "secrets:write",
+        "fleet:operate",
+        "people:manage",
+        "audit:read",
+        "state:read",
+        "work:write",
+        "knowledge:write",
+      ],
       handle: "ada",
       owner: "ada",
       name: "Ada Okonkwo",
-      kind: "human",
     },
   });
   const { container } = mount();
@@ -473,12 +436,21 @@ test("a reader looking at their own queue is still addressed as themselves", asy
   serving({
     work_activity: { records: [prioritised()], complete: true },
     viewer: {
-      login: "sam.swe",
-      grants: ["state:read"],
+      login: "op-2",
+      grants: [
+        "config:read",
+        "config:write",
+        "secrets:write",
+        "fleet:operate",
+        "people:manage",
+        "audit:read",
+        "state:read",
+        "work:write",
+        "knowledge:write",
+      ],
       handle: "agent-swe",
       owner: "agent-swe",
       name: "SWE",
-      kind: "human",
     },
   });
   const { container } = mount();
@@ -504,61 +476,39 @@ test("the bar says how many are shown and offers the older ones", async () => {
   await waitFor(() => expect(screen.getByText(/Showing the latest 2/)).toBeTruthy());
 });
 
-// AND AN UNBOUND READER'S QUEUE IS KEPT UNDER THEIR LOGIN, which is the name a
-// person subject carries for them — compared against the seat handle alone,
-// a reader the directory binds to no seat was told about their own queue in
-// the third person.
-test("an unbound reader's own queue, kept under their login, is addressed to them", async () => {
-  serving({
-    work_activity: {
-      records: [{ ...prioritised(), subject_id: "jane.doe" }],
-      complete: true,
-    },
-    viewer: {
-      login: "jane.doe",
-      grants: ["state:read"],
-      handle: "",
-      owner: "jane.doe",
-      name: "",
-      kind: "",
-    },
-  });
-  const { container } = mount();
-  await waitFor(() =>
-    expect(container.querySelector(".work-log-what")?.textContent).toContain("your priorities"),
-  );
-});
-
-// A DUPLICATE'S HISTORY LEADS TO THE DUPLICATE.
-//
-// A change is drawn under its task's key, and a key two tasks hold opens the
-// one that claimed it first — so every row of the duplicate's history linked
-// to its claimant, and the log is the one place a reader goes to find out what
-// happened to it. The engine says which key opens another task beside the key,
-// and the flagged one's row goes by the task's id.
-test("two tasks under one key each link their own history rows", async () => {
+// THE CHART EPOCH IS ENGINE BOOKKEEPING. A config activation re-declares every
+// project, and the only thing that moves is a counter — so the log printed
+// "Chart epoch: 1790538626 → 1790538628" once per project per apply. A run of
+// them is one quiet line by the engine, and the number is never shown.
+test("a run of chart re-applications is one quiet line with no epoch in it", async () => {
+  const epoch = (id: string, project: string) =>
+    record({
+      id,
+      kind: "project_updated",
+      actor: "",
+      actor_kind: "system",
+      subject_kind: "project",
+      subject_id: project,
+      subject_key: project,
+      project,
+      fields: { chart_epoch: { from: "1790538626", to: "1790538628" } },
+    });
   serving({
     work_activity: {
       records: [
-        record({
-          id: "r2",
-          subject_id: DUPLICATE,
-          subject_key: SHARED_KEY,
-          subject_key_collision: true,
-        }),
-        record({ id: "r1", subject_id: CLAIMANT, subject_key: SHARED_KEY }),
+        epoch("e1", "ENG"),
+        epoch("e2", "PROD"),
+        epoch("e3", "LEAD"),
+        record({ id: "r1" }),
+        epoch("e4", "ENG"),
       ],
       complete: true,
     },
   });
   const { container } = mount();
-  await waitFor(() => expect(container.querySelectorAll(".work-log-key a").length).toBe(2));
-  const links = [...container.querySelectorAll(".work-log-key a")].map((a) => [
-    a.textContent,
-    a.getAttribute("href"),
-  ]);
-  expect(links).toEqual([
-    [SHARED_KEY, DUPLICATE_HREF],
-    [SHARED_KEY, CLAIMANT_HREF],
-  ]);
+  await waitFor(() => expect(screen.getByText("Org chart re-applied to 3 projects")).toBeTruthy());
+  // A RUN BROKEN BY A REAL CHANGE IS TWO RUNS: lines never move past each other.
+  expect(screen.getByText("Org chart re-applied to ENG")).toBeTruthy();
+  expect(container.querySelectorAll(".work-log-row")).toHaveLength(3);
+  expect(container.textContent).not.toMatch(/epoch|1790538626/i);
 });

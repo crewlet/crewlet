@@ -22,18 +22,15 @@ import {
   GripVerticalGlyph,
   UserGlyph,
 } from "@crewlethq/icons/glyphs";
-// A task TYPE's mark is named by the company's own type table as a value, and
-// the design system's glyphs are components, so the name -> drawing lookup is
-// `~/ui/glyph.tsx`'s `Mark` — one change there moves every caller at once.
+// STILL OURS: a task TYPE's mark is named by the company's own type table as a
+// value, and uilet's glyphs are components. The name -> drawing lookup stays in
+// `~/ui/Icon.tsx`, which is where one change moves every caller at once.
 import { Mark } from "~/ui/glyph.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
 import { rowPeekHandler } from "~/app/frame/DetailRail.tsx";
-import { ClockText } from "~/app/frame/cells.tsx";
-import { useClockReading } from "~/lib/clock.ts";
 import {
-  currentYear,
   fmtCount,
-  fmtDateCompactIn,
+  fmtDateCompact,
   fmtDateTime,
   fmtExact,
   humanize,
@@ -47,9 +44,7 @@ import { GENERATION_STRIDE } from "~/contract/positions.ts";
 import type { CardLive, SeatKind, SeatRing } from "~/lib/seats.ts";
 import {
   DEFAULT_TYPE,
-  checklistTask,
   fmtMinutes,
-  itemAddress,
   statusLabel,
   statusShape,
   STATUS_TONE,
@@ -307,15 +302,8 @@ export function Assignee({
  * derives it against the company's day start, and a browser re-deriving it
  * from its own midnight is how one screen shows a task as overdue and another
  * does not.
- *
- * IT READS THE YEAR, NOT THE SECOND. Whether the year is drawn is the only
- * thing the mark asks of the clock, so it subscribes to that and renders when
- * the year turns — handed the screen's `now`, every row of every list and
- * board that draws one rendered once a second for a value that moves once a
- * year.
  */
-export function DueMark({ due, overdue }: { due?: string; overdue?: boolean }) {
-  const thisYear = useClockReading(currentYear);
+export function DueMark({ due, overdue, now }: { due?: string; overdue?: boolean; now: number }) {
   if (!due) return null;
   return (
     // THE FULL INSTANT IS ON THE TITLE, always. What is DRAWN is the
@@ -323,7 +311,7 @@ export function DueMark({ due, overdue }: { due?: string; overdue?: boolean }) {
     // row is how the one date not in this year goes unnoticed.
     <span className={cx("work-due", overdue && "overdue")} title={fmtDateTime(due)}>
       <CalendarGlyph size="xs" />
-      {fmtDateCompactIn(due, thisYear)}
+      {fmtDateCompact(due, now)}
       {overdue && <span className="sr-only">— overdue</span>}
     </span>
   );
@@ -484,10 +472,12 @@ export function fitTags(
  */
 function CardFoot({
   row,
+  now,
   tagName,
   omit,
 }: {
   row: WorkSummary;
+  now: number;
   tagName?: (slug: string) => string;
   omit: ReadonlySet<CardFact>;
 }) {
@@ -556,7 +546,7 @@ function CardFoot({
           <span className="sr-only">{`${plural(rest.length, "more label")}: ${rest.join(", ")}`}</span>
         ) : null}
       </Tag>
-      {!omit.has("due") && <DueMark due={row.due} overdue={row.overdue} />}
+      {!omit.has("due") && <DueMark due={row.due} overdue={row.overdue} now={now} />}
       {/* WHAT THIS TASK HOLDS UP — the live tasks waiting on it, which is
           the other end of `blocked`: the reason to pick THIS card first. */}
       {row.dependents_count ? (
@@ -603,6 +593,7 @@ export function WorkCard({
   href,
   onOpen,
   selected,
+  now,
   chrome = {},
   live,
   waiting,
@@ -616,6 +607,7 @@ export function WorkCard({
   href: string;
   onOpen?: () => void;
   selected?: boolean;
+  now: number;
   chrome?: RowChrome;
   /** The descriptive facts the reader put away — see [CARD_FACTS]. */
   omit?: ReadonlySet<CardFact>;
@@ -663,24 +655,20 @@ export function WorkCard({
         />
       </div>
       <div className="work-card-title clamp">{row.title}</div>
-      {hasFootMarks(row, omit) && <CardFoot row={row} tagName={tagName} omit={omit} />}
+      {hasFootMarks(row, omit) && <CardFoot row={row} now={now} tagName={tagName} omit={omit} />}
       {live ? (
         <div className="work-card-live" data-tone="working">
           <i className="dot info" aria-hidden="true" />
           <span className="truncate">
             {chrome.seatName?.(live.handle) ?? live.handle} · {live.doing}
           </span>
-          <span className="work-card-age">
-            <ClockText read={(now) => shortAge(live.since, now)} />
-          </span>
+          <span className="work-card-age">{shortAge(live.since, now)}</span>
         </div>
       ) : waiting ? (
         <div className="work-card-live" data-tone="needs">
           <CircleAlertGlyph size="xs" aria-hidden="true" />
           <span className="truncate">Waiting on you · coding run parked</span>
-          <span className="work-card-age">
-            <ClockText read={(now) => shortAge(waiting.since, now)} />
-          </span>
+          <span className="work-card-age">{shortAge(waiting.since, now)}</span>
         </div>
       ) : null}
     </a>
@@ -700,6 +688,7 @@ export function WorkRow({
   href,
   onOpen,
   selected,
+  now,
   chrome = {},
   keyOf,
   ordinal,
@@ -711,6 +700,7 @@ export function WorkRow({
   href: string;
   onOpen?: () => void;
   selected?: boolean;
+  now: number;
   chrome?: RowChrome;
   /** A blocker's KEY from its id, where this list holds its row — see
    *  [blockedBy]. */
@@ -781,7 +771,7 @@ export function WorkRow({
         )}
       </span>
       <span className="work-cell work-cell-due">
-        <DueMark due={row.due} overdue={row.overdue} />
+        <DueMark due={row.due} overdue={row.overdue} now={now} />
       </span>
       <span className="work-cell work-cell-type">
         <TypeIcon type={row.type} types={chrome.types} />
@@ -790,7 +780,7 @@ export function WorkRow({
         <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
       </span>
       <span className="work-row-when" title={fmtDateTime(row.updated)}>
-        <ClockText read={(now) => relTime(row.updated, now)} />
+        {relTime(row.updated, now)}
       </span>
     </a>
   );
@@ -839,6 +829,7 @@ export function blockedBy(row: WorkSummary, keyOf?: (id: string) => string | und
  */
 export function RowList({
   rows,
+  now,
   chrome,
   hrefOf,
   onOpen,
@@ -846,10 +837,10 @@ export function RowList({
   ordinals,
 }: {
   rows: WorkSummary[];
+  now: number;
   chrome?: RowChrome;
   hrefOf: (row: WorkSummary) => string;
   onOpen?: (row: WorkSummary) => void;
-  /** The ADDRESS of the task the rail holds — see `itemAddress`. */
   selected?: string;
   /** Number each row by its place in `rows`, from 1. */
   ordinals?: boolean;
@@ -866,9 +857,10 @@ export function RowList({
         <WorkRow
           key={row.id}
           row={row}
+          now={now}
           chrome={chrome}
           href={hrefOf(row)}
-          selected={selected === itemAddress(row)}
+          selected={selected === row.key}
           onOpen={onOpen ? () => onOpen(row) : undefined}
           keyOf={(id) => keys.get(id)}
           ordinal={ordinals ? at + 1 : undefined}
@@ -885,87 +877,6 @@ export interface CoverageFacts {
   log_seq?: number;
   applied_through?: number;
   incomplete?: WorkIncomplete;
-}
-
-/*
- * THE WORDS AN ANSWER'S COVERAGE IS SAID IN, once, for every surface that says
- * it: the page's state bar, a panel's own banner and chips, and the audit,
- * which names the one source a shortfall belongs to. Written in each, the same
- * fact would have reached a reader in three phrasings, and the one that
- * drifted would read as a different state.
- *
- * THIS IS THE STATE LOG'S COVERAGE — whether the node that answered could
- * apply and decode everything its log holds — and NOT the fleet's: which
- * nodes answered a fan-out read is `contract/coverage.ts`, drawn by
- * `CoverageNote`. One answer can carry both and they say different things,
- * so neither borrows the other's words.
- */
-
-/** The lead of an answer that could not account for everything it was asked. */
-export const INCOMPLETE = "This answer is incomplete";
-
-/** What an incomplete answer means for its rows and counts. */
-export const INCOMPLETE_ROWS =
-  "Rows may be missing, rows that should have gone may still be here, and the counts were computed over what is shown.";
-
-/** " — 3 record(s) this build cannot read", or "" where the answer did not count them. */
-export function unreadable(incomplete: WorkIncomplete | undefined): string {
-  return incomplete ? ` — ${incomplete.records} record(s) this build cannot read` : "";
-}
-
-/** " Affected: project:ENG.", or "" where the answer named no scope. */
-export function affected(incomplete: WorkIncomplete | undefined): string {
-  return incomplete?.scope?.length ? ` Affected: ${incomplete.scope.join(", ")}.` : "";
-}
-
-/**
- * The record version this node could not read and what resolves it, or ""
- * where the answer did not say: a build that can read it, NOT A REFRESH, which
- * is the one remedy a reader of an incomplete answer reaches for first and the
- * one that changes nothing.
- */
-export function unreadableRemedy(incomplete: WorkIncomplete | undefined): string {
-  return incomplete
-    ? ` Record version ${incomplete.version}, from sequence ${incomplete.from.seq} — a build that can read it is what resolves this, not a refresh.`
-    : "";
-}
-
-/** What a node whose applied prefix stops short of its position is doing. */
-export const HOLDS_UNAPPLIED = "This node holds records it has not applied yet";
-
-/**
- * A packed log position as a person reads it: the sequence alone in the first
- * generation, where every log starts and almost all stay, and `generation:seq`
- * past it, so a re-anchored log says which generation it is in.
- *
- * `applied_through` and `log_seq` are packed — (generation × 2^40) + seq, by
- * the engine's own stride ([GENERATION_STRIDE]) — so they ORDER correctly with
- * a plain `<` across a re-anchor, and that comparison stays on the packed
- * values. What a person reads is not packed: printed raw, every position after
- * a log's first re-anchor was a thirteen-digit number ("applied through
- * 1099511627817 of 1099511627832") that names neither the generation nor how
- * far behind the node is.
- */
-export function positionWords(packed: number): string {
-  const generation = Math.floor(packed / GENERATION_STRIDE);
-  const seq = packed - generation * GENERATION_STRIDE;
-  return generation === 0 ? `${seq}` : `${generation}:${seq}`;
-}
-
-/** "applied through 41 of 88" for an answer whose node is behind its log, or null. */
-export function appliedThrough(facts: CoverageFacts | null | undefined): string | null {
-  if (facts?.applied_through === undefined || facts.log_seq === undefined) return null;
-  return facts.applied_through < facts.log_seq
-    ? `applied through ${positionWords(facts.applied_through)} of ${positionWords(facts.log_seq)}`
-    : null;
-}
-
-/** The chip for an answer served at a level this surface did not expect. */
-export const AGE_UNKNOWN = "age unknown";
-
-/** What [AGE_UNKNOWN] means, naming the level the answer was served at. */
-export function ageUnknown(level: string): string {
-  return `This node could not measure its own distance from the log, so this answer is a coherent point in its order with no statement about age (read level ${level})`;
 }
 
 /**
@@ -994,10 +905,22 @@ export function Coverage({ answer }: { answer?: CoverageFacts | null }) {
         // already owns that. The severity stays a WARNING rather than a
         // danger — the answer is usable, it just cannot account for
         // everything, which is precisely what the sentence says.
-        <Callout variant="warning" title={`${INCOMPLETE}${unreadable(answer.incomplete)}`}>
-          {INCOMPLETE_ROWS}
-          {affected(answer.incomplete)}
-          {unreadableRemedy(answer.incomplete)}
+        <Callout
+          variant="warning"
+          title={`This answer is incomplete${
+            answer.incomplete
+              ? ` — ${answer.incomplete.records} record(s) this build cannot read`
+              : ""
+          }`}
+        >
+          Rows may be missing, rows that should have gone may still be here, and the counts were
+          computed over what is shown.
+          {answer.incomplete?.scope?.length
+            ? ` Affected: ${answer.incomplete.scope.join(", ")}.`
+            : ""}
+          {answer.incomplete
+            ? ` Record version ${answer.incomplete.version}, from sequence ${answer.incomplete.from.seq} — a build that can read it is what resolves this, not a refresh.`
+            : ""}
         </Callout>
       )}
       <CoverageTags answer={answer} />
@@ -1052,8 +975,13 @@ export function CoverageTags({ answer }: { answer?: CoverageFacts | null }) {
   return (
     <span className="work-coverage">
       {odd && (
-        <Tag variant="warning" appearance="outline" size="xs" title={ageUnknown(level)}>
-          {AGE_UNKNOWN}
+        <Tag
+          variant="warning"
+          appearance="outline"
+          size="xs"
+          title={`This node could not measure its own distance from the log, so this answer is a coherent point in its order with no statement about age (read level ${level})`}
+        >
+          age unknown
         </Tag>
       )}
       {/* APPLIED_THROUGH BESIDE SEQ, so a node holding something it cannot
@@ -1061,12 +989,39 @@ export function CoverageTags({ answer }: { answer?: CoverageFacts | null }) {
           read level and an apply position are facts about the answer, not
           states of it, and lag alone is never an alarm. */}
       {behind !== null && (
-        <Tag appearance="outline" size="xs" title={HOLDS_UNAPPLIED}>
+        <Tag appearance="outline" size="xs" title="This node holds records it has not applied yet">
           {behind}
         </Tag>
       )}
     </span>
   );
+}
+
+/**
+ * A packed log position as a person reads it: the sequence alone in the first
+ * generation, where every log starts and almost all stay, and `generation:seq`
+ * past it, so a re-anchored log says which generation it is in.
+ *
+ * `applied_through` and `log_seq` are packed — (generation × 2^40) + seq, by
+ * the engine's own stride ([GENERATION_STRIDE]) — so they ORDER correctly with
+ * a plain `<` across a re-anchor, and that comparison stays on the packed
+ * values. What a person reads is not packed: printed raw, every position after
+ * a log's first re-anchor was a thirteen-digit number ("applied through
+ * 1099511627817 of 1099511627832") that names neither the generation nor how
+ * far behind the node is.
+ */
+export function positionWords(packed: number): string {
+  const generation = Math.floor(packed / GENERATION_STRIDE);
+  const seq = packed - generation * GENERATION_STRIDE;
+  return generation === 0 ? `${seq}` : `${generation}:${seq}`;
+}
+
+/** "applied through 41 of 88" for an answer whose node is behind its log, or null. */
+export function appliedThrough(facts: CoverageFacts | null | undefined): string | null {
+  if (facts?.applied_through === undefined || facts.log_seq === undefined) return null;
+  return facts.applied_through < facts.log_seq
+    ? `applied through ${positionWords(facts.applied_through)} of ${positionWords(facts.log_seq)}`
+    : null;
 }
 
 /**
@@ -1088,6 +1043,7 @@ export function TaskBlock({
   hint,
   total,
   rows,
+  now,
   chrome,
   hrefOf,
 }: {
@@ -1101,6 +1057,7 @@ export function TaskBlock({
    */
   total: WorkClaimTotal | undefined;
   rows: WorkSummary[];
+  now: number;
   chrome?: RowChrome;
   /** Where a row goes. The screen owns the address. */
   hrefOf: (row: WorkSummary) => string;
@@ -1110,11 +1067,11 @@ export function TaskBlock({
     <Card padding="none">
       <Card.Header
         subtitle={hint}
-        count={total ? `${fmtExact(total.total)}${total.capped ? "+" : ""}` : undefined}
+        count={total ? `${total.total.toLocaleString()}${total.capped ? "+" : ""}` : undefined}
       >
         <Card.Title>{title}</Card.Title>
       </Card.Header>
-      <RowList rows={rows} chrome={chrome} hrefOf={hrefOf} />
+      <RowList rows={rows} now={now} chrome={chrome} hrefOf={hrefOf} />
     </Card>
   );
 }
@@ -1137,18 +1094,15 @@ export function ChecklistClaims({
   hrefOf,
 }: {
   rows: readonly WorkChecklistRow[];
-  /**
-   * Where a task goes, by its ADDRESS (`itemAddress`) — the key, unless
-   * another task claimed that key first. The screen owns the route.
-   */
-  hrefOf: (address: string) => string;
+  /** Where a task key goes. The screen owns the address. */
+  hrefOf: (key: string) => string;
 }) {
   if (rows.length === 0) return null;
   return (
     <div className="col">
       {rows.map((item) => (
         <div key={`${item.task}:${item.item}`} className={cx("work-check", item.done && "done")}>
-          <a className="mono t-link" href={hrefOf(itemAddress(checklistTask(item)))}>
+          <a className="mono t-link" href={hrefOf(item.task_key)}>
             {item.task_key}
           </a>
           <span className="work-check-name">{item.name}</span>

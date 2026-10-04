@@ -33,15 +33,16 @@ import { BrainGlyph, CircleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { seatKindKey } from "~/app/crumbs.ts";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
-import { ClockText, DateCell, NumberCell, SeatLabel } from "~/app/frame/cells.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DateCell, NumberCell, SeatLabel } from "~/app/frame/cells.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DiaryCard, EpisodesCard, heldWords } from "~/components/memory.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { handleLabel, indexOrg, seatByAddress, type OrgIndex } from "~/lib/seats.ts";
+import { handleLabel, indexOrg, type OrgIndex } from "~/lib/seats.ts";
+import { useNow } from "~/lib/clock.ts";
 import { plural, relTime, tsKey } from "~/lib/format.ts";
 import type { MemoryOverviewSeat } from "~/contract/memory.ts";
 
@@ -60,102 +61,21 @@ export function uncounted(row: MemoryOverviewSeat): string | null {
   return null;
 }
 
-/** A seat's name by its address — a handle a rename retired still finds it. */
 function nameOf(index: OrgIndex, handle: string): string {
-  return seatByAddress(index, handle)?.name || handle;
-}
-
-/** A row's count, or why it carries none. */
-function count(row: MemoryOverviewSeat, value: number) {
-  const why = uncounted(row);
-  return why ? <EmptyValue label={why} /> : <NumberCell value={value} />;
-}
-
-/**
- * The diary list's columns. They read the chart's names and kinds and nothing
- * else on the screen, so they are held on it (`useMemo` below): every row is
- * memoised on this list, and one built inline drew every agent on every poll.
- */
-function diaryColumns(index: OrgIndex): GridColumn<MemoryOverviewSeat>[] {
-  return [
-    {
-      key: "agent",
-      header: "Agent",
-      floor: "170px",
-      phoneLead: true,
-      sortValue: (r) => nameOf(index, r.handle).toLowerCase(),
-      cell: (r) => (
-        <SeatLabel name={nameOf(index, r.handle)} kind={seatByAddress(index, r.handle)?.kind} />
-      ),
-    },
-    {
-      key: "latest",
-      header: "Latest entry",
-      floor: "160px",
-      drop: 3,
-      cell: (r) => <LatestCell row={r} />,
-    },
-    {
-      key: "written",
-      header: "Written",
-      shrink: true,
-      align: "right",
-      sortValue: (r) => (r.last_reflection_at ? tsKey(r.last_reflection_at) : null),
-      cell: (r) =>
-        uncounted(r) ? (
-          <EmptyValue label={uncounted(r)!} />
-        ) : (
-          <DateCell at={r.last_reflection_at} />
-        ),
-    },
-    {
-      key: "diary",
-      header: "Entries",
-      shrink: true,
-      align: "right",
-      sortValue: (r) => (uncounted(r) ? null : r.diary_total),
-      cell: (r) => count(r, r.diary_total),
-    },
-    {
-      key: "episodes",
-      header: "Episodes",
-      shrink: true,
-      align: "right",
-      drop: 2,
-      sortValue: (r) => (uncounted(r) ? null : r.episodes_total),
-      cell: (r) => count(r, r.episodes_total),
-    },
-    {
-      key: "skills",
-      header: "Skills",
-      shrink: true,
-      align: "right",
-      drop: 1,
-      sortValue: (r) => (uncounted(r) ? null : r.skills_total),
-      cell: (r) => count(r, r.skills_total),
-    },
-    {
-      key: "held",
-      header: "Held by",
-      shrink: true,
-      drop: 4,
-      sortValue: (r) => r.held_by,
-      cell: (r) =>
-        r.held_by === "none" ? (
-          <span className="muted">No node</span>
-        ) : (
-          <span className="mono t-cell">{r.held_by}</span>
-        ),
-    },
-  ];
+  return index.byHandle.get(handle)?.name || handle;
 }
 
 export function Diaries() {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
+  const now = useNow();
   const overview = useQuery("memory_overview", undefined, { pollMs: DIARY_POLL_MS });
   const rows = overview.data?.seats ?? [];
-  const columns = useMemo(() => diaryColumns(index), [index]);
+
+  const count = (row: MemoryOverviewSeat, value: number) => {
+    const why = uncounted(row);
+    return why ? <EmptyValue label={why} /> : <NumberCell value={value} />;
+  };
 
   return (
     <>
@@ -195,7 +115,80 @@ export function Diaries() {
             rowKey={(r) => r.agent_id}
             defaultSort="agent"
             rowHref={(r) => href(["knowledge", "diaries", r.handle])}
-            columns={columns}
+            columns={[
+              {
+                key: "agent",
+                header: "Agent",
+                floor: "170px",
+                phoneLead: true,
+                sortValue: (r) => nameOf(index, r.handle).toLowerCase(),
+                cell: (r) => (
+                  <SeatLabel
+                    name={nameOf(index, r.handle)}
+                    kind={index.byHandle.get(r.handle)?.kind}
+                  />
+                ),
+              },
+              {
+                key: "latest",
+                header: "Latest entry",
+                floor: "160px",
+                drop: 3,
+                cell: (r) => <LatestCell row={r} />,
+              },
+              {
+                key: "written",
+                header: "Written",
+                shrink: true,
+                align: "right",
+                sortValue: (r) => (r.last_reflection_at ? tsKey(r.last_reflection_at) : null),
+                cell: (r) =>
+                  uncounted(r) ? (
+                    <EmptyValue label={uncounted(r)!} />
+                  ) : (
+                    <DateCell at={r.last_reflection_at} now={now} />
+                  ),
+              },
+              {
+                key: "diary",
+                header: "Entries",
+                shrink: true,
+                align: "right",
+                sortValue: (r) => (uncounted(r) ? null : r.diary_total),
+                cell: (r) => count(r, r.diary_total),
+              },
+              {
+                key: "episodes",
+                header: "Episodes",
+                shrink: true,
+                align: "right",
+                drop: 2,
+                sortValue: (r) => (uncounted(r) ? null : r.episodes_total),
+                cell: (r) => count(r, r.episodes_total),
+              },
+              {
+                key: "skills",
+                header: "Skills",
+                shrink: true,
+                align: "right",
+                drop: 1,
+                sortValue: (r) => (uncounted(r) ? null : r.skills_total),
+                cell: (r) => count(r, r.skills_total),
+              },
+              {
+                key: "held",
+                header: "Held by",
+                shrink: true,
+                drop: 4,
+                sortValue: (r) => r.held_by,
+                cell: (r) =>
+                  r.held_by === "none" ? (
+                    <span className="muted">No node</span>
+                  ) : (
+                    <span className="mono t-cell">{r.held_by}</span>
+                  ),
+              },
+            ]}
           />
         </Card>
       </QueryState>
@@ -224,7 +217,8 @@ function LatestCell({ row }: { row: MemoryOverviewSeat }): ReactNode {
 export function Diary({ handle }: { handle: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
-  const seat = seatByAddress(index, handle);
+  const now = useNow();
+  const seat = index.byHandle.get(handle);
   const name = seat?.name || handle;
   usePageLabels(seat?.name ? { [handle]: seat.name, [seatKindKey(handle)]: seat.kind } : {});
   const memory = useQuery("agent_memory", { id: handle }, { pollMs: DIARY_POLL_MS });
@@ -245,10 +239,7 @@ export function Diary({ handle }: { handle: string }) {
         <PageNote>
           {heldWords(data.held_by)}
           {data.latest_reflection && (
-            <>
-              {" "}
-              Last written <LastWritten at={data.latest_reflection.created_at} />.
-            </>
+            <> Last written {relTime(data.latest_reflection.created_at, now)}.</>
           )}
         </PageNote>
       )}
@@ -269,7 +260,7 @@ export function Diary({ handle }: { handle: string }) {
           data && (
             <>
               <DiaryCard memory={data} heading="h2" />
-              <EpisodesCard memory={data} heading="h2" />
+              <EpisodesCard memory={data} now={now} heading="h2" />
               <p className="t-caption">
                 {plural(data.skills_total, "learned skill")} and{" "}
                 {plural(data.counterparties_total, "colleague")} remembered —{" "}
@@ -286,9 +277,4 @@ export function Diary({ handle }: { handle: string }) {
       </QueryState>
     </div>
   );
-}
-
-/** When a diary was last written, read off the clock by these words alone. */
-function LastWritten({ at }: { at: string }) {
-  return <ClockText read={(now) => relTime(at, now)} />;
 }

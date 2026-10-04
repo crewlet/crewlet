@@ -2,17 +2,14 @@
  * Keeping the operator's work across a reload of the tab.
  *
  * ONLY THE LOG IS KEPT. One key, `crewlet_org_draft`, holds
- * `{ v, mode, baseRevision, basePrint, ops, undone, savedAt, reader }`, and `write`
- * with the nodes it `creates` while a save of that log is out, and nothing
- * else: never the base settings, the chart, the draft or the problems. They
- * hold contact identities, emails, policies and `${VAR}` names; kept in
- * storage they would outlive the operator's session and be offered to whoever
- * uses the tab next. The chart the log was made on is kept as its
- * FINGERPRINT (`document.fingerprint`), which says whether a chart read later
- * is the same one and nothing about what it holds. The log refers to the
- * company only by keys and the values its own edits wrote, and on restore the
- * base is fetched again, so what is replayed is always replayed onto what the
- * engine holds now.
+ * `{ v, mode, baseRevision, ops, undone, savedAt }`, and `write` while a save
+ * of that log is out, and nothing else: never the base document, the draft
+ * or the problems. The document holds contact
+ * identities, emails, policies and `${VAR}` names; kept in storage it would
+ * outlive the operator's token and be offered to whoever uses the tab next.
+ * The log refers to the company only by keys and the values its own edits
+ * wrote, and on restore the base is fetched again, so what is replayed is
+ * always replayed onto what the engine holds now.
  *
  * ONE KEY, NOT ONE PER REVISION. A draft saved against revision A must still
  * be found once the active revision is B, because that is exactly when it
@@ -30,37 +27,27 @@
  * which the builder shows as a caution: the work continues, it just will not
  * survive a reload.
  *
- * WHAT CLEARS IT: a save, a discard, a change of reader, and a check
+ * WHAT CLEARS IT: a save, a discard, a change of who is signed in, and a check
  * the engine refused with 401 or 403. The last two are the tab changing hands,
- * and a colleague's draft is not something to offer the next operator.
+ * and a colleague's draft is not something to offer the next reader.
  * [persistencePlan] turns the builder's state into the one write or removal
  * that matches it.
  *
- * AND WHO KEPT IT IS PART OF IT. A draft carries the principal it was kept for
- * (`reader`, the tab's reader from `lib/reader.ts`), and one kept for anybody
- * else is discarded unoffered ([restoreOffer]). The change-of-reader check
- * above is the builder's own, and it lives in a component: a session that
- * ended while the builder was closed routed the tab to the sign-in, the next
- * person to sign in opened the builder fresh — so their first answer was not
- * a change — and the last person's unsaved company edits were offered to them
- * as their own, a save of which would be recorded as theirs. The stamp makes
- * that a fact of the draft rather than of a component staying mounted.
- *
- * A SAVE WHOSE OUTCOME IS NOT KNOWN IS KEPT WITH ITS LOG, AND WITH WHAT IT
- * CREATES. A save is a sequence of writes, any of which can land without its
- * answer, and the builder that sent it may be gone by then. Replayed onto a
- * company that holds part of it, the log meets its own writes: a value the
- * company already holds is recognised as already there (`history.rebase`),
- * but a seat the save created is, to a replay, an add over an address
- * somebody holds. So a save marks the kept log with its write id AND the
- * nodes it creates before it is sent (`markPendingWrite`), and the next visit
- * rebases the log with those creations resolved onto the nodes the chart
- * holds, rather than asking whose seat `alice` is.
+ * A SAVE WHOSE ANSWER IS LOST IS KEPT WITH ITS LOG. A save can land without
+ * its answer, and the builder that sent it may be gone by then (the operator
+ * left it, or the tab reloaded). A kept log of a save that DID land, offered
+ * again as an update onto its own revision, would replay every operation a
+ * second time. So a save marks the kept log with its write id before it is
+ * sent (`markPendingWrite`), the mark is cleared once the save is known not
+ * to have landed, and a landed save removes the log whole; a log still marked
+ * when the builder next opens is a save nobody settled, and is settled
+ * before it is offered.
  */
 
+import type { ConfigRole, ConfigUnit } from "~/protocol/index.ts";
 import { isRecord } from "./json.ts";
 import { isMintedKey, isNodeKey } from "./keys.ts";
-import type { DraftSeat, DraftUnit, Placement, SeatData, UnitData } from "./draft.ts";
+import type { DraftSeat, DraftUnit, Placement } from "./draft.ts";
 import {
   EDIT_PART_TYPES,
   OPERATIONS_VERSION,
@@ -69,7 +56,6 @@ import {
   type Operation,
 } from "./operations.ts";
 import type { Log } from "./history.ts";
-import type { Creation } from "./save.ts";
 import type { BuilderMode } from "./transport.ts";
 import { isWriteId } from "./writes.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
@@ -103,23 +89,17 @@ export interface DraftStorage {
 export interface KeptDraft {
   readonly v: number;
   readonly mode: BuilderMode;
-  /** The settings revision the log was recorded on; `null` in create mode. */
+  /** The revision the log was recorded on; `null` in create mode. */
   readonly baseRevision: string | null;
-  /** The fingerprint of the chart the log was recorded on. */
-  readonly basePrint: string;
   readonly ops: readonly Operation[];
   readonly undone: readonly Operation[];
   /** Milliseconds since the epoch, from the injected clock. */
   readonly savedAt: number;
-  /** The principal it was kept for. See the module doc. */
-  readonly reader: string;
   /**
    * The write id of a save of this log whose outcome is not known yet; absent
    * otherwise. See the module doc.
    */
   readonly write?: string;
-  /** The nodes that save creates, beside its write id. */
-  readonly creates?: readonly Creation[];
 }
 
 export type KeepResult = "kept" | "cleared" | "too_large" | "refused" | "unavailable";
@@ -138,30 +118,18 @@ export function keepDraft(storage: DraftStorage | null, kept: KeptDraft): KeepRe
   }
 }
 
-/** A save being sent: its write id and the nodes it creates. */
-export interface PendingWrite {
-  readonly write: string;
-  readonly creates: readonly Creation[];
-}
-
 /**
- * Marks the kept draft with a save of it that is being sent, or clears the
- * mark (`null`) once the save's outcome is known. Nothing to mark when no
- * draft is kept: a log no storage holds is never offered again, so there is
- * nothing a lost answer could have replayed.
+ * Marks the kept draft with the write id of a save of it that is being sent,
+ * or clears the mark (`null`) once the save is known not to have landed.
+ * Nothing to mark when no draft is kept: a log no storage holds is never
+ * offered again, so there is nothing a lost answer could have replayed.
  */
-export function markPendingWrite(
-  storage: DraftStorage | null,
-  pending: PendingWrite | null,
-): KeepResult {
+export function markPendingWrite(storage: DraftStorage | null, write: string | null): KeepResult {
   const restored = restoreDraft(storage);
   switch (restored.kind) {
     case "restored": {
-      const { write: _write, creates: _creates, ...kept } = restored.kept;
-      return keepDraft(
-        storage,
-        pending === null ? kept : { ...kept, write: pending.write, creates: pending.creates },
-      );
+      const { write: _stale, ...kept } = restored.kept;
+      return keepDraft(storage, write === null ? kept : { ...kept, write });
     }
     case "refused":
     case "unavailable":
@@ -215,15 +183,10 @@ export function restoreDraft(storage: DraftStorage | null): Restored {
 
 /** What to offer when a kept draft meets the company that was just loaded. */
 export type RestoreOffer =
-  /** Kept for somebody else: discarded, and never offered. */
-  | { readonly kind: "discard_other_reader" }
-  /** The same company: offer Keep or Discard. */
+  /** Same mode and revision: offer Keep or Discard. */
   | { readonly kind: "keep_or_discard" }
-  /**
-   * The company moved (a newer settings revision, or other chart rows), or a
-   * save of the draft was out: run the update-my-draft flow.
-   */
-  | { readonly kind: "update" }
+  /** Edit mode, and the revision moved: run the update-my-draft flow. */
+  | { readonly kind: "update"; readonly from: string; readonly to: string }
   /** The draft was made for a different mode: discard it and say so. */
   | {
       readonly kind: "discard_mode_changed";
@@ -234,24 +197,17 @@ export type RestoreOffer =
 /** Decides what a restored draft offers against the company as loaded. */
 export function restoreOffer(
   kept: KeptDraft,
-  loaded: { mode: BuilderMode; revision: string | null; print: string; reader: string },
+  loaded: { mode: BuilderMode; revision: string | null },
 ): RestoreOffer {
-  // FIRST, before anything the draft could be carried onto: a colleague's
-  // draft is not this reader's to keep, update or even be told about.
-  if (kept.reader !== loaded.reader) return { kind: "discard_other_reader" };
-  // A CREATE DRAFT WHOSE SAVE WAS OUT meets the company that save may have
-  // made, and is carried onto it rather than thrown away with it.
-  if (kept.mode === "create" && loaded.mode === "edit" && kept.write !== undefined) {
-    return { kind: "update" };
-  }
   if (kept.mode !== loaded.mode)
     return { kind: "discard_mode_changed", kept: kept.mode, loaded: loaded.mode };
   if (
-    kept.write !== undefined ||
-    kept.basePrint !== loaded.print ||
-    (kept.mode === "edit" && kept.baseRevision !== loaded.revision)
+    kept.mode === "edit" &&
+    kept.baseRevision !== loaded.revision &&
+    kept.baseRevision !== null &&
+    loaded.revision !== null
   ) {
-    return { kind: "update" };
+    return { kind: "update", from: kept.baseRevision, to: loaded.revision };
   }
   return { kind: "keep_or_discard" };
 }
@@ -264,27 +220,15 @@ export function restoreOffer(
 export function parseKeptDraft(value: unknown): KeptDraft | undefined {
   if (
     !isRecord(value) ||
-    !exactKeys(
-      value,
-      ["v", "mode", "baseRevision", "basePrint", "ops", "undone", "savedAt", "reader"],
-      ["write", "creates"],
-    )
+    !exactKeys(value, ["v", "mode", "baseRevision", "ops", "undone", "savedAt"], ["write"])
   )
     return undefined;
   if (value.write !== undefined && !isWriteId(value.write)) return undefined;
-  if (
-    value.creates !== undefined &&
-    (value.write === undefined || !list(value.creates, isCreation))
-  )
-    return undefined;
-  if (typeof value.basePrint !== "string" || !/^[0-9a-f]{16}$/.test(value.basePrint))
-    return undefined;
   if (value.v !== OPERATIONS_VERSION) return undefined;
   if (value.mode !== "edit" && value.mode !== "create") return undefined;
   if (value.mode === "edit" ? !isNonEmptyString(value.baseRevision) : value.baseRevision !== null)
     return undefined;
   if (typeof value.savedAt !== "number" || !Number.isFinite(value.savedAt)) return undefined;
-  if (!isNonEmptyString(value.reader)) return undefined;
   if (!Array.isArray(value.ops) || !Array.isArray(value.undone)) return undefined;
   if (value.ops.length + value.undone.length > MAX_KEPT_OPERATIONS) return undefined;
   const mode = value.mode;
@@ -314,37 +258,22 @@ const isPath = (v: unknown) =>
   Array.isArray(v) && v.length > 0 && v.every((s) => typeof s === "string" && s !== "");
 
 function isPlacement(v: unknown): v is Placement {
-  return isRecord(v) && exactKeys(v, ["parent"]) && isNodeKey(v.parent);
-}
-
-/**
- * A seat's own fields: a record with a string handle and a string name. Its
- * other fields are the engine's to judge.
- */
-function isSeatData(v: unknown): v is SeatData {
-  return isRecord(v) && typeof v.handle === "string" && typeof v.name === "string";
-}
-
-/** A unit's own fields: a string key and name, and never the lists the tree holds. */
-function isUnitData(v: unknown): v is UnitData {
   return (
     isRecord(v) &&
-    typeof v.key === "string" &&
-    typeof v.name === "string" &&
-    !("roles" in v) &&
-    !("children" in v)
+    exactKeys(v, ["parent", "after"]) &&
+    isNodeKey(v.parent) &&
+    (v.after === null || isNodeKey(v.after))
   );
 }
 
-/** A node a save creates: the minted key, its kind, and the address it takes. */
-function isCreation(v: unknown): v is Creation {
-  return (
-    isRecord(v) &&
-    exactKeys(v, ["key", "kind", "address"]) &&
-    isMintedKey(v.key) &&
-    (v.kind === "seat" || v.kind === "unit") &&
-    isNonEmptyString(v.address)
-  );
+/** A role object: a record with a string name. Its other fields are the engine's to judge. */
+function isRoleData(v: unknown): v is ConfigRole {
+  return isRecord(v) && typeof v.name === "string";
+}
+
+/** A unit's own fields: a record with a string name and never the lists the tree holds. */
+function isUnitData(v: unknown): v is ConfigUnit {
+  return isRecord(v) && typeof v.name === "string" && !("roles" in v) && !("children" in v);
 }
 
 function isFieldChange(v: unknown): v is FieldChange {
@@ -375,7 +304,7 @@ function isSnapshot(v: unknown): boolean {
 }
 
 function isDraftSeat(v: unknown): v is DraftSeat {
-  return isRecord(v) && exactKeys(v, ["key", "data"]) && isMintedKey(v.key) && isSeatData(v.data);
+  return isRecord(v) && exactKeys(v, ["key", "data"]) && isMintedKey(v.key) && isRoleData(v.data);
 }
 
 function isDraftUnit(v: unknown): v is DraftUnit {
@@ -409,17 +338,31 @@ export function isOperation(v: unknown): v is Operation {
         exactKeys(v, ["type", "key", "placement", "data"]) &&
         isMintedKey(v.key) &&
         isPlacement(v.placement) &&
-        isSeatData(v.data)
+        isRoleData(v.data)
       );
     case "remove":
       return (
-        exactKeys(v, ["type", "target", "snapshot", "accessLevels"], ["routeTo"]) &&
+        exactKeys(
+          v,
+          ["type", "target", "snapshot", "placedSeats", "placed", "accessLevels"],
+          ["routeTo"],
+        ) &&
         isNodeKey(v.target) &&
         isSnapshot(v.snapshot) &&
+        (v.placedSeats === "remove" || v.placedSeats === "keep") &&
+        list(v.placed, isSnapshot) &&
         list(v.accessLevels, isAccessLevelChange) &&
         (v.routeTo === undefined || isRouteToChange(v.routeTo))
       );
     case "renameSeat":
+      return (
+        exactKeys(v, ["type", "target", "before", "after", "accessLevels"], ["pin"]) &&
+        isNodeKey(v.target) &&
+        typeof v.before === "string" &&
+        typeof v.after === "string" &&
+        (v.pin === undefined || isNonEmptyString(v.pin)) &&
+        list(v.accessLevels, isAccessLevelChange)
+      );
     case "renameUnit":
       return (
         exactKeys(v, ["type", "target", "before", "after"]) &&
@@ -429,10 +372,11 @@ export function isOperation(v: unknown): v is Operation {
       );
     case "move":
       return (
-        exactKeys(v, ["type", "target", "from", "to", "clearLeads"]) &&
+        exactKeys(v, ["type", "target", "from", "to", "clearLeads"], ["unitRef"]) &&
         isNodeKey(v.target) &&
         isPlacement(v.from) &&
         isPlacement(v.to) &&
+        isOptionalString(v.unitRef) &&
         list(
           v.clearLeads,
           (c) =>
@@ -441,6 +385,13 @@ export function isOperation(v: unknown): v is Operation {
             isNodeKey(c.unit) &&
             typeof c.before === "string",
         )
+      );
+    case "reorder":
+      return (
+        exactKeys(v, ["type", "target", "from", "to"]) &&
+        isNodeKey(v.target) &&
+        isPlacement(v.from) &&
+        isPlacement(v.to)
       );
     case "updateSeat":
       return (
@@ -526,14 +477,11 @@ export function isOperation(v: unknown): v is Operation {
 export interface PersistableState {
   readonly mode: BuilderMode;
   readonly baseRevision: string | null;
-  readonly basePrint: string;
   readonly log: Log;
-  /** False from a change of reader or a refused check until the next operation. */
+  /** False from a token change or a refused check until the next operation. */
   readonly keep: boolean;
-  /** A save of this log whose outcome is not known yet, or `null`. */
-  readonly pending: PendingWrite | null;
-  /** The principal the tab is read by, whom a kept draft is kept for. */
-  readonly reader: string;
+  /** The write id of a save of this log whose outcome is not known yet, or `null`. */
+  readonly write: string | null;
 }
 
 /** The one storage action a state calls for. */
@@ -554,14 +502,10 @@ export function persistencePlan(state: PersistableState, now: number): Persisten
       v: OPERATIONS_VERSION,
       mode: state.mode,
       baseRevision: state.baseRevision,
-      basePrint: state.basePrint,
       ops: state.log.ops,
       undone: state.log.undone,
       savedAt: now,
-      reader: state.reader,
-      ...(state.pending !== null
-        ? { write: state.pending.write, creates: state.pending.creates }
-        : {}),
+      ...(state.write !== null ? { write: state.write } : {}),
     },
   };
 }

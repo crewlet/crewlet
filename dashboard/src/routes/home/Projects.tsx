@@ -17,8 +17,7 @@ import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { companyDateLabel, fmtExact, plural } from "~/lib/format.ts";
-import { projectPath } from "~/lib/work.ts";
+import { companyDateLabel, plural } from "~/lib/format.ts";
 import type { WorkProjectRow } from "~/protocol/index.ts";
 
 /** How many projects the card draws before "All projects". */
@@ -101,7 +100,7 @@ function ProjectRow({ project, leadName }: { project: WorkProjectRow; leadName: 
   const pct = whole > 0 ? Math.round((done / whole) * 100) : null;
   return (
     <li>
-      <a className="project-row" href={href(projectPath(project.key))}>
+      <a className="project-row" href={href(["work", project.key])}>
         <span className="project-row-head">
           <span className="project-key mono">{project.key}</span>
           <span className="project-name">{project.name}</span>
@@ -139,9 +138,9 @@ function ProjectRow({ project, leadName }: { project: WorkProjectRow; leadName: 
 /** "38 done · 12 active · 11 to do", naming only the parts that hold work. */
 export function censusLine(done: number, active: number, todo: number): string {
   return [
-    done && `${fmtExact(done)} done`,
-    active && `${fmtExact(active)} active`,
-    todo && `${fmtExact(todo)} to do`,
+    done && `${done.toLocaleString()} done`,
+    active && `${active.toLocaleString()} active`,
+    todo && `${todo.toLocaleString()} to do`,
   ]
     .filter(Boolean)
     .join(" · ");

@@ -9,7 +9,7 @@
  * that looked broken.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AppShell } from "@crewlethq/ui";
 
@@ -25,9 +25,10 @@ import {
 import { foldTabs } from "../frame/tabFit.ts";
 import { WORKSPACES } from "~/app/nav.ts";
 import { Router } from "~/app/router.tsx";
+import { noteReader } from "~/lib/reader.ts";
+import { starsKey } from "~/lib/starred.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import { noteReader } from "~/lib/reader.ts";
 
 const had = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 
@@ -83,8 +84,6 @@ describe("the star", () => {
     expect(screen.getByRole("button", { name: "Keep in Starred" })).toBeTruthy();
   });
 
-  // The store drops a kept path that does not resolve, so a star pressed on
-  // Not Found filled and then vanished on the next read, with nothing said.
   // NOR BY NOBODY: a tab that has not learned who reads it has no list to
   // keep a star in, and one kept in a list nobody owns would be offered to
   // whoever signs in next.
@@ -94,6 +93,8 @@ describe("the star", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
+  // The store drops a kept path that does not resolve, so a star pressed on
+  // Not Found filled and then vanished on the next read, with nothing said.
   test("is not offered on an address that is no page", () => {
     render(<StarPage path={["work", "tasks"]} label="Not found" workspace="work" />);
     expect(screen.queryByRole("button")).toBeNull();
@@ -109,7 +110,7 @@ describe("the star", () => {
     expect(star.getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByText("Already in the sidebar")).toBeTruthy();
     fireEvent.click(star);
-    expect(localStorage.getItem("crewlet_starred") ?? "[]").toBe("[]");
+    expect(localStorage.getItem(starsKey("p-1")) ?? "[]").toBe("[]");
   });
 });
 
@@ -251,14 +252,14 @@ describe("who is working", () => {
     const store = new Store();
     store.applySeats([
       {
+        agent_id: "a1",
         id: "a1",
-        agent_id: "id-a1",
         role: "Agent SWE",
         activity: "working",
         live_call: { work_item: { key: "ENG-1", project: "ENG" } },
       },
-      { id: "a2", agent_id: "id-a2", role: "SRE", activity: "working" },
-      { id: "a4", agent_id: "id-a4", role: "CTO", activity: "idle" },
+      { agent_id: "a2", id: "a2", role: "SRE", activity: "working" },
+      { agent_id: "a4", id: "a4", role: "CTO", activity: "idle" },
     ] as never);
     const socket = new LiveSocket(store);
     return render(
@@ -294,7 +295,7 @@ describe("who is working", () => {
 
   test("nobody working draws nothing, even where it is asked for", () => {
     const store = new Store();
-    store.applySeats([{ id: "a4", agent_id: "id-a4", role: "CTO", activity: "idle" }] as never);
+    store.applySeats([{ agent_id: "a4", id: "a4", role: "CTO", activity: "idle" }] as never);
     const { container } = render(
       <Router>
         <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>

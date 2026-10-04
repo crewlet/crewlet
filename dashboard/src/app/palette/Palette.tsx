@@ -89,10 +89,10 @@ import {
   liveRowFor,
   nameOfIn,
   ringOf,
-  unitPath,
+  unitRoute,
   type Seat,
 } from "~/lib/seats.ts";
-import { itemPath, statusLabel } from "~/lib/work.ts";
+import { statusLabel } from "~/lib/work.ts";
 import { fmtCount } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { goSignIn } from "~/lib/session.ts";
@@ -512,10 +512,7 @@ export function CommandPalette({
   const taskRows = (cap: number): CommandPaletteItem[] => {
     const hits = taskAnswer.data?.hits ?? [];
     return hits.slice(0, cap).map((item) => ({
-      // THE ITEM'S ID, which is what the list keys an option on: a key is an
-      // ADDRESS two items can hold at once (`key_collision`), and a search that
-      // finds both would draw two options under one key.
-      id: `task-${item.id}`,
+      id: `task-${item.key}`,
       icon: <StatusMark status={item.status} />,
       label: (
         <>
@@ -527,10 +524,7 @@ export function CommandPalette({
         item.assignee ? (index.byHandle.get(item.assignee)?.name ?? item.assignee) : "unassigned",
       ].join(" · "),
       meta: <PriorityMark priority={item.priority} />,
-      // AND IT GOES TO THE ITEM'S ADDRESS for the same reason: a key two items
-      // hold opens the one that claimed it first, so the option drawn for the
-      // other one opened its neighbour.
-      onSelect: () => nav.to(itemPath(item)),
+      onSelect: () => nav.to(["work", item.key]),
     }));
   };
 
@@ -621,7 +615,7 @@ export function CommandPalette({
           icon: <UsersGlyph size="sm" />,
           label: unit.name,
           hint: `${unit.type || "team"} · ${unit.id}${unit.lead ? ` · lead ${unit.lead}` : ""}`,
-          onSelect: () => nav.to(unitPath(unit)),
+          onSelect: () => nav.to(unitRoute(unit)),
         })),
       });
     }

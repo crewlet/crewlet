@@ -41,14 +41,14 @@ import {
 } from "@crewlethq/ui";
 import { ClockGlyph, CpuGlyph, KeyGlyph, PencilGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
-import { ClockText, KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { href } from "~/app/router.tsx";
 import { usePageMenu } from "~/app/Shell.tsx";
-import { useClockReading } from "~/lib/clock.ts";
+import { useNow } from "~/lib/clock.ts";
 import { fmtTime, inTimeExact, plural } from "~/lib/format.ts";
 import {
   benchParts,
@@ -88,13 +88,9 @@ import { EditModelDialog } from "./EditModelDialog.tsx";
 export const MODELS_POLL_MS = 15_000;
 
 export function Models({ id }: { id?: string }) {
-  const { data, loading, error, refusal, detail, refetch } = useQuery(
-    "credential_pool",
-    undefined,
-    {
-      pollMs: MODELS_POLL_MS,
-    },
-  );
+  const { data, loading, error, refusal, refetch } = useQuery("credential_pool", undefined, {
+    pollMs: MODELS_POLL_MS,
+  });
   const org = useOrg();
   const seats = useMemo(() => indexOrg(org).seats, [org]);
   const [editing, setEditing] = useState<string | null>(null);
@@ -104,9 +100,7 @@ export function Models({ id }: { id?: string }) {
 
   return (
     <>
-      {error && !data && (
-        <QueryState error={error} refusal={refusal} detail={detail ?? undefined} loading={false} />
-      )}
+      {error && !data && <QueryState error={error} refusal={refusal} loading={false} />}
       {loading && !data && <Skeleton variant="text" rows={6} label="Loading" />}
 
       {data && !id && <ModelList answer={data} seats={seats} onEdit={setEditing} />}
@@ -151,8 +145,8 @@ function ModelList({
   seats: readonly Seat[];
   onEdit: (id: string) => void;
 }) {
+  const now = useNow();
   const providers = answer.providers;
-  const columns = useMemo(() => modelColumns(seats, onEdit), [seats, onEdit]);
   const pooled = providers.filter((p) => p.state !== "login");
   const keys = pooled.flatMap((p) => p.keys.filter((k) => k.state !== "duplicate"));
   const ready = keys.filter((k) => k.state === "ready").length;
@@ -188,13 +182,7 @@ function ModelList({
           <StatCard
             icon={<ClockGlyph size="xs" />}
             label="Next key back"
-            value={
-              lift ? (
-                <ClockText read={(now) => inTimeExact(lift, now).replace(/^in /, "")} />
-              ) : (
-                EMPTY_VALUE
-              )
-            }
+            value={lift ? inTimeExact(lift, now).replace(/^in /, "") : EMPTY_VALUE}
             sub={lift ? `at ${fmtTime(lift)}` : "nothing is cooling"}
           />
         </StatGroup>
@@ -216,7 +204,69 @@ function ModelList({
             rows={providers}
             rowKey={(p) => p.key}
             rowHref={(p) => href(["settings", "models", p.key])}
-            columns={columns}
+            columns={[
+              {
+                key: "model",
+                header: "Model",
+                floor: "12rem",
+                sortValue: (p) => p.key,
+                cell: (p) => (
+                  <span className="col model-name">
+                    <span className="mono">{p.key}</span>
+                    <span className="t-caption muted truncate" title={p.model || undefined}>
+                      {modelLine(p)}
+                    </span>
+                  </span>
+                ),
+              },
+              {
+                key: "state",
+                header: "State",
+                shrink: true,
+                sortValue: (p) => p.state,
+                cell: (p) => <PoolTag row={p} />,
+              },
+              {
+                key: "keys",
+                header: "Keys",
+                // TWICE THE MODEL COLUMN'S SHARE of what is left: a key's mark
+                // is its whole variable name and a model carries several, so
+                // at an even split they stood one per line beside a Model
+                // column holding a short key and its id.
+                width: "minmax(0, 2fr)",
+                cell: (p) => <KeyMarks row={p} now={now} />,
+              },
+              {
+                key: "seats",
+                header: "Runs",
+                shrink: true,
+                drop: 2,
+                sortValue: (p) => usesOf(seats, p.key).length,
+                cell: (p) => <ReachLine uses={usesOf(seats, p.key)} />,
+              },
+              {
+                key: "bench",
+                header: "Bench",
+                shrink: true,
+                drop: 1,
+                // STACKED, one cause per line: on one line the pair outgrew
+                // the column's cap at 1280 and was clipped mid-glyph ("auth 2"
+                // for "auth 24h"), and a cell that clips shows a wrong value.
+                cell: (p) =>
+                  p.state === "login" ? (
+                    <EmptyValue label="Nothing rotates" />
+                  ) : (
+                    <BenchLine row={p} stacked />
+                  ),
+              },
+              {
+                key: "act",
+                header: "",
+                label: "Actions",
+                shrink: true,
+                cell: (p) => <EditButton id={p.key} onEdit={onEdit} icon />,
+              },
+            ]}
           />
         )}
       </Card>
@@ -236,9 +286,8 @@ function ModelPage({
   seats: readonly Seat[];
   onEdit: (id: string) => void;
 }) {
-  const uses = useMemo(() => usesOf(seats, row.key), [seats, row.key]);
-  const keyRows = useMemo(() => row.keys.map((key, i) => ({ key, at: i + 1 })), [row.keys]);
-  const keyColumns = useMemo(() => keyColumnsOf(answer.node), [answer.node]);
+  const now = useNow();
+  const uses = usesOf(seats, row.key);
   const words = POOL_STATE_WORDS[row.state];
   const duplicates = row.keys.filter((k) => k.state === "duplicate").length;
   const counted = row.keys.length - duplicates;
@@ -337,10 +386,96 @@ function ModelPage({
           ) : (
             <DataGrid<{ key: CredentialKeyRow; at: number }>
               name="keys"
-              rows={keyRows}
+              rows={row.keys.map((key, i) => ({ key, at: i + 1 }))}
               rowKey={(r) => String(r.at)}
               defaultSort="at"
-              columns={keyColumns}
+              columns={[
+                {
+                  key: "at",
+                  header: "#",
+                  shrink: true,
+                  sortValue: (r) => r.at,
+                  cell: (r) => <span className="muted">{r.at}</span>,
+                },
+                {
+                  key: "name",
+                  header: "Key",
+                  floor: "10rem",
+                  sortValue: (r) => keyName(r.key, r.at),
+                  cell: (r) => <KeyLabel keyRow={r.key} at={r.at} />,
+                },
+                {
+                  key: "state",
+                  header: "State",
+                  shrink: true,
+                  sortValue: (r) => r.key.state,
+                  cell: (r) => <KeyTag keyRow={r.key} />,
+                },
+                {
+                  key: "lifts",
+                  header: "Back",
+                  shrink: true,
+                  sortValue: (r) => r.key.cooling_until ?? "",
+                  cell: (r) =>
+                    r.key.cooling_until ? (
+                      <span title={r.key.cooling_until}>
+                        {fmtTime(r.key.cooling_until)}{" "}
+                        <span className="muted">{inTimeExact(r.key.cooling_until, now)}</span>
+                      </span>
+                    ) : r.key.state === "duplicate" ? (
+                      // SAID, NOT A DASH: a duplicate is in the pool — as the
+                      // key it repeats, which comes back whenever that one does.
+                      <span className="muted">{keyBackWords(r.key)}</span>
+                    ) : (
+                      <EmptyValue label={keyBackWords(r.key)} />
+                    ),
+                },
+                {
+                  key: "why",
+                  header: "Why",
+                  drop: 1,
+                  cell: (r) => <span className="t-caption muted">{keyWhy(r.key)}</span>,
+                },
+                {
+                  key: "uses",
+                  header: "Calls here",
+                  shrink: true,
+                  align: "right",
+                  drop: 2,
+                  sortValue: (r) => r.key.uses,
+                  cell: (r) =>
+                    r.key.state === "unresolved" || r.key.state === "duplicate" ? (
+                      <EmptyValue label="None" />
+                    ) : (
+                      <span
+                        className="t-num"
+                        title={`Leased ${r.key.uses} times by ${answer.node} since it applied this configuration; ${r.key.in_flight} in flight now`}
+                      >
+                        {r.key.uses}
+                        {r.key.in_flight > 0 && (
+                          <span className="muted"> · {r.key.in_flight} live</span>
+                        )}
+                      </span>
+                    ),
+                },
+                {
+                  key: "hint",
+                  header: "Hint",
+                  shrink: true,
+                  drop: 3,
+                  cell: (r) =>
+                    r.key.hint ? (
+                      <span
+                        className="mono t-caption muted"
+                        title="The engine's credential_cooled log lines name a key by this hint — never by its value"
+                      >
+                        {r.key.hint}
+                      </span>
+                    ) : (
+                      <EmptyValue label="None" />
+                    ),
+                },
+              ]}
             />
           )}
         </Card>
@@ -363,212 +498,46 @@ function ModelPage({
             rows={uses}
             rowKey={(u) => u.seat.key}
             rowHref={(u) => (u.seat.handle ? href(["agents", "seats", u.seat.handle]) : "")}
-            columns={SEAT_COLUMNS}
+            columns={[
+              {
+                key: "seat",
+                header: "Seat",
+                floor: "10rem",
+                sortValue: (u) => u.seat.name,
+                cell: (u) => (
+                  <SeatCell handle={u.seat.handle} name={u.seat.name} kind={u.seat.kind} />
+                ),
+              },
+              {
+                key: "runs",
+                header: "Runs on it",
+                cell: (u) =>
+                  u.every ? (
+                    <TextCell>Every phase</TextCell>
+                  ) : u.runs.length ? (
+                    <TextCell>{u.runs.join(", ")}</TextCell>
+                  ) : (
+                    <EmptyValue label="Nothing first" />
+                  ),
+              },
+              {
+                key: "fallback",
+                header: "Falls back to it",
+                drop: 1,
+                cell: (u) =>
+                  u.fallback.length ? (
+                    <TextCell>{u.fallback.join(", ")}</TextCell>
+                  ) : (
+                    <EmptyValue label="Never" />
+                  ),
+              },
+            ]}
           />
         )}
       </Card>
     </>
   );
 }
-
-/**
- * The model list's columns, over the seats the Runs cell counts and the edit
- * the last cell opens — held still by the caller's `useMemo` while neither
- * moves, so a poll that changed nothing redraws no row.
- */
-function modelColumns(
-  seats: readonly Seat[],
-  onEdit: (id: string) => void,
-): GridColumn<CredentialPoolRow>[] {
-  return [
-    {
-      key: "model",
-      header: "Model",
-      floor: "12rem",
-      sortValue: (p) => p.key,
-      cell: (p) => (
-        <span className="col model-name">
-          <span className="mono">{p.key}</span>
-          <span className="t-caption muted truncate" title={p.model || undefined}>
-            {modelLine(p)}
-          </span>
-        </span>
-      ),
-    },
-    {
-      key: "state",
-      header: "State",
-      shrink: true,
-      sortValue: (p) => p.state,
-      cell: (p) => <PoolTag row={p} />,
-    },
-    {
-      key: "keys",
-      header: "Keys",
-      // TWICE THE MODEL COLUMN'S SHARE of what is left: a key's mark
-      // is its whole variable name and a model carries several, so
-      // at an even split they stood one per line beside a Model
-      // column holding a short key and its id.
-      width: "minmax(0, 2fr)",
-      cell: (p) => <KeyMarks row={p} />,
-    },
-    {
-      key: "seats",
-      header: "Runs",
-      shrink: true,
-      drop: 2,
-      sortValue: (p) => usesOf(seats, p.key).length,
-      cell: (p) => <ReachLine uses={usesOf(seats, p.key)} />,
-    },
-    {
-      key: "bench",
-      header: "Bench",
-      shrink: true,
-      drop: 1,
-      // STACKED, one cause per line: on one line the pair outgrew
-      // the column's cap at 1280 and was clipped mid-glyph ("auth 2"
-      // for "auth 24h"), and a cell that clips shows a wrong value.
-      cell: (p) =>
-        p.state === "login" ? (
-          <EmptyValue label="Nothing rotates" />
-        ) : (
-          <BenchLine row={p} stacked />
-        ),
-    },
-    {
-      key: "act",
-      header: "",
-      label: "Actions",
-      shrink: true,
-      cell: (p) => <EditButton id={p.key} onEdit={onEdit} icon />,
-    },
-  ];
-}
-
-/** A model's keys, over the node whose call counts the Calls cell names. */
-function keyColumnsOf(node: string): GridColumn<{ key: CredentialKeyRow; at: number }>[] {
-  return [
-    {
-      key: "at",
-      header: "#",
-      shrink: true,
-      sortValue: (r) => r.at,
-      cell: (r) => <span className="muted">{r.at}</span>,
-    },
-    {
-      key: "name",
-      header: "Key",
-      floor: "10rem",
-      sortValue: (r) => keyName(r.key, r.at),
-      cell: (r) => <KeyLabel keyRow={r.key} at={r.at} />,
-    },
-    {
-      key: "state",
-      header: "State",
-      shrink: true,
-      sortValue: (r) => r.key.state,
-      cell: (r) => <KeyTag keyRow={r.key} />,
-    },
-    {
-      key: "lifts",
-      header: "Back",
-      shrink: true,
-      sortValue: (r) => r.key.cooling_until ?? "",
-      cell: (r) =>
-        r.key.cooling_until ? (
-          <span title={r.key.cooling_until}>
-            {fmtTime(r.key.cooling_until)}{" "}
-            <span className="muted">
-              <ClockText read={(now) => inTimeExact(r.key.cooling_until, now)} />
-            </span>
-          </span>
-        ) : r.key.state === "duplicate" ? (
-          // SAID, NOT A DASH: a duplicate is in the pool — as the
-          // key it repeats, which comes back whenever that one does.
-          <span className="muted">{keyBackWords(r.key)}</span>
-        ) : (
-          <EmptyValue label={keyBackWords(r.key)} />
-        ),
-    },
-    {
-      key: "why",
-      header: "Why",
-      drop: 1,
-      cell: (r) => <span className="t-caption muted">{keyWhy(r.key)}</span>,
-    },
-    {
-      key: "uses",
-      header: "Calls here",
-      shrink: true,
-      align: "right",
-      drop: 2,
-      sortValue: (r) => r.key.uses,
-      cell: (r) =>
-        r.key.state === "unresolved" || r.key.state === "duplicate" ? (
-          <EmptyValue label="None" />
-        ) : (
-          <span
-            className="t-num"
-            title={`Leased ${r.key.uses} times by ${node} since it applied this configuration; ${r.key.in_flight} in flight now`}
-          >
-            {r.key.uses}
-            {r.key.in_flight > 0 && <span className="muted"> · {r.key.in_flight} live</span>}
-          </span>
-        ),
-    },
-    {
-      key: "hint",
-      header: "Hint",
-      shrink: true,
-      drop: 3,
-      cell: (r) =>
-        r.key.hint ? (
-          <span
-            className="mono t-caption muted"
-            title="The engine's credential_cooled log lines name a key by this hint — never by its value"
-          >
-            {r.key.hint}
-          </span>
-        ) : (
-          <EmptyValue label="None" />
-        ),
-    },
-  ];
-}
-
-/** The seats on a model: nothing in them reads anything but the row. */
-const SEAT_COLUMNS: GridColumn<ModelUse>[] = [
-  {
-    key: "seat",
-    header: "Seat",
-    floor: "10rem",
-    sortValue: (u) => u.seat.name,
-    cell: (u) => <SeatCell handle={u.seat.handle} name={u.seat.name} kind={u.seat.kind} />,
-  },
-  {
-    key: "runs",
-    header: "Runs on it",
-    cell: (u) =>
-      u.every ? (
-        <TextCell>Every phase</TextCell>
-      ) : u.runs.length ? (
-        <TextCell>{u.runs.join(", ")}</TextCell>
-      ) : (
-        <EmptyValue label="Nothing first" />
-      ),
-  },
-  {
-    key: "fallback",
-    header: "Falls back to it",
-    drop: 1,
-    cell: (u) =>
-      u.fallback.length ? (
-        <TextCell>{u.fallback.join(", ")}</TextCell>
-      ) : (
-        <EmptyValue label="Never" />
-      ),
-  },
-];
 
 /**
  * Where a key's value lives, said once on the list: a model's keys are
@@ -657,42 +626,33 @@ function KeyLabel({ keyRow, at }: { keyRow: CredentialKeyRow; at: number }) {
  * tone, the variable in its title. A cooling key carries how long it has left,
  * which is the one number a person watching a rate limit wants.
  */
-function KeyMarks({ row }: { row: CredentialPoolRow }) {
+function KeyMarks({ row, now }: { row: CredentialPoolRow; now: number }) {
   if (row.state === "login") return <EmptyValue label="A CLI login" />;
   if (row.keys.length === 0) return <EmptyValue label="No key" />;
   return (
     <span className="row gap-1 wrap" role="list" aria-label={`${row.key} keys`}>
-      {row.keys.map((k, i) => (
-        <KeyMarkItem key={i} keyRow={k} at={i + 1} />
-      ))}
-    </span>
-  );
-}
-
-/**
- * One key's mark. THE CLOCK IS READ HERE, in the one mark that shows a time,
- * so a second passing redraws a cooling key's countdown and nothing else in
- * the row — never the grid around it.
- */
-function KeyMarkItem({ keyRow: k, at }: { keyRow: CredentialKeyRow; at: number }) {
-  const words = KEY_STATE_WORDS[k.state];
-  const name = keyName(k, at);
-  const until = k.state === "cooling" ? (k.cooling_until ?? "") : "";
-  const left = useClockReading((now) => (until ? inTimeExact(until, now) : ""));
-  return (
-    <span role="listitem">
-      <Tag
-        size="sm"
-        appearance="outline"
-        variant={words.tone}
-        title={`${name}: ${words.label.toLowerCase()}${left ? `, back ${left}` : ""}. ${keyWhy(k)}`}
-      >
-        <span className="mono model-key">{keyMark(k, at)}</span>
-        {/* THE STATE IN WORDS for a reader who does not get the tone:
-            a screen reader, or eyes that cannot tell the inks apart. */}
-        <span className="sr-only">, {words.label.toLowerCase()}</span>
-        {left && <span className="model-key-left"> {left.replace(/^in /, "")}</span>}
-      </Tag>
+      {row.keys.map((k, i) => {
+        const words = KEY_STATE_WORDS[k.state];
+        const name = keyName(k, i + 1);
+        const left =
+          k.state === "cooling" && k.cooling_until ? inTimeExact(k.cooling_until, now) : "";
+        return (
+          <span role="listitem" key={i}>
+            <Tag
+              size="sm"
+              appearance="outline"
+              variant={words.tone}
+              title={`${name}: ${words.label.toLowerCase()}${left ? `, back ${left}` : ""}. ${keyWhy(k)}`}
+            >
+              <span className="mono model-key">{keyMark(k, i + 1)}</span>
+              {/* THE STATE IN WORDS for a reader who does not get the tone:
+                  a screen reader, or eyes that cannot tell the inks apart. */}
+              <span className="sr-only">, {words.label.toLowerCase()}</span>
+              {left && <span className="model-key-left"> {left.replace(/^in /, "")}</span>}
+            </Tag>
+          </span>
+        );
+      })}
     </span>
   );
 }

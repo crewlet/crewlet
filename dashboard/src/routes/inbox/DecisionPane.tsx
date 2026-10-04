@@ -42,11 +42,8 @@ import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
-import { renderMarkdown, safeHref } from "~/lib/markdown.ts";
-import { fmtDateTime, fmtExact, humanize, relTime } from "~/lib/format.ts";
-import { useClockReading } from "~/lib/clock.ts";
-import { detailItem, itemAddress, itemPath } from "~/lib/work.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
+import { plainText, renderMarkdown, safeHref } from "~/lib/markdown.ts";
+import { fmtDateTime, humanize, relTime } from "~/lib/format.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { Attention } from "~/lib/attention.ts";
@@ -56,7 +53,7 @@ import type {
   WorkDecisionEvidence,
   WorkInboxNotice,
 } from "~/protocol/index.ts";
-import { noticeText, rowItem, rowKey, rowWho, type Who } from "./NoticeList.tsx";
+import { noticeText, rowKey, rowWho, type Who } from "./NoticeList.tsx";
 import { firstLine } from "~/lib/format.ts";
 import { NoticeActions } from "./SnoozeMenu.tsx";
 import { Thread, type ThreadOf } from "./Thread.tsx";
@@ -66,8 +63,8 @@ import type { InboxRow } from "./model.ts";
 interface PaneProps {
   row: InboxRow | null;
   index: OrgIndex;
-  /** The seat the viewer holds, or "": "reports to you" is read off the chart by it. */
   viewerHandle: string;
+  now: number;
   /** The company's clock, which the snooze presets are read on. */
   zone: string | undefined;
   maxSnoozeAhead: number | undefined;
@@ -89,7 +86,7 @@ export function DecisionPane(props: PaneProps) {
   }
   // REMOUNTED PER ROW, so a draft, a pressed option or a refusal drawn for
   // one row never shows under the next.
-  return <OpenPane key={props.row.id} {...props} row={props.row} />;
+  return <OpenPane key={props.row.key} {...props} row={props.row} />;
 }
 
 /** The ask a row is, when it is one. */
@@ -177,16 +174,12 @@ function OpenPane({
   row,
   index,
   viewerHandle,
+  now,
   zone,
   maxSnoozeAhead,
   onBack,
 }: PaneProps & { row: InboxRow }) {
-  // THE KEY IS WHAT THE PANE PRINTS; THE ADDRESS IS WHAT IT OPENS, THREADS
-  // AND REPLIES BY ([rowItem]) — a key another task claimed first would read
-  // and write the claimant's conversation from a duplicate's notice.
   const itemKey = rowKey(row);
-  const item = rowItem(row);
-  const address = item ? itemAddress(item) : "";
   const who = rowWho(row, index);
   const ask = askOf(row);
   const notices = row.kind === "notice" ? [row.notice] : row.kind === "decision" ? row.notices : [];
@@ -195,7 +188,7 @@ function OpenPane({
   const composer = useRef<ComposerHandle | null>(null);
   const [mode, setMode] = useState<ComposeMode>(() => initialMode(row));
   const kind = paneKind(row);
-  const composes = address !== "" && (ask !== null || row.kind === "notice");
+  const composes = itemKey !== "" && (ask !== null || row.kind === "notice");
 
   const instruct = () => {
     if (!ask) return;
@@ -214,16 +207,17 @@ function OpenPane({
               who={who}
               index={index}
               viewerHandle={viewerHandle}
+              now={now}
               answering={mode.kind === "answer"}
               onInstruct={instruct}
             />
           );
           break;
         case "run":
-          body = <RunBody run={row.subject.run} who={who} />;
+          body = <RunBody run={row.subject.run} who={who} now={now} />;
           break;
         case "seat":
-          body = <SeatBody seat={row.subject.seat} who={who} />;
+          body = <SeatBody seat={row.subject.seat} who={who} now={now} />;
           break;
       }
       break;
@@ -231,7 +225,7 @@ function OpenPane({
       body = <ConditionBody item={row.item} />;
       break;
     case "notice":
-      body = <NoticeBody notice={row.notice} who={who} index={index} />;
+      body = <NoticeBody notice={row.notice} who={who} index={index} now={now} />;
       break;
   }
 
@@ -250,16 +244,17 @@ function OpenPane({
         <Tag variant={kind.tone} appearance="soft" leadingIcon={kind.icon ?? undefined}>
           {kind.label}
         </Tag>
-        {item && (
-          <a className="inbox-pane-key mono" href={href(itemPath(item))}>
-            {itemKey || "Open the task"}
+        {itemKey && (
+          <a className="inbox-pane-key mono" href={href(["work", itemKey])}>
+            {itemKey}
           </a>
         )}
         {title && <span className="inbox-pane-title">{title}</span>}
         <span className="spacer" />
         <NoticeActions
           notices={notices}
-          item={item ? { ref: item, key: itemKey } : null}
+          itemKey={itemKey}
+          now={now}
           zone={zone}
           maxSnoozeAhead={maxSnoozeAhead}
         />
@@ -267,8 +262,8 @@ function OpenPane({
       <div className="inbox-pane-scroll">
         <div className="inbox-pane-body">
           {body}
-          {address && (row.kind === "notice" || ask) && (
-            <Thread item={address} of={threadOf(row)} index={index} onTitle={onTitle} />
+          {itemKey && (row.kind === "notice" || ask) && (
+            <Thread item={itemKey} of={threadOf(row)} index={index} now={now} onTitle={onTitle} />
           )}
         </div>
       </div>
@@ -276,7 +271,7 @@ function OpenPane({
         <div className="inbox-pane-compose">
           <Composer
             ref={composer}
-            item={address}
+            item={itemKey}
             mode={mode}
             to={who?.name ?? "the thread"}
             index={index}
@@ -303,6 +298,7 @@ function AskBody({
   who,
   index,
   viewerHandle,
+  now,
   answering,
   onInstruct,
 }: {
@@ -310,6 +306,7 @@ function AskBody({
   who: Who | null;
   index: OrgIndex;
   viewerHandle: string;
+  now: number;
   answering: boolean;
   onInstruct: () => void;
 }) {
@@ -321,10 +318,9 @@ function AskBody({
   const context = decision ? ask.body.trim() : ask.body.split("\n").slice(1).join("\n").trim();
   const recommended = decision?.options.find((o) => o.id === decision.recommended);
   // "REPORTS TO YOU" is derived from the chart, never stated by the asker.
-  const reports =
-    who?.handle && viewerHandle
-      ? index.byHandle.get(who.handle)?.managers.some((m) => m.handle === viewerHandle)
-      : false;
+  const reports = who?.handle
+    ? index.byHandle.get(who.handle)?.managers.some((m) => m.handle === viewerHandle)
+    : false;
   return (
     <>
       <div className="inbox-pane-head">
@@ -332,7 +328,7 @@ function AskBody({
         <Byline who={who}>
           <span>
             <strong>{asker}</strong>
-            <ClockText read={(now) => ` asked you ${relTime(ask.asked_at, now)}`} />
+            {` asked you ${relTime(ask.asked_at, now)}`}
           </span>
           {decision && (
             <>
@@ -437,7 +433,7 @@ function OptionCards({
               onPress={() => {
                 setPressed(option.id);
                 void write.run(
-                  { item: itemAddress(ask), answers: ask.comment, choice: option.id },
+                  { item: ask.key, answers: ask.comment, choice: option.id },
                   { done: `Answered ${ask.key}: ${option.label}` },
                 );
               }}
@@ -521,10 +517,8 @@ function EvidenceChip({ evidence }: { evidence: WorkDecisionEvidence }) {
 function TaskEvidence({ id, label }: { id: string; label?: string }) {
   const read = useQuery("work_item", { id });
   const task = read.data?.task;
-  // BY ITS ADDRESS once it has answered, by the id it was cited by until then:
-  // the cited id is the task, and a key it holds may open another.
   return (
-    <a className="inbox-chip" href={href(itemPath(read.data ? detailItem(read.data) : { id }))}>
+    <a className="inbox-chip" href={href(["work", task?.key ?? id])}>
       {task && <StatusMark status={task.status} />}
       <span className="mono">{task?.key ?? "Task"}</span>
       <span className="truncate">{label || task?.title || ""}</span>
@@ -532,26 +526,11 @@ function TaskEvidence({ id, label }: { id: string; label?: string }) {
   );
 }
 
-/**
- * How long a parked run's box is still held, read off the clock in this one
- * line — a countdown in minutes, so it renders when the minute moves and the
- * pane around it does not. Nothing at all where there is no window to count.
- */
-function HoldLine({ run }: { run: SandboxRun }) {
-  const hold = useClockReading((now) => holdLine(run, now) ?? "");
-  if (!hold) return null;
-  return (
-    <>
-      <span aria-hidden="true">·</span>
-      <span>{hold}</span>
-    </>
-  );
-}
-
-function RunBody({ run, who }: { run: SandboxRun; who: Who | null }) {
+function RunBody({ run, who, now }: { run: SandboxRun; who: Who | null; now: number }) {
   const write = useAct("answer_run");
   const [answer, setAnswer] = useState("");
   const name = who?.name ?? run.agent_handle;
+  const hold = holdLine(run, now);
   const send = async () => {
     const text = answer.trim();
     if (!text) return;
@@ -566,10 +545,13 @@ function RunBody({ run, who }: { run: SandboxRun; who: Who | null }) {
       <div className="inbox-pane-head">
         <h1 className="inbox-pane-question">{`${name}’s coding run is parked on a question`}</h1>
         <Byline who={who}>
-          <span>
-            <ClockText read={(now) => `Parked ${relTime(run.paused_at || run.updated_at, now)}`} />
-          </span>
-          <HoldLine run={run} />
+          <span>{`Parked ${relTime(run.paused_at || run.updated_at, now)}`}</span>
+          {hold && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>{hold}</span>
+            </>
+          )}
         </Byline>
       </div>
       <div className="inbox-pane-card">
@@ -610,7 +592,7 @@ function RunBody({ run, who }: { run: SandboxRun; who: Who | null }) {
   );
 }
 
-function SeatBody({ seat, who }: { seat: SeatCondition; who: Who | null }) {
+function SeatBody({ seat, who, now }: { seat: SeatCondition; who: Who | null; now: number }) {
   const name = who?.name ?? seat.row.role;
   const item = seat.row.turn?.work_item ?? seat.row.live_call?.work_item ?? null;
   const w = seat.window;
@@ -625,9 +607,7 @@ function SeatBody({ seat, who }: { seat: SeatCondition; who: Who | null }) {
           {seat.at && (
             <>
               <span aria-hidden="true">·</span>
-              <span>
-                <ClockText read={(now) => `last refused ${relTime(seat.at, now)}`} />
-              </span>
+              <span>{`last refused ${relTime(seat.at, now)}`}</span>
             </>
           )}
         </Byline>
@@ -635,7 +615,7 @@ function SeatBody({ seat, who }: { seat: SeatCondition; who: Who | null }) {
       <div className="inbox-pane-card">
         <p>
           {w
-            ? `${fmtExact(w.used)} of ${fmtExact(w.limit ?? 0)} tokens are spent in ${w.window}, so the engine turns this seat's charges away until ${fmtDateTime(w.resets_at)}.`
+            ? `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens are spent in ${w.window}, so the engine turns this seat's charges away until ${fmtDateTime(w.resets_at)}.`
             : "The engine turns this seat's charges away until its budget window resets."}
         </p>
         <p className="t-caption">
@@ -647,7 +627,7 @@ function SeatBody({ seat, who }: { seat: SeatCondition; who: Who | null }) {
             name={name}
             window={seat.window}
           />
-          {item && <ReassignItem item={itemAddress(item)} />}
+          {item && <ReassignItem item={item.key} />}
         </div>
       </div>
     </>
@@ -686,10 +666,12 @@ function NoticeBody({
   notice,
   who,
   index,
+  now,
 }: {
   notice: WorkInboxNotice;
   who: Who | null;
   index: OrgIndex;
+  now: number;
 }) {
   // THE LIST'S OWN SENTENCE, so the pane heads with what the row said.
   const said = noticeText(notice, index);
@@ -700,8 +682,8 @@ function NoticeBody({
         <h1 className="inbox-pane-question">{said ? firstLine(said) : humanize(notice.kind)}</h1>
         <Byline who={who}>
           <span>
-            <strong>{who?.name ?? "The engine"}</strong>
-            <ClockText read={(now) => ` · ${relTime(notice.at, now)}`} />
+            <strong>{who?.name ?? "An operator"}</strong>
+            {` · ${relTime(notice.at, now)}`}
           </span>
           <span aria-hidden="true">·</span>
           <span className="inbox-pane-role">
@@ -720,15 +702,9 @@ function NoticeBody({
           )}
           {ask && (
             <p className="t-caption">
-              {ask.open ? (
-                "The question it is about is still open."
-              ) : (
-                <ClockText
-                  read={(now) =>
-                    `The question it is about was ${ask.resolved ? "resolved" : "answered"}${ask.answered_at ? ` ${relTime(ask.answered_at, now)}` : ""}.`
-                  }
-                />
-              )}
+              {ask.open
+                ? "The question it is about is still open."
+                : `The question it is about was ${ask.resolved ? "resolved" : "answered"}${ask.answered_at ? ` ${relTime(ask.answered_at, now)}` : ""}.`}
             </p>
           )}
         </div>

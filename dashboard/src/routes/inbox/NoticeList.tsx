@@ -17,10 +17,8 @@ import { Mark } from "~/ui/glyph.tsx";
 import { Segmented } from "~/ui/primitives.tsx";
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
 import { plainText } from "~/lib/markdown.ts";
-import { ENGINE_SENTENCES, authorOf, nameAuthor, noticeItem, type ItemRef } from "~/lib/work.ts";
-import { dateFormatter, fmtDateTime, humanize } from "~/lib/format.ts";
-import { zone } from "~/lib/prefs.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
+import { ENGINE_SENTENCES, authorOf, nameAuthor } from "~/lib/work.ts";
+import { fmtDateTime, humanize } from "~/lib/format.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
 import { CHIPS, rowPill, type Chip, type DayGroup, type InboxRow, type Scope } from "./model.ts";
@@ -96,39 +94,7 @@ export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
   return null;
 }
 
-/**
- * The work item a row is on, or null — to ADDRESS it ([itemAddress]): a key
- * another task claimed first opens that task, so a row about the task that did
- * not claim it links, threads and replies by its id. The engine says so on
- * every row that carries a key it may not own (`key_collision`,
- * `subject_key_collision`); a live turn's reference carries no flag, and its
- * key is the one the turn was charged under.
- */
-export function rowItem(row: InboxRow): ItemRef | null {
-  switch (row.kind) {
-    case "decision":
-      switch (row.subject.kind) {
-        case "ask":
-          return row.subject.ask;
-        case "run":
-          return row.subject.run.work_item ?? null;
-        case "seat": {
-          const r = row.subject.seat.row;
-          return r.turn?.work_item ?? r.live_call?.work_item ?? null;
-        }
-      }
-      break;
-    case "condition":
-      return null;
-    case "notice": {
-      const item = noticeItem(row.notice);
-      return item.id || item.key ? item : null;
-    }
-  }
-  return null;
-}
-
-/** The work item a row is on, by the key a reader reads, or "". */
+/** The work item a row is on, by key, or "". */
 export function rowKey(row: InboxRow): string {
   switch (row.kind) {
     case "decision":
@@ -211,12 +177,8 @@ export function shortWhen(at: string | undefined, now: number): string {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h`;
-  // IN THE READER'S ZONE, through the kept formatters, as every other time on
-  // the screen is: the browser's own calendar named a different weekday from
-  // the pane's full timestamp for a reader whose preference is elsewhere.
-  if (hours < 24 * 7)
-    return dateFormatter(undefined, { weekday: "short", timeZone: zone() }).format(t);
-  return dateFormatter(undefined, { month: "short", day: "numeric", timeZone: zone() }).format(t);
+  if (hours < 24 * 7) return new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(t);
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(t);
 }
 
 /** Whether the row has something this person has not read. */
@@ -243,6 +205,7 @@ export function NoticeList({
   selected,
   onOpen,
   index,
+  now,
   loading,
   quiet,
   more,
@@ -261,9 +224,9 @@ export function NoticeList({
   decisions: InboxRow[];
   groups: DayGroup[];
   selected: string;
-  /** Open a row by its own id — what `row=` names. */
-  onOpen: (id: string) => void;
+  onOpen: (key: string) => void;
   index: OrgIndex;
+  now: number;
   /** Nothing has answered yet. */
   loading: boolean;
   /** What to say instead of rows, or null where rows (or a refusal) are drawn. */
@@ -277,7 +240,7 @@ export function NoticeList({
   pageLocal: boolean;
   /** Whether the decisions group is part of this view (not under Snoozed). */
   showDecisions: boolean;
-  /** Whether the notices are part of this view (a reader with a record of their own). */
+  /** Whether the notices are part of this view (a bound reader). */
   showNotices: boolean;
   /** A read's refusal, drawn where its rows would be. */
   refusal?: React.ReactNode;
@@ -360,11 +323,12 @@ export function NoticeList({
           <Group label="Needs a decision">
             {decisions.map((row) => (
               <Row
-                key={row.id}
+                key={row.key}
                 row={row}
                 index={index}
-                selected={row.id === selected}
-                onOpen={() => onOpen(row.id)}
+                now={now}
+                selected={row.key === selected}
+                onOpen={() => onOpen(row.key)}
               />
             ))}
           </Group>
@@ -373,11 +337,12 @@ export function NoticeList({
           <Group key={group.label} label={group.label}>
             {group.rows.map((row) => (
               <Row
-                key={row.id}
+                key={row.key}
                 row={row}
                 index={index}
-                selected={row.id === selected}
-                onOpen={() => onOpen(row.id)}
+                now={now}
+                selected={row.key === selected}
+                onOpen={() => onOpen(row.key)}
               />
             ))}
           </Group>
@@ -413,11 +378,13 @@ const RING = { warning: "warning", danger: "danger", neutral: undefined } as con
 function Row({
   row,
   index,
+  now,
   selected,
   onOpen,
 }: {
   row: InboxRow;
   index: OrgIndex;
+  now: number;
   selected: boolean;
   onOpen: () => void;
 }) {
@@ -454,14 +421,8 @@ function Row({
               {who?.name ?? (row.kind === "condition" ? "The company" : "The engine")}
             </span>
             <span className="inbox-row-where">{where}</span>
-            {/* THE CLOCK IS READ HERE, in the one cell that shows it, so a
-                tick re-renders the cells whose words moved and never the list. */}
             <span className="inbox-row-age t-num">
-              {Number.isFinite(Date.parse(row.at ?? "")) ? (
-                <ClockText read={(now) => shortWhen(row.at, now)} />
-              ) : (
-                <EmptyValue label="No time recorded" />
-              )}
+              {shortWhen(row.at, now) || <EmptyValue label="No time recorded" />}
             </span>
           </span>
           <span className="inbox-row-line">{rowLine(row, index)}</span>

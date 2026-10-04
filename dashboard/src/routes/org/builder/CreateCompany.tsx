@@ -6,8 +6,7 @@
  * their own. Everything else a template writes (units, neutral role titles,
  * who manages whom) is in `model/templates.ts`, and what it produces is one
  * `applyTemplate` operation, so the whole start is a single undo and is
- * checked exactly like any other draft. Saved, it is two writes: the settings
- * as the company's first revision, then the org chart (`model/save.ts`).
+ * checked by the engine exactly like any other draft.
  *
  * NO INVENTED IDENTITY. A human seat reaches people through a contact
  * identity, and a template never writes one it was not given: the only
@@ -15,11 +14,10 @@
  * "Leads are people" option therefore creates human leads without identities,
  * and the review lists each one until it has one.
  *
- * WHAT A CREATE CANNOT DO. No screen adds a model provider (`providers.llm`:
- * Settings › Models & keys edits one the company already has, and a company
- * just created has none), so the next steps after a successful create name
- * the two things left to do and give the command for the one that has no
- * screen at all.
+ * WHAT A CREATE CANNOT DO. The dashboard writes no model provider (that is
+ * `providers.llm`, which no screen edits), so the next steps after a
+ * successful create name the two things left to do and give the command for
+ * the one that has no screen at all.
  */
 
 import { useState } from "react";
@@ -154,7 +152,7 @@ export function CreateCompany({
             />
             <span className="t-caption">
               {leads === "people"
-                ? "Each unit lead is a human seat, created with no contact identity. Add one in a seat's editor for a person agents should be able to @-mention."
+                ? "Each unit lead is a human seat. Every one needs a contact identity before the company can be created."
                 : "Each unit lead is an agent seat the engine runs."}
             </span>
           </div>
@@ -189,9 +187,7 @@ export function CreateCompany({
               label={CONTACT_IDENTITIES.find((c) => c.key === identity)!.label}
               value={value}
               onChange={setValue}
-              required={false}
               disabled={disabled}
-              help="Optional. Leave it empty if you will work only through the dashboard: agents then hand you work in the tracker rather than mentioning you."
             />
           </div>
         )}
@@ -248,10 +244,9 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
           <strong>Add a model provider</strong>
           <span className="t-caption">
             Until one is configured no agent seat takes a turn, and work sent to a seat waits on its
-            inbox until it is. No dashboard screen adds the first entry under{" "}
-            <InlineCode>providers.llm</InlineCode>. Seal the key first with{" "}
-            <InlineCode>crewlet secrets set ANTHROPIC_API_KEY</InlineCode>, then patch the settings,
-            which adds the provider and changes nothing else:
+            inbox until it is. No dashboard screen writes <InlineCode>providers.llm</InlineCode>.
+            Seal the key first with <InlineCode>crewlet secrets set ANTHROPIC_API_KEY</InlineCode>,
+            then either import a company file or patch the configuration:
           </span>
           <CodeBlock plain wrap code={PROVIDER_SNIPPET} maxHeight={RECORD_MAX_HEIGHT} />
         </div>
@@ -260,16 +255,13 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
   );
 }
 
-/**
- * The exact command the step above names.
- *
- * THE PATCH, NOT AN IMPORT. `crewlet config import` writes a whole company
- * file — its settings AND its org chart — so for a company just created here,
- * which no file describes, it would put back whatever a file said over the
- * chart this screen wrote. A merge patch of `providers` changes nothing else.
- */
-const PROVIDER_SNIPPET = `curl -X PATCH "$CREWLET_URL/config" \\
-  -H "Authorization: Bearer $CREWLET_API_TOKEN" \\
+/** The exact commands the step above names. */
+const PROVIDER_SNIPPET = `# Either: edit the company file and import it
+crewlet config import company.yaml
+
+# Or: patch the running configuration
+curl -X PATCH "$CREWLET_URL/config" \\
+  -H "Authorization: Bearer $CREWLET_TOKEN" \\
   -H "Content-Type: application/merge-patch+json" \\
   -H "X-Summary: add a model provider" \\
   -d '{"providers":{"llm":{"default":{"type":"anthropic",

@@ -14,7 +14,7 @@
 
 import { useCallback, useMemo, useRef } from "react";
 import { rest } from "~/protocol/index.ts";
-import { useRestRead } from "./restRead.ts";
+import { useRest } from "./useRest.ts";
 
 /**
  * How long a read of the names stays fresh enough that a completion opening
@@ -33,10 +33,7 @@ export function useSecretNames(): {
   /** Ask again, quietly, unless a read is fresher than [SECRET_NAMES_FRESH_MS]. */
   refresh: () => void;
 } {
-  // THE ONE REST LOADER (`./restRead.ts`): a refusal — a reader without the
-  // grant the listing takes — holds no names, and anything else keeps the
-  // last reading through the failure.
-  const secrets = useRestRead(
+  const secrets = useRest(
     "/secrets",
     (signal) => rest.get("/secrets", signal) as Promise<{ secrets?: { name?: string }[] } | null>,
   );
@@ -49,12 +46,12 @@ export function useSecretNames(): {
   // an entry in another tab, which is exactly what a person does on finding
   // the name they wanted is not there.
   const askedAt = useRef(Date.now());
-  const { refetch } = secrets;
+  const { reload } = secrets;
   const refresh = useCallback(() => {
     const now = Date.now();
     if (now - askedAt.current < SECRET_NAMES_FRESH_MS) return;
     askedAt.current = now;
-    refetch();
-  }, [refetch]);
+    void reload({ quiet: true });
+  }, [reload]);
   return { names, refresh };
 }

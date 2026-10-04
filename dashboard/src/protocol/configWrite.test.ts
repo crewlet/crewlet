@@ -286,24 +286,24 @@ describe("one reading of a /config refusal", () => {
   });
 });
 
-// ONE PROVIDER, READ WITH ITS REVISION'S TAG AND CHECKED AS THE WRITE WOULD SEND
-// IT: Settings' EditModelDialog changes a provider by sending the entity back,
-// so the read has to carry the tag the write is conditional on, and the check
-// has to be the same PUT carrying `dry_run=true` and no summary.
+// ONE SEAT, READ WITH ITS REVISION'S TAG AND CHECKED AS THE WRITE WOULD SEND IT:
+// the Budgets screen raises a seat's ceiling by sending the seat back, so the
+// read has to carry the tag the write is conditional on, and the check has to
+// be the same PUT carrying `dry_run=true` and no summary.
 describe("one entity", () => {
   test("is read with the revision's tag, and a missing one is missing", async () => {
     stub(async (url) =>
-      url.endsWith("/config/llm-providers/zulu")
-        ? json({ type: "anthropic", model: "m" }, 200, { ETag: '"r7"' })
+      url.endsWith("/config/roles/pm")
+        ? json({ name: "PM", handle: "pm" }, 200, { ETag: '"r7"' })
         : json({ error: "no_such_entity" }, 404),
     );
     const signal = new AbortController().signal;
-    expect(await getEntity("llm-providers", "zulu", signal)).toEqual({
+    expect(await getEntity("roles", "pm", signal)).toEqual({
       kind: "entity",
-      entity: { type: "anthropic", model: "m" },
+      entity: { name: "PM", handle: "pm" },
       etag: '"r7"',
     });
-    expect(await getEntity("llm-providers", "ghost", signal)).toEqual({ kind: "missing" });
+    expect(await getEntity("roles", "ghost", signal)).toEqual({ kind: "missing" });
   });
 
   test("a check is the write's own PUT, conditional, with dry_run and no summary", async () => {
@@ -311,17 +311,17 @@ describe("one entity", () => {
       json({ valid: true, base_revision_id: "r7", warnings: [] }, 200),
     );
     const outcome = await dryRunEntity(
-      "llm-providers",
-      "zulu",
-      { type: "anthropic", model: "m2" },
+      "roles",
+      "pm",
+      { name: "PM", token_budget: { day: 5 } },
       '"r7"',
       new AbortController().signal,
     );
     expect(outcome).toMatchObject({ kind: "valid", baseRevisionId: "r7" });
     const call = calls[0]!;
     expect(call.init.method).toBe("PUT");
-    expect(call.url).toContain("/config/llm-providers/zulu?dry_run=true");
+    expect(call.url).toContain("/config/roles/pm?dry_run=true");
     expect(new Headers(call.init.headers).get("If-Match")).toBe('"r7"');
-    expect(JSON.parse(call.init.body as string)).toEqual({ type: "anthropic", model: "m2" });
+    expect(JSON.parse(call.init.body as string)).toEqual({ name: "PM", token_budget: { day: 5 } });
   });
 });

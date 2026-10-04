@@ -13,23 +13,23 @@
  * Grid.test.tsx` holds the same rule over the grid's two column sets.
  */
 
-import { cleanup, render } from "~/test/inCase.ts";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import {
   Assignee,
   CARD_FACTS,
-  ChecklistClaims,
-  RowList,
   WorkCard,
   cardHidden,
   cardHideParam,
   fitTags,
   type RowChrome,
 } from "./work.tsx";
-import type { WorkChecklistRow, WorkSummary } from "~/protocol/index.ts";
+import type { WorkSummary } from "~/protocol/index.ts";
 
 afterEach(cleanup);
+
+const NOW = Date.parse("2031-04-16T12:00:00Z");
 
 /** The chart: `iris` is the human seat, `ada` the agent, `departed` neither. */
 const chrome: RowChrome = {
@@ -114,12 +114,12 @@ test("no kind resolver never draws a person", () => {
 // and it drew the badge through the same [Assignee] with the kind dropped.
 test("the board card draws a human seat as a person and an agent as an agent", () => {
   const human = render(
-    <WorkCard row={row({ assignee: "iris" })} href="#/work/ENG-9" chrome={chrome} />,
+    <WorkCard row={row({ assignee: "iris" })} href="#/work/ENG-9" now={NOW} chrome={chrome} />,
   );
   expect(outline(human.container)).toBe("human");
   cleanup();
   const agent = render(
-    <WorkCard row={row({ assignee: "ada" })} href="#/work/ENG-9" chrome={chrome} />,
+    <WorkCard row={row({ assignee: "ada" })} href="#/work/ENG-9" now={NOW} chrome={chrome} />,
   );
   expect(outline(agent.container)).toBe("agent");
 });
@@ -160,7 +160,7 @@ test("a card draws only the facts not put away, and never hides a state", () => 
     dependents_count: 2,
   });
   const all = new Set(CARD_FACTS.map((f) => f.key));
-  const { container } = render(<WorkCard row={full} href="#/work/ENG-9" omit={all} />);
+  const { container } = render(<WorkCard row={full} href="#/work/ENG-9" now={NOW} omit={all} />);
   expect(container.querySelector(".work-card-points")).toBeNull();
   expect(container.querySelector(".work-due")).toBeNull();
   expect(container.querySelector(".work-card-tokens")).toBeNull();
@@ -173,13 +173,13 @@ test("a card draws only the facts not put away, and never hides a state", () => 
     <WorkCard
       row={row({ points: 3, due: "2031-04-20T00:00:00Z" })}
       href="#"
-
+      now={NOW}
       omit={all}
     />,
   ).container;
   expect(quiet.querySelector(".work-card-foot")).toBeNull();
   cleanup();
-  const shown = render(<WorkCard row={full} href="#" />).container;
+  const shown = render(<WorkCard row={full} href="#" now={NOW} />).container;
   expect(shown.querySelector(".work-card-points")?.textContent).toBe("3 pts");
   expect(shown.querySelector(".work-due")).toBeTruthy();
   expect(shown.querySelector(".work-card-tokens")).toBeTruthy();
@@ -188,10 +188,12 @@ test("a card draws only the facts not put away, and never hides a state", () => 
 });
 
 test("a card draws a type mark for a bug and none for a plain task", () => {
-  const task = render(<WorkCard row={row()} href="#/work/ENG-9" chrome={chrome} />);
+  const task = render(<WorkCard row={row()} href="#/work/ENG-9" now={NOW} chrome={chrome} />);
   expect(task.container.querySelector(".work-card-top .work-type")).toBeNull();
   cleanup();
-  const bug = render(<WorkCard row={row({ type: "bug" })} href="#/work/ENG-9" chrome={chrome} />);
+  const bug = render(
+    <WorkCard row={row({ type: "bug" })} href="#/work/ENG-9" now={NOW} chrome={chrome} />,
+  );
   expect(bug.container.querySelector(".work-card-top .work-type")?.textContent).toBe("Bug");
 });
 
@@ -247,7 +249,7 @@ test("a card too narrow for its labels names the rest in a +N and keeps the coun
           spend: { tokens: 56_200, turns: 3, workers: 0, sent_back: 0, reopens: 0 },
         })}
         href="#/work/ENG-9"
-
+        now={NOW}
         chrome={chrome}
       />,
     );
@@ -267,46 +269,4 @@ test("a card too narrow for its labels names the rest in a +N and keeps the coun
     if (offset) Object.defineProperty(HTMLElement.prototype, "offsetWidth", offset);
     if (client) Object.defineProperty(Element.prototype, "clientWidth", client);
   }
-});
-
-// ---------------------------------------------------------------------------
-// A task is reached by its ADDRESS
-// ---------------------------------------------------------------------------
-
-// A KEY ANOTHER TASK CLAIMED FIRST OPENS THAT TASK, on every node, so a row
-// flagged `key_collision` is linked and selected by its id — and drawn by its
-// key, which is what a person reads. A list that matched the open task on its
-// key lit up both holders of a shared one.
-test("a list selects the task the rail holds by its address, never its key", () => {
-  const rows = [
-    row({ id: "t-claimant", key: "ENG-7" }),
-    row({ id: "t-second", key: "ENG-7", key_collision: true }),
-  ];
-  const { container } = render(
-    <RowList rows={rows} hrefOf={(r) => `#/work/${r.id}`} selected="t-second" />,
-  );
-  const selected = [...container.querySelectorAll("a.work-row.selected")];
-  expect(selected.map((a) => a.getAttribute("href"))).toEqual(["#/work/t-second"]);
-});
-
-test("a claimed item's task is linked by its id and drawn by its key", () => {
-  const item = (over: Partial<WorkChecklistRow>): WorkChecklistRow => ({
-    task: "t-1",
-    task_key: "ENG-7",
-    task_title: "the wrong subtree",
-    checklist: "c-1",
-    item: "i-1",
-    name: "write the test",
-    done: false,
-    ...over,
-  });
-  const { container } = render(
-    <ChecklistClaims
-      rows={[item({}), item({ task: "t-2", item: "i-2", task_key_collision: true })]}
-      hrefOf={(address) => `#/work/${address}`}
-    />,
-  );
-  const links = [...container.querySelectorAll("a")];
-  expect(links.map((a) => a.getAttribute("href"))).toEqual(["#/work/ENG-7", "#/work/t-2"]);
-  expect(links.map((a) => a.textContent)).toEqual(["ENG-7", "ENG-7"]);
 });

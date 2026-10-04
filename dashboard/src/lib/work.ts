@@ -24,13 +24,10 @@ import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
   civilAt,
   civilKey,
-  dateFormatter,
   fmtDate,
-  fmtDateTime,
-  fmtExact,
   fromWall,
+  fmtDateTime,
   humanize,
-  naturalCompare,
   parseUTC,
   plural,
   readerDay,
@@ -45,13 +42,9 @@ import type { GlyphName } from "@crewlethq/icons/glyphs";
 import type {
   WorkActivityRecord,
   WorkChange,
-  WorkChecklistRow,
   WorkFieldDef,
   WorkFieldValue,
   WorkGroup,
-  WorkInboxNotice,
-  WorkItemDetail,
-  WorkLink,
   WorkProjectRow,
   WorkProjectTag,
   WorkStatus,
@@ -64,113 +57,6 @@ import type {
 import { CHANGES, GROUP_AXES, type WorkViewShape } from "~/contract/work.ts";
 
 export type Tone = "neutral" | "positive" | "caution" | "critical" | "info";
-
-// ---------------------------------------------------------------------------
-// Where an item is
-// ---------------------------------------------------------------------------
-
-/**
- * What it takes to address a task: its id, the key it carries, and whether
- * that key is somebody else's.
- *
- * Every row shape the engine lists a task in carries the three, under the
- * names of the key they qualify — `key`/`key_collision` on a row, a hit and a
- * link, `subject_key`/`subject_key_collision` on a feed record and a notice
- * (whose id is its `task`, not its subject), `task_key`/`task_key_collision` on
- * a checklist item. The adapters below turn each into this, so a screen never
- * pairs an id with the wrong flag by hand.
- */
-export interface ItemRef {
-  id: string;
-  key?: string;
-  key_collision?: boolean;
-}
-
-/**
- * The address that opens a task: its KEY, unless another task claimed that
- * key first, and then its ID.
- *
- * A KEY TWO TASKS HOLD OPENS THE ONE THAT CLAIMED IT, on every node — the
- * engine resolves a key through its directory before it looks at a row, so
- * every link, chat message and comment written against the claimant keeps
- * reaching it. The task that did not claim it is flagged `key_collision`, and
- * a link, a peek, a selection or a copied call built from its key lands on the
- * claimant: every screen drew two `ENG-7`s and both opened the same task. Its
- * id is the one address that reaches it, and the engine's item route takes an
- * id as readily as a key.
- *
- * THE KEY EVERYWHERE ELSE, because it is what a person reads, pastes into chat
- * and types into a tool call — a page full of uuids is a page nobody can talk
- * about. And the id when a row carries no key at all, since an empty segment
- * addresses nothing.
- *
- * THE ONE PLACE THIS IS WRITTEN. The engine states the same sentence as
- * `tracker.ItemAddress`, and `app/source.test.ts` fails a screen that builds
- * an item's link, its peek or its selection out of a key any other way.
- */
-export function itemAddress(ref: ItemRef): string {
-  return ref.key && !ref.key_collision ? ref.key : ref.id;
-}
-
-/** Where a task's page is: `#/work/{address}`. See [itemAddress]. */
-export function itemPath(ref: ItemRef): string[] {
-  return ["work", itemAddress(ref)];
-}
-
-/**
- * Where a project's page is: `#/work/{KEY}`.
- *
- * A PROJECT KEY IS ITS ADDRESS — no two projects hold one — so this is the
- * route and nothing more. It is a function rather than an array written at the
- * call site because an item's route is the one shape that must never be
- * written there, and a gate that told the two apart by their spelling could
- * only do it if neither were spelled by hand.
- */
-export function projectPath(key: string): string[] {
-  return ["work", key];
-}
-
-/** A feed record's subject, as a task to address. */
-export function subjectItem(row: {
-  subject_id: string;
-  subject_key?: string;
-  subject_key_collision?: boolean;
-}): ItemRef {
-  return { id: row.subject_id, key: row.subject_key, key_collision: row.subject_key_collision };
-}
-
-/**
- * The task an inbox notice is about, as a task to address.
- *
- * ITS `task`, NEVER ITS SUBJECT. A notice about a task commit is about its own
- * subject, but a `prioritised` notice's subject is the PERSON whose list a
- * lead reordered, and its key is the task's — read as a subject, the one
- * notice whose key could open another task had a person's handle for an id,
- * and its link went to `#/work/{handle}`. A notice naming no task keeps its
- * key as its only address, and the engine never flags one.
- */
-export function noticeItem(notice: WorkInboxNotice): ItemRef {
-  return {
-    id: notice.task ?? "",
-    key: notice.subject_key,
-    key_collision: notice.subject_key_collision,
-  };
-}
-
-/** The task a checklist item sits on. */
-export function checklistTask(row: WorkChecklistRow): ItemRef {
-  return { id: row.task, key: row.task_key, key_collision: row.task_key_collision };
-}
-
-/** The other end of an item's link. */
-export function linkedItem(link: WorkLink): ItemRef {
-  return { id: link.other, key: link.key, key_collision: link.key_collision };
-}
-
-/** The task an item answer is about — its flag is on the ANSWER, beside `blocked`. */
-export function detailItem(detail: WorkItemDetail): ItemRef {
-  return { id: detail.task.id, key: detail.task.key, key_collision: detail.key_collision };
-}
 
 // ---------------------------------------------------------------------------
 // The closed sets
@@ -371,16 +257,15 @@ export interface LabelContext {
   /**
    * What a UNIT key is called, where the caller can say.
    *
-   * The one axis this module cannot name for itself: a row holds the unit's
-   * KEY, which is its `id` on a company that set one, and this module holds no
-   * org index to turn a key into a name — so the engine's own column `label`
-   * is the name, and a caller holding the answer passes it down here. Absent,
+   * The one axis a client cannot name for itself: a row holds the unit's KEY,
+   * which is its `id` on a company that set one, and the anonymous org
+   * projection carries no ids — so the engine's own column `label` is the only
+   * name for it, and a caller holding the answer passes it down here. Absent,
    * the key stands, which is what the address holds and what a filter takes.
    */
   unitName?: (key: string) => string;
   /**
-   * WHO IS READING, as the name their own record is kept under — the viewer's
-   * `owner`: their seat when bound, their login when not.
+   * WHO IS READING, as the seat handle a wake would have been delivered to.
    *
    * A change record is written ONCE and read by everybody, so a sentence the
    * engine addressed to the seat it woke — "…of your priorities" — is second
@@ -453,11 +338,13 @@ export function axisLabel(axis: string, key: string, ctx: LabelContext = {}): st
       // THE NAME WHERE THE CALLER HAS ONE, and the key where it does not.
       //
       // A unit key is its `id` on a company that set one — a word chosen so
-      // that a rename moves nothing, and therefore a word nobody reads. This
-      // module holds no org index to turn one into a team's name; what the
-      // engine gives is a column's own `label`, which [groupLabel] takes
-      // before this is reached and which a caller holding the answer can pass
-      // down — so a chip and the heading it was cut from say one word.
+      // that a rename moves nothing, and therefore a word nobody reads. Only
+      // the ENGINE can turn one into a team's name: a unit's `id:` is guarded,
+      // so the anonymous org projection this client reads carries names alone
+      // and a key out of a URL resolves against nothing here. What the engine
+      // does give is a column's own `label`, which [groupLabel] takes before
+      // this is reached and which a caller holding the answer can pass down —
+      // so a chip and the heading it was cut from say one word.
       return key ? ctx.unitName?.(key) || key : "No unit";
     case "due:bucket":
       // THE ENGINE NAMES THESE and a column head takes that name — the answer
@@ -603,6 +490,7 @@ export function manualOrder(sort: string, project: string): boolean {
  * like a rendering bug.
  */
 export function describeChange(record: WorkActivityRecord, ctx: LabelContext): string {
+  if (isChartReapply(record)) return "Org chart re-applied";
   // A SAVED VIEW IS NAMED, not dumped: its record moves the container, the
   // rank and a params blob — "Params: – → blocked=true, Rank: – → a1" — which
   // is the engine's storage of a view rather than anything a person did to
@@ -682,6 +570,86 @@ export function nameAuthor(
   if (!name || name === author) return text;
   const handle = author.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return text.replace(new RegExp(`(?<![\\w-])${handle}(?![\\w-])`, "g"), name);
+}
+
+/**
+ * The delta fields that are the engine's own bookkeeping rather than anything
+ * a person changed, and are never printed.
+ *
+ * `chart_epoch` is the config activation a project's chart fields were last
+ * re-declared at. The tracker records it because it is the only thing such a
+ * re-declaration moves (`internal/tracker/deltas.go`), so the row is not empty
+ * — but "Chart epoch: 1790538626 → 1790538628" is an internal counter, not a
+ * fact about the work. A record whose ONLY delta it is reads as the org chart
+ * being re-applied ([isChartReapply]), and runs of them fold into one line
+ * ([foldChartReapplies]).
+ */
+const BOOKKEEPING = new Set(["chart_epoch"]);
+
+/** Whether a record is a project's chart being re-applied and nothing else. */
+export function isChartReapply(record: WorkActivityRecord): boolean {
+  const fields = Object.keys(record.fields ?? {});
+  return (
+    record.subject_kind === "project" &&
+    fields.length > 0 &&
+    fields.every((field) => BOOKKEEPING.has(field))
+  );
+}
+
+/** One line of a change log: a record, or a run of chart re-applications. */
+export type ChangeLine =
+  | { kind: "record"; record: WorkActivityRecord }
+  | {
+      kind: "reapply";
+      /** The newest record's id, so the line has a stable key. */
+      id: string;
+      /** The newest record's instant: a log is read newest first. */
+      at: string;
+      /** The projects the run touched, in the order the log met them. */
+      projects: string[];
+      records: WorkActivityRecord[];
+    };
+
+/**
+ * The log's records as lines, CONSECUTIVE chart re-applications folded into
+ * one.
+ *
+ * A config activation re-declares every project the chart names, and each is a
+ * record — so one apply over a company of twelve projects was twelve rows of
+ * nothing a person did, pushing the work they came for off the page. ONLY
+ * CONSECUTIVE records fold: a run broken by a real change is two runs, because
+ * a log whose lines moved past each other would not be the log.
+ */
+export function foldChartReapplies(records: readonly WorkActivityRecord[]): ChangeLine[] {
+  const out: ChangeLine[] = [];
+  for (const record of records) {
+    const last = out[out.length - 1];
+    if (!isChartReapply(record)) {
+      out.push({ kind: "record", record });
+      continue;
+    }
+    const project = record.project || record.subject_key || record.subject_id;
+    if (last?.kind === "reapply") {
+      last.records.push(record);
+      if (!last.projects.includes(project)) last.projects.push(project);
+      continue;
+    }
+    out.push({
+      kind: "reapply",
+      id: record.id,
+      at: record.at,
+      projects: [project],
+      records: [record],
+    });
+  }
+  return out;
+}
+
+/** What a folded run says: "Org chart re-applied to ENG", or "to 3 projects". */
+export function reapplySentence(projects: readonly string[]): string {
+  return projects.length === 1
+    ? `Org chart re-applied to ${projects[0]}`
+    : `Org chart re-applied to ${plural(projects.length, "project")}`;
 }
 
 /**
@@ -804,6 +772,8 @@ export function describeHistory(entry: WorkChange, ctx: LabelContext): string {
 function deltaSentence(fields: Record<string, unknown> | undefined, ctx: LabelContext): string {
   const said: string[] = [];
   for (const [field, raw] of Object.entries(fields ?? {})) {
+    // ENGINE BOOKKEEPING IS NOT A CHANGE A PERSON MADE. See [BOOKKEEPING].
+    if (BOOKKEEPING.has(field)) continue;
     const delta = raw as { from?: unknown; to?: unknown } | null;
     if (delta && typeof delta === "object" && ("from" in delta || "to" in delta)) {
       said.push(deltaClause(field, scalar(delta.from), scalar(delta.to), ctx));
@@ -1255,9 +1225,11 @@ export interface TrackerFilters {
   /**
    * The TEAM the work is filed into, by the unit's id or by its name.
    *
-   * URL-ONLY: it arrives from an item's own "Filed into" line rather than
-   * from a control — the filter menu offers no row for it. It still carries
-   * a chip, which is how a reader sees it and takes it off.
+   * URL-ONLY, and deliberately: it arrives from an item's own "Filed into"
+   * line rather than from a control, because naming a team from a picker
+   * would need a list of unit KEYS, and the anonymous org projection this
+   * client reads carries names alone (a unit's `id:` is guarded). It still
+   * carries a chip, which is how a reader sees it and takes it off.
    *
    * The engine matches the SET of the unit's spellings, so the one key an
    * item holds reaches every task of that team however it was filed — which
@@ -2407,9 +2379,9 @@ export function totalHint(hint: number, shown: number, capped?: boolean): string
  * be outstanding over a count the engine could not finish.
  */
 export function loadedOf(loaded: number, hint: number, capped?: boolean): string {
-  const count = fmtExact(loaded);
-  if (capped) return `${count} of ${fmtExact(hint)}+ loaded`;
-  if (hint > loaded) return `${count} of ${fmtExact(hint)} loaded`;
+  const count = loaded.toLocaleString();
+  if (capped) return `${count} of ${hint.toLocaleString()}+ loaded`;
+  if (hint > loaded) return `${count} of ${hint.toLocaleString()} loaded`;
   return `${count} loaded`;
 }
 
@@ -2456,7 +2428,7 @@ export function countedLabel(
   // where a screen says which one it is on. "25 items" sat one row under a
   // project's "Items 19", which counts OPEN tasks: two numbers both called
   // items, a row apart, that disagree.
-  return scope ? `${fmtExact(shown)} in ${scope}` : plural(shown, "item");
+  return scope ? `${shown.toLocaleString()} in ${scope}` : plural(shown, "item");
 }
 
 /**
@@ -2519,14 +2491,9 @@ export function endNote(args: {
  * never runs. An empty grid then takes [buildItemsParams] down the calendar
  * branch with no range, which is the one state that branch must never be in. A
  * mangled month is a bad address, not a company whose work has no dates.
- *
- * The fallback is the month of `today` — a browser day, `2031-04-16`, from
- * `useToday` — rather than of an instant, because the month is all of the
- * clock a calendar reads, and a screen holding the second re-rendered every
- * shape it draws once a second to arrive at the same month.
  */
-export function monthOrToday(month: string, today: string): string {
-  return /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : today.slice(0, 7);
+export function monthOrNow(month: string, now: number): string {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : monthOf(now);
 }
 
 /**
@@ -2550,7 +2517,7 @@ export function monthOrToday(month: string, today: string): string {
  * another's `20 (more)` read as two different facts.
  */
 export function pageCount(shown: number, more: boolean): string {
-  return more ? `${fmtExact(shown)}+` : fmtExact(shown);
+  return more ? `${shown.toLocaleString()}+` : shown.toLocaleString();
 }
 
 /**
@@ -2743,7 +2710,7 @@ export function shiftMonth(month: string, by: number): string {
  * any zone west of Greenwich it would name the day before.
  */
 function civilLabel(at: number, opts: Intl.DateTimeFormatOptions): string {
-  return dateFormatter(undefined, { ...opts, timeZone: "UTC" }).format(at);
+  return new Date(at).toLocaleDateString(undefined, { ...opts, timeZone: "UTC" });
 }
 
 export function monthLabel(month: string): string {
@@ -2859,7 +2826,7 @@ export function bucketByDay(rows: WorkSummary[]): Map<string, WorkSummary[]> {
     else out.set(key, [row]);
   }
   for (const day of out.values()) {
-    day.sort((a, b) => naturalCompare(a.due ?? "", b.due ?? "") || naturalCompare(a.key, b.key));
+    day.sort((a, b) => (a.due ?? "").localeCompare(b.due ?? "") || a.key.localeCompare(b.key));
   }
   return out;
 }
@@ -2884,12 +2851,16 @@ export function unfinished(counts: WorkTaskCounts): number {
  * locale.
  *
  * A DAY, NOT AN INSTANT — the engine stores the target as the calendar date on
- * the company's clock — so it is spelled as a CIVIL date ([civilLabel]), for
- * [dayLabel]'s reason: read through [fmtDate] as UTC midnight, it renders as
- * the 17th anywhere west of Greenwich.
+ * the company's clock — so it is built with `new Date(y, m - 1, d)` for
+ * [dayLabel]'s reason: read through [fmtDate] as UTC midnight, it renders as the
+ * 17th anywhere west of Greenwich.
  */
 export function targetLabel(day: string): string {
-  const at = civilAt(day);
-  if (at === null) return day;
-  return civilLabel(at, { day: "numeric", month: "short", year: "numeric" });
+  const [y, m, d] = day.split("-").map(Number);
+  if (!y || !m || !d) return day;
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 }

@@ -3,7 +3,7 @@
  * registration lasts exactly as long as the view.
  */
 
-import { cleanup, render } from "~/test/inCase.ts";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import {
   BuilderContext,
@@ -22,16 +22,8 @@ test("reading the context outside the Builder throws", () => {
     useBuilder();
     return null;
   }
-  // THE THROW IS EXPECTED, and React reports a render that throws on
-  // console.error — which fails any case that did not silence it
-  // (`src/test/setup.ts`). Silenced for this render only and put back: left
-  // in place it swallowed every error the rest of the file printed.
-  const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    expect(() => render(<Reader />)).toThrow(/outside the org builder/);
-  } finally {
-    quiet.mockRestore();
-  }
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  expect(() => render(<Reader />)).toThrow(/outside the org builder/);
 });
 
 // A handle left registered after its view unmounted would take focus calls

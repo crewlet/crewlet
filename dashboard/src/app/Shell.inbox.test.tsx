@@ -7,12 +7,11 @@
  * the sixty-second poll that used to be the only way the badge moved.
  */
 
-import { act, cleanup, render } from "~/test/inCase.ts";
+import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Shell } from "./Shell.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { INBOX_SETTLE_MS } from "~/lib/useQuery.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 
 class InertWebSocket {
@@ -86,7 +85,7 @@ test("the shell watches the viewer's seat and asks for their inbox again when it
     store.applyInboxChanged({ handle: "ana", unread_delta: 1, subject: "t-1", reason: "assignee" });
   });
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(INBOX_SETTLE_MS);
+    await vi.advanceTimersByTimeAsync(0);
   });
   // WELL INSIDE THE POLL, which is the point: the poll alone would not have
   // asked again for another minute.

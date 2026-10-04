@@ -4,21 +4,22 @@
  *
  * What these protect. A log replays to the same draft, with the same keys,
  * however many times and after a trip through JSON (which is how it survives a
- * reload). A rebase onto a newer chart applies what still holds, reports what
- * is gone, and holds every conflict with both values rather than overwriting
- * the other operator's change; an edit to a field this log never touched
- * survives it; an operation follows its seat through a rename somebody else
- * made; and a seat somebody created under an address another seat used to
- * answer to is never the target of an operation recorded against that other.
+ * reload). A rebase onto a newer revision applies what still holds, reports
+ * what is gone, and holds every conflict with both values rather than
+ * overwriting the other operator's change; an edit to a field this log never
+ * touched survives it; and an entity somebody recreated under the same name
+ * is never the target of an operation recorded against the original.
  *
  * The random cases come from a seeded PRNG in this file. A failure names its
  * seed, and `SEEDS` replays it.
  */
 
 import { describe, expect, test } from "vitest";
+import type { CompanyDocument } from "~/protocol/index.ts";
+import { cloneJson } from "./json.ts";
 import { COMPANY_KEY, mintKey, type KeySource, type NodeKey } from "./keys.ts";
 import { allKeys, allSeats, allUnits, locate, type Draft } from "./draft.ts";
-import { fromChart } from "./document.ts";
+import { fromDocument, toDocument } from "./document.ts";
 import { apply, record, type Intent, type Operation } from "./operations.ts";
 import {
   EMPTY_LOG,
@@ -29,7 +30,7 @@ import {
   undoOperation,
   ReplayError,
 } from "./history.ts";
-import { chartOfDraft, fixtureChart, fixtureSettings } from "./testkit.ts";
+import { fixtureCompany, fixtureDerived, fixtureHandle } from "./testkit.ts";
 
 /** mulberry32: a seeded PRNG, so a failing property names the run that found it. */
 function prng(seed: number): () => number {
@@ -45,10 +46,9 @@ function prng(seed: number): () => number {
 
 const SEEDS = Array.from({ length: 150 }, (_, i) => i + 1);
 
-const fixture = (): Draft => fromChart(fixtureSettings(), fixtureChart());
-
-/** What the chart holds once a draft is saved, read back: the next base. */
-const savedAs = (draft: Draft): Draft => fromChart(draft.company, chartOfDraft(draft));
+function keyed(doc: CompanyDocument): Draft {
+  return fromDocument(doc, fixtureDerived(doc));
+}
 
 /** A random intent against a draft, from what the draft holds now. */
 function randomIntent(draft: Draft, rand: () => number, keys: KeySource, label: string): Intent {
@@ -57,42 +57,61 @@ function randomIntent(draft: Draft, rand: () => number, keys: KeySource, label: 
   const seats = [...allSeats(draft)].map(({ seat }) => seat);
   const units = [...allUnits(draft)].map(({ unit }) => unit);
   const parents: NodeKey[] = [COMPANY_KEY, ...units.map((u) => u.key)];
+  const placementIn = (parent: NodeKey, kind: "seat" | "unit", self?: NodeKey) => {
+    const found = parent === COMPANY_KEY ? undefined : locate(draft, parent);
+    const list =
+      parent === COMPANY_KEY
+        ? kind === "seat"
+          ? draft.roles
+          : draft.units
+        : found?.kind === "unit"
+          ? kind === "seat"
+            ? found.node.roles
+            : found.node.children
+          : [];
+    const options = list.filter((n) => n.key !== self);
+    const after = rand() < 0.3 ? null : (pick(options)?.key ?? null);
+    return { parent, after };
+  };
   const seat = pick(seats);
   const unitNode = pick(units);
   const field = pick(["goal", "backstory", "email"] as const)!;
-  const charter = (f: "mission" | "vision"): Intent => ({
-    type: "updateCompany",
-    set: [{ path: [f], value: label }],
-  });
-  switch (Math.floor(rand() * 12)) {
-    case 0:
+  switch (Math.floor(rand() * 11)) {
+    case 0: {
+      const parent = pick(parents)!;
       return {
         type: "addSeat",
         key: mintKey(keys),
-        placement: { parent: pick(parents)! },
-        data: { handle: `s-${label}`, name: `Seat ${label}`, goal: label },
+        placement: placementIn(parent, "seat"),
+        data: { name: `Seat ${label}`, goal: label },
       };
-    case 1:
+    }
+    case 1: {
+      const parent = pick(parents)!;
       return {
         type: "addUnit",
         key: mintKey(keys),
-        placement: { parent: pick(parents)! },
-        data: { key: `u-${label}`, name: `Unit ${label}` },
+        placement: placementIn(parent, "unit"),
+        data: { name: `Unit ${label}` },
       };
+    }
     case 2:
-      return seat ? { type: "remove", target: seat.key } : charter("mission");
+      return seat
+        ? { type: "remove", target: seat.key }
+        : { type: "updateCompany", set: [{ path: ["mission"], value: label }] };
     case 3:
       return seat
         ? { type: "renameSeat", target: seat.key, name: `${seat.data.name} ${label}` }
-        : charter("vision");
+        : { type: "updateCompany", set: [{ path: ["vision"], value: label }] };
     case 4:
       return unitNode
         ? { type: "renameUnit", target: unitNode.key, name: `${unitNode.data.name} ${label}` }
-        : charter("mission");
-    case 5:
-      return seat
-        ? { type: "move", target: seat.key, to: { parent: pick(parents)! } }
-        : charter("vision");
+        : { type: "updateCompany", set: [{ path: ["mission"], value: label }] };
+    case 5: {
+      if (!seat) return { type: "updateCompany", set: [{ path: ["vision"], value: label }] };
+      const parent = pick(parents)!;
+      return { type: "move", target: seat.key, to: placementIn(parent, "seat", seat.key) };
+    }
     case 6:
       // An editor submits the whole form: the field the operator changed, and
       // the others at the values the form opened with. Only the first may
@@ -107,23 +126,23 @@ function randomIntent(draft: Draft, rand: () => number, keys: KeySource, label: 
                 : { path: [f], value: seat.data[f] },
             ),
           }
-        : charter("mission");
+        : { type: "updateCompany", set: [{ path: ["mission"], value: label }] };
     case 7:
       return unitNode
         ? {
             type: "setLead",
             target: unitNode.key,
-            ...(rand() < 0.3 || !seat ? {} : { lead: seat.data.handle }),
+            ...(rand() < 0.3 || !seat ? {} : { lead: seat.data.name }),
           }
-        : charter("mission");
+        : { type: "updateCompany", set: [{ path: ["mission"], value: label }] };
     case 8:
       return seat
         ? {
             type: "setManages",
             target: seat.key,
-            manages: seats.filter(() => rand() < 0.3).map((s) => s.data.handle),
+            manages: seats.filter(() => rand() < 0.3).map((s) => s.data.name),
           }
-        : charter("vision");
+        : { type: "updateCompany", set: [{ path: ["vision"], value: label }] };
     case 9:
       return seat
         ? {
@@ -132,12 +151,7 @@ function randomIntent(draft: Draft, rand: () => number, keys: KeySource, label: 
             kind: seat.data.kind === "human" ? "agent" : "human",
             contact: { slack_user_id: `U${label}` },
           }
-        : charter("mission");
-    case 10:
-      // A new address: the chart's rename, which keeps the seat.
-      return seat
-        ? { type: "updateSeat", target: seat.key, set: [{ path: ["handle"], value: `h-${label}` }] }
-        : charter("vision");
+        : { type: "updateCompany", set: [{ path: ["mission"], value: label }] };
     default:
       return unitNode
         ? {
@@ -145,7 +159,7 @@ function randomIntent(draft: Draft, rand: () => number, keys: KeySource, label: 
             target: unitNode.key,
             set: [{ path: ["purpose"], value: `purpose ${label}` }],
           }
-        : charter("vision");
+        : { type: "updateCompany", set: [{ path: ["vision"], value: label }] };
   }
 }
 
@@ -169,7 +183,7 @@ function randomLog(
   const intended = new Set<string>();
   let draft = base;
   for (let attempt = 0; ops.length < count && attempt < count * 6; attempt++) {
-    const intent = randomIntent(draft, rand, keys, `${tag}${seed}-${attempt}`);
+    const intent = randomIntent(draft, rand, keys, `${tag}${attempt}`);
     const result = record(draft, intent);
     if (!result.ok) continue;
     if (intent.type === "updateSeat") {
@@ -200,31 +214,9 @@ function failuresFor(seeds: readonly number[], check: (seed: number) => string |
   return failures;
 }
 
-const intentOk = (draft: Draft, intent: Intent): { op: Operation; draft: Draft } => {
-  const result = record(draft, intent);
-  if (!result.ok) throw new Error(`${intent.type}: ${result.message}`);
-  return { op: result.op, draft: apply(draft, result.op).draft };
-};
-
-function logOf(base: Draft, intents: readonly Intent[]): { ops: Operation[]; draft: Draft } {
-  let draft = base;
-  const ops: Operation[] = [];
-  for (const intent of intents) {
-    const next = intentOk(draft, intent);
-    ops.push(next.op);
-    draft = next.draft;
-  }
-  return { ops, draft };
-}
-
-const seatData = (draft: Draft, key: NodeKey) => {
-  const found = locate(draft, key);
-  return found?.kind === "seat" ? found.node.data : undefined;
-};
-
 describe("undo and redo", () => {
   test("undo returns to the draft before the operation and redo to the one after", () => {
-    const base = fixture();
+    const base = keyed(fixtureCompany());
     const failures = failuresFor(SEEDS.slice(0, 60), (seed) => {
       const { ops, drafts } = randomLog(base, seed, 8, "u");
       let log = EMPTY_LOG;
@@ -250,7 +242,8 @@ describe("undo and redo", () => {
   });
 
   test("recording after an undo forgets what was undone", () => {
-    const { ops } = randomLog(fixture(), 7, 3, "r");
+    const base = keyed(fixtureCompany());
+    const { ops } = randomLog(base, 7, 3, "r");
     let log = EMPTY_LOG;
     for (const op of ops) log = pushOperation(log, op);
     log = undoOperation(log)!.log;
@@ -261,17 +254,14 @@ describe("undo and redo", () => {
 });
 
 describe("replay", () => {
-  test("replaying the same operations twice gives identical keys and drafts, and survives JSON", () => {
-    const base = fixture();
+  test("replaying the same operations twice gives identical keys and drafts", () => {
+    const base = keyed(fixtureCompany());
     const failures = failuresFor(SEEDS, (seed) => {
       const { ops, drafts } = randomLog(base, seed, 12, "p");
       const first = replay(base, ops).draft;
-      const second = replay(fixture(), ops).draft;
+      const second = replay(keyed(fixtureCompany()), ops).draft;
       if ([...allKeys(first)].join() !== [...allKeys(second)].join()) return "keys differ";
       if (JSON.stringify(first) !== JSON.stringify(second)) return "drafts differ";
-      const roundTripped = JSON.parse(JSON.stringify({ ops })).ops as Operation[];
-      if (JSON.stringify(replay(base, roundTripped).draft) !== JSON.stringify(first))
-        return "a log that went through JSON replays differently";
       return JSON.stringify(first) === JSON.stringify(drafts[drafts.length - 1])
         ? null
         : "replay differs from recording";
@@ -279,9 +269,24 @@ describe("replay", () => {
     expect(failures).toEqual([]);
   });
 
+  test("a log that went through JSON replays identically", () => {
+    const base = keyed(fixtureCompany());
+    const failures = failuresFor(SEEDS, (seed) => {
+      const { ops } = randomLog(base, seed, 12, "j");
+      const roundTripped = JSON.parse(JSON.stringify({ ops })).ops as Operation[];
+      const a = toDocument(replay(base, ops).draft);
+      const b = toDocument(replay(base, roundTripped).draft);
+      if (JSON.stringify(a.document) !== JSON.stringify(b.document)) return "documents differ";
+      return JSON.stringify([...a.index.byPath]) === JSON.stringify([...b.index.byPath])
+        ? null
+        : "path indexes differ";
+    });
+    expect(failures).toEqual([]);
+  });
+
   test("an operation that does not apply is a defect and names its position", () => {
-    const base = fixture();
-    const op = record(base, { type: "setLead", target: "unit:sales", lead: "account-executive" });
+    const base = keyed(fixtureCompany());
+    const op = record(base, { type: "setLead", target: "unit:Sales", lead: "Account Executive" });
     if (!op.ok) throw new Error(op.message);
     expect(() => replay(base, [op.op, op.op])).toThrow(ReplayError);
     try {
@@ -293,8 +298,14 @@ describe("replay", () => {
 });
 
 describe("rebase", () => {
+  const intentOk = (draft: Draft, intent: Intent): { op: Operation; draft: Draft } => {
+    const result = record(draft, intent);
+    if (!result.ok) throw new Error(`${intent.type}: ${result.message}`);
+    return { op: result.op, draft: apply(draft, result.op).draft };
+  };
+
   test("onto the base it was recorded on, everything applies to the same draft", () => {
-    const base = fixture();
+    const base = keyed(fixtureCompany());
     const failures = failuresFor(SEEDS.slice(0, 60), (seed) => {
       const { ops, drafts } = randomLog(base, seed, 10, "s");
       const result = rebase(base, ops);
@@ -307,178 +318,110 @@ describe("rebase", () => {
     expect(failures).toEqual([]);
   });
 
-  test("onto a chart that gained a unit, every key still resolves", () => {
-    const base = fixture();
-    const { ops } = logOf(base, [
+  test("onto a document with a unit inserted before the targets, every key still resolves", () => {
+    const doc = fixtureCompany();
+    const base = keyed(doc);
+    let draft = base;
+    const ops: Operation[] = [];
+    for (const intent of [
       { type: "updateSeat", target: "seat:sre", set: [{ path: ["goal"], value: "Automate" }] },
-      { type: "setLead", target: "unit:sales", lead: "account-executive" },
-      { type: "move", target: "seat:dev", to: { parent: "unit:platform" } },
-    ]);
-    const theirs = logOf(base, [
-      {
-        type: "addUnit",
-        key: "new:l",
-        placement: { parent: COMPANY_KEY },
-        data: { key: "legal", name: "Legal" },
-      },
-    ]).draft;
-    const result = rebase(savedAs(theirs), ops);
+      { type: "setLead", target: "unit:Sales", lead: "Account Executive" },
+      { type: "move", target: "seat:dev", to: { parent: "unit:Platform", after: "seat:sre" } },
+    ] as Intent[]) {
+      const next = intentOk(draft, intent);
+      ops.push(next.op);
+      draft = next.draft;
+    }
+
+    const theirs = cloneJson(doc);
+    theirs.units!.unshift({ name: "Legal", roles: [{ name: "Counsel" }] });
+    const result = rebase(keyed(theirs), ops);
     expect(result.entries.map((e) => e.outcome)).toEqual(["applies", "applies", "applies"]);
-    expect(result.draft.units.map((u) => u.data.key)).toEqual(["engineering", "legal", "sales"]);
-    expect(seatData(result.draft, "seat:sre")?.goal).toBe("Automate");
-    expect(locate(result.draft, "seat:dev")?.parent).toBe("unit:platform");
+    const out = toDocument(result.draft).document;
+    expect(out.units!.map((u) => u.name)).toEqual(["Legal", "Engineering", "Sales"]);
+    expect(out.units![1]!.children![0]!.roles!.map((r) => [r.name, r.goal])).toEqual([
+      ["SRE", "Automate"],
+      ["Dev", "Build"],
+    ]);
+    expect(out.units![2]!.lead).toBe("Account Executive");
   });
 
   test("a value changed upstream is held as a conflict with both values, then kept mine or theirs", () => {
-    const base = fixture();
-    const { ops } = logOf(base, [
-      { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Mine" }] },
-    ]);
-    const newBase = savedAs(
-      logOf(base, [
-        { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Theirs" }] },
-      ]).draft,
-    );
+    const doc = fixtureCompany();
+    const { op } = intentOk(keyed(doc), {
+      type: "updateSeat",
+      target: "seat:dev",
+      set: [{ path: ["goal"], value: "Mine" }],
+    });
+    const theirs = cloneJson(doc);
+    theirs.units![0]!.roles![1]!.goal = "Theirs";
+    const newBase = keyed(theirs);
 
-    const held = rebase(newBase, ops);
+    const held = rebase(newBase, [op]);
     expect(held.pending).toBe(1);
     expect(held.entries[0]).toMatchObject({
       outcome: "conflict",
       conflicts: [{ subject: "goal", base: "Build", theirs: "Theirs", mine: "Mine" }],
     });
-    expect(seatData(held.draft, "seat:dev")?.goal).toBe("Theirs");
+    expect(toDocument(held.draft).document.units![0]!.roles![1]!.goal).toBe("Theirs");
 
-    const mine = rebase(newBase, ops, new Map([[0, "mine"]]));
+    const mine = rebase(newBase, [op], new Map([[0, "mine"]]));
     expect(mine.pending).toBe(0);
-    expect(seatData(mine.draft, "seat:dev")?.goal).toBe("Mine");
+    expect(toDocument(mine.draft).document.units![0]!.roles![1]!.goal).toBe("Mine");
     expect(mine.ops[0]).toMatchObject({
       changes: [{ path: ["goal"], before: "Theirs", after: "Mine" }],
     });
 
-    const kept = rebase(newBase, ops, new Map([[0, "theirs"]]));
+    const kept = rebase(newBase, [op], new Map([[0, "theirs"]]));
     expect(kept.pending).toBe(0);
     expect(kept.ops).toEqual([]);
-    expect(seatData(kept.draft, "seat:dev")?.goal).toBe("Theirs");
-  });
-
-  test("the base already holding this operation's own value is not a conflict", () => {
-    const base = fixture();
-    const change: Intent = {
-      type: "updateSeat",
-      target: "seat:dev",
-      set: [{ path: ["goal"], value: "Ship" }],
-    };
-    const { ops } = logOf(base, [change]);
-    const result = rebase(savedAs(logOf(base, [change]).draft), ops);
-    expect(result.pending).toBe(0);
-    expect(result.entries.map((e) => e.outcome)).toEqual(["already"]);
+    expect(toDocument(kept.draft).document.units![0]!.roles![1]!.goal).toBe("Theirs");
   });
 
   test("an operation on something removed upstream is gone, and so is one that depended on a held conflict", () => {
-    const base = fixture();
-    const { ops } = logOf(base, [
+    const doc = fixtureCompany();
+    let draft = keyed(doc);
+    const ops: Operation[] = [];
+    for (const intent of [
       {
         type: "updateUnit",
-        target: "unit:sales",
+        target: "unit:Sales",
         set: [{ path: ["purpose"], value: "Sell more" }],
       },
       {
         type: "addSeat",
         key: "new:a",
-        placement: { parent: "unit:engineering" },
-        data: { handle: "tester", name: "Tester" },
+        placement: { parent: "unit:Engineering", after: "seat:dev" },
+        data: { name: "Tester" },
       },
       { type: "updateSeat", target: "new:a", set: [{ path: ["goal"], value: "Test" }] },
-    ]);
-    // Upstream removed Sales and created a seat of its own under `tester`.
-    const theirs = savedAs(
-      logOf(base, [
-        { type: "remove", target: "unit:sales" },
-        {
-          type: "addSeat",
-          key: "new:t",
-          placement: { parent: COMPANY_KEY },
-          data: { handle: "tester", name: "Their tester" },
-        },
-      ]).draft,
-    );
-    const result = rebase(theirs, ops);
+    ] as Intent[]) {
+      const next = intentOk(draft, intent);
+      ops.push(next.op);
+      draft = next.draft;
+    }
+    const theirs = cloneJson(doc);
+    theirs.units!.splice(1, 1);
+    theirs.units![0]!.roles!.splice(1, 1);
+    const result = rebase(keyed(theirs), ops);
     expect(result.entries.map((e) => e.outcome)).toEqual(["gone", "conflict", "gone"]);
 
-    // Keep mine of the add writes this draft's seat over theirs, and the edit
-    // of the seat this draft created lands on it.
-    const resolved = rebase(theirs, ops, new Map([[1, "mine"]]));
+    const resolved = rebase(keyed(theirs), ops, new Map([[1, "mine"]]));
     expect(resolved.entries.map((e) => e.outcome)).toEqual(["gone", "conflict", "applies"]);
-    expect(seatData(resolved.draft, "seat:tester")).toMatchObject({ name: "Tester", goal: "Test" });
-    expect(locate(resolved.draft, "seat:tester")?.parent).toBe("unit:engineering");
-    expect(resolved.rekeyed.get("new:a")).toBe("seat:tester");
-  });
-
-  test("an operation follows its seat through a rename somebody else made", () => {
-    const base = fixture();
-    const { ops } = logOf(base, [
-      { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Ship" }] },
+    expect(toDocument(resolved.draft).document.units![0]!.roles!.map((r) => r.name)).toEqual([
+      "VP Engineering",
+      "Tester",
     ]);
-    const renamed = savedAs(
-      logOf(base, [
-        { type: "updateSeat", target: "seat:dev", set: [{ path: ["handle"], value: "developer" }] },
-      ]).draft,
-    );
-    const result = rebase(renamed, ops);
-    expect(result.entries.map((e) => e.outcome)).toEqual(["applies"]);
-    expect(seatData(result.draft, "seat:dev")).toMatchObject({ handle: "developer", goal: "Ship" });
-  });
-
-  // THE CHART LETS A NEW SEAT TAKE A RETIRED ALIAS, and a draft keyed by address
-  // would then carry an edit of the renamed seat onto the newcomer. Keyed by
-  // identity, the newcomer is another node however it is addressed.
-  test("a seat created under an address another seat used to answer to never receives that seat's operations", () => {
-    // `zed` was created as `dev` and renamed; the draft holds it under `seat:dev`.
-    const base = savedAs(
-      logOf(fixture(), [
-        { type: "updateSeat", target: "seat:dev", set: [{ path: ["handle"], value: "zed" }] },
-      ]).draft,
-    );
-    const { ops } = logOf(base, [
-      { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Mine" }] },
-      { type: "remove", target: "seat:dev" },
-    ]);
-    // Upstream renamed it again and gave `zed` to a new seat.
-    const theirs = savedAs(
-      logOf(base, [
-        { type: "updateSeat", target: "seat:dev", set: [{ path: ["handle"], value: "yan" }] },
-        {
-          type: "addSeat",
-          key: "new:z",
-          placement: { parent: COMPANY_KEY },
-          data: { handle: "zed", name: "Newcomer", goal: "Theirs" },
-        },
-      ]).draft,
-    );
-    for (const choice of ["mine", "theirs"] as const) {
-      const rebased = rebase(theirs, ops, new Map(ops.map((_, i) => [i, choice])));
-      const newcomer = seatData(rebased.draft, "seat:zed");
-      expect(newcomer, choice).toMatchObject({ handle: "zed", name: "Newcomer", goal: "Theirs" });
-      for (const op of rebased.ops) {
-        expect("target" in op && op.target, `${op.type} under ${choice}`).not.toBe("seat:zed");
-      }
-    }
-    // Control: the renamed seat itself is what they reach — the edit applies to
-    // it, and the removal is held because the seat it removes changed since.
-    const applied = rebase(theirs, ops);
-    expect(applied.entries.map((e) => e.outcome)).toEqual(["applies", "conflict"]);
-    expect(seatData(applied.draft, "seat:dev")).toMatchObject({ handle: "yan", goal: "Mine" });
-    const removed = rebase(theirs, ops, new Map([[1, "mine"]]));
-    expect(locate(removed.draft, "seat:dev")).toBeUndefined();
-    expect(seatData(removed.draft, "seat:zed")?.name).toBe("Newcomer");
   });
 
   test("a concurrent edit to a field this log never touched survives", () => {
-    const base = fixture();
+    const doc = fixtureCompany();
+    const base = keyed(doc);
     const failures = failuresFor(SEEDS, (seed) => {
       const theirs = randomLog(base, seed, 6, "t");
+      const theirsDoc = toDocument(theirs.drafts[theirs.drafts.length - 1]!).document;
       const mine = randomLog(base, seed + 10_000, 6, "m");
-      const newBase = savedAs(theirs.drafts[theirs.drafts.length - 1]!);
+      const newBase = keyed(theirsDoc);
       // Keep mine on every conflict: the harshest choice for the other
       // operator's work, and still it may win only where this operator
       // actually changed something.
@@ -502,12 +445,73 @@ describe("rebase", () => {
     expect(failures).toEqual([]);
   });
 
+  test("an entity recreated upstream under the same name is never modified by an operation on the original", () => {
+    const doc = fixtureCompany();
+    const base = keyed(doc);
+    const failures = failuresFor(SEEDS, (seed) => {
+      const rand = prng(seed + 20_000);
+      const seats = [...allSeats(base)].map(({ seat, parent }) => ({ seat, parent }));
+      const victim = seats[Math.floor(rand() * seats.length)]!;
+      const mine = randomLog(base, seed, 10, "c");
+
+      // Upstream removes the seat and creates a different one under its name:
+      // a different seat, so the engine gives it a different handle.
+      const removed = record(base, {
+        type: "remove",
+        target: victim.seat.key,
+        placedSeats: "keep",
+      });
+      if (!removed.ok) return `could not remove ${victim.seat.key}`;
+      let upstream = apply(base, removed.op).draft;
+      const parent = locate(upstream, victim.parent) ? victim.parent : COMPANY_KEY;
+      const recreatedData = {
+        name: victim.seat.data.name,
+        handle: `${fixtureHandle(victim.seat.data)}-recreated`,
+        goal: "Recreated",
+      };
+      const added = record(upstream, {
+        type: "addSeat",
+        key: "new:recreated",
+        placement: { parent, after: null },
+        data: recreatedData,
+      });
+      if (!added.ok) return `could not recreate: ${added.message}`;
+      upstream = apply(upstream, added.op).draft;
+      const theirsDoc = toDocument(upstream).document;
+      const newBase = keyed(theirsDoc);
+      const recreatedKey = `seat:${recreatedData.handle}`;
+      if (locate(newBase, recreatedKey)?.kind !== "seat")
+        return "the recreated seat is not keyed by its own handle";
+
+      for (const choice of ["mine", "theirs"] as const) {
+        const rebased = rebase(newBase, mine.ops, new Map(mine.ops.map((_, i) => [i, choice])));
+        for (const op of rebased.ops) {
+          if ("target" in op && op.target === recreatedKey)
+            return `${op.type} was applied to the recreated seat`;
+        }
+        const found = locate(rebased.draft, recreatedKey);
+        if (found?.kind === "seat") {
+          const data = found.node.data;
+          if (
+            data.goal !== "Recreated" ||
+            data.handle !== recreatedData.handle ||
+            data.name !== recreatedData.name
+          ) {
+            return `the recreated seat changed under "${choice}": ${JSON.stringify(data)}`;
+          }
+        }
+      }
+      return null;
+    });
+    expect(failures).toEqual([]);
+  });
+
   test("never throws, and an adopted rebase replays to its own draft", () => {
-    const base = fixture();
+    const base = keyed(fixtureCompany());
     const failures = failuresFor(SEEDS, (seed) => {
       const theirs = randomLog(base, seed, 8, "x");
       const mine = randomLog(base, seed + 50_000, 8, "y");
-      const newBase = savedAs(theirs.drafts[theirs.drafts.length - 1]!);
+      const newBase = keyed(toDocument(theirs.drafts[theirs.drafts.length - 1]!).document);
       const choices = new Map(
         mine.ops.map((_, i) => [i, seed % 2 === 0 ? ("mine" as const) : ("theirs" as const)]),
       );

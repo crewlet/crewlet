@@ -87,8 +87,7 @@ export const KINDS: Record<ObjectKind, KindSpec> = {
   item: { label: "Item", pathOf: (id) => ["work", id], mono: true },
   project: { label: "Project", pathOf: (id) => ["work", id], mono: true },
   seat: { label: "Seat", pathOf: (id) => ["agents", "seats", id], mono: true },
-  // A unit's id is its KEY (`lib/seats.ts`'s `unitPath`), never its name.
-  unit: { label: "Unit", pathOf: (id) => ["agents", "teams", id], mono: true },
+  unit: { label: "Unit", pathOf: (id) => ["agents", "teams", id] },
   page: {
     // ONE ADDRESS, THE PAGE'S ID. It was `CONTAINER/Title`, and a title
     // changes on rename: every copied link died the day somebody fixed a

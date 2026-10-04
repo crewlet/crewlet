@@ -10,7 +10,7 @@
  * hides that its real work is still out in a box.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { Router } from "~/app/router.tsx";
@@ -116,16 +116,7 @@ function mount(turns: TurnRow[], agents: unknown[] = []) {
   const store = new Store();
   store.applyHealth({ status: "healthy" });
   store.applyOrg({ roles: [{ name: "CEO", handle: "ceo" }] });
-  // THE ROSTER, set whole (`applySeats`; `applyAgents` only patches a seat the
-  // roster already holds), each row under the agent id the store keeps it by.
-  if (agents.length) {
-    store.applySeats(
-      (agents as Record<string, unknown>[]).map((a) => ({
-        agent_id: `a-${String(a.handle ?? a.role ?? "")}`,
-        ...a,
-      })) as never,
-    );
-  }
+  if (agents.length) store.applySeats(agents);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     Promise.resolve(
@@ -169,7 +160,16 @@ test("a parked turn is marked parked, and an open one running or not settled by 
       row("t-live", "the running one", {}),
       row("t-dead", "the stopped one", {}),
     ],
-    [{ role: "CEO", activity: "working", turn: { turn_id: "t-live", stage: "phase" } }],
+    [
+      {
+        id: "ceo",
+        agent_id: "ceo",
+        handle: "ceo",
+        role: "CEO",
+        activity: "working",
+        turn: { turn_id: "t-live", stage: "phase" },
+      },
+    ],
   );
   await screen.findByText("the parked one");
 
@@ -225,19 +225,12 @@ test("the seat in the address is sent to the engine as its handle", async () => 
 // is what holds the key on one line (base.css), and the summary truncates
 // instead.
 test("a row draws the seat's badge and its item key as one token", async () => {
-  // THE SEAT BY ITS AGENT ID, the key a turn row names its seat by, paired
-  // with the roster row that carries it — never by the role name a namesake
-  // shares.
-  mount(
-    [
-      row("t-1", "reviewed the work", {
-        agent_id: "a-ceo",
-        complete: true,
-        work_item: { backend: "native", id: "x", key: "ENG-22", project: "ENG" },
-      }),
-    ],
-    [{ role: "CEO", handle: "ceo", agent_id: "a-ceo" }],
-  );
+  mount([
+    row("t-1", "reviewed the work", {
+      complete: true,
+      work_item: { backend: "native", id: "x", key: "ENG-22", project: "ENG" },
+    }),
+  ]);
   await screen.findByText("reviewed the work");
   const r = rowOf("reviewed the work");
   expect(r.querySelector(".cell-seat .crewlet-avatar")).not.toBeNull();

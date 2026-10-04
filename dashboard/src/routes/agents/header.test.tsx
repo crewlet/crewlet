@@ -3,7 +3,7 @@
  * every tab, and Edit org in the phone's "More" menu.
  */
 
-import { cleanup, render } from "~/test/inCase.ts";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { AgentsHeader, useAgentsCounts } from "./header.tsx";
@@ -38,7 +38,7 @@ function withClient(ui: React.ReactNode, schedules: number) {
   });
   const socket = new LiveSocket(store);
   (socket as unknown as { query: () => Promise<unknown> }).query = () =>
-    Promise.resolve({ login: "", grants: [], acts: [] });
+    Promise.resolve({ login: "", owner: "", acts: [] });
   return render(
     <ClientContext.Provider value={{ store, socket }}>
       <ViewerProvider>

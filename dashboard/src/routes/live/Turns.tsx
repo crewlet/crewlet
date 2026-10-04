@@ -63,15 +63,14 @@ import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 // exact case our own `activate="manual"` exists for — arrowing across three
 // options would ask the engine three times.
 import { Segmented } from "~/ui/primitives.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useClient, useAgents, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useShared } from "~/lib/share.ts";
-import { rerunCounts, runsOf } from "~/lib/reruns.ts";
 import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";
-import { fmtExact, plural } from "~/lib/format.ts";
+import { plural } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
 import { spanWords, useTimeRange } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
@@ -86,8 +85,7 @@ import {
   TurnWhatCell,
   UnsettledCell,
 } from "~/app/frame/cells.tsx";
-import { openState, runningNow, UNSETTLED } from "~/lib/turns.ts";
-import { queryFailure, type QueryFailure } from "~/protocol/index.ts";
+import { openState, runningNow, UNSETTLED, type OpenState } from "~/lib/turns.ts";
 import type { EventSeries, TurnRow, TurnsAnswer } from "~/protocol/index.ts";
 
 /**
@@ -139,8 +137,13 @@ export const AXIS_UNFILTERED = " · every turn, not only the filtered ones";
 export const ENDED_TURNS = { type: "agent_turn_completed", suspended: "false" } as const;
 
 export function Turns() {
+  const seatBadge = useSeatBadgeOf();
+  const now = useNow();
   const org = useOrg();
   const { socket } = useClient();
+  // THE PUSH, for what a turn still running is doing (`runningNow`).
+  const agents = useAgents();
+  const { connected } = useConnection();
   const { open: openPeek } = usePeekControls();
   // EVERY FILTER IS A FILTER, so it replaces the history entry: a reader
   // narrowing to one seat and then to the failures has walked one screen,
@@ -158,7 +161,7 @@ export function Turns() {
   // edge is the END of the bucket in progress, so the current column is drawn
   // while it is still being spent and the window's identity — and therefore
   // the query — changes once per column rather than once per second.
-  const range = useTimeRange(TURN_OFFER);
+  const range = useTimeRange(now, TURN_OFFER);
   const { since, until, bucket } = range;
   // THE WINDOW ITSELF, as its two instants on the turn's start. The read took
   // whole days back from NOW, so a bar picked three days ago was asked as "the
@@ -191,8 +194,7 @@ export function Turns() {
     pages: [],
   });
   const [paging, setPaging] = useState(false);
-  // THE WHOLE FAILURE, its refusal included — see [queryFailure].
-  const [pageFailure, setPageFailure] = useState<QueryFailure | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
   const pages = older.for === question ? older.pages : [];
   const last = pages.at(-1) ?? list.data;
 
@@ -211,11 +213,7 @@ export function Turns() {
   // THE ENGINE HELD EVERY PAGE TO THE WINDOW, so what came back is the list:
   // a second filter here was how an answer for the wrong window became an
   // empty screen rather than a wrong one.
-  //
-  // SHARED WITH THE ROWS LAST DRAWN (`~/lib/share.ts`): every poll answers as
-  // a fresh parse, so a poll that brought back the same hundred turns drew all
-  // of them, and one that changed one turn drew every row beside it.
-  const rows = useShared(turns);
+  const rows = turns;
   // THE CURSOR ALONE SAYS WHETHER THERE IS MORE — and it can be present on a
   // page with no row, when a node stopped before any turn above it could be
   // shown, so "Load older" is offered on an empty page too.
@@ -224,7 +222,7 @@ export function Turns() {
   const loadOlder = useCallback(async () => {
     if (!last?.next) return;
     setPaging(true);
-    setPageFailure(null);
+    setPageError(null);
     try {
       const page = await socket.query("turns", { ...params, before: last.next });
       setOlder((prev) => ({
@@ -232,7 +230,7 @@ export function Turns() {
         pages: [...(prev.for === question ? prev.pages : []), page],
       }));
     } catch (err) {
-      setPageFailure(queryFailure(err));
+      setPageError(err instanceof Error ? err.message : "query_failed");
     } finally {
       setPaging(false);
     }
@@ -242,18 +240,16 @@ export function Turns() {
   // HOW MANY RUNS EACH TRIGGER GOT, over the rows this list holds. A turn id
   // names one run (see `adr/0017`), so a redelivered trigger is several rows
   // and nothing else on the screen says they are the same work.
-  //
-  // SHARED (`~/lib/share.ts`), because the column list closes over it: counted
-  // afresh on every poll it was a new value each time, and every row drew
-  // again for counts that had not moved.
-  const reruns = useShared(useMemo(() => rerunCounts(rows), [rows]));
-  // THE COLUMNS HOLD STILL until the re-run counts move: every row is
-  // memoised on the column list, so a list built inline drew every row on
-  // every render — a seat's live state moving, a poll that changed one turn.
-  // What a running turn is doing, and which seat ran it, are read by the CELLS
-  // off the push ([TurnSeatCell], [TurnWhat], [TurnState]), so a push reaches
-  // the cells it moves rather than the list.
-  const columns = useMemo(() => turnColumns(reruns), [reruns]);
+  const reruns = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const t of rows) {
+      // An empty work key is the ABSENCE of an identity — a trigger with
+      // nothing to collapse on — so counting them together would report
+      // every such turn as a re-run of every other.
+      if (t.work_key) counts.set(t.work_key, (counts.get(t.work_key) ?? 0) + 1);
+    }
+    return counts;
+  }, [rows]);
   // WHAT `[` AND `]` WALK: the rows this list actually loaded, in the order
   // the engine answered them. Published rather than handed to the rail,
   // because only the list knows that order — see `PeekHost`.
@@ -291,7 +287,7 @@ export function Turns() {
           className="card-head-stacked"
           subtitle={`${
             series.data
-              ? `${plural(total, "turn")} ended over ${spanWords(since, until)}${failedTotal > 0 ? `, ${fmtExact(failedTotal)} failed` : ""}`
+              ? `${plural(total, "turn")} ended over ${spanWords(since, until)}${failedTotal > 0 ? `, ${failedTotal.toLocaleString()} failed` : ""}`
               : `over ${spanWords(since, until)}`
           }${failed ? AXIS_UNFILTERED : ""} · one bar per ${bucket}, click one to narrow the window`}
         >
@@ -309,6 +305,7 @@ export function Turns() {
             // answered — never the page this screen happens to hold.
             over="window"
             axis
+            now={now}
             onPick={range.set}
             label="Turns that ended over the window"
           />
@@ -395,14 +392,96 @@ export function Turns() {
             }
             rowPeekHandler(go)?.(e);
           }}
-          columns={columns}
+          columns={[
+            {
+              key: "started",
+              header: "Started",
+              shrink: true,
+              cell: (t) => <DateCell at={t.started_at} now={now} />,
+            },
+            {
+              key: "seat",
+              header: "Seat",
+              shrink: true,
+              // NOT `SeatCell`: it is a link, and the row around it is one.
+              cell: (t) =>
+                t.role ? (
+                  <SeatLabel {...seatBadge(t.role)} />
+                ) : (
+                  // NOT a dash: a turn with no seat is the engine's own work.
+                  <span className="muted">the engine</span>
+                ),
+            },
+            {
+              key: "summary",
+              header: "What it did",
+              // A TURN STILL RUNNING says what it is doing and what it is on,
+              // from the push (`runningNow`): the store's row has neither yet.
+              cell: (t) => {
+                const live = runningNow(t, agents);
+                return (
+                  <TurnWhatCell
+                    summary={t.summary}
+                    item={t.work_item ?? live?.item}
+                    doing={live?.words}
+                  />
+                );
+              },
+            },
+            {
+              key: "state",
+              // HEADED, like every other column: an unlabelled slot between
+              // What it did and Iterations read as a gap, and a badge under no
+              // heading has to be decoded from its colour.
+              header: "State",
+              shrink: true,
+              // NOTHING AT ALL for a turn with no state to show, so a phone's
+              // card drops the line rather than printing a bare label.
+              cell: (t) => (
+                <TurnState turn={t} reruns={reruns} open={openState(t, agents, connected)} />
+              ),
+            },
+            {
+              key: "iterations",
+              // SELF-ITERATE ROUNDS, and the word says so — a phase's TOOL
+              // rounds are on its own record, under another word.
+              header: (
+                <span title="self-iterate rounds — the tool rounds each phase used are on the turn's own page">
+                  Iterations
+                </span>
+              ),
+              label: "Iterations",
+              shrink: true,
+              align: "right",
+              cell: (t) => (t.complete ? <NumberCell value={t.iterations} /> : <UnsettledCell />),
+            },
+            {
+              key: "tokens",
+              header: "Tokens",
+              shrink: true,
+              align: "right",
+              cell: (t) => (t.complete ? <TokenCell value={t.total_tokens} /> : <UnsettledCell />),
+            },
+            {
+              key: "took",
+              header: "Took",
+              shrink: true,
+              align: "right",
+              // A RUNNING TURN HAS NO DURATION, and its zero would make the
+              // busiest turns look like the cheapest — so the cell is handed
+              // null and draws the dash that says nothing was measured.
+              cell: (t) => (
+                <DurationCell ms={t.complete && t.duration_ms > 0 ? t.duration_ms : null} />
+              ),
+            },
+          ]}
         />
       </QueryState>
 
-      {(rows.length > 0 || more || pageFailure) && (
+      {(rows.length > 0 || more || pageError) && (
         <div className="row gap-2">
-          {pageFailure ? (
-            <QueryState error={pageFailure.error} refusal={pageFailure.refusal} loading={false} />
+          {pageError ? (
+            <QueryState error={pageError} loading={false} />
           ) : more ? (
             <Button
               size="small"
@@ -429,124 +508,23 @@ export function Turns() {
   );
 }
 
-/**
- * The turn list's columns: a function of the re-run counts alone, so the list
- * is built once per change of those (see [Turns]). Everything a cell reads
- * off the push it reads for itself.
- */
-function turnColumns(reruns: Record<string, number>): GridColumn<TurnRow>[] {
-  return [
-    {
-      key: "started",
-      header: "Started",
-      shrink: true,
-      // THE CELL READS THE CLOCK ITSELF, so a tick redraws the cells whose
-      // words moved and no row else.
-      cell: (t) => <DateCell at={t.started_at} />,
-    },
-    {
-      key: "seat",
-      header: "Seat",
-      shrink: true,
-      cell: (t) => <TurnSeatCell turn={t} />,
-    },
-    {
-      key: "summary",
-      header: "What it did",
-      // A TURN STILL RUNNING says what it is doing and what it is on, from the
-      // push (`runningNow`): the store's row has neither yet.
-      cell: (t) => <TurnWhat turn={t} />,
-    },
-    {
-      key: "state",
-      // HEADED, like every other column: an unlabelled slot between What it
-      // did and Iterations read as a gap, and a badge under no heading has to
-      // be decoded from its colour.
-      header: "State",
-      shrink: true,
-      // NOTHING AT ALL for a turn with no state to show, so a phone's card
-      // drops the line rather than printing a bare label.
-      cell: (t) => <TurnState turn={t} reruns={reruns} />,
-    },
-    {
-      key: "iterations",
-      // SELF-ITERATE ROUNDS, and the word says so — a phase's TOOL rounds are
-      // on its own record, under another word.
-      header: (
-        <span title="self-iterate rounds — the tool rounds each phase used are on the turn's own page">
-          Iterations
-        </span>
-      ),
-      label: "Iterations",
-      shrink: true,
-      align: "right",
-      cell: (t) => (t.complete ? <NumberCell value={t.iterations} /> : <UnsettledCell />),
-    },
-    {
-      key: "tokens",
-      header: "Tokens",
-      shrink: true,
-      align: "right",
-      cell: (t) => (t.complete ? <TokenCell value={t.total_tokens} /> : <UnsettledCell />),
-    },
-    {
-      key: "took",
-      header: "Took",
-      shrink: true,
-      align: "right",
-      // A RUNNING TURN HAS NO DURATION, and its zero would make the busiest
-      // turns look like the cheapest — so the cell is handed null and draws
-      // the dash that says nothing was measured.
-      cell: (t) => <DurationCell ms={t.complete && t.duration_ms > 0 ? t.duration_ms : null} />,
-    },
-  ];
-}
-
-/**
- * The seat a turn ran for, by its AGENT ID, paired with the roster's row for
- * that id and named by the chart — never by the role NAME the row also
- * carries, which namesakes share and a rename changes: a second "Engineer"
- * was drawn with the first one's badge. A turn whose seat no roster row
- * carries (a seat since removed) is drawn by its recorded name, unlinked.
- *
- * NOT `SeatCell`: it is a link, and the row around it is one.
- */
-function TurnSeatCell({ turn: t }: { turn: TurnRow }) {
-  const agents = useAgents();
-  const seatBadge = useSeatBadgeOf();
-  const handle = t.agent_id ? agents.find((a) => a.agent_id === t.agent_id)?.handle : undefined;
-  if (handle) return <SeatLabel {...seatBadge(handle)} />;
-  // NOT a dash: a turn with no seat is the engine's own work.
-  return t.role ? (
-    <span className="truncate">{t.role}</span>
-  ) : (
-    <span className="muted">the engine</span>
-  );
-}
-
-/** What a turn did — and, while it runs, what it is doing, off the push. */
-function TurnWhat({ turn: t }: { turn: TurnRow }) {
-  const agents = useAgents();
-  const live = runningNow(t, agents);
-  return <TurnWhatCell summary={t.summary} item={t.work_item ?? live?.item} doing={live?.words} />;
-}
-
 /** The engine's bars, with their failed share. */
 export function barsOf(series: EventSeries | null | undefined): Bar[] {
   return (series?.bars ?? []).map((b) => ({ at: b.at, count: b.count, failed: b.failed }));
 }
 
-/**
- * What a turn IS beyond finished — re-run, parked, running, failed — or
- * nothing. What a turn with no completion record is ([openState]) is read off
- * the push here, by the cell, so the list's columns do not move with it.
- */
-function TurnState({ turn: t, reruns }: { turn: TurnRow; reruns: Record<string, number> }) {
-  const agents = useAgents();
-  const { connected } = useConnection();
-  const open = openState(t, agents, connected);
-  const runs = runsOf(reruns, t.work_key);
-  const rerun = runs > 1;
+/** What a turn IS beyond finished — re-run, parked, running, failed — or nothing. */
+function TurnState({
+  turn: t,
+  reruns,
+  open,
+}: {
+  turn: TurnRow;
+  reruns: Map<string, number>;
+  /** What a turn with no completion record is — see [openState]. */
+  open: OpenState;
+}) {
+  const rerun = !!t.work_key && (reruns.get(t.work_key) ?? 0) > 1;
   if (!rerun && !t.parked && (open === "" || open === "unknown") && !t.failed) return null;
   return (
     <span className="row gap-1">
@@ -558,7 +536,7 @@ function TurnState({ turn: t, reruns }: { turn: TurnRow; reruns: Record<string, 
         <Tag
           appearance="outline"
           title={
-            `one of ${runs} runs of the same trigger listed here — ` +
+            `one of ${reruns.get(t.work_key!)} runs of the same trigger listed here — ` +
             `a turn that fails without acting is redelivered and runs again`
           }
         >

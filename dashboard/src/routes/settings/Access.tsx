@@ -1,53 +1,58 @@
 /**
  * Settings › People & access: who can reach this company, and as whom.
  *
+ * # One join, drawn from both ends
+ *
+ * A person acts in this company as themself once the identity directory holds
+ * them and they prove who they are; they act AS A SEAT when their row binds
+ * them to one. A Tier A API token is a credential of the node it is declared
+ * on, and acts as a seat only when the directory row its `token:<id>` login
+ * names is bound to one. Each half alone hides the half that goes wrong — a
+ * seat nobody holds looks staffed on the chart, and a token label mistyped on
+ * either side leaves the token acting as itself while its operator believes it
+ * acts as a seat — so this screen draws the directory from both ends: each
+ * principal with the seat it holds, each human seat with whoever holds it, and
+ * each of this node's tokens with the row its login names.
+ *
  * # Read from the identity directory, never written here
  *
- * A person, a service account and every credential they prove themselves
- * with live in the identity estate (`internal/iamdomain`), read through
- * `/iam`. This screen draws five of its answers and changes none of them:
+ * Five answers of `/iam`, none of them changed from this page:
  *
- *  - `GET /iam/people` — every principal the directory holds: its kind, its
- *    stage, its login, the grants its row declares and the seat it is bound
- *    to. Walked to its last page, because a directory drawn from its first
- *    two hundred rows is a company that looks smaller than it is.
- *  - `GET /iam/credentials?person=` and `GET /iam/people/{id}/sessions` — the
- *    credentials one principal holds (the machine tokens it minted among
- *    them) and the sessions it is signed in with, read for the row a reader
- *    opens rather than for everybody at once.
+ *  - `GET /iam/people` — every principal, walked to its last page, because a
+ *    directory drawn from its first page is a company that looks smaller than
+ *    it is. Opening a row reads that one principal's credentials
+ *    (`GET /iam/credentials?person=`) and sessions
+ *    (`GET /iam/people/{id}/sessions`).
+ *  - `GET /iam/seats` — every human seat of the running company and who
+ *    holds it.
  *  - `GET /iam/node-tokens` — THIS NODE's Tier A tokens by label, each joined
- *    to the directory row its `token:<id>` login names, because a label
- *    mistyped on either side leaves a token acting as itself while its
- *    operator believes it acts as a seat, and no directory read alone can see
- *    a label.
- *  - `GET /iam/check` — what the directory reports wrong: nobody left who can
- *    administer it, somebody active with no credential, a binding whose seat
- *    is gone, a grant this node's ceiling withholds, a claim two people hold,
- *    a reservation nobody completed.
- *  - `GET /chart/check` — the two org-chart findings about people: a human
- *    seat nobody in the directory holds, and one no agent can reach.
+ *    to the directory row its login names.
+ *  - `GET /iam/check` — what the directory reports wrong, worded per kind
+ *    with the engine's own detail beside it, so a kind this build does not
+ *    know still reads.
  *
- * Inviting, granting, binding, suspending and revoking are `crewlet iam`'s:
- * a write about who may do what is a step-up gesture this page does not make.
+ * Inviting, granting, binding, suspending and revoking are `crewlet iam`'s: a
+ * write about who may do what is a step-up gesture this page does not make.
  *
  * # Labels and verifiers, never values
  *
  * No answer here has a member a credential's value could travel in — the
- * engine stores verifiers, and a Tier A token is named by its label — and
- * this screen holds none either.
+ * engine stores verifiers, and a Tier A token is named by its label — and this
+ * screen holds none either. Where a seat is reached on a chat surface, the
+ * identity is drawn as the company document writes it: a `${VAR}` is its
+ * name, never the variable's value.
  *
  * # Decided by the engine, drawn as it decided
  *
- * Every read is `people:manage` or `audit:read` (`authz.ActionDirectoryRead`)
- * but the chart's report, which is `audit:read` alone. A reader refused sees
- * the refusal and the grants that would have admitted them — never an empty
- * company — and a reader holding `people:manage` alone sees every card but
- * that one, which says so.
+ * Every read is `people:manage` or `audit:read` (`authz.ActionDirectoryRead`).
+ * A reader refused sees the refusal and the grants that would have admitted
+ * them — never an empty company. The contact identities are the company
+ * document's, which takes `config:read`, and a reader without it is told so
+ * rather than shown seats nobody can reach.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
-  Callout,
   Card,
   EMPTY_VALUE,
   EmptyValue,
@@ -59,27 +64,31 @@ import {
 } from "@crewlethq/ui";
 import { KeyGlyph, TriangleAlertGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-import { href } from "~/app/router.tsx";
-import { plural } from "~/lib/format.ts";
-import { useRestRead, type RestRead } from "~/lib/restRead.ts";
-import { indexOrg, seatByAddress, type Seat } from "~/lib/seats.ts";
+import { href, useParam } from "~/app/router.tsx";
+import { useNow } from "~/lib/clock.ts";
+import { needsSentence } from "~/lib/refusal.ts";
+import { documentUnits, indexOrg, unitByKey } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
+import { useQuery } from "~/lib/useQuery.ts";
+import { useRest, type RestResult } from "~/lib/useRest.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { rest } from "~/protocol/index.ts";
+import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
 
 // ---------------------------------------------------------------------------
-// The wire, as internal/api/iamapi and internal/api/chartapi write it
+// The wire, as internal/api/iamapi writes it
 // ---------------------------------------------------------------------------
 
-/** One directory row (`personView`): the sealed values opened, the verifiers absent. */
+/** One directory row (`iamapi.personView`): the sealed values opened, the verifiers absent. */
 export interface DirectoryRow {
   id: string;
-  /** `person`, `machine`, `seat` or `engine` (iam.Kind). */
+  /** `person`, `machine`, `seat` or `engine` (`iam.Kind`). */
   kind: string;
-  /** `invited`, `enrolling`, `active`, `suspended` or `retired` (iam.Stage). */
+  /** `invited`, `enrolling`, `active`, `suspended` or `retired` (`iam.Stage`). */
   stage: string;
   login?: string;
   name?: string;
@@ -88,21 +97,19 @@ export interface DirectoryRow {
   sealed?: boolean;
   /** An enrolment whose claims landed and whose content record has not. */
   reserved?: boolean;
-  /** The bound seat's IDENTITY — the handle it was created under (ADR-0027). */
+  /** The seat the row is bound to, by its handle. */
   seat?: string;
   grants?: string[] | null;
-  /** `none`, `read` or `write` (iam.Colleague). */
-  colleague?: string;
   created_at?: string;
 }
 
 interface DirectoryPage {
   people: DirectoryRow[] | null;
+  /** The cursor of the next page, "" on the last. */
   next: string;
-  position: string;
 }
 
-/** One credential (`credentialView`). No verifier, ever. */
+/** One credential (`iamapi.credentialView`). No verifier, ever. */
 export interface CredentialRow {
   id: string;
   person: string;
@@ -118,7 +125,7 @@ export interface CredentialRow {
   grants?: string[] | null;
 }
 
-/** One session (`sessionView`): its lineage, nothing a session resumes from. */
+/** One session (`iamapi.sessionView`): its lineage, nothing a session resumes from. */
 export interface SessionRow {
   lineage: string;
   person: string;
@@ -128,6 +135,15 @@ export interface SessionRow {
   ended_reason?: string;
   live: boolean;
   enrolment_only?: boolean;
+}
+
+/** One human seat of the running company and who holds it (`iamapi.SeatRow`). */
+export interface SeatRow {
+  handle: string;
+  name: string;
+  /** The key of the unit the seat sits in, "" at the root. */
+  unit?: string;
+  holders: { person: string; login?: string; stage?: string }[];
 }
 
 /** One of this node's Tier A tokens, by label, joined to its directory row. */
@@ -163,24 +179,6 @@ interface DirectoryCheck {
   bindings_unchecked: number;
 }
 
-/** One row of the chart's report (`chartapi.Finding`). */
-export interface ChartFinding {
-  kind: string;
-  severity: string;
-  object: string;
-  detail: string;
-  remedy?: string;
-}
-
-interface ChartCheck {
-  report: {
-    findings: ChartFinding[] | null;
-    seats: number;
-    unchecked?: number;
-    evaluated: boolean;
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Words
 // ---------------------------------------------------------------------------
@@ -194,9 +192,9 @@ interface Words {
 }
 
 /**
- * The five stages, in the engine's words (`internal/iam/principal.go`). A stage
- * this build has no word for is drawn as written — the engine adds a value
- * additively, and naming it beats dropping it.
+ * The five stages, in the engine's words (`internal/iam/principal.go`). A
+ * value this build has no word for is drawn as written — the engine adds one
+ * additively, and naming it beats dropping it. So for every table below.
  */
 export const STAGE_WORDS: Record<string, Words> = {
   invited: {
@@ -222,19 +220,12 @@ export const STAGE_WORDS: Record<string, Words> = {
   },
 };
 
-/** The four principal kinds, as a reader says them. */
+/** The principal kinds, as a reader says them. */
 const KIND_WORDS: Record<string, string> = {
   person: "Person",
   machine: "Service account",
   seat: "Seat",
   engine: "Engine",
-};
-
-/** How far into the company's own work a principal reaches (iam.Colleague). */
-const COLLEAGUE_WORDS: Record<string, string> = {
-  none: "No reach",
-  read: "Reads the work",
-  write: "Works here",
 };
 
 /** What a Tier A token's login names in the directory. */
@@ -276,8 +267,8 @@ export const BINDING_WORDS: Record<string, Words> = {
   },
 };
 
-/** The directory report's six kinds, worst first (`iamapi.FindingKinds`). */
-export const DIRECTORY_FINDING_WORDS: Record<string, { label: string; tone: Tone }> = {
+/** The directory report's kinds, in the engine's order (`iamapi.FindingKinds`). */
+export const FINDING_WORDS: Record<string, { label: string; tone: Tone }> = {
   no_people_manage_holder: { label: "Nobody can administer", tone: "danger" },
   person_without_credential: { label: "Active, no credential", tone: "warning" },
   binding_dangling: { label: "Seat gone", tone: "warning" },
@@ -286,18 +277,24 @@ export const DIRECTORY_FINDING_WORDS: Record<string, { label: string; tone: Tone
   claim_orphaned: { label: "Reservation left behind", tone: "warning" },
 };
 
-/** The two chart findings this screen draws, and the words for each. */
-export const CHART_FINDING_WORDS: Record<string, { label: string; tone: Tone }> = {
-  seat_unheld: { label: "Nobody holds it", tone: "warning" },
-  seat_unreachable: { label: "No contact", tone: "warning" },
-};
-
 /** What a credential method is called. */
 const METHOD_WORDS: Record<string, string> = {
   password: "Password",
   totp: "Authenticator app",
   recovery: "Recovery codes",
   token: "Machine token",
+};
+
+/**
+ * The surface each contact field reaches a person on, in the chart's own
+ * field order. A key this build has no word for is drawn as the key itself.
+ */
+const CONTACT_SURFACES: Record<string, string> = {
+  slack_user_id: "Slack",
+  mattermost_user_id: "Mattermost",
+  atlassian_account_id: "Atlassian",
+  github_login: "GitHub",
+  gitlab_username: "GitLab",
 };
 
 /** The engine writes a detail in its own lower case; drawn, it is a sentence. */
@@ -329,10 +326,12 @@ function WordTag({ words, fallback }: { words: Words | undefined; fallback: stri
  * at once, which is where somebody who just ran the command is looking.
  */
 const POLL_MS = 60_000;
-const cadence = () => POLL_MS;
 
 /** A page as large as the directory serves (`iamdomain.MaxPageSize`). */
 const PAGE = 200;
+
+/** The grant the company document — and so every contact identity — is read under. */
+const CONFIG_READ = "config:read";
 
 /** Every row of the directory, walked to its last page. */
 async function readDirectory(signal: AbortSignal): Promise<DirectoryRow[]> {
@@ -343,226 +342,362 @@ async function readDirectory(signal: AbortSignal): Promise<DirectoryRow[]> {
     if (after) params.set("after", after);
     const page = (await rest.get(`/iam/people?${params}`, signal)) as DirectoryPage | null;
     rows.push(...(page?.people ?? []));
-    // A CURSOR THAT DOES NOT MOVE ends the walk rather than looping on it.
+    // THE CURSOR MUST MOVE: a page that names its own cursor again would
+    // otherwise be asked for ever.
     if (!page?.next || page.next === after) return rows;
     after = page.next;
   }
 }
 
+/** The list an `/iam` answer carries under `field`, or none. */
+function listOf<T>(answer: unknown, field: string): T[] {
+  const list = (answer as Record<string, unknown> | null)?.[field];
+  return Array.isArray(list) ? (list as T[]) : [];
+}
+
+/** How every `/iam` read here is kept current. */
+const READ = { pollMs: POLL_MS, refetchOnFocus: true };
+
 // ---------------------------------------------------------------------------
 // The screen
 // ---------------------------------------------------------------------------
 
-/** A principal as a reader names it: their name, else their login, else their id. */
-function whoOf(row: DirectoryRow | undefined, id: string): string {
-  return row?.name || row?.login || id;
-}
-
 export function PeopleAndAccess() {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
-  const seatOf = useCallback((identity: string) => seatByAddress(index, identity), [index]);
+  const viewer = useViewer();
+  const [opened, setOpened] = useParam("person", "");
 
-  const directory = useRestRead("/iam/people", readDirectory, { cadence, refetchOnFocus: true });
-  // EACH READ NAMES ITS OWN PATH at the call, so `protocol/proxy.test.ts` can
-  // hold the dev server's proxy to every one of them.
-  const tokens = useRestRead(
-    "/iam/node-tokens",
-    async (signal) =>
-      (await rest.get("/iam/node-tokens", signal)) as { tokens: NodeToken[] | null } | null,
-    { cadence, refetchOnFocus: true },
+  const directory = useRest("/iam/people", readDirectory, READ);
+  const seats = useRest(
+    "/iam/seats",
+    async (signal) => listOf<SeatRow>(await rest.get("/iam/seats", signal), "seats"),
+    READ,
   );
-  const check = useRestRead(
+  const tokens = useRest(
+    "/iam/node-tokens",
+    async (signal) => listOf<NodeToken>(await rest.get("/iam/node-tokens", signal), "tokens"),
+    READ,
+  );
+  const check = useRest(
     "/iam/check",
     async (signal) => (await rest.get("/iam/check", signal)) as DirectoryCheck | null,
-    { cadence, refetchOnFocus: true },
+    READ,
   );
-  const chart = useRestRead(
-    "/chart/check",
-    async (signal) => (await rest.get("/chart/check", signal)) as ChartCheck | null,
-    { cadence, refetchOnFocus: true },
-  );
-
-  const [opened, setOpened] = useState<string | null>(null);
+  // THE CONTACT IDENTITIES ARE THE COMPANY DOCUMENT'S, which takes
+  // `config:read`. A reader without it is never asked: the refusal is known
+  // before the question, and each seat says what it would take instead.
+  const readsConfig = viewer.grants.includes(CONFIG_READ);
+  const config = useQuery("config", undefined, { enabled: readsConfig });
+  const contacts = useMemo(() => contactsByHandle(config.data), [config.data]);
 
   const people = useMemo(() => directory.data ?? [], [directory.data]);
-  const byID = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
-  const nodeTokens = useMemo(() => tokens.data?.tokens ?? [], [tokens.data]);
-  const openedRow = opened ? byID.get(opened) : undefined;
-
-  const peopleColumns = useMemo(() => directoryColumns(seatOf), [seatOf]);
-  const tokenColumns = useMemo(() => nodeTokenColumns(seatOf, byID), [seatOf, byID]);
-
-  const activate = useCallback(
-    (row: DirectoryRow) => setOpened((was) => (was === row.id ? null : row.id)),
-    [],
-  );
-  const isOpened = useCallback((row: DirectoryRow) => row.id === opened, [opened]);
-
-  // REFUSED OUTRIGHT: the directory is the screen, so a reader it was refused
-  // to sees the refusal alone — no tiles over nothing, no empty lists.
-  if (directory.failure?.error === "unauthorized" && directory.data === null) {
-    return (
-      <>
-        <AccessNote />
-        <QueryState
-          error={directory.failure.error}
-          refusal={directory.failure.refusal}
-          loading={false}
-        />
-      </>
-    );
-  }
-
-  const persons = people.filter((p) => p.kind === "person");
-  const machines = people.filter((p) => p.kind === "machine");
-  const activeOf = (rows: DirectoryRow[]) => rows.filter((p) => p.stage === "active").length;
-  const boundTokens = nodeTokens.filter((t) => t.binding === "bound").length;
-  const findings = findingsTile(check, chart);
+  const active = people.filter((p) => p.stage === "active").length;
+  const seatRows = useMemo(() => seats.data ?? [], [seats.data]);
+  const unheld = seatRows.filter((s) => s.holders.length === 0).length;
+  const tokenRows = useMemo(() => tokens.data ?? [], [tokens.data]);
+  const boundTokens = tokenRows.filter((t) => t.binding === "bound").length;
+  const openedRow = people.find((p) => p.id === opened) ?? null;
 
   return (
     <>
       <PageActions>
-        <a className="t-link" href={href(["settings", "audit"])}>
+        <a className="t-link" href={href(["settings", "audit"], { kind: "identity" })}>
           Identity trail →
         </a>
+        {/* THE CHART IS WHERE A SEAT AND ITS CONTACTS ARE WRITTEN, so the
+            action here leaves for it rather than editing a copy. */}
+        <a className="t-link" href={href(["agents", "edit"])}>
+          Edit org →
+        </a>
       </PageActions>
-      <AccessNote />
+      <PageNote>
+        Who can reach this company and as whom: the identity directory, the human seats and who
+        holds them, and this node&rsquo;s API tokens. Read-only — inviting, granting, binding and
+        revoking are <InlineCode>crewlet iam</InlineCode>&rsquo;s. This screen never holds a
+        credential&rsquo;s value.
+      </PageNote>
 
-      {directory.data !== null && (
-        <Card padding="none">
-          <StatGroup columns={4}>
-            <StatCard
-              icon={<UsersGlyph size="xs" />}
-              label="People"
-              value={persons.length}
-              sub={`${activeOf(persons)} active`}
-            />
-            <StatCard
-              icon={<KeyGlyph size="xs" />}
-              label="Service accounts"
-              value={machines.length}
-              sub={`${activeOf(machines)} active`}
-            />
-            <StatCard
-              icon={<KeyGlyph size="xs" />}
-              label="API tokens here"
-              value={tokens.data ? nodeTokens.length : EMPTY_VALUE}
-              sub={tokens.data ? `${boundTokens} act as a seat` : "not read yet"}
-            />
-            <StatCard
-              icon={<TriangleAlertGlyph size="xs" />}
-              label="Findings"
-              value={findings.value}
-              sub={findings.sub}
-            />
-          </StatGroup>
-        </Card>
+      {/* A REFUSED DIRECTORY IS NOT AN EMPTY COMPANY: every read here is
+          decided on the same grant, so the first refusal is the whole page's,
+          drawn with the grants that would have admitted the reader. */}
+      {directory.code && !directory.data && (
+        <QueryState
+          error={directory.code}
+          refusal={directory.refusal}
+          detail={directory.error?.detail || undefined}
+          loading={false}
+        />
+      )}
+      {directory.loading && !directory.data && (
+        <Skeleton variant="text" rows={6} label="Loading the directory" />
       )}
 
-      <Card padding="none">
-        <Card.Header
-          icon={<UsersGlyph size="sm" />}
-          count={directory.data ? people.length : undefined}
-        >
-          People
-        </Card.Header>
-        {directory.loading && directory.data === null ? (
-          <Skeleton variant="text" rows={6} label="Loading the directory" />
-        ) : (
-          <>
-            <QueryState
-              error={directory.failure?.error ?? null}
-              refusal={directory.failure?.refusal ?? null}
-              loading={false}
-            />
-            {directory.data !== null && (
-              <DataGrid<DirectoryRow>
-                rows={people}
-                rowKey={(p) => p.id}
-                defaultSort="who"
-                columns={peopleColumns}
-                onRowActivate={activate}
-                isSelected={isOpened}
-                empty={{
-                  title: "Nobody is enrolled",
-                  hint: "Invite the first person with crewlet iam invite, under a Tier A token.",
-                  icon: "users",
-                }}
+      {directory.data && (
+        <>
+          <Card padding="none">
+            <StatGroup columns={3}>
+              <StatCard
+                icon={<UsersGlyph size="xs" />}
+                label="People"
+                value={people.length}
+                sub={`${active} active`}
               />
-            )}
-          </>
-        )}
-      </Card>
+              <StatCard
+                icon={<TriangleAlertGlyph size="xs" />}
+                label="Human seats nobody holds"
+                value={seats.data ? unheld : EMPTY_VALUE}
+                sub={
+                  seats.data
+                    ? `of ${seatRows.length} human seat${seatRows.length === 1 ? "" : "s"}`
+                    : "not read"
+                }
+              />
+              <StatCard
+                icon={<KeyGlyph size="xs" />}
+                label="API tokens on this node"
+                value={tokens.data ? tokenRows.length : EMPTY_VALUE}
+                sub={tokens.data ? `${boundTokens} acting as a seat` : "not read"}
+              />
+            </StatGroup>
+          </Card>
 
-      {openedRow && (
-        <PrincipalDetail key={openedRow.id} row={openedRow} onClose={() => setOpened(null)} />
-      )}
+          <Findings check={check} />
 
-      <Card padding="none">
-        <Card.Header
-          icon={<KeyGlyph size="sm" />}
-          count={tokens.data ? nodeTokens.length : undefined}
-        >
-          API tokens on this node
-        </Card.Header>
-        <p className="t-caption muted" style={{ padding: "var(--spacing-3) var(--spacing-4) 0" }}>
-          Declared under <InlineCode>api.auth.tokens</InlineCode> in this node&rsquo;s bootstrap
-          file, and shown by label. A token acts under the login{" "}
-          <InlineCode>token:&lt;id&gt;</InlineCode>, and the directory row holding that login is
-          what binds it to a seat.
-        </p>
-        {tokens.loading && tokens.data === null ? (
-          <Skeleton variant="text" rows={3} label="Loading this node's tokens" />
-        ) : (
-          <>
-            <QueryState
-              error={tokens.failure?.error ?? null}
-              refusal={tokens.failure?.refusal ?? null}
-              loading={false}
+          <Card padding="none">
+            <Card.Header icon={<UsersGlyph size="sm" />} count={people.length}>
+              People
+            </Card.Header>
+            <DataGrid<DirectoryRow>
+              rows={people}
+              rowKey={(p) => p.id}
+              defaultSort="person"
+              isSelected={(p) => p.id === opened}
+              onRowActivate={(p) => setOpened(p.id === opened ? "" : p.id)}
+              empty={{
+                title: "Nobody is in the directory yet",
+                hint: "Invite the first person with crewlet iam invite, under this node's API token.",
+              }}
+              columns={[
+                {
+                  key: "person",
+                  header: "Name",
+                  floor: "12rem",
+                  sortValue: (p) => p.name || p.login || p.id,
+                  cell: (p) => <PersonName row={p} />,
+                },
+                {
+                  key: "login",
+                  header: "Login",
+                  shrink: true,
+                  sortValue: (p) => p.login ?? "",
+                  cell: (p) =>
+                    p.login ? <KeyCell value={p.login} /> : <EmptyValue label="No login" />,
+                },
+                {
+                  key: "kind",
+                  header: "Kind",
+                  shrink: true,
+                  drop: 2,
+                  sortValue: (p) => p.kind,
+                  cell: (p) => <TextCell>{KIND_WORDS[p.kind] ?? p.kind}</TextCell>,
+                },
+                {
+                  key: "stage",
+                  header: "Stage",
+                  shrink: true,
+                  sortValue: (p) => p.stage,
+                  cell: (p) =>
+                    p.reserved ? (
+                      <Tag
+                        size="sm"
+                        variant="warning"
+                        title="An enrolment's claims landed and its record has not: this row holds an address, a login or a seat and is nobody yet."
+                      >
+                        Reservation
+                      </Tag>
+                    ) : (
+                      <WordTag words={STAGE_WORDS[p.stage]} fallback={p.stage} />
+                    ),
+                },
+                {
+                  key: "seat",
+                  header: "Seat",
+                  sortValue: (p) => p.seat ?? "",
+                  cell: (p) => {
+                    if (!p.seat) return <EmptyValue label="Bound to no seat" />;
+                    const seat = index.byHandle.get(p.seat);
+                    return <SeatCell handle={p.seat} name={seat?.name ?? p.seat} kind="human" />;
+                  },
+                },
+                {
+                  key: "grants",
+                  header: "Grants",
+                  drop: 1,
+                  sortValue: (p) => (p.grants ?? []).length,
+                  cell: (p) => <Grants grants={p.grants} />,
+                },
+              ]}
             />
-            {tokens.data !== null && (
+          </Card>
+
+          {openedRow && <Principal row={openedRow} />}
+
+          <Card padding="none">
+            <Card.Header icon={<UsersGlyph size="sm" />} count={seatRows.length}>
+              Human seats
+            </Card.Header>
+            <QueryState
+              error={seats.code}
+              refusal={seats.refusal}
+              detail={seats.error?.detail || undefined}
+              loading={seats.loading && !seats.data}
+            >
+              <DataGrid<SeatRow>
+                rows={seatRows}
+                rowKey={(s) => s.handle}
+                defaultSort="seat"
+                empty={{ title: "The running company has no human seats" }}
+                columns={[
+                  {
+                    key: "seat",
+                    header: "Seat",
+                    floor: "12rem",
+                    sortValue: (s) => s.name || s.handle,
+                    cell: (s) => <SeatCell handle={s.handle} name={s.name} kind="human" />,
+                  },
+                  {
+                    key: "unit",
+                    header: "Team",
+                    shrink: true,
+                    drop: 2,
+                    sortValue: (s) => (s.unit ? (unitByKey(index, s.unit)?.name ?? s.unit) : ""),
+                    cell: (s) => {
+                      if (!s.unit) return <EmptyValue label="No team" />;
+                      return <TextCell>{unitByKey(index, s.unit)?.name ?? s.unit}</TextCell>;
+                    },
+                  },
+                  {
+                    key: "holders",
+                    header: "Held by",
+                    sortValue: (s) => s.holders.length,
+                    cell: (s) => <Holders holders={s.holders} />,
+                  },
+                  {
+                    key: "reach",
+                    header: "Reached on",
+                    drop: 1,
+                    cell: (s) =>
+                      readsConfig ? (
+                        <Contacts contact={contacts.get(s.handle)} />
+                      ) : (
+                        <EmptyValue
+                          label={needsSentence("Reading where a seat is reached", [CONFIG_READ])}
+                        />
+                      ),
+                  },
+                ]}
+              />
+            </QueryState>
+          </Card>
+
+          <Card padding="none">
+            <Card.Header icon={<KeyGlyph size="sm" />} count={tokenRows.length}>
+              API tokens on this node
+            </Card.Header>
+            <QueryState
+              error={tokens.code}
+              refusal={tokens.refusal}
+              detail={tokens.error?.detail || undefined}
+              loading={tokens.loading && !tokens.data}
+            >
               <DataGrid<NodeToken>
-                name="node-tokens"
-                rows={nodeTokens}
+                rows={tokenRows}
                 rowKey={(t) => t.id}
                 defaultSort="id"
-                columns={tokenColumns}
                 empty={{
-                  title: "No Tier A token on this node",
-                  hint: "A node serving the API refuses to start without one, so this node serves none.",
-                  icon: "key",
+                  title: "This node declares no API token",
+                  hint: "Tokens are declared in Tier A under api.auth.tokens and change with a restart.",
                 }}
+                columns={[
+                  {
+                    key: "id",
+                    header: "Label",
+                    shrink: true,
+                    sortValue: (t) => t.id,
+                    cell: (t) => <KeyCell value={t.id} />,
+                  },
+                  {
+                    key: "login",
+                    header: "Acts under",
+                    shrink: true,
+                    drop: 1,
+                    sortValue: (t) => t.login,
+                    cell: (t) => <KeyCell value={t.login} />,
+                  },
+                  {
+                    key: "row",
+                    header: "Directory",
+                    shrink: true,
+                    sortValue: (t) => t.row,
+                    cell: (t) => <WordTag words={TOKEN_ROW_WORDS[t.row]} fallback={t.row} />,
+                  },
+                  {
+                    key: "binding",
+                    header: "Acts as",
+                    floor: "10rem",
+                    sortValue: (t) => t.binding,
+                    cell: (t) => <TokenBinding token={t} index={index} />,
+                  },
+                ]}
               />
-            )}
-          </>
-        )}
-      </Card>
-
-      <DirectoryReport check={check} byID={byID} seatOf={seatOf} />
-      <ChartReport chart={chart} seatOf={seatOf} />
+            </QueryState>
+          </Card>
+        </>
+      )}
     </>
   );
 }
 
-function AccessNote() {
-  return (
-    <PageNote>
-      Who can reach this company and as whom: the people and service accounts the identity directory
-      holds, the credentials each proves themselves with, this node&rsquo;s API tokens, and what the
-      directory and the org chart report wrong. Read only — invite, grant, bind and revoke with{" "}
-      <InlineCode>crewlet iam</InlineCode>. No credential&rsquo;s value reaches this page.
-    </PageNote>
-  );
+// ---------------------------------------------------------------------------
+// Parts
+// ---------------------------------------------------------------------------
+
+/**
+ * Every seat's contact identities, by handle, from the company document —
+ * top-level seats and every unit's, as `seatSettings` walks them.
+ */
+function contactsByHandle(
+  doc: CompanyDocument | null | undefined,
+): Map<string, ConfigRole["contact"]> {
+  const out = new Map<string, ConfigRole["contact"]>();
+  const roles: ConfigRole[] = [...(doc?.roles ?? [])];
+  for (const unit of documentUnits(doc)) roles.push(...(unit.roles ?? []));
+  for (const role of roles) if (role.handle) out.set(role.handle, role.contact);
+  return out;
 }
 
-/** The bound seat, by the chart's CURRENT handle, or the identity as written. */
-function BoundSeat({ identity, seat }: { identity?: string; seat: Seat | null }) {
-  if (!identity) return <EmptyValue label="No seat" />;
-  if (!seat) return <KeyCell value={identity} />;
-  return <SeatCell handle={seat.handle} name={seat.name} kind={seat.kind} />;
+/**
+ * A principal's name. A SEALED value is a state the operator can end by
+ * putting a key back, never a blank — a blank reads as somebody who never
+ * gave a name.
+ */
+function PersonName({ row }: { row: DirectoryRow }) {
+  if (row.sealed) {
+    return (
+      <Tag
+        size="sm"
+        variant="warning"
+        title="This node's keyring cannot open this row's name and address: a key was dropped before crewlet secrets rekey moved them off it, or the estate was restored under another keyring."
+      >
+        sealed
+      </Tag>
+    );
+  }
+  return <TextCell>{row.name || row.login || row.id}</TextCell>;
 }
 
+/** A row's declared grants, as written. */
 function Grants({ grants }: { grants?: string[] | null }) {
   if (!grants || grants.length === 0) return <EmptyValue label="No grants" />;
   return (
@@ -576,570 +711,253 @@ function Grants({ grants }: { grants?: string[] | null }) {
   );
 }
 
-function directoryColumns(seatOf: (identity: string) => Seat | null): GridColumn<DirectoryRow>[] {
-  return [
-    {
-      key: "who",
-      header: "Who",
-      floor: "12rem",
-      sortValue: (p) => whoOf(p, p.id),
-      cell: (p) => (
-        <span className="col" style={{ minWidth: 0 }}>
-          <span className="row gap-2">
-            <span className="truncate">{whoOf(p, p.id)}</span>
-            {p.sealed && (
-              <Tag
-                size="sm"
-                variant="warning"
-                title="This node's keyring cannot open this row's name or address: a key dropped before the values were moved off it, or a restore under another keyring."
-              >
-                sealed
-              </Tag>
-            )}
-            {p.reserved && (
-              <Tag
-                size="sm"
-                variant="warning"
-                title="An enrolment claimed these and stopped before its record landed."
-              >
-                reservation
-              </Tag>
-            )}
-          </span>
-          {p.email && <span className="t-caption muted truncate">{p.email}</span>}
-        </span>
-      ),
-    },
-    {
-      key: "kind",
-      header: "Kind",
-      shrink: true,
-      drop: 3,
-      sortValue: (p) => p.kind,
-      cell: (p) => <TextCell>{KIND_WORDS[p.kind] ?? p.kind}</TextCell>,
-    },
-    {
-      key: "login",
-      header: "Login",
-      shrink: true,
-      drop: 2,
-      sortValue: (p) => p.login ?? "",
-      cell: (p) => (p.login ? <KeyCell value={p.login} /> : <EmptyValue label="No login" />),
-    },
-    {
-      key: "stage",
-      header: "Stage",
-      shrink: true,
-      sortValue: (p) => p.stage,
-      cell: (p) => <WordTag words={STAGE_WORDS[p.stage]} fallback={p.stage} />,
-    },
-    {
-      key: "seat",
-      header: "Seat",
-      floor: "9rem",
-      sortValue: (p) => p.seat ?? "",
-      cell: (p) => <BoundSeat identity={p.seat} seat={p.seat ? seatOf(p.seat) : null} />,
-    },
-    {
-      key: "grants",
-      header: "Grants",
-      drop: 1,
-      sortValue: (p) => p.grants?.length ?? 0,
-      cell: (p) => <Grants grants={p.grants} />,
-    },
-    {
-      key: "colleague",
-      header: "Reach",
-      shrink: true,
-      drop: 4,
-      sortValue: (p) => p.colleague ?? "",
-      cell: (p) =>
-        p.colleague ? (
-          <TextCell>{COLLEAGUE_WORDS[p.colleague] ?? p.colleague}</TextCell>
-        ) : (
-          <EmptyValue label="Not recorded" />
-        ),
-    },
-    {
-      key: "joined",
-      header: "Since",
-      shrink: true,
-      drop: 5,
-      sortValue: (p) => p.created_at ?? "",
-      cell: (p) => <DateCell at={p.created_at} />,
-    },
-  ];
-}
-
-function nodeTokenColumns(
-  seatOf: (identity: string) => Seat | null,
-  byID: ReadonlyMap<string, DirectoryRow>,
-): GridColumn<NodeToken>[] {
-  return [
-    {
-      key: "id",
-      header: "Label",
-      shrink: true,
-      sortValue: (t) => t.id,
-      cell: (t) => <KeyCell value={t.id} />,
-    },
-    {
-      key: "login",
-      header: "Acts under",
-      shrink: true,
-      drop: 2,
-      sortValue: (t) => t.login,
-      cell: (t) => <KeyCell value={t.login} />,
-    },
-    {
-      key: "row",
-      header: "Directory",
-      shrink: true,
-      sortValue: (t) => t.row,
-      cell: (t) =>
-        t.row === "held" && t.stage ? (
-          <span className="row gap-1">
-            <WordTag words={TOKEN_ROW_WORDS.held} fallback={t.row} />
-            <WordTag words={STAGE_WORDS[t.stage]} fallback={t.stage} />
-          </span>
-        ) : (
-          <WordTag words={TOKEN_ROW_WORDS[t.row]} fallback={t.row} />
-        ),
-    },
-    {
-      key: "principal",
-      header: "Row",
-      drop: 3,
-      sortValue: (t) => (t.person ? whoOf(byID.get(t.person), t.person) : ""),
-      cell: (t) =>
-        t.person ? (
-          <TextCell>{whoOf(byID.get(t.person), t.person)}</TextCell>
-        ) : (
-          <EmptyValue label="Nobody" />
-        ),
-    },
-    {
-      key: "seat",
-      header: "Seat",
-      floor: "9rem",
-      sortValue: (t) => t.seat ?? "",
-      cell: (t) => <BoundSeat identity={t.seat} seat={t.seat ? seatOf(t.seat) : null} />,
-    },
-    {
-      key: "binding",
-      header: "Acts as",
-      shrink: true,
-      sortValue: (t) => t.binding,
-      cell: (t) => {
-        const words = BINDING_WORDS[t.binding];
-        return (
-          <Tag
-            size="sm"
-            variant={words?.tone ?? "neutral"}
-            title={t.detail ? sentence(t.detail) : words?.hint}
-          >
-            {words?.label ?? t.binding}
-          </Tag>
-        );
-      },
-    },
-  ];
-}
-
-// ---------------------------------------------------------------------------
-// One principal's credentials and sessions
-// ---------------------------------------------------------------------------
-
-const CREDENTIAL_COLUMNS: GridColumn<CredentialRow>[] = [
-  {
-    key: "method",
-    header: "Method",
-    shrink: true,
-    sortValue: (c) => c.method,
-    cell: (c) => <TextCell>{METHOD_WORDS[c.method] ?? c.method}</TextCell>,
-  },
-  {
-    key: "label",
-    header: "Label",
-    sortValue: (c) => c.label ?? "",
-    cell: (c) => (c.label ? <TextCell>{c.label}</TextCell> : <EmptyValue label="No label" />),
-  },
-  {
-    key: "grants",
-    header: "Carries",
-    drop: 1,
-    sortValue: (c) => c.grants?.length ?? 0,
-    cell: (c) =>
-      c.method === "token" ? <Grants grants={c.grants} /> : <EmptyValue label="Its owner's" />,
-  },
-  {
-    key: "state",
-    header: "State",
-    shrink: true,
-    sortValue: (c) => (c.revoked ? 1 : 0),
-    cell: (c) =>
-      !c.revoked ? (
-        <Tag size="sm" variant="success">
-          Live
-        </Tag>
-      ) : c.revoked_at ? (
-        <Tag size="sm" variant="neutral">
-          Revoked
-        </Tag>
-      ) : (
-        <Tag size="sm" variant="neutral">
-          Expired
-        </Tag>
-      ),
-  },
-  {
-    key: "created",
-    header: "Made",
-    shrink: true,
-    drop: 2,
-    sortValue: (c) => c.created_at ?? "",
-    cell: (c) => <DateCell at={c.created_at} />,
-  },
-  {
-    key: "expires",
-    header: "Expires",
-    shrink: true,
-    drop: 3,
-    sortValue: (c) => c.expires_at ?? "",
-    cell: (c) => (c.expires_at ? <DateCell at={c.expires_at} /> : <EmptyValue label="Never" />),
-  },
-];
-
-const SESSION_COLUMNS: GridColumn<SessionRow>[] = [
-  {
-    key: "lineage",
-    header: "Session",
-    shrink: true,
-    sortValue: (s) => s.lineage,
-    cell: (s) => <KeyCell value={s.lineage} text={s.lineage.slice(0, 8)} />,
-  },
-  {
-    key: "state",
-    header: "State",
-    shrink: true,
-    sortValue: (s) => (s.live ? 0 : 1),
-    cell: (s) => (
-      <span className="row gap-1">
-        {s.live ? (
-          <Tag size="sm" variant="success">
-            Signed in
-          </Tag>
-        ) : (
-          <Tag size="sm" variant="neutral" title={s.ended_reason}>
-            Ended
-          </Tag>
-        )}
-        {s.enrolment_only && (
-          <Tag
-            size="sm"
-            variant="warning"
-            title="Opened on a password alone where a second factor is required: it may only enrol one."
-          >
-            enrolment only
-          </Tag>
-        )}
-      </span>
-    ),
-  },
-  {
-    key: "started",
-    header: "Started",
-    shrink: true,
-    sortValue: (s) => s.created_at ?? "",
-    cell: (s) => <DateCell at={s.created_at} />,
-  },
-  {
-    key: "ends",
-    header: "Ends",
-    shrink: true,
-    drop: 1,
-    sortValue: (s) => s.ended_at ?? s.expires_at ?? "",
-    cell: (s) => <DateCell at={s.ended_at ?? s.expires_at} />,
-  },
-];
-
-/** The empty lists a read that answered none draws: one identity each, held still. */
-const NO_CREDENTIALS: CredentialRow[] = [];
-const NO_SESSIONS: SessionRow[] = [];
-
-function PrincipalDetail({ row, onClose }: { row: DirectoryRow; onClose: () => void }) {
-  const id = encodeURIComponent(row.id);
-  const credentials = useRestRead(
-    `/iam/credentials?person=${id}`,
-    async (signal) =>
-      (await rest.get(`/iam/credentials?person=${id}`, signal)) as {
-        credentials: CredentialRow[] | null;
-      } | null,
-    { cadence },
-  );
-  const sessions = useRestRead(
-    `/iam/people/${id}/sessions`,
-    async (signal) =>
-      (await rest.get(`/iam/people/${id}/sessions`, signal)) as {
-        sessions: SessionRow[] | null;
-      } | null,
-    { cadence },
-  );
-  const who = whoOf(row, row.id);
+/** Whoever holds a seat, by login and stage — or the plain fact that nobody does. */
+function Holders({ holders }: { holders: SeatRow["holders"] }) {
+  if (holders.length === 0) return <EmptyValue label="Nobody holds it" />;
   return (
-    <Card padding="none">
-      <Card.Header icon={<KeyGlyph size="sm" />}>
-        <span className="row gap-2">
-          <span>{who}&rsquo;s credentials and sessions</span>
-          <button type="button" className="t-link" onClick={onClose}>
-            Close
-          </button>
-        </span>
-      </Card.Header>
-      <div className="col gap-3" style={{ padding: "var(--spacing-3) var(--spacing-4)" }}>
-        <QueryState
-          error={credentials.failure?.error ?? null}
-          refusal={credentials.failure?.refusal ?? null}
-          loading={credentials.loading}
-        />
-        {credentials.loading && credentials.data === null && (
-          <Skeleton variant="text" rows={2} label="Loading credentials" />
-        )}
-        {credentials.data !== null && (
-          <DataGrid<CredentialRow>
-            name="credentials"
-            rows={credentials.data.credentials ?? NO_CREDENTIALS}
-            rowKey={(c) => c.id}
-            defaultSort="method"
-            columns={CREDENTIAL_COLUMNS}
-            flush
-            empty={{
-              title: "No credential",
-              hint:
-                row.kind === "machine"
-                  ? "A service account proves itself with a machine token an administrator mints for it."
-                  : "They have not redeemed an invitation into a password yet.",
-              icon: "key",
-            }}
-          />
-        )}
-        <QueryState
-          error={sessions.failure?.error ?? null}
-          refusal={sessions.failure?.refusal ?? null}
-          loading={sessions.loading}
-        />
-        {sessions.loading && sessions.data === null && (
-          <Skeleton variant="text" rows={2} label="Loading sessions" />
-        )}
-        {sessions.data !== null && (
-          <DataGrid<SessionRow>
-            name="sessions"
-            rows={sessions.data.sessions ?? NO_SESSIONS}
-            rowKey={(s) => s.lineage}
-            defaultSort="started"
-            columns={SESSION_COLUMNS}
-            flush
-            empty={{
-              title: "No session",
-              hint: "A session is what a browser holds once somebody signs in; a machine token opens none.",
-              icon: "key",
-            }}
-          />
-        )}
-      </div>
-    </Card>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// The two reports
-// ---------------------------------------------------------------------------
-
-function DirectoryReport({
-  check,
-  byID,
-  seatOf,
-}: {
-  check: RestRead<DirectoryCheck | null>;
-  byID: ReadonlyMap<string, DirectoryRow>;
-  seatOf: (identity: string) => Seat | null;
-}) {
-  const findings = check.data?.findings ?? [];
-  const unchecked = check.data?.bindings_unchecked ?? 0;
-  const nameOf = (id: string) => whoOf(byID.get(id), id);
-  return (
-    <Card padding="none">
-      <Card.Header
-        icon={<TriangleAlertGlyph size="sm" />}
-        count={check.data ? findings.length : undefined}
-      >
-        What the directory reports
-      </Card.Header>
-      <div className="col gap-2" style={{ padding: "var(--spacing-3) var(--spacing-4)" }}>
-        {check.loading && check.data === null && (
-          <Skeleton variant="text" rows={2} label="Loading the directory's report" />
-        )}
-        <QueryState
-          error={check.failure?.error ?? null}
-          refusal={check.failure?.refusal ?? null}
-          loading={check.loading}
-        />
-        {check.data && unchecked > 0 && (
-          // SAID RATHER THAN SILENT: "no dangling binding" and "this node's
-          // chart could not say" are different answers.
-          <Callout variant="warning">
-            {plural(unchecked, "seat binding")} could not be checked on this node just now, so a
-            binding whose seat is gone may be missing below.
-          </Callout>
-        )}
-        {check.data && findings.length === 0 && unchecked === 0 && (
-          <p className="t-body muted">The directory reports nothing wrong.</p>
-        )}
-        {findings.map((f, i) => (
-          <DirectoryFindingRow key={`${f.kind}:${i}`} finding={f} nameOf={nameOf} seatOf={seatOf} />
-        ))}
-      </div>
-    </Card>
-  );
-}
-
-function DirectoryFindingRow({
-  finding: f,
-  nameOf,
-  seatOf,
-}: {
-  finding: DirectoryFinding;
-  nameOf: (id: string) => string;
-  seatOf: (identity: string) => Seat | null;
-}) {
-  const words = DIRECTORY_FINDING_WORDS[f.kind];
-  const holders = f.people ?? [];
-  return (
-    <div className="col gap-1" data-finding={f.kind}>
-      <span className="row gap-2" style={{ flexWrap: "wrap" }}>
-        <Tag size="sm" variant={words?.tone ?? "neutral"}>
-          {words?.label ?? f.kind}
+    <span className="row gap-1" style={{ flexWrap: "wrap" }}>
+      {holders.map((h) => (
+        <Tag
+          key={h.person}
+          size="sm"
+          variant={STAGE_WORDS[h.stage ?? ""]?.tone ?? "neutral"}
+          title={STAGE_WORDS[h.stage ?? ""]?.label ?? h.stage}
+        >
+          <span className="mono">{h.login || h.person}</span>
         </Tag>
-        {f.person && <span className="t-body">{nameOf(f.person)}</span>}
-        {!f.person && f.login && <span className="mono">{f.login}</span>}
-        {f.claim && <span className="t-caption muted">{f.claim} claim</span>}
-        {f.grant && <InlineCode>{f.grant}</InlineCode>}
-        {f.seat && <BoundSeat identity={f.seat} seat={seatOf(f.seat)} />}
-      </span>
-      {holders.length > 0 && (
-        <span className="t-caption">Held by {holders.map(nameOf).join(", ")}</span>
-      )}
-      <span className="t-caption muted">{sentence(f.detail)}</span>
-    </div>
+      ))}
+    </span>
   );
 }
 
-/** The chart findings about people, in the report's own order. */
-function chartPeopleFindings(chart: ChartCheck): ChartFinding[] {
-  return (chart.report.findings ?? []).filter((f) => f.kind in CHART_FINDING_WORDS);
+/** Where agents reach a seat: one chip per field, as the document writes it. */
+function Contacts({ contact }: { contact: ConfigRole["contact"] }) {
+  const entries = Object.entries(contact ?? {}).filter(([, value]) => value);
+  if (entries.length === 0) return <EmptyValue label="No surface" />;
+  return (
+    <span className="row gap-1" style={{ flexWrap: "wrap" }}>
+      {entries.map(([key, value]) => (
+        <Tag key={key} size="sm" appearance="outline" title={`${key}: ${value}`}>
+          {CONTACT_SURFACES[key] ?? key} <span className="mono">{value}</span>
+        </Tag>
+      ))}
+    </span>
+  );
+}
+
+/** What a token acts as: the seat it is bound to, or why it is not. */
+function TokenBinding({ token, index }: { token: NodeToken; index: ReturnType<typeof indexOrg> }) {
+  const words = BINDING_WORDS[token.binding];
+  const tag = (
+    <Tag
+      size="sm"
+      variant={words?.tone ?? "neutral"}
+      title={token.detail ? sentence(token.detail) : words?.hint}
+    >
+      {words?.label ?? token.binding}
+    </Tag>
+  );
+  if (token.binding !== "bound" || !token.seat) return tag;
+  const seat = index.byHandle.get(token.seat);
+  return (
+    <span className="row gap-2">
+      <SeatCell handle={token.seat} name={seat?.name ?? token.seat} kind="human" />
+      {tag}
+    </span>
+  );
 }
 
 /**
- * The Findings tile: a COUNT only once every report this reader may read has
- * answered, and "nothing reported" only where each of them also evaluated
- * everything it was asked about.
- *
- * ABSENT EVIDENCE IS NOT A CLEAN BILL, and the tile is the first thing on the
- * page: it summed whatever had answered, so a directory report that failed
- * beside a clean chart, or a chart this node never evaluated, read "0 —
- * nothing reported" above the two cards saying otherwise. A chart report
- * REFUSED to this reader is the one absence that is settled rather than
- * pending — it takes `audit:read`, which `people:manage` alone does not carry
- * — so the count stands without it and the line says what it covers.
+ * What the directory reports wrong. Each finding by its kind and, beside it,
+ * the engine's own detail — so a kind this build has no word for still reads
+ * as the sentence the engine wrote.
  */
-function findingsTile(
-  check: Pick<RestRead<DirectoryCheck | null>, "data" | "loading">,
-  chart: Pick<RestRead<ChartCheck | null>, "data" | "loading" | "failure">,
-): { value: number | string; sub: string } {
-  const chartRefused = chart.data === null && chart.failure?.error === "unauthorized";
-  if (check.data === null || (chart.data === null && !chartRefused)) {
-    return {
-      value: EMPTY_VALUE,
-      sub: check.loading || chart.loading ? "not read yet" : "a report could not be read",
-    };
-  }
-  const report = chart.data?.report;
-  const count =
-    (check.data.findings?.length ?? 0) + (chart.data ? chartPeopleFindings(chart.data).length : 0);
-  const partial =
-    check.data.bindings_unchecked > 0 ||
-    (report !== undefined && (!report.evaluated || (report.unchecked ?? 0) > 0));
-  return {
-    value: count,
-    sub:
-      count > 0
-        ? "listed below"
-        : partial
-          ? "not everything could be checked"
-          : chartRefused
-            ? "in the directory's report — the chart's needs audit:read"
-            : "nothing reported",
-  };
-}
-
-function ChartReport({
-  chart,
-  seatOf,
-}: {
-  chart: RestRead<ChartCheck | null>;
-  seatOf: (identity: string) => Seat | null;
-}) {
-  const report = chart.data?.report;
-  const findings = chart.data ? chartPeopleFindings(chart.data) : [];
-  const unchecked = report?.unchecked ?? 0;
+function Findings({ check }: { check: RestResult<DirectoryCheck | null> }) {
+  const findings = check.data?.findings ?? [];
+  const unchecked = check.data?.bindings_unchecked ?? 0;
   return (
     <Card padding="none">
-      <Card.Header icon={<UsersGlyph size="sm" />} count={chart.data ? findings.length : undefined}>
-        Human seats nobody holds or reaches
+      <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={findings.length}>
+        What the directory reports
       </Card.Header>
-      <div className="col gap-2" style={{ padding: "var(--spacing-3) var(--spacing-4)" }}>
-        {chart.loading && chart.data === null && (
-          <Skeleton variant="text" rows={2} label="Loading the org chart's report" />
-        )}
-        <QueryState
-          error={chart.failure?.error ?? null}
-          refusal={chart.failure?.refusal ?? null}
-          loading={chart.loading}
-        />
-        {report && !report.evaluated && (
-          // ABSENT EVIDENCE IS NOT A CLEAN BILL.
-          <Callout variant="warning">
-            This node has not evaluated the org chart yet, so it cannot say which seats are held.
-          </Callout>
-        )}
-        {report?.evaluated && unchecked > 0 && (
-          <Callout variant="warning">
-            {plural(unchecked, "human seat")} could not be asked about on this node just now, so a
-            seat nobody holds may be missing below.
-          </Callout>
-        )}
-        {report?.evaluated && findings.length === 0 && unchecked === 0 && (
-          <p className="t-body muted">
-            Every human seat is held by somebody in the directory and has a way to be reached.
-          </p>
-        )}
-        {findings.map((f) => {
-          const words = CHART_FINDING_WORDS[f.kind];
-          const seat = seatOf(f.object);
-          return (
-            <div key={`${f.kind}:${f.object}`} className="col gap-1" data-finding={f.kind}>
-              <span className="row gap-2" style={{ flexWrap: "wrap" }}>
+      <QueryState
+        error={check.code}
+        refusal={check.refusal}
+        detail={check.error?.detail || undefined}
+        loading={check.loading && !check.data}
+      >
+        <div className="col" style={{ gap: "var(--spacing-2)", padding: "var(--spacing-4)" }}>
+          {findings.length === 0 && <p className="t-body muted">Nothing to report.</p>}
+          {findings.map((f, i) => {
+            const words = FINDING_WORDS[f.kind];
+            return (
+              <div key={`${f.kind}:${f.person ?? f.claim ?? f.seat ?? i}`} className="row gap-2">
                 <Tag size="sm" variant={words?.tone ?? "neutral"}>
                   {words?.label ?? f.kind}
                 </Tag>
-                <BoundSeat identity={f.object} seat={seat} />
-              </span>
-              <span className="t-caption muted">{sentence(f.detail)}</span>
-              {f.remedy && <span className="t-caption">{sentence(f.remedy)}</span>}
-            </div>
-          );
-        })}
-      </div>
+                <span className="t-body">{sentence(f.detail)}</span>
+              </div>
+            );
+          })}
+          {/* SAID RATHER THAN SILENT: "no dangling binding" and "this node
+              could not say" are different answers. */}
+          {unchecked > 0 && (
+            <p className="t-caption muted">
+              {unchecked} binding{unchecked === 1 ? "" : "s"} could not be checked against this
+              node&rsquo;s chart just now.
+            </p>
+          )}
+        </div>
+      </QueryState>
+    </Card>
+  );
+}
+
+/**
+ * One principal opened: the credentials they prove themselves with and the
+ * sessions they are signed in with, read for this row alone.
+ */
+function Principal({ row }: { row: DirectoryRow }) {
+  const now = useNow();
+  const id = encodeURIComponent(row.id);
+  const credentials = useRest(
+    `/iam/credentials?person=${id}`,
+    async (signal) =>
+      listOf<CredentialRow>(await rest.get(`/iam/credentials?person=${id}`, signal), "credentials"),
+    READ,
+  );
+  const sessions = useRest(
+    `/iam/people/${id}/sessions`,
+    async (signal) =>
+      listOf<SessionRow>(await rest.get(`/iam/people/${id}/sessions`, signal), "sessions"),
+    READ,
+  );
+  const who = row.sealed ? row.id : row.name || row.login || row.id;
+  return (
+    <Card padding="none">
+      <Card.Header icon={<KeyGlyph size="sm" />}>{who}: credentials and sessions</Card.Header>
+      <QueryState
+        error={credentials.code}
+        refusal={credentials.refusal}
+        detail={credentials.error?.detail || undefined}
+        loading={credentials.loading && !credentials.data}
+      >
+        <DataGrid<CredentialRow>
+          rows={credentials.data ?? []}
+          rowKey={(c) => c.id}
+          defaultSort="method"
+          empty={{ title: "Holds no credential" }}
+          columns={[
+            {
+              key: "method",
+              header: "Credential",
+              sortValue: (c) => c.method,
+              cell: (c) => (
+                <TextCell>
+                  {METHOD_WORDS[c.method] ?? c.method}
+                  {c.label ? ` · ${c.label}` : ""}
+                </TextCell>
+              ),
+            },
+            {
+              key: "state",
+              header: "State",
+              shrink: true,
+              sortValue: (c) => (c.revoked ? 1 : 0),
+              cell: (c) =>
+                c.revoked ? (
+                  <Tag size="sm" variant="neutral">
+                    {c.revoked_at ? "Revoked" : "Expired"}
+                  </Tag>
+                ) : (
+                  <Tag size="sm" variant="success">
+                    In use
+                  </Tag>
+                ),
+            },
+            {
+              key: "created",
+              header: "Created",
+              shrink: true,
+              sortValue: (c) => c.created_at ?? "",
+              cell: (c) => <DateCell at={c.created_at} now={now} />,
+            },
+            {
+              key: "expires",
+              header: "Expires",
+              shrink: true,
+              drop: 1,
+              sortValue: (c) => c.expires_at ?? "",
+              cell: (c) =>
+                c.expires_at ? (
+                  <DateCell at={c.expires_at} now={now} />
+                ) : (
+                  <EmptyValue label="Does not expire" />
+                ),
+            },
+            {
+              key: "grants",
+              header: "Carries",
+              drop: 2,
+              cell: (c) =>
+                c.method === "token" ? (
+                  <Grants grants={c.grants} />
+                ) : (
+                  <EmptyValue label="Its holder's grants" />
+                ),
+            },
+          ]}
+        />
+      </QueryState>
+      <QueryState
+        error={sessions.code}
+        refusal={sessions.refusal}
+        detail={sessions.error?.detail || undefined}
+        loading={sessions.loading && !sessions.data}
+      >
+        <DataGrid<SessionRow>
+          rows={sessions.data ?? []}
+          rowKey={(s) => s.lineage}
+          defaultSort="started"
+          empty={{ title: "Signed in nowhere" }}
+          columns={[
+            {
+              key: "started",
+              header: "Session",
+              sortValue: (s) => s.created_at ?? "",
+              cell: (s) => <DateCell at={s.created_at} now={now} />,
+            },
+            {
+              key: "state",
+              header: "State",
+              shrink: true,
+              sortValue: (s) => (s.live ? 0 : 1),
+              cell: (s) =>
+                s.live ? (
+                  <Tag
+                    size="sm"
+                    variant="success"
+                    title={s.enrolment_only ? "May only enrol a second factor" : undefined}
+                  >
+                    {s.enrolment_only ? "Enrolling a factor" : "Signed in"}
+                  </Tag>
+                ) : (
+                  <Tag size="sm" variant="neutral" title={s.ended_reason}>
+                    Ended
+                  </Tag>
+                ),
+            },
+            {
+              key: "ends",
+              header: "Ends",
+              shrink: true,
+              drop: 1,
+              sortValue: (s) => s.ended_at ?? s.expires_at ?? "",
+              cell: (s) => <DateCell at={s.ended_at ?? s.expires_at} now={now} />,
+            },
+          ]}
+        />
+      </QueryState>
     </Card>
   );
 }

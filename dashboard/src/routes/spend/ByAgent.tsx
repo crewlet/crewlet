@@ -24,12 +24,12 @@
 
 import { Card, EmptyValue, Meter } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { NumberCell, TokenCell } from "~/app/frame/cells.tsx";
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { fmtCount, fmtExact, plural } from "~/lib/format.ts";
-import { activityOf, ringOf, seatAddress, useSeatBadgeOf } from "~/lib/seats.ts";
+import { activityOf, ringOf, useSeatBadgeOf } from "~/lib/seats.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
 import type { Window } from "~/lib/range.ts";
 import { isRange, windowParam } from "~/lib/range.ts";
@@ -80,125 +80,13 @@ export function ByAgent({
   const turns = turnsLink(range);
   // WHETHER ANY SEAT'S DAY IS CAPPED — the column exists only if so.
   const capped = lines.some((l) => l.day?.limit !== undefined);
-  // THE COLUMNS HOLD STILL until what they read moves — the chart's names, the
-  // live rows' rings, the top share, whether any day is capped: every row is
-  // memoised on this list, and one built inline drew every seat on every render.
-  const columns = useMemo<GridColumn<AgentLine>[]>(
-    () => [
-      {
-        key: "agent",
-        header: "Agent",
-        // THE ONE FLEXIBLE COLUMN, so every spare pixel goes to the name
-        // (see Share). The floor is what the row keeps before Share gives
-        // way — at 1280 every column still fits beside it.
-        floor: "8rem",
-        phoneLead: true,
-        sortValue: (l) => badgeOf(l.row.handle || l.row.role).name,
-        cell: (l) => {
-          const badge = badgeOf(l.row.handle || l.row.role);
-          const ring = ringOf(activityOf(byAgent.get(l.row.agent_id)));
-          return (
-            <span className="cell-seat" title={badge.name}>
-              <SeatAvatar
-                name={badge.name}
-                size="xs"
-                kind={badge.kind === "human" ? "human" : "agent"}
-                ring={ring}
-                decorative
-              />
-              <span className="truncate">{badge.name}</span>
-            </span>
-          );
-        },
-      },
-      {
-        key: "turns",
-        header: "Turns",
-        align: "right",
-        // WIDTHS RATHER THAN `shrink`: a shrunk column is sized to its
-        // cells, and at 1280 beside the list column the sortable heads
-        // ("Tokens ⌄", "Per turn") were cut to "To…" over figures that fit.
-        width: "4.5rem",
-        sortValue: (l) => l.row.turns ?? -1,
-        cell: (l) => (
-          <>
-            <NumberCell value={l.row.turns} />
-            <PhoneUnit words={l.row.turns === 1 ? "turn" : "turns"} />
-          </>
-        ),
-      },
-      {
-        key: "tokens",
-        header: "Tokens",
-        align: "right",
-        width: "5.5rem",
-        phoneLead: true,
-        sortValue: (l) => l.row.total_tokens,
-        cell: (l) => <TokenCell value={l.row.total_tokens} />,
-      },
-      {
-        key: "share",
-        header: "Share",
-        // A FIXED TRACK, so the one flexible column is the name: a second
-        // flexible column split the spare width with it, and at 1440 the
-        // share bar stood in empty space while names were cut.
-        width: "6rem",
-        phoneLead: true,
-        // THE SHARE GIVES WAY FIRST: it restates the tokens beside it as
-        // a fraction, where today's budget is a fact nothing else on the
-        // row says.
-        drop: 1,
-        sortValue: (l) => l.share,
-        cell: (l) => (
-          <span className="spend-share" title={`${fmtExact(l.row.total_tokens)} tokens`}>
-            <span className="spend-share-track" aria-hidden="true">
-              <span
-                className="spend-share-bar"
-                style={{ width: `${top > 0 ? (l.share / top) * 100 : 0}%` }}
-              />
-            </span>
-            <span className="spend-share-pct">{Math.round(l.share * 100)}%</span>
-          </span>
-        ),
-      },
-      ...(capped
-        ? [
-            {
-              key: "today",
-              header: "Budget today",
-              width: "8rem",
-              drop: 2,
-              sortValue: (l: AgentLine) => (l.day?.limit ? l.day.used / l.day.limit : -1),
-              cell: (l: AgentLine) => (
-                <DayBudget line={l} name={badgeOf(l.row.handle || l.row.role).name} />
-              ),
-            },
-          ]
-        : []),
-      {
-        key: "perturn",
-        header: "Per turn",
-        align: "right",
-        width: "5.5rem",
-        sortValue: (l) => l.perTurn ?? -1,
-        cell: (l) =>
-          l.perTurn === null ? (
-            <EmptyValue label="No turn ended in this window" />
-          ) : (
-            <span className="spend-per-turn" title={`${fmtExact(l.perTurn)} tokens per ended turn`}>
-              {fmtCount(l.perTurn)}
-              <PhoneUnit words="per turn" />
-            </span>
-          ),
-      },
-    ],
-    [badgeOf, byAgent, top, capped],
-  );
-
   // `[` AND `]` WALK THE SEATS IN THE ORDER THE TABLE OPENS IN — most tokens
   // first, the order `agentLines` returns.
   usePeekNeighbours(
-    useMemo(() => rows.map((l) => ({ kind: "seat" as const, id: seatAddress(l.row) })), [rows]),
+    useMemo(
+      () => rows.map((l) => ({ kind: "seat" as const, id: l.row.handle || l.row.role })),
+      [rows],
+    ),
   );
 
   return (
@@ -219,8 +107,10 @@ export function ByAgent({
         defaultSort="-tokens"
         phoneRows="compact"
         flush
-        rowHref={(l) => peekHref({ kind: "seat", id: seatAddress(l.row) })}
-        onRowActivate={peekRow<AgentLine>((l) => open({ kind: "seat", id: seatAddress(l.row) }))}
+        rowHref={(l) => peekHref({ kind: "seat", id: l.row.handle || l.row.role })}
+        onRowActivate={peekRow<AgentLine>((l) =>
+          open({ kind: "seat", id: l.row.handle || l.row.role }),
+        )}
         empty={
           error
             ? { title: "This window did not answer", hint: "The refusal above says why." }
@@ -229,7 +119,117 @@ export function ByAgent({
                 hint: "A seat appears here once one of its turns makes a model call.",
               }
         }
-        columns={columns}
+        columns={[
+          {
+            key: "agent",
+            header: "Agent",
+            // THE ONE FLEXIBLE COLUMN, so every spare pixel goes to the name
+            // (see Share). The floor is what the row keeps before Share gives
+            // way — at 1280 every column still fits beside it.
+            floor: "8rem",
+            phoneLead: true,
+            sortValue: (l) => badgeOf(l.row.handle || l.row.role).name,
+            cell: (l) => {
+              const badge = badgeOf(l.row.handle || l.row.role);
+              const ring = ringOf(activityOf(byAgent.get(l.row.agent_id)));
+              return (
+                <span className="cell-seat" title={badge.name}>
+                  <SeatAvatar
+                    name={badge.name}
+                    size="xs"
+                    kind={badge.kind === "human" ? "human" : "agent"}
+                    ring={ring}
+                    decorative
+                  />
+                  <span className="truncate">{badge.name}</span>
+                </span>
+              );
+            },
+          },
+          {
+            key: "turns",
+            header: "Turns",
+            align: "right",
+            // WIDTHS RATHER THAN `shrink`: a shrunk column is sized to its
+            // cells, and at 1280 beside the list column the sortable heads
+            // ("Tokens ⌄", "Per turn") were cut to "To…" over figures that fit.
+            width: "4.5rem",
+            sortValue: (l) => l.row.turns ?? -1,
+            cell: (l) => (
+              <>
+                <NumberCell value={l.row.turns} />
+                <PhoneUnit words={l.row.turns === 1 ? "turn" : "turns"} />
+              </>
+            ),
+          },
+          {
+            key: "tokens",
+            header: "Tokens",
+            align: "right",
+            width: "5.5rem",
+            phoneLead: true,
+            sortValue: (l) => l.row.total_tokens,
+            cell: (l) => <TokenCell value={l.row.total_tokens} />,
+          },
+          {
+            key: "share",
+            header: "Share",
+            // A FIXED TRACK, so the one flexible column is the name: a second
+            // flexible column split the spare width with it, and at 1440 the
+            // share bar stood in empty space while names were cut.
+            width: "6rem",
+            phoneLead: true,
+            // THE SHARE GIVES WAY FIRST: it restates the tokens beside it as
+            // a fraction, where today's budget is a fact nothing else on the
+            // row says.
+            drop: 1,
+            sortValue: (l) => l.share,
+            cell: (l) => (
+              <span className="spend-share" title={`${fmtExact(l.row.total_tokens)} tokens`}>
+                <span className="spend-share-track" aria-hidden="true">
+                  <span
+                    className="spend-share-bar"
+                    style={{ width: `${top > 0 ? (l.share / top) * 100 : 0}%` }}
+                  />
+                </span>
+                <span className="spend-share-pct">{Math.round(l.share * 100)}%</span>
+              </span>
+            ),
+          },
+          ...(capped
+            ? [
+                {
+                  key: "today",
+                  header: "Budget today",
+                  width: "8rem",
+                  drop: 2,
+                  sortValue: (l: AgentLine) => (l.day?.limit ? l.day.used / l.day.limit : -1),
+                  cell: (l: AgentLine) => (
+                    <DayBudget line={l} name={badgeOf(l.row.handle || l.row.role).name} />
+                  ),
+                },
+              ]
+            : []),
+          {
+            key: "perturn",
+            header: "Per turn",
+            align: "right",
+            width: "5.5rem",
+            sortValue: (l) => l.perTurn ?? -1,
+            cell: (l) =>
+              l.perTurn === null ? (
+                <EmptyValue label="No turn ended in this window" />
+              ) : (
+                <span
+                  className="spend-per-turn"
+                  title={`${fmtExact(l.perTurn)} tokens per ended turn`}
+                >
+                  {fmtCount(l.perTurn)}
+                  <PhoneUnit words="per turn" />
+                </span>
+              ),
+          },
+        ]}
       />
       {/* PER-TURN SPEND IS THE TURN LIST'S. A company day holds no turn, so
           this screen has none to rank; the list does, over the event log. */}

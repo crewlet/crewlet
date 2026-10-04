@@ -8,17 +8,8 @@
  * palette — and assert what a reader still has.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
-import {
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  onTestFinished,
-  test,
-  vi,
-} from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -39,31 +30,7 @@ class InertWebSocket {
 
 /** A screen that throws the way a malformed field does. */
 function Throws(): never {
-  throw new Error(THROWN);
-}
-
-const THROWN = "model is an object, not a string";
-
-/**
- * What React reports about a failure a boundary caught — which every case
- * here causes ON PURPOSE, so it is this case's to silence (`test/console.ts`).
- * Silenced for exactly that: every line heard must name one of the failures
- * the case threw, so an error nobody threw still fails it.
- */
-function expectReported(...failures: string[]) {
-  const said: string[] = [];
-  const quiet = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
-    said.push(
-      args.map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : String(a))).join(" "),
-    );
-  });
-  onTestFinished(() => {
-    quiet.mockRestore();
-    expect(
-      said.filter((line) => !failures.some((failure) => line.includes(failure))),
-      "the console said something no failure this case threw explains",
-    ).toEqual([]);
-  });
+  throw new Error("model is an object, not a string");
 }
 
 let undo: (() => void)[] = [];
@@ -130,14 +97,13 @@ afterEach(async () => {
 
 describe("a screen that throws", () => {
   test("leaves the sidebar and ⌘K working", async () => {
-    expectReported(THROWN);
     breakExport("spend", "Spend", Throws);
     location.hash = "#/spend";
     await mount();
     const alert = await screen.findByText("This screen could not be drawn");
     expect(alert).toBeDefined();
     // The message a report needs is on screen.
-    expect(screen.getByText(THROWN)).toBeDefined();
+    expect(screen.getByText("model is an object, not a string")).toBeDefined();
     // THE WAY OUT IS STILL THERE: the sidebar's rows, and the palette.
     const nav = screen.getByRole("navigation", { name: "Navigation" });
     expect(nav.querySelector('a[href="#/home"]')).not.toBeNull();
@@ -146,7 +112,6 @@ describe("a screen that throws", () => {
   });
 
   test("is drawn afresh when the reader goes somewhere else", async () => {
-    expectReported(THROWN);
     breakExport("spend", "Spend", Throws);
     location.hash = "#/spend";
     await mount();
@@ -156,7 +121,6 @@ describe("a screen that throws", () => {
   });
 
   test("but not by a query string alone, which is the same screen", async () => {
-    expectReported(THROWN);
     breakExport("spend", "Spend", Throws);
     location.hash = "#/spend";
     await mount();
@@ -168,7 +132,6 @@ describe("a screen that throws", () => {
 
 describe("a chunk that never arrives", () => {
   test("has its own sentence, a Reload, and a Try again that really asks again", async () => {
-    expectReported("The Spend screens could not be loaded");
     let fail = true;
     undo.push(
       overrideChunkForTest("spend", async () => {
@@ -193,7 +156,6 @@ describe("a chunk that never arrives", () => {
 
 describe("a peek that throws", () => {
   test("takes its body down and leaves the rail's close and the screen behind", async () => {
-    expectReported(THROWN);
     breakExport("work", "ItemPeek", Throws);
     location.hash = `#/spend?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
     await mount();
@@ -212,7 +174,6 @@ describe("a sidebar section that throws", () => {
   // A project whose name arrived as an object is a React child React refuses —
   // the same shape of failure as the per-phase model mapping.
   test("costs its own list and never the navigation above it", async () => {
-    expectReported("Objects are not valid as a React child");
     // ON A SCREEN THAT DOES NOT READ THE PROJECTS ITSELF: Home draws a
     // projects card from the same answer, and its own boundary is the
     // screen's, which is the case below this one.
@@ -240,7 +201,6 @@ describe("a sidebar section that throws", () => {
 
 describe("a layer's boundary", () => {
   test("is a dialog that says so and closes the way the layer does", () => {
-    expectReported(THROWN);
     let closed = 0;
     render(
       <LayerBoundary title="Search" onClose={() => closed++}>
@@ -248,7 +208,7 @@ describe("a layer's boundary", () => {
       </LayerBoundary>,
     );
     const dialog = screen.getByRole("dialog", { name: "Search could not be drawn" });
-    expect(dialog.textContent).toContain(THROWN);
+    expect(dialog.textContent).toContain("model is an object, not a string");
     fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0]!);
     expect(closed).toBe(1);
   });
@@ -257,7 +217,6 @@ describe("a layer's boundary", () => {
   // tab an upgrade outdated is a chunk that never arrives — and that is the
   // chunk's own sentence and a Reload, not the raw rejection.
   test("a layer whose chunk never came says to reload", () => {
-    expectReported("The Work screens could not be loaded");
     function ChunkGone(): never {
       throw new ChunkLoadError("work", new Error("Failed to fetch"));
     }

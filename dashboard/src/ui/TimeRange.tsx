@@ -10,7 +10,7 @@
  * THE OFFERED SET IS THE SCREEN'S, not the whole vocabulary — a spend chart
  * has nothing useful to say about fifteen minutes and a client-buffered strip
  * has nothing to say about ninety days — and it is the SAME declaration the
- * screen's `useWindow` reads, carried on the range itself. Two lists would
+ * screen's `useTimeRange` reads, carried on the range itself. Two lists would
  * be two answers to "which windows does this screen have", and the one the URL
  * is checked against is not the one a reader can see.
  *
@@ -30,10 +30,9 @@ import {
   daysInterval,
   isRange,
   todayWindow,
-  windowEdges,
   windowLabel,
 } from "~/lib/range.ts";
-import type { Interval, Range, TimeRange, Window, WindowChoice } from "~/lib/range.ts";
+import type { Range, TimeRange, Window } from "~/lib/range.ts";
 import { fromWall, toWall, tsKey } from "~/lib/format.ts";
 import { Button, Callout, FormField, Input, Modal } from "@crewlethq/ui";
 import { ClockGlyph } from "@crewlethq/icons/glyphs";
@@ -53,27 +52,11 @@ export function TimeRangePicker({
   range,
   ariaLabel = "Time range",
 }: {
-  /**
-   * The screen's window — a chart's with the edges it draws, a list's
-   * without. A list computes its edges when it asks, so it has none to hand
-   * over until somebody asks for them, and this asks at the one moment it
-   * needs them: the press that opens the custom window.
-   */
-  range: WindowChoice | TimeRange;
+  range: TimeRange;
   ariaLabel?: string;
 }) {
-  // THE TWO INSTANTS THE DIALOG OPENS ON, taken at the press that opens it —
-  // the edges the chart is drawing where it has some, and otherwise the
-  // window as of that press, which is what a list on screen is showing.
-  const [editing, setEditing] = useState<Interval | null>(null);
-  const { window, offer, set } = range;
-  const opening = (): Interval => {
-    const { since, until } =
-      "since" in range
-        ? range
-        : windowEdges(window, Date.now(), 0, offer.customDays ? { zone: offer.zone } : undefined);
-    return { from: tsKey(since), to: tsKey(until) };
-  };
+  const [editing, setEditing] = useState(false);
+  const { window, offer, since, until, set } = range;
 
   const options: { value: Choice; label: string; title: string }[] = [];
   // TODAY LEADS, because it is the shortest window a screen offering it has
@@ -114,20 +97,20 @@ export function TimeRangePicker({
         value={isRange(window) ? window : window.today ? TODAY : CUSTOM}
         onChange={(next) =>
           next === CUSTOM
-            ? setEditing(opening())
+            ? setEditing(true)
             : set(next === TODAY ? todayWindow(Date.now(), offer.zone) : next)
         }
         options={options}
       />
       {editing && (
         <CustomWindow
-          from={editing.from}
-          to={editing.to}
+          from={tsKey(since)}
+          to={tsKey(until)}
           days={offer.customDays ? { zone: offer.zone } : undefined}
-          onClose={() => setEditing(null)}
+          onClose={() => setEditing(false)}
           onPick={(next) => {
             set(next);
-            setEditing(null);
+            setEditing(false);
           }}
         />
       )}

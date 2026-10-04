@@ -3,7 +3,7 @@
  * same goal is three lines in a 340px side and one on a wide phone.
  */
 
-import { cleanup, render, screen } from "~/test/inCase.ts";
+import { cleanup, render, screen } from "@testing-library/react";
 import { useRef } from "react";
 import { afterEach, expect, test } from "vitest";
 

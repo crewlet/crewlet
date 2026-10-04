@@ -14,7 +14,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { changeValue, ConfigScreen, RevisionAuthor, RevisionPeek } from "./Config.tsx";
 import { Router } from "~/app/router.tsx";
@@ -30,7 +30,6 @@ const revisions = [
     created_at: "2026-08-23T15:00:00Z",
     created_by: "founder",
     created_by_kind: "operator",
-    operator_id: "pat:01JTOKEN",
     source: "api",
     summary: "connect datadog",
     is_active: true,
@@ -39,8 +38,7 @@ const revisions = [
     revision_id: "01JCFGBBBB0000000000000002",
     created_at: "2026-08-22T15:00:00Z",
     created_by: "node-a",
-    created_by_kind: "system",
-    operator_id: "",
+    created_by_kind: "node",
     source: "file",
     summary: "first import",
     is_active: false,
@@ -140,12 +138,10 @@ test("a revision row renders the server's own field names", async () => {
   // The author, WHAT the author is, and the active marker. The kind is the
   // revision's own word: a node's seed reads as the node's, never as a
   // person's.
-  // THE CREDENTIAL BESIDE THE NAME, where it is not the name itself: which of
-  // the author's credentials wrote a revision is what an incident asks.
-  expect(screen.getByText("founder (through pat:01JTOKEN)")).toBeDefined();
+  expect(screen.getByText("founder")).toBeDefined();
   expect(screen.getByText("node-a")).toBeDefined();
   expect(screen.getByText("operator")).toBeDefined();
-  expect(screen.getByText("system")).toBeDefined();
+  expect(screen.getByText("node")).toBeDefined();
   expect(screen.getAllByText("active").length).toBe(1);
 });
 
@@ -336,28 +332,14 @@ test("a collection with no active revision says so, not that the revision declar
   expect(screen.queryByText(/declares none of these/)).toBeNull();
 });
 
-// THE CONTROL. An active revision that genuinely declares no providers is a
+// THE CONTROL. An active revision that genuinely declares no seats is a
 // different fact and keeps its own wording — without this, collapsing both
 // into the no-revision sentence would pass the case above.
 test("an empty collection under an active revision still reads as empty", async () => {
-  mount("#/config?lens=entities", diff, { kind: "llm-providers", ids: [] });
+  mount("#/config?lens=entities", diff, { kind: "roles", ids: [] });
 
   expect(await screen.findByText("Nothing in this collection")).toBeDefined();
   expect(screen.queryByText("No company configuration is active")).toBeNull();
-});
-
-// THE LENS OFFERS WHAT THE ENGINE ADDRESSES, in the contract's order, and
-// opens on the first. Seats and units are the org chart's — no revision
-// carries them — so neither is a collection here: the lens once opened on
-// "Seats" and told every company it declared nobody.
-test("the lens opens on the providers and offers no chart collection", async () => {
-  mount("#/config?lens=entities", diff, { kind: "llm-providers", ids: [] });
-  expect(await screen.findByText("Nothing in this collection")).toBeDefined();
-  expect(asked.find((q) => q.what === "config_entities")?.params?.kind).toBe("llm-providers");
-  const offered = within(screen.getByRole("radiogroup", { name: "Which collection" }))
-    .getAllByRole("radio")
-    .map((option) => option.textContent?.trim());
-  expect(offered).toEqual(["LLM providers", "MCP servers"]);
 });
 
 // `entity` is a URL key, so a shared or bookmarked link lands on the panel in
@@ -423,7 +405,8 @@ test("with no side named the diff is read against the active revision", async ()
   expect(screen.getByText("against the active revision")).toBeDefined();
 });
 
-// A REVISION NOBODY RECORDED AN AUTHOR FOR SAYS SO — and "not recorded" is a
+// A REVISION NOBODY RECORDED AN AUTHOR FOR SAYS SO. It was adopted from an
+// older engine's pointer, which named nobody — and "not recorded" is a
 // different fact from "the engine wrote it" or from an empty name.
 test("a revision with no recorded author says so rather than naming anybody", () => {
   const { container } = render(
@@ -444,40 +427,34 @@ test("a revision with no recorded author says so rather than naming anybody", ()
 });
 
 // THE LIST SAYS WHICH ONE IS OPEN, to a reader who cannot see the fill: the
-// picked id is a pressed toggle and every other is not, and each carries its
-// whole id in its title because the list track is fixed and cuts one longer
-// than it.
+// picked handle is a pressed toggle and every other is not, and each carries
+// its whole handle in its title because the list track is fixed and cuts one
+// longer than it.
 test("the picked entity is the one pressed toggle in the list", async () => {
-  mount(
-    "#/config?lens=entities&kind=mcp-servers&entity=notion",
-    diff,
-    (params?: Record<string, unknown>) =>
-      params?.id
-        ? { kind: "mcp-servers", id: params.id, entity: { name: params.id } }
-        : { kind: "mcp-servers", ids: ["github-enterprise-issue-tracker", "notion"] },
+  mount("#/config?lens=entities&entity=agent-ceo", diff, (params?: Record<string, unknown>) =>
+    params?.id
+      ? { kind: "roles", id: params.id, entity: { handle: params.id } }
+      : { kind: "roles", ids: ["agent-ai-systems-engineer", "agent-ceo"] },
   );
 
   const picked = (await screen.findByRole("button", { pressed: true })).closest("button");
-  const other = screen.getByText("github-enterprise-issue-tracker").closest("button");
-  expect(picked?.textContent).toBe("notion");
+  const other = screen.getByText("agent-ai-systems-engineer").closest("button");
+  expect(picked?.textContent).toBe("agent-ceo");
   expect(other?.getAttribute("aria-pressed")).toBe("false");
-  expect(other?.getAttribute("title")).toBe("github-enterprise-issue-tracker");
+  expect(other?.getAttribute("title")).toBe("agent-ai-systems-engineer");
   expect(picked?.closest(".entity-pick-list")).not.toBeNull();
 });
 
 // A PICKED ROW IS A SELECTION, NOT THE PAGE'S PRIMARY ACTION. Drawn as the
 // kit's primary button it filled solid violet under the pointer with a code
 // chip inside that kept its own grey ink — 1.5:1 in the light theme, 2.5:1 in
-// the dark. The list's rows are the one list-row shape, picked or not, and an
-// id is the row's own ink rather than a chip with a colour of its own.
+// the dark. The list's rows are the one list-row shape, picked or not, and a
+// handle is the row's own ink rather than a chip with a colour of its own.
 test("the picked entity is drawn as a list selection, never the primary button", async () => {
-  mount(
-    "#/config?lens=entities&kind=mcp-servers&entity=notion",
-    diff,
-    (params?: Record<string, unknown>) =>
-      params?.id
-        ? { kind: "mcp-servers", id: params.id, entity: { name: params.id } }
-        : { kind: "mcp-servers", ids: ["github-enterprise-issue-tracker", "notion"] },
+  mount("#/config?lens=entities&entity=agent-ceo", diff, (params?: Record<string, unknown>) =>
+    params?.id
+      ? { kind: "roles", id: params.id, entity: { handle: params.id } }
+      : { kind: "roles", ids: ["agent-ai-systems-engineer", "agent-ceo"] },
   );
 
   const picked = await screen.findByRole("button", { pressed: true });
@@ -485,7 +462,7 @@ test("the picked entity is drawn as a list selection, never the primary button",
   expect(rows).toHaveLength(2);
   for (const row of rows) {
     expect(row.className, "a list row takes the kit's button variants").toBe("entity-pick-row");
-    expect(row.querySelector("code"), "an id inside a chip with its own ink").toBeNull();
+    expect(row.querySelector("code"), "a handle inside a chip with its own ink").toBeNull();
   }
   expect(picked.classList.contains("crewlet-btn--primary")).toBe(false);
 });
@@ -665,9 +642,9 @@ test("an author's name comes before its kind, on a line the kind leaves first", 
   expect(await screen.findByText("connect datadog")).toBeDefined();
   const author = container.querySelector<HTMLElement>(".grid-cell > .revision-author")!;
   expect(author).not.toBeNull();
-  expect(author.firstElementChild?.textContent).toBe("founder (through pat:01JTOKEN)");
+  expect(author.firstElementChild?.textContent).toBe("founder");
   expect(author.lastElementChild?.classList.contains("crewlet-tag")).toBe(true);
-  expect(author.getAttribute("title")).toBe("founder (through pat:01JTOKEN) · operator");
+  expect(author.getAttribute("title")).toBe("founder · operator");
 
   const css = readFileSync(join(process.cwd(), "src/styles/screens.css"), "utf8");
   const at = css.indexOf(".grid-cell > .revision-author {");

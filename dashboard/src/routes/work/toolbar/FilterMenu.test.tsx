@@ -16,7 +16,7 @@
  * rather than through the mount's own container.
  */
 
-import { cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { FilterMenu, type FilterMenuProps } from "./FilterMenu.tsx";
@@ -144,8 +144,10 @@ test("the menu offers the grammar's own keys, the company's fields last", () => 
 });
 
 // A FILTER THE MENU DOES NOT OFFER IS STILL A FILTER. `unit=` arrives from an
-// item's own "Filed into" line rather than from a control, so the menu has no
-// row for it, and its chip is how a reader sees it and takes it off.
+// item's own "Filed into" line rather than from a control — naming a team from
+// a picker would need a list of unit KEYS, which the anonymous org projection
+// this client reads does not carry — so the menu has no row for it, and its
+// chip is how a reader sees it and takes it off.
 test("a filter the menu does not offer has no row here", () => {
   openMenu();
   expect(offered()).not.toContain("unit=");

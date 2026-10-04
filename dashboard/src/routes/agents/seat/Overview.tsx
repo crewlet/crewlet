@@ -18,7 +18,7 @@
  * A human seat's Overview asks nothing a runtime answers — no activity, no
  * memory, no turn list, no phase history: the engine never spawns a person,
  * so every one of those reads would be a question about a thing that cannot
- * exist. What it shows is their day (theirs, or an operator's, to read), the
+ * exist. What it shows is their day (theirs, or a `fleet:operate` holder's, to read), the
  * work assigned to them and who they are.
  */
 
@@ -46,15 +46,11 @@ import {
   fmtDate,
   fmtDuration,
   fmtElapsed,
-  fmtExact,
   fmtTime,
   inTime,
   plural,
   relTime,
 } from "~/lib/format.ts";
-import { useClockReading } from "~/lib/clock.ts";
-import { detailItem, itemPath } from "~/lib/work.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
 import {
   awaitingPerson,
   heldBy,
@@ -75,6 +71,7 @@ import { turnSteps } from "~/lib/turnsteps.ts";
 import { useClipped } from "~/lib/useClipped.ts";
 import { inboxFigure, useInboxCountsOf } from "~/lib/useInboxCounts.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
+
 import { useViewer } from "~/lib/viewer.ts";
 import type { AgentMemory } from "~/contract/memory.ts";
 import type {
@@ -86,7 +83,6 @@ import type {
 } from "~/protocol/index.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { toolSourceLabel, turnOrdinal } from "../SeatPeek.tsx";
-import { answersFor, taskAsked, taskPath } from "~/routes/live/trace/useTurnOrdinal.ts";
 import {
   companyCeilings,
   companyCeilingShort,
@@ -114,9 +110,6 @@ export const ASSIGNED_ROWS = 5;
 /** How many schedules the Overview's card lists before "All n". */
 const SCHEDULE_ROWS = 3;
 
-/** The grant a seat's trail — its memory, its conversations — is read under. */
-export const AUDIT_GRANT = "audit:read";
-
 /**
  * How many responsibilities About lists before "Show all" — the artboard's
  * three, which keep Setup and Memory beside the week's tiles rather than a
@@ -140,15 +133,9 @@ export interface OverviewProps {
   work: QueryResult<WorkItemsAnswer>;
   reading: SeatReading;
   nameOf: NameOf;
+  now: number;
 }
 
-/**
- * NO CLOCK IN THE PROPS. Every relative word on the tab — the turn's elapsed
- * time, a call running, a reflection's age, when a schedule fires next —
- * reads the clock in the cell that shows it (`ClockText`, `useClockReading`),
- * so the second ticking redraws those words and nothing else: handed `now`
- * from the page, the whole Overview drew once a second.
- */
 export function Overview(props: OverviewProps) {
   return props.seat.kind === "human" ? <HumanOverview {...props} /> : <AgentOverview {...props} />;
 }
@@ -157,7 +144,7 @@ export function Overview(props: OverviewProps) {
 // An agent
 // ---------------------------------------------------------------------------
 
-function AgentOverview({ seat, agent, index, work, reading }: OverviewProps) {
+function AgentOverview({ seat, agent, index, work, reading, now }: OverviewProps) {
   const handle = seat.handle;
   const activity = useQuery(
     "seat_activity",
@@ -168,25 +155,18 @@ function AgentOverview({ seat, agent, index, work, reading }: OverviewProps) {
   // THE TOTALS AND THE NEWEST REFLECTION, from the node HOLDING the seat —
   // one row of each list is all this card draws, and the totals are counted
   // there rather than read off a page.
-  //
-  // ON `audit:read` AND ASKED ONLY OF A READER HOLDING IT: a seat's memory is
-  // its trail, answered on the audit grant whoever's seat it is. Asked of
-  // everybody, every reader without it drew a refusal in the side column of
-  // a page they may otherwise read whole.
-  const viewer = useViewer();
-  const audits = viewer.grants.includes(AUDIT_GRANT);
   const memory = useQuery(
     "agent_memory",
     { id: handle, limit: 1 },
-    { enabled: handle !== "" && audits, pollMs: 60_000 },
+    { enabled: handle !== "", pollMs: 60_000 },
   );
   return (
     <div className="prof-overview">
       <div className="prof-main">
         <Kpis seat={seat} agent={agent} activity={activity} />
-        <CurrentTurn seat={seat} agent={agent} />
+        <CurrentTurn seat={seat} agent={agent} now={now} />
         <div className="prof-pair">
-          <AssignedWork seat={seat} work={work} />
+          <AssignedWork seat={seat} work={work} now={now} />
           <TurnsPerDay activity={activity} row={row} />
         </div>
         <Reports seat={seat} index={index} />
@@ -194,8 +174,8 @@ function AgentOverview({ seat, agent, index, work, reading }: OverviewProps) {
       <aside className="prof-side" aria-label={`About ${seat.name}`}>
         <About seat={seat} onboardedAt={memory.data?.onboarded_at} />
         <Setup seat={seat} agent={agent} reading={reading} />
-        <MemoryCard seat={seat} memory={memory} audits={audits || viewer.loading} />
-        <SchedulesCard seat={seat} />
+        <MemoryCard seat={seat} memory={memory} now={now} />
+        <SchedulesCard seat={seat} now={now} />
       </aside>
     </div>
   );
@@ -230,7 +210,9 @@ function Kpis({
       <StatCard
         label={`Turns · ${ACTIVITY_DAYS} days`}
         loading={waiting}
-        value={row ? fmtExact(row.turns) : <EmptyValue label="The usage history did not answer" />}
+        value={
+          row ? row.turns.toLocaleString() : <EmptyValue label="The usage history did not answer" />
+        }
         // WHETHER MORE TURNS IS BETTER is not a thing this tile knows, so the
         // change is neutral: a seat twice as busy may be twice as stuck.
         delta={
@@ -241,7 +223,7 @@ function Kpis({
             ? prev
               ? "vs last week"
               : row.failed > 0
-                ? `${fmtExact(row.failed)} failed`
+                ? `${row.failed.toLocaleString()} failed`
                 : "none failed"
             : unanswered
               ? "not answered"
@@ -264,7 +246,7 @@ function Kpis({
         sub={
           row
             ? row.reviewed > 0
-              ? `${fmtExact(row.sent_back)} sent back`
+              ? `${row.sent_back.toLocaleString()} sent back`
               : "none reviewed this week"
             : unanswered
               ? "not answered"
@@ -329,45 +311,40 @@ function Kpis({
  * The turn in flight: where it is, what it has called, and the call running
  * now — or, between turns, the seat's state in one line.
  */
-function CurrentTurn({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) {
+function CurrentTurn({
+  seat,
+  agent,
+  now,
+}: {
+  seat: Seat;
+  agent: AgentRow | undefined;
+  now: number;
+}) {
   const sandboxes = useSandboxes();
   const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
   const turn = agent?.turn ?? null;
   const call = agent?.live_call ?? null;
   const turnId = turn?.turn_id ?? call?.turn_id ?? "";
-  // THE TASK THE TURN IS CHARGED TO, and the spelling it is asked for by —
-  // its id where it is the engine's own ([taskAsked]), because its key may be
-  // one another task claimed first and the key would answer with that task.
-  const task = call?.work_item ?? turn?.work_item ?? null;
-  const key = task?.key ?? "";
-  const asked = taskAsked(task);
+  const key = call?.work_item?.key || turn?.work_item?.key || "";
   const onTurn = turnId !== "" && !!agent;
   // WHICH TURN ON THE TASK, from the task's own turn list — the same reading
   // the seat's peek makes.
   const itemTurns = useQuery(
     "work_item_turns",
-    { id: asked, limit: 1 },
-    { enabled: onTurn && asked !== "" },
+    { id: key, limit: 1 },
+    { enabled: onTurn && key !== "" },
   );
-  // WHAT THE TASK IS CALLED, read off the turn's own item — never a lookup in
-  // the Assigned-work card's top five: a turn on a task outside those five
-  // (one just asked of it, with no priority) read "On ENG-35" with no title
-  // at all.
-  const item = useQuery("work_item", { id: asked }, { enabled: onTurn && asked !== "" });
+  // WHAT THE TASK IS CALLED, read by its key — the turn's own item, never a
+  // lookup in the Assigned-work card's top five: a turn on a task outside
+  // those five (one just asked of it, with no priority) read "On ENG-35" with
+  // no title at all.
+  const item = useQuery("work_item", { id: key }, { enabled: onTurn && key !== "" });
   // THE PHASES THIS TURN HAS RECORDED, for its tokens: the seat's newest
   // turn row is this turn's once any phase of it has completed.
-  //
-  // ON `audit:read` AND ASKED ONLY OF A READER HOLDING IT, as the Memory card's
-  // read is: `turns` is a seat's trail, and asked of everybody, every reader
-  // without the grant was refused on every twenty-second poll for as long as
-  // the turn ran. Without it the card says no token figure ([turnTokens]
-  // reads no answer as nothing to say) and everything else it draws is the
-  // `agents` push and the task's own reads.
-  const audits = useViewer().grants.includes(AUDIT_GRANT);
   const newest = useQuery(
     "turns",
     { seat: seat.handle, limit: 1 },
-    { enabled: onTurn && seat.handle !== "" && audits, pollMs: 20_000 },
+    { enabled: onTurn && seat.handle !== "", pollMs: 20_000 },
   );
   if (!agent || !onTurn) {
     const last = agent?.last_turn;
@@ -399,32 +376,28 @@ function CurrentTurn({ seat, agent }: { seat: Seat; agent: AgentRow | undefined 
         {last && (
           <p className="prof-turn-last">
             Its last turn {last.outcome === "failed" ? "failed" : "ended"}{" "}
-            <ClockText read={(now) => relTime(last.ended_at, now)} />.
+            {relTime(last.ended_at, now)}.
           </p>
         )}
       </Card>
     );
   }
-  // THE ANSWERS FOR THIS TASK ONLY ([answersFor]): while a turn moves to
-  // another task the last reads are still the previous one's, and its number
-  // and its title under the new key would name the wrong task.
-  const ordinal = asked
+  const ordinal = key
     ? turnOrdinal(
         turnId,
         itemTurns.data?.turns?.[0],
-        !!itemTurns.data && answersFor(task, { id: itemTurns.data.item, key: itemTurns.data.key }),
+        !!itemTurns.data && itemTurns.data.key === key,
       )
     : null;
-  const read = item.data?.task;
-  const answered =
-    item.data && read && answersFor(task, { id: read.id, key: read.key }) ? item.data : null;
-  const title = answered?.task.title;
+  // THE ANSWER FOR THIS KEY ONLY: while a turn moves to another task the last
+  // read is still the previous one's, and its title under the new key would
+  // name the wrong task.
+  const task = item.data?.task;
+  const title = key && task && task.key === key ? task.title : undefined;
   // ON A PHONE THE ROUND IS SAID BESIDE THE STEPS rather than inside one:
   // "Execute · round 7 of 25" left the row no room for Review, which wrapped
   // onto a line of its own behind a dangling connector.
   const { steps, current, detail } = turnSteps(agent, { inLabel: !phone });
-  // THE TURN'S OWN RUN, by its turn id — which names one run, where the
-  // seat's name a namesake shares.
   const sandbox = sandboxes.find((s) => s.turn_id === turnId) ?? null;
   const asking = !!sandbox && awaitingPerson(sandbox.status);
   const started = Date.parse(turn?.started_at ?? call?.started_at ?? "");
@@ -444,16 +417,10 @@ function CurrentTurn({ seat, agent }: { seat: Seat; agent: AgentRow | undefined 
         // a turn that has not is said as nothing rather than as "on no task",
         // which it may yet not be.
         subtitle={
-          task && key ? (
+          key ? (
             <span className="prof-turn-about">
               {ordinal ? `Turn ${ordinal} on ` : "On "}
-              {/* THE TASK'S ADDRESS ([taskPath]): the read's own once it
-                  answered — it says whether the key is one another task
-                  claimed first — and the turn's id until then. */}
-              <a
-                className="work-key mono"
-                href={href(taskPath(task, answered ? detailItem(answered) : null))}
-              >
+              <a className="work-key mono" href={href(["work", key])}>
                 {key}
               </a>
               {title && ` · ${title}`}
@@ -477,17 +444,13 @@ function CurrentTurn({ seat, agent }: { seat: Seat; agent: AgentRow | undefined 
           pulse={!asking}
         />
         <span className="prof-turn-figures">
-          <ClockText
-            read={(now) =>
-              [
-                phone ? detail : "",
-                Number.isFinite(started) ? fmtElapsed(now - started) : "",
-                tokens !== null ? `${fmtCount(tokens)} tokens` : "",
-              ]
-                .filter(Boolean)
-                .join(" · ")
-            }
-          />
+          {[
+            phone ? detail : "",
+            Number.isFinite(started) ? fmtElapsed(now - started) : "",
+            tokens !== null ? `${fmtCount(tokens)} tokens` : "",
+          ]
+            .filter(Boolean)
+            .join(" · ")}
         </span>
       </div>
       {asking && (
@@ -505,15 +468,13 @@ function CurrentTurn({ seat, agent }: { seat: Seat; agent: AgentRow | undefined 
                 {r.words}
               </span>
               <span className="prof-feed-took" data-failed={r.failed || undefined}>
-                {r.running ? (
-                  <ClockText read={(now) => `running ${fmtElapsed(now - Date.parse(r.at))}`} />
-                ) : r.failed ? (
-                  `failed${r.tookMs !== undefined ? ` · ${fmtDuration(r.tookMs)}` : ""}`
-                ) : r.tookMs !== undefined ? (
-                  fmtDuration(r.tookMs)
-                ) : (
-                  ""
-                )}
+                {r.running
+                  ? `running ${fmtElapsed(now - Date.parse(r.at))}`
+                  : r.failed
+                    ? `failed${r.tookMs !== undefined ? ` · ${fmtDuration(r.tookMs)}` : ""}`
+                    : r.tookMs !== undefined
+                      ? fmtDuration(r.tookMs)
+                      : ""}
               </span>
             </li>
           ))}
@@ -530,7 +491,15 @@ function CurrentTurn({ seat, agent }: { seat: Seat; agent: AgentRow | undefined 
 }
 
 /** The open work on the seat, most urgent first, with the way to all of it. */
-function AssignedWork({ seat, work }: { seat: Seat; work: QueryResult<WorkItemsAnswer> }) {
+function AssignedWork({
+  seat,
+  work,
+  now,
+}: {
+  seat: Seat;
+  work: QueryResult<WorkItemsAnswer>;
+  now: number;
+}) {
   const rows = work.data?.items ?? [];
   const total = work.data?.total_hint ?? rows.length;
   return (
@@ -539,7 +508,7 @@ function AssignedWork({ seat, work }: { seat: Seat; work: QueryResult<WorkItemsA
         actions={
           total > 0 ? (
             <a className="t-link" href={href(["work"], { assignee: seat.handle })}>
-              All {fmtExact(total)}
+              All {total.toLocaleString()}
               {work.data?.total_capped ? "+" : ""}
             </a>
           ) : undefined
@@ -562,7 +531,7 @@ function AssignedWork({ seat, work }: { seat: Seat; work: QueryResult<WorkItemsA
       >
         <ul className="prof-rows">
           {rows.slice(0, ASSIGNED_ROWS).map((row) => (
-            <AssignedRow key={row.id} row={row} />
+            <AssignedRow key={row.key} row={row} now={now} />
           ))}
         </ul>
       </QueryState>
@@ -570,14 +539,10 @@ function AssignedWork({ seat, work }: { seat: Seat; work: QueryResult<WorkItemsA
   );
 }
 
-/**
- * One assigned task. OPENED BY ITS ADDRESS (`itemPath`): a key two tasks hold
- * opens the one that claimed it first, and the other is reached by its id.
- */
-function AssignedRow({ row }: { row: WorkSummary }) {
+function AssignedRow({ row, now }: { row: WorkSummary; now: number }) {
   return (
     <li>
-      <a className="prof-row" href={href(itemPath(row))}>
+      <a className="prof-row" href={href(["work", row.key])}>
         <StatusMark status={row.status} />
         <span className="work-key mono prof-row-key" title={row.key}>
           {row.key}
@@ -585,7 +550,7 @@ function AssignedRow({ row }: { row: WorkSummary }) {
         <span className="prof-row-title">{row.title}</span>
         <PriorityMark priority={row.priority} />
         <span className="prof-row-due">
-          <DueMark due={row.due} overdue={row.overdue} />
+          <DueMark due={row.due} overdue={row.overdue} now={now} />
         </span>
       </a>
     </li>
@@ -616,7 +581,7 @@ function TurnsPerDay({
         className="card-head-stacked"
         subtitle={
           days.length > 0
-            ? `Last ${days.length} days · ${failed > 0 ? `${fmtExact(failed)} failed` : "none failed"}`
+            ? `Last ${days.length} days · ${failed > 0 ? `${failed.toLocaleString()} failed` : "none failed"}`
             : undefined
         }
       >
@@ -634,7 +599,7 @@ function TurnsPerDay({
             legend="none"
             height="9rem"
             label={`Turns per company day, the last ${days.length} days`}
-            format={(v) => fmtExact(Math.round(v))}
+            format={(v) => Math.round(v).toLocaleString()}
             formatTime={(at) => labels.get(at) ?? ""}
           />
         </QueryState>
@@ -762,23 +727,20 @@ function About({ seat, onboardedAt }: { seat: Seat; onboardedAt?: string | undef
 /**
  * How the seat is set up: the model it runs on and the tools it is granted —
  * both on the org projection, which carries them only to a reader holding
- * `config:read` because both are derived from the runtime half — and where
- * its code runs, which nodes may hold it and which workers it may delegate
- * to, which are the seat's RUNTIME half on the org chart and read only with
+ * `config:read` because both are derived from the company document — and
+ * where its code runs, which nodes may hold it and which workers it may
+ * delegate to, which are the company document's and read only with
  * `config:read`.
  *
  * AN ABSENT CHAIN OR TOOL LIST IS THE SEAT'S OWN ONLY FOR A READER THE ENGINE
  * WOULD HAVE SENT IT TO ([resolvedAbsence]): "No provider configured" and
  * "none granted" are said to a `config:read` holder, and everybody else is
- * told which grant shows them — said to them, both were false about every
- * seat that has a model and tools.
+ * told which grant shows them.
  *
- * EVERY STATE OF THE GUARDED HALF HAS ITS OWN SENTENCE, never an empty value
- * over a setting nobody could read: read; refused, naming the grant the
- * engine named; withheld (the chart served the row without its runtime half);
- * absent (the chart holds no seat by this handle); failed (the node could not
- * answer); and unread — which, for a reader nobody has signed in as, is the
- * read never asked rather than one in flight.
+ * FOUR STATES FOR THE GUARDED HALF, never an empty value over a setting
+ * nobody could read: read, refused (the reader does not hold `config:read`),
+ * absent (the active revision names no seat by this handle) and unread (still
+ * in flight).
  */
 function Setup({
   seat,
@@ -791,17 +753,15 @@ function Setup({
 }) {
   const viewer = useViewer();
   const health = useEngineHealth();
-  // THE FLEET'S LEASES ARE THE DEPLOYMENT'S, read on `fleet:operate`: asked
-  // only of a reader holding it, and everybody else is told what the public
-  // health push says.
+  // THE FLEET'S LEASES ARE THE DEPLOYMENT'S, read on `fleet:operate`.
   const fleet = useQuery("fleet", undefined, { enabled: viewer.operatesFleet, pollMs: 60_000 });
   const chain = seat.raw.llm?.["execute"] ?? [];
   const tools = seat.raw.tool_sources ?? [];
   const absent = resolvedAbsence(viewer);
   const lease = fleet.data?.seats?.find((s) => s.handle === seat.handle);
-  // WHICH NODE HOLDS IT NOW: the fleet's lease for an operator, else what
-  // the public health push says (`heldBy`), which the peek says too. Empty
-  // only while an operator's fleet read is in flight.
+  // WHICH NODE HOLDS IT NOW: the fleet's lease for a `fleet:operate` holder,
+  // else what the health push says (`heldBy`), which the peek says too. Empty
+  // only while that holder's fleet read is in flight.
   const holder = viewer.operatesFleet
     ? lease
       ? lease.node
@@ -829,7 +789,7 @@ function Setup({
           ) : absent === "none" ? (
             "No provider configured"
           ) : absent === "withheld" ? (
-            resolvedWithheld("its model chain")
+            <span className="muted">{resolvedWithheld("its model chain")}</span>
           ) : (
             <EmptyValue label="Not reported yet" />
           )}
@@ -837,14 +797,14 @@ function Setup({
         {reading.state === "read" ? (
           <>
             <dt>Sandbox</dt>
-            <dd>{sandboxWords(reading.seat.runtime)}</dd>
+            <dd>{sandboxWords(reading.role)}</dd>
             <dt>Runs on</dt>
             <dd>
-              {placementWords(reading.seat.runtime)}
+              {placementWords(reading.role)}
               {holder && <span className="muted"> · now {holder}</span>}
             </dd>
             <dt>Workers</dt>
-            <dd>{workersWords(reading.seat.runtime)}</dd>
+            <dd>{workersWords(reading.role)}</dd>
           </>
         ) : (
           <>
@@ -863,66 +823,37 @@ function Setup({
           ) : absent === "none" ? (
             "none granted"
           ) : absent === "withheld" ? (
-            resolvedWithheld("its tools")
+            <span className="muted">{resolvedWithheld("its tool sources")}</span>
           ) : (
             <EmptyValue label="Not reported yet" />
           )}
         </dd>
       </dl>
-      {reading.state !== "read" && <p className="prof-note">{setupNote(reading, viewer)}</p>}
+      {reading.state !== "read" && (
+        <p className="prof-note">
+          {reading.state === "refused" || (reading.state === "unread" && absent === "withheld")
+            ? // A READER WITHOUT THE GRANT IS NEVER ASKED (`useSeatSetup`):
+              // they stay `unread`, and what they are missing is the grant,
+              // not a read in flight.
+              "Its sandbox, placement and workers are in the company document, which config:read reads."
+            : reading.state === "absent"
+              ? "The active revision names no seat by this handle, so its sandbox, placement and workers cannot be read."
+              : "Reading its sandbox, placement and workers from the company document…"}
+        </p>
+      )}
     </Card>
   );
-}
-
-/**
- * Why the Setup card names no sandbox, placement or workers — one sentence
- * per outcome of the chart read ([SeatReading]).
- *
- * A REFUSAL NAMES THE GRANT THE ENGINE NAMED, and an outcome about the NODE
- * claims nothing about the READER: this said "an operator token reads" over a
- * refusal, over a read in flight, and over a node catching up after a restart
- * alike — sending a signed-in reader to find a credential they have no use
- * for. A reader nobody has signed in as is never asked (`useSeatSetup`), so
- * their `unread` is the read never made rather than one in flight.
- */
-function setupNote(
-  reading: Exclude<SeatReading, { state: "read" }>,
-  viewer: { anonymous: boolean },
-): string {
-  const what = "Its sandbox, placement and workers";
-  switch (reading.state) {
-    case "refused":
-      return reading.grants.length > 0
-        ? `${what} are in its runtime half, which needs ${reading.grants.join(" or ")}.`
-        : `${what} are in its runtime half, which needs a credential the engine accepts.`;
-    case "stripped":
-      return `${what} are in its runtime half, which config:read reads and was not shown to you.`;
-    case "absent":
-      return `The org chart holds no seat by this handle, so ${what.toLowerCase()} cannot be read.`;
-    case "failed":
-      return `${what} could not be read just now.`;
-    case "unread":
-      return viewer.anonymous
-        ? `${what} are in its runtime half, which a signed-in reader holding config:read reads.`
-        : `Reading ${what.toLowerCase()} from the org chart…`;
-  }
 }
 
 /** What the seat remembers, counted, and the newest thing it chose to keep. */
 function MemoryCard({
   seat,
   memory,
-  audits,
+  now,
 }: {
   seat: Seat;
   memory: QueryResult<AgentMemory>;
-  /**
-   * Whether this reader may read the seat's trail (`audit:read`) — or the
-   * viewer has not answered yet, which claims nothing either way. Where they
-   * may not, the card says which grant reads it rather than drawing the
-   * refusal the read was never sent to fetch.
-   */
-  audits: boolean;
+  now: number;
 }) {
   const data = memory.data;
   const reflection = data?.latest_reflection ?? null;
@@ -939,12 +870,6 @@ function MemoryCard({
         <Card.Title as="h3">Memory</Card.Title>
       </Card.Header>
       <div className="prof-memory">
-        {!audits && (
-          <p className="t-caption">
-            A seat&rsquo;s memory is its trail, read with <code className="inline">audit:read</code>
-            , which you do not hold.
-          </p>
-        )}
         <QueryState error={memory.error} refusal={memory.refusal} loading={memory.loading && !data}>
           {data && (
             <>
@@ -953,23 +878,22 @@ function MemoryCard({
               <dl className="prof-memory-totals">
                 <div>
                   <dt>diary</dt>
-                  <dd>{fmtExact(data.diary_total)}</dd>
+                  <dd>{data.diary_total.toLocaleString()}</dd>
                 </div>
                 <div>
                   <dt>episodes</dt>
-                  <dd>{fmtExact(data.episodes_total)}</dd>
+                  <dd>{data.episodes_total.toLocaleString()}</dd>
                 </div>
                 <div>
                   <dt>learned skills</dt>
-                  <dd>{fmtExact(data.skills_total)}</dd>
+                  <dd>{data.skills_total.toLocaleString()}</dd>
                 </div>
               </dl>
               {reflection ? (
                 <figure className="prof-reflection">
                   <figcaption>
                     <BrainGlyph size="xs" aria-hidden="true" />
-                    Latest reflection ·{" "}
-                    <ClockText read={(now) => relTime(reflection.created_at, now)} />
+                    Latest reflection · {relTime(reflection.created_at, now)}
                   </figcaption>
                   <blockquote>“{reflection.content}”</blockquote>
                 </figure>
@@ -989,7 +913,7 @@ function MemoryCard({
 }
 
 /** The recurring work that wakes the seat, soonest first. */
-function SchedulesCard({ seat }: { seat: Seat }) {
+function SchedulesCard({ seat, now }: { seat: Seat; now: number }) {
   const pushed = useSchedules();
   const rows = useMemo(() => seatSchedules(pushed, seat.handle), [pushed, seat.handle]);
   return (
@@ -1023,7 +947,9 @@ function SchedulesCard({ seat }: { seat: Seat }) {
                 ) : !row.enabled ? (
                   "disabled"
                 ) : (
-                  <ScheduleWhen cron={row.cron} next={row.next_run} />
+                  <span title={row.next_run ? `next ${inTime(row.next_run, now)}` : undefined}>
+                    {describeCron(row.cron) ?? row.cron}
+                  </span>
                 )}
               </span>
             </li>
@@ -1034,30 +960,17 @@ function SchedulesCard({ seat }: { seat: Seat }) {
   );
 }
 
-/**
- * When a schedule fires, as the card says it: what the expression means, and
- * the next fire on hover. ITS OWN CLOCK, so the title moves when its words do
- * and the card around it never draws on a tick.
- */
-function ScheduleWhen({ cron, next }: { cron: string; next: string | undefined }) {
-  const title = useClockReading((now) => (next ? `next ${inTime(next, now)}` : ""));
-  return <span title={title || undefined}>{describeCron(cron) ?? cron}</span>;
-}
-
 // ---------------------------------------------------------------------------
 // A person
 // ---------------------------------------------------------------------------
 
-function HumanOverview({ seat, index, work, nameOf }: OverviewProps) {
+function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
   const viewer = useViewer();
   // A PERSON RECORD IS THEIRS: their unread notices, the order they mean to
   // work in and who set it. The engine answers it to its owner, to whoever
-  // leads them and to `fleet:operate`, the admin path of that rule — NOT to
-  // `people:manage`, which is authority over directory rows and opens nobody's
-  // work. The lead relation is the chart's and not this screen's to compute,
-  // so a lead's read is asked for the owner and the grant alone; asking for
-  // every colleague would put a refusal on the screen where the honest answer
-  // is that this is somebody else's.
+  // leads them and to a `fleet:operate` holder — so it is asked where this
+  // page can tell it will be answered, and WITHHELD by a sentence elsewhere
+  // rather than drawn as a person with nothing to do.
   const self = viewer.handle !== "" && viewer.handle === seat.handle;
   const mayRead = viewer.operatesFleet || self;
   const person = useQuery(
@@ -1134,7 +1047,7 @@ function HumanOverview({ seat, index, work, nameOf }: OverviewProps) {
                     loading={!mine.data && !mine.error}
                     value={
                       priorities ? (
-                        `${fmtExact(priorities.total)}${priorities.capped ? "+" : ""}`
+                        `${priorities.total.toLocaleString()}${priorities.capped ? "+" : ""}`
                       ) : (
                         <EmptyValue
                           label={
@@ -1146,26 +1059,18 @@ function HumanOverview({ seat, index, work, nameOf }: OverviewProps) {
                       )
                     }
                     sub={
-                      person.data.priorities_set_by ? (
-                        <>
-                          set by {nameOf(person.data.priorities_set_by)}
-                          {person.data.priorities_set_at && (
-                            <>
-                              {" "}
-                              <ClockText
-                                read={(now) => relTime(person.data?.priorities_set_at, now)}
-                              />
-                            </>
-                          )}
-                        </>
-                      ) : (
-                        `${self ? "your" : "their"} own order`
-                      )
+                      person.data.priorities_set_by
+                        ? `set by ${nameOf(person.data.priorities_set_by)}${
+                            person.data.priorities_set_at
+                              ? ` ${relTime(person.data.priorities_set_at, now)}`
+                              : ""
+                          }`
+                        : `${self ? "your" : "their"} own order`
                     }
                   />
                   <StatCard
                     label="Pinned views"
-                    value={fmtExact(person.data.pinned_views?.length ?? 0)}
+                    value={(person.data.pinned_views?.length ?? 0).toLocaleString()}
                     sub={`${person.data.favorites?.length ?? 0} starred`}
                   />
                 </StatGroup>
@@ -1177,25 +1082,13 @@ function HumanOverview({ seat, index, work, nameOf }: OverviewProps) {
             <Card.Header divided={false}>
               <Card.Title as="h3">Their day</Card.Title>
             </Card.Header>
-            {/* THE RULE, NOT A CREDENTIAL. This said reading it "needs an
-                operator credential", which was never the rule: the engine
-                answers a person's record to them, to whoever leads them and to
-                fleet:operate. This page asks on the first and the last alone,
-                because the lead relation is the chart's to decide — so a lead
-                is pointed at My work, which asks the engine and shows what it
-                answers. */}
             <p className="prof-note">
-              Their inbox, their priorities and their pinned views are theirs. The engine shows them
-              to them, to whoever leads them and to <code className="inline">fleet:operate</code>;
-              if you lead them,{" "}
-              <a className="t-link prose-link" href={href(["me"], { handle: seat.handle })}>
-                open their day in My work
-              </a>
-              .
+              Their inbox, their priorities and their pinned views are theirs. Reading another
+              person&rsquo;s needs fleet:operate, or leading them.
             </p>
           </Card>
         )}
-        <AssignedWork seat={seat} work={work} />
+        <AssignedWork seat={seat} work={work} now={now} />
         <Reports seat={seat} index={index} />
       </div>
       <aside className="prof-side" aria-label={`About ${seat.name}`}>

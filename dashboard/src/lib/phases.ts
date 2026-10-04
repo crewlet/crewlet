@@ -25,7 +25,6 @@
  */
 
 import type {
-  AgentRow,
   EventRecord,
   LiveCall,
   LiveTurn,
@@ -111,19 +110,17 @@ export interface PhaseRecord {
   workKey: string;
   phase: string;
   iteration: number;
+  role: string;
   /**
-   * The SEAT this phase ran for, by its agent id — the one every node derives
-   * for the handle the seat was created under — off the durable record's
-   * `agent_id`, and for a running call off the seat row it hangs off, since
-   * the call itself names nobody. What a screen filters a seat's phases by
-   * and finds the seat's row by. Never `role`: two seats may share a name —
-   * two unit seats stamped from one template do — and a rename changes it
-   * while the history keeps the old one, so a seat's page filtered by name
-   * listed its namesake's phases as its own.
+   * The seat's own id — the one every node derives for its handle — off the
+   * durable record's `agent_id`, and "" where nothing named it (a live call
+   * carries no id; its seat is the push row it hangs off).
+   *
+   * WHAT "ONE SEAT'S PHASES" IS MATCHED ON, never `role`: two unit seats
+   * stamped from one template share a role name, and a rename changes it
+   * while the history keeps the old one.
    */
   agentId: string;
-  /** What the seat was called — as the record says, which is display only. */
-  role: string;
   model: string;
   providerKey: string;
   /** Live means the phase has not published its completed event yet. */
@@ -473,23 +470,18 @@ export function phaseKey(
 }
 
 /**
- * A phase still running, from a seat's live overlay — named after the seat row
- * it hangs off, since the call itself says nothing about whose it is — and the
- * seat's own turn, which is where the stage is kept.
+ * A phase still running, from a seat's live overlay — and the seat's own turn,
+ * which is where the stage is kept.
  */
-export function fromLiveCall(
-  call: LiveCall,
-  seat: Pick<AgentRow, "agent_id" | "role">,
-  turn?: LiveTurn | null,
-): PhaseRecord {
+export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | null): PhaseRecord {
   return {
     key: phaseKey(call.turn_id, call.phase, call.iteration),
     turnId: call.turn_id,
     workKey: call.work_key ?? "",
     phase: call.phase,
     iteration: call.iteration,
-    agentId: seat.agent_id,
-    role: seat.role,
+    role,
+    agentId: "",
     model: call.model,
     providerKey: "",
     live: call.in_progress !== false && !call.failed,
@@ -579,10 +571,8 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     workKey: String(ev.work_key ?? p.work_key ?? ""),
     phase,
     iteration,
-    // THE PAYLOAD'S FIELD FIRST, the stored row's tag where an older record
-    // left the payload without it.
-    agentId: String(p.agent_id ?? ev.tags?.agent_id ?? ""),
     role: String(p.role ?? ev.actor ?? ""),
+    agentId: String(p.agent_id ?? ev.tags?.agent_id ?? ""),
     model: String(p.model ?? ""),
     providerKey: String(p.provider_key ?? ""),
     live: false,
@@ -836,8 +826,6 @@ export interface TurnGroup {
       the split wrote. Two groups sharing one of these are two attempts at the
       same trigger; see `adr/0017`. */
   workKey: string;
-  /** The seat the turn ran for, by agent id — see `PhaseRecord.agentId`. */
-  agentId: string;
   role: string;
   /** The turn's OWN phases, in the order they ran. A nested call is not
       here — it hangs off the phase that made it, see `nested`. */
@@ -847,14 +835,8 @@ export interface TurnGroup {
       worker. `host_phase` and `host_iteration` have always been on the
       wire and nothing read them, so a fan-out of eight rendered as eight
       siblings of the turn's own two phases and the reader had to work out
-      which round each belonged to.
-
-      A PLAIN RECORD rather than a `Map`, read through [nestedUnder], because
-      a screen keeps the groups it drew last time through `useShared`
-      (`~/lib/share.ts`), whose walk reads arrays and object literals only:
-      holding a `Map`, every group was a new value whenever any phase arrived
-      — any seat's — and every turn card on a seat's page drew again. */
-  nested: Record<string, PhaseRecord[]>;
+      which round each belonged to. */
+  nested: Map<string, PhaseRecord[]>;
   /** The newest instant in the group — what the group is ordered by. */
   at: string;
   /** When the turn's OLDEST phase began. Never moves; `at` does. */
@@ -885,15 +867,6 @@ export interface TurnGroup {
   trigger: PhaseRecord["trigger"];
 }
 
-/** The nested calls filed under the phase `key` names, or undefined where it made none. */
-export function nestedUnder(
-  nested: Record<string, PhaseRecord[]>,
-  key: string,
-): PhaseRecord[] | undefined {
-  // OWN KEYS ONLY: a record inherits `toString` and its kind.
-  return Object.hasOwn(nested, key) ? nested[key] : undefined;
-}
-
 /** Which attempt at its trigger a turn was, for the turns a screen holds. */
 export interface Attempt {
   /** 1-based, oldest attempt first. */
@@ -918,33 +891,22 @@ export interface Attempt {
  * A turn with no work key gets no attempt at all: an empty key is the absence
  * of an identity, not a value, so grouping on it would report every
  * unledgered turn on the page as attempts at one another.
- *
- * A PLAIN RECORD, by turn id, read through [attemptOf], for [TurnGroup.nested]'s
- * reason: a screen hands each turn card its attempt, and a value it can keep
- * through `useShared` is one whose cards draw only when an attempt moved.
  */
-export function attempts(groups: readonly TurnGroup[]): Record<string, Attempt> {
+export function attempts(groups: readonly TurnGroup[]): Map<string, Attempt> {
   const byKey = new Map<string, TurnGroup[]>();
   for (const g of groups) {
     if (!g.workKey) continue;
     byKey.set(g.workKey, [...(byKey.get(g.workKey) ?? []), g]);
   }
-  const out: Record<string, Attempt> = {};
+  const out = new Map<string, Attempt>();
   for (const list of byKey.values()) {
     if (list.length < 2) continue;
     // Oldest first, so "attempt 1" is the one that ran first however the
     // caller happened to sort them.
     const ordered = [...list].sort((a, b) => tsKey(a.startedAt) - tsKey(b.startedAt));
-    ordered.forEach((g, i) => {
-      out[g.turnId] = { index: i + 1, total: ordered.length };
-    });
+    ordered.forEach((g, i) => out.set(g.turnId, { index: i + 1, total: ordered.length }));
   }
   return out;
-}
-
-/** Which attempt `turnId` was among [attempts], or undefined for a turn that ran once. */
-export function attemptOf(all: Record<string, Attempt>, turnId: string): Attempt | undefined {
-  return Object.hasOwn(all, turnId) ? all[turnId] : undefined;
 }
 
 /** Group phases into the turns they belong to, newest turn first. */
@@ -976,14 +938,14 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
       // the card, the trace tree, the counts — agrees about what a turn's
       // phases are.
       const own: PhaseRecord[] = [];
-      const nested: Record<string, PhaseRecord[]> = {};
+      const nested = new Map<string, PhaseRecord[]>();
       for (const rec of ordered) {
         if (!rec.hostPhase) {
           own.push(rec);
           continue;
         }
         const host = phaseKey(rec.turnId, rec.hostPhase, rec.hostIteration);
-        nested[host] = [...(nestedUnder(nested, host) ?? []), rec];
+        nested.set(host, [...(nested.get(host) ?? []), rec]);
       }
       const at = ordered.reduce((max, r) => (tsKey(r.at) > tsKey(max) ? r.at : max), "");
       // THE WINDOW THIS TURN RAN IN, by the one rule [turnSpan] states. It was
@@ -1000,8 +962,6 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
         // none, and a turn whose opening phase is such a record still belongs
         // to whatever unit of work its later phases name.
         workKey: ordered.find((r) => r.workKey)?.workKey ?? "",
-        // The first phase that NAMES a seat, for the work key's reason.
-        agentId: ordered.find((r) => r.agentId)?.agentId ?? "",
         role: ordered[0]?.role ?? "",
         phases: own,
         nested,

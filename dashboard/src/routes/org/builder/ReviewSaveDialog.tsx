@@ -1,55 +1,51 @@
 /**
  * Review and save: what the save changes, what follows from it, and the
- * writes themselves.
+ * write itself.
  *
- * CONSEQUENCES BEFORE THE BUTTON. A unit's rename re-onboards the agents in
- * it, a move changes the tool credentials a seat receives, a removal clears
- * references and leaves vendor accounts behind. `model/changes.ts` reads all
- * of it off the base and the draft, and this dialog states each one in a
+ * CONSEQUENCES BEFORE THE BUTTON. A rename re-onboards seats, a reorder can
+ * change who a seat reports to, a removal clears references and leaves vendor
+ * accounts behind. `model/changes.ts` derives all of it from the base and the
+ * draft as the engine derived them, and this dialog states each one in a
  * sentence. The consequences that cannot be taken back (a company rename, a
- * kind change, a change of tool credentials, removing most of the company)
- * each need an acknowledgement before Save enables. What the ENGINE derives
- * from the chart — who reports to whom, what a unit inherits, where unrouted
- * work goes — is not worked out again here, and the dialog says so.
+ * handle change, a kind change, a change of tool credentials, removing most
+ * of the company) each need an acknowledgement before Save enables.
  *
- * THE SAVE IS SHOWN AS IT GOES. It is a sequence of writes (`model/save.ts`):
- * the settings, the chart's structure in batches, each changed object's
- * content. Each is listed with what the engine answered — written, written
- * and still being applied here, refused and why, or not confirmed — because a
- * save that stops part way has landed what came before, and a reader has to
- * see which.
+ * THE WARNINGS ARE THE ENGINE'S, for exactly the body the save will send: the
+ * check of the current draft is a dry run of that same request.
  *
- * THE AUDIT SUMMARY GOES WITH THE SETTINGS. The settings revision records
- * the operator's sentence, followed by the write id, which is what lets the
- * builder recognise that write if its answer is lost. The chart records who
- * made each change on its own, so a save that writes no settings asks for no
- * summary.
+ * THE AUDIT SUMMARY CARRIES THE WRITE ID. The operator's sentence is recorded
+ * with the revision, followed by the write id, which is what lets the builder
+ * recognize this save if its answer is lost (`useSave.ts`).
  */
 
 import { useState } from "react";
 import { plural } from "~/lib/format.ts";
+import type { ConfigWarning } from "~/protocol/index.ts";
 import { ConfigField } from "~/components/ConfigField.tsx";
 import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
 import type { Acknowledgement, ChangeSet, EntityRef, OnboardingCause } from "./model/changes.ts";
-import type { NodeKey } from "./model/keys.ts";
 import type { PlacedProblem } from "./model/problems.ts";
-import type { StepOutcome } from "./model/save.ts";
 import type { CheckStatus, SaveRules } from "./model/scheduler.ts";
 import type { BuilderMode } from "./model/transport.ts";
 import { signedSummary } from "./model/writes.ts";
-import { stepLabel, type SavePhase, type SaveRun } from "./useSave.ts";
+import type { SavePhase } from "./useSave.ts";
 import { PlugGlyph, RotateCwGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
 import { Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
 
 /** Why a group of seats onboards again, agreeing with how many there are. */
 const ONBOARDING_CAUSE: Record<OnboardingCause, (one: boolean) => string> = {
   company_rename: () => "because the company is renamed",
+  seat_rename: (one) => (one ? "because it is renamed" : "because they are renamed"),
+  unit_rename: (one) =>
+    one ? "because a unit it belongs to is renamed" : "because a unit they belong to is renamed",
   move: (one) => (one ? "because it moves to another unit" : "because they move to another unit"),
 };
 
 const names = (refs: readonly EntityRef[]) => refs.map((r) => r.name).join(", ");
 const place = (ref: EntityRef) =>
   ref.kind === "company" ? "the top of the organization" : ref.name;
+const who = (ref: EntityRef | null) => (ref ? ref.name : "nobody");
+const inherited = (flag: boolean) => (flag ? " (inherited)" : "");
 
 /** Every change and consequence, as sentences. */
 export function changeSentences(changes: ChangeSet): { changes: string[]; consequences: string[] } {
@@ -69,11 +65,8 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
       `Renames the company from ${changes.companyRename.before} to ${changes.companyRename.after}.`,
     );
   }
-  for (const a of changes.addressChanges) {
-    const at = a.ref.kind === "seat" ? "@" : "";
-    follow.push(
-      `${a.ref.name} is addressed as ${at}${a.after} instead of ${at}${a.before}. It keeps its identity${a.ref.kind === "seat" ? ", which its mailbox, diary and schedules are keyed on" : ""}, and ${at}${a.before} goes on reaching it until something else takes that address.`,
-    );
+  for (const h of changes.handleChanges) {
+    follow.push(`${h.ref.name} changes handle from @${h.before} to @${h.after}.`);
   }
   for (const group of changes.onboarding) {
     const one = group.seats.length === 1;
@@ -82,7 +75,39 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
     );
   }
   for (const u of changes.unitRenames) {
-    follow.push(`Onboarding pages for ${u.before} are looked up under its new name, ${u.after}.`);
+    const schedules =
+      u.schedules.length > 0
+        ? ` Its schedules get a new identity, so a run due this minute may fire again: ${u.schedules.join(", ")}.`
+        : "";
+    follow.push(
+      `Onboarding pages for ${u.before} are looked up under its new name, ${u.after}.${schedules}`,
+    );
+  }
+  for (const r of changes.reportsTo) {
+    follow.push(
+      r.orderOnly
+        ? `${r.ref.name} reports first to ${who(r.after)} instead of ${who(r.before)}: the same managers, listed in a different order.`
+        : `${r.ref.name} reports to ${who(r.after)} instead of ${who(r.before)}.`,
+    );
+  }
+  for (const l of changes.leads) {
+    follow.push(
+      `${l.ref.name} is led by ${who(l.after)}${inherited(l.afterInherited)} instead of ${who(l.before)}${inherited(l.beforeInherited)}.`,
+    );
+  }
+  for (const c of changes.channels) {
+    follow.push(
+      `${c.ref.name} uses the channel ${c.after || "none"}${inherited(c.afterInherited)} instead of ${c.before || "none"}${inherited(c.beforeInherited)}.`,
+    );
+  }
+  for (const r of changes.routing) {
+    const tool = r.tool === "jira" ? "Jira project" : "Confluence space";
+    const shared = r.shared
+      ? " More than one owner declares it, and the engine routes to the first it finds."
+      : "";
+    follow.push(
+      `Unrouted work in the ${tool} ${r.scope} goes to ${who(r.after)} instead of ${who(r.before)}.${shared}`,
+    );
   }
   for (const s of changes.credentialServers) {
     if (s.gained.length > 0) {
@@ -102,8 +127,8 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
     const what =
       c.kind === "gitlab_access_level"
         ? "GitLab access level"
-        : c.kind === "datadog_route_to"
-          ? "Datadog fallback"
+        : c.kind === "unit"
+          ? "unit reference"
           : c.kind;
     follow.push(`The ${what} on ${place(c.holder)} naming ${c.from} is cleared.`);
   }
@@ -118,33 +143,17 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
       `The GitLab access level for @${g.handle} changes from ${g.before ?? "none"} to ${g.after ?? "none"}.`,
     );
   }
+  for (const m of changes.memoryReuse) {
+    follow.push(
+      `${m.ref.name} takes the handle @${m.handle} of the removed seat ${m.previous}, and its memory reattaches.`,
+    );
+  }
   if (changes.massRemoval) {
     follow.push(
       `Removes ${changes.massRemoval.removed} of the company's ${changes.massRemoval.total} seats.`,
     );
   }
   return { changes: out, consequences: follow };
-}
-
-/** What a step's answer says, as a phrase beside the step. */
-export function outcomeWords(outcome: StepOutcome | undefined, sending: boolean): string {
-  if (!outcome) return sending ? "Writing…" : "Not sent";
-  switch (outcome.kind) {
-    case "applied":
-      return outcome.revisionId
-        ? `Written as revision ${outcome.revisionId.slice(0, 10)}`
-        : outcome.position
-          ? `Written at ${outcome.position}`
-          : "Written";
-    case "pending":
-      return `Written at ${outcome.position}; this node is still applying it`;
-    case "unknown":
-      return `Not confirmed (operation ${outcome.opId})`;
-    case "refused":
-      return `Refused: ${outcome.detail}`;
-    case "conflict":
-      return "Somebody else's write got there first";
-  }
 }
 
 export function ReviewSaveDialog({
@@ -155,71 +164,50 @@ export function ReviewSaveDialog({
   warnings,
   problemCount,
   documentProblems,
-  withoutContact,
-  writesSettings,
-  runtimeVisible,
+  needsContact,
   writeId,
   phase,
-  run,
-  nameOf,
   onSave,
-  onRetry,
+  onCheckAgain,
   onClose,
 }: {
   mode: BuilderMode;
   changes: ChangeSet;
   rules: SaveRules;
   status: CheckStatus;
-  /** The current check's warnings: the draft's own, and the settings' dry run. */
-  warnings: readonly PlacedProblem[];
+  /** The current check's warnings: a dry run of exactly this save. */
+  warnings: readonly ConfigWarning[];
   problemCount: number;
   documentProblems: readonly PlacedProblem[];
-  /**
-   * Human seats holding no contact identity, by name. A notice rather than a
-   * refusal: the engine admits such a seat, and the chart check reports it.
-   */
-  withoutContact: readonly string[];
-  /** Whether the save writes the settings, which is what records the audit summary. */
-  writesSettings: boolean;
-  /** Whether the chart showed this reader the runtime half. */
-  runtimeVisible: boolean;
+  /** Human seats holding no contact identity, by name. */
+  needsContact: readonly string[];
   writeId: string;
   phase: SavePhase;
-  run: SaveRun | null;
-  nameOf: (key: NodeKey) => string;
   onSave: (summary: string) => void;
-  onRetry: () => void;
+  onCheckAgain: () => void;
   onClose: () => void;
 }) {
   const [summary, setSummary] = useState(changes.summary);
   const [acknowledged, setAcknowledged] = useState<ReadonlySet<Acknowledgement>>(new Set());
-  const busy = phase.kind === "confirming" || phase.kind === "saving" || phase.kind === "settling";
-  const stopped = phase.kind === "stopped" ? phase : null;
-  const unknown = stopped?.unknown === true;
+  const busy = phase.kind === "saving" || phase.kind === "settling";
+  const unknown = phase.kind === "unknown";
   const text = changeSentences(changes);
   const allAcknowledged = changes.acknowledgements.every((a) => acknowledged.has(a));
-  const summaryMissing = writesSettings && summary.trim() === "";
-  const canSave = rules.save && allAcknowledged && !summaryMissing && !busy && !unknown;
+  const summaryMissing = summary.trim() === "";
+  const canSave = rules.save && allAcknowledged && !summaryMissing && !busy;
   const create = mode === "create";
-  const chartChanges =
-    changes.added.length +
-      changes.removed.length +
-      changes.moved.length +
-      changes.renamed.length +
-      changes.edited.length >
-    0;
 
   const saveLabel = busy
-    ? phase.kind === "confirming"
-      ? "Checking the chart"
-      : phase.kind === "settling"
-        ? "Checking the settings"
-        : "Saving"
+    ? phase.kind === "settling"
+      ? "Checking the save"
+      : "Saving"
     : rules.waiting
       ? "Waiting for the check"
-      : create
-        ? "Create the company"
-        : "Save";
+      : unknown
+        ? "Save again"
+        : create
+          ? "Create the company"
+          : "Save";
 
   return (
     <Modal
@@ -233,66 +221,60 @@ export function ReviewSaveDialog({
       // the title would be a second, unnamed spelling of it.
       showCloseButton={false}
       onClose={onClose}
+      // The secondary road out of the unknown state, at the foot's own start
+      // edge. It used to be the first thing in the actions with a flexing
+      // span shoved after it, so two spacing mechanisms fought in one band:
+      // the end slot's own auto margin and a `flex: 1 1 auto` child inside it.
+      footerStart={
+        unknown ? (
+          <Button variant="secondary" onClick={onCheckAgain} disabled={busy}>
+            Check again
+          </Button>
+        ) : undefined
+      }
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>
-            {unknown ? "Close" : "Cancel"}
+            Cancel
           </Button>
-          {unknown ? (
-            <Button variant="primary" onClick={onRetry}>
-              Retry
-            </Button>
-          ) : (
-            <Button variant="primary" disabled={!canSave} onClick={() => onSave(summary)}>
-              {saveLabel}
-            </Button>
-          )}
+          <Button variant="primary" disabled={!canSave} onClick={() => onSave(summary)}>
+            {saveLabel}
+          </Button>
         </>
       }
     >
       {/* The engine's answer to the save this reader just asked for, so it is
           announced. The rest of this dialog describes what a save WOULD do and
           is read when the dialog opens. */}
-      {stopped && (
-        <Callout variant={unknown ? "warning" : "danger"} role="alert">
-          {stopped.message}
-          {!unknown &&
-          run &&
-          run.outcomes.some((o) => o?.kind === "applied" || o?.kind === "pending")
-            ? " What was written before it stays written; the draft now holds only what is left to save."
-            : ""}
+      {phase.kind === "refused" && (
+        <Callout variant="danger" role="alert">
+          {phase.message}
         </Callout>
       )}
+      {phase.kind === "retry" && <Callout variant="warning">{phase.message}</Callout>}
       {phase.kind === "settling" && (
         <Callout variant="warning" icon={<RotateCwGlyph />}>
-          The engine's answer to the settings did not arrive. Checking whether they were stored.
+          The engine's answer did not arrive. Checking whether the save was stored.
+        </Callout>
+      )}
+      {unknown && (
+        <Callout variant="warning">
+          Whether the save was stored could not be confirmed. {phase.detail} Check again, or save
+          again: a save that already landed is recognized by its write id rather than stored a
+          second time.
         </Callout>
       )}
 
-      {run && (
-        <section className="col gap-1" aria-label="The save">
-          <strong>The save</strong>
-          <ol className="org-builder-list">
-            {run.steps.map((step, i) => (
-              <li key={step.id}>
-                {stepLabel(step, nameOf).replace(/^./, (c) => c.toUpperCase())}:{" "}
-                {outcomeWords(run.outcomes[i], phase.kind === "saving" && phase.at === i)}
-              </li>
-            ))}
-          </ol>
-        </section>
-      )}
-
-      {rules.reason && !busy && !stopped && (
+      {rules.reason && !busy && (
         <Callout variant={status === "problems" ? "danger" : "warning"}>
           {rules.reason}
           {status === "problems" &&
             problemCount > 0 &&
-            ` The check found ${plural(problemCount, "problem")}.`}
+            ` The engine reported ${plural(problemCount, "problem")}.`}
         </Callout>
       )}
       {status === "problems" && documentProblems.length > 0 && (
-        <ul className="org-builder-list" aria-label="Problems with the whole company">
+        <ul className="org-builder-list" aria-label="Problems with the whole configuration">
           {documentProblems.map((p, i) => (
             <li key={i}>{p.message}</li>
           ))}
@@ -300,27 +282,15 @@ export function ReviewSaveDialog({
       )}
       {status === "unreachable" && (
         <Callout variant="warning" icon={<PlugGlyph />}>
-          The engine could not be reached to check this draft. Saving still reads the chart first,
-          and every write is decided where it lands.
-        </Callout>
-      )}
-      {!runtimeVisible && (
-        <Callout variant="neutral">
-          The engine does not show this reader the runtime half of the chart — model chains, tool
-          credentials, contact identities — so this save leaves it as it is on every seat and unit.
+          The engine could not be reached to check this draft. Saving still validates it.
         </Callout>
       )}
 
-      {withoutContact.length > 0 && (
-        <section className="col gap-1" aria-label="Human seats with no contact identity">
-          <strong>These human seats have no contact identity</strong>
-          <p className="t-caption">
-            No agent can @-mention them, so agents hand them work in the tracker instead. That is
-            right for a person who works only through the dashboard; the chart check keeps naming
-            each one until an identity is added in the seat's editor.
-          </p>
+      {needsContact.length > 0 && (
+        <section className="col gap-1" aria-label="Seats that need a contact identity">
+          <strong>These human seats need a contact identity</strong>
           <ul className="org-builder-list">
-            {withoutContact.map((name) => (
+            {needsContact.map((name) => (
               <li key={name}>{name}</li>
             ))}
           </ul>
@@ -340,14 +310,13 @@ export function ReviewSaveDialog({
         )}
       </section>
 
-      {(text.consequences.length > 0 || chartChanges) && (
+      {(text.consequences.length > 0 || !changes.derivedKnown) && (
         <section className="col gap-1" aria-label="Consequences">
           <strong>What follows</strong>
-          {chartChanges && (
+          {!changes.derivedKnown && (
             <p className="muted">
-              Who reports to whom, the lead and channel a unit inherits and where unrouted work goes
-              are derived by the engine from the chart once it is saved, so they are not listed
-              here.
+              The engine has not described this draft yet, so consequences that depend on its
+              hierarchy (onboarding, reporting lines, leads and routing) are not listed.
             </p>
           )}
           <ul className="org-builder-list">
@@ -388,29 +357,26 @@ export function ReviewSaveDialog({
         />
       ))}
 
-      {writesSettings && (
-        <ConfigField
-          label="Audit summary"
-          kind="multiline"
-          rows={2}
-          value={summary}
-          onChange={setSummary}
-          disabled={busy}
-          error={
-            summaryMissing
-              ? "Enter a summary. The engine records one with every settings revision."
-              : undefined
-          }
-          help={
-            <>
-              Recorded with the settings revision as{" "}
-              <InlineCode>{signedSummary(summary, writeId).trim()}</InlineCode>. The write id lets
-              the builder recognize the settings write if its answer is lost; the org chart records
-              who made each of its changes on its own.
-            </>
-          }
-        />
-      )}
+      <ConfigField
+        label="Audit summary"
+        kind="multiline"
+        rows={2}
+        value={summary}
+        onChange={setSummary}
+        disabled={busy}
+        error={
+          summaryMissing
+            ? "Enter a summary. The engine records one with every revision."
+            : undefined
+        }
+        help={
+          <>
+            Recorded with the revision as{" "}
+            <InlineCode>{signedSummary(summary, writeId).trim()}</InlineCode>. The write id lets the
+            builder recognize this save if its answer is lost.
+          </>
+        }
+      />
     </Modal>
   );
 }

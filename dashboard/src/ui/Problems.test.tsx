@@ -7,7 +7,7 @@
  * into the end of the first one's sentence.
  */
 
-import { cleanup, render, screen } from "~/test/inCase.ts";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { Problems, marked, paths, split, withProblems } from "./Problems.tsx";

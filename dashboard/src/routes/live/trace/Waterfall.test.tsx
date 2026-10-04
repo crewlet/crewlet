@@ -8,7 +8,7 @@
  * that a person's note is drawn as what became of it.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
@@ -221,11 +221,8 @@ describe("a person's note", () => {
         iteration: 1,
         round: 3,
         note: "use staging",
-        // A BOUND PERSON WRITES AS THEIR SEAT: the author is the seat's handle,
-        // and its kind says so.
         steered_by: "jane",
         steered_by_kind: "human",
-        operator_id: "session:s1",
       }),
       event("agent_turn_steered", 3_000, { note_id: "n2", outcome: "expired", note: "too late" }),
     ];
@@ -246,26 +243,6 @@ describe("a person's note", () => {
     expect(screen.getByText("the turn finished before it read the note")).toBeTruthy();
     expect(screen.getByText("delivered")).toBeTruthy();
     expect(screen.getByText("expired")).toBeTruthy();
-  });
-
-  // AN UNBOUND CREDENTIAL'S NOTE IS ITS LOGIN, never a seat it happens to spell:
-  // only a `human` or `agent` author is a handle to name.
-  //
-  // Mutation: read every author as a seat handle, and this names the seat.
-  test("an operator's note is from its login, not from a seat of that spelling", () => {
-    const marks = steerMarks(
-      [
-        event("agent_turn_steered", 2_000, {
-          note_id: "n3",
-          outcome: "expired",
-          note: "stop",
-          steered_by: "token:ci",
-          steered_by_kind: "operator",
-        }),
-      ],
-      "turn-1",
-    );
-    expect(marks.map((m) => [m.by, m.bySeat])).toEqual([["token:ci", false]]);
   });
 
   // NAMED BY ITS HEADING, which a screen reader announces: an `aria-label` on

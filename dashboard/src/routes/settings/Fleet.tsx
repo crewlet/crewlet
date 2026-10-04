@@ -54,7 +54,7 @@ import {
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import {
   DateCell,
   DurationCell,
@@ -75,6 +75,7 @@ import { usePublishFleet } from "~/app/Shell.tsx";
 import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { plural } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
 import type { FleetAnswer, FleetDutyLease, FleetNode, FleetSeatLease } from "~/protocol/index.ts";
 
 /**
@@ -104,38 +105,9 @@ export function Fleet({ node }: { node?: string }) {
 // The fleet
 // ---------------------------------------------------------------------------
 
-// The fleet-wide duty table's columns, which close over nothing on the
-// screen — so a module constant.
-const DUTY_COLUMNS: GridColumn<FleetDutyLease>[] = [
-  {
-    key: "name",
-    header: "Duty",
-    sortValue: (d) => d.duty,
-    cell: (d) => <KeyCell value={d.duty} />,
-  },
-  {
-    key: "node",
-    header: "Held by",
-    // Content-sized for the reason the seat table's is: the
-    // duty's name is the flexible track, and as a second `1fr`
-    // this column left "integration-reconci…" cut beside
-    // spare space of its own.
-    shrink: true,
-    sortValue: (d) => d.node,
-    cell: (d) => <HeldBy node={d.node} />,
-  },
-  {
-    key: "ttl",
-    header: "Lease",
-    align: "right",
-    shrink: true,
-    sortValue: (d) => d.expires_in ?? null,
-    cell: (d) => <DurationCell ms={leaseMs(d.expires_in)} />,
-  },
-];
-
 function FleetScreen() {
   const seatBadge = useSeatBadgeOf();
+  const now = useNow();
   const { data, loading, error, refusal } = useQuery("fleet", undefined, { pollMs: POLL_MS });
   // THE COLUMN'S "n behind on config" IS THIS READING, not a second poll.
   usePublishFleet(data);
@@ -151,206 +123,6 @@ function FleetScreen() {
   // order instead: one order both halves agree on beats a stepper that claims
   // to follow a sequence it cannot see.
   usePeekNeighbours(useMemo(() => nodes.map((n) => ({ kind: "node", id: n.id })), [nodes]));
-
-  const thisNode = data?.this_node;
-  const target = data?.target_epoch;
-  // THE COLUMN LISTS HOLD STILL, on what their cells close over and nothing
-  // else: every row is memoised on its list, and one built in the render drew
-  // every node and every lease again on each fifteen-second poll.
-  const nodeColumns = useMemo<GridColumn<FleetNode>[]>(
-    () => [
-      {
-        key: "id",
-        header: "Node",
-        // THE ONE FLEXIBLE TRACK, as the seat is in the lease tables
-        // below: the row exists to name a node, so the node takes
-        // whatever width is spare and every fact beside it sizes to
-        // its content. Three `1fr` columns (Roles, Seats, In flight)
-        // split the spare width three ways — 150px of air around a
-        // single digit at 1440 while the role chips wrapped onto
-        // three lines, and under a peek each fell to a letter ("R.",
-        // "S.", "I.") and the chips to empty pills.
-        //
-        // AND IT NEVER WRAPS OR CUTS: the floor is its content. An id
-        // is one identifier — given a share, the grid once broke
-        // `demo-node` down the page one character at a time — so
-        // where the row cannot hold every fact, facts give way
-        // (`drop`) rather than the name.
-        floor: "max-content",
-        sortValue: (n) => n.id,
-        cell: (n) => (
-          <span className="row gap-1">
-            <InlineCode>{n.id}</InlineCode>
-            {n.id === thisNode && <Tag variant="brand">this one</Tag>}
-            {n.draining && <Tag variant="warning">draining</Tag>}
-          </span>
-        ),
-      },
-      {
-        key: "roles",
-        header: "Roles",
-        sortValue: (n) => n.roles.join(","),
-        // ROLES, NOT "DUTIES", which is what this column said while the
-        // panel below it lists the fleet-wide duty leases. They are
-        // different facts — `ingress`, `seats` and `workers` are what
-        // this node MAY run, and a duty is a singleton somebody has to
-        // hold — so a node reading "duties: seats, workers" beside a
-        // duties panel naming a different node was one word describing
-        // two things.
-        //
-        // ON ONE LINE, OR NOT AT ALL. A chip is a word, and a track
-        // narrower than its chips either stacks them — a row two or
-        // three times its neighbours' height — or squeezes them into
-        // pills with no word in them. So the track is the chips'
-        // own width, and under a peek the column gives way whole:
-        // the node's peek names its roles among its facts.
-        width: "max-content",
-        drop: 3,
-        cell: (n) => <TagsCell tags={n.roles} />,
-      },
-      {
-        key: "seats",
-        header: "Seats",
-        align: "right",
-        // A COUNT IS AS WIDE AS ITS HEAD, never a share of the row.
-        shrink: true,
-        sortValue: (n) => n.seats,
-        // A COUNT on the node row; WHICH seats is the placement table
-        // below, and the node's own page, which can name them.
-        cell: (n) => <NumberCell value={n.seats} />,
-      },
-      {
-        key: "inflight",
-        header: "In flight",
-        align: "right",
-        shrink: true,
-        // The node's peek says it too ("Running"), so it may give way
-        // — last of the four, being the load an operator scans for.
-        drop: 4,
-        // ABSENT IS NOT ZERO, and the engine is careful to send it
-        // absent: the presence heartbeat carries it only for a node
-        // that publishes one at all. `?? 0` drew a confident idle row
-        // for a process that was simply not saying — the one reading an
-        // operator must never be given for free.
-        sortValue: (n) => n.in_flight ?? null,
-        cell: (n) => <NumberCell value={n.in_flight} />,
-      },
-      {
-        key: "posture",
-        header: "Posture",
-        shrink: true,
-        sortValue: (n) => n.posture ?? "",
-        // A TAG RATHER THAN A `StatusCell`: the control plane's
-        // postures are a vocabulary the node itself chooses a word
-        // from — `serve`, `hold`, whatever it reports — and a glyph
-        // would claim a binary this column does not have.
-        cell: (n) =>
-          n.posture ? (
-            <Tag variant={n.posture === "serve" ? "success" : "warning"}>{n.posture}</Tag>
-          ) : (
-            <EmptyValue label="This node has published no presence heartbeat" />
-          ),
-      },
-      {
-        key: "config",
-        header: "Config",
-        shrink: true,
-        sortValue: (n) => n.config_status ?? "",
-        cell: (n) => (
-          <span className="row gap-1">
-            <Tag variant={STATUS_TONE[n.config_status ?? ""] ?? "neutral"}>
-              {n.config_status || "unknown"}
-            </Tag>
-            {target !== undefined && (n.config_epoch ?? 0) < target && (
-              <span
-                className="t-caption"
-                title={`applied epoch ${n.config_epoch ?? 0}, target ${target}`}
-              >
-                behind
-              </span>
-            )}
-          </span>
-        ),
-      },
-      {
-        key: "lease",
-        header: "Lease",
-        shrink: true,
-        // FIRST TO GIVE WAY. Every row here holds an unexpired lease
-        // — a node is listed exactly as long as it does — so this
-        // column is a countdown that reads "healthy" by construction
-        // until the moment the row leaves; the node's own page and
-        // peek carry it as "Its own lease". At 1280 the eight
-        // columns want about 770px of a 746px grid, and this is the
-        // one whose absence costs the scan least.
-        drop: 1,
-        sortValue: (n) => n.expires_in ?? null,
-        cell: (n) => (
-          <span title="time until this node's lease expires">
-            <DurationCell ms={leaseMs(n.expires_in)} />
-          </span>
-        ),
-      },
-      {
-        key: "up",
-        header: "Up since",
-        shrink: true,
-        // The node's peek carries it beside In flight ("Running").
-        drop: 2,
-        sortValue: (n) => n.started_at ?? "",
-        cell: (n) => <DateCell at={n.started_at} />,
-      },
-    ],
-    [thisNode, target],
-  );
-  const seatColumns = useMemo<GridColumn<FleetSeatLease>[]>(
-    () => [
-      {
-        key: "handle",
-        header: "Seat",
-        sortValue: (s) => s.handle,
-        // NOT `SeatCell`, and not the seat chip this column used to
-        // draw: both are links and every row here is one now, and an
-        // anchor inside an anchor is markup no browser agrees about.
-        cell: (s) => <SeatLabel {...seatBadge(s.handle)} />,
-      },
-      {
-        key: "node",
-        header: "Held by",
-        // CONTENT-SIZED, so the SEAT is the one flexible track. As
-        // a second `1fr` this column took half of what the fixed
-        // columns left — about 155px for a nine-character node id —
-        // and the seat name the row exists to show was the value
-        // cut ("Agent Frontend …") at a 1440 frame.
-        shrink: true,
-        sortValue: (s) => s.node,
-        // The NODE, not the lease's `owner` — that is the fencing
-        // token (a node id plus a per-process suffix), and showing
-        // it here would make one node look like several across a
-        // restart.
-        cell: (s) => <HeldBy node={s.node} />,
-      },
-      {
-        key: "since",
-        header: "Since",
-        align: "right",
-        shrink: true,
-        // OLDEST FIRST WHEN ASCENDING, and an unrecorded tenure
-        // sorts as unknown rather than as the epoch of time.
-        sortValue: (s) => s.acquired_at ?? null,
-        cell: (s) => <HeldSince lease={s} />,
-      },
-      {
-        key: "ttl",
-        header: "Lease",
-        align: "right",
-        shrink: true,
-        sortValue: (s) => s.expires_in ?? null,
-        cell: (s) => <DurationCell ms={leaseMs(s.expires_in)} />,
-      },
-    ],
-    [seatBadge],
-  );
 
   // A node is behind when it has APPLIED an older epoch than the one the
   // activation pointer names. Epoch 0 means it has not reported at all, which
@@ -461,7 +233,149 @@ function FleetScreen() {
               // different pages.
               rowHref={(n) => peekHref({ kind: "node", id: n.id })}
               onRowActivate={peekRow<FleetNode>((n) => openPeek({ kind: "node", id: n.id }))}
-              columns={nodeColumns}
+              columns={[
+                {
+                  key: "id",
+                  header: "Node",
+                  // THE ONE FLEXIBLE TRACK, as the seat is in the lease tables
+                  // below: the row exists to name a node, so the node takes
+                  // whatever width is spare and every fact beside it sizes to
+                  // its content. Three `1fr` columns (Roles, Seats, In flight)
+                  // split the spare width three ways — 150px of air around a
+                  // single digit at 1440 while the role chips wrapped onto
+                  // three lines, and under a peek each fell to a letter ("R.",
+                  // "S.", "I.") and the chips to empty pills.
+                  //
+                  // AND IT NEVER WRAPS OR CUTS: the floor is its content. An id
+                  // is one identifier — given a share, the grid once broke
+                  // `demo-node` down the page one character at a time — so
+                  // where the row cannot hold every fact, facts give way
+                  // (`drop`) rather than the name.
+                  floor: "max-content",
+                  sortValue: (n) => n.id,
+                  cell: (n) => (
+                    <span className="row gap-1">
+                      <InlineCode>{n.id}</InlineCode>
+                      {n.id === data?.this_node && <Tag variant="brand">this one</Tag>}
+                      {n.draining && <Tag variant="warning">draining</Tag>}
+                    </span>
+                  ),
+                },
+                {
+                  key: "roles",
+                  header: "Roles",
+                  sortValue: (n) => n.roles.join(","),
+                  // ROLES, NOT "DUTIES", which is what this column said while the
+                  // panel below it lists the fleet-wide duty leases. They are
+                  // different facts — `ingress`, `seats` and `workers` are what
+                  // this node MAY run, and a duty is a singleton somebody has to
+                  // hold — so a node reading "duties: seats, workers" beside a
+                  // duties panel naming a different node was one word describing
+                  // two things.
+                  //
+                  // ON ONE LINE, OR NOT AT ALL. A chip is a word, and a track
+                  // narrower than its chips either stacks them — a row two or
+                  // three times its neighbours' height — or squeezes them into
+                  // pills with no word in them. So the track is the chips'
+                  // own width, and under a peek the column gives way whole:
+                  // the node's peek names its roles among its facts.
+                  width: "max-content",
+                  drop: 3,
+                  cell: (n) => <TagsCell tags={n.roles} />,
+                },
+                {
+                  key: "seats",
+                  header: "Seats",
+                  align: "right",
+                  // A COUNT IS AS WIDE AS ITS HEAD, never a share of the row.
+                  shrink: true,
+                  sortValue: (n) => n.seats,
+                  // A COUNT on the node row; WHICH seats is the placement table
+                  // below, and the node's own page, which can name them.
+                  cell: (n) => <NumberCell value={n.seats} />,
+                },
+                {
+                  key: "inflight",
+                  header: "In flight",
+                  align: "right",
+                  shrink: true,
+                  // The node's peek says it too ("Running"), so it may give way
+                  // — last of the four, being the load an operator scans for.
+                  drop: 4,
+                  // ABSENT IS NOT ZERO, and the engine is careful to send it
+                  // absent: the presence heartbeat carries it only for a node
+                  // that publishes one at all. `?? 0` drew a confident idle row
+                  // for a process that was simply not saying — the one reading an
+                  // operator must never be given for free.
+                  sortValue: (n) => n.in_flight ?? null,
+                  cell: (n) => <NumberCell value={n.in_flight} />,
+                },
+                {
+                  key: "posture",
+                  header: "Posture",
+                  shrink: true,
+                  sortValue: (n) => n.posture ?? "",
+                  // A TAG RATHER THAN A `StatusCell`: the control plane's
+                  // postures are a vocabulary the node itself chooses a word
+                  // from — `serve`, `hold`, whatever it reports — and a glyph
+                  // would claim a binary this column does not have.
+                  cell: (n) =>
+                    n.posture ? (
+                      <Tag variant={n.posture === "serve" ? "success" : "warning"}>{n.posture}</Tag>
+                    ) : (
+                      <EmptyValue label="This node has published no presence heartbeat" />
+                    ),
+                },
+                {
+                  key: "config",
+                  header: "Config",
+                  shrink: true,
+                  sortValue: (n) => n.config_status ?? "",
+                  cell: (n) => (
+                    <span className="row gap-1">
+                      <Tag variant={STATUS_TONE[n.config_status ?? ""] ?? "neutral"}>
+                        {n.config_status || "unknown"}
+                      </Tag>
+                      {data && (n.config_epoch ?? 0) < data.target_epoch && (
+                        <span
+                          className="t-caption"
+                          title={`applied epoch ${n.config_epoch ?? 0}, target ${data.target_epoch}`}
+                        >
+                          behind
+                        </span>
+                      )}
+                    </span>
+                  ),
+                },
+                {
+                  key: "lease",
+                  header: "Lease",
+                  shrink: true,
+                  // FIRST TO GIVE WAY. Every row here holds an unexpired lease
+                  // — a node is listed exactly as long as it does — so this
+                  // column is a countdown that reads "healthy" by construction
+                  // until the moment the row leaves; the node's own page and
+                  // peek carry it as "Its own lease". At 1280 the eight
+                  // columns want about 770px of a 746px grid, and this is the
+                  // one whose absence costs the scan least.
+                  drop: 1,
+                  sortValue: (n) => n.expires_in ?? null,
+                  cell: (n) => (
+                    <span title="time until this node's lease expires">
+                      <DurationCell ms={leaseMs(n.expires_in)} />
+                    </span>
+                  ),
+                },
+                {
+                  key: "up",
+                  header: "Up since",
+                  shrink: true,
+                  // The node's peek carries it beside In flight ("Running").
+                  drop: 2,
+                  sortValue: (n) => n.started_at ?? "",
+                  cell: (n) => <DateCell at={n.started_at} now={now} />,
+                },
+              ]}
             />
           </Card>
 
@@ -497,7 +411,51 @@ function FleetScreen() {
                 onRowActivate={peekRow<FleetSeatLease>((s) =>
                   openPeek({ kind: "seat", id: s.handle }),
                 )}
-                columns={seatColumns}
+                columns={[
+                  {
+                    key: "handle",
+                    header: "Seat",
+                    sortValue: (s) => s.handle,
+                    // NOT `SeatCell`, and not the seat chip this column used to
+                    // draw: both are links and every row here is one now, and an
+                    // anchor inside an anchor is markup no browser agrees about.
+                    cell: (s) => <SeatLabel {...seatBadge(s.handle)} />,
+                  },
+                  {
+                    key: "node",
+                    header: "Held by",
+                    // CONTENT-SIZED, so the SEAT is the one flexible track. As
+                    // a second `1fr` this column took half of what the fixed
+                    // columns left — about 155px for a nine-character node id —
+                    // and the seat name the row exists to show was the value
+                    // cut ("Agent Frontend …") at a 1440 frame.
+                    shrink: true,
+                    sortValue: (s) => s.node,
+                    // The NODE, not the lease's `owner` — that is the fencing
+                    // token (a node id plus a per-process suffix), and showing
+                    // it here would make one node look like several across a
+                    // restart.
+                    cell: (s) => <HeldBy node={s.node} />,
+                  },
+                  {
+                    key: "since",
+                    header: "Since",
+                    align: "right",
+                    shrink: true,
+                    // OLDEST FIRST WHEN ASCENDING, and an unrecorded tenure
+                    // sorts as unknown rather than as the epoch of time.
+                    sortValue: (s) => s.acquired_at ?? null,
+                    cell: (s) => <HeldSince lease={s} now={now} />,
+                  },
+                  {
+                    key: "ttl",
+                    header: "Lease",
+                    align: "right",
+                    shrink: true,
+                    sortValue: (s) => s.expires_in ?? null,
+                    cell: (s) => <DurationCell ms={leaseMs(s.expires_in)} />,
+                  },
+                ]}
               />
             </Card>
 
@@ -514,7 +472,33 @@ function FleetScreen() {
                   title: "No singleton duties are leased",
                   hint: "The retention sweep and the scheduler are fleet singletons — exactly one node runs each.",
                 }}
-                columns={DUTY_COLUMNS}
+                columns={[
+                  {
+                    key: "name",
+                    header: "Duty",
+                    sortValue: (d) => d.duty,
+                    cell: (d) => <KeyCell value={d.duty} />,
+                  },
+                  {
+                    key: "node",
+                    header: "Held by",
+                    // Content-sized for the reason the seat table's is: the
+                    // duty's name is the flexible track, and as a second `1fr`
+                    // this column left "integration-reconci…" cut beside
+                    // spare space of its own.
+                    shrink: true,
+                    sortValue: (d) => d.node,
+                    cell: (d) => <HeldBy node={d.node} />,
+                  },
+                  {
+                    key: "ttl",
+                    header: "Lease",
+                    align: "right",
+                    shrink: true,
+                    sortValue: (d) => d.expires_in ?? null,
+                    cell: (d) => <DurationCell ms={leaseMs(d.expires_in)} />,
+                  },
+                ]}
               />
             </Card>
           </div>
@@ -610,13 +594,13 @@ export function HeldBy({ node }: { node: string }) {
  * lease that never began — it is one written by a build older than the stamp,
  * whose start nobody recorded. Unknown is said as unknown.
  */
-export function HeldSince({ lease }: { lease: FleetSeatLease }) {
+export function HeldSince({ lease, now }: { lease: FleetSeatLease; now: number }) {
   if (!lease.acquired_at) {
     return (
       <EmptyValue label="Not recorded: this lease was written by a build older than the stamp" />
     );
   }
-  return <DateCell at={lease.acquired_at} />;
+  return <DateCell at={lease.acquired_at} now={now} />;
 }
 
 /**
@@ -648,6 +632,7 @@ function nodeFlags(node: FleetNode, thisNode?: string): React.ReactNode {
  * describe a different node on every refresh.
  */
 export function NodeScreen({ id }: { id: string }) {
+  const now = useNow();
   const { data, loading, error, refusal } = useQuery("fleet", undefined, {
     enabled: id !== "",
     pollMs: POLL_MS,
@@ -681,7 +666,7 @@ export function NodeScreen({ id }: { id: string }) {
                 status={nodeFlags(node, data.this_node)}
                 facts={nodeFacts({ node, target: data.target_epoch, version })}
               />
-              <NodePanels node={node} answer={data} />
+              <NodePanels node={node} answer={data} now={now} />
               <Card>
                 <Card.Header icon={<SlidersVerticalGlyph size="sm" />}>Placement</Card.Header>
                 <div className="col gap-2">
@@ -728,6 +713,7 @@ export function NodeScreen({ id }: { id: string }) {
  * load balancer picked. Finding one row in that answer is the whole lookup.
  */
 export function NodePeek({ id }: { id: string }) {
+  const now = useNow();
   const { data, loading, error, refusal } = useQuery("fleet", undefined, {
     enabled: id !== "",
     pollMs: POLL_MS,
@@ -751,7 +737,7 @@ export function NodePeek({ id }: { id: string }) {
                 facts={nodeFacts({ node, target: data.target_epoch, version })}
               />
               <div className="col gap-3">
-                <NodePanels node={node} answer={data} />
+                <NodePanels node={node} answer={data} now={now} />
               </div>
             </>
           ) : (
@@ -892,61 +878,13 @@ export function nodeFacts({
   ];
 }
 
-// One node's duty table's columns: they close over nothing.
-const NODE_DUTY_COLUMNS: GridColumn<FleetDutyLease>[] = [
-  {
-    key: "name",
-    header: "Duty",
-    sortValue: (d) => d.duty,
-    cell: (d) => <KeyCell value={d.duty} />,
-  },
-  {
-    key: "ttl",
-    header: "Lease",
-    align: "right",
-    shrink: true,
-    sortValue: (d) => d.expires_in ?? null,
-    cell: (d) => <DurationCell ms={leaseMs(d.expires_in)} />,
-  },
-];
-
 /**
  * What a node is doing, on its page and in the rail alike: whether it has
  * applied the revision the fleet activated, the leases it holds, and the
  * fleet-wide duties that landed on it.
  */
-function NodePanels({ node, answer }: { node: FleetNode; answer: FleetAnswer }) {
+function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswer; now: number }) {
   const seatBadge = useSeatBadgeOf();
-  // HELD STILL on the one thing a cell closes over, for the reason the fleet's
-  // own tables are: a poll that moved nothing on this node draws no row again.
-  const seatColumns = useMemo<GridColumn<FleetSeatLease>[]>(
-    () => [
-      {
-        key: "handle",
-        header: "Seat",
-        sortValue: (s) => s.handle,
-        // NOT `SeatCell`: it is a link and this row is one already.
-        cell: (s) => <SeatLabel {...seatBadge(s.handle)} />,
-      },
-      {
-        key: "since",
-        header: "Since",
-        align: "right",
-        shrink: true,
-        sortValue: (s) => s.acquired_at ?? null,
-        cell: (s) => <HeldSince lease={s} />,
-      },
-      {
-        key: "ttl",
-        header: "Lease",
-        align: "right",
-        shrink: true,
-        sortValue: (s) => s.expires_in ?? null,
-        cell: (s) => <DurationCell ms={leaseMs(s.expires_in)} />,
-      },
-    ],
-    [seatBadge],
-  );
   const { open: openPeek } = usePeekControls();
   const seats = answer.seats.filter((s) => s.node === node.id);
   const duties = answer.duties.filter((d) => d.node === node.id);
@@ -991,7 +929,7 @@ function NodePanels({ node, answer }: { node: FleetNode; answer: FleetAnswer }) 
             </Tag>
             <span className="spacer" />
             <span className="t-caption">reported</span>
-            <DateCell at={node.config_reported_at} />
+            <DateCell at={node.config_reported_at} now={now} />
           </div>
           {node.config_error && (
             <Callout variant="danger" role="alert">
@@ -1004,7 +942,7 @@ function NodePanels({ node, answer }: { node: FleetNode; answer: FleetAnswer }) 
                 a node that publishes none is not a node running no turns. */}
             <NumberCell value={node.in_flight} />
             <span className="t-label">Up since</span>
-            <DateCell at={node.started_at} />
+            <DateCell at={node.started_at} now={now} />
           </div>
           <p className="t-caption">
             A node reports the epoch it has applied; the activation pointer names the one the fleet
@@ -1044,7 +982,31 @@ function NodePanels({ node, answer }: { node: FleetNode; answer: FleetAnswer }) 
           }}
           rowHref={(s) => peekHref({ kind: "seat", id: s.handle })}
           onRowActivate={peekRow<FleetSeatLease>((s) => openPeek({ kind: "seat", id: s.handle }))}
-          columns={seatColumns}
+          columns={[
+            {
+              key: "handle",
+              header: "Seat",
+              sortValue: (s) => s.handle,
+              // NOT `SeatCell`: it is a link and this row is one already.
+              cell: (s) => <SeatLabel {...seatBadge(s.handle)} />,
+            },
+            {
+              key: "since",
+              header: "Since",
+              align: "right",
+              shrink: true,
+              sortValue: (s) => s.acquired_at ?? null,
+              cell: (s) => <HeldSince lease={s} now={now} />,
+            },
+            {
+              key: "ttl",
+              header: "Lease",
+              align: "right",
+              shrink: true,
+              sortValue: (s) => s.expires_in ?? null,
+              cell: (s) => <DurationCell ms={leaseMs(s.expires_in)} />,
+            },
+          ]}
         />
       </Card>
 
@@ -1061,7 +1023,22 @@ function NodePanels({ node, answer }: { node: FleetNode; answer: FleetAnswer }) 
             title: "No fleet singletons are held here",
             hint: "Exactly one node runs each — the trim, the maintenance sweep, the scheduler — so most nodes hold none.",
           }}
-          columns={NODE_DUTY_COLUMNS}
+          columns={[
+            {
+              key: "name",
+              header: "Duty",
+              sortValue: (d) => d.duty,
+              cell: (d) => <KeyCell value={d.duty} />,
+            },
+            {
+              key: "ttl",
+              header: "Lease",
+              align: "right",
+              shrink: true,
+              sortValue: (d) => d.expires_in ?? null,
+              cell: (d) => <DurationCell ms={leaseMs(d.expires_in)} />,
+            },
+          ]}
         />
       </Card>
     </>

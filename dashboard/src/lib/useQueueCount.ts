@@ -77,21 +77,14 @@ export function listTotal(answer: WorkItemsAnswer | null): WorkClaimTotal | unde
 /**
  * The standing read for one person's queue count.
  *
- * 30 SECONDS, the interval My work's other readings of a day take. `watched`
- * is whether this tab's socket watches that person's record, which only the
- * viewer's own is: an assignment writes its assignee a notice, so the frame
- * that moves their inbox (`inbox_changed`) asks the count again within half a
- * second, and the poll is the backstop for a frame lost to a reconnect.
+ * 30 SECONDS, the interval My work's other readings of a day take: a count
+ * that moves when somebody assigns work is read, not watched, and it has no
+ * push behind it.
  */
-export function useQueueCountRead(
-  handle: string,
-  enabled = true,
-  watched = false,
-): WorkClaimTotal | undefined {
+export function useQueueCountRead(handle: string, enabled = true): WorkClaimTotal | undefined {
   const read = useQuery("work_items", handle ? queueCountParams(handle) : undefined, {
     enabled: enabled && handle !== "",
     pollMs: 30_000,
-    refetchOnInboxOf: watched ? handle : "",
   });
   return useMemo(() => listTotal(read.data), [read.data]);
 }
@@ -108,13 +101,10 @@ const Reading = createContext<QueueCount | null>(null);
 
 /**
  * Ask once, for everything under it. Inside [ViewerProvider], whose viewer it
- * asks for, for the reason [InboxCountsProvider] is — and under `owner`, the
- * name the viewer's own record is kept under, for the reason it gives: asked
- * by `handle`, an unbound reader's count was withheld for ever, a blank where
- * the engine would have answered.
+ * asks for, for the reason [InboxCountsProvider] is.
  */
 export function QueueCountProvider({ children }: { children: ReactNode }) {
-  const claim = useQueueCountRead(useViewer().owner, true, true);
+  const claim = useQueueCountRead(useViewer().handle);
   const value = useMemo(() => ({ claim }), [claim]);
   return createElement(Reading.Provider, { value }, children);
 }

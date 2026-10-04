@@ -38,7 +38,7 @@
  *
  * A machine token acts as its owner, and a browser session is one of a
  * person's several, so the author alone reads a token's write as one its owner
- * made by hand. Every source records the credential beside the author now
+ * made by hand. Every source records the credential beside the author
  * (`operator_id`: `pat:<id>`, `session:<lineage>`), and the Through column says
  * it wherever it names something the author does not ([throughOf]).
  *
@@ -79,21 +79,16 @@
  * # What each source can and cannot be asked
  *
  * The tracker's feed and the runtime audit take a wall-clock window, and the
- * identity trail one instant it resolves to a log position; the wiki's pages on
- * a LOG POSITION, and the config and credential reads take neither. So those
- * three are fetched as their newest page and narrowed to the window HERE — and
- * the screen says so rather than implying its window is the engine's. A row
- * count from a client-side narrowing is a count over what was loaded, never
- * over what exists, which is the rule every list in this product is held to.
- * And a windowed page can fill too: a busy week reaches further back than one
- * page, and that is said as well.
- *
- * THE WINDOW IS COMPUTED WHEN EACH SOURCE IS ASKED, never at render: the
- * screen holds the CHOICE (`useWindow`), so a second passing is not a new
- * question and redraws nothing.
+ * identity trail one instant it resolves to a log position; the wiki's pages
+ * on a LOG POSITION, and the config and credential reads take neither. So those three are fetched as their newest page and narrowed to the
+ * window HERE — and the screen says so rather than implying its window is the
+ * engine's. A row count from a client-side narrowing is a count over what was
+ * loaded, never over what exists, which is the rule every list in this product
+ * is held to. And a windowed page can fill too: a busy week reaches further
+ * back than one page, and that is said as well.
  */
 
-import { useCallback, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { Callout, Card, EmptyValue, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
 import { FileTextGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
@@ -104,34 +99,21 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { DateCell, SeatCell, SeatLabel, TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
-import {
-  HOLDS_UNAPPLIED,
-  INCOMPLETE,
-  INCOMPLETE_ROWS,
-  affected,
-  ageUnknown,
-  appliedThrough,
-  oddLevel,
-  unreadable,
-  unreadableRemedy,
-  type CoverageFacts,
-} from "~/components/work.tsx";
 import { DownloadButton } from "~/ui/primitives.tsx";
 import { toCsv } from "~/lib/csv.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useShared } from "~/lib/share.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { needsSentence } from "~/lib/refusal.ts";
-import { useRestRead, type RestRead } from "~/lib/restRead.ts";
-import { throughOf } from "~/lib/attribution.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { OPERATOR_SOURCE, RUNTIME_AUDIT_TYPES } from "~/contract/audit.ts";
-import { indexOrg, kindOfAuthor, seatByAddress, type SeatKind } from "~/lib/seats.ts";
-import { isRange, useWindow, windowEdges, windowParam, type Offer } from "~/lib/range.ts";
-import { itemPath, projectPath, subjectItem } from "~/lib/work.ts";
+import { useNow } from "~/lib/clock.ts";
+import { indexOrg, kindOfAuthor, type SeatKind } from "~/lib/seats.ts";
+import { useTimeRange, type Offer } from "~/lib/range.ts";
 import { rest, RestError } from "~/protocol/index.ts";
+import { useRest, type RestResult } from "~/lib/useRest.ts";
+import { needsSentence } from "~/lib/refusal.ts";
+import { throughOf } from "~/lib/attribution.ts";
 import type { FeedRow, SecretRow, WorkActivityRecord } from "~/protocol/index.ts";
 
 /**
@@ -221,8 +203,7 @@ function isRuntimeType(type: string): type is RuntimeType {
  * (`iamapi.auditView`).
  *
  * DECLARED HERE, beside its one reader, rather than in `~/contract`: no engine
- * test reads it, and the directory's other answers are this screen's and the
- * People & access screen's own.
+ * test reads it.
  */
 export interface IdentityAuditEntry {
   id: string;
@@ -330,11 +311,7 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
       // A PURGED TASK HAS NO PAGE. Its rows are destroyed and this entry is
       // the only evidence it existed, so a link here would be a NotFound on
       // the one row a reader most wants to follow.
-      //
-      // AND A LIVE ONE IS REACHED BY ITS ADDRESS, never its key: a task whose
-      // key another task claimed first is named by that key here, and the key
-      // opens the claimant. See [itemAddress].
-      path: record.kind === "purged" ? undefined : itemPath(subjectItem(record)),
+      path: record.kind === "purged" ? undefined : ["work", record.subject_key],
     };
   }
   switch (kind) {
@@ -343,7 +320,7 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
     case "person":
       return { subject: id, path: ["agents", "seats", id] };
     case "project":
-      return { subject: id, path: projectPath(id) };
+      return { subject: id, path: ["work", id] };
     default:
       // EVERY OTHER SUBJECT KIND HAS NO PAGE — a counter, a catalogue, a
       // tag set, an alias. Named by its kind rather than linked,
@@ -406,9 +383,6 @@ function list<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : [];
 }
 
-/** A seat by its address, as the Who cell draws it — or null where the chart holds none. */
-export type SeatOf = (address: string) => { handle: string; name: string; kind?: SeatKind } | null;
-
 /**
  * Who a row's writer IS, as the Who column draws them.
  *
@@ -429,7 +403,7 @@ export type SeatOf = (address: string) => { handle: string; name: string; kind?:
  *
  * The identity trail's principal kinds read the same way: `machine` is a
  * login, `engine` the system, `seat` a seat, and a `person` is their seat
- * where the chart holds one by that address and their login where it does not.
+ * where the chart holds one by that handle and their login where it does not.
  */
 export type Writer =
   | { as: "seat"; handle: string; name: string; kind?: SeatKind }
@@ -437,6 +411,9 @@ export type Writer =
   | { as: "system"; name: string }
   | { as: "engine" }
   | { as: "unrecorded" };
+
+/** A seat by its handle, as the Who cell draws it — or null where the chart holds none. */
+export type SeatOf = (handle: string) => { name: string; kind?: SeatKind } | null;
 
 export function writerOf(
   row: Pick<AuditEntry, "actor" | "actorKind" | "unrecorded">,
@@ -459,10 +436,27 @@ export function writerOf(
   if (!seat && row.actorKind === "person") return { as: "login", name: row.actor };
   return {
     as: "seat",
-    handle: seat?.handle ?? row.actor,
+    handle: row.actor,
     name: seat?.name ?? row.actor,
     kind: seat?.kind ?? kindOfAuthor(row.actorKind === "seat" ? "agent" : row.actorKind),
   };
+}
+
+/**
+ * THE CHART'S ANSWER ABOUT A HANDLE — the seat, or none — since the only thing
+ * a screen naming a writer asks of the chart is how to draw them. One hook, so
+ * every surface that names who did something (this trail, a backup's history)
+ * draws the same writer the same way.
+ */
+export function useSeatOf(): SeatOf {
+  const org = useOrg();
+  return useMemo<SeatOf>(() => {
+    const index = indexOrg(org);
+    return (handle) => {
+      const seat = index.byHandle.get(handle);
+      return seat ? { name: seat.name, kind: seat.kind } : null;
+    };
+  }, [org]);
 }
 
 /** The Who cell: one [Writer], drawn. */
@@ -487,21 +481,6 @@ export function WriterCell({ writer }: { writer: Writer }) {
   }
 }
 
-/** The seat lookup the Who cell draws through: a seat by any address it answers to. */
-export function useSeatOf(): SeatOf {
-  const org = useOrg();
-  return useMemo(() => {
-    const index = indexOrg(org);
-    return (address: string) => {
-      // BY ADDRESS — its handle, the one it was created under, or one a
-      // rename retired — so a write recorded before a rename still draws the
-      // seat that made it, linked to where it lives now.
-      const seat = seatByAddress(index, address);
-      return seat ? { handle: seat.handle || address, name: seat.name, kind: seat.kind } : null;
-    };
-  }, [org]);
-}
-
 /**
  * WHOSE WRITES COUNT AS AN OPERATOR'S.
  *
@@ -513,163 +492,35 @@ export function useSeatOf(): SeatOf {
  */
 const OPERATOR_KINDS = "operator,human";
 
-/**
- * The Audit log's columns. They read the chart's answer about a seat and
- * nothing else on the screen, so they are held on it (`useMemo` below) and a
- * poll that moved one row draws that row.
- */
-function auditColumns(seatOf: SeatOf): GridColumn<AuditEntry>[] {
-  return [
-    {
-      key: "at",
-      header: "When",
-      shrink: true,
-      sortValue: (row) => row.at,
-      cell: (row) => <DateCell at={row.at} />,
-    },
-    {
-      key: "source",
-      header: "Where",
-      shrink: true,
-      sortValue: (row) => row.source,
-      cell: (row) => <TextCell>{SOURCE_LABEL[row.source]}</TextCell>,
-    },
-    {
-      key: "actor",
-      header: "Who",
-      shrink: true,
-      sortValue: (row) => row.actor,
-      cell: (row) => <WriterCell writer={writerOf(row, seatOf)} />,
-    },
-    {
-      // THE KIND IS ITS OWN COLUMN. It shared the Who cell, where a chip
-      // keeps its width and a name gives way — so beside Settings' column
-      // at 1280 every writer read "m…" or "fo…" next to a whole "operator"
-      // chip, and the log no longer said who did anything. Its own track
-      // sizes to the chip, and the name has the Who track to itself.
-      key: "as",
-      header: "As",
-      shrink: true,
-      sortValue: (row) => row.actorKind,
-      cell: (row) =>
-        row.actorKind ? (
-          <Tag appearance="outline">{row.actorKind}</Tag>
-        ) : (
-          <EmptyValue label="No kind recorded" />
-        ),
-    },
-    {
-      // THE CREDENTIAL BESIDE THE AUTHOR, in a track of its own for the
-      // reason the kind has one; the first to give way, since the CSV and
-      // the row's title keep it.
-      key: "through",
-      header: "Through",
-      shrink: true,
-      drop: 1,
-      sortValue: (row) => row.through,
-      cell: (row) =>
-        row.through ? (
-          <span className="mono truncate" title={row.through}>
-            {row.through}
-          </span>
-        ) : (
-          <EmptyValue label="No credential beside the author" />
-        ),
-    },
-    {
-      key: "kind",
-      header: "What",
-      shrink: true,
-      sortValue: (row) => row.kind,
-      cell: (row) => <Tag appearance="outline">{row.kind.replaceAll("_", " ")}</Tag>,
-    },
-    {
-      key: "subject",
-      header: "To",
-      shrink: true,
-      sortValue: (row) => row.subject,
-      // ONE LINE CUT WITH AN ELLIPSIS, the whole value on the title — a
-      // backup's directory is a long absolute path, and clipped hard it
-      // read "/tmp/claude-0/-home-use" with half a glyph and no way to see
-      // the rest. On a phone card `.truncate` wraps instead (frame.css).
-      cell: (row) =>
-        !row.subject ? (
-          // AN EMPTY CELL SAYS WHY, in the row's own terms, rather than
-          // leaving a gap that reads as a lost value.
-          <EmptyValue label={row.noSubject ?? "None recorded"} />
-        ) : row.path ? (
-          <a className="mono t-link truncate" href={href(row.path)} title={row.subject}>
-            {row.subject}
-          </a>
-        ) : (
-          <span className="mono truncate" title={row.subject}>
-            {row.subject}
-          </span>
-        ),
-    },
-    {
-      key: "detail",
-      header: "Detail",
-      cell: (row) =>
-        row.detail ? (
-          // THE WHOLE LINE ON THE TITLE, and the serving node under it: the
-          // cell is cut at the column's width.
-          <span
-            className="truncate"
-            title={row.node ? `${row.detail}\nOn ${row.node}` : row.detail}
-          >
-            {row.detail}
-          </span>
-        ) : (
-          <EmptyValue label="None recorded" />
-        ),
-    },
-  ];
-}
-
 export function Audit() {
   // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
   const searchBox = useRef<HTMLInputElement>(null);
   useSearchTarget(searchBox);
+  const now = useNow();
   const seatOf = useSeatOf();
-  // THE CHOICE, NOT ITS EDGES. This screen read the one-second clock and
-  // turned it into `from` and `to` at render, so every tick was a new
-  // question: the tracker was asked for its feed once a second where the
-  // poll below says once a minute, and every row on screen was drawn again
-  // each time. The edges are computed when each source is ASKED.
-  const range = useWindow(AUDIT_OFFER);
+  const range = useTimeRange(now, AUDIT_OFFER, false);
+  const { since, until } = range;
   const [actor, setActor] = useParam("actor", "");
   const [kind, setKind] = useParam("kind", "");
 
-  // THE TRACKER'S FEED TAKES THE WINDOW. `from` and `to` bound the AUTHORED
-  // instants, which is what somebody typing "last week" means (D113) — and
-  // they are the window as of each ask, the first and every poll after it.
+  // THE ONE SOURCE THAT TAKES THE WINDOW. `from` and `to` bound the AUTHORED
+  // instants, which is what somebody typing "last week" means (D113).
   const work = useQuery(
     "work_activity",
     {
       container: "workspace",
       actor_kinds: OPERATOR_KINDS,
+      from: since,
+      to: until,
       limit: PAGE.work,
     },
-    { pollMs: POLL_MS, window: { over: range.window, since: "from", until: "to" } },
+    { pollMs: POLL_MS },
   );
-  // AND THE WINDOW EVERY OTHER SOURCE IS CUT TO. From below, where the
-  // tracker was last asked to begin, so the sources narrowed here and the ones
-  // the engine narrowed agree about where the window starts. From above only
-  // where the window HAS an end — a reader's own two instants: a named range
-  // ends now, and a revision, a page change or a credential written after the
-  // tracker's last ask is inside it. Cut at that ask, each was hidden until the
-  // tracker was asked again — up to a minute on every poll, and for ever once a
-  // refusal no wait clears stopped the tracker's poll while the others went on
-  // answering. Empty only before the first ask, when nothing has answered to
-  // be cut.
-  const since = work.asked?.since ?? "";
-  const until = work.asked && !isRange(work.asked.over) ? work.asked.until : "";
-  // THE TWO SOURCES THAT DO NOT TAKE A CLOCK. `page_activity` bounds on a log
-  // POSITION rather than a clock, and the config history has no window at all
-  // — so each is asked for its newest page and narrowed below, with
-  // `truncated` saying when that page did not reach back as far as the window
-  // does. (The credential table, the third, is read over REST below.)
+  // AND THE THREE THAT DO NOT. `page_activity` bounds on a log POSITION
+  // rather than a clock, and neither the config history nor the credential
+  // table has a window at all — so each is asked for its newest page and
+  // narrowed below, with `truncated` saying when that page did not reach back
+  // as far as the window does.
   const knowledge = useQuery(
     "page_activity",
     { actor_kinds: OPERATOR_KINDS, limit: PAGE.pages },
@@ -680,146 +531,136 @@ export function Audit() {
   // event log narrowed to the source every runtime audit event carries.
   const runtime = useQuery(
     "events",
-    { source: OPERATOR_SOURCE, limit: PAGE.runtime },
-    { pollMs: POLL_MS, window: { over: range.window, since: "since", until: "until" } },
+    { source: OPERATOR_SOURCE, since, until, limit: PAGE.runtime },
+    { pollMs: POLL_MS },
   );
   const secrets = useSecrets();
-  const identity = useIdentityTrail(range.window);
+  const identity = useIdentityTrail(since);
   // The first of the socket's reads that failed, whose code and refusal the
   // banner shows together. The two REST reads are best effort, and each says
   // what it withheld in a sentence of its own.
   const failed = [work, knowledge, config, runtime].find((read) => read.error !== null);
 
-  // SHARED WITH THE ROWS LAST DRAWN (`~/lib/share.ts`). Every entry is built
-  // here afresh whenever any of the sources answers, so a poll that moved one
-  // tracker commit made every row a new object, and the grid drew every one
-  // of them; shared, it draws the one that moved.
-  const rows = useShared(
-    useMemo<AuditEntry[]>(() => {
-      const out: AuditEntry[] = [];
-      for (const record of list(work.data?.records)) {
-        out.push({
-          id: `work:${record.id}`,
-          at: record.at,
-          source: "work",
-          kind: record.kind,
-          actor: record.actor ?? "",
-          actorKind: record.actor_kind ?? "",
-          through: throughOf(record.actor ?? "", record.operator_id),
-          ...workSubject(record),
-          // FLATTENED AT THE ROW, so the grid cell and `auditCsv` cannot differ.
-          // It also keeps a body's newlines out of a CSV field, where they are
-          // legal inside quotes and unreadable in every spreadsheet.
-          detail: plainText(record.excerpt ?? ""),
-        });
-      }
-      for (const change of list(knowledge.data?.changes)) {
-        out.push({
-          id: `page:${change.id}`,
-          at: change.at,
-          source: "knowledge",
-          kind: change.kind,
-          actor: change.actor ?? "",
-          actorKind: change.actor_kind ?? "",
-          through: throughOf(change.actor ?? "", change.operator_id),
-          subject: change.title || change.page_id,
-          // A PURGED PAGE HAS NO TITLE, and no page to open: its entry is the
-          // record it ever existed.
-          path: change.title ? ["knowledge", "pages", change.page_id] : undefined,
-          detail: plainText(change.excerpt ?? ""),
-        });
-      }
-      for (const revision of list(config.data)) {
-        out.push({
-          id: `config:${revision.revision_id}`,
-          at: revision.created_at,
-          source: "config",
-          // THE SOURCE IS THE KIND HERE — `dashboard`, `cli`, `setup` — because
-          // "a revision was created" is the only thing that ever happens to the
-          // config history, so the word that distinguishes two rows is how it
-          // was created rather than what was done.
-          kind: revision.source || "revision",
-          actor: revision.created_by ?? "",
-          // THE REVISION'S OWN WORD for what wrote it. This was the literal
-          // "operator", so a node's seed and the reconcile loop's reloads were
-          // drawn as a person's writes.
-          actorKind: revision.created_by_kind ?? "",
-          ...(!revision.created_by_kind && !revision.created_by
-            ? { unrecorded: true as const }
-            : {}),
-          through: throughOf(revision.created_by ?? "", revision.operator_id),
-          subject: revision.revision_id.slice(0, 8),
-          path: ["settings", "config", "revisions", revision.revision_id],
-          detail: revision.summary ?? "",
-        });
-      }
-      for (const row of list(secrets.rows)) {
-        out.push({
-          id: `secret:${row.name}`,
-          at: row.updated_at,
-          source: "credentials",
-          // THE LAST WRITE ONLY, and the row says so. `/secrets` answers the
-          // CURRENT state of each name — there is no history of a credential,
-          // deliberately, because a history of writes to a secret is a map of
-          // when it was weakest. So this is one entry per name, at the instant
-          // it was last stored.
-          kind: "stored",
-          actor: row.updated_by ?? "",
-          // THE RECORDED KIND, where there is one, never a guess: a person
-          // bound to a seat, the engine sealing a chart value and a Tier A
-          // token read alike under one.
-          actorKind: row.updated_by_kind ?? "",
-          through: throughOf(row.updated_by ?? "", row.operator_id),
-          subject: row.name,
-          path: ["settings", "secrets"],
-          detail: row.source ? `from ${row.source}` : "",
-        });
-      }
-      for (const event of list(runtime.data?.events)) {
-        // A TYPE THIS BUILD DOES NOT KNOW is a newer node's record: drawn under
-        // its own type name rather than dropped, because an audit that loses
-        // a row during an upgrade is the wrong way round.
-        const what = isRuntimeType(event.type)
-          ? RUNTIME_ROW[event.type](event)
-          : { kind: event.type, subject: "", noSubject: "None recorded" };
-        out.push({
-          id: `runtime:${event.id}`,
-          at: event.timestamp,
-          source: "runtime",
-          ...what,
-          actor: event.actor ?? "",
-          // THE KIND AND THE CREDENTIAL THE ENGINE RECORDED, off the row's
-          // promoted tags: a call is an operator's only where its author was
-          // bound to no seat.
-          actorKind: event.tags?.actor_kind ?? "",
-          through: throughOf(event.actor ?? "", event.tags?.operator_id),
-          ...(event.tags?.node ? { node: event.tags.node } : {}),
-          ...(event.failed ? { failed: true as const } : {}),
-          detail: event.summary ?? "",
-        });
-      }
-      for (const entry of list(identity.page?.events)) {
-        out.push({
-          id: `identity:${entry.id}`,
-          at: entry.at ?? "",
-          source: "identity",
-          kind: entry.op,
-          actor: entry.actor ?? "",
-          actorKind: entry.actor_kind ?? "",
-          through: throughOf(entry.actor ?? "", entry.operator_id),
-          ...identitySubject(entry),
-          detail: entry.summary || entry.reason || "",
-        });
-      }
-      return out;
-    }, [work.data, knowledge.data, config.data, secrets.rows, runtime.data, identity.page]),
-  );
+  const rows = useMemo<AuditEntry[]>(() => {
+    const out: AuditEntry[] = [];
+    for (const record of list(work.data?.records)) {
+      out.push({
+        id: `work:${record.id}`,
+        at: record.at,
+        source: "work",
+        kind: record.kind,
+        actor: record.actor ?? "",
+        actorKind: record.actor_kind ?? "",
+        through: throughOf(record.actor ?? "", record.operator_id),
+        ...workSubject(record),
+        // FLATTENED AT THE ROW, so the grid cell and `auditCsv` cannot differ.
+        // It also keeps a body's newlines out of a CSV field, where they are
+        // legal inside quotes and unreadable in every spreadsheet.
+        detail: plainText(record.excerpt ?? ""),
+      });
+    }
+    for (const change of list(knowledge.data?.changes)) {
+      out.push({
+        id: `page:${change.id}`,
+        at: change.at,
+        source: "knowledge",
+        kind: change.kind,
+        actor: change.actor ?? "",
+        actorKind: change.actor_kind ?? "",
+        through: throughOf(change.actor ?? "", change.operator_id),
+        subject: change.title || change.page_id,
+        // A PURGED PAGE HAS NO TITLE, and no page to open: its entry is the
+        // record it ever existed.
+        path: change.title ? ["knowledge", "pages", change.page_id] : undefined,
+        detail: plainText(change.excerpt ?? ""),
+      });
+    }
+    for (const revision of list(config.data)) {
+      out.push({
+        id: `config:${revision.revision_id}`,
+        at: revision.created_at,
+        source: "config",
+        // THE SOURCE IS THE KIND HERE — `dashboard`, `cli`, `setup` — because
+        // "a revision was created" is the only thing that ever happens to the
+        // config history, so the word that distinguishes two rows is how it
+        // was created rather than what was done.
+        kind: revision.source || "revision",
+        actor: revision.created_by ?? "",
+        // THE REVISION'S OWN WORD for what wrote it. This was the literal
+        // "operator", so a node's seed and the reconcile loop's reloads were
+        // drawn as a person's writes.
+        actorKind: revision.created_by_kind ?? "",
+        ...(!revision.created_by_kind && !revision.created_by ? { unrecorded: true as const } : {}),
+        through: throughOf(revision.created_by ?? "", revision.operator_id),
+        subject: revision.revision_id.slice(0, 8),
+        path: ["settings", "config", "revisions", revision.revision_id],
+        detail: revision.summary ?? "",
+      });
+    }
+    for (const row of list(secrets.rows)) {
+      out.push({
+        id: `secret:${row.name}`,
+        at: row.updated_at,
+        source: "credentials",
+        // THE LAST WRITE ONLY, and the row says so. `/secrets` answers the
+        // CURRENT state of each name — there is no history of a credential,
+        // deliberately, because a history of writes to a secret is a map of
+        // when it was weakest. So this is one entry per name, at the instant
+        // it was last stored.
+        kind: "stored",
+        actor: row.updated_by ?? "",
+        // THE RECORDED KIND, where there is one, never a guess: a person bound
+        // to a seat and a Tier A token read alike under one.
+        actorKind: row.updated_by_kind ?? "",
+        through: throughOf(row.updated_by ?? "", row.operator_id),
+        subject: row.name,
+        path: ["settings", "secrets"],
+        detail: row.source ? `from ${row.source}` : "",
+      });
+    }
+    for (const event of list(runtime.data?.events)) {
+      // A TYPE THIS BUILD DOES NOT KNOW is a newer node's record: drawn under
+      // its own type name rather than dropped, because an audit that loses
+      // a row during an upgrade is the wrong way round.
+      const what = isRuntimeType(event.type)
+        ? RUNTIME_ROW[event.type](event)
+        : { kind: event.type, subject: "", noSubject: "None recorded" };
+      out.push({
+        id: `runtime:${event.id}`,
+        at: event.timestamp,
+        source: "runtime",
+        ...what,
+        actor: event.actor ?? "",
+        // THE KIND AND THE CREDENTIAL THE ENGINE RECORDED, off the row's
+        // promoted tags: a call is an operator's only where its author was
+        // bound to no seat.
+        actorKind: event.tags?.actor_kind ?? "",
+        through: throughOf(event.actor ?? "", event.tags?.operator_id),
+        ...(event.tags?.node ? { node: event.tags.node } : {}),
+        ...(event.failed ? { failed: true as const } : {}),
+        detail: event.summary ?? "",
+      });
+    }
+    for (const entry of list(identity.page?.events)) {
+      out.push({
+        id: `identity:${entry.id}`,
+        at: entry.at ?? "",
+        source: "identity",
+        kind: entry.op,
+        actor: entry.actor ?? "",
+        actorKind: entry.actor_kind ?? "",
+        through: throughOf(entry.actor ?? "", entry.operator_id),
+        ...identitySubject(entry),
+        detail: entry.summary || entry.reason || "",
+      });
+    }
+    return out;
+  }, [work.data, knowledge.data, config.data, secrets.rows, runtime.data, identity.page]);
 
   /** Newest first, narrowed to the window and to what the reader asked. */
   const shown = useMemo(() => {
-    if (!since) return [];
     const from = Date.parse(since);
-    const to = until ? Date.parse(until) : Number.POSITIVE_INFINITY;
+    const to = Date.parse(until);
     return rows
       .filter((row) => {
         const at = Date.parse(row.at);
@@ -833,80 +674,151 @@ export function Audit() {
       .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   }, [rows, since, until, kind, actor]);
 
-  // A PAGE THAT DID NOT REACH BACK AS FAR AS THE WINDOW. Every source answers
-  // one page — the unwindowed ones their newest N, the windowed ones the newest
-  // N inside the window — so a busy company's window can extend past the
-  // oldest row that arrived, and a screen that said nothing would be claiming
-  // those rows do not exist.
+  // A PAGE THAT DID NOT REACH BACK AS FAR AS THE WINDOW. The three sources
+  // narrowed here are asked for their newest N, so a busy company's window can
+  // extend past the oldest row that arrived — and a screen that said nothing
+  // would be claiming those rows do not exist.
   const truncated = useMemo(() => {
     const short: string[] = [];
-    if (!since) return short;
     const from = Date.parse(since);
-    // A PAGE WHOSE ENGINE SAID MORE MATCH. The tracker's feed and the
-    // identity trail each say so exactly — a cursor comes back only when more
-    // rows match — and a page is short of THIS window only if what it did
-    // return stops inside it.
-    const reachedPast = (ats: string[], more: boolean, label: string) => {
-      if (!more || ats.length === 0) return;
-      const reached = Math.min(...ats.map((at) => Date.parse(at)));
-      if (reached > from) short.push(label);
-    };
-    reachedPast(
-      list(work.data?.records).map((record) => record.at),
-      Boolean(work.data?.next_cursor),
-      SOURCE_LABEL.work,
-    );
-    reachedPast(
-      list(identity.page?.events).map((entry) => entry.at ?? ""),
-      Boolean(identity.page?.next),
-      SOURCE_LABEL.identity,
-    );
-    // AND A PAGE THAT FILLED, for the sources that say nothing more.
-    const oldest = (rows: { at: string }[], page: number, label: string) => {
-      if (rows.length < page) return;
-      const last = rows[rows.length - 1];
+    const oldest = (list: { at: string }[], page: number, label: string) => {
+      if (list.length < page) return;
+      const last = list[list.length - 1];
       if (last && Date.parse(last.at) > from) short.push(label);
     };
+    // A WINDOWED PAGE CAN FILL TOO. Every row it holds is inside the window,
+    // so a full one whose oldest row is still after the window's start is a
+    // busy week reaching further back than a page — the same test.
+    oldest(list(work.data?.records), PAGE.work, "Work");
+    oldest(
+      list(identity.page?.events).map((entry) => ({ at: entry.at ?? "" })),
+      PAGE.identity,
+      "Identity",
+    );
     oldest(
       list(runtime.data?.events).map((event) => ({ at: event.timestamp })),
       PAGE.runtime,
-      SOURCE_LABEL.runtime,
+      "Runtime",
     );
-    oldest(list(knowledge.data?.changes), PAGE.pages, SOURCE_LABEL.knowledge);
+    oldest(list(knowledge.data?.changes), PAGE.pages, "Knowledge");
     oldest(
       list(config.data).map((revision) => ({ at: revision.created_at })),
       PAGE.config,
-      SOURCE_LABEL.config,
+      "Configuration",
     );
     return short;
   }, [work.data, identity.page, runtime.data, knowledge.data, config.data, since]);
 
-  // AN ANSWER THAT COULD NOT ACCOUNT FOR EVERYTHING, OR WHOSE NODE HAD NOT
-  // APPLIED ALL IT HELD, said of the SOURCE it came from. The tracker's feed
-  // and the knowledge base's each carry their own coverage — whether they are
-  // complete, the records this build cannot read, how far the node applied
-  // against where it stands — and they are two different logs: one being
-  // behind says nothing about the other, nor about the configuration and the
-  // credentials, which have no log here at all. This screen read none of it,
-  // so a node holding tracker records it could not decode served an audit
-  // missing their writes under a header claiming every write across the
-  // tracker. Each shortfall is now named by its source, in the words History
-  // and the state bar say it in, and never drawn as the whole page's coverage.
-  const shortfalls = useMemo(
-    () =>
-      [
-        truncated.length > 0
-          ? `${truncated.join(" and ")} answered one page, which does not reach the start of this window — those rows are the newest, not all of them.`
-          : "",
-        ...coverageSentences(SOURCE_LABEL.work, work.data),
-        ...coverageSentences(SOURCE_LABEL.knowledge, knowledge.data),
-        secrets.withheld,
-        identity.withheld,
-      ].filter((sentence) => sentence !== ""),
-    [truncated, work.data, knowledge.data, secrets.withheld, identity.withheld],
+  const columns = useMemo<GridColumn<AuditEntry>[]>(
+    () => [
+      {
+        key: "at",
+        header: "When",
+        shrink: true,
+        sortValue: (row) => row.at,
+        cell: (row) => <DateCell at={row.at} now={now} />,
+      },
+      {
+        key: "source",
+        header: "Where",
+        shrink: true,
+        sortValue: (row) => row.source,
+        cell: (row) => <TextCell>{SOURCE_LABEL[row.source]}</TextCell>,
+      },
+      {
+        key: "actor",
+        header: "Who",
+        shrink: true,
+        sortValue: (row) => row.actor,
+        cell: (row) => <WriterCell writer={writerOf(row, seatOf)} />,
+      },
+      {
+        // THE KIND IS ITS OWN COLUMN. It shared the Who cell, where a chip
+        // keeps its width and a name gives way — so beside Settings' column
+        // at 1280 every writer read "m…" or "fo…" next to a whole "operator"
+        // chip, and the log no longer said who did anything. Its own track
+        // sizes to the chip, and the name has the Who track to itself.
+        key: "as",
+        header: "As",
+        shrink: true,
+        sortValue: (row) => row.actorKind,
+        cell: (row) =>
+          row.actorKind ? (
+            <Tag appearance="outline">{row.actorKind}</Tag>
+          ) : (
+            <EmptyValue label="No kind recorded" />
+          ),
+      },
+      {
+        // THE CREDENTIAL BESIDE THE AUTHOR, in a track of its own for the
+        // reason the kind has one.
+        key: "through",
+        header: "Through",
+        shrink: true,
+        sortValue: (row) => row.through,
+        cell: (row) =>
+          row.through ? (
+            <span className="mono truncate" title={row.through}>
+              {row.through}
+            </span>
+          ) : (
+            <EmptyValue label="No credential beside the author" />
+          ),
+      },
+      {
+        key: "kind",
+        header: "What",
+        shrink: true,
+        sortValue: (row) => row.kind,
+        cell: (row) => <Tag appearance="outline">{row.kind.replaceAll("_", " ")}</Tag>,
+      },
+      {
+        key: "subject",
+        header: "To",
+        shrink: true,
+        sortValue: (row) => row.subject,
+        // ONE LINE CUT WITH AN ELLIPSIS, the whole value on the title — a
+        // backup's directory is a long absolute path, and clipped hard it
+        // read "/tmp/claude-0/-home-use" with half a glyph and no way to see
+        // the rest. On a phone card `.truncate` wraps instead (frame.css).
+        cell: (row) =>
+          !row.subject ? (
+            // AN EMPTY CELL SAYS WHY, in the row's own terms, rather than
+            // leaving a gap that reads as a lost value.
+            <EmptyValue label={row.noSubject ?? "None recorded"} />
+          ) : row.path ? (
+            <a className="mono t-link truncate" href={href(row.path)} title={row.subject}>
+              {row.subject}
+            </a>
+          ) : (
+            <span className="mono truncate" title={row.subject}>
+              {row.subject}
+            </span>
+          ),
+      },
+      {
+        key: "detail",
+        header: "Detail",
+        cell: (row) =>
+          row.detail ? (
+            // THE WHOLE LINE ON THE TITLE, and the serving node under it: the
+            // cell is cut at the column's width.
+            <span
+              className="truncate"
+              title={row.node ? `${row.detail}\nOn ${row.node}` : row.detail}
+            >
+              {row.detail}
+            </span>
+          ) : (
+            <EmptyValue label="None recorded" />
+          ),
+      },
+    ],
+    [now, seatOf],
   );
 
-  const columns = useMemo(() => auditColumns(seatOf), [seatOf]);
+  // WHAT THE TWO BEST-EFFORT REST READS WITHHELD, each said by its source.
+  const withheld = [secrets.withheld, identity.withheld].filter((sentence) => sentence !== "");
 
   const loading = work.loading || knowledge.loading || config.loading || runtime.loading;
   return (
@@ -963,13 +875,19 @@ export function Audit() {
         <Skeleton variant="text" rows={6} label="Loading what was done" />
       )}
       <CoverageNote coverage={[runtime.data?.coverage]} what="the runtime rows" />
-      {/* EVERY WAY THE ROWS FALL SHORT IS A NOTICE OF ITS OWN, not the card's
-          subtitle: a header line is one line, and the sentence was cut at
-          "those rows are the newest, n…" — its whole point, lost at every
-          width. Each shortfall is its own sentence, naming its source. */}
-      {shortfalls.length > 0 && (
+      {/* A PAGE THAT STOPPED SHORT OF THE WINDOW IS A NOTICE OF ITS OWN, not
+          the card's subtitle: a header line is one line, and the sentence was
+          cut at "those rows are the newest, n…" — its whole point, lost at
+          every width. */}
+      {truncated.length > 0 && (
         <Callout variant="warning">
-          {shortfalls.map((sentence) => (
+          {truncated.join(" and ")} answered one page, which does not reach the start of this window
+          — those rows are the newest, not all of them.
+        </Callout>
+      )}
+      {withheld.length > 0 && (
+        <Callout variant="warning">
+          {withheld.map((sentence) => (
             <p key={sentence}>{sentence}</p>
           ))}
         </Callout>
@@ -986,14 +904,7 @@ export function Audit() {
           <Card.Header
             icon={<FileTextGlyph size="sm" />}
             count={shown.length}
-            // THE CLAIM IS MADE ONLY WHERE NOTHING FELL SHORT: a header saying
-            // "across … the credentials" over an audit that read none of them
-            // was the screen claiming rows it never had.
-            subtitle={
-              shortfalls.length > 0
-                ? "What the sources answered, short where the notice above says."
-                : "Every write a person or a credential made, every call they made at runtime, every change to who can reach the company, and every configuration revision, whoever wrote it."
-            }
+            subtitle="Every write a person or a credential made, every call they made at runtime, every change to who can reach the company, and every configuration revision, whoever wrote it."
           >
             <Card.Title>What was done</Card.Title>
           </Card.Header>
@@ -1028,49 +939,37 @@ export function Audit() {
  * BEST EFFORT, like every other credential read on a screen that is not about
  * credentials: a reader without the grant for `/secrets` still has an audit of
  * everything else, and a failed read here must not take the tracker's and the
- * wiki's rows down with it. But best effort is not SILENT: a request past its
- * deadline, a node catching up, a refusal on authority — each left the
- * credentials out of an audit whose header said it covered them, with nothing
- * on the page to say they were missing. It is the shared REST read
- * (`~/lib/restRead.ts`), on the cadence the other sources keep, asked again
- * on its own where waiting can clear a failure, and its failure is the
+ * wiki's rows down with it. But best effort is not SILENT: its failure is the
  * `withheld` sentence the notice carries.
  */
 function useSecrets(): { rows: SecretRow[] | null; withheld: string } {
-  const read = useRestRead(
+  const secrets = useRest(
     "/secrets",
-    async (signal) =>
-      ((await rest.get("/secrets", signal)) as { secrets?: SecretRow[] } | null)?.secrets ?? [],
-    { cadence: () => POLL_MS },
+    (signal) => rest.get("/secrets", signal) as Promise<{ secrets?: SecretRow[] } | null>,
+    { pollMs: POLL_MS },
   );
-  return { rows: read.data, withheld: withheldSentence(CREDENTIALS_WITHHELD, read) };
+  return {
+    rows: secrets.data ? (secrets.data.secrets ?? []) : null,
+    withheld: withheldSentence(CREDENTIALS_WITHHELD, secrets),
+  };
 }
 
 /**
- * The identity estate's trail over the window, newest first, over REST —
- * and, where it could not be read, a sentence saying so.
+ * The identity estate's trail from the window's start, newest first, over REST
+ * — and, where it could not be read, a sentence saying so.
  *
- * KEYED ON THE WINDOW, NOT ITS EDGES, for the reason the tracker's feed is:
- * the instant the window starts is computed when the read is ASKED, and handed
- * to the route as `at=`, which it resolves once into a log position — the
- * trail pages by position because no two nodes' clocks are compared. Best
- * effort for the reason the credentials are: a reader the directory's trail
- * is refused to keeps the rest of the audit, and is told what is missing.
+ * `at=` IS AN INSTANT the route resolves once into a log position: the trail
+ * pages by position because no two nodes' clocks are compared. Best effort for
+ * the reason the credentials are: a reader the directory's trail is refused to
+ * keeps the rest of the audit, and is told what is missing.
  */
-function useIdentityTrail(window: ReturnType<typeof useWindow>["window"]): {
-  page: IdentityAuditPage | null;
-  withheld: string;
-} {
-  const question = windowParam(window);
-  const ask = useCallback(
-    async (signal: AbortSignal) => {
-      const { since } = windowEdges(window, Date.now());
-      const params = new URLSearchParams({ at: since, limit: String(PAGE.identity) });
-      return (await rest.get(`/iam/audit?${params}`, signal)) as IdentityAuditPage | null;
-    },
-    [window],
+function useIdentityTrail(since: string): { page: IdentityAuditPage | null; withheld: string } {
+  const params = new URLSearchParams({ at: since, limit: String(PAGE.identity) });
+  const read = useRest(
+    `/iam/audit?${params}`,
+    (signal) => rest.get(`/iam/audit?${params}`, signal) as Promise<IdentityAuditPage | null>,
+    { pollMs: POLL_MS },
   );
-  const read = useRestRead(`/iam/audit?${question}`, ask, { cadence: () => POLL_MS });
   return { page: read.data, withheld: withheldSentence(IDENTITY_WITHHELD, read) };
 }
 
@@ -1106,46 +1005,14 @@ const IDENTITY_WITHHELD: Withheld = {
  * nothing held says none of them are here; and one that failed while an
  * earlier answer is still on screen says those rows may be behind.
  */
-function withheldSentence(source: Withheld, read: RestRead<unknown>): string {
-  if (read.failure === null) return "";
-  if (read.failure.error === "unauthorized") {
+function withheldSentence(source: Withheld, read: RestResult<unknown>): string {
+  if (read.error === null) return "";
+  if (read.error.unauthorized) {
     return needsSentence(source.gesture, read.error instanceof RestError ? read.error.grants : []);
   }
   return read.data === null
     ? `${source.subject} could not be read, so none of ${source.rows} are listed here.`
     : `${source.subject} could not be read again, so ${source.rows} are as they were last read.`;
-}
-
-/**
- * What one source's answer could not cover, as sentences naming the source —
- * none where it covered everything.
- *
- * THE WORDS ARE THE COVERAGE WORDS (`~/components/work.tsx`), the ones History
- * and the state bar say the same facts in, so a reader who has met "applied
- * through 41 of 88" on one screen meets it here; only the source in front of
- * them is this screen's own.
- */
-export function coverageSentences(
-  label: string,
-  facts: CoverageFacts | null | undefined,
-): string[] {
-  if (!facts) return [];
-  const out: string[] = [];
-  if (facts.complete === false) {
-    // WHOLE, as History's banner says it: which objects the records it cannot
-    // read are about, and that a build which reads them — not a refresh — is
-    // what resolves it. Cut to the lead and the rows' caveat, an operator
-    // auditing a node learned that writes were missing and neither where nor
-    // what would bring them back.
-    out.push(
-      `${label}: ${INCOMPLETE}${unreadable(facts.incomplete)}. ${INCOMPLETE_ROWS}` +
-        `${affected(facts.incomplete)}${unreadableRemedy(facts.incomplete)}`,
-    );
-  }
-  const behind = appliedThrough(facts);
-  if (behind !== null) out.push(`${label}: ${HOLDS_UNAPPLIED} (${behind}).`);
-  if (oddLevel(facts.read_level)) out.push(`${label}: ${ageUnknown(facts.read_level ?? "")}.`);
-  return out;
 }
 
 /**

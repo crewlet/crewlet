@@ -2,22 +2,23 @@
  * Fixtures for the builder core's suites. Imported by tests only.
  *
  * THE DERIVATIONS HERE ARE FIXTURE DATA, NOT A PORT OF THE ENGINE. A suite
- * that needs the engine's `derived` block states the managers and leads it
- * wants, and [fixtureDerived] only lays them out in the wire shape, each seat
- * by its handle and each unit by its key.
+ * that needs the engine's `derived` block states the handles, managers and
+ * leads it wants, and [fixtureDerived] only lays them out in the wire shape
+ * with each seat's authored path. Its default handle is a plain ASCII
+ * lower-case-and-hyphen form of the name, which is correct for the ASCII
+ * names these fixtures use and is never used outside a test: the dashboard
+ * does not derive handles (see `keys.ts`).
  */
 
 import type {
-  ChartRead,
-  ChartSeat,
-  ChartUnit,
   CompanyDocument,
+  ConfigRole,
+  ConfigUnit,
   Derived,
   DerivedSeat,
   DerivedUnit,
 } from "~/protocol/index.ts";
-import { COMPANY_KEY, handleOfKey, unitKeyOf, type KeySource } from "./keys.ts";
-import { allSeats, allUnits, type Draft } from "./draft.ts";
+import type { KeySource } from "./keys.ts";
 
 /** A key source that counts: `k1`, `k2`, and so on, with a prefix per source. */
 export function countingKeys(prefix = "k"): KeySource {
@@ -25,137 +26,96 @@ export function countingKeys(prefix = "k"): KeySource {
   return { next: () => `${prefix}${++n}` };
 }
 
-/** A chart answer holding these rows, as `GET /chart?runtime=true` serves one. */
-export function chartOf(
-  rows: {
-    readonly units?: readonly ChartUnit[];
-    readonly seats?: readonly ChartSeat[];
-    readonly manages?: Readonly<Record<string, readonly string[]>> | null;
-  },
-  runtime = true,
-): ChartRead {
-  const units = [...(rows.units ?? [])];
-  const leads: Record<string, string> = {};
-  for (const unit of units) if (unit.lead) leads[unit.key] = unit.lead;
-  const manages: Record<string, string[]> = {};
-  for (const [handle, list] of Object.entries(rows.manages ?? {})) manages[handle] = [...list];
-  return {
-    units,
-    seats: [...(rows.seats ?? [])],
-    manages,
-    leads,
-    answer: { level: "linearizable", position: "CREWLET_CHART_LOG@1:10" },
-    runtime,
-  };
+/** The fixture's handle for a seat: its declared handle, or its ASCII name in lower case with hyphens. */
+export function fixtureHandle(role: ConfigRole): string {
+  if (typeof role.handle === "string" && role.handle !== "") return role.handle;
+  return role.name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/** Per-seat and per-unit overrides of a fixture derivation, by authored path. */
+export interface DerivedOverrides {
+  readonly seats?: Readonly<Record<string, Partial<DerivedSeat>>>;
+  readonly units?: Readonly<Record<string, Partial<DerivedUnit>>>;
 }
 
 /**
- * The chart as `GET /chart?runtime=true` serves it to a reader WITHOUT the
- * grant that reads the runtime half: every row's half stripped, and the
- * answer saying it was withheld. Both, because the engine does both, and a
- * suite that only flipped the flag would be handing the builder a runtime
- * half no reader of that kind is ever shown.
+ * A `derived` block for a document: every seat at its authored path with the
+ * fixture handle and its structural home unit, every unit at its path with
+ * its declared lead's handle, and nobody managing anybody unless an override
+ * says so. Root seats come first, then each unit's seats depth-first, which
+ * is the engine's own seat order for a document with no `unit:` references.
  */
-export function strippedChart(chart: ChartRead): ChartRead {
-  return {
-    ...chart,
-    units: chart.units.map(({ runtime: _runtime, ...unit }) => unit),
-    seats: chart.seats.map(({ runtime: _runtime, ...seat }) => seat),
-    runtime: false,
+export function fixtureDerived(doc: CompanyDocument, overrides: DerivedOverrides = {}): Derived {
+  const seats: DerivedSeat[] = [];
+  const units: DerivedUnit[] = [];
+  const handleByName = new Map<string, string>();
+  const collect = (roles: readonly ConfigRole[] | undefined) => {
+    for (const r of roles ?? [])
+      if (!handleByName.has(r.name)) handleByName.set(r.name, fixtureHandle(r));
   };
-}
+  collect(doc.roles);
+  const collectUnits = (list: readonly ConfigUnit[] | undefined) => {
+    for (const u of list ?? []) {
+      collect(u.roles);
+      collectUnits(u.children);
+    }
+  };
+  collectUnits(doc.units);
 
-/**
- * The chart a draft describes, as `GET /chart` would serve it once saved:
- * every unit with its parent, every seat with its unit, the `manages:` lists
- * beside them, and — for a node the chart already held under another address —
- * the identity its key carries. What a suite needs to hand a draft to anything
- * that reads a chart: a derivation, the component kit's engine.
- */
-export function chartOfDraft(draft: Draft, runtime = true): ChartRead {
-  const keyOf = new Map([...allUnits(draft)].map(({ unit }) => [unit.key, unit.data.key]));
-  const units: ChartUnit[] = [];
-  for (const { unit, parent } of allUnits(draft)) {
-    const { key, ...rest } = unit.data;
-    const origin = unitKeyOf(unit.key);
-    units.push({
-      key,
-      ...rest,
-      ...(parent !== COMPANY_KEY ? { parent: keyOf.get(parent) } : {}),
-      ...(origin !== undefined && origin !== key ? { origin_key: origin } : {}),
-    } as ChartUnit);
-  }
-  const seats: ChartSeat[] = [];
-  const manages: Record<string, string[]> = {};
-  for (const { seat, parent } of allSeats(draft)) {
-    const { handle, manages: list, ...rest } = seat.data;
-    const origin = handleOfKey(seat.key);
+  const seat = (role: ConfigRole, path: string, unitPath: string, chain: string[]) => {
     seats.push({
-      handle,
-      ...rest,
-      ...(parent !== COMPANY_KEY ? { unit: keyOf.get(parent) } : {}),
-      ...(origin !== undefined && origin !== handle ? { origin_handle: origin } : {}),
-    } as ChartSeat);
-    if (list && list.length > 0) manages[handle] = [...list];
-  }
-  return chartOf({ units, seats, manages }, runtime);
+      path,
+      handle: fixtureHandle(role),
+      name: role.name,
+      kind: role.kind === "human" ? "human" : "agent",
+      unit_path: unitPath,
+      placed_by_ref: false,
+      manager: "",
+      managers: null,
+      reports: null,
+      auto_reports: null,
+      onboarding_chain: chain.length > 0 ? [...chain] : null,
+      ...overrides.seats?.[path],
+    });
+  };
+  (doc.roles ?? []).forEach((r, i) => seat(r, `roles[${i}]`, "", []));
+  const walk = (list: readonly ConfigUnit[] | undefined, prefix: string, chain: string[]) => {
+    (list ?? []).forEach((u, i) => {
+      const path = `${prefix}[${i}]`;
+      const here = [...chain, u.name];
+      units.push({
+        path,
+        // THE KEY, as the engine derives it: the unit's `id`, or its name
+        // where it declares none (`config.DerivedUnit.ID`).
+        id: u.id ?? u.name,
+        name: u.name,
+        type: u.type ?? "unit",
+        lead: u.lead ? (handleByName.get(u.lead) ?? "") : "",
+        lead_inherited: false,
+        channel: u.channel ?? "",
+        channel_inherited: false,
+        seats: (u.roles ?? []).map(fixtureHandle),
+        ...overrides.units?.[path],
+      });
+      (u.roles ?? []).forEach((r, j) => seat(r, `${path}.roles[${j}]`, path, here));
+      walk(u.children, `${path}.children`, here);
+    });
+  };
+  walk(doc.units, "units", []);
+  return { seats, units };
 }
 
 /**
- * A small company exercising what the operations touch: root seats, nested
- * units, a lead, `manages` naming a seat and a unit, schedules, a unit's tool
- * credentials, a runtime key this build does not model, and the two
- * integration entries keyed by handle.
+ * A small company exercising what the operations touch: root seats (one
+ * placed in a unit by reference), nested units, a lead, `manages` naming a
+ * seat and a unit, schedules, a unit's tool credentials, a key this build does
+ * not model, and the two integration entries keyed by handle.
  */
-export function fixtureChart(): ChartRead {
-  return chartOf({
-    units: [
-      {
-        key: "engineering",
-        name: "Engineering",
-        type: "department",
-        lead: "vp-engineering",
-        runtime: {
-          mcp_env: { tracker: { TOKEN: "${TRACKER_TOKEN}" } },
-          schedules: [
-            { name: "standup", cron: "0 9 * * 1-5", task: "Run standup", target: "lead" },
-          ],
-        },
-      },
-      { key: "platform", name: "Platform", type: "team", parent: "engineering" },
-      { key: "sales", name: "Sales" },
-    ],
-    seats: [
-      { handle: "ceo", name: "CEO", goal: "Lead" },
-      { handle: "designer", name: "Designer", unit: "platform", goal: "Design" },
-      {
-        handle: "vp-engineering",
-        name: "VP Engineering",
-        unit: "engineering",
-        goal: "Run engineering",
-      },
-      {
-        handle: "dev",
-        name: "Dev",
-        unit: "engineering",
-        goal: "Build",
-        runtime: { llm: "fast", future_runtime_key: 7 },
-      },
-      { handle: "sre", name: "SRE", unit: "platform", goal: "Keep it up", project: "OPS" },
-      {
-        handle: "account-executive",
-        name: "Account Executive",
-        unit: "sales",
-        goal: "Sell",
-        runtime: { schedules: [{ name: "pipeline", cron: "0 8 * * 1", task: "Review" }] },
-      },
-    ],
-    manages: { ceo: ["engineering", "designer"], "vp-engineering": ["dev"] },
-  });
-}
-
-/** The settings revision beside [fixtureChart]: the charter and the two integration entries. */
-export function fixtureSettings(): CompanyDocument {
+export function fixtureCompany(): CompanyDocument {
   return {
     name: "Acme",
     mission: "Make things.",
@@ -165,58 +125,41 @@ export function fixtureSettings(): CompanyDocument {
       datadog: { enabled: true, route_to: "sre" },
       gitlab: { provisioning: { access_levels: { dev: "developer", sre: "maintainer" } } },
     },
+    roles: [
+      { name: "CEO", goal: "Lead", manages: ["Engineering", "Designer"] },
+      { name: "Designer", unit: "Platform", goal: "Design" },
+    ],
+    units: [
+      {
+        name: "Engineering",
+        type: "department",
+        lead: "VP Engineering",
+        mcp_env: { tracker: { TOKEN: "${TRACKER_TOKEN}" } },
+        schedules: [{ name: "standup", cron: "0 9 * * 1-5", task: "Run standup", target: "lead" }],
+        roles: [
+          { name: "VP Engineering", goal: "Run engineering", manages: ["Dev"] },
+          { name: "Dev", goal: "Build", unknown_role_key: 7 },
+        ],
+        children: [
+          {
+            name: "Platform",
+            type: "team",
+            roles: [
+              { name: "SRE", goal: "Keep it up", integrations: { jira: { project: "OPS" } } },
+            ],
+          },
+        ],
+      },
+      {
+        name: "Sales",
+        roles: [
+          {
+            name: "Account Executive",
+            goal: "Sell",
+            schedules: [{ name: "pipeline", cron: "0 8 * * 1", task: "Review" }],
+          },
+        ],
+      },
+    ],
   };
-}
-
-/** Per-seat and per-unit overrides of a fixture derivation, by handle and by key. */
-export interface DerivedOverrides {
-  readonly seats?: Readonly<Record<string, Partial<DerivedSeat>>>;
-  readonly units?: Readonly<Record<string, Partial<DerivedUnit>>>;
-}
-
-/**
- * A `derived` block for a chart: every seat by its handle in its unit, every
- * unit by its key with its authored lead, and nobody managing anybody unless
- * an override says so.
- */
-export function fixtureDerived(chart: ChartRead, overrides: DerivedOverrides = {}): Derived {
-  const byKey = new Map(chart.units.map((u) => [u.key, u]));
-  const chainOf = (key: string | undefined): string[] => {
-    const out: string[] = [];
-    for (
-      let at = key ? byKey.get(key) : undefined;
-      at;
-      at = at.parent ? byKey.get(at.parent) : undefined
-    ) {
-      out.unshift(at.name ?? at.key);
-    }
-    return out;
-  };
-  const seats: DerivedSeat[] = chart.seats.map((seat) => ({
-    path: "",
-    handle: seat.handle,
-    name: seat.name ?? "",
-    kind: seat.kind === "human" ? "human" : "agent",
-    unit_path: seat.unit ?? "",
-    placed_by_ref: false,
-    manager: "",
-    managers: null,
-    reports: null,
-    auto_reports: null,
-    onboarding_chain: seat.unit ? chainOf(seat.unit) : null,
-    ...overrides.seats?.[seat.handle],
-  }));
-  const units: DerivedUnit[] = chart.units.map((unit) => ({
-    path: "",
-    id: unit.key,
-    name: unit.name ?? "",
-    type: unit.type ?? "unit",
-    lead: unit.lead ?? "",
-    lead_inherited: false,
-    channel: unit.channel ?? "",
-    channel_inherited: false,
-    seats: chart.seats.filter((s) => s.unit === unit.key).map((s) => s.handle),
-    ...overrides.units?.[unit.key],
-  }));
-  return { seats, units };
 }

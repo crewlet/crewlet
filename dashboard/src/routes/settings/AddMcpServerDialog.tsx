@@ -3,7 +3,7 @@
  *
  * A NEW CONFIGURATION REVISION, not an act: a server is a `mcp_servers` entry,
  * so the write goes through `protocol/configWrite.ts` like a seat or a budget
- * ceiling, guarded by the operator credential (`useConfigWriteAccess`) rather
+ * ceiling, guarded by the `config:write` grant (`useConfigWriteAccess`) rather
  * than a seat binding. The button is drawn for every reader and disabled with
  * the reason for one who cannot change the configuration.
  *

@@ -14,25 +14,9 @@
  * and Pause / Resume — each a `WriteButton`, so a reader who cannot make the
  * change sees the control and the reason rather than a page with no way to
  * act. Pause asks whether to stop the current turn too, and says that
- * without it the turn finishes first. "Events" and "Edit in org" are the
- * secondary pair, in the bar's "More" menu.
- *
- * # A seat's events are narrowed two ways, by its kind
- *
- * An AGENT's by `seat=<handle>`, which the engine resolves to the agent id
- * its events carry — never by the name, which a namesake shares. A PERSON has
- * no agent id: what the log records about them names them as the ACTOR, and
- * the name it records for a person bound to a seat is the seat's HANDLE
- * (`iam.ActorFor`) — so theirs is `actor=<handle>`, an equality that the
- * display name never matched.
- *
- * # A retired address opens the seat it named
- *
- * A link kept from before a rename carries the handle the seat answered to
- * then; [findSeat] resolves it in the engine's order and the page moves the
- * route to the handle the seat holds now, by REPLACE — it is the same place
- * said the way the seat is known now, so Back does not land on a spelling the
- * reader never chose.
+ * without it the turn finishes first. "Events" (an agent's only: a person
+ * publishes no events under a seat id for `seat=` to narrow by) and "Edit in
+ * org" are the secondary pair, in the bar's "More" menu.
  *
  * ON A PHONE THE BAR KEEPS ONE ACTION IN VIEW, the frame's rule: Message, or
  * Resume on a paused seat — the one thing to do about a seat that is holding
@@ -51,7 +35,7 @@
  * this kind has not got lands on Overview (`useTab`).
  */
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Button, Callout, EmptyState, Menu, Tag, tabId } from "@crewlethq/ui";
 import {
   ChartNoAxesGanttGlyph,
@@ -63,7 +47,7 @@ import {
   PlusGlyph,
   UserGlyph,
 } from "@crewlethq/icons/glyphs";
-import { href, useNavigator, useRoute } from "~/app/router.tsx";
+import { href, useNavigator } from "~/app/router.tsx";
 import { seatKindKey, seatPlaceKey, seatUnitKey } from "~/app/crumbs.ts";
 import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -76,7 +60,7 @@ import {
   MessageSeatButton,
   PauseSeatButton,
 } from "~/components/writes.tsx";
-import { ClockText } from "~/app/frame/cells.tsx";
+import { useNow } from "~/lib/clock.ts";
 import { relTime } from "~/lib/format.ts";
 import { unitPath } from "~/lib/orgchart.ts";
 import {
@@ -86,7 +70,6 @@ import {
   indexOrg,
   nameOfIn,
   ringOf,
-  sandboxFor,
   seatPath,
   seatResolvers,
   stoppedLine,
@@ -120,25 +103,13 @@ import { Work } from "./seat/Work.tsx";
 /** How many open tasks the Work tab's list, and the Overview's card, are read from. */
 const WORK_PAGE = 50;
 
-/** Where a seat's events are listed, narrowed by its kind — see the file's doc. */
-function eventsQuery(seat: Seat): Record<string, string> {
-  return seat.kind === "human" ? { actor: seat.handle } : { seat: seat.handle };
-}
-
 export function SeatScreen({ handle }: { handle: string }) {
   const nav = useNavigator();
   const org = useOrg();
   const agents = useAgents();
+  const now = useNow();
   const index = useMemo(() => indexOrg(org), [org]);
   const seat = findSeat(index, handle);
-  // A RETIRED ADDRESS IS MOVED TO THE CURRENT ONE — see the file's doc. The
-  // query (the open tab, a thread) rides along, and every link this page
-  // builds, the chart read it makes and the crumb it publishes then key on
-  // the handle the seat actually holds.
-  const route = useRoute();
-  useEffect(() => {
-    if (seat?.handle && seat.handle !== handle) nav.replace(seatPath(seat), route.query);
-  }, [seat, handle, nav, route.query]);
   const human = seat?.kind === "human";
   // THE TRAIL NAMES THE SEAT, not the slug the URL addresses it by — keyed on
   // the RAW SEGMENT, which is what `crumbsFor` looks up (a seat the engine
@@ -159,7 +130,7 @@ export function SeatScreen({ handle }: { handle: string }) {
   );
   const [tab, setTab] = useTab<SeatTab>("tab", human ? HUMAN_TABS : AGENT_TABS);
   const panelId = useId();
-  const agent = liveRow(agents, seat);
+  const agent = liveRow(agents, handle, seat);
   // THE OPEN WORK ON THE SEAT, asked once for the strip's count, the
   // Overview's card and the Work tab's list — three readings of one answer,
   // so they can never name three numbers.
@@ -179,10 +150,8 @@ export function SeatScreen({ handle }: { handle: string }) {
     },
     { enabled: !!seat?.handle, pollMs: 30_000 },
   );
-  // THE GUARDED HALF, read once for every tab that draws it: the seat's own
-  // org chart row and its home unit's, by HANDLE (`useSeatSetup`) — never the
-  // company document, which holds no seats.
-  const setup = useSeatSetup(handle);
+  // THE GUARDED HALF, read once for every tab that draws it.
+  const setup = useSeatSetup(seat ? seat.handle || seat.name : "");
   const chrome: RowChrome = useMemo(() => seatResolvers(index), [index]);
   const nameOf = useMemo(() => nameOfIn(index), [index]);
 
@@ -227,12 +196,16 @@ export function SeatScreen({ handle }: { handle: string }) {
                   ...menuHold(pauseAccess),
                 },
               ]),
-          {
-            key: "events",
-            label: "Events",
-            icon: <ChartNoAxesGanttGlyph size="sm" />,
-            onSelect: () => nav.to(["live", "events"], eventsQuery(seat)),
-          },
+          ...(human
+            ? []
+            : [
+                {
+                  key: "events",
+                  label: "Events",
+                  icon: <ChartNoAxesGanttGlyph size="sm" />,
+                  onSelect: () => nav.to(["live", "events"], { seat: seat.handle }),
+                },
+              ]),
           {
             key: "edit",
             label: "Edit in org",
@@ -295,15 +268,17 @@ export function SeatScreen({ handle }: { handle: string }) {
             triggerVariant="ghost"
             align="end"
             items={[
-              {
-                key: "events",
-                label: "Events",
-                description: human
-                  ? "Everything the engine recorded with them as its actor"
-                  : "Everything the engine published about this seat",
-                icon: <ChartNoAxesGanttGlyph size="sm" />,
-                onSelect: () => nav.to(["live", "events"], eventsQuery(seat)),
-              },
+              ...(human
+                ? []
+                : [
+                    {
+                      key: "events",
+                      label: "Events",
+                      description: "Everything the engine published about this seat",
+                      icon: <ChartNoAxesGanttGlyph size="sm" />,
+                      onSelect: () => nav.to(["live", "events"], { seat: seat.handle }),
+                    },
+                  ]),
               {
                 key: "edit",
                 label: "Edit in org",
@@ -338,7 +313,7 @@ export function SeatScreen({ handle }: { handle: string }) {
       </header>
 
       <div className="prof-body">
-        <Notices seat={seat} agent={agent} nameOf={nameOf} />
+        <Notices seat={seat} agent={agent} now={now} nameOf={nameOf} />
         {/* THEIR STRIP, OUR PANEL: the kit's `TabPanel` spreads nothing, so
             it cannot take the `tabIndex={0}` that puts the content in the tab
             order — and without it a reader who picks a tab and presses Tab
@@ -358,12 +333,13 @@ export function SeatScreen({ handle }: { handle: string }) {
               work={work}
               reading={setup.reading}
               nameOf={nameOf}
+              now={now}
             />
           )}
-          {tab === "work" && <Work seat={seat} work={work} chrome={chrome} />}
-          {tab === "turns" && !human && <Turns seat={seat} agent={agent} />}
-          {tab === "memory" && !human && <Memory seat={seat} />}
-          {tab === "schedules" && !human && <Schedules seat={seat} />}
+          {tab === "work" && <Work seat={seat} work={work} chrome={chrome} now={now} />}
+          {tab === "turns" && !human && <Turns seat={seat} agent={agent} now={now} />}
+          {tab === "memory" && !human && <Memory seat={seat} now={now} />}
+          {tab === "schedules" && !human && <Schedules seat={seat} now={now} />}
           {tab === "settings" && <Settings seat={seat} agent={agent} setup={setup} />}
         </div>
       </div>
@@ -424,20 +400,19 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
 function Notices({
   seat,
   agent,
+  now,
   nameOf,
 }: {
   seat: Seat;
   agent: AgentRow | undefined;
+  now: number;
   nameOf: (key: string) => string;
 }) {
   const sandboxes = useSandboxes();
   if (seat.kind === "human" || !agent) return null;
   const state = activityOf(agent);
   const paused = agent.paused ?? null;
-  // THE SEAT'S OWN RUN, by its AGENT ID ([sandboxFor]) — never the run's role
-  // name, which a namesake shares: a seat whose namesake was coding read as
-  // parked on that namesake's question.
-  const sandbox = sandboxFor(sandboxes, agent);
+  const sandbox = sandboxes.find((s) => s.agent_handle === seat.handle) ?? null;
   const asking = !!sandbox && awaitingPerson(sandbox.status);
   if (!agent.last_error && state !== "stopped" && !asking) return null;
   return (
@@ -455,12 +430,7 @@ function Notices({
         >
           <strong>{agent.last_error.kind || "error"}</strong> — {agent.last_error.message}
           {agent.last_error.phase && ` (during ${agent.last_error.phase})`}
-          {agent.last_error.at && (
-            <>
-              {" · "}
-              <ClockText read={(now) => relTime(agent.last_error?.at, now)} />
-            </>
-          )}
+          {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
         </Callout>
       )}
       {/* THE STATE'S OWN TONE, the pill's and the ring's: a stopped seat is
@@ -469,8 +439,7 @@ function Notices({
       {state === "stopped" &&
         (agent.stopped_reason === "paused" && paused ? (
           <Callout variant={toneOf(state)}>
-            <strong>Paused by {nameOf(paused.by)}</strong>{" "}
-            <ClockText read={(now) => relTime(paused.at, now)} />
+            <strong>Paused by {nameOf(paused.by)}</strong> {relTime(paused.at, now)}
             {paused.reason ? ` — “${sentence(paused.reason)}”` : "."} It starts no new turn; what is
             sent to it waits on its inbox, in order, and its scheduled runs are skipped.
             {paused.stop_running ? " The turn it was on was stopped." : ""}

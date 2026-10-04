@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render } from "~/test/inCase.ts";
+import { render } from "@testing-library/react";
 import {
   nestSections,
   outline,

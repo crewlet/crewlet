@@ -7,7 +7,7 @@
  * the task in the whole answer.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import { ListPosition } from "./ListPosition.tsx";
@@ -33,7 +33,7 @@ function mount(hash: string, around: unknown) {
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
-        <ListPosition address="ENG-4" />
+        <ListPosition itemKey="ENG-4" />
       </Router>
     </ClientContext.Provider>,
   );

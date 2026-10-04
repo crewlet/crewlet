@@ -10,7 +10,7 @@
  */
 
 import { useState } from "react";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import { ObjectTabs, type ObjectTab } from "./ObjectTabs.tsx";

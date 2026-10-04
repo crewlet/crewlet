@@ -17,7 +17,7 @@
  * every mark on a row makes: a push changes a word and never a measured box.
  */
 
-import { cleanup, render, screen } from "~/test/inCase.ts";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import type { AgentRow, SandboxEntry } from "~/protocol/index.ts";
 import type { BuilderApi } from "./BuilderContext.tsx";
@@ -37,7 +37,9 @@ function seat(over: Partial<SeatView> = {}): SeatView {
     handle: "dev",
     saved: { handle: "dev", name: "Dev" },
     running: true,
-    danglingNotes: [],
+    placedByRef: false,
+    danglingUnitRef: null,
+    danglingNote: undefined,
     datadogFallback: false,
     manager: null,
     parent: COMPANY_KEY,
@@ -50,10 +52,11 @@ function api(agents: AgentRow[], sandboxes: SandboxEntry[] = []): BuilderApi {
   return { agents, sandboxes } as unknown as BuilderApi;
 }
 
+/** A roster row: its `id` is the handle the seat runs under. */
 const agent = (over: Partial<AgentRow> = {}): AgentRow =>
   ({
-    id: "a1",
-    agent_id: "id-a1",
+    id: "dev",
+    agent_id: "id-dev",
     role: "Dev",
     handle: "dev",
     activity: "idle",
@@ -85,7 +88,7 @@ describe("a seat's live state", () => {
   test("a live row under another handle is not this seat's, whatever it is called", () => {
     render(
       <LiveState
-        api={api([agent({ handle: "dev-2", role: "Dev", activity: "working" })])}
+        api={api([agent({ id: "dev-2", handle: "dev-2", role: "Dev", activity: "working" })])}
         view={seat()}
       />,
     );
@@ -147,10 +150,7 @@ describe("a seat's live state", () => {
   test("a seat says the engine's word, and a box beside it changes nothing", () => {
     render(
       <LiveState
-        api={api(
-          [agent({ activity: "needs" })],
-          [{ role: "Dev", agent_id: "id-a1", status: "running" } as SandboxEntry],
-        )}
+        api={api([agent({ activity: "needs" })], [{ role: "Dev" } as SandboxEntry])}
         view={seat()}
       />,
     );

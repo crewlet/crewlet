@@ -15,7 +15,7 @@
  * the other's back.
  */
 
-import { cleanup, render, waitFor } from "~/test/inCase.ts";
+import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatScreen } from "./Seat.tsx";

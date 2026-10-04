@@ -23,15 +23,6 @@
  * calls and output are readable — whenever the engine has named the turn. A
  * seat whose turn has not published an id yet draws the same row, unlinked,
  * rather than a link to nothing.
- *
- * # The clock is read where the time is drawn
- *
- * The elapsed time and the quiet mark move every second; the stepper, the
- * badge and the call line do not. So each moving part reads the clock itself
- * (`ClockText`, `QuietMark`) and the row reads only what changes its own
- * drawing — whether the round has gone quiet at all, and the words of what
- * it is doing. Handed the screen's `now`, every running row on Home and Live
- * drew its stepper again once a second for a count beside it.
  */
 
 import { StatusDot, Stepper, Tag } from "@crewlethq/ui";
@@ -39,8 +30,6 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href } from "~/app/router.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { fmtElapsed } from "~/lib/format.ts";
-import { useClockReading } from "~/lib/clock.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
 import { useMediaQuery } from "~/lib/media.ts";
 import { staleness, stateLine, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { lastCallLine, turnSteps } from "~/lib/turnsteps.ts";
@@ -84,19 +73,7 @@ export function liveDoing(row: AgentRow, now: number, seat: Seat | null): string
   return typeof summary === "string" && summary.trim() ? `${verb} · ${summary.trim()}` : verb;
 }
 
-/** The quiet mark, reading the clock itself: its words count the silence up. */
-function QuietMark({ row }: { row: AgentRow }) {
-  const text = useClockReading((now) => quietMark(row, now)?.text ?? "");
-  const tone = useClockReading((now) => quietMark(row, now)?.tone ?? "warning");
-  if (!text) return null;
-  return (
-    <Tag size="xs" variant={tone} className="live-quiet">
-      {text}
-    </Tag>
-  );
-}
-
-export function LiveTurnRow({ row, index }: { row: AgentRow; index: OrgIndex }) {
+export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgIndex; now: number }) {
   const handle = row.handle ?? "";
   const seat = index.byHandle.get(handle) ?? null;
   const name = seat?.name ?? row.role;
@@ -115,10 +92,8 @@ export function LiveTurnRow({ row, index }: { row: AgentRow; index: OrgIndex }) 
   const { steps, current, detail } = turnSteps(row, { inLabel: !phone });
   const callLine = lastCallLine(row);
   const last = phone && detail ? [detail, callLine].filter(Boolean).join(" · ") : callLine;
-  // WHETHER IT HAS GONE QUIET, which changes at two minutes and stops the
-  // stepper's pulse; how long, the mark below reads for itself.
-  const quiet = useClockReading((now) => quietMark(row, now) !== null);
-  const doing = useClockReading((now) => liveDoing(row, now, seat));
+  const quiet = quietMark(row, now);
+  const doing = liveDoing(row, now, seat);
   const body = (
     <>
       <SeatAvatar name={name} kind="agent" ring="info" size="sm" />
@@ -128,11 +103,13 @@ export function LiveTurnRow({ row, index }: { row: AgentRow; index: OrgIndex }) 
           <span className="live-doing" title={doing}>
             {doing}
           </span>
-          {quiet && <QuietMark row={row} />}
+          {quiet && (
+            <Tag size="xs" variant={quiet.tone} className="live-quiet">
+              {quiet.text}
+            </Tag>
+          )}
           <span className="live-elapsed">
-            {Number.isFinite(started) ? (
-              <ClockText read={(now) => fmtElapsed(now - started)} />
-            ) : null}
+            {Number.isFinite(started) ? fmtElapsed(now - started) : ""}
           </span>
         </span>
         <Stepper label={`${name}'s turn`} steps={steps} current={current} pulse={!quiet} />

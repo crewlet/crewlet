@@ -12,7 +12,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RETRY_AFTER_MAX_MS, UNAVAILABLE_RETRY_MS } from "../contract/retry.ts";
-import { LiveSocket, QueryRefusedError } from "./socket.ts";
+import { LiveSocket, QueryError } from "./socket.ts";
 import { Store } from "./store.ts";
 
 /** A WebSocket the test drives and whose outgoing frames it reads. */
@@ -246,9 +246,9 @@ describe("a query frame", () => {
       () => null,
       (err: unknown) => err,
     );
-    expect(refused).toBeInstanceOf(QueryRefusedError);
-    expect((refused as QueryRefusedError).message).toBe("unauthorized");
-    expect((refused as QueryRefusedError).refusal).toEqual({
+    expect(refused).toBeInstanceOf(QueryError);
+    expect((refused as QueryError).message).toBe("unauthorized");
+    expect((refused as QueryError).refusal).toEqual({
       reason: "no_grant",
       grants: ["audit:read"],
     });
@@ -289,8 +289,8 @@ describe("a query frame", () => {
       () => null,
       (err: unknown) => err,
     );
-    expect(refused).toBeInstanceOf(QueryRefusedError);
-    expect((refused as QueryRefusedError).message).toBe("unavailable");
-    expect((refused as QueryRefusedError).refusal).toEqual(want);
+    expect(refused).toBeInstanceOf(QueryError);
+    expect((refused as QueryError).message).toBe("unavailable");
+    expect((refused as QueryError).refusal).toEqual(want);
   });
 });

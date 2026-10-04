@@ -5,7 +5,7 @@
  */
 
 import { useRef, type ReactNode } from "react";
-import { act, cleanup, render, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, Modal } from "@crewlethq/ui";
 import {

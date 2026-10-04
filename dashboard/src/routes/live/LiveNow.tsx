@@ -66,17 +66,11 @@ import { RecentPhases } from "./RecentPhases.tsx";
 import { useAgents, useEvents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import {
-  awaitingPerson,
-  indexOrg,
-  liveRowFor,
-  seatByAddress,
-  workingLongestFirst,
-} from "~/lib/seats.ts";
+import { needsSentence } from "~/lib/refusal.ts";
+import { awaitingPerson, indexOrg, workingLongestFirst } from "~/lib/seats.ts";
 import { phaseKey, type PhaseRecord } from "~/lib/phases.ts";
 import { plural, relTime } from "~/lib/format.ts";
-import { useClockReading } from "~/lib/clock.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
+import { useNow } from "~/lib/clock.ts";
 import { cutInto, spanOf, useTimeRange, windowLabel } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
@@ -126,6 +120,9 @@ const RUNS_POLL_MS = 30_000;
 /** How often a seat's own latest events are read again, when one is chosen. */
 const SEAT_EVENTS_POLL_MS = 15_000;
 
+/** The grant an `event` frame is pushed under (`api/stream`'s audience). */
+const AUDIT_READ = "audit:read";
+
 /** The phases the engine emits, the turn's own two first. */
 const PHASES = [
   "execute",
@@ -144,6 +141,7 @@ function runningPhase(row: AgentRow): string {
 }
 
 export function LiveNow() {
+  const now = useNow();
   const agents = useAgents();
   const sandboxes = useSandboxes();
   const pushed = useEvents();
@@ -156,29 +154,20 @@ export function LiveNow() {
   const [seat, setSeat] = useParam("seat", "", "filter");
   const [phase, setPhase] = useParam("phase", "", "filter");
   const [failed, setFailed] = useParam("failed", "", "filter");
-  // THE STRIP IS A CHART over minute bars, so its window is a chart's: the
-  // top edge is the end of the minute in progress, and the question it keys
-  // changes when a minute rolls rather than when a second passes. The screen
-  // holds no second of its own — every time drawn below reads the clock in the
-  // cell that shows it — so a tick reaches those cells and nothing else.
-  const range = useTimeRange(STRIP_OFFER);
+  // NOT ALIGNED to a bucket: the strip's newest cell is the minute in progress.
+  const range = useTimeRange(now, STRIP_OFFER, false);
 
-  // THE SEAT THE ADDRESS NAMES — a handle a rename retired included — and its
-  // roster row, paired by the handle the seat answers to now, never by its
-  // name: two unit seats stamped from one template share a role name.
-  const named = seat ? seatByAddress(index, seat) : null;
-  const seatHandle = named?.handle || seat;
-  const seatRow = named ? liveRowFor(agents, named) : undefined;
+  const seatRow = agents.find((a) => a.handle === seat);
   const agentSeats = useMemo(() => index.seats.filter((s) => s.kind === "agent"), [index.seats]);
-  const seatName = (handle: string) => seatByAddress(index, handle)?.name ?? handle;
+  const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
 
   // --- running turns -----------------------------------------------------
   const running = useMemo(
     () =>
       workingLongestFirst(agents).filter(
-        (a) => (!seat || a.handle === seatHandle) && (!phase || runningPhase(a) === phase),
+        (a) => (!seat || a.handle === seat) && (!phase || runningPhase(a) === phase),
       ),
-    [agents, seat, seatHandle, phase],
+    [agents, seat, phase],
   );
   // THE PHASES THE RUNNING ROWS ARE DRAWING, so a phase that completes lands
   // in Recent phases at once instead of behind the "new rows" button.
@@ -199,12 +188,8 @@ export function LiveNow() {
   const runs = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
   const inFlight = useMemo(
     () =>
-      mergeRuns(runs.data?.runs ?? [], sandboxes).filter(
-        // BY THE SEAT, through the chart: a run records the handle its seat
-        // answered to when it launched, which a rename since has retired.
-        (r) => !seat || (named !== null && seatByAddress(index, r.agent_handle) === named),
-      ),
-    [runs.data, sandboxes, seat, named, index],
+      mergeRuns(runs.data?.runs ?? [], sandboxes).filter((r) => !seat || r.agent_handle === seat),
+    [runs.data, sandboxes, seat],
   );
   const waiting = inFlight.filter((r) => awaitingPerson(r.status));
   const boxed = inFlight.filter((r) => !awaitingPerson(r.status));
@@ -216,14 +201,9 @@ export function LiveNow() {
     { since: range.since, until: range.until, bucket: "minute", ...(seat ? { seat } : {}) },
     { pollMs: 30_000 },
   );
-  // THE CELL IN PROGRESS, which is all of the clock the strip reads: it
-  // held the second for it, and drew the whole screen — every card, every row
-  // and the strip re-folded — once a second to draw the same cells. Read as
-  // the cell's own start it changes when a cell rolls over.
-  const end = useClockReading((now) => Math.floor(now / cell) * cell);
   const strip = useMemo(
-    () => stripOf(series.data, end, cell, cells),
-    [series.data, end, cell, cells],
+    () => stripOf(series.data, now, cell, cells),
+    [series.data, now, cell, cells],
   );
   // A SEAT'S OWN LATEST EVENTS come from the engine, narrowed by its id: the
   // push names no seat on an event, so filtering it here would be a guess.
@@ -331,7 +311,7 @@ export function LiveNow() {
             {running.length > 0 ? (
               <ul className="live-list">
                 {running.map((row) => (
-                  <LiveTurnRow key={row.id} row={row} index={index} />
+                  <LiveTurnRow key={row.id} row={row} index={index} now={now} />
                 ))}
               </ul>
             ) : (
@@ -361,6 +341,7 @@ export function LiveNow() {
                     key={run.turn_id}
                     subject={{ kind: "run", at: run.paused_at || run.updated_at, run }}
                     decider={{ handle: viewer.handle }}
+                    now={now}
                   />
                 ))}
               </ul>
@@ -397,6 +378,7 @@ export function LiveNow() {
                     key={run.turn_id}
                     run={run}
                     who={seatName(run.agent_handle) || run.role}
+                    now={now}
                     onOpen={() => openPeek({ kind: "run", id: run.turn_id })}
                   />
                 ))}
@@ -464,6 +446,17 @@ export function LiveNow() {
                   <EventRow key={ev.id} event={ev} compact />
                 ))}
               </div>
+            ) : !seat && !viewer.loading && !viewer.grants.includes(AUDIT_READ) ? (
+              // WITHHELD IS NOT EMPTY: the engine pushes an `event` frame only
+              // to a socket whose principal holds `audit:read`, so for anybody
+              // else this feed stays empty however busy the company is —
+              // "nothing has happened" would be a claim about the company.
+              <EmptyState
+                size="compact"
+                icon={<ChartNoAxesGanttGlyph size={32} />}
+                title="The live feed is not shown to you"
+                description={needsSentence("The live feed", [AUDIT_READ])}
+              />
             ) : (
               <EmptyState
                 size="compact"
@@ -482,6 +475,7 @@ export function LiveNow() {
           failed={failed === "true"}
           runningKeys={runningKeys}
           nameOf={nameOfPhase}
+          now={now}
         />
       </div>
     </>
@@ -513,7 +507,17 @@ export function stripOf(
 }
 
 /** One coding run in flight, as a row that opens it beside the list. */
-function InBoxRow({ run, who, onOpen }: { run: SandboxRun; who: string; onOpen: () => void }) {
+function InBoxRow({
+  run,
+  who,
+  now,
+  onOpen,
+}: {
+  run: SandboxRun;
+  who: string;
+  now: number;
+  onOpen: () => void;
+}) {
   return (
     // A REAL LINK to the run's page, peeking on a plain click — the rule
     // every row in the product follows, written once in `rowPeekHandler`.
@@ -530,9 +534,7 @@ function InBoxRow({ run, who, onOpen }: { run: SandboxRun; who: string; onOpen: 
           {run.coding_agent ? ` · ${run.coding_agent}` : ""}
         </span>
       </span>
-      <span className="t-caption nowrap">
-        <ClockText read={(now) => relTime(run.started_at, now)} />
-      </span>
+      <span className="t-caption nowrap">{relTime(run.started_at, now)}</span>
     </a>
   );
 }

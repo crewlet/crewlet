@@ -267,15 +267,11 @@ export function startingProject(
   // lands would draw the sheet empty and then fill it.
   if (projects.length === 0) return preset.project || own;
   if (known(preset.project)) return preset.project!;
-  const chain =
-    preset.assignee && index ? (index.byHandle.get(preset.assignee)?.unit?.chain ?? []) : [];
-  if (index && chain.length) {
-    // KEYED ON THE UNIT ITSELF — one of this index's own — and never its name:
-    // two teams sharing a name pooled their projects, and a team renamed since
-    // its projects were filed matched none.
-    const byUnit = projectsByUnit(projects, index);
+  const chain = preset.assignee ? (index?.byHandle.get(preset.assignee)?.unit?.chain ?? []) : [];
+  if (chain.length) {
+    const byUnit = projectsByUnit(projects);
     for (const unit of [...chain].reverse()) {
-      const key = byUnit.get(unit)?.[0];
+      const key = byUnit.get(unit.id)?.[0];
       if (key) return key;
     }
   }
@@ -406,12 +402,8 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
     if (!result) return;
     if (result.kind === "applied") {
       onClose();
-      // BY THE ADDRESS THE RECEIPT NAMES (`item`), never its key: a counter
-      // restored beside work minted after it hands a new task a key an older
-      // one claimed first, and that key opens the older task.
-      const receipt = result.receipt as { item?: string; key?: string } | null;
-      const address = receipt?.item || receipt?.key;
-      if (address) nav.to(["work", address]);
+      const key = (result.receipt as { key?: string } | null)?.key;
+      if (key) nav.to(["work", key]);
     } else if (result.kind === "pending") {
       onClose();
     }

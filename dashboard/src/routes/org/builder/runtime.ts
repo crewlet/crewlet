@@ -6,14 +6,9 @@
  * test with a fake clock and a scripted engine; `Builder.tsx` owns their
  * lifetimes, and this module is what it hands over.
  *
- * - The TRANSPORT resolves with every answer, refusals included, as the model
- *   requires, and rejects only when the caller aborted. `protocol/rest.ts`
- *   throws on a refusal; a thrown refusal is turned back into the status and
- *   body the engine sent, and anything else that never reached the engine is
- *   status 0. It reaches the org chart (`/chart`) as well as the settings
- *   (`/config`), because a save is a sequence over both surfaces — which is
- *   why it is the builder's own rather than `protocol/configWrite.ts`'s,
- *   whose requests are the settings' alone.
+ * - The TRANSPORT is not here: it is `protocol/configWrite.ts`'s
+ *   `configTransport`, the one path every screen that writes the company
+ *   document takes, and the model's `ConfigTransport` is its shape.
  * - The CLOCK is monotonic (`performance.now`), because the check's debounce
  *   and backoff are durations and a wall clock moved by NTP or a suspended
  *   laptop would fire them early or never.
@@ -24,71 +19,9 @@
  *   accessor itself can throw (a sandboxed frame, blocked site data).
  */
 
-import { layoutOpID } from "~/protocol/gate.ts";
-import { isAbort, rest, RestError, type RestResponse } from "~/protocol/index.ts";
 import type { DraftStorage } from "./model/persistence.ts";
 import type { KeySource } from "./model/keys.ts";
-import type { Clock, EngineTransport, HttpAnswer } from "./model/transport.ts";
-
-/** What a request that never reached the engine answers: status 0 with its reason. */
-function unreachable(err: unknown): HttpAnswer {
-  return {
-    status: 0,
-    body: {
-      error: "unreachable",
-      detail: err instanceof Error ? err.message : "The engine could not be reached.",
-    },
-    etag: null,
-  };
-}
-
-/**
- * Runs one REST call and resolves with the answer, refusal or not. An abort
- * rejects, because a superseded request is not an engine that answered.
- */
-export async function answerOf(call: Promise<RestResponse>): Promise<HttpAnswer> {
-  try {
-    const { status, body, etag } = await call;
-    return { status, body, etag };
-  } catch (err) {
-    if (isAbort(err)) throw err;
-    // THE ENGINE'S RETRY HINT RIDES THE ANSWER ([HttpAnswer.retryAfter]),
-    // read by the rule [RestError.retryHint] keeps, so the model holds no
-    // second copy of which 503 is the engine's.
-    if (err instanceof RestError) {
-      return { status: err.status, body: err.body, etag: null, retryAfter: err.retryHint };
-    }
-    return unreachable(err);
-  }
-}
-
-/** The settings and the org chart, over the dashboard's one REST path. */
-export const restTransport: EngineTransport = {
-  send: (request, signal) => {
-    const options = {
-      query: request.query,
-      contentType: request.contentType,
-      headers: request.headers,
-      body: request.body,
-      signal,
-    };
-    // EACH SURFACE DIALLED BY ITS OWN LITERAL, never the model's path handed
-    // on whole: a write reaches the settings or the org chart and nothing
-    // else (`EngineRequest.path`'s type says so), and a call that starts with
-    // the surface's own path is one `protocol/proxy.test.ts` can hold the dev
-    // server's proxy to.
-    return answerOf(
-      request.path === "/config"
-        ? rest.request(request.method, "/config", options)
-        : rest.request(request.method, `/chart/${request.path.slice("/chart/".length)}`, options),
-    );
-  },
-  settings: (signal) => answerOf(rest.request("GET", "/config", { signal })),
-  revision: (id, signal) =>
-    answerOf(rest.request("GET", `/config/revisions/${encodeURIComponent(id)}`, { signal })),
-  chart: (signal) =>
-    answerOf(rest.request("GET", "/chart", { query: { runtime: "true" }, signal })),
-};
+import type { Clock } from "./model/transport.ts";
 
 /** A monotonic clock and one-shot timers. */
 export const browserClock: Clock = {
@@ -114,18 +47,6 @@ export const randomKeys: KeySource = {
     return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
   },
 };
-
-/**
- * A fresh write id (`model/writes.ts`'s `isWriteId`): a bare operation id in the
- * engine's grammar, minted in the browser like a gate's (`newGateOpID`) and on
- * the browser's clock for its reason. Call it in the event handler that saves.
- */
-export function newWriteId(
-  now: number = Date.now(),
-  random: (bytes: Uint8Array<ArrayBuffer>) => Uint8Array = (bytes) => crypto.getRandomValues(bytes),
-): string {
-  return layoutOpID(now, random(new Uint8Array(10)), "");
-}
 
 /** The tab's session storage, or `null` when the browser refuses it. */
 export function sessionDraftStorage(): DraftStorage | null {

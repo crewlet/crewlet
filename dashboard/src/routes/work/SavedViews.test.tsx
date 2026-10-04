@@ -7,7 +7,7 @@
  * one person two ways, which is the failure this case exists to hold shut.
  */
 
-import { cleanup, render, screen, waitFor } from "~/test/inCase.ts";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import { SavedViews } from "./SavedViews.tsx";
@@ -78,35 +78,6 @@ test("an owner outside the chart is named by their handle", async () => {
   const { container } = mount("v-1");
   await waitFor(() => expect(screen.getByText(/A personal view owned by/)).toBeTruthy());
   expect(container.textContent).toContain("A personal view owned by ops-rota.");
-});
-
-// A LOGIN IS NAMED, NEVER LINKED AS A SEAT. A person the directory binds to no
-// seat keeps their personal views under their login, and the owner was drawn
-// as a seat badge linking to a seat page that answers "no such seat" — on the
-// view's own page and in the inventory alike. A seat stays a link.
-test("an owner who holds no seat is named without a link to a seat page", async () => {
-  serving({
-    work_saved_views: {
-      views: [
-        view({ owner: "jane.doe" }),
-        view({ id: "v-2", key: "theirs", name: "Theirs", owner: "ada-okonkwo" }),
-      ],
-      complete: true,
-    },
-  });
-  const seatLinks = (root: ParentNode) =>
-    [...root.querySelectorAll<HTMLAnchorElement>("a.cell-seat")].map((a) => a.getAttribute("href"));
-
-  const one = mount("v-1");
-  await waitFor(() => expect(screen.getByText(/A personal view owned by/)).toBeTruthy());
-  expect(one.container.textContent).toContain("jane.doe");
-  expect(seatLinks(one.container)).toEqual([]);
-  cleanup();
-
-  const all = mount();
-  await waitFor(() => expect(screen.getByText("Theirs")).toBeTruthy());
-  expect(all.container.textContent).toContain("jane.doe");
-  expect(seatLinks(all.container)).toEqual(["#/agents/seats/ada-okonkwo"]);
 });
 
 // A SHARED VIEW IS NOT AN UNOWNED ONE — empty is a setting somebody chose, and

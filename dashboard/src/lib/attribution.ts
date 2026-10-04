@@ -3,8 +3,8 @@
  *
  * # The one thing this product can say that a tracker cannot
  *
- * Every write in this engine is attributed to somebody — a seat, a person, an
- * operator token — and carries the turn it happened in. So a properties rail
+ * Every write in this engine is attributed to somebody — a seat, a person, a
+ * login bound to no seat — and carries the turn it happened in. So a properties rail
  * here can say `set by ada · 3h ago · turn ↗` on the row, where Jira, Linear
  * and ClickUp can only put an actor on a feed entry and leave the reader to
  * match it up. `ObjectHeader.Fact` and `PropertiesRail.Property` were both

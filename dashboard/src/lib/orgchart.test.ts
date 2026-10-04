@@ -7,26 +7,15 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { TreeInput } from "@crewlethq/ui";
-import {
-  balanceRoots,
-  buildOrgChart,
-  placeLine,
-  projectsByUnit,
-  stateCounts,
-  unitOfRef,
-  unitPath,
-} from "./orgchart.ts";
+import { balanceRoots, buildOrgChart, placeLine, stateCounts, unitPath } from "./orgchart.ts";
 import { indexOrg } from "./seats.ts";
 import type { AgentRow, OrgProjection, WorkProjectRow } from "~/protocol/types.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 
-// AS THE ENGINE ANSWERS THEM: the key the row was filed under, and the
-// chart's name for the unit it resolves to. CHART_ORG declares no ids, so a
-// unit's key there is its name.
 const PROJECTS = [
-  { key: "ENG", unit: { key: "Core", name: "Core", resolved: true } },
-  { key: "OLD", unit: { key: "Core", name: "Core", resolved: true }, archived: true },
-  { key: "PROD", unit: { key: "Management", name: "Management", resolved: true } },
+  { key: "ENG", unit: { key: "core", name: "Core", resolved: true } },
+  { key: "OLD", unit: { key: "core", name: "Core", resolved: true }, archived: true },
+  { key: "PROD", unit: { key: "management", name: "Management", resolved: true } },
 ] as unknown as WorkProjectRow[];
 
 /** The tree as `parent > child` lines, for a readable equality. */
@@ -78,51 +67,15 @@ test("with no derived hierarchy every seat is a root and nothing is boxed", () =
 test("the legend counts each agent seat by its activity and nothing else", () => {
   const index = indexOrg(CHART_ORG);
   const agents = [
-    { role: "CEO", handle: "ceo", activity: "idle" },
-    { role: "CTO", handle: "cto", activity: "working" },
-    { role: "SWE", handle: "swe", activity: "working" },
-    { role: "FE", handle: "fe", activity: "needs" },
-    { role: "PM", handle: "pm", activity: "stopped" },
-    { role: "Jane Founder", handle: "jane", activity: "working" },
-    { role: "Gone", handle: "gone", activity: "working" },
+    { id: "ceo", agent_id: "a-ceo", role: "CEO", activity: "idle" },
+    { id: "cto", agent_id: "a-cto", role: "CTO", activity: "working" },
+    { id: "swe", agent_id: "a-swe", role: "SWE", activity: "working" },
+    { id: "fe", agent_id: "a-fe", role: "FE", activity: "needs" },
+    { id: "pm", agent_id: "a-pm", role: "PM", activity: "stopped" },
+    { id: "jane", agent_id: "a-jane", role: "Jane Founder", activity: "working" },
+    { id: "gone", agent_id: "a-gone", role: "Gone", activity: "working" },
   ] as unknown as AgentRow[];
   expect(stateCounts(index, agents)).toEqual({ working: 2, needs: 1, stopped: 1, idle: 1 });
-});
-
-// EACH SEAT IS COUNTED BY ITS OWN ROW. Paired by name, two seats sharing one
-// were both counted in whichever row came last — here both as stopped.
-//
-// Mutation: pair by `a.role` / `seat.name` again, and the working one is lost.
-test("two seats sharing a name are each counted by their own row", () => {
-  const derived = (handle: string) => ({
-    handle,
-    name: "Engineer",
-    kind: "agent",
-    manager: "",
-    managers: [],
-    reports: [],
-    auto_reports: [],
-    placed_by_ref: false,
-  });
-  const org = {
-    name: "Acme",
-    roles: [
-      { name: "Engineer", handle: "eng-a" },
-      { name: "Engineer", handle: "eng-b" },
-    ],
-    units: [],
-    derived: { seats: [derived("eng-a"), derived("eng-b")], units: [] },
-  } as unknown as OrgProjection;
-  const agents = [
-    { role: "Engineer", handle: "eng-a", activity: "working" },
-    { role: "Engineer", handle: "eng-b", activity: "stopped" },
-  ] as unknown as AgentRow[];
-  expect(stateCounts(indexOrg(org), agents)).toEqual({
-    working: 1,
-    needs: 0,
-    stopped: 1,
-    idle: 0,
-  });
 });
 
 test("a seat's place is its unit path, or above every unit", () => {
@@ -227,96 +180,4 @@ describe("a root that leads nobody is placed to centre the top row", () => {
     // tree leans right and Maya is drawn on the founder's left.
     expect(buildOrgChart(indexOrg(org), PROJECTS).nodes.map((n) => n.id)).toEqual(["maya", "jane"]);
   });
-});
-
-// ---------------------------------------------------------------------------
-// Which unit a project is filed to
-// ---------------------------------------------------------------------------
-
-/**
- * Two teams called Platform — one keyed `platform`, one `infra` — and an
- * Operations team renamed from the key `ops` (its origin) through `sre`.
- * The projection carries every unit's CURRENT key as `id` and the rest on the
- * derived block, exactly as the engine publishes them.
- */
-const KEYED = {
-  name: "Acme",
-  roles: [],
-  units: [
-    { id: "platform", name: "Platform", roles: [{ name: "Web" }] },
-    { id: "infra", name: "Platform", roles: [{ name: "Metal" }] },
-    { id: "operations", name: "Operations", roles: [{ name: "Oncall" }] },
-  ],
-  derived: {
-    seats: [
-      { handle: "web", name: "Web", kind: "agent" },
-      { handle: "metal", name: "Metal", kind: "agent" },
-      { handle: "oncall", name: "Oncall", kind: "agent" },
-    ],
-    units: [
-      { id: "platform", name: "Platform", seats: ["web"] },
-      { id: "infra", name: "Platform", seats: ["metal"] },
-      {
-        id: "operations",
-        name: "Operations",
-        seats: ["oncall"],
-        origin_key: "ops",
-        former_keys: ["sre"],
-      },
-    ],
-  },
-} as unknown as OrgProjection;
-
-const ref = (key: string, name: string, resolved = true) => ({ key, name, resolved });
-
-// TWO UNITS SHARING A NAME ARE TWO UNITS. The projects were keyed on the
-// unit's name, so both Platform boxes drew both teams' projects.
-//
-// Mutation: key the map on `unit.name` again, and the two entries merge.
-test("two units sharing a name each carry only their own projects", () => {
-  const index = indexOrg(KEYED);
-  const [platform, infra] = index.units;
-  const keys = projectsByUnit(
-    [
-      { key: "WEB", unit: ref("platform", "Platform") },
-      { key: "MTL", unit: ref("infra", "Platform") },
-    ] as unknown as WorkProjectRow[],
-    index,
-  );
-  expect(keys.get(platform!)).toEqual(["WEB"]);
-  expect(keys.get(infra!)).toEqual(["MTL"]);
-  // AND A NAME TWO UNITS CARRY NAMES NEITHER: a row the engine resolved by
-  // a key this projection does not hold is not guessed onto either Platform.
-  expect(unitOfRef(index, ref("platform-old", "Platform"))).toBeNull();
-});
-
-// A RENAMED UNIT KEEPS THE PROJECTS FILED BEFORE ITS RENAME. The row holds
-// the key the unit had when it was filed — its origin, or one it answered to
-// since — and only the CURRENT key is the projection's `id`, so a lookup on
-// `id` alone drew none of a renamed team's work.
-//
-// Mutation: resolve the ref's key against `unit.id` only, and the two older
-// projects fall out of the box.
-test("a renamed unit carries the projects filed under every key it answered to", () => {
-  const index = indexOrg(KEYED);
-  const operations = index.units[2]!;
-  const keys = projectsByUnit(
-    [
-      { key: "NOW", unit: ref("operations", "Operations") },
-      { key: "FIRST", unit: ref("ops", "Operations") },
-      { key: "THEN", unit: ref("sre", "Operations") },
-    ] as unknown as WorkProjectRow[],
-    index,
-  );
-  expect(keys.get(operations)).toEqual(["FIRST", "NOW", "THEN"]);
-});
-
-// A ROW FILED UNDER A UNIT'S NAME — before the chart gave it a key — is the
-// unit's when that name is one unit's, which the engine says by answering it
-// resolved; and a reference the chart could not resolve is nobody's.
-test("a row under a unit's name is that unit's, and an unresolved one is nobody's", () => {
-  const index = indexOrg(KEYED);
-  expect(unitOfRef(index, ref("Ops Team", "Operations"))).toBe(index.units[2]);
-  expect(unitOfRef(index, ref("gone", "", false))).toBeNull();
-  expect(unitOfRef(index, ref("", "Operations", false))).toBeNull();
 });

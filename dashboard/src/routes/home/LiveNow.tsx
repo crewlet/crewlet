@@ -14,19 +14,13 @@ import { Card, Tag } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, workingLongestFirst } from "~/lib/seats.ts";
-import { fmtExact } from "~/lib/format.ts";
 import { LiveDot, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 
 /** How many working seats the card lists before "Open live view". */
 export const LIVE_ROWS = 4;
 
-/**
- * THE CLOCK IS READ IN EACH ROW (`LiveTurnRow`), never here: a card handed the
- * second drew every working seat's row once a second for an elapsed time that
- * moves once a minute.
- */
-export function LiveNow({ agents }: { agents: readonly AgentRow[] }) {
+export function LiveNow({ agents, now }: { agents: readonly AgentRow[]; now: number }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const working = workingLongestFirst(agents);
@@ -44,7 +38,7 @@ export function LiveNow({ agents }: { agents: readonly AgentRow[] }) {
           Live now
           {working.length > 0 && (
             <Tag size="xs" variant="info" className="home-card-count">
-              {fmtExact(working.length)}
+              {working.length.toLocaleString()}
             </Tag>
           )}
         </Card.Title>
@@ -56,10 +50,8 @@ export function LiveNow({ agents }: { agents: readonly AgentRow[] }) {
         </div>
       ) : (
         <ul className="live-list">
-          {/* KEYED ON THE AGENT ID, the one name a seat keeps across a rename —
-              the roster's own key. */}
           {working.slice(0, LIVE_ROWS).map((row) => (
-            <LiveTurnRow key={row.agent_id} row={row} index={index} />
+            <LiveTurnRow key={row.id} row={row} index={index} now={now} />
           ))}
         </ul>
       )}

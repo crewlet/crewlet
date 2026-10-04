@@ -10,7 +10,7 @@
 import { describe, expect, test } from "vitest";
 
 import { CHANGE_FIELDS } from "~/contract/attribution.ts";
-import { attribution, authorLabel, throughOf } from "./attribution.ts";
+import { attribution } from "./attribution.ts";
 import type { WorkChange } from "~/protocol/index.ts";
 
 function change(over: Partial<WorkChange>): WorkChange {
@@ -112,30 +112,20 @@ describe("the latest change to each property", () => {
     expect(who.get("status")?.actor).toBe("ada");
   });
 
-  // A BOUND PERSON'S CHANGE IS RECORDED AS THEIR SEAT, kind `human`, with the
-  // credential beside it — so the rail names the person the activity names,
-  // and the credential is a column of its own rather than the name.
-  test("a bound person's change names their seat, never the credential", () => {
+  // A PERSON THE DIRECTORY BINDS TO A SEAT WRITES AS THE SEAT (`iam.ActorFor`),
+  // whichever credential they wrote through — that rides beside it.
+  test("a bound person's change names the seat they write as, as the activity does", () => {
     const who = attribution([
       change({
         actor: "jane-founder",
         actor_kind: "human",
-        operator_id: "pat:0192f00d",
+        operator_id: "pat:t-1",
         fields: { priority: { from: "low", to: "high" } },
       }),
     ]);
     expect(who.get("priority")?.actor).toBe("jane-founder");
     expect(who.get("priority")?.actorKind).toBe("human");
   });
-
-  // EVERY KIND THE ENGINE WRITES, as itself.
-  test.each(["agent", "human", "operator", "system"] as const)(
-    "the %s kind is carried as written",
-    (kind) => {
-      const who = attribution([change({ actor: "x", actor_kind: kind, fields: { status: {} } })]);
-      expect(who.get("status")?.actorKind).toBe(kind);
-    },
-  );
 });
 
 describe("when there is no honest answer", () => {
@@ -190,24 +180,6 @@ test("every field name is one the engine writes, spelled its way", () => {
     "points",
     "routing_unit",
   ]);
-});
-
-describe("an author and the credential beside them", () => {
-  test("names a person's token beside the person", () => {
-    expect(authorLabel("jane.doe", "pat:0192f00d")).toBe("jane.doe (through pat:0192f00d)");
-    expect(throughOf("jane.doe", "session:0192f00d")).toBe("session:0192f00d");
-  });
-
-  test("does not repeat a credential that is the author's own name", () => {
-    // A Tier A token's login is both, and saying it twice says nothing.
-    expect(authorLabel("token:ops", "token:ops")).toBe("token:ops");
-    expect(throughOf("token:ops", "token:ops")).toBe("");
-  });
-
-  test("says nothing about a write no credential made, or nobody recorded", () => {
-    expect(authorLabel("ada", undefined)).toBe("ada");
-    expect(authorLabel("", "pat:0192f00d")).toBe("");
-  });
 });
 
 test("the people and routing rows can be attributed", () => {

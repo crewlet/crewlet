@@ -12,10 +12,10 @@
  * defect was never the arithmetic — each surface counted something true.
  */
 
-import { act, cleanup, render, screen } from "~/test/inCase.ts";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
-import { LEAD_NOT_REPORTED, Teams, UnitBlock, UnitScreen } from "./Company.tsx";
+import { LEAD_NOT_REPORTED, Teams, UnitBlock } from "./Company.tsx";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -32,7 +32,8 @@ class InertWebSocket {
   close(): void {}
 }
 
-/** Engineering holds one seat of its own and a team of two under it. */
+/** Engineering holds one seat of its own and a team of two under it — as the
+ *  engine sends it: every seat with its handle and every unit with its key. */
 const ORG: OrgProjection = {
   name: "Acme",
   roles: [],
@@ -47,7 +48,10 @@ const ORG: OrgProjection = {
           id: "backend",
           name: "Backend",
           type: "team",
-          roles: [{ name: "Dev A" }, { name: "Dev B" }],
+          roles: [
+            { name: "Dev A", handle: "dev-a" },
+            { name: "Dev B", handle: "dev-b" },
+          ],
         },
       ],
     },
@@ -108,62 +112,6 @@ test("a leaf unit says one number, not the same number twice", () => {
 });
 
 // ---------------------------------------------------------------------------
-// A unit's page is found by its KEY
-// ---------------------------------------------------------------------------
-
-/**
- * Two teams called Platform, one declaring the id `infra`.
- *
- * Both halves are legal: a name is prose nothing holds unique, and a unit's
- * key is its id where it declares one. The page was looked up by NAME, so
- * `#/agents/teams/infra` answered "no unit" and the second Platform had no
- * page at all.
- */
-const TWINS = {
-  name: "Acme",
-  roles: [],
-  units: [
-    { id: "platform", name: "Platform", purpose: "Runs the web tier", roles: [{ name: "Web" }] },
-    { id: "infra", name: "Platform", purpose: "Runs the metal", roles: [{ name: "Metal" }] },
-  ],
-  derived: {
-    seats: [
-      { handle: "web", name: "Web", kind: "agent" },
-      { handle: "metal", name: "Metal", kind: "agent" },
-    ],
-    units: [
-      { id: "platform", name: "Platform", type: "team", seats: ["web"] },
-      { id: "infra", name: "Platform", type: "team", seats: ["metal"] },
-    ],
-  },
-} as unknown as OrgProjection;
-
-function unitPage(id: string) {
-  const store = new Store();
-  store.applyOrg(TWINS);
-  const socket = new LiveSocket(store);
-  return render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <UnitScreen id={id} />
-      </Router>
-    </ClientContext.Provider>,
-  );
-}
-
-test("a unit's page is the unit its key names, not the first sharing its name", () => {
-  unitPage("infra");
-  expect(screen.getByText("Runs the metal")).toBeTruthy();
-  expect(screen.queryByText("Runs the web tier")).toBeNull();
-});
-
-test("the other unit of that name is reached by its own key", () => {
-  unitPage("platform");
-  expect(screen.getByText("Runs the web tier")).toBeTruthy();
-  expect(screen.queryByText("Runs the metal")).toBeNull();
-});
-
-// ---------------------------------------------------------------------------
 // Teams
 // ---------------------------------------------------------------------------
 
@@ -180,7 +128,7 @@ async function teams(org: OrgProjection) {
             projects: [{ key: "BE", unit: { key: "backend", name: "Backend", resolved: true } }],
             total: 1,
           }
-        : { login: "", grants: [], acts: [] },
+        : { login: "", owner: "", acts: [] },
     );
   render(
     <ClientContext.Provider value={{ store, socket }}>

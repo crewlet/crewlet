@@ -4,15 +4,7 @@
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { GATE_REQUEST_TIMEOUT_MS } from "../contract/gate.ts";
-import {
-  isAbort,
-  REQUEST_TIMEOUT_MS,
-  rest,
-  RestError,
-  restRetryMs,
-  retryAfterSeconds,
-} from "./index.ts";
+import { isAbort, REQUEST_TIMEOUT_MS, rest, RestError, retryAfterSeconds } from "./index.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -105,13 +97,13 @@ test("a caller with a longer path keeps the request past the ordinary deadline",
   const err = await settled;
   expect((err as RestError).status).toBe(0);
   expect((err as RestError).message).toContain("30 minutes");
+  vi.useRealTimers();
 });
 
 // A CALL WITH A LONGER PATH SAYS SO, AND ITS REFUSAL NAMES ITS OWN DEADLINE.
 //
-// The node gate is allowed two minutes from its first record to its last
-// answer, and the fixed thirty seconds gave up on a gesture the node went on to
-// finish.
+// The node gate is allowed a minute from its first record to its last answer,
+// and the fixed thirty seconds gave up on a gesture the node went on to finish.
 // A per-call deadline replaces the default for that call only — it is not
 // abandoned at the default, it IS abandoned at its own, and the sentence says
 // which deadline ran out rather than the default's.
@@ -131,10 +123,7 @@ test("a per-call deadline replaces the default for that call", async () => {
 
   let done = false;
   const settled = rest
-    .request("POST", "/work/retention/evict/node-4", {
-      body: {},
-      timeoutMs: GATE_REQUEST_TIMEOUT_MS,
-    })
+    .request("POST", "/work/retention/evict/node-4", { body: {}, timeoutMs: 75_000 })
     .catch((err: unknown) => err)
     .finally(() => {
       done = true;
@@ -142,11 +131,11 @@ test("a per-call deadline replaces the default for that call", async () => {
   await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
   expect(done).toBe(false);
 
-  await vi.advanceTimersByTimeAsync(GATE_REQUEST_TIMEOUT_MS - REQUEST_TIMEOUT_MS);
+  await vi.advanceTimersByTimeAsync(75_000 - REQUEST_TIMEOUT_MS);
   const err = await settled;
   expect(err).toBeInstanceOf(RestError);
   expect((err as RestError).status).toBe(0);
-  expect((err as RestError).detail).toContain(`within ${GATE_REQUEST_TIMEOUT_MS / 1000} seconds`);
+  expect((err as RestError).detail).toContain("within 75 seconds");
 });
 
 describe("the whole answer", () => {
@@ -361,6 +350,47 @@ describe("a body that never arrives whole", () => {
   });
 });
 
+// THE REFUSAL CARRIES THE ENGINE'S WAIT.
+//
+// A 503 is two different answers — a node catching up or draining, which a
+// wait clears and which says how long, and a node with no keyring, which no
+// wait clears and which says nothing — and the header is the only thing that
+// tells a loader which of the two it holds.
+describe("Retry-After", () => {
+  test("a 503 with Retry-After carries the wait", async () => {
+    stub(() => json({ error: "unavailable" }, 503, { "Retry-After": "7" }));
+    const err = await rest.get("/secrets").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RestError);
+    expect((err as RestError).retryAfterSeconds).toBe(7);
+  });
+
+  test("a 503 without one carries none", async () => {
+    stub(() => json({ error: "no_keyring" }, 503));
+    const err = await rest.get("/secrets").catch((e: unknown) => e);
+    expect((err as RestError).retryAfterSeconds).toBeNull();
+  });
+
+  test("a proxy's HTML 503 still carries its wait", async () => {
+    stub(() => new Response("<html>down</html>", { status: 503, headers: { "Retry-After": "3" } }));
+    const err = await rest.get("/secrets").catch((e: unknown) => e);
+    expect((err as RestError).code).toBe("unreadable_body");
+    expect((err as RestError).retryAfterSeconds).toBe(3);
+  });
+
+  test.each([
+    ["12", 12],
+    [" 0 ", 0],
+    ["", null],
+    [null, null],
+    ["soon", null],
+    ["-4", null],
+    ["Thu, 01 Jan 2026 00:00:30 GMT", 30],
+    ["Wed, 31 Dec 2025 23:59:00 GMT", 0],
+  ] as const)("the header %j reads as %j seconds", (header, want) => {
+    expect(retryAfterSeconds(header, Date.parse("2026-01-01T00:00:00Z"))).toBe(want);
+  });
+});
+
 // ONLY AN ANSWER WITH AN ENGINE ERROR CODE IS THE ENGINE'S REFUSAL. Every
 // refusal it writes is JSON with an `error` code, so a gateway's page, a JSON
 // body of a proxy's own, or a 200 cut off part way through is something else —
@@ -417,81 +447,5 @@ describe("whether an answer is the engine's own", () => {
     const err = await rest.request("POST", "/work/retention/evict/node-4").catch((e: unknown) => e);
     expect((err as RestError).status).toBe(0);
     expect((err as RestError).unanswered).toBe(true);
-  });
-});
-
-// A REST REFUSAL IN THE SHAPE `QueryState` RENDERS FROM, so a screen reading
-// over REST says what a socket screen says about the same refusal: the grants a
-// 403 named, and whether waiting changes a 503 — no `Retry-After` being the
-// engine saying it will not. A 401 names no rule: nobody was signed in.
-describe("the refusal behind an answer", () => {
-  test("a 403 carries its rule and the grants that would admit the caller", () => {
-    const err = new RestError(403, {
-      error: "unauthorized",
-      reason: "operator",
-      grants: ["config:read"],
-    });
-    expect(err.refusal).toEqual({ reason: "operator", grants: ["config:read"] });
-  });
-
-  test("a 503 says whether waiting changes it", () => {
-    const final = new RestError(503, { error: "unavailable", refusal: "log_full", detail: "full" });
-    expect(final.refusal).toEqual({ code: "log_full", detail: "full", retryAfter: 0 });
-    const soon = new RestError(503, { error: "unavailable", detail: "behind" }, 2);
-    expect(soon.refusal).toEqual({ code: null, detail: "behind", retryAfter: 2 });
-  });
-
-  test("a 401, and an answer the engine did not write, name no rule", () => {
-    expect(new RestError(401, { error: "invalid_token" }).refusal).toBeNull();
-    expect(new RestError(503, { message: "upstream closed" }).refusal).toBeNull();
-  });
-});
-
-// THE REFUSAL CARRIES THE WAIT IT WAS GIVEN.
-//
-// A 503 is two different answers — a node catching up or draining, which a
-// wait clears and which says how long, and a node with no keyring, which no
-// wait clears and which says nothing — and the header is the only thing that
-// tells a reader which of the two it holds. Both forms the RFC allows are
-// read, because a proxy answering for the engine may write a date.
-describe("Retry-After", () => {
-  test("a 503 with Retry-After carries the wait", async () => {
-    stub(() => json({ error: "unavailable" }, 503, { "Retry-After": "7" }));
-    const err = await rest.get("/secrets").catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(RestError);
-    expect((err as RestError).retryAfter).toBe(7);
-    expect((err as RestError).retryHint).toBe(7);
-  });
-
-  test("a 503 without one carries none, which the engine means as final", async () => {
-    stub(() => json({ error: "no_keyring" }, 503));
-    const err = await rest.get("/secrets").catch((e: unknown) => e);
-    expect((err as RestError).retryAfter).toBeNull();
-    expect((err as RestError).retryHint).toBe(0);
-  });
-
-  // A PROXY'S PAGE IS NOT THE ENGINE'S ANSWER: its header travels on the
-  // error as what was said, and is no engine hint — the read backs off as
-  // every read nobody answered does.
-  test("a proxy's HTML 503 keeps its header, which is not the engine's hint", async () => {
-    stub(() => new Response("<html>down</html>", { status: 503, headers: { "Retry-After": "3" } }));
-    const err = await rest.get("/secrets").catch((e: unknown) => e);
-    expect((err as RestError).code).toBe("unreadable_body");
-    expect((err as RestError).retryAfter).toBe(3);
-    expect((err as RestError).retryHint).toBeNull();
-    expect(restRetryMs(err, { cadence: null, unanswered: 1 })).toBe(1_000);
-  });
-
-  test.each([
-    ["12", 12],
-    [" 0 ", 0],
-    ["", null],
-    [null, null],
-    ["soon", null],
-    ["-4", null],
-    ["Thu, 01 Jan 2026 00:00:30 GMT", 30],
-    ["Wed, 31 Dec 2025 23:59:00 GMT", 0],
-  ] as const)("the header %j reads as %j seconds", (header, want) => {
-    expect(retryAfterSeconds(header, Date.parse("2026-01-01T00:00:00Z"))).toBe(want);
   });
 });

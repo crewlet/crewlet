@@ -16,7 +16,7 @@
  * states precisely.
  */
 
-import { cleanup, render, screen } from "~/test/inCase.ts";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { Tag } from "@crewlethq/ui";
 
@@ -131,78 +131,4 @@ test("a bad_params refusal with the engine's sentence shows the sentence, not th
   cleanup();
   render(<QueryState error="bad_params" loading={false} />);
   expect(screen.getByText(/screen’s bug to fix/)).toBeTruthy();
-});
-
-// A REFUSAL ON AUTHORITY SAYS WHAT WOULD CHANGE IT. The banner read "the
-// credential you presented does not carry the grant this answer needs" and
-// named no grant, because the socket delivered the code alone; the engine's
-// frame now carries the rule and the grants, and the banner draws them — a
-// grant to ask for, or the honest answer that no grant would help.
-test("a refusal on authority names the grants that would admit the reader", () => {
-  render(
-    <QueryState
-      error="unauthorized"
-      refusal={{ reason: "no_grant", grants: ["audit:read"] }}
-      loading={false}
-    />,
-  );
-  expect(screen.getByText("audit:read")).toBeTruthy();
-  expect(screen.getByText("no_grant")).toBeTruthy();
-});
-
-test("a refusal no grant would change says so rather than naming one", () => {
-  render(
-    <QueryState
-      error="unauthorized"
-      refusal={{ reason: "not_lead", grants: [] }}
-      loading={false}
-    />,
-  );
-  expect(screen.getByText(/no grant would change that/)).toBeTruthy();
-  expect(screen.getByText("not_lead")).toBeTruthy();
-});
-
-// A REFUSAL BY THE STATE LOG THAT WAITING WILL NOT CLEAR IS NOT "CATCHING UP".
-// The `unavailable` banner promises the screen asks again on its own, which for
-// a full log or a record the node cannot decode is a promise of a loop: the
-// read is refused the same until an operator acts or another node is asked. So
-// the banner says that, with the refusal's own words and code. A refusal that
-// clears is the control and keeps the catching-up banner.
-test("a log refusal no wait clears says so and names it", () => {
-  render(
-    <QueryState
-      error="unavailable"
-      refusal={{ code: "log_full", detail: "raise the stream's byte ceiling", retryAfter: 0 }}
-      loading={false}
-    />,
-  );
-  expect(screen.getByText(/asking it again will not change that/)).toBeTruthy();
-  expect(screen.getByText(/raise the stream's byte ceiling/)).toBeTruthy();
-  expect(screen.getByText("log_full")).toBeTruthy();
-  expect(screen.queryByText(/asks again on its own/)).toBeNull();
-});
-
-// A REST READ NO ANSWER CAME BACK TO IS NOT A SOCKET THAT WENT AWAY. It was
-// drawn as `closed`, which says the connection went and the screen reads again
-// once the socket is back: false whenever the socket stayed up, which is the
-// ordinary case for one request past its deadline. Its own sentence says only
-// what is true of every such read, and that it is asked again regardless.
-test("a read no answer came back to says so, and never that the socket went", () => {
-  render(<QueryState error="unanswered" refusal={null} loading={false} />);
-  expect(screen.getByText(/No answer from the engine reached this page/)).toBeTruthy();
-  expect(screen.getByText(/asks again on its own/)).toBeTruthy();
-  expect(screen.queryByText(/connection went away/)).toBeNull();
-  expect(screen.queryByText(/code this build does not know/)).toBeNull();
-});
-
-test("a log refusal that clears keeps the catching-up banner", () => {
-  render(
-    <QueryState
-      error="unavailable"
-      refusal={{ code: "behind", detail: "40 000 records behind", retryAfter: 12 }}
-      loading={false}
-    />,
-  );
-  expect(screen.getByText(/asks again on its own/)).toBeTruthy();
-  expect(screen.queryByText(/asking it again will not change that/)).toBeNull();
 });

@@ -3,26 +3,24 @@
  * The node editor's form as values.
  *
  * What these protect: an untouched form applies nothing; each part names only
- * a field whose value changed from the form's start, at the path the chart
- * keeps it (the prose and relations on the object, the runtime half under
- * `runtime`); an emptied field is the field removed, never an empty value the
- * base did not have; a box nobody typed in is no change, a MASKED address
- * included; a model chain is read whichever shape the chart wrote it in; and
- * the parts record as one edit that applies what the form says.
+ * a field whose value changed from the form's start; an emptied field is the
+ * field removed, never an empty value the base did not have; a model chain
+ * keeps the shape the seat wrote; and the parts record as one edit that
+ * applies what the form says.
  */
 
 import { tokenBudgetError } from "~/lib/budget.ts";
 import { describe, expect, test } from "vitest";
-import { REDACTED } from "~/lib/format.ts";
+import type { ConfigRole } from "~/protocol/index.ts";
 import { COMPANY_KEY } from "./model/keys.ts";
-import { locate, type SeatData, type UnitData } from "./model/draft.ts";
+import { fixtureCompany } from "./model/testkit.ts";
+import { locate } from "./model/draft.ts";
 import { builderReducer } from "./model/reducer.ts";
-import { fixtureSettings } from "./model/testkit.ts";
 import {
   companyForm,
   companyParts,
   editIntent,
-  providerKeys,
+  llmChain,
   renames,
   seatForm,
   seatParts,
@@ -30,52 +28,56 @@ import {
   unitForm,
   unitParts,
 } from "./editorForm.ts";
-import { loadedState } from "./testState.ts";
+import { keyedState } from "./testState.ts";
 
-const dev = (): SeatData => ({
-  handle: "dev",
-  name: "Dev",
-  goal: "Build",
-  runtime: { llm: "fast", future_runtime_key: 7 },
-});
-
-const engineering = (): UnitData => ({
-  key: "engineering",
-  name: "Engineering",
-  type: "department",
-  lead: "vp-engineering",
-  runtime: { schedules: [{ name: "standup", cron: "0 9 * * 1-5", task: "Run standup" }] },
-});
+const dev = (): ConfigRole => fixtureCompany().units![0]!.roles![1]!;
 
 describe("an untouched form", () => {
   test("applies nothing, for the company, a unit and a seat", () => {
-    const company = fixtureSettings();
+    const company = fixtureCompany();
     expect(companyParts(companyForm(company), companyForm(company))).toEqual([]);
-    expect(unitParts("unit:engineering", unitForm(engineering()), unitForm(engineering()))).toEqual(
-      [],
-    );
+    const unit = company.units![0]!;
+    expect(unitParts("unit:Engineering", unitForm(unit), unitForm(unit))).toEqual([]);
     const form = seatForm(dev(), "developer");
-    expect(seatParts("seat:dev", form, form)).toEqual([]);
+    expect(seatParts("seat:dev", dev(), form, form, { editableHandle: false })).toEqual([]);
   });
 
   // A RENAME COMES FROM THE BOX, NOT FROM THE MODEL'S TRIM. The model writes a
   // trimmed name, so a stored name with spaces around it differs from what a
   // rename would write, and asking only that question renamed such a node
-  // whenever anything else in its form was applied.
-  test("a name stored with spaces is not a rename until somebody types", () => {
-    const padded: SeatData = { handle: "dev", name: " Dev ", goal: "Build" };
+  // whenever anything else in its form was applied. Renaming a unit re-keys
+  // its schedules and makes every agent under it onboard again.
+  test("a name the document stored with spaces is not a rename until somebody types", () => {
+    const padded: ConfigRole = { name: " Dev ", goal: "Build" };
     const initial = seatForm(padded, "");
-    expect(seatParts("seat:dev", initial, { ...initial, goal: "Ship" })).toEqual([
+    expect(
+      seatParts(
+        "seat:dev",
+        padded,
+        initial,
+        { ...initial, goal: "Ship" },
+        { editableHandle: false },
+      ),
+    ).toEqual([
       { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Ship" }] },
     ]);
     expect(renames(" Dev ", "Developer")).toBe(true);
-    // A box that gained nothing but a space is no rename either.
+
+    const unit = { name: " Engineering " };
+    const unitInitial = unitForm(unit);
+    expect(unitParts("unit:e", unitInitial, { ...unitInitial, purpose: "Build" })).toEqual([
+      { type: "updateUnit", target: "unit:e", set: [{ path: ["purpose"], value: "Build" }] },
+    ]);
+    // And a box that gained nothing but a space is no rename either: the model
+    // trims before it compares, so the part would only be refused.
     expect(renames("Dev", "Dev ")).toBe(false);
   });
 
-  // THE COMPANY'S NAME COSTS MOST: an agent seat's id is derived from it.
-  test("a charter whose name is stored with spaces is not renamed by another edit", () => {
-    const company = { ...fixtureSettings(), name: " Acme " };
+  // THE COMPANY'S NAME IS THE ONE THAT COSTS MOST: an agent seat's id is
+  // derived from it, so a phantom rename of a name stored with a space gives
+  // every agent seat a new id over an edit to the mission.
+  test("a charter whose name the document stored with spaces is not renamed by another edit", () => {
+    const company = { ...fixtureCompany(), name: " Acme " };
     const initial = companyForm(company);
     expect(companyParts(initial, { ...initial, mission: "Make more things." })).toEqual([
       { type: "updateCompany", set: [{ path: ["mission"], value: "Make more things." }] },
@@ -85,137 +87,136 @@ describe("an untouched form", () => {
     ]);
   });
 
+  // Every single-line value is written trimmed, so each of them had the same
+  // phantom edit as the name: applying a goal wrote the trimmed email.
   test("a single-line value stored with spaces is written only when its box changes", () => {
-    const padded: SeatData = {
-      handle: "dev",
+    const padded: ConfigRole = {
       name: "Dev",
       email: "dev@example.com ",
-      project: "OPS ",
-      runtime: { contact: { github_login: " dev" }, mattermost: { channel: " eng" } },
+      contact: { github_login: " dev" },
+      integrations: {
+        slack: { channel: "C1 " },
+        mattermost: { channel: " eng", username: "dev-bot " },
+        jira: { project: "OPS " },
+        confluence: { space: " ENG" },
+      },
     };
     const initial = seatForm(padded, "");
-    expect(seatParts("seat:dev", initial, { ...initial, goal: "Ship" })).toEqual([
+    expect(
+      seatParts(
+        "seat:dev",
+        padded,
+        initial,
+        { ...initial, goal: "Ship" },
+        { editableHandle: true },
+      ),
+    ).toEqual([
       { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Ship" }] },
     ]);
     // Typing in the box is a change, written as the model writes it.
-    expect(seatParts("seat:dev", initial, { ...initial, email: "dev@example.org " })).toEqual([
+    expect(
+      seatParts(
+        "seat:dev",
+        padded,
+        initial,
+        { ...initial, email: "dev@example.org " },
+        { editableHandle: false },
+      ),
+    ).toEqual([
       {
         type: "updateSeat",
         target: "seat:dev",
         set: [{ path: ["email"], value: "dev@example.org" }],
       },
     ]);
-    const unit: UnitData = { key: "ops", name: "Ops", type: "team ", channel: " ops" };
-    const unitInitial = unitForm(unit);
-    expect(unitParts("unit:ops", unitInitial, { ...unitInitial, purpose: "Run it" })).toEqual([
-      { type: "updateUnit", target: "unit:ops", set: [{ path: ["purpose"], value: "Run it" }] },
-    ]);
-  });
 
-  // THE CHART SERVES A SEAT'S ADDRESS MASKED, and a write handing the mask
-  // back is restored from the row. So a masked address is a value like any
-  // other to the form: untouched, it is no change and goes back as it came.
-  test("a masked address nobody replaced is no change, and replacing it writes what was typed", () => {
-    const masked: SeatData = { handle: "ops", name: "Ops", email: REDACTED };
-    const initial = seatForm(masked, "");
-    expect(initial.email).toBe(REDACTED);
-    expect(seatParts("seat:ops", initial, { ...initial, goal: "Run" })).toEqual([
-      { type: "updateSeat", target: "seat:ops", set: [{ path: ["goal"], value: "Run" }] },
-    ]);
-    expect(seatParts("seat:ops", initial, { ...initial, email: "ops@example.com" })).toEqual([
-      {
-        type: "updateSeat",
-        target: "seat:ops",
-        set: [{ path: ["email"], value: "ops@example.com" }],
-      },
-    ]);
-    // Replaced with nothing is the address removed.
-    expect(seatParts("seat:ops", initial, { ...initial, email: "" })).toEqual([
-      { type: "updateSeat", target: "seat:ops", set: [{ path: ["email"] }] },
+    const unit = {
+      name: "Ops",
+      type: "team ",
+      channel: " ops",
+      integrations: { jira: { project: " OPS" } },
+    };
+    const unitInitial = unitForm(unit);
+    expect(unitParts("unit:Ops", unitInitial, { ...unitInitial, purpose: "Run it" })).toEqual([
+      { type: "updateUnit", target: "unit:Ops", set: [{ path: ["purpose"], value: "Run it" }] },
     ]);
   });
 });
 
 describe("a seat", () => {
-  test("names only the fields that changed, each where the chart keeps it, and an emptied field removes it", () => {
+  test("names only the fields that changed, and an emptied field removes it", () => {
     const initial = seatForm(dev(), "");
     const form = {
       ...initial,
       goal: "",
       backstory: "Came from ops",
-      project: "ENG",
+      contact: { ...initial.contact },
       tokenBudget: { ...initial.tokenBudget, day: "5000" },
     };
-    expect(seatParts("seat:dev", initial, form)).toEqual([
+    expect(seatParts("seat:dev", dev(), initial, form, { editableHandle: false })).toEqual([
       {
         type: "updateSeat",
         target: "seat:dev",
         set: [
           { path: ["goal"] },
           { path: ["backstory"], value: "Came from ops" },
-          { path: ["project"], value: "ENG" },
-          { path: ["runtime", "token_budget", "day"], value: 5000 },
+          { path: ["token_budget", "day"], value: 5000 },
         ],
       },
     ]);
   });
 
-  test("a new handle is the seat's rename, and the name is a part of its own", () => {
-    const initial = seatForm(dev(), "");
-    expect(
-      seatParts("seat:dev", initial, { ...initial, handle: "developer", name: "Developer" }),
-    ).toEqual([
-      { type: "renameSeat", target: "seat:dev", name: "Developer" },
-      { type: "updateSeat", target: "seat:dev", set: [{ path: ["handle"], value: "developer" }] },
-    ]);
-  });
-
-  test("the manages list, a schedule toggle and the access level are their own parts", () => {
-    const data: SeatData = {
-      handle: "dev",
+  test("a rename, the manages list, a schedule toggle and the access level are their own parts", () => {
+    const data: ConfigRole = {
       name: "Dev",
-      manages: ["sre"],
-      runtime: { schedules: [{ name: "digest", cron: "0 8 * * *", task: "Digest" }] },
+      manages: ["SRE"],
+      schedules: [{ name: "digest", cron: "0 8 * * *", task: "Digest" }],
     };
     const initial = seatForm(data, "developer");
     const form = {
       ...initial,
-      manages: ["sre", "platform"],
+      name: "Developer",
+      manages: ["SRE", "Platform"],
       schedules: { digest: false },
       accessLevel: "",
     };
-    expect(seatParts("seat:dev", initial, form)).toEqual([
+    expect(seatParts("seat:dev", data, initial, form, { editableHandle: false })).toEqual([
+      { type: "renameSeat", target: "seat:dev", name: "Developer" },
       { type: "updateSeat", target: "seat:dev", set: [], accessLevel: null },
-      { type: "setManages", target: "seat:dev", manages: ["sre", "platform"] },
+      { type: "setManages", target: "seat:dev", manages: ["SRE", "Platform"] },
       { type: "setScheduleEnabled", target: "seat:dev", schedule: "digest", enabled: false },
     ]);
   });
 
-  // ONE PART PER WINDOW of the runtime half, never the whole mapping, so a
-  // colleague's ceiling on another window survives an update onto their
-  // write; and a window emptied is that key removed, which is how the engine
-  // spells "no ceiling".
+  test("an existing seat's handle is never written, however the form holds it", () => {
+    const initial = seatForm(dev(), "");
+    const form = { ...initial, handle: "renamed" };
+    expect(seatParts("seat:dev", dev(), initial, form, { editableHandle: false })).toEqual([]);
+    expect(seatParts("new:x", dev(), initial, form, { editableHandle: true })).toEqual([
+      { type: "updateSeat", target: "new:x", set: [{ path: ["handle"], value: "renamed" }] },
+    ]);
+  });
+
+  // ONE PART PER WINDOW, never the whole mapping, so a colleague's ceiling
+  // on another window survives an update onto their revision; and a window
+  // emptied is that key removed, which is how the engine spells "no ceiling".
   test("a token budget writes each window it changed, and an emptied window is removed", () => {
-    const data: SeatData = {
-      handle: "dev",
-      name: "Dev",
-      runtime: { token_budget: { day: 100, week: 700 } },
-    };
+    const data: ConfigRole = { name: "Dev", token_budget: { day: 100, week: 700 } };
     const initial = seatForm(data, "");
     expect(initial.tokenBudget).toEqual({ day: "100", week: "700", month: "" });
     expect(
-      seatParts("seat:dev", initial, {
-        ...initial,
-        tokenBudget: { day: "", week: "700", month: "40000" },
-      }),
+      seatParts(
+        "seat:dev",
+        data,
+        initial,
+        { ...initial, tokenBudget: { day: "", week: "700", month: "40000" } },
+        { editableHandle: false },
+      ),
     ).toEqual([
       {
         type: "updateSeat",
         target: "seat:dev",
-        set: [
-          { path: ["runtime", "token_budget", "day"] },
-          { path: ["runtime", "token_budget", "month"], value: 40000 },
-        ],
+        set: [{ path: ["token_budget", "day"] }, { path: ["token_budget", "month"], value: 40000 }],
       },
     ]);
   });
@@ -223,10 +224,7 @@ describe("a seat", () => {
   test("a ceiling of 0 or a malformed one is refused before Apply, naming the window", () => {
     // A stored 0 is SHOWN, not hidden as an empty box: it is the one value
     // the engine refuses, and a form that hid it could never correct it.
-    expect(
-      seatForm({ handle: "x", name: "X", runtime: { token_budget: { day: 0 } } }, "").tokenBudget
-        .day,
-    ).toBe("0");
+    expect(seatForm({ name: "X", token_budget: { day: 0 } }, "").tokenBudget.day).toBe("0");
     expect(tokenBudgetError("day", "0")).toBe(
       "A ceiling of 0 is refused: leave it empty for no daily ceiling.",
     );
@@ -248,47 +246,47 @@ describe("a seat", () => {
     });
   });
 
-  // THE CHART WRITES ONE PROVIDER KEY AS A BARE STRING and several as a list
-  // (`org.ProviderKeys`), so a form that read only the list read every seat
-  // pinned to one provider as a seat that names none.
-  test("a model chain is read whichever shape the chart wrote it in", () => {
-    expect(providerKeys(undefined)).toEqual([]);
-    expect(providerKeys("fast")).toEqual(["fast"]);
-    expect(providerKeys(" ")).toEqual([]);
-    expect(providerKeys(["fast", "smart", ""])).toEqual(["fast", "smart"]);
-    const one = seatForm(dev(), "");
-    expect(one.llm).toEqual(["fast"]);
-    // Unchanged, whichever shape: nothing.
-    expect(seatParts("seat:dev", one, { ...one, goal: "Build" })).toEqual([]);
-    expect(seatParts("seat:dev", one, { ...one, llm: ["fast", "smart"] })).toEqual([
-      {
-        type: "updateSeat",
-        target: "seat:dev",
-        set: [{ path: ["runtime", "llm"], value: ["fast", "smart"] }],
-      },
+  test("a model chain keeps the shape the seat wrote, and a per-phase mapping is not editable", () => {
+    expect(llmChain(undefined)).toEqual([]);
+    expect(llmChain("fast")).toEqual(["fast"]);
+    expect(llmChain(["fast", "smart"])).toEqual(["fast", "smart"]);
+    expect(llmChain({ default: "fast", review: ["smart"] })).toBeNull();
+
+    const single: ConfigRole = { name: "A", llm: "fast" };
+    const one = seatForm(single, "");
+    expect(
+      seatParts("seat:a", single, one, { ...one, llm: ["smart"] }, { editableHandle: false }),
+    ).toEqual([{ type: "updateSeat", target: "seat:a", set: [{ path: ["llm"], value: "smart" }] }]);
+
+    const listed: ConfigRole = { name: "A", llm: ["fast", "smart"] };
+    const two = seatForm(listed, "");
+    expect(
+      seatParts("seat:a", listed, two, { ...two, llm: ["smart"] }, { editableHandle: false }),
+    ).toEqual([
+      { type: "updateSeat", target: "seat:a", set: [{ path: ["llm"], value: ["smart"] }] },
     ]);
+
+    const mapped: ConfigRole = { name: "A", llm: { default: "fast" } };
+    const form = seatForm(mapped, "");
+    expect(seatParts("seat:a", mapped, form, form, { editableHandle: false })).toEqual([]);
   });
 
-  test("the integration and contact fields write inside the runtime half", () => {
+  test("the integration fields write inside the seat's own blocks", () => {
     const initial = seatForm(dev(), "");
     const form = {
       ...initial,
       githubTier: "review",
       githubRepos: ["acme/api"],
-      mattermostUsername: " dev-bot ",
-      contact: { ...initial.contact, slack_user_id: "U1" },
-      availability: "Weekdays",
+      jira: " OPS ",
     };
-    expect(seatParts("seat:dev", initial, form)).toEqual([
+    expect(seatParts("seat:dev", dev(), initial, form, { editableHandle: false })).toEqual([
       {
         type: "updateSeat",
         target: "seat:dev",
         set: [
-          { path: ["runtime", "contact", "slack_user_id"], value: "U1" },
-          { path: ["runtime", "availability"], value: "Weekdays" },
-          { path: ["runtime", "github", "tier"], value: "review" },
-          { path: ["runtime", "github", "repos"], value: ["acme/api"] },
-          { path: ["runtime", "mattermost", "username"], value: "dev-bot" },
+          { path: ["integrations", "github", "tier"], value: "review" },
+          { path: ["integrations", "github", "repos"], value: ["acme/api"] },
+          { path: ["integrations", "jira", "project"], value: "OPS" },
         ],
       },
     ]);
@@ -296,33 +294,28 @@ describe("a seat", () => {
 });
 
 describe("a unit and the company", () => {
-  test("a unit's rename, address, fields, lead and schedule toggle are its parts; clearing the lead names none", () => {
-    const initial = unitForm(engineering());
+  test("a unit's rename, fields, lead and schedule toggle are its parts; clearing the lead names none", () => {
+    const unit = fixtureCompany().units![0]!;
+    const initial = unitForm(unit);
     expect(initial.schedules).toEqual({ standup: true });
     const form = {
       ...initial,
       name: "Product Engineering",
-      key: "product-engineering",
       purpose: "Build it",
-      space: "ENG",
       lead: "",
       schedules: { standup: false },
     };
-    expect(unitParts("unit:engineering", initial, form)).toEqual([
-      { type: "renameUnit", target: "unit:engineering", name: "Product Engineering" },
+    expect(unitParts("unit:Engineering", initial, form)).toEqual([
+      { type: "renameUnit", target: "unit:Engineering", name: "Product Engineering" },
       {
         type: "updateUnit",
-        target: "unit:engineering",
-        set: [
-          { path: ["key"], value: "product-engineering" },
-          { path: ["purpose"], value: "Build it" },
-          { path: ["space"], value: "ENG" },
-        ],
+        target: "unit:Engineering",
+        set: [{ path: ["purpose"], value: "Build it" }],
       },
-      { type: "setLead", target: "unit:engineering" },
+      { type: "setLead", target: "unit:Engineering" },
       {
         type: "setScheduleEnabled",
-        target: "unit:engineering",
+        target: "unit:Engineering",
         schedule: "standup",
         enabled: false,
       },
@@ -330,7 +323,8 @@ describe("a unit and the company", () => {
   });
 
   test("the charter's changed fields are one part", () => {
-    const initial = companyForm(fixtureSettings());
+    const company = fixtureCompany();
+    const initial = companyForm(company);
     expect(companyParts(initial, { ...initial, vision: "Everywhere", policies: [] })).toEqual([
       {
         type: "updateCompany",
@@ -341,22 +335,22 @@ describe("a unit and the company", () => {
 });
 
 test("the parts record as one edit that applies what the form says", () => {
-  const state = loadedState();
-  const found = locate(state.draft, "seat:dev");
-  if (found?.kind !== "seat") throw new Error("no dev");
-  const initial = seatForm(found.node.data, "developer");
-  const form = { ...initial, name: "Developer", goal: "Ship", manages: ["sre"] };
+  const state = keyedState(fixtureCompany());
+  const initial = seatForm(dev(), "developer");
+  const form = { ...initial, name: "Developer", goal: "Ship", manages: ["SRE"] };
   const next = builderReducer(state, {
     type: "record",
-    intent: editIntent("seat:dev", seatParts("seat:dev", initial, form)),
+    intent: editIntent(
+      "seat:dev",
+      seatParts("seat:dev", dev(), initial, form, { editableHandle: false }),
+    ),
   });
   expect(next.log.ops).toHaveLength(1);
-  const after = locate(next.draft, "seat:dev");
-  expect(after?.kind === "seat" && after.node.data).toMatchObject({
+  const found = locate(next.draft, "seat:dev");
+  expect(found?.kind === "seat" && found.node.data).toMatchObject({
     name: "Developer",
     goal: "Ship",
-    manages: ["sre"],
-    runtime: { llm: "fast", future_runtime_key: 7 },
+    manages: ["SRE"],
   });
   expect(editIntent(COMPANY_KEY, [])).toEqual({ type: "edit", target: COMPANY_KEY, intents: [] });
 });

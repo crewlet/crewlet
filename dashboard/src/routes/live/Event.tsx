@@ -5,7 +5,6 @@
  * event id pasted out of a log is a destination.
  */
 
-import { useMemo } from "react";
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { Button, Card, CodeBlock, Disclosure, Skeleton, Tag } from "@crewlethq/ui";
@@ -30,10 +29,8 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { eventHistoryLabel, fmtDateTime, humanize, relTime } from "~/lib/format.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
-import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, seatByAddress, type OrgIndex } from "~/lib/seats.ts";
-import { authorLabel } from "~/lib/attribution.ts";
+import { useNow } from "~/lib/clock.ts";
+import { useAgents, useEngineHealth } from "~/lib/store-hooks.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -75,61 +72,21 @@ function eventTitle(event: EventRecord): string {
  */
 /**
  * The handle of the seat an event concerns, or "" when no seat this tab knows
- * is the one it names.
+ * carries its id.
  *
- * BY THE SEAT'S ID, never its actor's display name. An agent's events carry
- * the actor as a display name ("Agent PM"), and the seat's page is addressed
- * by its handle — so the actor's link and button went to
- * `#/agents/seats/Agent PM`, which is no seat's address, on every event a seat
- * published. The id is the store's own `agent_id` tag, and the agents push is
- * what maps it to a handle.
- *
- * A PERSON'S WRITE carries no agent id: the engine records it under the SEAT
- * HANDLE the identity directory binds them to (`iam.ActorFor`, author kind
- * `human`), so its actor IS an address — resolved through the chart, a handle
- * a rename retired included. An operator's login and the engine's own name
- * are no seat's, and link nowhere.
+ * BY THE SEAT'S ID, never its actor. An event's actor is a display name
+ * ("Agent PM"), and the seat's page is addressed by its handle — so the
+ * actor's link and button went to `#/agents/seats/Agent PM`, which is no
+ * seat's address, on every event a seat published. The id is the store's own
+ * `agent_id` tag, and the agents push is what maps it to a handle.
  */
-export function seatHandleOf(
-  event: EventRecord,
-  agents: readonly AgentRow[],
-  index?: OrgIndex,
-): string {
+export function seatHandleOf(event: EventRecord, agents: readonly AgentRow[]): string {
   const id = event.tags?.agent_id;
-  if (id) return agents.find((a) => a.agent_id === id)?.handle ?? "";
-  if (index && actorKindOf(event) === "human" && event.actor) {
-    return seatByAddress(index, event.actor)?.handle ?? "";
-  }
-  return "";
+  if (!id) return "";
+  return agents.find((a) => a.agent_id === id)?.handle ?? "";
 }
 
-/**
- * The kind of whoever an event names as its actor, as the engine recorded it:
- * the store's promoted `actor_kind` tag, else the payload's own field — every
- * runtime audit and human-verb event carries it — else "". One of `agent`,
- * `human`, `operator` or `system`; a value this build does not know is drawn
- * as it came rather than guessed into one of those.
- */
-export function actorKindOf(event: EventRecord): string {
-  const tagged = event.tags?.actor_kind;
-  if (tagged) return tagged;
-  const carried = event.payload?.actor_kind;
-  return typeof carried === "string" ? carried : "";
-}
-
-/**
- * The credential an event's actor acted through (`operator_id`): a person's
- * machine token (`pat:<id>`), their browser session (`session:<lineage>`), or
- * a Tier A token's login — from the promoted tag, else the payload.
- */
-function operatorIdOf(event: EventRecord): string {
-  const tagged = event.tags?.operator_id;
-  if (tagged) return tagged;
-  const carried = event.payload?.operator_id;
-  return typeof carried === "string" ? carried : "";
-}
-
-function eventFacts(event: EventRecord, handle: string): Fact[] {
+function eventFacts(event: EventRecord, now: number, handle: string): Fact[] {
   return [
     {
       label: "Type",
@@ -146,11 +103,7 @@ function eventFacts(event: EventRecord, handle: string): Fact[] {
       // the engine rather than by anybody, which is a fact rather than a
       // blank — and only a real actor carries a link out to its seat.
       label: "Actor",
-      value: event.actor ? (
-        <ActorValue event={event} />
-      ) : (
-        <span className="muted">the engine itself</span>
-      ),
+      value: event.actor || <span className="muted">the engine itself</span>,
       path: handle ? ["agents", "seats", handle] : undefined,
     },
     {
@@ -158,11 +111,7 @@ function eventFacts(event: EventRecord, handle: string): Fact[] {
       // Relative in the line and absolute on hover, the way `DateCell` reads
       // in every grid: a reader who has the record open asks "how long ago"
       // first and "at what instant" only once they are writing it down.
-      value: (
-        <span title={fmtDateTime(event.timestamp)}>
-          <ClockText read={(now) => relTime(event.timestamp, now)} />
-        </span>
-      ),
+      value: <span title={fmtDateTime(event.timestamp)}>{relTime(event.timestamp, now)}</span>,
     },
     {
       label: "Trace",
@@ -177,23 +126,6 @@ function eventFacts(event: EventRecord, handle: string): Fact[] {
       token: Boolean(event.trace_id),
     },
   ];
-}
-
-/**
- * Who acted, as the record names them: the author, the KIND of author the
- * engine recorded (`agent`, `human`, `operator` or `system` — `iam.ActorFor`),
- * and the credential they acted through where it says something the author
- * does not (`authorLabel`: a person's token or session, never a Tier A
- * token's login repeated beside itself).
- */
-function ActorValue({ event }: { event: EventRecord }) {
-  const kind = actorKindOf(event);
-  return (
-    <span className="row gap-1">
-      <span>{authorLabel(event.actor, operatorIdOf(event))}</span>
-      {kind && <Tag appearance="outline">{kind}</Tag>}
-    </span>
-  );
 }
 
 /**
@@ -246,12 +178,11 @@ function eventStatus(event: EventRecord) {
 
 export function EventScreen({ eventId }: { eventId: string }) {
   const nav = useNavigator();
-  const { data, loading, error, refusal } = useQuery("event", { id: eventId });
+  const now = useNow();
+  const { data, loading, error } = useQuery("event", { id: eventId });
   const engine = useEngineHealth();
   const agents = useAgents();
-  const org = useOrg();
-  const index = useMemo(() => indexOrg(org), [org]);
-  const handle = data ? seatHandleOf(data, agents, index) : "";
+  const handle = data ? seatHandleOf(data, agents) : "";
 
   // A phase event has a first-class rendering; everything else gets its
   // payload shown honestly rather than being squeezed into a shape it is not.
@@ -322,13 +253,12 @@ export function EventScreen({ eventId }: { eventId: string }) {
           identifier={data.id}
           title={name}
           status={eventStatus(data)}
-          facts={eventFacts(data, handle)}
+          facts={eventFacts(data, now, handle)}
         />
       )}
 
       <QueryState
         error={error === "not_found" ? null : error}
-        refusal={refusal}
         loading={loading}
         empty={
           !loading && !data
@@ -448,16 +378,11 @@ export function EventScreen({ eventId }: { eventId: string }) {
  * is one click to the frame that can draw it.
  */
 export function EventPeek({ eventId }: { eventId: string }) {
-  const { data, loading, error, refusal } = useQuery(
-    "event",
-    { id: eventId },
-    { enabled: eventId !== "" },
-  );
+  const now = useNow();
+  const { data, loading, error } = useQuery("event", { id: eventId }, { enabled: eventId !== "" });
   const engine = useEngineHealth();
   const agents = useAgents();
-  const org = useOrg();
-  const index = useMemo(() => indexOrg(org), [org]);
-  const handle = data ? seatHandleOf(data, agents, index) : "";
+  const handle = data ? seatHandleOf(data, agents) : "";
 
   // NOT AN EMPTY RAIL. `peek=event:` is reached from a pasted id as often as
   // from a row — the search box takes one — so an id that resolves to nothing
@@ -475,7 +400,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
           identifier={data.id}
           title={eventTitle(data)}
           status={eventStatus(data)}
-          facts={eventFacts(data, handle)}
+          facts={eventFacts(data, now, handle)}
         />
       )}
       <div className="col gap-3">
@@ -485,7 +410,6 @@ export function EventPeek({ eventId }: { eventId: string }) {
           // reached and has no such row, which the empty state below states
           // precisely. Every other code is the engine failing to answer.
           error={error === "not_found" ? null : error}
-          refusal={refusal}
           loading={loading}
           empty={
             missing

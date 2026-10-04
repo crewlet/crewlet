@@ -3,7 +3,7 @@
  * room for, and a mark anchors to the end of the track only when it IS the end.
  */
 
-import { cleanup, render } from "~/test/inCase.ts";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { ticks, tickLabel } from "~/lib/waterfall.ts";

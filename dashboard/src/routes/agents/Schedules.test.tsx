@@ -10,8 +10,7 @@
  * engine already computed, so it is the only place that can be wrong this way.
  */
 
-import { Profiler } from "react";
-import { act, cleanup, render, screen } from "~/test/inCase.ts";
+import { cleanup, render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -20,12 +19,12 @@ import {
   NextFires,
   OutcomeTag,
   ScheduleDefinition,
-  SchedulePeek,
   Schedules,
   ScopeCell,
   Wakes,
   scheduleFacts,
 } from "./Schedules.tsx";
+import { act } from "@testing-library/react";
 import { PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -40,34 +39,19 @@ beforeEach(() => {
   // different question from the one under test. Pinned so the assertions are
   // about the schedule's zone alone.
   setZone("UTC");
-  // THE CLOCK THE PANELS READ, faked rather than handed in: every relative
-  // word on this screen reads the shared clock itself, so the instant under
-  // test is the system's.
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
-  vi.setSystemTime(NOW);
 });
 
 afterEach(() => {
   cleanup();
-  vi.useRealTimers();
   setZone("");
 });
 
 const NOW = Date.parse("2026-06-15T00:30:00Z");
 
-/** The agent ids the ledger keys a role scope on, beside the handles a person reads. */
-const CEO_ID = "b9f8fba1-4fe4-522f-8349-9f28db43654f";
-const PM_ID = "2c1a7e0d-5b3f-5d61-9e8a-4f6b2d9c0a17";
-
 function row(over: Partial<ScheduleRow> = {}): ScheduleRow {
   return {
     scope_type: "role",
-    // THE ID IS NOT THE HANDLE — a role scope is keyed on the seat's agent
-    // id, and the handle rides beside it as `scope_name`. A fixture where
-    // the two are equal could not tell a screen reading the id from one
-    // reading the name.
-    scope_id: CEO_ID,
-    scope_name: "ceo",
+    scope_id: "ceo",
     name: "standup",
     cron: "0 9 * * *",
     timezone: "Asia/Tokyo",
@@ -87,7 +71,7 @@ function row(over: Partial<ScheduleRow> = {}): ScheduleRow {
 // ever, on a screen whose header carries the engine's own answer right above
 // it.
 test("the fires are worked out in the schedule's zone, not in UTC", () => {
-  render(<NextFires row={row()} count={3} />);
+  render(<NextFires row={row()} now={NOW} count={3} />);
   expect(screen.getAllByText(/00:00:00/).length).toBe(3);
   expect(screen.queryByText(/09:00:00/)).toBeNull();
   expect(screen.getByText(/evaluated in Asia\/Tokyo/)).toBeTruthy();
@@ -100,10 +84,10 @@ test("the fires are worked out in the schedule's zone, not in UTC", () => {
 // zone draws no fires rather than a list on a clock the engine does not fire
 // on.
 test("a row is worked out in the zone the engine names, and never in a default", () => {
-  render(<NextFires row={row({ timezone: "Asia/Tokyo" })} count={3} />);
+  render(<NextFires row={row({ timezone: "Asia/Tokyo" })} now={NOW} count={3} />);
   expect(screen.getAllByText(/00:00:00/).length).toBe(3);
   cleanup();
-  const { container } = render(<NextFires row={row({ timezone: "" })} count={3} />);
+  const { container } = render(<NextFires row={row({ timezone: "" })} now={NOW} count={3} />);
   expect(container.textContent).toBe("");
 });
 
@@ -182,7 +166,7 @@ const NAMES: Record<string, string> = { ceo: "Chief Executive", swe: "Agent SWE"
 const who = (h: string) => ({ name: NAMES[h] ?? h, kind: "agent" as const });
 
 test("the header's Wakes names the seats, never their handles", () => {
-  const wakes = scheduleFacts(row({ runners: ["ceo"] }), who).find(
+  const wakes = scheduleFacts(row({ runners: ["ceo"] }), NOW, who).find(
     (fact) => fact.label === "Wakes",
   )!;
   const { container } = render(<Router>{wakes.value}</Router>);
@@ -237,8 +221,7 @@ async function mountScreen(scope?: string[]) {
   const socket = new LiveSocket(store);
   const fire = {
     scope_type: "role",
-    scope_id: PM_ID,
-    scope_name: "pm",
+    scope_id: "pm",
     schedule_name: "standup",
     fire_label: "2026-06-15T00:00:00Z",
     target_handle: "pm",
@@ -250,14 +233,11 @@ async function mountScreen(scope?: string[]) {
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
     Promise.resolve(
       what === "schedules"
-        ? {
-            schedules: [row({ scope_id: PM_ID, scope_name: "pm", runners: ["pm"] })],
-            recent_runs: [fire],
-          }
+        ? { schedules: [row({ scope_id: "pm", runners: ["pm"] })], recent_runs: [fire] }
         : what === "schedule_runs"
           ? { runs: [fire], truncated: false }
           : what === "viewer"
-            ? { login: "", grants: [], acts: [] }
+            ? { login: "", owner: "", acts: [] }
             : {},
     );
   const view = render(
@@ -278,11 +258,7 @@ async function mountScreen(scope?: string[]) {
 }
 
 // AND THE SCREEN USES IT IN BOTH GRIDS: the fires below the definitions drew
-// a role's scope as its bare handle in a pill. AND BY ITS NAME, NEVER ITS ID: a
-// role scope is keyed on the seat's agent id, which no page is addressed by, so
-// a scope drawn and linked from `scope_id` read as a uuid and opened nothing.
-//
-// Mutation: draw the scope from `scope_id` again, and the four links fail.
+// a role's scope as its bare handle in a pill.
 test("both grids name a role's scope by its seat", async () => {
   const { container } = await mountScreen();
   expect(container.textContent).toContain("Recent runs");
@@ -294,7 +270,6 @@ test("both grids name a role's scope by its seat", async () => {
     (a) => a.getAttribute("href") === "#/agents/seats/pm",
   );
   expect(seat).toHaveLength(4);
-  expect(container.textContent).not.toContain(PM_ID);
 });
 
 // AND THE SCHEDULE'S OWN HEADER NAMES ITS SCOPE. Its eyebrow drew the address,
@@ -302,13 +277,10 @@ test("both grids name a role's scope by its seat", async () => {
 // seat — on the one header this change had already taught to name the seats
 // it wakes.
 test("the schedule's eyebrow names its scope, never its address", async () => {
-  // ADDRESSED BY ITS IDENTITY, as every row links to it: the eyebrow names the
-  // scope from what the answers say it is called.
-  const { container } = await mountScreen(["role", PM_ID, "standup"]);
+  const { container } = await mountScreen(["role", "pm", "standup"]);
   const eyebrow = container.querySelector(".object-eyebrow")?.textContent ?? "";
   expect(eyebrow).toContain("Seat · PM");
   expect(eyebrow).not.toContain("role:");
-  expect(eyebrow).not.toContain(PM_ID);
   expect(container.querySelector(".object-eyebrow .mono")).toBeNull();
 });
 
@@ -316,7 +288,7 @@ test("the schedule's eyebrow names its scope, never its address", async () => {
 // clamped to two lines, "every 20 minutes every day" was cut after its third
 // word, while the grid one card below stacked the same value.
 test("the header's cron fact stacks the expression over its sentence, unclamped", () => {
-  const cron = scheduleFacts(row({ cron: "*/20 * * * *" }), who).find(
+  const cron = scheduleFacts(row({ cron: "*/20 * * * *" }), NOW, who).find(
     (fact) => fact.label === "Cron",
   )!;
   expect(cron.whole).toBe(true);
@@ -329,7 +301,7 @@ test("the header's cron fact stacks the expression over its sentence, unclamped"
 // A SERIES IS READ ROW AGAINST ROW. Rounded to one unit, the fires after the
 // hour of a schedule every twenty minutes all read "in 1h".
 test("the fires after the next one never read alike", () => {
-  render(<NextFires row={row({ cron: "*/20 * * * *", timezone: "UTC" })} count={5} />);
+  render(<NextFires row={row({ cron: "*/20 * * * *", timezone: "UTC" })} now={NOW} count={5} />);
   const labels = [...document.querySelectorAll(".fires li")].map(
     (li) => li.lastElementChild?.textContent,
   );
@@ -409,78 +381,11 @@ describe("the recent runs grid beside a peek", () => {
 // sized to its content, so the grid ended halfway across the card and its head
 // band stopped over nothing.
 test("the one schedule's fires fill their card on who each fire woke", async () => {
-  const { container } = await mountScreen(["role", PM_ID, "standup"]);
+  const { container } = await mountScreen(["role", "pm", "standup"]);
   const fires = [...container.querySelectorAll<HTMLElement>(".grid-wrap")].find((g) =>
     g.textContent?.includes("Woke"),
   );
   expect(fires).toBeDefined();
   // Fired, then Woke — the one flexible track — then the two content-sized.
   expect(fires!.style.gridTemplateColumns).toMatch(/^\S+ minmax\(12rem, 1fr\) /);
-});
-
-class InertWebSocket {
-  static CONNECTING = 0;
-  static OPEN = 1;
-  static CLOSED = 3;
-  readyState = InertWebSocket.CONNECTING;
-  send(): void {}
-  close(): void {}
-}
-
-// ONE SCHEDULE IS NOT DRAWN ONCE A SECOND.
-//
-// Its page and its peek held the one-second clock for the "in 23h" of the Next
-// fact and the fires panel, and drew the whole object — the header, the
-// definition, the panel and every fire under it — on each tick to change words
-// that move once an hour. Those read the clock themselves now, so ten seconds
-// in which no word turns over commit nothing, and the words are still the
-// clock's.
-//
-// Mutation: hand the peek `useNow()` again and pass it down, and it commits on
-// every tick.
-test("one schedule's peek draws nothing on a tick", async () => {
-  // HALF A MINUTE PAST, so no word on the peek turns over in the ten seconds
-  // below: on the minute, the fires panel's "in 23h 30m" honestly becomes "in
-  // 23h 29m" a second later, and that one commit is a word changing.
-  vi.setSystemTime(NOW + 30_000);
-  Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  const store = new Store();
-  store.applyHealth({ status: "healthy" });
-  const socket = new LiveSocket(store);
-  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
-    if (what === "schedules") return Promise.resolve({ schedules: [row()] });
-    if (what === "schedule_runs") return Promise.resolve({ runs: [] });
-    return Promise.resolve({});
-  };
-  let commits = 0;
-  render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <Profiler
-          id="peek"
-          onRender={() => {
-            commits += 1;
-          }}
-        >
-          <SchedulePeek scope={`role/${row().scope_id}/standup`} />
-        </Profiler>
-      </Router>
-    </ClientContext.Provider>,
-  );
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-  // 00:30Z AGAINST A FIRE AT 00:00Z TOMORROW, which the Next fact reads as
-  // twenty-three hours off.
-  expect(screen.getAllByText("in 23h").length).toBeGreaterThan(0);
-
-  const settled = commits;
-  for (let i = 0; i < 10; i++) {
-    act(() => {
-      vi.advanceTimersByTime(1_000);
-    });
-  }
-  expect(commits).toBe(settled);
 });

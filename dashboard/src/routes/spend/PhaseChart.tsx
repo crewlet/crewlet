@@ -22,8 +22,8 @@ import { QueryState } from "~/components/common.tsx";
 import { GROUPS } from "~/contract/spend.ts";
 import { bandsOf, unbandedTokens } from "~/lib/spend.ts";
 import { companyDateLabel, fmtCount, fmtExact } from "~/lib/format.ts";
-import { useClockReading } from "~/lib/clock.ts";
 import { dayLabelIn } from "~/lib/range.ts";
+
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { TokenSeries } from "~/protocol/types.ts";
 // OURS, AND DELIBERATELY: the kit's `SegmentedControl` commits the option the
@@ -61,9 +61,7 @@ export function PhaseChart({
   // its agent id and labelled by the engine with its current name, so there
   // is no chart lookup to make here.
   const bands = bandsOf(data, drawn);
-  // TODAY ON THE COMPANY'S CLOCK, read as the day — this re-renders when the
-  // company's day turns, never once a second (`useClockReading`).
-  const today = useClockReading((now) => dayLabelIn(now, zone));
+  const today = dayLabelIn(Date.now(), zone);
   const labels = new Map(
     (data?.series ?? []).map((p) => [
       Date.parse(p.at),
@@ -85,7 +83,7 @@ export function PhaseChart({
       <QueryState
         error={series.error}
         refusal={series.refusal}
-        detail={series.detail ?? undefined}
+        detail={series.detail}
         loading={series.loading && !data}
         empty={
           data && data.totals.calls === 0

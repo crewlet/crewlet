@@ -139,11 +139,11 @@ export function menuHold(access: WriteAccess): { disabled?: boolean; description
 
 /**
  * Why this browser cannot change the company's CONFIGURATION — a ceiling, a
- * seat's runtime, a server — as opposed to acting in it.
+ * seat, a server — as opposed to acting in it.
  *
- * A DIFFERENT GATE FROM AN ACT, and the difference is the engine's: `/config`
- * and a `/chart` runtime write are decided by the `config:write` GRANT, not
- * by the act catalogue and not by a seat binding — so a person bound to no
+ * A DIFFERENT GATE FROM AN ACT, and the difference is the engine's: a
+ * `/config` write is decided by the `config:write` GRANT, not by the act
+ * catalogue and not by a seat binding — so a person bound to no
  * seat who holds it may change a ceiling, and a bound person without it may
  * not. `viewer.grants` is the engine's own answer to exactly that question,
  * read here rather than guessed per screen. The step-up such a write may

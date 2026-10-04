@@ -17,7 +17,7 @@
  *    warnings subtracted, and a refusal is placed beside its field.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import type { ReactElement } from "react";
@@ -27,7 +27,7 @@ import { nodeCellWords } from "./McpServers.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, QueryRefusedError, Store } from "~/protocol/index.ts";
+import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type { ToolAnnotations, ToolRow } from "~/protocol/index.ts";
 import type { McpServersStatusAnswer } from "~/contract/mcp.ts";
 
@@ -199,27 +199,25 @@ const status: McpServersStatusAnswer = {
   ],
 };
 
-// The viewer answer as the engine sends it: who, the grants they carry, and
-// the seat the directory binds them to. The operator reads the company's
-// configuration and writes it; the reader holds the state grant alone.
 const OPERATOR = {
-  login: "jane.doe",
-  grants: ["state:read", "config:read", "config:write"],
+  login: "U0FOUNDER",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
   handle: "jane",
   owner: "jane",
   name: "Jane",
   kind: "human",
-  acts: [],
 };
-const READER = {
-  login: "reader",
-  grants: ["state:read"],
-  handle: "",
-  owner: "reader",
-  name: "",
-  kind: "",
-  acts: [],
-};
+const READER = { login: "", grants: [], handle: "", owner: "", name: "", kind: "" };
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -257,9 +255,7 @@ function mount(
   const query = vi.fn((what: string) => {
     if (what === "viewer") return Promise.resolve(viewer);
     if (what === "mcp_servers_status") {
-      return refuse
-        ? Promise.reject(new QueryRefusedError("unauthorized", null))
-        : Promise.resolve(answer);
+      return refuse ? Promise.reject(new QueryError("unauthorized")) : Promise.resolve(answer);
     }
     return new Promise(() => {});
   });
@@ -328,8 +324,7 @@ test("a server granted to nobody says no seat can call it", async () => {
   expect(screen.getByText(/No seat can call this/)).toBeDefined();
 });
 
-// UNKNOWN IS NOT NOBODY: a roster with no grant on it, sent to a reader who
-// may read the configuration, came from an older node.
+// UNKNOWN IS NOT NOBODY: a roster with no grant on it came from an older node.
 test("a roster that carries no grant is unknown, not nobody", async () => {
   mount(<ToolPeek name="create_issue" />, {
     roster: { name: "Acme", roles: [{ name: "PM", handle: "pm" }] },
@@ -337,25 +332,6 @@ test("a roster that carries no grant is unknown, not nobody", async () => {
   await settle();
   expect(screen.queryByText(/No seat can call this/)).toBeNull();
   expect(screen.getByText(/is not on the roster/)).toBeDefined();
-});
-
-// …AND TO ANYBODY ELSE IT IS THE GRANT WITHHELD. A seat's grant is derived from
-// its runtime half, which the engine projects only for an audience holding
-// `config:read`; telling that reader the node is old sent them looking for an
-// upgrade when what they lacked was the grant.
-test("a roster withheld from a reader without config:read names the grant, not an old node", async () => {
-  mount(<ToolPeek name="create_issue" />, {
-    viewer: READER,
-    roster: { name: "Acme", roles: [{ name: "PM", handle: "pm" }] },
-  });
-  await settle();
-  expect(
-    screen.getByText(
-      "Seeing which seats are granted github needs config:read, which the credential you presented does not carry.",
-    ),
-  ).toBeDefined();
-  expect(screen.queryByText(/older than the grant/)).toBeNull();
-  expect(screen.queryByText(/No seat can call this/)).toBeNull();
 });
 
 // THE LIST IS FOR FINDING A TOOL. A description is written for a model and

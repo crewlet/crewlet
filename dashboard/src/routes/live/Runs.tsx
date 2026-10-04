@@ -46,7 +46,7 @@ import {
   Tag,
 } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, SeatLabel, StatusCell, TextCell } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -59,15 +59,8 @@ import {
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useShared } from "~/lib/share.ts";
 import { useOrg, useSandboxes } from "~/lib/store-hooks.ts";
-import {
-  indexOrg,
-  seatByAddress,
-  useSeatBadgeOf,
-  type NameOf,
-  type SeatKind,
-} from "~/lib/seats.ts";
+import { indexOrg, nameOfIn, useSeatBadgeOf, type NameOf } from "~/lib/seats.ts";
 import { RUNS_POLL_MS } from "~/lib/runs.ts";
 import { fromPhaseEvent, type PhaseRecord } from "~/lib/phases.ts";
 import { AnswerRunButton } from "~/components/writes.tsx";
@@ -270,10 +263,15 @@ function pauseDeadline(run: SandboxRun): string | null {
  * carries an answer back" described a door with no handle on it. The chat
  * path is still named where there is one, as the other way in.
  */
-export function AwaitingBanner({ run, nameOf }: { run: SandboxRun; nameOf: NameOf }) {
-  // THE BANNER HOLDS THE SECOND, because its hold counts down and expires; the
-  // screens around it do not, so their run grids are not drawn again with it.
-  const now = useNow();
+export function AwaitingBanner({
+  run,
+  now,
+  nameOf,
+}: {
+  run: SandboxRun;
+  now: number;
+  nameOf: NameOf;
+}) {
   const deadline = pauseDeadline(run);
   const expired = deadline !== null && tsKey(deadline) <= now;
   const seat = nameOf(run.agent_handle) || run.role || run.agent_handle;
@@ -379,6 +377,7 @@ function BridgeSummary({ run }: { run: SandboxRun }) {
  * screen exists at all.
  */
 export function RunPeek({ turnId }: { turnId: string }) {
+  const now = useNow();
   const live = useSandboxes();
   const nameOf = useNameOf();
   const { data, loading, error, refusal } = useQuery("sandbox_runs", undefined, {
@@ -423,7 +422,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
                   {AWAITING.includes(run.status) ? "Waiting on a person" : "Doing now"}
                 </div>
                 {AWAITING.includes(run.status) ? (
-                  <AwaitingBanner run={run} nameOf={nameOf} />
+                  <AwaitingBanner run={run} now={now} nameOf={nameOf} />
                 ) : (
                   <p className="t-body">{doingLine(run)}</p>
                 )}
@@ -467,139 +466,15 @@ export function RunPeek({ turnId }: { turnId: string }) {
   );
 }
 
-/**
- * The run list's columns, which close over nothing on the screen but the
- * chart's badge lookup — so they are built once per chart, and a sandbox push
- * that moved one live box draws that row rather than the grid.
- */
-function runColumns(
-  seatBadge: (key: string) => { name: string; kind?: SeatKind },
-): GridColumn<SandboxRun>[] {
-  return [
-    {
-      key: "status",
-      header: "Status",
-      shrink: true,
-      sortValue: (r) => r.status,
-      // A BADGE, NOT `StatusCell`: the engine's seven words are a vocabulary
-      // rather than two lifecycle states, and this is the pill the Inbox and
-      // Live now draw for the same run — a third rendering of one status is a
-      // third thing to keep in step.
-      cell: (r) => <RunStatus status={r.status} />,
-    },
-    {
-      key: "seat",
-      header: "Seat",
-      // THE TWO COLUMNS A ROW IS RECOGNISED BY keep a width beside a peek; the
-      // three that describe the box give way first — see DataGrid's
-      // `fitColumns`. At 1280 with a run open they were drawn one letter wide.
-      floor: "9rem",
-      // BY THE SEAT'S HANDLE, through the chart — a handle a rename retired
-      // included — and never by its role name, which namesakes share. The
-      // role is what a row whose seat no handle names is drawn as.
-      sortValue: (r) => (r.agent_handle ? seatBadge(r.agent_handle).name : r.role),
-      // NOT `SeatCell` or `SeatChip`: both are anchors and every row here is
-      // one, and an anchor inside an anchor is markup no browser agrees
-      // about. The seat is one ⌘-click away from the run's own page, where it
-      // is a link again.
-      cell: (r) =>
-        r.agent_handle ? (
-          <SeatLabel {...seatBadge(r.agent_handle)} />
-        ) : r.role ? (
-          <TextCell>{r.role}</TextCell>
-        ) : (
-          <EmptyValue label="No seat" />
-        ),
-    },
-    {
-      key: "task",
-      header: "Task",
-      floor: "10rem",
-      cell: (r) =>
-        r.task_description ? (
-          <TextCell>{r.task_description}</TextCell>
-        ) : (
-          <EmptyValue label="No task recorded" />
-        ),
-    },
-    {
-      key: "agent",
-      header: "Coding agent",
-      shrink: true,
-      drop: 1,
-      sortValue: (r) => r.coding_agent,
-      cell: (r) =>
-        r.coding_agent ? (
-          <Tag appearance="outline" monospace>
-            {r.coding_agent}
-          </Tag>
-        ) : (
-          <EmptyValue label="Not recorded" />
-        ),
-    },
-    {
-      key: "where",
-      header: "Runs in",
-      shrink: true,
-      drop: 2,
-      sortValue: (r) => r.placement,
-      cell: (r) =>
-        r.placement ? (
-          <Tag appearance="outline" monospace>
-            {r.placement}
-          </Tag>
-        ) : (
-          // NOT "—" FOR A LIVE ROW'S SAKE: the projection carries no placement,
-          // so this is genuinely "the store has not written this run yet"
-          // rather than a run with nowhere to run, and the dash says the first
-          // on hover.
-          <EmptyValue label="The durable row has not been written yet" />
-        ),
-    },
-    {
-      key: "box",
-      header: "Box",
-      shrink: true,
-      drop: 3,
-      sortValue: (r) => (r.box_exists ? 1 : 0),
-      cell: (r) => (
-        <StatusCell
-          glyph={r.box_exists ? "●" : "○"}
-          label={r.box_exists ? "up" : "reclaimed"}
-          tone={r.box_exists ? "info" : "neutral"}
-          title={
-            r.box_exists
-              ? "the sandbox is still there"
-              : "the sandbox has been reclaimed; the run's record remains"
-          }
-        />
-      ),
-    },
-    {
-      key: "updated",
-      header: "Updated",
-      shrink: true,
-      sortValue: (r) => tsKey(r.updated_at || r.started_at),
-      // THE CELL READS THE CLOCK ITSELF, so a tick redraws the cells whose
-      // words moved and no row else.
-      cell: (r) => <DateCell at={r.updated_at || r.started_at} />,
-    },
-  ];
-}
-
 export function Runs() {
   const seatBadge = useSeatBadgeOf();
-  const columns = useMemo(() => runColumns(seatBadge), [seatBadge]);
   const live = useSandboxes();
+  const now = useNow();
   // Durable runs have no push behind them, so this is the one place a poll is
   // correct — and it is slow, because a run's lifetime is minutes.
-  const { data, loading, error, refusal } = useQuery("sandbox_runs", undefined, {
-    pollMs: RUNS_POLL_MS,
-  });
+  const { data, loading, error } = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
 
-  // SHARED WITH THE ROWS LAST DRAWN (`~/lib/share.ts`): a live box is turned
-  // into a row afresh on every sandbox push, so each one drew every live row.
-  const rows = useShared(useMemo(() => mergeRuns(data?.runs ?? [], live), [data, live]));
+  const rows = useMemo(() => mergeRuns(data?.runs ?? [], live), [data, live]);
 
   // THE ORDER `[` AND `]` WALK is the one on screen, which is this list sorted
   // as the reader left it. Published from the merged rows rather than from the
@@ -684,7 +559,6 @@ export function Runs() {
       {loading && !rows.length && <Skeleton variant="text" rows={4} label="Loading runs" />}
       <QueryState
         error={error}
-        refusal={refusal}
         loading={loading}
         empty={
           rows.length
@@ -702,7 +576,110 @@ export function Runs() {
             onRowActivate={openRun}
             rowHref={(r) => peekHref({ kind: "run", id: r.turn_id })}
             defaultSort="-updated"
-            columns={columns}
+            columns={[
+              {
+                key: "status",
+                header: "Status",
+                shrink: true,
+                sortValue: (r) => r.status,
+                // A BADGE, NOT `StatusCell`: the engine's seven words are a
+                // vocabulary rather than two lifecycle states, and this is the
+                // pill the Inbox and Live now draw for the same run — a third
+                // rendering of one status is a third thing to keep in step.
+                cell: (r) => <RunStatus status={r.status} />,
+              },
+              {
+                key: "seat",
+                header: "Seat",
+                // THE TWO COLUMNS A ROW IS RECOGNISED BY keep a width beside a
+                // peek; the three that describe the box give way first — see
+                // DataGrid's `fitColumns`. At 1280 with a run open they were
+                // drawn one letter wide.
+                floor: "9rem",
+                sortValue: (r) => r.role || r.agent_handle,
+                // NOT `SeatCell` or `SeatChip`: both are anchors and every row
+                // here is one, and an anchor inside an anchor is markup no
+                // browser agrees about. The seat is one ⌘-click away from the
+                // run's own page, where it is a link again.
+                cell: (r) =>
+                  r.role || r.agent_handle ? (
+                    <SeatLabel {...seatBadge(r.role || r.agent_handle)} />
+                  ) : (
+                    <EmptyValue label="No seat" />
+                  ),
+              },
+              {
+                key: "task",
+                header: "Task",
+                floor: "10rem",
+                cell: (r) =>
+                  r.task_description ? (
+                    <TextCell>{r.task_description}</TextCell>
+                  ) : (
+                    <EmptyValue label="No task recorded" />
+                  ),
+              },
+              {
+                key: "agent",
+                header: "Coding agent",
+                shrink: true,
+                drop: 1,
+                sortValue: (r) => r.coding_agent,
+                cell: (r) =>
+                  r.coding_agent ? (
+                    <Tag appearance="outline" monospace>
+                      {r.coding_agent}
+                    </Tag>
+                  ) : (
+                    <EmptyValue label="Not recorded" />
+                  ),
+              },
+              {
+                key: "where",
+                header: "Runs in",
+                shrink: true,
+                drop: 2,
+                sortValue: (r) => r.placement,
+                cell: (r) =>
+                  r.placement ? (
+                    <Tag appearance="outline" monospace>
+                      {r.placement}
+                    </Tag>
+                  ) : (
+                    // NOT "—" FOR A LIVE ROW'S SAKE: the projection carries no
+                    // placement, so this is genuinely "the store has not
+                    // written this run yet" rather than a run with nowhere to
+                    // run, and the dash says the first on hover.
+                    <EmptyValue label="The durable row has not been written yet" />
+                  ),
+              },
+              {
+                key: "box",
+                header: "Box",
+                shrink: true,
+                drop: 3,
+                sortValue: (r) => (r.box_exists ? 1 : 0),
+                cell: (r) => (
+                  <StatusCell
+                    glyph={r.box_exists ? "●" : "○"}
+                    label={r.box_exists ? "up" : "reclaimed"}
+                    tone={r.box_exists ? "info" : "neutral"}
+                    title={
+                      r.box_exists
+                        ? "the sandbox is still there"
+                        : "the sandbox has been reclaimed; the run's record remains"
+                    }
+                  />
+                ),
+              },
+              {
+                key: "updated",
+                header: "Updated",
+                shrink: true,
+                sortValue: (r) => tsKey(r.updated_at || r.started_at),
+                cell: (r) => <DateCell at={r.updated_at || r.started_at} now={now} />,
+              },
+            ]}
           />
         </Card>
       </QueryState>
@@ -710,18 +687,10 @@ export function Runs() {
   );
 }
 
-/**
- * A handle as the seat's name, off the one org index every screen reads —
- * through [seatByAddress], so a run recorded under a handle a rename has since
- * retired is still named as the seat it belonged to. A key that names no seat
- * (a login, a seat since removed) is drawn as it came.
- */
+/** A handle as the seat's name, off the one org index every screen reads. */
 function useNameOf(): NameOf {
   const org = useOrg();
-  return useMemo(() => {
-    const index = indexOrg(org);
-    return (key: string) => seatByAddress(index, key)?.name ?? key;
-  }, [org]);
+  return useMemo(() => nameOfIn(indexOrg(org)), [org]);
 }
 
 /** The statuses whose job is running now, so its output is asked of its owner. */
@@ -760,6 +729,7 @@ export function collectedRuns(events: readonly EventRecord[] | undefined): Phase
  */
 export function RunScreen({ turnId }: { turnId: string }) {
   const nav = useNavigator();
+  const now = useNow();
   const live = useSandboxes();
   const nameOf = useNameOf();
   const board = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
@@ -868,11 +838,7 @@ export function RunScreen({ turnId }: { turnId: string }) {
         }
       />
       {loading && <Skeleton variant="text" rows={6} label="Loading the run" />}
-      <QueryState
-        error={board.error && turn.error ? board.error : null}
-        refusal={board.error && turn.error ? board.refusal : null}
-        loading={loading}
-      >
+      <QueryState error={board.error && turn.error ? board.error : null} loading={loading}>
         {unread && (
           <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
             {unread === "board"
@@ -887,7 +853,9 @@ export function RunScreen({ turnId }: { turnId: string }) {
             description="Neither the run record nor the turn holds a coding run under this id. A turn's record is kept for the store's retention window; the id may be wrong, or the turn may be older than that."
           />
         )}
-        {run && AWAITING.includes(run.status) && <AwaitingBanner run={run} nameOf={nameOf} />}
+        {run && AWAITING.includes(run.status) && (
+          <AwaitingBanner run={run} now={now} nameOf={nameOf} />
+        )}
         {/* WHAT IT IS DOING, for a run nobody is being waited on by: a parked
             run's banner above already says what it is waiting for. */}
         {run && !AWAITING.includes(run.status) && (
@@ -896,7 +864,7 @@ export function RunScreen({ turnId }: { turnId: string }) {
               <Card.Title>Doing now</Card.Title>
             </Card.Header>
             {RUNNING.includes(run.status) && run.launch_id ? (
-              <LiveOutput turnId={run.turn_id} launchId={run.launch_id} />
+              <LiveOutput turnId={run.turn_id} launchId={run.launch_id} now={now} />
             ) : RUNNING.includes(run.status) ? (
               <span className="t-caption">
                 {run.owner

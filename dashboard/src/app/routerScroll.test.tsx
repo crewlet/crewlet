@@ -8,7 +8,7 @@
  * on a phone and scrolled into view, was scrolled straight back out of it.
  */
 
-import { act, cleanup, render } from "~/test/inCase.ts";
+import { act, cleanup, render } from "@testing-library/react";
 import { useLayoutEffect } from "react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 

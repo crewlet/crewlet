@@ -1,6 +1,5 @@
 /**
- * Agents › Edit org: the builder, which edits the company — its org chart
- * through `/chart` and the settings beside it through `/config`.
+ * Agents › Edit org: the builder, which edits the company's configuration.
  *
  * THE SURFACES ARE PASSED, NOT IMPORTED BY THE BUILDER: every dialog and both
  * views are injected so a suite can drive it with fakes. `builderSurfaces` is

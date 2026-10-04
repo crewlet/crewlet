@@ -29,7 +29,7 @@ import {
   relTime,
   tsKey,
 } from "~/lib/format.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
+import { useNow } from "~/lib/clock.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
@@ -136,7 +136,8 @@ export function arrange(events: readonly EventRecord[]): TraceRow[] {
 
 export function TraceScreen({ traceId }: { traceId: string }) {
   const nav = useNavigator();
-  const { data, loading, error, refusal } = useQuery("trace", { trace_id: traceId });
+  const now = useNow();
+  const { data, loading, error } = useQuery("trace", { trace_id: traceId });
 
   // `.events`, not the answer itself.
   const events = data?.events ?? [];
@@ -195,9 +196,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
       label: "Began",
       value: from ? (
         <span title={fmtDateTime(new Date(from).toISOString())}>
-          {/* THE CELL READS THE CLOCK ITSELF, so a tick reaches these words
-              and not the trace's whole tree. */}
-          <ClockText read={(now) => relTime(new Date(from).toISOString(), now)} />
+          {relTime(new Date(from).toISOString(), now)}
         </span>
       ) : (
         ""
@@ -249,7 +248,6 @@ export function TraceScreen({ traceId }: { traceId: string }) {
       <CoverageNote coverage={[data?.coverage]} what="this trace" />
       <QueryState
         error={error}
-        refusal={refusal}
         loading={loading}
         empty={
           events.length

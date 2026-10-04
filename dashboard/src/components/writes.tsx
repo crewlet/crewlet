@@ -45,7 +45,7 @@ import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { handleLabel, indexOrg, nameOfIn } from "~/lib/seats.ts";
-import { itemAddress, targetLabel } from "~/lib/work.ts";
+import { targetLabel } from "~/lib/work.ts";
 import { useOpenNewTask } from "~/app/newTask.ts";
 import { STEER_NOTE_MAX_RUNES } from "~/contract/steer.ts";
 
@@ -930,13 +930,7 @@ const ASSIGN_SEARCH = 25;
  * the list was drawn becomes choosable when the term is next searched.
  */
 function assignOptions(
-  hits: readonly {
-    id: string;
-    key: string;
-    key_collision?: boolean;
-    title: string;
-    assignee?: string;
-  }[],
+  hits: readonly { key: string; title: string; assignee?: string }[],
   handle: string,
   nameOf: (handle: string) => string,
 ): ComboboxOption[] {
@@ -945,9 +939,7 @@ function assignOptions(
   return [...movable, ...theirs].slice(0, ASSIGN_MATCHES).map((hit) => {
     const own = (hit.assignee ?? "") === handle;
     return {
-      // THE ADDRESS IS THE VALUE (`itemAddress`), the key the label: a key
-      // another task claimed first names that task to the engine.
-      value: itemAddress(hit),
+      value: hit.key,
       label: `${hit.key} · ${hit.title}`,
       hint: own ? "already theirs" : hit.assignee ? `with ${nameOf(hit.assignee)}` : "unassigned",
       ...(own ? { disabled: true } : {}),
@@ -1037,12 +1029,9 @@ function AssignToSeatDialog({
   const openNewTask = useOpenNewTask();
   const [term, setTerm] = useState("");
   const [listOpen, setListOpen] = useState(false);
-  const [chosen, setChosen] = useState<{
-    address: string;
-    key: string;
-    title: string;
-    assignee: string;
-  } | null>(null);
+  const [chosen, setChosen] = useState<{ key: string; title: string; assignee: string } | null>(
+    null,
+  );
   const [reason, setReason] = useState("");
   const q = term.trim();
   const search = useQuery(
@@ -1051,12 +1040,12 @@ function AssignToSeatDialog({
     { enabled: q.length >= ASSIGN_MIN_TERM },
   );
   // THE VERSION THE HAND-OFF IS CONDITIONAL ON, read for the task chosen.
-  const read = useQuery("work_item", chosen ? { id: chosen.address } : undefined, {
+  const read = useQuery("work_item", chosen ? { id: chosen.key } : undefined, {
     enabled: chosen !== null,
   });
   const hits = q.length >= ASSIGN_MIN_TERM ? (search.data?.hits ?? []) : [];
   const options = useMemo(() => assignOptions(hits, handle, nameOf), [hits, handle, nameOf]);
-  const task = read.data && itemAddress(read.data.task) === chosen?.address ? read.data.task : null;
+  const task = read.data && read.data.task.key === chosen?.key ? read.data.task : null;
   const version = task ? task.version : null;
   // WHOSE IT IS NOW is the READ's, once it lands — the same answer the
   // hand-off's `if_match` is taken from. The search hit's assignee is the
@@ -1078,7 +1067,7 @@ function AssignToSeatDialog({
     if (!pressable(write, blocked) || !chosen || version === null) return;
     const result = await write.run(
       {
-        item: chosen.address,
+        item: chosen.key,
         assignee: handle,
         if_match: version,
         ...(reason.trim() ? { reason: reason.trim() } : {}),
@@ -1159,14 +1148,9 @@ function AssignToSeatDialog({
                       : "No task matches"
                 }
                 onCommit={(option) => {
-                  const hit = hits.find((h) => itemAddress(h) === option.value);
+                  const hit = hits.find((h) => h.key === option.value);
                   if (!hit) return;
-                  setChosen({
-                    address: itemAddress(hit),
-                    key: hit.key,
-                    title: hit.title,
-                    assignee: hit.assignee ?? "",
-                  });
+                  setChosen({ key: hit.key, title: hit.title, assignee: hit.assignee ?? "" });
                   setTerm(`${hit.key} · ${hit.title}`);
                   setListOpen(false);
                 }}

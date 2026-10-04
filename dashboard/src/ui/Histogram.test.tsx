@@ -15,27 +15,17 @@
  * the caller's now, required, for the reason `FacetRail`'s `over` is.
  */
 
-import { cleanup, render, screen } from "~/test/inCase.ts";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, expect, test } from "vitest";
 
 import { Histogram, ticksFor, type Bar } from "./Histogram.tsx";
 import { fmtDateCompact } from "~/lib/format.ts";
 
+afterEach(cleanup);
+
 const DAY = 24 * 60 * 60_000;
 /** A fixed instant, so the compact date's own year rule is not the clock's. */
 const NOW = Date.parse("2026-09-22T12:00:00Z");
-
-// THE CHART READS THE SHARED CLOCK FOR ITS YEAR, so the clock is held at
-// [NOW]: the system time is what the clock reads when it starts.
-beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["Date"] });
-  vi.setSystemTime(NOW);
-});
-
-afterEach(() => {
-  cleanup();
-  vi.useRealTimers();
-});
 
 /** `count` daily buckets ending on the day before [NOW]. */
 function days(count: number, counts: number[] = []): Bar[] {
@@ -56,7 +46,7 @@ const ticks = (root: HTMLElement) => [...root.querySelectorAll(".histogram-tick"
 test("the axis names its first and its last bucket", () => {
   const bars = days(14);
   const { container } = render(
-    <Histogram bars={bars} bucket="day" total={0} noun="change" over="loaded" axis />,
+    <Histogram bars={bars} bucket="day" total={0} noun="change" over="loaded" axis now={NOW} />,
   );
   const drawn = ticks(container);
   expect(drawn[0]?.textContent).toBe(fmtDateCompact(bars[0]!.at, NOW));
@@ -98,7 +88,7 @@ test("the ticks between the ends are an even spread over the buckets", () => {
 // pinned to the edges instead: centred, they would hang off the card.
 test("an interior tick is centred on its own bucket and the ends are pinned", () => {
   const { container } = render(
-    <Histogram bars={days(4)} bucket="day" total={0} noun="change" over="loaded" axis />,
+    <Histogram bars={days(4)} bucket="day" total={0} noun="change" over="loaded" axis now={NOW} />,
   );
   const drawn = ticks(container) as HTMLElement[];
   expect(drawn).toHaveLength(4);
@@ -119,7 +109,7 @@ test("a bucket shorter than a day is labelled with a clock", () => {
     count: 0,
   }));
   const { container } = render(
-    <Histogram bars={bars} bucket="hour" total={0} noun="event" over="window" axis />,
+    <Histogram bars={bars} bucket="hour" total={0} noun="event" over="window" axis now={NOW} />,
   );
   for (const tick of ticks(container)) {
     expect(tick.textContent).toMatch(/^\d{2}:\d{2}$/);
@@ -188,7 +178,7 @@ test("a bar's height is carried by a fill inside its slot", () => {
 test("a bar's failed share is drawn at its foot and named in its title", () => {
   const bars = [{ ...days(2, [8])[0]!, failed: 2 }, { ...days(2, [0, 5])[1]! }];
   const { container } = render(
-    <Histogram bars={bars} bucket="day" total={13} noun="turn" over="window" />,
+    <Histogram bars={bars} bucket="day" total={13} noun="turn" over="window" now={NOW} />,
   );
   const [split, plain] = [...container.querySelectorAll(".histogram-bar")];
   const foot = split!.querySelector<HTMLElement>(".histogram-failed");

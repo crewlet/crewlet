@@ -9,7 +9,7 @@
  * polling at `stale` would pass every smaller test here.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 
@@ -18,7 +18,7 @@ import { useQuery } from "./useQuery.ts";
 import { useClient, useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import { WriteButton } from "~/components/WriteButton.tsx";
-import { tabFloors } from "~/protocol/floors.ts";
+import { session } from "~/protocol/session.ts";
 
 vi.mock("./store-hooks.ts", () => ({ useClient: vi.fn(), useConnection: vi.fn() }));
 vi.mock("./viewer.ts", () => ({ useViewer: vi.fn() }));
@@ -153,7 +153,7 @@ test("pending tells the person this node has not applied it, and the reads wait 
   );
   await waitFor(() => expect(sent).toHaveLength(2));
   expect(sent[1]!.params).toMatchObject({ min_position: "CREWLET_TRACKER_LOG@1:901" });
-  expect(tabFloors.floor("tracker")).toBe("CREWLET_TRACKER_LOG@1:901");
+  expect(session.floor("tracker")).toBe("CREWLET_TRACKER_LOG@1:901");
 });
 
 // UNKNOWN IS NEVER RETRIED ON ITS OWN, and a Retry the person presses sends

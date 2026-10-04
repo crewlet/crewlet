@@ -11,7 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { currentSessionNeed, sessionRestored } from "./session.ts";
+import { currentSessionNeed, sessionRestored } from "./signin.ts";
 import { LiveSocket } from "./socket.ts";
 import { Store } from "./store.ts";
 

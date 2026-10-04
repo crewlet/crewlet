@@ -19,15 +19,18 @@
  * stays available.
  */
 
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { seatPath } from "~/lib/seats.ts";
 import type { AddKind, BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, SeatView, Structure, UnitView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
+import type { Reorder } from "./reorder.ts";
 import { CrewletIcon } from "@crewlethq/icons";
 import {
   NetworkGlyph,
+  ArrowDownGlyph,
   ArrowUpRightGlyph,
+  ArrowUpGlyph,
   TrashGlyph,
   PencilGlyph,
   FolderInputGlyph,
@@ -183,6 +186,38 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
 }
 
 /**
+ * Move up and Move down, as a node's menu offers them.
+ *
+ * ALWAYS MEANINGFUL, because both surfaces draw the siblings in the chart's
+ * own order: there is no sort to take "the one before" away from the sibling
+ * the move would pass. A node that cannot move at all (the company, and a root
+ * seat a unit reference placed, which lives in the company's list) is offered
+ * neither rather than two entries that would write somewhere else. A node that
+ * CAN move under a posture that refuses every write is offered both, refused,
+ * like every other entry in this module.
+ */
+export function moveEntries(api: BuilderApi, reorder: Reorder, key: NodeKey): MenuEntry[] {
+  if (!reorder.movable(key)) return [];
+  return [
+    { kind: "separator", key: "sep-move" },
+    {
+      key: "move-up",
+      label: "Move up",
+      icon: <ArrowUpGlyph />,
+      disabled: api.readOnly,
+      onSelect: () => reorder.move(key, -1),
+    },
+    {
+      key: "move-down",
+      label: "Move down",
+      icon: <ArrowDownGlyph />,
+      disabled: api.readOnly,
+      onSelect: () => reorder.move(key, 1),
+    },
+  ];
+}
+
+/**
  * WHAT A SURFACE ALREADY OFFERS WITHOUT ITS MENU, by the keys the entries
  * above carry. A key rather than a label, because a label is what a menu SAYS
  * and two of these say different things on different nodes ("Change to human
@@ -210,30 +245,36 @@ const REACHED_ON_A_CARD = new Set(["edit", "delete"]);
 const REACHED_ON_A_ROW = new Set(["add-unit", "add-agent", "add-human", "edit", "delete"]);
 
 /** The chart's own: a card draws the pencil and the trash, and keys reach both. */
-export function cardMenu(api: BuilderApi, view: NodeView, open: OpenScreen): MenuEntry[] {
-  return surfaceMenu(api, view, open, REACHED_ON_A_CARD);
+export function cardMenu(
+  api: BuilderApi,
+  view: NodeView,
+  open: OpenScreen,
+  reorder: Reorder,
+): MenuEntry[] {
+  return surfaceMenu(api, view, open, reorder, REACHED_ON_A_CARD);
 }
 
 /** The table's own: a row draws the add pill as well, and the grid reaches it. */
-export function rowMenu(api: BuilderApi, view: NodeView, open: OpenScreen): MenuEntry[] {
-  return surfaceMenu(api, view, open, REACHED_ON_A_ROW);
+export function rowMenu(
+  api: BuilderApi,
+  view: NodeView,
+  open: OpenScreen,
+  reorder: Reorder,
+): MenuEntry[] {
+  return surfaceMenu(api, view, open, reorder, REACHED_ON_A_ROW);
 }
 
 /**
  * The menu of a node on a surface that draws some of its actions itself: every
- * action the surface does not already offer.
+ * action the surface does not already offer, plus the two moves among its
+ * siblings.
  *
  * ONE SUBTRACTION FOR BOTH, because the question is the same one and the two
  * answers drifted when they were written out separately: the card's menu kept
- * an Edit and a Delete it had drawn itself, so one node read two ways on two
- * views of one draft. The toolbar draws no control of its own and therefore
- * keeps `nodeMenu` whole.
- *
- * THERE IS NO MOVE UP OR MOVE DOWN. The chart keeps no order among siblings —
- * a unit's seats and child units are served by address and stored in no other
- * order (`model/draft.Placement`) — so a move among them would be an
- * arrangement the save silently drops. Where a node sits is its parent, and
- * Move to is how that changes.
+ * an Edit and a Delete it had drawn itself and dropped the Move up and Move
+ * down the row beside it offered, so one node read two ways on two views of
+ * one draft. The toolbar draws no control of its own and therefore keeps
+ * `nodeMenu` whole.
  *
  * SEPARATORS ARE PART OF THE SUBTRACTION. `nodeMenu` groups its entries with
  * rules, and taking the adds and Delete out of a unit's menu left a rule at
@@ -244,9 +285,10 @@ function surfaceMenu(
   api: BuilderApi,
   view: NodeView,
   open: OpenScreen,
+  reorder: Reorder,
   reached: ReadonlySet<string>,
 ): MenuEntry[] {
-  const kept = nodeMenu(api, view, open).filter(
+  const kept = [...nodeMenu(api, view, open), ...moveEntries(api, reorder, view.key)].filter(
     (entry) => entry.kind === "separator" || !reached.has(entry.key),
   );
   const menu: MenuEntry[] = [];
@@ -259,6 +301,26 @@ function surfaceMenu(
   }
   if (menu.length > 0 && menu[menu.length - 1]!.kind === "separator") menu.pop();
   return menu;
+}
+
+/**
+ * Alt with an arrow: the key that moves a node among the siblings it is drawn
+ * beside. Answers true when it took the key.
+ *
+ * ONE READING FOR BOTH SURFACES. The outline binds it on a row and the chart
+ * on a card, and the chart is where a reader reaches for it first: a chart
+ * draws siblings left to right in exactly the order this changes, and passing
+ * one can change which seat manages this one (`reorder.ts`). Written twice it
+ * would be two answers to what Alt with an arrow does to one organization.
+ */
+export function moveKey(
+  reorder: Reorder,
+  key: NodeKey,
+  event: Pick<KeyboardEvent, "altKey" | "key">,
+): boolean {
+  if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return false;
+  reorder.move(key, event.key === "ArrowUp" ? -1 : 1);
+  return true;
 }
 
 /**
@@ -288,8 +350,13 @@ export function reportingMenu(api: BuilderApi, view: SeatView, open: OpenScreen)
   return entries;
 }
 
-/** What a lead chip says: the lead, and whether it is inherited. */
+/**
+ * What a lead chip says: the lead, whether it is inherited, or that it is
+ * known after the check. Never that a check is running: whether one is on its
+ * way (or the engine cannot be reached at all) is the toolbar's to say.
+ */
 export function leadLabel(unit: UnitView): string {
+  if (unit.lead === undefined) return "Lead after the check";
   if (unit.lead === null) return "No lead";
   return unit.lead.inherited ? `${unit.lead.name} (inherited)` : unit.lead.name;
 }
@@ -303,14 +370,24 @@ export function leadLabel(unit: UnitView): string {
  * its own along the bottom edge of a card, with nothing above it saying what
  * the name IS: the console chart this is drawn from writes "Lead: Ada" there
  * for exactly that reason, and "Lead" in a pill with nothing in it.
+ *
+ * AND THE THIRD ANSWER IS THIS BUILDER'S OWN. That chart has two states, set
+ * and unset, so its wording covers two; this one has three, because the lead a
+ * unit inherits is derived by the engine and no check of the current draft has
+ * answered yet just after an edit. Written as "Lead" too, a pill would hide a
+ * check still out behind a unit that declares nothing, which are different
+ * facts about the organization. So the two states that chart HAS take its
+ * wording, and the one it has no idea of keeps ours.
  */
 export function leadChipLabel(unit: UnitView): string {
+  if (unit.lead === undefined) return "Lead after the check";
   if (unit.lead === null) return "Lead";
   return `Lead: ${leadLabel(unit)}`;
 }
 
 /** What a unit's treeitem says about its lead to a screen reader: one sentence. */
 export function leadSentence(unit: UnitView): string {
+  if (unit.lead === undefined) return "Lead after the check.";
   if (unit.lead === null) return "No lead.";
   return `Lead: ${leadLabel(unit)}.`;
 }
@@ -321,17 +398,13 @@ export function leadSentence(unit: UnitView): string {
  * declares when that seat is elsewhere. A lead may name any seat, so the last
  * entry sends the operator to the editor to choose one outside the unit.
  *
- * BY HANDLE, as the chart stores a lead: a name is prose two seats may share,
- * so two members called the same are told apart by their handles rather than
- * folded into one answer that could only ever pick the first.
- *
  * CHOOSING THE CURRENT ANSWER CHANGES NOTHING AND SAYS NOTHING. The checked
  * answer only closes the menu, as a radio button already on does nothing:
  * recording it would be refused ("The lead is unchanged.") and the refusal
  * announced, for a choice that is exactly what the operator sees.
  */
 export function leadMenu(api: BuilderApi, structure: Structure, unit: UnitView): MenuEntry[] {
-  const declared = unit.lead && !unit.lead.inherited ? unit.lead.handle : null;
+  const declared = unit.lead && !unit.lead.inherited ? unit.lead.name : null;
   const answer = (key: string, label: string, lead: string | null): MenuEntry => {
     const checked = declared === lead;
     return {
@@ -351,26 +424,19 @@ export function leadMenu(api: BuilderApi, structure: Structure, unit: UnitView):
   const members = unit.seats
     .map((key) => structure.nodes.get(key))
     .filter((v): v is SeatView => v?.type === "seat");
-  const nameCount = new Map<string, number>();
-  for (const m of members) nameCount.set(m.name, (nameCount.get(m.name) ?? 0) + 1);
-  const labelOf = (m: SeatView) =>
-    m.name === ""
-      ? `@${m.handle}`
-      : nameCount.get(m.name)! > 1
-        ? `${m.name} (@${m.handle})`
-        : m.name;
+  const names = [...new Set(members.map((m) => m.name))];
   const entries: MenuEntry[] = [
     answer(
       "none",
       unit.inheritable ? `No lead (inherits ${unit.inheritable.name})` : "No lead",
       null,
     ),
-    ...members.map((m) => answer(`seat:${m.handle}`, labelOf(m), m.handle)),
+    ...names.map((name) => answer(`seat:${name}`, name, name)),
   ];
-  // A declared lead drawn nowhere in the unit (a seat elsewhere, or a handle
+  // A declared lead drawn nowhere in the unit (a seat elsewhere, or a name
   // no seat holds) is still the current answer, and says so.
-  if (declared !== null && !members.some((m) => m.handle === declared)) {
-    entries.push(answer("declared", unit.lead!.name, declared));
+  if (declared !== null && !names.includes(declared)) {
+    entries.push(answer("declared", declared, declared));
   }
   entries.push(
     { kind: "separator", key: "sep" },

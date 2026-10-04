@@ -17,9 +17,9 @@
  * # Written as you
  *
  * "New page" files a page in the space being browsed through `write_page`, as
- * the principal the request resolves to (ADR-0024) — the same tool a seat
- * writes with, attributed to somebody who can be asked why. The page itself,
- * its editor and its thread are `page/`.
+ * the person signed in (ADR-0024) — the same tool a seat writes
+ * with, attributed to somebody who can be asked why. The page itself, its
+ * editor and its thread are `page/`.
  */
 
 import { useMemo, useRef, useState } from "react";
@@ -29,7 +29,17 @@ import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { NewPageDialog } from "./NewPage.tsx";
-import { Button, Card, EmptyState, FilterChip, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  cx,
+  EmptyState,
+  FilterChip,
+  Input,
+  Select,
+  Skeleton,
+  Tag,
+} from "@crewlethq/ui";
 // OURS, DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics`: `radio` selects as the arrows move, `tabs` is manual but
 // demands a `panelId` naming a TabPanel neither of these rows controls. Both
@@ -37,7 +47,7 @@ import { Button, Card, EmptyState, FilterChip, Input, Select, Skeleton, Tag } fr
 // and the diff lens gates one of its own — which is exactly the case our
 // `activate="manual"` exists for. See the report.
 import { Segmented } from "~/ui/primitives.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, NumberCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { peekHref, peekRow, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -51,10 +61,12 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg } from "~/lib/seats.ts";
-import { fmtExact, plural, tsKey } from "~/lib/format.ts";
+import { indexOrg, seatLookup } from "~/lib/seats.ts";
+import { fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import type { Page, PageDetail, PageRevision, PageSummary } from "~/protocol/index.ts";
+import { usePageLabels } from "~/app/Shell.tsx";
 import { usePagedPages } from "./usePagedPages.ts";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
@@ -88,11 +100,13 @@ const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "info" | "n
 function pageFacts({
   page,
   history,
+  now,
   seatName,
 }: {
   page: Page;
   /** Newest first, as the `page` answer orders it. */
   history: PageRevision[];
+  now: number;
   seatName: (handle: string) => string;
 }): Fact[] {
   const last = history[0];
@@ -113,9 +127,8 @@ function pageFacts({
       setBy: last
         ? {
             actor: last.author ? seatName(last.author) : "the engine",
-            // THE LINE READS ITS OWN CLOCK (`SetByLine`), so the header is
-            // not a function of the second.
             at: last.created_at,
+            ago: relTime(last.created_at, now),
           }
         : undefined,
     },
@@ -129,7 +142,7 @@ function pageFacts({
     },
     {
       label: "Updated",
-      value: <DateCell at={page.updated_at} />,
+      value: <DateCell at={page.updated_at} now={now} />,
       // WHY THIS IS NOT THE SAVE ABOVE IT. Ten kinds of change stamp a page —
       // `internal/pages` writes a history entry for a comment, a rename, a
       // move and a label edit as well as a save — so these two instants
@@ -212,6 +225,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
   const org = useOrg();
   const nav = useNavigator();
   const index = useMemo(() => indexOrg(org), [org]);
+  const now = useNow();
 
   // THE CONTAINER IS THE PATH (`#/knowledge/ENG`), because a container is an
   // object — it has an owning unit, a page tree and a purpose — and a filter
@@ -223,109 +237,6 @@ export function Pages({ container: fromPath }: { container?: string }) {
   // (auditing the catalogue), everything but them (an ordinary browse), and
   // everything. A checkbox would make one of the three unreachable.
   const [kind, setKind] = useParam("kind", "prose");
-
-  // THE COLUMNS HOLD STILL until the chart moves (`index`, which names an
-  // author): every row is memoised on this list, so one built inline drew every
-  // page on every twenty-second poll.
-  const columns = useMemo<GridColumn<PageSummary>[]>(
-    () => [
-      {
-        key: "title",
-        header: "Title",
-        sortValue: (r) => r.title,
-        // NOT AN ANCHOR: the row is one now, and a title that was also
-        // a link would be the one part of the row where a plain click
-        // meant something different from everywhere else on it.
-        cell: (r) => <TextCell icon="file-text">{r.title}</TextCell>,
-      },
-      {
-        key: "container",
-        header: "Container",
-        shrink: true,
-        sortValue: (r) => r.container,
-        // A CHIP RATHER THAN A `KeyCell`, which is the one identifier
-        // cell and would otherwise be right: the containers above this
-        // grid are the filter for this very column, drawn as exactly
-        // this badge, and a column that spelled them differently would
-        // make the control and the thing it controls look like two
-        // different vocabularies.
-        cell: (r) => (
-          <Tag appearance="outline" monospace>
-            {r.container}
-          </Tag>
-        ),
-      },
-      {
-        key: "kind",
-        header: "Kind",
-        shrink: true,
-        sortValue: (r) => (r.skill ? "skill" : r.onboarding ? "onboarding" : "page"),
-        cell: (r) =>
-          r.skill ? (
-            // A TOOL SKILL IS MACHINERY, marked so a reader does not
-            // take it for guidance somebody wrote to be read: it is
-            // documentation the engine injects into a phase.
-            <Tag variant="info" title="Injected into a phase by the tool-skill registry">
-              tool skill
-            </Tag>
-          ) : r.onboarding ? (
-            <Tag variant="warning" title="Where a new seat's reading starts">
-              onboarding
-            </Tag>
-          ) : (
-            <span className="muted">page</span>
-          ),
-      },
-      {
-        key: "status",
-        header: "Status",
-        shrink: true,
-        sortValue: (r) => r.status,
-        cell: (r) => (
-          <Tag variant={STATUS_TONE[r.status] ?? "neutral"} dot>
-            {r.status}
-          </Tag>
-        ),
-      },
-      {
-        key: "version",
-        header: "Version",
-        shrink: true,
-        align: "right",
-        sortValue: (r) => r.version,
-        // A VERSION IS AN IDENTIFIER, not a quantity: v10 does not
-        // mean ten of anything, so it wears the mono face a key wears
-        // rather than the tabular one a `NumberCell` counts in.
-        cell: (r) => <KeyCell value={`v${r.version}`} />,
-      },
-      {
-        key: "author",
-        header: "Author",
-        shrink: true,
-        sortValue: (r) => r.author ?? "",
-        // HALF A CELL, and the other half is the reason: `SeatCell` is
-        // the one rendering of a person in a grid, and a page with no
-        // author was written by the ENGINE rather than by nobody. The
-        // `—` this column drew said the opposite — that the author is
-        // a thing nothing recorded — about every page the tool-skill
-        // catalogue publishes.
-        cell: (r) => {
-          if (!r.author) return <span className="muted">the engine</span>;
-          const who = index.byHandle.get(r.author);
-          return <SeatCell handle={r.author} name={who?.name} kind={who?.kind} />;
-        },
-      },
-      {
-        key: "updated",
-        header: "Updated",
-        shrink: true,
-        align: "right",
-        sortValue: (r) => tsKey(r.updated_at),
-        cell: (r) => <DateCell at={r.updated_at} />,
-      },
-    ],
-    [index],
-  );
 
   const containers = useQuery("containers", undefined, { pollMs: 60_000 });
 
@@ -340,7 +251,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
   // was fifty rows with nothing to say the rest existed. It reads windows of
   // 500 now, with the listing's own total and "Load more" from its cursor.
   const listing = usePagedPages(params, { pollMs: 20_000 });
-  const { loading, error, refusal } = listing;
+  const { loading, error } = listing;
 
   const rows = useMemo(
     () => [...listing.rows].sort((a, b) => tsKey(b.updated_at) - tsKey(a.updated_at)),
@@ -466,7 +377,6 @@ export function Pages({ container: fromPath }: { container?: string }) {
 
       <QueryState
         error={error}
-        refusal={refusal}
         loading={loading}
         // ONE EMPTY STATE. There used to be two, and on a company with no
         // pages at all they rendered TOGETHER: `QueryState` fired on
@@ -506,7 +416,102 @@ export function Pages({ container: fromPath }: { container?: string }) {
             // different pages.
             rowHref={(r) => peekHref({ kind: "page", id: r.id })}
             onRowActivate={peekRow<PageSummary>((r) => openPeek({ kind: "page", id: r.id }))}
-            columns={columns}
+            columns={[
+              {
+                key: "title",
+                header: "Title",
+                sortValue: (r) => r.title,
+                // NOT AN ANCHOR: the row is one now, and a title that was also
+                // a link would be the one part of the row where a plain click
+                // meant something different from everywhere else on it.
+                cell: (r) => <TextCell icon="file-text">{r.title}</TextCell>,
+              },
+              {
+                key: "container",
+                header: "Container",
+                shrink: true,
+                sortValue: (r) => r.container,
+                // A CHIP RATHER THAN A `KeyCell`, which is the one identifier
+                // cell and would otherwise be right: the containers above this
+                // grid are the filter for this very column, drawn as exactly
+                // this badge, and a column that spelled them differently would
+                // make the control and the thing it controls look like two
+                // different vocabularies.
+                cell: (r) => (
+                  <Tag appearance="outline" monospace>
+                    {r.container}
+                  </Tag>
+                ),
+              },
+              {
+                key: "kind",
+                header: "Kind",
+                shrink: true,
+                sortValue: (r) => (r.skill ? "skill" : r.onboarding ? "onboarding" : "page"),
+                cell: (r) =>
+                  r.skill ? (
+                    // A TOOL SKILL IS MACHINERY, marked so a reader does not
+                    // take it for guidance somebody wrote to be read: it is
+                    // documentation the engine injects into a phase.
+                    <Tag variant="info" title="Injected into a phase by the tool-skill registry">
+                      tool skill
+                    </Tag>
+                  ) : r.onboarding ? (
+                    <Tag variant="warning" title="Where a new seat's reading starts">
+                      onboarding
+                    </Tag>
+                  ) : (
+                    <span className="muted">page</span>
+                  ),
+              },
+              {
+                key: "status",
+                header: "Status",
+                shrink: true,
+                sortValue: (r) => r.status,
+                cell: (r) => (
+                  <Tag variant={STATUS_TONE[r.status] ?? "neutral"} dot>
+                    {r.status}
+                  </Tag>
+                ),
+              },
+              {
+                key: "version",
+                header: "Version",
+                shrink: true,
+                align: "right",
+                sortValue: (r) => r.version,
+                // A VERSION IS AN IDENTIFIER, not a quantity: v10 does not
+                // mean ten of anything, so it wears the mono face a key wears
+                // rather than the tabular one a `NumberCell` counts in.
+                cell: (r) => <KeyCell value={`v${r.version}`} />,
+              },
+              {
+                key: "author",
+                header: "Author",
+                shrink: true,
+                sortValue: (r) => r.author ?? "",
+                // HALF A CELL, and the other half is the reason: `SeatCell` is
+                // the one rendering of a person in a grid, and a page with no
+                // author was written by the ENGINE rather than by nobody. The
+                // `—` this column drew said the opposite — that the author is
+                // a thing nothing recorded — about every page the tool-skill
+                // catalogue publishes.
+                cell: (r) => {
+                  if (!r.author) return <span className="muted">the engine</span>;
+                  const who = index.byHandle.get(r.author);
+                  return <SeatCell handle={r.author} name={who?.name} kind={who?.kind} />;
+                },
+              },
+              {
+                key: "updated",
+                header: "Updated",
+                shrink: true,
+                align: "right",
+                sortValue: (r) => tsKey(r.updated_at),
+                cell: (r) => <DateCell at={r.updated_at} now={now} />,
+              },
+            ]}
           />
           {listing.more && (
             // A WINDOW LABELLED AS ONE: what is drawn of how many there are.
@@ -516,8 +521,8 @@ export function Pages({ container: fromPath }: { container?: string }) {
             <Card.Footer variant="meta">
               <span className="row wrap gap-2">
                 <span>
-                  {fmtExact(rows.length)} of {fmtExact(listing.total ?? 0)} pages loaded — sorted
-                  among these.
+                  {rows.length.toLocaleString()} of {(listing.total ?? 0).toLocaleString()} pages
+                  loaded — sorted among these.
                 </span>
                 <Button
                   variant="secondary"
@@ -527,15 +532,8 @@ export function Pages({ container: fromPath }: { container?: string }) {
                 >
                   Load more
                 </Button>
-                {listing.pageFailure && (
-                  // THE FAILURE WHOLE: the grant a refusal named, or that the
-                  // state log will not lift it — never a bare code.
-                  <QueryState
-                    error={listing.pageFailure.error}
-                    refusal={listing.pageFailure.refusal}
-                    detail={listing.pageFailure.detail ?? undefined}
-                    loading={false}
-                  />
+                {listing.pageError && (
+                  <span role="alert">The next pages could not be read ({listing.pageError}).</span>
                 )}
               </span>
             </Card.Footer>
@@ -607,6 +605,7 @@ function firstLines(body: string, max: number): { head: string; more: number } {
 export function PagePeek({ id }: { id: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
+  const now = useNow();
   const { data, loading, error, refusal } = useQuery(
     "page",
     { id },
@@ -648,7 +647,7 @@ export function PagePeek({ id }: { id: string }) {
               icon="file-text"
               title={page.title}
               status={pageFlags(data)}
-              facts={pageFacts({ page, history, seatName })}
+              facts={pageFacts({ page, history, now, seatName })}
             />
             <div className="col gap-3">
               <Card>
@@ -721,7 +720,7 @@ export function PagePeek({ id }: { id: string }) {
                         </span>
                         {rev.message && <span className="muted truncate">{rev.message}</span>}
                         <span className="spacer" />
-                        <DateCell at={rev.created_at} />
+                        <DateCell at={rev.created_at} now={now} />
                       </span>
                     ))}
                     {history.length > PEEK_SAVES && (

@@ -31,7 +31,7 @@
  *
  * # The operation id is minted HERE, before the first request, and kept
  *
- * The node finishes a gesture under its own budget whatever happens
+ * The node finishes a gesture under its own one-minute budget whatever happens
  * to the connection, so a request that timed out or dropped has very likely
  * done its work — and an id the route minted comes back only in the answer
  * that never arrived. So the dialog mints the id in the engine's grammar

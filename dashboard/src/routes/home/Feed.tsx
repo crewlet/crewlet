@@ -15,14 +15,9 @@
  * then brought newer rows would push rows out of the first page that belong
  * to neither — a hole in the middle of a feed. A filter change starts a live
  * one again.
- *
- * A ROW'S TIME IS READ OFF THE CLOCK IN ITS OWN CELL, and the feed itself takes
- * none of it: handed the second, every row redrew once a second for a column
- * that moves at midnight. A TASK IS LINKED BY ITS ADDRESS (`itemAddress`): a
- * key another task claimed first opens that task.
  */
 
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Button, Card, SegmentedControl } from "@crewlethq/ui";
 import {
   CircleCheckGlyph,
@@ -38,24 +33,9 @@ import { useMediaQuery } from "~/lib/media.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { useClient, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, type OrgIndex } from "~/lib/seats.ts";
-import {
-  dateFormatter,
-  fmtCount,
-  fmtDateCompact,
-  parseUTC,
-  plural,
-  readerDay,
-} from "~/lib/format.ts";
+import { fmtCount, fmtDateCompact, parseUTC, plural, readerDay } from "~/lib/format.ts";
 import { zone } from "~/lib/prefs.ts";
-import { itemPath } from "~/lib/work.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
-import {
-  queryFailure,
-  type CompanyFeedAnswer,
-  type FeedEntry,
-  type FeedWorkRow,
-  type QueryFailure,
-} from "~/protocol/index.ts";
+import type { CompanyFeedAnswer, FeedEntry } from "~/protocol/index.ts";
 import {
   FEED_FILTERS,
   FEED_PHRASES,
@@ -68,7 +48,7 @@ import {
 /** One screen of the feed before "Load older". */
 export const FEED_PAGE = 20;
 
-export function Feed() {
+export function Feed({ now }: { now: number }) {
   const [filterValue, setFilter] = useParam("feed", "all");
   const filter = feedFilterOf(filterValue);
   const org = useOrg();
@@ -89,10 +69,7 @@ export function Feed() {
     pages: CompanyFeedAnswer[];
   } | null>(null);
   const [paging, setPaging] = useState(false);
-  // WHY THE LAST OLDER PAGE FAILED, WHOLE — its refusal beside its code — so
-  // the line can say which grant would admit the reader, and when the state
-  // log will not lift a refusal, rather than that a read failed.
-  const [pageFailure, setPageFailure] = useState<QueryFailure | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
   const key = filter.value;
   const held = older && older.key === key ? older : null;
   const head = held?.head ?? live.data;
@@ -102,7 +79,7 @@ export function Feed() {
   const loadOlder = useCallback(async () => {
     if (!next || !head) return;
     setPaging(true);
-    setPageFailure(null);
+    setPageError(null);
     try {
       const page = await socket.query("company_feed", { ...params, cursor: next });
       setOlder((prev) =>
@@ -111,7 +88,7 @@ export function Feed() {
           : { key, head, pages: [page] },
       );
     } catch (err) {
-      setPageFailure(queryFailure(err));
+      setPageError(err instanceof Error ? err.message : "query_failed");
     } finally {
       setPaging(false);
     }
@@ -168,19 +145,13 @@ export function Feed() {
               key={`${row.kind}:${row.work?.id ?? row.page?.id ?? i}`}
               row={row}
               index={index}
+              now={now}
             />
           ))}
         </ul>
-        {(next || pageFailure) && (
+        {(next || pageError) && (
           <div className="home-feed-more">
-            {pageFailure && (
-              <QueryState
-                error={pageFailure.error}
-                refusal={pageFailure.refusal}
-                detail={pageFailure.detail ?? undefined}
-                loading={false}
-              />
-            )}
+            {pageError && <span className="t-caption">Could not read older activity.</span>}
             <Button size="small" variant="ghost" loading={paging} onClick={() => void loadOlder()}>
               Load older
             </Button>
@@ -191,12 +162,12 @@ export function Feed() {
   );
 }
 
-function FeedRow({ row, index }: { row: FeedEntry; index: OrgIndex }) {
-  const { icon, text, aside } = phrase(row, index);
+function FeedRow({ row, index, now }: { row: FeedEntry; index: OrgIndex; now: number }) {
+  const { icon, text, aside } = phrase(row, index, now);
   return (
     <li className="home-feed-row">
       <time className="home-feed-time mono" dateTime={row.at}>
-        <ClockText read={(now) => whenLabel(row.at, now)} />
+        {whenLabel(row.at, now)}
       </time>
       <span className="home-feed-mark" aria-hidden="true">
         {icon}
@@ -212,12 +183,12 @@ function whenLabel(at: string, now: number): string {
   const d = parseUTC(at);
   if (!d) return "";
   if (readerDay(d) === readerDay(now)) {
-    return dateFormatter(undefined, {
+    return d.toLocaleTimeString(undefined, {
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
       timeZone: zone(),
-    }).format(d);
+    });
   }
   return fmtDateCompact(at, now);
 }
@@ -227,25 +198,18 @@ function nameOf(index: OrgIndex, handle: string | undefined): string {
   return index.byHandle.get(handle)?.name ?? handle;
 }
 
-/** The task a row is about: its key as a reader reads it, linked by its address. */
-function Key({ row }: { row: FeedWorkRow }) {
-  if (!row.key && !row.task) return null;
+function Key({ value }: { value: string | undefined }) {
+  if (!value) return null;
   return (
-    <a
-      className="home-feed-key mono"
-      href={href(itemPath({ id: row.task, key: row.key, key_collision: row.key_collision }))}
-    >
-      {row.key || row.task}
+    <a className="home-feed-key mono" href={href(["work", value])}>
+      {value}
     </a>
   );
 }
 
 /** A row in words: its mark, its sentence and the fact at its end. Every verb
  *  is `FEED_PHRASES`' or `scheduleVerb`'s — see `model.ts`. */
-function phrase(
-  row: FeedEntry,
-  index: OrgIndex,
-): { icon: ReactNode; text: ReactNode; aside: ReactNode } {
+function phrase(row: FeedEntry, index: OrgIndex, now: number) {
   const w = row.work;
   if (w) {
     // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the directory binds
@@ -263,7 +227,7 @@ function phrase(
           icon: <CircleCheckGlyph size="sm" />,
           text: (
             <>
-              {who} {FEED_PHRASES.completed} <Key row={w} /> {w.title}
+              {who} {FEED_PHRASES.completed} <Key value={w.key} /> {w.title}
               {review}
             </>
           ),
@@ -277,7 +241,7 @@ function phrase(
           icon: <PlusGlyph size="sm" />,
           text: (
             <>
-              {who} {FEED_PHRASES.created} <Key row={w} /> {w.title}
+              {who} {FEED_PHRASES.created} <Key value={w.key} /> {w.title}
             </>
           ),
           aside: w.origin ? `from ${surfaceName(w.origin.surface)}` : "",
@@ -287,7 +251,7 @@ function phrase(
           icon: <UserGlyph size="sm" />,
           text: (
             <>
-              {who} {FEED_PHRASES.handoff} <Key row={w} /> from {nameOf(index, w.from)} to{" "}
+              {who} {FEED_PHRASES.handoff} <Key value={w.key} /> from {nameOf(index, w.from)} to{" "}
               {nameOf(index, w.to)}
             </>
           ),
@@ -326,7 +290,6 @@ function phrase(
   }
   // SINCE IS THE OLDEST RUN THE ROW FOLDS, on the same clock as every time in
   // the column: "since 02:40" beside "ran 12 times" says over what span.
-  const since = s.since;
   return {
     icon: <CalendarClockGlyph size="sm" />,
     text: (
@@ -335,11 +298,6 @@ function phrase(
         {s.target ? ` for ${nameOf(index, s.target)}` : ""}
       </>
     ),
-    aside:
-      since && (s.runs ?? 1) > 1 ? (
-        <ClockText read={(now) => `since ${whenLabel(since, now)}`} />
-      ) : (
-        ""
-      ),
+    aside: s.since && (s.runs ?? 1) > 1 ? `since ${whenLabel(s.since, now)}` : "",
   };
 }

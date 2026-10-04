@@ -8,7 +8,7 @@
  * omitting the field and letting a default on the far side decide.
  */
 
-import { cleanup, fireEvent, poll, render, screen, waitFor } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
 
@@ -358,20 +358,9 @@ test("a surface that is busy is retried rather than abandoning the rest", async 
       });
       if (path.endsWith("/jira") && refusals > 0) {
         refusals--;
-        // THE ENGINE'S OWN BUSY ANSWER: its code, its sentence, the
-        // detail and the Retry-After the disconnect route writes.
         return new Response(
-          JSON.stringify({
-            error: "surface_busy",
-            message:
-              "Something else is writing to this integration right now. " +
-              "Try again in a moment; nothing was changed.",
-            detail:
-              "setupapi: this surface is being written at: jira is being " +
-              "provisioned right now, so the disconnect was not started; try " +
-              "again in a moment",
-          }),
-          { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "3" } },
+          JSON.stringify({ error: "surface_busy", detail: "try again in a moment" }),
+          { status: 503 },
         );
       }
       return new Response(JSON.stringify({ key: "x", disconnecting: true }), { status: 202 });
@@ -391,10 +380,10 @@ test("a surface that is busy is retried rather than abandoning the rest", async 
 
   // THE WAIT IS SAID, and not as an error: the disconnect has not failed, it
   // has not started.
-  await poll(() => expect(screen.getByText(/has to wait its turn/)).toBeTruthy());
+  await vi.waitFor(() => expect(screen.getByText(/has to wait its turn/)).toBeTruthy());
   await vi.advanceTimersByTimeAsync(10_000);
 
-  await poll(() => expect(done).toHaveBeenCalled());
+  await vi.waitFor(() => expect(done).toHaveBeenCalled());
   const asked = sent.filter((s) => s.method === "DELETE").map((s) => s.path);
   for (const kind of ["jira", "confluence", "atlassian"]) {
     expect(asked.some((p) => p.endsWith(`/${kind}`))).toBe(true);
@@ -409,16 +398,8 @@ test("a surface that is busy is retried rather than abandoning the rest", async 
  *
  * Retrying a status row the node could not write is a loop the fault does not
  * end, and the operator needs the banner and the way out rather than a spinner.
- *
- * THE ENGINE'S OWN ANSWER, verbatim: `503 unavailable` with its sentence and a
- * `Retry-After` (internal/api/setupapi's disconnect route, through
- * httpjson.UnavailableWith). It used to answer `internal_error`, and a fixture
- * still stubbing that passed while exercising an answer nothing sends — so a
- * dialog that started obeying the header here would have gone unnoticed. The
- * clock is run well past the header to prove it is not obeyed.
  */
 test("a refusal that is not a race stops and offers the force", async () => {
-  vi.useFakeTimers();
   const sent: Sent[] = [];
   vi.stubGlobal(
     "fetch",
@@ -430,15 +411,10 @@ test("a refusal that is not a race stops and offers the force", async () => {
       });
       return new Response(
         JSON.stringify({
-          error: "unavailable",
-          message:
-            "This node cannot answer that right now — ask it again when it says to, " +
-            "or, where it gives no time, ask another node or an operator.",
-          detail:
-            "setupapi: this node could not take jira to record the disconnect: " +
-            "the fleet status row could not be written",
+          error: "internal_error",
+          detail: "the fleet status row could not be written",
         }),
-        { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "2" } },
+        { status: 503 },
       );
     }),
   );
@@ -446,100 +422,7 @@ test("a refusal that is not a race stops and offers the force", async () => {
   render(<DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={() => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
 
-  await poll(() => expect(screen.getByText(/status row could not be written/)).toBeTruthy());
-  await vi.advanceTimersByTimeAsync(10_000);
+  await waitFor(() => expect(screen.getByText(/status row could not be written/)).toBeTruthy());
   expect(screen.queryByText(/has to wait its turn/)).toBeNull();
   expect(sent.filter((s) => s.method === "DELETE")).toHaveLength(1);
-});
-
-/**
- * A BUSY SURFACE IS ASKED AGAIN WHEN THE ENGINE SAYS, and a busy answer that
- * says nothing about when is not waited out at all.
- *
- * The dialog re-asked every three seconds of its own, and the engine's
- * `Retry-After` on the refusal was justified as matching that cadence — two
- * copies of one number with the engine's the one nobody read. So the header
- * is the wait: a surface the engine says is busy for seven seconds is not
- * asked at three, and a busy answer with no `Retry-After` is the engine's
- * statement that waiting will not clear it, which ends the wait with the
- * refusal on screen and nothing asked again.
- */
-function busyThen(headers: Record<string, string>, refusals: number, asked: number[]) {
-  let left = refusals;
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      // WHEN each DELETE went out, on the fake clock: `poll` moves that
-      // clock as it polls, so the gaps between asks are what can be held,
-      // never a count at an absolute instant.
-      if ((init?.method ?? "GET") === "DELETE") asked.push(Date.now());
-      if (left > 0) {
-        left--;
-        return new Response(
-          JSON.stringify({
-            error: "surface_busy",
-            message:
-              "Something else is writing to this integration right now. " +
-              "Try again in a moment; nothing was changed.",
-            detail: "setupapi: this surface is being written at",
-          }),
-          { status: 503, headers: { "Content-Type": "application/json", ...headers } },
-        );
-      }
-      return new Response(JSON.stringify({ key: "jira", disconnecting: true }), { status: 202 });
-    }),
-  );
-}
-
-/**
- * The gaps between consecutive asks, in whole seconds, rounded DOWN: `poll`
- * moves the fake clock in 50 ms steps while it polls for the refusal to land,
- * which the first wait can start behind. A wait of the dialog's old three
- * seconds against a hint of seven reads as 3, never 7.
- */
-const gaps = (asked: number[]) =>
-  asked.slice(1).map((at, i) => Math.floor((at - asked[i]!) / 1_000));
-
-test("a busy surface is asked again when its Retry-After says", async () => {
-  vi.useFakeTimers();
-  const asked: number[] = [];
-  busyThen({ "Retry-After": "7" }, 1, asked);
-  const done = vi.fn();
-  render(<DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={done} />);
-  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
-
-  await poll(() => expect(screen.getByText(/has to wait its turn/)).toBeTruthy());
-  await vi.advanceTimersByTimeAsync(10_000);
-  await poll(() => expect(done).toHaveBeenCalled());
-  expect(gaps(asked)).toEqual([7]);
-});
-
-test("a busy answer with no Retry-After is not waited out", async () => {
-  vi.useFakeTimers();
-  const asked: number[] = [];
-  busyThen({}, 1, asked);
-  render(<DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={() => {}} />);
-  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
-
-  await poll(() => expect(screen.getByText(/being written at/)).toBeTruthy());
-  await vi.advanceTimersByTimeAsync(60_000);
-  expect(screen.queryByText(/has to wait its turn/)).toBeNull();
-  expect(asked).toHaveLength(1);
-});
-
-// THE WINDOW BOUNDS THE WHOLE WAIT: a surface still busy when the next wait
-// would end past it is given up on then, rather than one hint late.
-test("a busy surface is given up on once the next wait would end past the window", async () => {
-  vi.useFakeTimers();
-  const asked: number[] = [];
-  busyThen({ "Retry-After": "20" }, 10, asked);
-  render(<DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={() => {}} />);
-  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
-
-  await poll(() => expect(screen.getByText(/has to wait its turn/)).toBeTruthy());
-  await vi.advanceTimersByTimeAsync(120_000);
-  // Asked at 0, 20 and 40 seconds; a fourth wait would end at 60, past the
-  // 45-second window, so the third refusal is the answer.
-  expect(gaps(asked)).toEqual([20, 20]);
-  await poll(() => expect(screen.getByText(/being written at/)).toBeTruthy());
 });

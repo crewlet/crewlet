@@ -27,7 +27,6 @@ import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { activityOf, roundLabel, staleness, stoppedLine, type NameOf } from "./seats.ts";
-import { fmtExact } from "./format.ts";
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -313,9 +312,6 @@ export function attentionQueue(input: AttentionInput): Attention[] {
   }
 
   // --- seats ---------------------------------------------------------------
-  // Each row's id is the seat's AGENT ID, never its name: two seats sharing a
-  // name that both stopped were one row, and the queue said one seat was down
-  // when two were.
   for (const agent of agents) {
     const state = activityOf(agent);
     if (agent.last_error) {
@@ -454,7 +450,7 @@ function waitingDetail(run: SandboxRun, now: number): string {
 /** A refusing window in words: the gate's own stamp where it has one, and the
  *  arithmetic where the window is full but no charge has been turned away yet. */
 function refusalWords(w: BudgetWindow): string {
-  const spent = `${fmtExact(w.used)} of ${fmtExact(w.limit ?? 0)} tokens in ${w.window}.`;
+  const spent = `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens in ${w.window}.`;
   return w.refused_at
     ? `Turns are being declined at the budget gate; last refusal ${w.refused_at}. ${spent}`
     : `No further charge fits, so turns are being declined at the gate. ${spent}`;
@@ -462,5 +458,5 @@ function refusalWords(w: BudgetWindow): string {
 
 /** A near window's spend in words. */
 function spentWords(w: BudgetWindow): string {
-  return `${fmtExact(w.used)} of ${fmtExact(w.limit ?? 0)} tokens in ${w.window} are spent.`;
+  return `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens in ${w.window} are spent.`;
 }

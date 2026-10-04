@@ -9,7 +9,7 @@
  * each refuse, or none and no word about why.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -30,8 +30,18 @@ class InertWebSocket {
 }
 
 const JANE = {
-  login: "jane.founder",
-  grants: ["state:read", "work:write"],
+  login: "U0FOUNDER",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -164,7 +174,6 @@ describe("a writer", () => {
     reply = { status: 409, body: { error: "stale_version", tool: "update_work_item", detail: "" } };
     mount(JANE, {
       work_activity: {
-        // A PERSON THE DIRECTORY BINDS TO A SEAT WRITES AS THE SEAT.
         records: [{ id: "h-9", kind: "status_changed", actor: "maya", actor_kind: "human" }],
         complete: true,
       },
@@ -186,13 +195,6 @@ describe("a writer", () => {
 // that each refuse.
 describe.each([
   { who: "an anonymous reader", viewer: { anonymous: true }, reason: WRITE_REASONS.anonymous },
-  // UNBOUND IS NOT A BLOCK: an unbound reader edits under their own login, so
-  // what holds them is what holds anybody — the change the engine will not make.
-  {
-    who: "an unbound reader the engine does not change tasks for",
-    viewer: { login: "ci.release", handle: "", owner: "ci.release", acts: [] },
-    reason: WRITE_REASONS.not_served,
-  },
   {
     who: "a person the engine does not change tasks for",
     viewer: { ...JANE, acts: [] },

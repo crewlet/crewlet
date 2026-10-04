@@ -24,7 +24,6 @@ import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { fmtDateCompact, fmtDateTime, toWall } from "~/lib/format.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { WorkComment } from "~/protocol/index.ts";
 import { whoOf } from "./NoticeList.tsx";
@@ -54,16 +53,14 @@ export function Thread({
   item,
   of,
   index,
+  now,
   onTitle,
 }: {
-  /**
-   * The task's ADDRESS (`itemAddress`): its key, or its id where another task
-   * claimed the key first — by the key, a duplicate's thread was its
-   * claimant's.
-   */
+  /** The task's key or id. */
   item: string;
   of: ThreadOf;
   index: OrgIndex;
+  now: number;
   /** Told the task's title, which the newest page carries. */
   onTitle?: (title: string) => void;
 }) {
@@ -105,6 +102,7 @@ export function Thread({
           cursor={cursor}
           of={of}
           index={index}
+          now={now}
           onPage={onPage}
           onTitle={cursor ? undefined : onTitle}
         />
@@ -125,6 +123,7 @@ function ThreadPage({
   cursor,
   of,
   index,
+  now,
   onPage,
   onTitle,
 }: {
@@ -132,6 +131,7 @@ function ThreadPage({
   cursor: string;
   of: ThreadOf;
   index: OrgIndex;
+  now: number;
   onPage: (cursor: string, next: string | null, count: number) => void;
   onTitle?: (title: string) => void;
 }) {
@@ -166,7 +166,9 @@ function ThreadPage({
                 ? (of.options?.find((o) => o.id === c.choice)?.label ?? c.choice)
                 : ""
             }
+
             index={index}
+            now={now}
           />
         ))}
       </ol>
@@ -178,11 +180,13 @@ function ThreadEntry({
   comment,
   chose,
   index,
+  now,
 }: {
   comment: WorkComment;
   /** The option this answer chose, by its words, or "". */
   chose: string;
   index: OrgIndex;
+  now: number;
 }) {
   // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the identity directory
   // binds to a seat comments AS that seat, and anybody bound to none under
@@ -190,13 +194,9 @@ function ThreadEntry({
   // engine's.
   const who = whoOf(index, comment.author, comment.author_kind);
   // THE READER'S OWN CLOCK, to the minute: a time alone today, the date with
-  // it before — read in the cell, so a tick re-renders this time and nothing
-  // around it.
+  // it before.
   const wall = toWall(Date.parse(comment.created_at));
-  const when = (now: number) =>
-    wall.slice(0, 10) === toWall(now).slice(0, 10)
-      ? wall.slice(11)
-      : `${fmtDateCompact(comment.created_at, now)} ${wall.slice(11)}`;
+  const today = wall.slice(0, 10) === toWall(now).slice(0, 10);
   return (
     <li className="inbox-thread-entry">
       <SeatAvatar
@@ -209,7 +209,9 @@ function ThreadEntry({
         <div className="inbox-thread-meta">
           <strong>{who?.name ?? "The engine"}</strong>
           <time dateTime={comment.created_at} title={fmtDateTime(comment.created_at)}>
-            <ClockText read={when} />
+            {today
+              ? wall.slice(11)
+              : `${fmtDateCompact(comment.created_at, now)} ${wall.slice(11)}`}
           </time>
           {chose && comment.body.trim() && <span className="t-caption">{`chose “${chose}”`}</span>}
         </div>

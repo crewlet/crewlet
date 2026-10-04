@@ -8,7 +8,7 @@
  * pixel the time leaves.
  */
 
-import { cleanup, render } from "~/test/inCase.ts";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import { EventRow } from "./common.tsx";

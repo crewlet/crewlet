@@ -33,7 +33,7 @@
  * than offering a button the engine would refuse.
  */
 
-import { firstLine, relTime } from "~/lib/format.ts";
+import { firstLine } from "~/lib/format.ts";
 import { useMemo, type ReactNode } from "react";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -44,9 +44,8 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, type OrgIndex } from "~/lib/seats.ts";
 import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
-import { itemAddress, itemPath, type ItemRef } from "~/lib/work.ts";
-import { useClockReading } from "~/lib/clock.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
+import { relTime } from "~/lib/format.ts";
+import { CONFIG_WRITE_GRANT } from "~/lib/useWriteAccess.ts";
 import type {
   AgentRow,
   BudgetWindow,
@@ -109,10 +108,9 @@ export function seatConditionsOf(agents: readonly AgentRow[]): SeatCondition[] {
  * A STOPPED SEAT HAS TWO WAYS OUT, and a seat is waiting on a reader exactly
  * when they can take one of them:
  *
- *  - RAISE THE CEILING — a seat's ceiling is its runtime half on the org
- *    chart and the company's is a setting of the company document, and the
- *    engine takes either write only from a principal holding `config:write`,
- *    so the reader's GRANT decides it, never who they are bound to;
+ *  - RAISE THE CEILING — a change to the company document, which `/config`
+ *    takes only from a principal holding `config:write`, so the reader's
+ *    GRANT decides it, never who they are bound to;
  *  - HAND THE ITEM ON — `update_work_item` as the reader, which needs the
  *    engine to serve that write for them (`viewer.acts`) AND an item the seat
  *    was on: a seat stopped between turns has nothing to hand on.
@@ -128,7 +126,7 @@ export function seatDecisionsFor<T extends { row: AgentRow }>(
 ): { mine: T[]; others: T[] } {
   const mine: T[] = [];
   const others: T[] = [];
-  const raises = viewer.grants.includes("config:write");
+  const raises = viewer.grants.includes(CONFIG_WRITE_GRANT);
   for (const c of conditions) {
     const item = c.row.turn?.work_item ?? c.row.live_call?.work_item ?? null;
     const reassign = item !== null && viewer.acts.includes("update_work_item");
@@ -139,8 +137,7 @@ export function seatDecisionsFor<T extends { row: AgentRow }>(
 
 /**
  * The engine's decisions and the stopped seats the reader can act on as one
- * list, newest first — the order Home's card and the Inbox's "Needs a
- * decision" both draw.
+ * list, newest first — the order Home's card and the Inbox's "Needs a decision" both draw.
  */
 export function decisionSubjects(
   answer: DecisionsAnswer | null,
@@ -183,23 +180,22 @@ export interface Decider {
 export function DecisionRow({
   subject,
   decider,
+  now,
 }: {
   subject: DecisionSubject;
   /** Whose decisions these are: a line says so when the asker reports to them. */
   decider: Decider;
+  now: number;
 }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
-  // THE CLOCK IS READ WHERE THE TIME IS DRAWN (`Ago`, the hold line), never
-  // handed down: a list handed the screen's `now` drew every row, its buttons
-  // and their dialogs again once a second for a line that moves once a minute.
   switch (subject.kind) {
     case "ask":
-      return <AskRow ask={subject.ask} index={index} decider={decider} />;
+      return <AskRow ask={subject.ask} index={index} decider={decider} now={now} />;
     case "run":
-      return <RunRow run={subject.run} index={index} />;
+      return <RunRow run={subject.run} index={index} now={now} />;
     case "seat":
-      return <SeatRow seat={subject.seat} index={index} />;
+      return <SeatRow seat={subject.seat} index={index} now={now} />;
   }
 }
 
@@ -211,7 +207,15 @@ export function DecisionRow({
  * are none: what an empty one says is the caller's — a section must say
  * something, a card stacked among others must not.
  */
-export function AskList({ rows, decider }: { rows: readonly WorkAskRow[]; decider: Decider }) {
+export function AskList({
+  rows,
+  decider,
+  now,
+}: {
+  rows: readonly WorkAskRow[];
+  decider: Decider;
+  now: number;
+}) {
   if (rows.length === 0) return null;
   return (
     <ul className="decision-list">
@@ -220,6 +224,7 @@ export function AskList({ rows, decider }: { rows: readonly WorkAskRow[]; decide
           key={ask.comment}
           subject={{ kind: "ask", at: ask.asked_at, ask }}
           decider={decider}
+          now={now}
         />
       ))}
     </ul>
@@ -259,21 +264,13 @@ function seatOf(index: OrgIndex, handle: string): { name: string; kind: "agent" 
   return { name: seat?.name ?? handle, kind: seat?.kind ?? "agent" };
 }
 
-/**
- * A key, in the mono face every key is drawn in, linking to its item by its
- * ADDRESS (`itemAddress`): a key another task claimed first opens that task.
- */
-function Key({ item }: { item: ItemRef }) {
+/** A key, in the mono face every key is drawn in, linking to its item. */
+function Key({ value }: { value: string }) {
   return (
-    <a className="decision-key mono" href={href(itemPath(item))}>
-      {item.key || item.id}
+    <a className="decision-key mono" href={href(["work", value])}>
+      {value}
     </a>
   );
-}
-
-/** How long ago, read off the clock by the words themselves. */
-function Ago({ at }: { at: string }) {
-  return <ClockText read={(now) => relTime(at, now)} />;
 }
 
 function joined(parts: ReactNode[]): ReactNode {
@@ -286,7 +283,17 @@ function joined(parts: ReactNode[]): ReactNode {
   ));
 }
 
-function AskRow({ ask, index, decider }: { ask: WorkAskRow; index: OrgIndex; decider: Decider }) {
+function AskRow({
+  ask,
+  index,
+  decider,
+  now,
+}: {
+  ask: WorkAskRow;
+  index: OrgIndex;
+  decider: Decider;
+  now: number;
+}) {
   // THE AUTHOR IS THE SEAT: a person the identity directory binds to a seat
   // writes AS it, so the asker is that seat, and a principal bound to none
   // draws as its own login.
@@ -305,7 +312,7 @@ function AskRow({ ask, index, decider }: { ask: WorkAskRow; index: OrgIndex; dec
     .get(askerHandle)
     ?.managers.some((m) => m.handle === decider.handle);
   const sub = joined([
-    <Key key="k" item={ask} />,
+    <Key key="k" value={ask.key} />,
     decision ? `${them ? `${them} is` : "you are"} the ${decision.role}` : `asked ${them ?? "you"}`,
     reports ? `${asker.name} reports to ${them ?? "you"}` : "",
     recommended ? (
@@ -315,7 +322,7 @@ function AskRow({ ask, index, decider }: { ask: WorkAskRow; index: OrgIndex; dec
     ) : (
       ""
     ),
-    <Ago key="t" at={ask.asked_at} />,
+    relTime(ask.asked_at, now),
   ]);
   // WHAT THE ANSWER SETS OFF, said beside the buttons that send it: a person
   // choosing an option should know the asker is woken with it and — where the
@@ -336,7 +343,7 @@ function AskRow({ ask, index, decider }: { ask: WorkAskRow; index: OrgIndex; dec
       actions={
         decision && decision.options.length > 0 ? (
           <AnswerAskButtons
-            item={itemAddress(ask)}
+            item={ask.key}
             comment={ask.comment}
             options={decision.options}
             recommended={decision.recommended}
@@ -346,7 +353,7 @@ function AskRow({ ask, index, decider }: { ask: WorkAskRow; index: OrgIndex; dec
           // other decision on this row: a link elsewhere sent the reader to
           // a pane with nowhere to write.
           <ReplyAskButton
-            item={itemAddress(ask)}
+            item={ask.key}
             comment={ask.comment}
             asker={asker.name}
             question={question}
@@ -357,17 +364,15 @@ function AskRow({ ask, index, decider }: { ask: WorkAskRow; index: OrgIndex; dec
   );
 }
 
-function RunRow({ run, index }: { run: SandboxRun; index: OrgIndex }) {
+function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: number }) {
   const who = seatOf(index, run.agent_handle);
-  const item = run.work_item ?? null;
+  const key = run.work_item?.key ?? "";
   const since = run.paused_at || run.updated_at;
-  // THE WORDS, NOT THE SECOND: the hold moves a minute at a time.
-  const held = useClockReading((now) => holdLine(run, now) ?? "");
   const sub = joined([
-    item ? <Key key="k" item={item} /> : "",
+    key ? <Key key="k" value={key} /> : "",
     run.question ? `“${run.question}”` : "",
     audienceOf(run, index),
-    <Ago key="t" at={since} />,
+    relTime(since, now),
   ]);
   return (
     <Row
@@ -375,7 +380,7 @@ function RunRow({ run, index }: { run: SandboxRun; index: OrgIndex }) {
       ring="warning"
       title={`${who.name}’s coding run is parked on a question`}
       sub={sub}
-      line={held || undefined}
+      line={holdLine(run, now)}
       actions={<AnswerRunButton turnId={run.turn_id} seat={who.name} question={run.question} />}
     />
   );
@@ -413,15 +418,15 @@ export function holdLine(run: SandboxRun, now: number): string | undefined {
   return `Its box is held for ${hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`} more`;
 }
 
-function SeatRow({ seat, index }: { seat: SeatCondition; index: OrgIndex }) {
+function SeatRow({ seat, index, now }: { seat: SeatCondition; index: OrgIndex; now: number }) {
   const handle = seat.row.handle ?? seat.row.role;
   const who = seatOf(index, handle);
   const item = seat.row.turn?.work_item ?? seat.row.live_call?.work_item ?? null;
   const period = seat.window ? PERIOD_ADJECTIVE[seat.window.period] : "";
   const sub = joined([
-    item ? <Key key="k" item={item} /> : "",
+    item ? <Key key="k" value={item.key} /> : "",
     item ? "stopped mid-turn" : "",
-    seat.at ? <Ago key="t" at={seat.at} /> : "",
+    seat.at ? relTime(seat.at, now) : "",
   ]);
   return (
     <Row
@@ -434,7 +439,7 @@ function SeatRow({ seat, index }: { seat: SeatCondition; index: OrgIndex }) {
           {/* RAISED WHERE IT IS REPORTED: the dialog opens on the scope
               that is refusing this seat, the stopped window focused. */}
           <RaiseBudgetButton handle={handle} name={who.name} window={seat.window} />
-          {item && <ReassignItem item={itemAddress(item)} />}
+          {item && <ReassignItem item={item.key} />}
         </>
       }
     />

@@ -27,8 +27,7 @@
  */
 
 import { useId, type ReactNode } from "react";
-import { dataColor } from "@crewlethq/ui";
-import { dateFormatter, fmtExact } from "~/lib/format.ts";
+import { DATA_COLOR_OTHER, dataColor } from "@crewlethq/ui";
 
 // ---------------------------------------------------------------------------
 
@@ -52,7 +51,7 @@ export function TimeSeries({
   to,
   height = 120,
   label,
-  format = fmtExact,
+  format = (n) => n.toLocaleString(),
 }: {
   series: {
     name: string;
@@ -170,15 +169,7 @@ export function TimeSeries({
 function formatEdge(at: number, span: number): string {
   const date = new Date(at);
   if (span >= 24 * 60 * 60 * 1000) {
-    return dateFormatter(undefined, { month: "short", day: "numeric" }).format(date);
+    return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
-  // `toLocaleString()`'s own defaults, spelled out: every component numeric.
-  return dateFormatter(undefined, {
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-    hour: "numeric",
-    minute: "numeric",
-    second: "numeric",
-  }).format(date);
+  return date.toLocaleString();
 }

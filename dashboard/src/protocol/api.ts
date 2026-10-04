@@ -9,7 +9,7 @@
  *
  * It is not the dashboard's only HTTP. Writes and the guarded reads no query
  * answers (`/secrets`, `/setup`, `/config`) go over REST through `rest.ts`,
- * and a screen reads those through `lib/restRead.ts`. What this file keeps is
+ * and a screen reads those through `lib/useRest.ts`. What this file keeps is
  * its own separation: it had a second entry once, and that one is why the
  * Fleet screen shipped dead — a screen reaching for its own transport takes
  * its client from somewhere, and the somewhere it chose was a context field
@@ -17,6 +17,7 @@
  */
 
 import { retryHintOf } from "./rest.ts";
+import { needSession } from "./signin.ts";
 import type { Snapshot } from "./types.ts";
 
 /**
@@ -51,10 +52,14 @@ export const api = {
       // dashboard makes (see rest.ts).
       const response = await fetch(location.origin + "/stream/snapshot", {
         credentials: "same-origin",
+        cache: "no-store",
       });
       if (!response.ok) {
-        // WHOSE REFUSAL, read by the rule every other read takes: only a
-        // 503 carrying the engine's own error code carries its hint.
+        // A 401 is nobody signed in, which the sign-in screen repairs — the
+        // same reading `rest.ts` gives every other request's.
+        if (response.status === 401) needSession("sign_in");
+        // WHOSE REFUSAL, read by the rule every other read takes: only a 503
+        // carrying the engine's own error code carries its hint.
         return { state: "unread", retryAfter: await retryHintOf(response) };
       }
       return { state: "read", snapshot: (await response.json()) as Snapshot };

@@ -16,7 +16,7 @@
 
 import { Card, DATA_COLOR_OTHER, StackedColumns } from "@crewlethq/ui";
 import { QueryState } from "~/components/common.tsx";
-import { companyDateLabel, fmtExact } from "~/lib/format.ts";
+import { companyDateLabel } from "~/lib/format.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { WorkFlowAnswer } from "~/protocol/index.ts";
 
@@ -47,7 +47,7 @@ export function CompletedChart({ flow }: { flow: QueryResult<WorkFlowAnswer> }) 
         </div>
         {points.length > 0 && (
           <span className="home-chart-figure">
-            {fmtExact(week)}
+            {week.toLocaleString()}
             <span className="home-chart-figure-unit"> in 7 days</span>
           </span>
         )}
@@ -59,7 +59,7 @@ export function CompletedChart({ flow }: { flow: QueryResult<WorkFlowAnswer> }) 
           legend="none"
           height="9.5rem"
           label="Tasks completed per company day, the last fourteen days"
-          format={(v) => fmtExact(Math.round(v))}
+          format={(v) => Math.round(v).toLocaleString()}
           formatTime={(at) => labels.get(at) ?? ""}
         />
       </QueryState>

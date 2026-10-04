@@ -111,10 +111,6 @@ export interface Band {
 export function bandsOf(series: TokenSeries | null, group?: string): Band[] {
   return (series?.by_group ?? []).map((b, i) => ({
     key: b.other ? "" : b.group,
-    // THE ENGINE'S WORDS WHERE IT SENT SOME: a seat band is keyed by the
-    // seat's agent id and a unit band by the unit's key — identities, since
-    // two seats or two units may share a name — and neither is words a
-    // reader should be handed. A phase band is named by the contract.
     label: b.other
       ? `other (${b.folded})`
       : group === "phase"

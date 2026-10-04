@@ -27,15 +27,14 @@
  * because a chart drawn from a hierarchy that disagrees with its own seats is
  * a chart that lies.
  *
- * THE GUARDED HALF IS NOT HERE EITHER. `/org` is anonymously readable, so the
- * projection carries a charter, a tree and the budgets as written — and, to a
- * reader holding the grant that reads the company's configuration, each agent
- * seat's RESOLVED model chain and tool sources, which are derived from the
- * runtime half and follow its rule. Nothing else: a seat's authored model
- * chain, token budget, contact identities, tool credentials and schedules are
- * the org chart's RUNTIME half, read through `GET /chart/seats/{handle}` where
- * the reader may have it (`lib/chartReads.ts`, [useSeatSetup]), and
- * [seatReading] below says what that read answered.
+ * THE GUARDED HALF IS NOT HERE EITHER. `/org` is the `state:read` projection,
+ * so it carries a charter, a tree and the budgets as written — and, to a
+ * reader holding `config:read`, each agent seat's RESOLVED model chain and
+ * tool sources ([resolvedAbsence] says what their absence means to everybody
+ * else). Nothing else: a seat's email, authored `llm` fields, contact
+ * identities, tool credentials, integrations and schedules are read from the
+ * company document through the `config` query, which takes `config:read` and
+ * is what [seatSettings] and [unitSettings] below are for.
  *
  * Resolved ONCE, into an index, and screens consume seats. Doing it per screen
  * is how the previous dashboard ended up walking the whole roster once per
@@ -46,26 +45,24 @@
 import { useMemo } from "react";
 import { parseUTC, plural } from "./format.ts";
 import { needsSentence } from "./refusal.ts";
-import { chartSeat, chartUnit, useChartRead, WITH_RUNTIME } from "./chartReads.ts";
-import type { ChartReading } from "./chartReads.ts";
-import { useOrg, useOrgPushes } from "./store-hooks.ts";
+import { useQuery } from "./useQuery.ts";
+import { useOrg } from "./store-hooks.ts";
 import { useViewer } from "./viewer.ts";
 import { DELEGATE_TASKS, DELEGATE_TOOL, type SeatActivity } from "~/contract/wire.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type {
   AgentRow,
-  ChartSeat,
-  ChartSeatRead,
-  ChartUnit,
-  ChartUnitRead,
+  CompanyDocument,
+  ConfigRole,
+  ConfigUnit,
   Derived,
   LiveCall,
   OrgProjection,
   OrgSeat,
   OrgUnit,
+  PhaseLLM,
   ProviderKeys,
-  RestFailure,
-  SandboxEntry,
+  ScheduleSpec,
 } from "~/protocol/index.ts";
 
 /** One unit, as the projection wrote it and as the engine resolved it. */
@@ -73,27 +70,15 @@ export interface Unit {
   /** Stable React key and DOM id suffix: the unit's depth-first position. */
   key: string;
   /**
-   * The unit's KEY, and what ADDRESSES it — here and in every route
-   * ([unitPath]).
-   *
-   * The engine's own `Unit.Key`, carried on the projection: the declared `id:`
-   * where the unit has one and its name where it does not. Never the name
-   * alone. A name is prose, two units may share one, and a unit that declares
-   * an id is addressed by the chart, a schedule's scope and a report's finding
-   * under that id — so a page looked up by name opened the first unit of that
-   * name, or "no unit called" for a link carrying the id.
+   * The unit's KEY — the engine's `Unit.Key`, its declared `id:`, which the
+   * engine mints from the name when a document declares none — and how a
+   * unit is ADDRESSED, here and in every route ([unitRoute]). Every reference
+   * in the document names a unit by it: a `manages:` entry, a seat's `unit:`.
    */
   id: string;
-  /** What a person reads. Display only: nothing resolves a unit by it. */
+  /** What a person reads. Prose, and two units may share one, so nothing
+   *  addresses a unit by it. */
   name: string;
-  /**
-   * The keys a rename moved this unit off, which still ADDRESS it: the key it
-   * was created under ("" until a rename moved it off it) and every key it has
-   * answered to since, newest first. [unitByKey] resolves through them in the
-   * engine's own order, so a link somebody kept opens the unit it named.
-   */
-  originKey: string;
-  formerKeys: string[];
   /** The EFFECTIVE type where the hierarchy is reported, else as written. */
   type: string;
   purpose: string;
@@ -101,9 +86,10 @@ export interface Unit {
   /** Free-text knowledge references. NOT a read scope. */
   knowledge: string[];
   /**
-   * The lead AS THE DOCUMENT WRITES IT: a seat name, "" when the unit
-   * inherits one. Deliberately still a name rather than a resolved seat —
-   * `effectiveLead` is the resolved one, and the two are different facts.
+   * The lead AS THE DOCUMENT WRITES IT: a seat handle, "" when the unit
+   * inherits one. Deliberately still the reference rather than a resolved
+   * seat — `effectiveLead` is the resolved one, and the two are different
+   * facts.
    */
   lead: string;
   /** The effective lead, declared or inherited, resolved to a seat. */
@@ -160,20 +146,12 @@ export interface Seat {
    * that keys the seat's memory, so it never makes one up.
    */
   handle: string;
-  /**
-   * The handles a rename moved this seat off, which still ADDRESS it: the one
-   * it was created under ("" until a rename moved it off it) and every one it
-   * has answered to since, newest first. [seatByAddress] resolves through them
-   * in the engine's own order.
-   */
-  originHandle: string;
-  formerHandles: string[];
   kind: SeatKind;
   goal: string;
   backstory: string;
   responsibilities: string[];
   guidelines: string[];
-  /** The `manages` entries AS WRITTEN: seat and unit names, unexpanded. */
+  /** The `manages` entries AS WRITTEN: seat handles and unit keys, unexpanded. */
   manages: string[];
   availability: string;
   /** Root → own unit. Empty for a root-level seat. */
@@ -213,6 +191,8 @@ export interface OrgIndex {
   /** The outermost units, in document order. */
   topUnits: Unit[];
   byHandle: Map<string, Seat>;
+  /** The FIRST seat with each name. */
+  byName: Map<string, Seat>;
 }
 
 /**
@@ -227,72 +207,33 @@ export function seatPath(seat: Pick<Seat, "handle" | "name">): string[] {
   return ["agents", "seats", seat.handle || seat.name];
 }
 
-/**
- * The route segments that open a unit's page: its KEY, never its name.
- *
- * ONE HELPER for the reason [seatPath] is one: five screens built this path
- * for themselves, every one of them out of the unit's name, so two units
- * sharing a name opened the same page and a unit that declares an id was
- * unreachable from the chart's own findings and a schedule's scope, which
- * both name it by key.
- */
-export function unitPath(unit: Pick<Unit, "id">): string[] {
+/** The route segments that open a unit's page: its KEY, never its name. */
+export function unitRoute(unit: Pick<Unit, "id">): string[] {
   return ["agents", "teams", unit.id];
 }
 
 /**
- * The unit a route's segment addresses: the one whose KEY it is, or null.
- *
- * Exactly the key the projection carried, which is the engine's own
- * `Unit.Key` and so the value every link this product builds — [unitPath], a
- * schedule's scope, a report's finding — already holds. Never the name: two
- * units may share one, and a lookup by name opened whichever came first.
+ * The unit a route's segment addresses — the one whose KEY it is — or null.
+ * Never the name: two units may share one, and a lookup by name opened
+ * whichever came first.
  */
 export function unitByKey(index: Pick<OrgIndex, "units">, key: string): Unit | null {
   if (!key) return null;
-  // A RETIRED KEY TOO, and only after every live one has missed — the engine's
-  // own order (`Organization.Unit`): the key a unit was created under, then
-  // the keys it has answered to since. A link somebody kept to a team that has
-  // since been re-keyed opened "No unit" when this matched the current key
-  // alone; the screen then replaces the route with the key it holds now.
-  return (
-    index.units.find((u) => u.id === key) ??
-    index.units.find((u) => u.originKey === key) ??
-    index.units.find((u) => u.formerKeys.includes(key)) ??
-    null
-  );
+  return index.units.find((u) => u.id === key) ?? null;
 }
 
 /**
- * The seat a route's segment addresses, or null — resolved in the engine's own
- * order (`Organization.Role`): every current handle, then the handle each seat
- * was created under, then every handle a rename retired. A live handle never
- * loses to another seat's retired one, which is why these are three passes and
- * not one.
- *
- * NEVER A NAME, except for the one seat a name is the address of: a seat the
- * engine reported no handle for, which [seatPath] links to by name. A name is
- * prose and two seats may share it, so resolving any other link by name opened
- * whichever namesake came first — a different person's page under a URL that
- * looked right.
- *
- * A HANDLE IS LOWER CASE, so an address typed with capitals is read as the
- * handle it spells rather than as nobody.
+ * The roster row carrying a seat's live state, matched by the seat's HANDLE —
+ * which is the roster row's `id` — and never by its name: two seats may share
+ * a name, and a ring read off a namesake's row is a state the seat is not in.
  */
-export function seatByAddress(
-  index: Pick<OrgIndex, "seats" | "byHandle">,
-  address: string,
-): Seat | null {
-  if (!address) return null;
-  const found =
-    index.byHandle.get(address) ??
-    index.seats.find((s) => s.originHandle === address) ??
-    index.seats.find((s) => s.formerHandles.includes(address)) ??
-    index.seats.find((s) => s.handle === "" && s.name === address) ??
-    null;
-  if (found) return found;
-  const lower = address.toLowerCase();
-  return lower === address ? null : seatByAddress(index, lower);
+export function liveRowFor(
+  agents: readonly AgentRow[],
+  seat: Pick<Seat, "handle"> | null | undefined,
+): AgentRow | undefined {
+  const handle = seat?.handle;
+  if (!handle) return undefined;
+  return agents.find((a) => a.id === handle);
 }
 
 const list = <T>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
@@ -322,8 +263,6 @@ function newUnit(raw: OrgUnit, at: number): Unit {
     key: `u${at}`,
     id: raw.id ?? "",
     name: raw.name ?? "",
-    originKey: "",
-    formerKeys: [],
     type: raw.type ?? "",
     purpose: raw.purpose ?? "",
     goals: list(raw.goals),
@@ -347,8 +286,6 @@ function newSeat(raw: OrgSeat, handle: string, key: string): Seat {
     key,
     name: raw.name ?? "",
     handle,
-    originHandle: "",
-    formerHandles: [],
     kind: raw.kind === "human" ? "human" : "agent",
     goal: raw.goal ?? "",
     backstory: raw.backstory ?? "",
@@ -386,7 +323,7 @@ function link(authored: Authored): Unit[] {
  *
  * The block names units in depth-first order and seats by name, so the pairing
  * is CHECKED rather than assumed: the same number of units with the same keys
- * and names in the same order, every seat accounted for exactly once, and every handle
+ * in the same order, every seat accounted for exactly once, and every handle
  * it mentions belonging to one of them. Anything else returns null and the
  * caller falls back to the authored tree, because half a hierarchy drawn as a
  * whole one is worse than an honest "the engine did not say".
@@ -403,19 +340,15 @@ function overlay(authored: Authored, derived: Derived | undefined): OrgIndex | n
   for (let i = 0; i < units.length; i++) {
     const d = dUnits[i];
     const unit = units[i]!;
-    // BY KEY AND NAME, in position: the key is what tells two units sharing a
-    // name apart, and the name is what the tree draws.
-    if (!d || (d.id ?? "") !== unit.id || d.name !== unit.name) return null;
+    if (!d || d.id !== unit.id) return null;
     unit.type = d.type || unit.type;
-    unit.originKey = d.origin_key ?? "";
-    unit.formerKeys = list(d.former_keys);
     unit.channel = d.channel ?? "";
     unit.channelInherited = !!d.channel_inherited;
     unit.leadInherited = !!d.lead_inherited;
   }
 
-  // Seats pair by NAME, and a name that repeats (legal: a name is prose and
-  // nothing holds it unique) is not paired by position. The
+  // Seats pair by NAME, and a name that repeats (only possible in a revision
+  // stored before names had to be unique) is not paired by position. The
   // engine's order is not the document's — a root seat moved into a unit comes
   // after that unit's own seats — so the first "Designer" the engine lists can
   // be the second one the document wrote, and pairing them in turn would draw
@@ -444,8 +377,6 @@ function overlay(authored: Authored, derived: Derived | undefined): OrgIndex | n
     // the wire this build does not know is the same value everywhere.
     seat.kind = d.kind === "human" ? "human" : "agent";
     seat.placedByRef = !!d.placed_by_ref;
-    seat.originHandle = d.origin_handle ?? "";
-    seat.formerHandles = list(d.former_handles);
     byHandle.set(d.handle, seat);
     seats.push(seat);
   }
@@ -503,6 +434,7 @@ function overlay(authored: Authored, derived: Derived | undefined): OrgIndex | n
     units,
     topUnits: units.filter((u) => !u.parent),
     byHandle,
+    byName: new Map(),
   };
 }
 
@@ -535,12 +467,10 @@ function authoredOnly(authored: Authored): OrgIndex {
     if (seat.handle && !byHandle.has(seat.handle)) byHandle.set(seat.handle, seat);
   }
   // A lead the unit DECLARES is a fact of the document and names a seat by its
-  // exact name; an inherited one is the engine's conclusion, so it stays
-  // unknown here rather than being cascaded by a second implementation.
-  const firstByName = new Map<string, Seat>();
-  for (const seat of seats) if (!firstByName.has(seat.name)) firstByName.set(seat.name, seat);
+  // handle; an inherited one is the engine's conclusion, so it stays unknown
+  // here rather than being cascaded by a second implementation.
   for (const unit of units) {
-    unit.effectiveLead = unit.lead ? (firstByName.get(unit.lead) ?? null) : null;
+    unit.effectiveLead = unit.lead ? (byHandle.get(unit.lead) ?? null) : null;
   }
   for (const seat of seats) seat.unitLead = seat.unit?.effectiveLead?.name ?? "";
   return {
@@ -550,6 +480,7 @@ function authoredOnly(authored: Authored): OrgIndex {
     units,
     topUnits: units.filter((u) => !u.parent),
     byHandle,
+    byName: new Map(),
   };
 }
 
@@ -580,6 +511,9 @@ export function indexOrg(org: OrgProjection | null | undefined): OrgIndex {
   // AFTER whichever half built the tree, because both build one and the pass
   // reads only `seats` and `children` — which both of them have set by here.
   fillSubtrees(built.units);
+  for (const seat of built.seats) {
+    if (!built.byName.has(seat.name)) built.byName.set(seat.name, seat);
+  }
   return built;
 }
 
@@ -769,101 +703,64 @@ export function roundLabel(call: LiveCall | null | undefined): {
 }
 
 // ---------------------------------------------------------------------------
-// The guarded half: what only the org chart's own read says
+// The guarded half: what only the company document says
 // ---------------------------------------------------------------------------
 
+/** What the company document holds for one seat, or why it cannot be said. */
+export type SeatSettings =
+  | { state: "found"; role: ConfigRole; unit: ConfigUnit | null }
+  | { state: "missing" }
+  | { state: "ambiguous" };
+
 /**
- * WHAT THIS READER CAN SAY ABOUT A SEAT'S GUARDED HALF, read off the org
- * chart (`GET /chart/seats/{handle}`, and the home unit's
- * `GET /chart/units/{key}` for the credentials its members inherit).
+ * WHAT THIS READER CAN SAY ABOUT A SEAT'S GUARDED HALF.
  *
- * SIX OUTCOMES, NOT A NULLABLE SEAT. "The chart holds no seat by this handle",
- * "you may not read the chart", "you may read the chart and not the seat's
- * runtime half", "the engine could not answer", "the read has not come back
- * yet" and "here it is" are six different facts — and a `ChartSeat | null`
- * collapses five of them into one. Every screen that did that printed the
- * same sentence for all of them, and the sentence it picked was the reader's:
- * the seat header's MODEL fact read "needs an operator token" on five of
- * eight tabs, because those tabs simply did not ask.
+ * FOUR OUTCOMES, NOT A NULLABLE ROLE. The company document takes
+ * `config:read`, so "this seat is not in the active revision", "you may not
+ * read it", "the read has not come back yet" and "here it is" are four
+ * different facts — and a `ConfigRole | null` collapses the first three into
+ * one. Every screen that did that printed the same sentence for all of them,
+ * and the sentence it picked was the reader's: the seat header's MODEL fact
+ * read "needs a credential" on five of eight tabs, because those tabs simply
+ * did not ask.
  *
- * ONLY `refused` IS A REFUSAL, and `stripped` is not one: the chart served
- * the seat's rows without the runtime half — its model chain, budget, contact
- * identities, tool credentials and schedules — because reading that half
- * takes the grant that reads the company's configuration, and it SAID so
- * (`runtime: false`). A refusal carries the grants the engine named, because
- * what a signed-in reader lacks is a grant, never "an operator token".
- *
- * IT WAS THE COMPANY DOCUMENT, found by the seat's NAME. The document holds
- * no seats any more — the org chart left it for a log of its own — so that
- * lookup found nothing for every seat in every company, and a name was never
- * an address anyway: two seats may share one. The chart is read by the
- * HANDLE, which is what every reference names a seat by.
+ * THE ERROR IS CHECKED FIRST, and that order is the whole of it. `useQuery`
+ * keeps its last good answer through a failed ask — which suits a poll and is
+ * exactly wrong for a guarded read: once a grant is withdrawn, the document it
+ * had been allowed to read is still in hand, so a reading that looked at the
+ * answer first would keep printing a revoked reader's model, budget and
+ * schedules beside a banner saying the answer needs a grant.
  */
 export type SeatReading =
-  | { state: "read"; seat: ChartSeat; unit: ChartUnit | null }
-  /** The chart answered without the runtime half: the reader may not read it. */
-  | { state: "stripped"; seat: ChartSeat }
-  /** The chart holds no seat by this handle. */
+  | { state: "read"; role: ConfigRole; unit: ConfigUnit | null }
+  /** The revision answered and names no seat by this handle. */
   | { state: "absent" }
-  /**
-   * The engine refused the read on authority. `grants` are the ones it named,
-   * any ONE of which would admit this reader — empty for a 401, where nothing
-   * the engine accepted was presented — and `reason` the deciding rule's.
-   */
-  | { state: "refused"; grants: readonly string[]; reason: string }
-  /**
-   * The engine could not answer, or nothing came back from it: a node
-   * catching up, a fault, a request past its deadline. `failure` says which,
-   * in the terms `QueryState` draws — see `ChartReading`.
-   */
-  | { state: "failed"; failure: RestFailure }
+  /** The engine refused the read: this reader does not hold `config:read`. */
+  | { state: "refused" }
   /** Nothing has been asked, or nothing has come back. Never a claim. */
   | { state: "unread" };
 
-/**
- * The seat reading from the two chart reads it is made of: the seat's own,
- * and — when it sits in a unit — that unit's, which carries the tool
- * credentials its direct agent members inherit.
- *
- * THE UNIT IS PART OF THE ANSWER, so a unit read still out is an answer still
- * out: a seat's credentials drawn without the ones it inherits would be a
- * list that shrinks when the second read lands. A unit the chart no longer
- * holds (a row a record left dangling) is no unit rather than a failure.
- */
 export function seatReading(
-  seat: ChartReading<ChartSeatRead>,
-  unit: ChartReading<ChartUnitRead> | null,
+  settings: SeatSettings | null | undefined,
+  error?: unknown,
 ): SeatReading {
-  if (seat.state !== "read") return seat;
-  const row = seat.value.seat;
-  if (!seat.value.runtime) return { state: "stripped", seat: row };
-  if (!row.unit || unit === null) return { state: "read", seat: row, unit: null };
-  switch (unit.state) {
-    case "read":
-      return { state: "read", seat: row, unit: unit.value.unit };
-    case "absent":
-      return { state: "read", seat: row, unit: null };
-    default:
-      return unit;
+  if (error) return { state: "refused" };
+  if (!settings) return { state: "unread" };
+  if (settings.state === "found") {
+    return { state: "read", role: settings.role, unit: settings.unit };
   }
+  // `missing` AND `ambiguous` ARE ONE ANSWER HERE. Both mean the revision
+  // holds no single entry this page may attribute to this seat, and the second
+  // is only reachable from a document holding one handle twice, which the
+  // engine refuses — so a distinct sentence for it would be a sentence nobody
+  // will ever read.
+  return { state: "absent" };
 }
 
 /**
- * What [useSeatSetup] answers. A type of its own so a screen that READ it once
- * can hand it to every panel drawing it: two callers of the hook are two
- * reads of the seat and of its home unit.
- */
-export interface SeatSetup {
-  /** The seat the address names — followed through a rename — or undefined. */
-  seat: Seat | undefined;
-  /** What this reader can say about the seat's guarded half. See [SeatReading]. */
-  reading: SeatReading;
-}
-
-/**
- * The grant the chart serves a runtime half under, and the org projection a
- * seat's RESOLVED setup under (`config:read`): its model chain and its tool
- * sources are derived from that half, so they follow its rule.
+ * The grant the company document is read under, and the org projection a
+ * seat's RESOLVED setup under: its model chain and its tool sources are
+ * derived from the document's own half, so they follow its rule.
  */
 export const RUNTIME_GRANT = "config:read";
 
@@ -871,7 +768,7 @@ export const RUNTIME_GRANT = "config:read";
  * What it means that the org projection carried no model chain (`llm`) or no
  * tool sources (`tool_sources`) for an agent seat — which depends on WHO is
  * reading, because the engine strips both for every audience without
- * `config:read` (`internal/api`'s `OrgProjection.For`):
+ * `config:read`:
  *
  *   - `none` — the reader holds the grant, so the engine would have sent the
  *     value, and its absence is the seat's own: no provider, no tools;
@@ -902,50 +799,124 @@ export function resolvedWithheld(what: string): string {
 }
 
 /**
- * The guarded half of one seat, for any screen that draws it: the org chart's
- * own row for the seat and its home unit, read by HANDLE through
- * `lib/chartReads.ts`, and the six-way [seatReading] of them.
- *
- * NEVER `/config`: the company document holds no seats, and a seat found in it
- * by NAME was nothing for every seat in every company. The seat is resolved
- * from the address a route carries ([seatByAddress]), so a link kept from
- * before a rename opens the seat it named.
- *
- * ASKED BY WHAT THE READER HOLDS. Nobody is asked anything until the viewer
- * has answered, nor for an anonymous one — both are known before the
- * question, and asking only puts a refusal on the wire and a banner over a
- * page that never had a chance; such a reader stays `unread`, which claims
- * nothing, and the screen says what signing in would show. The RUNTIME half is
- * asked for (`?runtime=true`) only by a reader holding `config:read`, the
- * grant the chart serves it under; anybody else is asked for the rows alone,
- * which the chart answers without the half and SAYS so, so the reading is
- * `stripped` rather than a runtime request the engine was always going to
- * strip.
- *
- * RE-READ ON EVERY ORG PUSH (`useOrgPushes`), which is what follows a chart
- * write that landed — a change to the runtime half included, which the
- * projection itself does not carry.
+ * What [useSeatSetup] answers. A type of its own so a screen that READ it once
+ * can hand it to every panel drawing it: `useQuery` shares no request between
+ * two callers, so a panel calling the hook again fetches the whole guarded
+ * document a second time.
  */
-export function useSeatSetup(address: string): SeatSetup {
+export interface SeatSetup {
+  seat: Seat | undefined;
+  settings: SeatSettings | null;
+  reading: SeatReading;
+  /** The raw answer, for a panel that states its own read: the document
+   *  (never beside a refusal), whether it is in flight, and the refusal. */
+  config: { doc: CompanyDocument | null; loading: boolean; error: string | null };
+}
+
+/**
+ * The guarded half of one seat, for any screen that draws it: the company
+ * document's entry for the seat and the four-state reading of it.
+ *
+ * ONE READ, ONE ORDER. The document takes `config:read`, and every screen
+ * that read it on its own either forgot the refusal-first order
+ * [seatReading] exists for — and printed a revoked reader's model beside a
+ * banner saying the answer needs a grant — or collapsed "absent", "refused"
+ * and "not read yet" into one sentence. The seat is resolved by handle, or by
+ * name for a seat the engine reported no handle for, which is how
+ * [seatPath] addresses one.
+ *
+ * A reader without the grant is never asked: see the query below.
+ */
+export function useSeatSetup(handle: string): SeatSetup {
   const org = useOrg();
-  const pushes = useOrgPushes();
   const viewer = useViewer();
   const index = useMemo(() => indexOrg(org), [org]);
-  const seat = (address ? seatByAddress(index, address) : null) ?? undefined;
-  const ask = !!seat?.handle && !viewer.loading && !viewer.anonymous;
-  const query = viewer.grants.includes(RUNTIME_GRANT) ? WITH_RUNTIME : undefined;
-  const seatRead = useChartRead<ChartSeatRead>(
-    ask && seat ? chartSeat(seat.handle) : null,
-    query,
-    pushes,
+  const seat = handle ? (index.byHandle.get(handle) ?? index.byName.get(handle)) : undefined;
+  // NOT ASKED WITHOUT THE GRANT. The document takes `config:read`, so a reader
+  // without it is refused on every ask — the answer is known before the
+  // question, and asking only puts a refusal on the wire and a `refused`
+  // banner over a page that never had a chance. Such a reader stays `unread`,
+  // which claims nothing; the screen names the grant instead.
+  const config = useQuery("config", undefined, {
+    enabled: !!seat && viewer.grants.includes(RUNTIME_GRANT),
+  });
+  // NOTHING FROM THE DOCUMENT BESIDE A REFUSAL: `useQuery` keeps its last good
+  // answer through a failed ask, which suits a poll and is wrong for a guarded
+  // read.
+  const settings = useMemo<SeatSettings | null>(
+    () => (seat && config.data && !config.error ? seatSettings(config.data, seat) : null),
+    [seat, config.data, config.error],
   );
-  const home = seatRead.state === "read" ? (seatRead.value.seat.unit ?? "") : "";
-  const unitRead = useChartRead<ChartUnitRead>(home !== "" ? chartUnit(home) : null, query, pushes);
-  const reading = useMemo(
-    () => seatReading(seatRead, home !== "" ? unitRead : null),
-    [seatRead, unitRead, home],
-  );
-  return useMemo(() => ({ seat, reading }), [seat, reading]);
+  const reading = useMemo(() => seatReading(settings, config.error), [settings, config.error]);
+  return {
+    seat,
+    settings,
+    reading,
+    config: {
+      doc: config.error ? null : (config.data ?? null),
+      loading: config.loading,
+      error: config.error,
+    },
+  };
+}
+
+/** Every unit in a company document, depth first, parents before children. */
+export function documentUnits(doc: CompanyDocument | null | undefined): ConfigUnit[] {
+  const out: ConfigUnit[] = [];
+  const visit = (unit: ConfigUnit): void => {
+    out.push(unit);
+    for (const child of list(unit.children)) visit(child);
+  };
+  for (const unit of list(doc?.units)) visit(unit);
+  return out;
+}
+
+/**
+ * The document's own entry for a seat, from the `config` answer.
+ *
+ * Contact identities, email, the model chain, the token budget, schedules, the
+ * seat's integration blocks and its tool credential names are not on the
+ * `state:read` projection, so every screen that shows one reads it here.
+ *
+ * The seat is found by HANDLE, which is the identity the document itself
+ * addresses a seat by: the engine mints one for every seat it stores and
+ * refuses a document holding one twice, so a second match is a document this
+ * engine did not write — and attributing either entry to the page would be a
+ * guess, so that answer is `ambiguous` rather than the first match.
+ *
+ * `unit` is the document's entry for the seat's home unit, whose `mcp_env` its
+ * direct agent members inherit, found by its KEY. Null at the root.
+ */
+export function seatSettings(doc: CompanyDocument | null | undefined, seat: Seat): SeatSettings {
+  const roles: ConfigRole[] = [...list(doc?.roles)];
+  const units = documentUnits(doc);
+  for (const unit of units) for (const role of list(unit.roles)) roles.push(role);
+
+  const matches = seat.handle ? roles.filter((r) => r.handle === seat.handle) : [];
+  if (matches.length === 0) return { state: "missing" };
+  if (matches.length > 1) return { state: "ambiguous" };
+  return {
+    state: "found",
+    role: matches[0]!,
+    unit: seat.unit ? unitSettings(doc, seat.unit) : null,
+  };
+}
+
+/**
+ * The document's own entry for a unit, found by its KEY: the tracker project
+ * and knowledge container it owns, and the credentials its members inherit.
+ *
+ * Guarded for the reasons `internal/api/orgprojection_test.go` records against
+ * each field, so it is null without `config:read` — never an empty value,
+ * which would read as a unit that owns nothing.
+ */
+export function unitSettings(
+  doc: CompanyDocument | null | undefined,
+  unit: Pick<Unit, "id">,
+): ConfigUnit | null {
+  if (!unit.id) return null;
+  const matches = documentUnits(doc).filter((u) => u.id === unit.id);
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 /**
@@ -954,41 +925,76 @@ export function useSeatSetup(address: string): SeatSetup {
  *
  * Per VARIABLE rather than per server, which is `org.MCPEnv`'s own rule: a seat
  * that overrides one header must not silently drop the token beside it. A
- * human seat inherits none, because it runs no tools (`org.inheritMCPEnv`).
+ * human seat inherits none, because it runs no tools.
  */
 export function mcpEnvOf(
-  reading: SeatReading,
+  settings: SeatSettings,
   kind: Seat["kind"],
 ): Record<string, Record<string, string>> {
-  if (reading.state !== "read") return {};
+  if (settings.state !== "found") return {};
   const out: Record<string, Record<string, string>> = {};
   if (kind === "agent") {
-    for (const [server, vars] of Object.entries(reading.unit?.runtime?.mcp_env ?? {})) {
+    for (const [server, vars] of Object.entries(settings.unit?.mcp_env ?? {})) {
       out[server] = { ...(out[server] ?? {}), ...vars };
     }
   }
-  for (const [server, vars] of Object.entries(reading.seat.runtime?.mcp_env ?? {})) {
+  for (const [server, vars] of Object.entries(settings.role.mcp_env ?? {})) {
     out[server] = { ...(out[server] ?? {}), ...vars };
   }
   return out;
 }
 
+/** A seat's schedules, from the document. Empty where the document did not answer. */
+export function schedulesOf(settings: SeatSettings): ScheduleSpec[] {
+  return settings.state === "found" ? list(settings.role.schedules) : [];
+}
+
 /**
- * The provider keys one phase's chain names, first choice first.
+ * The provider keys a seat's `llm:` names, in declaration order.
  *
- * TWO SHAPES REACH THIS BROWSER, because `org.ProviderKeys` marshals as a
- * string for one provider and an array for a fallback chain. The type once
- * declared a string, so a chain rendered as `fast,backup` and any consumer
- * that called a string method on one threw on a seat the engine accepts.
+ * THREE SHAPES REACH THIS BROWSER, because `config.PhaseLLM` accepts three:
+ * `llm: fast`, `llm: [fast, backup]`, and `llm: {default: fast, judge: tiny}`.
+ * The type declared a string, so the other two were rendered by whatever
+ * happened to be asked of them — an array as `fast,backup`, a mapping as
+ * `[object Object]` — and any consumer that called a string method on one
+ * threw on a config the engine accepts.
  *
- * An empty key is dropped rather than listed — a seat that names nothing takes
- * the default provider, which is not a provider called "" — and a key listed
- * twice is one model.
+ * The mapping form flattens in PHASE ORDER with `default` first, because the
+ * question a reader has on a seat page is "which models does this seat run
+ * on", not "which model runs its judge". Duplicates are dropped: a chain that
+ * lists one key twice is one key, and the same key reached through two phases
+ * is not two models.
+ *
+ * `phase` picks one phase out of the mapping instead, falling back to
+ * `default` exactly as the engine does.
  */
-export function llmChain(llm: ProviderKeys | undefined): string[] {
+export function llmChain(
+  llm: PhaseLLM | undefined,
+  phase?: "default" | "review" | "subagent" | "auxiliary" | "judge" | "sandbox",
+): string[] {
+  const keys = (value: ProviderKeys | undefined): string[] =>
+    typeof value === "string"
+      ? value
+        ? [value]
+        : []
+      : Array.isArray(value)
+        ? value.filter(Boolean)
+        : [];
   if (llm == null) return [];
-  const keys = typeof llm === "string" ? [llm] : Array.isArray(llm) ? llm : [];
-  return dedupe(keys.filter((key) => typeof key === "string" && key !== ""));
+  if (typeof llm === "string" || Array.isArray(llm)) return dedupe(keys(llm));
+  const mapping = llm as Record<string, ProviderKeys | undefined>;
+  if (phase) {
+    const own = keys(mapping[phase]);
+    return dedupe(own.length ? own : keys(mapping["default"]));
+  }
+  return dedupe([
+    ...keys(mapping["default"]),
+    ...keys(mapping["review"]),
+    ...keys(mapping["subagent"]),
+    ...keys(mapping["auxiliary"]),
+    ...keys(mapping["judge"]),
+    ...keys(mapping["sandbox"]),
+  ]);
 }
 
 function dedupe(keys: string[]): string[] {
@@ -1022,25 +1028,23 @@ export function seatLookup(index: OrgIndex): (handle: string) => { name: string;
 }
 
 /**
- * A seat by its ADDRESS — the pair a badge needs — through [seatByAddress]:
- * its handle, a handle it answered to before a rename, or the name of a seat
- * the engine reported no handle for.
+ * A seat by HANDLE or, failing that, by NAME — the pair a badge needs.
  *
- * NEVER BY NAME OTHERWISE. A name is prose two seats may share, and a badge
- * looked up by one drew the first namesake's kind and name over the second's
- * row; every row that names a seat carries its handle now (a turn, a budget
- * and a spend row by the seat they pair with on agent id). A key that names no
- * seat is drawn as it came: a renamed-away handle nobody holds, or a login.
+ * Half the rows that name a seat carry its handle (a lease, a channel end) and
+ * half carry its role NAME (a turn, a budget, a spend row), so a screen drawing
+ * the badge in both kinds of column needs both lookups. Handle first, because
+ * a handle is unique and a name only the first seat's.
  */
 export function seatBadgeOf(index: OrgIndex): (key: string) => { name: string; kind?: SeatKind } {
   return (key) => {
-    const seat = seatByAddress(index, key);
+    const seat = index.byHandle.get(key) ?? index.byName.get(key);
     return seat ? { name: seat.name, kind: seat.kind } : { name: key };
   };
 }
 
 /**
- * A seat's name and kind by its address, off the chart the store holds.
+ * A seat's name and kind by its handle or its name, off the chart the store
+ * holds.
  *
  * HERE, BESIDE [seatBadgeOf], rather than in `store-hooks.ts`, which it used
  * to be: that put `store-hooks.ts → seats.ts → useQuery.ts → store-hooks.ts`
@@ -1093,11 +1097,9 @@ export function seatResolvers(index: OrgIndex): {
  * The kind of a writer the CHART does not hold, from what the record says
  * wrote it.
  *
- * AN OPERATOR IS SOMEBODY WHO IS NOT A SEAT. A write by a caller the identity
- * directory binds to no seat — a person outside the chart, a pipeline's
- * token, through the dashboard or `/operator/mcp` alike — carries their whole
- * LOGIN as its author, with author kind `operator` (`iam.ActorFor`) — so a
- * task one of them filed has a reporter no chart lists, and the chart's
+ * AN OPERATOR IS A PERSON WHO IS NOT A SEAT. A write through `/operator/mcp`
+ * carries the TOKEN's name as its author, with author kind `operator` — so a
+ * task an operator filed has a reporter no chart lists, and the chart's
  * answer for it is "no such seat". Drawn from that alone the badge fell to the
  * kit's default outline, the agent's squircle, and the one fact the outline
  * encodes was wrong for every operator-authored write on the item page.
@@ -1199,79 +1201,6 @@ export function awaitingPerson(status: string | undefined): boolean {
   return status === "awaiting_clarification" || status === "reseed";
 }
 
-/**
- * The live row for a seat of the org index: the roster row carrying the same
- * HANDLE, or undefined for a seat the roster does not carry (a person, or a
- * seat this node has no chart row for yet).
- *
- * BY HANDLE, because both halves carry the handle the seat answers to NOW —
- * the org projection and the roster are cut from the same chart view — and a
- * handle is unique. It paired by NAME, which is prose two seats may share, so
- * the second "Engineer" in a company wore the first one's state, its live call
- * and its sandbox, on every screen that drew it. A seat with no known handle
- * (an engine that reports no derived hierarchy) pairs with nothing rather than
- * with a namesake.
- */
-export function liveRowFor(
-  agents: readonly AgentRow[],
-  seat: Pick<Seat, "handle"> | null | undefined,
-): AgentRow | undefined {
-  const handle = seat?.handle;
-  if (!handle) return undefined;
-  return agents.find((a) => a.handle === handle);
-}
-
-/**
- * The address a row NAMING a seat — a spend row, a budget row — opens it by:
- * its HANDLE. A row carrying none is a seat the chart no longer holds, and it
- * opens by its agent id, which answers the honest "no such seat" — where the
- * NAME it fell back to opened whichever seat of that name came first, somebody
- * else entirely. The name is never an address here, so it is not even read.
- */
-export function seatAddress(row: { handle?: string; agent_id: string }): string {
-  return row.handle || row.agent_id;
-}
-
-/**
- * What a list narrowed to ONE SEAT asks the engine for.
- *
- * A link and a URL carry the seat's HANDLE — the address every screen gives
- * a seat — and the engine narrows a turn list, a phase list and a spend
- * rollup by the seat's AGENT ID, which neither a rename nor a namesake moves.
- * They narrowed by the seat's NAME, so a filter on one "Engineer" listed every
- * Engineer's turns as that seat's.
- *
- * `agentId` is "" while the filter names no seat (`handle` empty) AND when it
- * names one this node cannot place — a handle no agent seat answers to — which
- * `seat` being null tells apart: a caller must not read that second case as
- * "every seat", since a filter that silently widened would answer a question
- * nobody asked.
- */
-export function seatFilter(
-  index: OrgIndex,
-  agents: readonly AgentRow[],
-  handle: string,
-): { seat: Seat | null; agentId: string } {
-  if (!handle) return { seat: null, agentId: "" };
-  const seat = index.byHandle.get(handle) ?? null;
-  return { seat, agentId: liveRowFor(agents, seat)?.agent_id ?? "" };
-}
-
-/**
- * The detached coding run a seat's row is parked on, or null — matched by
- * AGENT ID, which the run carries for exactly this and which neither a rename
- * nor a namesake moves. It matched the run's role name, so a seat whose
- * namesake was coding read as coding too.
- */
-export function sandboxFor(
-  sandboxes: readonly SandboxEntry[],
-  agent: Pick<AgentRow, "agent_id"> | null | undefined,
-): SandboxEntry | null {
-  const id = agent?.agent_id;
-  if (!id) return null;
-  return sandboxes.find((s) => s.agent_id === id) ?? null;
-}
-
 /** The ring round a seat's badge: the one place a seat's state has a hue. */
 export type SeatRing = "info" | "warning" | "danger";
 
@@ -1301,14 +1230,14 @@ export function ringOf(state: SeatState | undefined): SeatRing | undefined {
 /**
  * Which node holds a seat's lease, as far as the PUBLIC health push can say.
  *
- * WHAT EVERY READER IS TOLD, whatever they hold, on the profile and in the
- * peek alike. `/health` is unguarded, so a node's own name and the seats it
- * holds are already within every reader's reach: withholding "this node ·
- * node-2" in one place and printing it in the next was a rule nobody could
- * state. What the push does NOT say is WHICH peer holds a seat this node does
- * not — that is the `fleet` answer, behind `fleet:operate` — so a seat held
- * elsewhere is "another node", and a reader holding that grant is shown the
- * lease itself.
+ * WHAT EVERY READER IS TOLD, operator or not, on the profile and in the peek
+ * alike. `/health` is unguarded and its push reaches an anonymous tab, so a
+ * node's own name and the seats it holds are already on every reader's
+ * screen: withholding "this node · node-2" in one place and printing it in
+ * the next was a rule nobody could state. What the push does NOT say is WHICH
+ * peer holds a seat this node does not — that is the operator-only `fleet`
+ * answer — so a seat held elsewhere is "another node", and an operator is
+ * shown the lease itself.
  *
  * IT WAS THE AGENT INSTANCE ID, which exists only while a turn runs — so an
  * idle seat THIS node held read "not running on this node" on its own page.
@@ -1517,20 +1446,15 @@ export interface CardLive {
   since?: string;
 }
 
-/**
- * Every working seat's turn, keyed on the ID of the task the turn is charged
- * to — never its key. A key two tasks hold (`key_collision`) is one value for
- * two tasks, so a map keyed on it drew one task's turn on both their cards; the
- * id is the one name no two tasks share, and a card looks itself up by its own.
- */
+/** Every working seat's turn, keyed on the task key the turn is charged to. */
 export function liveOnItems(rows: readonly AgentRow[]): Map<string, CardLive> {
   const out = new Map<string, CardLive>();
   for (const row of rows) {
     if (row.activity !== "working") continue;
-    const id = row.live_call?.work_item?.id || row.turn?.work_item?.id || "";
+    const key = row.live_call?.work_item?.key || row.turn?.work_item?.key || "";
     const handle = row.handle ?? "";
-    if (!id || !handle) continue;
-    out.set(id, {
+    if (!key || !handle) continue;
+    out.set(key, {
       handle,
       doing: doingWords(row),
       since: row.turn?.started_at ?? row.live_call?.started_at,

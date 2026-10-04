@@ -10,14 +10,13 @@
  * turn record" printed above the panel rendering that record.
  */
 
-import { isValidElement, type ReactElement } from "react";
 import { describe, expect, test } from "vitest";
 import { outcomeOf, problemCount, turnFacts, type TurnView } from "./Turn.tsx";
 // THE SPAN RULE LIVES BESIDE THE PHASES IT MEASURES NOW. The turn CARD had a
 // second one — two LANDING instants subtracted, which drops the first phase's
 // own length — so the two are one function and one set of cases.
 import { turnSpan } from "~/lib/phases.ts";
-import type { Timed } from "~/lib/phases.ts";
+import type { PhaseRecord, Timed } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 import { tellStory } from "~/lib/turnstory.ts";
 import { phaseRecord } from "~/test/phaseRecord.ts";
@@ -221,13 +220,12 @@ describe("turnFacts", () => {
       turnId: "t",
       loading: false,
       error: null,
-      refusal: null,
       attempt: null,
       events: [],
       cut: false,
       phases: [],
       own: [phaseRecord()],
-      nested: {},
+      nested: new Map(),
       rec: {} as TurnView["rec"],
       role: "",
       trigger: null,
@@ -355,25 +353,6 @@ describe("turnFacts", () => {
   test("the node is the one the answer says ran it", () => {
     expect(fact(view({ nodes: ["node-a", "node-b"] }), "Node")?.value).toBe("node-a, node-b");
     expect(fact(view({}), "Node")?.value).toBe("");
-  });
-
-  // THE RAIL'S SEAT FACT (`{ seat: true }`), which the page leaves to its
-  // trail.
-  test("the seat links by its handle, and a seat nobody can place is named unlinked", () => {
-    // The chip linked `handle={view.handle || view.role}` — the seat's NAME as
-    // its address where no handle was known — which opened whichever seat of
-    // that name came first, a namesake included. The handle is resolved from
-    // the agent id the phases carry.
-    const seat = (v: TurnView) => turnFacts(v, 0, { seat: true }).find((f) => f.label === "Seat");
-    const placed = seat(view({ role: "Engineer", handle: "ada" }));
-    expect(isValidElement(placed?.value)).toBe(true);
-    expect((placed?.value as ReactElement<{ handle: string }>).props.handle).toBe("ada");
-
-    // A seat the roster no longer carries has no page: the name, and no link.
-    expect(seat(view({ role: "Engineer", handle: "" }))?.value).toBe("Engineer");
-    expect(seat(view({ role: "", handle: "" }))?.value).toBe("the engine");
-    // AND THE PAGE DRAWS NONE: its trail names the seat.
-    expect(fact(view({ role: "Engineer", handle: "ada" }), "Seat")).toBeUndefined();
   });
 
   test("a turn with no phase record in hand counts nothing, and notes nothing", () => {

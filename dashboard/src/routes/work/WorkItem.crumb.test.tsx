@@ -11,7 +11,7 @@
  * better crumb than nothing, and a placeholder would be worse than either.
  */
 
-import { act, cleanup, render, screen } from "~/test/inCase.ts";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { WorkItem } from "./WorkItem.tsx";

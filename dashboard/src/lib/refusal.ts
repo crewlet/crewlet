@@ -78,8 +78,8 @@ export function refusalText(err: unknown): string {
       : `Something in front of the engine answered ${err.status}.`);
   const parts = [said];
   if (err.hint) parts.push(asSentence(err.hint));
-  if (err.status === 429 && err.retryAfter !== null) {
-    parts.push(`Try again in ${plural(err.retryAfter, "second")}.`);
+  if (err.status === 429 && err.retryAfterSeconds !== null) {
+    parts.push(`Try again in ${plural(err.retryAfterSeconds, "second")}.`);
   }
   return parts.join(" ");
 }

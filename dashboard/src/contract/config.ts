@@ -1,16 +1,15 @@
 /**
  * The addressable collections of the active revision, as `configapi` names
- * them — Settings › Configuration's Entities lens, in the order it offers
- * them, so the lens opens on the first.
+ * them — Settings › Configuration's Entities lens.
  *
- * TWO NAMES THE ENGINE OWNS, held against `configapi.EntityKinds()` by
+ * FOUR NAMES THE ENGINE OWNS, held against `configapi.EntityKinds()` by
  * `internal/api/configapi/entities_client_test.go` — a kind this list spells
  * differently asks for a collection that does not exist, and the answer is a
- * bad-params refusal rather than anything a reader could act on. Seats and
- * units are not among them: they are the org chart's, which no revision
- * carries, read and edited through `/chart`.
+ * bad-params refusal rather than anything a reader could act on.
  */
 export const ENTITY_KINDS = [
+  { kind: "roles", label: "Seats" },
+  { kind: "units", label: "Units" },
   { kind: "llm-providers", label: "LLM providers" },
   { kind: "mcp-servers", label: "MCP servers" },
 ] as const;

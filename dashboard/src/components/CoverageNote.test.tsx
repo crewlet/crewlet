@@ -4,7 +4,7 @@
  * reader learns to skip.
  */
 
-import { cleanup, render } from "~/test/inCase.ts";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import { CoverageNote, missingFrom } from "./CoverageNote.tsx";

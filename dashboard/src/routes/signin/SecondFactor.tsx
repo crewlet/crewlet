@@ -270,11 +270,11 @@ export function FirstRecoveryCodes({ onDone }: { onDone: () => void }) {
 /**
  * Adding or replacing an authenticator, from a person's own menu.
  *
- * THE ENGINE ASKS FOR A FRESH PROOF FIRST — the sensitive window, because this
- * is the gesture that decides whether a stolen session becomes a permanent
- * hold on somebody's account — and the step-up ceremony answers it before the
- * seed arrives, so this dialog only ever shows a seed its reader proved they
- * may have.
+ * THE ENGINE ASKS FOR A FRESH PROOF FIRST — the one step-up window, because
+ * this is the gesture that decides whether a stolen session becomes a
+ * permanent hold on somebody's account — and the step-up ceremony answers it
+ * before the seed arrives, so this dialog only ever shows a seed its reader
+ * proved they may have.
  */
 export function AuthenticatorDialog({ onClose }: { onClose: () => void }) {
   const [enrolled, setEnrolled] = useState(false);

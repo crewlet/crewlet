@@ -6,8 +6,8 @@
 /**
  * Every `kind` a frame from `/ws/stream` carries — the pushes, the one push
  * addressed to a SEAT rather than to every tab (`inbox_changed`, sent only to
- * a socket whose `watch` of that seat was allowed), the socket's own word on
- * its credential (`identity`), the two answers to a query, and the pong.
+ * a socket whose `watch` of that seat was allowed), the two answers to a
+ * query, and the pong.
  *
  * EXACTLY THE ENGINE'S `stream.Kind` CONSTANTS, held both ways by
  * `internal/api/stream`'s push-kind gate. A kind the engine sends that this

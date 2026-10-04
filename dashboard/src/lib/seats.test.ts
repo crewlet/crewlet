@@ -25,45 +25,31 @@ import {
   labelOf,
   leadsInLine,
   liveOnItems,
-  liveRowFor,
+  roundLabel,
+  roundOf,
+  stoppedLine,
   llmChain,
   mcpEnvOf,
   ringOf,
-  roundLabel,
-  roundOf,
-  sandboxFor,
-  seatAddress,
-  seatByAddress,
-  seatFilter,
   seatPath,
-  seatReading,
+  seatSettings,
   stateLine,
-  stoppedLine,
   staleness,
   toneOf,
   STALE_MS,
   STALLED_MS,
-  unitByKey,
   unitDirectLabel,
-  unitPath,
   unitSeatsLabel,
+  unitSettings,
   unitTally,
   UNIT_TOTAL_HINT,
-  type OrgIndex,
-  type Seat,
 } from "./seats.ts";
-import type { ChartReading } from "./chartReads.ts";
 import type {
   AgentRow,
-  ChartAnswer,
-  ChartSeat,
-  ChartSeatRead,
-  ChartUnit,
-  ChartUnitRead,
+  CompanyDocument,
   DerivedSeat,
   LiveCall,
   OrgProjection,
-  SandboxEntry,
 } from "~/protocol/index.ts";
 import {
   type Lang,
@@ -99,10 +85,10 @@ const org: OrgProjection = {
   ],
   units: [
     {
-      id: "engineering",
+      id: "eng",
       name: "Engineering",
       type: "department",
-      lead: "VP Engineering",
+      lead: "vpe",
       roles: [{ name: "VP Engineering", handle: "vpe" }],
       children: [
         {
@@ -139,7 +125,7 @@ const org: OrgProjection = {
     ],
     units: [
       {
-        id: "engineering",
+        id: "eng",
         name: "Engineering",
         type: "department",
         lead: "vpe",
@@ -163,13 +149,6 @@ const org: OrgProjection = {
 };
 
 const index = indexOrg(org);
-
-/**
- * The first seat carrying a name. A TEST convenience over fixtures whose names
- * are unique: nothing in the product resolves a seat by name, because two
- * seats may share one.
- */
-const named = (i: OrgIndex, name: string): Seat | undefined => i.seats.find((s) => s.name === name);
 
 /** The same company, from an engine that reports no derived hierarchy. */
 const { derived: _omitted, ...older } = org;
@@ -241,31 +220,31 @@ describe("the engine's hierarchy", () => {
   // the handle keys a seat's memory — so a link pinning the client's version
   // pointed at nothing.
   test("a handle is the engine's, and is unknown where it did not say", () => {
-    expect(named(index, "Dev A")?.handle).toBe("dev-a");
-    expect(named(index, "CEO")?.handle).toBe("ceo");
+    expect(index.byName.get("Dev A")?.handle).toBe("dev-a");
+    expect(index.byName.get("CEO")?.handle).toBe("ceo");
     // Without the block, only a DECLARED handle is known.
-    expect(named(authored, "CEO")?.handle).toBe("ceo");
-    expect(named(authored, "Dev A")?.handle).toBe("");
+    expect(authored.byName.get("CEO")?.handle).toBe("ceo");
+    expect(authored.byName.get("Dev A")?.handle).toBe("");
     expect(authored.hierarchy).toBe(false);
   });
 
   // A LINK STILL REACHES A SEAT WITH NO REPORTED HANDLE: the seat screen
   // resolves a name as well as a handle, and the rule lives in one place.
   test("a seat with no reported handle is addressed by name", () => {
-    expect(seatPath(named(index, "Dev A")!)).toEqual(["agents", "seats", "dev-a"]);
-    expect(seatPath(named(authored, "Dev A")!)).toEqual(["agents", "seats", "Dev A"]);
+    expect(seatPath(index.byName.get("Dev A")!)).toEqual(["agents", "seats", "dev-a"]);
+    expect(seatPath(authored.byName.get("Dev A")!)).toEqual(["agents", "seats", "Dev A"]);
   });
 
   // ONLY THE ENGINE KNOWS WHERE A ROOT SEAT SITS. The document wrote Designer
   // above every unit; its `unit:` reference put it in Backend.
   test("a root seat the engine placed sits in its unit, and says it was placed", () => {
-    const designer = named(index, "Designer")!;
+    const designer = index.byName.get("Designer")!;
     expect(designer.unit?.name).toBe("Backend");
     expect(designer.placedByRef).toBe(true);
     expect(index.rootSeats.map((s) => s.name).sort()).toEqual(["CEO", "Jane Founder"]);
     // Without the block it sits where it was WRITTEN, and nothing claims more.
-    expect(named(authored, "Designer")!.unit).toBeNull();
-    expect(named(authored, "Designer")!.placedByRef).toBe(false);
+    expect(authored.byName.get("Designer")!.unit).toBeNull();
+    expect(authored.byName.get("Designer")!.placedByRef).toBe(false);
   });
 
   test("a unit with no lead of its own takes the inherited one, marked", () => {
@@ -276,8 +255,11 @@ describe("the engine's hierarchy", () => {
     expect(backend.effectiveLead?.name).toBe("VP Engineering");
     expect(backend.leadInherited).toBe(true);
     expect(index.units.find((u) => u.name === "Engineering")!.leadInherited).toBe(false);
-    expect(named(index, "Dev A")?.unitLead).toBe("VP Engineering");
-    expect(named(index, "Dev A")?.unitChain.map((u) => u.name)).toEqual(["Engineering", "Backend"]);
+    expect(index.byName.get("Dev A")?.unitLead).toBe("VP Engineering");
+    expect(index.byName.get("Dev A")?.unitChain.map((u) => u.name)).toEqual([
+      "Engineering",
+      "Backend",
+    ]);
     // An INHERITED lead is the engine's conclusion, so without the block the
     // unit has none rather than one this client cascaded.
     expect(authored.units.find((u) => u.name === "Backend")!.effectiveLead).toBeNull();
@@ -288,15 +270,16 @@ describe("the engine's hierarchy", () => {
 
   test("reporting lines are the engine's, and unknown without them", () => {
     expect(
-      named(index, "CEO")!
+      index.byName
+        .get("CEO")!
         .reports.map((r) => r.name)
         .sort(),
     ).toEqual(["Dev A", "Dev B", "VP Engineering"]);
-    expect(named(index, "Dev A")!.manager?.name).toBe("CEO");
-    expect(named(index, "CEO")!.manager?.name).toBe("Jane Founder");
+    expect(index.byName.get("Dev A")!.manager?.name).toBe("CEO");
+    expect(index.byName.get("CEO")!.manager?.name).toBe("Jane Founder");
     // NOT NOBODY: the engine did not say.
-    expect(named(authored, "Dev A")!.manager).toBeNull();
-    expect(named(authored, "CEO")!.reports).toEqual([]);
+    expect(authored.byName.get("Dev A")!.manager).toBeNull();
+    expect(authored.byName.get("CEO")!.reports).toEqual([]);
   });
 
   // A BLOCK THAT DOES NOT DESCRIBE THIS TREE IS NOT HALF A HIERARCHY. A chart
@@ -307,7 +290,7 @@ describe("the engine's hierarchy", () => {
       derived: { ...org.derived!, seats: (org.derived!.seats ?? []).slice(0, 2) },
     });
     expect(mismatched.hierarchy).toBe(false);
-    expect(named(mismatched, "Dev A")!.manager).toBeNull();
+    expect(mismatched.byName.get("Dev A")!.manager).toBeNull();
 
     // And one naming a handle that belongs to no seat in it.
     const dangling = indexOrg({
@@ -335,26 +318,12 @@ describe("the engine's hierarchy", () => {
       },
     });
     expect(phantom.hierarchy).toBe(false);
-
-    // AND A UNIT PAIRS BY ITS KEY as well as its name: two units may share a
-    // name, so a block naming another unit in this one's place is not this
-    // unit's hierarchy however it is spelled.
-    const swapped = indexOrg({
-      ...org,
-      derived: {
-        ...org.derived!,
-        units: (org.derived!.units ?? []).map((u) =>
-          u.name === "Backend" ? { ...u, id: "backend-2" } : u,
-        ),
-      },
-    });
-    expect(swapped.hierarchy).toBe(false);
   });
 
   test("a human seat holds a place in the hierarchy", () => {
     // Addressable-only: no runtime, no inbox, no LLM — but escalation has to
     // terminate at a person.
-    const founder = named(index, "Jane Founder");
+    const founder = index.byName.get("Jane Founder");
     expect(founder?.kind).toBe("human");
     expect(founder?.reports.map((r) => r.name)).toEqual(["CEO"]);
   });
@@ -370,348 +339,123 @@ describe("the engine's hierarchy", () => {
 // The guarded half
 // ---------------------------------------------------------------------------
 
-// EVERYTHING BELOW IS OFF THE ORG CHART'S OWN READ, not the projection. `/org`
-// is anonymously readable, so the model chain, the token budget, contact
-// identities and `mcp_env` are not on it at all; the chart serves them as a
-// row's RUNTIME half, and only to a reader who may read the configuration.
-const answer: ChartAnswer = { level: "consistent_prefix", position: "CREWLET_CHART_LOG@1:10" };
-
-const backend: ChartUnit = {
-  key: "backend",
-  name: "Backend",
-  parent: "engineering",
-  runtime: {
-    mcp_env: { github: { GITHUB_HOST: "example.com", GITHUB_TOKEN: "${BACKEND_TOKEN}" } },
-  },
-};
-const devA: ChartSeat = {
-  handle: "dev-a",
-  name: "Dev A",
-  unit: "backend",
-  runtime: {
-    token_budget: { week: 250000 },
-    mcp_env: { github: { GITHUB_TOKEN: "${DEV_A_TOKEN}" } },
-  },
-};
-const ceo: ChartSeat = { handle: "ceo", name: "CEO", runtime: { llm: "fast" } };
-
-const seatRead = (row: ChartSeat, runtime = true): ChartReading<ChartSeatRead> => ({
-  state: "read",
-  value: { seat: row, manages: null, answer, runtime },
-});
-const unitRead = (row: ChartUnit): ChartReading<ChartUnitRead> => ({
-  state: "read",
-  value: { unit: row, children: [], seats: [], answer, runtime: true },
-});
-
-// A UNIT IS ADDRESSED BY ITS KEY. Every route to one was built from its NAME,
-// which is prose: two units may share one, and a unit that declares an `id:`
-// is named by that id wherever the engine names it — a schedule's scope, the
-// org chart's findings — so a page looked up by name opened the first unit of
-// that name, and a link carrying the id opened none.
-describe("addressing a unit", () => {
-  /** Two teams called Platform, one of them declaring an id. */
-  const twins: OrgProjection = {
-    name: "Acme",
-    roles: [],
-    units: [
-      { id: "platform", name: "Platform", purpose: "the web", roles: [{ name: "Web" }] },
-      { id: "infra", name: "Platform", purpose: "the metal", roles: [{ name: "Metal" }] },
-    ],
-    derived: {
-      seats: [seat({ handle: "web", name: "Web" }), seat({ handle: "metal", name: "Metal" })],
-      units: [
+// EVERYTHING BELOW IS OFF THE COMPANY DOCUMENT, not the projection. `/org` is
+// anonymously readable, so email, the model chain, the token budget, contact
+// identities, `mcp_env`, `space:` and `id:` are not on it at all.
+// AS THE ENGINE STORES IT: every seat carries the handle the engine minted for
+// it and every unit the key, because those — never a name — are what the
+// document is addressed by.
+const doc: CompanyDocument = {
+  name: "Acme",
+  roles: [
+    {
+      name: "Jane Founder",
+      handle: "jane-founder",
+      kind: "human",
+      contact: { slack_user_id: "U0FOUNDER" },
+    },
+    { name: "CEO", handle: "ceo", email: "ceo@example.com", token_budget: { week: 250000 } },
+  ],
+  units: [
+    {
+      name: "Engineering",
+      id: "eng",
+      mcp_env: { github: { GITHUB_HOST: "example.com" } },
+      roles: [{ name: "VP Engineering", handle: "vpe" }],
+      children: [
         {
-          id: "platform",
-          name: "Platform",
-          type: "team",
-          lead: "",
-          lead_inherited: false,
-          channel: "",
-          channel_inherited: false,
-          seats: ["web"],
-        },
-        {
-          id: "infra",
-          name: "Platform",
-          type: "team",
-          lead: "",
-          lead_inherited: false,
-          channel: "",
-          channel_inherited: false,
-          seats: ["metal"],
+          name: "Backend",
+          id: "backend",
+          space: "ENG",
+          mcp_env: { github: { GITHUB_TOKEN: "${BACKEND_TOKEN}" } },
+          roles: [
+            {
+              name: "Dev A",
+              handle: "dev-a",
+              mcp_env: { github: { GITHUB_TOKEN: "${DEV_A_TOKEN}" } },
+            },
+            { name: "Dev B", handle: "dev-b" },
+          ],
         },
       ],
     },
-  };
-  const twinIndex = indexOrg(twins);
+  ],
+};
 
-  test("each unit's path carries its own key", () => {
-    expect(twinIndex.hierarchy).toBe(true);
-    expect(twinIndex.units.map(unitPath)).toEqual([
-      ["agents", "teams", "platform"],
-      ["agents", "teams", "infra"],
-    ]);
+describe("what only the company document says", () => {
+  test("a seat is found by the handle the document addresses it by", () => {
+    const found = seatSettings(doc, index.byName.get("CEO")!);
+    expect(found.state).toBe("found");
+    expect(found.state === "found" && found.role.email).toBe("ceo@example.com");
+    expect(found.state === "found" && found.role.token_budget).toEqual({ week: 250000 });
   });
 
-  test("a key opens its own unit, whatever name it shares", () => {
-    expect(unitByKey(twinIndex, "infra")?.purpose).toBe("the metal");
-    expect(unitByKey(twinIndex, "platform")?.purpose).toBe("the web");
+  // THE PROJECTION AND THE DOCUMENT CAN DISAGREE for a moment either side of
+  // an apply, and a seat that is in one and not the other is a state to say
+  // rather than a blank panel.
+  test("a seat the document does not hold is missing, not empty", () => {
+    expect(seatSettings(doc, index.byName.get("Designer")!).state).toBe("missing");
+    expect(seatSettings(null, index.byName.get("CEO")!).state).toBe("missing");
   });
 
-  test("a name is not an address", () => {
-    // "Platform" is the key of the first unit and the name of both; the id
-    // one declares is not reachable under the name it shares.
-    expect(unitByKey(twinIndex, "Platform")).toBeNull();
-    expect(unitByKey(twinIndex, "")).toBeNull();
-  });
-});
-
-describe("a renamed seat or unit keeps its old addresses", () => {
-  /**
-   * `web` was created as `frontend` and answered to `site` in between; the
-   * `edge` unit was created as `platform`. A second seat now HOLDS `site` as
-   * its current handle — a live handle must win over a retired alias.
-   */
-  const renamed: OrgProjection = {
-    name: "Acme",
-    roles: [
-      { name: "Web", handle: "web" },
-      { name: "Site Reliability", handle: "site" },
-    ],
-    units: [{ id: "edge", name: "Edge", roles: [{ name: "Metal", handle: "metal" }] }],
-    derived: {
-      seats: [
-        seat({
-          handle: "web",
-          name: "Web",
-          origin_handle: "frontend",
-          former_handles: ["site", "frontend"],
-        }),
-        seat({ handle: "site", name: "Site Reliability" }),
-        seat({ handle: "metal", name: "Metal" }),
-      ],
-      units: [
-        {
-          id: "edge",
-          name: "Edge",
-          type: "team",
-          lead: "",
-          lead_inherited: false,
-          channel: "",
-          channel_inherited: false,
-          seats: ["metal"],
-          origin_key: "platform",
-          former_keys: ["platform"],
-        },
-      ],
-    },
-  };
-  const renamedIndex = indexOrg(renamed);
-
-  test("a link kept before a rename opens the seat that holds the address now", () => {
-    expect(renamedIndex.hierarchy).toBe(true);
-    expect(seatByAddress(renamedIndex, "frontend")?.handle).toBe("web");
-    expect(seatByAddress(renamedIndex, "web")?.handle).toBe("web");
-    // THE LIVE HANDLE WINS, however recently another seat gave it up.
-    expect(seatByAddress(renamedIndex, "site")?.handle).toBe("site");
-    // Typed with capitals, a handle is still the handle it spells.
-    expect(seatByAddress(renamedIndex, "FRONTEND")?.handle).toBe("web");
-    expect(seatByAddress(renamedIndex, "nobody")).toBeNull();
+  // TWO SEATS WITH ONE HANDLE can only come from a document this engine did
+  // not write, and attributing either one's settings to the page would be a
+  // guess.
+  test("a handle held by two seats is ambiguous rather than the first match", () => {
+    const twice: CompanyDocument = {
+      ...doc,
+      roles: [...(doc.roles ?? []), { name: "Chief Executive", handle: "ceo" }],
+    };
+    expect(seatSettings(twice, index.byName.get("CEO")!).state).toBe("ambiguous");
   });
 
-  test("a seat's NAME is not its address", () => {
-    // Every seat here has a handle, so no name addresses one — the arm that
-    // resolved a name opened whichever namesake came first.
-    expect(seatByAddress(renamedIndex, "Site Reliability")).toBeNull();
-    // The one seat a name IS the address of: one the engine gave no handle,
-    // which `seatPath` links to by name.
-    const handleless = indexOrg({ name: "Acme", roles: [{ name: "Dev A" }] });
-    expect(seatByAddress(handleless, "Dev A")?.name).toBe("Dev A");
+  // TWO SEATS WITH ONE NAME are two seats: the name is prose, and matching on
+  // it handed one seat's settings to the other.
+  test("a name another seat shares does not confuse the seat's own entry", () => {
+    const namesake: CompanyDocument = {
+      ...doc,
+      roles: [...(doc.roles ?? []), { name: "CEO", handle: "ceo-2" }],
+    };
+    expect(seatSettings(namesake, index.byName.get("CEO")!).state).toBe("found");
   });
 
-  test("a link kept before a unit was re-keyed opens that unit", () => {
-    expect(unitByKey(renamedIndex, "platform")?.id).toBe("edge");
-    expect(unitByKey(renamedIndex, "edge")?.id).toBe("edge");
-  });
-});
-
-describe("what only the org chart's own read says", () => {
-  test("a seat read with its runtime half is read, together with its home unit", () => {
-    const reading = seatReading(seatRead(devA), unitRead(backend));
-    expect(reading.state).toBe("read");
-    expect(reading.state === "read" && reading.seat.runtime?.token_budget).toEqual({
-      week: 250000,
-    });
-    expect(reading.state === "read" && reading.unit?.key).toBe("backend");
-  });
-
-  // A RUNTIME HALF WITHHELD IS NOT A REFUSAL: the chart served the rows and
-  // said it left the half out, so the reading keeps the seat and says so.
-  test("a seat served without its runtime half is stripped, not refused and not empty", () => {
-    const reading = seatReading(
-      seatRead({ handle: "dev-a", name: "Dev A", unit: "backend" }, false),
-      unitRead(backend),
-    );
-    expect(reading).toEqual({
-      state: "stripped",
-      seat: { handle: "dev-a", name: "Dev A", unit: "backend" },
-    });
-    // Its credentials are unknown to this reader, never an empty set it was shown.
-    expect(mcpEnvOf(reading, "agent")).toEqual({});
-    // The control: the same seat served whole is read.
-    expect(seatReading(seatRead(devA), unitRead(backend)).state).toBe("read");
-  });
-
-  // FIVE FACTS THE CHART CAN ANSWER, and a reading carries each as itself:
-  // folded into one, a reader who lacked a grant was told the seat had
-  // nothing to show.
-  test("an absent, refused, failed or unread seat read is that answer, whatever the unit said", () => {
-    expect(seatReading({ state: "absent" }, unitRead(backend))).toEqual({ state: "absent" });
-    expect(
-      seatReading({ state: "refused", grants: ["state:read"], reason: "needs a grant" }, null),
-    ).toEqual({ state: "refused", grants: ["state:read"], reason: "needs a grant" });
-    const failed = { state: "failed", failure: { error: "unanswered", refusal: null } } as const;
-    expect(seatReading(failed, null)).toEqual(failed);
-    expect(seatReading({ state: "unread" }, unitRead(backend))).toEqual({ state: "unread" });
-  });
-
-  // THE UNIT IS PART OF THE ANSWER: a seat's credentials drawn before its
-  // unit's arrive would be a list that grows when the second read lands.
-  test("a unit read still out, refused or failed is the seat reading's own answer", () => {
-    expect(seatReading(seatRead(devA), { state: "unread" }).state).toBe("unread");
-    expect(
-      seatReading(seatRead(devA), {
-        state: "failed",
-        failure: { error: "query_failed", refusal: null },
-      }).state,
-    ).toBe("failed");
-    expect(
-      seatReading(seatRead(devA), { state: "refused", grants: ["config:read"], reason: "" }),
-    ).toEqual({ state: "refused", grants: ["config:read"], reason: "" });
-    // A unit the chart no longer holds is no unit rather than a failure.
-    expect(seatReading(seatRead(devA), { state: "absent" })).toEqual({
-      state: "read",
-      seat: devA,
-      unit: null,
-    });
-  });
-
-  test("a seat at the root reads no unit, and needs none", () => {
-    expect(seatReading(seatRead(ceo), null)).toEqual({ state: "read", seat: ceo, unit: null });
-  });
-
-  test("mcp_env merges the home unit's DOWN, the seat's own winning per variable", () => {
-    const env = mcpEnvOf(seatReading(seatRead(devA), unitRead(backend)), "agent").github;
-    // Per VARIABLE: the seat overrides the token and keeps the unit's host.
+  test("mcp_env merges DOWN the unit chain with the seat's own winning", () => {
+    const env = mcpEnvOf(seatSettings(doc, index.byName.get("Dev A")!), "agent").github;
+    expect(env?.GITHUB_HOST).toBeUndefined();
     expect(env?.GITHUB_TOKEN).toBe("${DEV_A_TOKEN}");
-    expect(env?.GITHUB_HOST).toBe("example.com");
-    const inherited = mcpEnvOf(
-      seatReading(seatRead({ handle: "dev-b", name: "Dev B", unit: "backend" }), unitRead(backend)),
-      "agent",
-    ).github;
+    const inherited = mcpEnvOf(seatSettings(doc, index.byName.get("Dev B")!), "agent").github;
     expect(inherited?.GITHUB_TOKEN).toBe("${BACKEND_TOKEN}");
   });
 
   // A HUMAN SEAT RUNS NO TOOLS, so it inherits none of its unit's credentials.
   test("a human seat inherits no tool credentials", () => {
-    const human = { handle: "dev-b", name: "Dev B", unit: "backend", kind: "human" };
-    expect(mcpEnvOf(seatReading(seatRead(human), unitRead(backend)), "human")).toEqual({});
-    // The control: the same unit hands an agent seat its credentials.
-    expect(Object.keys(mcpEnvOf(seatReading(seatRead(human), unitRead(backend)), "agent"))).toEqual(
-      ["github"],
-    );
+    const found = seatSettings(doc, index.byName.get("Dev B")!);
+    expect(Object.keys(mcpEnvOf(found, "human"))).toEqual([]);
+  });
+
+  test("a unit's guarded fields are read from the document by its key, and only from it", () => {
+    expect(unitSettings(doc, { id: "eng" })?.name).toBe("Engineering");
+    expect(unitSettings(doc, { id: "backend" })?.space).toBe("ENG");
+    expect(unitSettings(doc, { id: "Backend" })).toBeNull();
+    expect(unitSettings(null, { id: "backend" })).toBeNull();
   });
 });
 
 describe("what a seat is doing", () => {
-  const box: SandboxEntry = {
-    turn_id: "t1",
-    role: "Dev A",
-    agent_handle: "dev-a",
-    agent_id: "id-a",
-    coding_agent: "claude-code",
-    sandbox_id: "s1",
-    task: "",
-    status: "running",
-    started_at: "",
-  };
-
   const now = Date.parse("2026-01-01T12:00:00Z");
-
-  test("a run belongs to its seat by agent id, never to a namesake", () => {
-    // Two seats may share a name. Paired by the run's role name, the second
-    // "Dev A" read as coding whenever the first one was.
-    const namesake = { id: "b", agent_id: "id-b", role: "Dev A", activity: "idle" as const };
-    expect(sandboxFor([box], namesake)).toBeNull();
-    expect(sandboxFor([box], { agent_id: "id-a" })).toBe(box);
-    // An empty id pairs with nothing, not with every run that carries none.
-    expect(sandboxFor([{ ...box, agent_id: "" }], { agent_id: "" })).toBeNull();
-  });
-
-  test("a seat pairs with its live row by handle, never by name", () => {
-    const ada: AgentRow = {
-      id: "ada",
-      agent_id: "id-ada",
-      role: "Engineer",
-      handle: "ada",
-      activity: "working",
-    };
-    const bob: AgentRow = {
-      id: "bob",
-      agent_id: "id-bob",
-      role: "Engineer",
-      handle: "bob",
-      activity: "idle",
-    };
-    expect(liveRowFor([ada, bob], { handle: "bob" })).toBe(bob);
-    expect(liveRowFor([ada, bob], { handle: "ada" })).toBe(ada);
-    // A seat whose handle nobody reported pairs with nothing rather than with
-    // whichever namesake comes first.
-    expect(liveRowFor([ada, bob], { handle: "" })).toBeUndefined();
-  });
-
-  test("a spend row opens its seat by handle, and a retired one by its id — never by name", () => {
-    expect(seatAddress({ handle: "dev-a", agent_id: "id-a" })).toBe("dev-a");
-    // A row the chart no longer holds carries no handle. Its name is somebody
-    // else's address by now; its id answers the honest "no such seat".
-    expect(seatAddress({ handle: "", agent_id: "id-gone" })).toBe("id-gone");
-  });
-
-  test("a one-seat filter asks by the agent id its handle pairs with", () => {
-    const rows = [
-      { id: "dev-a", agent_id: "id-a", role: "Dev A", handle: "dev-a" },
-      { id: "dev-b", agent_id: "id-b", role: "Dev A", handle: "dev-b" },
-    ];
-    // No filter: no seat and no id, which a caller reads as "every seat".
-    expect(seatFilter(index, rows, "")).toEqual({ seat: null, agentId: "" });
-    // A filter on one of two namesakes narrows to that one alone.
-    const b = seatFilter(index, rows, "dev-b");
-    expect(b.seat?.handle).toBe("dev-b");
-    expect(b.agentId).toBe("id-b");
-    // A handle nothing answers to is NOT "every seat": the seat is null and a
-    // caller must say so rather than widen the list.
-    expect(seatFilter(index, rows, "nobody")).toEqual({ seat: null, agentId: "" });
-    // A person's seat has no roster row, so it narrows to no agent id at all.
-    const human = seatFilter(index, rows, "jane-founder");
-    expect(human.seat?.handle).toBe("jane-founder");
-    expect(human.agentId).toBe("");
-  });
 
   test("a seat's state is the ENGINE'S word, and nothing is folded in here", () => {
     // The client used to fold the running-runs panel into the seat's state
     // itself, three different ways on three screens. The engine now serves
     // one word per seat — its runs included — and this reads it unchanged.
-    expect(activityOf({ id: "a", agent_id: "id-a", role: "Dev A", activity: "working" })).toBe(
+    expect(activityOf({ id: "a", agent_id: "a", role: "Dev A", activity: "working" })).toBe(
       "working",
     );
-    expect(activityOf({ id: "a", agent_id: "id-a", role: "Dev A", activity: "needs" })).toBe(
-      "needs",
-    );
-    expect(activityOf({ id: "a", agent_id: "id-a", role: "Dev A", activity: "idle" })).toBe("idle");
+    expect(activityOf({ id: "a", agent_id: "a", role: "Dev A", activity: "needs" })).toBe("needs");
+    expect(activityOf({ id: "a", agent_id: "a", role: "Dev A", activity: "idle" })).toBe("idle");
     // No row from the engine yet is its own answer, never a guess.
     expect(activityOf(undefined)).toBe("offline");
-    expect(activityOf({ id: "a", agent_id: "id-a", role: "Dev A" })).toBe("offline");
+    expect(activityOf({ id: "a", agent_id: "a", role: "Dev A" })).toBe("offline");
   });
 
   test("colour is STATE and an idle seat gets none", () => {
@@ -733,16 +477,14 @@ describe("what a seat is doing", () => {
   });
 
   test("a label is the engine's words, with the reason and the pauser", () => {
-    expect(labelOf({ id: "a", agent_id: "id-a", role: "Dev A", activity: "working" }, now)).toBe(
+    expect(labelOf({ id: "a", agent_id: "a", role: "Dev A", activity: "working" }, now)).toBe(
       "Working",
     );
-    expect(labelOf({ id: "a", agent_id: "id-a", role: "Dev A", activity: "idle" }, now)).toBe(
-      "Idle",
-    );
+    expect(labelOf({ id: "a", agent_id: "a", role: "Dev A", activity: "idle" }, now)).toBe("Idle");
     expect(labelOf(undefined, now)).toBe("No state from the engine yet");
     expect(
       labelOf(
-        { id: "a", agent_id: "id-a", role: "Dev A", activity: "stopped", stopped_reason: "budget" },
+        { id: "a", agent_id: "a", role: "Dev A", activity: "stopped", stopped_reason: "budget" },
         now,
       ),
     ).toBe("Stopped · budget");
@@ -750,29 +492,28 @@ describe("what a seat is doing", () => {
       labelOf(
         {
           id: "a",
-          agent_id: "id-a",
+          agent_id: "a",
           role: "Dev A",
           activity: "stopped",
           stopped_reason: "paused",
-          paused: { by: "jane", by_kind: "human", at: "2026-01-01T11:48:00Z", stop_running: false },
+          paused: { by_kind: "human", by: "jane", at: "2026-01-01T11:48:00Z", stop_running: false },
         },
         now,
       ),
     ).toBe("Paused by jane · 12m");
-    // THE PAUSER BY NAME where the chart knows them: `paused.by` is the name
-    // the engine records them under — a bound person's seat handle — and
-    // "Paused by jane-founder" names an address where a person is meant. A
-    // key the chart does not hold — the login of somebody bound to no seat —
-    // is drawn as it came.
+    // THE PAUSER BY NAME where the chart knows them: `paused.by` is the seat
+    // handle their token is bound to, and "Paused by jane-founder" names an
+    // address where a person is meant. A key the chart does not hold — a
+    // token's own name — is drawn as it came.
     const paused = {
       id: "a",
-      agent_id: "id-a",
+      agent_id: "a",
       role: "Dev A",
       activity: "stopped" as const,
       stopped_reason: "paused" as const,
       paused: {
-        by: "jane-founder",
         by_kind: "human",
+        by: "jane-founder",
         at: "2026-01-01T11:48:00Z",
         stop_running: false,
       },
@@ -781,19 +522,15 @@ describe("what a seat is doing", () => {
     expect(labelOf(paused, now, nameOf)).toBe("Paused by Jane Founder · 12m");
     expect(stoppedLine(paused, nameOf)).toBe("paused by Jane Founder");
     expect(stateLine(paused, { now, nameOf })).toBe("Paused by Jane Founder · 12m");
-    expect(
-      labelOf(
-        { ...paused, paused: { ...paused.paused, by: "ops.lead", by_kind: "operator" } },
-        now,
-        nameOf,
-      ),
-    ).toBe("Paused by ops.lead · 12m");
+    expect(labelOf({ ...paused, paused: { ...paused.paused, by: "ops-bot" } }, now, nameOf)).toBe(
+      "Paused by ops-bot · 12m",
+    );
     // A reason this build does not know draws the word, never a guess.
     expect(
       labelOf(
         {
           id: "a",
-          agent_id: "id-a",
+          agent_id: "a",
           role: "Dev A",
           activity: "stopped",
           stopped_reason: "later" as never,
@@ -808,7 +545,7 @@ describe("what a seat is doing", () => {
       stateLine(
         {
           id: "a",
-          agent_id: "id-a",
+          agent_id: "a",
           role: "Dev A",
           activity: "working",
           current_phase: "execute",
@@ -823,7 +560,7 @@ describe("what a seat is doing", () => {
       stateLine(
         {
           id: "a",
-          agent_id: "id-a",
+          agent_id: "a",
           role: "Dev A",
           activity: "working",
           current_phase: "execute",
@@ -844,13 +581,7 @@ describe("what a seat is doing", () => {
     expect(delegating('{"tasks": "three"}')).toBe("Executing ENG-405");
     expect(
       stateLine(
-        {
-          id: "a",
-          agent_id: "id-a",
-          role: "Dev A",
-          activity: "stopped",
-          stopped_reason: "unplaced",
-        },
+        { id: "a", agent_id: "a", role: "Dev A", activity: "stopped", stopped_reason: "unplaced" },
         { now },
       ),
     ).toBe("Not placed on any node");
@@ -858,7 +589,7 @@ describe("what a seat is doing", () => {
       stateLine(
         {
           id: "a",
-          agent_id: "id-a",
+          agent_id: "a",
           role: "Dev A",
           activity: "idle",
           last_turn: { ended_at: "2026-01-01T11:36:00Z" } as never,
@@ -867,7 +598,9 @@ describe("what a seat is doing", () => {
       ),
     ).toBe("Idle · last turn 24m ago");
     expect(stateLine(undefined, { now })).toBe("No state from the engine yet");
-    expect(stateLine(null, { now, seat: named(index, "Jane Founder")! })).toMatch(/human|Human/);
+    expect(stateLine(null, { now, seat: index.byName.get("Jane Founder")! })).toMatch(
+      /human|Human/,
+    );
   });
 
   test("a parked run is a coding run while working, and says so", () => {
@@ -877,7 +610,7 @@ describe("what a seat is doing", () => {
       stateLine(
         {
           id: "a",
-          agent_id: "id-a",
+          agent_id: "a",
           role: "Dev A",
           activity: "working",
           current_phase: "execute",
@@ -890,7 +623,7 @@ describe("what a seat is doing", () => {
       labelOf(
         {
           id: "a",
-          agent_id: "id-a",
+          agent_id: "a",
           role: "Dev A",
           activity: "needs",
           turn: { stage: "parked" } as never,
@@ -1095,17 +828,19 @@ describe("staleness", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The model chain, in both shapes the chart serves
+// The model chain, in every shape the config accepts
 // ---------------------------------------------------------------------------
 
-// `org.ProviderKeys` marshals as a STRING for one provider and an ARRAY for a
-// fallback chain. The client declared a string, so an array rendered as
-// `fast,backup` and any consumer calling a string method on one threw on a
-// seat the engine accepts.
+// `config.PhaseLLM` marshals as a STRING for one provider, an ARRAY for a
+// fallback chain, and an OBJECT keyed on phase for a per-phase mapping. The
+// client declared a string, so an array rendered as `fast,backup` and a
+// mapping as `[object Object]`, and any consumer calling a string method on
+// one threw on a config the engine accepts.
 describe("llmChain", () => {
-  test("reads both shapes the engine marshals, first choice first", () => {
+  test("reads all three shapes the engine marshals", () => {
     expect(llmChain("fast")).toEqual(["fast"]);
     expect(llmChain(["fast", "backup"])).toEqual(["fast", "backup"]);
+    expect(llmChain({ default: "big", judge: "tiny" })).toEqual(["big", "tiny"]);
   });
 
   // A SEAT THAT SAYS NOTHING takes the default provider, and that is not the
@@ -1114,11 +849,27 @@ describe("llmChain", () => {
     expect(llmChain(undefined)).toEqual([]);
     expect(llmChain("")).toEqual([]);
     expect(llmChain([])).toEqual([]);
-    expect(llmChain(["", "fast"])).toEqual(["fast"]);
+    expect(llmChain({})).toEqual([]);
   });
 
-  test("one key listed twice is one model", () => {
-    expect(llmChain(["big", "tiny", "big"])).toEqual(["big", "tiny"]);
+  // THE SAME KEY REACHED THROUGH TWO PHASES IS NOT TWO MODELS. Without this
+  // the common mapping — one strong model for most phases, a cheap one for the
+  // judge — reads as five models on the seat page.
+  test("one key named by several phases is listed once", () => {
+    expect(
+      llmChain({ default: "big", review: "big", judge: "tiny", sandbox: ["big", "tiny"] }),
+    ).toEqual(["big", "tiny"]);
+  });
+
+  // A PHASE FALLS BACK TO `default`, exactly as the engine's own resolution
+  // does — so asking for the judge of a seat that never named one answers the
+  // model the judge will actually run on.
+  test("a named phase falls back to default", () => {
+    const llm = { default: "big", judge: "tiny" };
+    expect(llmChain(llm, "judge")).toEqual(["tiny"]);
+    expect(llmChain(llm, "review")).toEqual(["big"]);
+    // And a flat chain answers the same for every phase, because it is one.
+    expect(llmChain(["fast", "backup"], "judge")).toEqual(["fast", "backup"]);
   });
 });
 
@@ -1203,32 +954,8 @@ test("a working seat's strip on a task counts its round from one", () => {
         work_item: { backend: "native", id: "i", key: "ENG-412", project: "ENG" },
       },
     }) as unknown as AgentRow;
-  expect(liveOnItems([working(6, 6)]).get("i")?.doing).toMatch(/round 7 of 25$/);
-  expect(liveOnItems([working(0, 0)]).get("i")?.doing).toMatch(/round 1 of 25$/);
-});
-
-// A TURN IS ON ONE TASK, AND A KEY CAN BE TWO. A key another task claimed
-// first is flagged `key_collision` and stays on the task that did not claim
-// it, so two cards can carry one key — and a map keyed on it drew the working
-// seat's strip on both of them. Keyed on the task's id, only the task the turn
-// is charged to finds one.
-test("of two tasks sharing a key, only the one being worked on draws the strip", () => {
-  const row = {
-    role: "SWE",
-    handle: "swe",
-    activity: "working",
-    live_call: {
-      phase: "execute",
-      round_num: 2,
-      rounds_used: 2,
-      max_rounds: 25,
-      work_item: { backend: "native", id: "t-duplicate", key: "ENG-7", project: "ENG" },
-    },
-  } as unknown as AgentRow;
-  const live = liveOnItems([row]);
-  expect(live.get("t-duplicate")?.handle).toBe("swe");
-  expect(live.has("t-claimant")).toBe(false);
-  expect(live.has("ENG-7")).toBe(false);
+  expect(liveOnItems([working(6, 6)]).get("ENG-412")?.doing).toMatch(/round 7 of 25$/);
+  expect(liveOnItems([working(0, 0)]).get("ENG-412")?.doing).toMatch(/round 1 of 25$/);
 });
 
 // ONE READING OF THE ROUND, on the roster's card and in the attention queue

@@ -12,7 +12,7 @@
  * the rows it holds do not support.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TurnPeek, TurnScreen } from "./Turn.tsx";
 import { ABSORBED } from "~/contract/turnbands.ts";
@@ -21,7 +21,6 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventRecord, TurnAnswer } from "~/protocol/index.ts";
-import { CLAIMANT_HREF, DUPLICATE, DUPLICATE_HREF, SHARED_KEY } from "~/test/keyCollision.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -778,31 +777,6 @@ test("a turn with only its opening record is headed by its seat and its wake", a
   expect(screen.queryByRole("button", { name: /Already on this page/ })).toBeNull();
 });
 
-// OPEN TASK OPENS THE TURN'S OWN TASK. The turn names it by id and key, and
-// nothing this page reads says whether the key is one another task claimed
-// first — the engine opens such a key on the claimant — so the task is opened
-// by its id, which no collision moves.
-//
-// Mutation: navigate to `["work", workItem.key]` again, and the press lands on
-// the claimant's address.
-test("Open task opens the turn's task by its identity, never the key two tasks may hold", async () => {
-  const opening = event({
-    type: "agent_turn_started",
-    payload: {
-      turn_id: TURN,
-      role: "CEO",
-      agent_handle: "ceo",
-      work_item: { backend: "native", id: DUPLICATE, key: SHARED_KEY, project: "ENG" },
-      started_at: "2026-09-13T10:00:00Z",
-      resumed: false,
-    },
-  });
-  mount({ events: [opening] });
-  fireEvent.click(await screen.findByRole("button", { name: "Open task" }));
-  await waitFor(() => expect(location.hash).toBe(DUPLICATE_HREF));
-  expect(location.hash).not.toBe(CLAIMANT_HREF);
-});
-
 /**
  * A RESUMED SEGMENT DOES NOT RENAME THE TURN. A parked coding run publishes a
  * start per segment under one id, and a segment's wake is the box's completion
@@ -864,13 +838,12 @@ test("a turn with nothing absorbed draws no such note", async () => {
 /** Mount over a seat whose live overlay places it on this turn, at `stage`. */
 function onTurn(stage: "phase" | "parked") {
   const store = new Store();
-  // THE ROSTER, set whole (`applySeats`): `applyAgents` only patches the live
-  // overlay of a seat the roster already holds.
   store.applySeats([
     {
+      id: "ceo",
+      agent_id: "ceo",
       role: "CEO",
       handle: "ceo",
-      agent_id: "a-ceo",
       turn: { turn_id: TURN, started_at: "2026-09-13T10:00:00Z", stage },
     },
   ] as never);

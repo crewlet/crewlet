@@ -18,15 +18,6 @@
  * of 142" in its header, the same words on all four (`components/memory.tsx`,
  * whose diary and episode cards Knowledge › Agent diaries draws too), so the
  * two cannot silently disagree.
- *
- * # Read with `audit:read`, and asked of nobody else
- *
- * A seat's memory and its conversation ledger are its TRAIL, which the engine
- * answers on the audit grant whoever's seat it is — not by the owner-or-lead
- * rule a person's queue takes. So the tab asks nothing of a reader who does
- * not hold it and says which grant reads it ([GrantRequired]), rather than
- * sending two questions to be refused and drawing the refusals as a seat's
- * memory.
  */
 
 import { Callout, Card, CodeBlock, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
@@ -39,38 +30,17 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useLayoutEffect, useRef } from "react";
 import { href, useParam } from "~/app/router.tsx";
-import { ClockText } from "~/app/frame/cells.tsx";
-import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { reveal } from "~/lib/scroller.ts";
 import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { cutThen, DiaryCard, EpisodesCard, heldWords, pageWords } from "~/components/memory.tsx";
 import { conversationLabel, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useViewer } from "~/lib/viewer.ts";
-import { seatPath, type Seat } from "~/lib/seats.ts";
-import { AUDIT_GRANT } from "./Overview.tsx";
+import type { Seat } from "~/lib/seats.ts";
 import type { CounterpartyProfile } from "~/contract/memory.ts";
 import type { ConversationEntry } from "~/protocol/index.ts";
 
-export function Memory({ seat }: { seat: Seat }) {
-  const viewer = useViewer();
-  // THE FIRST VIEWER READ IS STILL OUT: nothing is asked yet. Mounting the
-  // body here sent both questions before the grants arrived, so a reader
-  // without the audit grant was asked of — and refused — anyway.
-  if (viewer.asking) {
-    return <Skeleton variant="text" rows={5} label="Loading this seat's memory" />;
-  }
-  // ANSWERED, AND WITHOUT THE GRANT: nothing is asked — see the file's doc.
-  // A viewer read that FAILED is not refused either: waiting on it would wait
-  // for ever, so the body's reads say what they find.
-  if (!viewer.loading && !viewer.grants.includes(AUDIT_GRANT)) {
-    return <GrantRequired what={`${seat.name}'s memory`} grants={[AUDIT_GRANT]} />;
-  }
-  return <MemoryBody seat={seat} />;
-}
-
-function MemoryBody({ seat }: { seat: Seat }) {
+export function Memory({ seat, now }: { seat: Seat; now: number }) {
   const handle = seat.handle;
   const memory = useQuery("agent_memory", { id: handle }, { enabled: handle !== "" });
   const data = memory.data;
@@ -84,7 +54,7 @@ function MemoryBody({ seat }: { seat: Seat }) {
           <>
             <p className="t-caption">{heldWords(data.held_by)}</p>
             <DiaryCard memory={data} />
-            <EpisodesCard memory={data} />
+            <EpisodesCard memory={data} now={now} />
 
             <Card padding="none">
               <Card.Header
@@ -140,7 +110,7 @@ function MemoryBody({ seat }: { seat: Seat }) {
               {data.counterparties.length ? (
                 <div className="list">
                   {data.counterparties.map((c, i) => (
-                    <CounterpartyRow key={`${counterpartyKey(c)}-${i}`} profile={c} />
+                    <CounterpartyRow key={`${counterpartyKey(c)}-${i}`} profile={c} now={now} />
                   ))}
                 </div>
               ) : (
@@ -155,7 +125,7 @@ function MemoryBody({ seat }: { seat: Seat }) {
           </>
         )}
       </QueryState>
-      <Conversations seat={seat} />
+      <Conversations seat={seat} now={now} />
     </div>
   );
 }
@@ -183,7 +153,7 @@ function MemoryBody({ seat }: { seat: Seat }) {
  * is width-free on purpose: the detail is revealed whenever it is not on
  * screen, which is never on a wide column and always on a phone.
  */
-function Conversations({ seat }: { seat: Seat }) {
+function Conversations({ seat, now }: { seat: Seat; now: number }) {
   const [thread, setThread] = useParam("conversation", "", "filter");
   // SET BY A PRESS, read once the chosen thread has rendered: a thread named in
   // the address the page was opened on is not a reader's gesture, and the page
@@ -251,9 +221,7 @@ function Conversations({ seat }: { seat: Seat }) {
                     <span className="mono t-cell key-cell">{conversationLabel(row.key)}</span>
                     <span className="t-caption">
                       {plural(row.turns, "turn")} ·{" "}
-                      <span title={fmtDateTime(row.last_at)}>
-                        <ClockText read={(now) => relTime(row.last_at, now)} />
-                      </span>
+                      <span title={fmtDateTime(row.last_at)}>{relTime(row.last_at, now)}</span>
                     </span>
                   </button>
                 ))}
@@ -364,7 +332,7 @@ const STALE_TRAIT_MS = 30 * 24 * 60 * 60 * 1000;
  *  THE TRAITS ARE A BAG: the model invents the keys, so they are listed as
  *  they come rather than drawn as whichever three fields appeared first.
  */
-export function CounterpartyRow({ profile }: { profile: CounterpartyProfile }) {
+export function CounterpartyRow({ profile, now }: { profile: CounterpartyProfile; now: number }) {
   const traits = Object.entries(profile.traits ?? {});
   const stale =
     profile.last_corroborated_at &&
@@ -374,10 +342,7 @@ export function CounterpartyRow({ profile }: { profile: CounterpartyProfile }) {
     <div className="thread-entry">
       <div className="row gap-1">
         {profile.subject.handle ? (
-          <a
-            className="t-cell"
-            href={href(seatPath({ handle: profile.subject.handle, name: profile.subject.name }))}
-          >
+          <a className="t-cell" href={href(["agents", "seats", profile.subject.handle])}>
             <strong>{profile.subject.name || profile.subject.handle}</strong>
           </a>
         ) : (
@@ -395,7 +360,7 @@ export function CounterpartyRow({ profile }: { profile: CounterpartyProfile }) {
             the one row that read differently. */}
         {profile.last_updated_at && (
           <span className="t-caption" title={fmtDateTime(profile.last_updated_at)}>
-            <ClockText read={(now) => relTime(profile.last_updated_at, now)} />
+            {relTime(profile.last_updated_at, now)}
           </span>
         )}
       </div>

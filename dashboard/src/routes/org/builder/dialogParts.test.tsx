@@ -20,7 +20,7 @@
  * component renders rather than about how it is spelled.
  */
 
-import { cleanup, render } from "~/test/inCase.ts";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import { ScreenLink } from "./dialogParts.tsx";
 

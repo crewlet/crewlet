@@ -43,13 +43,21 @@ import { EventRow, QueryState } from "~/components/common.tsx";
 import { Button, Card, FilterChip, Input, Skeleton, Tag } from "@crewlethq/ui";
 import { XGlyph, SearchGlyph, ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useClient, useEngineHealth, useEvents, useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, liveRowFor, seatByAddress } from "~/lib/seats.ts";
+import { indexOrg } from "~/lib/seats.ts";
 import { eventHistoryLabel, fmtDate, newestFirst, plural, tsKey } from "~/lib/format.ts";
-import { queryFailure, type FeedRow, type QueryFailure } from "~/protocol/index.ts";
+import type { FeedRow } from "~/protocol/index.ts";
 import type { Coverage } from "~/contract/coverage.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
+import { useNow } from "~/lib/clock.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { spanWords, useTimeRange, windowLabel, windowParam } from "~/lib/range.ts";
+import {
+  spanWords,
+  stepOf,
+  useTimeRange,
+  windowEdges,
+  windowLabel,
+  windowParam,
+} from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { Histogram } from "~/ui/Histogram.tsx";
@@ -109,6 +117,7 @@ export function Activity() {
   const { socket } = useClient();
   const liveEvents = useEvents();
   const engine = useEngineHealth();
+  const now = useNow();
   const [category, setCategory] = useParam("category", "");
   const [actor, setActor] = useParam("actor", "");
   const [q, setQ] = useParam("q", "");
@@ -119,51 +128,42 @@ export function Activity() {
   // ONE TRACE AND ONE CHANNEL, by id, as the links that open the log name them.
   const [trace, setTrace] = useParam("trace", "");
   const [channel, setChannel] = useParam("channel", "");
-  // ONE SEAT'S EVENTS, by the HANDLE a link carries — what an agent's
-  // "Events" opens. The engine resolves the handle to the AGENT ID its events
-  // carry (a handle a rename retired included), so the pages it answers are
-  // that seat's. A seat's events used to arrive here as `actor` carrying the
-  // seat's NAME, which two seats may share, so a namesake's events were listed
-  // — and counted on the axis — as this seat's; `actor` stays for what it is,
-  // an equality match on whoever acted, which is how a PERSON's seat is
-  // narrowed (`iam.ActorFor` records their writes under the seat's handle).
-  //
-  // The LIVE rows are narrowed here by the same id, off the agents push — the
-  // seat the address names, followed through a rename and paired with its
-  // roster row by handle, never by name.
+  // ONE SEAT'S EVENTS, by its handle — what a profile's "Events" opens. The
+  // engine resolves the handle to the id its events carry, so the pages it
+  // answers are that seat's; the LIVE rows are narrowed here by the same id,
+  // off the agents push, which is the only place this tab learns it.
   const [seat, setSeat] = useParam("seat", "");
   const agents = useAgents();
   const org = useOrg();
-  const index = useMemo(() => indexOrg(org), [org]);
-  const named = seat ? seatByAddress(index, seat) : null;
-  const seatId = named ? liveRowFor(agents, named)?.agent_id : undefined;
-  const seatName = named?.name ?? seat;
-  // ONE WINDOW FOR THE LOG AND ITS AXIS, snapped OUT to the bucket the axis
-  // draws in (`useTimeRange`). It buys three things.
-  //
-  // The axis's question stands still between ticks: a query is keyed on its
-  // parameters, so instants carrying the millisecond re-asked the engine for
-  // the same bars once a second, on every open tab — and the bars cover
-  // exactly the window the badge names, whole buckets ending at the end of the
-  // one in progress, rather than the extra part-bucket the engine's own
-  // outward snap adds under a raw `now`.
-  //
-  // The list and the bars agree about where the window starts. The list ran
-  // to the second while the axis ran to the column, so the oldest bucket's
-  // bar counted rows the list had already cut. Rounding the top edge up asks
-  // the store for rows up to the end of the bucket in progress, which are
-  // simply not there yet: the newest row is still the newest row, and a row
-  // the socket pushes inside the column is inside the window.
-  //
-  // And the clock reaches this screen as the column, not the second. Holding
-  // the second, the log drew every row it held — the live ring and every page
-  // fetched — once a second to move edges that move when a column rolls.
-  const range = useTimeRange(LOG_OFFER);
+  const seatId = seat ? agents.find((a) => a.handle === seat)?.agent_id : undefined;
+  const seatName = useMemo(
+    () => (seat ? (indexOrg(org).byHandle.get(seat)?.name ?? seat) : ""),
+    [org, seat],
+  );
+  // NOT ALIGNED to the bucket. A chart rounds its edges up so the column in
+  // progress is drawn and the query changes once per column; a LIST's newest
+  // row is the newest row, and rounding up would ask the store for rows that
+  // do not exist yet.
+  const range = useTimeRange(now, LOG_OFFER, false);
   const { since, until, bucket } = range;
-  // WHICH WINDOW THIS IS, as an identity rather than as two instants: keyed on
-  // the instants, the reset below threw away every page a reader had loaded
-  // whenever they moved.
+  // WHICH WINDOW THIS IS, as an identity rather than as two instants.
+  //
+  // The price of the unaligned range above is that `since` and `until` ARE the
+  // clock: a fresh pair of millisecond instants on every tick of `useNow`. They
+  // are the right values to FILTER and to ASK with, and the wrong thing for
+  // anything to be keyed on — keyed on them, the reset below ran once a second,
+  // so every page a reader had loaded was thrown away and page one re-fetched,
+  // for as long as the tab stayed open.
   const windowKey = windowParam(range.window);
+  // THE AXIS'S OWN EDGES, snapped OUT to the bucket it draws in — the rounding
+  // the comment above says a chart wants, and the reason `windowEdges` takes a
+  // step at all. It buys two things: the query's identity stands still between
+  // ticks (a query is keyed on its parameters, so instants carrying the
+  // millisecond re-asked the engine for the same bars once a second, on every
+  // open tab), and the bars cover exactly the window the badge names — whole
+  // buckets ending at the end of the one in progress, rather than the extra
+  // part-bucket the engine's own outward snap adds under a raw `now`.
+  const axis = windowEdges(range.window, now, stepOf(bucket));
 
   const [older, setOlder] = useState<FeedRow[]>([]);
   // Whether this window's FIRST page has been asked for. A window is a query
@@ -175,8 +175,7 @@ export function Activity() {
   const [cursor, setCursor] = useState<{ before_time: string; before_id: string } | null>(null);
   const [exhausted, setExhausted] = useState(false);
   const [paging, setPaging] = useState(false);
-  // THE WHOLE FAILURE, its refusal included — see [queryFailure].
-  const [pageFailure, setPageFailure] = useState<QueryFailure | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
   // WHICH NODES EACH PAGE WAS MERGED FROM, so the note below names a node
   // that did not answer for any of them.
   const [pageCoverage, setPageCoverage] = useState<(Coverage | undefined)[]>([]);
@@ -190,8 +189,8 @@ export function Activity() {
   // narrower filter reported that there was no more history to fetch when its
   // own first page had never been asked for.
   //
-  // The server-side keys only. `q` is applied in the browser to whatever
-  // arrived, so changing it cannot invalidate a page.
+  // The server-side keys only. `q` and `failed` are applied in the browser to
+  // whatever arrived, so changing them cannot invalidate a page.
   //
   // THE WINDOW'S IDENTITY, not its two instants — see [windowKey]. A reader
   // choosing another range is a new query and its pages go; a second passing
@@ -200,7 +199,7 @@ export function Activity() {
     setOlder([]);
     setCursor(null);
     setExhausted(false);
-    setPageFailure(null);
+    setPageError(null);
     setPageCoverage([]);
     setFetched(false);
   }, [category, actor, seat, trace, channel, failedOnly, windowKey]);
@@ -288,14 +287,17 @@ export function Activity() {
     }),
     [category, actor, seat, trace, channel, failedOnly],
   );
-  const series = useQuery("event_series", { since, until, bucket, ...filters });
+  const series = useQuery("event_series", {
+    since: axis.since,
+    until: axis.until,
+    bucket,
+    ...filters,
+  });
 
   const loadOlder = useCallback(async () => {
     setPaging(true);
-    setPageFailure(null);
+    setPageError(null);
     try {
-      // THE LOG'S OWN WINDOW, the one its rows are cut to and its bars count:
-      // a page asked over any other could bring rows the list then hides.
       // The cursor names BOTH halves. The engine reads `before_time` and
       // `before_id`; a client sending one bare `before` gets every page
       // rejected with `query_failed`.
@@ -319,7 +321,7 @@ export function Activity() {
       setCursor(page.next ?? null);
       setExhausted(page.exhausted || !page.next);
     } catch (err) {
-      setPageFailure(queryFailure(err));
+      setPageError(err instanceof Error ? err.message : "query_failed");
     } finally {
       setPaging(false);
     }
@@ -408,6 +410,7 @@ export function Activity() {
               // who has learnt one log in this product has learnt the other,
               // and an axis on one of them only is two frames again.
               axis
+              now={now}
               onPick={range.set}
             />
           )}
@@ -550,7 +553,7 @@ export function Activity() {
           // tells a reader their log is gone when nobody managed to read it.
           // Both are absences of an answer; only the third is an answer.
           !paging &&
-          !pageFailure && (
+          !pageError && (
             <QueryState
               error={null}
               loading={false}
@@ -571,8 +574,8 @@ export function Activity() {
           )
         )}
         <footer className="panel-foot">
-          {pageFailure ? (
-            <QueryState error={pageFailure.error} refusal={pageFailure.refusal} loading={false} />
+          {pageError ? (
+            <QueryState error={pageError} loading={false} />
           ) : exhausted ? (
             // THE END OF WHAT WAS ASKED, NOT OF THE STORE. Pages are bounded
             // by the window and narrowed by the filters, so "exhausted" means

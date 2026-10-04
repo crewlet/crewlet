@@ -34,8 +34,8 @@
 
 import type { TreeInput } from "@crewlethq/ui";
 import type { SeatActivity } from "~/contract/wire.ts";
-import type { AgentRow, WorkProjectRow, WorkUnitRef } from "~/protocol/types.ts";
-import { unitByKey, type OrgIndex, type Seat, type Unit } from "./seats.ts";
+import type { AgentRow, WorkProjectRow } from "~/protocol/types.ts";
+import type { OrgIndex, Seat, Unit } from "./seats.ts";
 
 /** One box round a run of sibling cards: a unit, under its lead. */
 export interface ChartGroup {
@@ -73,58 +73,20 @@ export function placeLine(seat: Seat): string {
 }
 
 /**
- * The unit a tracker row's unit reference names, as this chart holds it — or
- * null where the chart cannot say which unit it is.
- *
- * THE ROW HOLDS WHAT WAS WRITTEN, not what the chart calls the unit today
- * (`tracker.UnitRef`): a project filed before a rename keeps the key its unit
- * had then, so `ref.key` is the unit's current key, the key it was created
- * under or one it answered to since — and only the first of those is the
- * projection's `id`. So the key is resolved the engine's way, through every
- * spelling a unit answers to ([unitByKey]: the current key, then the origin,
- * then each former key), and never compared with `id` alone.
- *
- * AND BY THE CHART'S OWN NAME ONLY WHEN IT IS ONE UNIT'S. The engine resolves
- * a row filed under a unit's name (before the chart gave it a key) and answers
- * that unit's current name beside the stored key, so a resolved reference
- * whose key this projection does not carry is matched on that name — but a
- * name is prose two units may share, and a name two units carry names
- * neither: it was keyed on the name, and two teams called Platform drew each
+ * Every project filed to each unit, by unit KEY — what a project's `unit:`
+ * names and what [Unit.id] is (`lib/seats.ts`). Never the unit's NAME, which is
+ * prose two units may share: keyed on it, two teams called Platform drew each
  * other's projects in their boxes.
- */
-export function unitOfRef(
-  index: Pick<OrgIndex, "units">,
-  ref: WorkUnitRef | null | undefined,
-): Unit | null {
-  if (!ref) return null;
-  const key = (ref.key ?? "").trim();
-  const byKey = key ? unitByKey(index, key) : null;
-  if (byKey) return byKey;
-  if (!ref.resolved || !ref.name) return null;
-  const named = index.units.filter((u) => u.name === ref.name);
-  return named.length === 1 ? named[0]! : null;
-}
-
-/**
- * Every live project filed to each unit, keyed on the UNIT — the very
- * objects of the index it is handed, so a caller looks a unit up with one of
- * that index's units and two units sharing a name are two entries.
- *
- * It was keyed on the unit's NAME, so two teams of one name pooled their
- * projects, and a team renamed since its projects were filed drew none.
  */
 export function projectsByUnit(
   projects: readonly Pick<WorkProjectRow, "key" | "unit" | "archived">[],
-  index: Pick<OrgIndex, "units">,
-): Map<Unit, string[]> {
-  const out = new Map<Unit, string[]>();
+): Map<string, string[]> {
+  const out = new Map<string, string[]>();
   for (const p of projects) {
     // AN ARCHIVED PROJECT IS NOT WHERE A UNIT'S WORK GOES: its key on the box
     // would send a reader to a board nobody files to.
-    if (p.archived) continue;
-    const unit = unitOfRef(index, p.unit);
-    if (!unit) continue;
-    out.set(unit, [...(out.get(unit) ?? []), p.key]);
+    if (p.archived || !p.unit?.key) continue;
+    out.set(p.unit.key, [...(out.get(p.unit.key) ?? []), p.key]);
   }
   for (const keys of out.values()) keys.sort();
   return out;
@@ -145,7 +107,7 @@ export function buildOrgChart(
   const seats = new Map(index.seats.map((s) => [s.key, s]));
   const unitOrder = new Map(index.units.map((u, i) => [u, i]));
   const seatOrder = new Map(index.seats.map((s, i) => [s, i]));
-  const keysOf = projectsByUnit(projects, index);
+  const keysOf = projectsByUnit(projects);
 
   // A MANAGER CHAIN THAT LOOPS cannot be a tree. The engine's derivation
   // cannot produce one, but a chart that trusted that would recurse for ever
@@ -187,7 +149,7 @@ export function buildOrgChart(
         id: `unit:${run.unit.key}:${seat.key}`,
         unit: run.unit,
         label: pathBelow(run.unit, seat.unit),
-        projectKeys: keysOf.get(run.unit) ?? [],
+        projectKeys: keysOf.get(run.unit.id) ?? [],
         memberIds: run.ids,
       });
       run = null;
@@ -312,16 +274,15 @@ export type StateCounts = Record<SeatActivity, number>;
  * The legend's four figures: every agent seat of the chart, counted by the
  * ENGINE's word for it. A seat with no row yet is counted nowhere — the
  * legend says what the engine reported, and "no state yet" is not idle.
- *
- * EACH SEAT BY ITS OWN ROW, paired by HANDLE ([liveRowFor]'s rule): it was
- * paired by NAME, which two seats may share, so two "Engineer"s were each
- * counted in the state of whichever row came last.
  */
 export function stateCounts(index: OrgIndex, agents: readonly AgentRow[]): StateCounts {
   const counts: StateCounts = { working: 0, needs: 0, stopped: 0, idle: 0 };
-  const byHandle = new Map(agents.flatMap((a) => (a.handle ? [[a.handle, a] as const] : [])));
+  // EACH SEAT BY ITS OWN ROW, paired by HANDLE (the roster row's `id`): paired
+  // by NAME, which two seats may share, two "Engineer"s were each counted in
+  // the state of whichever row came last.
+  const byHandle = new Map(agents.map((a) => [a.id, a]));
   for (const seat of index.seats) {
-    if (seat.kind === "human" || !seat.handle) continue;
+    if (seat.kind === "human") continue;
     const activity = byHandle.get(seat.handle)?.activity;
     if (activity && activity in counts) counts[activity] += 1;
   }

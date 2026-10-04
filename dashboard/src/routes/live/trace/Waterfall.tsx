@@ -61,8 +61,7 @@ import { ClockGlyph, CircleAlertGlyph, SquareTerminalGlyph, XGlyph } from "@crew
 import { NowLine } from "~/components/time/NowLine.tsx";
 import { SpanBar } from "~/components/time/SpanBar.tsx";
 import { TimeAxis } from "~/components/time/TimeAxis.tsx";
-import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
-import { ClockText } from "~/app/frame/cells.tsx";
+import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { fmtCount, fmtDuration, fmtElapsed, fmtTime, plural, relTime } from "~/lib/format.ts";
 import { rounds, type PhaseRecord } from "~/lib/phases.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
@@ -505,7 +504,9 @@ function SpanDetail({
           {(span.kind === "phase" || span.kind === "worker" || span.kind === "judge") && record && (
             <PhaseDetail record={record} />
           )}
-          {span.kind === "run" && <RunDetail span={span} record={record} turnId={turnId} />}
+          {span.kind === "run" && (
+            <RunDetail span={span} record={record} turnId={turnId} now={now} />
+          )}
         </div>
       </Card>
     </div>
@@ -639,10 +640,12 @@ function RunDetail({
   span,
   record,
   turnId,
+  now,
 }: {
   span: Span;
   record: PhaseRecord | null;
   turnId: string;
+  now: number;
 }) {
   return (
     <>
@@ -656,7 +659,7 @@ function RunDetail({
         ]}
       />
       {span.open && span.launchId ? (
-        <LiveOutput turnId={turnId} launchId={span.launchId} />
+        <LiveOutput turnId={turnId} launchId={span.launchId} now={now} />
       ) : span.open ? (
         <span className="t-caption">
           This run&rsquo;s announcement names no job, so its live output cannot be asked for — it
@@ -683,7 +686,15 @@ function RunDetail({
  * [SANDBOX_TAIL_POLL_MS] for as long as this is mounted — which is as long as
  * a reader has the span open and the run is running.
  */
-export function LiveOutput({ turnId, launchId }: { turnId: string; launchId: string }) {
+export function LiveOutput({
+  turnId,
+  launchId,
+  now,
+}: {
+  turnId: string;
+  launchId: string;
+  now: number;
+}) {
   // A RUN THAT HAS STOPPED STOPS THE POLL: its output is on its record from
   // here on, which the trace re-reads when the record lands. The answer that
   // said so is KEPT — a disabled question answers nothing, and the reader is
@@ -701,11 +712,8 @@ export function LiveOutput({ turnId, launchId }: { turnId: string; launchId: str
 
   let body: ReactNode;
   if (!answer) {
-    // A REFUSED READ NAMES WHAT WOULD ADMIT THE READER — a run's live output
-    // is `audit:read`'s, like the run's own record — rather than printing the
-    // bare code as though the output were broken.
     body = tail.error ? (
-      <QueryState error={tail.error} refusal={tail.refusal} loading={false} />
+      <Callout variant="warning">The run&rsquo;s output could not be read: {tail.error}.</Callout>
     ) : (
       <span className="t-caption">Asking the node that runs it…</span>
     );
@@ -768,11 +776,7 @@ export function LiveOutput({ turnId, launchId }: { turnId: string; launchId: str
         <span className="t-label">Live output</span>
         {out && (
           <span className="t-caption">
-            {/* THE CAPTION READS THE CLOCK ITSELF: the run's page holds no
-                second, and the trace's waterfall holds one only while its
-                turn runs. */}
-            {out.cut ? "the last 8 KiB · " : ""}read{" "}
-            <ClockText read={(now) => relTime(out.as_of, now)} />
+            {out.cut ? "the last 8 KiB · " : ""}read {relTime(out.as_of, now)}
             {answer?.node ? ` on ${answer.node}` : ""}
             {out.finished ? " · finished, waiting to be collected" : ""}
           </span>

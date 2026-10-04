@@ -31,8 +31,7 @@
  * cleared profile answers nothing.
  *
  * AND NEVER A CREDENTIAL. The session is a cookie no script can read, and a
- * bearer kept here is one any script injected into the page reads too — which
- * is why `crewlet_api_token` is retired below rather than declared.
+ * bearer kept here is one any script injected into the page reads too.
  *
  * A KEY MAY BE A PREFIX, for a list kept PER READER (`lib/recents.ts`,
  * `lib/starred.ts`): the reader's id follows it, so one browser shared by two
@@ -81,25 +80,8 @@ export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];
  * `crewlet.rail.collapsed` was whether the app rail was folded to its icons;
  * the rail is gone — the sidebar is the kit's `AppShell`, which is a drawer
  * below its breakpoint and never folds.
- *
- * `crewlet_api_token` was a bearer an earlier build kept here and sent on
- * every request: a credential any script on the page could read, and one that
- * outlived every sign-out. The session is a cookie now and nothing reads the
- * key — so a value left behind is removed at the first boot of this build
- * rather than left in the profile for ever.
- *
- * `crewlet_recents` and `crewlet_starred` were ONE list per browser, shared by
- * whoever sat down at it: the last person's recent titles and stars drawn in
- * the next person's palette. Each reader's list lives under its own key now
- * ([STORAGE_KEYS.recents], [STORAGE_KEYS.starred]), so the shared one is
- * nobody's and is deleted.
  */
-export const RETIRED_STORAGE_KEYS: readonly string[] = [
-  "crewlet.rail.collapsed",
-  "crewlet_api_token",
-  "crewlet_recents",
-  "crewlet_starred",
-];
+export const RETIRED_STORAGE_KEYS: readonly string[] = ["crewlet.rail.collapsed"];
 
 /**
  * Remove every retired key. NEVER THROWS: a private window, blocked site data

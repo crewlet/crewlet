@@ -21,11 +21,10 @@
  *
  * # Edited as you
  *
- * Edit (`edit=1`) writes through `save_page` as the principal the request
- * resolves to, against the revision they opened — see `Editor.tsx` for what a
- * save that raced somebody else's does. A comment and a new sub-page write the
- * same way. For a reader who cannot write, every control stays drawn and says
- * why.
+ * Edit (`edit=1`) writes through `save_page` as the person signed in,
+ * against the revision they opened — see `Editor.tsx` for what a save
+ * that raced somebody else's does. A comment and a new sub-page write the same
+ * way. For a reader who cannot write, every control stays drawn and says why.
  */
 
 import { useMemo, useState } from "react";
@@ -45,12 +44,10 @@ import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { QueryState } from "~/components/common.tsx";
-import { ClockText } from "~/app/frame/cells.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
-import { useClockReading } from "~/lib/clock.ts";
-import { companyMidnight } from "~/lib/range.ts";
+import { useNow } from "~/lib/clock.ts";
 import { useMediaQuery } from "~/lib/media.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { outline, renderMarkdown } from "~/lib/markdown.ts";
@@ -132,7 +129,7 @@ function SkillPill({ detail, who }: { detail: PageDetail; who: Who }) {
 }
 
 /** The title and the line under it: who saved it last, when, and its revision. */
-function DocHead({ detail, who }: { detail: PageDetail; who: Who }) {
+function DocHead({ detail, who, now }: { detail: PageDetail; who: Who; now: number }) {
   const page = detail.page;
   // THE LAST SAVE IS THE NEWEST REVISION, not the page's author: a page's
   // `author` is who STARTED it and no save moves it, so "updated by" beside it
@@ -149,7 +146,7 @@ function DocHead({ detail, who }: { detail: PageDetail; who: Who }) {
         <span>
           Updated by <b>{seat ? seat.name : "the engine"}</b>{" "}
           <time dateTime={at} title={fmtDateTime(at)}>
-            <ClockText read={(now) => relTime(at, now)} />
+            {relTime(at, now)}
           </time>
         </span>
         <span aria-hidden="true">·</span>
@@ -174,6 +171,7 @@ export function PageView({ id }: { id: string }) {
       return { name: seat.name, kind: seat.kind === "human" ? "human" : "agent" };
     };
   }, [index]);
+  const now = useNow();
   const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
   // THE DOCUMENT AND ITS RAIL EACH SCROLL ON THEIR OWN, the way the task page's
   // do — above a phone, where they are one column and the page scrolls.
@@ -223,14 +221,9 @@ export function PageView({ id }: { id: string }) {
   );
   const headings = useMemo(() => outline(body), [body]);
   const readers = reads.data?.readers;
-  // TODAY IS THE COMPANY'S DAY, read off the clock as its midnight — this
-  // re-renders when the company's day turns, never once a second, which is
-  // all "read today" turns on.
-  const zone = org?.timezone;
-  const midnight = useClockReading((now) => companyMidnight(now, zone));
   const faces = useMemo(
-    () => (readers ? readToday(readers, midnight, zone) : []),
-    [readers, midnight, zone],
+    () => (readers ? readToday(readers, now, org?.timezone) : []),
+    [readers, now, org?.timezone],
   );
 
   const toggleHistory = () => {
@@ -324,7 +317,7 @@ export function PageView({ id }: { id: string }) {
             <div className="kpage-grid">
               <div className="kpage-main">
                 <article className="kpage-doc" aria-label={page.title}>
-                  <DocHead detail={data} who={who} />
+                  <DocHead detail={data} who={who} now={now} />
                   {editing ? (
                     <PageEditor key={page.id} detail={data} onDone={() => setEdit("")} />
                   ) : version > 0 ? (
@@ -333,6 +326,7 @@ export function PageView({ id }: { id: string }) {
                       version={version}
                       history={history}
                       seatName={(h) => who(h).name}
+                      now={now}
                       onClose={() => setVersion("")}
                     />
                   ) : body.trim() ? (
@@ -353,12 +347,13 @@ export function PageView({ id }: { id: string }) {
                   title={page.title}
                   comments={data.comments ?? []}
                   who={who}
+                  now={now}
                 />
-                <PageChanges pageID={page.id} seatName={(h) => who(h).name} />
+                <PageChanges pageID={page.id} seatName={(h) => who(h).name} now={now} />
               </div>
               <aside className="kpage-rail" aria-label={`About “${page.title}”`}>
                 {!editing && version === 0 && <OnThisPage headings={headings} />}
-                <ReadBy reads={reads.data} error={reads.error} refusal={reads.refusal} who={who} />
+                <ReadBy reads={reads.data} error={reads.error} who={who} now={now} />
                 <LinkedFrom links={data.linked_from} status={data.linked_from_status} />
                 <Revisions
                   history={history}
@@ -368,6 +363,7 @@ export function PageView({ id }: { id: string }) {
                     setVersion(v > 0 ? String(v) : "");
                   }}
                   who={who}
+                  now={now}
                 />
                 <Children children={data.children ?? []} total={data.children_total ?? 0} />
                 <Watchers watchers={page.watchers ?? []} who={who} />

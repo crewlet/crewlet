@@ -15,9 +15,9 @@
  * distinguishes from a series that had no data.
  */
 
-import { cleanup, render } from "~/test/inCase.ts";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import { dataColor } from "@crewlethq/ui";
+import { DATA_COLOR_OTHER, dataColor } from "@crewlethq/ui";
 import { TimeSeries } from "./charts.tsx";
 
 afterEach(cleanup);

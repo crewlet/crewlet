@@ -11,7 +11,7 @@
  * hold the other two to the same words.
  */
 
-import { cleanup, render } from "~/test/inCase.ts";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import { StateBar } from "~/app/frame/StateBar.tsx";

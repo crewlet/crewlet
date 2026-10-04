@@ -9,8 +9,8 @@
  * answer is worth pinning.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
-import { afterEach, expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, expect, test } from "vitest";
 import {
   CATALOG,
   EntryRow,
@@ -641,15 +641,13 @@ test("one unfinished surface makes the whole tool unfinished", () => {
 // Where this build answers no setup state for a tool and nothing refused the
 // read, there is no form a Connect could open, and the page that says how is
 // its documentation. Where the read was REFUSED, the form exists and the
-// reader lacks the grant — so the action stays Connect, disabled with the
-// sentence that says why (a write control is never hidden), naming the grants
-// rather than "an operator token" nobody signed in has a use for.
+// reader lacks the grants — so the action stays Connect, disabled with the
+// sentence that names them (a write control is never hidden).
 test("a tool with no form behind it is learned about, not connected", () => {
   const nothing = entryState(slack, rowsOf(), rolled("slack", "not_in_use", "Not in use"));
   expect(kindOf(nothing, [], false, [], false)).toBe("learn");
   expect(kindOf(nothing, [], false, [], true)).toBe("connect");
-  expect(formBlocked([], true)).toMatch(/config:read/);
-  expect(formBlocked([], true)).not.toMatch(/token/);
+  expect(formBlocked([], true)).toMatch(/needs config:read .* config:write and secrets:write/);
   expect(formBlocked([], false)).toMatch(/no form to open/);
   expect(formBlocked([{}], true)).toBeUndefined();
 });
@@ -1275,6 +1273,8 @@ test("a stale setup listing never contradicts the tag", () => {
 
 // --- an agent's own app, in the two acts a person performs ---------------- //
 
+import { waitFor } from "@testing-library/react";
+import { vi } from "vitest";
 import type { SetupSeatState } from "~/protocol/types.ts";
 
 const github = CATALOG.find((e) => e.key === "github")!;
@@ -1335,6 +1335,7 @@ function fieldsOf(form: HTMLFormElement): Record<string, string> {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  localStorage.clear();
 });
 
 // AN AGENT WITH NO APP OF ITS OWN CANNOT ACT AS ITSELF, and the roster is
@@ -1517,35 +1518,19 @@ test("a step this build cannot perform draws no control", () => {
 // a button that quietly did nothing would leave them pressing it again.
 test("the engine's refusal is reported beside the agent it was refused for", async () => {
   const sent: Sent[] = [];
-  stubFetch(sent, { error: "no_external_url", hint: "set api.external_url first" }, 409);
+  stubFetch(sent, { error: "no_public_url", hint: "set integrations.public_base_url first" }, 409);
   roster(seatOf({ step: "create_app" }));
 
   fireEvent.click(screen.getByRole("button", { name: "Create app on GitHub" }));
-  expect(await screen.findByText("set api.external_url first")).toBeTruthy();
+  expect(await screen.findByText("set integrations.public_base_url first")).toBeTruthy();
 });
 
 // --- the listing, and when it is worth reading again ---------------------- //
 
-import type { ReactElement } from "react";
+import { act } from "@testing-library/react";
 import { useSetup } from "./Integrations.tsx";
-import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
 
-/**
- * The hook under a client: it reads over `rest`, and asks the client only
- * when the live socket comes back, which is when it reads again. Nothing
- * dials.
- */
-function underClient(ui: ReactElement): ReactElement {
-  const store = new Store();
-  return (
-    <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
-      {ui}
-    </ClientContext.Provider>
-  );
-}
-
-/** The hook alone, drawn as what it read. */
+/** The hook alone: it reaches for `rest` and for no context at all. */
 function Probe() {
   const setup = useSetup();
   return (
@@ -1573,7 +1558,7 @@ test("the roster is read again when the tab comes back", async () => {
       });
     }),
   );
-  render(underClient(<Probe />));
+  render(<Probe />);
   await waitFor(() => expect(calls).toEqual(["/setup/integrations"]));
 
   // A TAB GOING AWAY IS NOT A REASON TO READ ANYTHING. Nobody is looking.
@@ -1587,35 +1572,6 @@ test("the roster is read again when the tab comes back", async () => {
   // skeleton would blank every card each time somebody switched tabs.
   expect(screen.getByTestId("probe").textContent).toBe("ready:github");
   await waitFor(() => expect(calls.length).toBe(2));
-});
-
-// A REFUSED LISTING CARRIES THE GRANT IT NAMED.
-//
-// The screen said setting an integration up "needs an operator token", which a
-// person signed in without `config:read` has no use for: what they lack is a
-// grant, and the refusal names it. The hook hands it to the banner.
-function NeedsProbe() {
-  const setup = useSetup();
-  return (
-    <span data-testid="needs">
-      {setup.loading ? "loading" : `${setup.guarded}:${setup.needs.join(",")}`}
-    </span>
-  );
-}
-
-test("a refused listing names the grant the refusal named", async () => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({ error: "unauthorized", reason: "no_grant", grants: ["config:read"] }),
-          { status: 403 },
-        ),
-    ),
-  );
-  render(underClient(<NeedsProbe />));
-  await waitFor(() => expect(screen.getByTestId("needs").textContent).toBe("true:config:read"));
 });
 
 // ONE AGENT, ONE ROW.

@@ -95,10 +95,16 @@ describe("why a backup was not taken", () => {
     expect(refusal.message).toMatch(/may still finish/);
   });
 
-  test("a refused credential says what to set", () => {
+  // A 401 accepted no credential, so the repair is signing in; a 403 named the
+  // grant the backup is taken under, and the sentence names it.
+  test("a refused credential says what would admit it", () => {
     expect(backupRefusal(new RestError(401, { error: "unauthorized" })).message).toMatch(
-      /operator token/,
+      /needs a credential the engine accepts\. Sign in\./,
     );
+    expect(
+      backupRefusal(new RestError(403, { error: "unauthorized", grants: ["fleet:operate"] }))
+        .message,
+    ).toMatch(/Taking a backup needs fleet:operate/);
   });
 });
 

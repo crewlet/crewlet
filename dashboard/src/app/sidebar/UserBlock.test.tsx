@@ -18,7 +18,7 @@
  * offered its sign-outs.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -257,45 +257,6 @@ describe("what the account offers", () => {
     });
     // NOTHING ANSWERED AT ALL IS STILL NOTHING.
     expect(accountOf(waiting, null)).toBeNull();
-  });
-
-  // AND A SESSION READ NOTHING ANSWERED IS ASKED AGAIN ON ITS OWN. For the
-  // people above it is the only way to the sign-outs, and it was read once:
-  // one request lost on the way left them with no sign-out until a reload.
-  test("a session read nothing answered is asked again, and the sign-outs arrive", async () => {
-    vi.useFakeTimers();
-    try {
-      let reads = 0;
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => {
-          reads++;
-          if (reads === 1) throw new TypeError("Failed to fetch");
-          return new Response(JSON.stringify(PERSON), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }),
-      );
-      render(block({ ...nobody, loading: true }));
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      expect(reads).toBe(1);
-      fireEvent.click(screen.getByRole("button", { name: "Account and preferences" }));
-      const popover = screen.getByRole("dialog", { name: "Account and preferences" });
-      expect(within(popover).queryByRole("button", { name: "Sign out" })).toBeNull();
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1_000);
-      });
-      expect(reads).toBe(2);
-      expect(within(popover).getByText("ada.lovelace")).toBeDefined();
-      expect(within(popover).getByRole("button", { name: "Sign out" })).toBeDefined();
-      expect(within(popover).getByRole("button", { name: "Sign out everywhere" })).toBeDefined();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   test("nobody at all is offered a way to sign in, back to where they are", async () => {

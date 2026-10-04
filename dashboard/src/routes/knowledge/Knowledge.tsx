@@ -43,9 +43,10 @@ import {
   UsersGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
-import { indexOrg, seatLookup, unitPath, type OrgIndex } from "~/lib/seats.ts";
+import { useQuery } from "~/lib/useQuery.ts";
+import { indexOrg, seatLookup, type OrgIndex } from "~/lib/seats.ts";
 import { plural, tsKey } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
 import { modeLabel, resolveSearchMode, searchCoverageNote, servedNote } from "~/lib/search.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -154,7 +155,7 @@ function Results({
   search,
 }: {
   phrase: string;
-  search: Pick<QueryResult<KnowledgeAnswer>, "data" | "loading" | "error" | "refusal">;
+  search: { data: KnowledgeAnswer | null; loading: boolean; error: string | null };
 }) {
   const { open: openPeek } = usePeekControls();
   const data = search.data;
@@ -204,7 +205,6 @@ function Results({
       )}
       <QueryState
         error={search.error}
-        refusal={search.refusal}
         loading={search.loading}
         empty={
           hits.length || !ran
@@ -394,6 +394,7 @@ function containerFacts({
   capped,
   unread,
   owners,
+  now,
 }: {
   container: PageContainer;
   /** The newest `updated_at` among the pages this node returned, if any. */
@@ -404,13 +405,14 @@ function containerFacts({
   unread: boolean;
   /**
    * Who files into this container, in the four states `spaceOwners.ts` names:
-   * `space` is guarded, so a reader the org chart was refused to does not know
+   * `space` is guarded, so a reader without the company document does not know
    * who files here, and an empty list would say nobody does.
    */
   owners: SpaceOwners;
+  now: number;
 }): Fact[] {
   const units = owners.state === "read" ? owners.units : null;
-  const only = units?.length === 1 ? units[0] : undefined;
+  const lead = units?.[0];
   return [
     // A COUNT, and ZERO IS A REAL ONE: a container exists from the first write
     // into it, so one whose pages have all been trashed is a state an operator
@@ -428,7 +430,7 @@ function containerFacts({
       value: unread ? (
         <EmptyValue label="The container's page list has not answered, so nothing here says when it last moved" />
       ) : (
-        <DateCell at={newest} />
+        <DateCell at={newest} now={now} />
       ),
       // WHAT THE VALUE COVERS, which is what a note is for. The engine orders
       // a page list by container and TITLE, so a read that came back at its
@@ -439,13 +441,13 @@ function containerFacts({
       note: capped ? "newest of the pages this read returned" : undefined,
     },
     {
-      // WHO WRITES HERE, from the CHART rather than from the pages: a unit's
+      // WHO WRITES HERE, from the CONFIG rather than from the pages: a unit's
       // `space:` is what sends its seats' pages into this container, so it
       // answers the question even for a container nobody has written in yet.
       // The panel below answers the other half — who actually has.
       label: "Filed by",
-      // THE STATE'S OWN SENTENCE while there is no list: a refusal said to a
-      // reader whose read is merely in flight is false.
+      // THE STATE'S OWN SENTENCE while there is no list: "needs a grant" said
+      // to an operator whose read is merely in flight is false.
       value: !units ? (
         <EmptyValue label={ownerSentence(owners)} />
       ) : units.length > 0 ? (
@@ -456,11 +458,9 @@ function containerFacts({
       // A LINK ONLY WHERE THERE IS ONE PLACE TO GO. Two units filing into one
       // container is legal and happens — a shared space — and a fact line that
       // linked the first of them would be a link that is right half the time.
-      // BY ITS KEY: the name is prose two units may share, and a unit that
-      // declares an id has no page under its name at all.
-      path: only ? unitPath({ id: only.key }) : undefined,
+      path: units?.length === 1 && lead?.id ? ["agents", "teams", lead.id] : undefined,
     },
-    { label: "Created", value: <DateCell at={container.created_at} /> },
+    { label: "Created", value: <DateCell at={container.created_at} now={now} /> },
   ];
 }
 
@@ -490,6 +490,7 @@ function containerFacts({
  */
 export function ContainerPeek({ id }: { id: string }) {
   const org = useOrg();
+  const now = useNow();
   const index = useMemo(() => indexOrg(org), [org]);
   const containers = useQuery("containers", undefined, { enabled: id !== "", pollMs: 60_000 });
   // THE SAME SET THE COUNT COUNTS. `containers` excludes trashed pages from
@@ -526,10 +527,10 @@ export function ContainerPeek({ id }: { id: string }) {
   // WHO FILES HERE IS GUARDED. A unit's `space:` is the knowledge container
   // it owns, and `internal/api/orgprojection_test.go` classifies it as guarded
   // ("a knowledge container key: where this unit's pages are written"), so the
-  // org projection carries none of it and this is read from the org
-  // chart — in the four states `spaceOwners.ts` names, the tree's own, because
-  // "no unit files here" is a fact about the company and an unread chart is
-  // not evidence for it.
+  // anonymous org projection carries none of it and this is read from the
+  // company document — in the four states `spaceOwners.ts` names, the tree's
+  // own, because "no unit files here" is a fact about the company and an
+  // unread document is not evidence for it.
   const owners = useSpaceOwners({ enabled: id !== "" })(id);
 
   return (
@@ -562,6 +563,7 @@ export function ContainerPeek({ id }: { id: string }) {
                   capped,
                   unread: !list.data,
                   owners,
+                  now,
                 })}
               />
               <div className="col gap-3">
@@ -586,6 +588,7 @@ export function ContainerPeek({ id }: { id: string }) {
                   total={total}
                   capped={capped}
                   list={list}
+                  now={now}
                 />
                 <ContainerWriters recent={recent} total={total} capped={capped} index={index} />
               </div>
@@ -622,6 +625,7 @@ function ContainerPages({
   total,
   capped,
   list,
+  now,
 }: {
   container: PageContainer;
   recent: PageSummary[];
@@ -629,12 +633,8 @@ function ContainerPages({
   total: number | null;
   /** The read returned fewer pages than the container holds. */
   capped: boolean;
-  /**
-   * The read's whole failure — its `refusal` included, which is what lets the
-   * banner say which grant would have admitted the reader, or that the state
-   * log refused and asking again will not change it.
-   */
-  list: Pick<QueryResult<unknown>, "error" | "loading" | "refusal">;
+  list: { error: string | null; loading: boolean };
+  now: number;
 }) {
   const shown = Math.min(recent.length, PEEK_PAGES);
   // THE REST OF THE CONTAINER, counted off the TOTAL: the rows are one window,
@@ -657,7 +657,6 @@ function ContainerPages({
       </Card.Header>
       <QueryState
         error={list.error}
-        refusal={list.refusal}
         loading={list.loading}
         empty={
           recent.length
@@ -673,7 +672,7 @@ function ContainerPages({
             <span key={page.id} className="row gap-2">
               <PageLink page={page} />
               <span className="spacer" />
-              <DateCell at={page.updated_at} />
+              <DateCell at={page.updated_at} now={now} />
             </span>
           ))}
           {rest > 0 && (

@@ -183,13 +183,13 @@ describe("the figures", () => {
   });
 
   test("a sub-line names only the parts with somebody in them", () => {
-    const row = (activity: AgentRow["activity"], i: number): AgentRow => ({
-      id: `${activity ?? ""}-${i}`,
-      agent_id: `seat-${i}`,
+    const row = (activity: AgentRow["activity"]): AgentRow => ({
+      id: activity ?? "",
+      agent_id: activity ?? "",
       role: "r",
       activity,
     });
-    const crew = crewOf([row("working", 0), row("working", 1), row("needs", 2), row("idle", 3)]);
+    const crew = crewOf([row("working"), row("working"), row("needs"), row("idle")]);
     expect(crew).toEqual({ working: 2, needs: 1, stopped: 0, idle: 1, total: 4 });
     expect(joinParts(crewParts(crew))).toBe("1 waiting · 1 idle");
     expect(joinParts(crewParts(crewOf([])))).toBe("No agent seats in the chart");
@@ -221,17 +221,17 @@ describe("the figures", () => {
   });
 
   // A STOPPED SEAT WAITS ON A READER ONLY WHERE THEY CAN TAKE A WAY OUT:
-  // raise the ceiling (a ceiling is written under `config:write`) or hand the
+  // raise the ceiling (a `/config` write, under `config:write`) or hand the
   // item on (`update_work_item`, and only with an item to hand).
   test("a stopped seat is the reader's decision only where they can act on it", () => {
     const onItem = {
       row: { role: "SWE", turn: { work_item: { id: "t-1", key: "ENG-1" } } } as never,
     };
     const between = { row: { role: "DevRel" } as never };
-    const raiser = { grants: ["config:write"], acts: [] };
-    const reassigner = { grants: ["work:write"], acts: ["update_work_item"] };
-    const neither = { grants: ["work:write"], acts: ["comment_on_work_item"] };
-    expect(seatDecisionsFor([onItem, between], raiser)).toEqual({
+    const operator = { grants: ["config:write"], acts: [] };
+    const reassigner = { grants: ["state:read"], acts: ["update_work_item"] };
+    const neither = { grants: ["state:read"], acts: ["comment_on_work_item"] };
+    expect(seatDecisionsFor([onItem, between], operator)).toEqual({
       mine: [onItem, between],
       others: [],
     });

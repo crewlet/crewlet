@@ -7,12 +7,9 @@ import {
   ceilingText,
   changesFrom,
   companyPatch,
-  chartRefusalWords,
   refusalWords,
-  runtimeWithCeilings,
-  seatCeilingBody,
+  seatWithCeilings,
 } from "./ceilings.ts";
-import { RestError } from "~/protocol/rest.ts";
 
 describe("reading a typed ceiling", () => {
   // THE SPELLING THE SCREEN DRAWS. A field that took only digits asked the
@@ -64,60 +61,26 @@ describe("what a change writes", () => {
     expect(companyPatch({ week: null })).toEqual({ token_budget: { week: null } });
   });
 
-  // THE RUNTIME AS READ, masks included — the chart restores a mask from the
-  // row it patches — and no empty `token_budget` once nothing is capped.
-  test("a seat's runtime half is sent back whole, with its ceilings changed", () => {
-    const runtime = {
-      llm: "zulu",
-      mcp_env: { github: { GITHUB_TOKEN: "${CHART_SEAT_X_GITHUB}" } },
+  // THE SEAT AS READ, masks included — the engine restores a mask against the
+  // revision it served — and no empty `token_budget` once nothing is capped.
+  test("a seat is sent back whole, with its ceilings changed", () => {
+    const seat = {
+      name: "PM",
+      handle: "pm",
+      api_key: "__redacted__",
       token_budget: { day: 5, week: 9 },
     };
-    expect(runtimeWithCeilings(runtime, { day: 7 })).toEqual({
-      ...runtime,
+    expect(seatWithCeilings(seat, { day: 7 })).toEqual({
+      ...seat,
       token_budget: { day: 7, week: 9 },
     });
-    const bare = runtimeWithCeilings(runtime, { day: null, week: null });
-    expect(bare).toEqual({ llm: "zulu", mcp_env: runtime.mcp_env });
+    const bare = seatWithCeilings(seat, { day: null, week: null });
+    expect(bare).toEqual({ name: "PM", handle: "pm", api_key: "__redacted__" });
     expect("token_budget" in bare).toBe(false);
-    expect(runtimeWithCeilings({}, { month: 3 })).toEqual({ token_budget: { month: 3 } });
-  });
-
-  // THE WHOLE CONTENT, because a content write is the object's post-state —
-  // a field left out is a field cleared — and NEITHER of the two structural
-  // fields the content route refuses by name.
-  test("a seat's content write restates its content and states its runtime", () => {
-    const seat = {
-      handle: "pm",
-      kind: "agent",
-      unit: "product",
-      name: "PM",
-      email: "${CHART_SEAT_PM_EMAIL}",
-      goal: "ship",
-      responsibilities: ["plan"],
-      former_handles: ["old-pm"],
-      runtime: { llm: "zulu", token_budget: { month: 1000 } },
-    };
-    const body = seatCeilingBody(seat, { day: 2_500_000 });
-    expect(body).toEqual({
-      unit: "product",
-      name: "PM",
-      email: "${CHART_SEAT_PM_EMAIL}",
-      backstory: "",
-      goal: "ship",
-      responsibilities: ["plan"],
-      behavioral_guidelines: [],
-      project: "",
-      space: "",
-      runtime: { llm: "zulu", token_budget: { month: 1000, day: 2_500_000 } },
+    expect(seatWithCeilings({ name: "X" }, { month: 3 })).toEqual({
+      name: "X",
+      token_budget: { month: 3 },
     });
-    expect("kind" in body || "manages" in body || "handle" in body).toBe(false);
-    // A RUNTIME THE CHANGE EMPTIES IS CLEARED, never sent as `{}`.
-    const cleared = seatCeilingBody(
-      { handle: "x", runtime: { token_budget: { day: 1 } } },
-      { day: null },
-    );
-    expect(cleared.clear_runtime).toBe(true);
-    expect("runtime" in cleared).toBe(false);
   });
 
   test("only the windows whose value differs from what is held are changes", () => {
@@ -159,7 +122,7 @@ describe("what the engine's answer means", () => {
       reload: true,
     });
     expect(refusalWords({ kind: "missing" }, scope).message).toBe(
-      "PM is no longer in the org chart.",
+      "PM is no longer in the company's configuration.",
     );
     expect(
       refusalWords(
@@ -180,40 +143,5 @@ describe("what the engine's answer means", () => {
         scope,
       ),
     ).toEqual({ message: "must be at least 1", reload: false });
-  });
-});
-
-describe("what the chart's answer to a seat's ceiling means", () => {
-  const scope = { kind: "seat", handle: "pm", name: "PM" } as const;
-  const refused = (status: number, body: Record<string, unknown>) =>
-    chartRefusalWords(new RestError(status, body), scope);
-
-  test("a refusal on authority names the grant", () => {
-    expect(
-      refused(403, { error: "unauthorized", reason: "no_grant", grants: ["config:write"] }),
-    ).toEqual({
-      message:
-        "Changing PM's ceilings needs config:write, which the credential you presented does not carry.",
-      reload: false,
-    });
-  });
-
-  // A COLLEAGUE'S WRITE TO THIS SEAT LANDED FIRST: re-read, never overwrite.
-  test("a stale write saves nothing and asks for a fresh read", () => {
-    expect(refused(409, { error: "stale", detail: "lost a race" }).reload).toBe(true);
-  });
-
-  // THE CHART'S OWN RULE, in its own words.
-  test("a ceiling the chart will not hold is refused in the rule's words", () => {
-    expect(
-      refused(422, { error: "refused", detail: "token_budget.day must be at least 1" }),
-    ).toEqual({ message: "token_budget.day must be at least 1", reload: false });
-  });
-
-  test("a seat a removal took says so", () => {
-    expect(refused(404, { error: "not_found" })).toEqual({
-      message: "PM is no longer in the org chart.",
-      reload: true,
-    });
   });
 });

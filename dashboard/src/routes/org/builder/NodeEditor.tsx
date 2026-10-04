@@ -16,26 +16,18 @@
  *
  * WHAT IS EDITABLE IS DECIDED FIELD BY FIELD (the field coverage of the
  * builder's spec). A field the builder can write is a field. A field it shows
- * but cannot write is a read-only fact that says why and where it is written
- * instead: a node's RUNTIME half is carried by the chart opaquely, and the
- * builder draws the few runtime fields it edits and states the rest. Fields
- * that are neither are not drawn: the chart keeps them, and the builder
- * preserves every key it does not model.
- *
- * AN ADDRESS IS A FIELD. A seat's handle and a unit's key are what every
- * reference names them by, and a new one on a node the chart holds is the
- * chart's RENAME, which keeps the node — its identity, memory and mailbox —
- * and leaves the old address reaching it until something else takes it.
- *
- * A RUNTIME HALF THE READER WAS NOT SHOWN IS NOT DRAWN. The chart serves it
- * only to a reader holding the grant that reads the configuration and says
- * when it withheld it, so the fields that live there are left out with a
- * sentence saying why, rather than drawn empty and read as absent.
+ * but cannot write is a read-only fact that says why and where it is edited
+ * instead, because each needs a company-level block the builder does not
+ * edit, or because changing it here would change something it must not (an
+ * existing seat's handle is its identity). Fields that are neither are not
+ * drawn: the configuration document keeps them, and the builder preserves
+ * every key it does not model.
  *
  * A FIELD FOR A TOOL IS DRAWN ONLY WHERE THE TOOL IS. A seat's GitHub tier,
- * Mattermost channel and GitLab access level mean something only when the
- * company has connected that tool, so each says "<Tool> is not connected"
- * instead of offering a setting that does nothing. Two of them change more than their field, and say so
+ * Slack channel, Mattermost channel, GitLab access level, Jira project and
+ * Confluence space mean something only when the company has connected that
+ * tool, so each says "<Tool> is not connected" instead of offering a setting
+ * that does nothing. Two of them change more than their field, and say so
  * beside it: a GitHub tier on a seat with no GitHub block enrols the seat,
  * and a tier change on a seat whose app exists does not reach the app, whose
  * permissions were fixed when it was created.
@@ -44,17 +36,17 @@
  * names, a seat's chat app blocks as the settings a person writes (a channel,
  * a username), and nothing else of theirs.
  *
- * THE DRAFT'S PROBLEMS SIT BESIDE THE FIELDS THEY NAME, placed by the field
- * path the check placed them on; whatever names no drawn field is listed at
- * the top, so nothing the check said is dropped. A warning, which a save
- * accepts, is listed at the top as a caution rather than drawn as a field's
- * error (see `placeOnFields`).
+ * THE ENGINE'S PROBLEMS SIT BESIDE THE FIELDS THEY NAME, placed through the
+ * same path index the check's answer was placed with; whatever names no
+ * drawn field is listed at the top, so nothing the engine said is dropped.
+ * A warning, which the engine accepts, is listed at the top as a caution
+ * rather than drawn as a field's error (see `placeOnFields`).
  */
 
 import { useState, type ReactNode } from "react";
 import { useLeaveGuard } from "~/app/router.tsx";
-import type { CompanyDocument } from "~/protocol/index.ts";
-import { REDACTED, plural } from "~/lib/format.ts";
+import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
+import { formatPhaseLLM, plural } from "~/lib/format.ts";
 import { ConfigField, type FieldChoice } from "~/components/ConfigField.tsx";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import {
@@ -67,7 +59,6 @@ import {
   companyForm,
   companyParts,
   editIntent,
-  providerKeys,
   renames,
   scheduleRuns,
   schedulesOf,
@@ -84,41 +75,32 @@ import {
 } from "./editorForm.ts";
 import {
   ACKNOWLEDGEMENT_TEXT,
-  ADDRESS_HELP,
   EditorSection,
-  NAME_HELP,
   NodeProblems,
   NotConnected,
   ReadOnlyFact,
   Refusal,
-  RUNTIME_ELSEWHERE,
-  RuntimeHidden,
   ScreenLink,
+  UNIQUE_NAME_HELP,
   UnitTypeField,
   placeOnFields,
 } from "./dialogParts.tsx";
 import { NodeGlyph, type NodeGlyphKind } from "./nodeMarks.tsx";
-import type { Segment } from "./model/document.ts";
-import {
-  allSeats,
-  allUnits,
-  locate,
-  type DraftSeat,
-  type DraftUnit,
-  type SeatData,
-  type UnitData,
-} from "./model/draft.ts";
+import { declaredHandle, type Segment } from "./model/document.ts";
+import { allSeats, allUnits, locate, type DraftSeat, type DraftUnit } from "./model/draft.ts";
 import { getPath, isRecord, jsonEqual } from "./model/json.ts";
-import { COMPANY_KEY, handleOfKey, isMintedKey, type NodeKey } from "./model/keys.ts";
+import { COMPANY_KEY, isMintedKey, type NodeKey } from "./model/keys.ts";
 import { kindOf, type EditPartIntent } from "./model/operations.ts";
 import type { PlacedProblem } from "./model/problems.ts";
-import { recordIntent } from "./model/reducer.ts";
+import { handlesOf, recordIntent } from "./model/reducer.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
-import { datadogEnabled, datadogFallback, effectiveLeads } from "./chartModel.ts";
+import { datadogEnabled, datadogFallback } from "./chartModel.ts";
 import {
   PHASE_MODEL_FIELDS,
+  currentCheck,
   defaultGitLabAccessLevel,
   derivedSeatOf,
+  derivedUnitOf,
   gitLabAccessLevel,
   hasGitLabProvisioning,
   isConnected,
@@ -127,10 +109,10 @@ import {
   nameOfHandle,
   placementSummary,
   providerOrder,
-  savedDerivation,
   toolCredentialNames,
   unpinnedProvider,
 } from "./nodeFacts.ts";
+import { RenameUnitPreflight } from "./RenameUnitPreflight.tsx";
 import {
   Button,
   Callout,
@@ -172,10 +154,9 @@ export function NodeEditor({
   // ONE FORM PER OPENING, NOT PER KEY. The Builder mounts a new editor for
   // every opening (its dialog host keys each dialog by the opening), so
   // another node, or the same one opened again, starts from its own data. A
-  // node's key can also change while its editor is open (a save moves the
-  // nodes it created onto the addresses the chart gave them), and the form and
-  // its drawer stay: keyed by the node here, they would be torn down and built
-  // again on that answer.
+  // node's key can also change while its editor is open (the first check keys
+  // the base by the engine's handles), and the form and its drawer stay: keyed
+  // by the node here, they were torn down and built again on that answer.
   return found.kind === "unit" ? (
     <UnitEditor unit={found.node} section={section} onClose={onClose} />
   ) : (
@@ -391,7 +372,7 @@ function ScheduleToggles({
   disabled,
   error,
 }: {
-  data: SeatData | UnitData;
+  data: ConfigRole | ConfigUnit;
   unit: boolean;
   values: Readonly<Record<string, boolean>>;
   onChange: (name: string, enabled: boolean) => void;
@@ -406,8 +387,7 @@ function ScheduleToggles({
       title="Schedules"
       hint={
         <>
-          Schedules are written in the runtime half, which crewlet config import writes from a
-          company file. Here each can be switched on or off.{" "}
+          Schedules are written in the configuration document. Here each can be switched on or off.{" "}
           <ScreenLink to="schedules">Open Schedules</ScreenLink>
         </>
       }
@@ -439,13 +419,14 @@ function ScheduleToggles({
 }
 
 /** Tool credentials as names, never values. */
-function ToolCredentialFact({ data }: { data: SeatData | UnitData }) {
+function ToolCredentialFact({ data }: { data: ConfigRole | ConfigUnit }) {
   const names = toolCredentialNames(data);
   if (names.length === 0) return null;
   return (
     <ReadOnlyFact
       label="Tool credentials"
-      reason={`They name servers the settings' mcp_servers block defines. ${RUNTIME_ELSEWHERE} Values are never shown.`}
+      reason="They name servers the company's mcp_servers block defines, so they are set in the configuration document. Values are never shown."
+      link={{ to: "config", label: "Open the configuration" }}
     >
       <ul className="builder-list">
         {names.map(({ server, variables }) => (
@@ -459,57 +440,60 @@ function ToolCredentialFact({ data }: { data: SeatData | UnitData }) {
   );
 }
 
-/**
- * The tracker project and knowledge-base space a node works in: where
- * unrouted work for it goes and where it files its own. Not a permission, and
- * the same field whichever backend the company runs its tracker and knowledge
- * base on — the engine's own, Jira or Confluence.
- *
- * A RELATION, which the chart asks the configuration grant for: authority is
- * derived from it (a lead of a project leads its work), so a lead who could
- * change it could take over another team's project. The save names the fields
- * when a change is refused for that.
- */
+const JIRA_PROJECT: Segment[] = ["integrations", "jira", "project"];
+const CONFLUENCE_SPACE: Segment[] = ["integrations", "confluence", "space"];
+
+/** Jira project and Confluence space: ownership for routing, not a permission. */
 function Owns({
   who,
-  project,
-  space,
-  onProject,
-  onSpace,
+  jira,
+  confluence,
+  onJira,
+  onConfluence,
   errorFor,
   disabled,
 }: {
   who: "seat" | "unit";
-  project: string;
-  space: string;
-  onProject: (next: string) => void;
-  onSpace: (next: string) => void;
+  jira: string;
+  confluence: string;
+  onJira: (next: string) => void;
+  onConfluence: (next: string) => void;
   errorFor: (path: readonly Segment[]) => string | undefined;
   disabled: boolean;
 }) {
+  const { state } = useBuilder();
+  const company = state.draft.company;
   return (
     <EditorSection
       title="Owns"
-      hint={`Where unrouted work for this ${who} goes and where it files its own. Not a permission. Changing either takes the grant that writes the company's configuration.`}
+      hint={`Where unrouted work for this ${who} goes. Not a permission.`}
     >
-      <ConfigField
-        label="Project"
-        kind="id"
-        value={project}
-        onChange={onProject}
-        required={false}
-        disabled={disabled}
-        error={errorFor(["project"])}
-      />
-      <ConfigField
-        label="Knowledge space"
-        kind="id"
-        value={space}
-        onChange={onSpace}
-        required={false}
-        disabled={disabled}
-        error={errorFor(["space"])}
-      />
+      {isConnected(company, "jira") ? (
+        <ConfigField
+          label="Jira project"
+          kind="id"
+          value={jira}
+          onChange={onJira}
+          required={false}
+          disabled={disabled}
+          error={errorFor(JIRA_PROJECT)}
+        />
+      ) : (
+        <NotConnected tool="jira" />
+      )}
+      {isConnected(company, "confluence") ? (
+        <ConfigField
+          label="Confluence space"
+          kind="id"
+          value={confluence}
+          onChange={onConfluence}
+          required={false}
+          disabled={disabled}
+          error={errorFor(CONFLUENCE_SPACE)}
+        />
+      ) : (
+        <NotConnected tool="confluence" />
+      )}
     </EditorSection>
   );
 }
@@ -538,7 +522,7 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
   // edit. It compares with the SAVED name as the engine holds it, untrimmed,
   // because the engine derives agent ids from exactly that string, and a
   // name typed back to the saved one is no rename at all.
-  const savedName = typeof state.base.settings?.name === "string" ? state.base.settings.name : "";
+  const savedName = typeof state.base.document?.name === "string" ? state.base.document.name : "";
   const renaming =
     savedName !== "" && renames(initial.name, form.name) && form.name.trim() !== savedName;
   const blocked =
@@ -616,25 +600,23 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
 // ---------------------------------------------------------------------------
 
 /**
- * The field paths a unit's form draws, so a problem placed on a field this
- * form does NOT draw is listed at the top rather than attached to a field
- * nobody can see.
+ * The field paths a unit's form draws, so a problem the engine reported on a
+ * field this form does NOT draw (a Jira project on a company that has not
+ * connected Jira) is listed at the top rather than attached to a field nobody
+ * can see.
  */
-function unitFieldPaths(data: UnitData, runtimeVisible: boolean): Segment[][] {
+function unitFieldPaths(company: CompanyDocument, data: ConfigUnit): Segment[][] {
   return [
     ["name"],
-    ["key"],
     ["type"],
     ["purpose"],
     ["lead"],
     ["goals"],
     ["channel"],
-    ["knowledge_refs"],
-    ["project"],
-    ["space"],
-    ...(runtimeVisible && schedulesOf(data).length > 0
-      ? [["runtime", "schedules"] as Segment[]]
-      : []),
+    ["knowledge"],
+    ...(isConnected(company, "jira") ? [JIRA_PROJECT] : []),
+    ...(isConnected(company, "confluence") ? [CONFLUENCE_SPACE] : []),
+    ...(schedulesOf(data).length > 0 ? [["schedules"] as Segment[]] : []),
   ];
 }
 
@@ -660,21 +642,20 @@ function UnitEditor({
   const key = unit.key;
   const { initial, form, set, dirty } = useForm<UnitForm>(() => unitForm(unit.data));
   const { refusal, apply } = useApply(api, key, onClose);
-  const runtimeVisible = state.base.runtimeVisible;
   const { errorFor, rest } = placeOnFields(
     placedOn(api, key),
-    unitFieldPaths(unit.data, runtimeVisible),
+    unitFieldPaths(state.draft.company, unit.data),
   );
   const disabled = api.readOnly;
-  const saved = !isMintedKey(key);
 
   // What the unit inherits when it declares nothing: the lead and channel the
-  // unit above it resolves to (`chartModel.effectiveLeads`).
+  // unit above it resolved to, as the last check reported them.
   const parent = parentUnitOf(api, key);
-  const above = parent ? effectiveLeads(state.draft).get(parent.key) : undefined;
-  const inheritedLead = above?.lead ? seatLabel(state.draft, above.lead) : "";
+  const above = parent ? derivedUnitOf(state, parent.key) : undefined;
+  const inheritedLead = above?.lead ? nameOfHandle(state, above.lead) : "";
   const inheritedChannel = above?.channel ?? "";
 
+  const seatNames = [...new Set([...allSeats(state.draft)].map(({ seat }) => seat.data.name))];
   const leadChoices: FieldChoice[] = [
     {
       value: "",
@@ -683,20 +664,11 @@ function UnitEditor({
           ? `No lead (inherits ${inheritedLead} from ${parent.data.name})`
           : "No lead",
     },
-    ...seatChoices(state.draft),
+    ...seatNames.map((name) => ({ value: name, label: name })),
   ];
-  // A declared lead no seat of the draft holds is still the current answer.
-  if (form.lead !== "" && !leadChoices.some((c) => c.value === form.lead)) {
-    leadChoices.push({ value: form.lead, label: `@${form.lead} (names no seat)` });
-  }
 
-  const blocked =
-    form.name.trim() === ""
-      ? "A unit needs a name."
-      : form.key.trim() === ""
-        ? "A unit needs a key."
-        : null;
-  const renamed = saved && renames(initial.name, form.name);
+  const blocked = form.name.trim() === "" ? "A unit needs a name." : null;
+  const renamed = renames(initial.name, form.name);
 
   return (
     <EditorShell
@@ -716,24 +688,10 @@ function UnitEditor({
         value={form.name}
         onChange={(name) => set({ name })}
         disabled={disabled}
-        help={NAME_HELP.unit}
+        help={UNIQUE_NAME_HELP.unit}
         error={errorFor(["name"])}
       />
-      {renamed && (
-        <p className="t-caption">
-          Onboarding pages are looked up under a unit&apos;s name, so the seats in it read the pages
-          under the new name.
-        </p>
-      )}
-      <ConfigField
-        label="Key"
-        kind="id"
-        value={form.key}
-        onChange={(value) => set({ key: value })}
-        disabled={disabled}
-        help={saved ? ADDRESS_HELP.unit.saved : ADDRESS_HELP.unit.created}
-        error={errorFor(["key"])}
-      />
+      {renamed && <RenameUnitPreflight unit={key} stored={!isMintedKey(key)} />}
       <UnitTypeField
         value={form.type}
         onChange={(type) => set({ type })}
@@ -796,37 +754,32 @@ function UnitEditor({
         optional
         disabled={disabled}
         helper="Free-text references, not a read scope."
-        error={withProblems(errorFor(["knowledge_refs"]))}
+        error={withProblems(errorFor(["knowledge"]))}
       />
 
       <Owns
         who="unit"
-        project={form.project}
-        space={form.space}
-        onProject={(project) => set({ project })}
-        onSpace={(space) => set({ space })}
+        jira={form.jira}
+        confluence={form.confluence}
+        onJira={(jira) => set({ jira })}
+        onConfluence={(confluence) => set({ confluence })}
         errorFor={errorFor}
         disabled={disabled}
       />
 
-      {runtimeVisible ? (
-        <>
-          <ScheduleToggles
-            data={unit.data}
-            unit
-            values={form.schedules}
-            onChange={(name, enabled) => set({ schedules: { ...form.schedules, [name]: enabled } })}
-            disabled={disabled}
-            error={errorFor(["runtime", "schedules"])}
-          />
-          {toolCredentialNames(unit.data).length > 0 && (
-            <EditorSection title="In the runtime half">
-              <ToolCredentialFact data={unit.data} />
-            </EditorSection>
-          )}
-        </>
-      ) : (
-        <RuntimeHidden what="unit" />
+      <ScheduleToggles
+        data={unit.data}
+        unit
+        values={form.schedules}
+        onChange={(name, enabled) => set({ schedules: { ...form.schedules, [name]: enabled } })}
+        disabled={disabled}
+        error={errorFor(["schedules"])}
+      />
+
+      {toolCredentialNames(unit.data).length > 0 && (
+        <EditorSection title="Configured in the document">
+          <ToolCredentialFact data={unit.data} />
+        </EditorSection>
       )}
     </EditorShell>
   );
@@ -836,157 +789,47 @@ function UnitEditor({
 // A seat
 // ---------------------------------------------------------------------------
 
-const GITHUB_TIER: Segment[] = ["runtime", "github", "tier"];
-const GITHUB_REPOS: Segment[] = ["runtime", "github", "repos"];
-const MATTERMOST_CHANNEL: Segment[] = ["runtime", "mattermost", "channel"];
-const MATTERMOST_USERNAME: Segment[] = ["runtime", "mattermost", "username"];
-
-/** A seat of the draft by handle, as a person reads it: its name, or its handle. */
-function seatLabel(draft: Parameters<typeof allSeats>[0], handle: string): string {
-  for (const { seat } of allSeats(draft)) {
-    if (seat.data.handle === handle) return seat.data.name || `@${handle}`;
-  }
-  return `@${handle}`;
-}
-
-/**
- * Every seat of the draft as a choice, by handle: its name, with the handle
- * beside it where another seat shares the name, so two seats called the same
- * are two choices a reader can tell apart.
- */
-function seatChoices(draft: Parameters<typeof allSeats>[0], except?: NodeKey): FieldChoice[] {
-  const seats = [...allSeats(draft)].map(({ seat }) => seat).filter((s) => s.key !== except);
-  const count = new Map<string, number>();
-  for (const s of seats) count.set(s.data.name, (count.get(s.data.name) ?? 0) + 1);
-  return seats.map((s) => ({
-    value: s.data.handle,
-    label:
-      s.data.name === ""
-        ? `@${s.data.handle}`
-        : count.get(s.data.name)! > 1
-          ? `${s.data.name} (@${s.data.handle})`
-          : s.data.name,
-  }));
-}
+const GITHUB_TIER: Segment[] = ["integrations", "github", "tier"];
+const GITHUB_REPOS: Segment[] = ["integrations", "github", "repos"];
+const SLACK_CHANNEL: Segment[] = ["integrations", "slack", "channel"];
+const MATTERMOST_CHANNEL: Segment[] = ["integrations", "mattermost", "channel"];
+const MATTERMOST_USERNAME: Segment[] = ["integrations", "mattermost", "username"];
 
 /** The field paths a seat's form draws; see [unitFieldPaths] for why it matters. */
 function seatFieldPaths(
   company: CompanyDocument,
-  data: SeatData,
-  { human, runtimeVisible }: { human: boolean; runtimeVisible: boolean },
+  data: ConfigRole,
+  { human, minted }: { human: boolean; minted: boolean },
 ): Segment[][] {
-  const runtime: Segment[][] = !runtimeVisible
-    ? []
-    : human
-      ? [
-          ["runtime", "contact"],
-          ["runtime", "availability"],
-        ]
-      : [
-          ["runtime", "llm"],
-          // The block, for a problem about its shape, and each window, so a
-          // refused ceiling is drawn under the box it was typed in.
-          ["runtime", "token_budget"],
-          ...BUDGET_WINDOWS.map(({ period }) => ["runtime", "token_budget", period] as Segment[]),
-          ...(schedulesOf(data).length > 0 ? [["runtime", "schedules"] as Segment[]] : []),
-          ...(isConnected(company, "github") ? [GITHUB_TIER, GITHUB_REPOS] : []),
-          ...(isConnected(company, "mattermost") &&
-          isRecord(getPath(data, ["runtime", "mattermost"]))
-            ? [MATTERMOST_CHANNEL, MATTERMOST_USERNAME]
-            : []),
-        ];
+  const seatBlock = (tool: "slack" | "mattermost") =>
+    isConnected(company, tool) && isRecord(getPath(data, ["integrations", tool]));
   return [
     ["name"],
-    ["handle"],
+    // An existing seat's handle is a read-only fact, so a problem about it
+    // belongs at the top of the form with the rest.
+    ...(minted ? [["handle"] as Segment[]] : []),
     ["email"],
     ["goal"],
     ["backstory"],
     ["responsibilities"],
     ["manages"],
-    ["project"],
-    ["space"],
-    ...(human ? [] : [["behavioral_guidelines"] as Segment[]]),
-    ...runtime,
+    ...(human
+      ? [["contact"] as Segment[], ["availability"] as Segment[]]
+      : [
+          ["behavioral_guidelines"] as Segment[],
+          ["llm"] as Segment[],
+          // The block, for a problem about its shape, and each window, so a
+          // refused ceiling is drawn under the box it was typed in.
+          ["token_budget"] as Segment[],
+          ...BUDGET_WINDOWS.map(({ period }) => ["token_budget", period] as Segment[]),
+          ...(schedulesOf(data).length > 0 ? [["schedules"] as Segment[]] : []),
+          ...(isConnected(company, "github") ? [GITHUB_TIER, GITHUB_REPOS] : []),
+          ...(seatBlock("slack") ? [SLACK_CHANNEL] : []),
+          ...(seatBlock("mattermost") ? [MATTERMOST_CHANNEL, MATTERMOST_USERNAME] : []),
+          ...(isConnected(company, "jira") ? [JIRA_PROJECT] : []),
+          ...(isConnected(company, "confluence") ? [CONFLUENCE_SPACE] : []),
+        ]),
   ];
-}
-
-/**
- * A seat's address, which the chart SEALS LIKE A CREDENTIAL and serves only as
- * the `${VAR}` reference it was sealed under or, where a row holds something
- * else, the mask — never a value a person could read as the address.
- *
- * EITHER READS AS "SET, SEALED", never as text in a box. Shown in one,
- * `__redacted__` looked like an address somebody had typed, and a person
- * clearing the box to type over it had cleared the address before they knew
- * it; and the reference is a name the CHART minted for its own secret store
- * entry, so a box holding it invited an edit that would point the seat at an
- * entry nobody stored. The reference is still shown, as the name it is, so a
- * person can tell a sealed address from a hidden one. An untouched field sends
- * back exactly what was read — the chart keeps a reference it already holds
- * and restores a mask from the row — so nothing about it is a change until
- * somebody chooses to replace it.
- */
-function AddressField({
-  initial,
-  value,
-  onChange,
-  disabled,
-  error,
-}: {
-  initial: string;
-  value: string;
-  onChange: (value: string) => void;
-  disabled: boolean;
-  error: string | undefined;
-}) {
-  const reference = isWholeReference(initial);
-  const hidden = initial === REDACTED || reference;
-  if (hidden && value === initial) {
-    return (
-      <ReadOnlyFact
-        label="Email"
-        reason="The chart keeps an address sealed and never sends it to a browser. Saving leaves it as it is."
-      >
-        <span className="row gap-2">
-          {reference ? (
-            <span>
-              An address is set, sealed as <InlineCode>{initial.trim()}</InlineCode>.
-            </span>
-          ) : (
-            <span>An address is set (hidden).</span>
-          )}
-          <Button variant="secondary" size="small" disabled={disabled} onClick={() => onChange("")}>
-            Replace
-          </Button>
-        </span>
-      </ReadOnlyFact>
-    );
-  }
-  return (
-    <div className="col gap-1">
-      <ConfigField
-        label="Email"
-        kind="email"
-        value={value}
-        onChange={onChange}
-        required={false}
-        disabled={disabled}
-        help={hidden ? "Replaces the sealed address. Left empty, it removes it." : undefined}
-        error={error}
-      />
-      {hidden && (
-        <Button
-          variant="ghost"
-          size="small"
-          disabled={disabled}
-          onClick={() => onChange(initial)}
-          style={{ alignSelf: "flex-start" }}
-        >
-          Keep the sealed address
-        </Button>
-      )}
-    </div>
-  );
 }
 
 const GITHUB_TIERS: FieldChoice[] = [
@@ -1012,27 +855,27 @@ function SeatEditor({
   const company = state.draft.company;
   const minted = isMintedKey(key);
   const human = kindOf(data) === "human";
-  const handle = data.handle;
-  const runtimeVisible = state.base.runtimeVisible;
+  const handle = handlesOf(state).get(key);
   const { initial, form, set, dirty } = useForm<SeatForm>(() =>
     seatForm(data, gitLabAccessLevel(company, handle)),
   );
   const { refusal, apply } = useApply(api, key, onClose);
   const { errorFor, rest } = placeOnFields(
     placedOn(api, key),
-    seatFieldPaths(company, data, { human, runtimeVisible }),
+    seatFieldPaths(company, data, { human, minted }),
   );
   const disabled = api.readOnly;
+  // The handle the engine derives from the name, which is the seat's handle
+  // while it declares none of its own.
+  const derivedHandle = declaredHandle(data) === undefined ? handle : undefined;
 
-  const budgetErrors = human || !runtimeVisible ? {} : tokenBudgetErrors(form.tokenBudget);
+  const budgetErrors = human ? {} : tokenBudgetErrors(form.tokenBudget);
   const blocked =
     form.name.trim() === ""
       ? "A seat needs a name."
-      : form.handle.trim() === ""
-        ? "A seat needs a handle."
-        : Object.keys(budgetErrors).length > 0
-          ? "Correct the token budget first."
-          : null;
+      : Object.keys(budgetErrors).length > 0
+        ? "Correct the token budget first."
+        : null;
 
   return (
     <EditorShell
@@ -1044,7 +887,7 @@ function SeatEditor({
       readOnly={api.readOnly}
       refusal={refusal}
       problems={rest}
-      onApply={() => apply(seatParts(key, initial, form))}
+      onApply={() => apply(seatParts(key, data, initial, form, { editableHandle: minted }))}
       onClose={onClose}
     >
       <ConfigField
@@ -1052,23 +895,43 @@ function SeatEditor({
         value={form.name}
         onChange={(name) => set({ name })}
         disabled={disabled}
-        help={NAME_HELP.seat}
+        help={UNIQUE_NAME_HELP.seat}
         error={errorFor(["name"])}
       />
-      <ConfigField
-        label="Handle"
-        kind="id"
-        value={form.handle}
-        onChange={(value) => set({ handle: value })}
-        disabled={disabled}
-        help={minted ? ADDRESS_HELP.seat.created : ADDRESS_HELP.seat.saved}
-        error={errorFor(["handle"])}
-      />
+      {minted ? (
+        <ConfigField
+          label="Handle"
+          kind="id"
+          value={form.handle}
+          onChange={(value) => set({ handle: value })}
+          required={false}
+          disabled={disabled}
+          help={
+            form.handle.trim() !== ""
+              ? "The handle this seat's memory, mailbox and mentions attach to."
+              : // The engine derived that handle from the name the draft
+                // holds, so a name typed here since is not what it names.
+                derivedHandle && !renames(initial.name, form.name)
+                ? `Empty uses the handle the engine derives from the name: ${derivedHandle}.`
+                : "Empty uses the handle the engine derives from the name, shown here after the next check."
+          }
+          error={errorFor(["handle"])}
+        />
+      ) : (
+        <ReadOnlyFact
+          label="Handle"
+          reason="An existing seat keeps its handle: it is the identity its memory and mailbox attach to."
+        >
+          <InlineCode>{handle ?? ""}</InlineCode>
+        </ReadOnlyFact>
+      )}
       <KindFact seatKey={key} human={human} dirty={dirty} onClose={onClose} />
-      <AddressField
-        initial={initial.email}
+      <ConfigField
+        label="Email"
+        kind="email"
         value={form.email}
         onChange={(email) => set({ email })}
+        required={false}
         disabled={disabled}
         error={errorFor(["email"])}
       />
@@ -1122,22 +985,10 @@ function SeatEditor({
         autoFocus={section === "reports"}
       />
 
-      <Owns
-        who="seat"
-        project={form.project}
-        space={form.space}
-        onProject={(project) => set({ project })}
-        onSpace={(space) => set({ space })}
-        errorFor={errorFor}
-        disabled={disabled}
-      />
-
-      {!runtimeVisible ? (
-        <RuntimeHidden what="seat" />
-      ) : human ? (
+      {human ? (
         <EditorSection
           title="Contact"
-          hint="Optional: how agents @-mention and reach the person on each surface. A person who works only through the dashboard needs none, and the chart check names the seat until one is added."
+          hint="A human seat needs at least one contact identity, which is how the organization reaches the person."
         >
           {CONTACT_IDENTITIES.map(({ key: identity, label }) => (
             <ConfigField
@@ -1150,9 +1001,9 @@ function SeatEditor({
               disabled={disabled}
             />
           ))}
-          {errorFor(["runtime", "contact"]) && (
+          {errorFor(["contact"]) && (
             <Callout variant="danger" role="alert">
-              {errorFor(["runtime", "contact"])}
+              {errorFor(["contact"])}
             </Callout>
           )}
           <ConfigField
@@ -1162,12 +1013,13 @@ function SeatEditor({
             required={false}
             disabled={disabled}
             help="A free-text note, such as working hours."
-            error={errorFor(["runtime", "availability"])}
+            error={errorFor(["availability"])}
           />
         </EditorSection>
       ) : (
         <>
           <ModelSection
+            data={data}
             chain={form.llm}
             onChain={(llm) => set({ llm })}
             budget={form.tokenBudget}
@@ -1176,14 +1028,12 @@ function SeatEditor({
             }
             budgetError={(window) =>
               budgetErrors[window] ??
-              errorFor(["runtime", "token_budget", window]) ??
+              errorFor(["token_budget", window]) ??
               // A problem with the block as a whole — its shape — belongs
               // to every box, and is drawn under the first.
-              (window === BUDGET_WINDOWS[0].period
-                ? errorFor(["runtime", "token_budget"])
-                : undefined)
+              (window === BUDGET_WINDOWS[0].period ? errorFor(["token_budget"]) : undefined)
             }
-            chainError={errorFor(["runtime", "llm"])}
+            chainError={errorFor(["llm"])}
             disabled={disabled}
           />
           <ScheduleToggles
@@ -1192,18 +1042,28 @@ function SeatEditor({
             values={form.schedules}
             onChange={(name, enabled) => set({ schedules: { ...form.schedules, [name]: enabled } })}
             disabled={disabled}
-            error={errorFor(["runtime", "schedules"])}
+            error={errorFor(["schedules"])}
           />
           <IntegrationsSection
-            seatKey={key}
             data={data}
+            handle={handle}
+            minted={minted}
             initial={initial}
             form={form}
             set={set}
             errorFor={errorFor}
             disabled={disabled}
           />
-          <RuntimeFacts data={data} handle={handle} />
+          <Owns
+            who="seat"
+            jira={form.jira}
+            confluence={form.confluence}
+            onJira={(jira) => set({ jira })}
+            onConfluence={(confluence) => set({ confluence })}
+            errorFor={errorFor}
+            disabled={disabled}
+          />
+          <DocumentFacts data={data} handle={handle} />
         </>
       )}
     </EditorShell>
@@ -1272,33 +1132,28 @@ function Reports({
   autoFocus: boolean;
 }) {
   const { state } = useBuilder();
-  // BY ADDRESS, as the chart stores an entry: a seat's handle or a unit's
-  // key. A handle and a key never collide in one draft that the engine would
-  // take — an entry resolves to the seat first — so a unit whose key a seat's
-  // handle already is, is not offered as a second meaning of it.
-  const options: TagsInputOption[] = seatChoices(state.draft, seat.key).map((choice) => ({
-    value: choice.value,
-    label: choice.label,
-    group: "Seats",
-  }));
-  const handles = new Set([...allSeats(state.draft)].map(({ seat: s }) => s.data.handle));
+  const seatNames = new Set<string>();
+  const options: TagsInputOption[] = [];
+  for (const { seat: other } of allSeats(state.draft)) {
+    if (other.key === seat.key || seatNames.has(other.data.name)) continue;
+    seatNames.add(other.data.name);
+    options.push({ value: other.data.name, label: other.data.name, group: "Seats" });
+  }
   for (const { unit } of allUnits(state.draft)) {
-    if (handles.has(unit.data.key)) continue;
+    // A manages entry that names both a seat and a unit names the seat, so a
+    // unit sharing a seat's name is not offered as a second meaning of it.
+    if (seatNames.has(unit.data.name) || unit.data.name === seat.data.name) continue;
     options.push({
-      value: unit.data.key,
-      label: unit.data.name || unit.data.key,
+      value: unit.data.name,
+      label: unit.data.name,
       group: "Units",
       description: "every seat in it",
     });
   }
 
-  // WHO IT MANAGES AS A LEAD is the engine's derivation, of the SAVED chart:
-  // shown while the draft's chart is still that one, and said to be derived
-  // on saving otherwise.
-  const saved = savedDerivation(state);
   const derived = derivedSeatOf(state, seat.key);
   const automatic = new Set(derived?.auto_reports ?? []);
-  const groups = (saved?.derived.units ?? [])
+  const groups = (currentCheck(state)?.derived.units ?? [])
     .filter((u) => derived?.handle && u.lead === derived.handle)
     .map((u) => ({
       unit: u.name,
@@ -1341,16 +1196,12 @@ function Reports({
           {g.names.join(", ")}
         </ReadOnlyFact>
       ))}
-      {!saved && state.base.derived !== null && (
-        <p className="builder-note muted">
-          Who this seat manages as a unit lead is derived by the engine once this draft is saved.
-        </p>
-      )}
     </EditorSection>
   );
 }
 
 function ModelSection({
+  data,
   chain,
   onChain,
   budget,
@@ -1359,7 +1210,8 @@ function ModelSection({
   chainError,
   disabled,
 }: {
-  chain: readonly string[];
+  data: ConfigRole;
+  chain: readonly string[] | null;
   onChain: (next: string[]) => void;
   budget: BudgetForm;
   onBudget: (window: BudgetWindow, typed: string) => void;
@@ -1373,37 +1225,54 @@ function ModelSection({
   const unpinned = unpinnedProvider(company);
   return (
     <EditorSection title="Model">
-      <FormField
-        label="Model"
-        optional
-        helper={
-          chain.length > 0
-            ? `Tried in this order: ${chain.join(", then ")}.`
-            : unpinned
-              ? `Runs on ${unpinned}, the provider a seat that names none runs on.`
-              : "The company has no model provider yet. Add one in the settings."
-        }
-        error={withProblems(chainError)}
-      >
-        {(field) => (
-          <TagsInput
-            id={field.id}
-            label="Model providers"
-            value={[...chain]}
-            onChange={onChain}
-            options={providers.map((key) => ({ value: key, label: key }))}
-            allowCustom={false}
-            // THE ORDER IS THE FALLBACK CHAIN, read first to last, so it is
-            // moved rather than retyped. The help line used to end "to change
-            // the order, remove a provider and choose it again", which was a
-            // workaround for a control that could not reorder.
-            ordered
-            disabled={disabled}
-            aria-describedby={field.describedBy}
-            aria-invalid={field.invalid}
-          />
-        )}
-      </FormField>
+      {chain === null ? (
+        <ReadOnlyFact
+          label="Model"
+          reason="This seat chooses a model per phase."
+          link={{ to: "config", label: "Edit in the configuration document" }}
+        >
+          <ul className="builder-list">
+            {formatPhaseLLM(data.llm).map((row) => (
+              <li key={row.phase}>
+                {row.phase ? `${row.phase}: ` : ""}
+                {row.chain}
+              </li>
+            ))}
+          </ul>
+        </ReadOnlyFact>
+      ) : (
+        <FormField
+          label="Model"
+          optional
+          helper={
+            chain.length > 0
+              ? `Tried in this order: ${chain.join(", then ")}.`
+              : unpinned
+                ? `Runs on ${unpinned}, the provider a seat that names none runs on.`
+                : "The company has no model provider yet. Add one in the configuration document."
+          }
+          error={withProblems(chainError)}
+        >
+          {(field) => (
+            <TagsInput
+              id={field.id}
+              label="Model providers"
+              value={[...chain]}
+              onChange={onChain}
+              options={providers.map((key) => ({ value: key, label: key }))}
+              allowCustom={false}
+              // THE ORDER IS THE FALLBACK CHAIN, read first to last, so it is
+              // moved rather than retyped. The help line used to end "to change
+              // the order, remove a provider and choose it again", which was a
+              // workaround for a control that could not reorder.
+              ordered
+              disabled={disabled}
+              aria-describedby={field.describedBy}
+              aria-invalid={field.invalid}
+            />
+          )}
+        </FormField>
+      )}
       {/* ONE BOX PER WINDOW, each optional: a seat may cap its day, its
           week and its month independently, and a turn runs only while every
           capped window has room. The company's own ceilings apply on top. */}
@@ -1425,16 +1294,18 @@ function ModelSection({
 }
 
 function IntegrationsSection({
-  seatKey,
   data,
+  handle,
+  minted,
   initial,
   form,
   set,
   errorFor,
   disabled,
 }: {
-  seatKey: NodeKey;
-  data: SeatData;
+  data: ConfigRole;
+  handle: string | undefined;
+  minted: boolean;
   initial: SeatForm;
   form: SeatForm;
   set: (patch: Partial<SeatForm>) => void;
@@ -1443,24 +1314,19 @@ function IntegrationsSection({
 }) {
   const { state } = useBuilder();
   const company = state.draft.company;
-  const minted = isMintedKey(seatKey);
-  const github = getPath(data, ["runtime", "github"]);
+  const github = getPath(data, ["integrations", "github"]);
   const appSlug = isRecord(github) && typeof github.app_slug === "string" ? github.app_slug : "";
   const enrolling = !isRecord(github) && (form.githubTier !== "" || form.githubRepos.length > 0);
   const tierChanged = appSlug !== "" && form.githubTier !== initial.githubTier;
-  const mattermost = getPath(data, ["runtime", "mattermost"]);
+  const slack = getPath(data, ["integrations", "slack"]);
+  const mattermost = getPath(data, ["integrations", "mattermost"]);
   // A BOT IS THE ENGINE'S ONLY WHERE ITS TOKEN NAMES A SECRET STORE ENTRY.
   // The provisioner mints into the entry a whole `${VAR}` points at and skips
   // every other seat with a note (`mattermost.PlanFor`), so a literal token,
   // which reaches this screen as its mask, is a bot somebody manages by hand
   // and whose username is theirs to correct.
   const provisioned = isRecord(mattermost) && isWholeReference(mattermost.bot_token);
-  // THE PROVISIONER NAMES A BOT AFTER THE HANDLE THE SEAT WAS CREATED UNDER
-  // (`provision.Origin`), which no rename moves: a saved seat's KEY, which is
-  // its identity (`keys.ts`), and a seat this draft creates, the handle it
-  // will be created under.
-  const origin = minted ? form.handle.trim() : (handleOfKey(seatKey) ?? "");
-  const defaultUsername = origin === "" ? "" : mattermostBotUsername(company, origin);
+  const defaultUsername = handle === undefined ? "" : mattermostBotUsername(company, handle);
   const gitlabDefault = defaultGitLabAccessLevel(company);
 
   return (
@@ -1513,6 +1379,28 @@ function IntegrationsSection({
         )}
       </EditorSection>
 
+      <EditorSection title="Slack">
+        {!isConnected(company, "slack") ? (
+          <NotConnected tool="slack" />
+        ) : isRecord(slack) ? (
+          <ConfigField
+            label="Slack channel ID"
+            kind="id"
+            value={form.slackChannel}
+            onChange={(slackChannel) => set({ slackChannel })}
+            required={false}
+            disabled={disabled}
+            help="The ID of this seat's default channel, such as C0123ABCD, not its name."
+            error={errorFor(SLACK_CHANNEL)}
+          />
+        ) : (
+          <p className="builder-note muted">
+            This seat has no Slack app of its own, so it has no channel to set.{" "}
+            <ScreenLink to="integrations">Open Integrations</ScreenLink>
+          </p>
+        )}
+      </EditorSection>
+
       <EditorSection title="Mattermost">
         {!isConnected(company, "mattermost") ? (
           <NotConnected tool="mattermost" />
@@ -1532,11 +1420,7 @@ function IntegrationsSection({
                 label="Bot username"
                 reason="The engine provisions this bot, because its token names a secret store entry. Changing the username would make the provisioner find or create a second bot."
               >
-                {form.mattermostUsername || defaultUsername ? (
-                  <InlineCode>{form.mattermostUsername || defaultUsername}</InlineCode>
-                ) : (
-                  "The name the provisioner gives the handle this seat was created under"
-                )}
+                <InlineCode>{form.mattermostUsername || defaultUsername}</InlineCode>
               </ReadOnlyFact>
             ) : (
               <ConfigField
@@ -1549,7 +1433,7 @@ function IntegrationsSection({
                 help={
                   defaultUsername
                     ? `The engine provisions a bot only where its token names a secret store entry, so this one is managed by hand. Empty uses ${defaultUsername}.`
-                    : "The engine provisions a bot only where its token names a secret store entry, so this one is managed by hand. Empty uses the name the provisioner gives the handle this seat was created under."
+                    : "The engine provisions a bot only where its token names a secret store entry, so this one is managed by hand."
                 }
                 error={errorFor(MATTERMOST_USERNAME)}
               />
@@ -1582,8 +1466,14 @@ function IntegrationsSection({
             ]}
             value={form.accessLevel}
             onChange={(accessLevel) => set({ accessLevel })}
-            disabled={disabled}
-            help="The level this seat's GitLab account joins the group with. Kept by handle, so a new handle carries it."
+            disabled={disabled || handle === undefined}
+            help={
+              handle === undefined
+                ? "Access levels are kept by handle, so this is available once the check reports this seat's handle."
+                : minted
+                  ? "Kept by handle: choosing a handle for this seat carries its level with it."
+                  : "The level this seat's GitLab account joins the group with."
+            }
           />
         )}
       </EditorSection>
@@ -1591,69 +1481,83 @@ function IntegrationsSection({
   );
 }
 
-/** The seat's runtime settings the builder shows and does not edit, each with why. */
-function RuntimeFacts({ data, handle }: { data: SeatData; handle: string }) {
+/** The seat's settings the builder shows and does not edit, each with why. */
+function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | undefined }) {
   const { state } = useBuilder();
   const company = state.draft.company;
   const facts: ReactNode[] = [];
-  const runtime = isRecord(data.runtime) ? data.runtime : {};
-  const chainOf = (value: unknown) => providerKeys(value).join(", then ");
+  const configLink = { to: "config", label: "Open the configuration" } as const;
 
-  const phases = PHASE_MODEL_FIELDS.filter((field) => chainOf(runtime[field]) !== "");
+  const phases = PHASE_MODEL_FIELDS.filter((field) => data[field] !== undefined);
   if (phases.length > 0) {
     facts.push(
-      <ReadOnlyFact key="phases" label="Models per phase" reason={RUNTIME_ELSEWHERE}>
+      <ReadOnlyFact
+        key="phases"
+        label="Models per phase"
+        reason="Set in the configuration document."
+        link={configLink}
+      >
         <ul className="builder-list">
           {phases.map((field) => (
             <li key={field}>
-              {field.replace("llm_", "")}: {chainOf(runtime[field])}
+              {field.replace("llm_", "")}:{" "}
+              {formatPhaseLLM(data[field])
+                .map((r) => r.chain)
+                .join("; ")}
             </li>
           ))}
         </ul>
       </ReadOnlyFact>,
     );
   }
-  if (isRecord(runtime.sandbox)) {
-    const enabled = runtime.sandbox.enabled === true ? "Enabled" : "Not enabled";
-    const runIn =
-      typeof runtime.sandbox.run_in === "string" ? `, runs in ${runtime.sandbox.run_in}` : "";
+  if (isRecord(data.sandbox)) {
+    const enabled = data.sandbox.enabled === true ? "Enabled" : "Not enabled";
+    const runIn = typeof data.sandbox.run_in === "string" ? `, runs in ${data.sandbox.run_in}` : "";
     facts.push(
       <ReadOnlyFact
         key="sandbox"
         label="Sandbox"
-        reason={`A sandbox runs on the settings' providers.sandbox block. ${RUNTIME_ELSEWHERE}`}
+        reason="A sandbox runs on the company's providers.sandbox block, which the builder does not edit."
+        link={configLink}
       >
         {enabled}
         {runIn}
       </ReadOnlyFact>,
     );
   }
-  if (Array.isArray(runtime.workers) && runtime.workers.length > 0) {
+  if (Array.isArray(data.workers) && data.workers.length > 0) {
     facts.push(
       <ReadOnlyFact
         key="workers"
         label="Workers"
-        reason={`Workers name templates from the settings' workers block. ${RUNTIME_ELSEWHERE}`}
+        reason="Workers name templates from the company's workers block, which the builder does not edit."
+        link={configLink}
       >
-        {runtime.workers.join(", ")}
+        {data.workers.join(", ")}
       </ReadOnlyFact>,
     );
   }
-  if (isRecord(runtime.placement)) {
+  if (isRecord(data.placement)) {
     facts.push(
       <ReadOnlyFact
         key="placement"
         label="Placement"
-        reason={`Which nodes run this seat, a fleet setting. ${RUNTIME_ELSEWHERE}`}
+        reason="Placement is a fleet setting for which nodes run this seat, edited in the configuration document."
+        link={configLink}
       >
-        {placementSummary(runtime.placement)}
+        {placementSummary(data.placement)}
       </ReadOnlyFact>,
     );
   }
-  if (typeof runtime.learning_enabled === "boolean") {
+  if (typeof data.learning_enabled === "boolean") {
     facts.push(
-      <ReadOnlyFact key="learning" label="Learning" reason={RUNTIME_ELSEWHERE}>
-        {runtime.learning_enabled ? "On" : "Off"}
+      <ReadOnlyFact
+        key="learning"
+        label="Learning"
+        reason="Set in the configuration document."
+        link={configLink}
+      >
+        {data.learning_enabled ? "On" : "Off"}
       </ReadOnlyFact>,
     );
   }
@@ -1663,7 +1567,7 @@ function RuntimeFacts({ data, handle }: { data: SeatData; handle: string }) {
     // A block that is switched off wakes nobody, whatever its route_to says,
     // which is how the engine reads it and how the chart draws it.
     const on = datadogEnabled(company);
-    const fallback = datadogFallback(company) === handle;
+    const fallback = handle !== undefined && datadogFallback(company) === handle;
     facts.push(
       <ReadOnlyFact
         key="datadog"
@@ -1682,7 +1586,7 @@ function RuntimeFacts({ data, handle }: { data: SeatData; handle: string }) {
   if (facts.length === 0) return null;
   return (
     <EditorSection
-      title="Shown, not edited here"
+      title="Configured in the document"
       hint={`${plural(facts.length, "setting")} the builder shows and does not edit.`}
     >
       {facts}

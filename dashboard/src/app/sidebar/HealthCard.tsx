@@ -16,15 +16,13 @@
  *      here repairs, so the card is a statement and the state bar beside it
  *      carries the retry and the sign-out;
  *   3. the socket is reconnecting — everything shown is the last push;
- *   4. the engine could not verify the session at its last check — live
- *      updates are paused until it can, and it checks again on its own;
- *   5. this node is draining — it is leaving and hands its seats on;
- *   6. no company is configured — nothing runs, whatever else is true;
- *   7. the node's posture diverged from the fleet (`shed`, `stuck`,
+ *   4. this node is draining — it is leaving and hands its seats on;
+ *   5. no company is configured — nothing runs, whatever else is true;
+ *   6. the node's posture diverged from the fleet (`shed`, `stuck`,
  *      `isolated`) — it is running a configuration nobody else is;
- *   8. no health push yet — connected, and nothing to report on, which is
+ *   7. no health push yet — connected, and nothing to report on, which is
  *      not "healthy";
- *   9. serving — a success dot, the detail "3 nodes · config epoch 42" (or
+ *   8. serving — a success dot, the detail "3 nodes · config epoch 42" (or
  *      "node count unavailable" where the presence read failed, never a
  *      zero), and the title "Engine healthy" ONLY when the alarm table was
  *      evaluated and nothing in it fires; otherwise "Engine serving".

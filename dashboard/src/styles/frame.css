@@ -2250,7 +2250,6 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
   .section-picker:not([data-open]) .section-picker-list {
     display: none;
   }
-
   .section-picker[data-open] .section-picker-list {
     padding-top: var(--spacing-2);
   }

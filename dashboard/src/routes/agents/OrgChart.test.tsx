@@ -4,7 +4,7 @@
  * that opens the seat beside the chart.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -40,34 +40,41 @@ class InertWebSocket {
   close(): void {}
 }
 
-// EACH ROW CARRIES THE HANDLE IT IS PAIRED BY, and the agent id the store
-// keeps it under: a card wears the row of the seat its handle names, never one
-// that merely shares the seat's name.
 const AGENTS = [
-  { role: "CEO", handle: "ceo", agent_id: "a-ceo", activity: "idle", last_turn: null },
+  { id: "ceo", agent_id: "ceo", handle: "ceo", role: "CEO", activity: "idle", last_turn: null },
   {
-    role: "CTO",
+    id: "cto",
+    agent_id: "cto",
     handle: "cto",
-    agent_id: "a-cto",
+    role: "CTO",
     activity: "working",
     live_call: { phase: "review", work_item: { key: "ENG-409" } },
   },
   {
-    role: "SWE",
+    id: "swe",
+    agent_id: "swe",
     handle: "swe",
-    agent_id: "a-swe",
+    role: "SWE",
     activity: "working",
     live_call: { phase: "execute", work_item: { key: "ENG-412" } },
   },
   {
-    role: "FE",
+    id: "fe",
+    agent_id: "fe",
     handle: "fe",
-    agent_id: "a-fe",
+    role: "FE",
     activity: "needs",
     turn: { turn_id: "t", started_at: "", stage: "parked" },
   },
-  { role: "PM", handle: "pm", agent_id: "a-pm", activity: "stopped", stopped_reason: "budget" },
-  { role: "DevRel", handle: "devrel", agent_id: "a-devrel", activity: "idle" },
+  {
+    id: "pm",
+    agent_id: "pm",
+    handle: "pm",
+    role: "PM",
+    activity: "stopped",
+    stopped_reason: "budget",
+  },
+  { id: "devrel", agent_id: "devrel", handle: "devrel", role: "DevRel", activity: "idle" },
 ] as unknown as AgentRow[];
 
 let restore: () => void;
@@ -84,17 +91,11 @@ afterEach(() => {
   location.hash = "";
 });
 
-/** A reader signed in without `config:write`: they may read the chart, not change it. */
-const READER = { login: "ada.lovelace", grants: ["state:read"], handle: "", acts: [] };
-
-async function mount(viewer: Record<string, unknown> = READER, agents: AgentRow[] = AGENTS) {
+async function mount(viewer: Record<string, unknown> = { login: "", owner: "", acts: [] }) {
   const store = new Store();
   store.applyHealth({ status: "healthy" });
-  store.setConnected(true);
   store.applyOrg(CHART_ORG);
-  // THE ROSTER, which `applySeats` sets whole; `applyAgents` only patches the
-  // live overlay of a seat the roster already holds.
-  store.applySeats(agents);
+  store.applySeats(AGENTS);
   const socket = new LiveSocket(store);
   const asked: string[] = [];
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
@@ -102,7 +103,7 @@ async function mount(viewer: Record<string, unknown> = READER, agents: AgentRow[
     if (what === "viewer") return Promise.resolve(viewer);
     if (what === "work_projects") {
       return Promise.resolve({
-        projects: [{ key: "ENG", unit: { key: "Core", name: "Core", resolved: true } }],
+        projects: [{ key: "ENG", unit: { key: "core", name: "Core", resolved: true } }],
         total: 1,
         census: { active: 1, archived: 0 },
         complete: true,
@@ -140,20 +141,6 @@ function card(name: string): HTMLElement {
   if (!found) throw new Error(`no card for ${name}`);
   return found;
 }
-
-// A CARD WEARS THE ROW ITS HANDLE NAMES, whatever name the row carries: paired
-// by name, two seats sharing one wore each other's state, and a row whose name
-// had moved wore none.
-//
-// Mutation: pair the cards by `role` against the seat's name again, and SWE's
-// card says nothing about ENG-412.
-test("a card is paired with its live row by handle, never by name", async () => {
-  await mount(
-    READER,
-    AGENTS.map((a) => ({ ...a, role: "Somebody else" })),
-  );
-  expect(within(card("SWE")).getByText("Executing ENG-412")).toBeTruthy();
-});
 
 // A CARD PER SEAT, SAYING WHAT THE ENGINE SAYS IT IS DOING.
 test("every seat of the applied chart is a card with its place and state line", async () => {
@@ -198,17 +185,32 @@ test("pressing a card opens that seat's peek", async () => {
 });
 
 // ADD SEAT IS NEVER HIDDEN: a reader who may not change the org sees it held,
-// with the reason — the GRANT a structural chart write is decided by, never
-// "an operator token".
-test("Add seat is held with its reason for a reader without config:write", async () => {
+// with the reason.
+test("Add seat is held with its reason for a reader nobody has signed in", async () => {
   await mount();
   const add = screen.getByRole("button", { name: /Add seat/ });
   expect(add.getAttribute("aria-disabled") === "true" || add.hasAttribute("disabled")).toBe(true);
-  expect(add.getAttribute("title")).toBe(CONFIG_WRITE_REASONS.no_grant);
+  expect(add.getAttribute("title")).toBe(CONFIG_WRITE_REASONS.anonymous);
 });
 
-test("a config:write holder's Add seat goes to the builder, adding an agent", async () => {
-  await mount({ login: "jane.founder", grants: ["config:write"], handle: "jane", acts: [] });
+test("an operator's Add seat goes to the builder, adding an agent", async () => {
+  await mount({
+    login: "ops",
+    grants: [
+      "config:read",
+      "config:write",
+      "secrets:write",
+      "fleet:operate",
+      "people:manage",
+      "audit:read",
+      "state:read",
+      "work:write",
+      "knowledge:write",
+    ],
+    handle: "jane",
+    owner: "jane",
+    acts: [],
+  });
   const add = screen.getByRole("link", { name: /Add seat/ });
   expect(add.getAttribute("href")).toBe("#/agents/edit?add=agent");
 });

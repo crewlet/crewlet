@@ -12,9 +12,7 @@ import { expect, test } from "vitest";
 // THE ONE MARK, from the design system rather than re-spelled here: a test
 // carrying its own copy of the glyph goes green on whatever is written.
 import { EMPTY_VALUE } from "@crewlethq/ui";
-import { readerDay } from "./format.ts";
 import {
-  askedByParams,
   SCOPES,
   STATUSES,
   STATUS_TONE,
@@ -29,6 +27,7 @@ import {
   secondAxisOptions,
   filterChips,
   bucketByDay,
+  askedByParams,
   buildItemsParams,
   calendarWeeks,
   dayKey,
@@ -36,6 +35,7 @@ import {
   authorOf,
   describeChange,
   nameAuthor,
+  foldChartReapplies,
   endNote,
   LANDING_SHAPE,
   SCOPE_GROUPS,
@@ -47,6 +47,7 @@ import {
   fmtMinutes,
   gridRange,
   groupLabel,
+  monthOf,
   NO_FILTERS,
   projectKeys,
   scopeOf,
@@ -63,17 +64,9 @@ import {
   type Shape,
   countedLabel,
   dayLabel,
-  monthOrToday,
+  monthOrNow,
   pageCount,
   pageNote,
-  checklistTask,
-  detailItem,
-  itemAddress,
-  itemPath,
-  linkedItem,
-  noticeItem,
-  projectPath,
-  subjectItem,
   targetLabel,
   unfinished,
 } from "./work.ts";
@@ -552,10 +545,8 @@ test("an engine-written sentence names its author by name, and a comment is left
     kind: "prioritised",
     subject_kind: "person",
     subject_id: "agent-swe",
-    // A BOUND PERSON IS RECORDED AS THEIR SEAT, kind `human`.
     actor: "maya",
     actor_kind: "human",
-    operator_id: "session:0192f00d",
     excerpt: "maya put ENG-1 at position 1 of your priorities",
   });
   expect(describeChange(reordered, { viewer: "ada", seatName })).toBe(
@@ -563,9 +554,9 @@ test("an engine-written sentence names its author by name, and a comment is left
   );
   // A WHOLE HANDLE, never a part of a longer one.
   expect(nameAuthor("maya-ops-2 and maya", "maya", seatName)).toBe("maya-ops-2 and Maya Ops");
-  // A LOGIN IS NO SEAT: an operator — somebody bound to no seat, recorded
-  // under their login — is not renamed.
-  expect(authorOf({ actor: "ops.lead", actor_kind: "operator" })).toBe("");
+  // A LOGIN NO CHART HOLDS IS NOT RENAMED: a principal bound to no seat
+  // writes as an `operator`, under its own login.
+  expect(authorOf({ actor: "ci.bot", actor_kind: "operator" })).toBe("");
   // AND A COMMENT IS WHAT SOMEBODY TYPED.
   expect(
     describeChange(
@@ -1230,9 +1221,9 @@ test("only dated rows reach a day, ordered by when they are due", () => {
   expect([...buckets.values()].flat()).toHaveLength(2);
 });
 
-test("the current month comes from the reader's own calendar", () => {
-  const today = readerDay(new Date(2031, 6, 4, 12, 0, 0));
-  expect(monthOrToday("", today)).toBe("2031-07");
+test("the current month comes from the reader's own clock", () => {
+  const now = new Date(2031, 6, 4, 12, 0, 0);
+  expect(monthOf(now.getTime())).toBe("2031-07");
 });
 
 // A COUNT SAID TWICE IS A COUNT THAT READS AS TWO FACTS. The hint exists to
@@ -1351,11 +1342,11 @@ test("the calendar's window wins the one due key, and never leaves it unset", ()
 // catch `NaN`, the cell count is `NaN` and the loop never runs — which takes
 // `buildItemsParams` down the calendar branch with no range at all.
 test("a month the address bar mangled falls back to the reader's own", () => {
-  const today = "2031-05-16";
-  expect(monthOrToday("2031-04", today)).toBe("2031-04");
-  expect(monthOrToday("oops", today)).toBe("2031-05");
-  expect(monthOrToday("2031-13", today)).toBe("2031-05");
-  expect(monthOrToday("", today)).toBe("2031-05");
+  const now = Date.parse("2031-04-16T12:00:00Z");
+  expect(monthOrNow("2031-04", now)).toBe("2031-04");
+  expect(monthOrNow("oops", now)).toBe(monthOf(now));
+  expect(monthOrNow("2031-13", now)).toBe(monthOf(now));
+  expect(monthOrNow("", now)).toBe(monthOf(now));
   // WHY the guard exists, rather than tidiness.
   expect(calendarWeeks("oops", "")).toHaveLength(0);
 });
@@ -1519,8 +1510,8 @@ test("an axis names its own empty key", () => {
 
 // A UNIT KEY IS THE ONE AXIS THIS CLIENT CANNOT NAME FOR ITSELF. What a row
 // holds is the unit's `id` on a company that set one — a word chosen so that a
-// rename moves nothing — and the label reading holds no org index, so the
-// engine's own column label is the name for it. Given one, a chip and
+// rename moves nothing — and the anonymous org projection carries no ids, so
+// the engine's own column label is the only name for it. Given one, a chip and
 // the heading it was cut from say the same word; without one the key stands,
 // which is what the address holds and what the filter takes.
 test("a unit reads by the name its answer gave, and by its key otherwise", () => {
@@ -1740,72 +1731,6 @@ test("the grouping picker offers each axis once, and project at workspace scope 
   expect(secondAxisOptions("status", true)[0]?.value).toBe("");
 });
 
-// AN ITEM IS ITS KEY UNLESS THE KEY OPENS ANOTHER ONE.
-//
-// A key two tasks hold resolves to the one that claimed it first, so the other
-// — flagged `key_collision` — is reached by its id alone, and an empty key
-// addresses nothing. Every other task keeps the key a person reads and pastes.
-test("an item is addressed by its key, unless the key is another's or absent", () => {
-  expect(itemAddress({ id: "u-1", key: "ENG-7" })).toBe("ENG-7");
-  expect(itemAddress({ id: "u-2", key: "ENG-7", key_collision: true })).toBe("u-2");
-  expect(itemAddress({ id: "u-3", key: "" })).toBe("u-3");
-  expect(itemAddress({ id: "u-4" })).toBe("u-4");
-  expect(itemPath({ id: "u-2", key: "ENG-7", key_collision: true })).toEqual(["work", "u-2"]);
-  expect(projectPath("ENG")).toEqual(["work", "ENG"]);
-});
-
-// AND EVERY SHAPE THE ENGINE LISTS A TASK IN PAIRS THE FLAG WITH ITS OWN KEY.
-// The flag is named after the key it qualifies, so an adapter that read the
-// row's other key — or no flag — would address the duplicate by a key that
-// opens its claimant.
-test("each row shape's adapter pairs a task's id with its own key and flag", () => {
-  const flagged = { id: "u-2", key: "ENG-7", key_collision: true };
-  expect(
-    subjectItem({ subject_id: "u-2", subject_key: "ENG-7", subject_key_collision: true }),
-  ).toEqual(flagged);
-  // A NOTICE'S ID IS ITS TASK, never its subject — a prioritised notice's
-  // subject is the person whose list it is.
-  const notice = {
-    record_id: "r-1",
-    log_seq: 1,
-    log_stream: "CREWLET_WORK_LOG",
-    log_generation: 1,
-    at: "2031-04-16T00:00:00Z",
-    reason: "prioritised",
-    primary: true,
-    addressed: true,
-    kind: "prioritised",
-    subject_id: "ana",
-    subject_key: "ENG-7",
-    read: false,
-  };
-  expect(noticeItem({ ...notice, task: "u-2", subject_key_collision: true })).toEqual(flagged);
-  // AND ONE NAMING NO TASK KEEPS ITS KEY, the only address it carries.
-  expect(itemAddress(noticeItem(notice))).toBe("ENG-7");
-  expect(
-    checklistTask({
-      task: "u-2",
-      task_key: "ENG-7",
-      task_key_collision: true,
-      task_title: "",
-      checklist: "",
-      item: "",
-      name: "",
-      done: false,
-    }),
-  ).toEqual(flagged);
-  expect(linkedItem({ kind: "linked", other: "u-2", key: "ENG-7", key_collision: true })).toEqual(
-    flagged,
-  );
-  expect(
-    detailItem({
-      task: { id: "u-2", key: "ENG-7", project: "ENG", title: "", status: "todo", version: 1 },
-      key_collision: true,
-      complete: true,
-    }),
-  ).toEqual(flagged);
-});
-
 // THE UNFINISHED WORK IS WAITING AND STARTED TOGETHER. The engine sends the two
 // apart and no longer sends their sum, so a surface asking "how much is left"
 // reads it here — and a sum that dropped either half would under-count every
@@ -1842,6 +1767,32 @@ test("a status is coloured by its group, and review is work moving", () => {
   // And no status the tracker ships is drawn in the NEEDS-YOU hue.
   expect(Object.values(STATUS_TONE)).not.toContain("caution");
   expect(Object.keys(STATUS_TONE)).toHaveLength(STATUSES.length);
+});
+
+// THE CHART EPOCH IS NEVER A CLAUSE A PERSON READS: beside a real change it is
+// dropped, and alone it is the chart being re-applied.
+test("a project's chart epoch is bookkeeping, never printed", () => {
+  const epoch = { chart_epoch: { from: "1790538626", to: "1790538628" } };
+  const project = { kind: "project_updated", subject_kind: "project", subject_id: "ENG" };
+  expect(describeChange(record({ ...project, fields: epoch }), {})).toBe("Org chart re-applied");
+  const mixed = describeChange(
+    record({ ...project, fields: { ...epoch, name: { from: "Core", to: "Platform" } } }),
+    {},
+  );
+  expect(mixed).not.toMatch(/epoch|1790538626/i);
+  expect(mixed).toContain("Platform");
+  // AND ONLY CONSECUTIVE ONES FOLD.
+  const lines = foldChartReapplies([
+    record({ ...project, id: "a", project: "ENG", fields: epoch }),
+    record({ ...project, id: "b", project: "PROD", fields: epoch }),
+    record({ id: "c", fields: { status: { from: "todo", to: "done" } } }),
+    record({ ...project, id: "d", project: "ENG", fields: epoch }),
+  ]);
+  expect(lines.map((l) => (l.kind === "reapply" ? l.projects.join("+") : "record"))).toEqual([
+    "ENG+PROD",
+    "record",
+    "ENG",
+  ]);
 });
 
 // A SAVED VIEW'S RECORD IS ITS STORAGE — container, rank, a params blob — and

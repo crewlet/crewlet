@@ -37,7 +37,7 @@ import { BarList, Button, Card, EmptyState, Skeleton, Tag } from "@crewlethq/ui"
 import { BrainGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { peekHref } from "~/app/frame/DetailRail.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import {
   DateCell,
   NumberCell,
@@ -49,7 +49,6 @@ import { QueryState } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { fmtCount, plural, tsKey } from "~/lib/format.ts";
 import {
-  attemptOf,
   attempts,
   fromLiveCall,
   fromPhaseEvent,
@@ -59,7 +58,6 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import { useSettled } from "~/lib/settled.ts";
-import { useShared } from "~/lib/share.ts";
 import { phaseColor, spentOnly } from "~/lib/spend.ts";
 import { useClient, useConnection, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { MAX_TURN_DAYS, openState, runningNow, UNSETTLED } from "~/lib/turns.ts";
@@ -81,18 +79,25 @@ export const SPEND_DAYS = 7;
 
 const turnKey = (g: { turnId: string }) => g.turnId;
 
-export function Turns({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) {
+export function Turns({
+  seat,
+  agent,
+  now,
+}: {
+  seat: Seat;
+  agent: AgentRow | undefined;
+  now: number;
+}) {
   const handle = seat.handle;
   const phaseEvents = usePhaseEvents();
   // THE SEAT'S OWN LIVE ROW, the one overlay a running turn on this list can
   // be on.
   const running = useMemo(() => (agent ? [agent] : []), [agent]);
   const { connected } = useConnection();
-  // The AGENT ID, which is what a streamed phase record names its seat by —
-  // never the role name, which two seats may share, so this tab listed a
-  // namesake's phases as this seat's own. Empty for a seat with no live row,
-  // and the stream filter below reads it as "match no phase" rather than
-  // "match every phase that named none".
+  // The seat's AGENT ID, which is what a phase record names its seat by —
+  // never the role NAME, which two seats may share. Empty for a seat no roster
+  // row is held for, and the stream filter below reads it as "match no phase"
+  // rather than "match every phase that named no seat".
   const agentId = agent?.agent_id ?? "";
   const { socket } = useClient();
   // EVERY DAY THE STORE KEEPS: named, because the read's default is a week,
@@ -130,20 +135,14 @@ export function Turns({ seat, agent }: { seat: Seat; agent: AgentRow | undefined
     // it — every phase of the turn a reader opened this tab to watch —
     // reaches the tab only here.
     const streamed = streamedPhases(phaseEvents, (r) => agentId !== "" && r.agentId === agentId);
-    const live = agent?.live_call ? [fromLiveCall(agent.live_call, agent, agent.turn)] : [];
+    const live = agent?.live_call ? [fromLiveCall(agent.live_call, agent.role, agent.turn)] : [];
     // Streamed FIRST so the query's own copy of the same phase wins the key.
     return mergePhases([...streamed, ...stored], live);
   }, [history.data, phaseEvents, agent, agentId]);
-  // SHARED WITH THE GROUPS LAST DRAWN (`~/lib/share.ts`): the phases are
-  // merged and grouped afresh whenever any phase arrives — the store's phase
-  // slice is the whole company's — so every turn card drew again for a phase
-  // that was somebody else's. Shared, a card draws when its own turn moved.
-  const turns = useShared(useMemo(() => groupTurns(phases), [phases]));
+  const turns = useMemo(() => groupTurns(phases), [phases]);
   // WHICH OF THESE ARE THE SAME WORK: a turn id names one run, so a trigger
-  // that failed without acting and came back is several cards. Shared too,
-  // and read per card through `attemptOf`, so a card's attempt is the same
-  // value until its own turn's moved.
-  const attempt = useShared(useMemo(() => attempts(turns), [turns]));
+  // that failed without acting and came back is several cards.
+  const attempt = useMemo(() => attempts(turns), [turns]);
   // THE ENGINE'S OWN ROW FOR EACH CARD, so a card and the list above it read
   // one turn's start and length off one record.
   const rows = useMemo(() => new Map(list.items.map((t) => [t.turn_id, t])), [list.items]);
@@ -158,103 +157,6 @@ export function Turns({ seat, agent }: { seat: Seat; agent: AgentRow | undefined
   const watched = useRef<Set<string>>(new Set());
   for (const key of liveKeys) watched.current.add(key);
   const settled = useSettled(doneTurns, turnKey, liveKeys);
-
-  // THE COLUMNS HOLD STILL until the overlay or the connection they read
-  // moves: every row is memoised on this list, and one built inline drew every
-  // turn on every render — a phase arriving for any seat in the company.
-  const columns = useMemo<GridColumn<TurnRow>[]>(
-    () => [
-      {
-        key: "started",
-        header: "Started",
-        shrink: true,
-        sortValue: (t) => tsKey(t.started_at),
-        cell: (t) => <DateCell at={t.started_at} />,
-      },
-      {
-        key: "summary",
-        header: "What it did",
-        sortValue: (t) => t.summary ?? "",
-        // A TURN STILL RUNNING says what it is doing and what it is
-        // on, from the push (`runningNow`) — the store's row for it
-        // has neither yet.
-        cell: (t) => {
-          const live = runningNow(t, running);
-          return (
-            <TurnWhatCell
-              summary={t.summary}
-              item={t.work_item ?? live?.item}
-              doing={live?.words}
-            />
-          );
-        },
-      },
-      {
-        key: "iterations",
-        // SELF-ITERATE ROUNDS, and the word says so: a phase's TOOL
-        // rounds are on its own card, under their own word.
-        header: (
-          <span title="self-iterate rounds — the tool rounds each phase used are on the phase row">
-            Iterations
-          </span>
-        ),
-        label: "Iterations",
-        shrink: true,
-        sortValue: (t) => (t.complete ? t.iterations : null),
-        cell: (t) => (t.complete ? <NumberCell value={t.iterations} /> : <UnsettledCell />),
-      },
-      {
-        key: "tokens",
-        header: "Tokens",
-        shrink: true,
-        sortValue: (t) => (t.complete ? t.total_tokens : null),
-        cell: (t) => (t.complete ? <TokenCell value={t.total_tokens} /> : <UnsettledCell />),
-      },
-      {
-        key: "state",
-        // NAMED, like every other column: an empty head over the one
-        // column whose tags say what went wrong read as a gap.
-        header: "State",
-        shrink: true,
-        // NOTHING AT ALL for a turn that ended cleanly — not an empty
-        // wrapper: a cell with no child nodes is what a phone's card
-        // drops (`.grid-cell:empty`), where an empty span left a
-        // "STATE" label alone on a line of every settled turn.
-        cell: (t) => {
-          // NO COMPLETION RECORD is running or not settled, read off
-          // the seat's own overlay exactly as the turn's page reads
-          // it ([openState]) — "running" for both disagreed with the
-          // page one click away.
-          const open = openState(t, running, connected);
-          return t.parked || open === "running" || open === "unsettled" || t.failed ? (
-            <span className="row gap-1">
-              {/* A RUNNING TURN IS NOT A ZERO-LENGTH ONE: `complete`
-                  tells a turn in flight from one that ended, and a
-                  turn waiting on its coding run is `parked`,
-                  neither. */}
-              {t.parked && (
-                <Tag appearance="outline" title="waiting on a coding run it launched">
-                  parked
-                </Tag>
-              )}
-              {open === "running" && (
-                <Tag variant="info" title="this seat is running the turn now">
-                  running
-                </Tag>
-              )}
-              {open === "unsettled" && (
-                <Tag variant="warning" title={UNSETTLED.title}>
-                  {UNSETTLED.word}
-                </Tag>
-              )}
-              {t.failed && <Tag variant="danger">failed</Tag>}
-            </span>
-          ) : null;
-        },
-      },
-    ],
-    [running, connected],
-  );
 
   return (
     <div className="col gap-4">
@@ -275,7 +177,7 @@ export function Turns({ seat, agent }: { seat: Seat; agent: AgentRow | undefined
                 key={g.turnId}
                 group={g}
                 row={rows.get(g.turnId)}
-                attempt={attemptOf(attempt, g.turnId)}
+                attempt={attempt.get(g.turnId)}
                 defaultOpen
               />
             ))}
@@ -351,11 +253,7 @@ export function Turns({ seat, agent }: { seat: Seat; agent: AgentRow | undefined
         >
           <Card.Title as="h3">Turns</Card.Title>
         </Card.Header>
-        <QueryState
-          error={list.error}
-          refusal={list.refusal}
-          loading={list.loading && list.answers.length === 0}
-        >
+        <QueryState error={list.error} loading={list.loading && list.answers.length === 0}>
           <DataGrid
             name="prof-turns"
             rows={list.items}
@@ -365,20 +263,105 @@ export function Turns({ seat, agent }: { seat: Seat; agent: AgentRow | undefined
               title: "No turns in the record for this seat",
               hint: `A turn is recorded when it starts; the store keeps ${MAX_TURN_DAYS} days of them.`,
             }}
-            columns={columns}
+            columns={[
+              {
+                key: "started",
+                header: "Started",
+                shrink: true,
+                sortValue: (t) => tsKey(t.started_at),
+                cell: (t) => <DateCell at={t.started_at} now={now} />,
+              },
+              {
+                key: "summary",
+                header: "What it did",
+                sortValue: (t) => t.summary ?? "",
+                // A TURN STILL RUNNING says what it is doing and what it is
+                // on, from the push (`runningNow`) — the store's row for it
+                // has neither yet.
+                cell: (t) => {
+                  const live = runningNow(t, running);
+                  return (
+                    <TurnWhatCell
+                      summary={t.summary}
+                      item={t.work_item ?? live?.item}
+                      doing={live?.words}
+                    />
+                  );
+                },
+              },
+              {
+                key: "iterations",
+                // SELF-ITERATE ROUNDS, and the word says so: a phase's TOOL
+                // rounds are on its own card, under their own word.
+                header: (
+                  <span title="self-iterate rounds — the tool rounds each phase used are on the phase row">
+                    Iterations
+                  </span>
+                ),
+                label: "Iterations",
+                shrink: true,
+                sortValue: (t) => (t.complete ? t.iterations : null),
+                cell: (t) => (t.complete ? <NumberCell value={t.iterations} /> : <UnsettledCell />),
+              },
+              {
+                key: "tokens",
+                header: "Tokens",
+                shrink: true,
+                sortValue: (t) => (t.complete ? t.total_tokens : null),
+                cell: (t) =>
+                  t.complete ? <TokenCell value={t.total_tokens} /> : <UnsettledCell />,
+              },
+              {
+                key: "state",
+                // NAMED, like every other column: an empty head over the one
+                // column whose tags say what went wrong read as a gap.
+                header: "State",
+                shrink: true,
+                // NOTHING AT ALL for a turn that ended cleanly — not an empty
+                // wrapper: a cell with no child nodes is what a phone's card
+                // drops (`.grid-cell:empty`), where an empty span left a
+                // "STATE" label alone on a line of every settled turn.
+                cell: (t) => {
+                  // NO COMPLETION RECORD is running or not settled, read off
+                  // the seat's own overlay exactly as the turn's page reads
+                  // it ([openState]) — "running" for both disagreed with the
+                  // page one click away.
+                  const open = openState(t, running, connected);
+                  return t.parked || open === "running" || open === "unsettled" || t.failed ? (
+                    <span className="row gap-1">
+                      {/* A RUNNING TURN IS NOT A ZERO-LENGTH ONE: `complete`
+                          tells a turn in flight from one that ended, and a
+                          turn waiting on its coding run is `parked`,
+                          neither. */}
+                      {t.parked && (
+                        <Tag appearance="outline" title="waiting on a coding run it launched">
+                          parked
+                        </Tag>
+                      )}
+                      {open === "running" && (
+                        <Tag variant="info" title="this seat is running the turn now">
+                          running
+                        </Tag>
+                      )}
+                      {open === "unsettled" && (
+                        <Tag variant="warning" title={UNSETTLED.title}>
+                          {UNSETTLED.word}
+                        </Tag>
+                      )}
+                      {t.failed && <Tag variant="danger">failed</Tag>}
+                    </span>
+                  ) : null;
+                },
+              },
+            ]}
           />
         </QueryState>
         {/* OLDER TURNS ARE FETCHED, from the cursor the engine answered —
             never reached by a wider page. */}
-        {(list.more || list.paging || list.pageFailure) && (
+        {(list.more || list.paging || list.pageError) && (
           <footer className="panel-foot">
-            {list.pageFailure ? (
-              <QueryState
-                error={list.pageFailure.error}
-                refusal={list.pageFailure.refusal}
-                detail={list.pageFailure.detail ?? undefined}
-                loading={false}
-              />
+            {list.pageError ? (
+              <QueryState error={list.pageError} loading={false} />
             ) : (
               <Button size="small" variant="secondary" onClick={list.older} disabled={list.paging}>
                 {list.paging ? "Loading…" : "Load older turns"}
@@ -426,7 +409,7 @@ export function Turns({ seat, agent }: { seat: Seat; agent: AgentRow | undefined
               key={g.turnId}
               group={g}
               row={rows.get(g.turnId)}
-              attempt={attemptOf(attempt, g.turnId)}
+              attempt={attempt.get(g.turnId)}
               defaultOpen={(i === 0 && !liveTurns.length) || watched.current.has(g.turnId)}
             />
           ))}

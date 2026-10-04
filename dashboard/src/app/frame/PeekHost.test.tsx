@@ -8,7 +8,7 @@
  * plain click was the one way that lost its place.
  */
 
-import { act, cleanup, render, screen, waitFor } from "~/test/inCase.ts";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { Suspense } from "react";
 import { afterEach, expect, test } from "vitest";
 

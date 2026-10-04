@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "vitest";
-import { cleanup, render } from "~/test/inCase.ts";
+import { cleanup, render } from "@testing-library/react";
 
 import { REDUCED_MOTION, SpanBar } from "./SpanBar.tsx";
 

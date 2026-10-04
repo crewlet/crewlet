@@ -24,12 +24,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import type { QueryResult } from "~/lib/useQuery.ts";
-import {
-  queryFailure,
-  type LogRefusal,
-  type QueryFailure,
-  type QueryRefusal,
-} from "~/protocol/index.ts";
+import { queryErrorCode } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 
 /** No older page held — one constant, so an unpaged list is not a new array each render. */
@@ -42,21 +37,12 @@ export interface Paged<T, A> {
   answers: readonly A[];
   loading: boolean;
   error: QueryErrorCode | null;
-  /** Why the newest page was refused, beside `error` — what `QueryState` names. */
-  refusal: QueryRefusal | LogRefusal | null;
   /** Whether a page older than every one loaded exists. */
   more: boolean;
   /** Ask for it. A no-op when there is none or one is in flight. */
   older: () => void;
   paging: boolean;
-  /**
-   * Why the last older page failed, until the next ask — WHOLE ([queryFailure]),
-   * its refusal and the engine's own sentence included. A bare code here was
-   * the half a screen could not pass on: `QueryState` names the grant that
-   * would admit the reader, and says when the state log will not lift a
-   * refusal, only from the refusal beside the code.
-   */
-  pageFailure: QueryFailure | null;
+  pageError: QueryErrorCode | null;
   refetch: () => void;
 }
 
@@ -81,7 +67,7 @@ export function usePaged<A, T>(
   const question = JSON.stringify(params);
   const [held, setHeld] = useState<{ question: string; pages: readonly A[] } | null>(null);
   const [paging, setPaging] = useState(false);
-  const [pageFailure, setPageFailure] = useState<QueryFailure | null>(null);
+  const [pageError, setPageError] = useState<QueryErrorCode | null>(null);
   const pages: readonly A[] = held && held.question === question ? held.pages : NONE;
   const last = pages.length > 0 ? pages[pages.length - 1] : first.data;
   const next = last ? cursorOf(last) : "";
@@ -89,7 +75,7 @@ export function usePaged<A, T>(
   const older = useCallback(async () => {
     if (!next || paging) return;
     setPaging(true);
-    setPageFailure(null);
+    setPageError(null);
     try {
       const answer = await page(next);
       setHeld((prev) =>
@@ -98,7 +84,7 @@ export function usePaged<A, T>(
           : { question, pages: [answer] },
       );
     } catch (err) {
-      setPageFailure(queryFailure(err));
+      setPageError(queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed");
     } finally {
       setPaging(false);
     }
@@ -126,11 +112,10 @@ export function usePaged<A, T>(
     answers,
     loading: first.loading,
     error: first.error,
-    refusal: first.refusal,
     more: next !== "",
     older: () => void older(),
     paging,
-    pageFailure,
+    pageError,
     refetch: first.refetch,
   };
 }

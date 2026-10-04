@@ -11,7 +11,6 @@
  */
 
 import type { SearchMode, SearchOutcome } from "~/protocol/index.ts";
-import { fmtExact } from "./format.ts";
 
 /**
  * The modes, in the order a control draws them; the first is the engine's
@@ -177,7 +176,7 @@ export function searchCoverageNote(
   }
   const part =
     missing > 0
-      ? `${fmtExact(missing)} of the corpus's buckets went unsearched`
+      ? `${missing.toLocaleString()} of the corpus's buckets went unsearched`
       : "part of the fleet did not answer";
   return {
     sentence: `This search is partial: ${part}, so pages there may match and are not listed.`,

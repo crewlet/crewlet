@@ -8,7 +8,7 @@
  * reader nobody bound shown an empty list that claims to have looked.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { EMPTY_VALUE, LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -32,10 +32,18 @@ class InertWebSocket {
 }
 
 const JANE = {
-  login: "jane.founder",
-  // `config:write` IS WHAT A CEILING IS WRITTEN UNDER, so this reader may raise
-  // a stopped seat's budget and is offered the way into Spend › Budgets.
-  grants: ["state:read", "work:write", "config:write"],
+  login: "U0FOUNDER",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -201,9 +209,7 @@ function mount({
   const store = new Store();
   store.applyHealth({ status: "healthy", nodes: 3 } as never);
   store.applyOrg(ORG as never);
-  // THE ROSTER, as the snapshot hands it over — each seat keyed on its agent
-  // id, which is what the store merges every later overlay onto.
-  store.applySeats(agents.map((a, i) => ({ agent_id: `seat-${i}`, ...a })) as never);
+  store.applySeats(agents as never);
   if (budget) store.applyBudget(budget as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string, params?: Record<string, unknown>) => {
@@ -344,9 +350,9 @@ describe("the figures", () => {
   test("the crew is the engine's word for every seat", async () => {
     mount({
       agents: [
-        { role: "CTO", handle: "cto", activity: "working" },
-        { role: "SWE", handle: "swe", activity: "needs" },
-        { role: "DevRel", handle: "devrel", activity: "idle" },
+        { id: "cto", agent_id: "cto", role: "CTO", handle: "cto", activity: "working" },
+        { id: "swe", agent_id: "swe", role: "SWE", handle: "swe", activity: "needs" },
+        { id: "devrel", agent_id: "devrel", role: "DevRel", handle: "devrel", activity: "idle" },
       ],
     });
     await settle();
@@ -486,6 +492,8 @@ describe("the decisions", () => {
     mount({
       agents: [
         {
+          id: "devrel",
+          agent_id: "devrel",
           role: "DevRel",
           handle: "devrel",
           activity: "stopped",
@@ -525,7 +533,16 @@ describe("the decisions", () => {
   test("a stopped seat the reader cannot act on is a condition, not their decision", async () => {
     mount({
       viewer: { ...JANE, grants: ["state:read", "work:write"], acts: ["comment_on_work_item"] },
-      agents: [{ role: "DevRel", handle: "devrel", activity: "stopped", stopped_reason: "budget" }],
+      agents: [
+        {
+          id: "devrel",
+          agent_id: "devrel",
+          role: "DevRel",
+          handle: "devrel",
+          activity: "stopped",
+          stopped_reason: "budget",
+        },
+      ],
     });
     await settle();
     expect(screen.queryByText(/DevRel stopped/)).toBeNull();
@@ -605,6 +622,8 @@ describe("live now", () => {
     mount({
       agents: [
         {
+          id: "swe",
+          agent_id: "swe",
           role: "SWE",
           handle: "swe",
           activity: "working",
@@ -710,7 +729,7 @@ describe("the feed", () => {
     expect(card.textContent).toContain("1 turn · 38.2k tokens");
     expect(card.textContent).toContain("from Slack");
     expect(card.textContent).toContain("hand-off 1 of 8");
-    expect(card.textContent).not.toMatch(/\$|USD/);
+    expect(card.textContent).not.toMatch(/\$|cost_usd/);
   });
 
   // A SCHEDULE'S ROW SAYS WHAT THE SCHEDULER DID: a fold of runs is counted
@@ -771,7 +790,16 @@ describe("the head", () => {
 
   test("a condition that needs a look links to where it is listed", async () => {
     mount({
-      agents: [{ role: "DevRel", handle: "devrel", activity: "stopped", stopped_reason: "paused" }],
+      agents: [
+        {
+          id: "devrel",
+          agent_id: "devrel",
+          role: "DevRel",
+          handle: "devrel",
+          activity: "stopped",
+          stopped_reason: "paused",
+        },
+      ],
     });
     await settle();
     const link = document.querySelector<HTMLAnchorElement>(".home-status a");

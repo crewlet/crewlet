@@ -12,12 +12,32 @@
  * is how a person learns they have work without waiting for a poll.
  *
  * The socket is the channel for the projection and for every question the
- * query registry answers — not for everything. Writes and the reads no
- * question answers go over REST through `rest.ts` and `act.ts`, and this file
- * makes two HTTP requests of its own: the degraded snapshot, which keeps the
- * page honest while the socket is down (a proxy that refuses to upgrade, a
- * restarting engine) and stops the moment the socket is back, and the refusal
- * probe after a handshake that never opened.
+ * query registry answers — not for everything. Writes and the guarded reads no
+ * query answers (`/secrets`, `/setup`, `/config`) go over REST through
+ * `rest.ts`, and this file makes two HTTP requests of its own: the degraded
+ * snapshot, which keeps the page honest while the socket is down (a proxy that
+ * refuses to upgrade, a restarting engine) and stops the moment the socket is
+ * back, and the refusal probe after a handshake that never opened.
+ *
+ * # What a close means
+ *
+ * The handshake carries the session cookie and nothing else, and the engine
+ * decides it once. After that it CLOSES the socket when the identity estate
+ * moves under it — and the code says what the tab should do:
+ *
+ *  - 4401 (`CLOSE_UNAUTHENTICATED`): the session the socket was opened with
+ *    ended — a sign-out here or everywhere, a suspension, a removal, a
+ *    revocation, a fleet-wide invalidation, or a STEP-UP, which replaces the
+ *    session it was made from. Not a refusal on its own: the browser may hold
+ *    a newer cookie, and after a step-up it does, once the answer that set it
+ *    has landed. So the tab waits for its own requests to settle and dials
+ *    again; only a re-handshake the probe then reads as 401 sends anybody to
+ *    sign in.
+ *  - 4403 (`CLOSE_FORBIDDEN`): the engine knows who this is and will not serve
+ *    them this surface. Reconnecting reaches the same person with the same
+ *    access, so the socket STOPS and the page says why.
+ *  - anything else, the standard's 1013 "try again later" included: an
+ *    ordinary reconnect on the backoff.
  */
 
 // RELATIVE, like every contract import in this directory: it is also built
@@ -26,89 +46,13 @@ import { CLOSE_FORBIDDEN, CLOSE_UNAUTHENTICATED } from "../contract/closecodes.t
 import type { QueryErrorCode } from "../contract/errors.ts";
 import { UNAVAILABLE_RETRY_MS } from "../contract/retry.ts";
 import { api } from "./api.ts";
-import { retryHintOf } from "./rest.ts";
+import { retryHintOf, whenRequestsSettle } from "./rest.ts";
 import { retryAfterMs } from "./retry.ts";
-import { needSession } from "./session.ts";
+import { needSession } from "./signin.ts";
 import type { Store } from "./store.ts";
 import type { Frame, LogRefusal, QueryMap, QueryName, QueryRefusal } from "./types.ts";
 
-/**
- * A rejected question, carrying — when the engine refused it on AUTHORITY —
- * the reason and the grants its error frame named, or — when it answered
- * `unavailable` — the state log's refusal behind that and whether asking again
- * can change it ({@link LogRefusal}).
- *
- * `message` IS STILL THE CODE, which every existing reader tests with
- * {@link queryErrorCode}; the refusal rides beside it rather than replacing it,
- * so a screen that only branches on the code is unchanged and one that can say
- * what would admit the reader has it to say.
- *
- * AND A `bad_params` REFUSAL'S SENTENCE rides beside it as `detail` — the one
- * refusal the engine writes FOR the caller, naming the parameter to change and
- * what it accepts; every other failure's text stays in the node's log, so this
- * is never a path or a driver's message. A rejection carrying only the code
- * left a screen to say "something was missing" about a window the reader
- * chose. An `unavailable` answer's words are its {@link LogRefusal}'s.
- */
-export class QueryRefusedError extends Error {
-  constructor(
-    code: string,
-    readonly refusal: QueryRefusal | LogRefusal | null,
-    readonly detail: string | null = null,
-  ) {
-    super(code);
-    this.name = "QueryRefusedError";
-  }
-}
-
-/**
- * What a failed `query` said: its code, the refusal behind it, if any, and a
- * `bad_params` refusal's sentence, or null.
- */
-export interface QueryFailure {
-  error: string;
-  refusal: QueryRefusal | LogRefusal | null;
-  detail: string | null;
-}
-
-/**
- * A failed `query` as the pair `QueryState` renders from.
- *
- * ONE READING of a rejection, for every surface that asks outside `useQuery` —
- * a page of older rows, a question asked once on a press. Read inline at
- * each, the refusal was the half a surface forgot: its screen said a read was
- * refused and not which grant would have admitted the reader, although the
- * answer had named it.
- */
-export function queryFailure(err: unknown): QueryFailure {
-  const refused = err instanceof QueryRefusedError ? err : null;
-  return {
-    error: err instanceof Error ? err.message : "query_failed",
-    refusal: refused?.refusal ?? null,
-    detail: refused?.detail ?? null,
-  };
-}
-
-/**
- * Whether a refusal is the state log's, carried by an `unavailable` answer,
- * rather than one on authority. The two ride the same field of an answer
- * because a screen hands both to `QueryState` the same way.
- */
-export function isLogRefusal(refusal: QueryRefusal | LogRefusal): refusal is LogRefusal {
-  return "retryAfter" in refusal;
-}
-
 const PATH = "/ws/stream";
-
-// What the two application close codes mean to a tab — `contract/closecodes.ts`
-// declares their numbers, held to the engine's by a gate in
-// `internal/api/stream`. A 4401 is a credential that names nobody any more:
-// NOT a refusal on its own, because the browser may hold a newer cookie than
-// the socket was opened with, so the ordinary reconnect is the repair and only
-// a handshake that is then refused (see `probeRefusal`) asks the reader for
-// anything. A 4403 is somebody who may not have this surface: reconnecting
-// reaches the same person with the same access, so the socket STOPS and the
-// page says why.
 
 /**
  * Reconnect backoff ceiling. Long enough that a dashboard left open against a
@@ -138,28 +82,6 @@ const FALLBACK_MS = 5_000;
 const QUERY_TIMEOUT_MS = 10_000;
 
 /**
- * How soon something the engine answered `unavailable` is asked again — a
- * query (see `useQuery`) or a watch — in milliseconds, or `null` for "not on a
- * timer".
- *
- * `unavailable` is the engine saying it cannot answer HERE, and its frame says
- * when that may change: `retry_after`, read through {@link retryAfterMs} —
- * waited out, bounded, and ZERO meaning waiting will not change it, so nothing
- * re-asks. An answer carrying no hint waits {@link UNAVAILABLE_RETRY_MS}, what
- * the engine says when it has nothing better; so does a refusal that is not
- * the state log's, which no `unavailable` answer carries.
- *
- * ONE READING for both, because the engine's answer is one: a query and a
- * watch refused `unavailable` by the same node are waiting on the same thing.
- * The fixed five seconds each of them re-asked at whatever the frame said is
- * what this replaced.
- */
-export function unavailableRetryMs(refusal: QueryRefusal | LogRefusal | null): number | null {
-  if (refusal === null || !isLogRefusal(refusal)) return UNAVAILABLE_RETRY_MS;
-  return retryAfterMs(refusal.retryAfter);
-}
-
-/**
  * What a watch refusal's error frame names in `what` — the engine's
  * `watchWhat`. A watch carries no query id, so this is how an error frame about
  * one is told from a query's.
@@ -187,6 +109,82 @@ const QUERY_ERROR_CODES: Record<QueryErrorCode, true> = {
 };
 
 /**
+ * The query error code `value` is, or null for anything else: no failure at
+ * all, or prose a screen wrote itself.
+ *
+ * Branching on the narrowed value is what keeps a screen's handling inside the
+ * vocabulary. A comparison against a code the union lacks, such as the
+ * `no_event_store` the engine never sent, is then a type error rather than a
+ * branch that can never run. `Object.hasOwn`, because `in` would also accept
+ * `toString` and every other name an object inherits.
+ */
+export function queryErrorCode(value: string | null | undefined): QueryErrorCode | null {
+  return value && Object.hasOwn(QUERY_ERROR_CODES, value) ? (value as QueryErrorCode) : null;
+}
+
+/**
+ * A query the engine refused, with what its error frame said beyond the code.
+ *
+ * AN ERROR WHOSE MESSAGE IS THE CODE, so every caller that reads a refusal by
+ * [queryErrorCode] of its message keeps working, and a TYPE beside it for what
+ * the text of an error is no place to carry: the refusal — on AUTHORITY, the
+ * rule and the grants that would have admitted the reader; on `unavailable`,
+ * the state log's refusal and whether, and when, asking again can change it.
+ */
+export class QueryError extends Error {
+  /**
+   * The refusal behind the code, or null — for a frame that is neither a
+   * refusal on authority nor an `unavailable` answer, and for the socket's own
+   * `timeout` and `closed`, which no engine said anything about.
+   */
+  readonly refusal: QueryRefusal | LogRefusal | null;
+  /**
+   * The refusal's own sentence on a `bad_params` refusal — the parameter to
+   * change and what it accepts — and null everywhere else. The engine writes
+   * that one refusal FOR the caller and keeps every other failure's text in
+   * its log, so this is never a path or a driver's message. An `unavailable`
+   * answer's words are its {@link LogRefusal}'s.
+   */
+  readonly detail: string | null;
+
+  constructor(
+    code: string,
+    refusal: QueryRefusal | LogRefusal | null = null,
+    detail: string | null = null,
+  ) {
+    super(code);
+    this.name = "QueryError";
+    this.refusal = refusal;
+    this.detail = detail;
+  }
+}
+
+/**
+ * Whether a refusal is the state log's, carried by an `unavailable` answer,
+ * rather than one on authority. The two ride the same field of an answer
+ * because a screen hands both to `QueryState` the same way.
+ */
+export function isLogRefusal(refusal: QueryRefusal | LogRefusal): refusal is LogRefusal {
+  return "retryAfter" in refusal;
+}
+
+/**
+ * How soon something the engine answered `unavailable` is asked again — a
+ * query (see `useQuery`) or a watch — in milliseconds, or `null` for "not on a
+ * timer".
+ *
+ * `unavailable` is the engine saying it cannot answer HERE, and its frame says
+ * when that may change: `retry_after`, read through {@link retryAfterMs} —
+ * waited out, bounded, and ZERO meaning waiting will not change it, so nothing
+ * re-asks. An answer carrying no hint waits {@link UNAVAILABLE_RETRY_MS}, what
+ * the engine says when it has nothing better.
+ */
+export function unavailableRetryMs(refusal: QueryRefusal | LogRefusal | null): number | null {
+  if (refusal === null || !isLogRefusal(refusal)) return UNAVAILABLE_RETRY_MS;
+  return retryAfterMs(refusal.retryAfter);
+}
+
+/**
  * A `bad_params` frame's sentence, or null for any other frame. The engine
  * writes that one refusal for the caller; an `unavailable` frame's words are
  * its refusal's ({@link refusalOf}), and every other frame carries none.
@@ -199,17 +197,13 @@ function badParamsDetail(msg: Frame): string | null {
 
 /**
  * The refusal an error frame carries, or null — for a frame that is neither a
- * refusal on authority nor an `unavailable` answer, or a node too old to say
- * why.
+ * refusal on authority nor an `unavailable` answer.
  */
 function refusalOf(msg: Frame): QueryRefusal | LogRefusal | null {
-  // AN `unavailable` ANSWER'S REFUSAL AND HINT, where the engine sent them:
-  // the state log's code and words, and whether — and when — asking this node
-  // again can change the answer. A frame with no `retry_after` is a node too
-  // old to say, which reads as no hint at all (see `unavailableRetryMs`); so
-  // does a negative one, which is not a number of seconds the engine writes,
-  // exactly as a `Retry-After` that is not whole seconds is none to
-  // `rest.ts`.
+  // AN `unavailable` ANSWER'S REFUSAL AND HINT: the state log's code and
+  // words, and whether — and when — asking this node again can change the
+  // answer. The engine always sends `retry_after` there; a frame without one,
+  // or with a negative one, reads as no hint at all (see `unavailableRetryMs`).
   if (msg.error === "unavailable") {
     if (typeof msg.retry_after !== "number" || !(msg.retry_after >= 0)) return null;
     return {
@@ -223,20 +217,6 @@ function refusalOf(msg: Frame): QueryRefusal | LogRefusal | null {
     reason: msg.reason,
     grants: Array.isArray(msg.grants) ? msg.grants.filter((g) => typeof g === "string") : [],
   };
-}
-
-/**
- * The query error code `value` is, or null for anything else: no failure at
- * all, or prose a screen wrote itself.
- *
- * Branching on the narrowed value is what keeps a screen's handling inside the
- * vocabulary. A comparison against a code the union lacks, such as the
- * `no_event_store` the engine never sent, is then a type error rather than a
- * branch that can never run. `Object.hasOwn`, because `in` would also accept
- * `toString` and every other name an object inherits.
- */
-export function queryErrorCode(value: string | null | undefined): QueryErrorCode | null {
-  return value && Object.hasOwn(QUERY_ERROR_CODES, value) ? (value as QueryErrorCode) : null;
 }
 
 interface Inflight {
@@ -295,16 +275,15 @@ export class LiveSocket {
    *
    * A dropped envelope is gone: the server's per-client queue discards the
    * OLDEST frame under backpressure, so a lost `agents` overlay is never
-   * re-sent and the only true repair is a fresh handshake snapshot.
+   * re-sent and the only true repair is a fresh handshake snapshot. It is
+   * also how a sign-in or a restored access is picked up: a re-dial is a new
+   * attempt, usually with a credential the browser did not hold at the last
+   * one, so the last refusal no longer describes it.
    */
   reconnect(): void {
     this.refused = false;
-    // A RE-DIAL IS A NEW ATTEMPT, usually with a credential the browser did
-    // not hold at the last one — a sign-in's cookie, a step-up's replacement
-    // — so the last refusal no longer describes it. Left standing, the page a
-    // sign-in lands on would open under a banner saying this browser was
-    // refused, until the handshake it had just started answered.
     this.store.setAuthRejected(false);
+    this.store.setAccessRefused(null);
     if (this.sock) this.sock.close();
     else this.connect();
   }
@@ -333,7 +312,7 @@ export class LiveSocket {
    * "could not load" and stayed there. Queries are pure reads, so one that was
    * in flight when the socket dropped is simply re-sent on reconnect.
    *
-   * Rejects with an Error carrying the server's machine-readable code
+   * Rejects with a [QueryError] carrying the server's machine-readable code
    * (`not_found`, `unauthorized`, `unavailable`, …), `timeout` if a sent
    * query goes unanswered, or `closed` if the client shuts down.
    */
@@ -355,15 +334,9 @@ export class LiveSocket {
 
   private sendQuery(entry: Inflight): void {
     if (!this.connected || !this.sock) return; // `onopen` flushes it
-    const frame: Record<string, unknown> = {
-      kind: "query",
-      id: entry.id,
-      what: entry.what,
-      params: entry.params,
-    };
     // NO CREDENTIAL IN THE FRAME. The engine asks every question as the
-    // principal the handshake resolved and reads no per-frame token, so one
-    // here was the reader's bearer copied into every frame for nothing.
+    // principal the handshake resolved.
+    const frame = { kind: "query", id: entry.id, what: entry.what, params: entry.params };
     try {
       this.sock.send(JSON.stringify(frame));
     } catch {
@@ -372,7 +345,7 @@ export class LiveSocket {
     clearTimeout(entry.timer);
     entry.timer = setTimeout(() => {
       this.inflight.delete(entry.id);
-      entry.reject(new Error("timeout"));
+      entry.reject(new QueryError("timeout"));
     }, QUERY_TIMEOUT_MS);
   }
 
@@ -412,23 +385,17 @@ export class LiveSocket {
   }
 
   /**
-   * The engine refused a watch — the one it was just sent, or the one it
-   * re-decided when it re-checked this socket's credential.
+   * The engine refused a watch.
    *
    * `unavailable` means this node could not read the chart that decides it,
    * or the directory a login resolves through, so it is asked again when the
    * frame's `retry_after` says that may have changed ({@link
-   * unavailableRetryMs}) — which this used to claim and did not do: it re-asked
-   * at a fixed five seconds whatever the frame said. A ZERO is a read no wait
-   * clears, and ANY OTHER CODE IS A DECISION; either way asking again on a
-   * timer would only be answered the same: the screen's poll carries on as it
-   * did before there was a push at all, and the next socket asks once more in
-   * case the answer moved.
+   * unavailableRetryMs}). A ZERO is a read no wait clears, and ANY OTHER CODE
+   * IS A DECISION; either way asking again on a timer would only be answered
+   * the same: the screens' polls carry on as they did before there was a push
+   * at all, and the next socket asks once more in case the answer moved.
    */
   private watchAnswered(msg: Frame): void {
-    // ANY ANSWER SUPERSEDES A RETRY an earlier one scheduled: a refusal that
-    // lands while it is pending is a decision, and the retry would only be
-    // refused the same.
     clearTimeout(this.watchRetry);
     this.watchRetry = 0;
     if (msg.error !== "unavailable" || this.watched === "") return;
@@ -444,8 +411,10 @@ export class LiveSocket {
 
   private connect(): void {
     if (
-      this.sock &&
-      (this.sock.readyState === WebSocket.OPEN || this.sock.readyState === WebSocket.CONNECTING)
+      this.isClosed ||
+      this.refused ||
+      (this.sock &&
+        (this.sock.readyState === WebSocket.OPEN || this.sock.readyState === WebSocket.CONNECTING))
     ) {
       return;
     }
@@ -499,20 +468,29 @@ export class LiveSocket {
         entry.timer = 0;
       }
       this.store.setConnected(false);
-      if (e && e.code === CLOSE_FORBIDDEN) {
+      const code = e ? e.code : 0;
+      if (code === CLOSE_FORBIDDEN) {
         // No reconnect and no REST fallback: both would be answered 403 by
         // the same decision, for as long as the tab stayed open.
         this.accessRefused(e.reason);
         return;
       }
+      if (code === CLOSE_UNAUTHENTICATED) {
+        // THE SESSION ENDED, and the browser may already hold the one that
+        // replaced it — or be about to: a step-up's answer sets it. Dial
+        // once this tab's own requests have settled, and let that dial's
+        // handshake say whether anybody is signed in. Neither the backoff
+        // nor the fallback: the fallback's read, sent now, would carry the
+        // ended cookie and send a person who just proved who they are to
+        // the sign-in form.
+        void whenRequestsSettle().then(() => this.connect());
+        return;
+      }
       this.scheduleReconnect();
       this.startFallback();
-      // A 4401 needs nothing beyond the reconnect above — see
-      // CLOSE_UNAUTHENTICATED. A dial that never opened may be a refusal, and
-      // only a plain HTTP re-ask can say which (see `probeRefusal`).
-      if (!handshakeCompleted && (!e || e.code !== CLOSE_UNAUTHENTICATED)) {
-        void this.probeRefusal();
-      }
+      // A dial that never opened may be a refusal, and only a plain HTTP
+      // re-ask can say which (see `probeRefusal`).
+      if (!handshakeCompleted) void this.probeRefusal();
     };
     sock.onerror = () => {
       // `onclose` runs next and owns the recovery; just surface the
@@ -524,24 +502,19 @@ export class LiveSocket {
   /**
    * Ask, over plain HTTP, whether that dial was refused or merely failed.
    *
-   * A handshake the engine answers 401 NEVER reaches this page as close(1008).
-   * A close code travels in a close frame, and a connection that never opened
+   * A handshake the engine refuses NEVER reaches this page as a close code. A
+   * close code travels in a close frame, and a connection that never opened
    * has no frames — so the browser reports 1006, the same code it gives for an
    * engine that is simply down, and withholds the status deliberately (a page
    * that could read it could use a socket to scan ports it cannot otherwise
    * reach).
    *
-   * This client believed otherwise once, and the whole repair path hung off a
-   * code that never arrived: a refused credential produced a dashboard that
-   * reconnected for ever, said "retrying", and offered no way to correct the
-   * one thing that was wrong.
-   *
    * So the status is fetched where a browser will hand it over. A plain GET of
    * the same path runs the same guard, with the same cookie, and stops one line
    * short of the upgrade: 401 is nobody signed in, 426 (Upgrade Required)
-   * means the session was accepted and only the missing header stopped it, and
-   * a `503` the engine wrote is a node that could not decide the handshake yet
-   * — its identity estate unreadable for a moment — which says in its
+   * means the session was accepted and only the missing header stopped it, a
+   * 403 is somebody refused this surface, and a `503` the engine wrote is a
+   * node that could not decide the handshake yet, which says in its
    * `Retry-After` when to dial again (see `redialWhenSaid`). A throw is the
    * network, which is not an auth problem and must not send anybody to sign
    * in.
@@ -566,7 +539,7 @@ export class LiveSocket {
         // the loop as a refusal does, and asks for the enrolment rather
         // than saying access was withdrawn.
         if (body?.error === "second_factor_enrolment_required") this.enrolmentRequired();
-        else this.accessRefused(body?.detail ?? "");
+        else this.accessRefused(body?.detail ?? body?.error ?? "");
       }
     } catch {
       // Offline, or a proxy that refuses the request outright. The reconnect
@@ -576,31 +549,13 @@ export class LiveSocket {
 
   /**
    * A refused handshake's `503`: dial again when the engine said, in place of
-   * the backoff.
+   * the backoff — exactly, and bounded at `RETRY_AFTER_MAX_MS`.
    *
-   * THE HINT WAS ON THE WIRE AND THE LOOP NEVER READ IT. A node that cannot
-   * read its identity estate answers every guarded route, this handshake
-   * included, `503` with a `Retry-After` of two seconds — the estate's own
-   * catch-up scale — and the loop went on doubling its own wait: a few refused
-   * dials in, a tab was sitting out sixteen or thirty seconds where its node
-   * had said two, and on the first refusal it dialled at one second, before the
-   * node had said it could answer. Waited out through `retryAfterMs`, like
-   * every other hint: exactly, and bounded at `RETRY_AFTER_MAX_MS`.
-   *
-   * ONLY THE ENGINE'S `503`, by the rule `RestError.retryHint` keeps — a proxy
-   * in front of a node that is down writes one too, and that is the backoff's
-   * case. The probe runs beside the reconnect rather than before it, so the
-   * hint can land with the next dial already out; the dial it schedules then
-   * finds one in flight and does nothing (`connect`), and that dial's own
-   * close schedules what follows it.
-   *
-   * A ZERO KEEPS THE BACKOFF rather than stopping the loop, unlike every other
-   * re-ask in this dashboard, because a dial is not a re-ask of this one node:
-   * behind a balancer the next one may reach another — which is what a zero
-   * tells a client to do — and the loop is this tab's only way back to any
-   * engine. Its backoff already caps it at one dial every thirty seconds. No
-   * handshake refusal the engine writes today carries a zero; this says what a
-   * future one would get.
+   * ONLY THE ENGINE'S `503` (`retryHintOf`): a proxy in front of a node that
+   * is down writes one too, and that is the backoff's case. A ZERO keeps the
+   * backoff rather than stopping the loop, because a dial is not a re-ask of
+   * this one node — behind a balancer the next one may reach another — and
+   * the loop is this tab's only way back to any engine.
    */
   private async redialWhenSaid(res: Response): Promise<void> {
     const hint = await retryHintOf(res);
@@ -651,8 +606,8 @@ export class LiveSocket {
    * the loop goes on dialling: a sign-in in another tab gives this one the
    * cookie too, and the next dial is what notices.
    *
-   * The socket does not own the screen. It cannot: the sign-in is a route, and
-   * a transport that reaches into the router is a transport that cannot be
+   * The socket does not own the screen: the sign-in is a route, and a
+   * transport that reaches into the router is a transport that cannot be
    * tested without one — so it raises the session need the app follows.
    */
   private authRejected(): void {
@@ -685,7 +640,7 @@ export class LiveSocket {
         this.store.applyEvent(msg.data as never);
         break;
       case "agents":
-        this.store.applyAgents(msg.data);
+        this.store.applyAgents(msg.data as never);
         break;
       case "seats":
         this.store.applySeats(msg.data);
@@ -725,10 +680,6 @@ export class LiveSocket {
         }
         // An error frame always carries a code. One that does not is still
         // a failure nobody explained, which is what `query_failed` means.
-        //
-        // AND A REFUSAL ON AUTHORITY SAYS WHY — the rule and the grants that
-        // would have admitted the reader — which the engine sends beside the
-        // code under the REST envelope's own keys.
         this.settle(
           msg.id,
           msg.error || "query_failed",
@@ -741,12 +692,11 @@ export class LiveSocket {
         break;
       default:
         // A KIND THIS BUILD DOES NOT KNOW IS A NEWER PEER'S, and it is
-        // ignored rather than thrown on or applied to a slice by a guess:
-        // a node on another build may push what this bundle was built
-        // before. It is COUNTED rather than dropped silently, because the
-        // same fall-through is also what this build's own engine sending a
-        // kind its own client forgot looks like — and the e2e replay
-        // asserts that count is zero.
+        // ignored rather than thrown on: a fleet mid-upgrade has a node
+        // pushing what this bundle was built before. It is COUNTED rather
+        // than dropped silently, because the same fall-through is also what
+        // this build's own engine sending a kind its own client forgot looks
+        // like — and the e2e replay asserts that count is zero.
         this.store.noteUnknownPush((msg as { kind?: unknown }).kind);
         break;
     }
@@ -764,14 +714,14 @@ export class LiveSocket {
     if (!entry) return;
     this.inflight.delete(id);
     clearTimeout(entry.timer);
-    if (error) entry.reject(new QueryRefusedError(error, refusal, detail));
+    if (error) entry.reject(new QueryError(error, refusal, detail));
     else entry.resolve(data);
   }
 
   private failInflight(reason: string): void {
     for (const entry of this.inflight.values()) {
       clearTimeout(entry.timer);
-      entry.reject(new Error(reason));
+      entry.reject(new QueryError(reason));
     }
     this.inflight.clear();
   }
@@ -780,13 +730,18 @@ export class LiveSocket {
    * Dial again after the backoff — or after `after` ms, where the engine said
    * when (`redialWhenSaid`), which replaces the dial already scheduled and
    * leaves the backoff's count where it was.
+   *
+   * FULL JITTER: the wait is drawn uniformly between zero and the backoff's
+   * ceiling for this attempt. A node that closes every socket at once — a
+   * 1013 to everybody on a restart — would otherwise bring every tab back in
+   * lockstep, one wave per doubling, each wave as large as the first.
    */
   private scheduleReconnect(after?: number): void {
     if (this.isClosed || this.refused) return;
     clearTimeout(this.reconnectTimer);
     let delay = after;
     if (delay === undefined) {
-      delay = Math.min(1000 * 2 ** Math.min(this.attempt, 10), MAX_BACKOFF_MS);
+      delay = Math.random() * Math.min(1000 * 2 ** Math.min(this.attempt, 10), MAX_BACKOFF_MS);
       this.attempt++;
     }
     this.reconnectTimer = setTimeout(() => this.connect(), delay);
@@ -839,12 +794,11 @@ export class LiveSocket {
     // run is what says so, as is a `stop()`.
     if (this.fallbackRun !== run || this.connected) return;
     if (read.state === "read") this.store.applySnapshot(read.snapshot);
-    // THE NEXT READ WAITS WHAT THE ENGINE SAID, as every other re-ask does: a
-    // 503 it wrote replaces the next tick with its `Retry-After`, and one with
-    // none is its statement that waiting will not change the answer, so this
-    // run stops there — the reconnect loop goes on, and a socket that opens
-    // and later drops starts a fresh one. Anything else it could not read —
-    // the network, a proxy — is the ordinary tick.
+    // THE NEXT READ WAITS WHAT THE ENGINE SAID: a 503 it wrote replaces the
+    // next tick with its `Retry-After`, and one with none is its statement
+    // that waiting will not change the answer, so this run stops there — the
+    // reconnect loop goes on, and a socket that opens and later drops starts
+    // a fresh one. Anything else it could not read is the ordinary tick.
     const next =
       read.state === "unread" && read.retryAfter !== null
         ? retryAfterMs(read.retryAfter)

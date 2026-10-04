@@ -10,15 +10,14 @@
  *    fixture — so a new write surface cannot land without being rendered
  *    below, and a screen cannot reach `act` around the gating;
  *  - THE RENDER: every control of every such module, for an anonymous
- *    reader, an unbound principal the engine makes the change for, a bound
- *    person it makes the change for, and one it does not. The control is
- *    PRESENT in all four — a write control is never hidden — enabled for the
- *    principals the engine serves, bound or not (an unbound principal acts
- *    under its own login, ADR-0024), and otherwise disabled with the sentence
- *    that says what would change that.
+ *    reader, a person bound to no seat, a bound person the engine makes the
+ *    change for, and one it does not. The control is PRESENT in all four — a
+ *    write control is never hidden — enabled for whoever the engine serves,
+ *    bound to a seat or not, and otherwise disabled with the sentence that
+ *    says what would change that.
  */
 
-import { cleanup, render, screen } from "~/test/inCase.ts";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { ComponentType } from "react";
 import { existsSync, readFileSync } from "node:fs";
@@ -127,8 +126,7 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
   "app/palette/answer.ts": {
     why:
       "the palette's answer from the company's knowledge, asked only for a reader " +
-      "who may ask — a principal a seat binds, since the answer runs on the seat's own " +
-      "model — and telling an anonymous or unbound one what would let them",
+      "who may ask, and telling an anonymous or unbound one what would let them",
     suite: "app/palette/Palette.test.tsx",
   },
 };
@@ -212,16 +210,16 @@ const READERS: readonly {
   reason: string | null;
 }[] = [
   { who: "an anonymous reader", viewer: () => NOBODY, reason: WRITE_REASONS.anonymous },
-  // AN UNBOUND PRINCIPAL ACTS, under its own login (ADR-0024): what binding
-  // adds is the seat it acts as, not the right to act. So it is held to the
-  // engine's own list exactly as a bound person is.
   {
-    who: "an unbound principal the engine makes it for",
+    // AN UNBOUND PRINCIPAL ACTS, under its own login (ADR-0024): a binding
+    // adds the seat a person acts as, never the right to act.
+    who: "a person bound to no seat the engine makes it for",
     viewer: () => ({
       ...NOBODY,
       anonymous: false,
-      login: "ci",
-      owner: "ci",
+      login: "ops.lead",
+      owner: "ops.lead",
+      grants: ["work:write", "knowledge:write"],
       unbound: true,
       acts: EVERY_TOOL,
     }),
@@ -232,7 +230,19 @@ const READERS: readonly {
     viewer: () => ({
       ...NOBODY,
       anonymous: false,
-      login: "jane.founder",
+      login: "founder",
+      grants: [
+        "config:read",
+        "config:write",
+        "secrets:write",
+        "fleet:operate",
+        "people:manage",
+        "audit:read",
+        "state:read",
+        "work:write",
+        "knowledge:write",
+      ],
+      operatesFleet: true,
       handle: "jane",
       owner: "jane",
       name: "Jane Founder",
@@ -246,7 +256,19 @@ const READERS: readonly {
     viewer: (tool) => ({
       ...NOBODY,
       anonymous: false,
-      login: "jane.founder",
+      login: "founder",
+      grants: [
+        "config:read",
+        "config:write",
+        "secrets:write",
+        "fleet:operate",
+        "people:manage",
+        "audit:read",
+        "state:read",
+        "work:write",
+        "knowledge:write",
+      ],
+      operatesFleet: true,
       handle: "jane",
       owner: "jane",
       name: "Jane Founder",

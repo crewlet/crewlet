@@ -8,7 +8,7 @@
  * between a value that saves and one the engine rejects after the fact.
  */
 
-import { cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { useState } from "react";
 import { ConfigField } from "./ConfigField.tsx";

@@ -148,8 +148,8 @@ function PasswordForm({ onSignedIn }: { onSignedIn: (answer: SignedInAs) => void
         setAsked(true);
         return;
       }
-      if (err instanceof RestError && err.status === 429 && err.retryAfter !== null) {
-        wait(err.retryAfter);
+      if (err instanceof RestError && err.status === 429 && err.retryAfterSeconds !== null) {
+        wait(err.retryAfterSeconds);
       }
       // A CODE IS SPENT OR WRONG after one try, so it is not left to be sent
       // again; the password stays, because retyping it is not what fixes a

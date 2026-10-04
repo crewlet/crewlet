@@ -7,7 +7,7 @@
  * paragraph they were mid-sentence in down the page.
  */
 
-import { renderHook } from "~/test/inCase.ts";
+import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import { SCREEN_SCROLL_ID } from "./scroller.ts";
 import { TOP_SLACK_PX, useSettled } from "./settled.ts";

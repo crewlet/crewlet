@@ -24,9 +24,9 @@ import {
 import type {
   AgentRow,
   BudgetWindow,
+  ConfigRole,
   ScheduleRow,
   SeatActivityRow,
-  SeatRuntime,
   TurnRow,
 } from "~/protocol/index.ts";
 
@@ -155,9 +155,7 @@ describe("the current turn's calls", () => {
 });
 
 describe("the setup card's words", () => {
-  // THE SEAT'S RUNTIME HALF, as the org chart serves it to a reader holding
-  // `config:read` — the company document holds no seats any more.
-  const role = (over: SeatRuntime): SeatRuntime => ({ ...over });
+  const role = (over: Partial<ConfigRole>): ConfigRole => ({ name: "SWE", ...over });
 
   test("a sandbox is not offered until it is enabled, and a default is said as one", () => {
     expect(sandboxWords(role({}))).toBe("not offered");
@@ -186,10 +184,7 @@ describe("the setup card's words", () => {
 describe("the recurring work", () => {
   const row = (over: Partial<ScheduleRow>): ScheduleRow => ({
     scope_type: "role",
-    // THE ID IS NOT THE HANDLE: a role scope is keyed on the seat's agent id,
-    // and the handle rides beside it as `scope_name`.
-    scope_id: "a-swe",
-    scope_name: "swe",
+    scope_id: "swe",
     name: "x",
     cron: "0 9 * * *",
     timezone: "UTC",
@@ -206,35 +201,15 @@ describe("the recurring work", () => {
     const rows = [
       row({ name: "later", next_run: "2026-09-22T09:00:00Z" }),
       row({ name: "broken", problem: "unknown zone" }),
-      row({
-        name: "unit",
-        scope_type: "unit",
-        scope_id: "core",
-        scope_name: "core",
-        next_run: "2026-09-21T10:00:00Z",
-      }),
+      row({ name: "unit", scope_type: "unit", scope_id: "Core", next_run: "2026-09-21T10:00:00Z" }),
       row({
         name: "not-ours",
-        scope_id: "a-cto",
-        scope_name: "cto",
+        scope_id: "cto",
         runners: ["cto"],
         next_run: "2026-09-21T08:00:00Z",
       }),
     ];
     expect(seatSchedules(rows, "swe").map((r) => r.name)).toEqual(["unit", "later", "broken"]);
-  });
-
-  // A SEAT'S OWN SCHEDULE IS FOUND BY ITS SCOPE'S NAME, never its id: the id
-  // is the agent id the fire ledger keys on, which no handle equals — so
-  // matched on it, a seat that fires nobody else's schedule showed none of
-  // its own.
-  //
-  // Mutation: compare the handle with `scope_id` again, and this lists nothing.
-  test("a role schedule is the seat's by its scope's name, not its identity", () => {
-    expect(seatSchedules([row({ name: "mine", runners: [] })], "swe").map((r) => r.name)).toEqual([
-      "mine",
-    ]);
-    expect(seatSchedules([row({ name: "mine", runners: [] })], "a-swe")).toEqual([]);
   });
 });
 

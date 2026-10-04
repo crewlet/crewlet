@@ -2,28 +2,23 @@
  * Who files into a knowledge space — the units whose `space:` names it, and
  * the tracker project each of them works in.
  *
- * # Read from the org chart, in FOUR states
+ * # Read from the guarded company document, in FOUR states
  *
  * A unit's `space:` is guarded (`internal/api/orgprojection_test.go`: "a
  * knowledge container key: where this unit's pages are written"), so the
- * org projection carries none of it, and the answer comes from the
- * org chart (`GET /chart`), which states it on every unit row — the runtime
- * half is not needed. It came from the company document, which holds no units
- * any more: the chart left it for a log of its own, so the list was empty for
- * every space. Four different facts come out of trying to read it, and each
- * has its own sentence:
+ * `state:read` org projection carries none of it and the answer comes from the
+ * company document, which takes `config:read`. Four different facts come out
+ * of trying to read it, and each has its own sentence:
  *
- *  - `read`    — the chart answered; an EMPTY list is then a real fact about
- *                the company ("no unit names this space").
- *  - `unread`  — the read is in flight. Not a refusal: that sentence was drawn
- *                at a reader who holds the grant for as long as the read took.
- *  - `refused` — the engine refused it on authority, naming the grants that
- *                would have admitted the reader (`needsSentence`).
- *  - `failed`  — the engine did not answer, or could not; the shared REST read
- *                asks again on its own (`~/lib/chartReads.ts`).
- *
- * RE-READ ON EVERY ORG PUSH, which follows a chart write that landed — so a
- * unit given a space shows up here without a reload.
+ *  - `read`     — the document answered; an EMPTY list is then a real fact
+ *                 about the company ("no unit names this space").
+ *  - `no_grant` — the engine has said this reader does not hold
+ *                 `config:read`, so nothing was asked: the refusal is known
+ *                 before the question.
+ *  - `loading`  — the read is in flight, or the viewer has not answered yet.
+ *                 Not "needs a grant": that sentence was drawn at a reader who
+ *                 HOLDS it for as long as the read took.
+ *  - `refused`  — the read answered with an error.
  *
  * ONE HOOK for the tree's space rows and the container rail, because both
  * state the same fact about the same space and two derivations of it had
@@ -31,63 +26,47 @@
  */
 
 import { useMemo } from "react";
-import { useChartRead, WHOLE_CHART } from "~/lib/chartReads.ts";
-import { needsSentence } from "~/lib/refusal.ts";
-import { useOrgPushes } from "~/lib/store-hooks.ts";
-import type { ChartRead } from "~/protocol/index.ts";
-
-/** One unit filing into a space: its name, its KEY — what a link addresses — and its project. */
-export interface SpaceUnit {
-  name: string;
-  key: string;
-  project?: string;
-}
+import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { documentUnits, RUNTIME_GRANT } from "~/lib/seats.ts";
 
 export type SpaceOwners =
-  | { state: "read"; units: SpaceUnit[] }
-  | { state: "unread" }
-  | { state: "refused"; grants: readonly string[] }
-  | { state: "failed" };
+  | { state: "read"; units: { id: string; name: string; project?: string }[] }
+  | { state: "no_grant" }
+  | { state: "loading" }
+  | { state: "refused" };
 
 /** A lookup from a space key to who files into it. */
 export function useSpaceOwners(options: { enabled?: boolean } = {}): (key: string) => SpaceOwners {
-  const pushes = useOrgPushes();
-  const chart = useChartRead<ChartRead>(
-    (options.enabled ?? true) ? WHOLE_CHART : null,
-    undefined,
-    pushes,
-  );
+  const viewer = useViewer();
+  const holds = viewer.grants.includes(RUNTIME_GRANT);
+  const refused = !viewer.loading && !holds;
+  const doc = useQuery("config", undefined, { enabled: holds && (options.enabled ?? true) });
   return useMemo(() => {
-    switch (chart.state) {
-      case "refused":
-        return () => ({ state: "refused" as const, grants: chart.grants });
-      case "failed":
-      case "absent":
-        return () => ({ state: "failed" as const });
-      case "unread":
-        return () => ({ state: "unread" as const });
-    }
-    const units = chart.value.units ?? [];
+    if (refused) return () => ({ state: "no_grant" as const });
+    if (doc.error) return () => ({ state: "refused" as const });
+    if (!doc.data) return () => ({ state: "loading" as const });
+    const units = documentUnits(doc.data);
     return (key: string) => ({
       state: "read" as const,
       // CASE-INSENSITIVE: the engine upper-cases a container key on the way
-      // in, and whoever wrote the unit wrote whatever they typed.
+      // in and a config file says whatever its author typed.
       units: units
         .filter((u) => (u.space ?? "").toUpperCase() === key.toUpperCase())
-        .map((u) => ({ name: u.name || u.key, key: u.key, project: u.project })),
+        .map((u) => ({ id: u.id ?? "", name: u.name, project: u.project })),
     });
-  }, [chart]);
+  }, [refused, doc.data, doc.error]);
 }
 
 /** The one sentence that states `owners`, for a tooltip or a screen reader. */
 export function ownerSentence(owners: SpaceOwners): string {
   switch (owners.state) {
-    case "unread":
+    case "no_grant":
+      return "Who files here needs config:read to read";
+    case "loading":
       return "Who files here is still being read";
     case "refused":
-      return needsSentence("Reading who files here", owners.grants);
-    case "failed":
-      return "Who files here could not be read just now";
+      return "Who files here could not be read";
     case "read": {
       if (owners.units.length === 0) return "No unit names this space in its space:";
       return owners.units

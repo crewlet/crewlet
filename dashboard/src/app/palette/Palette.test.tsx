@@ -7,7 +7,7 @@
  * that is really a guess and a row that writes as nobody are all well-typed.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -19,14 +19,7 @@ import { Router } from "../router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
-import { LiveSocket, Store, type WorkRanked } from "~/protocol/index.ts";
-import {
-  CLAIMANT_HREF,
-  CLAIMANT_TITLE,
-  DUPLICATE_HREF,
-  DUPLICATE_TITLE,
-  collidingHits,
-} from "~/test/keyCollision.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 
 vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
@@ -42,9 +35,19 @@ class InertWebSocket {
 const EVERY_ACT = ["update_work_item", "create_work_item", "answer_knowledge"];
 
 const JANE: ViewerState = {
-  login: "jane.founder",
-  grants: ["state:read", "work:write", "knowledge:write"],
-  operatesFleet: false,
+  login: "founder",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
+  operatesFleet: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -61,6 +64,7 @@ const ANONYMOUS: ViewerState = {
   ...JANE,
   login: "",
   grants: [],
+  operatesFleet: false,
   handle: "",
   owner: "",
   name: "",
@@ -92,7 +96,6 @@ const ORG = {
   ],
   units: [
     {
-      id: "platform",
       name: "Platform",
       type: "team",
       roles: [{ name: "SRE", handle: "sre", goal: "Keep it up" }],
@@ -128,7 +131,7 @@ const OUTCOME = {
 type Answers = Partial<Record<string, (params: Record<string, unknown>) => Promise<unknown>>>;
 
 let asked: { kind: string; params: Record<string, unknown> }[];
-let posted: { tool: string; body: { args: Record<string, unknown> } }[];
+let posted: { tool: string; body: { request_id: string; args: Record<string, unknown> } }[];
 
 function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -143,7 +146,10 @@ function engine(reply: (tool: string, args: Record<string, unknown>) => Response
     "fetch",
     vi.fn(async (url: string, init: RequestInit) => {
       const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
-      const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
+      const body = JSON.parse(init.body as string) as {
+        request_id: string;
+        args: Record<string, unknown>;
+      };
       posted.push({ tool, body });
       return reply(tool, body.args);
     }),
@@ -154,7 +160,7 @@ function mount({
   viewer = JANE,
   answers = {},
   hash = "#/",
-  agents = [{ id: "swe", agent_id: "id-swe", handle: "swe", role: "SWE", activity: "working" }],
+  agents = [{ id: "swe", agent_id: "a-swe", role: "SWE", handle: "swe", activity: "working" }],
 }: {
   viewer?: ViewerState;
   answers?: Answers;
@@ -166,7 +172,8 @@ function mount({
   const store = new Store();
   store.setConnected(true);
   store.applyOrg(ORG as never);
-  // THE ROSTER, each row carrying the agent id an overlay pairs with it by.
+  // THE ROSTER, which is how a seat reaches the list: an overlay for a seat
+  // the roster does not carry is dropped (`Store.applyAgents`).
   store.applySeats(agents as never);
   const socket = new LiveSocket(store);
   socket.query = ((kind: string, params?: Record<string, unknown>) => {
@@ -269,13 +276,6 @@ describe("scopes and sigils", () => {
     expect(screen.getByText("Platform")).toBeDefined();
     expect(screen.getByText("SWE")).toBeDefined();
   });
-
-  test("and a typed term still narrows them", async () => {
-    const p = mount();
-    await p.type("@plat");
-    expect(screen.getByText("Platform")).toBeDefined();
-    expect(screen.queryByText("SWE")).toBeNull();
-  });
 });
 
 // A SEAT'S STATE IN THE CHART'S WORDS: the pauser is a person, and a hint
@@ -285,9 +285,9 @@ test("an agent's state names its pauser by the chart's name", async () => {
     agents: [
       {
         id: "sre",
-        agent_id: "id-sre",
-        handle: "sre",
+        agent_id: "a-sre",
         role: "SRE",
+        handle: "sre",
         activity: "stopped",
         stopped_reason: "paused",
         paused: { by: "jane", by_kind: "human", at: new Date().toISOString(), reason: "" },
@@ -305,19 +305,6 @@ describe("an id pasted out of a log", () => {
     await p.type(id);
     fireEvent.click(p.row("as a trace — every event that carries it"));
     expect(location.hash).toBe(`#/live/traces/${id}`);
-  });
-
-  test("and the event and turn hits still open their own screens", async () => {
-    const id = "44444444-4444-4444-8444-444444444444";
-    const p = mount();
-    await p.type(id);
-    fireEvent.click(p.row("as an event"));
-    expect(location.hash).toBe(`#/live/events/${id}`);
-    cleanup();
-    const q = mount();
-    await q.type(id);
-    fireEvent.click(q.row("as a turn"));
-    expect(location.hash).toBe(`#/live/turns/${id}`);
   });
 });
 
@@ -351,15 +338,6 @@ describe("the task search has four answers, kept apart", () => {
     const p = mount({ answers: answering(() => Promise.reject(new Error("unknown_query"))) });
     await p.type("#auth");
     expect(screen.getByText(/does not serve this answer/)).toBeDefined();
-    expect(screen.queryByText(/No task matches/)).toBeNull();
-  });
-
-  // A SOCKET THAT WENT AWAY refused nothing, and is said as what it was.
-  test("a read the socket dropped is not a refusal either", async () => {
-    const p = mount({ answers: answering(() => Promise.reject(new Error("closed"))) });
-    await p.type("#auth");
-    expect(screen.getByText(/connection went away/)).toBeDefined();
-    expect(screen.queryByText(/does not serve this answer/)).toBeNull();
     expect(screen.queryByText(/No task matches/)).toBeNull();
   });
 
@@ -553,7 +531,7 @@ describe("the knowledge answer", () => {
       answers: {
         work_search: async () => ({
           ...OUTCOME,
-          hits: [HIT, { ...HIT, id: "t2", key: "ENG-421" }, { ...HIT, id: "t3", key: "ENG-422" }],
+          hits: [HIT, { ...HIT, key: "ENG-421" }, { ...HIT, key: "ENG-422" }],
           available: true,
         }),
         knowledge: async () => ({
@@ -896,154 +874,6 @@ describe("the colleague question", () => {
     // 201 bytes in a string JavaScript calls 67 long.
     await p.type(`@${"語".repeat(67)}`);
     expect(asked.filter((a) => a.kind === "colleague")).toHaveLength(1);
-  });
-});
-
-describe("a destination a reader holds none of the grants for", () => {
-  /** The Go-to row for the Nodes section: the option whose text starts with its label. */
-  const nodesRow = () =>
-    screen.getAllByRole("option").find((o) => (o.textContent ?? "").startsWith("Nodes"))!;
-
-  // THE GRANT, AND ONLY TO A READER WHO LACKS IT. The palette said "needs a
-  // token" beside every guarded destination for every reader — a credential a
-  // person signing in has no use for, told to a reader who was signed in and
-  // could already open it.
-  test("names the grant that would open it, to a reader without it", async () => {
-    const p = mount();
-    await p.type("Nodes");
-    expect(nodesRow().textContent).toContain("needs fleet:operate");
-    expect(screen.queryByText(/needs a token/)).toBeNull();
-  });
-
-  test("and says nothing of it to a reader who holds it", async () => {
-    const p = mount({ viewer: { ...JANE, grants: [...JANE.grants, "fleet:operate"] } });
-    await p.type("Nodes");
-    expect(nodesRow().textContent).not.toContain("needs");
-  });
-
-  // NOBODY SIGNED IN IS TOLD THAT, the step before any grant: naming one would
-  // tell a reader to hold something before they are anybody.
-  test("says it needs sign-in to a reader nobody signed in", async () => {
-    const p = mount({ viewer: ANONYMOUS });
-    await p.type("Nodes");
-    expect(nodesRow().textContent).toContain("needs sign-in");
-    expect(nodesRow().textContent).not.toContain("fleet:operate");
-  });
-
-  // NOR WHILE NOBODY HAS SAID: a lock claimed before the viewer answered is a
-  // refusal nobody made.
-  test("and nothing while the viewer has not answered", async () => {
-    const p = mount({ viewer: { ...ANONYMOUS, anonymous: false, loading: true } });
-    await p.type("Nodes");
-    expect(nodesRow().textContent).not.toContain("needs");
-  });
-});
-
-describe("a unit, by its key", () => {
-  // BY KEY, which is what tells two units sharing a name apart — as a row id,
-  // in the hint a reader picks between them by, and in the route. Keyed on the
-  // name, the second such unit was a duplicate row id and both rows opened the
-  // first one's page.
-  test("is drawn with its key and opens its page by it", async () => {
-    const p = mount();
-    await p.type("@Platform");
-    const row = p.row("Platform");
-    expect(row.textContent).toContain("platform");
-    await act(async () => {
-      fireEvent.click(row);
-    });
-    expect(location.hash).toBe("#/agents/teams/platform");
-  });
-});
-
-describe("two tasks holding one key", () => {
-  const answering = (reply: (q: string) => Promise<unknown>): Answers => ({
-    work_search: (params) => reply(String(params.q)),
-  });
-  // IN THE WIRE'S OWN SHAPE, typed, so a hit missing a field the engine always
-  // sends — the `id` above all, which is what the list keys a hit on — is a
-  // typecheck failure rather than a fixture that agrees only with itself.
-  const hit: WorkRanked = { ...HIT, status: "in_progress", assignee: "swe" };
-
-  // TWO ITEMS CAN HOLD ONE KEY, and a search that finds both lists both, once
-  // each. A key is the tracker's ADDRESS rather than its identity, so a hit
-  // named by its key gave the list two options under one key, which it may
-  // draw twice or drop when the next term re-orders them.
-  test("are two options, each drawn once", async () => {
-    const original = { ...hit, title: "Authentication rework" };
-    const restored = {
-      ...hit,
-      id: "0198f0a0-0000-7000-8000-00000000000b",
-      title: "Authentication audit",
-    };
-    const p = mount({
-      answers: answering(async (q) => ({
-        ...OUTCOME,
-        hits: q === "auth" ? [original, restored] : [restored, original],
-        available: true,
-      })),
-    });
-    const labels = () =>
-      screen
-        .queryAllByRole("option")
-        .map((option) => option.textContent ?? "")
-        .filter((text) => text.includes("ENG-420"));
-    await p.type("#auth");
-    expect(labels()).toEqual([
-      expect.stringContaining("Authentication rework"),
-      expect.stringContaining("Authentication audit"),
-    ]);
-    await p.type("#authentication");
-    await waitFor(() => expect(labels()[0]).toContain("Authentication audit"));
-    expect(labels()).toHaveLength(2);
-  });
-
-  // AND THE TWO OPTIONS GO TO TWO TASKS. Drawn once each, they still both went
-  // to `#/work/ENG-7` — and a key two tasks hold opens the one that claimed it
-  // first, so choosing the other one opened its neighbour. The flagged hit
-  // goes by its id.
-  test("open two different tasks", async () => {
-    const p = mount({
-      answers: answering(async () => ({ ...OUTCOME, hits: collidingHits(), available: true })),
-    });
-    await p.type("#claim");
-    await act(async () => {
-      fireEvent.click(p.row(new RegExp(DUPLICATE_TITLE)));
-    });
-    expect(location.hash).toBe(DUPLICATE_HREF);
-    cleanup();
-    const q = mount({
-      answers: answering(async () => ({ ...OUTCOME, hits: collidingHits(), available: true })),
-    });
-    await q.type("#claim");
-    await act(async () => {
-      fireEvent.click(q.row(new RegExp(CLAIMANT_TITLE)));
-    });
-    expect(location.hash).toBe(CLAIMANT_HREF);
-  });
-});
-
-describe("who the changes are made as", () => {
-  // THE SIGNED-IN PRINCIPAL, which is who the act route records: the seat's
-  // name where the directory binds one, the login where it binds none — an
-  // unbound principal acts under its own login (ADR-0024).
-  test.each([
-    ["a bound person", JANE, "Changes are made as Jane Founder"],
-    ["an unbound principal", UNBOUND, "Changes are made as ci"],
-    ["nobody", ANONYMOUS, "Changes need you signed in"],
-  ])("for %s, the Actions scope says so", async (_, viewer, words) => {
-    const p = mount({ viewer });
-    await p.type(">");
-    expect(screen.getByText(words)).toBeDefined();
-  });
-
-  // WHO THIS BROWSER ACTS AS IS A SIGN-IN, never a token typed into a page
-  // any script could read back.
-  test("signing in as somebody else is a command, and setting a token is not", async () => {
-    const p = mount();
-    await p.type(">sign in");
-    expect(p.row("Sign in as somebody else")).toBeDefined();
-    expect(screen.queryByText("Set the API token")).toBeNull();
   });
 });
 

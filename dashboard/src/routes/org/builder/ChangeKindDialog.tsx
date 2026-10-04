@@ -3,24 +3,23 @@
  *
  * A KIND CHANGE REMOVES FIELDS, which is why it is its own step rather than a
  * control in the editor. A human seat runs no turns, so the engine refuses it
- * every field an agent runs on (`org.Role.humanForbidden`), its own GitHub App
- * included; an agent seat is refused `contact` and `availability`. Every one
- * of them is in the seat's runtime half, so the operation strips exactly
- * those, the dialog lists them by name before anything is recorded — and a
- * reader the chart did not show that half cannot change a kind at all, since
- * nothing here could say what would go.
+ * every runtime field (`org.Role.humanForbidden`) and, on admission, its own
+ * GitHub App; an agent seat is refused `contact` and `availability`. The
+ * operation strips exactly those, and the dialog lists them by their authored
+ * names before anything is recorded.
  *
- * A STRIPPED CREDENTIAL DOES NOT COME BACK. No screen of the builder shows or
- * takes a credential, so the seat's chat app tokens, its tool credentials and
- * its GitHub App key are gone from the chart once the change is saved. That
- * is called out on the fields that hold them.
+ * A STRIPPED CREDENTIAL DOES NOT COME BACK. The configuration surface sends a
+ * literal credential as a mask, so the builder never holds one and cannot type
+ * one back in: the seat's chat app tokens, its tool credentials and its GitHub
+ * App key are gone from the document once the change is saved. That is called
+ * out on the fields that hold them.
  *
- * WHAT THE SEAT BECOMES. The dialog offers one contact identity and does not
- * require it: the engine admits a human seat with none — a person who works
- * only through the dashboard has none to give — and the chart check names such
- * a seat afterwards. A seat that is the Datadog fallback cannot become human
- * (an alert would wake nobody), so a replacement is chosen here too, and the
- * schedules the change strands are named as they are for a move or a removal.
+ * WHAT THE SEAT BECOMES. A human seat needs one contact identity, which the
+ * dialog collects, because the engine refuses a human seat without one and the
+ * refusal would otherwise arrive at the next check with no field to fix. A
+ * seat that is the Datadog fallback cannot become human (an alert would wake
+ * nobody), so a replacement is chosen here too, and the schedules the change
+ * strands are named as they are for a move or a removal.
  *
  * WHAT IT LEAVES BEHIND. Stripping a field tears nothing down at a vendor:
  * the seat's GitHub App, its chat bots and the accounts it was enrolled for
@@ -46,9 +45,9 @@ import {
 import { allSeats, locate } from "./model/draft.ts";
 import { isMintedKey, type NodeKey } from "./model/keys.ts";
 import { fieldName, isCredentialField, kindOf, type Intent } from "./model/operations.ts";
-import { recordIntent } from "./model/reducer.ts";
+import { handlesOf, recordIntent } from "./model/reducer.ts";
 import { datadogFallback } from "./chartModel.ts";
-import { isWorking, referenceNames, savedHandleOf, vendorIdentities } from "./nodeFacts.ts";
+import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
 import { UserGlyph, BotGlyph } from "@crewlethq/icons/glyphs";
 import { Button, Callout, InlineCode, Modal } from "@crewlethq/ui";
@@ -84,19 +83,17 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
   }
 
   const seat = found.node;
-  const name = seat.data.name || seat.data.handle;
+  const name = seat.data.name;
   const becoming = kindOf(seat.data) === "human" ? "agent" : "human";
-  const handle = seat.data.handle;
-  const isFallback = becoming === "human" && datadogFallback(state.draft.company) === handle;
+  const handles = handlesOf(state);
+  const handle = handles.get(nodeKey);
+  const isFallback =
+    becoming === "human" && handle !== undefined && datadogFallback(state.draft.company) === handle;
   const replacements = [...allSeats(state.draft)]
     .map(({ seat: other }) => other)
     .filter((other) => other.key !== nodeKey && kindOf(other.data) === "agent")
-    .map((other) => ({
-      value: other.data.handle,
-      label: other.data.name
-        ? `${other.data.name} (@${other.data.handle})`
-        : `@${other.data.handle}`,
-    }));
+    .map((other) => ({ value: handles.get(other.key) ?? "", label: other.data.name }))
+    .filter((choice) => choice.value !== "");
 
   const intent: Intent = {
     type: "changeKind",
@@ -127,9 +124,13 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
       : [];
   // Only an agent seat has work in flight, so this names nobody when a human
   // seat is becoming an agent.
-  const working = isWorking(savedHandleOf(state, nodeKey), api.agents, api.sandboxes) ? [name] : [];
+  const working = isWorking(handle, api.agents, api.sandboxes) ? [name] : [];
 
-  const blocked = !preview.ok || api.readOnly || (isFallback && routeTo === "");
+  const blocked =
+    !preview.ok ||
+    api.readOnly ||
+    (becoming === "human" && contact.trim() === "") ||
+    (isFallback && routeTo === "");
 
   function change() {
     if (blocked) return;
@@ -180,7 +181,7 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
           title="Fields that are removed"
           hint={
             stripped.some((field) => field.credential)
-              ? "A field that holds credentials cannot be entered again in the builder, which never shows or takes one, so it is gone for good once this change is saved."
+              ? "A field that holds credentials cannot be entered again in the builder, which never shows one, so it is gone for good once this change is saved."
               : undefined
           }
         >
@@ -204,7 +205,7 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
       {becoming === "human" && (
         <EditorSection
           title="Contact identity"
-          hint="Optional. How agents @-mention the person; leave it empty for somebody who works only through the dashboard."
+          hint="A human seat is reached through a person's own identity, and the engine refuses one without it."
         >
           <ContactField
             identity={identity}

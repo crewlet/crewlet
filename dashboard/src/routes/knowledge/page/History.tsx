@@ -27,7 +27,6 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { ClockText } from "~/app/frame/cells.tsx";
 import { collapse, diffLines, diffStat, type DiffSection } from "~/lib/diff.ts";
 import { fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { plainText, renderMarkdown } from "~/lib/markdown.ts";
@@ -129,6 +128,7 @@ export function VersionView({
   version,
   history,
   seatName,
+  now,
   onClose,
 }: {
   pageID: string;
@@ -136,6 +136,7 @@ export function VersionView({
   /** Newest first, as the `page` answer orders it. */
   history: PageRevision[];
   seatName: (handle: string) => string;
+  now: number;
   onClose: () => void;
 }) {
   const body = useQuery("page_revision", { page: pageID, version }, { enabled: version > 0 });
@@ -186,7 +187,7 @@ export function VersionView({
             {" "}
             · {rev.author ? seatName(rev.author) : "the engine"} ·{" "}
             <time dateTime={rev.created_at} title={fmtDateTime(rev.created_at)}>
-              <ClockText read={(now) => relTime(rev.created_at, now)} />
+              {relTime(rev.created_at, now)}
             </time>
           </span>
         )}
@@ -241,9 +242,11 @@ export function VersionView({
 export function PageChanges({
   pageID,
   seatName,
+  now,
 }: {
   pageID: string;
   seatName: (handle: string) => string;
+  now: number;
 }) {
   const feed = useQuery("page_activity", { page: pageID }, { pollMs: 60_000 });
   const changes = feed.data?.changes ?? [];
@@ -291,7 +294,7 @@ export function PageChanges({
                   dateTime={change.at}
                   title={fmtDateTime(change.at)}
                 >
-                  <ClockText read={(now) => relTime(change.at, now)} />
+                  {relTime(change.at, now)}
                 </time>
               </span>
               {change.excerpt && <p className="t-caption">{plainText(change.excerpt)}</p>}

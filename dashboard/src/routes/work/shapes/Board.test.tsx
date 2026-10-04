@@ -9,7 +9,7 @@
  * read-only reader offered a drag that could only ever be refused.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -33,8 +33,18 @@ class InertWebSocket {
 }
 
 const JANE = {
-  login: "jane.founder",
-  grants: ["state:read", "work:write"],
+  login: "U0FOUNDER",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -108,7 +118,6 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  vi.useRealTimers();
   vi.unstubAllGlobals();
   location.hash = "";
 });
@@ -117,8 +126,6 @@ function client(viewer: Record<string, unknown>, agents: Record<string, unknown>
   const store = new Store();
   store.applyHealth({ status: "healthy", nodes: 1 } as never);
   store.applyOrg(ORG as never);
-  // THE ROSTER, as the snapshot hands it over: an overlay push merges onto a
-  // seat the roster already carries and drops anything else.
   store.applySeats(agents as never);
   const socket = new LiveSocket(store);
   const asked: { kind: string; params: Record<string, unknown> }[] = [];
@@ -151,6 +158,7 @@ function mountBoard({
         <ClientContext.Provider value={{ store: c.store, socket: c.socket }}>
           <ViewerProvider>
             <Board
+              now={NOW}
               groups={next}
               axis="status"
               chrome={{ seatName: (h) => ORG.roles.find((r) => r.handle === h)?.name ?? h }}
@@ -225,22 +233,17 @@ describe("the card", () => {
 
   // THE BAND IS A STATE AND SAYS SO IN WORDS: the seat and what it is doing on
   // THIS task, and a run parked waiting on the reader — never somebody else's.
-  // KEYED ON THE TASK'S ID, as `liveOnItems` keys them: a key two tasks hold
-  // would draw one task's turn on both cards.
   test("a running turn and a run waiting on the reader each say so in words", async () => {
-    // THE CLOCK IS PINNED, because the strip's "6m" is read off it in the cell.
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(NOW);
     mountBoard({
       props: {
         facts: {
           live: new Map([
             [
-              "eng-1",
+              "ENG-1",
               { handle: "swe", doing: "executing · round 7 of 20", since: "2031-04-16T11:54:00Z" },
             ],
           ]),
-          waiting: new Map([["eng-3", { since: "2031-04-16T11:22:00Z" }]]),
+          waiting: new Map([["ENG-3", { since: "2031-04-16T11:22:00Z" }]]),
           ring: () => undefined,
         },
       },
@@ -570,14 +573,6 @@ describe("moving a card", () => {
 // board.
 describe.each([
   { who: "an anonymous reader", viewer: { anonymous: true }, reason: WRITE_REASONS.anonymous },
-  // UNBOUND IS NOT A BLOCK: an unbound reader moves cards under their own
-  // login, so what holds them is what holds anybody — the change the engine
-  // will not make for them.
-  {
-    who: "an unbound reader the engine does not move cards for",
-    viewer: { login: "ci.release", handle: "", owner: "ci.release", acts: ["update_work_item"] },
-    reason: WRITE_REASONS.not_served,
-  },
   {
     who: "a person the engine does not move cards for",
     viewer: { ...JANE, acts: ["update_work_item"] },
@@ -629,8 +624,8 @@ describe("the board on the work screen", () => {
   }
 
   const working = (item: string, key = "ENG-9") => ({
+    agent_id: "swe",
     id: "swe",
-    agent_id: "id-swe",
     role: "SWE",
     handle: "swe",
     activity: "working",
@@ -664,8 +659,11 @@ describe("the board on the work screen", () => {
     const c = mountList([working("ENG-2")]);
     await settle();
     const before = c.asked.filter((a) => a.kind === "work_items").length;
-    // THE OVERLAY PUSH a turn's end sends, merged onto the seat by its id.
-    act(() => c.store.applyAgents([{ agent_id: "id-swe", activity: "idle" }] as never));
+    act(() =>
+      c.store.applySeats([
+        { agent_id: "swe", id: "swe", role: "SWE", handle: "swe", activity: "idle" },
+      ] as never),
+    );
     await settle();
     expect(c.asked.filter((a) => a.kind === "work_items").length).toBeGreaterThan(before);
   });
@@ -699,7 +697,7 @@ describe("a lane's +", () => {
   test("names its lane and hands the screen what files into it", async () => {
     const added: NewTaskPreset[] = [];
     mountBoard({
-      viewer: { login: "", handle: "", owner: "", name: "", acts: [] },
+      viewer: { login: "", grants: [], handle: "", owner: "", name: "", acts: [] },
       props: { onAdd: (preset) => added.push(preset) },
     });
     await settle();

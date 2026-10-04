@@ -22,44 +22,35 @@
  */
 
 import { ChevronDownGlyph, ChevronUpGlyph } from "@crewlethq/icons/glyphs";
-import { anyGridDriving } from "~/app/frame/DataGrid.tsx";
+import { useAnyGridDriving } from "~/app/frame/DataGrid.tsx";
 import { useKeymap } from "~/app/keymap.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtExact } from "~/lib/format.ts";
 import { aroundParams } from "~/lib/work.ts";
 
-/**
- * `address` is the task's ADDRESS (`itemAddress`): its key, or its id where
- * another task claimed the key first — which is what `around=` places, and
- * what the answer's `prev` and `next` are in turn, so a step from one of two
- * tasks sharing a key never lands on the other.
- */
-export function ListPosition({ address }: { address: string }) {
+export function ListPosition({ itemKey }: { itemKey: string }) {
   const [list] = useParam("list", "");
   const nav = useNavigator();
-  const params = aroundParams(list, address);
+  const params = aroundParams(list, itemKey);
   const answer = useQuery("work_items", params ?? undefined, { enabled: params !== null });
   const around = params ? answer.data?.around : undefined;
   // `j` AND `k` STEP THROUGH THE LIST, as they step through a list's rows —
   // the same two rows of the keymap, because on a task opened from a list the
   // task IS the row. A grid on this page holds them first, so one press is
-  // never two actions — ASKED AT THE KEYSTROKE (`anyGridDriving`), since a
-  // grid mounting or emptying re-renders nothing here.
-  const next = around?.next ?? "";
-  const prev = around?.prev ?? "";
+  // never two actions.
+  const gridHasKeys = useAnyGridDriving();
   useKeymap({
     "list.next": {
-      run: () => next && nav.to(["work", next], { list }),
-      when: () => next !== "" && !anyGridDriving(),
+      run: () => around?.next && nav.to(["work", around.next], { list }),
+      when: Boolean(around?.next) && !gridHasKeys,
     },
     "list.previous": {
-      run: () => prev && nav.to(["work", prev], { list }),
-      when: () => prev !== "" && !anyGridDriving(),
+      run: () => around?.prev && nav.to(["work", around.prev], { list }),
+      when: Boolean(around?.prev) && !gridHasKeys,
     },
   });
   if (!params || !around) return null;
-  const total = `${fmtExact(around.total_hint)}${around.total_capped ? "+" : ""}`;
+  const total = `${around.total_hint.toLocaleString()}${around.total_capped ? "+" : ""}`;
   const step = (key: string) => href(["work", key], { list });
   // UP AND DOWN, then the place, as the approved Issue page draws it: the list
   // a task was opened from runs top to bottom, so its neighbours are above and

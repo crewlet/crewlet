@@ -55,11 +55,11 @@ import {
 } from "~/lib/seats.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import { relTime } from "~/lib/format.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
-import { detailItem, itemAddress, projectPath, typeIcon, type LabelContext } from "~/lib/work.ts";
+import { useNow } from "~/lib/clock.ts";
+import { typeIcon, type LabelContext } from "~/lib/work.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
-import { usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { refToken } from "~/app/frame/objects.ts";
 import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
@@ -92,17 +92,14 @@ const READ_ONLY = "The fields, checklists and description are read-only here.";
  * has been archived, it is in the trash. The status is a FIELD rather than a
  * flag, because every task has one and a badge every task wears says nothing.
  *
- * IT TAKES THE DETAIL RATHER THAN THE TASK, because `blocked` and
- * `key_collision` are DERIVED and live on the answer (see
- * [WorkItemDetail.blocked]).
+ * IT TAKES THE DETAIL RATHER THAN THE TASK, because `blocked` is DERIVED and
+ * lives on the answer (see [WorkItemDetail.blocked]).
  *
  * `undefined` rather than an empty element, so an ordinary task draws no row.
  */
 export function itemFlags(detail: WorkItemDetail) {
   const item = detail.task;
-  if (!detail.blocked && !item.archived && !item.removed && !detail.key_collision) {
-    return undefined;
-  }
+  if (!detail.blocked && !item.archived && !item.removed) return undefined;
   return (
     <span className="row gap-1 task-flags">
       {/* IN THE TRASH, AND SAID FIRST. The detail read does not filter
@@ -116,21 +113,6 @@ export function itemFlags(detail: WorkItemDetail) {
         </Tag>
       )}
       {item.archived && <Tag appearance="outline">Archived</Tag>}
-      {/* A KEY THIS TASK SHARES, said where its key is shown. Another task
-          claimed it first and the key opens that one, so this task's own page
-          is addressed by its id — and the header, the board and every list
-          draw the same key on both. Without the word a reader holding two
-          tabs headed `ENG-7` has no way to tell which is which, or why the
-          address bar of one of them is a uuid. */}
-      {detail.key_collision && (
-        <Tag
-          variant="warning"
-          appearance="outline"
-          title={`Another task claimed ${item.key} first, and the key opens that one — this task is reached by its id`}
-        >
-          Key shared
-        </Tag>
-      )}
     </span>
   );
 }
@@ -140,13 +122,12 @@ export function itemFlags(detail: WorkItemDetail) {
  * who, when, whether it went with its container — and that it is reversible,
  * which is the fact that decides what a reader does next.
  */
-export function RemovedNote({ tomb }: { tomb: WorkTombstone }) {
+export function RemovedNote({ tomb, now }: { tomb: WorkTombstone; now: number }) {
   return (
     <Callout variant="warning" icon={<TrashGlyph size="md" />}>
       <span>
         <strong>This is in the trash.</strong> {tomb.by || "somebody"}
-        {tomb.kind ? ` (${tomb.kind})` : ""} removed it{" "}
-        <ClockText read={(now) => relTime(tomb.at, now)} />
+        {tomb.kind ? ` (${tomb.kind})` : ""} removed it {relTime(tomb.at, now)}
         {tomb.removed_with ? (
           <>
             {" "}
@@ -190,16 +171,15 @@ function useItemChrome(
  * The seat running a turn on this task now — joined on the item the engine
  * charges the turn to, never on a `work_key`, and only while the seat's own
  * state is `working`.
- *
- * BY THE TASK'S ID ALONE. A key another task claimed first stays on the task
- * that did not claim it (`key_collision`), so a turn on one of the pair
- * matched on its key drew "Watch live" and a running strip on both.
  */
-export function liveOn(rows: readonly AgentRow[], item: { id: string }): AgentRow | null {
+export function liveOn(
+  rows: readonly AgentRow[],
+  item: { id: string; key: string },
+): AgentRow | null {
   for (const row of rows) {
     if (row.activity !== "working") continue;
     const on = row.live_call?.work_item ?? row.turn?.work_item ?? null;
-    if (on && on.id === item.id) return row;
+    if (on && (on.key === item.key || on.id === item.id)) return row;
   }
   return null;
 }
@@ -233,10 +213,10 @@ export function WorkItem({ id }: { id: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const agents = useAgents();
+  const now = useNow();
   const { state, item, project, children } = useTask(id);
   const chrome = useItemChrome(index, state.data, project.data);
   const { open: openPeek } = usePeekControls();
-  const open = usePeek();
   const nav = useNavigator();
   // THE TASK AND ITS RAIL EACH SCROLL ON THEIR OWN, so the page takes the
   // window's height rather than growing — above a phone, where the two are one
@@ -257,20 +237,10 @@ export function WorkItem({ id }: { id: string }) {
   );
   const liveTurn = live?.turn?.turn_id ?? live?.live_call?.turn_id ?? "";
 
-  // THE TASK'S ADDRESS — its key, or its id where the key opens another task
-  // that claimed it first — which is what every write and every link from
-  // this page names it by. Named by the key, a duplicate's edits, its restore
-  // and its "open on the board" all reached the claimant.
-  const address = state.data ? itemAddress(detailItem(state.data)) : "";
-
   // "THIS TASK, ON ITS OWN BOARD", with the rail open: the project is a path
-  // and the task is the frame's `peek=` token, by its address.
+  // and the task is the frame's `peek=` token.
   const openOnBoard = () => {
-    if (item && state.data) {
-      nav.to(projectPath(item.project), {
-        peek: refToken({ kind: "item", id: itemAddress(detailItem(state.data)) }),
-      });
-    }
+    if (item) nav.to(["work", item.project], { peek: refToken({ kind: "item", id: item.key }) });
   };
   // AND ON A PHONE IT IS IN THE BAR'S ONE "MORE", beside the star and the
   // link, rather than a second ellipsis next to the frame's.
@@ -291,7 +261,7 @@ export function WorkItem({ id }: { id: string }) {
     <>
       <PageActions>
         {/* WHERE THIS TASK SITS IN THE LIST IT WAS OPENED FROM. */}
-        {item && <ListPosition address={address} />}
+        {item && <ListPosition itemKey={item.key} />}
         {/* WATCH LIVE ONLY WHILE A TURN IS RUNNING ON THIS TASK. */}
         {live && liveTurn && (
           <ButtonLink
@@ -304,7 +274,7 @@ export function WorkItem({ id }: { id: string }) {
           </ButtonLink>
         )}
         {/* A task in the trash is offered the way back. */}
-        {item?.removed && <RestoreButton key={address} item={address} />}
+        {item?.removed && <RestoreButton key={item.key} item={item.key} />}
         {item && (
           <span className="page-action-folds">
             <Menu
@@ -329,12 +299,12 @@ export function WorkItem({ id }: { id: string }) {
       )}
       <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
         {state.data && item && (
-          <ItemEditsProvider item={address} version={item.version} seatName={chrome.seatName}>
+          <ItemEditsProvider item={item.key} version={item.version} seatName={chrome.seatName}>
             <div className="task-frame">
               <div className="task-main">
                 <div className="task-col">
                   {itemFlags(state.data)}
-                  {item.removed && <RemovedNote tomb={item.removed} />}
+                  {item.removed && <RemovedNote tomb={item.removed} now={now} />}
                   <Coverage answer={state.data} />
                   <ItemEditNote readOnly={READ_ONLY} />
                   <ItemTitle item={item} />
@@ -343,24 +313,16 @@ export function WorkItem({ id }: { id: string }) {
                   <Subtasks
                     rows={children.data?.items ?? []}
                     error={children.error}
-                    refusal={children.refusal}
                     chrome={chrome}
                     parent={item.removed ? undefined : item}
                     ringOf={ringFor}
-                    peek={(row: WorkSummary) => openPeek({ kind: "item", id: itemAddress(row) })}
-                    selected={open?.kind === "item" ? open.id : undefined}
+                    peek={(row: WorkSummary) => openPeek({ kind: "item", id: row.key })}
                   />
-                  <Activity
-                    item={item}
-                    address={address}
-                    chrome={chrome}
-                    index={index}
-                    live={live}
-                  />
+                  <Activity item={item} chrome={chrome} index={index} now={now} live={live} />
                 </div>
               </div>
               <aside className="task-rail" aria-label={`Properties of ${item.key}`}>
-                <ItemRail detail={state.data} chrome={chrome} project={project.data} />
+                <ItemRail detail={state.data} chrome={chrome} project={project.data} now={now} />
               </aside>
             </div>
           </ItemEditsProvider>
@@ -385,11 +347,12 @@ export function WorkItem({ id }: { id: string }) {
  * IT RESOLVES ITS OWN PEOPLE: the frame mounts it from a `peek=` token knowing
  * nothing about an org chart, and the chart is a store read.
  */
-export function ItemPeek({ address }: { address: string }) {
+export function ItemPeek({ itemKey }: { itemKey: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const agents = useAgents();
-  const { state, item, project, children } = useTask(address);
+  const now = useNow();
+  const { state, item, project, children } = useTask(itemKey);
   const chrome = useItemChrome(index, state.data, project.data);
   const live = item ? liveOn(agents, item) : null;
 
@@ -401,11 +364,7 @@ export function ItemPeek({ address }: { address: string }) {
       <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
         {state.data &&
           (item ? (
-            <ItemEditsProvider
-              item={itemAddress(detailItem(state.data))}
-              version={item.version}
-              seatName={chrome.seatName}
-            >
+            <ItemEditsProvider item={item.key} version={item.version} seatName={chrome.seatName}>
               {/* IDENTITY AND STATE MARKS ONLY: the rail below is in the SAME
                   column and states every field once. */}
               <ObjectHeader
@@ -417,10 +376,16 @@ export function ItemPeek({ address }: { address: string }) {
                 status={itemFlags(state.data)}
               />
               <div className="col gap-3 task-peek">
-                {item.removed && <RemovedNote tomb={item.removed} />}
+                {item.removed && <RemovedNote tomb={item.removed} now={now} />}
                 <Coverage answer={state.data} />
                 <ItemEditNote readOnly={READ_ONLY} />
-                <ItemRail detail={state.data} chrome={chrome} project={project.data} compact />
+                <ItemRail
+                  detail={state.data}
+                  chrome={chrome}
+                  project={project.data}
+                  now={now}
+                  compact
+                />
                 <ItemDescription item={item} flush />
                 <Checklists item={item} chrome={chrome} />
                 {/* A CHILD NAVIGATES FROM THE PEEK rather than replacing its
@@ -429,14 +394,13 @@ export function ItemPeek({ address }: { address: string }) {
                 <Subtasks
                   rows={children.data?.items ?? []}
                   error={children.error}
-                  refusal={children.refusal}
                   chrome={chrome}
                 />
                 <Activity
                   item={item}
-                  address={itemAddress(detailItem(state.data))}
                   chrome={chrome}
                   index={index}
+                  now={now}
                   live={live}
                   param="peek_activity"
                 />
@@ -448,7 +412,7 @@ export function ItemPeek({ address }: { address: string }) {
             <EmptyState
               size="compact"
               icon={<PackageGlyph size="xl" />}
-              title={`Nothing answers to “${address}”`}
+              title={`Nothing answers to “${itemKey}”`}
               description="A task is addressed by its key or by its uuid, and both resolve. This node holds neither — it may have been removed, or its log may not have reached this far."
             />
           ))}

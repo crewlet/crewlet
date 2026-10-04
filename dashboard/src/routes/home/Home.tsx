@@ -27,17 +27,6 @@
  * one every due date and budget window is cut on; the greeting is the
  * reader's own, because it is their morning. See `model.ts` for how each
  * clause reads for none, one and many.
- *
- * # Whose decisions, and the clock
- *
- * THE READER'S OWN, asked by their credential and enabled for anybody with a
- * record — a seat when the identity directory binds them to one, their login
- * when it does not (`owner`): an unbound reader is asked things and asks
- * things too. Nobody types whose decisions these are.
- *
- * NO PART OF THIS SCREEN TAKES THE SECOND: the date and the greeting read the
- * clock where they are written, and so does every row's age below. Held here,
- * the second drew all five tiles, both cards and the feed once a second.
  */
 
 import { useMemo } from "react";
@@ -48,8 +37,8 @@ import { NewTaskButton } from "~/components/NewTaskButton.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { dateFormatter, toWall } from "~/lib/format.ts";
-import { ClockText } from "~/app/frame/cells.tsx";
+import { useNow } from "~/lib/clock.ts";
+import { toWall } from "~/lib/format.ts";
 import { useAttention } from "~/lib/useAttention.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { Kpis } from "./Kpis.tsx";
@@ -81,6 +70,7 @@ const SLOW_POLL_MS = 60_000;
 export function Home() {
   // WHO IS WORKING, at the head of this page and no other (`useWorkingNow`).
   useWorkingNow();
+  const now = useNow();
   const org = useOrg();
   const viewer = useViewer();
   const agents = useAgents();
@@ -157,12 +147,8 @@ export function Home() {
 
       <header className="home-head">
         <div className="home-head-text">
-          <span className="home-date">
-            <ClockText read={(now) => companyDay(now, org?.timezone)} />
-          </span>
-          <h2 className="home-greeting">
-            <ClockText read={(now) => greeting(now, viewer.name)} />
-          </h2>
+          <span className="home-date">{companyDay(now, org?.timezone)}</span>
+          <h2 className="home-greeting">{greeting(now, viewer.name)}</h2>
           <p className="home-status">
             {sentence.map((run, i) =>
               run.strong ? (
@@ -196,6 +182,7 @@ export function Home() {
         waitingError={decisions.error}
         flow={flow}
         spend={spend}
+        now={now}
       />
 
       <div className="home-row home-row-main">
@@ -206,8 +193,9 @@ export function Home() {
           refusal={decisions.refusal}
           loading={decisions.loading}
           seatConditions={seats.mine}
+          now={now}
         />
-        <LiveNow agents={agents} />
+        <LiveNow agents={agents} now={now} />
       </div>
 
       <div className="home-row home-row-three">
@@ -216,7 +204,7 @@ export function Home() {
         <Projects />
       </div>
 
-      <Feed />
+      <Feed now={now} />
     </div>
   );
 }
@@ -244,13 +232,13 @@ export function greeting(now: number, name: string): string {
  * blank line.
  */
 export function companyDay(now: number, zone: string | undefined): string {
-  // THROUGH THE KEPT FORMATTERS (`lib/format.ts`), one per zone: built here,
-  // the line built a formatter every time the clock asked it.
   const options: Intl.DateTimeFormatOptions = { weekday: "long", month: "long", day: "numeric" };
   try {
-    return dateFormatter(undefined, { ...options, timeZone: zone || undefined }).format(now);
+    return new Intl.DateTimeFormat(undefined, { ...options, timeZone: zone || undefined }).format(
+      now,
+    );
   } catch {
     // A ZONE THIS RUNTIME CANNOT FORMAT IN is not a reason to lose the line.
-    return dateFormatter(undefined, options).format(now);
+    return new Intl.DateTimeFormat(undefined, options).format(now);
   }
 }

@@ -45,10 +45,9 @@
  * # It writes, as the reader
  *
  * A board card can be dragged, and a writer changes a row's status, priority
- * or holder in place — each through `useAct`, as the principal the request
- * resolves to (ADR-0024), conditional on the version the row was drawn at.
- * Nothing moves until the engine answers; see `shapes/Board.tsx` and
- * `shapes/cells.tsx`.
+ * or holder in place — each through `useAct`, as the person signed in
+ * (ADR-0024), conditional on the version the row was drawn at. Nothing moves
+ * until the engine answers; see `shapes/Board.tsx` and `shapes/cells.tsx`.
  *
  * # Every row is reachable
  *
@@ -106,7 +105,7 @@ import {
   seatResolvers,
   type SeatRing,
 } from "~/lib/seats.ts";
-import { useToday } from "~/lib/clock.ts";
+import { useNow } from "~/lib/clock.ts";
 import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import {
   anyFilter,
@@ -115,6 +114,7 @@ import {
   buildItemsParams,
   calendarWeeks,
   countedLabel,
+  dayKey,
   dayRange,
   defaultView,
   drawnRows,
@@ -127,12 +127,10 @@ import {
   gridRange,
   hiddenLanes,
   hideParam,
-  itemAddress,
-  itemPath,
   listParam,
   loadedOf,
   manualOrder,
-  monthOrToday,
+  monthOrNow,
   seededScope,
   shapeOf,
   shownRows,
@@ -147,13 +145,7 @@ import {
   type TrackerFilters,
 } from "~/lib/work.ts";
 import { plural } from "~/lib/format.ts";
-import {
-  isLogRefusal,
-  type QueryFailure,
-  type WorkSummary,
-  type WorkTaskCounts,
-  type WorkView,
-} from "~/protocol/index.ts";
+import type { WorkSummary, WorkTaskCounts, WorkView } from "~/protocol/index.ts";
 
 /**
  * Every custom-field narrowing on the address, as the grammar spells them.
@@ -257,14 +249,10 @@ export function ItemsView({
   const viewer = useViewer();
   const agents = useAgents();
   const openNewTask = useOpenNewTask();
-  // THE DAY, NOT THE SECOND. Which day it is — the calendar's today cell and
-  // the month it opens on — is all this screen reads off the clock itself.
-  // It held the second, and every shape it draws re-rendered with it: two
-  // hundred grid rows, every board card and the timeline's whole layout, once
-  // a second, to arrive at the same day. A relative time or a due date on a
-  // row reads the clock in the row (`ClockText`, `DueMark`), and only when its
-  // words change.
-  const today = useToday();
+  // ONE CLOCK for the screen, ticking on its own: a relative time computed
+  // from Date.now() at render is frozen until something else re-renders, so
+  // "2 minutes ago" stays that for an hour on a screen nobody touches.
+  const now = useNow();
 
   // THE SECTIONS — a place the reader called, so each pushes history. The
   // shape is one of them: switching a list to a board is a screen somebody
@@ -281,9 +269,7 @@ export function ItemsView({
   const [cardHide, setCardHide] = useParam("card_hide", "");
   const cardOmit = useMemo(() => cardHidden(cardHide), [cardHide]);
 
-  // AND THE FILTERS, which replace: four ticked chips are ONE screen. Read
-  // one key at a time and WRITTEN THROUGH ONE PATCH ([setFilter]), so a chip
-  // and the menu cannot write a key two ways.
+  // AND THE FILTERS, which replace: four ticked chips are ONE screen.
   const [q, setQ] = useParam("q", "");
   const [status] = useParam("status", "");
   const [type] = useParam("type", "");
@@ -306,17 +292,16 @@ export function ItemsView({
   // here on: it narrows the query, it carries a chip, and the chip takes it
   // off.
   const [unit] = useParam("unit", "");
-  // WRITTEN THROUGH THE ONE PATCH ([onGroupBy]), never on its own: a column
-  // filter belongs to its axis and goes with it.
-  const [groupBy] = useParam("group_by", "");
+  const [groupBy, setGroupBy] = useParam("group_by", "");
   const [groupBy2, setGroupBy2] = useParam("group_by2", "");
   // THE COLUMN NARROWING IS THREE-VALUED and `useParam` cannot say so: its
   // value is "the key, or the fallback", which reads an ABSENT key and a
   // PRESENT EMPTY one as the same string — and the empty one is a real column,
   // the one holding the rows with no value on this axis. So the value is read
   // off the whole query, the way [useFieldFilters] reads the custom fields, and
-  // cleared through the one patch that moves its axis ([onGroupBy]). See
+  // the setter is kept for the one gesture that CLEARS it. See
   // [TrackerFilters.group].
+  const [, setGroup] = useParam("group", "");
   const [sort, setSort] = useParam("sort", "");
   const [blocked] = useParam("blocked", "");
   const [due] = useParam("due", "");
@@ -464,10 +449,11 @@ export function ItemsView({
     fields,
   };
 
-  const thisMonth = monthOrToday(month, today);
+  const thisMonth = monthOrNow(month, now);
+  const todayKey = dayKey(new Date(now).toISOString());
   const weeks = useMemo(
-    () => (shape === "calendar" ? calendarWeeks(thisMonth, today) : []),
-    [shape, thisMonth, today],
+    () => (shape === "calendar" ? calendarWeeks(thisMonth, todayKey) : []),
+    [shape, thisMonth, todayKey],
   );
 
   const params = useMemo(
@@ -503,7 +489,7 @@ export function ItemsView({
   // Twenty seconds: a board is read, not watched, and a tracker's own pace is
   // a person typing a comment.
   const paged = usePagedItems(params, { pollMs: ITEMS_POLL_MS });
-  const { data, loading, error, refusal } = paged;
+  const { data, loading, error } = paged;
 
   // A TRASH LISTING IS THE ONE VIEW WHOSE ROWS DO NOT CARRY THEIR OWN STORY.
   // The row says a task is removed; WHO removed it, WHEN, and whether the
@@ -540,12 +526,8 @@ export function ItemsView({
     () => drawnRows(rows, groups, shape === "board" ? hidden : NOTHING_HIDDEN),
     [rows, groups, shape, hidden],
   );
-  //
-  // BY ADDRESS, like everything else that names a row here — see
-  // [itemAddress]: a key two rows share would make the stepper land on the
-  // claimant from both of them.
   const neighbours = useMemo(
-    () => drawn.map((r) => ({ kind: "item" as const, id: itemAddress(r) })),
+    () => drawn.map((r) => ({ kind: "item" as const, id: r.key })),
     [drawn],
   );
   // AND THE QUESTION, so a task opened through the peek's Open carries it like
@@ -557,11 +539,10 @@ export function ItemsView({
   usePeekNeighbours(neighbours, listQuery);
 
   // WHAT IS HAPPENING ON THE CARDS: the turn a seat is running on each task,
-  // its holder's state ring, and the coding runs parked on a question put to
-  // THIS READER — every task keyed on its ID, which no two tasks share, where
-  // a key two tasks hold would draw one task's turn on both cards. All the
-  // engine's words: `activity` from the push, the item the turn is charged
-  // to, and `decisions`' own reading of which runs wait on this person.
+  // its holder's state ring, and — for a bound reader — the coding runs parked
+  // on a question put to THEM. All the engine's words: `activity` from the
+  // push, the item the turn is charged to, and `decisions`' own reading of
+  // which runs wait on this person.
   const live = useMemo(() => liveOnItems(agents), [agents]);
   const rings = useMemo(() => {
     const out = new Map<string, SeatRing>();
@@ -571,10 +552,6 @@ export function ItemsView({
     }
     return out;
   }, [agents]);
-  // THE READER'S OWN RECORD, asked by nothing but their credential: a run is
-  // parked on a question to whoever requested it — a seat, or a person the
-  // directory binds to none, whose record is their login — so an UNBOUND
-  // reader has runs waiting on them too, and gating this on a seat hid them.
   const decisions = useQuery("decisions", undefined, {
     enabled: shape === "board" && viewer.owner !== "",
     pollMs: ITEMS_POLL_MS,
@@ -582,8 +559,8 @@ export function ItemsView({
   const waiting = useMemo(() => {
     const out = new Map<string, CardWaiting>();
     for (const item of decisions.data?.items ?? []) {
-      const id = item.run?.work_item?.id;
-      if (item.kind === "run" && id && !out.has(id)) out.set(id, { since: item.run?.paused_at });
+      const key = item.run?.work_item?.key;
+      if (item.kind === "run" && key && !out.has(key)) out.set(key, { since: item.run?.paused_at });
     }
     return out;
   }, [decisions.data]);
@@ -597,8 +574,8 @@ export function ItemsView({
   // when a task on screen loses its running turn, the list asks again then,
   // rather than drawing the task as it was for up to a poll's length.
   const runningHere = drawn
-    .filter((r) => live.has(r.id))
-    .map((r) => r.id)
+    .filter((r) => live.has(r.key))
+    .map((r) => r.key)
     .join(",");
   const wasRunning = useRef("");
   // THE BAR'S RUN, which scrolls on a phone and fades the edge with more past
@@ -608,9 +585,9 @@ export function ItemsView({
   const { refetch } = paged;
   useEffect(() => {
     const before = wasRunning.current ? wasRunning.current.split(",") : [];
-    const running = new Set(runningHere ? runningHere.split(",") : []);
+    const now = new Set(runningHere ? runningHere.split(",") : []);
     wasRunning.current = runningHere;
-    if (before.some((id) => !running.has(id))) refetch();
+    if (before.some((key) => !now.has(key))) refetch();
   }, [runningHere, refetch]);
   const shown = useMemo(() => shownRows(rows, groups), [rows, groups]);
   // THE BANDS A LIST DRAWS, which are not the lanes a board draws — see
@@ -618,16 +595,11 @@ export function ItemsView({
   // over nothing is a rule separating nothing from nothing.
   const bands = useMemo(() => bandsOf(groups), [groups]);
 
-  // HELD STILL on what it is made of. The grid's column list is built from it,
-  // and every grid row is memoised on that list: a literal here was a new
-  // value on every render — a keystroke in the filter box, an inbox push, the
-  // poll — and every row of the list drew again with it.
-  const types = catalogue.data?.types;
-  const statuses = detail?.statuses;
-  const chrome = useMemo<RowChrome>(
-    () => ({ ...seatResolvers(index), types, statuses }),
-    [index, types, statuses],
-  );
+  const chrome: RowChrome = {
+    ...seatResolvers(index),
+    types: catalogue.data?.types,
+    statuses: detail?.statuses,
+  };
   // WHO THE FILTER MENU CAN OFFER, held still across renders. The menu builds
   // its field list behind a memo keyed on this, and a fresh array literal in
   // the JSX is a new identity every render — so that memo rebuilt every field,
@@ -697,18 +669,10 @@ export function ItemsView({
     setFilters(patch);
   };
 
-  // WHERE A ROW GOES AND WHAT A PLAIN CLICK PEEKS, both by the row's ADDRESS
-  // and never by its key: a task flagged `key_collision` holds a key another
-  // task claimed first, and that key opens the claimant — so both of a pair
-  // drew one link and peeked one task. ONE pair of functions for every shape,
-  // so the board, the grid, the timeline and the calendar cannot disagree
-  // about which task a row is.
-  //
-  // AND A TASK OPENED FROM HERE CARRIES THIS LIST'S QUESTION, so its own page
-  // can ask where it sits in it (`around=`) and step to the next one.
+  // A TASK OPENED FROM HERE CARRIES THIS LIST'S QUESTION, so its own page can
+  // ask where it sits in it (`around=`) and step to the next one.
   const list = useMemo(() => listParam(params), [params]);
-  const itemHref = (row: WorkSummary) => href(itemPath(row), list ? { list } : undefined);
-  const openItem = (row: WorkSummary) => openPeek({ kind: "item", id: itemAddress(row) });
+  const itemHref = (row: WorkSummary) => href(["work", row.key], list ? { list } : undefined);
 
   // WHERE A COLUMN FOOTER GOES, as the link the browser follows on a middle
   // click and shows in the status bar. Built here because this is the only
@@ -785,8 +749,8 @@ export function ItemsView({
   const pageMore = paged.next
     ? {
         load: paged.more,
-        note: paged.pageFailure
-          ? nextPageFailed(paged.pageFailure)
+        note: paged.pageError
+          ? "The next page could not be read — try again."
           : loadedOf(rows.length, data?.total_hint ?? 0, data?.total_capped),
       }
     : undefined;
@@ -985,7 +949,7 @@ export function ItemsView({
               used to describe one — and that prop takes a title and a hint. A
               refusal and a pending read still come first: they are the two
               states an empty list must never be confused with. */}
-          <QueryState error={error} refusal={refusal} loading={loading}>
+          <QueryState error={error} loading={loading}>
             {nothingShown ? (
               <EmptyList
                 narrowed={filtered}
@@ -1004,13 +968,14 @@ export function ItemsView({
                 does. */}
             {!nothingShown && shape === "board" && (
               <Board
+                now={now}
                 groups={groups}
                 axis={String(params.group_by ?? "status")}
                 chrome={chrome}
                 detail={detail}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
-                onOpen={openItem}
+                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
                 onOverflow={(axis, key) => openOverflow(filterPatchForGroup(axis, key), "push")}
                 overflowHref={boardOverflowHref}
                 facts={facts}
@@ -1051,10 +1016,11 @@ export function ItemsView({
                 subAxis={String(params.group_by2 ?? "")}
                 chrome={chrome}
                 detail={detail}
+                now={now}
                 workspace={!project}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
-                onOpen={openItem}
+                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
                 onOverflow={(axis, key) => openOverflow({ group_by: axis, group: key }, "replace")}
                 overflowHref={listOverflowHref}
                 removals={inTrash ? removals : undefined}
@@ -1074,8 +1040,9 @@ export function ItemsView({
                 groups={bands}
                 chrome={chrome}
                 selected={peek?.kind === "item" ? peek.id : ""}
+                now={now}
                 hrefOf={itemHref}
-                onOpen={openItem}
+                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
                 more={pageMore}
               />
             )}
@@ -1086,7 +1053,7 @@ export function ItemsView({
                 month={thisMonth}
                 chrome={chrome}
                 hrefOf={itemHref}
-                onOpen={openItem}
+                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
                 onMonth={setMonth}
                 onToday={() => setMonth("")}
                 dayHref={dayListHref}
@@ -1096,31 +1063,13 @@ export function ItemsView({
             )}
           </QueryState>
 
-          {inTrash && <PurgeBand records={purges} answer={tombstones.data ?? undefined} />}
+          {inTrash && (
+            <PurgeBand records={purges} answer={tombstones.data ?? undefined} now={now} />
+          )}
         </div>
       </div>
     </>
   );
-}
-
-/**
- * What a "Load more" that failed says in the list's foot.
- *
- * "TRY AGAIN" ONLY WHERE AGAIN CAN ANSWER. A page the state log refused with
- * no wait behind it (`retryAfter` 0 — a log this node cannot decode, a node
- * evicted from it) is refused the same way on every press, so telling the
- * reader to press again sends them round a loop the engine already said has
- * no exit.
- */
-function nextPageFailed(failure: QueryFailure): string {
-  const { refusal } = failure;
-  if (refusal && isLogRefusal(refusal) && refusal.retryAfter === 0) {
-    return "The next page was refused by this node's log, and asking again will not change that.";
-  }
-  if (failure.error === "unauthorized") {
-    return "The next page was refused — your credential does not reach it.";
-  }
-  return "The next page could not be read — try again.";
 }
 
 /** Whether a `shape=` off the address is one this product draws. */

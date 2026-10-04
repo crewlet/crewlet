@@ -76,7 +76,7 @@ describe("the rows", () => {
     expect(
       rows.decisions[0]!.kind === "decision" && rows.decisions[0]!.notices.map((n) => n.record_id),
     ).toEqual(["r-1"]);
-    expect(rows.notices.map((r) => r.id)).toEqual(["r-2"]);
+    expect(rows.notices.map((r) => r.key)).toEqual(["r-2"]);
   });
 
   test("the Snoozed scope holds no decisions", () => {
@@ -111,7 +111,7 @@ describe("the rows", () => {
     const counts = chipCounts(rows);
     expect(counts).toEqual({ "": 4, decisions: 2, reviews: 1, mentions: 1, assigned: 1 });
     const all: InboxRow[] = [...rows.decisions, ...rows.notices];
-    expect(all.filter((r) => rowMatches(r, "assigned")).map((r) => r.id)).toEqual(["r-2"]);
+    expect(all.filter((r) => rowMatches(r, "assigned")).map((r) => r.key)).toEqual(["r-2"]);
   });
 });
 
@@ -122,11 +122,11 @@ describe("the day groups", () => {
   test("are cut at the company's midnight, not the reader's", () => {
     const now = Date.parse("2026-09-27T03:00:00Z");
     const rows: InboxRow[] = [
-      { kind: "notice", id: "a", at: "2026-09-27T02:00:00Z", notice: notice("a") },
-      { kind: "notice", id: "b", at: "2026-09-26T05:00:00Z", notice: notice("b") },
-      { kind: "notice", id: "c", at: "2026-09-24T12:00:00Z", notice: notice("c") },
+      { kind: "notice", key: "a", at: "2026-09-27T02:00:00Z", notice: notice("a") },
+      { kind: "notice", key: "b", at: "2026-09-26T05:00:00Z", notice: notice("b") },
+      { kind: "notice", key: "c", at: "2026-09-24T12:00:00Z", notice: notice("c") },
     ];
-    const utc = dayGroups(rows, now, "UTC").map((g) => [g.label, g.rows.map((r) => r.id)]);
+    const utc = dayGroups(rows, now, "UTC").map((g) => [g.label, g.rows.map((r) => r.key)]);
     expect(utc).toEqual([
       ["Today", ["a"]],
       ["Yesterday", ["b"]],
@@ -134,7 +134,7 @@ describe("the day groups", () => {
     ]);
     const ny = dayGroups(rows, now, "America/New_York").map((g) => [
       g.label,
-      g.rows.map((r) => r.id),
+      g.rows.map((r) => r.key),
     ]);
     expect(ny).toEqual([
       ["Today", ["a", "b"]],

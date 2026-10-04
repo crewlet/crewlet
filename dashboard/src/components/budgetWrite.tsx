@@ -13,9 +13,8 @@
  *
  * NEVER HIDDEN. Both are drawn for every reader and disabled with the reason
  * for one who cannot change the company's configuration
- * (`useConfigWriteAccess`), which is a different gate from acting in it: the
- * company's ceiling is a `/config` change and a seat's is its org chart
- * runtime half, and both are the company's grant (`config:write`).
+ * (`useConfigWriteAccess`), which is a different gate from acting in it: a
+ * ceiling is a `/config` change, written under `config:write`.
  *
  * THERE IS NO RESET, and nothing here offers one. A window's `used` IS what
  * the window spent; the room comes back when it turns over on the company
@@ -93,12 +92,6 @@ function WriteStatus({ write, onReload }: { write: CeilingWrite; onReload: () =>
           </ul>
         </Callout>
       )}
-      {state.kind === "unknown" && (
-        // NOT A REFUSAL AND NOT A SAVE: the change may have landed. The form's
-        // own button turns into "Send again" ([pressLabel]), which resends the
-        // SAME operation — a fresh one would be a second write.
-        <Callout variant="warning">{state.message}</Callout>
-      )}
       {state.kind === "refused" && (
         <Callout variant="danger">
           <span>{state.message}</span>
@@ -115,32 +108,12 @@ function WriteStatus({ write, onReload }: { write: CeilingWrite; onReload: () =>
   );
 }
 
-/**
- * Whether the form's own button sends what the last press held rather than
- * the typed values: a write a check WARNED about, confirmed as checked, and
- * one whose outcome is UNKNOWN, resent under its own operation — the typed
- * values pressed again would be a second write beside a first that may have
- * landed.
- */
-function resends(write: CeilingWrite): boolean {
-  return write.state.kind === "warned" || write.state.kind === "unknown";
-}
-
-/** The form's own button, in the words of what it will do. */
-function pressLabel(write: CeilingWrite): string {
-  return write.state.kind === "warned"
-    ? "Save anyway"
-    : write.state.kind === "unknown"
-      ? "Send again"
-      : "Save";
-}
-
 // ---------------------------------------------------------------------------
 // One window, in place
 // ---------------------------------------------------------------------------
 
 /**
- * One window's ceiling as a figure, and — for a reader holding `config:write` — as a field.
+ * One window's ceiling as a figure, and — for a `config:write` holder — as a field.
  *
  * WHAT IT SHOWS AFTER A SAVE is the ceiling SAVED, marked as applying, until
  * this node has applied it and the answer the screen draws carries it. Going
@@ -225,8 +198,8 @@ export function CeilingEditor({
     event?.preventDefault();
     if (write.busy) return;
     // ENTER ON A WARNING IS THE SECOND PRESS the warning asked for, exactly
-    // as the button under it is — and on an unknown, the resend.
-    if (resends(write)) {
+    // as the button under it is.
+    if (write.state.kind === "warned") {
       write.confirm();
       return;
     }
@@ -317,13 +290,13 @@ export function CeilingEditor({
               Cancel
             </Button>
             <Button
-              type={resends(write) ? "button" : "submit"}
+              type={write.state.kind === "warned" ? "button" : "submit"}
               size="small"
               variant="primary"
               loading={write.busy}
-              onClick={resends(write) ? write.confirm : undefined}
+              onClick={write.state.kind === "warned" ? write.confirm : undefined}
             >
-              {pressLabel(write)}
+              {write.state.kind === "warned" ? "Save anyway" : "Save"}
             </Button>
           </div>
         </form>
@@ -428,7 +401,7 @@ export function RaiseBudgetDialog({
             ? "Waiting for the engine to answer."
             : undefined;
 
-  const warned = resends(write);
+  const warned = write.state.kind === "warned";
   const save = () => {
     if (warned) write.confirm();
     else if (!blocked) write.submit(values);
@@ -457,7 +430,7 @@ export function RaiseBudgetDialog({
             disabledReason={warned ? undefined : blocked}
             title={warned ? undefined : blocked}
           >
-            {pressLabel(write)}
+            {warned ? "Save anyway" : "Save"}
           </Button>
         </>
       }

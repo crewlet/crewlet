@@ -1,36 +1,14 @@
 /**
- * The check: when the builder asks the engine about the draft, what the
- * answer means, and what saving is allowed to do meanwhile.
+ * The dry-run check: when the builder asks the engine about the draft, what
+ * the answer means, and what saving is allowed to do meanwhile.
  *
- * WHAT A CHECK ASKS. The org chart has no dry run — a batch and a content
- * write are decided when they are written — so a check asks the two things
- * that can be asked without writing, and says the rest itself:
- *
- * - IS THE CHART STILL THE ONE THE DRAFT WAS MADE ON? It reads the chart and
- *   compares its rows with the base's ([chartPrint]): a content write is full
- *   post-state and carries no precondition, so a draft saved over rows
- *   somebody else changed would put back what they wrote. That is the lost
- *   update this check exists to catch, and it is a `conflict`, which halts.
- *   In create mode the question is whether the chart is still empty.
- * - WOULD THE SETTINGS BE TAKEN? When the draft changes them (always in
- *   create mode) their dry run is the same request the save sends, and its
- *   problems and a newer revision are reported as they always were. When it
- *   changes none, the check READS them instead and compares the revision with
- *   the base: the save would write no settings, so there is nothing to
- *   validate, but a draft nobody touched still has to stand on the charter a
- *   colleague saved rather than go on showing the one it was loaded with —
- *   and a draft with work on it has to hear of that revision now, not at the
- *   first settings edit, when the conflict would name a change made an hour
- *   earlier.
- * - WHAT DOES THE DRAFT'S OWN SHAPE SAY? `problems.preflight`, synchronously,
- *   with the answer: an address the chart would refuse, a field past its cap.
- *
- * EVERY GENERATION IS CHECKED, AND ONLY ITS OWN ANSWER IS USED. Every change
- * to the draft (an operation, an undo, a redo, a rebase, a discard, a load)
- * moves its GENERATION, and the check that answers for a generation is the
- * only one whose answer is used: a request is aborted as soon as a newer
+ * THE ENGINE IS THE VALIDATOR, SO IT IS ASKED OFTEN AND ASKED EXACTLY. Every
+ * change to the draft (an operation, an undo, a redo, a rebase, a discard, a
+ * load) moves its GENERATION, and the check that answers for a generation is
+ * the only one whose answer is used: a request is aborted as soon as a newer
  * generation supersedes it, and an answer that still arrives for an older one
- * is dropped.
+ * is dropped. Each answer travels with the document that was sent, because
+ * the problems in it name paths in THAT document.
  *
  * A PURE STATE MACHINE, AND A SMALL DRIVER. [transition] takes the state and
  * one event and returns the next state with the effects to perform (send,
@@ -38,59 +16,41 @@
  * transport. The machine is where every rule is, and every rule is tested
  * without a timer or a socket.
  *
- * ONE CHECK IN FLIGHT. It reads the whole chart and may validate the whole
- * settings document, so two in flight for one tab would only race to be
- * dropped.
+ * ONE REQUEST IN FLIGHT. A dry run validates and derives the whole company, so
+ * two in flight for one tab would only race to be dropped.
  *
  * STATES. `checking` while an answer for the current generation is due;
- * `clean` and `problems` for a checked draft; `conflict` when the engine holds
- * a newer company than the draft's base (the chart's rows changed; a settings
- * 409 or 412, or a dry run reporting a different base); `guarded` when it
- * refused the credential (401 or 403); `unreachable` when a request was never
- * answered or the engine failed (status 0, or a 5xx). A draining node's `503
- * draining` is one of those, deliberately: the drain ends, so the retry
- * reaches a peer behind a load balancer, or this node once it has restarted.
+ * `clean` and `problems` for a validated draft; `conflict` when the engine
+ * holds a newer revision than the draft's base (a 409, a 412, or a dry run
+ * reporting a different base); `guarded` when it refused the token (401 or
+ * 403); `unreachable` when the request was never answered or the engine
+ * failed (status 0, or a 5xx). A draining node's `503 draining` is one of
+ * those, deliberately: the drain ends, so the retry reaches a peer behind a
+ * load balancer, or this node once it has restarted.
  *
  * TWO OF THEM HALT. `conflict` and `guarded` do not change by asking again:
  * the answer to the next check is the same refusal. So a change to the draft
  * in one of them sends nothing, and checking resumes only on a reset (a load,
- * an updated draft, a change of reader).
+ * an updated draft, a token change).
  *
  * `unreachable` BACKS OFF. Asking again at every keystroke would hammer an
  * engine that is restarting, or a network that is down, with requests that
  * each wait out the transport's deadline. After a failure the next check waits
- * [unansweredRetryMs] — the one backoff every unanswered request in this
- * dashboard takes (`~/protocol/retry.ts`), doubling per consecutive failure up
- * to a cap — and changes made meanwhile ride that retry instead of scheduling
- * their own.
- *
- * UNLESS THE ENGINE SAID WHEN. A `503` the engine wrote carries a
- * `Retry-After` — a node behind the chart's log says how far, a draining one
- * says thirty seconds — and the retry waits exactly that
- * (`~/protocol/retry.ts`, bounded like every hint), where the backoff asked a
- * node twelve seconds behind at one, two, four and eight seconds first. And a
- * `503` it wrote with NO `Retry-After` is its statement that waiting will not
- * change the answer — a chart log at its ceiling, a record the node cannot
- * decode — so nothing re-asks it on a timer: the check stays `unreachable`
- * with no retry due, and the next change to the draft is asked about as a
- * fresh question, because a person editing is the one thing that may come
- * after an operator's fix.
+ * [backoffDelay], doubling per consecutive failure up to a cap, and changes
+ * made meanwhile ride that retry instead of scheduling their own.
  */
 
-import type { ChartRead, ConfigProblem, ConfigWarning, DryRunResult } from "~/protocol/index.ts";
-import { chartPrint, fingerprint } from "./document.ts";
-import type { Draft } from "./draft.ts";
+import type { ConfigProblem, ConfigWarning, Derived, DryRunResult } from "~/protocol/index.ts";
+import { classifyConfigRefusal, type ConfigConflictReason } from "~/protocol/configAnswer.ts";
+import type { IndexedDocument } from "./document.ts";
 import { isRecord } from "./json.ts";
-import { placeSettingsFindings, preflight, type PlacedProblem } from "./problems.ts";
-import { retryAfterMs, unansweredRetryMs } from "~/protocol/retry.ts";
-import {
-  revisionOfEtag,
-  type BuilderMode,
-  type Clock,
-  type CancelTimer,
-  type EngineRequest,
-  type EngineTransport,
-  type HttpAnswer,
+import type {
+  BuilderMode,
+  Clock,
+  CancelTimer,
+  ConfigRequest,
+  ConfigTransport,
+  HttpAnswer,
 } from "./transport.ts";
 
 /**
@@ -100,7 +60,7 @@ import {
  * the node editor applies a whole form as one operation, so typing is not a
  * stream of them), and the answer to a single act should arrive while the
  * operator is still looking at what they did. What must coalesce is a burst:
- * a held Ctrl+Z or Shift+Ctrl+Z repeats at the platform's key-repeat interval,
+ * a held Alt+Down or Ctrl+Z repeats at the platform's key-repeat interval,
  * about 30 to 50 ms, after an initial delay of 250 ms or more. Three hundred
  * milliseconds sits above the repeat interval, so a held key sends one check
  * when it is released rather than one per repeat, and well under the half
@@ -108,36 +68,51 @@ import {
  */
 export const CHECK_DEBOUNCE_MS = 300;
 
+/**
+ * The wait before the first retry after an unanswered or failed check. One
+ * second is long enough not to spin against a refused connection and short
+ * enough to recover as soon as a restarting engine accepts one.
+ */
+export const CHECK_BACKOFF_BASE_MS = 1_000;
+
+/**
+ * The longest wait between retries: `REQUEST_TIMEOUT_MS` in `protocol/rest.ts`,
+ * the longest a single attempt may itself take, so an engine that recovers is
+ * never noticed later than one more attempt would have taken to fail.
+ */
+export const CHECK_BACKOFF_MAX_MS = 30_000;
+
+/** The wait before retry `failures` (1 for the first). */
+export function backoffDelay(failures: number): number {
+  const exponent = Math.max(0, failures - 1);
+  return Math.min(CHECK_BACKOFF_MAX_MS, CHECK_BACKOFF_BASE_MS * 2 ** Math.min(exponent, 30));
+}
+
 export type CheckStatus =
   "checking" | "clean" | "problems" | "conflict" | "guarded" | "unreachable";
 
-/** Why the engine holds a company the draft was not built on. */
+/**
+ * Why the engine holds a revision the draft was not built on: every reason
+ * a `/config` refusal names (`protocol/configAnswer.ts`), and one only a
+ * check can see.
+ */
 export type ConflictReason =
-  /** `409 revision_advanced`: another settings write activated after the draft's base. */
-  | "revision_advanced"
-  /** `412 already_configured`: a company exists, and the draft was creating one. */
-  | "already_configured"
-  /** `409` or `412 no_active_revision`: the draft edits a company the engine no longer holds. */
-  | "no_active_revision"
-  /** A settings dry run validated against a base other than the draft's. */
-  | "base_moved"
-  /** The chart's rows are not the ones the draft was made on: somebody else wrote them. */
-  | "chart_moved"
-  /** The draft creates a company, and the chart already holds seats or units. */
-  | "chart_exists";
+  | ConfigConflictReason
+  /** A dry run validated against a base other than the draft's. */
+  | "base_moved";
 
 /** What one answered check means. */
 export type CheckOutcome =
   | {
       readonly status: "clean";
-      /** Warnings only: the draft's own and the settings dry run's. */
-      readonly findings: readonly PlacedProblem[];
+      readonly warnings: readonly ConfigWarning[];
+      readonly derived: Derived | null;
     }
   | {
       readonly status: "problems";
-      /** At least one problem, beside any warnings. */
-      readonly findings: readonly PlacedProblem[];
-      /** The settings refusal's code and hint, when it was the settings that were refused. */
+      /** Never empty: a refusal carrying none is given one at document level from its detail. */
+      readonly problems: readonly ConfigProblem[];
+      readonly derived: Derived | null;
       readonly code: string;
       readonly hint: string;
     }
@@ -146,238 +121,70 @@ export type CheckOutcome =
       readonly reason: ConflictReason;
       readonly currentRevisionId: string | null;
     }
-  | {
-      readonly status: "guarded";
-      /**
-       * The grants the refusal named, any ONE of which would admit this
-       * reader — empty for a 401, where nothing the engine accepted was
-       * presented. Read from the answer, never written here.
-       */
-      readonly grants: readonly string[];
-    }
-  | {
-      readonly status: "unreachable";
-      readonly detail: string;
-      /**
-       * When the engine said to ask again — [HttpAnswer.retryAfter], seconds,
-       * zero for "waiting will not change it" — or null where it said nothing
-       * and the check backs off on its own.
-       */
-      readonly retryAfter: number | null;
-    };
+  | { readonly status: "guarded" }
+  | { readonly status: "unreachable"; readonly detail: string };
 
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 const list = <T>(value: unknown): readonly T[] => (Array.isArray(value) ? (value as T[]) : []);
-
-/** The grants a 401 or a 403 names, parsed here because this directory takes nothing from `~/protocol` at runtime. */
-function grantsOf(body: Record<string, unknown>): string[] {
-  return list<unknown>(body.grants).filter((g): g is string => typeof g === "string");
-}
-
-/** What a settings dry run said, as far as a check is concerned. */
-export type SettingsAnswer =
-  | {
-      readonly kind: "taken";
-      readonly warnings: readonly ConfigWarning[];
-    }
-  | {
-      readonly kind: "refused";
-      readonly problems: readonly ConfigProblem[];
-      readonly code: string;
-      readonly hint: string;
-    }
-  | { readonly kind: "outcome"; readonly outcome: CheckOutcome };
+const derivedOf = (value: unknown): Derived | null =>
+  isRecord(value) ? (value as unknown as Derived) : null;
 
 /**
- * What a settings dry run's answer means for a draft built on `baseRevision`.
- * A save's refusal answers with the same codes, and `writes.ts` reads a
- * settings write through the same function.
+ * What an answer to a check means for a draft built on `baseRevision`.
+ *
+ * Also used for a save's refusal: a write answers with the same codes, and a
+ * 201 is classified by `writes.ts`, which is the only place a success differs.
  */
-export function classifySettings(
+export function classifyCheck(
   answer: HttpAnswer,
   mode: BuilderMode,
   baseRevision: string | null,
-): SettingsAnswer {
-  const body = isRecord(answer.body) ? answer.body : {};
-  const code = text(body.error);
-  const current = text(body.current_revision_id) || null;
-
+): CheckOutcome {
   if (answer.status >= 200 && answer.status < 300) {
+    const body = isRecord(answer.body) ? answer.body : {};
     const result = body as Partial<DryRunResult>;
     const answeredBase = text(result.base_revision_id);
     if (
       mode === "edit" ? answeredBase !== "" && answeredBase !== baseRevision : answeredBase !== ""
     ) {
       return {
-        kind: "outcome",
-        outcome: {
-          status: "conflict",
-          reason: mode === "edit" ? "base_moved" : "already_configured",
-          currentRevisionId: answeredBase,
-        },
+        status: "conflict",
+        reason: mode === "edit" ? "base_moved" : "already_configured",
+        currentRevisionId: answeredBase,
       };
     }
-    return { kind: "taken", warnings: list<ConfigWarning>(result.warnings) };
-  }
-  if (answer.status === 401 || answer.status === 403) {
-    return { kind: "outcome", outcome: { status: "guarded", grants: grantsOf(body) } };
-  }
-  if (answer.status === 409 || answer.status === 412) {
-    const reason: ConflictReason =
-      code === "no_active_revision"
-        ? "no_active_revision"
-        : code === "already_configured"
-          ? "already_configured"
-          : "revision_advanced";
-    return { kind: "outcome", outcome: { status: "conflict", reason, currentRevisionId: current } };
-  }
-  if (answer.status === 0 || answer.status >= 500) {
     return {
-      kind: "outcome",
-      outcome: {
-        status: "unreachable",
-        detail: text(body.detail) || code,
-        retryAfter: answer.retryAfter ?? null,
-      },
+      status: "clean",
+      warnings: list<ConfigWarning>(result.warnings),
+      derived: derivedOf(result.derived),
     };
   }
-  // Every other refusal is about the document or the request that carried it:
-  // a validation error, a patch the engine could not apply, a body too large.
-  const problems = list<ConfigProblem>(body.problems);
-  const detail =
-    text(body.detail) || code || `The engine refused the settings with status ${answer.status}.`;
-  return {
-    kind: "refused",
-    problems:
-      problems.length > 0
-        ? problems
-        : [{ path: "", segments: null, kind: "invalid", message: detail }],
-    code,
-    hint: text(body.hint),
-  };
-}
-
-/**
- * What a plain read of the settings says about an edit draft that changes none
- * of them: nothing while the engine serves the draft's base revision, and the
- * dry run's own conflicts otherwise — a newer revision is `revision_advanced`,
- * as a 409 is, and a company that is gone is `no_active_revision`.
- */
-export function classifySettingsRead(
-  answer: HttpAnswer,
-  baseRevision: string | null,
-): SettingsAnswer | null {
-  const body = isRecord(answer.body) ? answer.body : {};
-  const outcome = (o: CheckOutcome): SettingsAnswer => ({ kind: "outcome", outcome: o });
-  if (answer.status === 200) {
-    const current = revisionOfEtag(answer.etag);
-    return current === baseRevision
-      ? null
-      : outcome({ status: "conflict", reason: "revision_advanced", currentRevisionId: current });
+  // EVERY REFUSAL IS READ THE WAY EVERY OTHER /config WRITER READS IT
+  // (`protocol/configAnswer.ts`). A check has no stored revision to settle,
+  // so a drain and an unanswered request are the same thing to it: the
+  // engine could not be asked, and the scheduler asks again.
+  const refusal = classifyConfigRefusal(answer);
+  switch (refusal.kind) {
+    case "guarded":
+      return { status: "guarded" };
+    case "conflict":
+      return {
+        status: "conflict",
+        reason: refusal.reason,
+        currentRevisionId: refusal.currentRevisionId,
+      };
+    case "draining":
+    case "unreachable":
+      return { status: "unreachable", detail: refusal.detail };
+    case "problems":
+      return {
+        status: "problems",
+        problems: refusal.problems,
+        derived: refusal.derived,
+        code: refusal.code,
+        hint: refusal.hint,
+      };
   }
-  if (answer.status === 401 || answer.status === 403) {
-    return outcome({ status: "guarded", grants: grantsOf(body) });
-  }
-  if (answer.status === 404 && text(body.error) === "no_active_revision") {
-    return outcome({ status: "conflict", reason: "no_active_revision", currentRevisionId: null });
-  }
-  return outcome({
-    status: "unreachable",
-    detail:
-      text(body.detail) ||
-      text(body.error) ||
-      (answer.status === 0
-        ? "The engine could not be reached."
-        : `The engine answered the settings read with status ${answer.status}.`),
-    retryAfter: answer.retryAfter ?? null,
-  });
-}
-
-/**
- * What a chart read says about a draft: nothing (the rows are the base's, or
- * in create mode there are none), or the outcome that stops the check.
- */
-export function classifyChart(
-  answer: HttpAnswer,
-  mode: BuilderMode,
-  basePrint: string,
-): CheckOutcome | null {
-  const body = isRecord(answer.body) ? answer.body : {};
-  if (answer.status === 401 || answer.status === 403) {
-    return { status: "guarded", grants: grantsOf(body) };
-  }
-  if (answer.status !== 200) {
-    return {
-      status: "unreachable",
-      detail:
-        text(body.detail) ||
-        text(body.error) ||
-        (answer.status === 0
-          ? "The engine could not be reached."
-          : `The engine answered the chart read with status ${answer.status}.`),
-      retryAfter: answer.retryAfter ?? null,
-    };
-  }
-  const chart = body as unknown as ChartRead;
-  if (mode === "create") {
-    const holds = list(chart.seats).length > 0 || list(chart.units).length > 0;
-    return holds ? { status: "conflict", reason: "chart_exists", currentRevisionId: null } : null;
-  }
-  return fingerprint(chartPrint(chart)) === basePrint
-    ? null
-    : { status: "conflict", reason: "chart_moved", currentRevisionId: null };
-}
-
-/**
- * The outcome of a check from its parts: the chart's word, the settings' (or
- * `null` when there were none to check), and the draft's own problems.
- * A halting answer from either request outranks everything, an unanswered one
- * comes next, and only a draft both requests took is judged on its problems.
- */
-export function combineCheck(
-  chart: CheckOutcome | null,
-  settings: SettingsAnswer | null,
-  own: readonly PlacedProblem[],
-): CheckOutcome {
-  const settingsOutcome = settings?.kind === "outcome" ? settings.outcome : null;
-  for (const status of ["guarded", "conflict"] as const) {
-    if (chart?.status === status) return chart;
-    if (settingsOutcome?.status === status) return settingsOutcome;
-  }
-  const unanswered = [chart, settingsOutcome].filter(
-    (o): o is Extract<CheckOutcome, { status: "unreachable" }> => o?.status === "unreachable",
-  );
-  if (unanswered.length > 0) {
-    // THE CHART'S WORDS, AND BOTH REQUESTS' HINTS: the next check asks both
-    // again, so it waits for whichever said it needs longer — and never,
-    // when either said waiting will not change it.
-    return { ...unanswered[0]!, retryAfter: joinHints(unanswered.map((o) => o.retryAfter)) };
-  }
-  const findings: PlacedProblem[] = [...own];
-  let code = "";
-  let hint = "";
-  if (settings?.kind === "taken") {
-    findings.push(...placeSettingsFindings({ warnings: settings.warnings }));
-  } else if (settings?.kind === "refused") {
-    findings.push(...placeSettingsFindings({ problems: settings.problems }));
-    code = settings.code;
-    hint = settings.hint;
-  }
-  return findings.some((f) => f.severity === "problem")
-    ? { status: "problems", findings, code, hint }
-    : { status: "clean", findings };
-}
-
-/**
- * One retry hint for a check whose requests each said one: zero if either said
- * waiting will not change it, the longer of two that said when, and null only
- * where neither said anything — a request the engine did not answer says
- * nothing about the one it did.
- */
-function joinHints(hints: readonly (number | null)[]): number | null {
-  if (hints.some((h) => h === 0)) return 0;
-  const said = hints.filter((h): h is number => h !== null);
-  return said.length > 0 ? Math.max(...said) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -389,7 +196,7 @@ export interface InFlight {
   readonly generation: number;
   /**
    * Numbered per request, not per generation: a reset checks the SAME
-   * generation again (a change of reader moves no generation), and the answer
+   * generation again (a token change moves no generation), and the answer
    * to the request it replaced must not be taken for the answer to the new
    * one.
    */
@@ -405,11 +212,7 @@ export interface CheckState {
   readonly requests: number;
   /** When the next request is due, if one is scheduled. */
   readonly dueAt: number | null;
-  /**
-   * Consecutive unanswered or failed checks that a later retry may clear. A
-   * refusal the engine said waiting will not change is not one: nothing
-   * re-asks it on a timer, so there is no backoff for it to lengthen.
-   */
+  /** Consecutive unanswered or failed checks. */
   readonly failures: number;
   /** A halting status holds: changes send nothing until a reset. */
   readonly halted: boolean;
@@ -418,7 +221,7 @@ export interface CheckState {
 export type CheckEvent =
   /**
    * Check this generation now, whatever is in flight, forgetting any halt: a
-   * load, an updated draft, a save, or a change of reader (which moves no
+   * load, an updated draft, a save, or a token change (which moves no
    * generation but may change every answer).
    */
   | { readonly type: "reset"; readonly generation: number; readonly now: number }
@@ -432,11 +235,6 @@ export type CheckEvent =
       readonly request: number;
       readonly status: Exclude<CheckStatus, "checking">;
       readonly now: number;
-      /**
-       * For an `unreachable` answer, when the engine said to ask again (see
-       * the outcome's `retryAfter`); absent or null where it said nothing.
-       */
-      readonly retryAfter?: number | null;
     };
 
 export type CheckEffect =
@@ -499,7 +297,7 @@ export function transition(state: CheckState, event: CheckEvent): Transition {
       if (state.halted) return { state: base, effects };
       if (state.failures > 0) {
         // Ride the retry that is already scheduled.
-        const dueAt = state.dueAt ?? event.now + unansweredRetryMs(state.failures);
+        const dueAt = state.dueAt ?? event.now + backoffDelay(state.failures);
         if (state.dueAt === null) effects.push({ type: "wake", at: dueAt });
         return { state: { ...base, dueAt }, effects };
       }
@@ -526,26 +324,8 @@ export function transition(state: CheckState, event: CheckEvent): Transition {
         return { state: { ...state, inFlight: null }, effects };
       }
       if (event.status === "unreachable") {
-        const hint = event.retryAfter ?? null;
         const failures = state.failures + 1;
-        const wait = hint === null ? unansweredRetryMs(failures) : retryAfterMs(hint);
-        if (wait === null) {
-          // THE ENGINE SAID WAITING WILL NOT CHANGE IT, so no retry is due,
-          // and a change to the draft is asked about as a fresh question
-          // rather than riding a retry nothing scheduled.
-          return {
-            state: {
-              ...state,
-              status: "unreachable",
-              inFlight: null,
-              failures: 0,
-              dueAt: null,
-              halted: false,
-            },
-            effects,
-          };
-        }
-        const dueAt = event.now + wait;
+        const dueAt = event.now + backoffDelay(failures);
         effects.push({ type: "wake", at: dueAt });
         return {
           state: {
@@ -601,10 +381,9 @@ export interface SaveRules {
 /**
  * What saving may do in a check status.
  *
- * `unreachable` ALLOWS SAVING: a save reads the chart again before its first
- * write and every write is decided where it lands, so a network that dropped a
- * check is no reason to refuse the operator a write that may well get
- * through. `problems` opens the review so the
+ * `unreachable` ALLOWS SAVING: the write validates exactly as the check would
+ * have, so a network that dropped a check is no reason to refuse the operator
+ * a write that may well get through. `problems` opens the review so the
  * operator can read the changes, with Save disabled, in both modes: the
  * engine will refuse exactly what it just reported. The three halting states
  * refuse even the review, because what it would review is not what the
@@ -619,7 +398,7 @@ export function saveRules(status: CheckStatus, hasChanges: boolean): SaveRules {
         review: false,
         save: false,
         waiting: false,
-        reason: "The company changed since you started editing. Update your draft first.",
+        reason: "The configuration changed since you started editing. Update your draft first.",
       };
     case "guarded":
       return {
@@ -627,11 +406,9 @@ export function saveRules(status: CheckStatus, hasChanges: boolean): SaveRules {
         save: false,
         waiting: false,
         // THE BANNER SAYS WHICH GRANT, from the refusal itself; this is the
-        // disabled button's reason, and it used to name "an operator
-        // token", which a signed-in reader holding the wrong grants has no
-        // use for.
-        reason:
-          "The engine refused this browser's credential to read the chart or write the settings.",
+        // disabled button's reason, and it used to name "an operator token",
+        // which a signed-in reader holding the wrong grants has no use for.
+        reason: "The engine refused this browser's credential to check or save the configuration.",
       };
     case "problems":
       return { review: true, save: false, waiting: false, reason: "Fix the problems above first." };
@@ -649,33 +426,25 @@ export function saveRules(status: CheckStatus, hasChanges: boolean): SaveRules {
 
 /** What the runner needs to check one generation of the draft. */
 export interface PreparedCheck {
+  readonly request: ConfigRequest;
+  readonly sent: IndexedDocument;
   readonly mode: BuilderMode;
   readonly baseRevision: string | null;
-  /** The fingerprint of the chart the draft was made on (`document.fingerprint`). */
-  readonly basePrint: string;
-  readonly draft: Draft;
-  /** The chart the draft was made on, for the checks that compare against it. */
-  readonly baseDraft: Draft;
-  /**
-   * The settings dry run, or `null` when the draft changes no setting — and
-   * then the check reads the settings instead ([classifySettingsRead]).
-   */
-  readonly settings: EngineRequest | null;
 }
 
 /** One answered check, for the reducer. */
 export interface SettledCheck {
   readonly generation: number;
+  readonly sent: IndexedDocument;
   readonly baseRevision: string | null;
-  readonly basePrint: string;
   readonly outcome: CheckOutcome;
 }
 
 export interface CheckRunnerOptions {
   readonly clock: Clock;
-  readonly transport: EngineTransport;
+  readonly transport: ConfigTransport;
   /**
-   * What to check for `generation`, built from the draft as it stands; `null`
+   * The request for `generation`, built from the draft as it stands; `null`
    * when the draft has already moved past that generation.
    */
   readonly prepare: (generation: number) => PreparedCheck | null;
@@ -688,7 +457,7 @@ export interface CheckRunnerOptions {
 /**
  * Performs the machine's effects: one timer, one request, one abort
  * controller. The owner calls [changed] when the draft's generation moves,
- * [reset] on a load, an adopted update, a save or a change of reader (see
+ * [reset] on a load, an adopted update, a save or a token change (see
  * `reducer.checkTrigger`), and [dispose] when the builder goes away.
  */
 export class CheckRunner {
@@ -772,45 +541,24 @@ export class CheckRunner {
         request,
         status: outcome.status,
         now: this.options.clock.now(),
-        retryAfter: outcome.status === "unreachable" ? outcome.retryAfter : null,
       });
       if (current) {
         this.options.onSettled({
           generation,
+          sent: prepared.sent,
           baseRevision: prepared.baseRevision,
-          basePrint: prepared.basePrint,
           outcome,
         });
       }
     };
-    const { transport } = this.options;
-    const chart = transport.chart(controller.signal);
-    const settings: Promise<SettingsAnswer | null> = prepared.settings
-      ? transport
-          .send(prepared.settings, controller.signal)
-          .then((answer) => classifySettings(answer, prepared.mode, prepared.baseRevision))
-      : transport
-          .settings(controller.signal)
-          .then((answer) => classifySettingsRead(answer, prepared.baseRevision));
-    Promise.all([chart, settings]).then(
-      ([chartAnswer, settingsAnswer]) =>
-        settle(
-          combineCheck(
-            classifyChart(chartAnswer, prepared.mode, prepared.basePrint),
-            settingsAnswer,
-            preflight(prepared.draft, prepared.baseDraft),
-          ),
-        ),
+    this.options.transport.send(prepared.request, controller.signal).then(
+      (answer) => settle(classifyCheck(answer, prepared.mode, prepared.baseRevision)),
       // An aborted check is superseded, not unreachable, and `settle` drops
       // it. A transport that rejects for any other reason broke its contract,
       // and the check is reported as unanswered rather than left in flight for
       // ever, which would stop every later check.
       (err: unknown) =>
-        settle({
-          status: "unreachable",
-          detail: err instanceof Error ? err.message : String(err),
-          retryAfter: null,
-        }),
+        settle({ status: "unreachable", detail: err instanceof Error ? err.message : String(err) }),
     );
   }
 }

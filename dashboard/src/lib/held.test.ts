@@ -1,6 +1,6 @@
 /**
  * Which node holds a seat, as the seat's page and its peek both say it to a
- * reader without the `fleet` read, which takes `fleet:operate`.
+ * reader without the operator-only fleet read.
  *
  * IT WAS THE AGENT INSTANCE ID, which exists only while a turn runs — so an
  * idle seat THIS node held read "not running on this node" on its own page,
@@ -17,18 +17,18 @@ const health = { status: "ok", node: "node-a", seats: ["agent-cto"] };
 
 test("a seat this node holds says so, idle or not", () => {
   expect(
-    heldBy("agent-cto", { id: "a", agent_id: "id-cto", role: "CTO", activity: "idle" }, health),
+    heldBy("agent-cto", { id: "a", agent_id: "a", role: "CTO", activity: "idle" }, health),
   ).toBe("this node · node-a");
 });
 
 test("a seat held elsewhere is a peer's, and one nobody holds is said", () => {
-  expect(
-    heldBy("agent-pm", { id: "b", agent_id: "id-pm", role: "PM", activity: "idle" }, health),
-  ).toBe("another node");
+  expect(heldBy("agent-pm", { id: "b", agent_id: "b", role: "PM", activity: "idle" }, health)).toBe(
+    "another node",
+  );
   expect(
     heldBy(
       "agent-pm",
-      { id: "b", agent_id: "id-pm", role: "PM", activity: "stopped", stopped_reason: "unplaced" },
+      { id: "b", agent_id: "b", role: "PM", activity: "stopped", stopped_reason: "unplaced" },
       health,
     ),
   ).toBe("no node — not placed");

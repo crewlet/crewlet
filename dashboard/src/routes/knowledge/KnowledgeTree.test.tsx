@@ -19,13 +19,14 @@
  *    already name is DRAWN, not only put in a tooltip.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { KnowledgeTree } from "./KnowledgeTree.tsx";
 import { installWindow } from "~/testing.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 
 class InertWebSocket {
@@ -60,48 +61,26 @@ afterEach(() => {
 
 type Answer = (params: Record<string, unknown>) => unknown;
 
-/** The `/chart` reads the last mount made. */
-let chartReads: string[] = [];
+/** A signed-in reader holding `config:read`, which who files into a space is read under. */
+const READER = { login: "ana", owner: "ana", grants: ["state:read", "config:read"] };
 
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-
-/**
- * The tree over a socket answering each question as told, and `/chart` — the
- * org chart who files into a space is read from — as told, by default in
- * flight for ever.
- */
-function mount(
-  answers: Record<string, Answer>,
-  chart: () => Response | Promise<Response> = () => new Promise<Response>(() => {}),
-) {
-  const charts: string[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
-      const path = new URL(String(input)).pathname;
-      if (path !== "/chart") return json({});
-      charts.push(path);
-      return chart();
-    }),
-  );
-  chartReads = charts;
+/** The tree over a socket answering each question as told — `viewer` as [READER] unless told. */
+function mount(answers: Record<string, Answer>) {
   const store = new Store();
   const socket = new LiveSocket(store);
   const asked: { what: string; params: Record<string, unknown> }[] = [];
   socket.query = ((what: string, params: Record<string, unknown>) => {
     asked.push({ what, params });
-    const answer = answers[what];
+    const answer = answers[what] ?? (what === "viewer" ? () => READER : undefined);
     return answer ? Promise.resolve(answer(params)) : Promise.reject(new Error("unknown_query"));
   }) as typeof socket.query;
   render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <KnowledgeTree />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <KnowledgeTree />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
   return asked;
@@ -341,47 +320,44 @@ test("a company on a vendor wiki is told there is no tree here, not shown an err
   await waitFor(() => expect(screen.getByText(/no tree to browse here/)).toBeTruthy());
 });
 
-/** The org chart, as `/chart` answers it, with `units` in it. */
-function chartOf(units: { key: string; name: string; space?: string; project?: string }[]) {
-  return {
-    units,
-    seats: [],
-    manages: null,
-    leads: null,
-    answer: { level: "consistent_prefix", position: "CREWLET_CHART_LOG@1:4" },
-    runtime: false,
-  };
-}
-
 test("who files into a space: four states, each its own sentence", async () => {
   const eng = () => ({ containers: [{ key: "ENG", name: "Engineering", pages: 3 }] });
   const key = () => screen.getByText("ENG").closest(".ktree-key")!.textContent;
 
-  // A READ IN FLIGHT: not a refusal of the reader.
-  mount({ knowledge: everyMode, containers: eng });
+  // NO GRANT: nothing is asked, and the sentence says which grant.
+  let asked = mount({
+    knowledge: everyMode,
+    containers: eng,
+    viewer: () => ({ ...READER, grants: ["state:read"] }),
+  });
   await waitFor(() => expect(screen.getByText("ENG")).toBeTruthy());
+  await waitFor(() => expect(key()).toMatch(/needs config:read to read/));
+  expect(asked.some((a) => a.what === "config")).toBe(false);
+
+  // THE GRANT AND A READ IN FLIGHT: not "needs a grant".
+  cleanup();
+  asked = mount({ knowledge: everyMode, containers: eng, config: () => new Promise(() => {}) });
+  await waitFor(() => expect(screen.getByText("ENG")).toBeTruthy());
+  await waitFor(() => expect(asked.some((a) => a.what === "config")).toBe(true));
   expect(key()).toMatch(/still being read/);
-  expect(key()).not.toMatch(/needs/);
-  expect(chartReads.length).toBeGreaterThan(0);
+  expect(key()).not.toMatch(/needs config:read/);
 
-  // REFUSED, naming the grant the engine named.
+  // REFUSED.
   cleanup();
-  mount({ knowledge: everyMode, containers: eng }, () =>
-    json({ error: "unauthorized", reason: "no_grant", grants: ["state:read"] }, 403),
-  );
-  await waitFor(() => expect(key()).toMatch(/Reading who files here needs state:read/));
-
-  // A NODE THAT COULD NOT ANSWER, which is not a refusal of the reader.
-  cleanup();
-  mount({ knowledge: everyMode, containers: eng }, () => json({ error: "unavailable" }, 503));
-  await waitFor(() => expect(key()).toMatch(/could not be read just now/));
-  expect(key()).not.toMatch(/needs/);
+  mount({
+    knowledge: everyMode,
+    containers: eng,
+    config: () => Promise.reject(new Error("unauthorized")),
+  });
+  await waitFor(() => expect(key()).toMatch(/could not be read/));
 
   // READ: the unit, and its project DRAWN where the key does not name it.
   cleanup();
-  mount({ knowledge: everyMode, containers: eng }, () =>
-    json(chartOf([{ key: "core", name: "Core platform", space: "eng", project: "PLAT" }])),
-  );
+  mount({
+    knowledge: everyMode,
+    containers: eng,
+    config: () => ({ units: [{ name: "Core platform", space: "eng", project: "PLAT" }] }),
+  });
   await waitFor(() => expect(key()).toMatch(/Filed by Core platform, whose work is in PLAT/));
   const proj = document.querySelector(".ktree-proj");
   expect(proj?.textContent).toBe("tracker project PLAT");
@@ -389,13 +365,11 @@ test("who files into a space: four states, each its own sentence", async () => {
 });
 
 test("a project the space key already names is not drawn twice", async () => {
-  mount(
-    {
-      knowledge: everyMode,
-      containers: () => ({ containers: [{ key: "ENG", name: "Engineering", pages: 3 }] }),
-    },
-    () => json(chartOf([{ key: "eng", name: "Engineering", space: "ENG", project: "ENG" }])),
-  );
+  mount({
+    knowledge: everyMode,
+    containers: () => ({ containers: [{ key: "ENG", name: "Engineering", pages: 3 }] }),
+    config: () => ({ units: [{ name: "Engineering", space: "ENG", project: "ENG" }] }),
+  });
   await waitFor(() =>
     expect(screen.getByText("ENG").closest(".ktree-key")!.textContent).toMatch(/Filed by/),
   );

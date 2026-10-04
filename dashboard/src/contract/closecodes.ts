@@ -8,14 +8,19 @@
  * the engine's, and every 4000-range code the engine closes with has one here.
  * An engine that renumbered one would otherwise have a dashboard reconnecting
  * for ever against a withdrawn grant, or stopping dead over a cookie that
- * merely expired. What a close MEANS to a tab is `protocol/socket.ts`'s.
+ * merely expired. Every other close — the standard's 1013 "try again later"
+ * included — is an ordinary reconnect on the backoff. What a close MEANS to a
+ * tab is `protocol/socket.ts`'s.
  */
 
 /**
  * The credential the socket was opened with names nobody any more — the
- * session ended, expired or was revoked. The engine re-checks an open socket
- * and closes it with this. The ordinary reconnect is the repair, because the
- * browser may hold a newer cookie than the one the socket was opened with.
+ * session was signed out (here or everywhere), suspended, removed, revoked,
+ * invalidated fleet-wide, or REPLACED by a step-up. The engine closes an open
+ * socket with this when its identity log records the move. The reconnect is
+ * the repair, once this tab's own requests have settled, because the browser
+ * may hold a newer cookie than the one the socket was opened with — a
+ * step-up's answer sets exactly that.
  */
 export const CLOSE_UNAUTHENTICATED = 4401;
 

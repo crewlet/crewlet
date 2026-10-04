@@ -43,11 +43,16 @@ import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
 import { SeatChip } from "~/components/common.tsx";
 import { AssignButton } from "~/components/writes.tsx";
-import { PriorityMark, StatusMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
+import {
+  PriorityMark,
+  StatusBadge,
+  StatusMark,
+  TypeIcon,
+  type RowChrome,
+} from "~/components/work.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { attribution, type ChangeField } from "~/lib/attribution.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useClockReading } from "~/lib/clock.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import {
   fmtCount,
@@ -62,13 +67,9 @@ import {
 import {
   PRIORITIES,
   STATUSES,
-  detailItem,
   fieldValueState,
   fieldValueText,
   fmtMinutes,
-  itemAddress,
-  itemPath,
-  linkedItem,
   statusLabel,
   typeName,
 } from "~/lib/work.ts";
@@ -107,11 +108,13 @@ export function ItemRail({
   detail,
   chrome,
   project,
+  now,
   compact,
 }: {
   detail: WorkItemDetail;
   chrome: RowChrome;
   project?: WorkProjectDetail | null;
+  now: number;
   /** The peek's column: the page's rail less the cost and the record. */
   compact?: boolean;
 }) {
@@ -124,16 +127,14 @@ export function ItemRail({
   // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the identity
   // directory binds to a seat files AS that seat, so the reporter is them.
   const reporter = item.reporter;
-  // THE TASK'S ADDRESS — its key, or its id where another task claimed the key
-  // first — which is what a hand-off from this rail names it by.
-  const address = itemAddress(detailItem(detail));
   // NAMED THE WAY THE ROWS BESIDE IT NAME PEOPLE: the change log carries a
   // handle, and a line reading `agent-ceo · 21h ago` under a Reporter row
-  // saying "Agent CEO" is one person with two names on one screen. The line
-  // reads its own "21h ago" off the clock (`SetByLine`).
+  // saying "Agent CEO" is one person with two names on one screen.
   const by = (field: ChangeField): SetBy | undefined => {
     const who = setBy.get(field);
-    return who ? { ...who, actor: seatName(who.actor) } : undefined;
+    return who
+      ? { ...who, actor: seatName(who.actor), ago: who.at ? relTime(who.at, now) : undefined }
+      : undefined;
   };
   const defs = useMemo(() => {
     const map = new Map<string, WorkFieldDef>();
@@ -224,7 +225,7 @@ export function ItemRail({
                   reaches nobody, and the page offers Restore instead. */}
               {!item.removed && (
                 <AssignButton
-                  item={address}
+                  item={item.key}
                   version={item.version}
                   assignee={item.assignee ?? ""}
                 />
@@ -235,9 +236,6 @@ export function ItemRail({
         },
         {
           label: "Reporter",
-          // WHOEVER FILED IT, as the record names them: a person the
-          // directory binds to a seat filed AS that seat, and anybody bound to
-          // none under their own login. One person, one name on one page.
           value: reporter ? (
             <SeatChip name={seatName(reporter)} handle={reporter} kind={seatKind(reporter)} />
           ) : undefined,
@@ -286,6 +284,7 @@ export function ItemRail({
             <DateValue
               label={`Due date of ${item.key}`}
               at={item.due_at}
+              now={now}
               allDay={item.due_all_day}
               standing={detail.due_standing}
               onSave={(day) =>
@@ -306,6 +305,7 @@ export function ItemRail({
                   <DateValue
                     label={`Start date of ${item.key}`}
                     at={item.start_at}
+                    now={now}
                     onSave={(day) =>
                       edits?.edit(
                         { start: day },
@@ -512,19 +512,6 @@ function LabelsValue({
   );
 }
 
-/**
- * How far off a date is by the shared clock — "in 3d", "2h ago" — and nothing
- * where that reading IS the date (past a month the relative reading prints
- * the absolute one, and the rail printed it twice).
- */
-function ClockDistance({ at, absolute }: { at: string; absolute: string }) {
-  const distance = useClockReading((now) =>
-    Date.parse(at) >= now ? inTime(at, now) : relTime(at, now),
-  );
-  if (!distance || distance === absolute) return null;
-  return <span className="muted">{distance}</span>;
-}
-
 /** A day: the date and how far off it is — and for a writer, a date to pick. */
 /**
  * A due date's distance in CALENDAR days on the company's clock, as the
@@ -549,12 +536,14 @@ export function standingWords(standing: { days: number; overdue?: boolean }): st
 function DateValue({
   label,
   at,
+  now,
   allDay,
   standing,
   onSave,
 }: {
   label: string;
   at?: string;
+  now: number;
   allDay?: boolean;
   /** The engine's standing of a DUE date on the company's calendar — see
    *  [standingWords]. A start date has none, and reads its distance off the
@@ -593,20 +582,20 @@ function DateValue({
   // THE DISTANCE, never the date a second time: past a month the shared
   // clock's relative reading IS the absolute date, and the rail printed
   // "Nov 09, 2026" twice. A due date takes the engine's words instead.
-  //
-  // A START DATE'S DISTANCE IS READ OFF THE CLOCK IN ITS OWN CELL, so the
-  // rail renders when "in 3d" turns over rather than once a second.
   const absolute = at ? fmtDate(at) : "";
+  const distance = !at
+    ? ""
+    : standing
+      ? standingWords(standing)
+      : Date.parse(at) >= now
+        ? inTime(at, now)
+        : relTime(at, now);
   const shown = at ? (
     <span className={cx("task-date", standing?.overdue && "overdue")}>
       <CalendarGlyph size="xs" />
       <span title={fmtDateTime(at)}>{absolute}</span>
-      {standing ? (
-        standingWords(standing) !== absolute && (
-          <span className={standing.overdue ? undefined : "muted"}>{standingWords(standing)}</span>
-        )
-      ) : (
-        <ClockDistance at={at} absolute={absolute} />
+      {distance && distance !== absolute && (
+        <span className={standing?.overdue ? undefined : "muted"}>{distance}</span>
       )}
       {allDay && <span className="muted">all day</span>}
     </span>
@@ -860,12 +849,7 @@ export function Relations({ detail, chrome }: { detail: WorkItemDetail; chrome: 
     <section className="task-rail-section" aria-label="Relations">
       <div className="task-lbl">Relations</div>
       {(parent || detail.task.parent) && (
-        // BY THE PARENT'S ADDRESS once the answer resolved it, by its id
-        // until then — a key another task claimed first opens that one.
-        <a
-          className="task-rail-link"
-          href={href(itemPath(parent ?? { id: detail.task.parent ?? "" }))}
-        >
+        <a className="task-rail-link" href={href(["work", parent?.key || detail.task.parent!])}>
           <ArrowUpRightGlyph size="xs" />
           <span className="muted">Part of</span>
           <span className="work-key mono">{parent?.key || detail.task.parent}</span>
@@ -874,7 +858,7 @@ export function Relations({ detail, chrome }: { detail: WorkItemDetail; chrome: 
       )}
       {links.map((link) => (
         <div key={`${link.kind}:${link.other}`} className="task-rail-link-row">
-          <a className="task-rail-link" href={href(itemPath(linkedItem(link)))}>
+          <a className="task-rail-link" href={href(["work", link.key || link.other])}>
             <LinkGlyph size="xs" />
             <span className="muted">{linkHeading(link)}</span>
             <span className="work-key mono">{link.key || link.other}</span>

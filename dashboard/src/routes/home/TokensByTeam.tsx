@@ -61,9 +61,7 @@ export function TokensByTeam({
           moreLabel={(n) => `${plural(n, "more team")}`}
           data={bands.map((b) => ({
             id: b.group || "other",
-            // BY THE UNIT'S NAME, keyed on its key: a band is an identity
-            // (two teams may share a name), and `label` is what it is called.
-            label: b.other ? "Everyone else" : b.label || b.group,
+            label: b.other ? "Everyone else" : b.group,
             sub: b.other
               ? plural(b.folded, "team")
               : b.seats

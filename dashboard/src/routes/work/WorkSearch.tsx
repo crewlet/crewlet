@@ -70,7 +70,7 @@ import { useParam } from "~/app/router.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { StatusBadge, TypeIcon } from "~/components/work.tsx";
@@ -82,17 +82,22 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { plainText } from "~/lib/markdown.ts";
-import { itemAddress, projectPath } from "~/lib/work.ts";
 import type { WorkRanked } from "~/protocol/index.ts";
 
-// HOW A HIT IS ADDRESSED is `itemAddress`, and FOUR things here agree on it:
-// the row's link, the peek a plain click opens, the order `[` and `]` step
-// through, and which row is drawn as the open one. Four spellings of "which
-// item is this" is how the rail comes to highlight a different row from the
-// one it is showing. This screen had its own — the key where there was one —
-// which is the rule that opened the claimant from a hit flagged
-// `key_collision`: a search that found both holders of a key drew two rows
-// that opened one task.
+/**
+ * HOW A HIT IS ADDRESSED, in the one spelling every consumer of it uses.
+ *
+ * A hit carries both an id and a key, and the key is what the tracker addresses
+ * an item by — so the key where there is one and the id where there is not,
+ * which is the rule this screen's row link already followed alone. It is a
+ * function now because FOUR things have to agree on it: the row's link, the
+ * peek a plain click opens, the order `[` and `]` step through, and which row
+ * is drawn as the open one. Four spellings of "which item is this" is how the
+ * rail comes to highlight a different row from the one it is showing.
+ */
+function itemId(hit: WorkRanked): string {
+  return hit.key || hit.id;
+}
 
 export function WorkSearch() {
   // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
@@ -117,7 +122,7 @@ export function WorkSearch() {
 
   // THE PEEK IS THE FRAME'S: the shell mounts one rail for every screen, so
   // this one opens peeks and renders none — and the grid marks the row whose
-  // link is the peek's page, so the open hit is drawn from the same address.
+  // link is the peek's page, so the open hit is drawn from the same `itemId`.
   const { open: openPeek } = usePeekControls();
 
   const rows = useMemo(() => hits.data?.hits ?? [], [hits.data]);
@@ -126,108 +131,7 @@ export function WorkSearch() {
   // it and nothing here re-sorts. Stepping the rail is therefore stepping DOWN
   // THE RANKING, which is the gesture a reader working through hits makes.
   usePeekNeighbours(
-    useMemo(() => rows.map((r) => ({ kind: "item" as const, id: itemAddress(r) })), [rows]),
-  );
-
-  // THE COLUMNS HOLD STILL until the chart moves (`index`, which names an
-  // assignee): every row is memoised on this list, so one built inline drew
-  // every hit on every keystroke typed into the box above it.
-  const columns = useMemo<GridColumn<WorkRanked>[]>(
-    () => [
-      {
-        key: "rank",
-        header: "#",
-        shrink: true,
-        cell: (r) => <span className="rank-place">{r.rank}</span>,
-      },
-      {
-        key: "title",
-        header: "Item",
-        cell: (r) => (
-          <div className="col gap-1">
-            {/* THE ITEM'S OWN TYPE, through the one component that owns
-                what a type is drawn as and what it is called. This
-                column drew a hardcoded tick, which was wrong twice: a
-                bug, an epic and a spike were one drawing here and three
-                on every other tracker surface, and a TICK is this
-                product's completion mark — so a hit whose Status cell
-                one column over read "In progress" carried a mark saying
-                it was finished.
-
-                AND THE MARK IS THE ONLY PLACE THIS SCREEN STATES A TYPE,
-                since there is no Type column. That is why it is
-                `TypeIcon` and not `icon={typeIcon(r.type)}`: a
-                name-keyed mark renders `aria-hidden` with no hover word,
-                so the right drawing alone would still be a fact nobody
-                can name.
-
-                WITHOUT THE PROJECT'S OWN TYPE TABLE, for the reason the
-                Status column below gives about the six statuses: a
-                ranked answer spans every project, so the shipped word is
-                the only one true of the whole list. */}
-            <TextCell mark={<TypeIcon type={r.type} />}>{r.title}</TextCell>
-            {/* THE INDEX'S OWN EXCERPT — the half a board row cannot
-                have, because a board row does not know what you
-                asked. It is a CUT of a markdown body, so it is drawn
-                as the prose it renders to ([plainText]) rather than
-                with its `**` and `#` in it. */}
-            {r.snippet && <span className="t-caption">{plainText(r.snippet)}</span>}
-          </div>
-        ),
-      },
-      {
-        key: "key",
-        header: "Key",
-        shrink: true,
-        // THE CELL OWNS THE ABSENCE. A hit whose key has not landed on
-        // this node yet is a dash that says so on hover, rather than a
-        // faint em dash of this screen's own that means whatever the
-        // next screen's faint em dash means.
-        cell: (r) => <KeyCell value={r.key} />,
-      },
-      {
-        key: "project",
-        header: "Project",
-        shrink: true,
-        // A PROJECT KEY IS AN IDENTIFIER, so it wears the mono face
-        // every other key in the product wears and links to the
-        // project rather than sitting in a chip. Colour is spent on
-        // state here, and which project an item is in is identity.
-        cell: (r) => <KeyCell value={r.project} path={projectPath(r.project)} />,
-      },
-      {
-        key: "status",
-        header: "Status",
-        shrink: true,
-        // THE TRACKER'S OWN STATUS BADGE, not a `StatusCell` and not
-        // the raw slug this column used to print. Six statuses with a
-        // tone each is a VOCABULARY rather than two lifecycle states,
-        // and a company may rename any of them — `StatusBadge` is the
-        // one place that resolves the label and the tone together, so
-        // a status reads the same here as it does on the board.
-        //
-        // WITHOUT THE PROJECT'S OWN LABELS, deliberately: a ranked
-        // answer spans every project and each may name the six
-        // differently, so the shipped word is the only one true of the
-        // whole list. The board, which is inside one project, passes
-        // that project's definitions.
-        cell: (r) =>
-          r.status ? <StatusBadge status={r.status} /> : <EmptyValue label="No status" />,
-      },
-      {
-        key: "assignee",
-        header: "Assignee",
-        shrink: true,
-        // THE NAME, not the handle: a handle is the database's word
-        // for a person, and every other grid in the tree resolves it
-        // through the chart before showing it.
-        cell: (r) => {
-          const who = r.assignee ? index.byHandle.get(r.assignee) : undefined;
-          return <SeatCell handle={r.assignee} name={who?.name} kind={who?.kind} />;
-        },
-      },
-    ],
-    [index],
+    useMemo(() => rows.map((r) => ({ kind: "item" as const, id: itemId(r) })), [rows]),
   );
 
   return (
@@ -300,7 +204,6 @@ export function WorkSearch() {
         <QueryState
           error={hits.error}
           refusal={hits.refusal}
-          detail={hits.detail ?? undefined}
           loading={hits.loading}
           empty={
             rows.length
@@ -318,12 +221,12 @@ export function WorkSearch() {
             // second copy of the route: the rail's `Open ↗` is built from the
             // same reference, so the link a row carries and the way out of the
             // panel it opens can never name different pages.
-            rowHref={(r) => peekHref({ kind: "item", id: itemAddress(r) })}
+            rowHref={(r) => peekHref({ kind: "item", id: itemId(r) })}
             // A PLAIN CLICK PEEKS, because a ranked list is read by working
             // DOWN it: a reader checking whether the third hit is the one they
             // meant should not lose the other nine to find out.
             onRowActivate={(r, e) => {
-              const go = () => openPeek({ kind: "item", id: itemAddress(r) });
+              const go = () => openPeek({ kind: "item", id: itemId(r) });
               // THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the
               // frame's one copy of "which clicks mean elsewhere" and reads a
               // mouse event; the `enter` chord carries no button at all and is
@@ -337,7 +240,100 @@ export function WorkSearch() {
             // NO DEFAULT SORT. The answer's own order IS the result, and a
             // grid that re-sorted it by title would throw away the only
             // thing this question produces.
-            columns={columns}
+            columns={[
+              {
+                key: "rank",
+                header: "#",
+                shrink: true,
+                cell: (r) => <span className="rank-place">{r.rank}</span>,
+              },
+              {
+                key: "title",
+                header: "Item",
+                cell: (r) => (
+                  <div className="col gap-1">
+                    {/* THE ITEM'S OWN TYPE, through the one component that owns
+                        what a type is drawn as and what it is called. This
+                        column drew a hardcoded tick, which was wrong twice: a
+                        bug, an epic and a spike were one drawing here and three
+                        on every other tracker surface, and a TICK is this
+                        product's completion mark — so a hit whose Status cell
+                        one column over read "In progress" carried a mark saying
+                        it was finished.
+
+                        AND THE MARK IS THE ONLY PLACE THIS SCREEN STATES A TYPE,
+                        since there is no Type column. That is why it is
+                        `TypeIcon` and not `icon={typeIcon(r.type)}`: a
+                        name-keyed mark renders `aria-hidden` with no hover word,
+                        so the right drawing alone would still be a fact nobody
+                        can name.
+
+                        WITHOUT THE PROJECT'S OWN TYPE TABLE, for the reason the
+                        Status column below gives about the six statuses: a
+                        ranked answer spans every project, so the shipped word is
+                        the only one true of the whole list. */}
+                    <TextCell mark={<TypeIcon type={r.type} />}>{r.title}</TextCell>
+                    {/* THE INDEX'S OWN EXCERPT — the half a board row cannot
+                        have, because a board row does not know what you
+                        asked. It is a CUT of a markdown body, so it is drawn
+                        as the prose it renders to ([plainText]) rather than
+                        with its `**` and `#` in it. */}
+                    {r.snippet && <span className="t-caption">{plainText(r.snippet)}</span>}
+                  </div>
+                ),
+              },
+              {
+                key: "key",
+                header: "Key",
+                shrink: true,
+                // THE CELL OWNS THE ABSENCE. A hit whose key has not landed on
+                // this node yet is a dash that says so on hover, rather than a
+                // faint em dash of this screen's own that means whatever the
+                // next screen's faint em dash means.
+                cell: (r) => <KeyCell value={r.key} />,
+              },
+              {
+                key: "project",
+                header: "Project",
+                shrink: true,
+                // A PROJECT KEY IS AN IDENTIFIER, so it wears the mono face
+                // every other key in the product wears and links to the
+                // project rather than sitting in a chip. Colour is spent on
+                // state here, and which project an item is in is identity.
+                cell: (r) => <KeyCell value={r.project} path={["work", r.project]} />,
+              },
+              {
+                key: "status",
+                header: "Status",
+                shrink: true,
+                // THE TRACKER'S OWN STATUS BADGE, not a `StatusCell` and not
+                // the raw slug this column used to print. Six statuses with a
+                // tone each is a VOCABULARY rather than two lifecycle states,
+                // and a company may rename any of them — `StatusBadge` is the
+                // one place that resolves the label and the tone together, so
+                // a status reads the same here as it does on the board.
+                //
+                // WITHOUT THE PROJECT'S OWN LABELS, deliberately: a ranked
+                // answer spans every project and each may name the six
+                // differently, so the shipped word is the only one true of the
+                // whole list. The board, which is inside one project, passes
+                // that project's definitions.
+                cell: (r) =>
+                  r.status ? <StatusBadge status={r.status} /> : <EmptyValue label="No status" />,
+              },
+              {
+                key: "assignee",
+                header: "Assignee",
+                shrink: true,
+                // THE NAME, not the handle: a handle is the database's word
+                // for a person, and every other grid in the tree resolves it
+                // through the chart before showing it.
+                cell: (r) => {
+                  const who = r.assignee ? index.byHandle.get(r.assignee) : undefined;
+                  return <SeatCell handle={r.assignee} name={who?.name} kind={who?.kind} />;
+                },
+              },
+            ]}
             loadedNote={`${rows.length} ranked by ${hits.data?.served_mode ? modeLabel(hits.data.served_mode).toLowerCase() : "relevance"}`}
           />
         </QueryState>

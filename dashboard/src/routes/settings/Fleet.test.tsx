@@ -13,7 +13,7 @@
  * is where page and rail agree: `ObjectHeader` takes this list on both.
  */
 
-import { cleanup, render, screen } from "~/test/inCase.ts";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { Fleet, HeldSince, NodePeek, nodeFacts } from "./Fleet.tsx";
@@ -21,7 +21,7 @@ import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { PAGE_ACTIONS_SLOT } from "~/app/frame/PageActions.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, QueryRefusedError, Store } from "~/protocol/index.ts";
+import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type { FleetNode } from "~/protocol/types.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 
@@ -118,9 +118,7 @@ describe("the fleet, refused before any reading", () => {
     const store = new Store();
     const socket = new LiveSocket(store);
     (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-      what === "viewer"
-        ? new Promise(() => {})
-        : Promise.reject(new QueryRefusedError("unauthorized", null));
+      what === "viewer" ? new Promise(() => {}) : Promise.reject(new QueryError("unauthorized"));
     const view = render(
       <ClientContext.Provider value={{ store, socket }}>
         <Router>
@@ -144,24 +142,18 @@ describe("the fleet, refused before any reading", () => {
 // older build wrote carries none — and the grid's own date cell says "Never"
 // for an absent date, which would claim a seat was never acquired.
 describe("the seat's held-since column", () => {
-  // THE CELL READS THE CLOCK ITSELF, so the case holds the clock rather than
-  // handing it an instant.
+  afterEach(cleanup);
   const now = Date.parse("2031-05-01T10:02:00Z");
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
-    vi.setSystemTime(now);
-  });
-  afterEach(() => {
-    cleanup();
-    vi.useRealTimers();
-  });
 
   test("a stamped tenure reads as how long ago it began, with the instant in its title", () => {
     // The lease also expires in an hour, so a cell reading the lease's END
     // rather than its START would say "in 1h" and title 11:02, not 08:02.
     const acquired = "2031-05-01T08:02:00Z";
     render(
-      <HeldSince lease={{ handle: "swe", node: "n1", acquired_at: acquired, expires_in: 3600 }} />,
+      <HeldSince
+        lease={{ handle: "swe", node: "n1", acquired_at: acquired, expires_in: 3600 }}
+        now={now}
+      />,
     );
     const cell = screen.getByText(relTime(acquired, now));
     expect(cell.textContent).toMatch(/2h/);
@@ -172,7 +164,7 @@ describe("the seat's held-since column", () => {
   });
 
   test("an unstamped lease is not recorded, never 'Never'", () => {
-    const view = render(<HeldSince lease={{ handle: "swe", node: "n1" }} />);
+    const view = render(<HeldSince lease={{ handle: "swe", node: "n1" }} now={now} />);
     expect(view.container.textContent).not.toContain("Never");
     expect(screen.getByText(/Not recorded/)).toBeDefined();
   });

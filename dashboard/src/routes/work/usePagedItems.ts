@@ -21,10 +21,7 @@
  *
  * A keyset cursor resumes after the last row it was minted on, so a task that
  * moved between two asks can appear on both pages. The merge keeps the FIRST
- * occurrence, which is the one nearest the top the reader is looking at — BY
- * ITS ID, which no two tasks share: a key two tasks hold (`key_collision`) is
- * one value for two rows, and a merge keyed on it dropped the second task from
- * the list as though it were the first one seen again.
+ * occurrence by key, which is the one nearest the top the reader is looking at.
  *
  * GROUPED ANSWERS HAVE NO CURSOR (a board's lanes each carry their own count and
  * a link to the rest), so for them this is `useQuery` and nothing more.
@@ -33,14 +30,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
-import {
-  queryFailure,
-  type LogRefusal,
-  type QueryFailure,
-  type QueryRefusal,
-  type WorkItemsAnswer,
-  type WorkSummary,
-} from "~/protocol/index.ts";
+import { queryErrorCode, type WorkItemsAnswer, type WorkSummary } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 
 export interface PagedItems {
@@ -48,8 +38,6 @@ export interface PagedItems {
   data: WorkItemsAnswer | null;
   loading: boolean;
   error: QueryErrorCode | null;
-  /** Why the first page was refused, beside `error` — see `QueryState`. */
-  refusal: QueryRefusal | LogRefusal | null;
   /** Every row loaded, the first page's and every page after it, drawn once. */
   rows: WorkSummary[];
   /** Where the next page starts, or "" when the list is whole. */
@@ -58,23 +46,19 @@ export interface PagedItems {
   more: () => void;
   /** A page is in flight. */
   paging: boolean;
-  /**
-   * Why the last "Load more" failed, until the next one — WHOLE, its refusal
-   * included ([queryFailure]), so a page the state log refused is not told to
-   * try again.
-   */
-  pageFailure: QueryFailure | null;
+  /** Why the last "Load more" failed, until the next one. */
+  pageError: QueryErrorCode | null;
   refetch: () => void;
 }
 
-/** Rows from several pages, each task once by its id, first occurrence kept. */
+/** Rows from several pages, each task once, first occurrence kept. */
 export function mergePages(pages: readonly (readonly WorkSummary[])[]): WorkSummary[] {
   const seen = new Set<string>();
   const out: WorkSummary[] = [];
   for (const page of pages) {
     for (const row of page) {
-      if (seen.has(row.id)) continue;
-      seen.add(row.id);
+      if (seen.has(row.key)) continue;
+      seen.add(row.key);
       out.push(row);
     }
   }
@@ -94,7 +78,7 @@ export function usePagedItems(
   const question = JSON.stringify(params);
   const [held, setHeld] = useState<{ question: string; pages: WorkItemsAnswer[] } | null>(null);
   const [paging, setPaging] = useState(false);
-  const [pageFailure, setPageFailure] = useState<QueryFailure | null>(null);
+  const [pageError, setPageError] = useState<QueryErrorCode | null>(null);
   const pages = held && held.question === question ? held.pages : NO_PAGES;
   const last = pages.length > 0 ? pages[pages.length - 1] : first.data;
   const next = last?.next_cursor ?? "";
@@ -102,7 +86,7 @@ export function usePagedItems(
   const more = useCallback(async () => {
     if (!next || paging) return;
     setPaging(true);
-    setPageFailure(null);
+    setPageError(null);
     try {
       // AT THIS TAB'S READ FLOOR, like every other ask: a page read from a
       // node behind a write this tab just made would draw the task as it was.
@@ -116,7 +100,7 @@ export function usePagedItems(
           : { question, pages: [page] },
       );
     } catch (err) {
-      setPageFailure(queryFailure(err));
+      setPageError(queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed");
     } finally {
       setPaging(false);
     }
@@ -131,12 +115,11 @@ export function usePagedItems(
     data: first.data,
     loading: first.loading,
     error: first.error,
-    refusal: first.refusal,
     rows,
     next,
     more: () => void more(),
     paging,
-    pageFailure,
+    pageError,
     refetch: first.refetch,
   };
 }

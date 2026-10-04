@@ -3,7 +3,7 @@
  * in, and keeps the last refusal beside itself.
  */
 
-import { cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { WriteButton } from "./WriteButton.tsx";
 import type { Act } from "~/lib/useAct.ts";
@@ -96,7 +96,7 @@ test("a press in flight does not press again", () => {
 
 test("a refusal the node caused offers to try again, under the same request", () => {
   const w = write({
-    refusal: { sentence: "This node is shutting down.", hint: "", grants: [], retryable: true },
+    refusal: { sentence: "This node is shutting down.", hint: "", retryable: true, grants: [] },
   });
   render(
     <WriteButton write={w} onPress={() => {}}>
@@ -113,7 +113,7 @@ test("a refusal the request caused offers no retry: the same request would be re
   render(
     <WriteButton
       write={write({
-        refusal: { sentence: "views: v9 is not a view", hint: "", grants: [], retryable: false },
+        refusal: { sentence: "views: v9 is not a view", hint: "", retryable: false, grants: [] },
       })}
       onPress={() => {}}
     >
@@ -131,8 +131,8 @@ test("an argument the engine names in backticks is drawn as a value, not punctua
         refusal: {
           sentence: "`title` is 600 bytes and a task's title holds at most 256.",
           hint: "",
-          grants: [],
           retryable: false,
+          grants: [],
         },
       })}
       onPress={() => {}}
@@ -143,47 +143,4 @@ test("an argument the engine names in backticks is drawn as a value, not punctua
   const alert = screen.getByRole("alert");
   expect(alert.textContent).not.toContain("`");
   expect(alert.querySelector("code")?.textContent).toBe("title");
-});
-
-// A REFUSAL ON AUTHORITY NAMES WHAT WOULD CHANGE IT: the grants the deciding
-// rule would have admitted the person on, as the answer carried them — and a
-// refusal that carried none names none, rather than a grant guessed here.
-test("a refusal on authority names the grants that would have admitted the person", () => {
-  render(
-    <WriteButton
-      write={write({
-        refusal: {
-          sentence: "You may not make this change.",
-          hint: "",
-          grants: ["config:write", "fleet:operate"],
-          retryable: false,
-        },
-      })}
-      onPress={() => {}}
-    >
-      Pin
-    </WriteButton>,
-  );
-  const said = screen.getByRole("alert");
-  expect([...said.querySelectorAll("code")].map((c) => c.textContent)).toEqual([
-    "config:write",
-    "fleet:operate",
-  ]);
-  cleanup();
-  render(
-    <WriteButton
-      write={write({
-        refusal: {
-          sentence: "You may not make this change.",
-          hint: "",
-          grants: [],
-          retryable: false,
-        },
-      })}
-      onPress={() => {}}
-    >
-      Pin
-    </WriteButton>,
-  );
-  expect(screen.getByRole("alert").textContent).not.toContain("Needs");
 });

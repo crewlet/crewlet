@@ -34,7 +34,6 @@ import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Menu, Tabs, cx } from "@crewlethq/ui";
 import { ChevronDownGlyph } from "@crewlethq/icons/glyphs";
 import { foldTabs } from "./tabFit.ts";
-import { fmtExact } from "~/lib/format.ts";
 
 export interface ObjectTab {
   value: string;
@@ -103,7 +102,7 @@ export function ObjectTabs({
             items={out.map((t) => ({
               key: t.value,
               label: t.label,
-              ...(t.count !== undefined ? { hint: fmtExact(t.count) } : {}),
+              ...(t.count !== undefined ? { hint: t.count.toLocaleString() } : {}),
               onSelect: () => onValueChange(t.value),
             }))}
           />

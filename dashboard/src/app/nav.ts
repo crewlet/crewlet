@@ -111,15 +111,6 @@ export interface Section {
    * `viewer` read itself does, so nothing here repeats it.
    */
   grants?: readonly Grant[];
-  /**
-   * The SCREEN answers the refusal rather than the frame. One section does:
-   * Edit org, whose draft is kept in the tab's storage — replacing the
-   * builder with the frame's refusal the moment a grant was withdrawn would
-   * take the draft off screen while the person who wrote it is still there to
-   * copy it out, and the builder says for itself which of its saves the
-   * reader's grants reach.
-   */
-  answersRefusal?: boolean;
   /** Drawn in the renderer (default), or an address reached another way. */
   tab?: boolean;
   /** The Settings column's group heading. */
@@ -349,8 +340,11 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "pencil",
         path: ["agents", "edit"],
         hint: "Change the company's shape: units, seats and who reports to whom",
-        grants: ["config:write"],
-        answersRefusal: true,
+        // NO GRANT: the builder answers for itself, saying which of its saves
+        // the reader's grants reach, rather than the frame locking it whole —
+        // its draft is kept in the tab's storage, and a frame refusal drawn
+        // the moment a grant was withdrawn would take the draft off screen
+        // while the person who wrote it is still there to copy it out.
         tab: false,
       },
     ],

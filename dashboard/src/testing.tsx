@@ -16,17 +16,8 @@
  * `routes/` or `components/` reaches for it.
  */
 
-// THE LIBRARY THROUGH ITS BINDING (`test/inCase.ts`), the one door every
-// suite takes to it, so a render, a wait or a click made here ends with the
-// case that asked. And the library's `act`, NOT REACT'S: React's own warns
-// that the environment is not set up for it unless `IS_REACT_ACT_ENVIRONMENT`
-// is on, and with Vitest's globals off the library never turns it on for the
-// file — it does so only for the length of each of its own `act` calls. So a
-// reference drawn here printed "The current testing environment is not
-// configured to support act(...)" into three suites' output, which is how a
-// warning that means something gets read past.
-import { act, fireEvent, render, screen } from "~/test/inCase.ts";
-import { createElement } from "react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import type { ComponentProps, ElementType, ReactElement } from "react";
 import {
@@ -146,23 +137,17 @@ function referenceChart(): {
   // portals into a node it has to be able to find, and a viewport whose layout
   // effects read the element they are on. And MEASURED, so the chart has a
   // layout and therefore connectors to name: see the doc above.
-  const meter = measuring();
-  let drawn: ReturnType<typeof render>;
-  try {
-    drawn = render(
-      createElement(TreeCanvas, {
-        label: "Reference chart",
-        nodes: [{ id: "a", label: "A", children: [{ id: "b", label: "B" }] }],
-        cards: () => [{ id: "a", children: [{ id: "b", children: [] }] }],
-        cardOf: (id: string) => id,
-        renderCard: (id: string, card: TreeCardContext) => createElement("div", card.item(id), id),
-      }),
-    );
-    meter.layout();
-  } finally {
-    meter.stop();
-  }
-  const { container: host, unmount } = drawn;
+  const stop = measuring();
+  const { container: host, unmount } = render(
+    createElement(TreeCanvas, {
+      label: "Reference chart",
+      nodes: [{ id: "a", label: "A", children: [{ id: "b", label: "B" }] }],
+      cards: () => [{ id: "a", children: [{ id: "b", children: [] }] }],
+      cardOf: (id: string) => id,
+      renderCard: (id: string, card: TreeCardContext) => createElement("div", card.item(id), id),
+    }),
+  );
+  stop();
   const item = host.querySelector("[role='treeitem']");
   const tree = host.querySelector("[role='tree']");
   // THE CONNECTORS ARE THE CHART'S OWN SVG, which is a child of the element
@@ -195,80 +180,36 @@ function referenceChart(): {
   return read;
 }
 
-/** How many layouts [measuring] runs before it calls the reference chart unsettled. */
-const REFERENCE_LAYOUTS = 4;
-
 /**
- * A ResizeObserver for the reference chart, installed for the length of one
- * render and laid out once the render has committed.
+ * A ResizeObserver that answers at once, for the length of one render.
  *
  * The reference chart has to be MEASURED to draw its connectors, and it is
  * rendered before any suite's own observer is installed. Every box gets one
  * size, which is all a chart of two cards needs to have a layout at all.
- *
- * IT REPORTS WHEN A BROWSER WOULD: after the render, never from inside
- * `observe()`. It used to answer at once, and `observe()` is called from the
- * card's REF, which React attaches in the middle of its commit — so the
- * design system's resize handler, which flushes its sizes synchronously
- * (correct for a real observer, whose callback runs in the event loop's
- * rendering step with React idle), ran `flushSync` inside a lifecycle, and
- * React printed eight "flushSync was called from inside a lifecycle method"
- * warnings into the first chart case of every builder suite. The warning was
- * the harness's, not the chart's, and it read as a production defect in
- * whichever case happened to build the reference first.
- *
- * So the observer RECORDS, and [layout] delivers inside `act` — the shape
- * `LayoutObserver.settle` already has for the suites' own charts — round
- * after round until a layout observes nothing new, since the cards a layout
- * places are measured too. BOUNDED, because a reference chart that never
- * settles is a package this harness no longer understands.
  */
-function measuring(): { layout: () => void; stop: () => void } {
+function measuring(): () => void {
   const real = globalThis.ResizeObserver;
-  const observers: Recorded[] = [];
-  class Recorded {
-    readonly pending = new Set<Element>();
-    constructor(private readonly report: ResizeObserverCallback) {
-      observers.push(this);
-    }
+  class Immediate {
+    constructor(private readonly report: ResizeObserverCallback) {}
     observe(el: Element): void {
-      this.pending.add(el);
-    }
-    unobserve(el: Element): void {
-      this.pending.delete(el);
-    }
-    disconnect(): void {
-      this.pending.clear();
-    }
-    /** Reports every element observed since the last report; says whether there was one. */
-    deliver(): boolean {
-      if (this.pending.size === 0) return false;
       const box = { width: 100, height: 40 };
-      const entries = [...this.pending].map((target) => ({
-        target,
-        contentRect: box,
-        borderBoxSize: [{ inlineSize: box.width, blockSize: box.height }],
-      }));
-      this.pending.clear();
-      this.report(entries as unknown as ResizeObserverEntry[], this as unknown as ResizeObserver);
-      return true;
+      this.report(
+        [
+          {
+            target: el,
+            contentRect: box,
+            borderBoxSize: [{ inlineSize: box.width, blockSize: box.height }],
+          },
+        ] as unknown as ResizeObserverEntry[],
+        this as unknown as ResizeObserver,
+      );
     }
+    unobserve(): void {}
+    disconnect(): void {}
   }
-  globalThis.ResizeObserver = Recorded as unknown as typeof ResizeObserver;
-  return {
-    layout: () => {
-      for (let round = 0; round < REFERENCE_LAYOUTS; round++) {
-        let reported = false;
-        act(() => {
-          for (const observer of [...observers]) if (observer.deliver()) reported = true;
-        });
-        if (!reported) return;
-      }
-      throw new Error(`the reference chart was still observing after ${REFERENCE_LAYOUTS} layouts`);
-    },
-    stop: () => {
-      globalThis.ResizeObserver = real;
-    },
+  globalThis.ResizeObserver = Immediate as unknown as typeof ResizeObserver;
+  return () => {
+    globalThis.ResizeObserver = real;
   };
 }
 
@@ -310,7 +251,7 @@ export function orgTableParts(): {
         { key: "actions", header: "Actions", headerHidden: true },
       ],
       rows: [{ id: "a", label: "A" }],
-      renderCell: (_id: string, column: number) =>
+      renderCell: (id: string, column: number) =>
         column === 1
           ? createElement(OrgTableName, {
               icon: createElement("svg"),
@@ -597,20 +538,18 @@ export function installWindow(initial: number): {
  * tuned. The pair is restored in a `finally`, so a case cannot leave every
  * later one measuring a box jsdom never laid out.
  *
- * `open` IS FOR A BLOCK THAT IS NOT RENDERED YET. A `lazy` disclosure mounts
+ * `act` IS FOR A BLOCK THAT IS NOT RENDERED YET. A `lazy` disclosure mounts
  * its children when a reader opens it, which is after this function would
  * otherwise have put the real dimensions back — so the block measures a box
  * jsdom reports as zero and the branch under test never runs. Anything the
  * callback does happens while the fake is still installed, which is the only
  * arrangement where the open and the measurement are the same moment they are
- * in a browser. It was called `act`, which inside this function hid the
- * case-bound `act` the rest of the file calls — and in a file that calls
- * `act`, the name is the binding's alone (`test/inCase.source.test.ts`).
+ * in a browser.
  */
 export function overflowing(
   ui: ReactElement,
   axis: "height" | "width" = "height",
-  open?: (container: HTMLElement) => void,
+  act?: (container: HTMLElement) => void,
 ): HTMLElement {
   const scroll = axis === "height" ? "scrollHeight" : "scrollWidth";
   const client = axis === "height" ? "clientHeight" : "clientWidth";
@@ -622,7 +561,7 @@ export function overflowing(
   Object.defineProperty(HTMLElement.prototype, client, { configurable: true, value: 460 });
   try {
     const { container } = render(ui);
-    open?.(container);
+    act?.(container);
     return container;
   } finally {
     if (had.scroll) Object.defineProperty(HTMLElement.prototype, scroll, had.scroll);

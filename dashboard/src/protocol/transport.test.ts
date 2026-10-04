@@ -7,15 +7,14 @@
  * The dashboard reaches the engine from `src/protocol/` and from nowhere else:
  * `rest.ts` for every REST route, `socket.ts` for the live socket and its
  * handshake probe, `api.ts` for the degraded-mode snapshot poll. What that buys
- * is everything those modules decide ONCE — the session cookie sent to this
- * origin and no other, a lost session noted as one and a step-up confirmed and
- * replayed, the deadline that ends a request that never settles, a body read
- * to its end before a write counts as answered, no browser cache in front of a
+ * is everything those modules decide ONCE — the session credential on every
+ * request, the deadline that ends a request that never settles, a body read to
+ * its end before a write counts as answered, no browser cache in front of a
  * guarded answer, and a refusal a screen can branch on. A screen that reached
  * for `fetch` itself would get none of it, and nothing would say so: it type
  * checks, it works on the happy path, and it is the one write in the product
- * that never asks for a step-up, waits for ever, or reads a dropped connection
- * as a success. That is a real history here: `rest.ts` exists because the Fleet
+ * that sends no credential, waits for ever, or reads a dropped connection as a
+ * success. That is a real history here: `rest.ts` exists because the Fleet
  * screen once took its client from a context field the shell never populated
  * and shipped dead.
  *
@@ -206,8 +205,8 @@ describe("every write goes through the one transport", () => {
     expect(
       offenders,
       "the dashboard reaches the engine through src/protocol/ only: call `rest` for a REST " +
-        "route and `useQuery` for a question, so the session, the deadline and the refusal " +
-        "are the ones every other request gets",
+        "route and `useQuery` for a question, so the token, the deadline and the refusal are " +
+        "the ones every other request gets",
     ).toEqual([]);
   });
 
@@ -260,7 +259,7 @@ describe("every write goes through the one transport", () => {
     ["refetch", 'const { refetch } = useQuery("x");\nrefetch();'],
     ["a method called refetch", "state.refetch();"],
     ["a method called fetch", "loader.fetch();"],
-    ["a comment", '// fetch("/x") would skip the step-up\nconst x = 1;'],
+    ["a comment", '// fetch("/x") would skip the token\nconst x = 1;'],
     ["a string", 'const s = "fetch(";'],
     ["a template", "const s = `fetch(${x})`;"],
     ["a type", "let s: WebSocket | null = null;\ntype F = typeof fetch;"],

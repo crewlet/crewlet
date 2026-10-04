@@ -21,7 +21,7 @@
  * render with its own class names.
  */
 
-import { cleanup, render, screen } from "~/test/inCase.ts";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { Button } from "@crewlethq/ui";
 

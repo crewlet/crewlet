@@ -14,8 +14,8 @@
  *
  * Dropping a row somewhere else — or `Alt` with Up or Down on a focused row,
  * because a pointer-only reorder is a write a keyboard reader cannot make —
- * sends `set_priorities` as the principal this browser signed in as
- * (ADR-0024), on their own record. Three rules make it honest:
+ * sends `set_priorities` as the person signed in (ADR-0024). Three
+ * rules make it honest:
  *
  *  - THE WHOLE STORED LIST, NOT THE ROWS. The rows are the open entries and at
  *    most twenty of them; the list the write replaces is the person's own
@@ -59,6 +59,7 @@ export function PriorityQueue({
   they,
   theirs,
   total,
+  now,
   chrome,
   hrefOf,
 }: {
@@ -66,7 +67,7 @@ export function PriorityQueue({
   rows: readonly WorkSummary[];
   /** The record the write replaces, or undefined while it has not answered. */
   stored: StoredOrder | undefined;
-  /** Whose queue this is, by the name their own record is kept under — what the write names. */
+  /** Whose queue this is, by handle — what the write names. */
   whose: string;
   /** "you" on the reader's own day, "them" on anybody else's. */
   they: string;
@@ -74,6 +75,7 @@ export function PriorityQueue({
   theirs?: string;
   /** How many open entries the list holds in full, where the engine said. */
   total?: number;
+  now: number;
   chrome: RowChrome;
   hrefOf: (row: WorkSummary) => string;
 }) {
@@ -249,6 +251,7 @@ export function PriorityQueue({
             <WorkRow
               key={row.id}
               row={row}
+              now={now}
               chrome={chrome}
               href={hrefOf(row)}
               ordinal={at + 1}
@@ -331,11 +334,11 @@ function capitalize(s: string): string {
 /**
  * Why a reorder cannot be made here, or "" where it can.
  *
- * THE WRITE'S OWN ACCESS FIRST — offline, nobody signed in, a change this
- * engine does not make for the reader, somebody else's queue — because that
- * is the sentence every other control on the screen is showing. Then the two
- * this list adds: the record the write is conditional on has not answered, and
- * a list of one has no order to change.
+ * THE WRITE'S OWN ACCESS FIRST — offline, nobody signed in, a token bound to
+ * nobody, somebody else's queue — because that is the sentence every other
+ * control on the screen is showing. Then the two this list adds: the record
+ * the write is conditional on has not answered, and a list of one has no
+ * order to change.
  */
 export function holdOf(
   access: WriteAccess,
