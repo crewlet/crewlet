@@ -217,37 +217,23 @@ they are deliberately different mechanisms.
 
 ### The socket's admission semaphore
 
-One **principal** may have **four queries running at once**
-(`stream.MaxInFlightQueries`), across every socket they hold. Queries run on
-their own goroutines so a store scan cannot stall the live feed, and the bound
-is a token pool taken **on the read loop's own goroutine**: a burst past it
-pauses the reader rather than piling up as blocked goroutines, so the
-backpressure is where it can be seen. Four is what one screen issues at once —
-the agent page opens with three.
+One **socket** may have **four queries running at once**
+(`stream.MaxInFlightQueries`). Queries run on their own goroutines so a store
+scan cannot stall the live feed, and the bound is a token pool taken **on the
+read loop's own goroutine**: a burst past it pauses the reader rather than
+piling up as blocked goroutines, so the backpressure is where it can be seen.
 
-**Per principal is what makes the pool below it sized correctly.** It was per
-SOCKET, with nothing tying a person's second tab to their first, so three tabs
-offered twelve concurrent scans and six offered twenty-four — against a reader
-floor of eight, which was itself derived as "two full dashboards at four
-queries each". The sizing was right and the unit was wrong, so one person with
-three tabs already exceeded what the pool was built to hold, and what queued
-behind them was the engine's own reads.
-
-Per principal, N tabs belonging to one person share one allowance, and a second
-operator's burst is unaffected by the first's — which is the property a single
-node-wide cap could not have had: one person opening six tabs would have been
-an outage for everybody else's dashboard. So the load a company's store sees
-is **four per operator at the dashboard**, not four per tab.
-
-**A principal is its id, not its login.** A login is a name, and a name is
-renamed — and until every enrolment was required to carry one it was also
-optional, so keyed on it every person enrolled by address alone shared one
-four-slot budget under the empty login, and the second of them to open a
-dashboard queued behind the first. The id is what every row keys a principal
-on: never empty for anybody the guard resolved, never shared between two, and
-unchanged when somebody renames their login, so their open tabs go on sharing
-one allowance across the change. A person's own machine token acts as them and
-shares that allowance too.
+**Four per socket is the number the pool below is sized from.** The reader
+floor is eight, derived as "two full dashboards at four queries each", and a
+dashboard is a tab — so the semaphore and the floor are one decision stated
+twice, and changing either means changing both. A person with three tabs open
+offers twelve concurrent queries, and that is accepted rather than engineered
+away: past the pool, a query waits in the pool's own queue, and the one read
+that must never wait behind such a burst — resolving who is acting — runs on
+the connection the store reserves for it (below). The allowance used to be per
+**principal**, one budget shared and reference-counted across every socket a
+person held; it bought a bound the reserved connection already gives where it
+matters, and cost a person's second tab a wait on their first.
 
 ### The store's reserved connection
 
@@ -279,7 +265,7 @@ rather than a scan.
 The failure it stops has the same shape as the one the pinned writers exist to
 break:
 
-1. A socket storm arrives: N operators, four concurrent queries each, every
+1. A socket storm arrives: N tabs, four concurrent queries each, every
    one of them a scan.
 2. They take every connection.
 3. The identity lookup that would let those very requests be decided queues

@@ -59,6 +59,12 @@ func (a *Applier) applyInvalidation(ctx context.Context, tx *sql.Tx, at applyCon
 			invalidation.Generation, err)
 	}
 	written, _ := result.RowsAffected()
+	if written > 0 {
+		// EVERY SESSION AND MACHINE TOKEN IN THE COMPANY is over, and no
+		// list could name them: that is the whole reason the counter
+		// exists. See [Moved.Everyone].
+		a.moved.Everyone = true
+	}
 	return int(written), nil
 }
 

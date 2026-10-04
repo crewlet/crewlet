@@ -9,22 +9,6 @@ import { degradationOf } from "./StateBar.tsx";
 const noop = () => {};
 
 describe("degradationOf", () => {
-  test("an unverifiable session says the tab is paused and needs nothing", () => {
-    // Distinct from a dropped connection: the socket is open and the node is
-    // healthy, so "reconnecting" would be false, and the remedy is waiting —
-    // the engine re-checks every minute on its own.
-    const got = degradationOf({
-      authRejected: false,
-      connected: true,
-      identityUnverifiable: true,
-      configured: true,
-      onSignIn: noop,
-      onConfig: noop,
-    });
-    expect(got?.message).toMatch(/cannot verify your session/);
-    expect(got?.action).toBeUndefined();
-  });
-
   // THE REPAIR IS A SIGN-IN, the reader's own: there is no token to set any
   // more, and a strip naming one sent a person to look for a credential the
   // browser no longer holds anywhere.
@@ -42,20 +26,6 @@ describe("degradationOf", () => {
     expect(got?.action?.label).toBe("Sign in");
     got?.action?.onClick();
     expect(asked).toBe(true);
-  });
-
-  test("nobody signed in outranks an unverifiable session", () => {
-    // A refusal never clears on its own; a hold does. The strip shows the one
-    // somebody has to act on.
-    const got = degradationOf({
-      authRejected: true,
-      connected: true,
-      identityUnverifiable: true,
-      configured: true,
-      onSignIn: noop,
-      onConfig: noop,
-    });
-    expect(got?.variant).toBe("danger");
   });
 
   test("refused access says why, outranks a dropped connection, and offers a retry", () => {
@@ -104,12 +74,11 @@ describe("degradationOf", () => {
     expect(got?.action?.label).toBe("Try again");
   });
 
-  test("a verified, connected, configured tab has nothing to report", () => {
+  test("a connected, configured tab has nothing to report", () => {
     expect(
       degradationOf({
         authRejected: false,
         connected: true,
-        identityUnverifiable: false,
         configured: true,
         onSignIn: noop,
         onConfig: noop,

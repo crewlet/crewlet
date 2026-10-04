@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -445,13 +446,14 @@ type applyHooks struct {
 	// no engine behind the log.
 	nudgeChart func()
 
-	// nudgeDirectory is what the IDENTITY APPLIER calls after a committed
-	// batch that moved a seat's standing — a suspension, a bind, an
-	// unbind, a removal — threaded down for nudgeChart's reason: the apply
-	// is the only thing that sees it on every node, and a suspension
-	// moves nothing a published company would ever carry. It must not
-	// block either. See internal/engine/directory.go.
-	nudgeDirectory func()
+	// identityMoved is what the IDENTITY APPLIER calls after a committed
+	// batch, with what it moved ([iamdomain.Moved]) — a seat's standing
+	// for the party registry, whose credentials for whatever holds one
+	// open — threaded down for nudgeChart's reason: the apply is the only
+	// thing that sees it on every node, and a suspension moves nothing a
+	// published company would ever carry. It must not block either. See
+	// [Engine.identityMoved].
+	identityMoved func(iamdomain.Moved)
 
 	// inboxMoved is what the TRACKER APPLIER calls after a committed
 	// batch that wrote somebody a notice — see [Engine.SetOnInboxMoved].
@@ -464,10 +466,10 @@ type applyHooks struct {
 // applyHooks is every post-commit hook this engine hands its appliers.
 func (e *Engine) applyHooks() applyHooks {
 	return applyHooks{
-		nudgeSkills:    e.nudgeSkills,
-		nudgeChart:     e.nudgeChart,
-		nudgeDirectory: e.nudgeDirectory,
-		inboxMoved:     e.inboxMoved,
+		nudgeSkills:   e.nudgeSkills,
+		nudgeChart:    e.nudgeChart,
+		identityMoved: e.identityMoved,
+		inboxMoved:    e.inboxMoved,
 	}
 }
 
@@ -2187,6 +2189,9 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 			"a snapshot if it needs one and re-keys each applier to the rows it "+
 			"holds")
 	s.haltAppliers()
+	// replaced is whether the join may have put a donor's rows in place,
+	// which no committed batch will ever say — see [stateLog.estateReplaced].
+	replaced := false
 	// ctx IS the state log's own run context here — [requestRejoin]
 	// starts this under it — so the relaunched appliers get the lifetime
 	// the boot launch gave them rather than a heartbeat tick's.
@@ -2203,6 +2208,9 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 					"serving the view it built from its own; the periodic "+
 					"rebuild retries")
 		}
+		if replaced {
+			s.estateReplaced()
+		}
 	}()
 
 	logs := make(map[string]*jetstream.DomainLog, len(s.domains))
@@ -2212,6 +2220,11 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	outcome, want, err := e.join(ctx, s, logs)
 	switch {
 	case err != nil:
+		// A JOIN THAT FAILED may have installed the artefact before it
+		// did, so the rows are told about as replaced: closing every open
+		// socket for its handshake to decide costs one reconnect per tab,
+		// and not closing one a peer's record ended leaves it serving.
+		replaced = true
 		return err
 	case outcome == joinNoDonor:
 		return errNoDonor
@@ -2225,6 +2238,7 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 		return want.StreamCreatedAt[name], nil
 	})
 	if outcome == joinAdopted {
+		replaced = true
 		s.nudgeSnapshot()
 	}
 	log.InfoContext(ctx, "statelog_rejoined", "node", s.nodeID, "outcome", string(outcome))
@@ -2264,10 +2278,21 @@ func (s *stateLog) restoreEstate(ctx context.Context) error {
 	s.haltAppliers()
 	// ctx is the state log's own run context, for [Engine.rejoin]'s
 	// reason: the relaunched appliers outlive the heartbeat tick.
-	defer s.launchAppliers(ctx)
+	//
+	// AND A FILE THAT OPENED IS TOLD ABOUT AS REPLACED once they run: it
+	// may be the donor's a failed join installed, whose rows no committed
+	// batch here ever said anything about — see [stateLog.estateReplaced].
+	reopened := false
+	defer func() {
+		s.launchAppliers(ctx)
+		if reopened {
+			s.estateReplaced()
+		}
+	}()
 	if err := s.db.ReopenReplicated(ctx); err != nil {
 		return fmt.Errorf("%w: %w", statelog.ErrEstateNotRestored, err)
 	}
+	reopened = true
 	log.WarnContext(ctx, "statelog_estate_restored", "node", s.nodeID,
 		"path", s.db.ReplicatedPath(),
 		"detail", "the replicated database an earlier join left closed is "+

@@ -162,7 +162,6 @@ export function useConnection() {
     connected: s.connected,
     authRejected: s.authRejected,
     accessRefused: s.accessRefused,
-    identityUnverifiable: s.identityUnverifiable,
     health: s.health,
   }));
 }

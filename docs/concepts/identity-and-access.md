@@ -348,7 +348,7 @@ from that node's own rows:
 |---|---|---|
 | Signing in | refused from the apply on | the stage is read from the row, and only `active` may act |
 | Every session they hold | refused at the next request, `401 session_revoked` | the same stage check, on every request |
-| An open dashboard tab | closed `4401` within a minute | the socket re-checks its credential every 60 seconds |
+| An open dashboard tab | closed `4401` as the record applies — or `1013` on a node that cannot read the record yet, whose reconnect answers that person `503` until it can | each node's identity applier says whose credentials a committed batch moved — the person, the login they hold, the session it ended — and the node decides again exactly the sockets opened with one; a move that can name nobody (the company's session generation, a record the node retains instead of applying, its identity log passing the stall grace) closes every open tab `1013` without reading anything, and each reconnect's handshake decides |
 | Their seat's contact identities — the Slack member, the Jira account, the GitHub login | withdrawn within one apply, with a 30-second re-read behind it | the identity applier signals after the commit, and the node rebuilds its party registry for the same company from a fresh read of the directory |
 | What agents are shown of them — a lead's roster, `lookup_colleague` | their accounts left out from the next turn | every turn pins the registry's reading beside its org, so the prompt and the tools leave out the same people |
 | Their `inbox_changed` watch | gone with the socket | a watch needs a resolved caller |
@@ -1930,8 +1930,8 @@ authenticate by their own means, so what they carry is not the guard's to
 count: the Atlassian Forge relay sends its own signed JWT as a bearer on
 every Jira and Confluence delivery, and a browser loading the sign-in page
 may still hold a cookie signed under a key the deployment has since retired.
-Neither is a failed sign-in, and neither is an open dashboard tab re-checking
-the credential it connected with. A refusal is counted where a route that
+Neither is a failed sign-in, and neither is an open dashboard tab deciding
+again the credential it connected with. A refusal is counted where a route that
 needs a credential answered `401` because of it.
 
 When the minute has closed, the engine publishes **one `iam_login_failures`

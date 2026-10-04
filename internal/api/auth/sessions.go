@@ -436,6 +436,10 @@ type sessionAnswer struct {
 	// it and a guarded route's refusal counts it; see audit.go for why the
 	// count is not taken here.
 	malformed bool
+
+	// lifetime is the served session's absolute deadline, which no
+	// re-issue moves — see [Lifetime].
+	lifetime time.Time
 }
 
 // resolve turns a cookie into an answer, or reports that this request carries
@@ -446,9 +450,12 @@ type sessionAnswer struct {
 //
 // tokens is the guard's Tier A entries by login, for a session exchanged from
 // one: see [tierASubjects].
+//
+// open is whether the cookie is the one an OPEN CONNECTION was opened with —
+// see [Guard.ResolveOpen] — which sets its idle deadline aside.
 func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	ceiling []iam.Grant, proof proofWindow,
-	tokens func(login string) (config.APIToken, bool)) sessionAnswer {
+	tokens func(login string) (config.APIToken, bool), open bool) sessionAnswer {
 
 	cookie := s.cookieOf(r)
 	if cookie == "" {
@@ -456,9 +463,18 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	}
 	subjects := tierASubjects{directory: s.directory, tokens: tokens}
 	need := needOf(r.Method)
-	v := s.signer.Validate(r.Context(), subjects, cookie)
+	// AN OPEN CONNECTION IS ACTIVITY, so its idle deadline is not what
+	// ends it: the bearer it holds was presented at its handshake and can
+	// never be re-issued over a socket. The session table says so
+	// ([session.Signer.ValidateOpen]); this only says which question is
+	// being asked.
+	validate := s.signer.Validate
+	if open {
+		validate = s.signer.ValidateOpen
+	}
+	v := validate(r.Context(), subjects, cookie)
 	if v.Row == session.RowBehind && v.Answer(need) == session.AnswerUnavailable {
-		v = s.awaitStart(r.Context(), subjects, cookie, v)
+		v = s.awaitStart(r.Context(), subjects, cookie, v, validate)
 	}
 	switch v.Answer(need) {
 	case session.AnswerUnavailable:
@@ -498,7 +514,8 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 			// the entry exactly as it composes the token's bearer.
 			s.reissue(w, v)
 			return sessionAnswer{how: iam.Resolved, presented: true, tierA: &entry,
-				via: iam.SessionName(v.Bearer.Lineage.String())}
+				via:      iam.SessionName(v.Bearer.Lineage.String()),
+				lifetime: v.Bearer.AbsoluteExpiresAt}
 		}
 	}
 
@@ -555,7 +572,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	}
 	return sessionAnswer{
 		principal: s.principal(v, binding, ceiling, proof), how: iam.Resolved,
-		refusal: refusal, presented: true,
+		refusal: refusal, presented: true, lifetime: v.Bearer.AbsoluteExpiresAt,
 	}
 }
 
@@ -588,7 +605,9 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 // bearer did not state, and the bearer is SIGNED, so a caller cannot name a
 // position of its choosing to park a request on.
 func (s *Sessions) awaitStart(ctx context.Context, directory session.Directory,
-	cookie string, behind session.Validation) session.Validation {
+	cookie string, behind session.Validation,
+	validate func(context.Context, session.Directory, string) session.Validation,
+) session.Validation {
 
 	wait, cancel := context.WithTimeout(ctx, SessionCatchUp)
 	defer cancel()
@@ -598,7 +617,7 @@ func (s *Sessions) awaitStart(ctx context.Context, directory session.Directory,
 			"position", behind.Bearer.StartPosition, "error", err)
 		return behind
 	}
-	return s.signer.Validate(ctx, directory, cookie)
+	return validate(ctx, directory, cookie)
 }
 
 // reissue sets the cookie a served validation re-issued, if it re-issued one.

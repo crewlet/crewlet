@@ -88,7 +88,7 @@ func (a *Applier) writePerson(ctx context.Context, tx *sql.Tx, at applyContext,
 		// A CONTENT RECORD STATES A STAGE, so a person's standing may
 		// have moved with it — an enrolment arriving on a reservation
 		// that already holds a seat is the ordinary case.
-		a.directoryMoved = true
+		a.moved.Seats = true
 	}
 
 	// THE CLAIM COLUMNS ARE NOT TOUCHED HERE, and that is the one thing
@@ -99,7 +99,19 @@ func (a *Applier) writePerson(ctx context.Context, tx *sql.Tx, at applyContext,
 	// columns", in a domain where the columns are somebody's identity.
 
 	credentials, err := a.writeCredentials(ctx, tx, at, id, person.Credentials)
-	return int(written) + credentials, err
+	if err != nil {
+		return int(written) + credentials, err
+	}
+	if written > 0 || credentials > 0 {
+		// AND EVERY CREDENTIAL ACTING FOR THEM is to be decided again:
+		// the grants a session or a machine token carries are this row's,
+		// and a machine token this record revoked or dropped from the set
+		// is one it ended — named by its owner, whose row it is.
+		if err := a.movedPerson(ctx, tx, id); err != nil {
+			return int(written) + credentials, err
+		}
+	}
+	return int(written) + credentials, nil
 }
 
 // writeCredentials replaces a person's credential rows from the payload.
@@ -220,7 +232,12 @@ func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	written, _ := result.RowsAffected()
 	if written > 0 {
-		a.directoryMoved = true
+		// A STAGE THAT IS NOT `active` ends every credential acting for
+		// them, and one that is admits them again.
+		a.moved.Seats = true
+		if err := a.movedPerson(ctx, tx, id); err != nil {
+			return int(written), err
+		}
 	}
 	return int(written), nil
 }
@@ -279,6 +296,13 @@ func (a *Applier) writeRevocation(ctx context.Context, tx *sql.Tx,
 		return 0, fmt.Errorf("iamdomain: bump person %s's epoch: %w", id, err)
 	}
 	written, _ := result.RowsAffected()
+	if written > 0 {
+		// EVERY SESSION AND MACHINE TOKEN THEY HOLD is over, which is the
+		// whole of what an epoch bump is for.
+		if err := a.movedPerson(ctx, tx, id); err != nil {
+			return int(written), err
+		}
+	}
 	return int(written), nil
 }
 
@@ -309,6 +333,12 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx, at applyContext,
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: encode person %s's released claims: %w",
 			id, err)
+	}
+	// THE LOGIN THEY HOLD, read before the row that holds it is deleted:
+	// a credential bound through it is bound through nothing afterwards.
+	login, err := heldLogin(ctx, tx, id)
+	if err != nil {
+		return 0, err
 	}
 
 	// THE TOMBSTONE FIRST, so a transaction that fails partway leaves the
@@ -362,8 +392,10 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx, at applyContext,
 	if written > 0 {
 		// A REMOVAL RELEASES THE SEAT with every other claim, and the
 		// tombstone is what the directory then reads as the seat's
-		// standing — see [Reader.SeatHolders].
-		a.directoryMoved = true
+		// standing — see [Reader.SeatHolders]. And it ends every
+		// credential they held, with the rows it deleted.
+		a.moved.Seats = true
+		a.moved.person(id, login)
 	}
 	return int(written), nil
 }

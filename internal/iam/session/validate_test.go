@@ -764,3 +764,64 @@ func TestADeadlineEndsASessionBeforeAnyRowIsRead(t *testing.T) {
 		})
 	}
 }
+
+// AN OPEN CONNECTION'S BEARER OUTLIVES ITS IDLE DEADLINE, AND NOTHING ELSE.
+//
+// A socket holds the bearer its handshake presented and can never be handed a
+// re-issue, so its idle deadline is the handshake's plus [session.Idle] however
+// busy the tab has been since. [session.Signer.ValidateOpen] sets that one
+// deadline aside. The control is the same bearer through Validate, which the
+// idle deadline ends; a record ending the session and the absolute deadline
+// still end it; and nothing is re-issued, since there is no response to carry
+// one.
+//
+// Mutation: keep the idle deadline on the open arm and the first case is
+// ended; finish the open arm through the re-issue and it carries a cookie.
+func TestAnOpenConnectionsBearerOutlivesOnlyItsIdleDeadline(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	lifetime := session.Idle + 12*time.Hour
+	cookie, err := rig.signer.Mint(session.Mint{
+		Lineage: rig.lineage, Person: personID, Epoch: 3, Generation: 1,
+		StartPosition: startPos, AbsoluteExpiresAt: rig.clock.at.Add(lifetime),
+	})
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	rig.cookie = cookie
+	rig.clock.advance(session.Idle + time.Hour)
+	open := func() session.Validation {
+		return rig.signer.ValidateOpen(t.Context(), rig.dir, rig.cookie)
+	}
+
+	if got := rig.validate(); got.Row != session.RowEnded {
+		t.Fatalf("the control: a request past the idle deadline landed on %q, "+
+			"so the case below proves nothing", got.Row)
+	}
+	got := open()
+	if got.Row != session.RowValid {
+		t.Fatalf("an open connection past its idle deadline landed on %q: %s",
+			got.Row, got.Detail)
+	}
+	if got.Reissue != "" {
+		t.Error("an open connection was re-issued a cookie it has no " +
+			"response to carry")
+	}
+	if !got.Person.Found || got.Person.Login != "sarah.chen" {
+		t.Errorf("it carried the person row %+v, want this node's", got.Person)
+	}
+
+	rig.dir.identity.Session.Ended = true
+	if got := open(); got.Row != session.RowEnded {
+		t.Errorf("a session a record ended landed on %q for its open "+
+			"connection, want ended: the rows still decide", got.Row)
+	}
+	rig.dir.identity.Session.Ended = false
+
+	rig.clock.advance(lifetime)
+	if got := open(); got.Row != session.RowEnded ||
+		!strings.Contains(got.Detail, "absolute") {
+		t.Errorf("past its absolute deadline an open connection landed on %q "+
+			"(%s), want ended by that deadline", got.Row, got.Detail)
+	}
+}

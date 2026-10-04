@@ -28,6 +28,12 @@ import (
 // WARN log line on this node ([Guard.overreached]), which an operator's log
 // alerting sees without a dedupe of its own.
 //
+// BOTH ARE A REQUEST'S, recorded by the middleware alone. An open socket
+// decides the credential it was opened with again whenever the identity
+// estate moves it ([Guard.ResolveOpen]), outside the middleware, and a
+// re-decision is not somebody presenting a credential: counted, every tab a
+// revocation closed would be a failed attempt on the per-minute row.
+//
 // # A refusal is an attempt only where the guard RELIED on the credential
 //
 // Resolve runs on every request, the [Unguarded] ones included, and those
@@ -40,9 +46,7 @@ import (
 // MARKS what it refused ([refusedCredential]) and the middleware counts the
 // mark in the one arm where the refusal decided something: a guarded route
 // answering 401. The credential exchange at `POST /auth/token` is such a
-// route, and so is the socket's handshake. And an open socket re-checking the
-// credential it was opened with runs Resolve outside the middleware, so a
-// re-check is never counted either.
+// route, and so is the socket's handshake.
 
 // Audit is where the guard's authentication facts go.
 //

@@ -160,6 +160,8 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 		return r.WithContext(refusedCredential(iam.WithAnonymous(ctx))), nil
 	}
 
+	// A MACHINE TOKEN ENDS ON ITS OWN AT ITS EXPIRY — see [Lifetime].
+	ctx = withLifetime(ctx, row.ExpiresAt)
 	owner := row.Owner
 	id, err := uuid.Parse(owner.ID)
 	if err != nil {

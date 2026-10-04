@@ -714,9 +714,6 @@ export class LiveSocket {
       case "inbox_changed":
         this.store.applyInboxChanged(msg.data as never);
         break;
-      case "identity":
-        this.store.applyIdentity(msg.data as never);
-        break;
       case "result":
         this.settle(msg.id, null, msg.data);
         break;

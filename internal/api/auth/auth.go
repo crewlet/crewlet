@@ -653,7 +653,8 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		}
 		// A TIER A TOKEN'S OVERREACH IS LOGGED AT THE REQUEST, and only
 		// here, once the route has said no. See audit.go for why its use
-		// is no row at all.
+		// is no row at all, and why the resolution itself — which an open
+		// socket runs again on an identity event — records nothing.
 		recorded := &statusWriter{ResponseWriter: w}
 		next.ServeHTTP(recorded, r)
 		if refusalStatus(recorded.status) {

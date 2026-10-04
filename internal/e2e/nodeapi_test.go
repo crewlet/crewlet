@@ -247,6 +247,7 @@ func wireAPI(
 		SeatBindings: auth.SeatBindings{Directory: e, Chart: engine.SeatViewOf(e)},
 		Runtime:      runtime,
 		Inbox:        e,
+		Credentials:  e,
 		Chart:        chartSurface,
 		QueueBackend: backends.Queue.Backend(),
 		EventLog:     backends.Store.Events(),

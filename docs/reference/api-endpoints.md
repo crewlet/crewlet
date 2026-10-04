@@ -3259,9 +3259,9 @@ upgrade, naming the grant — and every push kind is received only by a socket
 whose caller holds the grant that kind's question takes: `event` needs
 `audit:read` (it is an `events` row, carrying every phase's prompt and
 response), and every other company kind `state:read`. The snapshot is built for
-the same audience. A re-check that finds the grants changed sends a fresh
-snapshot for the new audience, and one that finds `state:read` gone closes the
-socket `4403` — see [Close codes](#close-codes).
+the same audience. When the socket's credential is decided again and its grants
+have changed, a fresh snapshot is sent for the new audience; one that finds
+`state:read` gone closes the socket `4403` — see [Close codes](#close-codes).
 
 #### Pushes
 
@@ -3281,7 +3281,6 @@ Server → client kinds:
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
 | `error`    | Reply to a client `query` that could not be answered, or a `watch` that was not installed. | `{ id, what, error, reason?, grants?, retry_after?, refusal?, detail? }` where `error` is a code — and an `unauthorized` one adds `reason` and `grants`, exactly as the REST envelope does: the rule that decided, and the grants any one of which would have admitted the caller (an EMPTY list means no grant would, because what is missing is a relation such as leading that person). A **watch refusal** has no `id` and names `what: "watch"`: `unauthorized` when the caller may not watch that seat — with its `reason` and `grants` — `unavailable` when this node could not read the chart that decides it or the directory a login resolves through — carrying `retry_after` as a query's `unavailable` does, by the same rule and with the same `0` for a read no wait clears, but never the `refusal` or `detail` behind it, because what the directory says about a login names the seat it is bound to — and `not_found` when a login names no record, which only `fleet:operate` is ever told. For a query, the codes are: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *here* — a projection still catching up after a restart or a fresh join, a coordination store it could not reach, or a refusal by its state log — so a client does not report a fault. A query's `unavailable` frame also carries `retry_after`, the whole seconds before asking this node again, and, where a state-log refusal is behind it, `refusal` (its code — `behind`, `log_full`, `deferred`, `broker_refused`, …) and `detail` (its own words, the remedy). **A `retry_after` of `0` is the answer, never an omission**: waiting will not change it — a log at its byte ceiling, a record this node cannot decode, a barrier its broker refused — so the client asks another node or waits for an operator rather than polling this one; see [Read consistency](../guides/consistency.md#the-thirteen-refusals). Its REST twin is `503` with the same `refusal` and `detail` in the body and `Retry-After` carrying the hint, absent where the hint is zero. **A work, page or search question on a node that has not been handed a company yet** is `unavailable` with `refusal: "no_active_revision"`, the tracker's and the knowledge base's own sentence as its `detail`, and `retry_after: 15` — the reconcile poll that brings the company — and its REST twin is `503 no_active_revision` with the same detail and `Retry-After: 15`, as every other surface over those two halves answers such a node. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`, and it carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. A frame has ONE `detail` key, `unavailable`'s words and `bad_params`'s sentence alike. Every other code's text stays in the node's log, since a failure's own text can carry a path. The dashboard asks again after exactly a frame's `retry_after` — and not at all after a `0` — and keeps no wait of its own, so this hint and the `Retry-After` on a REST refusal are the only retry clock it has. |
 | `pong`     | Reply to a client `ping`. | `null` |
-| `identity` | This socket's own credential, at its last re-check. **Direct** — a fact about one tab, not the company, which is why it never rides the node's `health`. | `{ state: "unverifiable" \| "verified", retry_after? }` |
 | `inbox_changed` | A committed tracker batch wrote the watched seat one or more notices. Every node applies every tracker record, so each node pushes to its OWN sockets from its own applier after the batch commits; nothing is forwarded between nodes. One frame per seat per batch. | `{ handle, unread_delta, subject, reason }`, and the frame itself carries `seat`. **Identifiers and a count, never content**: `subject` is the id of the object the newest of those notices was written on — the task for a task commit, and the PERSON for a `prioritised` notice, whose task `work_inbox` names as `task` — and `reason` the reason it was routed under, and what the notices say is read through `work_inbox`, the question that decides who may read them. `unread_delta` is a **hint** — the notices the batch wrote, which a redelivery the engine has already collapsed may count twice — so a client re-asks rather than adding it to a badge. **Routed by seat**: it reaches only the clients whose `watch` for that seat was allowed, never every tab. It needs `state:read`, the grant `work_inbox` takes. |
 
 #### Client frames
@@ -3291,8 +3290,8 @@ Client → server kinds:
 | `kind` | Purpose |
 |--------|---------|
 | `ping` | Keepalive; server replies with `pong`. |
-| `watch` | Become a recipient for one seat's seat-routed frames: `{ kind: "watch", seat }`. An empty `seat` clears it (always allowed), and one socket watches one seat at a time — a tab is looking at one screen, so a second watch replaces the first. **`seat` names a record the way `work_inbox`'s `handle` does**: a seat's handle, either of your own names, or somebody's **login**, which is resolved to the record their notices are kept under — the seat the identity directory binds them to — and the watch is installed there, because that is the name every `inbox_changed` frame for them is pushed to; see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for), whose rules it follows to the letter, the directory asked only once the watch is decided as far as it can be without it. A login that names nobody answers `not_found` to `fleet:operate` and is refused like any other seat to everybody else. **It is decided like `work_inbox` about the same seat**, because it buys that seat's `inbox_changed` frames: the seat's own holder, whoever leads it through the chart, or the admin grant. Three answers, and none closes the socket. **Allowed** installs the watch. **Refused** installs nothing, drops any watch the socket held, and replies `error` with `unauthorized`. It is not a `4403` close, because a client reads that as "this browser may not have the live channel at all" when all that was refused is one seat's frames. **Undecidable** (this node could not read the chart, or the directory a login resolves through) installs nothing either and replies `unavailable`, with the `retry_after` that says when asking again can change the answer — `0` where no wait will. Installing would hand the seat's frames to somebody this node could not show was allowed them. Refusing would tell a lead they lead nobody because the node is behind. **Every credential re-check re-decides the current watch**: a refusal withdraws it and says so, and an undecidable answer keeps it, since nothing has been learned against a decision this node already made. A watch with nobody resolved behind it closes the socket with **4401**. |
-| `query` | Request one thing, answered with exactly one `result` or `error` frame. `{ kind, id, what, params }` — `id` is any client-chosen value echoed back on the reply. **There is no per-frame credential**: every question is asked as the principal the handshake resolved (and each re-check since), and decided by the grant it is registered under. Queries run concurrently with each other and with the push stream, so one database read cannot stall a tab's live rows — at most **four** at a time per **principal**, across every socket they hold, which is a person's share of the node's reader pool: the pool's floor is sized as two full dashboards at four each, so a person's second tab shares their first tab's four rather than adding its own, and a fifth query waits on its own socket rather than in the pool the engine's own reads share. |
+| `watch` | Become a recipient for one seat's seat-routed frames: `{ kind: "watch", seat }`. An empty `seat` clears it (always allowed), and one socket watches one seat at a time — a tab is looking at one screen, so a second watch replaces the first. **`seat` names a record the way `work_inbox`'s `handle` does**: a seat's handle, either of your own names, or somebody's **login**, which is resolved to the record their notices are kept under — the seat the identity directory binds them to — and the watch is installed there, because that is the name every `inbox_changed` frame for them is pushed to; see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for), whose rules it follows to the letter, the directory asked only once the watch is decided as far as it can be without it. A login that names nobody answers `not_found` to `fleet:operate` and is refused like any other seat to everybody else. **It is decided like `work_inbox` about the same seat**, because it buys that seat's `inbox_changed` frames: the seat's own holder, whoever leads it through the chart, or the admin grant. Three answers, and none closes the socket. **Allowed** installs the watch. **Refused** installs nothing, drops any watch the socket held, and replies `error` with `unauthorized`. It is not a `4403` close, because a client reads that as "this browser may not have the live channel at all" when all that was refused is one seat's frames. **Undecidable** (this node could not read the chart, or the directory a login resolves through) installs nothing either and replies `unavailable`, with the `retry_after` that says when asking again can change the answer — `0` where no wait will. Installing would hand the seat's frames to somebody this node could not show was allowed them. Refusing would tell a lead they lead nobody because the node is behind. **Every time the socket's credential is decided again by an identity record that names it, and on every published company, which is when a lead can move, so is the current watch**: a refusal withdraws it and says so, and an undecidable answer keeps it, since nothing has been learned against a decision this node already made. A watch with nobody resolved behind it closes the socket with **4401**. |
+| `query` | Request one thing, answered with exactly one `result` or `error` frame. `{ kind, id, what, params }` — `id` is any client-chosen value echoed back on the reply. **There is no per-frame credential**: every question is asked as the principal the handshake resolved (and each decision of the credential since), and decided by the grant it is registered under. Queries run concurrently with each other and with the push stream, so one database read cannot stall a tab's live rows — at most **four** at a time per **socket**, which is a tab's share of the node's reader pool: the pool's floor is sized as two full dashboards at four each, and a fifth query waits on its own socket rather than in the pool the engine's own reads share. |
 
 #### Queries
 
@@ -3560,25 +3559,73 @@ caused by one bad revision.
 A refused handshake **cannot** carry a close code: a close code rides a close
 frame, and a connection that never opened has none. That case is answered `401`
 before the upgrade and is covered under [`GET /ws/stream`](#ws-wsstream) above.
-These two are for a socket that is already open.
+These are for a socket that is already open.
 
-**An open socket re-checks its credential every 60 seconds** — the same
-[stall grace](../concepts/identity-and-access.md) a node may serve identity it
-has not caught up on — by running the guard again over the credential it was
-opened with. A handshake decision alone would leave a revoked session's socket
-pushing the company's state for as long as the tab stayed open. Each answer
-does one thing:
+**An open socket is authenticated at its handshake and ended by what ends its
+credential.** There is no periodic re-check. What can change the answer is an
+event, and each kind is handled the cheapest correct way:
+
+- **an identity record names it** — its session was signed out, ended by an
+  administrator or replaced by a step-up; the person it acts for was suspended,
+  removed, signed out everywhere, given other grants, bound to another seat or
+  had a machine token revoked; or the directory row a Tier A token is bound
+  through (`token:<id>`) moved. Every node applies the identity log, so every
+  node hears this from its own applier as the record applies; the sockets the
+  record names — and only those — are decided again by the guard, over the
+  request they were opened with, and a revocation reaches an open tab within
+  the time it takes to apply;
+- **an identity move names nobody** — the company's session generation moved
+  (every session ended at once), this node **retained** a record instead of
+  applying it (one a newer build wrote during a rolling upgrade, or one signed
+  under a keyring key it was not restarted with, whose person is inside a
+  payload it cannot read), a join replaced its identity estate, or its identity
+  applier **stopped keeping up** (halted on a record it cannot read, or frozen
+  behind a broker) and its lag has just passed the stall grace, the instant
+  every identity read on the node starts answering `503`. **Every** open socket
+  closes `1013` at once and nothing is read on its behalf: each tab reconnects
+  on its backoff and its handshake decides — `401` sends it to sign in, `503`
+  says this node cannot tell yet, and a credential the move did not touch is
+  back on a fresh snapshot;
+- **a company was published** — every hire, chart edit and configuration apply.
+  Each socket is decided against the company just published, in memory, with
+  no identity read: one whose person's seat that company no longer holds as a
+  human seat closes `4403`, one whose seat now answers to another handle closes
+  `1013` so its handshake resolves the binding afresh, and every `watch` is
+  decided again;
+- **its credential ends on its own** — a session's absolute deadline, a
+  machine token's expiry; no record is written at that instant, so each socket
+  keeps a timer for it, and the guard decides it;
+- and **once as it starts listening**, so a record that landed between the
+  handshake and that moment is not missed.
+
+A session's **idle** deadline does not end an open socket: an open live view is
+activity, and a socket can never be re-issued a cookie, so the session is
+decided on what its records say and its absolute deadline. The browser's own
+cookie is moved only by a REST response, so a client that talks to the node
+over the socket alone makes an ordinary REST request now and then to keep its
+session past the idle deadline.
+
+Each answer does one thing:
 
 | Answer | Code | What a client does |
 |---|---|---|
 | The session ended, expired or was revoked; the token is no longer accepted | `4401` | Re-dial with the credential the browser holds now; if the handshake answers `401`, sign in. |
 | The person resolves but their seat is gone from the chart, or they no longer hold `state:read` | `4403` | Stop reconnecting and show why: the credential is fine, what it may do is not. |
+| This node will not vouch for the credential now: it could not read what decides it, an identity move named nobody, or the seat answers to another handle | `1013` | The standard's *try again later*: reconnect on a backoff. The handshake decides — and answers `503 identity_unavailable` with a `Retry-After` for as long as the node cannot say, before any snapshot is built. |
 | Resolved with different grants | *(no close)* | Nothing — the socket's pushes follow the new grants, and a fresh `snapshot` built for them replaces what the screen was showing. |
-| This node cannot read its identity estate, or is behind it | *(no close)* | The socket is **degraded** and told so on an `identity` frame: pushes stop, questions answer `unavailable`, and the next check that can answer sends `identity: verified` and a fresh `snapshot`. |
-| Resolved | *(no close)* | Nothing — and later questions are asked as the principal just resolved, so a narrowed grant takes effect within one interval. |
+| Resolved | *(no close)* | Nothing — and later questions are asked as the principal just resolved, so a narrowed grant takes effect from the record that narrowed it. |
 
-Both sit in the 4000–4999 range the standard reserves for applications, and
-both deliberately echo the HTTP status they mean.
+**A node behind its identity log** hears no record it has not applied, so
+inside the stall grace its open sockets are served on their last decision, as
+its REST routes are served on the rows it has. Past the grace it can vouch for
+nobody, and every open socket closes `1013` at that instant (above) — including
+on a node whose applier **halted** on the very record meant to end them, which
+no applied record would ever have announced.
+
+`4401` and `4403` sit in the 4000–4999 range the standard reserves for
+applications, and both deliberately echo the HTTP status they mean; `1013` is
+the standard's own, because what it asks of a client is what any close outside
+that range asks.
 
 Nothing else closes this socket for a fault.
 

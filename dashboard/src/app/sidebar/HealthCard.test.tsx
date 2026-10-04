@@ -55,19 +55,6 @@ describe("which state the card says", () => {
     expect(r.press).toBe("none");
   });
 
-  // A SESSION THE ENGINE COULD NOT VERIFY is a pause, not a fault: it checks
-  // again on its own, and the alarm line still stands beneath it.
-  test("an unverifiable session is a warning below a lost socket", () => {
-    expect(read({ identityUnverifiable: true, connected: false }).title).toBe("Reconnecting");
-    const r = read({
-      identityUnverifiable: true,
-      health: { ...healthy, alarms: { count: 1 } },
-    });
-    expect(r.title).toBe("Session unverified");
-    expect(r.tone).toBe("warning");
-    expect(r.alarms?.text).toBe("1 alarm");
-  });
-
   test("a lost socket outranks what the last push claimed", () => {
     expect(read({ connected: false, health: { ...healthy, shutting_down: true } }).title).toBe(
       "Reconnecting",

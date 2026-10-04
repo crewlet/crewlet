@@ -671,8 +671,8 @@ without a sound.
 in precedence order: nobody is signed in (the card is then the button that
 goes to the sign-in), the engine knows who this is and will not serve them (a
 seat taken out of the chart, a session without `state:read` — a statement, with
-the state bar beside it carrying the retry and the sign-out), reconnecting, the
-session unverifiable at the engine's last check, draining, no configuration, a posture that
+the state bar beside it carrying the retry and the sign-out), reconnecting,
+draining, no configuration, a posture that
 diverged from the fleet (`shed`, `stuck`, `isolated`), no health push yet
 ("Waiting for the engine" — nothing reported is not healthy), and serving —
 "3 nodes · config epoch 42", or "node count unavailable" where the presence
@@ -6459,10 +6459,12 @@ brings that carries a design-system rule.
   "retrying" for as long as the node stayed degraded. `unavailable` is never
   flattened into an empty result — "this company has no work" is something a
   reader acts on.
-- **Two close codes, and what each one asks of the reader.** A refused
+- **Three close codes, and what each one asks of the reader.** A refused
   handshake cannot carry one (see the HTTP diagnosis above); these are for a
-  socket that is already open, which the engine re-checks every minute against
-  the credential it was opened with. `4401` means that credential no longer
+  socket that is already open, which the engine decides again — against the
+  credential it was opened with — whenever an identity record names that
+  credential, a company is published, or the credential reaches its own end.
+  `4401` means that credential no longer
   resolves to anybody — the session ended or was revoked — so re-dial with the
   cookie the browser holds now and sign in only if the handshake then answers
   `401`. `4403` means the person resolves and may not have this surface —
@@ -6472,10 +6474,15 @@ brings that carries a design-system rule.
   has acted and a *Sign out* beside it — the person refused is the person who
   needs to leave, and the engine keeps `/auth/` open to their session for
   exactly that. A handshake refused `403` is the same state, read through the
-  plain-HTTP re-ask. A re-check that cannot be answered is NOT a close: the tab receives an
-  `identity: unverifiable` frame, the state strip says live updates are paused,
-  and the engine's next successful check sends `identity: verified` with a
-  fresh snapshot. Nothing else closes this socket for a fault.
+  plain-HTTP re-ask. `1013` — the standard's *try again later* — means the
+  engine will not vouch for the credential on this socket now (it could not
+  read what decides it, an identity move named nobody, or the person's seat
+  answers to another handle): reconnect on a backoff, and let the handshake
+  decide and say why (`503 identity_unavailable` while the node cannot read its
+  identity estate). Nothing else closes this socket for a fault. And the
+  socket never moves the session's cookie — only a REST response can — so a tab
+  that would otherwise sit on the socket alone makes an ordinary REST read now
+  and then, or its session idles out under it however busy the screen is.
 - **One clock.** Every relative time on screen advances together and none of
   them is baked at render.
 - **The clock reaches the words, not the screen.** It ticks once a second, and

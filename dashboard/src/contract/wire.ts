@@ -29,7 +29,6 @@ export type PushKind =
   | "tools"
   | "health"
   | "inbox_changed"
-  | "identity"
   | "result"
   | "error"
   | "pong";

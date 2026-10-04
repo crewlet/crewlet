@@ -226,6 +226,15 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 		defer c.done.Done()
 		e.watchDirectory(runCtx)
 	}()
+	// AND THE WATCH THAT SAYS THIS NODE STOPPED VOUCHING FOR ITS IDENTITY
+	// ROWS, which no committed batch ever says — see identityvouch.go. Over
+	// the identity domain openIAM has already proved is running.
+	vouch := identityVouching(e, sl.Domain(iamdomain.Domain{}.Name()))
+	c.done.Add(1)
+	go func() {
+		defer c.done.Done()
+		vouch.run(runCtx)
+	}()
 	// THE RUNTIME IS THE ENGINE'S FROM HERE, so the cleanup above stands
 	// down and [Engine.stopCore] — the same shutdown — is what ends it.
 	started = true
@@ -260,8 +269,9 @@ func (e *Engine) startCoreDuties(ctx context.Context) {
 	e.startUsage(ctx, c.log)
 }
 
-// stopViewTriggers ends the core's view triggers — the chart view's two and the
-// party registry's directory trigger — and waits for a rebuild in flight.
+// stopViewTriggers ends the core's view triggers — the chart view's two, the
+// party registry's directory trigger and the identity vouch watch — and waits
+// for a rebuild in flight.
 //
 // SEPARATE FROM [Engine.stopCore], and called at the very top of the teardown,
 // because a trigger is not a reader of the log so much as a WRITER of

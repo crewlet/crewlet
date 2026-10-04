@@ -89,7 +89,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const agents = useAgents();
   const openNewTask = useOpenNewTask();
   const health = useEngineHealth();
-  const { connected, authRejected, accessRefused, identityUnverifiable } = useConnection();
+  const { connected, authRejected, accessRefused } = useConnection();
   const inbox = useInboxCounts();
   const here = workspaceOf(route.path);
   const at = route.path.join("/");
@@ -225,7 +225,6 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
                 connected,
                 authRejected,
                 accessRefused,
-                identityUnverifiable,
                 health,
               })}
               onSignIn={goSignIn}

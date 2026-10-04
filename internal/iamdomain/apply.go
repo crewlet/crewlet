@@ -47,12 +47,13 @@ var applyLog = logging.Get("iam.apply")
 // depended on which keyring keys this node holds — and two nodes a rotation
 // has not yet reached would write different rows from one record.
 //
-// THE DIRECTORY SIGNAL IS POST-COMMIT, because it is a consequence of a record
-// here that is not a row. A suspension withdraws the seat's contact identities from this
-// node's notify registry with no org-chart record at all, and the apply is the
-// only thing that sees that happen on EVERY node — the change feed relays a
-// record to one. So a committed batch that moved a seat's standing tells the
-// engine, which re-reads the directory and rebuilds the registry whole.
+// WHAT A BATCH MOVED IS SAID POST-COMMIT, because it is a consequence of a
+// record here that is not a row. A suspension withdraws the seat's contact
+// identities from this node's notify registry with no org-chart record at all,
+// and closes every dashboard socket the person holds open; the apply is the
+// only thing that sees either happen on EVERY node — the change feed relays a
+// record to one. So a committed batch hands the engine a [Moved] saying whose
+// standing it moved, and each listener re-reads the rows it needs.
 
 // Applier writes this node's copy of the identity estate.
 type Applier struct {
@@ -60,52 +61,124 @@ type Applier struct {
 	// record's writer against.
 	NodeID string
 
-	// directory is told, after a committed batch, that who holds which
-	// seat — or at what stage — may have moved. Nil is legal and means
-	// nobody is listening.
-	//
-	// IT CARRIES NOTHING, deliberately: its one listener is the notify
-	// registry, which is rebuilt WHOLE from a fresh read of the directory
-	// and swapped, because a diff applied to a fresh registry drops every
-	// identity it did not touch. So there is nothing a list of changed
-	// people could be used for except to be wrong about.
-	directory func()
+	// committed is told, after a committed batch, what it moved — see
+	// [Moved]. Nil is legal and means nobody is listening.
+	committed func(Moved)
 
-	// directoryMoved is set inside Apply when a record wrote a row the
-	// directory's standing is read from — a person's stage, a seat claim
-	// or its release, a removal — and drained by Committed. NOT guarded by
-	// a mutex, and the framework's contract is why: an applier is ONE
-	// writer, and Apply and Committed are called from the same goroutine
-	// with the commit in between. A SIGN-IN SETS NOTHING: it is the bulk of
-	// this log's traffic and it moves no seat's standing, so a rebuild per
-	// session would be a registry rebuilt per login for nothing.
-	directoryMoved bool
+	// moved is filled inside Apply as each record writes a row somebody's
+	// standing is read from, and drained by Committed. NOT guarded by a
+	// mutex, and the framework's contract is why: an applier is ONE writer,
+	// and Apply and Committed are called from the same goroutine with the
+	// commit in between. A body the store re-runs fills it twice, which
+	// costs a listener a re-read and nothing else — see [Moved] on why
+	// over-reporting is the safe direction.
+	moved Moved
 }
 
 // NewApplier builds the identity estate's applier for one node.
 //
-// directory is called after a committed batch that moved a seat's standing —
-// see the field. AFTER the commit and never inside the transaction, for the
-// reason internal/chart's view trigger gives: the store re-runs the body of an
+// committed is called after a committed batch that moved anything — see
+// [Moved]. AFTER the commit and never inside the transaction, for the reason
+// internal/chart's view trigger gives: the store re-runs the body of an
 // attempt that failed transiently, and a listener told about rows that then
-// rolled back would rebuild from rows no node holds.
-func NewApplier(nodeID string, directory func()) *Applier {
-	return &Applier{NodeID: nodeID, directory: directory}
+// rolled back would re-decide from rows no node holds.
+func NewApplier(nodeID string, committed func(Moved)) *Applier {
+	return &Applier{NodeID: nodeID, committed: committed}
 }
 
-// Committed is the post-commit half: the consequence of a record here that is
-// not a row — this node's contact routing hearing that a seat's standing may
-// have moved.
+// Committed is the post-commit half: the consequences of a record here that
+// are not rows — this node's contact routing hearing that a seat's standing
+// may have moved, and its open connections that a credential they were opened
+// with may have.
+//
+// IT MUST NOT BLOCK, and neither may the listener: it runs on the apply loop's
+// own goroutine with the next batch waiting behind it.
 func (a *Applier) Committed(context.Context) {
-	if !a.directoryMoved {
+	if a.moved.Empty() {
 		return
 	}
-	// RESET BEFORE THE CALL, so a signal the listener raises while it runs
+	// RESET BEFORE THE CALL, so a move the listener raises while it runs
 	// is one the next batch delivers rather than one this reset erases.
-	a.directoryMoved = false
-	if a.directory != nil {
-		a.directory()
+	moved := a.moved
+	a.moved = Moved{}
+	if a.committed != nil {
+		a.committed(moved)
 	}
+}
+
+// movedPerson records that the row of person id moved, under the login the row
+// holds — see [heldLogin].
+func (a *Applier) movedPerson(ctx context.Context, tx *sql.Tx, id string) error {
+	login, err := heldLogin(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	a.moved.person(id, login)
+	return nil
+}
+
+// heldLogin is the login person id's row holds, read in the apply's own
+// transaction, or "" for a row that holds none or does not exist. A move names
+// it beside the person so a credential bound through that login — a Tier A
+// token's `token:<id>` row — is named too ([Moved.Logins]).
+func heldLogin(ctx context.Context, tx *sql.Tx, id string) (string, error) {
+	var login string
+	err := tx.QueryRowContext(ctx,
+		`SELECT login FROM iam_people WHERE id = ?`, id).Scan(&login)
+	if err != nil && !errorsIsNoRows(err) {
+		return "", fmt.Errorf("iamdomain: read the login of person %s, whose "+
+			"row this record moved: %w", id, err)
+	}
+	return login, nil
+}
+
+// movedHolders records every person whose row holds token in column — read
+// BEFORE a statement takes it off them, so a release names whom it released
+// rather than nobody. except is a person the record itself names, left out.
+//
+// THE COLUMN IS ONE OF THE CLAIM COLUMNS [Applier.writeToken] chose by kind,
+// never a caller's string.
+func (a *Applier) movedHolders(ctx context.Context, tx *sql.Tx, column, token,
+	except string, at applyContext) error {
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, login FROM iam_people
+		WHERE `+column+` = ? AND id <> ? AND scoped_through < ?`,
+		token, except, at.packed)
+	if err != nil {
+		return fmt.Errorf("iamdomain: read who holds %s: %w", token, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id, login string
+		if err := rows.Scan(&id, &login); err != nil {
+			return fmt.Errorf("iamdomain: read who holds %s: %w", token, err)
+		}
+		a.moved.person(id, login)
+	}
+	return rows.Err()
+}
+
+// THE APPLIER HEARS WHAT A BATCH RETAINED: see [Applier.Retained].
+var _ statelog.RetentionHook = (*Applier)(nil)
+
+// Retained is told, after a committed batch and before [Applier.Committed],
+// that the batch RETAINED records this node did not apply — one a newer build
+// wrote, one signed under a keyring key this node was not restarted with, or
+// one a retained record's scope covers.
+//
+// IT MOVES EVERYONE ([Moved.Everyone]). Whose record it is sits inside a
+// payload this node could not read, and its scope is a BUCKET of the person
+// id rather than the person, so no list here can name whom it is about. What
+// the commit did change is what this node can vouch for: every read of a
+// person in that bucket answers unknown from now on (the deferral the
+// framework just recorded), and the guard refuses their REST requests 503. A
+// connection held open on a decision made before the commit — a revocation or
+// a suspension this node cannot read is exactly what such a record may be — is
+// one only the move naming everyone reaches. NOT [Moved.Seats]: the contact
+// routing is rebuilt from rows, and a retained record wrote none.
+func (a *Applier) Retained(context.Context, int) {
+	a.moved.Everyone = true
 }
 
 // Gated reports a record that must produce no rows at all.

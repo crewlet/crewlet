@@ -350,6 +350,32 @@ func (v Validation) Code(need Need) string {
 func (s *Signer) Validate(ctx context.Context, directory Directory,
 	cookie string) Validation {
 
+	return s.validate(ctx, directory, cookie, false)
+}
+
+// ValidateOpen is [Signer.Validate] for the bearer an OPEN CONNECTION was
+// opened with — a live socket, decided again long after its handshake — and it
+// differs in two respects, both because a connection can never be handed a
+// cookie.
+//
+// THE IDLE DEADLINE IS SET ASIDE. A re-issue on a REST response is what moves
+// it, and a connection holds the bearer its handshake presented, so its idle
+// deadline is the handshake's plus [Idle] however busy the tab has been since.
+// An open live view is activity: the session is decided on its ROWS — a record
+// ending it, its person's epoch or stage, the company's generation — and on its
+// ABSOLUTE deadline, which no re-issue moves and which still ends it here.
+//
+// AND NOTHING IS RE-ISSUED, since there is no response to carry it.
+func (s *Signer) ValidateOpen(ctx context.Context, directory Directory,
+	cookie string) Validation {
+
+	return s.validate(ctx, directory, cookie, true)
+}
+
+// validate is [Signer.Validate], and [Signer.ValidateOpen] when open is true.
+func (s *Signer) validate(ctx context.Context, directory Directory,
+	cookie string, open bool) Validation {
+
 	b, err := s.parse(cookie)
 	if err != nil {
 		return Validation{Row: RowMalformed, Detail: err.Error()}
@@ -364,7 +390,7 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 	case !now.Before(b.AbsoluteExpiresAt):
 		return Validation{Row: RowEnded, Bearer: b,
 			Detail: "the absolute deadline has passed"}
-	case !now.Before(b.IdleExpiresAt):
+	case !open && !now.Before(b.IdleExpiresAt):
 		return Validation{Row: RowEnded, Bearer: b,
 			Detail: "the idle deadline has passed"}
 	}
@@ -373,22 +399,26 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 	// an unauthenticated caller cannot price a request by sending rubbish.
 	identity, err := directory.Resolve(ctx, b.Lineage.String(), b.Person)
 	v := s.standing(b, identity, err)
-	if v.Row == RowValid || v.Row == RowBehind {
-		// THROUGH served, BOTH OF THEM. Both serve reads on the bearer's
-		// own proof, so both must move the idle deadline: an arm that
-		// served without re-issuing would let a session in continuous
-		// use on a lagging node expire on the deadline it was minted
-		// with.
-		return s.served(v.Row, b, identity, now, v.Detail)
+	switch {
+	case v.Row != RowValid && v.Row != RowBehind:
+		return v
+	case open:
+		v.Person, v.Session = identity.Person, identity.Session
+		return v
 	}
-	return v
+	// THROUGH served, BOTH OF THEM. Both serve reads on the bearer's own
+	// proof, so both must move the idle deadline: an arm that served
+	// without re-issuing would let a session in continuous use on a
+	// lagging node expire on the deadline it was minted with.
+	return s.served(v.Row, b, identity, now, v.Detail)
 }
 
 // standing is the row one read of the estate puts a bearer on — the half of
 // the table that is about the ROWS.
 //
-// A SERVING ROW comes back bare, for [Signer.Validate] to finish: it re-issues
-// through [Signer.served].
+// A SERVING ROW comes back bare, for [Signer.validate] to finish: a request's
+// re-issues through [Signer.served], and an open connection's is filled in and
+// re-issues nothing.
 func (s *Signer) standing(b Bearer, identity Identity, err error) Validation {
 	if err != nil {
 		return Validation{Row: RowStalled, Bearer: b, Err: err,

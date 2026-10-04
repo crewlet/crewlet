@@ -216,7 +216,6 @@ function emptyState() {
 		schedules: null,
 		connected: false,
 		authRejected: false,
-		identityUnverifiable: false,
 		accessRefused: null,
 		inboxMoves: {},
 		orgPushes: 0
@@ -388,7 +387,6 @@ var Store = class {
 	}
 	setConnected(value) {
 		this.state.connected = value;
-		if (!value) this.state.identityUnverifiable = false;
 		if (!value) this.state.health = { status: "unknown" };
 		this.emit("health");
 	}
@@ -405,12 +403,6 @@ var Store = class {
 			[handle]: (this.state.inboxMoves[handle] ?? 0) + 1
 		};
 		this.emit("inboxMoves");
-	}
-	applyIdentity(state) {
-		const next = state?.state === "unverifiable";
-		if (this.state.identityUnverifiable === next) return;
-		this.state.identityUnverifiable = next;
-		this.emit("health");
 	}
 	setAccessRefused(reason) {
 		const next = reason === null ? null : reason || "refused";
@@ -1849,9 +1841,6 @@ var LiveSocket = class {
 				break;
 			case "inbox_changed":
 				this.store.applyInboxChanged(msg.data);
-				break;
-			case "identity":
-				this.store.applyIdentity(msg.data);
 				break;
 			case "result":
 				this.settle(msg.id, null, msg.data);

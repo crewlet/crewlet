@@ -229,7 +229,20 @@ func intersect(declared, ceiling []iam.Grant) []iam.Grant {
 // had to remember to write is one a caller eventually forgets to — leaving a
 // browser on a bearer whose idle deadline stops moving, signed out mid-work.
 // Nothing else is written here; the refusal is returned.
+//
+// AND THE INSTANT THE CREDENTIAL ENDS ON ITS OWN rides the context beside the
+// answer ([Lifetime]), for a caller that holds the credential past this
+// request.
 func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
+	*http.Request, *Refusal) {
+
+	return g.resolve(w, r, false)
+}
+
+// resolve is [Guard.Resolve], and [Guard.ResolveOpen] when open is true — the
+// one difference being a session's idle deadline, which an open connection
+// does not answer to.
+func (g *Guard) resolve(w http.ResponseWriter, r *http.Request, open bool) (
 	*http.Request, *Refusal) {
 
 	// THE DEVELOPMENT PRINCIPAL FIRST, and only for a request that
@@ -247,8 +260,13 @@ func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 		return g.bearer(r, candidate)
 	}
 	if g.sessions != nil {
-		answer := g.sessions.resolve(w, r, g.ceiling, g.proof, g.tokenByLogin)
+		answer := g.sessions.resolve(w, r, g.ceiling, g.proof, g.tokenByLogin, open)
 		if answer.presented {
+			if answer.how == iam.Resolved {
+				// A SESSION ENDS ON ITS OWN AT ITS ABSOLUTE DEADLINE,
+				// which no re-issue moves.
+				r = r.WithContext(withLifetime(r.Context(), answer.lifetime))
+			}
 			if answer.tierA != nil && answer.how == iam.Resolved {
 				return g.exchanged(r, *answer.tierA, answer.via)
 			}

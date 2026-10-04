@@ -77,12 +77,6 @@ type Service struct {
 	hub   *Hub
 	state *livestate.LiveState
 
-	// budgets is the in-flight query allowance, one per PRINCIPAL rather
-	// than one per socket. It lives here because the service outlives any
-	// one connection, which is what lets a person's tabs share a budget
-	// at all — see budget.go.
-	budgets *budgets
-
 	// health is consulted by the shared tick.
 	health HealthFunc
 
@@ -119,9 +113,14 @@ type Service struct {
 	// holders resolves a `watch` frame's login. See [Options.Holders].
 	holders iam.Holders
 
-	// revalidateEvery is how often an open socket's credential is checked
-	// again. See [Options.RevalidateEvery].
-	revalidateEvery time.Duration
+	// seatOf is the published company's word on a seat. See
+	// [Options.SeatOf].
+	seatOf SeatOfFunc
+
+	// listeners is every open socket, by what it was opened with — see
+	// lifetime.go. The service holds it because what ends a socket arrives
+	// here: an identity move, a published company.
+	listeners listeners
 
 	// tokensDirty means a phase completed since the last rollup went out.
 	// Set on the publish path and cleared on the tick — see flushTokens.
@@ -145,12 +144,12 @@ type PlacementFunc func() (map[string]bool, error)
 
 // Options configure a service.
 //
-// Health, Posture, Seats, Roster, Org, Tools, Schedules, Placement, Chart and
-// Holders are REQUIRED, and [NewService] refuses a missing one by name. Each is something
-// the engine beside the API always answers, so a missing one is a wiring
-// mistake, and serving around it would push a confident answer where there is
-// none: a health frame reading "ok", an empty catalogue, an organization with
-// no seats, a lead told they may not watch their own report.
+// Health, Posture, Seats, Roster, Org, Tools, Schedules, Placement, Chart,
+// Holders and SeatOf are REQUIRED, and [NewService] refuses a missing one by name. Each is
+// something the engine beside the API always answers, so a missing one is a
+// wiring mistake, and serving around it would push a confident answer where
+// there is none: a health frame reading "ok", an empty catalogue, an
+// organization with no seats, a lead told they may not watch their own report.
 type Options struct {
 	Health HealthFunc
 
@@ -206,14 +205,6 @@ type Options struct {
 	// that there is exactly ONE of them however many times it is started.
 	HealthInterval time.Duration
 
-	// RevalidateEvery overrides how often an open socket's credential is
-	// checked again. Zero takes [RevalidateEvery], which is the production
-	// value and is tied to the stall grace — see revalidate.go.
-	//
-	// Injectable for HealthInterval's reason: a revocation case that had
-	// to wait out a minute per assertion would be a case nobody runs.
-	RevalidateEvery time.Duration
-
 	// Chart answers who leads whom, which is what a `watch` frame is
 	// decided by — see [watching]. REQUIRED: a watch installs routing for
 	// a seat's inbox, and the question it asks is the one the `work_inbox`
@@ -232,6 +223,13 @@ type Options struct {
 	// without it would refuse every such watch as undecidable for the life
 	// of the process.
 	Holders iam.Holders
+
+	// SeatOf answers what the company this node has published says about a
+	// seat, which is what an open socket acting as a seat is decided by
+	// when a company is published — in memory, with no identity read (see
+	// lifetime.go). REQUIRED for [Options.Chart]'s reason: a service built
+	// without it could never say a seat is gone.
+	SeatOf SeatOfFunc
 }
 
 // NewService builds the fan-out over a projection, or refuses a missing
@@ -251,6 +249,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		{"Schedules", opts.Schedules == nil},
 		{"Chart", opts.Chart == nil},
 		{"Holders", opts.Holders == nil},
+		{"SeatOf", opts.SeatOf == nil},
 		{"Placement", opts.Placement == nil},
 	} {
 		if field.absent {
@@ -264,7 +263,6 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 	}
 	s := &Service{
 		hub:       NewHub(),
-		budgets:   newBudgets(),
 		state:     state,
 		health:    opts.Health,
 		posture:   opts.Posture,
@@ -275,20 +273,16 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		schedules: opts.Schedules,
 		chart:     opts.Chart,
 		holders:   opts.Holders,
+		seatOf:    opts.SeatOf,
 		placement: opts.Placement,
 		now:       opts.Now,
 		interval:  opts.HealthInterval,
-
-		revalidateEvery: opts.RevalidateEvery,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
 	}
 	if s.interval <= 0 {
 		s.interval = HealthInterval
-	}
-	if s.revalidateEvery <= 0 {
-		s.revalidateEvery = RevalidateEvery
 	}
 	return s, nil
 }
@@ -527,6 +521,11 @@ func (s *Service) currentTools() []map[string]any { return s.tools() }
 // Broadcast(kind, data) and a caller in another package spelling each kind:
 // the payload each kind carries is this service's to build, and a caller that
 // paired a kind with the wrong payload would compile cleanly.
+//
+// AND EVERY OPEN SOCKET IS DECIDED AGAIN, after the re-sends, in memory
+// against the company just published: the seat its principal acts as may be
+// gone, and a lead may have moved off the team whose inbox the socket watches.
+// See lifetime.go.
 func (s *Service) CompanyPublished() {
 	now := s.now()
 	for _, push := range []struct {
@@ -542,6 +541,7 @@ func (s *Service) CompanyPublished() {
 	} {
 		s.hub.Broadcast(Push(push.kind, push.data, now))
 	}
+	s.listeners.each(func(l *listener) { signal(l.published) })
 }
 
 // InboxChange is the payload of an `inbox_changed` frame: whose inbox moved,

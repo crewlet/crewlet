@@ -3,53 +3,56 @@ package stream
 import (
 	"context"
 	"errors"
-	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // A WATCH IS RE-DECIDED WITH THE CREDENTIAL, and only a refusal withdraws it.
 //
-// A socket re-resolves its credential every interval precisely because a
-// decision kept for the life of a tab outlives what it decided (revalidate.go).
-// A watch is one of those decisions: a lead moved off a team must stop
-// following a former report's inbox within an interval, not at their next
+// A socket's credential is decided again whenever something could have moved
+// it, a published company among them (lifetime.go), because a decision kept
+// for the life of a tab outlives what it decided. A watch is one of those
+// decisions: a lead moved off a team must stop following a former report's
+// inbox when the chart that moves them is published, not at their next
 // reconnect. But a chart this node momentarily cannot read has taught it
 // NOTHING against a decision it already made, so that answer keeps the watch —
 // a blip that silently unsubscribed every lead's screen would be a
 // notification outage caused by the node being behind.
-func TestARevalidatedWatchIsWithdrawnOnlyByARefusal(t *testing.T) {
+func TestADecidedWatchIsWithdrawnOnlyByARefusal(t *testing.T) {
 	t.Parallel()
 	chart := &mutableChart{leads: true}
 	lead := person("platform-lead")
-	f := openRevalidatedOver(t, lead, func(r *http.Request) (*http.Request, *auth.Refusal) {
-		return r.WithContext(iam.WithPrincipal(r.Context(), person("platform-lead"))), nil
-	}, func(context.Context, string, map[string]any) (any, error) { return nil, nil }, chart)
-	if got := f.read(t); got.Kind != KindSnapshot {
-		t.Fatalf("first frame is %q, want the snapshot", got.Kind)
-	}
+	svc := newDecidingService(t, chart)
+	s := serve(t, svc, socketCase{principal: lead, opened: sessionOf(lead),
+		decide: resolvedAs(lead)})
+	s.settled(t, 1)
 
-	f.write(t, map[string]any{"kind": "watch", "seat": "sarah-chen"})
-	waitUntil(t, func() bool { return f.svc.Hub().Watchers("sarah-chen") == 1 },
+	s.write(t, map[string]any{"kind": "watch", "seat": "sarah-chen"})
+	waitUntil(t, func() bool { return svc.Hub().Watchers("sarah-chen") == 1 },
 		"a lead's watch of their report never reached the index")
 
-	// UNKNOWN KEEPS IT, across several checks.
+	// UNKNOWN KEEPS IT, across a published company it was decided on.
 	chart.set(false, errors.New("the chart view is behind"))
-	time.Sleep(4 * testInterval)
-	if got := f.svc.Hub().Watchers("sarah-chen"); got != 1 {
+	asked := chart.asked.Load()
+	svc.CompanyPublished()
+	waitUntil(t, func() bool { return chart.asked.Load() > asked },
+		"a published company never decided the watch again")
+	s.open(t)
+	if got := svc.Hub().Watchers("sarah-chen"); got != 1 {
 		t.Fatalf("a chart this node could not read withdrew a watch it had "+
 			"decided (%d watchers)", got)
 	}
 
 	// A REFUSAL WITHDRAWS IT, and says so on the socket.
 	chart.set(false, nil)
+	svc.CompanyPublished()
 	for {
-		got := f.read(t)
+		got := s.read(t)
 		if got.Kind != KindError {
 			continue
 		}
@@ -58,13 +61,13 @@ func TestARevalidatedWatchIsWithdrawnOnlyByARefusal(t *testing.T) {
 		}
 		break
 	}
-	waitUntil(t, func() bool { return f.svc.Hub().Watchers("sarah-chen") == 0 },
+	waitUntil(t, func() bool { return svc.Hub().Watchers("sarah-chen") == 0 },
 		"a lead who no longer leads the seat is still watching it")
 }
 
 // A RE-CHECK WITHDRAWS ONLY THE WATCH IT DECIDED.
 //
-// The re-check runs on the revalidation goroutine and asks the authority table
+// The re-check runs on the decision's goroutine and asks the authority table
 // with no lock held; the socket's own read loop installs watches meanwhile.
 // When a viewer's seat moves — a rebind, a rename — the read loop installs the
 // new seat's watch, allowed, at the very moment the old seat starts being
@@ -175,11 +178,13 @@ func (c *heldChart) LeadsAnyone(context.Context, string) (bool, error) {
 	return false, nil
 }
 
-// mutableChart answers the one lead question the case asks, changeably.
+// mutableChart answers the one lead question the case asks, changeably,
+// counting how often it was asked.
 type mutableChart struct {
 	mu    sync.Mutex
 	leads bool
 	err   error
+	asked atomic.Int64
 }
 
 func (c *mutableChart) set(leads bool, err error) {
@@ -189,6 +194,7 @@ func (c *mutableChart) set(leads bool, err error) {
 }
 
 func (c *mutableChart) Leads(_ context.Context, actor, subject string) (bool, error) {
+	c.asked.Add(1)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.err != nil {

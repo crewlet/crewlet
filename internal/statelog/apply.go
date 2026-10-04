@@ -2969,6 +2969,15 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	}
 	r.advance(at, committedRecord)
 	r.waiters.release(at)
+	if tally.retained > 0 {
+		// WHAT THE BATCH RETAINED, which no Apply call saw — see
+		// [RetentionHook]. AFTER the deferral index is refreshed above,
+		// so a listener that reads what this node can vouch for reads
+		// the deferral this batch committed.
+		if hook, ok := r.applier.(RetentionHook); ok {
+			hook.Retained(ctx, tally.retained)
+		}
+	}
 	r.applier.Committed(ctx)
 	r.ack(ctx, consumed)
 

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -28,9 +27,9 @@ import (
 // completed has none — see [Handler], where a refused credential is answered
 // 401 BEFORE the upgrade and the browser reports 1006. These two are for the
 // opposite case: a socket that is OPEN, whose credential stopped answering
-// while it was — which the socket's own revalidation finds (revalidate.go). A
-// handshake decision alone would leave a revoked session's tab receiving the
-// company's state for as long as it stayed open.
+// while it was — which the record that ended it, or the credential's own end,
+// decides (lifetime.go). A handshake decision alone would leave a revoked
+// session's tab receiving the company's state for as long as it stayed open.
 //
 // TWO CODES RATHER THAN ONE, because they call for different repairs and the
 // dashboard's own recovery branches on exactly that difference: 4401 means
@@ -52,13 +51,15 @@ import (
 // literals with nothing between them, and renumbering one side would have left
 // the dashboard reconnecting for ever against a withdrawn grant.
 //
-// NOTHING ELSE CLOSES THIS SOCKET FOR A FAULT. A node that cannot serve keeps
-// its socket open and degrades it instead — see [FrameDegraded].
+// ONE MORE CLOSE IS NOT THE APPLICATION'S: [CloseUndecided], the standard's
+// "try again later", for a credential this node will not vouch for now and
+// leaves to the reconnect's handshake — see lifetime.go. Nothing else closes this socket for a fault: a node that cannot
+// serve keeps its socket open and degrades it instead — see [FrameDegraded].
 const (
 	// CloseUnauthenticated ends a socket whose credential no longer
 	// resolves to anybody: its session ended, expired or was revoked, or
-	// its token is not one this node accepts — found by the socket's own
-	// revalidation (see revalidate.go) — or a frame that needs a caller
+	// its token is not one this node accepts — found when the socket was
+	// decided again (see lifetime.go) — or a frame that needs a caller
 	// arrived on a socket that has none.
 	CloseUnauthenticated websocket.StatusCode = 4401
 
@@ -307,13 +308,16 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) ht
 					string(iam.GrantStateRead)})
 			return
 		}
-		// THE BUDGET IS THE PRINCIPAL'S, keyed on its ID: the same
-		// person across their tabs and across a rename, and never shared
-		// between two. Not the login, which is a name somebody changes —
-		// see budget.go.
-		budgetKey := budgetKeyOf(principal)
-		who := &asking{principal: principal}
-		check := checkerFor(guard, r)
+		// WHAT THE SOCKET WAS OPENED WITH, which is what decides it again
+		// for as long as it is open — see lifetime.go.
+		//nolint:contextcheck // the resolved request's; see where it is resolved
+		ends, _ := auth.Lifetime(r.Context())
+		cred := credential{
+			who:    &asking{principal: principal},
+			opened: openedWith(principal),
+			ends:   ends,
+			decide: deciderFor(guard, r),
+		}
 
 		// THE HANDSHAKE'S ORIGIN IS JUDGED BY THE WRITES' RULE, and only
 		// a handshake's: see [auth.CSRF.RefuseCrossSite] for why the
@@ -334,7 +338,7 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) ht
 			return
 		}
 		//nolint:contextcheck // the resolved request's; see where it is resolved
-		serveSocket(r.Context(), conn, svc, query, budgetKey, who, check)
+		serveSocket(r.Context(), conn, svc, query, cred)
 	})
 }
 
@@ -388,16 +392,11 @@ func resolved(guard *auth.Guard, w http.ResponseWriter,
 
 // serveSocket runs one connection until it closes.
 func serveSocket(ctx context.Context, conn *websocket.Conn,
-	svc *Service, query Query, budgetKey uuid.UUID, who *asking, check checkFunc,
+	svc *Service, query Query, cred credential,
 ) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	// THE BUDGET IS ACQUIRED BEFORE ANY FRAME IS READ and released when
-	// this socket is done, so a person's tabs share one allowance for
-	// exactly as long as they are open. See budget.go.
-	slots, releaseBudget := svc.budgets.acquire(budgetKey)
-	defer releaseBudget()
+	who := cred.who
 
 	client := NewClient(AudienceOf(who.current().Grants))
 	// REGISTERED BEFORE THE SNAPSHOT. See Hub.Register: the overlap is
@@ -420,17 +419,21 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 
 	client.Reply(Push(KindSnapshot, svc.Snapshot(client.Audience()), time.Now().UTC()))
 
-	// THE CREDENTIAL IS CHECKED AGAIN FOR AS LONG AS THE SOCKET LIVES. See
-	// revalidate.go for why a handshake decision is not enough and what
-	// each answer does to this socket.
-	var checking sync.WaitGroup
-	checking.Go(func() {
-		revalidate(ctx, conn, client, check, who, svc.revalidateEvery,
-			svc.now, svc.Snapshot, seats.recheck)
+	// THE CREDENTIAL IS ENDED OR DECIDED AGAIN FOR AS LONG AS THE SOCKET
+	// LIVES, on what can change it and at nothing else. See lifetime.go for
+	// why a handshake decision is not enough and what each answer does to
+	// this socket. REGISTERED with one decision pending, so a record that
+	// landed between the handshake and this line is not missed.
+	l := newListener(cred.opened)
+	defer svc.listeners.add(l)()
+	var deciding sync.WaitGroup
+	deciding.Go(func() {
+		keepDecided(ctx, conn, client, l, cred, svc.seatOf, svc.now, svc.Snapshot,
+			seats.recheck)
 	})
-	defer checking.Wait()
+	defer deciding.Wait()
 
-	code, reason := readLoop(ctx, conn, seats, client, query, who, slots, svc.interval)
+	code, reason := readLoop(ctx, conn, seats, client, query, who, svc.interval)
 
 	// Unregister closes the client's queue, which is what ends the writer.
 	svc.Hub().Unregister(client)
@@ -497,16 +500,13 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 // can next change — the hint a query refused on one carries.
 func readLoop(ctx context.Context, conn *websocket.Conn,
 	seats *watching, client *Client, query Query, who *asking,
-	slots chan struct{}, healthEvery time.Duration,
+	healthEvery time.Duration,
 ) (websocket.StatusCode, string) {
-	// THE CONCURRENCY BOUND ARRIVES FROM THE SERVICE rather than being
-	// made here, and that is the whole of the per-principal change: a
-	// channel built in this function is one socket's, so a person's second
-	// tab got a second full allowance. Queries still run on their own
-	// goroutines so a store scan cannot stall the live feed, and a burst
-	// past the bound queues here rather than piling into the engine's
-	// connection pool — it is now this PERSON's burst that queues rather
-	// than this tab's.
+	// THIS SOCKET'S CONCURRENCY BOUND — see [MaxInFlightQueries] for why
+	// four, and why per socket. Queries run on their own goroutines so a
+	// store scan cannot stall the live feed, and a burst past the bound
+	// queues here rather than piling into the engine's connection pool.
+	slots := make(chan struct{}, MaxInFlightQueries)
 	var running sync.WaitGroup
 	defer running.Wait()
 
@@ -544,11 +544,11 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			// `unavailable` frame: `retry_after` is never omitted,
 			// because a frame without it is what a node too old to say
 			// sends. The posture is re-derived on the shared health
-			// tick — a node shedding or stuck on a configuration, or
-			// this socket's own credential unverifiable — so one tick
-			// is the soonest this node could answer differently, and
-			// the health frame the tab keeps receiving says why. No
-			// state-log refusal is behind it, so none is named.
+			// tick — a node shedding or stuck on a configuration — so
+			// one tick is the soonest this node could answer
+			// differently, and the health frame the tab keeps
+			// receiving says why. No state-log refusal is behind it,
+			// so none is named.
 			if !client.Posture().ServesQueries() {
 				env := queryError(req, CodeUnavailable)
 				env.unavailable(Unavailable{
@@ -571,9 +571,9 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			go func() {
 				defer running.Done()
 				defer func() { <-slots }()
-				// AS WHOEVER THE LAST CHECK SAID, not whoever opened
+				// AS WHOEVER THE LAST DECISION SAID, not whoever opened
 				// the socket: a grant narrowed an hour ago must not
-				// still answer here. See revalidate.go.
+				// still answer here. See lifetime.go.
 				runQuery(who.context(ctx), client, query, req)
 			}()
 		default:
@@ -820,9 +820,11 @@ func (w *watching) decide(ctx context.Context, principal iam.Principal,
 }
 
 // recheck re-decides the seat this socket watches, as whoever the latest
-// revalidation resolved — the watch's own half of revalidate.go's argument: a
-// decision taken once and kept for the life of the socket would let a lead
-// moved off a team go on following a former report's inbox.
+// decision of its credential resolved — the watch's own half of lifetime.go's
+// argument: a decision taken once and kept for the life of the socket would
+// let a lead moved off a team go on following a former report's inbox. It runs
+// whenever the guard decides the credential again, and whenever a company is
+// published — the one moment a lead can move.
 //
 // A REFUSAL withdraws the watch and says so. AN UNDECIDABLE ANSWER KEEPS IT,
 // which is the opposite of what a new watch gets and deliberately so: nothing
@@ -831,10 +833,10 @@ func (w *watching) decide(ctx context.Context, principal iam.Principal,
 // outage caused by the node being behind.
 //
 // WITHDRAWN ONLY IF IT IS STILL THE WATCH THAT WAS DECIDED. This runs on the
-// revalidation goroutine and the read loop installs watches on its own, so a
+// decision's goroutine and the read loop installs watches on its own, so a
 // refusal of the seat read here must not clear one the read loop allowed in
 // the meantime — see [Hub.UnwatchIf]. A watch that moved is the read loop's
-// to decide, and the next re-check decides it again.
+// to decide, and the next decision decides it again.
 func (w *watching) recheck(ctx context.Context) {
 	seat, watch := w.hub.Watching(w.client)
 	if seat == "" {

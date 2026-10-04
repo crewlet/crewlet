@@ -1802,6 +1802,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// WHOSE INBOX MOVED, from this engine's own tracker applier —
 		// how a person at the dashboard learns they have work.
 		Inbox: e,
+		// WHOSE CREDENTIALS MOVED, from this engine's own identity
+		// applier — what closes the open tab of a session that ended.
+		Credentials: e,
 		// THE ENGINE'S OWN RECEIVER, not a second one built here. The API
 		// verifies tokens this process's engine minted, and a second
 		// receiver is a second construction of one decision that nothing

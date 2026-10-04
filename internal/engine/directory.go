@@ -267,9 +267,10 @@ func (e *Engine) nudgeDirectory() {
 //
 // THE SAFETY NET RATHER THAN THE MECHANISM, and the chart view's own figure
 // for the chart view's own reasons ([ViewRefresh]): the committed hook is what
-// makes a suspension reach contact routing within one apply, and this covers
-// the ways the rows move with no hook at all — an adoption that replaces the
-// replicated file wholesale, a node that rejoined, a reading that failed. Thirty
+// makes a suspension reach contact routing within one apply, an adoption or a
+// reopened estate signals the same way ([stateLog.estateReplaced]), and this
+// covers a reading that failed and anything else that moves the rows with no
+// signal at all. Thirty
 // seconds, because that is what the alarm table already calls a stall: a
 // registry behind its own directory for longer than that is a fault an
 // operator is being told about, so a slower net would report what it was not

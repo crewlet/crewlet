@@ -117,15 +117,6 @@ export interface StoreState {
    */
   authRejected: boolean;
   /**
-   * Whether the engine could NOT verify this socket's own credential at its
-   * last check. A fact about this tab, not the engine: the node may be
-   * serving every other socket normally while its identity estate is behind,
-   * and its health frame says so. While it holds, live pushes stop and
-   * questions are answered "unavailable"; the engine re-checks every minute
-   * and releases the hold with a fresh snapshot.
-   */
-  identityUnverifiable: boolean;
-  /**
    * Why the engine KNOWS who this browser is and will not serve it this
    * surface, or null. Set by a `4403` close (the seat is gone from the chart,
    * or the grant the socket needs was withdrawn) and by a `403` handshake;
@@ -177,7 +168,6 @@ function emptyState(): StoreState {
     schedules: null,
     connected: false,
     authRejected: false,
-    identityUnverifiable: false,
     accessRefused: null,
     inboxMoves: {},
     orgPushes: 0,
@@ -398,9 +388,6 @@ export class Store {
 
   setConnected(value: boolean): void {
     this.state.connected = value;
-    // A NEW SOCKET STARTS VERIFIED: the handshake itself resolved its
-    // credential, and a hold belongs to the socket that reported it.
-    if (!value) this.state.identityUnverifiable = false;
     // A dropped socket CLEARS the health slice rather than freezing it. A stale
     // "healthy" is a lie with a timestamp nobody can see.
     if (!value) this.state.health = { status: "unknown" };
@@ -420,13 +407,6 @@ export class Store {
       [handle]: (this.state.inboxMoves[handle] ?? 0) + 1,
     };
     this.emit("inboxMoves");
-  }
-
-  applyIdentity(state: { state?: string } | null | undefined): void {
-    const next = state?.state === "unverifiable";
-    if (this.state.identityUnverifiable === next) return;
-    this.state.identityUnverifiable = next;
-    this.emit("health");
   }
 
   setAccessRefused(reason: string | null): void {
