@@ -286,10 +286,9 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 		}
 	}
 	// THE LEASE IS CHECKED, not just the error. A refused claim is the
-	// ordinary (nil, nil) here — a peer holding it, or the duty layout gate
-	// — so a precondition reading only err calls a refusal success and
-	// leaves the assertion below failing for a reason that is not the rule
-	// it is about.
+	// ordinary (nil, nil) here — a peer holding it — so a precondition
+	// reading only err calls a refusal success and leaves the assertion
+	// below failing for a reason that is not the rule it is about.
 	hold := coord.WorkerResource(holdName)
 	if got, err := leases.TryAcquire(ctx, hold, coord.AcquireOptions{
 		Owner: owner, TTL: 5 * time.Minute, Ungated: true,
