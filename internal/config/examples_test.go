@@ -87,6 +87,15 @@ func TestShippedCompanyExamplesLoad(t *testing.T) {
 					agents, humans)
 			}
 
+			// A FILE PEOPLE COPY AND KEEP states every identity. One
+			// minted from a name is minted again from the corrected name
+			// on the next import, and that is a different seat — a new
+			// agent id, an empty mailbox, its memory left behind.
+			if missing := undeclaredIdentities(t, data); len(missing) > 0 {
+				t.Errorf("examples/%s leaves identities to be minted from names:\n  %s",
+					name, strings.Join(missing, "\n  "))
+			}
+
 			// Every credential in a committed example must be a
 			// reference. A literal here would be published,
 			// permanently, in git history and in every artifact
