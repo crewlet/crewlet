@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
@@ -117,12 +118,15 @@ func (e *AdmissionError) Error() string {
 		strings.Join(parts, ", ")
 }
 
-// principalOf is who a request was resolved to. Every route here is guarded,
-// so a request reaching a handler carries one; the zero principal a handler
-// mounted outside the guard would read is refused everything.
-func principalOf(r *http.Request) *iam.Principal {
-	p, _ := iam.From(r.Context())
-	return &p
+// principalOf is who a request was resolved to, answering the request itself
+// when there is nobody to decide for; ok is false when it has. Every route
+// here is guarded, so a request reaching a handler carries one — and
+// [auth.Caller] keeps the third answer apart: a node that could not tell who
+// the caller is answers 503, where reading that as nobody refused a working
+// credential as though it named no lead.
+func principalOf(w http.ResponseWriter, r *http.Request) (*iam.Principal, bool) {
+	p, ok := auth.Caller(w, r)
+	return &p, ok
 }
 
 // admit refuses next when p may not turn prior into it — see the file's header.
@@ -210,7 +214,11 @@ func (s *Service) mayReach(w http.ResponseWriter, r *http.Request, a authz.Actio
 		s.fail(w, "build the organization the request is decided on", err)
 		return false
 	}
-	d := authz.Decide(r.Context(), *principalOf(r), a,
+	p, ok := principalOf(w, r)
+	if !ok {
+		return false
+	}
+	d := authz.Decide(r.Context(), *p, a,
 		authz.Object{Kind: authz.KindUnit, ID: id, Container: placeOf(o, kind, id)},
 		orgchart.Of(o), time.Now())
 	if d.Unknown() || !d.Allowed {

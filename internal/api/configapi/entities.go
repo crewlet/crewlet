@@ -581,7 +581,9 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			s.refuseEntity(w, kind, id, err)
 			return
 		}
-		d.principal = principalOf(r)
+		if d.principal, ok = principalOf(w, r); !ok {
+			return
+		}
 		prepared, err := s.prepare(r.Context(), d)
 		if err != nil {
 			s.refuseEntity(w, kind, id, err)

@@ -611,7 +611,9 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		built = active.ID
 	}
 	d := replaceDraft(incoming, built)
-	d.principal = principalOf(r)
+	if d.principal, ok = principalOf(w, r); !ok {
+		return
+	}
 	prepared, err := s.prepare(r.Context(), d)
 	if err != nil {
 		s.refuseWrite(w, err, createOnly)
@@ -683,14 +685,16 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 			})
 		return
 	}
-	if _, ok := s.checkPrecondition(w, r, active, found); !ok {
+	if _, ok = s.checkPrecondition(w, r, active, found); !ok {
 		return
 	}
 
 	d := patchDraft(ApplyRequest{
 		Patch: sent.text, Summary: summary, By: attributionOf(r), Expect: active.ID,
 	}, sent.doc)
-	d.principal = principalOf(r)
+	if d.principal, ok = principalOf(w, r); !ok {
+		return
+	}
 	prepared, err := s.prepare(r.Context(), d)
 	if err != nil {
 		s.refuseApply(w, err)
@@ -882,6 +886,10 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	principal, ok := principalOf(w, r)
+	if !ok {
+		return
+	}
 	prepared, err := s.prepare(r.Context(), draft{
 		// VALIDATED SEPARATELY from the open, so each refusal says what is
 		// true. Opening holds a stored revision to no rule, and a revert is
@@ -902,7 +910,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 		build: func(base) (*config.Company, []byte, error) {
 			return company, document, nil
 		},
-		principal: principalOf(r),
+		principal: principal,
 	})
 	var invalid *ValidationError
 	switch {
