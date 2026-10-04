@@ -146,6 +146,59 @@ test("a lead raises a seat they lead, and is told the company's ceiling is not t
   );
 });
 
+// A LEAD'S RAISE IS COMPARED WITH THE COMPANY AS IT STANDS. The engine answers
+// a lead's check of their seat unchanged, so a warning the company already
+// carries — here a seat with no contact, which no ceiling caused — is the
+// baseline's too, and the raise saves without asking the lead to confirm it.
+test("a lead's raise saves without confirming a warning the company already had", async () => {
+  const pm = { ...ADMIN, login: "pm.person", grants: ["state:read"], handle: "pm", owner: "pm" };
+  const seat = { name: "DevRel", handle: "devrel", token_budget: { day: 100 } };
+  const unreachable = {
+    kind: "advisory",
+    path: "roles[0].contact",
+    seat: "ceo",
+    message: "ceo is a human seat with no contact identity",
+  };
+  const calls: { method: string; url: string; body: unknown }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit = {}) => {
+      calls.push({
+        method: init.method ?? "GET",
+        url,
+        body: init.body ? JSON.parse(init.body as string) : undefined,
+      });
+      const reply = (payload: unknown, status: number, headers: Record<string, string> = {}) =>
+        new Response(JSON.stringify(payload), {
+          status,
+          headers: { "Content-Type": "application/json", ...headers },
+        });
+      if ((init.method ?? "GET") === "GET") return reply(seat, 200, { ETag: '"r1"' });
+      if (url.includes("dry_run=true"))
+        return reply({ valid: true, base_revision_id: "r1", warnings: [unreachable] }, 200);
+      return reply({ revision_id: "r2", epoch: 2, warnings: [] }, 201);
+    }),
+  );
+  mount(day(), true, pm);
+  await open();
+  fireEvent.change(screen.getByLabelText(/Daily ceiling/), { target: { value: "200" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  });
+  await settle();
+  expect(calls.map((c) => `${c.method} ${c.url.includes("dry_run") ? "check" : "write"}`)).toEqual([
+    "GET write",
+    "PUT check",
+    "PUT check",
+    "PUT write",
+  ]);
+  // The baseline was the seat as read, the second check the raise.
+  expect(calls[1]!.body).toEqual(seat);
+  expect(calls.at(-1)!.body).toMatchObject({ token_budget: { day: 200 } });
+  expect(screen.queryByText(/no contact identity/)).toBeNull();
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
 test("it raises the company's when only the company's window is refusing", async () => {
   mount(undefined, true);
   await open();

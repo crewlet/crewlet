@@ -790,8 +790,10 @@ holding it.
 The draft is that unit, whole, read with `GET /config/units/{key}` and
 checked and saved with `PUT /config/units/{key}` under `If-Match`, so the rest
 of the company is never sent and a newer revision refuses the save exactly as
-it refuses a whole-company one. An unchanged unit is read rather than checked,
-because storing it as it was is no lead's write. The engine judges every write
+it refuses a whole-company one. An unchanged unit is checked too, so its
+managers and inherited leads are drawn before anything is edited: the engine
+refuses a lead only the save of a unit as it was, which would re-publish the
+company. The engine judges every write
 part by part and refuses what reaches outside the units the caller leads,
 naming each part, and the builder marks each on the seat or unit it is about:
 

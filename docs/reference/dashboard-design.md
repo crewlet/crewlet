@@ -6402,9 +6402,10 @@ while the screen binds the real chart, table, editor and dialogs, and
   it again.
 - **Every draft is a dry run of the write a save would send.** The same
   `PATCH` with `If-Match` (or `PUT` with `If-None-Match: *` in create mode),
-  plus `dry_run=true` and without the audit summary; a draft that changes
-  nothing is read instead. A draft that changes moves its generation, and an
-  answer for an older generation is dropped.
+  plus `dry_run=true` and without the audit summary — a draft that changes
+  nothing included, a lead's unit too, since the engine refuses a lead only
+  the WRITE of an unchanged unit. A draft that changes moves its generation,
+  and an answer for an older generation is dropped.
 - **A lead edits one unit as a document of its own.** A reader without
   `config:write` who leads a unit (`lib/leadScope.ts`) is opened on it
   rather than refused: `model/scope.ts` reads `GET /config/units/{key}` as
@@ -6492,8 +6493,7 @@ while the screen binds the real chart, table, editor and dialogs, and
   editor lost its node, typed form and all, and the selection was cleared.
   The update is read only from a node serving the conflict's revision or a
   descendant of it, with the engine's description of it — a lead's from the
-  unit the node serves, with no description, since a lead reads no history
-  and the engine refuses a dry run of an unchanged unit — and
+  unit the node serves, since a lead reads no history — and
   `UpdateDraftDialog.tsx` shows what still applies, what is dropped and every
   conflict with its three values; confirming waits for a choice on each. A
   value is shown as a person reads it: the model tags a conflict over its own

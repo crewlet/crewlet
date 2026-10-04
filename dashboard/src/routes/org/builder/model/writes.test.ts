@@ -460,8 +460,12 @@ describe("a lead's draft", () => {
     }
   });
 
-  test("an update stands on the unit the node serves, with no dry run and no walk", async () => {
-    const engine = new Engine({ current: read("r3", "Grow") });
+  test("an update stands on the unit the node serves, described by its dry run and walked by nothing", async () => {
+    const derived = fixtureDerived({ name: "Acme", units: [unit("Grow")] });
+    const engine = new Engine({
+      current: read("r3", "Grow"),
+      send: { status: 200, body: { valid: true, base_revision_id: "r3", derived } },
+    });
     expect(
       await readyToUpdate(
         engine,
@@ -473,9 +477,9 @@ describe("a lead's draft", () => {
       kind: "ready",
       revisionId: "r3",
       document: { name: "Acme", units: [unit("Grow")] },
-      derived: null,
+      derived,
     });
-    expect(engine.calls).toEqual(["current"]);
+    expect(engine.calls).toEqual(["current", 'PUT {"dry_run":"true"} {"If-Match":"\\"r3\\""}']);
     const behind = new Engine({ current: read("base", "Build") });
     expect(
       await readyToUpdate(

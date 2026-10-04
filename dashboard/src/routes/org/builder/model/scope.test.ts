@@ -3,8 +3,8 @@
  * A lead's draft of one unit (`scope.ts`).
  *
  * What these protect: the draft is the unit as a document of its own, sent
- * whole to the unit's own address under the revision it was read at, and an
- * unchanged one is read rather than checked; every path the engine writes
+ * whole to the unit's own address under the revision it was read at, and
+ * checked there unchanged too; every path the engine writes
  * about the whole company is moved into the draft's coordinates, and what
  * lies outside the unit is never placed on whichever node of the draft sits
  * at that path; and the parts of the draft that reach outside the unit — the
@@ -84,15 +84,16 @@ describe("the requests a lead's draft makes", () => {
     expect(save.body).toEqual({ ...changed.units![0], _summary: "Edited Engineering" });
   });
 
-  // Storing a unit as it was is no lead's write, so the engine refuses a dry
-  // run of one; the unit's read says whether the company moved.
-  test("an unchanged unit is read, never checked", () => {
+  // Storing a unit as it was is no lead's write, but checking it is: the
+  // engine answers the dry run with what it derives of the unit as it stands.
+  test("an unchanged unit is checked at its own address like a changed one", () => {
     expect(checkRequest(inputs(DRAFT_DOC))).toEqual({
-      method: "GET",
+      method: "PUT",
       path: "/config/units/eng",
-      query: {},
+      query: { dry_run: "true" },
       contentType: "application/json",
-      headers: {},
+      headers: { "If-Match": '"r1"' },
+      body: DRAFT_DOC.units![0],
     });
   });
 });
@@ -160,7 +161,7 @@ describe("the engine's answer, in the draft's coordinates", () => {
     const sent: ConfigRequest[] = [];
     const answers: HttpAnswer[] = [
       { status: 200, body: ENGINEERING, etag: '"r1"' },
-      { status: 200, body: ENGINEERING, etag: '"r2"' },
+      { status: 200, body: { valid: true, base_revision_id: "r1", derived } },
       {
         status: 400,
         body: {
@@ -185,7 +186,6 @@ describe("the engine's answer, in the draft's coordinates", () => {
       etag: '"r1"',
     });
     expect(sent[0]).toMatchObject({ method: "GET", path: "/config/units/eng" });
-    // The read standing in for a check answers with its tag alone.
     const check = checkRequest({
       mode: "edit",
       baseRevision: "r1",
@@ -193,7 +193,11 @@ describe("the engine's answer, in the draft's coordinates", () => {
       sent: toDocument(fromDocument(DRAFT_DOC)),
       scope: "eng",
     });
-    expect(await transport.send(check, signal)).toEqual({ status: 200, body: {}, etag: '"r2"' });
+    const checked = await transport.send(check, signal);
+    expect(checked.body).toMatchObject({
+      valid: true,
+      derived: { units: [{ id: "eng", path: "units[0]" }, { id: "tools" }] },
+    });
     const refused = await transport.send({ ...check, method: "PUT", body: {} }, signal);
     expect(refused.body).toMatchObject({
       problems: [{ path: "units[0].name", segments: ["units", 0, "name"] }],

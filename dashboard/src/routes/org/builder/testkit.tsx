@@ -260,6 +260,7 @@ export function FakeView() {
   return (
     <div>
       <p>{api.readOnly ? "read only" : "editable"}</p>
+      <p data-testid="derivation">{api.state.check.derived ? "described" : "undescribed"}</p>
       <button type="button" onClick={() => api.selection.select(COMPANY_KEY)}>
         Select the company
       </button>

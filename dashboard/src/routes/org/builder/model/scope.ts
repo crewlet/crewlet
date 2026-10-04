@@ -116,9 +116,7 @@ export function inScope(body: unknown, scope: string): unknown {
 /**
  * The configuration transport for a lead's draft of the unit `scope`: the
  * company read as that unit ([scopedDocument], named by `company()`), and
- * every answer moved into the draft's coordinates ([inScope]). A read that
- * stands in for the check of an unchanged draft (`transport.checkRequest`)
- * answers with its entity tag alone, which is all the check reads of it.
+ * every answer moved into the draft's coordinates ([inScope]).
  */
 export function scopedTransport(
   inner: ConfigTransport,
@@ -141,7 +139,6 @@ export function scopedTransport(
     },
     async send(request, signal) {
       const answer = await inner.send(request, signal);
-      if (request.method === "GET" && answer.status === 200) return { ...answer, body: {} };
       return { ...answer, body: inScope(answer.body, scope) };
     },
     revision: (id, signal) => inner.revision(id, signal),

@@ -4,9 +4,11 @@
  *
  * What these protect: a lead's builder never reads the company document,
  * which they may not; it opens the unit they lead (the one an address names,
- * else the first), checks and saves it whole at `/config/units/{key}` under
- * the revision it read, and places the engine's answer — about the WHOLE
- * company — on the unit's own nodes; what reaches outside the unit is refused
+ * else the first), checks it — unchanged too, so the engine's derivation of
+ * the unit is the draft's from the start — and saves it whole at
+ * `/config/units/{key}` under the revision it read, and places the engine's
+ * answer — about the WHOLE company — on the unit's own nodes; what reaches
+ * outside the unit is refused
  * before the engine is asked, with the reason; and a lead of several units
  * opens them one draft at a time.
  */
@@ -67,6 +69,9 @@ function leadOrg(): OrgProjection {
 const LEAD = { login: "dev.person", owner: "dev", handle: "dev", grants: ["state:read"] };
 
 const isDryRun = (r: SentRequest) => r.query.get("dry_run") === "true";
+/** The goal a dry run of Engineering sends for its seat at `index`. */
+const goalSent = (r: SentRequest, index: number) =>
+  (r.body as { roles?: { goal?: string }[] }).roles?.[index]?.goal;
 const unitWrites = (engine: Engine, key: string) =>
   engine.requests.filter((r) => r.method === "PUT" && r.path === `/config/units/${key}`);
 
@@ -90,20 +95,26 @@ describe("a lead's draft", () => {
     // The company document is never asked for: a lead may not read it.
     expect(engine.sent("GET", "/config")).toHaveLength(0);
     expect(engine.sent("GET", "/config/units/engineering").length).toBeGreaterThan(0);
-    // An unchanged unit is read rather than checked, since storing it as it
-    // was is no lead's write.
+    // An unchanged unit is checked at its own address as well — storing it
+    // as it was is no lead's write, but checking it is — so the engine's
+    // derivation of it describes the draft before anything is edited.
     expect(await screen.findByText("No problems")).toBeDefined();
-    expect(engine.checks()).toHaveLength(0);
-    // The unit is read once to open it and once as its check: the transport
-    // its scope brings starts the check, and nothing asks for it again.
-    expect(engine.sent("GET", "/config/units/engineering")).toHaveLength(2);
+    expect(engine.checks()).toHaveLength(1);
+    expect(engine.checks()[0]).toMatchObject({
+      method: "PUT",
+      path: "/config/units/engineering",
+    });
+    expect(screen.getByTestId("derivation").textContent).toBe("described");
+    // The unit is read once to open it, and checked once: the transport its
+    // scope brings starts the check, and nothing asks for it again.
+    expect(engine.sent("GET", "/config/units/engineering")).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Editing Engineering as its lead" })).toBeDefined();
     // The draft holds no settings, so it says nothing about the providers.
     expect(screen.queryByText(/No model provider is configured/)).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Edit Dev" }));
-    await waitFor(() => expect(engine.checks()).toHaveLength(1));
-    const check = engine.checks()[0]!;
+    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    const check = engine.checks()[1]!;
     expect(check.method).toBe("PUT");
     expect(check.path).toBe("/config/units/engineering");
     expect(check.headers["If-Match"]).toBe('"r1"');
@@ -137,7 +148,8 @@ describe("a lead's draft", () => {
         "Only Engineering and what is inside it can be changed here: the company's top level takes the config:write grant.",
       ),
     ).toBeDefined();
-    expect(engine.checks()).toHaveLength(0);
+    // The unit as it stands is the one check sent.
+    expect(engine.checks()).toHaveLength(1);
 
     // The toolbar's Add at the company's top level is drawn unavailable.
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
@@ -152,7 +164,7 @@ describe("a lead's draft", () => {
   test("places the engine's answer about the whole company on the unit's own nodes", async () => {
     const engine = new Engine(leadCompany());
     engine.script = (r) => {
-      if (!isDryRun(r)) return null;
+      if (!isDryRun(r) || goalSent(r, 0) === "Build") return null;
       const result = engine.result(r);
       return json(
         {
@@ -192,7 +204,7 @@ describe("a lead's draft", () => {
   test("names what the engine refused a lead, on the part it refused", async () => {
     const engine = new Engine(leadCompany());
     engine.script = (r) =>
-      isDryRun(r)
+      isDryRun(r) && goalSent(r, 1) !== "Test"
         ? json(
             {
               error: "unauthorized",
@@ -225,7 +237,7 @@ describe("a lead's draft", () => {
     mountLead(engine);
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit Dev" }));
-    await waitFor(() => expect(engine.checks()).toHaveLength(1));
+    await waitFor(() => expect(engine.checks()).toHaveLength(2));
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
@@ -261,8 +273,17 @@ describe("a lead's draft", () => {
     expect(screen.queryByRole("link", { name: "Show what changed" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Update my draft" }));
     const dialog = await screen.findByRole("dialog", { name: "Update my draft and review" });
+    // The newer unit was described by its own dry run before the draft was
+    // updated onto it, as a whole company's is.
+    expect(
+      engine.checks().some((c) => c.headers["If-Match"] === '"r2"' && goalSent(c, 0) === "Build"),
+    ).toBe(true);
     fireEvent.click(within(dialog).getByRole("button", { name: "Update my draft" }));
-    await waitFor(() => expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r2"'));
+    await waitFor(() => {
+      const last = engine.checks().at(-1)!;
+      expect(last.headers["If-Match"]).toBe('"r2"');
+      expect(goalSent(last, 0)).toBe("Build and more");
+    });
     const unit = engine.checks().at(-1)!.body as { roles: { goal: string }[] };
     expect(unit.roles.map((r) => r.goal)).toEqual(["Build and more", "Test well"]);
     expect(engine.requests.some((r) => r.path.startsWith("/config/revisions/"))).toBe(false);

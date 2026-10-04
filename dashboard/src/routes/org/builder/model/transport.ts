@@ -23,9 +23,8 @@
  *   included — and `If-Match` naming the base revision: a lead may not read
  *   the company document, so they cannot patch it, and the engine admits this
  *   write when everything it changes is inside what they lead. Unchanged, the
- *   draft is READ rather than checked (`GET /config/units/{key}`): storing a
- *   unit as it was is no lead's write, so the engine refuses a dry run of
- *   one, and the read's entity tag is what says the company moved.
+ *   draft is checked all the same: the engine refuses a lead the write, which
+ *   would re-publish the company, and answers its dry run.
  *
  * A check adds `dry_run=true` and no summary (the engine lifts one out but
  * does not require it on a dry run); a save adds `_summary` to the body.
@@ -41,7 +40,6 @@
 
 import type { CompanyDocument } from "~/protocol/index.ts";
 import { buildPatch, type IndexedDocument } from "./document.ts";
-import { jsonEqual } from "./json.ts";
 
 /** Whether the builder edits the active company or creates the first one. */
 export type BuilderMode = "edit" | "create";
@@ -57,7 +55,7 @@ export interface HttpAnswer {
   readonly etag?: string | null;
 }
 
-/** A configuration write, dry run or read, ready for the transport. */
+/** A configuration write or dry run, or a lead's read of their unit, ready for the transport. */
 export interface ConfigRequest {
   readonly method: "GET" | "PUT" | "PATCH";
   /** `/config`, or a lead's unit ([unitPath]). */
@@ -180,23 +178,8 @@ function request(
   };
 }
 
-/**
- * The dry run of a draft: exactly the write a save would send, stored nowhere.
- * A lead's draft that changes nothing is read instead (see the module doc).
- */
+/** The dry run of a draft: exactly the write a save would send, stored nowhere. */
 export function checkRequest(inputs: RequestInputs): ConfigRequest {
-  if (
-    inputs.scope !== null &&
-    jsonEqual(scopedUnit(inputs.sent.document), scopedUnit(inputs.base))
-  ) {
-    return {
-      method: "GET",
-      path: unitPath(inputs.scope),
-      query: {},
-      contentType: "application/json",
-      headers: {},
-    };
-  }
   return request(inputs, { dry_run: "true" }, {});
 }
 

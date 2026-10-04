@@ -314,10 +314,8 @@ export type UpdateReadiness =
       /**
        * The engine's derivation of that document, from a dry run of it with no
        * changes, kept as the base's own for the review to compare against.
-       * `null` for a lead's draft, whose dry run of an unchanged unit the
-       * engine refuses; the next check of the draft describes it.
        */
-      readonly derived: Derived | null;
+      readonly derived: Derived;
     }
   /** The node still serves the draft's base or an older revision. */
   | { readonly kind: "behind" }
@@ -343,28 +341,30 @@ export async function readyToUpdate(
     return { kind: "unknown", detail: "The engine did not name its active revision." };
   const document = answer.body as CompanyDocument;
   if (active === conflict.baseRevision) return { kind: "behind" };
-  if (scope !== null) return { kind: "ready", revisionId: active, document, derived: null };
-  const target = conflict.conflictRevisionId;
-  let descends = target === null || active === target;
-
-  let at: string | null = active;
-  for (let step = 0; !descends && step < UPDATE_ANCESTRY_LIMIT && at !== null; step++) {
-    const revision = await transport.revision(at, signal);
-    if (revision.status !== 200 || !isRecord(revision.body))
-      return { kind: "unknown", detail: unanswered(revision) };
-    const parent = revision.body.parent_revision_id;
-    at = typeof parent === "string" && parent !== "" ? parent : null;
-    if (at === target) descends = true;
-    else if (at === conflict.baseRevision) return { kind: "behind" };
+  // A lead reads no history, so the unit the node serves now is the one (see
+  // the module doc).
+  if (scope === null) {
+    const target = conflict.conflictRevisionId;
+    let descends = target === null || active === target;
+    let at: string | null = active;
+    for (let step = 0; !descends && step < UPDATE_ANCESTRY_LIMIT && at !== null; step++) {
+      const revision = await transport.revision(at, signal);
+      if (revision.status !== 200 || !isRecord(revision.body))
+        return { kind: "unknown", detail: unanswered(revision) };
+      const parent = revision.body.parent_revision_id;
+      at = typeof parent === "string" && parent !== "" ? parent : null;
+      if (at === target) descends = true;
+      else if (at === conflict.baseRevision) return { kind: "behind" };
+    }
+    if (!descends) return { kind: "behind" };
   }
-  if (!descends) return { kind: "behind" };
 
   const request = checkRequest({
     mode: "edit",
     baseRevision: active,
     base: document,
     sent: toDocument(fromDocument(document)),
-    scope: null,
+    scope,
   });
   const checked = classifyCheck(await transport.send(request, signal), "edit", active);
   if ((checked.status === "clean" || checked.status === "problems") && checked.derived) {
