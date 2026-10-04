@@ -22,6 +22,7 @@ import { describe, expect, test } from "vitest";
 import { buildHash, parseHash, samePath } from "./router.tsx";
 import {
   DESTINATIONS,
+  FRAMELESS,
   RESERVED_SEGMENTS,
   WORKSPACES,
   sectionOf,
@@ -214,7 +215,9 @@ describe("the navigation grammar", () => {
   // `#/work/views` is a list of saved views until somebody creates a project
   // called VIEWS, and then it is a project.
   test("no reserved segment is the shape of a minted key", () => {
-    for (const segment of RESERVED_SEGMENTS) {
+    // A FRAMELESS HEAD TOO: `#/login` is read before any workspace is, so a
+    // head the engine could mint would take the page that key names.
+    for (const segment of [...RESERVED_SEGMENTS, ...FRAMELESS]) {
       expect(KEY_SHAPE.test(segment), `${segment} is a project-key shape`).toBe(false);
       expect(ITEM_KEY_SHAPE.test(segment), `${segment} is an item-key shape`).toBe(false);
       expect(CONTAINER_SHAPE.test(segment), `${segment} is a container-key shape`).toBe(false);
@@ -225,6 +228,21 @@ describe("the navigation grammar", () => {
 
 describe("the resolver", () => {
   const uuid = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f";
+
+  // THE SIGN-IN SCREENS take exactly the tail their address has. An
+  // invitation is the exception: its screen answers a link that is not whole
+  // (an empty one) rather than Not Found, since its holder pasted it.
+  test("a sign-in screen is its exact address, and an invitation its one link", () => {
+    expect(resolve(["login"])).toMatchObject({ screen: "login", workspace: "" });
+    expect(resolve(["login", "x"]).resolved).toBe(false);
+    expect(resolve(["enrol"])).toMatchObject({ screen: "enrol", workspace: "" });
+    expect(resolve(["enrol", "x"]).resolved).toBe(false);
+    expect(resolve(["invite", `${uuid}.secret`])).toMatchObject({
+      screen: "invite",
+      link: `${uuid}.secret`,
+    });
+    expect(resolve(["invite", "a", "b"])).toMatchObject({ screen: "invite", link: "" });
+  });
 
   test("a key is a project, a key with a number or a uuid an item, and nothing else is", () => {
     expect(resolve(["work", "ENG"])).toMatchObject({ screen: "project", key: "ENG" });
@@ -625,6 +643,11 @@ describe("the information architecture", () => {
       ...WORKSPACES.map((w) => w.path),
       ...WORKSPACES.flatMap((w) => w.sections.filter((s) => !s.elsewhere).map((s) => s.path)),
       ...DESTINATIONS.map((d) => d.path),
+      // THE SCREENS OUTSIDE THE FRAME, which no workspace declares: a page a
+      // person is sent to before anything else opens is one somebody
+      // starting from the document has to be able to find.
+      // An invitation is written down as the link it carries.
+      ...FRAMELESS.map((head) => (head === "invite" ? [head, "{id}.{secret}"] : [head])),
     ];
     for (const path of paths) {
       expect(
