@@ -52,8 +52,8 @@ import (
 // the dashboard reconnecting for ever against a withdrawn grant.
 //
 // ONE MORE CLOSE IS NOT THE APPLICATION'S: [CloseUndecided], the standard's
-// "try again later", for a credential this node could not decide again — see
-// lifetime.go. Nothing else closes this socket for a fault: a node that cannot
+// "try again later", for a credential this node will not vouch for now and
+// leaves to the reconnect's handshake — see lifetime.go. Nothing else closes this socket for a fault: a node that cannot
 // serve keeps its socket open and degrades it instead — see [FrameDegraded].
 const (
 	// CloseUnauthenticated ends a socket whose credential no longer
@@ -313,12 +313,10 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) ht
 		//nolint:contextcheck // the resolved request's; see where it is resolved
 		ends, _ := auth.Lifetime(r.Context())
 		cred := credential{
-			who: &asking{principal: principal},
-			//nolint:contextcheck // the resolved request's, as above
-			opened: openedWith(r.Context(), principal),
+			who:    &asking{principal: principal},
+			opened: openedWith(principal),
 			ends:   ends,
 			decide: deciderFor(guard, r),
-			key:    guard.PresentedKey(r),
 		}
 
 		// THE HANDSHAKE'S ORIGIN IS JUDGED BY THE WRITES' RULE, and only
@@ -421,16 +419,16 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 
 	client.Reply(Push(KindSnapshot, svc.Snapshot(client.Audience()), time.Now().UTC()))
 
-	// THE CREDENTIAL IS DECIDED AGAIN FOR AS LONG AS THE SOCKET LIVES, on
-	// what can change it and at nothing else. See lifetime.go for why a
-	// handshake decision is not enough and what each answer does to this
-	// socket. REGISTERED with one decision pending, so a record that
+	// THE CREDENTIAL IS ENDED OR DECIDED AGAIN FOR AS LONG AS THE SOCKET
+	// LIVES, on what can change it and at nothing else. See lifetime.go for
+	// why a handshake decision is not enough and what each answer does to
+	// this socket. REGISTERED with one decision pending, so a record that
 	// landed between the handshake and this line is not missed.
 	l := newListener(cred.opened)
 	defer svc.listeners.add(l)()
 	var deciding sync.WaitGroup
 	deciding.Go(func() {
-		keepDecided(ctx, conn, client, l, cred, svc.decisions, svc.now, svc.Snapshot,
+		keepDecided(ctx, conn, client, l, cred, svc.seatOf, svc.now, svc.Snapshot,
 			seats.recheck)
 	})
 	defer deciding.Wait()
@@ -825,8 +823,8 @@ func (w *watching) decide(ctx context.Context, principal iam.Principal,
 // decision of its credential resolved — the watch's own half of lifetime.go's
 // argument: a decision taken once and kept for the life of the socket would
 // let a lead moved off a team go on following a former report's inbox. It runs
-// whenever the credential is decided again, and a published company — the one
-// moment a lead can move — is among the things that do it.
+// whenever the guard decides the credential again, and whenever a company is
+// published — the one moment a lead can move.
 //
 // A REFUSAL withdraws the watch and says so. AN UNDECIDABLE ANSWER KEEPS IT,
 // which is the opposite of what a new watch gets and deliberately so: nothing

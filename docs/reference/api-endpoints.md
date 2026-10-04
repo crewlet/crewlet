@@ -3288,7 +3288,7 @@ Client → server kinds:
 | `kind` | Purpose |
 |--------|---------|
 | `ping` | Keepalive; server replies with `pong`. |
-| `watch` | Become a recipient for one seat's seat-routed frames: `{ kind: "watch", seat }`. An empty `seat` clears it (always allowed), and one socket watches one seat at a time — a tab is looking at one screen, so a second watch replaces the first. **`seat` names a record the way `work_inbox`'s `handle` does**: a seat's handle, either of your own names, or somebody's **login**, which is resolved to the record their notices are kept under — the seat the identity directory binds them to — and the watch is installed there, because that is the name every `inbox_changed` frame for them is pushed to; see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for), whose rules it follows to the letter, the directory asked only once the watch is decided as far as it can be without it. A login that names nobody answers `not_found` to `fleet:operate` and is refused like any other seat to everybody else. **It is decided like `work_inbox` about the same seat**, because it buys that seat's `inbox_changed` frames: the seat's own holder, whoever leads it through the chart, or the admin grant. Three answers, and none closes the socket. **Allowed** installs the watch. **Refused** installs nothing, drops any watch the socket held, and replies `error` with `unauthorized`. It is not a `4403` close, because a client reads that as "this browser may not have the live channel at all" when all that was refused is one seat's frames. **Undecidable** (this node could not read the chart, or the directory a login resolves through) installs nothing either and replies `unavailable`, with the `retry_after` that says when asking again can change the answer — `0` where no wait will. Installing would hand the seat's frames to somebody this node could not show was allowed them. Refusing would tell a lead they lead nobody because the node is behind. **Every time the socket's credential is decided again — an identity record that moved it, or a published company, which is when a lead can move — so is the current watch**: a refusal withdraws it and says so, and an undecidable answer keeps it, since nothing has been learned against a decision this node already made. A watch with nobody resolved behind it closes the socket with **4401**. |
+| `watch` | Become a recipient for one seat's seat-routed frames: `{ kind: "watch", seat }`. An empty `seat` clears it (always allowed), and one socket watches one seat at a time — a tab is looking at one screen, so a second watch replaces the first. **`seat` names a record the way `work_inbox`'s `handle` does**: a seat's handle, either of your own names, or somebody's **login**, which is resolved to the record their notices are kept under — the seat the identity directory binds them to — and the watch is installed there, because that is the name every `inbox_changed` frame for them is pushed to; see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for), whose rules it follows to the letter, the directory asked only once the watch is decided as far as it can be without it. A login that names nobody answers `not_found` to `fleet:operate` and is refused like any other seat to everybody else. **It is decided like `work_inbox` about the same seat**, because it buys that seat's `inbox_changed` frames: the seat's own holder, whoever leads it through the chart, or the admin grant. Three answers, and none closes the socket. **Allowed** installs the watch. **Refused** installs nothing, drops any watch the socket held, and replies `error` with `unauthorized`. It is not a `4403` close, because a client reads that as "this browser may not have the live channel at all" when all that was refused is one seat's frames. **Undecidable** (this node could not read the chart, or the directory a login resolves through) installs nothing either and replies `unavailable`, with the `retry_after` that says when asking again can change the answer — `0` where no wait will. Installing would hand the seat's frames to somebody this node could not show was allowed them. Refusing would tell a lead they lead nobody because the node is behind. **Every time the socket's credential is decided again by an identity record that names it, and on every published company, which is when a lead can move, so is the current watch**: a refusal withdraws it and says so, and an undecidable answer keeps it, since nothing has been learned against a decision this node already made. A watch with nobody resolved behind it closes the socket with **4401**. |
 | `query` | Request one thing, answered with exactly one `result` or `error` frame. `{ kind, id, what, params }` — `id` is any client-chosen value echoed back on the reply. **There is no per-frame credential**: every question is asked as the principal the handshake resolved (and each decision of the credential since), and decided by the grant it is registered under. Queries run concurrently with each other and with the push stream, so one database read cannot stall a tab's live rows — at most **four** at a time per **socket**, which is a tab's share of the node's reader pool: the pool's floor is sized as two full dashboards at four each, and a fifth query waits on its own socket rather than in the pool the engine's own reads share. |
 
 #### Queries
@@ -3560,53 +3560,41 @@ before the upgrade and is covered under [`GET /ws/stream`](#ws-wsstream) above.
 These are for a socket that is already open.
 
 **An open socket is authenticated at its handshake and ended by what ends its
-credential.** There is no periodic re-check. The guard decides the credential
-the socket was opened with again, over the same handshake, exactly when
-something could have changed the answer:
+credential.** There is no periodic re-check. What can change the answer is an
+event, and each kind is handled the cheapest correct way:
 
-- **an identity record moved it** — its session was signed out, ended by an
+- **an identity record names it** — its session was signed out, ended by an
   administrator or replaced by a step-up; the person it acts for was suspended,
-  removed, signed out everywhere, given other grants or bound to another seat;
-  a machine token it presented was revoked; or the company's session generation
-  moved. Every node applies the identity log, so every node hears this from its
-  own applier as the record applies and decides its own sockets — a revocation
-  reaches an open tab within the time it takes to apply, on every node that can
-  read it;
-- **this node retained an identity record instead of applying it** — one a
-  newer build wrote during a rolling upgrade, or one signed under a keyring key
-  this node was not restarted with. Whose it is sits inside a payload the node
-  cannot read, so every socket is decided again: one whose person is in the
-  bucket the record's scope covers is now somebody this node cannot vouch for,
-  and closes `1013`, its reconnect answering `503` exactly as the node's REST
-  routes answer that person — until the node can read the record (an upgrade,
-  or the key added and a restart) and applies it; every other socket is decided
-  as before and stays open;
-- **this node stopped vouching for its identity rows** — its identity applier
-  halted on a record it cannot read (a removal or a company-wide invalidation
-  signed under a key the node was not restarted with, a record that fails its
-  signature, a recreated stream) or is frozen behind a broker it cannot reach,
-  and its lag has just passed the stall grace, which is the instant every
-  identity read on the node starts answering `503`. Every socket is decided
-  again and closes `1013`, its reconnect answering `503` like the node's REST
-  routes, apart from a credential the node serves even then (an unbound Tier A
-  token, the break-glass path);
-- **a company was published** — the org chart a seat binding resolves through
-  may have moved;
+  removed, signed out everywhere, given other grants, bound to another seat or
+  had a machine token revoked; or the directory row a Tier A token is bound
+  through (`token:<id>`) moved. Every node applies the identity log, so every
+  node hears this from its own applier as the record applies; the sockets the
+  record names — and only those — are decided again by the guard, over the
+  request they were opened with, and a revocation reaches an open tab within
+  the time it takes to apply;
+- **an identity move names nobody** — the company's session generation moved
+  (every session ended at once), this node **retained** a record instead of
+  applying it (one a newer build wrote during a rolling upgrade, or one signed
+  under a keyring key it was not restarted with, whose person is inside a
+  payload it cannot read), a join replaced its identity estate, or its identity
+  applier **stopped keeping up** (halted on a record it cannot read, or frozen
+  behind a broker) and its lag has just passed the stall grace, the instant
+  every identity read on the node starts answering `503`. **Every** open socket
+  closes `1013` at once and nothing is read on its behalf: each tab reconnects
+  on its backoff and its handshake decides — `401` sends it to sign in, `503`
+  says this node cannot tell yet, and a credential the move did not touch is
+  back on a fresh snapshot;
+- **a company was published** — every hire, chart edit and configuration apply.
+  Each socket is decided against the company just published, in memory, with
+  no identity read: one whose person's seat that company no longer holds as a
+  human seat closes `4403`, one whose seat now answers to another handle closes
+  `1013` so its handshake resolves the binding afresh, and every `watch` is
+  decided again;
 - **its credential ends on its own** — a session's absolute deadline, a
   machine token's expiry; no record is written at that instant, so each socket
-  keeps a timer for it;
+  keeps a timer for it, and the guard decides it;
 - and **once as it starts listening**, so a record that landed between the
   handshake and that moment is not missed.
-
-A node decides its open sockets **one at a time, and once per credential**.
-Each decision is a read of the identity estate on the one connection the store
-reserves for identity reads — the one every REST request authenticates on —
-and a published company or a move naming everyone decides every socket at
-once, so a node with many tabs open takes them in turn rather than queueing
-one read per tab ahead of every request. Sockets whose handshakes presented
-the same credential — a person's tabs on one cookie, a script's connections on
-one token — share one decision per move; a credential's own deadline is always
-decided afresh.
 
 A session's **idle** deadline does not end an open socket: an open live view is
 activity, and a socket can never be re-issued a cookie, so the session is
@@ -3621,18 +3609,16 @@ Each answer does one thing:
 |---|---|---|
 | The session ended, expired or was revoked; the token is no longer accepted | `4401` | Re-dial with the credential the browser holds now; if the handshake answers `401`, sign in. |
 | The person resolves but their seat is gone from the chart, or they no longer hold `state:read` | `4403` | Stop reconnecting and show why: the credential is fine, what it may do is not. |
-| This node could not read what decides the credential | `1013` | The standard's *try again later*: reconnect on a backoff. The handshake answers `503 identity_unavailable` with a `Retry-After` for as long as the node cannot say, before any snapshot is built. |
+| This node will not vouch for the credential now: it could not read what decides it, an identity move named nobody, or the seat answers to another handle | `1013` | The standard's *try again later*: reconnect on a backoff. The handshake decides — and answers `503 identity_unavailable` with a `Retry-After` for as long as the node cannot say, before any snapshot is built. |
 | Resolved with different grants | *(no close)* | Nothing — the socket's pushes follow the new grants, and a fresh `snapshot` built for them replaces what the screen was showing. |
 | Resolved | *(no close)* | Nothing — and later questions are asked as the principal just resolved, so a narrowed grant takes effect from the record that narrowed it. |
 
 **A node behind its identity log** hears no record it has not applied, so
 inside the stall grace its open sockets are served on their last decision, as
 its REST routes are served on the rows it has. Past the grace it can vouch for
-nobody, and its open sockets close `1013` at that instant (above) — including
+nobody, and every open socket closes `1013` at that instant (above) — including
 on a node whose applier **halted** on the very record meant to end them, which
-no applied record would ever have announced. A node that has **retained** a
-record is not behind — its applier has moved past the record — which is why
-retention is a signal of its own (above) rather than this stall.
+no applied record would ever have announced.
 
 `4401` and `4403` sit in the 4000–4999 range the standard reserves for
 applications, and both deliberately echo the HTTP status they mean; `1013` is

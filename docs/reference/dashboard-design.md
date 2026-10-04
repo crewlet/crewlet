@@ -6462,7 +6462,7 @@ brings that carries a design-system rule.
 - **Three close codes, and what each one asks of the reader.** A refused
   handshake cannot carry one (see the HTTP diagnosis above); these are for a
   socket that is already open, which the engine decides again — against the
-  credential it was opened with — whenever an identity record moves that
+  credential it was opened with — whenever an identity record names that
   credential, a company is published, or the credential reaches its own end.
   `4401` means that credential no longer
   resolves to anybody — the session ended or was revoked — so re-dial with the
@@ -6475,9 +6475,11 @@ brings that carries a design-system rule.
   needs to leave, and the engine keeps `/auth/` open to their session for
   exactly that. A handshake refused `403` is the same state, read through the
   plain-HTTP re-ask. `1013` — the standard's *try again later* — means the
-  engine could not decide the credential again: reconnect on a backoff, and let
-  the handshake say why (`503 identity_unavailable` while the node cannot read
-  its identity estate). Nothing else closes this socket for a fault. And the
+  engine will not vouch for the credential on this socket now (it could not
+  read what decides it, an identity move named nobody, or the person's seat
+  answers to another handle): reconnect on a backoff, and let the handshake
+  decide and say why (`503 identity_unavailable` while the node cannot read its
+  identity estate). Nothing else closes this socket for a fault. And the
   socket never moves the session's cookie — only a REST response can — so a tab
   that would otherwise sit on the socket alone makes an ordinary REST read now
   and then, or its session idles out under it however busy the screen is.

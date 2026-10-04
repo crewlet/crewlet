@@ -611,6 +611,11 @@ func New(opts Options) (*App, error) {
 		// the same name through, so a watch is installed on the record
 		// the frames are pushed to.
 		Holders: opts.Sources.Holders,
+		// AND WHAT THE PUBLISHED COMPANY SAYS ABOUT A SEAT, which an open
+		// socket acting as one is decided by when a company is published.
+		SeatOf: func(name string) (stream.SeatState, bool) {
+			return seatOf(opts.Sources.Company, name)
+		},
 
 		Now:            now,
 		HealthInterval: opts.HealthInterval,

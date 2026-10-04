@@ -38,15 +38,12 @@
 // # An open socket's credential
 //
 // A socket is authenticated at its handshake and ended by what ends its
-// credential, never by a timer of its own: the guard decides it again when an
-// identity record moved it ([Service.CredentialsMoved]), when a company is
-// published, at the credential's own end, and once as it starts listening.
-// Each answer closes it with the code that says what to do —
-// [CloseUnauthenticated], [CloseUnauthorized], [CloseUndecided] — or carries
-// it on as whoever was just resolved. lifetime.go states every case and what each alternative cost; a
-// session's idle deadline does not end an open socket, and a node behind its
-// identity log serves one on its last decision until it applies the record
-// that ends it.
+// credential, never by a timer of its own: an identity move naming it is
+// decided by the guard ([Service.CredentialsMoved]), a move naming nobody
+// closes every socket [CloseUndecided] for the handshake to decide, a
+// published company is decided in memory, and the credential's own end by a
+// timer. lifetime.go states every case and what each close code asks of the
+// client.
 package stream
 
 import (

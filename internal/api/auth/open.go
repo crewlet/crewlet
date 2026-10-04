@@ -2,8 +2,6 @@ package auth
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"net/http"
 	"time"
 )
@@ -42,43 +40,6 @@ import (
 // token.
 func (g *Guard) ResolveOpen(r *http.Request) (*http.Request, *Refusal) {
 	return g.resolve(discardWriter{header: http.Header{}}, r, true)
-}
-
-// PresentedKey names the credential r presents to this guard, as a digest: its
-// bearer when it carries one, its session cookie when it does not, and the
-// absence of both otherwise — the same choice, in the same order, that
-// [Guard.Resolve] makes.
-//
-// # What it is for
-//
-// Two requests with equal keys present the same credential, and
-// [Guard.ResolveOpen] reads nothing else off a request to decide it: so ONE
-// decision answers for every connection opened with that credential. The
-// dashboard's live socket decides every open connection again whenever the
-// identity estate or the company moves, and a person with several tabs open
-// holds several connections on one cookie; asked once per connection, every
-// move read their rows once per tab, all at once, on the one connection the
-// store reserves for identity reads — ahead of every REST request's own.
-//
-// A DIGEST AND NEVER THE VALUE, because a key outlives the request it was
-// taken from in whatever map holds it, and a credential copied into one is a
-// second place it can leak from. SHA-256 over a kind-prefixed value, so a
-// bearer and a cookie of the same bytes are two credentials, as the guard
-// reads them.
-func (g *Guard) PresentedKey(r *http.Request) string {
-	sum := sha256.New()
-	switch bearer := g.Credential(r); {
-	case bearer != "":
-		sum.Write([]byte("bearer\x00" + bearer))
-	case g.sessions != nil && g.sessions.cookieOf(r) != "":
-		sum.Write([]byte("cookie\x00" + g.sessions.cookieOf(r)))
-	default:
-		// NOTHING PRESENTED, which the guard resolves the same way for
-		// every request: the development principal where one is
-		// configured, anonymous everywhere else.
-		sum.Write([]byte("none\x00"))
-	}
-	return hex.EncodeToString(sum.Sum(nil))
 }
 
 // lifetimeKey carries the instant the credential a request presented ends on

@@ -63,28 +63,36 @@ func (s *switched) answer(r *http.Request) (*http.Request, *auth.Refusal) {
 
 // socketCase is one socket a case serves: who its handshake resolved, what it
 // was opened with, when its credential ends, and how it is decided again.
-//
-// key is the credential its handshake presented, which decides which other
-// sockets share its decisions; left empty, it is a credential of its own.
 type socketCase struct {
 	principal iam.Principal
 	opened    opened
 	ends      time.Time
 	decide    answer
 	query     Query
-	key       string
 }
 
 // served is one socket, through the same serveSocket the handler uses.
 type served struct {
 	conn *websocket.Conn
 
-	// decisions counts every time the socket's credential was decided.
+	// decisions counts every time the socket's credential was decided by
+	// the guard — a read of the identity estate.
 	decisions atomic.Int64
 }
 
-// newDecidingService builds a service whose watches are decided through chart.
+// newDecidingService builds a service whose watches are decided through chart,
+// over a published company that holds every seat as a human seat under the
+// handle it was created under.
 func newDecidingService(t *testing.T, chart authz.Chart) *Service {
+	t.Helper()
+	return newServiceOver(t, chart, func(name string) (SeatState, bool) {
+		return SeatState{Origin: name, Handle: name, Human: true}, true
+	})
+}
+
+// newServiceOver is [newDecidingService] over the published company seatOf
+// reads.
+func newServiceOver(t *testing.T, chart authz.Chart, seatOf SeatOfFunc) *Service {
 	t.Helper()
 	svc, err := NewService(livestate.New(), Options{
 		Health:    func() Health { return nodeHealth{Status: "ok"} },
@@ -97,6 +105,7 @@ func newDecidingService(t *testing.T, chart authz.Chart) *Service {
 		Placement: func() (map[string]bool, error) { return map[string]bool{}, nil },
 		Chart:     chart,
 		Holders:   blindHolders{},
+		SeatOf:    seatOf,
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -126,9 +135,6 @@ func dial(t *testing.T, svc *Service, c socketCase) *served {
 			return nil, nil
 		}
 	}
-	if c.key == "" {
-		c.key = uuid.NewString()
-	}
 	s := &served{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
@@ -143,7 +149,6 @@ func dial(t *testing.T, svc *Service, c socketCase) *served {
 				s.decisions.Add(1)
 				return c.decide(r.Clone(ctx))
 			},
-			key: c.key,
 		})
 	}))
 	t.Cleanup(srv.Close)
@@ -233,17 +238,18 @@ func sessionOf(p iam.Principal) opened {
 
 // --- what decides a socket ---------------------------------------------- //
 
-// A SOCKET IS DECIDED AGAIN WHEN ITS CREDENTIAL MOVED, and not when somebody
-// else's did.
+// A MOVE REACHES THE SOCKETS IT NAMES, and not the ones it does not.
 //
 // Every identity batch that moves anybody's credential reaches every node's
-// sockets, so the match is what stops one person's sign-out re-reading the
+// sockets, so the match is what stops one person's sign-out reading the
 // directory for every tab in the company — and what makes the one tab it ended
-// hear it. A Tier A credential is matched on any person's move, because the
-// directory row its seat binding is read from is one whose id it never learns.
-func TestASocketIsDecidedAgainWhenItsCredentialMoved(t *testing.T) {
+// hear it. A Tier A token is named by the login of the directory row its seat
+// binding is read from, `token:<id>`, because that row's id is one it never
+// learns.
+func TestAMoveReachesTheSocketsItNames(t *testing.T) {
 	t.Parallel()
-	session := opened{lineage: "lineage-a", person: "person-a"}
+	session := opened{lineage: "lineage-a", person: "person-a", login: "ana.lee"}
+	tierA := opened{person: "derived-id", login: "token:ci"}
 	for _, c := range []struct {
 		name   string
 		opened opened
@@ -253,38 +259,39 @@ func TestASocketIsDecidedAgainWhenItsCredentialMoved(t *testing.T) {
 		{"its session ended", session, Moved{Sessions: []string{"lineage-a"}}, true},
 		{"another session ended", session, Moved{Sessions: []string{"lineage-b"}}, false},
 		{"its person moved", session, Moved{People: []string{"person-a"}}, true},
-		{"somebody else moved", session, Moved{People: []string{"person-b"}}, false},
-		{"no list could say", session, Moved{Everyone: true}, true},
+		{"somebody else moved", session, Moved{People: []string{"person-b"},
+			Logins: []string{"ben.ode"}}, false},
 		{"nothing moved", session, Moved{}, false},
 		{"a machine token's owner moved", opened{person: "person-a"},
 			Moved{People: []string{"person-a"}}, true},
-		{"a Tier A token, anybody moved", opened{configured: true},
-			Moved{People: []string{"person-b"}}, true},
-		{"a Tier A token, a session ended", opened{configured: true},
-			Moved{Sessions: []string{"lineage-b"}}, false},
-		{"a Tier A token's session ended", opened{configured: true, lineage: "lineage-a"},
+		{"a Tier A token's row moved", tierA, Moved{People: []string{"machine"},
+			Logins: []string{"token:ci"}}, true},
+		{"another token's row moved", tierA, Moved{People: []string{"machine"},
+			Logins: []string{"token:ops"}}, false},
+		{"a Tier A token's session ended",
+			opened{lineage: "lineage-a", login: "token:ci"},
 			Moved{Sessions: []string{"lineage-a"}}, true},
 	} {
-		if got := c.opened.movedBy(c.moved); got != c.want {
-			t.Errorf("%s: decided again %v, want %v", c.name, got, c.want)
+		if got := c.opened.namedBy(c.moved); got != c.want {
+			t.Errorf("%s: named %v, want %v", c.name, got, c.want)
 		}
 	}
 }
 
 // WHAT A SOCKET WAS OPENED WITH IS READ OFF THE HANDSHAKE'S RESOLUTION: a
-// session by its lineage and its person, a machine token by its owner, and a
-// Tier A token as a credential composed from configuration.
+// session by its lineage, its person and their login, a machine token by its
+// owner, and a Tier A token by its own login.
 func TestASocketIsOpenedWithWhatItsHandshakeResolved(t *testing.T) {
 	t.Parallel()
 	p := person("ana")
 	lineage := uuid.NewString()
 	p.Via = iam.SessionName(lineage)
-	if got := openedWith(t.Context(), p); got.lineage != lineage ||
-		got.person != p.ID.String() || got.configured {
+	if got := openedWith(p); got.lineage != lineage ||
+		got.person != p.ID.String() || got.login != "ana" {
 		t.Errorf("a session socket was opened with %+v", got)
 	}
 	p.Via = iam.MachineTokenName(uuid.NewString())
-	if got := openedWith(t.Context(), p); got.lineage != "" || got.person != p.ID.String() {
+	if got := openedWith(p); got.lineage != "" || got.person != p.ID.String() {
 		t.Errorf("a machine token socket was opened with %+v", got)
 	}
 
@@ -299,9 +306,9 @@ func TestASocketIsOpenedWithWhatItsHandshakeResolved(t *testing.T) {
 	if how != iam.Resolved {
 		t.Fatalf("the Tier A token resolved %v", how)
 	}
-	if got := openedWith(r.Context(), principal); !got.configured || got.person != "" {
-		t.Errorf("a Tier A socket was opened with %+v, want a configured credential "+
-			"and no person", got)
+	if got := openedWith(principal); got.login != iam.TokenLogin("ci") {
+		t.Errorf("a Tier A socket was opened with %+v, want its login %s", got,
+			iam.TokenLogin("ci"))
 	}
 }
 
@@ -354,7 +361,7 @@ func TestAnOpenSocketIsClosedByWhatEndsItsCredential(t *testing.T) {
 			s.open(t)
 
 			decide.flip()
-			svc.CredentialsMoved(Moved{Everyone: true})
+			svc.CredentialsMoved(Moved{People: []string{ana.ID.String()}})
 			if got := s.closedWith(t); got != c.code {
 				t.Fatalf("the socket closed %d, want %d", got, c.code)
 			}
@@ -362,13 +369,14 @@ func TestAnOpenSocketIsClosedByWhatEndsItsCredential(t *testing.T) {
 	}
 }
 
-// AN IDENTITY MOVE REACHES THE SOCKETS IT NAMES AND NO OTHER, and nothing but
+// AN IDENTITY MOVE DECIDES THE SOCKETS IT NAMES AND NO OTHER, and nothing but
 // a move decides an open socket.
 //
-// Two people's sockets on one node, both of whose credentials would now be
-// refused: the move naming one session closes that socket and leaves the other
-// open — which is also the proof that no timer is deciding sockets behind the
-// moves — and the move naming the second person closes theirs.
+// Three sockets on one node, all of whose credentials would now be refused:
+// the move naming a Tier A token's login closes that socket, the move naming
+// one session closes that one and leaves the person's colleague open — which
+// is also the proof that no timer is deciding sockets behind the moves — and
+// the move naming the colleague closes theirs.
 func TestAnIdentityMoveReachesTheSocketsItNames(t *testing.T) {
 	t.Parallel()
 	svc := newDecidingService(t, authz.NoChart{})
@@ -381,10 +389,24 @@ func TestAnIdentityMoveReachesTheSocketsItNames(t *testing.T) {
 	benDecide := &switched{before: resolvedAs(ben), after: ended}
 	first := serve(t, svc, socketCase{principal: ana, opened: anaSession, decide: anaDecide.answer})
 	second := serve(t, svc, socketCase{principal: ben, opened: benSession, decide: benDecide.answer})
+	ci := person("ci")
+	ciDecide := &switched{before: resolvedAs(ci), after: ended}
+	tierA := serve(t, svc, socketCase{principal: ci,
+		opened: opened{person: "derived", login: "token:ci"}, decide: ciDecide.answer})
 	first.settled(t, 1)
 	second.settled(t, 1)
+	tierA.settled(t, 1)
 	anaDecide.flip()
 	benDecide.flip()
+	ciDecide.flip()
+
+	// THE ROW A TIER A TOKEN IS BOUND THROUGH, named by its login.
+	svc.CredentialsMoved(Moved{People: []string{"machine"},
+		Logins: []string{"token:ci"}})
+	if got := tierA.closedWith(t); got != CloseUnauthenticated {
+		t.Fatalf("the Tier A socket whose row moved closed %d, want %d", got,
+			CloseUnauthenticated)
+	}
 
 	svc.CredentialsMoved(Moved{Sessions: []string{anaSession.lineage}})
 	if got := first.closedWith(t); got != CloseUnauthenticated {
@@ -393,14 +415,50 @@ func TestAnIdentityMoveReachesTheSocketsItNames(t *testing.T) {
 	}
 	second.open(t)
 	if got := second.decisions.Load(); got != 1 {
-		t.Fatalf("a move naming somebody else's session decided this socket "+
-			"%d times, want once — at its registration", got)
+		t.Fatalf("moves naming somebody else decided this socket %d times, "+
+			"want once — at its registration", got)
 	}
 
 	svc.CredentialsMoved(Moved{People: []string{ben.ID.String()}})
 	if got := second.closedWith(t); got != CloseUnauthenticated {
 		t.Fatalf("the socket whose person moved closed %d, want %d", got,
 			CloseUnauthenticated)
+	}
+}
+
+// A MOVE THAT NAMES NOBODY CLOSES EVERY SOCKET, AND READS NOTHING.
+//
+// The fleet-wide session generation, a record this node retained, a replaced
+// estate and a node that stopped vouching for its identity rows each name
+// nobody. Decided by a read, every socket on the node would put one identity
+// read on the store's one reserved identity connection at once; closed 1013
+// instead, each tab reconnects on its backoff and its handshake decides. The
+// sockets here would all still be served — the proof that the close is the
+// move's and not a decision's — and the guard is never asked again.
+//
+// Mutation: wake every socket on such a move instead of closing it, and both
+// stay open after one more read each.
+func TestAMoveNamingNobodyClosesEverySocketAndReadsNothing(t *testing.T) {
+	t.Parallel()
+	svc := newDecidingService(t, authz.NoChart{})
+	ana, ben := person("ana"), person("ben")
+	first := serve(t, svc, socketCase{principal: ana, opened: sessionOf(ana),
+		decide: resolvedAs(ana)})
+	second := serve(t, svc, socketCase{principal: ben,
+		opened: opened{person: "derived", login: "token:ci"}, decide: resolvedAs(ben)})
+	first.settled(t, 1)
+	second.settled(t, 1)
+
+	svc.CredentialsMoved(Moved{Everyone: true})
+	for _, s := range []*served{first, second} {
+		if got := s.closedWith(t); got != CloseUndecided {
+			t.Fatalf("a socket a move naming nobody reached closed %d, want %d",
+				got, CloseUndecided)
+		}
+		if got := s.decisions.Load(); got != 1 {
+			t.Fatalf("a move naming nobody read the socket's credential (%d "+
+				"decisions, want the one at its registration)", got)
+		}
 	}
 }
 
@@ -494,30 +552,96 @@ func TestAnEndTheGuardStillServesIsDecidedAgain(t *testing.T) {
 	}
 }
 
-// A PUBLISHED COMPANY DECIDES EVERY SOCKET AGAIN.
+// A PUBLISHED COMPANY DECIDES EACH SOCKET IN MEMORY, and reads no identity.
 //
 // The org chart a seat binding resolves through may have moved — a seat
-// removed under the person bound to it — and nothing on the identity log says
-// so, because a removal from the chart is not an identity record.
-func TestAPublishedCompanyDecidesEverySocketAgain(t *testing.T) {
+// removed under the person bound to it, turned over to an agent, renamed — and
+// nothing on the identity log says so. Every hire, chart edit and apply
+// publishes a company, so deciding every socket by the guard there would be an
+// identity read per open tab on each: the socket is decided against the
+// company just published instead. A seat this socket saw that company hold and
+// no longer a human seat is what the guard refuses `seat_unavailable` (4403);
+// a seat that answers to another handle now, or one the socket never saw the
+// published company hold, is the handshake's to resolve (1013). The control is
+// a seat still held under the handle it was opened with: the socket stays
+// open. In every case the guard is never asked again.
+//
+// Mutation: close every seat that fails to match 4403, and the renamed and
+// unseen seats are told access was withdrawn.
+func TestAPublishedCompanyDecidesEachSocketInMemory(t *testing.T) {
 	t.Parallel()
-	svc := newDecidingService(t, authz.NoChart{})
-	ana := person("ana")
-	decide := &switched{before: resolvedAs(ana),
-		after: func(r *http.Request) (*http.Request, *auth.Refusal) {
-			return r.WithContext(iam.WithPrincipal(r.Context(), ana)),
-				&auth.Refusal{Status: http.StatusForbidden,
-					Code: httpjson.CodeSeatUnavailable, Detail: "ana"}
-		}}
-	s := serve(t, svc, socketCase{principal: ana, opened: sessionOf(ana),
-		decide: decide.answer})
-	s.settled(t, 1)
-	decide.flip()
-	svc.CompanyPublished()
-	if got := s.closedWith(t); got != CloseUnauthorized {
-		t.Fatalf("a socket whose seat a published company removed closed %d, "+
-			"want %d", got, CloseUnauthorized)
+	held := SeatState{Origin: "ana", Handle: "ana", Human: true}
+	for _, c := range []struct {
+		name          string
+		before, after map[string]SeatState
+		code          websocket.StatusCode
+	}{
+		{"still held, the control", map[string]SeatState{"ana": held},
+			map[string]SeatState{"ana": held}, 0},
+		{"removed", map[string]SeatState{"ana": held}, map[string]SeatState{},
+			CloseUnauthorized},
+		{"turned over to an agent", map[string]SeatState{"ana": held},
+			map[string]SeatState{"ana": {Origin: "ana", Handle: "ana"}},
+			CloseUnauthorized},
+		{"renamed", map[string]SeatState{"ana": held},
+			map[string]SeatState{"ana": {Origin: "ana", Handle: "ana-lee", Human: true}},
+			CloseUndecided},
+		{"never seen published", map[string]SeatState{}, map[string]SeatState{},
+			CloseUndecided},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			book := &seatBook{seats: c.before}
+			svc := newServiceOver(t, authz.NoChart{}, book.of)
+			ana := person("ana")
+			s := serve(t, svc, socketCase{principal: ana, opened: sessionOf(ana),
+				decide: resolvedAs(ana)})
+			s.settled(t, 1)
+			book.set(c.after)
+			svc.CompanyPublished()
+			if c.code == 0 {
+				// TWICE BEFORE THE PUBLISH — as the socket started
+				// listening and after its first decision — and once for it.
+				waitUntil(t, func() bool { return book.asked() >= 3 },
+					"the published company was never asked about the seat")
+				s.open(t)
+			} else if got := s.closedWith(t); got != c.code {
+				t.Fatalf("the socket closed %d, want %d", got, c.code)
+			}
+			if got := s.decisions.Load(); got != 1 {
+				t.Fatalf("a published company read the socket's credential (%d "+
+					"decisions, want the one at its registration)", got)
+			}
+		})
 	}
+}
+
+// seatBook is a published company's seats by any name, changeable while
+// sockets are open, counting how often it was asked.
+type seatBook struct {
+	mu    sync.Mutex
+	seats map[string]SeatState
+	n     int
+}
+
+func (b *seatBook) of(name string) (SeatState, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.n++
+	s, ok := b.seats[name]
+	return s, ok
+}
+
+func (b *seatBook) set(seats map[string]SeatState) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.seats = seats
+}
+
+func (b *seatBook) asked() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.n
 }
 
 // A NARROWED GRANT IS WHAT LATER QUESTIONS ARE ASKED AS, from the decision on.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,8 +38,10 @@ func TestADecidedWatchIsWithdrawnOnlyByARefusal(t *testing.T) {
 
 	// UNKNOWN KEEPS IT, across a published company it was decided on.
 	chart.set(false, errors.New("the chart view is behind"))
+	asked := chart.asked.Load()
 	svc.CompanyPublished()
-	s.settled(t, 2)
+	waitUntil(t, func() bool { return chart.asked.Load() > asked },
+		"a published company never decided the watch again")
 	s.open(t)
 	if got := svc.Hub().Watchers("sarah-chen"); got != 1 {
 		t.Fatalf("a chart this node could not read withdrew a watch it had "+
@@ -175,11 +178,13 @@ func (c *heldChart) LeadsAnyone(context.Context, string) (bool, error) {
 	return false, nil
 }
 
-// mutableChart answers the one lead question the case asks, changeably.
+// mutableChart answers the one lead question the case asks, changeably,
+// counting how often it was asked.
 type mutableChart struct {
 	mu    sync.Mutex
 	leads bool
 	err   error
+	asked atomic.Int64
 }
 
 func (c *mutableChart) set(leads bool, err error) {
@@ -189,6 +194,7 @@ func (c *mutableChart) set(leads bool, err error) {
 }
 
 func (c *mutableChart) Leads(_ context.Context, actor, subject string) (bool, error) {
+	c.asked.Add(1)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.err != nil {

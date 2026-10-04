@@ -75,6 +75,13 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 		// the directory it means.
 		opts.Holders = blindDirectory{}
 	}
+	if opts.SeatOf == nil {
+		// A PUBLISHED COMPANY HOLDING EVERY SEAT, under the handle it was
+		// created under.
+		opts.SeatOf = func(name string) (stream.SeatState, bool) {
+			return stream.SeatState{Origin: name, Handle: name, Human: true}, true
+		}
+	}
 	if opts.Placement == nil {
 		// NO LEASE READ YET, which claims no seat is unplaced.
 		opts.Placement = func() (map[string]bool, error) { return map[string]bool{}, nil }
@@ -101,7 +108,7 @@ func TestNewServiceRefusesEveryMissingFunctionByName(t *testing.T) {
 	}
 	for _, field := range []string{
 		"Health", "Posture", "Seats", "Roster", "Org", "Tools", "Schedules", "Placement",
-		"Chart", "Holders",
+		"Chart", "Holders", "SeatOf",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)

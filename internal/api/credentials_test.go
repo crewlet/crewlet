@@ -22,7 +22,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/runtoken"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // fakeCredentials is the engine's half of the credential feed: it keeps what
@@ -91,18 +90,6 @@ func (l *liveRows) deferPerson(person string) {
 	identity := l.rows[person]
 	identity.Deferred = true
 	l.rows[person] = identity
-}
-
-// behind sets how far behind its identity log the node holding these rows is,
-// for every person: what a halted or frozen applier leaves every read
-// reporting.
-func (l *liveRows) behind(lag time.Duration) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for person, identity := range l.rows {
-		identity.Lag = lag
-		l.rows[person] = identity
-	}
 }
 
 // readsOf is how many times a person's rows have been read.
@@ -276,87 +263,50 @@ func TestAnIdentityMoveClosesTheTabsItEnded(t *testing.T) {
 	}
 }
 
-// A RECORD THIS NODE RETAINED CLOSES THE TABS IN ITS BUCKET, and only those.
+// A MOVE THAT NAMES NOBODY CLOSES EVERY TAB, AND THE HANDSHAKE DECIDES.
 //
-// A record this node cannot read — a newer build's during a rolling upgrade,
-// one signed under a key it was not restarted with — is retained rather than
-// applied, so no list says whose it is: the identity applier hands over a move
-// naming everyone (iamdomain.Applier.Retained). What the node CAN still say is
-// whose rows the record leaves unknown — every person in the bucket its scope
-// declares reads Deferred — and that is the answer the REST guard gives them:
-// 503. So an open tab in that bucket closes 1013 (try again later), and its
-// reconnect's handshake answers 503 like every route beside it, while a tab
-// outside the bucket is decided again on rows that still vouch for it and
-// stays open. Kept open instead, a revocation or a suspension written by a
-// newer peer would leave the person's tab streaming the company on every node
-// still on the older build, for as long as the upgrade took.
-func TestARetainedRecordClosesTheTabsItLeavesUnknown(t *testing.T) {
+// The fleet-wide session generation, a record this node retained (a newer
+// build's, or one signed under a key it was not restarted with), a replaced
+// estate and a node that stopped vouching for its identity rows (its applier
+// halted on a record it cannot read, or frozen past the stall grace) each name
+// nobody: whose it is sits where this node cannot read. Every open tab closes
+// 1013 at once and nothing is read on its behalf; the reconnect's handshake is
+// the decision, through the guard's ordinary resolution. Here one person's
+// rows are what such a record leaves them — unvouched — and the other's are
+// fine: both tabs close, neither's rows are read for it, and the two
+// reconnects are answered differently, 503 for the person this node cannot
+// vouch for and 426 (the upgrade the GET did not ask for) for the other.
+//
+// Mutation: decide every socket by the guard on such a move, and the tab whose
+// rows are fine stays open.
+func TestAMoveNamingNobodyClosesEveryTabAndTheHandshakeDecides(t *testing.T) {
 	t.Parallel()
 	node := newSocketNode(t, func() time.Time { return clock })
 	jane := node.tab(t, "jane.doe", clock.Add(8*time.Hour))
 	omar := node.tab(t, "omar.haddad", clock.Add(8*time.Hour))
 	node.rows.deferPerson(jane.person)
+	before := map[string]int{jane.person: node.rows.readsOf(jane.person),
+		omar.person: node.rows.readsOf(omar.person)}
 
 	node.feed.fire(t, iamdomain.Moved{Everyone: true})
-	if got := closeOf(t, jane.conn); got != stream.CloseUndecided {
-		t.Fatalf("the tab whose rows a retained record left unknown closed %d, "+
-			"want %d", got, stream.CloseUndecided)
+	for _, tab := range []signedInTab{jane, omar} {
+		if got := closeOf(t, tab.conn); got != stream.CloseUndecided {
+			t.Fatalf("a tab a move naming nobody reached closed %d, want %d", got,
+				stream.CloseUndecided)
+		}
+		if got := node.rows.readsOf(tab.person); got != before[tab.person] {
+			t.Fatalf("a move naming nobody read the rows of a tab it closed "+
+				"(%d reads, want %d)", got, before[tab.person])
+		}
 	}
-	stillOpen(t, omar.conn)
 	if got := node.probe(t, jane.cookie); got != http.StatusServiceUnavailable {
-		t.Fatalf("the reconnect of the tab a retained record closed answered %d, "+
-			"want 503 — the handshake is where the client learns why", got)
+		t.Fatalf("the reconnect of a tab whose rows this node cannot vouch for "+
+			"answered %d, want 503 — the handshake is where the client learns why",
+			got)
 	}
-}
-
-// A NODE THAT STOPS VOUCHING FOR ITS IDENTITY ROWS CLOSES EVERY TAB ON THEM.
-//
-// An identity applier halted on a record it cannot read — the removal or the
-// company-wide invalidation meant to end these very sessions, signed under a
-// key this node lacks — commits no batch, and neither does one frozen behind
-// a broker it cannot reach: no move names anybody. What the node's reads
-// report is the lag, and past the stall grace the guard answers every one of
-// them unknown, so REST is 503. The engine's vouch watch hands the feed a move
-// naming everyone at that crossing (internal/engine's identityvouch.go), and
-// this holds the other half: told so, an open tab on a stalled node closes
-// 1013 and its reconnect's handshake answers 503, exactly as a request does.
-//
-// The control is the same move on a node behind by less than the grace, which
-// the guard still serves: its tab stays open. Kept open on the stalled node,
-// a removed person's tab went on receiving every push and answering every
-// question until the node restarted.
-func TestAStalledNodeClosesTheTabsItCannotVouchFor(t *testing.T) {
-	t.Parallel()
-	for _, c := range []struct {
-		name   string
-		lag    time.Duration
-		closes bool
-	}{
-		{"past the stall grace", statelog.StallGrace + time.Second, true},
-		{"inside the stall grace", statelog.StallGrace, false},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			node := newSocketNode(t, func() time.Time { return clock })
-			jane := node.tab(t, "jane.doe", clock.Add(8*time.Hour))
-			before := node.rows.readsOf(jane.person)
-			node.rows.behind(c.lag)
-
-			node.feed.fire(t, iamdomain.Moved{Everyone: true})
-			if !c.closes {
-				node.rows.readAtLeast(t, jane.person, before+1)
-				stillOpen(t, jane.conn)
-				return
-			}
-			if got := closeOf(t, jane.conn); got != stream.CloseUndecided {
-				t.Fatalf("a tab on a node past the stall grace closed %d, want %d",
-					got, stream.CloseUndecided)
-			}
-			if got := node.probe(t, jane.cookie); got != http.StatusServiceUnavailable {
-				t.Fatalf("the reconnect of a tab a stalled node closed answered %d, "+
-					"want 503 — the handshake is where the client learns why", got)
-			}
-		})
+	if got := node.probe(t, omar.cookie); got != http.StatusUpgradeRequired {
+		t.Fatalf("the reconnect of a tab whose rows are fine answered %d, want 426",
+			got)
 	}
 }
 
@@ -396,8 +346,8 @@ func TestATabClosesAtItsSessionsAbsoluteDeadline(t *testing.T) {
 // cookie at the same instant is held to it, which is the control: the cookie
 // is past its idle deadline, and only the socket may outlive it.
 //
-// Two moves, and the socket's rows are read for each: the socket decides one
-// move at a time, so the second read is proof the first decision left it
+// Two moves, and the socket's rows are read for each: the socket acts on one
+// signal at a time, so the second read is proof the first decision left it
 // open.
 //
 // Mutation: decide an open socket through the guard's ordinary Resolve, and

@@ -113,15 +113,14 @@ type Service struct {
 	// holders resolves a `watch` frame's login. See [Options.Holders].
 	holders iam.Holders
 
-	// listeners is every open socket, by what decides it again — see
-	// lifetime.go. The service holds it because what decides a socket
-	// arrives here: an identity move, a published company.
-	listeners listeners
+	// seatOf is the published company's word on a seat. See
+	// [Options.SeatOf].
+	seatOf SeatOfFunc
 
-	// decisions is the node's one queue those sockets are decided through,
-	// one decision per credential per move — see decisions.go. The service
-	// holds it because it is shared by every socket on the node.
-	decisions *decisions
+	// listeners is every open socket, by what it was opened with — see
+	// lifetime.go. The service holds it because what ends a socket arrives
+	// here: an identity move, a published company.
+	listeners listeners
 
 	// tokensDirty means a phase completed since the last rollup went out.
 	// Set on the publish path and cleared on the tick — see flushTokens.
@@ -145,8 +144,8 @@ type PlacementFunc func() (map[string]bool, error)
 
 // Options configure a service.
 //
-// Health, Posture, Seats, Roster, Org, Tools, Schedules, Placement, Chart and
-// Holders are REQUIRED, and [NewService] refuses a missing one by name. Each is
+// Health, Posture, Seats, Roster, Org, Tools, Schedules, Placement, Chart,
+// Holders and SeatOf are REQUIRED, and [NewService] refuses a missing one by name. Each is
 // something the engine beside the API always answers, so a missing one is a
 // wiring mistake, and serving around it would push a confident answer where
 // there is none: a health frame reading "ok", an empty catalogue, an
@@ -224,6 +223,13 @@ type Options struct {
 	// without it would refuse every such watch as undecidable for the life
 	// of the process.
 	Holders iam.Holders
+
+	// SeatOf answers what the company this node has published says about a
+	// seat, which is what an open socket acting as a seat is decided by
+	// when a company is published — in memory, with no identity read (see
+	// lifetime.go). REQUIRED for [Options.Chart]'s reason: a service built
+	// without it could never say a seat is gone.
+	SeatOf SeatOfFunc
 }
 
 // NewService builds the fan-out over a projection, or refuses a missing
@@ -243,6 +249,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		{"Schedules", opts.Schedules == nil},
 		{"Chart", opts.Chart == nil},
 		{"Holders", opts.Holders == nil},
+		{"SeatOf", opts.SeatOf == nil},
 		{"Placement", opts.Placement == nil},
 	} {
 		if field.absent {
@@ -266,10 +273,10 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		schedules: opts.Schedules,
 		chart:     opts.Chart,
 		holders:   opts.Holders,
+		seatOf:    opts.SeatOf,
 		placement: opts.Placement,
 		now:       opts.Now,
 		interval:  opts.HealthInterval,
-		decisions: newDecisions(),
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
@@ -515,10 +522,10 @@ func (s *Service) currentTools() []map[string]any { return s.tools() }
 // the payload each kind carries is this service's to build, and a caller that
 // paired a kind with the wrong payload would compile cleanly.
 //
-// AND EVERY OPEN SOCKET IS DECIDED AGAIN, after the re-sends: the org chart a
-// seat binding resolves through and a watch is decided by may have moved — a
-// seat removed under the person bound to it, a lead moved off a team — and a
-// published company is the one moment either can change. See lifetime.go.
+// AND EVERY OPEN SOCKET IS DECIDED AGAIN, after the re-sends, in memory
+// against the company just published: the seat its principal acts as may be
+// gone, and a lead may have moved off the team whose inbox the socket watches.
+// See lifetime.go.
 func (s *Service) CompanyPublished() {
 	now := s.now()
 	for _, push := range []struct {
@@ -534,7 +541,7 @@ func (s *Service) CompanyPublished() {
 	} {
 		s.hub.Broadcast(Push(push.kind, push.data, now))
 	}
-	s.wake(func(opened) bool { return true })
+	s.listeners.each(func(l *listener) { signal(l.published) })
 }
 
 // InboxChange is the payload of an `inbox_changed` frame: whose inbox moved,
