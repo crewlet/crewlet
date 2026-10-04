@@ -144,10 +144,9 @@ func Open(cipher Cipher, payload []byte) ([]byte, error) {
 // sealed or not.
 //
 // THE MIGRATION'S READ, and nothing else's. A store written before the
-// keyring was required can hold plaintext revisions, and the commands that
-// rewrite them sealed (`crewlet config seal`, and `crewlet config scrub`,
-// whose erasure must reach a plaintext revision as surely as a sealed one)
-// have to be able to read what they are replacing. Every other reader goes
+// keyring was required can hold plaintext revisions, and the command that
+// rewrites them sealed (`crewlet config seal`) has to be able to read what it
+// is replacing. Every other reader goes
 // through [Open], which refuses a plaintext payload; a caller that used this
 // to READ a document would be accepting exactly the unauthenticated body
 // [ErrUnsealedWithKey] exists to refuse, which is why it takes the keyring it
