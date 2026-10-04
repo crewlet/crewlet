@@ -55,7 +55,7 @@ integrations:
       access_level: developer    # default group membership (developer | maintainer)
       access_levels:             # per-handle overrides
         tech-lead: maintainer
-      username_prefix: ""        # e.g. "agent-" when the group namespace is shared with humans
+      username_prefix: ""        # crewlet when empty; the username is <prefix>-<handle>
       projects: []               # extra projects to add each account to (+ hooks only when group_webhook: false / falls back)
       group_webhook: auto        # auto (group hook, else per-project) | true (group only) | false (per-project only)
       mode: group                # where accounts are OWNED: group (default) | instance (self-managed only)
@@ -212,7 +212,7 @@ The CLI probes the operator credential with `GET /user` up front and fails fast 
 
 For each **agent** seat that declares GitLab credentials (presence of `mcp_env.gitlab`, the same convention GitHub uses):
 
-1. **Ensure the service account exists.** Look it up by username — `<username_prefix><handle>` (see [A seat's account is named after its handle](../concepts/integration-reconcile.md#a-seats-account-is-named-after-its-handle)) — and create it if missing, under the configured group or (with `-mode instance`) on the instance. The display name is `role.name`. **No email address is sent**, so GitLab assigns one itself (`service_account_group_…@noreply.<instance>`).
+1. **Ensure the service account exists.** Look it up by username — `<username_prefix>-<handle>`, the prefix being `crewlet` when it is unset (see [A seat's account is named after its handle](../concepts/integration-reconcile.md#a-seats-account-is-named-after-its-handle)) — and create it if missing, under the configured group or (with `-mode instance`) on the instance. The display name is `role.name`. **No email address is sent**, so GitLab assigns one itself (`service_account_group_…@noreply.<instance>`).
 
    > **That omission is load-bearing.** GitLab's service-account routes take `email` as optional, and its documentation adds the sentence this turns on: *"custom email addresses require confirmation before the account is active"*, unless the group has a matching verified domain. Crewlet used to derive `<prefix><handle>@noreply.crewlet.invalid` — a reserved TLD ([RFC 2606](https://www.rfc-editor.org/rfc/rfc2606)), so no confirmation mail can ever be delivered and no domain can ever be verified. Every account created that way was permanently inactive, and GitLab refused each of its tokens with `403 Your primary email address is not confirmed`. Letting GitLab name the address keeps the same promise — the account is a robot and its mailbox does not exist — on a domain the instance actually controls.
 
@@ -285,7 +285,7 @@ Three sinks, chosen by flag:
 ### Rotation & decommission
 
 - **`-rotate`** mints a fresh token for **every** seat — including seats whose current one still works — retires the previous `crewlet-<handle>` tokens on that account, and updates the chosen sink. It is a flag rather than what a run does because GitLab returns a token's value exactly once: a provisioner cannot check that what it recorded last time still matches, so minting every run would revoke the credential every agent is currently authenticating with. An operator adding a tenth seat would take the other nine down, from a command whose whole promise is that it is safe to re-run. **The engine has to be restarted after.** On the GitLab.com Free tier — where every PAT expires within 365 days — this is the once-a-year cron candidate.
-- **`-decommission`** (explicit, never default) deletes managed service accounts whose seats have left the config. It refuses to act unless `provisioning.username_prefix` is set, so it can identify managed accounts without touching un-prefixed ones. Off by default because it is the one destructive direction, and a company mid-edit looks exactly like a company that removed a seat.
+- **`-decommission`** (explicit, never default) deletes managed service accounts whose seats have left the config. It considers only members of `provisioning.group` whose username starts with `<username_prefix>-` (`crewlet-` when the prefix is unset), so an account without that prefix is never touched. Off by default because it is the one destructive direction, and a company mid-edit looks exactly like a company that removed a seat.
 
 A run that changed nothing still says so: the report names the seats it **kept**, because a report listing only changes reads as a run that did nothing — and the operator's next move would be to reach for `-rotate`, which is exactly the outage above.
 
