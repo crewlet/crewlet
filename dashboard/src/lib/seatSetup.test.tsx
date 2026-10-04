@@ -52,6 +52,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  vi.unstubAllGlobals();
 });
 
 function probe() {
@@ -97,4 +98,77 @@ test("a reader holding config:read is read", async () => {
   await settle();
   expect(asked).toContain("config");
   expect(reading().state).toBe("read");
+});
+
+// A LEAD READS WHAT THEY LEAD through the per-seat and per-unit reads the
+// engine admits them, never the whole document they may not read: the seat,
+// and its unit's own fields, whose credentials the seat inherits.
+test("a lead of the seat's unit reads the seat and its unit, and never the document", async () => {
+  vi.mocked(useViewer).mockReturnValue({ ...READER, handle: "boss", unbound: false });
+  const paths: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input)).pathname;
+      paths.push(path);
+      const body =
+        path === "/config/roles/pm"
+          ? { name: "PM", handle: "pm", goal: "Plan" }
+          : {
+              id: "product",
+              name: "Product",
+              mcp_env: { tracker: { TOKEN: "${TRACKER}" } },
+              roles: [{ name: "PM", handle: "pm" }],
+            };
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ETag: '"r1"' },
+      });
+    }),
+  );
+  const store = new Store();
+  store.applyOrg({
+    name: "Acme",
+    units: [
+      { id: "product", name: "Product", lead: "boss", roles: [{ name: "PM", handle: "pm" }] },
+    ],
+    derived: {
+      seats: [],
+      units: [
+        {
+          id: "product",
+          name: "Product",
+          type: "unit",
+          lead: "boss",
+          lead_inherited: false,
+          channel: "",
+          channel_inherited: false,
+          seats: ["pm"],
+        },
+      ],
+    },
+  });
+  const socket = new LiveSocket(store);
+  const asked: string[] = [];
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
+    asked.push(what);
+    return Promise.resolve({});
+  };
+  let seen: ReturnType<typeof useSeatSetup> | undefined;
+  function Reader() {
+    seen = useSeatSetup("pm");
+    return null;
+  }
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Reader />
+    </ClientContext.Provider>,
+  );
+  await vi.waitFor(() => expect(seen!.reading.state).toBe("read"));
+  expect(asked).not.toContain("config");
+  expect([...paths].sort()).toEqual(["/config/roles/pm", "/config/units/product"]);
+  const reading = seen!.reading;
+  if (reading.state !== "read") throw new Error(reading.state);
+  expect(reading.role.goal).toBe("Plan");
+  expect(reading.unit?.mcp_env).toEqual({ tracker: { TOKEN: "${TRACKER}" } });
 });

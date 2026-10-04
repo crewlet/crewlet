@@ -38,6 +38,14 @@
  * lose the very change the conflict was about. [readyToUpdate] reads the
  * active document and accepts it only when it is the conflict's revision or a
  * descendant of it.
+ *
+ * A LEAD READS NO REVISION HISTORY. `GET /config/revisions/{id}` is
+ * `config:read`'s, which a lead editing their unit (`scope.ts`) does not
+ * hold, so neither walk is open to them. Their lost answer is settled by
+ * reading the unit back ([settleUnknownWrite]), and their update accepts the
+ * unit the node serves now, which a node that is behind can only make an
+ * older one — and an update onto an older revision ends at the save, whose
+ * `If-Match` the engine refuses, rather than in a lost change.
  */
 
 import type {
@@ -48,13 +56,14 @@ import type {
   WriteResult,
 } from "~/protocol/index.ts";
 import { classifyConfigRefusal } from "~/protocol/configAnswer.ts";
-import { isRecord } from "./json.ts";
+import { isRecord, jsonEqual } from "./json.ts";
 import type { KeySource } from "./keys.ts";
 import { fromDocument, toDocument } from "./document.ts";
 import { classifyCheck, type CheckOutcome } from "./scheduler.ts";
 import {
   checkRequest,
   revisionOfEtag,
+  scopedUnit,
   type BuilderMode,
   type ConfigTransport,
   type HttpAnswer,
@@ -98,6 +107,8 @@ export interface SaveAttempt {
   readonly mode: BuilderMode;
   /** The revision the draft was built on; `null` in create mode. */
   readonly baseRevision: string | null;
+  /** The unit a lead's draft is about; `null` for the whole company. */
+  readonly scope: string | null;
 }
 
 /** What a save's answer means. */
@@ -198,13 +209,36 @@ export type Settlement =
  * stops at the first revision whose parent is the draft's base (in create
  * mode, the first revision of all), which is the only place this write can
  * sit, and gives up as unknown past [UPDATE_ANCESTRY_LIMIT].
+ *
+ * A LEAD'S SAVE is settled by reading the unit back instead (see the module
+ * doc): the base revision still active did not take it; the unit as `sent`
+ * at a newer revision is this save; anything else is a newer company, which
+ * the update flow rebases onto — finding each change of this save already
+ * there, if it landed under a colleague's. A save a previous visit sent comes
+ * with no `sent` and is always that newer company: its kept log is offered as
+ * an update rather than settled by a guess.
  */
 export async function settleUnknownWrite(
   transport: ConfigTransport,
   attempt: SaveAttempt,
   currentRevisionId: string | null,
   signal: AbortSignal,
+  /** The document the save sent, for a lead's save; unread otherwise. */
+  sent: CompanyDocument | null = null,
 ): Promise<Settlement> {
+  if (attempt.scope !== null) {
+    const answer = await transport.current(signal);
+    if (answer.status !== 200 || !isRecord(answer.body))
+      return { kind: "unknown", detail: unanswered(answer) };
+    const current = revisionOfEtag(answer.etag);
+    if (current === null)
+      return { kind: "unknown", detail: "The engine did not name its active revision." };
+    if (current === attempt.baseRevision) return { kind: "not_landed", currentRevisionId: current };
+    const read = scopedUnit(answer.body as CompanyDocument);
+    return sent !== null && jsonEqual(read, scopedUnit(sent))
+      ? { kind: "landed", revisionId: current, activeRevisionId: current }
+      : { kind: "not_landed", currentRevisionId: current };
+  }
   let current = currentRevisionId;
   if (current === null) {
     const answer = await transport.current(signal);
@@ -279,11 +313,11 @@ export type UpdateReadiness =
       readonly document: CompanyDocument;
       /**
        * The engine's derivation of that document, from a dry run of it with no
-       * changes. The draft is rebased onto nodes keyed by the engine's handles,
-       * and without it a seat declaring no handle could only be keyed by its
-       * path, which names nothing the log recorded.
+       * changes, kept as the base's own for the review to compare against.
+       * `null` for a lead's draft, whose dry run of an unchanged unit the
+       * engine refuses; the next check of the draft describes it.
        */
-      readonly derived: Derived;
+      readonly derived: Derived | null;
     }
   /** The node still serves the draft's base or an older revision. */
   | { readonly kind: "behind" }
@@ -298,6 +332,8 @@ export async function readyToUpdate(
   transport: ConfigTransport,
   conflict: { readonly baseRevision: string; readonly conflictRevisionId: string | null },
   signal: AbortSignal,
+  /** The unit a lead's draft is about; `null` for the whole company. */
+  scope: string | null = null,
 ): Promise<UpdateReadiness> {
   const answer = await transport.current(signal);
   if (answer.status !== 200 || !isRecord(answer.body))
@@ -307,6 +343,7 @@ export async function readyToUpdate(
     return { kind: "unknown", detail: "The engine did not name its active revision." };
   const document = answer.body as CompanyDocument;
   if (active === conflict.baseRevision) return { kind: "behind" };
+  if (scope !== null) return { kind: "ready", revisionId: active, document, derived: null };
   const target = conflict.conflictRevisionId;
   let descends = target === null || active === target;
 
@@ -327,6 +364,7 @@ export async function readyToUpdate(
     baseRevision: active,
     base: document,
     sent: toDocument(fromDocument(document)),
+    scope: null,
   });
   const checked = classifyCheck(await transport.send(request, signal), "edit", active);
   if ((checked.status === "clean" || checked.status === "problems") && checked.derived) {

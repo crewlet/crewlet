@@ -19,7 +19,8 @@
  * diff of what they changed (the saved revision against its parent, never
  * against the active revision, which the save now is), and the company as
  * YAML, which is what keeps a `company.yaml` in a repository in step with what
- * the dashboard wrote.
+ * the dashboard wrote. Both read the company document, so a lead who saved
+ * their unit without `config:read` is offered neither.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -27,6 +28,7 @@ import { href } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useEngineHealth } from "~/lib/store-hooks.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { rest, RestError, type FleetAnswer } from "~/protocol/index.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import { useRecheck } from "~/routes/settings/recheck.ts";
@@ -165,6 +167,7 @@ export function AfterSaveStrip({
   onDismiss: () => void;
 }) {
   const [yaml, setYaml] = useState(false);
+  const readsCompany = useViewer().grants.includes("config:read");
   const [pollMs, setPollMs] = useState<number | undefined>(APPLYING_POLL_MS);
   const health = useEngineHealth();
   const fleet = useQuery("fleet", undefined, { pollMs });
@@ -197,7 +200,7 @@ export function AfterSaveStrip({
         }
         action={
           <span className="row gap-1 wrap">
-            {saved.parentRevisionId ? (
+            {!readsCompany ? null : saved.parentRevisionId ? (
               <ButtonLink
                 size="small"
                 variant="ghost"
@@ -216,9 +219,11 @@ export function AfterSaveStrip({
                 View the configuration
               </ButtonLink>
             )}
-            <Button size="small" variant="ghost" onClick={() => setYaml(true)}>
-              Copy as YAML
-            </Button>
+            {readsCompany && (
+              <Button size="small" variant="ghost" onClick={() => setYaml(true)}>
+                Copy as YAML
+              </Button>
+            )}
             {state.showFleet && (
               <ButtonLink size="small" variant="ghost" href={href(screenPath("nodes"))}>
                 Open the fleet

@@ -108,6 +108,7 @@ import { COMPANY_KEY, isMintedKey, mintKey, type NodeKey } from "./model/keys.ts
 import { kindOf, type EditPartIntent } from "./model/operations.ts";
 import type { PlacedProblem } from "./model/problems.ts";
 import { recordIntent } from "./model/reducer.ts";
+import { scopeLimit } from "./model/scope.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
 import { datadogEnabled, datadogFallback } from "./chartModel.ts";
 import {
@@ -529,8 +530,10 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
   const { refusal, apply } = useApply(api, COMPANY_KEY, onClose);
   const [acknowledged, setAcknowledged] = useState(false);
   const { errorFor, rest } = placeOnFields(placedOn(api, COMPANY_KEY), COMPANY_FIELDS);
-
-  const disabled = api.readOnly;
+  // A LEAD'S DRAFT of one unit holds the company's name and nothing else of
+  // it: the charter is shown, and changing it is the company grant's.
+  const limit = scopeLimit(state.scope, state.draft, COMPANY_KEY, "edit");
+  const disabled = api.readOnly || limit !== null;
 
   // ASKED OF THE FORM THAT RENAMES, AND ONLY THEN. The question is about what
   // this Apply does, so a name nobody typed in (a draft renamed by an earlier
@@ -542,11 +545,12 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
   const renaming =
     savedName !== "" && renames(initial.name, form.name) && form.name.trim() !== savedName;
   const blocked =
-    form.name.trim() === ""
+    limit ??
+    (form.name.trim() === ""
       ? "The company needs a name."
       : renaming && !acknowledged
         ? "Confirm what renaming the company does."
-        : null;
+        : null);
 
   return (
     <EditorShell
@@ -660,6 +664,9 @@ function UnitEditor({
   const { refusal, apply } = useApply(api, key, onClose);
   const { errorFor, rest } = placeOnFields(placedOn(api, key), unitFieldPaths(unit.data));
   const disabled = api.readOnly;
+  // A LEAD'S OWN UNIT keeps its lead, which decides who may change the unit
+  // (`model/scope.ts`); every other field stays theirs to edit.
+  const leadLimit = scopeLimit(state.scope, state.draft, key, "lead");
 
   // What the unit inherits when it declares nothing: the lead and channel the
   // unit above it resolved to, as the last check reported them.
@@ -760,9 +767,12 @@ function UnitEditor({
           choices={leadChoices}
           value={form.lead}
           onChange={(lead) => set({ lead })}
-          disabled={disabled}
+          disabled={disabled || leadLimit !== null}
           autoFocus={section === "leadership"}
-          help="The lead manages the unit's direct members, and a unit below that names no lead inherits this one."
+          help={
+            leadLimit ??
+            "The lead manages the unit's direct members, and a unit below that names no lead inherits this one."
+          }
           error={errorFor(["lead"])}
         />
         <ConfigField

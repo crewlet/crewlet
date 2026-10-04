@@ -133,6 +133,20 @@ describe("placeProblems", () => {
     expect(created.byNode.get("seat:ceo")).toHaveLength(1);
   });
 
+  // A PART OF A LEAD'S WRITE THE ENGINE REFUSED names a unit by its KEY,
+  // where a validation problem names one by its name and carries its path.
+  test("a refused part naming a unit is placed on the unit with that key", () => {
+    const { sent } = sentFixture();
+    const index = placeProblems(sent, {
+      problems: [
+        problem(null, { kind: "refused", unit: "platform" }),
+        problem(null, { unit: "platform" }),
+      ],
+    });
+    expect(index.byNode.get("unit:platform")).toHaveLength(1);
+    expect(index.document).toHaveLength(1);
+  });
+
   test("warnings are placed the same way and counted apart from problems", () => {
     const { sent } = sentFixture();
     const index = placeProblems(sent, {

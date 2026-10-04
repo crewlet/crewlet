@@ -12,7 +12,8 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import type { BudgetWindow, BudgetsAnswer } from "~/protocol/index.ts";
+import type { BudgetWindow, BudgetsAnswer, OrgProjection } from "~/protocol/index.ts";
+import { CHART_ORG } from "~/test/orgchart.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -51,10 +52,31 @@ const BUDGETS: BudgetsAnswer = {
   seats: [{ agent_id: "a", role: "DevRel", handle: "devrel", windows: [day()] }],
 };
 
-function mount(own: BudgetWindow | undefined, orgRefusing: boolean) {
+/** An administrator, who holds every grant. */
+const ADMIN = {
+  login: "U0",
+  grants: [
+    "config:read",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "audit:read",
+    "state:read",
+    "work:write",
+    "knowledge:write",
+  ],
+  handle: "jane",
+  owner: "jane",
+  name: "Jane",
+  kind: "human",
+};
+
+function mount(own: BudgetWindow | undefined, orgRefusing: boolean, viewer: unknown = ADMIN) {
   const store = new Store();
   store.applyHealth({ status: "healthy" });
   store.setConnected(true);
+  store.applyOrg(CHART_ORG as OrgProjection);
   store.applyBudget({
     meter_id: "n:1",
     seq: 1,
@@ -66,24 +88,7 @@ function mount(own: BudgetWindow | undefined, orgRefusing: boolean) {
     what === "budgets"
       ? Promise.resolve(BUDGETS)
       : what === "viewer"
-        ? Promise.resolve({
-            login: "U0",
-            grants: [
-              "config:read",
-              "config:write",
-              "secrets:write",
-              "fleet:operate",
-              "people:manage",
-              "audit:read",
-              "state:read",
-              "work:write",
-              "knowledge:write",
-            ],
-            handle: "jane",
-            owner: "jane",
-            name: "Jane",
-            kind: "human",
-          })
+        ? Promise.resolve(viewer)
         : new Promise(() => {});
   render(
     <ClientContext.Provider value={{ store, socket }}>
@@ -121,6 +126,24 @@ test("it raises the seat's own ceiling when the seat's window is the one refusin
   await open();
   expect(screen.getByRole("dialog", { name: "Raise DevRel's budget" })).toBeTruthy();
   expect(document.activeElement).toBe(screen.getByLabelText(/Daily ceiling/));
+});
+
+// A LEAD RAISES THE SEATS THEY LEAD, and never the company's ceiling: a
+// seat's ceiling is no credential, and the engine admits a lead's write of a
+// seat inside the units they lead.
+test("a lead raises a seat they lead, and is told the company's ceiling is not theirs", async () => {
+  const pm = { ...ADMIN, login: "pm.person", grants: ["state:read"], handle: "pm", owner: "pm" };
+  mount(day(), true, pm);
+  await settle();
+  const seat = screen.getByRole("button", { name: "Raise budget" });
+  expect(seat.getAttribute("title")).toBeNull();
+  cleanup();
+
+  mount(undefined, true, pm);
+  await settle();
+  expect(screen.getByRole("button", { name: "Raise budget" }).getAttribute("title")).toBe(
+    "You lead Management and Developer Relations, and this is outside them: changing it takes the config:write grant.",
+  );
 });
 
 test("it raises the company's when only the company's window is refusing", async () => {

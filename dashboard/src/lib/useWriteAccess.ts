@@ -40,6 +40,7 @@
  */
 
 import { createContext, createElement, useContext, type ReactNode } from "react";
+import { useLeadScope, type LeadScope } from "./leadScope.ts";
 import { useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import type { ActionTool } from "~/protocol/act.ts";
@@ -151,7 +152,8 @@ export function menuHold(access: WriteAccess): { disabled?: boolean; description
  * ask for is the transport's to replay (`protocol/rest.ts`), not a block: a
  * person asked to confirm who they are can, on the spot.
  */
-export type ConfigWriteBlock = "offline" | "loading" | "anonymous" | "no_grant" | "held";
+export type ConfigWriteBlock =
+  "offline" | "loading" | "anonymous" | "no_grant" | "outside_scope" | "held";
 
 export type ConfigWriteAccess =
   { can: true } | { can: false; block: ConfigWriteBlock; reason: string };
@@ -160,7 +162,9 @@ export type ConfigWriteAccess =
 export const CONFIG_WRITE_GRANT = "config:write";
 
 /** The sentence each block is shown as — every block but a [HoldWrites]'. */
-export const CONFIG_WRITE_REASONS: Readonly<Record<Exclude<ConfigWriteBlock, "held">, string>> = {
+export const CONFIG_WRITE_REASONS: Readonly<
+  Record<Exclude<ConfigWriteBlock, "held" | "outside_scope">, string>
+> = {
   offline: WRITE_REASONS.offline,
   loading: WRITE_REASONS.loading,
   anonymous: "Sign in to change the company's configuration.",
@@ -191,7 +195,9 @@ export function configWriteAccess(
   connected: boolean,
   held: string | null = null,
 ): ConfigWriteAccess {
-  const blocked = (block: Exclude<ConfigWriteBlock, "held">): ConfigWriteAccess => ({
+  const blocked = (
+    block: Exclude<ConfigWriteBlock, "held" | "outside_scope">,
+  ): ConfigWriteAccess => ({
     can: false,
     block,
     reason: CONFIG_WRITE_REASONS[block],
@@ -210,4 +216,66 @@ export function useConfigWriteAccess(): ConfigWriteAccess {
   const { connected } = useConnection();
   const held = useContext(Held);
   return configWriteAccess(viewer, connected, held);
+}
+
+// ---------------------------------------------------------------------------
+// A change to one part of the org chart
+// ---------------------------------------------------------------------------
+
+/**
+ * What a change to the org chart is about: one seat (by handle), one unit (by
+ * key), ANYWHERE a lead could make one — the builder itself, or adding a seat
+ * to the unit they lead — or the COMPANY itself (its own ceilings, its
+ * settings), which is never a lead's.
+ */
+export type OrgTarget =
+  { readonly seat: string } | { readonly unit: string } | "anywhere" | "company";
+
+/**
+ * The sentence a lead reads where a change reaches outside what they lead:
+ * which units those are, and the grant that reaches the rest.
+ */
+export function outsideScopeReason(scope: LeadScope): string {
+  const names = scope.tops.map((t) => t.name);
+  const led =
+    names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  return `You lead ${led}, and this is outside ${names.length === 1 ? "it" : "them"}: changing it takes the config:write grant.`;
+}
+
+/**
+ * Whether this browser may change one part of the org chart, and why not.
+ *
+ * THE COMPANY'S GRANT, OR A LEAD INSIDE THEIR OWN SUBTREE — the engine's rule
+ * (`lib/leadScope.ts`): without `config:write`, a person may still change the
+ * seats and units inside a unit they lead, through the per-seat and per-unit
+ * writes (`/config/roles/{handle}`, `/config/units/{key}`), and the engine
+ * refuses whatever such a write reaches outside it. A control about a seat
+ * or a unit OUTSIDE what they lead says so in its own words rather than as a
+ * missing grant, since the person may well know they lead something.
+ */
+export function orgWriteAccess(
+  viewer: ViewerState,
+  connected: boolean,
+  scope: LeadScope,
+  target: OrgTarget,
+  held: string | null = null,
+): ConfigWriteAccess {
+  const company = configWriteAccess(viewer, connected, held);
+  if (company.can || company.block !== "no_grant" || scope.tops.length === 0) return company;
+  const inside =
+    target === "anywhere" ||
+    (target !== "company" &&
+      ("seat" in target ? scope.seats.has(target.seat) : scope.units.has(target.unit)));
+  if (!inside) return { can: false, block: "outside_scope", reason: outsideScopeReason(scope) };
+  if (held) return { can: false, block: "held", reason: held };
+  return { can: true };
+}
+
+/** [orgWriteAccess] for the person reading, now. */
+export function useOrgWriteAccess(target: OrgTarget): ConfigWriteAccess {
+  const viewer = useViewer();
+  const { connected } = useConnection();
+  const held = useContext(Held);
+  const scope = useLeadScope();
+  return orgWriteAccess(viewer, connected, scope, target, held);
 }

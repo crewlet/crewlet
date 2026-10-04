@@ -90,6 +90,22 @@ const text = (value: unknown): string => (typeof value === "string" ? value : ""
 export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
   const body = isRecord(answer.body) ? answer.body : {};
   const code = text(body.error);
+  // A WRITE REFUSED PART BY PART. Without `config:write` the engine admits a
+  // write only where everything it changes is inside a unit the caller leads,
+  // and its refusal names each part that is not (`refused`,
+  // `configapi.RefusedChange`): the caller holds what they need for the rest,
+  // so it is a problem with the draft, placed on each seat and unit it names,
+  // and not a refusal of the person.
+  const refused = Array.isArray(body.refused) ? body.refused.filter(isRecord) : [];
+  if (answer.status === 403 && refused.length > 0) {
+    return {
+      kind: "problems",
+      problems: refused.map(refusedProblem),
+      derived: null,
+      code,
+      hint: text(body.hint),
+    };
+  }
   if (answer.status === 401 || answer.status === 403) return { kind: "guarded", code };
   // A 409 THAT IS NOT A RACE. `seat_held` refuses a write taking a human seat
   // out of the company while somebody is bound to it: nothing about it moves
@@ -137,6 +153,60 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
     code,
     hint: text(body.hint),
   };
+}
+
+/**
+ * One part of a write the caller may not make, as a problem about the seat or
+ * the unit it is (`seat` by handle, `unit` by KEY — where a validation
+ * problem's `unit` is the unit's name, its kind `refused` says which) or
+ * about the company.
+ */
+function refusedProblem(entry: Record<string, unknown>): ConfigProblem {
+  const kind = text(entry.kind);
+  const id = text(entry.id);
+  return {
+    path: "",
+    segments: null,
+    kind: "refused",
+    ...(kind === "seat" ? { seat: id } : {}),
+    ...(kind === "unit" ? { unit: id } : {}),
+    message: refusedSentence(entry),
+  };
+}
+
+/** What a refused part says, by WHY the engine refused it. */
+export function refusedSentence(entry: Record<string, unknown>): string {
+  const kind = text(entry.kind);
+  const id = text(entry.id);
+  const value = text(entry.value);
+  const place = text(entry.place);
+  const op = text(entry.op) || "changed";
+  const grant = "takes the config:write grant";
+  const subject = kind === "seat" ? `@${id}` : `Unit ${id}`;
+  const where = place ? `in ${place}` : "at the company's top level";
+  if (kind === "document") {
+    return `This write changes nothing, and storing the company as it is ${grant}.`;
+  }
+  if (kind === "setting") return `The company's ${id} setting ${grant}.`;
+  switch (text(entry.why)) {
+    case "credential":
+      return `${subject}: ${value} is a credential, and setting, changing or clearing one ${grant}.`;
+    case "key":
+      return `${subject}: ${value} is how another system finds it, and changing it ${grant}.`;
+    case "self":
+      return `${subject}'s own lead and place decide who may change it, so changing them ${grant}.`;
+    case "lead":
+      return `${subject}'s lead would be a seat ${where}, outside the units you lead.`;
+    case "manages":
+      return `${subject} would manage ${value}, ${where}, outside the units you lead.`;
+    case "named":
+    case "duplicate":
+      return `${subject} would name ${value}, ${where}, outside the units you lead.`;
+    default:
+      return text(entry.side) === "after"
+        ? `${subject} would sit ${where}, outside the units you lead.`
+        : `${subject} sits ${where}, outside the units you lead, so it cannot be ${op} here.`;
+  }
 }
 
 /**

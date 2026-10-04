@@ -44,6 +44,7 @@ export function prepareCheck(state: BuilderState, generation: number): PreparedC
       baseRevision: state.base.revision,
       base: state.base.document,
       sent,
+      scope: state.scope,
     }),
     sent,
     mode: state.mode,

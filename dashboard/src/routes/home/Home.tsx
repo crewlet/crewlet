@@ -44,6 +44,7 @@ import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-h
 import { Kpis } from "./Kpis.tsx";
 import { Decisions } from "./Decisions.tsx";
 import { seatConditionsOf, seatDecisionsFor } from "~/components/DecisionRow.tsx";
+import { useLeadScope } from "~/lib/leadScope.ts";
 import { conditionKey, conditionsToDecide } from "~/lib/attention.ts";
 import { LiveNow } from "./LiveNow.tsx";
 import { CompletedChart } from "./CompletedChart.tsx";
@@ -99,7 +100,11 @@ export function Home() {
   // THE STOPPED SEATS, SPLIT BY WHO CAN ACT: the ones this reader can raise
   // or hand on are decisions waiting on them; the rest are conditions they
   // can see and nothing more. See `seatDecisionsFor`.
-  const seats = useMemo(() => seatDecisionsFor(seatConditionsOf(agents), viewer), [agents, viewer]);
+  const leads = useLeadScope().seats;
+  const seats = useMemo(
+    () => seatDecisionsFor(seatConditionsOf(agents), viewer, leads),
+    [agents, viewer, leads],
+  );
   // WHAT WAITS ON THE READER: the engine's count of their asks and parked
   // runs, and the stopped seats they can act on. Unknown — nobody signed in,
   // or not answered yet — is null, never zero.

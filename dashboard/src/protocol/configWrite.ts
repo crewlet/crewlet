@@ -55,15 +55,18 @@ export async function answerOf(call: Promise<RestResponse>): Promise<ConfigAnswe
 }
 
 /**
- * One whole-document write or dry run, as a caller built it. Always to
- * `/config` itself: an entity write is [putEntity]'s, with its own path.
+ * One request as a caller built it: a whole-document write or dry run to
+ * `/config`, or — the org builder's lead mode — a read, write or dry run of
+ * one unit at its own path.
  */
 export interface ConfigWriteRequest {
-  readonly method: "PUT" | "PATCH";
+  readonly method: "GET" | "PUT" | "PATCH";
+  readonly path: string;
   readonly query: Readonly<Record<string, QueryValue>>;
   readonly contentType: string;
   readonly headers: Readonly<Record<string, string>>;
-  readonly body: unknown;
+  /** Absent on a read. */
+  readonly body?: unknown;
 }
 
 /**
@@ -73,11 +76,11 @@ export interface ConfigWriteRequest {
 export const configTransport = {
   send: (request: ConfigWriteRequest, signal: AbortSignal): Promise<ConfigAnswer> =>
     answerOf(
-      rest.request(request.method, "/config", {
+      rest.request(request.method, request.path, {
         query: request.query,
-        contentType: request.contentType,
+        ...(request.method === "GET" ? {} : { contentType: request.contentType }),
         headers: request.headers,
-        body: request.body,
+        ...(request.body === undefined ? {} : { body: request.body }),
         signal,
       }),
     ),
@@ -166,6 +169,7 @@ export async function dryRunPatch(
     await configTransport.send(
       {
         method: "PATCH",
+        path: "/config",
         query: { dry_run: "true" },
         contentType: "application/merge-patch+json",
         headers: { "If-Match": etag },
@@ -187,6 +191,7 @@ export async function savePatch(
     await configTransport.send(
       {
         method: "PATCH",
+        path: "/config",
         query: {},
         contentType: "application/merge-patch+json",
         headers: { "If-Match": etag },

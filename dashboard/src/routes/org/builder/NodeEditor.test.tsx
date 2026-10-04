@@ -28,6 +28,7 @@ import {
   checkWithWarnings,
   keyedState,
   problemAt,
+  scopedState,
   warningAt,
 } from "./testState.ts";
 import { Callout } from "@crewlethq/ui";
@@ -205,6 +206,40 @@ describe("applying", () => {
 
     edit(keyedState(connected()), "seat:dev", readOnly);
     expect(enabled()).toEqual([]);
+  });
+});
+
+// A LEAD'S DRAFT OF ONE UNIT (`model/scope.ts`): the company's charter and
+// the unit's own lead are outside what they lead, and say so where they are
+// drawn; everything else about the unit, and a unit inside it, is theirs.
+describe("a lead's draft of one unit", () => {
+  const disabled = (el: HTMLElement) =>
+    (el as HTMLInputElement).disabled || el.getAttribute("aria-disabled") === "true";
+
+  test("the charter is for reading, with the reason", () => {
+    edit(scopedState(fixtureCompany(), "engineering"), COMPANY_KEY);
+    expect(disabled(field("Company name"))).toBe(true);
+    expect(applyRefuses()).toBe(true);
+    expect(
+      shownReason(
+        "The company's charter and settings are not part of Engineering: changing them takes the config:write grant.",
+      ),
+    ).toBeDefined();
+  });
+
+  test("the unit's own lead is fixed, and a unit inside it chooses its own", () => {
+    edit(scopedState(fixtureCompany(), "engineering"), "unit:engineering");
+    expect(disabled(field("Lead"))).toBe(true);
+    expect(
+      screen.getByText(
+        "Engineering's own lead decides who may change it, so changing it takes the config:write grant.",
+      ),
+    ).toBeDefined();
+    expect(disabled(field("Purpose"))).toBe(false);
+    cleanup();
+
+    edit(scopedState(fixtureCompany(), "engineering"), "unit:platform");
+    expect(disabled(field("Lead"))).toBe(false);
   });
 });
 

@@ -2,8 +2,9 @@
  * Keeping the operator's work across a reload of the tab.
  *
  * ONLY THE LOG IS KEPT. One key, `crewlet_org_draft`, holds
- * `{ v, mode, baseRevision, ops, undone, savedAt }`, and `write` while a save
- * of that log is out, and nothing else: never the base document, the draft
+ * `{ v, mode, baseRevision, ops, undone, savedAt }`, `write` while a save
+ * of that log is out, and `scope` for a lead's draft of one unit (`scope.ts`),
+ * and nothing else: never the base document, the draft
  * or the problems. The document holds contact
  * identities, emails, policies and `${VAR}` names; kept in storage it would
  * outlive the operator's session and be offered to whoever uses the tab next.
@@ -102,6 +103,12 @@ export interface KeptDraft {
    * otherwise. See the module doc.
    */
   readonly write?: string;
+  /**
+   * The unit a lead's draft was about, by key; absent for the whole company.
+   * A log replays onto the document it was recorded against, and a unit's
+   * draft is not the company's, nor another unit's.
+   */
+  readonly scope?: string;
 }
 
 export type KeepResult = "kept" | "cleared" | "too_large" | "refused" | "unavailable";
@@ -194,15 +201,18 @@ export type RestoreOffer =
       readonly kind: "discard_mode_changed";
       readonly kept: BuilderMode;
       readonly loaded: BuilderMode;
-    };
+    }
+  /** The draft was made of another part of the organization: discard it and say so. */
+  | { readonly kind: "discard_scope_changed" };
 
 /** Decides what a restored draft offers against the company as loaded. */
 export function restoreOffer(
   kept: KeptDraft,
-  loaded: { mode: BuilderMode; revision: string | null },
+  loaded: { mode: BuilderMode; revision: string | null; scope: string | null },
 ): RestoreOffer {
   if (kept.mode !== loaded.mode)
     return { kind: "discard_mode_changed", kept: kept.mode, loaded: loaded.mode };
+  if ((kept.scope ?? null) !== loaded.scope) return { kind: "discard_scope_changed" };
   if (
     kept.mode === "edit" &&
     kept.baseRevision !== loaded.revision &&
@@ -222,10 +232,12 @@ export function restoreOffer(
 export function parseKeptDraft(value: unknown): KeptDraft | undefined {
   if (
     !isRecord(value) ||
-    !exactKeys(value, ["v", "mode", "baseRevision", "ops", "undone", "savedAt"], ["write"])
+    !exactKeys(value, ["v", "mode", "baseRevision", "ops", "undone", "savedAt"], ["write", "scope"])
   )
     return undefined;
   if (value.write !== undefined && !isWriteId(value.write)) return undefined;
+  if (value.scope !== undefined && (value.mode !== "edit" || !isNonEmptyString(value.scope)))
+    return undefined;
   if (value.v !== OPERATIONS_VERSION) return undefined;
   if (value.mode !== "edit" && value.mode !== "create") return undefined;
   if (value.mode === "edit" ? !isNonEmptyString(value.baseRevision) : value.baseRevision !== null)
@@ -479,6 +491,7 @@ export function isOperation(v: unknown): v is Operation {
 /** The builder state persistence reads. */
 export interface PersistableState {
   readonly mode: BuilderMode;
+  readonly scope: string | null;
   readonly baseRevision: string | null;
   readonly log: Log;
   /** False from a change of reader or a refused check until the next operation. */
@@ -509,6 +522,7 @@ export function persistencePlan(state: PersistableState, now: number): Persisten
       undone: state.log.undone,
       savedAt: now,
       ...(state.write !== null ? { write: state.write } : {}),
+      ...(state.scope !== null ? { scope: state.scope } : {}),
     },
   };
 }

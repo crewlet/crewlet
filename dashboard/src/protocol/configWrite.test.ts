@@ -51,6 +51,7 @@ test("a refusal resolves with the engine's status and body", async () => {
   const answer = await configTransport.send(
     {
       method: "PATCH",
+      path: "/config",
       query: { dry_run: "true" },
       contentType: "application/merge-patch+json",
       headers: { "If-Match": '"r1"' },
@@ -102,6 +103,7 @@ test("the dry run and the save carry exactly the request the model built", async
   await configTransport.send(
     {
       method: "PUT",
+      path: "/config",
       query: { dry_run: "true" },
       contentType: "application/json",
       headers: { "If-None-Match": "*" },
@@ -307,6 +309,64 @@ describe("one reading of a /config refusal", () => {
       kind: "problems",
       problems: [{ kind: "seat_held", message: "held" }],
     });
+  });
+
+  // A LEAD'S WRITE IS REFUSED PART BY PART. The engine names each part that
+  // reaches outside what the caller leads (`refused`), and the caller holds
+  // what they need for the rest: a problem per part, on the seat or unit it
+  // is, not a refusal of the person.
+  test("a write refused part by part is a problem on each seat and unit it names", () => {
+    const refusal = classifyConfigRefusal({
+      status: 403,
+      body: {
+        error: "unauthorized",
+        refused: [
+          {
+            kind: "seat",
+            id: "qa",
+            side: "after",
+            place: "sales",
+            why: "manages",
+            value: "seller",
+          },
+          { kind: "unit", id: "platform", side: "after", place: "platform", why: "self" },
+          { kind: "unit", id: "tooling", why: "key", value: "project" },
+          { kind: "setting", id: "mission" },
+        ],
+      },
+    });
+    expect(refusal).toMatchObject({ kind: "problems", code: "unauthorized", derived: null });
+    if (refusal.kind !== "problems") throw new Error(refusal.kind);
+    expect(refusal.problems.map((p) => [p.kind, p.seat, p.unit, p.message])).toEqual([
+      [
+        "refused",
+        "qa",
+        undefined,
+        "@qa would manage seller, in sales, outside the units you lead.",
+      ],
+      [
+        "refused",
+        undefined,
+        "platform",
+        "Unit platform's own lead and place decide who may change it, so changing them takes the config:write grant.",
+      ],
+      [
+        "refused",
+        undefined,
+        "tooling",
+        "Unit tooling: project is how another system finds it, and changing it takes the config:write grant.",
+      ],
+      [
+        "refused",
+        undefined,
+        undefined,
+        "The company's mission setting takes the config:write grant.",
+      ],
+    ]);
+    // A 403 naming no part is a refusal of the person, as before.
+    expect(
+      classifyConfigRefusal({ status: 403, body: { error: "unauthorized", refused: [] } }),
+    ).toEqual({ kind: "guarded", code: "unauthorized" });
   });
 
   test("a refusal with no problems of its own gets one from its detail", () => {

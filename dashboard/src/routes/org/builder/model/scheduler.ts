@@ -49,13 +49,14 @@ import type { ConfigProblem, ConfigWarning, Derived, DryRunResult } from "~/prot
 import { classifyConfigRefusal, type ConfigConflictReason } from "~/protocol/configAnswer.ts";
 import type { IndexedDocument } from "./document.ts";
 import { isRecord } from "./json.ts";
-import type {
-  BuilderMode,
-  Clock,
-  CancelTimer,
-  ConfigRequest,
-  ConfigTransport,
-  HttpAnswer,
+import {
+  revisionOfEtag,
+  type BuilderMode,
+  type Clock,
+  type CancelTimer,
+  type ConfigRequest,
+  type ConfigTransport,
+  type HttpAnswer,
 } from "./transport.ts";
 
 /**
@@ -156,7 +157,10 @@ export function classifyCheck(
   if (answer.status >= 200 && answer.status < 300) {
     const body = isRecord(answer.body) ? answer.body : {};
     const result = body as Partial<DryRunResult>;
-    const answeredBase = text(result.base_revision_id);
+    // A READ ANSWERS WITH THE REVISION IT WAS READ AT, in its entity tag:
+    // a lead's unchanged draft is read rather than checked
+    // (`transport.checkRequest`), and a dry run states its base in the body.
+    const answeredBase = text(result.base_revision_id) || (revisionOfEtag(answer.etag) ?? "");
     if (
       mode === "edit" ? answeredBase !== "" && answeredBase !== baseRevision : answeredBase !== ""
     ) {

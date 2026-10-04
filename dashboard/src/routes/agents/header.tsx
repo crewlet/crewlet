@@ -37,7 +37,9 @@ import { usePeekControls, usePeek } from "~/app/frame/DetailRail.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
 import { useSchedules } from "~/lib/store-hooks.ts";
-import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { CONFIG_WRITE_GRANT, useOrgWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useLeadScope } from "~/lib/leadScope.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { handleLabel, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { unitPath } from "~/lib/orgchart.ts";
 
@@ -108,11 +110,20 @@ export function AgentsHeader({
 }) {
   const nav = useNavigator();
   // ADDING A SEAT IS A STRUCTURAL CHART WRITE, decided by the `config:write`
-  // GRANT — not by a credential's kind and not by a seat binding — so the
-  // control asks the one gate every configuration write asks
-  // (`useConfigWriteAccess`), and a reader who cannot press it is told which
-  // of offline, still being read, signed out or missing the grant is why.
-  const access = useConfigWriteAccess();
+  // GRANT — or, inside a unit the reader leads, by that lead — and never by a
+  // credential's kind or a seat binding, so the control asks the one gate
+  // every org chart write asks (`useOrgWriteAccess`), and a reader who cannot
+  // press it is told which of offline, still being read, signed out or
+  // missing the grant is why. A lead adds to the first unit they lead, since
+  // nothing at the company's top level is theirs.
+  const access = useOrgWriteAccess("anywhere");
+  const viewer = useViewer();
+  const scope = useLeadScope();
+  const lead = !viewer.grants.includes(CONFIG_WRITE_GRANT) ? scope.tops[0] : undefined;
+  const addHref = href(
+    ["agents", "edit"],
+    lead ? { unit: lead.key, add: "agent" } : { add: "agent" },
+  );
   // ON A PHONE, Edit org FOLDS INTO "More": the bar keeps the finder and the
   // one action the chart invites in view, where the three side by side put
   // Add seat past the window's edge.
@@ -143,7 +154,7 @@ export function AgentsHeader({
         <ButtonLink
           size="small"
           variant="primary"
-          href={href(["agents", "edit"], { add: "agent" })}
+          href={addHref}
           leadingIcon={<PlusGlyph size="sm" />}
         >
           Add seat

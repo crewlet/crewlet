@@ -251,26 +251,39 @@ describe("keeping and restoring", () => {
 
 describe("restoreOffer", () => {
   test("keep or discard on the same revision, update when it moved, discard when the mode changed", () => {
-    expect(restoreOffer(kept(), { mode: "edit", revision: "rev-1" })).toEqual({
-      kind: "keep_or_discard",
-    });
-    expect(restoreOffer(kept(), { mode: "edit", revision: "rev-2" })).toEqual({
+    const edit = { mode: "edit" as const, revision: "rev-1", scope: null };
+    expect(restoreOffer(kept(), edit)).toEqual({ kind: "keep_or_discard" });
+    expect(restoreOffer(kept(), { ...edit, revision: "rev-2" })).toEqual({
       kind: "update",
       from: "rev-1",
       to: "rev-2",
     });
-    expect(restoreOffer(kept(), { mode: "create", revision: null })).toEqual({
+    expect(restoreOffer(kept(), { mode: "create", revision: null, scope: null })).toEqual({
       kind: "discard_mode_changed",
       kept: "edit",
       loaded: "create",
     });
-    expect(
-      restoreOffer(kept({ mode: "create", baseRevision: null }), {
-        mode: "edit",
-        revision: "rev-1",
-      }),
-    ).toMatchObject({
+    expect(restoreOffer(kept({ mode: "create", baseRevision: null }), edit)).toMatchObject({
       kind: "discard_mode_changed",
+    });
+  });
+
+  // A LEAD'S DRAFT IS ONE UNIT'S. Its log names that unit's nodes and was
+  // recorded against that unit's document, so it is never replayed onto the
+  // company's draft or another unit's.
+  test("a draft of one unit is offered only for that unit", () => {
+    const edit = { mode: "edit" as const, revision: "rev-1" };
+    expect(restoreOffer(kept({ scope: "platform" }), { ...edit, scope: "platform" })).toEqual({
+      kind: "keep_or_discard",
+    });
+    expect(restoreOffer(kept({ scope: "platform" }), { ...edit, scope: "tooling" })).toEqual({
+      kind: "discard_scope_changed",
+    });
+    expect(restoreOffer(kept({ scope: "platform" }), { ...edit, scope: null })).toEqual({
+      kind: "discard_scope_changed",
+    });
+    expect(restoreOffer(kept(), { ...edit, scope: "platform" })).toEqual({
+      kind: "discard_scope_changed",
     });
   });
 });
@@ -280,6 +293,7 @@ describe("persistencePlan", () => {
     const ops = everyOperation().slice(0, 2);
     const state = {
       mode: "edit" as const,
+      scope: null,
       baseRevision: "rev-1",
       log: { ops, undone: [] },
       keep: true,
@@ -295,6 +309,11 @@ describe("persistencePlan", () => {
     expect(persistencePlan({ ...state, write: "write-0001" }, 42)).toEqual({
       action: "keep",
       kept: kept({ ops, savedAt: 42, write: "write-0001" }),
+    });
+    // A lead's draft keeps the unit it is about.
+    expect(persistencePlan({ ...state, scope: "platform" }, 42)).toEqual({
+      action: "keep",
+      kept: kept({ ops, savedAt: 42, scope: "platform" }),
     });
   });
 });

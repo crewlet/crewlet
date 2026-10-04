@@ -21,6 +21,14 @@
  * its log stay on screen, the check runs again for the new reader, and a
  * refusal pauses editing rather than throwing the work away.
  *
+ * A LEAD EDITS THE UNITS THEY LEAD. A person without `config:write` who leads
+ * a unit (`lib/leadScope.ts`) is not refused here: the builder opens one unit
+ * they lead as a document of its own (`model/scope.ts`), read and written at
+ * `/config/units/{key}`, and the toolbar says which and offers the others.
+ * Until the frame knows who is reading, and what a reader who might lead
+ * leads, every answer waits as loading: a refusal read too early is a lead
+ * told they may not edit, and their kept draft forgotten with it.
+ *
  * WHAT THIS COMPONENT OWNS is everything with a lifetime: the reducer, the
  * dry-run check (`useCheck.ts`), the live region, the shortcuts, the
  * selection in the URL, the fullscreen container and which dialog is open.
@@ -55,7 +63,12 @@ import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { goSignIn } from "~/lib/session.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { CONFIG_WRITE_REASONS, configGuardedReason } from "~/lib/useWriteAccess.ts";
+import {
+  CONFIG_WRITE_GRANT,
+  CONFIG_WRITE_REASONS,
+  configGuardedReason,
+} from "~/lib/useWriteAccess.ts";
+import { useLeadScope, type LedUnit } from "~/lib/leadScope.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import type { Tone } from "@crewlethq/ui";
 import {
@@ -86,6 +99,7 @@ import {
   type CheckStatus,
 } from "./model/scheduler.ts";
 import { readyToUpdate } from "./model/writes.ts";
+import { scopedTransport } from "./model/scope.ts";
 import { UpdateDraftDialog } from "./UpdateDraftDialog.tsx";
 import { isRecord } from "./model/json.ts";
 import {
@@ -658,7 +672,52 @@ function BuilderScreen({
 
   // ---- Reading the configuration -----------------------------------------
 
-  const [read, setRead] = useState<{ answer: HttpAnswer; seq: number } | null>(null);
+  const orgName = org?.name ?? "";
+  // The store starts with an empty projection, so an empty one proves nothing
+  // until the socket has connected (and delivered its snapshot) or been
+  // refused; a projection that names a company is known however it arrived.
+  const orgKnown = connected || authRejected || orgName !== "";
+
+  // WHICH DOCUMENT THIS BUILDER EDITS: the company, or — for a reader without
+  // `config:write` who leads a unit — one unit they lead (see the module doc):
+  // the one they chose, else the one holding the node the address they
+  // arrived at names, else the first.
+  const leads = useLeadScope();
+  const writesCompany = viewer.grants.includes(CONFIG_WRITE_GRANT);
+  const undecided = viewer.asking || (!writesCompany && viewer.handle !== "" && !orgKnown);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const [arrivedAt] = useState(() => ({ unit: unitParam, seat: seatParam }));
+  const scope =
+    writesCompany || leads.tops.length === 0
+      ? null
+      : chosen !== null && leads.tops.some((t) => t.key === chosen)
+        ? chosen
+        : (leads.units.get(arrivedAt.unit) ??
+          leads.seats.get(arrivedAt.seat) ??
+          leads.tops[0]!.key);
+  const companyName = useRef(orgName);
+  companyName.current = orgName;
+  // The document a read is made of, and the one the draft's own checks and
+  // saves are about: the second follows the draft (`state.scope`), so a draft
+  // with work stays on its own unit whatever the reader is offered next.
+  const readTransport = useMemo(
+    () =>
+      scope === null ? transport : scopedTransport(transport, scope, () => companyName.current),
+    [transport, scope],
+  );
+  const draftTransport = useMemo(
+    () =>
+      state.scope === null
+        ? transport
+        : scopedTransport(transport, state.scope, () => companyName.current),
+    [transport, state.scope],
+  );
+
+  const [read, setRead] = useState<{
+    answer: HttpAnswer;
+    seq: number;
+    scope: string | null;
+  } | null>(null);
   const reading = useRef<{ seq: number; controller: AbortController } | null>(null);
   const readSeq = useRef(0);
   // A save loads the stored revision even though it names the base the draft
@@ -672,39 +731,44 @@ function BuilderScreen({
       const controller = new AbortController();
       reading.current = { seq, controller };
       if (force) forceLoad.current = true;
-      transport.current(controller.signal).then(
+      readTransport.current(controller.signal).then(
         (answer) => {
           if (reading.current?.seq !== seq) return;
           reading.current = null;
-          setRead({ answer, seq });
+          setRead({ answer, seq, scope });
         },
         () => {
           // Aborted by a newer read or by the unmount, which own the answer.
         },
       );
     },
-    [transport],
+    [readTransport, scope],
   );
 
+  // Nothing is read before it is known WHAT to read: a lead's first read of
+  // the company would only be refused.
   useEffect(() => {
+    if (undecided) return;
     load();
     return () => reading.current?.controller.abort();
-  }, [load]);
+  }, [load, undecided]);
 
-  const orgName = org?.name ?? "";
-  // The store starts with an empty projection, so an empty one proves nothing
-  // until the socket has connected (and delivered its snapshot) or been
-  // refused; a projection that names a company is known however it arrived.
-  const orgKnown = connected || authRejected || orgName !== "";
   const posture = useMemo(
     (): Posture =>
-      read
+      read && !undecided && read.scope === scope
         ? postureOf(read.answer, { known: orgKnown, name: orgName }, signedIn)
         : { kind: "loading" },
-    [read, orgKnown, orgName, signedIn],
+    [read, undecided, scope, orgKnown, orgName, signedIn],
   );
 
-  const check = useCheck({ state, stateRef, dispatch: dispatchRaw, loaded, transport, clock });
+  const check = useCheck({
+    state,
+    stateRef,
+    dispatch: dispatchRaw,
+    loaded,
+    transport: draftTransport,
+    clock,
+  });
 
   // Adopt what a read found: the company to edit, or nothing to create from.
   const adopted = useRef<{ seq: number; kind: Posture["kind"] } | null>(null);
@@ -725,14 +789,22 @@ function BuilderScreen({
     // revision already, and reading the same revision over it would throw the
     // edit away unasked for a document that differs from the one sent only by
     // the engine's own normalization.
+    //
+    // ANOTHER UNIT OF A LEAD'S is opened only over a draft with no changes
+    // (`LeadUnit`), and opening it is what the lead asked for: what it loses is
+    // a redo history at most.
     if (posture.kind === "edit") {
-      const stale = current.mode !== "edit" || current.base.revision !== posture.revision;
-      if (!loaded || ((force || stale) && !hasWork)) {
+      const switched = current.scope !== read.scope;
+      const stale =
+        switched || current.mode !== "edit" || current.base.revision !== posture.revision;
+      const keeps = switched ? hasChanges(current) : hasWork;
+      if (!loaded || ((force || stale) && !keeps)) {
         dispatchRaw({
           type: "load",
           mode: "edit",
           document: posture.document,
           revision: posture.revision,
+          ...(read.scope === null ? {} : { scope: read.scope }),
         });
         setLoaded(true);
       }
@@ -815,7 +887,7 @@ function BuilderScreen({
     onConflict: () => {},
     onRefused: () => {},
   });
-  const save = useSave({ stateRef, transport, keys, events: saveEvents });
+  const save = useSave({ stateRef, transport: draftTransport, keys, events: saveEvents });
 
   // A SAVE A PREVIOUS VISIT NEVER HEARD BACK FROM is settled before its kept
   // log is offered: it may have landed, and the log replayed onto its own
@@ -1065,9 +1137,10 @@ function BuilderScreen({
       setUpdateNote({ busy: true, message: null });
       try {
         const ready = await readyToUpdate(
-          transport,
+          draftTransport,
           { baseRevision: base, conflictRevisionId },
           controller.signal,
+          stateRef.current.scope,
         );
         if (controller.signal.aborted) return;
         if (ready.kind === "ready") {
@@ -1098,7 +1171,7 @@ function BuilderScreen({
         // Aborted: the Builder went away, or a newer attempt replaced this one.
       }
     },
-    [transport],
+    [draftTransport],
   );
 
   const conflict = status === "conflict" ? conflictOf(state) : null;
@@ -1116,14 +1189,12 @@ function BuilderScreen({
   // against this base, and moving the base under the offer would refuse its
   // Keep.
   //
-  // THROUGH THE UPDATE, NEVER A PLAIN READ. A document read from `GET
-  // /config` keys the seats that declare no handle by their paths until the
-  // next check answers, so every node something held lost its key for that
-  // moment: an open editor with a typed, unapplied form was drawn as gone
-  // and mounted again empty, and the selection was cleared. The update reads
-  // the newer revision with the engine's description of it
-  // (`writes.readyToUpdate`), so the base is keyed by handle at once and an
-  // existing seat keeps its key across the two revisions.
+  // THROUGH THE UPDATE, NEVER A PLAIN READ. A plain read replaces the draft
+  // whole, so an open editor with a typed, unapplied form was drawn as gone
+  // and mounted again empty, and the selection was cleared. The update
+  // rebases the draft onto the newer revision (`writes.readyToUpdate`), and
+  // a node keyed by its seat's handle or its unit's key keeps that key across
+  // the two revisions.
   const draftIsEmpty = state.log.ops.length === 0 && state.log.undone.length === 0;
   const keptPending = keeping.pending || keeping.offer !== null;
   useEffect(() => {
@@ -1330,7 +1401,11 @@ function BuilderScreen({
   // providers.llm and places its seats, then holds every delivery on the
   // seat's inbox until an apply brings a provider (engine/nomodels.go). The
   // dashboard writes none, so the builder says where one comes from.
-  const noProvider = state.mode === "edit" && !(isRecord(llm) && Object.keys(llm).length > 0);
+  // A lead's draft holds one unit and no settings, so it says nothing either way.
+  const noProvider =
+    state.mode === "edit" &&
+    state.scope === null &&
+    !(isRecord(llm) && Object.keys(llm).length > 0);
   const documentProblems = problemsCurrent ? state.check.problems.document : [];
 
   /*
@@ -1546,6 +1621,15 @@ function BuilderScreen({
               items={toolbarItems}
               trigger={selectedView ? selectedName : "Add"}
             />
+            {state.scope !== null && (
+              <LeadUnit
+                tops={leads.tops}
+                scope={state.scope}
+                name={state.draft.units[0]?.data.name ?? ""}
+                locked={changed || readOnly}
+                onChoose={setChosen}
+              />
+            )}
             <span className="spacer" />
             {/* ON THE TABLE ONLY: the visualization draws it at the end of the
                 chart's own zoom bar, where the console chart keeps it. */}
@@ -1669,7 +1753,7 @@ function BuilderScreen({
                     against that base. Settings › Configuration compares with
                     the active revision unless told otherwise, and the base
                     against the active one reads every change backwards. */}
-                {state.base.revision && conflict.currentRevisionId && (
+                {state.scope === null && state.base.revision && conflict.currentRevisionId && (
                   <ButtonLink
                     size="small"
                     variant="ghost"
@@ -1922,6 +2006,48 @@ function BuilderScreen({
   );
 }
 
+/**
+ * Which unit a lead's draft is about, and the others they lead.
+ *
+ * ONE UNIT PER DRAFT: the engine writes a lead's unit whole at its own
+ * address, so a change to a second unit is a second draft. Another unit is
+ * offered only while this draft has nothing to lose, and opening it reads that
+ * unit as the builder reads the company.
+ */
+function LeadUnit({
+  tops,
+  scope,
+  name,
+  locked,
+  onChoose,
+}: {
+  tops: readonly LedUnit[];
+  scope: string;
+  name: string;
+  locked: boolean;
+  onChoose: (key: string) => void;
+}) {
+  const label = `Editing ${name || scope} as its lead`;
+  if (tops.length < 2) return <Tag variant="neutral">{label}</Tag>;
+  return (
+    <Menu
+      label="Units you lead"
+      trigger={label}
+      items={tops.map((top) => {
+        const held = locked && top.key !== scope;
+        return {
+          key: top.key,
+          label: top.name,
+          checked: top.key === scope,
+          disabled: held,
+          ...(held ? { description: "Save or discard this draft to open another unit." } : {}),
+          onSelect: () => onChoose(top.key),
+        };
+      })}
+    />
+  );
+}
+
 /** The review, with the changes derived from the draft as it stands. */
 function ReviewPanel({
   state,
@@ -2140,7 +2266,7 @@ function PostureScreen({
               ? "Reading the configuration needs config:read."
               : "Editing the organization needs you to sign in."
           }
-          description="The configuration is guarded, reads included."
+          description="The configuration is guarded, reads included. A unit's lead edits the units they lead here without it."
           action={
             <Button variant="primary" onClick={onSignIn}>
               {posture.signedIn ? "Sign in as somebody else" : "Sign in"}

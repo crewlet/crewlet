@@ -27,7 +27,7 @@
  */
 
 import type { ConfigProblem, ConfigWarning, Derived } from "~/protocol/index.ts";
-import { COMPANY_KEY, seatKey, type NodeKey } from "./keys.ts";
+import { COMPANY_KEY, seatKey, unitKey, type NodeKey } from "./keys.ts";
 import {
   CHARTER_FIELDS,
   pathOfSegments,
@@ -86,10 +86,17 @@ export function placeProblems(sent: IndexedDocument, findings: Findings): Proble
   const { keyOfHandle } = placeDerivation(sent.index, findings.derived ?? null);
   const seatPath = (handle: string): readonly Segment[] =>
     sent.index.segmentsOf.get(keyOfHandle.get(handle) ?? seatKey(handle)) ?? [];
+  // A REFUSED PART names a unit by its KEY (`configAnswer.refusedProblem`),
+  // which is the unit's node key; a validation problem names one by its name
+  // and always carries the path it is at.
+  const unitPath = (id: string): readonly Segment[] => sent.index.segmentsOf.get(unitKey(id)) ?? [];
 
   const place = (severity: PlacedProblem["severity"], source: ConfigProblem | ConfigWarning) => {
     let segments: readonly Segment[] = source.segments ?? [];
     if (segments.length === 0 && source.seat) segments = seatPath(source.seat);
+    if (segments.length === 0 && source.kind === "refused" && source.unit) {
+      segments = unitPath(source.unit);
+    }
     const { node, field } = locate(sent, segments);
     const placed: PlacedProblem = {
       severity,

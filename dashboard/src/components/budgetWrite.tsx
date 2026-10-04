@@ -12,9 +12,12 @@
  *    have to find the seat on another screen first.
  *
  * NEVER HIDDEN. Both are drawn for every reader and disabled with the reason
- * for one who cannot change the company's configuration
- * (`useConfigWriteAccess`), which is a different gate from acting in it: a
- * ceiling is a `/config` change, written under `config:write`.
+ * for one who cannot change that ceiling (`useOrgWriteAccess`), which is a
+ * different gate from acting in it: a ceiling is a `/config` change, written
+ * under `config:write` — or, for a seat inside a unit the reader leads, by
+ * that lead, since a ceiling is no credential and the engine admits a lead's
+ * write of their own seats (`lib/leadScope.ts`). The company's own ceilings
+ * are the grant's alone.
  *
  * THERE IS NO RESET, and nothing here offers one. A window's `used` IS what
  * the window spent; the room comes back when it turns over on the company
@@ -41,8 +44,13 @@ import { dayLabelIn } from "~/lib/range.ts";
 import { useOrgBudget } from "~/lib/store-hooks.ts";
 import { useCeilingWrite, type CeilingWrite, type TypedCeilings } from "~/lib/useCeilingWrite.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useOrgWriteAccess, type OrgTarget } from "~/lib/useWriteAccess.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
+
+/** What changing a scope's ceilings is a change to: one seat, or the company. */
+function targetOf(scope: CeilingScope): OrgTarget {
+  return scope.kind === "seat" ? { seat: scope.handle } : "company";
+}
 
 /** "Daily", "Weekly", "Monthly" — the label a ceiling's field wears. */
 function periodTitle(period: Period): string {
@@ -136,7 +144,7 @@ export function CeilingEditor({
   /** Re-read what the screen draws once this node applies a saved ceiling. */
   onApplied: () => void;
 }) {
-  const access = useConfigWriteAccess();
+  const access = useOrgWriteAccess(targetOf(scope));
   const write = useCeilingWrite(scope, { onApplied });
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
@@ -327,7 +335,7 @@ export function RaiseBudgetDialog({
   onClose: () => void;
 }) {
   const toast = useToast();
-  const access = useConfigWriteAccess();
+  const access = useOrgWriteAccess(targetOf(scope));
   const budgets = useQuery("budgets", undefined);
   const write = useCeilingWrite(scope);
   const zone = budgets.data?.timezone ?? "";
@@ -509,11 +517,11 @@ export function RaiseBudgetButton({
   /** The seat's own window the gate is refusing in, where it names one. */
   window: BudgetWindow | undefined;
 }) {
-  const access = useConfigWriteAccess();
   const org = useOrgBudget();
   const [open, setOpen] = useState(false);
   const company = own ? undefined : waitedOn(org?.org.windows, "refusing");
   const scope: CeilingScope = company ? { kind: "company" } : { kind: "seat", handle, name };
+  const access = useOrgWriteAccess(targetOf(scope));
   const focus = (own ?? company)?.period;
   return (
     <>

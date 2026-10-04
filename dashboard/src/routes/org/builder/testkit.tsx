@@ -99,6 +99,12 @@ export function mergePatch(target: unknown, patch: unknown): unknown {
   return out;
 }
 
+/** The unit key a `/config/units/{key}` path addresses, or `null` for any other path. */
+function unitOfPath(path: string): string | null {
+  const match = /^\/config\/units\/([^/]+)$/.exec(path);
+  return match ? decodeURIComponent(match[1]!) : null;
+}
+
 /** The scripted engine: the active revision, and every request the page sent. */
 export class Engine {
   document: CompanyDocument | null;
@@ -123,10 +129,18 @@ export class Engine {
     return this.requests.filter((r) => r.query.get("dry_run") === "true");
   }
 
-  /** The document a write or dry run would produce. */
+  /**
+   * The document a write or dry run would produce. A unit's write replaces
+   * that top-level unit whole, as `PUT /config/units/{key}` splices it.
+   */
   result(request: SentRequest): CompanyDocument {
     const body = { ...(request.body as Record<string, unknown>) };
     delete body._summary;
+    const unit = unitOfPath(request.path);
+    if (unit !== null) {
+      const units = (this.document?.units ?? []).map((u) => (u.id === unit ? body : u));
+      return { ...this.document, units } as CompanyDocument;
+    }
     return (
       request.method === "PUT" ? body : mergePatch(this.document ?? {}, body)
     ) as CompanyDocument;
@@ -166,9 +180,19 @@ export class Engine {
           })
         : json({ error: "not_found" }, 404);
     }
-    if (request.path === "/config" && (request.method === "PATCH" || request.method === "PUT")) {
+    const unit = unitOfPath(request.path);
+    if (unit !== null && request.method === "GET") {
+      const found = this.document?.units?.find((u) => u.id === unit);
+      return found
+        ? json(found, 200, { ETag: `"${this.revision}"` })
+        : json({ error: "no_such_entity" }, 404);
+    }
+    if (
+      (request.path === "/config" || unit !== null) &&
+      (request.method === "PATCH" || request.method === "PUT")
+    ) {
       const expected = request.headers["If-Match"];
-      if (request.method === "PATCH" && expected !== `"${this.revision}"`) {
+      if ((request.method === "PATCH" || unit !== null) && expected !== `"${this.revision}"`) {
         return json({ error: "revision_advanced", current_revision_id: this.revision }, 409);
       }
       if (request.method === "PUT" && request.headers["If-None-Match"] === "*" && this.document) {

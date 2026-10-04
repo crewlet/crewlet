@@ -65,6 +65,7 @@ import {
 import { EMPTY_PROBLEMS, placeProblems, type ProblemIndex } from "./problems.ts";
 import { STEP_UP_REQUIRED, type CheckOutcome, type SettledCheck } from "./scheduler.ts";
 import type { KeptDraft } from "./persistence.ts";
+import { outsideScope } from "./scope.ts";
 import type { BuilderMode } from "./transport.ts";
 
 /** The company the draft was built on. */
@@ -116,6 +117,13 @@ export interface LastChange {
 
 export interface BuilderState {
   readonly mode: BuilderMode;
+  /**
+   * The unit a LEAD's draft is about, by key, or `null` for the whole company
+   * (`scope.ts`). Set by the load and kept until the next one: every request
+   * the draft makes is that unit's, and [recordIntent] refuses what reaches
+   * outside it before the engine has to.
+   */
+  readonly scope: string | null;
   readonly base: BaseCompany;
   readonly baseDraft: Draft;
   readonly draft: Draft;
@@ -131,7 +139,7 @@ export interface BuilderState {
   readonly last: LastChange | null;
   /** Why the last dispatched intent was not recorded. */
   readonly refusal: {
-    readonly reason: RecordRefusal | "mode" | "not_loaded" | "has_changes";
+    readonly reason: RecordRefusal | "mode" | "not_loaded" | "has_changes" | "scope";
     readonly message: string;
   } | null;
   /**
@@ -152,6 +160,8 @@ export type BuilderAction =
       readonly mode: BuilderMode;
       readonly document: CompanyDocument | null;
       readonly revision: string | null;
+      /** A lead's unit (see [BuilderState.scope]); absent for the whole company. */
+      readonly scope?: string;
     }
   | { readonly type: "record"; readonly intent: Intent }
   | { readonly type: "undo" }
@@ -172,7 +182,7 @@ export type BuilderAction =
       readonly type: "updateBegin";
       readonly document: CompanyDocument;
       readonly revision: string;
-      readonly derived: Derived;
+      readonly derived: Derived | null;
     }
   | { readonly type: "updateChoose"; readonly index: number; readonly choice: Choice | null }
   | { readonly type: "updateConfirm" }
@@ -199,6 +209,7 @@ const EMPTY_CHECK: CheckView = {
  */
 export const INITIAL_BUILDER: BuilderState = {
   mode: "edit",
+  scope: null,
   base: { document: null, revision: null, derived: null },
   baseDraft: EMPTY_DRAFT,
   draft: EMPTY_DRAFT,
@@ -264,7 +275,11 @@ export function checkedDocument(check: CheckView): CheckedDocument | null {
 /** What recording an intent against a state would answer, before anything is dispatched. */
 export type RecordAnswer =
   | Recorded
-  | { readonly ok: false; readonly refusal: "mode" | "not_loaded"; readonly message: string };
+  | {
+      readonly ok: false;
+      readonly refusal: "mode" | "not_loaded" | "scope";
+      readonly message: string;
+    };
 
 /**
  * Records an intent against the state's draft exactly as dispatching it would,
@@ -291,6 +306,8 @@ export function recordIntent(state: BuilderState, intent: Intent): RecordAnswer 
   if (!isLoaded(state)) {
     return { ok: false, refusal: "not_loaded", message: NOT_LOADED };
   }
+  const outside = outsideScope(state.scope, state.draft, intent);
+  if (outside !== null) return { ok: false, refusal: "scope", message: outside };
   return record(state.draft, intent);
 }
 
@@ -332,6 +349,7 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
       return {
         ...INITIAL_BUILDER,
         mode: action.mode,
+        scope: action.mode === "edit" ? (action.scope ?? null) : null,
         base: {
           document,
           revision: action.mode === "edit" ? action.revision : null,

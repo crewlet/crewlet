@@ -16,7 +16,10 @@
  * says it is unavailable (`aria-disabled`), so an operator learns what the
  * builder does and why it will not do it now, instead of meeting a menu that
  * silently lost half its entries. Opening a seat's screen changes nothing and
- * stays available.
+ * stays available. A LEAD'S DRAFT of one unit (`model/scope.ts`) disables the
+ * few entries that reach outside it — an add at the company's top level, the
+ * unit's own move, deletion and lead — the same way, with the sentence saying
+ * why.
  */
 
 import type { KeyboardEvent, ReactNode } from "react";
@@ -24,6 +27,7 @@ import { seatPath } from "~/lib/seats.ts";
 import type { AddKind, BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, SeatView, Structure, UnitView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
+import { scopeLimit, type ScopedChange } from "./model/scope.ts";
 import type { Reorder } from "./reorder.ts";
 import { CrewletIcon } from "@crewlethq/icons";
 import {
@@ -75,13 +79,26 @@ const ADD_CHOICES: readonly { kind: AddKind; label: string; icon: ReactNode }[] 
 /** Where an add under `parent` lands: the company root is `null`. */
 const addTarget = (parent: NodeKey) => (parent === COMPANY_KEY ? null : parent);
 
+/**
+ * Whether an entry that makes `change` to `key` is refused, and the sentence
+ * saying why where a lead's draft is what refuses it.
+ */
+export function refusedEntry(
+  api: BuilderApi,
+  key: NodeKey,
+  change: ScopedChange,
+): { disabled: boolean; description?: string } {
+  const limit = scopeLimit(api.state.scope, api.state.draft, key, change);
+  return limit === null ? { disabled: api.readOnly } : { disabled: true, description: limit };
+}
+
 function addEntries(api: BuilderApi, parent: NodeKey): MenuEntry[] {
   const at = addTarget(parent);
   return ADD_CHOICES.map((choice) => ({
     key: `add-${choice.kind}`,
     label: choice.label,
     icon: choice.icon,
-    disabled: api.readOnly,
+    ...refusedEntry(api, parent, "add"),
     onSelect: () => api.openAdd(at, choice.kind),
   }));
 }
@@ -106,7 +123,7 @@ export function addSections(api: BuilderApi, view: NodeView): AddPillSection[] {
     key: choice.kind,
     label: `${choice.label} to ${name}`,
     icon: choice.icon,
-    disabled: api.readOnly,
+    disabled: refusedEntry(api, view.key, "add").disabled,
     onSelect: () => api.openAdd(at, choice.kind),
   }));
 }
@@ -130,7 +147,7 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
     label: "Delete",
     icon: <TrashGlyph />,
     danger: true,
-    disabled: api.readOnly,
+    ...refusedEntry(api, view.key, "place"),
     hint: <Kbd keys={[deleteKey()]} />,
     onSelect: () => api.openDelete(view.key),
   };
@@ -138,7 +155,7 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
     key: "move",
     label: "Move to",
     icon: <FolderInputGlyph />,
-    disabled: api.readOnly,
+    ...refusedEntry(api, view.key, "place"),
     onSelect: () => api.openMove(view.key),
   };
   if (view.type === "company") {
@@ -406,13 +423,14 @@ export function leadSentence(unit: UnitView): string {
 export function leadMenu(api: BuilderApi, structure: Structure, unit: UnitView): MenuEntry[] {
   // ANSWERED BY HANDLE, the value a lead writes; named as the seat is.
   const declared = unit.lead && !unit.lead.inherited ? unit.lead.handle : null;
+  const refused = refusedEntry(api, unit.key, "lead");
   const answer = (key: string, label: string, lead: string | null): MenuEntry => {
     const checked = declared === lead;
     return {
       key,
       label,
       checked,
-      disabled: api.readOnly,
+      ...refused,
       onSelect: checked
         ? () => {}
         : () =>

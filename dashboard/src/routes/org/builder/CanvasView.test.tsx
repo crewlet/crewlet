@@ -28,7 +28,7 @@ import { OrgNodeLabel } from "@crewlethq/ui";
 import { COMPANY_KEY, seatKey, unitKey, type NodeKey } from "./model/keys.ts";
 import type { BuilderState } from "./model/reducer.ts";
 import { fixtureCompany, fixtureDerived } from "./model/testkit.ts";
-import { answered, checkedEdit, PLACED, record } from "./testState.ts";
+import { answered, checkedEdit, PLACED, record, scopedState } from "./testState.ts";
 import {
   BuilderHarness,
   LayoutObserver,
@@ -253,6 +253,26 @@ describe("the tree", () => {
     pointerPress("Lead: VP Engineering");
     press("Escape");
     expect(document.activeElement).toBe(item("Engineering"));
+  });
+
+  // A LEAD'S OWN UNIT KEEPS ITS LEAD (`model/scope.ts`): its chip says the
+  // lead and offers no change, while a unit inside it offers one.
+  test("in a lead's draft the unit's own lead chip offers no change", () => {
+    mount(scopedState(fixtureCompany(), "engineering"));
+    expect(screen.queryByRole("button", { name: "Lead: VP Engineering", hidden: true })).toBeNull();
+    expect(screen.getByText("Lead: VP Engineering")).toBeDefined();
+    // Platform's chip, inside the unit, still offers its lead.
+    expect(
+      screen.getAllByRole("button", { name: /^Lead\b/, hidden: true }).map((b) => b.textContent),
+    ).toEqual(["Lead"]);
+    // Where it sits decides who leads it too, so it does not move.
+    pointerPress("Actions for Engineering");
+    const menu = screen.getByRole("menu", { name: "Actions for Engineering" });
+    expect(
+      within(menu)
+        .getByRole("menuitem", { name: /^Move to/ })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
   });
 
   test("a human seat is drawn with a person's badge, by kind rather than by colour", () => {

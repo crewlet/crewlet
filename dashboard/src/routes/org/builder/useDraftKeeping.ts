@@ -161,10 +161,29 @@ export function useDraftKeeping({
       case "restored": {
         const kept = restored.kept;
         if (kept.write !== undefined) {
-          setUnsettled({ writeId: kept.write, mode: kept.mode, baseRevision: kept.baseRevision });
+          setUnsettled({
+            writeId: kept.write,
+            mode: kept.mode,
+            baseRevision: kept.baseRevision,
+            scope: kept.scope ?? null,
+          });
           return;
         }
-        const decision = restoreOffer(kept, { mode: state.mode, revision: state.base.revision });
+        const decision = restoreOffer(kept, {
+          mode: state.mode,
+          revision: state.base.revision,
+          scope: state.scope,
+        });
+        if (decision.kind === "discard_scope_changed") {
+          clearDraft(storage);
+          setDecisionNotice({
+            tone: "warning",
+            message:
+              "A kept draft of another part of the organization was discarded: it was made of a different unit than the one open now.",
+          });
+          setDecided(true);
+          return;
+        }
         if (decision.kind === "discard_mode_changed") {
           clearDraft(storage);
           setDecisionNotice({
@@ -215,6 +234,7 @@ export function useDraftKeeping({
     const plan = persistencePlan(
       {
         mode: state.mode,
+        scope: state.scope,
         baseRevision: state.base.revision,
         log: state.log,
         keep: state.keep,
@@ -236,9 +256,19 @@ export function useDraftKeeping({
             }
           : null,
     );
-    // `state.log`, `keep`, `mode` and the base revision are what the plan
+    // `state.log`, `keep`, `mode`, the scope and the base revision are what the plan
     // reads; a check answer moves none of them.
-  }, [loaded, decided, state.log, state.keep, state.mode, state.base.revision, storage, now]);
+  }, [
+    loaded,
+    decided,
+    state.log,
+    state.keep,
+    state.mode,
+    state.scope,
+    state.base.revision,
+    storage,
+    now,
+  ]);
 
   const keep = useCallback(() => {
     if (!offer) return;

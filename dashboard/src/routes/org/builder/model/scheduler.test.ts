@@ -49,7 +49,7 @@ describe("requests", () => {
 
   test("an edit-mode check is the merge patch a save sends, conditional on the base, without a summary", () => {
     const sent = draftDoc();
-    const check = checkRequest({ mode: "edit", baseRevision: "rev-1", base, sent });
+    const check = checkRequest({ mode: "edit", baseRevision: "rev-1", base, sent, scope: null });
     expect(check).toEqual({
       method: "PATCH",
       path: "/config",
@@ -59,7 +59,7 @@ describe("requests", () => {
       body: { mission: "Changed" },
     });
     const save = saveRequest(
-      { mode: "edit", baseRevision: "rev-1", base, sent },
+      { mode: "edit", baseRevision: "rev-1", base, sent, scope: null },
       "Update the mission (write abc)",
     );
     expect(save).toEqual({
@@ -71,7 +71,9 @@ describe("requests", () => {
 
   test("a create-mode check puts the whole document, only where no company exists", () => {
     const sent = toDocument(fromDocument({ name: "New", roles: [{ name: "A" }] }));
-    expect(checkRequest({ mode: "create", baseRevision: null, base: null, sent })).toEqual({
+    expect(
+      checkRequest({ mode: "create", baseRevision: null, base: null, sent, scope: null }),
+    ).toEqual({
       method: "PUT",
       path: "/config",
       query: { dry_run: "true" },
@@ -83,7 +85,7 @@ describe("requests", () => {
 
   test("an edit-mode request without its base is a defect", () => {
     expect(() =>
-      checkRequest({ mode: "edit", baseRevision: null, base: null, sent: draftDoc() }),
+      checkRequest({ mode: "edit", baseRevision: null, base: null, sent: draftDoc(), scope: null }),
     ).toThrow(RangeError);
   });
 
@@ -455,7 +457,13 @@ function harness() {
       if (g !== generation) return null;
       const sent = toDocument(fromDocument({ name: `generation ${g}` }));
       return {
-        request: checkRequest({ mode: "create", baseRevision: null, base: null, sent }),
+        request: checkRequest({
+          mode: "create",
+          baseRevision: null,
+          base: null,
+          sent,
+          scope: null,
+        }),
         sent,
         mode: "create",
         baseRevision: null,
