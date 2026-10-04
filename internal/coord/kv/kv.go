@@ -1169,7 +1169,7 @@ func (s *Store) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
 	clk := s.newClock()
 	floor, found := 0, false
 	for _, e := range all {
-		p := coord.StoredProtocol(e.value.Protocol)
+		p := e.value.Protocol
 		if found && p >= floor {
 			// Cannot lower the floor, so its liveness is not worth a
 			// clock read.
@@ -1587,7 +1587,7 @@ func (s *Store) storeNow(ctx context.Context, l *lane) (time.Time, error) {
 // liveness is judged, and a fleet running one build reads no clock for it.
 func (s *Store) blockedByOlder(ctx context.Context, entries []entry, clk *clock, protocol int) (bool, error) {
 	for _, e := range entries {
-		if coord.StoredProtocol(e.value.Protocol) >= protocol {
+		if e.value.Protocol >= protocol {
 			continue
 		}
 		held, err := s.held(ctx, e, clk)

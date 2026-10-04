@@ -113,7 +113,7 @@ func (e entry) lease() *coord.Lease {
 		ExpiresAt:  e.created.Add(e.value.ttl()).UTC(),
 		AcquiredAt: e.value.AcquiredAt,
 		Preferred:  e.value.Preferred,
-		Protocol:   coord.StoredProtocol(e.value.Protocol),
+		Protocol:   e.value.Protocol,
 		Meta:       e.value.Meta,
 	}
 }

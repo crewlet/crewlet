@@ -178,18 +178,10 @@ import (
 // over a newer node's expired leases.
 //
 // Bump this when the MEANING of holding a lease changes, never when
-// something merely gains a field. The history: v2 = holding a seat means
-// consulting the completion ledger; v3 = claiming a seat means this node
-// satisfies the role's placement; v4 = running a seat means charging its
-// rounds to the WINDOWED token counters, so a v3 and a v4 node running seats
-// side by side would each charge a different counter, each would see only its
-// own share of the company's spend and every cap would bind late — by as much
-// as the other build had spent; v5 = a seat
-// lease and a seat mailbox are named by the seat's ID rather than its handle
-// ([SeatResource]), so a v4 and a v5 node claim DIFFERENT resources for one
-// seat and would each run it. Every one was silent corruption in a mixed
-// fleet, which is the bar.
-const ProtocolVersion = 5
+// something merely gains a field — when two builds holding leases side by side
+// would be silent corruption, which is the bar. Version 1 is every build there
+// has been: none that held a lease to another meaning was ever released.
+const ProtocolVersion = 1
 
 // ErrUnavailable is the canonical "store could not answer" error. Backends
 // wrap their transport failures in it. Callers should not switch on it —
@@ -233,18 +225,6 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // twin too, in the tests that run against it. The contract suite certifies
 // both halves on every backend: a duty at exactly this TTL is honoured, one
 // beyond it is an error wrapping [ErrTTLTooLong].
-//
-// # The rolling upgrade a duty ceiling costs
-//
-// A backend that stores duties apart from seats (the embedded KV does) meets a
-// build that stored them together, and two builds locking one duty in two
-// places would both hold it. The rule every such backend follows: a duty claim
-// is REFUSED, as the ordinary (nil, nil), while any node of a build that
-// predates the move is live, and a holder's own re-claim is refused with it so
-// the duty stops at its next tick. An older node never looks for the newer
-// record, so this is the only side that can wait. See the kv package doc for
-// how a backend tells the two builds apart, and for the one window the check
-// cannot close.
 //
 // # Why three hours
 //
@@ -296,11 +276,9 @@ type Lease struct {
 	// reading a tenure, and a stamp that followed the heartbeat would say
 	// "since a few seconds ago" about a seat that has not moved all day.
 	//
-	// ZERO MEANS UNKNOWN, never "the epoch of time": a record written by a
-	// build that predates the field carries none, and its tenure began at a
-	// moment nobody wrote down. A reader renders zero as absent. A renewal
-	// does not invent one either, since the moment it would stamp is the
-	// renewal's and not the claim's.
+	// ZERO MEANS UNKNOWN, never "the epoch of time", and a reader renders it
+	// as absent. A renewal does not invent one, since the moment it would
+	// stamp is the renewal's and not the claim's.
 	//
 	// Nothing decides ownership by it. It is a fact for a person to read,
 	// and the fencing token is still Epoch alone.
@@ -349,17 +327,6 @@ func (o AcquireOptions) EffectiveProtocol() int {
 	return o.Protocol
 }
 
-// StoredProtocol normalises the protocol read back from a record. A record
-// written before the field existed reads as the OLDEST protocol, which is
-// the fail-closed reading: it holds newer nodes back rather than letting
-// them claim beside a build whose meaning of ownership they cannot know.
-func StoredProtocol(raw int) int {
-	if raw <= 0 {
-		return 1
-	}
-	return raw
-}
-
 // Live reports whether the lease is unexpired relative to a store-supplied
 // now. Callers that have a Lease from the store already know it was live
 // when read; this exists for backends and tests reasoning about records.
@@ -391,10 +358,6 @@ type AcquireOptions struct {
 	// engine would hold a live lease below every newer node's floor and
 	// stall the fleet's claims — looking exactly like a rolling upgrade
 	// that never finishes.
-	//
-	// A STORED record with no protocol is the opposite case and still
-	// reads as 1: that record genuinely predates the concept, so the
-	// oldest reading is the honest one. Backends normalise on read.
 	Protocol int
 	// Meta rides with the record; see Lease.Meta.
 	Meta map[string]any
@@ -408,10 +371,11 @@ type AcquireOptions struct {
 	// seats by a count that excludes it and each take a larger share,
 	// while its own capacity also excludes itself.
 	//
-	// Singleton duties: a duty record left at protocol 1 by a build that
-	// predates the gate would block every seat claim fleet-wide the moment
-	// the version moved. Duty claims still carry THIS build's protocol, so
-	// they never become the thing that blocks.
+	// Singleton duties: the gate is about what holding a SEAT means, and a
+	// duty holder is claimed per tick, so gating it would stop every fleet
+	// duty for the length of a rolling upgrade for nothing. Duty claims
+	// still carry THIS build's protocol, so they never become the thing that
+	// blocks.
 	Ungated bool
 }
 
@@ -642,9 +606,8 @@ func IsNodeResource(resource string) bool { return ClassNode.Holds(resource) }
 // SeatID recovers the seat id from a seat resource name.
 //
 // It reports false for a resource of another class AND for one whose name is
-// not a canonical uuid, so a key written by hand or by a build that predates
-// the id is answered as "not a seat lease" rather than as a seat with an
-// unreadable name.
+// not a canonical uuid, so a key written by hand is answered as "not a seat
+// lease" rather than as a seat with an unreadable name.
 func SeatID(resource string) (uuid.UUID, bool) {
 	name, ok := ClassSeat.Name(resource)
 	if !ok {
