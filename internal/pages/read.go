@@ -44,11 +44,6 @@ import (
 type Reader struct {
 	db  *store.DB
 	log *statelog.Reader
-
-	// committed is this node's own applied position on the pages log, or
-	// nil on a build that runs no applier. It is what a read's own answer
-	// is stamped with.
-	committed func() statelog.Position
 }
 
 // ReaderOptions configure a reader.
@@ -59,11 +54,6 @@ type ReaderOptions struct {
 	// level is a label rather than a guarantee, which is silent at every
 	// surface that renders one.
 	Log *statelog.Reader
-
-	// Committed is this node's applied position. Nil answers the zero
-	// position, which is what a test with no runner has and what a read
-	// then honestly reports.
-	Committed func() statelog.Position
 }
 
 // NewReader builds the knowledge base's read side.
@@ -77,16 +67,8 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 			"a guarantee, and a degradation invisible in the answer is worse " +
 			"than a refusal")
 	}
-	r := &Reader{db: opts.DB, log: opts.Log, committed: opts.Committed}
-	if r.committed == nil {
-		r.committed = func() statelog.Position { return statelog.Position{} }
-	}
-	return r, nil
+	return &Reader{db: opts.DB, log: opts.Log}, nil
 }
-
-// At is the position this node's rows were derived through, which every answer
-// here is true as of.
-func (r *Reader) At() statelog.Position { return r.committed() }
 
 // Filter narrows a page listing.
 type Filter struct {
