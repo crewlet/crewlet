@@ -15,14 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
-// duplicateStepsRevision is a stored SETTINGS company that breaks an
-// admission rule and none of the runnable ones: two sandbox setup steps under
-// one name. A build before that rule admitted it, and it runs.
-//
-// A SETTINGS RULE, because a revision carries settings. The fixture used to
-// be two units called "Platform", each with a seat called "Engineer" — which
-// is the same class of violation on the half a revision no longer holds, and
-// is refused as a chart before any rule is reached.
+// duplicateStepsRevision is a stored company that breaks an admission rule
+// and none of the runnable ones: two sandbox setup steps under one name. A
+// build before that rule admitted it, and it runs.
 //
 // The rule is a real one and its consequence is a write: a step's `env` and
 // `files` are credentials restored by the step's NAME, so two steps of one

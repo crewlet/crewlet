@@ -17,8 +17,9 @@ import (
 // independently of the function under test, a domain that starts claiming
 // identity moves the expectation and the budget together or fails.
 //
-// Mutation: put the literal minute back and the budget is half what four logs
-// need at the margin; drop a log from the count and it is three quarters.
+// Mutation: put the literal minute back and the budget is two thirds of what
+// three logs need at the margin; drop a log from the count and it is two
+// thirds again.
 func TestTheGateBudgetIsCountedFromTheRegister(t *testing.T) {
 	t.Parallel()
 	logs := 0

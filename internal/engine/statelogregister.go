@@ -149,8 +149,8 @@ type registration struct {
 	// Feed builds the WAKE FEED over this domain's log: the translator that
 	// decides whether a committed record wakes anybody, and the opener over
 	// the log's own fleet-wide group ([domainFeed]). Nil for a domain whose
-	// records wake nobody — the vectors, the org chart and the identity
-	// estate.
+	// records wake nobody — the vectors, the identity estate and the usage
+	// history.
 	//
 	// HELD TO THE DOMAIN'S OWN DECLARATION ([statelog.Domain.FeedGroup]),
 	// by [checkRegister] at boot and by [Engine.feedFor] where a feed
