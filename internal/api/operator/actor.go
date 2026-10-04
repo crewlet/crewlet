@@ -22,8 +22,8 @@ import (
 // beside either. The binding is the DIRECTORY'S, resolved by the request guard
 // before any handler ran, so it is one value on the context for the whole call:
 // the actor, the dispatch's audit record and every log line read that value,
-// and a rebind or a chart rename landing while the call runs changes the next
-// request rather than splitting this one between two people.
+// and a rebind or a company revision landing while the call runs changes the
+// next request rather than splitting this one between two people.
 //
 // The alternative — asking the caller to name a seat to act as — was rejected:
 // it lets anybody with a credential write as anybody, and a tracker whose

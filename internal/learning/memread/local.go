@@ -103,8 +103,7 @@ func agentID(seat Seat) string {
 // does not carry that half" if the key is simply not there, and both are
 // ordinary states.
 type Memory struct {
-	// ID is the handle the seat answers to now — the answer is about the
-	// seat whatever it has been called.
+	// ID is the seat's handle.
 	ID string `json:"id"`
 
 	// Diary is the newest LIVE entries, newest first; DiaryTotal how many

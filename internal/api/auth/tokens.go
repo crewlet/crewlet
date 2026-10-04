@@ -200,9 +200,8 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 		return r.WithContext(iam.WithPrincipal(ctx, p)), nil
 	}
 	// A BOUND OWNER ACTS AS THEIR SEAT, through the table every other
-	// credential's binding goes through — followed through a rename,
-	// refused NAMING the seat once it is gone, unknown where this node
-	// cannot say.
+	// credential's binding goes through — refused NAMING the seat once it
+	// is gone, unknown where this node cannot say.
 	binding := session.ResolveSeat(ctx, g.machine.chart, session.PersonRow{
 		Found: true, Stage: owner.Stage, Login: owner.Login,
 		Seat: owner.Seat,

@@ -66,10 +66,8 @@ const pauseReasonNoTurnEngine = string(inbox.HoldNoTurnEngine)
 // epoch's seats instead would resume every seat on every apply to lift holds
 // that almost never exist, and would still miss one the new revision no
 // longer names.
-// BY THE SEAT'S ID, which is what the paused topic is named by: the handle is
-// an address a rename moves, and a release that resumed a topic built from the
-// new one would leave the old topic paused for ever with every event on it
-// held. The handle rides along for the log lines.
+// BY THE SEAT'S ID, the agent id derived from its handle (ADR-0013), which is
+// what the paused topic is named by. The handle rides along for the log lines.
 type modelHolds struct {
 	mu    sync.Mutex
 	seats map[uuid.UUID]string
@@ -145,8 +143,7 @@ func (e *Engine) releaseModelHolds(ctx context.Context) {
 	e.modelHolds.mu.Unlock()
 
 	// SORTED BY THE ID, which is the key: the order only has to be stable so
-	// a test and a log read the same way, and the handle is a label that two
-	// entries could share after a rename.
+	// a test and a log read the same way.
 	ids := slices.Collect(maps.Keys(held))
 	slices.SortFunc(ids, func(a, b uuid.UUID) int {
 		return strings.Compare(a.String(), b.String())

@@ -138,8 +138,7 @@ type FeedScheduleRun struct {
 	ScopeID   string `json:"scope_id"`
 	ScopeName string `json:"scope_name"`
 	Name      string `json:"name"`
-	// Target is the seat the run was dispatched to, by the handle it
-	// answers to now.
+	// Target is the seat the run was dispatched to, by its handle.
 	Target  string `json:"target,omitempty"`
 	Outcome string `json:"outcome,omitempty"`
 	TraceID string `json:"trace_id,omitempty"`

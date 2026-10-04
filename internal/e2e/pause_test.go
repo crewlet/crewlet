@@ -24,9 +24,8 @@ import (
 //   - the answer names the author as [iam.ActorFor] does — the token's own
 //     login, of the operator kind, through itself — because nobody is bound
 //     to it;
-//   - the coordination record is keyed by the seat's IDENTITY, its agent id,
-//     never its handle, so a rename keeps the pause and a hire on a freed
-//     handle inherits nothing;
+//   - the coordination record is keyed by the seat's agent id, derived from
+//     its handle (ADR-0013), which is what every node reads a pause by;
 //   - the live projection puts the seat in `stopped`, for `paused`, and a
 //     resume takes it out again.
 //

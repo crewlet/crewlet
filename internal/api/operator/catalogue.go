@@ -58,8 +58,8 @@
 // to act as: a tracker whose author field is chosen by the writer is not an
 // audit trail. The principal is resolved ONCE, by the request guard, and is a
 // value on the context — so the dispatch, the tool's actor and the audit
-// record read one answer, and a directory rebind or a chart rename landing
-// while a call runs changes the next request, never this one.
+// record read one answer, and a directory rebind or a company revision
+// landing while a call runs changes the next request, never this one.
 //
 // # A retry is the same operations
 //

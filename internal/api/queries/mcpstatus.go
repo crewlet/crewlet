@@ -111,7 +111,7 @@ type MCPServerNode struct {
 	Tools    int  `json:"tools"`
 	// Error is one failed instance's reason, bounded on the wire, and
 	// ErrorSeat the seat it was launched for ("" for a shared server), by
-	// the handle it answers to now. The whole text is the node's
+	// its handle. The whole text is the node's
 	// `mcp_server_failed` log line.
 	Error     string `json:"error"`
 	ErrorSeat string `json:"error_seat"`

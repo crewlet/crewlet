@@ -840,7 +840,7 @@ func (s Sources) trailSeat(ctx context.Context, asked string) (memread.Seat, err
 // onboarded — each with its total — ANSWERED BY THE SEAT'S HOLDER, which the
 // answer names (`held_by`). See [Sources.Memory] for why.
 //
-// `id` is any handle the seat answers to, or a person's login; `limit` pages
+// `id` is the seat's handle, or a person's login; `limit` pages
 // every collection (at most [memread.PageLimit]); a profile's summary asks for
 // one, since the totals and the latest reflection travel whatever the page.
 func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {

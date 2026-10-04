@@ -43,8 +43,8 @@ import (
 
 // OverviewSeat is one seat's row of the overview.
 type OverviewSeat struct {
-	// ID is the seat's agent id, which a row is matched by; Handle the
-	// handle it answers to now, which a list draws.
+	// ID is the seat's agent id, which a row is matched by; Handle its
+	// handle, which a list draws.
 	ID     string `json:"agent_id"`
 	Handle string `json:"handle"`
 

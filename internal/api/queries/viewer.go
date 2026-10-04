@@ -106,7 +106,7 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		}
 	}
 	// ONE CHART READING for the seat and the project it defaults to, so the
-	// two cannot describe two charts a rename landed between.
+	// two cannot describe two charts a revision landed between.
 	organization := s.organization()
 	seat := seatOf(organization, principal)
 	if seat == nil {

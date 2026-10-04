@@ -290,8 +290,8 @@ func (s Sources) pageReads(ctx context.Context, p Params) (any, error) {
 //
 // THE CHART NAMES A SEAT IT HOLDS, and a day's own name is the fallback for a
 // seat it no longer does: a day records what the seat was called when it read,
-// which is a rename's worth out of date — the rule [tokens.Seats] states for
-// every spend row, held here for every read row.
+// which a retitled role name leaves out of date — the rule [tokens.Seats]
+// states for every spend row, held here for every read row.
 func (s Sources) chartHandles() map[string]chartSeat {
 	out := map[string]chartSeat{}
 	for _, seat := range chartSeats(s.organization()) {
@@ -392,8 +392,8 @@ func (s Sources) skillLoads(ctx context.Context, listed []pages.Summary) (map[st
 // namesSeat reports whether row's handle replaces the one a fold already
 // holds for its seat (held, from rows whose newest read was heldAt): THE NAME
 // THE NEWEST DAY GAVE THE SEAT, which is the one a reader knows it by now, and
-// on a tie the row folded later. ONE RULE for both folds, because a seat
-// renamed within the window would otherwise carry one name in a page's
+// on a tie the row folded later. ONE RULE for both folds, because a seat whose
+// rows name it differently would otherwise carry one name in a page's
 // `skill_loaded_by` and another in its `page_reads` whenever two rows share a
 // last read.
 func namesSeat(row usage.PageRead, held string, heldAt time.Time) bool {

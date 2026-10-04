@@ -498,8 +498,8 @@ func TestTheItemQueryStandsTheDueDateOnTheCompanyClock(t *testing.T) {
 // where the row holds its key.
 //
 // What a task's unit fields hold is the unit's KEY as it was when the row was
-// written — an address a person typed, short and possibly retired by a rename
-// since. Without the chart this answer carried that key alone, and an item
+// written — an address a person typed, short, and possibly one the chart has
+// since dropped. Without the chart this answer carried that key alone, and an item
 // page said `eng` beside a board column that said Engineering. An unresolved
 // reference is also a FINDING — the team has left the chart — so a surface
 // that holds a chart and does not pass it reports every task as orphaned.

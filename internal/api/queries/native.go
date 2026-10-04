@@ -192,9 +192,8 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	q.Level = statelog.LevelFor(statelog.SurfaceDashboard, q.Level)
 	// AND THE CHART THE UNIT FILTERS RESOLVE THROUGH, set here for the
 	// reason the level is: it is a property of this SURFACE rather than of
-	// the grammar, so `unit=` takes any spelling of a team — its key, a key
-	// it answered to before a rename, its name — and finds the work filed
-	// under each — see [tracker.Units].
+	// the grammar, so `unit=` takes either spelling of a team — its key or
+	// its name — and finds the work filed under each — see [tracker.Units].
 	q.Units = s.chartUnits()
 	answer, err := s.Work.Tasks(ctx, q, now)
 	switch {
@@ -873,10 +872,9 @@ func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
 	}
 	out, err := s.Work.Workload(ctx, tracker.WorkloadQuery{
 		Unit: strings.TrimSpace(p.String("unit")),
-		// THROUGH THE CHART, so `?unit=` takes the unit's key, a key
-		// it answered to before a rename, or its name — see
-		// [tracker.Units]. A screen sends whichever it was handed, and
-		// each row holds the key the unit had when it was written.
+		// THROUGH THE CHART, so `?unit=` takes the unit's key or its
+		// name — see [tracker.Units]. A screen sends whichever it was
+		// handed, and each row holds the unit's key.
 		Units: s.chartUnits(),
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,

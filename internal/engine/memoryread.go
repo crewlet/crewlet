@@ -38,9 +38,7 @@ func (e *Engine) armMemoryReads(ctx context.Context) error {
 		Conversations: ledgerstore.NewConversations(db),
 	}
 	owner := e.node.Owner()
-	// BY THE SEAT'S ID, which is how a read names the seat it is about:
-	// whether this node's copy is current is a fact about the seat, not
-	// about the handle it answered to when it arrived.
+	// BY THE SEAT'S ID, which is how a read names the seat it is about.
 	attached := e.node.AttachedSeats
 	e.memoryReads = &memread.Reader{Owner: owner, Local: stores}
 	if e.backends.Queue == nil {

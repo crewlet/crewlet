@@ -101,8 +101,7 @@ type budgetParks struct {
 }
 
 // budgetParking is one parked seat: what the park was decided under, when the
-// refusing window turns over, and the handle the seat answered to then, for the
-// log lines.
+// refusing window turns over, and the seat's handle, for the log lines.
 type budgetParking struct {
 	handle   string
 	basis    budgetBasis

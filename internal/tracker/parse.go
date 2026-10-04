@@ -188,11 +188,11 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 
 // registryHas narrows the party registry to the one question routing asks.
 //
-// A HANDLE THAT IS NO LONGER A SEAT is somebody who left, or a watcher
-// recorded before a rename. It is dropped rather than routed, because a
-// notification addressed to nobody is one nothing reports. A nil registry
-// admits everybody, which is the honest answer for a deployment with no
-// organization loaded yet.
+// A HANDLE THAT IS NO LONGER A SEAT is somebody who left — a changed handle
+// included, which is a removed seat (ADR-0013). It is dropped rather than
+// routed, because a notification addressed to nobody is one nothing reports.
+// A nil registry admits everybody, which is the honest answer for a deployment
+// with no organization loaded yet.
 func registryHas(reg *notify.Registry) func(string) bool {
 	if reg == nil {
 		return nil
