@@ -79,9 +79,9 @@ var ErrUnknownRole = errors.New("unknown node role")
 // THE NIL SET MEANS EVERY ROLE, not none — the one place this package
 // deliberately breaks Go's "a nil map reads as empty". A node that declared
 // nothing does everything, and the alternative reading is an incident: a
-// peer whose presence row predates the field, or a profile built by a caller
-// that never set this, would drop out of the seat denominator and every
-// other node would compute too large a share of the seats. "Declared
+// profile built by a caller that never set this would drop out of the seat
+// denominator and every other node would compute too large a share of the
+// seats. "Declared
 // nothing" and "does nothing" must never be the same answer.
 //
 // An empty non-nil set reads the same way for the same reason, and is also
@@ -290,10 +290,6 @@ func (n NodeProfile) Meta() map[string]any {
 // is "use that reading anyway", and the tempting wrong body (skip the peer)
 // is the incident: a live seat-running node missing from the denominator
 // makes every other node claim more than its share.
-//
-// The absent case is not hypothetical. A presence row written by a build
-// that predates this field has no meta at all, which is exactly what a
-// rolling upgrade puts in front of the new nodes.
 func FromMeta(nodeID string, meta map[string]any) NodeProfile {
 	return NodeProfile{
 		ID:     nodeID,
