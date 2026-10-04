@@ -50,8 +50,8 @@ type DomainPosition struct {
 	// stream read as one caught up on the live one, and no node of a
 	// fleet could ever re-anchor.
 	//
-	// ZERO IS UNKNOWN, never "no stream": a row written by a build that
-	// did not publish it, which a reader weighs conservatively.
+	// NEVER ZERO: a runner is always keyed to a stream
+	// ([statelog.Runner.KeyedTo]).
 	StreamCreatedAt time.Time `json:"stream_created_at,omitzero"`
 
 	// CheckpointStoredAt is the broker's instant for the record at this
@@ -68,9 +68,8 @@ type DomainPosition struct {
 	// against a reanchoring node's own position
 	// ([statelog.ReanchorInputs.Highest]).
 	//
-	// ZERO IS UNKNOWN — a checkpoint naming no record, or a build that did
-	// not publish it — and a reader weighs it as history the log may not
-	// hold.
+	// ZERO IS A CHECKPOINT NAMING NO RECORD, and a reader weighs it as
+	// history the log may not hold.
 	CheckpointStoredAt time.Time `json:"checkpoint_stored_at,omitzero"`
 
 	// Snapshot is the newest VERIFIED snapshot this node holds, and its
