@@ -635,8 +635,8 @@ what Settings › People & access reads.
 
 ## Sessions go stale, and an unset deadline is stale
 
-Every principal carries the two instants after which its proof of identity no
-longer holds — one for each [step-up window](#some-gestures-ask-how-recently-you-proved-who-you-are)
+Every principal carries the instant after which its proof of identity is too
+old for a [step-up gesture](#some-gestures-ask-how-recently-you-proved-who-you-are)
 — and **an unset deadline is treated as already stale, not as eternal**.
 The two readings are one keystroke apart and only one of them fails safe: a
 deadline nobody set is a session nobody bounded, and reading it as "never
