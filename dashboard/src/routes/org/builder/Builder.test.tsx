@@ -97,9 +97,11 @@ describe("the posture table", () => {
     expect(engine.checks()).toHaveLength(0);
   });
 
-  test("create mode waits for the org snapshot before deciding", async () => {
+  // THE SOCKET OPENING IS NOT THE SNAPSHOT: an answer that beats it would
+  // offer create mode on a node the fleet runs a company without.
+  test("create mode waits for the org snapshot, not the socket opening, before deciding", async () => {
     const engine = new Engine(null);
-    const { store } = mountBuilder({ engine, connected: false });
+    const { store } = mountBuilder({ engine, org: null });
     await new Promise((r) => setTimeout(r, 50));
     expect(engine.checks()).toHaveLength(0);
     act(() => store.applyOrg(named));
@@ -460,7 +462,7 @@ describe("checking the draft", () => {
 describe("what an org push re-checks", () => {
   test("the snapshot's first org is not an apply, and the draft is checked once", async () => {
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine });
+    const { store } = mountBuilder({ engine, org: null });
     await screen.findByText("No problems");
     expect(engine.checks()).toHaveLength(1);
     act(() => store.applySnapshot({ org: named }));

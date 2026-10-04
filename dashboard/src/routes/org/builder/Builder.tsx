@@ -631,7 +631,7 @@ function BuilderScreen({
   const nav = useNavigator();
   const toast = useToast();
   const org = useOrg();
-  const { connected, authRejected } = useConnection();
+  const { authRejected, accessRefused } = useConnection();
   // WHO IS READING: a signed-in reader refused is refused a GRANT, and one
   // nobody signed in is asked to sign in — two different repairs.
   const viewer = useViewer();
@@ -674,10 +674,15 @@ function BuilderScreen({
   // ---- Reading the configuration -----------------------------------------
 
   const orgName = org?.name ?? "";
-  // The store starts with an empty projection, so an empty one proves nothing
-  // until the socket has connected (and delivered its snapshot) or been
-  // refused; a projection that names a company is known however it arrived.
-  const orgKnown = connected || authRejected || orgName !== "";
+  // WHAT THE ORG SNAPSHOT SAYS IS KNOWN ONCE IT HAS ARRIVED, or once the
+  // socket was refused and none will. The slice is null until the snapshot
+  // (the socket's first frame, or the REST fallback's read) fills it, and the
+  // socket OPENING proves nothing: the snapshot follows the open. Read off the
+  // open, a lead's scope was computed from no org at all, so their first read
+  // went out as the company's and its refusal forgot the draft they kept, and
+  // a node behind the fleet answering before its snapshot was offered create
+  // mode.
+  const orgKnown = org !== null || authRejected || accessRefused !== null;
 
   // WHICH DOCUMENT THIS BUILDER EDITS: the company, or — for a reader without
   // `config:write` who leads a unit — one unit they lead (see the module doc):

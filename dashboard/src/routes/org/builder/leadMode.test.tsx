@@ -366,6 +366,37 @@ describe("a lead's draft", () => {
     expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain('"scope":"ops"');
   });
 
+  // WHAT A LEAD LEADS IS KNOWN FROM THE SNAPSHOT, which follows the socket
+  // opening. Read in between, the builder had no scope, read the company
+  // document as a whole-company draft, and its refusal forgot the draft the
+  // lead had kept through the reload.
+  test("a reload waits for the org snapshot before reading, and keeps the draft", async () => {
+    const engine = new Engine(leadCompany());
+    mountLead(engine);
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Edit Dev" }));
+    await waitFor(() =>
+      expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain('"scope":"engineering"'),
+    );
+    cleanup();
+    const kept = JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!) as { savedAt: number };
+    sessionStorage.setItem(
+      DRAFT_STORAGE_KEY,
+      JSON.stringify({ ...kept, savedAt: kept.savedAt - 1 }),
+    );
+
+    // The socket is open and its snapshot has not arrived.
+    engine.script = (r) => (r.path === "/config" ? json({ error: "unauthorized" }, 403) : null);
+    const { store } = mountBuilder({ engine, org: null, viewer: () => LEAD });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(engine.sent("GET", "/config")).toHaveLength(0);
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain('"scope":"engineering"');
+
+    act(() => store.applySnapshot({ org: leadOrg() }));
+    expect(await screen.findByText(/This tab kept a draft with 1 change/)).toBeDefined();
+    expect(engine.sent("GET", "/config")).toHaveLength(0);
+  });
+
   test("a reader who leads nothing is told the grant, and that a lead edits here", async () => {
     const engine = new Engine(leadCompany());
     engine.script = (r) => (r.path === "/config" ? json({ error: "unauthorized" }, 403) : null);

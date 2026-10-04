@@ -406,7 +406,7 @@ export const EDITOR = { login: "ops", owner: "ops", grants: ["config:read", "con
 
 export function mountBuilder({
   engine,
-  org = null,
+  org,
   connected = true,
   hash = "#/agents/edit?view=visualization",
   surfaces = fakeSurfaces,
@@ -417,6 +417,12 @@ export function mountBuilder({
   wrap = (tree) => tree,
 }: {
   engine: Engine;
+  /**
+   * The org the socket's snapshot delivered. Left out, a connected socket has
+   * delivered the snapshot of an engine running no company (`{}`) and a
+   * disconnected one none; `null` is a socket that opened and has not
+   * delivered it yet.
+   */
   org?: OrgProjection | null;
   connected?: boolean;
   hash?: string;
@@ -440,7 +446,8 @@ export function mountBuilder({
   engine.install();
   const store = new Store();
   if (connected) store.applyHealth({ status: "ok" });
-  if (org) store.applyOrg(org);
+  const snapshot = org === undefined ? (connected ? {} : null) : org;
+  if (snapshot) store.applyOrg(snapshot);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
     Promise.resolve(what === "viewer" ? viewer() : query(what));
