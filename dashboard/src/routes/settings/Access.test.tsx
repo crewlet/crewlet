@@ -213,6 +213,35 @@ test("a seat names who holds it and a token the seat its row binds", async () =>
   expect(within(vacant as HTMLElement).getByText("of 3 human seats")).toBeTruthy();
 });
 
+// THE BOUND SEAT'S KIND IS THE CHART'S: a token bound to an AGENT seat is the
+// residue the report names, and a person's badge on it would say the opposite
+// of the chart on the very row the report calls dangling.
+test("a row bound to an agent seat draws the agent's badge", async () => {
+  stubIam((url) =>
+    url.pathname === "/iam/node-tokens"
+      ? json(200, {
+          tokens: [
+            { id: "deploy", login: "token:deploy", row: "held", person: "p-deploy", seat: "jane" },
+            { id: "boss", login: "token:boss", row: "held", person: "p-boss", seat: "ceo" },
+          ],
+        })
+      : null,
+  );
+  mount();
+  const row = async (login: string) =>
+    (await screen.findByText(login)).closest(".grid-row") as HTMLElement;
+  const outline = (r: HTMLElement) => {
+    const mark = r.querySelector(".crewlet-avatar") as HTMLElement;
+    return mark.classList.contains("crewlet-avatar--human") ? "human" : "agent";
+  };
+  const boss = await row("token:boss");
+  // RESOLVED by the chart, so the outline is the seat's own kind and not the
+  // default a handle the chart does not hold is drawn with.
+  expect(within(boss).getByRole("link", { name: /CEO/ })).toBeTruthy();
+  expect(outline(boss)).toBe("agent");
+  expect(outline(await row("token:deploy"))).toBe("human");
+});
+
 // A REFUSED DIRECTORY IS NOT AN EMPTY COMPANY: the reader sees the refusal and
 // the grants the engine named, and no tile counting nobody.
 test("a refused reader sees the refusal and its grants, and no tiles", async () => {

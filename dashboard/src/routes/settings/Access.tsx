@@ -696,10 +696,16 @@ function Contacts({ contact }: { contact: ConfigRole["contact"] }) {
  * The seat a directory row binds — a person's or a token's — or the plain fact
  * that it binds none. What the row holds, never a verdict on it: a seat the
  * company no longer holds is the report's finding, below.
+ *
+ * THE KIND IS THE CHART'S, never assumed: a row bound to an AGENT seat is the
+ * residue the report names, and drawn with a person's badge this cell would
+ * state the opposite of the chart on the row the report calls dangling. A seat
+ * the chart does not hold has no kind, which the cell draws as its default.
  */
 function BoundSeat({ seat, index }: { seat?: string; index: ReturnType<typeof indexOrg> }) {
   if (!seat) return <EmptyValue label="Bound to no seat" />;
-  return <SeatCell handle={seat} name={index.byHandle.get(seat)?.name ?? seat} kind="human" />;
+  const held = index.byHandle.get(seat);
+  return <SeatCell handle={seat} name={held?.name ?? seat} kind={held?.kind} />;
 }
 
 /**
