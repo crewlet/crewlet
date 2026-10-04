@@ -98,13 +98,14 @@ func TestTheInvitationProposesALoginFromTheAddress(t *testing.T) {
 //
 // The id in the link is the credential, and a 410 once recorded nothing, so a
 // source could present a new invitation id on every request and no operator
-// would see it. Each 410 now reaches the audit trail's failure tally, which is
-// what makes a walk visible. It meets no curve: a link carries 256 bits of
-// secret, so there is nothing a curve would slow, and a curve keyed on the
-// address a link was presented from let one stranger there hold every
-// colleague's invitation at 429.
+// would see it. Each 410 is now a failed attempt, counted on the audit trail's
+// per-minute failure row under its source, which is what makes a walk
+// visible. It meets no curve: a link carries 256 bits of secret, so there is
+// nothing a curve would slow, and a curve keyed on the address a link was
+// presented from let one stranger there hold every colleague's invitation at
+// 429.
 //
-// Mutation: drop the count from the 410 and the tally is empty; key the
+// Mutation: drop the count from the 410 and no failure is counted; key the
 // invitation on its source and the walk meets 429.
 func TestAnInvitationIDThatResolvesToNothingIsCounted(t *testing.T) {
 	t.Parallel()
@@ -153,9 +154,9 @@ func (spentInvitation) InvitationByID(ctx context.Context, id string) (
 // Its holder — or the mail scanner that re-fetches every link in their inbox —
 // presents the link's own secret for an invitation already redeemed. That is
 // nobody guessing, and counted it put the address the scanner reads from in
-// the failure tally as a guesser. The answer is still the one 410 every
-// refusal gets. THE CONTROL is the same link with a secret that is not its
-// own, which IS a guess and is counted every time.
+// the per-minute failure row as a guesser. The answer is still the one 410
+// every refusal gets. THE CONTROL is the same link with a secret that is not
+// its own, which IS a guess and is counted every time.
 func TestASpentLinkThatProvesItselfIsNotAFailedAttempt(t *testing.T) {
 	t.Parallel()
 	const presentations = 8

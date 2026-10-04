@@ -327,8 +327,8 @@ func TestAWriteNamingARemovedPersonIsNeverA503(t *testing.T) {
 				t.Errorf("answered %d %v, want %d %s", rec.Code, body, c.status, c.code)
 			}
 			// A SPEND REFUSED OVER A REMOVAL IS A FAILED SIGN-IN LIKE
-			// EVERY OTHER, counted in the trail's tally through the one
-			// refusal every arm takes.
+			// EVERY OTHER, counted on the trail's per-minute failure row
+			// under its source through the one refusal every arm takes.
 			if c.name == "a sign-in's spend" {
 				if _, failures := r.audit.snapshot(); len(failures) != 1 {
 					t.Errorf("the refused sign-in was counted %d times, want "+

@@ -43,8 +43,8 @@ const (
 // one, and a stranger refusing one guessed value every twenty-five seconds held
 // every valid bearer at the address at 429 on every guarded route, the
 // break-glass Tier A token and `POST /auth/token` among them. What protects a
-// bearer is its value's length; what a guess costs the guesser is a line in the
-// audit trail's failure tally.
+// bearer is its value's length; what a guess costs the guesser is one more on
+// its source's count in the audit trail's per-minute failure row.
 //
 // Mutation: put a source-keyed curve back in front of the comparison and the
 // spray below is answered 429, and so is the valid token after it.
@@ -66,7 +66,8 @@ func TestAStrangerAtTheAddressCannotCloseTheWayBackIn(t *testing.T) {
 				"callers pay for", i, status, retry)
 		}
 	}
-	// SEEN, NEVER SLOWED: every refusal is a failed attempt in the tally.
+	// SEEN, NEVER SLOWED: every refusal is a failed attempt, counted on the
+	// per-minute failure row under its source.
 	if got := tr.failed(types.FailBearer); got != spray {
 		t.Errorf("counted %d bearer failures for %d refusals", got, spray)
 	}
