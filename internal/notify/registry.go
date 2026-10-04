@@ -104,10 +104,9 @@ type identityKey struct{ namespace, externalID string }
 // LOOKUP RESOLVES EACH SEAT'S DECLARED ADDRESS ([org.Role.ResolvedEmail]) —
 // the lookup [Registry.ReconcileHumanContacts] resolves contact ids through,
 // and nil reads the process environment as it does there. It is not optional
-// in practice: the org chart seals a literal address into the secret store and
-// its row carries the `${VAR}` naming it, so an org derived from the rows holds
-// a reference for every seat with an address, and an index built from those
-// as written matched no payload at all.
+// in practice: a company document may declare a seat's address as a `${VAR}`
+// reference, and an index built from those as written matched no payload at
+// all.
 func NewRegistry(o *org.Organization, lookup org.EnvLookup) *Registry {
 	r := &Registry{
 		byHandle: make(map[string]Party),
