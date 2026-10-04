@@ -13,7 +13,7 @@
 // routes — are `config.org.write`, and the two entity reads
 // `config.org.read`: the company's grant as before, or a lead inside the
 // units they lead. What a lead's write changes is decided place by place
-// (admission.go), and a setting or a credential is never theirs.
+// (admission.go), and a setting, a credential or a `${VAR}` is never theirs.
 //
 // THE ROUTES USED TO DECIDE NOTHING, which was sound while the only credential
 // was an operator token and stopped being sound the day a person could sign in

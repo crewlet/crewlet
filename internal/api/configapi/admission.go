@@ -26,8 +26,9 @@ import (
 // reaches, and each is asked of the authority table as `config.org.write`
 // against the document it was read in — where an object was, against the
 // revision being replaced; where it lands and what its new references name,
-// against the revision proposed. A setting and a credential are never a lead's:
-// both are asked as `config.write`, the company's grant.
+// against the revision proposed. A setting, a credential and a `${VAR}` in any
+// field are never a lead's: all three are asked as `config.write`, the
+// company's grant.
 //
 // FROM THE TWO DOCUMENTS, NEVER THE RUNNING COMPANY, so a node behind on its
 // applies decides a write exactly as a current one does.

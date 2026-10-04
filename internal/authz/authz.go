@@ -132,13 +132,15 @@
 //
 // THE ORG CHART IS ALSO ITS LEADS' ([ClassSubtree]): a person who leads a unit
 // may change the seats and units inside it without the grant, every field but
-// a credential's and every place a change reaches held to their own subtree on
-// both sides of the write (internal/api/configapi). What that reaches is
+// a credential's — and no field to a `${VAR}`, which the engine resolves from
+// its own environment wherever one stands — and every place a change reaches
+// held to their own subtree on both sides of the write
+// (internal/api/configapi). What that reaches is
 // stated rather than narrowed: a lead may point a seat in their team at any
 // model chain and any sandbox cell the company's SETTINGS offer — which
 // remain `config:write`'s, so whether a `cli-agent` provider or a host-side
 // sandbox cell exists for a lead to choose is the administrator's decision —
-// and may not name a credential at all.
+// and may not name a credential or a variable at all.
 package authz
 
 import (

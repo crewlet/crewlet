@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -48,11 +49,17 @@ import (
 // already carried was somebody else's decision, and judging it again would
 // make an admin-wired team uneditable by its own lead.
 //
-// A CREDENTIAL IS NEVER A LEAD'S. Every credential field a change sets, clears
-// or alters is listed apart ([OrgChange.Credentials]) and is the company
-// grant's: a `${VAR}` names any secret the company holds, and pointing a seat's
-// tools at one hands it to a process the lead configures. A setting outside
-// `roles:` and `units:` is listed apart for the same grant ([OrgDiff.Settings]).
+// A CREDENTIAL IS NEVER A LEAD'S, AND NEITHER IS A `${VAR}`. Every credential
+// field a change sets, clears or alters, and every `${VAR}` reference it sets,
+// clears or alters in ANY field, is listed apart ([OrgChange.Credentials]) and
+// is the company grant's. A reference names any variable the engine's process
+// can resolve — the company's secrets and Tier A's own keyring and tokens alike
+// — and a credential field is not the only place one is resolved: a human
+// seat's `email` and contact identities resolve a whole `${VAR}` too, and are
+// then recited by `lookup_colleague` and a lead's prompt roster and matched by
+// the party registry. So a lead could otherwise read any secret back by naming
+// it as their own Slack id. A setting outside `roles:` and `units:` is listed
+// apart for the same grant ([OrgDiff.Settings]).
 //
 // PURE, over two documents and never the running company: a node behind on
 // applies decides a write exactly as a current one does.
@@ -121,6 +128,7 @@ type OrgChange struct {
 	Fields []string
 
 	// Credentials is every credential the change sets, clears or alters,
+	// and every `${VAR}` reference it sets, clears or alters in any field,
 	// by its path inside the object, sorted.
 	Credentials []string
 
@@ -266,7 +274,8 @@ type object struct {
 	// document is its own fields, encoded: a unit's without its seats and
 	// child units.
 	document []byte
-	// credentials is every credential value it holds, by path.
+	// credentials is every credential value it holds and every string
+	// carrying a `${VAR}`, by path.
 	credentials map[string]string
 	// refs is every reference it states to another object.
 	refs []reference
@@ -473,13 +482,18 @@ func settingsChanged(before, after *Company) []string {
 	return differingKeys(b, a)
 }
 
-// credentialsOf is every credential value v holds, by its path inside v. An
-// empty one is no credential, so a block whose credential fields are unset
-// holds none.
+// credentialsOf is every credential value v holds, and every string anywhere
+// in v that carries a `${VAR}`, by its path inside v. An empty credential is
+// none, so a block whose credential fields are unset holds none.
 func credentialsOf(v any) map[string]string {
 	out := map[string]string{}
 	eachCredential(reflect.ValueOf(v), nil, false, func(path Path, value string) {
 		if value != "" {
+			out[path.String()] = value
+		}
+	})
+	walkStrings(reflect.ValueOf(v), nil, func(path Path, value string) {
+		if envref.Has(value) {
 			out[path.String()] = value
 		}
 	})

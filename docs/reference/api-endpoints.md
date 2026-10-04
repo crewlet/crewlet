@@ -1156,8 +1156,8 @@ was and where it lands, a unit's own fields are judged on the unit itself
 before and after (so handing it to another `lead:` is refused), a new `lead:`
 or `manages:` entry has to name something inside it, and a new project,
 space, channel, email or contact identity may not be one an object outside
-it already claims. A credential and a setting are never a lead's. The rule,
-change by change, is in [Identity and
+it already claims. A credential, a `${VAR}` in any field and a setting are
+never a lead's. The rule, change by change, is in [Identity and
 Access](../concepts/identity-and-access.md#a-lead-edits-their-own-team).
 
 A write any part of which is not the caller's is refused whole —
@@ -1188,7 +1188,7 @@ stored.
 | `op` | What the write does to the seat or unit: `added`, `removed`, `moved` or `changed` |
 | `side` | `before` (the revision replaced) or `after` (the one proposed): which document the place was read in |
 | `place` | The key of the unit the change reaches; `""` is the company root, which is nobody's subtree |
-| `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), a claimed key (`project`, `space`, `channel`, `email`, `contact`, with the key in `value`), `duplicate` (two objects on one id, which only the company grant may write), or `credential` (with the field's path in `value`) |
+| `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), a claimed key (`project`, `space`, `channel`, `email`, `contact`, with the key in `value`), `duplicate` (two objects on one id, which only the company grant may write), or `credential` (a credential field, or a `${VAR}` in any field, with the field's path in `value`) |
 | `reason` | The authority table's reason: `not_lead`, `root`, or `no_grant` for a credential or a setting |
 
 A lead reads what they may write the same way: `GET /config/roles/{handle}`

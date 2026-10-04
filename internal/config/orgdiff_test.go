@@ -323,7 +323,10 @@ func TestANewClaimReachesItsOtherClaimants(t *testing.T) {
 //
 // Setting, altering and clearing a credential are all changes; carrying it
 // through untouched is not, and neither is a credential block with nothing in
-// it.
+// it. A `${VAR}` anywhere in the object is listed as one too.
+//
+// Mutation: list only the credential fields and the address naming a
+// variable is no change a lead is refused.
 func TestACredentialChangeIsListedApart(t *testing.T) {
 	t.Parallel()
 	base := parse(t, diffBase)
@@ -352,6 +355,20 @@ func TestACredentialChangeIsListedApart(t *testing.T) {
 			"          - name: SRE\n"))
 	if change := only(t, unset); len(change.Credentials) != 0 {
 		t.Errorf("a seat added with no credential listed %v", change.Credentials)
+	}
+	// AND A `${VAR}` IN ANY FIELD IS ONE, credential field or not: a seat's
+	// address and contact ids resolve a whole reference from the engine's
+	// own environment, and are recited back to whoever asks about the seat.
+	// A literal in the same field is not.
+	ref := only(t, config.DiffOrg(base, edit(t, "            handle: sre\n",
+		"            handle: sre\n            email: ${CREWLET_KEYRING}\n")))
+	if !slices.Equal(ref.Credentials, []string{"email"}) {
+		t.Errorf("an address naming a variable listed %v, want email", ref.Credentials)
+	}
+	literal := only(t, config.DiffOrg(base, edit(t, "            handle: sre\n",
+		"            handle: sre\n            email: sre@example.com\n")))
+	if len(literal.Credentials) != 0 {
+		t.Errorf("a literal address listed credentials %v", literal.Credentials)
 	}
 }
 

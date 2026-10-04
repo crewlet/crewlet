@@ -201,13 +201,16 @@ func takeSeat(t *testing.T, list []any, handle string) ([]any, any) {
 // removed — and what they may not is anything that reaches outside it on
 // either side of the write: handing Platform to somebody else, removing or
 // moving the unit they lead, moving a seat out, making a seat manage somebody
-// outside, claiming another team's project, touching a root seat, or changing
-// a credential.
+// outside, claiming another team's project, touching a root seat, changing
+// a credential, or naming a `${VAR}` anywhere — a contact id or an address
+// that names one is resolved from the engine's own environment and recited to
+// whoever looks the seat up.
 //
 // Mutation: decide every place against the document being replaced alone and
 // the cases that only the proposed document refuses — clearing the unit's
 // lead, a seat moved out — are admitted; drop the claim check and the project
-// case is admitted.
+// case is admitted; list only credential fields and the contact id and the
+// address naming a variable are admitted.
 func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -239,6 +242,10 @@ func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 			}, true, ""},
 		{"a seat's masked credential sent back as it was read", configapi.EntityRoles,
 			"staff-eng", func(_ *testing.T, e map[string]any) { e["goal"] = "ship" }, true, ""},
+		{"a literal contact id on their own seat", configapi.EntityRoles, "platform-lead",
+			func(_ *testing.T, e map[string]any) {
+				e["contact"] = map[string]any{"slack_user_id": "U0PLATFORM"}
+			}, true, ""},
 
 		{"their own team handed to an outsider", configapi.EntityUnits, "platform",
 			func(_ *testing.T, e map[string]any) { e["lead"] = "data-lead" }, false,
@@ -278,6 +285,13 @@ func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 				e["mcp_env"] = map[string]any{"github": map[string]any{
 					"GITHUB_TOKEN": "${CEO_GITHUB_TOKEN}"}}
 			}, false, "seat/staff-eng///credential/no_grant"},
+		{"a contact id naming a variable on their own seat", configapi.EntityRoles,
+			"platform-lead", func(_ *testing.T, e map[string]any) {
+				e["contact"] = map[string]any{"slack_user_id": "${CREWLET_KEYRING}"}
+			}, false, "seat/platform-lead///credential/no_grant"},
+		{"an address naming a variable", configapi.EntityRoles, "sre",
+			func(_ *testing.T, e map[string]any) { e["email"] = "${SOME_SECRET}" }, false,
+			"seat/sre///credential/no_grant"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

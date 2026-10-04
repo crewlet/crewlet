@@ -310,8 +310,9 @@ where it lands: a seat added, edited, moved between two of their teams or
 removed, a sub-team added or removed, their own unit's name, purpose or
 channel. Handing their unit to another `lead:`, removing or moving it,
 naming somebody outside it in a `lead:` or `manages:` entry, claiming another
-team's project, space or channel, changing a credential, and any setting take
-`config:write`. A write that reaches past them is refused whole —
+team's project, space or channel, changing a credential, naming a `${VAR}` in
+any field, and any setting take `config:write`. A write that reaches past them
+is refused whole —
 `403 unauthorized` with a `refused` list naming every part, the place it
 reaches and why; see [A lead edits their own
 team](../reference/api-endpoints.md#a-lead-edits-their-own-team). The whole
