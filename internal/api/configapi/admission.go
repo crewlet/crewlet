@@ -43,14 +43,21 @@ import (
 //
 // # What a refusal says
 //
-// The chart's SHAPE is no secret from anybody the route admits. A refused
-// write names the place each refused part reaches — the unit a named seat
-// sits in — because that place is what the caller is refused on, and whether
-// a reference is refused at all already depends on what sits outside their
-// subtree; and a write to a seat or unit the revision does not hold is
-// `404 no_such_entity`. So anybody bound to a seat can learn which seats and
-// units exist and where they sit, as `state:read` is served the chart whole.
-// What only a read serves is a seat's or a unit's fields.
+// THE ADDRESS IS DECIDED FIRST. A read or a write of one seat or unit
+// (`/config/roles/{id}`, `/config/units/{id}`) is decided where the id sits
+// in the active revision — at the root for an id it does not hold — before
+// the id is looked up, the body decoded or anything built ([Service.mayReach]),
+// so a seat in another team, a seat at the root and an id the company does
+// not have are refused in the same bytes, and only the company's grant is
+// told an id is missing.
+//
+// The chart's SHAPE is still no secret from anybody bound to a seat. A
+// refused write names the place each refused part reaches — the unit a seat
+// it names in `manages:` or `lead:` sits in — because that place is what the
+// caller is refused on, and whether a reference is refused at all already
+// depends on what sits outside their subtree; so a lead can learn which
+// seats exist and where they sit by naming them, as `state:read` is served
+// the chart whole. What only a read serves is a seat's or a unit's fields.
 //
 // # Before validation, and before the seat-holder check
 //
@@ -189,31 +196,33 @@ func refuseAdmission(w http.ResponseWriter, err *AdmissionError) {
 	httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
 }
 
-// mayRead decides a read of one seat or unit of the active document,
-// answering the refusal itself; ok is false when the request has been
-// answered. A seat is read where it sits and a unit as itself, so a lead
-// reads what they may write and nothing else.
-func (s *Service) mayRead(w http.ResponseWriter, r *http.Request,
+// mayReach decides a — a read or a write of one seat or unit of the active
+// document — answering the refusal itself; ok is false when the request has
+// been answered. A seat is decided where it sits and a unit as itself, so a
+// lead reads and writes what they lead and nothing else; and it is decided
+// BEFORE anything looks the id up, so an id outside the caller's subtree and
+// one the revision does not hold are refused in the same bytes.
+func (s *Service) mayReach(w http.ResponseWriter, r *http.Request, a authz.Action,
 	company *config.Company, kind, id string) (ok bool) {
 
 	o, err := company.Organization()
 	if err != nil {
-		s.fail(w, "build the organization the read is decided on", err)
+		s.fail(w, "build the organization the request is decided on", err)
 		return false
 	}
-	d := authz.Decide(r.Context(), *principalOf(r), authz.ActionOrgRead,
+	d := authz.Decide(r.Context(), *principalOf(r), a,
 		authz.Object{Kind: authz.KindUnit, ID: id, Container: placeOf(o, kind, id)},
 		orgchart.Of(o), time.Now())
 	if d.Unknown() || !d.Allowed {
-		authz.EnvelopeRefusal(w, r, authz.Policy{Action: authz.ActionOrgRead}, d)
+		authz.EnvelopeRefusal(w, r, authz.Policy{Action: a}, d)
 		return false
 	}
 	return true
 }
 
-// placeOf is the unit a read of one seat or unit is decided on: the unit a
-// seat sits in, or a unit itself; empty for a seat at the root and for an id
-// the revision does not hold, which is decided as the root is.
+// placeOf is the unit a request for one seat or unit is decided on: the unit
+// a seat sits in, or a unit itself; empty for a seat at the root and for an
+// id the revision does not hold, which is decided as the root is.
 func placeOf(o *org.Organization, kind, id string) string {
 	if kind == EntityUnits {
 		if unit := o.Unit(id); unit != nil {

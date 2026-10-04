@@ -181,6 +181,38 @@ func childOf(t *testing.T, unit map[string]any, key string) map[string]any {
 	return nil
 }
 
+// putDocumentAs sends leadDoc back whole through PUT /config as p, with the
+// case's edit made to the document.
+func putDocumentAs(t *testing.T, s *surface, p iam.Principal,
+	change func(map[string]any)) *httptest.ResponseRecorder {
+
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal(companyJSON(t, leadDoc), &doc); err != nil {
+		t.Fatal(err)
+	}
+	change(doc)
+	body, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doAs(t, s, p, http.MethodPut, "/config", string(body),
+		map[string]string{"X-Summary": "a lead's edit"})
+}
+
+// topUnit is a whole document's top-level unit with this key.
+func topUnit(t *testing.T, doc map[string]any, key string) map[string]any {
+	t.Helper()
+	units, _ := doc["units"].([]any)
+	for _, u := range units {
+		if unit, _ := u.(map[string]any); unit["id"] == key {
+			return unit
+		}
+	}
+	t.Fatalf("no top-level unit %q", key)
+	return nil
+}
+
 // takeSeat removes the seat with this handle from a list, answering both.
 func takeSeat(t *testing.T, list []any, handle string) ([]any, any) {
 	t.Helper()
@@ -208,6 +240,12 @@ func takeSeat(t *testing.T, list []any, handle string) ([]any, any) {
 // anywhere — a contact id or an address that names one is resolved from the
 // engine's own environment and recited to whoever looks the seat up.
 //
+// A case with no kind is a whole-document write, its edit handed the whole
+// document: a seat or a unit outside their subtree is refused at its own
+// address before anything is built (TestAWriteIsDecidedBeforeItsIDIsLookedUp),
+// so what reaches outside from a write that also reaches inside is asked
+// there.
+//
 // Mutation: decide every place against the document being replaced alone and
 // the cases that only the proposed document refuses — clearing the unit's
 // lead, a seat moved out — are admitted; drop the key check and the project,
@@ -218,7 +256,7 @@ func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name       string
-		kind, id   string
+		kind, id   string // both empty for a whole-document write
 		change     func(t *testing.T, entity map[string]any)
 		admitted   bool
 		refusedHas string // kind/id/side/place/why/reason, for a refusal
@@ -255,13 +293,15 @@ func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 		{"a sub-team led by an outsider", configapi.EntityUnits, "tooling",
 			func(_ *testing.T, e map[string]any) { e["lead"] = "designer" }, false,
 			"unit/tooling/after/design/lead/not_lead"},
-		{"their own team removed", configapi.EntityUnits, "engineering",
-			func(t *testing.T, e map[string]any) {
+		{"their own team removed", "", "",
+			func(t *testing.T, doc map[string]any) {
+				e := topUnit(t, doc, "engineering")
 				children, _ := e["children"].([]any)
 				e["children"] = []any{children[1]} // Data stays
 			}, false, "unit/platform/before/engineering/place/not_lead"},
-		{"a seat moved out of their team", configapi.EntityUnits, "engineering",
-			func(t *testing.T, e map[string]any) {
+		{"a seat moved out of their team", "", "",
+			func(t *testing.T, doc map[string]any) {
+				e := topUnit(t, doc, "engineering")
 				platform, data := childOf(t, e, "platform"), childOf(t, e, "data")
 				var sre any
 				platform["roles"], sre = takeSeat(t, rolesOf(platform), "sre")
@@ -286,9 +326,12 @@ func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 			func(_ *testing.T, e map[string]any) {
 				e["contact"] = map[string]any{"slack_user_id": "U0PLATFORM"}
 			}, false, "seat/platform-lead///key/no_grant"},
-		{"a seat at the root", configapi.EntityRoles, "ceo",
-			func(_ *testing.T, e map[string]any) { e["goal"] = "grow" }, false,
-			"seat/ceo/before//place/not_lead"},
+		{"a seat at the root", "", "",
+			func(_ *testing.T, doc map[string]any) {
+				roles, _ := doc["roles"].([]any)
+				ceo, _ := roles[0].(map[string]any)
+				ceo["goal"] = "grow"
+			}, false, "seat/ceo/before//place/not_lead"},
 		{"a credential changed inside their team", configapi.EntityRoles, "staff-eng",
 			func(_ *testing.T, e map[string]any) {
 				e["mcp_env"] = map[string]any{"github": map[string]any{
@@ -313,8 +356,13 @@ func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			s := leadSurface(t)
-			res := putEntityAs(t, s, platformLead(), c.kind, c.id,
-				func(e map[string]any) { c.change(t, e) }, "")
+			edit := func(e map[string]any) { c.change(t, e) }
+			var res *httptest.ResponseRecorder
+			if c.kind == "" {
+				res = putDocumentAs(t, s, platformLead(), edit)
+			} else {
+				res = putEntityAs(t, s, platformLead(), c.kind, c.id, edit, "")
+			}
 			if c.admitted {
 				if res.Code != http.StatusCreated {
 					t.Fatalf("a lead's write inside their subtree answered %d: %s",
@@ -642,6 +690,69 @@ func TestAReadIsDecidedBeforeItsIDIsLookedUp(t *testing.T) {
 		ReauthAt: time.Now().Add(time.Hour)}
 	if res := doAs(t, s, admin, http.MethodGet, "/config/roles/nosuch", "", nil); res.Code != http.StatusNotFound {
 		t.Errorf("config:read reading a missing seat = %d, want 404: %s",
+			res.Code, res.Body.String())
+	}
+}
+
+// A WRITE IS DECIDED BEFORE ITS ID IS LOOKED UP, as a read is.
+//
+// The Platform lead writing a seat or a unit outside their subtree — in
+// another team, at the root, the team above their own — or one the company
+// does not have is refused in the same bytes whatever the body: decided where
+// the id sits before anything is built, a missing id at the root. Built
+// first, a body this kind cannot read answered 400 naming where the seat sits
+// in the document, a body naming another handle 400 naming both, a well-formed
+// edit admission's 403 naming the seat's unit, and a missing id 404. The
+// controls are the company's grant, which is told the id is not there, and an
+// address inside their subtree, whose body is read and refused as unreadable.
+//
+// Mutation: decide the address after the draft is built, and every body to an
+// existing id answers apart from the missing one.
+func TestAWriteIsDecidedBeforeItsIDIsLookedUp(t *testing.T) {
+	t.Parallel()
+	s := leadSurface(t)
+	headers := map[string]string{"X-Summary": "probe"}
+	bodies := map[string][]string{
+		configapi.EntityRoles: {`{"bogus": true}`, `{"name": "Renamed", "goal": "grow"}`,
+			`{"name": "Renamed", "handle": "other"}`},
+		configapi.EntityUnits: {`{"bogus": true}`, `{"name": "Renamed", "purpose": "grow"}`,
+			`{"name": "Renamed", "id": "other"}`},
+	}
+	ids := map[string][]string{
+		configapi.EntityRoles: {"designer", "ceo", "cto", "nosuch"},
+		configapi.EntityUnits: {"design", "engineering", "data", "nosuch"},
+	}
+	var first string
+	for kind, list := range ids {
+		for _, id := range list {
+			for _, body := range bodies[kind] {
+				path := "/config/" + kind + "/" + id
+				res := doAs(t, s, platformLead(), http.MethodPut, path, body, headers)
+				if res.Code != http.StatusForbidden {
+					t.Errorf("PUT %s %s = %d, want 403: %s", path, body, res.Code,
+						res.Body.String())
+					continue
+				}
+				if first == "" {
+					first = res.Body.String()
+				} else if res.Body.String() != first {
+					t.Errorf("PUT %s %s answered %s, unlike %s", path, body,
+						res.Body.String(), first)
+				}
+			}
+		}
+	}
+	if res := doAs(t, s, platformLead(), http.MethodPut, "/config/roles/sre",
+		`{"bogus": true}`, headers); res.Code != http.StatusBadRequest {
+		t.Errorf("PUT of a seat in their own team with an unreadable body = %d, "+
+			"want the body read and refused: %s", res.Code, res.Body.String())
+	}
+	admin := iam.Principal{ID: uuid.New(), Login: "ops.admin", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantConfigWrite},
+		ReauthAt: time.Now().Add(time.Hour)}
+	if res := doAs(t, s, admin, http.MethodPut, "/config/roles/nosuch",
+		`{"name": "Nosuch", "llm": "zulu"}`, headers); res.Code != http.StatusNotFound {
+		t.Errorf("config:write writing a missing seat = %d, want 404: %s",
 			res.Code, res.Body.String())
 	}
 }

@@ -1743,14 +1743,17 @@ caller's, each with the place it reaches; a dry run (`?dry_run=true`) answers
 the same, so a lead learns before saving. A lead reads what they may write the
 same way: `GET /config/roles/{handle}` and `GET /config/units/{id}` serve a seat
 or unit of their subtree, masked as every read of the document is, while the
-whole document stays `config:read`'s. The chart's **shape** is no secret from
-them: a refused write's `refused` list names the place each part reaches —
-which unit a seat they named sits in — because that place is what they are
-refused on, and a write to a seat or a unit the company does not have is
-`404 no_such_entity`, so anybody bound to a seat can learn which seats and
-units exist and where they sit, as `state:read` is shown the org chart whole.
-A seat's or a unit's fields are what only a read serves, to whoever may read
-it. The route admits anybody bound to a seat before the body is read, and nobody else; an agent never
+whole document stays `config:read`'s. A read or a write of one seat or unit
+is decided where it sits **before** it is looked up or its body is read — at
+the company root for a name the company does not have — so one in another
+team, one at the root and one that does not exist are refused in the same
+words; only the company's grant is told a name is missing. The chart's
+**shape** is still no secret from them: a refused write's `refused` list names
+the place each part reaches — which unit a seat they named in `manages:` or
+`lead:` sits in — because that place is what they are refused on, so anybody
+bound to a seat can learn which seats exist and where they sit by naming them,
+as `state:read` is shown the org chart whole. A seat's or a unit's fields are
+what only a read serves, to whoever may read it. The route admits anybody bound to a seat before the body is read, and nobody else; an agent never
 writes the chart, and a lead's write asks for the same recent proof of
 identity every other configuration write does.
 

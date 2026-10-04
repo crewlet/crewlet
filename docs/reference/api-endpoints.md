@@ -1194,13 +1194,17 @@ stored.
 
 A lead reads what they may write the same way: `GET /config/roles/{handle}`
 and `GET /config/units/{id}` serve a seat or a unit of their subtree, masked
-like every read here, and refuse one outside it `403 unauthorized`; a read is
-decided before the id is looked up, at the company root for an id the company
-does not have, so only `config:read` is told a seat or a unit is missing. A
-write is more forthcoming by design: each refused part names the place it
-reaches, which is where something outside the caller's subtree sits, and a
-write to an id the company does not have is `404 no_such_entity`. So the
-chart's shape — which seats and units exist and where they sit — is no secret
+like every read here, and refuse one outside it `403 unauthorized`. Both the
+read and the write of one seat or unit are decided where the id sits **before**
+it is looked up or the body is read — at the company root for an id the company
+does not have — so a seat in another team, a seat at the root and an id that
+does not exist are refused in the same bytes, whatever the body, and only
+`config:read` on a read and `config:write` on a write are told a seat or a unit
+is missing. A refused write that reaches outside from inside the caller's
+subtree is more forthcoming by design: each refused part names the place it
+reaches, which is where something outside the caller's subtree sits — the unit
+a seat a `manages:` entry names sits in, or the root for a name nothing answers
+to. So the chart's shape — which seats exist and where they sit — is no secret
 from anybody bound to a seat, as it is none from `state:read`, which is served
 the org chart whole; a seat's or a unit's fields are, and only a read serves
 them. The whole document, its history and its references stay `config:read`'s,
@@ -1320,8 +1324,10 @@ Four rules follow from that:
   placed where the seat sits in the document (`roles[1].gaol`), with its line in
   the body. A decoder that ignored what it did not recognise would answer `201`
   and store the seat with its goal silently gone.
-- **A plain `PUT` never creates.** An id nothing carries is `404 no_such_entity`,
-  not a new entity: naming one that is not there is far more often a typo than
+- **A plain `PUT` never creates.** An id nothing carries is `404 no_such_entity`
+  (on `roles` and `units`, to the holder of `config:write` alone — anybody else
+  is refused `403` as for a seat outside their team), not a new entity: naming
+  one that is not there is far more often a typo than
   an intent to add one. The intent is SAID with `If-None-Match: *` — the
   create-only write, for the two flat collections (`mcp-servers`,
   `llm-providers`): a taken id is `412 entity_exists` rather than a
@@ -1450,7 +1456,7 @@ On a `409`, re-read `/config` and send the edit again.
 - `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
 - `401 Unauthorized`: missing or invalid bearer token — `invalid_token`, in the same [refusal envelope](#every-refusal-is-one-envelope) every route answers with, written by the guard itself before any route runs
 - `403 Forbidden`: `unauthorized` when the credential holds neither the grant nor, on the org chart, the lead relation — with a `refused` list for [a lead's write](#a-lead-edits-their-own-team) — and `step_up_required` for a write whose proof of identity is older than `step_up`
-- `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity read or write naming an id the active revision does not carry (a read of a seat or a unit tells only `config:read`, and refuses anybody else `403` as for one outside their team), or `no_route` for a path under `/config` this surface does not serve
+- `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity read or write naming an id the active revision does not carry (of a seat or a unit, told only to `config:read` on a read and `config:write` on a write, and anybody else is refused `403` as for one outside their team), or `no_route` for a path under `/config` this surface does not serve
 - `405 Method Not Allowed`: `method_not_allowed` for a `/config` path under a method it does not take, with `Allow`
 - `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)
 - `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, or `no_active_revision` when `If-Match` names a revision and none is active

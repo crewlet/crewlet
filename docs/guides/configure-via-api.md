@@ -315,9 +315,11 @@ space, channel, address or contact id, changing a credential, naming a
 is refused whole —
 `403 unauthorized` with a `refused` list naming every part, the place it
 reaches and why; see [A lead edits their own
-team](../reference/api-endpoints.md#a-lead-edits-their-own-team). The whole
-document (`GET /config`) stays `config:read`'s, so a lead edits through the
-entity routes rather than a `GET` and `PUT` of `/config`.
+team](../reference/api-endpoints.md#a-lead-edits-their-own-team). A seat or a
+unit outside their team, and a name the company does not have, is refused
+`403` at its own address before the body is read, in the same words either
+way. The whole document (`GET /config`) stays `config:read`'s, so a lead edits
+through the entity routes rather than a `GET` and `PUT` of `/config`.
 
 ## Read paths
 
@@ -372,7 +374,7 @@ classified, beside the `detail` that renders them.
 | `403` | `unauthorized` | The credential holds neither the grant the route takes nor, on the org chart, the lead relation. A lead's write that reaches outside their team names every part under `refused` |
 | `403` | `step_up_required` | A write whose proof of identity is older than `step_up`: confirm who you are and send it again |
 | `404` | `no_active_revision` | Reading `/config` before the first PUT |
-| `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — a plain `PUT` never creates; send `If-None-Match: *` to add an MCP server or an LLM provider |
+| `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — a plain `PUT` never creates; send `If-None-Match: *` to add an MCP server or an LLM provider. Of a seat or a unit, only `config:write` is told: a lead is refused `403` as for one outside their team |
 | `404` | `no_route` | A path under `/config` this surface does not serve |
 | `405` | `method_not_allowed` | A `/config` path under a method it does not take; `Allow` names the ones it does |
 | `409` | `no_active_revision` | A per-entity write before the first PUT: there is nothing to splice into |
