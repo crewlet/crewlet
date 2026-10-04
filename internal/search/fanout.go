@@ -124,11 +124,6 @@ type Slice struct {
 	// indistinguishable from a corpus that is quietly short" — and the
 	// hole was that the sentence was only ever true for a participant that
 	// did not reply.
-	//
-	// The zero value is "ready", which is what a peer on a build that
-	// predates this field sends, and it is the old behaviour: evolution
-	// here is additive and an unknown field is ignored, so a rolling
-	// upgrade degrades a ranking rather than a search.
 	Building bool
 }
 
@@ -156,10 +151,8 @@ type FanQuery struct {
 	Mode knowledge.Mode
 
 	// Methods are the rankers a participant runs. EMPTY IS BOTH, which is
-	// what a coordinator on a build that predates modes sends and what
-	// the zero value has always meant — so the field is additive on the
-	// wire in both directions: an older participant that ignores it runs
-	// both, and the coordinator fuses only the ones it asked for.
+	// what the zero value means; the coordinator fuses only the ones it
+	// asked for.
 	Methods []Method
 
 	// Limit caps the fused answer. Zero takes [ReturnDepth].
@@ -609,9 +602,8 @@ func Divide(nodes []string) []Assigned {
 // merged against themselves and ranked above where they belong.
 //
 // ONLY THE RANKERS THE QUERY ASKED FOR ARE FUSED, whatever a participant sent
-// back: a peer on a build that predates [FanQuery.Methods] runs both, and
-// fusing the half nobody asked for would turn a keyword search into a hybrid
-// one on whichever buckets that peer happened to hold.
+// back: fusing a half nobody asked for would turn a keyword search into a
+// hybrid one on whichever buckets that peer happened to hold.
 //
 // scatterErr is why the peers could not be asked at all, which becomes every
 // unanswered peer's own reason rather than a generic silence.

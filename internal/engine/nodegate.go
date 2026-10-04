@@ -159,25 +159,18 @@ type GateRequest struct {
 	OpID string
 
 	// By is the principal who ran it, recorded on every log's record as the
-	// author and the kind of party ([iam.ActorFor]) — what `crewlet
-	// retention status` names beside an eviction — and, on the tracker's,
-	// the knowledge base's and the org chart's, the credential they acted
-	// through as well.
-	//
-	// NOT THE CREDENTIAL ON THE IDENTITY ESTATE'S. A gate record there is
-	// pinned at its first version for ever, so a node that cannot decode it
-	// never defers it, and that version has no field for the credential
-	// (iamdomain.GateRecordVersion); what the identity log records is the
-	// author and the kind alone.
+	// author, the kind of party and the credential they acted through
+	// ([iam.ActorFor]) — what `crewlet retention status` names beside an
+	// eviction.
 	//
 	// THE PRINCIPAL AND NOT ITS NAME, for two reasons. The records carry
-	// the author's kind — and three of them the credential — beside the
-	// name, and a bare name recorded every gesture as an operator acting
-	// through a credential named after themselves: a person bound to a
-	// seat, or a machine token acting as its owner, read as a Tier A token
-	// of that name. And the identity estate's writer judges
-	// `fleet:operate` on the party's OWN grants at the record
-	// ([registration.NewGate]), which a name cannot carry.
+	// the author's kind and the credential beside the name, and a bare
+	// name recorded every gesture as an operator acting through a
+	// credential named after themselves: a person bound to a seat, or a
+	// machine token acting as its owner, read as a Tier A token of that
+	// name. And the identity estate's writer judges `fleet:operate` on the
+	// party's OWN grants at the record ([registration.NewGate]), which a
+	// name cannot carry.
 	By iam.Principal
 
 	// Force evicts a node that still holds a live presence lease — see
@@ -546,8 +539,7 @@ func livePresences(ctx context.Context, leases liveLeases) ([]statelog.Presence,
 // the gesture's mint instant: the ledger's vouching reads it off the id, and
 // one spelled here in a shape that grammar did not recognise would be read as
 // minted at the zero instant — answered `unknown` on any node whose ledger
-// ever lost a row, to its sweep or to a snapshot from a donor that scrubbed
-// it. The sign is one step, and the log and the node together the last.
+// ever lost a row to its sweep. The sign is one step, and the log and the node together the last.
 //
 // INJECTIVE, which a plain join of four steps is not: a gesture id may carry
 // a tail of its own and a node id may hold dots, so gesture `x` on node

@@ -451,8 +451,8 @@ func (in ReanchorInputs) Discarding() error {
 func unheldCaveat(r TailRecord) string {
 	if !r.LedgerLostBefore.IsZero() {
 		return fmt.Sprintf("(This node's operation ledger may have lost rows from "+
-			"before %s — to its %s sweep, or with a snapshot from a peer on an "+
-			"older build — and this record's operation was minted before that, so "+
+			"before %s — to its %s sweep — and this record's operation was minted "+
+			"before that, so "+
 			"its rows may hold the record after all: if they do, the discard flag "+
 			"discards nothing.)", r.LedgerLostBefore.UTC().Format(time.RFC3339Nano),
 			OpsRetention)

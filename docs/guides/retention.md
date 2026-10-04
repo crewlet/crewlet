@@ -488,14 +488,7 @@ below the published floor whose missing records the log still holds reports
 **An adoption carries the operation ledger with it.** The ledger — the table
 that says which operations have already been applied — travels inside the
 snapshot, so the adopted node answers a retry of anything its donor applied
-from it, and files work that was queued before the join like any other. The one
-exception is a donor on an **older build**, which scrubbed its ledger out of the
-snapshot: the joining node records the join as the point before which its
-ledger may have lost rows, so a retry of older work there — a turn re-run
-whose work began before the join, an operator repeating an older `-op-id` —
-answers `unknown` (and logs `statelog_write_unvouched`) rather than risk
-applying it twice, until it is retried on a node that did not adopt from the
-older peer. Upgrading the fleet ends it. See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted).
+from it, and files work that was queued before the join like any other. See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted).
 
 ### A node a peer re-anchored past
 
@@ -1097,28 +1090,9 @@ checkpoint is then not past the end at all, and the record is the only thing
 that shows it — and when a broker is restored under it while it runs. It is
 compared for equality, so no clock is ever ordered against another.
 
-A checkpoint written before checkpoints named their record — or placed by a
-reanchor where the log held none — names nothing, and the next batch the node
-commits names its own. An **idle** domain commits no batch, so the node names
-such a checkpoint itself, at boot, from what it kept when it consumed that
-record and **never** from the log's record, which is exactly the thing in
-question: its operation ledger's row at the checkpoint (by the record's own
-instant, or — for a row older than that — by the operation being the one the
-log's record carries), or its retained copy of a record it could not decode. It
-writes the name back and logs `statelog_checkpoint_named` with the evidence
-(`ledger_instant`, `ledger_operation` or `retained`), and compares from then on
-like any other. A ledger row there naming **another** operation than the log's
-record carries is a divergence, logged as `statelog_checkpoint_other_operation`
-and then refused like one. Where nothing names it — the ledger's retention swept
-the row, or the record there wrote none (a read barrier, a repeated operation, a
-record a gate kept out of the rows) — the node logs
-`statelog_checkpoint_unnamed` (`WARN`) once and carries on: refusing would stop
-every idle domain on its first boot of this build over a question that almost
-always has the ordinary answer, but it is the one state in which a restored log
-written past these rows goes unnoticed until the next batch names a record. If
-the broker behind such a node was restored from an older copy, re-anchor or
-replace it rather than waiting for that batch. A checkpoint the log holds no
-record at is neither named nor said, since there is nothing to compare it with.
+A checkpoint a reanchor placed where the log held no record names nothing, so
+there is nothing to compare it with; the next batch the node commits names its
+own record and is compared from then on.
 
 **The rest of the fleet stops writing to it too.** A node whose rows were the
 copy's age sees a log that is its own history, so nothing about its own log
@@ -1585,16 +1559,6 @@ next change to that person's credentials, which republishes the whole set. The
 sweep rewrites the person's row without the collected credentials in the same
 transaction. How somebody joined outlives the redeemed invitation too: the
 redemption is on the change trail, kept for its own horizon.
-
-**A sweep record carries a version, and an older node waits for it.** Collecting
-what was spent is the second version of the sweep record. A sweep deletes by a
-rule every node evaluates for itself, so a node running a build that did not
-know the new clauses would delete less than its peers from the same record —
-and the copies would stay different after the upgrade, because a record is
-never applied twice. So an older node **defers** a version-2 sweep, holds back
-later identity records for the same bucket behind it, and applies all of them
-once it is upgraded. During a rolling upgrade that is a bucket's worth of
-people whose changes reach that node late, and never a node that disagrees.
 
 The identity domain's **operation ledger** keeps the 30-day horizon every
 other domain's does, and one hour for its session subjects, which is not a

@@ -14,16 +14,11 @@ import (
 // `GET /iam/audit` reads iam_history, and the trail named its actor alone. A
 // machine token acts as its owner, so its gesture's actor is the owner — and
 // what somebody's token did to the directory read there as done by them. The
-// record names the credential now, at the version that defines it, and the row
-// carries it beside the actor.
-//
-// TWO THINGS STAY WHERE THEY WERE, and each is a row below. A GATE is pinned at
-// version 1 for ever, so a removal through the same token names its actor alone
-// — the event announcing it carries the credential. And a writer that acted
-// through nothing — the node's own, which writes every sign-in and every duty —
-// writes at the base, so a rolling upgrade defers none of those on an older
-// node. Mutation: drop the column from the apply, the field from the record, or
-// write the version at the base, and a row goes red.
+// record names the credential, and the row carries it beside the actor: on a
+// removal too, the gesture somebody comes back to the trail for. A writer that
+// acted through nothing — the node's own, which writes every sign-in and every
+// duty — names none. Mutation: drop the column from the apply, or the field
+// from the record, and a row goes red.
 func TestAGestureMadeThroughATokenIsRecordedAsOneOnTheTrail(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -39,31 +34,26 @@ func TestAGestureMadeThroughATokenIsRecordedAsOneOnTheTrail(t *testing.T) {
 	for _, step := range []struct {
 		reason  string
 		gesture func() error
-		version int
 	}{
 		{"left the building", func() error {
 			_, err := party.SetStage(t.Context(), id, iam.StageSuspended,
 				"op-suspend", "left the building")
 			return err
-		}, iamdomain.OperatorRecordVersion},
+		}},
 		{"came back", func() error {
 			_, err := rig.writer.SetStage(t.Context(), id, iam.StageActive,
 				"op-restore", "came back")
 			return err
-		}, iamdomain.BaseRecordVersion},
+		}},
 		{"left for good", func() error {
 			_, err := party.Remove(t.Context(), id, "op-remove", "left for good")
 			return err
-		}, iamdomain.GateRecordVersion},
+		}},
 	} {
 		if err := step.gesture(); err != nil {
 			t.Fatalf("%s: %v", step.reason, err)
 		}
 		rig.drain()
-		if env := rig.lastEnvelope(); env.V != step.version {
-			t.Errorf("%q was written at version %d, want %d", step.reason,
-				env.V, step.version)
-		}
 	}
 
 	page, err := reader.History(t.Context(), iamdomain.HistoryQuery{Person: id})
@@ -77,7 +67,7 @@ func TestAGestureMadeThroughATokenIsRecordedAsOneOnTheTrail(t *testing.T) {
 	for reason, want := range map[string]string{
 		"left the building": via,
 		"came back":         "",
-		"left for good":     "",
+		"left for good":     via,
 	} {
 		row, ok := rows[reason]
 		if !ok {

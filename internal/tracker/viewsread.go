@@ -432,15 +432,13 @@ func implicitViews(container Container) []ViewRow {
 func savedViews(ctx context.Context, tx *sql.Tx, container Container,
 	units Units, viewer string, pinned map[string]bool) ([]ViewRow, error) {
 
-	// A UNIT CONTAINER MATCHES BOTH OF ITS TEAM'S SPELLINGS, which is the
-	// same rule a `unit=` filter follows and for the same reason: a strip
-	// saved before the team had an id is addressed by its name, and one
-	// saved after it by the id. Every other kind addresses itself one way
-	// and [unitSpellings] hands that one back.
+	// A UNIT CONTAINER IS READ UNDER ITS TEAM'S KEY, which is what a save
+	// stores ([CanonicalContainer]) — so a strip asked for by the team's
+	// name finds the views saved under its id.
 	ids := []string{container.ID}
 	if container.Kind == ContainerUnit {
-		if spellings := unitSpellings(units, ids); len(spellings) > 0 {
-			ids = spellings
+		if keys := unitKeys(units, ids); len(keys) > 0 {
+			ids = keys
 		}
 	}
 	// THE SHARED HALF IS `owner = ''`, and it is all an anonymous strip

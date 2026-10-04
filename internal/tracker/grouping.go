@@ -693,71 +693,20 @@ func labelsOf(table map[string]string) func(string) string {
 	return func(key string) string { return table[key] }
 }
 
-// unitAxis is a unit column grouped on the TEAM rather than on the string.
+// unitAxis is a unit column, headed with each team's name.
 //
-// A unit answers to two spellings — its key and its name — and which one a row
-// holds is decided by when it was written, because a filed unit is a record of
-// what was true and nothing rewrites it: a row filed before the document gave
-// the unit an id holds its name. Grouped on the column, that ONE team was TWO
-// columns, both headed with its name, splitting its counts down the middle.
-// That is the defect the `unit=` filter was fixed for, one surface along.
-//
-// So the expression folds every spelling onto the unit's KEY, in SQL, with the
-// spellings BOUND rather than written into the statement — a unit's name is
-// prose a founder typed, and prose reaching a statement as text is how an
-// injection gets in. One arm per unit that has a spelling other than its key,
-// `WHEN column IN (…) THEN key`, binding each such spelling once and the key
-// once ([ChartUnit.spellings]). The expression appears at most four times in
-// one statement (the SELECT, a narrowing — twice for the column of rows with
-// no unit — and a subgroup's), so the driver's own variable ceiling (2 000 on
-// the driver this build ships; see `store.Capabilities.MaxVariables`) allows
-// about five hundred bound values per expression: a unit whose name differs
-// from its key costs two. That is a couple of hundred teams — an order of
-// magnitude past any org chart — and a loud refusal rather than a wrong answer
-// if one ever arrives.
-//
-// A COMPANY WHOSE UNITS ANSWER ONLY TO THEIR KEYS GETS NO CASE AT ALL: every
-// arm would be `WHEN x THEN x`, which the ELSE already answers, so the
-// expression is the bare column it has always been. Same for a nil chart,
-// which is the honest state of a process holding no org.
-//
-// A STORED UNIT THE CHART NO LONGER HAS KEEPS ITS OWN COLUMN, through the
-// ELSE, under the literal the rows hold. It is a team that has left the chart:
-// folding it into anything would be inventing a home for work whose team is
-// gone, and [unitLabels] is what says so on the heading.
+// The rows hold the unit's KEY, which is what every write stores, so the
+// column groups on the team as it is. A STORED UNIT THE CHART NO LONGER HAS
+// keeps its own column under the literal the rows hold: it is a team that has
+// left the chart, and [unitLabels] is what says so on the heading.
 func unitAxis(column string, units Units) groupAxis {
 	axis := groupAxis{Expr: column, Unset: "(no unit)", Labels: unitLabels(units)}
 	if units == nil {
 		return axis
 	}
-	var arms strings.Builder
-	for _, unit := range units.AllUnits() {
-		key := strings.TrimSpace(unit.Key)
-		if key == "" {
-			continue
-		}
-		var others []any
-		seen := map[string]bool{key: true}
-		for _, spelling := range unit.spellings() {
-			if seen[spelling] {
-				continue
-			}
-			seen[spelling] = true
-			others = append(others, spelling)
-		}
-		if len(others) == 0 {
-			continue
-		}
-		arms.WriteString(" WHEN " + column + " IN (?" +
-			strings.Repeat(", ?", len(others)-1) + ") THEN ?")
-		axis.ExprArgs = append(append(axis.ExprArgs, others...), key)
-	}
-	if arms.Len() > 0 {
-		axis.Expr = "CASE" + arms.String() + " ELSE " + column + " END"
-	}
-	// AND A CALLER'S OWN VALUE IS SPELLED THE WAY THE EXPRESSION SPELLS
-	// IT, so `group=Engineering` and `group=eng` narrow to the one column
-	// the board draws — see [groupAxis.Canonical].
+	// A CALLER'S OWN VALUE IS SPELLED THE WAY THE ROWS SPELL IT, so
+	// `group=Engineering` and `group=eng` narrow to the one column the board
+	// draws — see [groupAxis.Canonical].
 	axis.Canonical = func(key string) string {
 		if unit, found := units.ResolveUnit(key); found {
 			return unit.Key

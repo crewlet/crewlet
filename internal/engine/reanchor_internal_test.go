@@ -940,7 +940,7 @@ func appendEvictionAs(t *testing.T, running *runningDomain, opID, node string,
 	t.Helper()
 	subject := tracker.EvictionSubject(node)
 	body, err := json.Marshal(tracker.Eviction{
-		V: tracker.GateRecordVersion, NodeID: node, EvictedBy: "ops-1",
+		V: tracker.DocumentVersion, NodeID: node, EvictedBy: "ops-1",
 		EvictedAt: time.Now().UTC(),
 	})
 	if err != nil {
@@ -948,7 +948,7 @@ func appendEvictionAs(t *testing.T, running *runningDomain, opID, node string,
 	}
 	record, err := tracker.MutationRecord{
 		RecordEnvelope: tracker.RecordEnvelope{
-			V: tracker.GateRecordVersion, OpID: opID, Subject: subject,
+			V: tracker.RecordVersion, OpID: opID, Subject: subject,
 			Op: tracker.OpEviction, CreatedAt: time.Now().UTC(),
 			Scope: tracker.ScopeSet{Subject: true}, Gen: gen, Writer: writer,
 		},

@@ -804,28 +804,20 @@ func refusedUnreadable(t *testing.T, res *httptest.ResponseRecorder,
 	return body
 }
 
-// A REVISION STORED WITHOUT A SEAL IS REFUSED BY EVERY READER, WITH THE REMEDY
-// FOR THE REVISION IT IS.
+// A REVISION STORED WITHOUT A SEAL IS REFUSED BY EVERY READER, naming the
+// import that brings its document back sealed.
 //
 // A node reads only sealed revisions — a plaintext one could have been written
-// by anything that reached the store — so an older build's plaintext revision
-// is neither shown nor applied. Each reader used to answer it as a 500 but
-// revert, which answered the KEY's code, whose message told the caller to put
-// back a key that was never involved. It has its own code, and a remedy that
-// depends on whether it is the active revision: `crewlet config seal` re-seals
-// the active revision and nothing else, so for a superseded one the way back
-// is importing its document again.
+// by anything that reached the store — so it is neither shown nor applied. It
+// has its own code rather than the key's, whose message would tell the caller
+// to put back a key that was never involved.
 //
-// Mutation: answer it under the key's code and the message names a key; drop
-// the active arm of the remedy and the active revision is told to re-import;
-// let the superseded arm name `crewlet config seal` and the second half fails.
-func TestAnUnsealedRevisionIsRefusedWithTheRemedyForWhichItIs(t *testing.T) {
+// Mutation: answer it under the key's code and the message names a key.
+func TestAnUnsealedRevisionIsRefusedNamingTheImport(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	plainID := s.seedUnsealed(t, companyDoc)
 
-	// WHILE IT IS THE ACTIVE REVISION: every reader names the command
-	// that seals it, a write whose prior it is included.
 	for _, req := range []struct{ method, path, body string }{
 		{http.MethodGet, "/config", ""},
 		{http.MethodGet, "/config/references", ""},
@@ -835,12 +827,10 @@ func TestAnUnsealedRevisionIsRefusedWithTheRemedyForWhichItIs(t *testing.T) {
 		t.Run(req.method+" "+req.path+" while active", func(t *testing.T) {
 			res := s.do(t, req.method, req.path, req.body, nil)
 			refusedUnreadable(t, res, httpjson.CodeUnsealedRevision, plainID,
-				"crewlet config seal")
+				"crewlet config import")
 		})
 	}
 
-	// ONCE SUPERSEDED: nothing seals it in place, so every reader says it
-	// cannot be shown or reverted to and names the import.
 	s.seed(t, companyDoc)
 	for _, req := range []struct{ method, path string }{
 		{http.MethodGet, "/config/revisions/" + plainID},
@@ -849,12 +839,8 @@ func TestAnUnsealedRevisionIsRefusedWithTheRemedyForWhichItIs(t *testing.T) {
 	} {
 		t.Run(req.method+" "+req.path+" once superseded", func(t *testing.T) {
 			res := s.do(t, req.method, req.path, "", nil)
-			body := refusedUnreadable(t, res, httpjson.CodeUnsealedRevision, plainID,
+			refusedUnreadable(t, res, httpjson.CodeUnsealedRevision, plainID,
 				"crewlet config import")
-			if hint, _ := body["hint"].(string); strings.Contains(hint, "config seal") {
-				t.Errorf("a superseded revision is told to run a command that "+
-					"seals only the active one: %q", hint)
-			}
 		})
 	}
 	// And the sealed revision that superseded it is served.

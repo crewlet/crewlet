@@ -161,10 +161,10 @@ var protocolCases = []testCase{
 
 	{"an_ungated_claim_still_records_its_own_protocol", func(h *harness) {
 		// Ungated skips the CHECK, never the stamp. A long-lived
-		// singleton record left at protocol 1 by a build that predates
-		// the gate would block every seat claim in the fleet the moment
-		// the version moved; carrying this build's protocol is what
-		// stops an opted-out claim from becoming the thing that blocks.
+		// singleton record stamped below the build that holds it would
+		// block every seat claim in the fleet the moment the version
+		// moved; carrying this build's protocol is what stops an
+		// opted-out claim from becoming the thing that blocks.
 		duty := h.claim(coord.WorkerResource("scheduler"), coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Protocol: 3, Ungated: true,
 		})
@@ -188,10 +188,7 @@ var protocolCases = []testCase{
 		// rolling upgrade that never finishes.
 		//
 		// So the zero value is SAFE: an omitted protocol claims at this
-		// build's version, which is what the caller meant. The opposite
-		// case — a STORED record with no protocol — still reads as the
-		// oldest, because that record genuinely predates the concept;
-		// coord.StoredProtocol is the read-side half.
+		// build's version, which is what the caller meant.
 		lease := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
 		if lease.Protocol != coord.ProtocolVersion {
 			h.t.Fatalf("a claim with no protocol recorded %d, want %d (this build)",
@@ -204,58 +201,6 @@ var protocolCases = []testCase{
 		// And crucially it does NOT gate a peer running this same build.
 		h.claim("seat:engineer", coord.AcquireOptions{
 			Owner: "node-b:1", TTL: LongTTL, Protocol: coord.ProtocolVersion,
-		})
-	}},
-
-	{"a_stored_record_with_no_protocol_reads_as_the_oldest", func(h *harness) {
-		// The read-side half, and the fail-closed one: a record written
-		// before the field existed must gate newer claims until it
-		// lapses, exactly as a real v1 hold would.
-		//
-		// READ THE SCOPE BEFORE TRUSTING THIS CASE. Now that a claim
-		// normalises to this build, NOTHING reachable through
-		// coord.Backend can store a protocol of zero — so the suite
-		// cannot plant the record this rule is about, and what follows
-		// checks the shared helper plus the behaviour the rule
-		// reproduces, NOT that this backend calls the helper on its own
-		// decode path. A durable backend reading the field raw passes
-		// here and still lets an ancient record read as current. That
-		// obligation belongs to each durable backend's own tests, where
-		// the record can be written out of band (internal/coord/kv does
-		// it in record.go); an in-memory store has no records that
-		// predate its own process and nothing to check.
-		if got := coord.StoredProtocol(0); got != 1 {
-			h.t.Fatalf("StoredProtocol(0) = %d, want 1", got)
-		}
-		if got := coord.StoredProtocol(3); got != 3 {
-			h.t.Fatalf("StoredProtocol(3) = %d, want 3", got)
-		}
-		// An explicit older claim still gates, which is the behaviour
-		// the stored reading exists to reproduce.
-		h.claim("seat:ceo", coord.AcquireOptions{Owner: "old:1", TTL: LongTTL, Protocol: 1})
-		h.refused("seat:engineer", coord.AcquireOptions{
-			Owner: "new:1", TTL: LongTTL, Protocol: coord.ProtocolVersion,
-		})
-	}},
-
-	{"a_seat_id_node_waits_for_the_last_handle_named_node", func(h *harness) {
-		// The bump that named a seat's lease and mailbox by the seat's id,
-		// stated as the deploy it protects. A node at the protocol before
-		// it names the same seat's lease by its handle, so the two claim
-		// DIFFERENT resources for one seat, each wins its own, and the
-		// seat runs twice. That node's presence alone is enough to hold
-		// this build back — before it has taken a single seat.
-		const handleNamedProtocol = 4
-		if coord.ProtocolVersion <= handleNamedProtocol {
-			h.t.Fatalf("ProtocolVersion %d is not above %d, the last protocol that named "+
-				"a seat's lease by its handle: this build would claim seats beside "+
-				"nodes that name them differently", coord.ProtocolVersion, handleNamedProtocol)
-		}
-		h.claim(coord.NodeResource("by-handle"), coord.AcquireOptions{
-			Owner: "by-handle:1", TTL: LongTTL, Ungated: true, Protocol: handleNamedProtocol,
-		})
-		h.refused(coord.SeatResource(seatID("ceo")), coord.AcquireOptions{
-			Owner: "by-id:1", TTL: LongTTL, Protocol: coord.ProtocolVersion,
 		})
 	}},
 

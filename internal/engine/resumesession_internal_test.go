@@ -36,10 +36,8 @@ func resumingEngine(t *testing.T) (*Engine, ledgerstore.Conversations) {
 // THE TWO ARE NEVER EQUAL HERE, and that is the whole point of the pair: they
 // differ for exactly one surface, a direct message, where the partition is the
 // thread the kick-off trigger arrived in and the conversation is the whole DM
-// line. A fixture that set only one left the accessor falling back to the
-// other at every call site in this file, so the ledger key the split exists to
-// fix was filed under whichever field happened to be there — and reverting
-// [Engine.recordResume] to the partition passed every case below.
+// line — so reverting [Engine.recordResume] to the partition fails a case
+// below.
 func resumed(conversation, partition string) resumeInput {
 	return resumeInput{
 		Run: sandbox.PendingRun{
@@ -168,33 +166,6 @@ func TestAResumedTurnWithNoConversationRecordsNothing(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("history = %d entries, want none", len(got))
-	}
-}
-
-// A ROW FROM BEFORE THE SPLIT CARRIES ONLY THE PARTITION, and the resume files
-// under it rather than recording nothing.
-//
-// The fallback is pinned on both sides of the seam on purpose: [PendingRun] has
-// it because nothing rewrites a parked run and one waits for a person, and
-// here because this is the frame that would otherwise write an empty key — a
-// resumed turn that recorded nothing at all is the gap [Engine.recordResume]
-// exists to close, and such a row would fall straight back into it.
-func TestAResumedRunFromBeforeTheSplitFilesUnderItsPartition(t *testing.T) {
-	t.Parallel()
-	e, conversations := resumingEngine(t)
-	ctx := context.Background()
-
-	e.recordResume(ctx, resumed("", theDMThread), turn.Result{
-		Decision: phase.Done, Delivered: true, Artifact: "shipped the branch",
-	})
-
-	got, err := conversations.History(ctx, "swe", theDMThread, 0)
-	if err != nil {
-		t.Fatalf("History: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("history = %d entries under the one key the row carries, want the "+
-			"resumed turn's own: a pre-split row records nothing at all", len(got))
 	}
 }
 

@@ -214,7 +214,7 @@ func TestTheEngineRegistersEverySeatMailboxWithTheFleet(t *testing.T) {
 // A GRACEFUL STOP GIVES EVERY FLEET DUTY BACK, AND ONLY THE DUTIES.
 //
 // A duty is claimed per tick and its lease outlives several ticks (45 minutes
-// for this sweep, three hours for the skill curator), and a restarted process
+// for this sweep, three hours for the learning passes), and a restarted process
 // is a new incarnation that cannot re-claim what the old one held. Kept, every
 // deploy that restarted the holder left the duty dark for its whole TTL. A
 // setup hold under the same prefix is different: it belongs to a pass that may
@@ -286,10 +286,9 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 		}
 	}
 	// THE LEASE IS CHECKED, not just the error. A refused claim is the
-	// ordinary (nil, nil) here — a peer holding it, or the duty layout gate
-	// — so a precondition reading only err calls a refusal success and
-	// leaves the assertion below failing for a reason that is not the rule
-	// it is about.
+	// ordinary (nil, nil) here — a peer holding it — so a precondition
+	// reading only err calls a refusal success and leaves the assertion
+	// below failing for a reason that is not the rule it is about.
 	hold := coord.WorkerResource(holdName)
 	if got, err := leases.TryAcquire(ctx, hold, coord.AcquireOptions{
 		Owner: owner, TTL: 5 * time.Minute, Ungated: true,

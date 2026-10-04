@@ -147,14 +147,14 @@ func readWorkload(ctx context.Context, tx *sql.Tx, q WorkloadQuery,
 	where := "t.removed_at IS NULL AND t.archived = 0 AND t.assignee <> '' " +
 		"AND t.status_group IN (" + openGroupsSQL + ")"
 	args := []any{dayStart}
-	// EITHER SPELLING, through the chart — see [unitSpellings]. A workload
+	// THE UNIT'S KEY, through the chart — see [unitKeys]. A workload
 	// narrowed to a team is read from a screen that got the unit from
-	// somewhere else, so whichever of the two names it holds has to work.
-	if spellings := unitSpellings(q.Units, []string{q.Unit}); len(spellings) > 0 {
+	// somewhere else, so its id and its name both have to work.
+	if units := unitKeys(q.Units, []string{q.Unit}); len(units) > 0 {
 		where += " AND EXISTS (SELECT 1 FROM tracker_projects p " +
 			"WHERE p.key = t.project_key AND p.unit IN (" +
-			placeholders(len(spellings)) + "))"
-		args = append(args, anyOf(spellings)...)
+			placeholders(len(units)) + "))"
+		args = append(args, anyOf(units)...)
 	}
 	args = append(args, MaxWorkloadHandles+1)
 

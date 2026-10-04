@@ -656,7 +656,7 @@ func TestTheDeciderRunsUnderTheDispatcher(t *testing.T) {
 	// suppresses the duplicate if the model recognises its own paraphrase.
 	self := settledTurn()
 	self.TurnID = "t2"
-	self.PlanToolSequence = []string{learning.ReflectTool}
+	self.AllToolNames = []string{learning.ReflectTool}
 	out = reflectOnce(r, self)
 	if out.Skipped["persist_decider"] != "self_persisted" {
 		t.Errorf("pass = %+v, want the decider skipped", out)
@@ -671,7 +671,7 @@ func TestTheDeciderRunsUnderTheDispatcher(t *testing.T) {
 	// Counterfactual: a turn naming some OTHER tool is not self-persisted.
 	third := settledTurn()
 	third.TurnID = "t3"
-	third.PlanToolSequence = []string{"query_episodes"}
+	third.AllToolNames = []string{"query_episodes"}
 	if out := reflectOnce(r, third); len(out.Ran) != 1 {
 		t.Errorf("pass = %+v, want the decider to run", out)
 	}

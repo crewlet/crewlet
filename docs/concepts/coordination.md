@@ -321,25 +321,15 @@ This is also why the retention sweep in the [maintenance duty](seat-ownership.md
 
 ## Duties have a bucket of their own
 
-A seat lease and a duty lease want opposite TTLs. A seat is renewed on a heartbeat, so its TTL is a few heartbeats and a dead node's seats move within a minute. A [duty](seat-ownership.md#singleton-duties) is claimed once per **tick** of the work it guards, and a tick runs from ten seconds (the scheduler) to an hour (the learning passes), so a duty's TTL has to outlive several of its own ticks: the scheduler's is 30 seconds, the integration reconcile's four and a half minutes, the retention sweep's 45 minutes and the skill curator's three hours.
+A seat lease and a duty lease want opposite TTLs. A seat is renewed on a heartbeat, so its TTL is a few heartbeats and a dead node's seats move within a minute. A [duty](seat-ownership.md#singleton-duties) is claimed once per **tick** of the work it guards, and a tick runs from ten seconds (the scheduler) to an hour (the learning passes), so a duty's TTL has to outlive several of its own ticks: the scheduler's is 30 seconds, the integration reconcile's four and a half minutes, the retention sweep's 45 minutes and the learning passes' three hours.
 
-A bucket's age is the longest TTL it can keep, so one bucket cannot serve both. While duties shared `leases`, every duty longer than the seat lease TTL was refused, and on a fleet running `coordination.type: embedded-kv` the retention sweep, the mailbox retirement, the integration reconcile, the skill curator and every integration setup pass never ran, with one warning per attempt (`maintenance_duty_claim_failed`, `integration_duty_unknown`) as the only sign. A single node running `local` coordination was unaffected.
+A bucket's age is the longest TTL it can keep, so one bucket cannot serve both. While duties shared `leases`, every duty longer than the seat lease TTL was refused, and on a fleet running `coordination.type: embedded-kv` the retention sweep, the mailbox retirement, the integration reconcile, the learning passes and every integration setup pass never ran, with one warning per attempt (`maintenance_duty_claim_failed`, `integration_duty_unknown`) as the only sign. A single node running `local` coordination was unaffected.
 
 So `duties` holds every `worker:` lease, and the rules are these:
 
 - **A duty may ask for any TTL up to three hours** (`coord.MaxDutyTTL`), on every backend, whatever the seat lease TTL is. One that asks for more is refused with an error naming the ceiling, on the in-memory backend as well, so a duty too long for a fleet fails in a single-node test rather than only in production.
 - **The ceiling is the longest duty's TTL**, and an engine test holds the two equal, so neither can move without the other.
 - **Changing `coordination.lease_ttl_seconds` changes seats and presence only.** A duty's TTL comes from its own cadence.
-
-### The rolling upgrade across the duty bucket
-
-A build that predates `duties` locks a duty in `leases`, and it cannot be taught to look anywhere else. A newer node claiming the same duty in `duties` beside it would give the fleet two holders of one duty. So:
-
-> **While any node of a build that predates the duty bucket is live, newer nodes run no duties.**
-
-Every lease record a newer build writes carries its storage layout, and a record of an older build carries none. An older node renews its presence in `leases` for as long as it runs, so a newer node that sees such a record refuses every duty claim, and a newer node already holding a duty is refused its next per-tick claim and stops. A newer node logs `coord_kv_duties_wait_for_older_build` (a warning) when it starts waiting and `coord_kv_duties_resumed` when it stops, once each, since a refused duty otherwise looks exactly like a duty a peer is running. The older nodes keep running the duties they can (those whose TTL fits the seat lease TTL, which is all they could ever run); once the last of them stops and its records lapse, the newer nodes take every duty in `duties`. The older build's own duty record lapses in `leases` in that same interval, so the two holdings never overlap. Seats are not held back by any of this.
-
-A KV cannot put "no older record exists" inside a compare-and-set, so the check is made before a claim and again after it, and a new claim the second check refuses is given back at once. What that cannot close is an older node that had no live record at all when a newer node claimed (a node the fleet already counts as gone) coming back and claiming the duty in its own bucket: the newer holder's next per-tick claim is refused and it stops, so the overlap lasts at most one tick of that duty. The fleet view shows a duty an older node holds in `leases` as held by that node, so an operator sees who is actually running it during the upgrade. A downgrade across this change needs every newer node stopped first.
 
 ---
 
@@ -355,30 +345,11 @@ A token budget is a set of ceilings per **calendar window** — the day, the ISO
 
 ## What a node says about itself
 
-Every node's presence lease is renewed on its heartbeat, and each renewal carries the node's **status** beside its roles and labels: turns in flight, whether it is draining, its config posture, when it started, how far its replicated state has come up — and two things a peer acts on rather than just displays:
+Every node's presence lease is renewed on its heartbeat, and each renewal carries the node's **status** beside its roles and labels: turns in flight, whether it is draining, its config posture, when it started, how far its replicated state has come up — and one thing a peer acts on rather than just displays:
 
-- **`features`** — the gestures this node's *build* can carry out on a peer's behalf. It is fixed at compile time, and a name joins it only in the build that implements it. This build advertises:
-  - `mcp_status` — the `mcp` rows below are complete, so an empty list means "started none".
-  - `answer_run_by_turn` — it takes an [answer by turn](code-sandbox.md#answering-a-parked-run) off a seat's inbox and hands it to the parked run it names; an older build would run it as a turn about nothing.
-  - `seat_pause` — it [honours a pause](agent-runtime.md#pausing-a-seat): it holds a paused seat's mail, takes that hold again before attaching a paused seat it acquires, skips its schedules and stops a turn a pause asked to stop. An older build would do none of it, so a pause is refused until every live node carries it.
-  - `steer` — it answers a [note to a turn it runs](turn-engine.md#steering-a-running-turn) and hands it to that turn's next round. An older build serves no such subject, so a note to its turns would be answered by nobody; a note is refused until every live node carries it, because which node runs the turn is not known until one answers.
-  - `held_read` — it answers a read of a [seat's memory and conversation ledger](seat-ownership.md) for the seats it holds. The read is asked of the HOLDER alone, since it is addressed to the incarnation the seat's lease names, so a seat held by an older build is answered `unavailable` at once, naming that node's build, rather than after a two-second wait for a reply that cannot come.
-  - `sandbox_tail` — it answers a request for the [live output of a coding run it owns](code-sandbox.md#watching-a-run-live). The request is asked of the run's OWNER alone, so a run owned by an older build is answered `owner_upgrading` at once rather than `owner_silent` after the whole budget.
-- **`mcp`** — one row per configured [MCP server](../guides/tools-and-mcp.md): whether it is shared, how many of its instances started and how many did not, how many tools one serves, and one failure's reason (clipped to 240 bytes, with the seat it belonged to). One row per *server*, not per child, because a per-role template has a child for every seat the node holds and the status is re-sent on every beat. A child that dies after starting is not observed here; its next call fails and says so.
+- **`mcp`** — one row per configured [MCP server](../guides/tools-and-mcp.md): whether it is shared, how many of its instances started and how many did not, how many tools one serves, and one failure's reason (clipped to 240 bytes, with the seat it belonged to). One row per *server*, not per child, because a per-role template has a child for every seat the node holds and the status is re-sent on every beat. An empty list means "started none". A child that dies after starting is not observed here; its next call fails and says so.
 
 Freshness is the heartbeat interval, the same as every other column of the fleet view. A node whose status hook overruns its share of the beat publishes no status for that beat, and a reader treats it as "did not say", never as zero.
-
-### Why a gesture asks the fleet first
-
-Some gestures are accepted by one node and carried out by another: a person pauses a seat through whichever node serves their dashboard, and the node *holding* the seat is the one that has to stop taking its mail. Mid-upgrade that node may run a build that has never heard of the gesture — it would not refuse it, it would simply never do it. So before such a gesture is written it is checked against the heartbeats, and the answer is three-valued:
-
-| The fleet says | The gesture |
-|---|---|
-| every node that could carry it out advertises the feature | goes ahead |
-| one of them runs a build without it (a status with no such feature) | refused **`peer_upgrading`** — nothing to retry until the upgrade reaches that node |
-| the store could not be read, a node published no status, the seat's holder has no presence (it is draining), or no node is live | refused **`unavailable`** — a retry may well clear it |
-
-A gesture only the seat's holder carries out asks about the node whose process holds the seat lease — matched by process incarnation, so a node that restarted since does not answer for its predecessor — and one every future holder must respect asks about every live node. A seat nobody holds is answered for every live node, since any of them may claim it next.
 
 ---
 

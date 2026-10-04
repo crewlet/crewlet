@@ -15,7 +15,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -102,16 +101,8 @@ var classAnswers = map[crewletmcp.Refusal]classAnswer{
 	crewletmcp.RefusalSteerUnsupported:   {http.StatusConflict, httpjson.CodeSteerUnsupported},
 	crewletmcp.RefusalBudgetExhausted:    {http.StatusConflict, httpjson.CodeBudgetExhausted},
 	crewletmcp.RefusalUnavailable:        {0, httpjson.CodeUnavailable},
-	crewletmcp.RefusalPeerUpgrading:      {0, httpjson.CodePeerUpgrading},
 	crewletmcp.RefusalInternalError:      {http.StatusInternalServerError, httpjson.CodeInternalError},
 }
-
-// peerUpgradingRetry is the wait a `peer_upgrading` refusal tells a caller to
-// come back after: the interval a node's presence lease — which is where the
-// fleet reads what each node's build carries out — is renewed at. An upgraded
-// node announces its features on its first beat, so asking sooner reads the
-// same leases and gets the same answer.
-const peerUpgradingRetry = seat.HeartbeatInterval
 
 // Fail writes the answer to one call that was NOT made: cause is the failed
 // result's cause (or a tool-less writer's error, through [ClassifyWrite]),
@@ -225,12 +216,8 @@ func failClass(w http.ResponseWriter, cause error, key string, detail,
 		// this node cannot decode — carries no Retry-After, one that
 		// derived its own hint carries that, and anything else this
 		// node's undecided hint ([statelog.RetryAfter]'s rule, which
-		// every surface answering a refusal reads). The fleet's upgrade
-		// is read off presence leases, so it is asked again after one.
+		// every surface answering a refusal reads).
 		otherwise := time.Duration(authz.RetryUndecidedSeconds) * time.Second
-		if class == crewletmcp.RefusalPeerUpgrading {
-			otherwise = peerUpgradingRetry
-		}
 		detail["op_id"] = key
 		httpjson.UnavailableWith(w, answer.code,
 			httpjson.RetrySeconds(statelog.RetryAfter(cause, otherwise)), detail)

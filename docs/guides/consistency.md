@@ -248,7 +248,6 @@ often it is sent here.
 | `evicted` | This node has been removed from the fleet; nothing it publishes is applied anywhere. | Readmit it, or write through another node. |
 | `deferred` | This node holds a record it cannot decode whose scope covers this object, so its rows are stale. | Write through another node, or upgrade this one. |
 | `deleted` | The object carries a permanent deletion marker. | It stays deleted. |
-| `retired` | The record names a kind this domain once published and no longer applies. | Upgrade the writer. |
 | `abandoned` | The record was written in a generation a reanchor abandoned — one only a node the fleet has since evicted held — so it produces rows nowhere. | Nothing to retry: the rows it was decided from are on no disk the fleet still has. Make the change again as a new operation. |
 | `overtaken` | The record was written after a restored reanchor, by a node the move had overtaken before it learned of it, from rows the reanchor did not keep. | The same: make the change again, under a fresh operation id, on a node on the new generation. |
 | `log_full` | The log is at the byte ceiling its ordinary appends are held to, and refuses appends rather than dropping records. On a log that keeps a [gate reserve](retention.md#the-gate-reserve) that is the reserve below the broker's own. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. |
@@ -261,13 +260,13 @@ often it is sent here.
 | `superseded` | This operation's record landed, and a later record on the same object has since undone or replaced it — an eviction retried under its id after a readmission took the node back — so a retry is not a new write of it. | If you still want the effect, start a new operation under a fresh id. |
 
 A record already durable on the log that a gate then dropped is refused under
-the gate that dropped it — `evicted`, `deleted`, `retired`, `abandoned` or
-`overtaken` — rather than under a generic word, because the gate is what says
+the gate that dropped it — `evicted`, `deleted`, `abandoned` or `overtaken` —
+rather than under a generic word, because the gate is what says
 why; republishing it writes another record the same gate drops.
 
 Eight write reasons have a read twin spelled the same, and each agrees with it
 about waiting: `behind`, `deferred`, `below_floor`, `floor_unknown`,
-`evicted`, `log_full`, `broker_refused` and `wrong_stream`. The other ten
+`evicted`, `log_full`, `broker_refused` and `wrong_stream`. The other nine
 describe something only a write meets:
 
 - `eviction_unknown` — a write's fence reads this node's own eviction rows
@@ -275,7 +274,7 @@ describe something only a write meets:
   this node's health already holds, and answers `evicted` from it.
 - `deleted` — a create that would bring back an object carrying a permanent
   deletion marker. A read of that object simply finds nothing.
-- `retired`, `abandoned` and `overtaken` — what became of a record already
+- `abandoned` and `overtaken` — what became of a record already
   durable on the log. A read appends no record except a barrier, and a barrier
   is never dropped by a gate.
 - `record_too_large` — the one record a read appends, a barrier, is a few

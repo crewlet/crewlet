@@ -113,10 +113,6 @@ const (
 	// object does not exist" — a caller told that files a duplicate.
 	RefusalUnavailable Refusal = "unavailable"
 
-	// RefusalPeerUpgrading — the fleet has a node too old to carry this
-	// gesture, so it is refused everywhere until the upgrade finishes.
-	RefusalPeerUpgrading Refusal = "peer_upgrading"
-
 	// RefusalInternalError — this node FAILED at something of its own: a
 	// read of its own store that broke, a database that would not answer,
 	// a path in its own code that went wrong. Nothing about the call was
@@ -148,7 +144,7 @@ var Refusals = []Refusal{
 	RefusalStaleVersion, RefusalConflict, RefusalExists,
 	RefusalAlreadyAnswered, RefusalReassignmentBudget, RefusalInboxFull,
 	RefusalNotRunning, RefusalSteerUnsupported, RefusalBudgetExhausted,
-	RefusalUnavailable, RefusalPeerUpgrading, RefusalInternalError,
+	RefusalUnavailable, RefusalInternalError,
 }
 
 // Valid reports whether a class off the wire is one this build knows. The

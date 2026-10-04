@@ -15,7 +15,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -53,23 +52,6 @@ func (a *fleetAsker) Ask(_ context.Context, subject string, request []byte, want
 	return out, nil
 }
 
-// steerFleet answers the steer feature gate.
-type steerFleet struct {
-	lacks bool
-	err   error
-}
-
-func (steerFleet) SeatFeature(context.Context, uuid.UUID, coord.Feature) (bool, error) {
-	return true, nil
-}
-
-func (f steerFleet) AllLiveHave(_ context.Context, feature coord.Feature) (bool, error) {
-	if f.err != nil {
-		return false, f.err
-	}
-	return feature == coord.FeatureSteer && !f.lacks, nil
-}
-
 // steerRig is steer_turn on the operator catalogue, called as one principal
 // and decided by the real authority table over a chart.
 type steerRig struct {
@@ -88,15 +70,14 @@ var operatorCaller = boundTo("ops", iam.GrantFleetOperate)
 // The note's id is taken from that and from nothing else, so a rig that put
 // the key anywhere the act route does not would certify a path no request
 // takes. An empty key is a call whose transport named no operation.
-func newSteerRig(t *testing.T, asker builtin.FleetAsker, fleet builtin.Fleet,
-	key string, caller iam.Principal, chart authz.Chart) steerRig {
+func newSteerRig(t *testing.T, asker builtin.FleetAsker, key string,
+	caller iam.Principal, chart authz.Chart) steerRig {
 
 	t.Helper()
 	o := organization(t)
 	cto := ctoSeat(t)
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
-		Fleet: fleet,
-		Org:   func() *org.Organization { return o },
+		Org: func() *org.Organization { return o },
 		Steer: builtin.SteerDeps{Asker: asker, Actor: func(ctx context.Context,
 			turn *turnctx.Turn) (builtin.Actor, error) {
 			actor, err := builtin.PrincipalActor(ctx, turn)
@@ -129,11 +110,9 @@ func ctoSeat(t *testing.T) uuid.UUID {
 
 // steerTool is [newSteerRig] for the deployment's own operator, which every
 // case not about authority acts as.
-func steerTool(t *testing.T, asker builtin.FleetAsker, fleet builtin.Fleet,
-	key string) steerRig {
-
+func steerTool(t *testing.T, asker builtin.FleetAsker, key string) steerRig {
 	t.Helper()
-	return newSteerRig(t, asker, fleet, key, operatorCaller, seatLeads)
+	return newSteerRig(t, asker, key, operatorCaller, seatLeads)
 }
 
 // requestKey is an operation key as the act route hands one to a tool: an
@@ -164,7 +143,7 @@ func TestSteerTurnSendsTheNoteAsThePersonAndAnswersPending(t *testing.T) {
 	asker := &fleetAsker{replies: []steer.Reply{{Version: 1, TurnID: "run-1",
 		AgentHandle: "swe", Status: steer.StatusAccepted}}}
 	key := requestKey()
-	res, out := steerCall(t, steerTool(t, asker, steerFleet{}, key), "run-1", "  use staging  ")
+	res, out := steerCall(t, steerTool(t, asker, key), "run-1", "  use staging  ")
 	if res.Failed {
 		t.Fatalf("refused: %s", res.Output)
 	}
@@ -211,7 +190,7 @@ func TestARetriedRequestIsOneNote(t *testing.T) {
 		asker := &fleetAsker{replies: []steer.Reply{{Version: 1, TurnID: "run-1",
 			AgentHandle: "swe", Status: steer.StatusAccepted}}}
 		for i, key := range keys {
-			res, out := steerCall(t, steerTool(t, asker, steerFleet{}, key),
+			res, out := steerCall(t, steerTool(t, asker, key),
 				"run-1", "use staging")
 			if res.Failed {
 				t.Fatalf("call %d refused: %s", i, res.Output)
@@ -272,7 +251,7 @@ func TestNoReplyIsUnknownNotNotRunning(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			res, out := steerCall(t, steerTool(t, asker, steerFleet{}, requestKey()), "run-1", "use staging")
+			res, out := steerCall(t, steerTool(t, asker, requestKey()), "run-1", "use staging")
 			if res.Failed {
 				t.Fatalf("refused %s: %s", tools.RefusalOf(res), res.Output)
 			}
@@ -293,7 +272,7 @@ func TestSteerTurnRefusesWhatTheRunningNodeRefused(t *testing.T) {
 		steer.StatusUnsupported: tools.RefusalSteerUnsupported,
 	} {
 		asker := &fleetAsker{replies: []steer.Reply{{TurnID: "run-1", AgentHandle: "swe", Status: status}}}
-		res, _ := steerCall(t, steerTool(t, asker, steerFleet{}, requestKey()), "run-1", "use staging")
+		res, _ := steerCall(t, steerTool(t, asker, requestKey()), "run-1", "use staging")
 		if !res.Failed || tools.RefusalOf(res) != want {
 			t.Errorf("%s: answered failed=%v %s (%s), want %s", status, res.Failed,
 				tools.RefusalOf(res), res.Output, want)
@@ -301,35 +280,10 @@ func TestSteerTurnRefusesWhatTheRunningNodeRefused(t *testing.T) {
 	}
 }
 
-// ASKED NOBODY BEFORE THE FLEET CAN CARRY IT: an older node running the turn
-// would answer nothing, and the person would retry an `unknown` that can never
-// succeed there. An unreadable fleet is `unavailable`, not an upgrade.
-func TestSteerTurnIsGatedOnEveryLiveNode(t *testing.T) {
-	t.Parallel()
-	for name, tc := range map[string]struct {
-		fleet steerFleet
-		want  tools.Refusal
-	}{
-		"a node lacks it": {steerFleet{lacks: true}, tools.RefusalPeerUpgrading},
-		"the fleet is unread": {steerFleet{err: fmt.Errorf("store down: %w", coord.ErrUnavailable)},
-			tools.RefusalUnavailable},
-	} {
-		asker := &fleetAsker{}
-		res, _ := steerCall(t, steerTool(t, asker, tc.fleet, requestKey()), "run-1", "use staging")
-		if !res.Failed || tools.RefusalOf(res) != tc.want {
-			t.Errorf("%s: answered %s (%s), want %s", name, tools.RefusalOf(res),
-				res.Output, tc.want)
-		}
-		if len(asker.asked) != 0 {
-			t.Errorf("%s: the note was scattered anyway", name)
-		}
-	}
-}
-
 func TestSteerTurnRefusesABadNote(t *testing.T) {
 	t.Parallel()
 	asker := &fleetAsker{}
-	tool := steerTool(t, asker, steerFleet{}, requestKey())
+	tool := steerTool(t, asker, requestKey())
 	for name, args := range map[string][2]string{
 		"no turn":  {"", "use staging"},
 		"no note":  {"run-1", "   "},
@@ -348,12 +302,12 @@ func TestSteerTurnRefusesABadNote(t *testing.T) {
 	// when the queue is not live; and an error nothing marked is a fault of
 	// this node, whose words are the log's, never the sentence's.
 	failing := &fleetAsker{err: fmt.Errorf("no broker: %w", queue.ErrNotLive)}
-	res, _ := steerCall(t, steerTool(t, failing, steerFleet{}, requestKey()), "run-1", "x")
+	res, _ := steerCall(t, steerTool(t, failing, requestKey()), "run-1", "x")
 	if tools.RefusalOf(res) != tools.RefusalUnavailable {
 		t.Errorf("an ask on a queue that is not live answered %s", tools.RefusalOf(res))
 	}
 	broken := &fleetAsker{err: errors.New("ask crewlet.seat.steer: open a reply mailbox: nats://10.0.0.7:4222 refused")}
-	res, _ = steerCall(t, steerTool(t, broken, steerFleet{}, requestKey()), "run-1", "x")
+	res, _ = steerCall(t, steerTool(t, broken, requestKey()), "run-1", "x")
 	if tools.RefusalOf(res) != tools.RefusalInternalError || strings.Contains(res.Output, "10.0.0.7") ||
 		!strings.Contains(res.Output, "Nothing was sent") {
 		t.Errorf("an ask that broke answered %s: %q", tools.RefusalOf(res), res.Output)
@@ -368,7 +322,7 @@ func TestALeadSteersTheirReportsTurnAfterAProbe(t *testing.T) {
 	t.Parallel()
 	asker := &fleetAsker{replies: []steer.Reply{{Version: 1, TurnID: "run-1",
 		Agent: ctoSeat(t).String(), AgentHandle: "agent-cto", Status: steer.StatusAccepted}}}
-	rig := newSteerRig(t, asker, steerFleet{}, requestKey(), boundTo("jane"), seatLeads)
+	rig := newSteerRig(t, asker, requestKey(), boundTo("jane"), seatLeads)
 
 	res, out := steerCall(t, rig, "run-1", "use staging")
 	if res.Failed || out["outcome"] != "pending" {
@@ -404,7 +358,7 @@ func TestSteeringSomebodyElsesTurnIsRefused(t *testing.T) {
 			asker := &fleetAsker{replies: []steer.Reply{{TurnID: "run-1",
 				Agent: ctoSeat(t).String(), AgentHandle: "agent-cto",
 				Status: steer.StatusAccepted}}}
-			rig := newSteerRig(t, asker, steerFleet{}, requestKey(), tc.caller, tc.chart)
+			rig := newSteerRig(t, asker, requestKey(), tc.caller, tc.chart)
 			res, _ := steerCall(t, rig, "run-1", "use staging")
 			if !res.Failed || !errors.Is(res.Cause, builtin.ErrRefused) {
 				t.Fatalf("answered %+v, want the authority's refusal", res)
@@ -435,7 +389,7 @@ func TestAProbeThatSaysNothingSendsNothing(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			asker := &fleetAsker{replies: replies}
-			rig := newSteerRig(t, asker, steerFleet{}, requestKey(), boundTo("jane"), seatLeads)
+			rig := newSteerRig(t, asker, requestKey(), boundTo("jane"), seatLeads)
 			res, _ := steerCall(t, rig, "run-1", "use staging")
 			if !res.Failed || tools.RefusalOf(res) != tools.RefusalUnavailable {
 				t.Fatalf("answered %+v, want unavailable", res)

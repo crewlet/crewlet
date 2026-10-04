@@ -33,8 +33,7 @@ import (
 //
 // A saved view carrying `view=` would expand into itself, and one carrying
 // `cursor=` would resume a page the caller never asked for. Both are refused
-// at the SAVE — see [checkView] — and stripped here too, because a row written
-// by an older build is a row this one still has to read.
+// at the SAVE — see [checkView] — so no stored view carries either.
 
 // The presets, and there are exactly five: each is a question a person asks
 // often enough that a screen puts it on a tab.
@@ -145,6 +144,17 @@ func (r *Reader) Expand(ctx context.Context, params map[string]any,
 	return mergeExpansion(params, presetDefaults, viewDefaults, viewer.Handle)
 }
 
+// savedDefaults is what a saved view's own parameters contribute to an
+// expansion: all of them, since the save refuses every key [expansionRefused]
+// names.
+func savedDefaults(params map[string]string) MapParams {
+	out := make(MapParams, len(params))
+	for key, value := range params {
+		out[key] = value
+	}
+	return out
+}
+
 // mergeExpansion is the whole of what a read's parameters mean once a preset
 // and a saved view have been read: the preset's defaults, the view's over
 // them, the caller's over both — and then `me` resolved to the viewer over the
@@ -179,23 +189,6 @@ func mergeExpansion(caller map[string]any, preset, view MapParams,
 		return nil, err
 	}
 	return MapParams(resolved), nil
-}
-
-// savedDefaults is what a saved view's own parameters contribute to an
-// expansion: every key but the ones [expansionRefused] names.
-//
-// A ROW AN OLDER BUILD WROTE may carry one, since the save refuses these —
-// dropped rather than honoured, because a saved cursor would resume a page
-// nobody asked for.
-func savedDefaults(params map[string]string) MapParams {
-	out := make(MapParams, len(params))
-	for key, value := range params {
-		if slices.Contains(expansionRefused, key) {
-			continue
-		}
-		out[key] = value
-	}
-	return out
 }
 
 // resolveViewerKeys substitutes the reader for every `me` a query names.

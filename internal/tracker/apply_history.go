@@ -71,23 +71,10 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	// edit filed as `catalogue_updated` when somebody heard about it and
 	// as `patch` when nobody did — and a quiet purge as `purge`, which is
 	// not a [ChangeKind] at all, so `kinds=purged` could never find it.
-	// See [MutationRecord.Kind].
-	//
-	// The ladder has three rungs and each one is reachable. The record's
-	// own kind is what this build's writers state. The notification's is
-	// what a record from the build BEFORE this field carries, which a
-	// rolling upgrade makes ordinary traffic. And [fallbackKind] is for a
-	// record from that same older build that was quiet — the only case
-	// where nothing on the record says what it did, and a guess from the
-	// operation is all there is.
+	// Every writer states it ([Writer.decide] refuses a history-writing
+	// record that does not), so there is nothing to fall back to. See
+	// [MutationRecord.Kind].
 	kind := string(c.record.Kind)
-	switch {
-	case c.record.Kind.Valid():
-	case notify != nil:
-		kind = string(notify.Kind)
-	default:
-		kind = string(fallbackKind(applied, c.record.Op))
-	}
 	// THE DELTAS ARE THE APPLIER'S, on every commit, loud or quiet.
 	//
 	// They used to be the NOTIFICATION's, which made "what changed" a
@@ -119,10 +106,9 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 		// and that was never true: a comment's wake builds its deltas
 		// with [TaskDeltas] like every other, so this branch can carry
 		// no key the one above could not. What it is actually for is a
-		// record whose notification was built by a DIFFERENT build —
-		// the only way the two sets can differ — and a retired kind is
-		// gated before it ever reaches an apply, so on a current build
-		// the two agree or both are empty.
+		// record the apply compared nothing for — a late record whose
+		// object row a successor already moved past — where the
+		// writer's own deltas are the only statement of what it did.
 		fields = jsonOf(notify.Fields)
 	}
 
@@ -431,7 +417,7 @@ func inboxSubjectKey(fromRow string, notify *Notify) string {
 // inflated her unread count. It is also what
 // `work_routing`'s `nobody` has always claimed of this table: "every
 // candidate was the actor" — which was true of the wake and false of the
-// rows. Rows written before this rule are removed by [rederiveOwnNotices].
+// rows.
 //
 // The retention horizon is applied AROUND the candidate computation rather
 // than inside it, which is what keeps that function free of a clock: a record
@@ -559,64 +545,4 @@ func batchOf(rec MutationRecord) any {
 		return nil
 	}
 	return *rec.BatchID
-}
-
-// fallbackKind is what a record that names no kind and carries no notification
-// is filed under.
-//
-// # It is the compatibility rung, and it used to be the ordinary one
-//
-// Every record this build writes states its own kind ([MutationRecord.Kind]),
-// so this is reached only for a record an older build wrote QUIETLY — which a
-// rolling upgrade makes real traffic for as long as one takes, and never
-// after. It stays for exactly that window and is the only thing that can ever
-// read such a row.
-//
-// BY WHAT MOVED, in a fixed precedence, because the kind is what every feed
-// filter selects on. The order puts `status` first for the same reason the
-// spans read the delta: it is the change other tables are derived from.
-//
-// # AND IT ANSWERS ONLY IN [ChangeKind]s, which is the half that was wrong
-//
-// It used to end at `ChangeKind(op)` — the OPERATION, cast. That is a
-// different vocabulary: `patch`, `tombstone`, `restore` and `purge` are
-// [OpKind]s, none of them is a valid [ChangeKind], and three of them are
-// near-misses of one (`removed`, `restored`, `purged`). So a quiet removal
-// filed as `tombstone` and `kinds=removed` did not find it — a filter looking
-// at the right word for a row written under the wrong one, with nothing on
-// either side to say so.
-func fallbackKind(applied map[string]Delta, op OpKind) ChangeKind {
-	switch op {
-	case OpCreate:
-		// A CREATE IS A CREATE, whatever it set on the way in: every
-		// field moves from empty on a create, so deciding by what moved
-		// would file every new task under the first field in the
-		// precedence.
-		return ChangeCreated
-	case OpTombstone:
-		return ChangeRemoved
-	case OpRestore:
-		return ChangeRestored
-	case OpPurge:
-		return ChangePurged
-	}
-	for _, moved := range []struct {
-		field string
-		kind  ChangeKind
-	}{
-		{"status", ChangeStatus},
-		{"assignee", ChangeAssignee},
-		{"project", ChangeMoved},
-		{"priority", ChangeFields},
-		{"title", ChangeFields},
-		{"type", ChangeFields},
-		{"tags", ChangeFields},
-	} {
-		if _, changed := applied[moved.field]; changed {
-			return moved.kind
-		}
-	}
-	// A PATCH THAT MOVED NOTHING THIS LIST NAMES IS A FIELD EDIT, which
-	// is both true and nameable — where the operation was neither.
-	return ChangeFields
 }

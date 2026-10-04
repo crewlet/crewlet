@@ -359,17 +359,12 @@ type Task struct {
 
 	// FiledUnit is IMMUTABLE and is a RECORD OF WHAT WAS TRUE: nothing
 	// rewrites it, and it may legitimately name a unit the chart no longer
-	// has, or a spelling it no longer uses.
+	// has.
 	//
 	// WHAT A WRITE STORES IS THE UNIT'S KEY — `org.Unit.Key`, resolved
 	// through [Units] by whoever holds the chart — so a rename does not
-	// move the work. WHAT A READ MATCHES IS BOTH OF THE UNIT'S SPELLINGS,
-	// through [unitSpellings], and that is the whole repair for the rows
-	// already written: these are REPLICATED rows derived from an ordered
-	// log, so nothing may rewrite them in place, and a repair record per
-	// task would rewrite history to say a team was called something it was
-	// not. The rows stay as they were written, the stored form is the key
-	// from here on, and every reader resolves the set.
+	// move the work, and a read resolves what it was asked for to the same
+	// key ([unitKeys]).
 	FiledUnit string `json:"filed_unit,omitempty"`
 	// RoutingUnit is the mutable half — whose lead hears about this task
 	// NOW — and is the only unit field any write touches. It takes the
@@ -714,12 +709,8 @@ type TaskPatch struct {
 	// walk whose holder died.
 	//
 	// MergeReparent rides the same append and says what that walk is for.
-	// TWO FIELDS RATHER THAN ONE RESHAPED VALUE because the record is a
-	// payload two builds share across a rolling upgrade, and evolution
-	// there is additive-only: an older node reading a newer merge mark
-	// ignores the intent and clears the marker, which is what it did
-	// before this existed. The applier clears it whenever the marker goes
-	// down, so the pair cannot drift into "not merging, but re-parenting".
+	// The applier clears MergeReparent whenever the marker goes down, so
+	// the pair cannot drift into "not merging, but re-parenting".
 	Merging       *bool `json:"merging,omitempty"`
 	MergeReparent *bool `json:"merge_reparent,omitempty"`
 
@@ -733,12 +724,6 @@ type TaskPatch struct {
 	// split: a separate mark could land without the move behind it, or the
 	// move without the mark, and either is a state no reader can tell
 	// from the other.
-	//
-	// A NEW FIELD ON A SHARED RECORD, so it has its row in
-	// [versionedFields] and a record carrying it is stamped at that
-	// version. Merging is a base-format field every build reads; this one
-	// the build before it would drop, and that node would then hold a row
-	// the rest of the fleet does not.
 	Moving *bool `json:"moving,omitempty"`
 
 	// Reassignments is the hand-off counter this write leaves behind,
@@ -1155,10 +1140,7 @@ type Project struct {
 	// it one, its name where it did not) rather than its display name,
 	// because a task filed into this project takes its own filed unit from
 	// here and never rewrites it. A reader renders the key back to the
-	// team's current name through [Units], and being chart-owned this
-	// column re-settles on the current key at the next chart apply — which
-	// is why a company that adds an id holds the older spelling only in
-	// TASK rows, and only those need reading through [unitSpellings].
+	// team's current name through [Units].
 	Name    string `json:"name"`
 	Purpose string `json:"purpose,omitempty"`
 	Unit    string `json:"unit,omitempty"`
@@ -1180,8 +1162,7 @@ type Project struct {
 	// ends in. LEAD-OWNED rather than chart-owned — it is how the team
 	// plans, not a fact the founder wrote in the config — so it is set
 	// through [Writer.WriteProject] and a chart apply carries it through
-	// untouched. A version-7 field ([versionedFields]): a build reading 6
-	// has no column for it and retains a record carrying one.
+	// untouched.
 	TargetDate string `json:"target_date,omitempty"`
 
 	// PolicyVersion moves on a fields edit — NOT on tags.
@@ -1389,10 +1370,7 @@ type Person struct {
 // on apply, so after a reanchor a person's position read back as generation
 // zero and every notice in the new generation compared above it — an inbox
 // that could never be read past again. A zero generation is omitted from the
-// JSON because a build that stored the bare sequence has nowhere to put any
-// other one: a record carrying a non-zero generation is stamped at the version
-// that stores it (see versionedFields), and one carrying none stays readable by
-// every build.
+// JSON, which is what a log no reanchor has moved carries.
 type Position struct {
 	Stream     string `json:"stream"`
 	Generation uint32 `json:"generation,omitempty"`

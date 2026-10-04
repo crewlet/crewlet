@@ -668,19 +668,13 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	if len(q.Types) > 0 {
 		add("t.type IN ("+placeholders(len(q.Types))+")", anyOf(q.Types)...)
 	}
-	// BOTH UNIT FILTERS MATCH EVERY SPELLING THEIR UNIT ANSWERS TO — see
-	// [unitSpellings]. `filed_unit` is a record of what was true and is
-	// never rewritten, so a company that gives a unit an id holds both
-	// spellings across its own history for ever: the filter resolves
-	// through the chart and matches the set rather than the one string
-	// somebody typed.
-	if spellings := unitSpellings(q.Units, q.Unit); len(spellings) > 0 {
-		add("t.filed_unit IN ("+placeholders(len(spellings))+")",
-			anyOf(spellings)...)
+	// BOTH UNIT FILTERS RESOLVE THROUGH THE CHART to the key the rows
+	// hold — see [unitKeys].
+	if units := unitKeys(q.Units, q.Unit); len(units) > 0 {
+		add("t.filed_unit IN ("+placeholders(len(units))+")", anyOf(units)...)
 	}
-	if spellings := unitSpellings(q.Units, q.RoutingUnit); len(spellings) > 0 {
-		add("t.routing_unit IN ("+placeholders(len(spellings))+")",
-			anyOf(spellings)...)
+	if units := unitKeys(q.Units, q.RoutingUnit); len(units) > 0 {
+		add("t.routing_unit IN ("+placeholders(len(units))+")", anyOf(units)...)
 	}
 	if handles := q.Assignee; len(handles) > 0 {
 		// `none` is a VALUE rather than a missing filter: "unassigned"

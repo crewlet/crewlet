@@ -242,9 +242,7 @@ func refusedBy(class tools.Refusal, cause error, msg string) tools.Result {
 // A refusal or an outcome the state log composed ([statelog.ErrUnavailable]:
 // a node behind its log, below its floor, holding a record it cannot decode, a
 // log that refused the append); a coordination store that did not answer
-// ([coord.ErrUnavailable]); a node that has not yet said what its build can do
-// ([coord.ErrFeatureUnknown] — it is draining, or has not beaten since it
-// started); an estate held closed while a peer's snapshot is adopted
+// ([coord.ErrUnavailable]); an estate held closed while a peer's snapshot is adopted
 // ([store.ErrNoEstate]); a store whose write lock the writers ahead of this one
 // held for longer than the write would wait ([store.ErrBusy]); an event queue
 // that is not live while this node starts or stops ([queue.ErrNotLive]); an
@@ -298,9 +296,6 @@ func Condition(err error) (words string, ok bool) {
 		return stateLogWords(err), true
 	case errors.Is(err, coord.ErrUnavailable):
 		return "the coordination store did not answer", true
-	case errors.Is(err, coord.ErrFeatureUnknown):
-		return "the node that would carry it out has not said what its build " +
-			"can do yet — it is draining, or has only just started", true
 	case errors.Is(err, store.ErrNoEstate):
 		return "this node's store is closed while it adopts a peer's snapshot " +
 			"or shuts down", true

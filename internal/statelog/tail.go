@@ -40,9 +40,8 @@ import (
 // record, and the broker's instant is the record's own rather than a node's.
 //
 // Every answer that is not "yes" is "no", and "no" is not always conclusive.
-// The ledger can LOSE rows — to its own sweep ([OpsRetention]), or with a
-// snapshot from a donor on an older build, which scrubbed it — and it says how
-// far back it may have ([Rows.LostBefore]): for an operation minted before
+// The ledger can LOSE rows — to its own sweep ([OpsRetention]) — and it says
+// how far back it may have ([Rows.LostBefore]): for an operation minted before
 // that watermark, absence says nothing, and the record is named with the
 // watermark ([TailRecord.LedgerLostBefore]) so the refusal can say its rows
 // may hold it after all. The other false "no" is a record a gate dropped,

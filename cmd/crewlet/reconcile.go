@@ -254,11 +254,9 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 //
 // What this publishes, every peer applies — and every peer refuses a body that
 // is not sealed, because the seal is what says a node of this fleet wrote it.
-// So a revision this node holds in the clear, which only a build older than
-// the mandatory keyring wrote, is refused HERE, where `crewlet config seal` is
-// the remedy and this node is the one to run it. Published, it was refused on
-// every node, this one included, each telling its operator to seal a revision
-// that was never theirs.
+// So a revision this node holds in the clear is refused HERE, where this
+// node's operator can act on it, rather than published to be refused on every
+// node.
 func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publisher,
 	configs localActivator, active store.Revision, cipher secrets.Cipher, log *slog.Logger,
 ) error {

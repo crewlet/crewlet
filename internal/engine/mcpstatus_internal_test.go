@@ -3,7 +3,6 @@ package engine
 import (
 	"errors"
 	"reflect"
-	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -129,19 +128,5 @@ func TestMCPStatusIsOneRowPerServerWithItsInstancesCounted(t *testing.T) {
 		if got := e.mcpStatus(); !reflect.DeepEqual(got, want) {
 			t.Fatalf("mcp status = %+v\nwant %+v", got, want)
 		}
-	}
-}
-
-// A NODE ADVERTISES EXACTLY WHAT ITS BUILD HONOURS. The list is a claim every
-// peer acts on — a gesture it gates is accepted once every node carries the
-// name — so it is this build's own vocabulary, and nothing a read could change.
-func TestANodeAdvertisesWhatItsBuildHonours(t *testing.T) {
-	t.Parallel()
-	got := (&Engine{}).nodeStatus(t.Context()).Features
-	if !slices.Equal(got, coord.Features) {
-		t.Errorf("features = %v, want this build's %v", got, coord.Features)
-	}
-	if !slices.Contains(got, coord.FeatureMCPStatus) {
-		t.Error("a node publishing its mcp status does not say so, so an empty list reads as \"did not say\"")
 	}
 }

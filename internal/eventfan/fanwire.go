@@ -26,90 +26,14 @@ import (
 // than was asked — rows merged in as though they matched — and a new ANSWER
 // field a merge sums, which the peer never sends and the merge reads as zero.
 //
-// So every request is stamped with the LOWEST version that answers it, on the
-// tracker's rule for its records (internal/statelog's RecordFields): a
-// question carrying nothing new goes out as v1 and every build answers it,
-// and one that needs a newer field goes out at that field's version, which an
-// older peer refuses by version rather than answering around. A node answers
-// any version from 1 to its own [Protocol] and replies in the version it was
-// asked in, and the asker names a peer that refused — or replied in another
-// version — in the coverage rather than guessing at fields it cannot read.
-// [versionOf] is the table: adding a filter or a summed answer field is adding
-// a row there and moving [Protocol] to its version.
+// So a field that a peer could ignore that way — a filter, or an answer field a
+// merge sums — moves [Protocol], and a node refuses a version above its own by
+// name rather than answering around a field it cannot read. The asker names a
+// peer that refused — or replied in another version — in the coverage rather
+// than guessing at fields it cannot read.
 
-// Protocol is the highest scatter version this build speaks — never, on its
-// own, the version it asks in; see [versionOf].
-//
-//   - v1: the base format.
-//   - v2: `channel_id` and `agent_id` on a listing's filters, and the
-//     `failed` split on every histogram bar and total.
-//   - v3: `suspended` on a listing's filters, `agent_id` on the company's
-//     phases — the question that narrowed by a role name, which two unit
-//     seats share, and now narrows by the seat's own id — and `since` and
-//     `until` on a page of turns, the window as the asker's two instants on
-//     the turn's start rather than whole days back from each peer's clock.
-//   - v4: `failed` on a listing's filters — the event log's "Failures only",
-//     which used to narrow the rows a tab had paged in rather than the rows
-//     it was sent.
-//   - v5: `agent_id` on a window's phase spend — one seat's records by the id
-//     every node derives, where the question used to narrow by a role name
-//     two seats share. An older peer reads only that role name, and would
-//     answer every seat's.
-const Protocol = 5
-
-// versionOf is the lowest scatter version that answers one question with
-// these parameters.
-//
-// A HISTOGRAM IS ALWAYS AT LEAST v2, because its answer carries the failed
-// split and a v1 peer would contribute bars with none — a sum that
-// under-counts failures by exactly that node's share, with nothing to say so —
-// and higher when its filters are. A listing is asked in its filters' version,
-// so one narrowing by nothing new is still answered by the whole fleet during
-// an upgrade. The company's phases narrowed to a seat are v3: an older peer
-// reads only the role name the question used to carry, and would answer every
-// seat's.
-func versionOf(q Question, params any) int {
-	switch q {
-	case QuestionSeries:
-		if p, ok := params.(seriesParams); ok {
-			return max(2, p.List.version())
-		}
-		return 2
-	case QuestionEvents:
-		if p, ok := params.(listParams); ok {
-			return p.version()
-		}
-	case QuestionPhases:
-		if p, ok := params.(phasesParams); ok && p.AgentID != "" {
-			return 3
-		}
-	case QuestionTurns:
-		// A PEER THAT READS ONLY `since_days` would answer the last week
-		// for a one-hour bar three days ago — a page of the wrong turns,
-		// every one of which the asker then has to throw away.
-		if p, ok := params.(turnsParams); ok && (!p.Since.IsZero() || !p.Until.IsZero()) {
-			return 3
-		}
-	case QuestionPhaseTokens:
-		if p, ok := params.(phaseTokenParams); ok && p.AgentID != "" {
-			return 5
-		}
-	}
-	return 1
-}
-
-// version is the lowest scatter version that honours every filter set.
-func (p listParams) version() int {
-	switch {
-	case p.Failed != nil:
-		return 4
-	case p.Suspended != nil:
-		return 3
-	case p.ChannelID != "" || p.AgentID != "":
-		return 2
-	}
-	return 1
-}
+// Protocol is the scatter version this build speaks and asks in.
+const Protocol = 1
 
 // Subject is where a history question is scattered: ONE subject for the whole
 // fleet, every node serving it, because the answerers are every node rather
@@ -295,7 +219,6 @@ type turnsParams struct {
 	Sort      store.TurnSort `json:"sort,omitempty"`
 	Limit     int            `json:"limit"`
 
-	// v3 — see [versionOf].
 	Since time.Time `json:"since,omitzero"`
 	Until time.Time `json:"until,omitzero"`
 
@@ -324,7 +247,7 @@ func (p turnsParams) query(ids []string) store.TurnQuery {
 }
 
 // phasesParams is both phase questions' parameters: the seat, by the id every
-// node derives for it (v3 on the company's phases), and never by a role name,
+// node derives for it, and never by a role name,
 // which two seats may share — read by name, one seat's history listed every
 // namesake's.
 type phasesParams struct {
@@ -340,7 +263,7 @@ type phaseTokenParams struct {
 	Until time.Time `json:"until"`
 	Limit int       `json:"limit,omitempty"`
 
-	// AgentID narrows to one seat (v5 — see [versionOf]).
+	// AgentID narrows to one seat.
 	AgentID string `json:"agent_id,omitempty"`
 
 	// At is the ASKER's clock — see [askedAt].

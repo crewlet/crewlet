@@ -451,7 +451,7 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		}
 	})
 
-	t.Run("an operation minted before an adoption from a scrubbing donor during its own write answers unknown", func(t *testing.T) {
+	t.Run("an operation minted before a sweep during its own write answers unknown", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
 		first, err := h.write(probeSubject("a"), "op-0", "one")
@@ -463,9 +463,8 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 
 		// The record lands, the acknowledgement is lost, this node
 		// applies past it — and its operation ledger is EMPTY, because
-		// it adopted a snapshot from a donor that scrubbed its ledger
-		// DURING this write, after the operation was minted and after
-		// its decision was checked.
+		// its sweep ran DURING this write, past the operation's mint and
+		// after its decision was checked.
 		h.applier.mu.Lock()
 		h.applier.auto = false
 		h.applier.mu.Unlock()
@@ -473,13 +472,13 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		h.appends.fail(errors.New("no response from stream"), false)
 		minted := time.Now()
 		h.appends.mu.Lock()
-		h.appends.beforeLastSeq = func() { h.adoptFromAScrubbingDonor(minted.Add(time.Hour)) }
+		h.appends.beforeLastSeq = func() { h.sweep(minted.Add(time.Hour)) }
 		h.appends.mu.Unlock()
 
 		op := statelog.NewOpID(minted, "write-a")
 		res, err := h.write(probeSubject("a"), op, "two")
 		if err != nil {
-			t.Fatalf("write across an adoption: %v", err)
+			t.Fatalf("write across a sweep: %v", err)
 		}
 		if res.Outcome != statelog.OutcomeUnknown {
 			t.Fatalf("outcome = %q, want unknown — reading the ledger's silence "+
@@ -511,8 +510,8 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		h := newHarness(t)
 		// The decision is checked before any loss; the loss is reported
 		// from the SECOND read of the watermark on — the resolution's —
-		// which is an adoption from a donor that scrubbed its ledger
-		// landing between this write's append and the answer to it.
+		// which is a sweep landing between this write's append and the
+		// answer to it.
 		h.applier.mu.Lock()
 		h.applier.lost = time.Now().Add(time.Hour)
 		h.applier.lostFrom = 2

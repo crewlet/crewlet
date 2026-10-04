@@ -97,11 +97,11 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// reset below included: a completion claims only the job it names.
 	run.LaunchID = uuid.NewString()
 	run.UpdatedAt = now
-	// And the job's own record starts here, keyed on that name: the
-	// instant the launch exists is the instant its phase began, and a
-	// previous job's record — its start, its iteration, whether its phase
-	// was published — is not this one's. Only the model is the caller's.
-	run.Launch = LaunchRecord{ID: run.LaunchID, StartedAt: now, Model: run.Launch.Model}
+	// And the job's own record starts here: the instant the launch exists
+	// is the instant its phase began, and a previous job's record — its
+	// start, its iteration, whether its phase was published — is not this
+	// one's. Only the model is the caller's.
+	run.Launch = LaunchRecord{StartedAt: now, Model: run.Launch.Model}
 	raw, err := encodeRun(run)
 	if err != nil {
 		return err
@@ -206,12 +206,6 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 		run.Status = release.To
 		run.Charged = run.Charged || release.Charged
 		if release.Published {
-			// Onto THIS job's record, starting one where the row carries
-			// none of its own: a row an older build launched has no record,
-			// and one it relaunched carries the previous job's.
-			if run.Launch.ID != run.LaunchID {
-				run.Launch = LaunchRecord{ID: run.LaunchID}
-			}
 			run.Launch.Published = true
 		}
 		return true
@@ -384,10 +378,6 @@ func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, suspensio
 		}
 		run.ExecuteState = maps.Clone(suspension.State)
 		run.Status = StatusRunning
-		// Keyed on the job like the rest of its record — see ReleaseClaim.
-		if run.Launch.ID != run.LaunchID {
-			run.Launch = LaunchRecord{ID: run.LaunchID}
-		}
 		run.Launch.Iteration = suspension.Iteration
 		return true
 	})

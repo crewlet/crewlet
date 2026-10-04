@@ -1091,14 +1091,11 @@ func (s *Service) open(revision store.Revision) (*config.Company, error) {
 // openDocument is [Service.open] plus the unsealed bytes it decoded, which is
 // what a write that must keep fields this build cannot represent works from.
 //
-// A revision the keyring does not open is an [UnreadableRevisionError], which
-// knows whether it is the active revision, because the remedy depends on it.
+// A revision the keyring does not open is an [UnreadableRevisionError].
 func (s *Service) openDocument(revision store.Revision) ([]byte, *config.Company, error) {
 	document, err := secrets.Open(s.cipher, revision.Payload)
 	if err != nil {
-		return nil, nil, &UnreadableRevisionError{
-			ID: revision.ID, Active: revision.Active, Err: err,
-		}
+		return nil, nil, &UnreadableRevisionError{ID: revision.ID, Err: err}
 	}
 	company, err := config.DecodeCompany(document)
 	if err != nil {
@@ -1206,15 +1203,9 @@ func (s *Service) fail(w http.ResponseWriter, what string, err error) {
 
 // UnreadableRevisionError is a stored revision this node's keyring does not
 // open: stored without a seal, or sealed under a key the keyring does not hold.
-//
-// It carries whether it is the ACTIVE revision because that is what decides
-// the remedy for an unsealed one: `crewlet config seal` re-seals the active
-// revision and nothing else, and a superseded revision is sealed in place by
-// nothing at all.
 type UnreadableRevisionError struct {
-	ID     string
-	Active bool
-	Err    error
+	ID  string
+	Err error
 }
 
 func (e *UnreadableRevisionError) Error() string {
@@ -1230,23 +1221,16 @@ func (e *UnreadableRevisionError) Unsealed() bool {
 	return errors.Is(e.Err, secrets.ErrUnsealedWithKey)
 }
 
-// Remedy is what brings the revision's document back, for the revision it is.
+// Remedy is what brings the revision's document back.
 func (e *UnreadableRevisionError) Remedy() string {
-	switch {
-	case !e.Unsealed():
+	if !e.Unsealed() {
 		return "it is sealed under a key that is no longer in the keyring; " +
 			"restore that key to the node's secrets.keys first"
-	case e.Active:
-		return "it is this node's active revision, stored without a seal by a " +
-			"build older than the mandatory keyring; seal it with `crewlet " +
-			"config seal` on this node, which stores it sealed and activates it"
-	default:
-		return "it is a superseded revision a build older than the mandatory " +
-			"keyring stored without a seal, and nothing seals a superseded " +
-			"revision in place, so it can be neither shown nor reverted to; to " +
-			"have its document again, import it from your own copy with PUT " +
-			"/config or `crewlet config import`, which stores it sealed"
 	}
+	return "it is stored without a seal, so nothing vouches for who wrote it " +
+		"and it is neither shown nor reverted to; to have its document again, " +
+		"import it from your own copy with PUT /config or `crewlet config " +
+		"import`, which stores it sealed"
 }
 
 // refuseUnreadable answers a revision this node cannot open, and reports

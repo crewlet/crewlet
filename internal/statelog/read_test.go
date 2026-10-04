@@ -752,7 +752,6 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 		{statelog.ReasonEvicted, false},
 		{statelog.ReasonDeferred, false},
 		{statelog.ReasonDeleted, false},
-		{statelog.ReasonRetired, false},
 		{statelog.ReasonAbandoned, false},
 		{statelog.ReasonOvertaken, false},
 		{statelog.ReasonLogFull, false},

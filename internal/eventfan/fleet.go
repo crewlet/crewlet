@@ -154,9 +154,7 @@ func gather[T any](ctx context.Context, f *Fleet, q Question, params any, ids []
 	}
 	var replies chan scattered
 	budget := cmp.Or(f.Budget, FleetReadBudget)
-	// THE LOWEST VERSION THAT ANSWERS THIS, so a peer an upgrade has not
-	// reached yet still answers every question it can answer correctly.
-	version := versionOf(q, params)
+	version := Protocol
 	if fan {
 		body, err := json.Marshal(params)
 		if err != nil {

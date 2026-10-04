@@ -481,84 +481,6 @@ func TestAListAtItsCeilingRefusesOneMoreInboxFull(t *testing.T) {
 	}
 }
 
-// A PERSON ROW AN OLDER APPLIER WROTE IS RE-DERIVED, PACKED, from the rows the
-// node already holds.
-//
-// The older applier stored `seen_through` as the bare sequence and every inbox
-// entry at whatever position its caller sent. Left as they were, a position
-// past a reanchor reads as generation zero — every notice in the live
-// generation unread — and a read mark's stale position is pruned on the next
-// write although its notice is still above the position, so it comes back
-// unread. The re-derivation must restore both to what the current applier
-// writes, and leave a row it already wrote untouched.
-func TestAnOlderAppliersPersonRowIsRederivedPacked(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	n := noticesFor(t, r, "ana", 3)
-	if _, err := r.writer.MarkInbox(t.Context(), "op-through", "ana",
-		tracker.InboxGesture{ReadThrough: positionOf(n[0]), Read: []string{n[2].RecordID}}, tracker.PersonAuthority{}); err != nil {
-		t.Fatalf("ana's marks: %v", err)
-	}
-	cy := r.writer.As("cy", tracker.AuthorHuman, tracker.Provenance{})
-	stream := tracker.Domain{}.Stream().Name
-	if _, err := cy.MarkInbox(t.Context(), "op-cy", "cy", tracker.InboxGesture{
-		ReadThrough: &statelog.Position{Stream: stream, Generation: 1, Seq: 7}}, tracker.PersonAuthority{}); err != nil {
-		t.Fatalf("cy's read-through into generation 1: %v", err)
-	}
-	r.drain()
-	wantAna, wantCy := r.person("ana"), r.person("cy")
-	if len(wantAna.Read) != 1 || wantAna.Read[0].Position == 0 {
-		t.Fatalf("ana's read list is %+v, want the one mark at its position", wantAna.Read)
-	}
-
-	rederive := func() int {
-		t.Helper()
-		var rows int
-		if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
-			var err error
-			rows, err = r.applier.Rederive(t.Context(), tx, statelog.ApplyOptions{})
-			return err
-		}); err != nil {
-			t.Fatalf("re-derive: %v", err)
-		}
-		return rows
-	}
-	if rows := rederive(); rows != 0 {
-		t.Fatalf("re-deriving rows this applier wrote rewrote %d of them", rows)
-	}
-
-	// THE PREDECESSOR'S ROWS: the bare sequence, and a caller's zero.
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(t.Context(),
-			`UPDATE tracker_persons SET seen_through = 7 WHERE handle = 'cy'`); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(t.Context(), `UPDATE tracker_persons SET read_json = ?
-			WHERE handle = 'ana'`, `[{"record_id":"`+n[2].RecordID+`","position":0}]`)
-		return err
-	}); err != nil {
-		t.Fatalf("plant the older applier's rows: %v", err)
-	}
-	if got := r.person("cy").SeenThrough; got.Generation != 0 {
-		t.Fatalf("the planted row already reads generation %d", got.Generation)
-	}
-	if rows := rederive(); rows != 2 {
-		t.Fatalf("the re-derivation wrote %d rows, want the two it had to", rows)
-	}
-	if got := r.person("cy").SeenThrough; got != wantCy.SeenThrough {
-		t.Fatalf("cy's position re-derives to %+v, want %+v — a node upgrading "+
-			"onto the older row would read every notice after the reanchor as "+
-			"unread", got, wantCy.SeenThrough)
-	}
-	if got := r.person("ana").Read; !slices.Equal(got, wantAna.Read) {
-		t.Fatalf("ana's read list re-derives to %+v, want %+v", got, wantAna.Read)
-	}
-	if tracker.DerivationVersion < 2 {
-		t.Error("the person positions are re-derived under a rule set that " +
-			"does not say so — a node already at the old version would never run it")
-	}
-}
-
 // A STAR FROM ONE TAB DOES NOT DROP A PIN FROM ANOTHER.
 //
 // Both lists used to be replaced whole, so the call that only meant to star a
@@ -857,9 +779,9 @@ func TestAPersonsListsAreBounded(t *testing.T) {
 	}
 }
 
-// A ROW WRITTEN BEFORE THE GENERATION WAS STORED READS AS GENERATION ZERO,
-// which is exactly what it was: the packed form of a zero generation is the
-// bare sequence, so nothing already on disk changes meaning.
+// A POSITION STORED AS THE BARE SEQUENCE READS AS GENERATION ZERO: the packed
+// form of a zero generation is the bare sequence, which is what a log no
+// reanchor has moved holds.
 func TestABareSequenceRowReadsAsGenerationZero(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

@@ -207,7 +207,7 @@ func evictedView(id string) tracker.View {
 func trackerEviction(t *testing.T, node string) []byte {
 	t.Helper()
 	body, err := json.Marshal(tracker.Eviction{
-		V: tracker.GateRecordVersion, NodeID: node, EvictedBy: "operator",
+		V: tracker.DocumentVersion, NodeID: node, EvictedBy: "operator",
 		EvictedAt: time.Now().UTC(),
 	})
 	if err != nil {
@@ -215,7 +215,7 @@ func trackerEviction(t *testing.T, node string) []byte {
 	}
 	payload, err := tracker.MutationRecord{
 		RecordEnvelope: tracker.RecordEnvelope{
-			V: tracker.GateRecordVersion, OpID: "op-evict-" + node,
+			V: tracker.RecordVersion, OpID: "op-evict-" + node,
 			Subject: tracker.EvictionSubject(node), Op: tracker.OpEviction,
 			Writer: "node-peer", Scope: tracker.ScopeSet{Subject: true},
 		},
@@ -231,7 +231,7 @@ func trackerEviction(t *testing.T, node string) []byte {
 func pagesEviction(t *testing.T, node string) []byte {
 	t.Helper()
 	body, err := json.Marshal(pages.Eviction{
-		V: pages.GateRecordVersion, NodeID: node, EvictedBy: "operator",
+		V: pages.DocumentVersion, NodeID: node, EvictedBy: "operator",
 		EvictedAt: time.Now().UTC(),
 	})
 	if err != nil {
@@ -239,7 +239,7 @@ func pagesEviction(t *testing.T, node string) []byte {
 	}
 	payload, err := pages.Encode(pages.MutationRecord{
 		RecordEnvelope: pages.RecordEnvelope{
-			V: pages.GateRecordVersion, OpID: "op-evict-" + node,
+			V: pages.RecordVersion, OpID: "op-evict-" + node,
 			Subject: pages.EvictionSubject(node), Op: pages.OpEviction,
 			Writer: "node-peer", Scope: pages.ScopeSet{Subject: true},
 		},
@@ -255,14 +255,14 @@ func pagesEviction(t *testing.T, node string) []byte {
 func iamEviction(t *testing.T, node string) []byte {
 	t.Helper()
 	body, err := iamdomain.EncodeEviction(iamdomain.Eviction{
-		V: iamdomain.GateRecordVersion, By: "operator",
+		V: iamdomain.DocumentVersion, By: "operator",
 	})
 	if err != nil {
 		t.Fatalf("encode the eviction: %v", err)
 	}
 	payload, err := iamdomain.Encode(iamdomain.MutationRecord{
 		RecordEnvelope: iamdomain.RecordEnvelope{
-			V: iamdomain.GateRecordVersion, OpID: "op-evict-" + node,
+			V: iamdomain.RecordVersion, OpID: "op-evict-" + node,
 			Subject: iamdomain.EvictionSubject(node), Op: iamdomain.OpEviction,
 			Writer: "node-peer", CreatedAt: time.Now().UTC(),
 			Scope: iamdomain.RootScope(),

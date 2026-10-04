@@ -323,7 +323,7 @@ finish, releases each seat as it goes idle, gives back every fleet duty it
 holds once its duty loops have finished their last tick, and exits. Peers
 pick the seats and the duties up. A node that is killed instead releases
 nothing: its seats move after the lease TTL, and its duties after their own
-TTL, which for the retention sweep is 45 minutes and for the skill curator
+TTL, which for the retention sweep is 45 minutes and for the learning passes
 three hours. Point load-balancer readiness at `/ready` (`503` while
 draining) and liveness at `/health` (stays `200` through a drain), and
 give the orchestrator a termination grace period longer than your longest
@@ -357,21 +357,6 @@ The consequences worth stating plainly:
 - **Rolling *back* across a protocol bump needs a full stop.** An older
   build has no protocol check at all, so it will happily take over a
   newer node's expired leases. Nothing in the table can stop it.
-- **A stalled rollout stalls the fleet duties too, on upgrades that move
-  them.** Upgrading from a build that kept the `worker:` leases beside the
-  seat leases, newer nodes run no scheduler tick, retention sweep,
-  integration reconcile or curator pass while any older node is live, and
-  say so once with `coord_kv_duties_wait_for_older_build` (and
-  `coord_kv_duties_resumed` when it ends). See
-  [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-duty-bucket).
-- **A gesture a newer build carries out for a person is refused
-  `peer_upgrading` until the node that would carry it out has that
-  build.** Each node advertises what its build can do on its heartbeat,
-  and a gesture another node carries out asks first — so mid-rollout it is
-  refused by name rather than accepted by an older node that never acts on
-  it. A read that cannot conclude (a store blip, a node mid-drain) refuses
-  `unavailable` instead, which a retry clears. See
-  [Coordination](../concepts/coordination.md#why-a-gesture-asks-the-fleet-first).
 - **A node that leaves takes its turn-level history with it.** Every node's
   event store holds the events it published, and the dashboard's turns,
   traces and event log are read from every live node at query time. A node
@@ -384,23 +369,6 @@ The consequences worth stating plainly:
   protocol.** The history scatter carries a version, and a node on a build
   that reshaped it answers with its own version and nothing else, which
   the answer's `coverage` names rather than merging rows it cannot read.
-
-**An activation during a rollout reaches both builds.** A revision reaches
-every node through the activation pointer, which carries the sealed document
-inside its own record. A build from before that change reads the document only
-from a key beside the pointer, so every activation writes it there too, just
-after the pointer. The fleet activates during a rollout even when nobody edits
-the company: the integration loop re-activates the revision when it seals a
-credential, and a node whose revision is newer than the pointer publishes it
-at boot. A node on the earlier build that polls between the two writes records
-one failed attempt and applies the revision on its next poll. The one race the
-mirror cannot close is the earlier build's own: one of its nodes activating in
-the same instant as an upgraded node can leave the older nodes unable to reach
-that epoch (they shed their work to an upgraded peer and, three attempts
-later, fail `/ready`, visible on the **Settings › Nodes** screen). Two nodes
-of the earlier build racing always had that outcome, and the next activation
-ends it. See
-[Control Plane § The design](../concepts/control-plane.md#the-design).
 
 **Adding a state-log domain is a coordinated upgrade**, and it sits beside the
 seat-protocol rule for the same reason: the fleet is briefly running two

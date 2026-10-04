@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -12,7 +11,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
@@ -41,26 +39,11 @@ func (d *deskFake) Deliver(_ context.Context, given types.SandboxAnswerGiven) er
 	return d.deliverErr
 }
 
-// fleetFake answers the feature gate for the node holding each seat.
-type fleetFake struct {
-	lacks map[uuid.UUID]bool
-	err   error
-}
-
-func (f fleetFake) SeatFeature(_ context.Context, seat uuid.UUID, feature coord.Feature) (bool, error) {
-	if f.err != nil {
-		return false, f.err
-	}
-	return feature == coord.FeatureAnswerRunByTurn && !f.lacks[seat], nil
-}
-
-func (f fleetFake) AllLiveHave(context.Context, coord.Feature) (bool, error) { return true, nil }
-
 // answerRunTool is the operator catalogue's answer_run over these fakes, called
 // as the deployment's own operator.
-func answerRunTool(t *testing.T, desk *deskFake, fleet builtin.Fleet) runAnswerRig {
+func answerRunTool(t *testing.T, desk *deskFake) runAnswerRig {
 	t.Helper()
-	return newAnswerRunRig(t, desk, fleet, operatorCaller, seatLeads)
+	return newAnswerRunRig(t, desk, operatorCaller, seatLeads)
 }
 
 // runAnswerRig is answer_run called as one principal, decided by the real
@@ -75,13 +58,12 @@ func (r runAnswerRig) Call(ctx context.Context, args map[string]any) (tools.Resu
 	return r.tool.Call(iam.WithPrincipal(ctx, r.caller), args)
 }
 
-func newAnswerRunRig(t *testing.T, desk *deskFake, fleet builtin.Fleet,
-	caller iam.Principal, chart authz.Chart) runAnswerRig {
+func newAnswerRunRig(t *testing.T, desk *deskFake, caller iam.Principal,
+	chart authz.Chart) runAnswerRig {
 
 	t.Helper()
 	o := organization(t)
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
-		Fleet:     fleet,
 		Org:       func() *org.Organization { return o },
 		Runs:      builtin.RunDeps{Desk: desk, Actor: builtin.PrincipalActor},
 		Authorize: builtin.Decide(chart),
@@ -109,7 +91,7 @@ func parked(t *testing.T, turnID, status string) sandbox.PendingRun {
 func TestAnswerRunDeliversTheAnswerAsThePersonAndAnswersPending(t *testing.T) {
 	t.Parallel()
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusReseed)}}
-	result, err := answerRunTool(t, desk, fleetFake{}).Call(t.Context(),
+	result, err := answerRunTool(t, desk).Call(t.Context(),
 		map[string]any{"turn_id": " t1 ", "answer": "  use main  "})
 	if err != nil || result.Failed {
 		t.Fatalf("answer_run = %+v, %v", result, err)
@@ -142,7 +124,7 @@ func TestAnswerRunRefusesARunThatIsNotWaiting(t *testing.T) {
 		t.Run(status, func(t *testing.T) {
 			t.Parallel()
 			desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", status)}}
-			result, _ := answerRunTool(t, desk, fleetFake{}).Call(t.Context(),
+			result, _ := answerRunTool(t, desk).Call(t.Context(),
 				map[string]any{"turn_id": "t1", "answer": "use main"})
 			if !result.Failed || tools.RefusalOf(result) != tools.RefusalNotRunning {
 				t.Fatalf("answer_run on a %s run = %+v, want not_running", status, result)
@@ -153,35 +135,10 @@ func TestAnswerRunRefusesARunThatIsNotWaiting(t *testing.T) {
 		})
 	}
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{}}
-	result, _ := answerRunTool(t, desk, fleetFake{}).Call(t.Context(),
+	result, _ := answerRunTool(t, desk).Call(t.Context(),
 		map[string]any{"turn_id": "gone", "answer": "use main"})
 	if !result.Failed || tools.RefusalOf(result) != tools.RefusalNotRunning {
 		t.Fatalf("answer_run on a run with no record = %+v, want not_running", result)
-	}
-}
-
-// AN OWNER THAT CANNOT READ THE EVENT IS REFUSED `peer_upgrading` — an older
-// build would take the answer for an ordinary wake and run a turn about nothing
-// while the run waited on — and a fleet that could not be read is
-// `unavailable`, never either answer.
-func TestAnswerRunRefusesAnOwnerThatCannotReadTheEvent(t *testing.T) {
-	t.Parallel()
-	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusAwaiting)}}
-	result, _ := answerRunTool(t, desk, fleetFake{lacks: map[uuid.UUID]bool{ctoSeat(t): true}}).Call(
-		t.Context(), map[string]any{"turn_id": "t1", "answer": "use main"})
-	if !result.Failed || tools.RefusalOf(result) != tools.RefusalPeerUpgrading {
-		t.Fatalf("answer_run to an older owner = %+v, want peer_upgrading", result)
-	}
-	// AS A COORDINATION STORE FAILS: its transport's error, marked
-	// [coord.ErrUnavailable] — the condition waiting clears.
-	result, _ = answerRunTool(t, desk, fleetFake{err: fmt.Errorf("the lease table is down: %w",
-		coord.ErrUnavailable)}).Call(
-		t.Context(), map[string]any{"turn_id": "t1", "answer": "use main"})
-	if !result.Failed || tools.RefusalOf(result) != tools.RefusalUnavailable {
-		t.Fatalf("answer_run over an unreadable fleet = %+v, want unavailable", result)
-	}
-	if len(desk.delivered) != 0 {
-		t.Errorf("delivered %+v past the feature gate", desk.delivered)
 	}
 }
 
@@ -193,7 +150,7 @@ func TestAnswerRunThatMayHaveLandedAnswersUnknown(t *testing.T) {
 		runs:       map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusAwaiting)},
 		deliverErr: errors.New("publish ack timed out"),
 	}
-	result, _ := answerRunTool(t, desk, fleetFake{}).Call(t.Context(),
+	result, _ := answerRunTool(t, desk).Call(t.Context(),
 		map[string]any{"turn_id": "t1", "answer": "use main"})
 	if result.Failed || !strings.Contains(result.Output, `"outcome": "unknown"`) {
 		t.Fatalf("answer_run over an unconfirmed delivery = %+v, want outcome unknown", result)
@@ -205,7 +162,7 @@ func TestAnswerRunThatMayHaveLandedAnswersUnknown(t *testing.T) {
 func TestAnswerRunRefusesAnAnswerTooLongToSplice(t *testing.T) {
 	t.Parallel()
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusAwaiting)}}
-	result, _ := answerRunTool(t, desk, fleetFake{}).Call(t.Context(), map[string]any{
+	result, _ := answerRunTool(t, desk).Call(t.Context(), map[string]any{
 		"turn_id": "t1", "answer": strings.Repeat("a", builtin.MaxRunAnswerBytes+1),
 	})
 	if !result.Failed || tools.RefusalOf(result) != tools.RefusalInvalid {
@@ -240,7 +197,7 @@ func TestARunIsAnsweredByItsRequesterOrItsSeatsLead(t *testing.T) {
 			t.Parallel()
 			desk := &deskFake{runs: map[string]sandbox.PendingRun{
 				"t1": parked(t, "t1", sandbox.StatusAwaiting)}}
-			result, err := newAnswerRunRig(t, desk, fleetFake{}, tc.caller, seatLeads).Call(
+			result, err := newAnswerRunRig(t, desk, tc.caller, seatLeads).Call(
 				t.Context(), map[string]any{"turn_id": "t1", "answer": "use main"})
 			if err != nil {
 				t.Fatal(err)

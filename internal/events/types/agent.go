@@ -87,9 +87,7 @@ const (
 type PlanDecision string
 
 // PlanDecisionSkip opts the turn out entirely — nobody was asking this seat to
-// do anything, which is why learning short-circuits on it. A pre-redesign node
-// also wrote `plan` and `direct` here; both decode as an unrecognised value,
-// which is exactly how every reader already treats anything that is not skip.
+// do anything, which is why learning short-circuits on it.
 const PlanDecisionSkip PlanDecision = "skip"
 
 // PromptMessage is one message of the conversation a phase sent to the model.
@@ -290,12 +288,7 @@ type AgentTurnCompleted struct {
 	TurnID string `json:"turn_id"`
 	// WorkKey is the unit of work this run was dispatched for — see
 	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
-	WorkKey string `json:"work_key,omitempty"`
-	// PlanModel is NO LONGER WRITTEN: there is no plan phase. It stays on
-	// the type because the event store holds rows an earlier build wrote,
-	// and a reader that dropped the field would render those turns as
-	// though the model that served their planning had never been recorded.
-	PlanModel      string `json:"plan_model,omitempty"`
+	WorkKey        string `json:"work_key,omitempty"`
 	ExecuteModel   string `json:"execute_model"`
 	ReviewModel    string `json:"review_model"`
 	SubagentCount  int    `json:"subagent_count"`
@@ -434,31 +427,20 @@ type TurnCompleted struct {
 	// fired in round 1 is a fact about the turn, and the reflect engine
 	// reads this to skip the post-turn persist decision when the agent
 	// already self-persisted in flight.
-	AllToolNames []string `json:"all_tool_names,omitempty"`
-	// PlanToolSequence is NO LONGER WRITTEN — it was the Plan phase's own
-	// calls, and there is no Plan phase. AllToolNames replaces it. It stays
-	// on the type, and the reflect engine keeps reading it, because the
-	// event store holds rows an earlier build wrote and a mixed fleet is
-	// still writing them: dropping it would make a turn that self-persisted
-	// look like one that did not, and run the persist decision twice.
-	PlanToolSequence []string `json:"plan_tool_sequence,omitempty"`
-	SkillsUsed       []string `json:"skills_used,omitempty"`
-	ReviewOutcome    string   `json:"review_outcome"`
-	Iterations       int      `json:"iterations"`
+	AllToolNames  []string `json:"all_tool_names,omitempty"`
+	SkillsUsed    []string `json:"skills_used,omitempty"`
+	ReviewOutcome string   `json:"review_outcome"`
+	Iterations    int      `json:"iterations"`
 	// Outcome is the executor's own last word on the turn — `delivered`,
 	// `no_action`, `blocked`, or the engine-written `incomplete`. Empty on
 	// a turn that never reached an executor at all.
 	Outcome string `json:"outcome,omitempty"`
-	// PlanDecision now carries only PlanDecisionSkip, and only for a turn
+	// PlanDecision carries only PlanDecisionSkip, and only for a turn
 	// that ended having decided nobody was asking it to do anything —
-	// which is the one thing every reader of this field gates on.
-	//
-	// Kept rather than replaced by Outcome because a mixed fleet writes
-	// both: an older node still publishes plan/direct/skip here, and a
-	// reader switched to Outcome alone would treat those turns as having
-	// no outcome. Learning short-circuits on PlanDecisionSkip: nothing the
-	// agent engaged with, so persisting facts read off the trigger would
-	// teach it things directed at someone else.
+	// which is the one thing every reader of this field gates on, and a
+	// fact Outcome does not state. Learning short-circuits on it: nothing
+	// the agent engaged with, so persisting facts read off the trigger
+	// would teach it things directed at someone else.
 	PlanDecision PlanDecision `json:"plan_decision"`
 	// Interactions carries each trigger message's sender and body when
 	// identifiable. Usually one entry; a coalesced trigger carries one per

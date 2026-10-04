@@ -105,10 +105,8 @@
 // # An operation id carries the instant it was minted
 //
 // Layer 1 has a hole the other two cannot fill: the ops table can LOSE ROWS.
-// The retention sweep deletes every row applied more than [OpsRetention] ago,
-// and a snapshot adopted from a donor that scrubbed its ledger — every build
-// before the ledger travelled — arrives with none of the donor's. A retry of
-// such an operation — a turn re-run under its derived id, a caller repeating
+// The retention sweep deletes every row applied more than [OpsRetention] ago.
+// A retry of such an operation — a turn re-run under its derived id, a caller repeating
 // an `unknown` — finds no row, decides again on rows that already hold the
 // first application, and publishes a second copy the broker has no reason to
 // refuse: the expectation is current and the duplicate window long past.
@@ -378,11 +376,9 @@
 // restarted node would have nothing to compare, so the verdict is recorded in
 // the node estate when it is reached and recalled while the checkpoint names
 // the same record ([NodeEstate]): only a reanchor or an adoption, which move
-// the checkpoint, ends it. A checkpoint that names NO record — committed before
-// checkpoints named theirs — is named from this node's own ledgers, never from
-// the log's record, which is the thing in question; where nothing names it,
-// that is said and the applier goes on until its next batch names one
-// ([Runner.nameCheckpoint]).
+// the checkpoint, ends it. A checkpoint that names NO record — one a reanchor
+// placed where the log held none — has nothing to compare, and the applier
+// goes on until its next batch names one.
 // The nodes whose rows are the copy's age see none of it — the log is their
 // own history — so what stops them writing records the restored reanchor of a
 // newer peer would apply nowhere is that peer's published position or flag

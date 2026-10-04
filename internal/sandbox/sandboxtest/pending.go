@@ -87,8 +87,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"TwoQuestionsOnOneDMAreToldApartByTheirThreads", testTwoQuestionsOnOneDMAreToldApartByTheirThreads},
 		{"AnAnswerOnAnotherConversationMatchesNothing", testAnAnswerOnAnotherConversationMatchesNothing},
 		{"AnAnswerWithNoConversationMatchesNothing", testAnAnswerWithNoConversationMatchesNothing},
-		{"ARowWithNoIdentityReportsBackToItsPartition", testARowWithNoIdentityReportsBackToItsPartition},
-		{"APreSplitRowIsStillAnswerable", testAPreSplitRowIsStillAnswerable},
+		{"ARowNamingOnlyAPartitionIsAnsweredByNothing", testARowNamingOnlyAPartitionIsAnsweredByNothing},
 		{"ListingsAreStable", testListingsAreStable},
 		{"APauseExpiresExactlyOnce", testAPauseExpiresExactlyOnce},
 		{"OnlyAParkedRunCanExpire", testOnlyAParkedRunCanExpire},
@@ -112,8 +111,6 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	}{
 		{"AudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem",
 			testAudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem},
-		{"ALaunchRecordKeptForAnotherJobIsNotThisOnes",
-			testALaunchRecordKeptForAnotherJobIsNotThisOnes},
 	}
 	for _, tc := range raw {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1204,26 +1201,6 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 		t.Errorf("the run reports back to %q, want the DM line it was launched from",
 			got.ConversationKey)
 	}
-	if got.Conversation() != "chat:D1" {
-		t.Errorf("Conversation() = %q", got.Conversation())
-	}
-}
-
-// A ROW FROM BEFORE THE SPLIT carries only the partition key, and a resume
-// must still know where to report: nothing rewrites a parked run, and one
-// waits for a person, so this row shape outlives any upgrade window.
-func testARowWithNoIdentityReportsBackToItsPartition(t *testing.T, s sandbox.PendingStore) {
-	old := run("t1")
-	old.ConversationKey = ""
-	mustLaunched(t, s, old)
-	got, found, err := s.Get(t.Context(), "t1")
-	if err != nil || !found {
-		t.Fatalf("Get: found=%v err=%v", found, err)
-	}
-	if got.Conversation() != "chat:D1:root-1" {
-		t.Errorf("a pre-split row reports back to %q, want the one key it carries — "+
-			"an empty answer records no ledger entry at all", got.Conversation())
-	}
 }
 
 // THE ENGINE'S OWN PROMPT SENDS THE ANSWER WHERE THE PARTITION CANNOT REACH.
@@ -1324,38 +1301,17 @@ func testAnAnswerOnAnotherConversationMatchesNothing(t *testing.T, s sandbox.Pen
 	}
 }
 
-// A PRE-SPLIT ROW IS STILL ANSWERABLE, in both readings of the one value it
-// carries — and it has to be: nothing rewrites a parked run, one waits for a
-// person, so this row shape outlives any upgrade window.
-//
-// Its value is the PARTITION its build derived, so comparing the arriving
-// partition against it reproduces that build's own match exactly. It is
-// compared against the identity as well, which is not a second spelling of
-// the same rule: such a row parked from a top-level DM holds the bare
-// channel, which is precisely what this build calls the identity, so reading
-// it that way is what repairs the rows the defect already stranded.
-func testAPreSplitRowIsStillAnswerable(t *testing.T, s sandbox.PendingStore) {
-	// Parked from a DM thread by a build that had no identity to write.
-	threaded := run("t1")
-	threaded.ConversationKey = ""
-	mustLaunched(t, s, threaded)
+// A ROW NAMING ONLY A PARTITION IS ANSWERED BY NOTHING, a reply in the very
+// thread it was launched from included: the identity is what admits a
+// delivery, and the partition only picks between rows the identity admitted.
+func testARowNamingOnlyAPartitionIsAnsweredByNothing(t *testing.T, s sandbox.PendingStore) {
+	partitionOnly := run("t1")
+	partitionOnly.ConversationKey = ""
+	mustLaunched(t, s, partitionOnly)
 	park(t, s, "t1")
-	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", answerOnTheDM)
-	if err != nil || !ok || got.TurnID != "t1" {
-		t.Fatalf("find = %q ok=%v err=%v; a row parked before the split stopped "+
-			"being answerable at all", got.TurnID, ok, err)
-	}
-
-	// And one parked from a top-level DM, whose one value is the channel.
-	toplevel := run("t2")
-	toplevel.PartitionKey, toplevel.ConversationKey = "chat:D9", ""
-	toplevel.CreatedAt = base.Add(time.Minute)
-	mustLaunched(t, s, toplevel)
-	park(t, s, "t2")
-	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe", sandbox.ConversationRef{
-		Identity: "chat:D9", Partition: "chat:D9:root-2",
-	}); !ok {
-		t.Error("a pre-split row parked from a top-level DM is still unanswerable")
+	if got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", answerOnTheDM); err != nil || ok {
+		t.Errorf("find = %q ok=%v err=%v; a row with no conversation was answered "+
+			"on its partition", got.TurnID, ok, err)
 	}
 }
 
@@ -1845,14 +1801,10 @@ func testCollectPublishesThePhase(t *testing.T, s sandbox.PendingStore) {
 	before := time.Now().UTC()
 	r := run("t1")
 	r.Launch = sandbox.LaunchRecord{Model: "claude-sonnet-5",
-		// Not the caller's to choose: the store names and dates the job.
-		ID: "chosen-by-the-caller", StartedAt: base, Published: true, Iteration: 9}
+		// Not the caller's to choose: the store dates the job.
+		StartedAt: base, Published: true, Iteration: 9}
 	mustLaunched(t, s, r)
-	got := mustGet(t, s, "t1")
-	facts := got.LaunchFacts()
-	if facts.ID != got.LaunchID || facts.ID == "" {
-		t.Fatalf("the launch record names %q, not the job %q", facts.ID, got.LaunchID)
-	}
+	facts := mustGet(t, s, "t1").Launch
 	if facts.StartedAt.Before(before) || facts.StartedAt.After(time.Now().UTC()) {
 		t.Errorf("the job is dated %s, not the instant it launched", facts.StartedAt)
 	}
@@ -1868,59 +1820,16 @@ func testCollectPublishesThePhase(t *testing.T, s sandbox.PendingStore) {
 		t.Fatalf("release: released=%v err=%v", released, err)
 	}
 	retry := mustClaim(t, s, "t1")
-	if !retry.LaunchFacts().Published {
+	if !retry.Launch.Published {
 		t.Fatal("the retry's claim came back without the publish the first attempt made")
 	}
 	mustRelease(t, s, retry)
-	if !mustGet(t, s, "t1").LaunchFacts().Published {
+	if !mustGet(t, s, "t1").Launch.Published {
 		t.Error("a release that carried no publish erased the record of one")
 	}
 
 	mustBeginLaunch(t, s, run("t1"))
-	next := mustGet(t, s, "t1")
-	if f := next.LaunchFacts(); f.Published || f.ID != next.LaunchID || f.Iteration != 0 {
+	if f := mustGet(t, s, "t1").Launch; f.Published || f.Iteration != 0 {
 		t.Errorf("the second job inherited the first one's record: %+v", f)
-	}
-}
-
-func testALaunchRecordKeptForAnotherJobIsNotThisOnes(
-	t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns,
-) {
-	// A BUILD THAT PREDATES THE LAUNCH RECORD carries it through its own
-	// read-modify-write untouched — including across a relaunch it performs,
-	// which it cannot know to clear. The row is seeded the way that leaves
-	// it: a new job named, the previous job's record still on it. Read for
-	// the new job, the record is nobody's; the suspension and the release
-	// start the new job's own.
-	r := run("t1")
-	r.Status = sandbox.StatusLaunching
-	r.LaunchID = "job-new"
-	r.Launch = sandbox.LaunchRecord{ID: "job-old", StartedAt: base, Iteration: 5, Published: true}
-	body, err := json.Marshal(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if created, err := runs.CreateSandboxRun(t.Context(), "t1", body); err != nil || !created {
-		t.Fatalf("seed the row: created=%v err=%v", created, err)
-	}
-	if f := mustGet(t, s, "t1").LaunchFacts(); f != (sandbox.LaunchRecord{}) {
-		t.Fatalf("job-old's record answered for job-new: %+v", f)
-	}
-
-	if ok, err := s.MarkSuspended(t.Context(), "t1", suspension()); err != nil || !ok {
-		t.Fatalf("suspend: %v %v", ok, err)
-	}
-	if f := mustGet(t, s, "t1").LaunchFacts(); f.ID != "job-new" || f.Published ||
-		f.Iteration != suspension().Iteration || !f.StartedAt.IsZero() {
-		t.Errorf("after the suspension the record is %+v, want job-new's own iteration and nothing else", f)
-	}
-	claimed := mustClaim(t, s, "t1")
-	release := releaseOf(claimed)
-	release.Published = true
-	if released, err := s.ReleaseClaim(t.Context(), "t1", release); err != nil || !released {
-		t.Fatalf("release: released=%v err=%v", released, err)
-	}
-	if f := mustGet(t, s, "t1").LaunchFacts(); f.ID != "job-new" || !f.Published {
-		t.Errorf("the publish was not recorded against job-new: %+v", f)
 	}
 }

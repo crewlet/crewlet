@@ -83,18 +83,13 @@ func TestAnEvictionIsWrittenAsWhoPressedItOnEveryLog(t *testing.T) {
 	}
 
 	// THE RECORD ITSELF, which is what every other node applies: the author
-	// on every log, and the credential on every log whose gate records one —
-	// which the identity estate's does not, by its own rule
-	// ([iamdomain.OperatorRecordVersion]: never on a gate), so it is not
-	// asked of that log here.
+	// and the credential they acted through, on every log.
 	author := iam.ActorFor(by).Name
 	for _, d := range res.Domains {
 		record := gateRecord(t, e, d.Stream, d.OpID)
-		wants := []string{`"actor":"` + author + `"`}
-		if d.Domain != (iamdomain.Domain{}).Name() {
-			wants = append(wants, `"operator_id":"`+by.Via+`"`)
-		}
-		for _, want := range wants {
+		for _, want := range []string{
+			`"actor":"` + author + `"`, `"operator_id":"` + by.Via + `"`,
+		} {
 			if !bytes.Contains(record, []byte(want)) {
 				t.Errorf("%s's eviction record does not carry %s: %s", d.Domain,
 					want, record)

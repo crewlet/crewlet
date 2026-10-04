@@ -1484,9 +1484,9 @@ func (d *Dispatcher) now() time.Time {
 // on every turn: the ledger, the telemetry, the episodes and a parked run's
 // answer match want the identity, while the coalescing record wants the
 // partition — it records that N events MERGED, which is what the partition
-// decides. The answer match takes both, and only because a row parked by a
-// build that predates the identity holds nothing else to match on. One value
-// answering every question is what filed a seat's own prior turn on a direct
+// decides. The answer match takes both: the identity admits a parked run and
+// the partition picks between several it admits. One value answering every
+// question is what filed a seat's own prior turn on a direct
 // message under a key its next turn never looked up, and what lost every
 // clarification a seat was told to ask for in a thread.
 //
@@ -1522,13 +1522,9 @@ func partitionKeyOf(evs []*events.Event) string { return notify.KeyOfAll(evs) }
 // colleague's question, "(task_assigned)" for a schedule's task text. The type
 // name remains only as the last resort it was always meant to be.
 //
-// TWO SOURCES, TYPED FIRST. Every wake type that runs a turn now states its
-// ask through Briefer, so the free-form bag below is not where any producer in
-// this build writes one. It is kept, and kept SECOND, because a rolling
-// upgrade puts two builds on one stream: a wake minted by a peer that predates
-// the typed payloads carries its body under "content" in the bag, and this
-// build decoding that event finds an empty typed payload. Reading the bag
-// after the brief is what stops such a wake reaching a seat as its type name.
+// Every wake type that runs a turn states its ask through Briefer; a type
+// that does not is described by its Summarizer line, and a type with neither
+// by its name.
 func DescribeTrigger(evs []*events.Event) string {
 	var parts []string
 	for _, ev := range evs {
@@ -1540,10 +1536,6 @@ func DescribeTrigger(evs []*events.Event) string {
 				parts = append(parts, b)
 				continue
 			}
-		}
-		if body := payloadBody(ev); body != "" {
-			parts = append(parts, body)
-			continue
 		}
 		if summary, ok := ev.Data.(events.Summarizer); ok {
 			if s := summary.Summary(); s != "" {
@@ -1601,30 +1593,6 @@ func delegationOf(evs []*events.Event) (int, []string) {
 		}
 	}
 	return depth, chain
-}
-
-// payloadBodyKeys are the untyped payload fields that carry a trigger's text,
-// in the order they are tried.
-//
-// A SHORT, CLOSED LIST rather than a scan: a wake with no typed payload has no
-// schema, so this is the only place that knows how to read one.
-//
-// NO PRODUCER IN THIS BUILD writes either key any more — internal/a2a stamped
-// "content" on both its wakes until they became typed payloads, and nothing
-// ever wrote "text". The list survives as the ROLLING-UPGRADE path: a wake
-// minted by a peer that predates those types still carries its body here, and
-// this build would otherwise hand it to a seat as its type name. Keep both
-// names for as long as a node running that older build can still be publishing.
-var payloadBodyKeys = []string{"text", "content"}
-
-// payloadBody is a trigger's text from its untyped payload, or empty.
-func payloadBody(ev *events.Event) string {
-	for _, key := range payloadBodyKeys {
-		if s, _ := ev.Payload[key].(string); s != "" {
-			return s
-		}
-	}
-	return ""
 }
 
 // noteCoalesced records a partition merged into one digest trigger.
@@ -1734,9 +1702,9 @@ func notificationSourceOf(evs []*events.Event) string {
 // them from different events is how a turn ends up filed under a trace whose
 // root says something it did not react to.
 //
-// An empty result is ordinary rather than exceptional: an event written by a
-// build older than tracing carries no ids, and a rolling upgrade guarantees
-// some do. WithRemote turns that into a fresh root.
+// An empty result is ordinary rather than exceptional: an event built with an
+// empty [events.TraceContext] carries no ids. WithRemote turns that into a
+// fresh root.
 func triggerTrace(evs []*events.Event) events.TraceContext {
 	for _, ev := range evs {
 		if ev == nil {
@@ -1809,8 +1777,7 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 
 		case types.ExternalNotification{}.EventType():
 			// The third-party app's own reading of its routing. See
-			// [notify.Prompt.Addressed]. Absent decodes as false, so an
-			// event written by a build that predates the field is
+			// [notify.Prompt.Addressed]. Absent decodes as false:
 			// unaddressed rather than an obligation nobody recorded.
 			//
 			// OFF THE TYPED PAYLOAD, never the envelope's free-form bag.

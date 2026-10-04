@@ -71,28 +71,15 @@ import (
 // PartitionField is the payload field a producer stamps the partition key
 // into.
 //
-// THE GO NAME MOVED WITH THE CONCEPT; THE WIRE STRING DID NOT. This constant
-// was KeyField and its value is still "conversation_key", because the value is
-// what two builds exchange over one stream while the name is only what this
-// build calls it. A rolling upgrade has an older peer stamping that field and
-// a newer node partitioning by it: rename the VALUE and every wake from the
-// other half of the fleet arrives unkeyed, every partition becomes a
-// singleton, and ten comments on one thread wake a seat ten times — the
-// outage [Service.deliver] already records having shipped once.
-//
-// The same trade the engine already made for agent/phase's "execute", which
-// "keeps its wire string although the phase it names now decides as well as
-// acts — the value is a column in the event store and read by every
-// dashboard, so renaming it would buy a better word at the cost of a value
-// migration".
-const PartitionField = "conversation_key"
+// `partition_key`, NOT `conversation_key`: that spelling is the conversation
+// IDENTITY on every event that carries it (a turn's records, the sandbox
+// events, the event store's tag), and the partition is a different value
+// exactly where it matters — a direct message's identity is the bare channel
+// and its partition can be a thread inside it.
+const PartitionField = "partition_key"
 
 // ConversationField is the payload field the durable conversation identity is
 // stamped into.
-//
-// NEW, and additive: an event from a build that predates the split carries
-// only [PartitionField] — see [ConversationIdentityOf] for what a reader does
-// with that.
 const ConversationField = "conversation_identity"
 
 // RecipientField carries the handle a notification was resolved to.
@@ -172,10 +159,6 @@ func Namespaced(source, local string) string {
 
 // KeyOf is the partition function: the partition key an event carries, or its
 // fallback.
-//
-// UNCHANGED BY THE SPLIT, deliberately. The partition path is the only one an
-// older peer can get wrong — it is what the broker groups on — so it goes on
-// reading exactly the field every build has always stamped.
 func KeyOf(ev *events.Event) string {
 	if ev == nil {
 		return ""
@@ -212,30 +195,16 @@ func KeyOfAll(evs []*events.Event) string {
 // working indicator raises its spinner on ([ConversationOf] in status.go),
 // which answers a different question from different metadata.
 //
-// THE FALLBACK TO [PartitionField] IS A PEER CONTRACT, not a compatibility
-// path for an unreleased surface. An event published by a build from before
-// the split carries only "conversation_key", and its value is what that build
-// would have handed the ledger — so reading it here reproduces the old
-// behaviour for an old event exactly, which is the safe half: the worst it
-// costs is the miss this split exists to fix (a DM thread reply filed under
-// its thread), where reading the absence as "no conversation" would refuse to
-// record the turn at all and lose history a person can see. Same shape as
-// [types.ExternalNotification.Addressed], where absent means unaddressed.
-//
-// THE WINDOW IS NOT AN UPGRADE WINDOW. CREWLET_AGENT is interest retention
-// with no maxAge, a seat's mailbox retains while nothing is attached, a parked
-// seat republishes its deliveries for hours and a removed seat's mail is kept
-// for 24 hours — so an event stamped by one build reaches another whenever,
-// and this branch is permanent rather than something a deploy retires.
+// NO FALLBACK TO [PartitionField]: every producer stamps both through
+// [Stamp], and a source's partition key is its identity or a finer cut of it
+// ([Prompt.ConversationIdentity]), so an event naming a partition and no
+// identity is one no producer writes.
 func ConversationIdentityOf(ev *events.Event) string {
 	if ev == nil {
 		return ""
 	}
 	if id, _ := ev.Payload[ConversationField].(string); id != "" {
 		return id
-	}
-	if key, _ := ev.Payload[PartitionField].(string); key != "" {
-		return key
 	}
 	return Fallback(ev.ID.String())
 }
@@ -248,22 +217,9 @@ func ConversationIdentityOf(ev *events.Event) string {
 // construction, because a source's partition key refines its identity. See
 // [Prompt.ConversationIdentity].
 //
-// TWO PASSES, AND THE ORDER IS THE POINT. A STATED identity outranks an
-// INFERRED one across the whole partition, rather than per event — so the
-// fallback to [PartitionField] runs only if no constituent names an identity
-// at all. Folded into one loop, the first event to name EITHER field decided,
-// and a partition can mix producers: a rolling upgrade puts one event from a
-// peer that predates the split, carrying only the partition, in front of one
-// carrying the true identity, and the whole turn is then filed under the
-// partition key — which for a direct message is precisely the batch its next
-// turn never looks up, the failure this split exists to remove.
-//
-// It can never disagree with a correct producer, which is what makes it free:
-// every event in a partition carries the SAME identity, so preferring a
-// stated one to a value inferred from a sibling is choosing between two
-// spellings of one answer. A partition that names neither yields "", so the
-// caller decides what that means rather than being handed one event's
-// fallback as if it described the whole partition.
+// A partition that names none yields "", so the caller decides what that
+// means rather than being handed one event's fallback as if it described the
+// whole partition.
 func ConversationIdentityOfAll(evs []*events.Event) string {
 	for _, ev := range evs {
 		if ev == nil {
@@ -271,17 +227,6 @@ func ConversationIdentityOfAll(evs []*events.Event) string {
 		}
 		if id, _ := ev.Payload[ConversationField].(string); id != "" {
 			return id
-		}
-	}
-	// Nothing STATED one. Now infer, for the peer reason
-	// [ConversationIdentityOf] gives — a partition of old-build events must
-	// not read as having no conversation.
-	for _, ev := range evs {
-		if ev == nil {
-			continue
-		}
-		if key, _ := ev.Payload[PartitionField].(string); key != "" {
-			return key
 		}
 	}
 	return ""

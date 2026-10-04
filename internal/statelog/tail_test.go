@@ -94,25 +94,6 @@ func TestTheSameOperationAtTheSamePositionIsNotTheSameRecord(t *testing.T) {
 	}
 }
 
-// A LEDGER ROW THAT NAMES NO INSTANT VOUCHES FOR NOTHING.
-//
-// A row written before the ledger kept the instant says an operation applied at
-// a position, which a retry at that position also satisfies; weighed as held,
-// it would let a reanchor skip a record it cannot tell from its own.
-func TestALedgerRowThatNamesNoInstantVouchesForNothing(t *testing.T) {
-	t.Parallel()
-	h := appliedThrough(t, 3)
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `UPDATE probe_ops SET stored_at = 0`)
-		return err
-	}); err != nil {
-		t.Fatalf("clear the ledger's instants: %v", err)
-	}
-	if got := unheld(t, h, 3); got == nil || got.Seq != 3 {
-		t.Fatalf("a ledger row naming no instant read as holding the record: %v", got)
-	}
-}
-
 // A RECORD THIS NODE RETAINED IS ITS HISTORY AS MUCH AS ONE IT APPLIED.
 func TestARecordThisNodeRetainedIsHeld(t *testing.T) {
 	t.Parallel()
@@ -234,10 +215,7 @@ func TestARestoredReanchorOverUnheldRecordsRunsOnlyOnTheOperatorsWord(t *testing
 // The operation ledger travels inside every snapshot, instant and all, so the
 // row a donor wrote when it applied a record names that record on the node that
 // adopted it exactly as it did on the donor: a restored reanchor there finds
-// nothing written after the restore and runs. A donor on an older build scrubbed
-// its ledger, and there the walk cannot vouch — but it says why, with the
-// watermark the adoption wrote in place of the scrubbed rows, so the refusal
-// can say the rows may hold the record after all.
+// nothing written after the restore and runs.
 func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 	t.Parallel()
 	held := otherHistory.Add(-time.Hour).Truncate(time.Microsecond)
@@ -281,25 +259,6 @@ func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 				"its own history", got)
 		}
 	})
-
-	t.Run("from a donor on an older build, which scrubbed it", func(t *testing.T) {
-		t.Parallel()
-		h := newJoinHarnessFrom(t, joinDonor{domain: scrubbingProbe{}, seed: seed})
-		if _, err := h.adopter(t).Join(t.Context()); err != nil {
-			t.Fatalf("Join: %v", err)
-		}
-		got := walk(t, h)
-		if got == nil || got.Seq != at.Seq {
-			t.Fatalf("the walk over a scrubbed ledger answered %v — it cannot vouch "+
-				"for a record whose row never arrived", got)
-		}
-		bound, lost := h.joinerLostBefore(t)
-		if !lost || !got.LedgerLostBefore.Equal(bound) {
-			t.Fatalf("the record names the ledger's watermark as %s, want the "+
-				"adoption's %s (lost %v) — the refusal cannot say the rows may "+
-				"hold it after all", got.LedgerLostBefore, bound, lost)
-		}
-	})
 }
 
 // A LEDGER'S SILENCE IS CONCLUSIVE ONLY FOR AN OPERATION MINTED SINCE IT LAST
@@ -307,8 +266,7 @@ func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 //
 // The walk names an unheld record with the ledger's watermark exactly when the
 // record's operation was minted before it — the one case in which its row may
-// have been swept, or scrubbed from the snapshot this node adopted, and the
-// rows may hold the record after all. An operation id that carries no instant
+// have been swept, and the rows may hold the record after all. An operation id that carries no instant
 // reads as minted before every loss, as the publisher reads it.
 func TestALedgersSilenceIsConclusiveOnlySinceItLastLostARow(t *testing.T) {
 	t.Parallel()

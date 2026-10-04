@@ -244,11 +244,9 @@ type Session struct {
 	// would also move with every node's own setting, and one browser would
 	// be restricted on one node and free on the next.
 	//
-	// ITS ZERO IS AN UNRESTRICTED SESSION, which is every session that
-	// existed before this field and every one a Tier A token opens. What stops an older build reading a restricted one as free is
-	// the record's VERSION ([ConditionRecordVersion]), not this field: a
-	// build that cannot decode it defers the record rather than dropping
-	// the field and serving the session whole.
+	// ITS ZERO IS AN UNRESTRICTED SESSION, which is every session a
+	// password and a second factor proved, and every one a Tier A token
+	// opens.
 	//
 	// NOT THE ONLY COPY. The bearer the sign-in mints carries the same
 	// decision, signed ([session.Bearer.EnrolmentOnly]), because this row
@@ -533,10 +531,10 @@ type StatusChange struct {
 
 // Removal is a person the company no longer has.
 //
-// PINNED AT [GateRecordVersion] FOR EVER, like every gate-installing record:
-// a removal whose version a node could not read would be deferred, and a
-// deferred removal here is somebody off-boarded still signing in on one node,
-// with no later record that corrects it.
+// A GATE, so its record stays at the base version for every build there will
+// ever be ([MutationRecord.readByEveryBuild]) and its shape may only ever grow
+// by addition: a removal a node deferred would be somebody off-boarded still
+// signing in on that node, with no later record that corrects it.
 type Removal struct {
 	V int `json:"v"`
 
@@ -594,11 +592,10 @@ type Sweep struct {
 	Changes  uint64 `json:"changes,omitempty"`
 	Sessions uint64 `json:"sessions,omitempty"`
 
-	// Expired is the instant sessions and invitations are collected
-	// against once they are over — and, on a record at
-	// [SweepRecordVersion], redeemed invitations and revoked or expired
-	// credentials too — already net of
-	// [SessionRowGrace], so the applier compares and never subtracts.
+	// Expired is the instant sessions, invitations and credentials are
+	// collected against once they are over — ended, expired, redeemed or
+	// revoked — already net of [SessionRowGrace], so the applier compares
+	// and never subtracts.
 	//
 	// THE PUBLISHER READ IT, ONCE, and that is the whole of the clock
 	// this path is allowed: every node then compares the same carried
@@ -611,13 +608,13 @@ type Sweep struct {
 
 // Invalidation ends every session in the company at once.
 //
-// PINNED AT [GateRecordVersion] FOR EVER, like a removal and an eviction: a
-// node that deferred this would go on honouring every bearer the company had
-// just invalidated, and no later record about any of those sessions repairs
-// it.
+// A GATE, like a removal and an eviction, so its record stays at the base
+// version for every build there will ever be: a node that deferred this would
+// go on honouring every bearer the company had just invalidated, and no later
+// record about any of those sessions repairs it.
 //
-// ITS PAYLOAD IS TWO FIELDS AND WILL STAY TWO, which is what a pinned version
-// costs and what it buys. Anything a bearer-invalidation might later want to
+// ITS PAYLOAD IS TWO FIELDS AND WILL STAY TWO, which is what staying at the
+// base costs and what it buys. Anything a bearer-invalidation might later want to
 // say — which sessions, on whose authority, under what policy — belongs on a
 // record that is allowed to evolve, because a field added here could only be
 // read by builds that already had it.
@@ -829,18 +826,17 @@ func DecodeStatus(data []byte) (StatusChange, error) {
 func EncodeRemoval(r Removal) ([]byte, error) { return jsoncarry.Encode(r, r.Extra) }
 
 // DecodeRemoval reads a removal's payload, keeping every field this build has
-// no home for, and checks no version: the payload is pinned at
-// [GateRecordVersion], so the envelope pass has already refused any other.
+// no home for, and checks no version: a removal is a gate, so a record above
+// this build's version has already stopped the applier at the envelope pass.
 func DecodeRemoval(data []byte) (Removal, error) {
 	var r Removal
 	extra, err := jsoncarry.Decode(data, &r, removalFields)
 	if err != nil {
 		return Removal{}, fmt.Errorf("iamdomain: decode a removal: %w", err)
 	}
-	// NO VERSION CHECK, and it is the one payload that has none. A removal
-	// is pinned at [GateRecordVersion] for ever, so a version above this
-	// build's is not a newer shape to defer — it is a record that must not
-	// exist, and the envelope pass has already refused it as a gate.
+	// NO VERSION CHECK: a gate's version above this build's is not a newer
+	// shape to defer — it is a record that must not exist, and the envelope
+	// pass has already refused it as a gate.
 	r.Extra = extra
 	return r, nil
 }
@@ -872,18 +868,17 @@ func EncodeInvalidation(i Invalidation) ([]byte, error) {
 }
 
 // DecodeInvalidation reads a company-wide invalidation's payload, keeping
-// every field this build has no home for, and checks no version: the payload
-// is pinned at [GateRecordVersion], so the envelope pass has already refused
-// any other.
+// every field this build has no home for, and checks no version: it is a gate,
+// so the envelope pass has already refused any other.
 func DecodeInvalidation(data []byte) (Invalidation, error) {
 	var i Invalidation
 	extra, err := jsoncarry.Decode(data, &i, invalidationFields)
 	if err != nil {
 		return Invalidation{}, fmt.Errorf("iamdomain: decode an invalidation: %w", err)
 	}
-	// NO VERSION CHECK, like a removal and an eviction: the payload is
-	// PINNED at [GateRecordVersion], so a version above this build's cannot
-	// exist, and the envelope pass has already refused it as a gate.
+	// NO VERSION CHECK, like a removal and an eviction: a version above
+	// this build's cannot exist on a gate, and the envelope pass has
+	// already refused it as one.
 	i.Extra = extra
 	return i, nil
 }
@@ -893,16 +888,15 @@ func DecodeInvalidation(data []byte) (Invalidation, error) {
 func EncodeEviction(e Eviction) ([]byte, error) { return jsoncarry.Encode(e, e.Extra) }
 
 // DecodeEviction reads an eviction's or a readmission's payload, keeping every
-// field this build has no home for, and checks no version: the payload is
-// pinned at [GateRecordVersion], so the envelope pass has already refused any
-// other.
+// field this build has no home for, and checks no version: it is a gate, so
+// the envelope pass has already refused any other.
 func DecodeEviction(data []byte) (Eviction, error) {
 	var e Eviction
 	extra, err := jsoncarry.Decode(data, &e, evictionFields)
 	if err != nil {
 		return Eviction{}, fmt.Errorf("iamdomain: decode an eviction: %w", err)
 	}
-	// PINNED, like a removal and for the reason one layer up: a node that
+	// A GATE, like a removal and for the reason one layer up: a node that
 	// deferred an eviction goes on applying records every peer is dropping.
 	e.Extra = extra
 	return e, nil

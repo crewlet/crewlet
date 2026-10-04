@@ -190,32 +190,6 @@ func TestWithNoKeyringNothingIsSealedOrRead(t *testing.T) {
 	}
 }
 
-// THE MIGRATION READS BOTH, and only with the keyring it will seal under.
-//
-// `crewlet config seal` rewrites an older build's plaintext revision sealed,
-// so it must read what it replaces, sealed or not. Without a keyring there is
-// nothing to seal under, so the read is refused before it happens.
-func TestTheMigrationOpensEitherAndOnlyWithAKeyring(t *testing.T) {
-	t.Parallel()
-	cipher, err := NewCipher(testRing(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sealed, err := Seal(cipher, document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, payload := range map[string][]byte{"plaintext": document, "sealed": sealed} {
-		opened, err := OpenToReseal(cipher, payload)
-		if err != nil || string(opened) != string(document) {
-			t.Errorf("OpenToReseal(%s) = %s, %v, want the document", name, opened, err)
-		}
-	}
-	if _, err := OpenToReseal(nil, document); !errors.Is(err, ErrNoKeyring) {
-		t.Errorf("OpenToReseal with no keyring = %v, want ErrNoKeyring", err)
-	}
-}
-
 func TestADocumentSealedByAnotherKeyIsRefused(t *testing.T) {
 	t.Parallel()
 	mine, err := NewCipher(testRing(t))

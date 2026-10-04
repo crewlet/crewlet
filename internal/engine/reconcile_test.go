@@ -760,12 +760,9 @@ func TestAnUnsealedRevisionFromThePeersIsNeitherAppliedNorKept(t *testing.T) {
 	if !errors.Is(err, secrets.ErrUnsealedWithKey) {
 		t.Fatalf("Tick = %v, want the unsealed-with-a-keyring refusal", err)
 	}
-	// AND IT SAYS WHERE THE BODY CAME FROM AND WHO FIXES IT: the node that
-	// published it, with the command that seals its revision. The receiving
-	// node's own `crewlet config seal` would re-seal its own active revision
-	// and do nothing about this body.
-	for _, says := range []string{"coordination store", "forged", "that node",
-		"crewlet config seal"} {
+	// AND IT SAYS WHERE THE BODY CAME FROM: the coordination store, where
+	// anything that reaches the broker could have written it.
+	for _, says := range []string{"coordination store", "without a seal", "forged"} {
 		if !strings.Contains(err.Error(), says) {
 			t.Errorf("the refusal does not say %q: %v", says, err)
 		}
@@ -806,11 +803,9 @@ func TestAnUnsealedRevisionFromThePeersIsNeitherAppliedNorKept(t *testing.T) {
 
 // THIS NODE'S OWN UNSEALED COPY IS NAMED AS ITS OWN.
 //
-// The fleet can point at a revision this node already holds, and an older
-// build stored its copy in the clear. That is not a body somebody else
-// published: the remedy is `crewlet config seal` HERE, which seals this node's
-// active revision and activates it for the fleet, so the refusal says it is
-// this node's own copy.
+// The fleet can point at a revision this node already holds in the clear. That
+// is not a body somebody else published: the remedy is an import HERE, which
+// stores the document sealed, so the refusal says it is this node's own copy.
 //
 // Mutation: answer the local copy with the peer's wording and the case fails.
 func TestThisNodesOwnUnsealedCopyIsNamedAsItsOwn(t *testing.T) {
@@ -819,13 +814,13 @@ func TestThisNodesOwnUnsealedCopyIsNamedAsItsOwn(t *testing.T) {
 	document := yamlToJSON(t, grownCompanyDoc)
 	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
 		Source: "test", CreatedBy: "operator", CreatedByKind: iam.ActorOperator,
-		Summary: "an older build's", Payload: document, CreatedAt: pinnedNow,
+		Summary: "unsealed", Payload: document, CreatedAt: pinnedNow,
 	})
 	if err != nil {
 		t.Fatalf("store the revision: %v", err)
 	}
 	if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: id, Summary: "an older build's", Payload: document, At: pinnedNow,
+		RevisionID: id, Summary: "unsealed", Payload: document, At: pinnedNow,
 	}); err != nil {
 		t.Fatalf("activate: %v", err)
 	}
@@ -833,7 +828,7 @@ func TestThisNodesOwnUnsealedCopyIsNamedAsItsOwn(t *testing.T) {
 	if !errors.Is(err, secrets.ErrUnsealedWithKey) {
 		t.Fatalf("Tick = %v, want the unsealed-with-a-keyring refusal", err)
 	}
-	for _, says := range []string{"this node's own copy", id, "crewlet config seal"} {
+	for _, says := range []string{"this node's own copy", id, "crewlet config import"} {
 		if !strings.Contains(err.Error(), says) {
 			t.Errorf("the refusal does not say %q: %v", says, err)
 		}

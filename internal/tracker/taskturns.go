@@ -88,7 +88,6 @@ type TaskTurn struct {
 	Phases []string `json:"phases"`
 
 	// Summary, Review and Tools are what it did — see [TurnRecord].
-	// Absent on a turn recorded by a build before the record carried them.
 	Summary string     `json:"summary,omitempty"`
 	Review  string     `json:"review,omitempty"`
 	Tools   []TurnTool `json:"tools,omitempty"`

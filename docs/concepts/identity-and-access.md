@@ -540,11 +540,8 @@ was for is sealed under the fleet keyring and bound to the invitation, so an
 address somebody typed and never sent leaves no cleartext anywhere — and the
 sweep that collects the invitation takes the sealed copy with it.
 
-An invitation issued before links carried a secret has no verifier and is
-**redeemable by nobody**: admitting it on its id would admit exactly what the
-secret closes. Issue it again. Its record also travels at the identity log's
-newest record version, so a node running an older build defers it and answers
-the link `410` rather than redeeming it without checking the secret.
+An invitation with no verifier is **redeemable by nobody**: admitting it on its
+id would admit exactly what the secret closes.
 
 **The engine never sends mail.** `crewlet iam invite` and `POST
 /iam/invitations` hand the inviter the URL; getting it to the person is
@@ -794,9 +791,7 @@ next. It is written in **two places, and both are read**:
   password sign-in.
 - **the session's start record**, which `GET /iam/people/{id}/sessions` reads
   to mark it `"enrolment_only": true`, so an administrator can tell a person
-  part-way through their first sign-in from one who is working. It is written
-  at the identity log's condition version, so a node running an older build
-  defers it rather than recording the session as whole.
+  part-way through their first sign-in from one who is working.
 
 A node running an older build refuses the scoped cookie outright, as a cookie
 not of its format — during a rolling upgrade somebody part-way through enrolling
@@ -1097,10 +1092,7 @@ name and gave it to the credential, which named nobody once the token's own
 row was swept. The identity estate's audit events carry it beside `by`, and
 its own trail, `GET /iam/audit`, beside the actor — which used to name the
 owner alone, so whatever a token did to the directory read there as done by
-them. The one exception is a removal and a company-wide invalidation: their
-records are pinned at their first version for ever, so their trail rows name
-the actor alone and the events announcing them carry the token. The `pat`
-class is
+them — a removal and a company-wide invalidation included. The `pat` class is
 reserved for exactly this: no service account may enrol under a login that
 starts `pat:`, so the name always means a machine token. See [who a write is
 attributed to](../reference/api-endpoints.md#who-a-write-is-attributed-to).
@@ -1907,13 +1899,8 @@ Identity has **two trails**, and they answer different questions.
   acted through (`operator_id`): a machine token's `pat:<id>`, a browser
   session's `session:<lineage>`, a Tier A token's own login. A token acts as
   its owner, so the actor is the owner either way, and the credential is what
-  says their token did it. Three kinds of row name none: what the sign-in
-  surface and the duties write, since the node acts on nobody's credential; a
-  **removal** and a company-wide **invalidation**, whose records are gates
-  pinned at their first version for ever — the events announcing them
-  (`iam_session_ended` with `person_removed`, `iam_session_generation_bumped`)
-  carry the credential instead; and every row written before the field
-  existed.
+  says their token did it. What the sign-in surface and the duties write names
+  none, since the node acts on nobody's credential.
 - **The `auth` category** of the ordinary event feed is what *this node saw*:
   who signed in here and how, what ended a session, how many attempts failed
   and from where. Each row is published through the

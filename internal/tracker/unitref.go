@@ -144,8 +144,8 @@ func taskUnits(units Units, task Task) *TaskUnits {
 // in.
 //
 // A REFERENCE THE CHART CANNOT RESOLVE IS LEFT ALONE, for the reason
-// [unitSpellings] leaves one alone: a strip saved against a team since
-// dissolved is still that strip, and the read matches both spellings anyway.
+// [unitKeys] leaves one alone: a strip saved against a team since dissolved
+// is still that strip.
 func CanonicalContainer(units Units, container Container) Container {
 	if units == nil || container.Kind != ContainerUnit {
 		return container
@@ -156,21 +156,17 @@ func CanonicalContainer(units Units, container Container) Container {
 	return container
 }
 
-// unitSpellings is every spelling a row may hold for the units these
-// references name.
+// unitKeys is the key a row holds for each unit these references name.
 //
-// THE READ HALF OF THE SPELLINGS. A write stores a unit's key, and a record is
-// never rewritten: rows written before the document gave the unit a key at all
-// hold its name — so a filter that compared against the one string somebody
-// typed would answer with part of the team's work, silently. Each reference is
-// resolved through the org and contributes the SET its unit answers to: its
-// key and its name.
+// A WRITE STORES A UNIT'S KEY — the tools resolve whatever was typed through
+// the chart, and a project's unit is the chart's own — so a filter resolves
+// each reference the same way and compares the key: a team's id, its name
+// and either in any case all narrow to its work.
 //
 // EXACT VALUES RATHER THAN A FOLDED COMPARISON. Both columns this filters
 // have an index over their stored text (`tracker_tasks_filed_unit_idx`,
 // `tracker_projects_unit_idx`), and a `COLLATE NOCASE` comparison stops a
-// planner seeking one — so the CHART absorbs the case, resolving whatever was
-// typed, and what comes back out is the unit's own spellings.
+// planner seeking one — so the CHART absorbs the case.
 //
 // A REFERENCE THE CHART CANNOT RESOLVE KEEPS ITS LITERAL, which is the honest
 // answer rather than an error or a widening: a stored unit may legitimately
@@ -181,50 +177,23 @@ func CanonicalContainer(units Units, container Container) Container {
 // A BLANK REFERENCE CONTRIBUTES NOTHING — it cannot arrive from the query
 // grammar, where an empty value carries no filter at all, and an empty set
 // here is what the callers check before building a clause.
-func unitSpellings(units Units, refs []string) []string {
-	out := make([]string, 0, len(refs)*3)
-	seen := make(map[string]bool, len(refs)*3)
-	add := func(value string) {
-		if value == "" || seen[value] {
-			return
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
+func unitKeys(units Units, refs []string) []string {
+	out := make([]string, 0, len(refs))
+	seen := make(map[string]bool, len(refs))
 	for _, ref := range refs {
 		ref = strings.TrimSpace(ref)
 		if ref == "" {
 			continue
 		}
-		unit, found := ChartUnit{}, false
 		if units != nil {
-			unit, found = units.ResolveUnit(ref)
+			if unit, found := units.ResolveUnit(ref); found {
+				ref = strings.TrimSpace(unit.Key)
+			}
 		}
-		if !found {
-			add(ref)
-			continue
+		if ref != "" && !seen[ref] {
+			seen[ref] = true
+			out = append(out, ref)
 		}
-		for _, spelling := range unit.spellings() {
-			add(spelling)
-		}
-	}
-	return out
-}
-
-// spellings is every string a stored row may hold for this unit, its key
-// first, then its name. Trimmed, since that is how every reference reaches the
-// chart; blanks are left out, and duplicates for the caller to fold.
-//
-// ONE LIST FOR THE FILTER AND THE BOARD, so the two can never disagree about
-// which rows are a team's: [unitSpellings] matches them and [unitAxis] folds
-// them onto the key.
-func (u ChartUnit) spellings() []string {
-	out := make([]string, 0, 2)
-	if key := strings.TrimSpace(u.Key); key != "" {
-		out = append(out, key)
-	}
-	if name := strings.TrimSpace(u.Name); name != "" {
-		out = append(out, name)
 	}
 	return out
 }

@@ -451,8 +451,7 @@ type HistoryRow struct {
 	ActorKind  iam.Kind
 
 	// OperatorID is the credential Actor acted through, and empty where
-	// the record named none: the node's own writer, a gate, and every row
-	// written before [OperatorRecordVersion].
+	// the record named none: the node's own writer.
 	OperatorID string
 
 	Reason  string

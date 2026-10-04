@@ -3,11 +3,9 @@ package pages_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -39,14 +37,15 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			// would be a schema the suite proved and the migration
 			// did not.
 			Encode: encodeSuiteRecord,
-			// THE VERSIONED-FIELD TABLE, and a record carrying each of
-			// its fields — which is what certifies the path the table
-			// names is where the encoder actually writes the field.
-			Fields:   pages.VersionedFields(),
-			Carrying: carryingSuiteField,
-			Kinds:    suiteKinds(),
-			Rows:     pages.NewRows,
-			Write:    suiteWrite,
+			// THE PRODUCTION TABLE, which is empty: the base format is
+			// every field this build writes. A row added to it needs a
+			// Carrying here that builds a record carrying the field
+			// through the writer's own encoder, and the suite refuses
+			// a table without one.
+			Fields: pages.VersionedFields(),
+			Kinds:  suiteKinds(),
+			Rows:   pages.NewRows,
+			Write:  suiteWrite,
 			// THE GATE RECORD, which this domain had an applier, a fence
 			// and a table for and no writer — so the trim never learned an
 			// evicted node had left this log.
@@ -90,39 +89,6 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) erro
 	}
 	_, _, err = s.EnsureContainer(ctx, activation(0), suiteContainer, "The suite's space", "")
 	return err
-}
-
-// carryingSuiteField builds a valid record carrying exactly one versioned
-// field, with its version left for the encoder to stamp.
-//
-// EVERY FIELD THE TABLE NAMES HAS A CASE, and a field without one fails here
-// rather than passing unexamined: the suite reads the version this returns,
-// and a record that did not carry the field would be stamped at 1 and reported
-// as the path being wrong, which is a fixture fault dressed as a domain one.
-func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
-	switch field.Name {
-	case "ContainerPayload.ChartEpoch":
-		body, err := marshal(pages.ContainerPayload{
-			V: pages.DocumentVersion, Key: suiteContainer, Name: "The suite's space",
-			ChartEpoch: configplane.ActivationStamp(activation(0)),
-		})
-		if err != nil {
-			return nil, err
-		}
-		return pages.Encode(pages.MutationRecord{
-			RecordEnvelope: pages.RecordEnvelope{
-				OpID:      "suite-carrying-" + field.Name,
-				Subject:   pages.ContainerSubject(suiteContainer),
-				Op:        pages.OpPatch,
-				Scope:     pages.ScopeSet{Subject: true},
-				CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Gen: 1,
-				Writer: "suite-node",
-			},
-			Mutation: body, Actor: "suite", ActorKind: pages.AuthorOperator,
-		})
-	}
-	return nil, fmt.Errorf("no suite record carries %s — add a case that sets it "+
-		"and nothing else versioned", field.Name)
 }
 
 // suiteKinds is every kind, derived from the enum rather than typed again.
@@ -204,12 +170,12 @@ func suitePayload(kind pages.ObjectKind, id string) (pages.OpKind, any, pages.Sc
 		}, pages.ScopeSet{Subject: true, Container: suiteContainer}
 	case pages.KindEviction:
 		return pages.OpEviction, pages.Eviction{
-			V: pages.GateRecordVersion, NodeID: id, EvictedBy: "suite",
+			V: pages.DocumentVersion, NodeID: id, EvictedBy: "suite",
 			EvictedAt: time.Unix(1_700_000_000, 0).UTC(),
 		}, pages.ScopeSet{Subject: true}
 	case pages.KindGeneration:
 		return pages.OpGeneration, pages.Generation{
-			V: pages.GateRecordVersion, Generation: 2, By: "suite",
+			V: pages.DocumentVersion, Generation: 2, By: "suite",
 			StreamCreatedAt: time.Unix(1_700_000_000, 0).UTC(),
 		}, pages.ScopeSet{Subject: true}
 	case pages.KindBarrier:
@@ -295,7 +261,7 @@ func gateSuiteRecord(subject pages.Subject, op pages.OpKind, writer, opID string
 // gateSuiteEviction is an eviction of node, or its readmission.
 func gateSuiteEviction(node string, readmitted bool) pages.Eviction {
 	return pages.Eviction{
-		V: pages.GateRecordVersion, NodeID: node, EvictedBy: "suite",
+		V: pages.DocumentVersion, NodeID: node, EvictedBy: "suite",
 		EvictedAt: time.Unix(1_700_000_000, 0).UTC(), Readmitted: readmitted,
 	}
 }

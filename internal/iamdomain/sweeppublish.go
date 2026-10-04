@@ -274,10 +274,9 @@ func bucketDue(ctx context.Context, tx *sql.Tx, b Bucket, changes, sessions uint
 			WHERE bucket = ? AND redeemed_at = 0
 			  AND expires_at > 0 AND expires_at < ? LIMIT 1`,
 			[]any{bucket, over}},
-		// AND WHAT A VERSION-2 RECORD ALSO COLLECTS — see
-		// [SweepRecordVersion]. Asked here because the publisher only
-		// writes version 2, so a bucket holding nothing but a spent
-		// invitation or a revoked token is a bucket with something due.
+		// AND WHAT WAS SPENT, which a sweep collects too, so a bucket
+		// holding nothing but a spent invitation or a revoked token is a
+		// bucket with something due.
 		{"redeemed invitations", over <= 0, `
 			SELECT 1 FROM iam_invites
 			WHERE bucket = ? AND redeemed_at > 0 AND redeemed_at < ? LIMIT 1`,

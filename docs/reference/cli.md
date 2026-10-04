@@ -34,7 +34,6 @@ subcommand below is served by it.
 | `crewlet config revisions [--limit N]` | List recent revisions (newest first) |
 | `crewlet config diff <UUID> [-against <UUID\|active>]` | Structural diff of two revisions — paths and values, always redacted on both sides |
 | `crewlet config activate <UUID>` | Mark a revision active in this node's store, published to the fleet at its next start; re-activating the current one mints a new epoch, which is how a rotated secret takes effect. A running fleet does the same through `POST /config/revisions/<UUID>/revert` or `POST /config/reload` |
-| `crewlet config seal` | Encrypt a plaintext active revision an older build left as one document under the Tier A keyring — every other reader refuses it — see [Secrets](../concepts/configuration.md#secrets) |
 | `crewlet config rekey [-dry-run]` | Re-encrypt the active revision's config document under the active key (master-key rotation) |
 | `crewlet secrets keygen [-key-id ID]` | Generate a fresh encryption-keyring key + the `crewlet.yaml` snippet to install it |
 | `crewlet secrets set <NAME>` | Store an encrypted secret in the [secret store](../concepts/secret-store.md); the engine resolves `${NAME}` from it ahead of the environment. Takes `secrets:write` |
@@ -364,18 +363,6 @@ Marks a revision active in **this node's** store, which the node publishes to th
 
 **Re-activating the revision that is already active is not a no-op**, and that is the point: the pointer is append-only, so it mints a new epoch. A node's reconciler skips on the *epoch* it has applied, never on the payload, so the apply always runs — re-reading the [secret store](../concepts/secret-store.md) and rebuilding every provider, transport and MCP child that captured a resolved value. It is the documented way to make a rotated credential take effect; on a running fleet the same gesture is `POST /config/reload`.
 
-### `crewlet config seal`
-
-```
-crewlet config seal [-config PATH]
-```
-
-Encrypts the active revision under the Tier A keyring and writes a new active revision holding the whole config as one opaque `{"__encrypted__": "enc:v1:…"}` document — the one-time migration off plaintext-at-rest for a store an older build wrote before the keyring was required. It is the **one** reader of a plaintext revision: every other refuses one, because an unsealed document is one anything that reaches the store could have written, and the seal is what authenticates a revision a node fetches from its peers. `${VAR}` references inside are kept verbatim and resolve at construction time. A no-op when the active revision is already sealed.
-
-It seals the **active** revision and nothing else, so a refusal names it only where it applies. A reader of the active revision (`show`, `import`, a boot, and the boot's publish of a revision the fleet has no pointer for, which is refused rather than published) names this command. A **superseded** plaintext revision is sealed in place by nothing: `export` and `diff` refuse it as one that can be neither shown nor compared, and name the way to have its document again, which is importing it from your own copy.
-
-Like `import`, this writes the revision to **this node's** store; the note it prints says what publishes it to a running fleet.
-
 ### `crewlet config rekey`
 
 ```
@@ -388,7 +375,7 @@ Rotates the master key: re-encrypts the active revision's config document under 
 
 Workflow: `crewlet secrets keygen -key-id <new>` → add the new key to `secrets.keys` and set `active_key_id: <new>` while keeping the old key → `crewlet config rekey` **and** `crewlet secrets rekey` → once both succeed, drop the old key from `crewlet.yaml`.
 
-`-dry-run` reports what would move by reading the key id off the envelope, decrypting nothing. Idempotent: a document already under the active key is skipped and says so. A **plaintext** revision is refused rather than silently sealed — "rotate the key this is under" and "start encrypting this at all" are different decisions, and the refusal points at `config seal`. Fails clearly, naming the key, if the document is sealed under one no longer in the keyring.
+`-dry-run` reports what would move by reading the key id off the envelope, decrypting nothing. Idempotent: a document already under the active key is skipped and says so. A **plaintext** revision is refused like every other reader refuses one: it has no key to rotate, and nothing vouches for who wrote it, so the refusal names `crewlet config import`, which stores the document sealed again from your own copy. Fails clearly, naming the key, if the document is sealed under one no longer in the keyring.
 
 ---
 
@@ -934,8 +921,6 @@ without it the command mints one, `<uuidv7>.pause` or `<uuidv7>.resume`. An
 `-op-id` so the retry is the same operation rather than a second one. Pass it
 exactly as printed: it carries the instant it was minted, which a node reads
 to decide whether it can still vouch for a retry.
-A fleet mid-upgrade refuses both `peer_upgrading` until every live node runs a
-build that can carry a pause.
 
 ## `crewlet retention`
 

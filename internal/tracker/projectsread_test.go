@@ -204,16 +204,16 @@ func TestTheProjectCensusIsNarrowedWithTheListing(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	seedProject(t, r, tracker.Project{Key: "OPS", Name: "Operations",
-		Purpose: "keep the lights on", Unit: "platform"})
+		Purpose: "keep the lights on", Unit: "plat"})
 	seedProject(t, r, tracker.Project{Key: "OLD", Name: "Retired",
-		Unit: "platform", Archived: true})
+		Unit: "plat", Archived: true})
 	// OUTSIDE THE UNIT, and archived — so a census that ignored `unit`
 	// would report two archived where the filtered question has one.
 	seedProject(t, r, tracker.Project{Key: "GON", Name: "Gone",
 		Unit: "dissolved", Archived: true})
-	// THE CHART THE TWO SPELLING CASES BELOW RESOLVE THROUGH: one team
-	// whose id is `plat` and whose name is what these rows were filed
-	// under, which is the pair a company gets the day it adds an id.
+	// THE CHART THE SPELLING CASES BELOW RESOLVE THROUGH: one team whose
+	// id is `plat`, which is what these rows hold, and whose name is
+	// `platform`.
 	platform := chart{{Key: "plat", Name: "platform"}}
 
 	for _, c := range []struct {
@@ -221,14 +221,12 @@ func TestTheProjectCensusIsNarrowedWithTheListing(t *testing.T) {
 		q            tracker.ProjectQuery
 		active, arch int
 	}{
-		{"unit", tracker.ProjectQuery{Unit: "platform"}, 1, 1},
+		{"unit", tracker.ProjectQuery{Unit: "plat"}, 1, 1},
 		{"unit with nothing archived", tracker.ProjectQuery{Unit: "dissolved"}, 0, 1},
 		{"q on the purpose", tracker.ProjectQuery{Q: "lights"}, 1, 0},
 		{"q matching nothing", tracker.ProjectQuery{Q: "nothing at all"}, 0, 0},
-		// AND BY EITHER SPELLING OF THE UNIT, because the rows are: a
-		// team's id and its name are one narrowing, so a census cut by
-		// one spelling beside rows cut by both would count a segment the
-		// listing does not draw.
+		// AND BY EITHER SPELLING OF THE UNIT, resolved through the chart
+		// to the key the rows hold.
 		{"the unit's id", tracker.ProjectQuery{Unit: "plat", Units: platform}, 1, 1},
 		{"the unit's name", tracker.ProjectQuery{Unit: "platform", Units: platform}, 1, 1},
 		{"the unit's name folded", tracker.ProjectQuery{Unit: "PLATFORM", Units: platform}, 1, 1},

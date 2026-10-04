@@ -67,8 +67,8 @@ rotation, which is precisely when a fleet is least able to absorb it.
 
 It does not make the log confidential. A frame authenticates; it does not
 encrypt, and the records are readable by anything that can reach the stream.
-Encryption at rest is the company document's, under the same keyring
-(`crewlet config seal`), and is a separate decision.
+Encryption at rest is the company document's, under the same keyring, and is
+a separate decision.
 
 It does not extend to the event queue's own envelope, which carries data rather
 than instructions and round-trips unknown types by ADR-0006, nor to the

@@ -482,9 +482,9 @@ func (m *Mailboxes) sweep(ctx context.Context, now, cutoff time.Time) (int64, er
 		}
 	}
 	// A SEAT IN THE ROSTER WITH NO RECORD is a mailbox a node created before
-	// it could register it: a coordination store that refused the write, or
-	// a build that predates the registry. Registered here, so that if the
-	// seat is ever removed its mailbox is remembered.
+	// it could register it: a coordination store that refused the write.
+	// Registered here, so that if the seat is ever removed its mailbox is
+	// remembered.
 	for _, s := range roster {
 		if registered[s.ID] {
 			continue

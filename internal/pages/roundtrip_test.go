@@ -183,19 +183,6 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 	}
 }
 
-// appendSigned puts one hand-built record on the log, SEALED under this
-// fleet's key exactly as the publisher seals what it appends — a record some
-// writer of this fleet wrote, only not through this build's decide. Unsigned it
-// would be a record no node applies, which is a different case from the one a
-// caller of this means.
-func (r *roundTrip) appendSigned(subject, msgID string, body []byte) {
-	r.t.Helper()
-	if _, _, err := r.log.Append(r.t.Context(), subject, msgID, nil,
-		r.signer.Seal(body)); err != nil {
-		r.t.Fatalf("append a record on %s: %v", subject, err)
-	}
-}
-
 // drain consumes every record the broker holds beyond what this node has
 // applied, exactly as the framework's own loop does — one transaction per
 // record, carrying the rows, the operation id, the anchor and the checkpoint

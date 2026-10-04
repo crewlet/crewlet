@@ -263,8 +263,8 @@ type Query struct {
 	RoutingUnit []string
 
 	// Units is the chart the two keys above are resolved through, so a
-	// filter naming a unit's id finds the work filed under its name and
-	// the other way round — see [Units] and [unitSpellings]. Nil matches
+	// filter naming a unit by its id or its name finds the work filed
+	// under its key — see [Units] and [unitKeys]. Nil matches
 	// what the caller typed, literally, which is the honest answer for a
 	// surface holding no chart.
 	//

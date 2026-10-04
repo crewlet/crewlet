@@ -126,7 +126,7 @@ func TestABrokerBlipAndABusyStoreAreConditions(t *testing.T) {
 	blip := fmt.Errorf("ask crewlet.seat.steer: %w", fmt.Errorf(
 		"%w: this node's connection to it is reconnecting: %w",
 		queue.ErrUnavailable, reconnecting))
-	got, _ = steerCall(t, steerTool(t, &fleetAsker{err: blip}, steerFleet{}, "r-1"),
+	got, _ = steerCall(t, steerTool(t, &fleetAsker{err: blip}, "r-1"),
 		"run-1", "use staging")
 	assertCondition(t, "a note the broker did not take", got, queue.ErrUnavailable, "nats:")
 	if !strings.Contains(got.Output, "Try again") || !strings.Contains(got.Output, "Nothing was sent") {
@@ -135,7 +135,7 @@ func TestABrokerBlipAndABusyStoreAreConditions(t *testing.T) {
 	}
 
 	unmarked := fmt.Errorf("ask crewlet.seat.steer: %w", reconnecting)
-	got, _ = steerCall(t, steerTool(t, &fleetAsker{err: unmarked}, steerFleet{}, "r-1"),
+	got, _ = steerCall(t, steerTool(t, &fleetAsker{err: unmarked}, "r-1"),
 		"run-1", "use staging")
 	if tools.RefusalOf(got) != tools.RefusalInternalError {
 		t.Errorf("a broker error the queue did not mark answered %s (%q); an "+

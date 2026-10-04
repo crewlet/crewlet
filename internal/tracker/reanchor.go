@@ -159,7 +159,7 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 	opID := f.OpID()
 	author, kind, operator := generationActor(f)
 	body, err := json.Marshal(Generation{
-		V:                   GateRecordVersion,
+		V:                   DocumentVersion,
 		Gen:                 f.Generation,
 		PrevStreamCreatedAt: f.Inputs.KeyedTo.UTC(),
 		NewStreamCreatedAt:  f.Inputs.StreamCreatedAt.UTC(),
@@ -175,9 +175,11 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 	// record's own: it opens the generation it names, and the eviction
 	// gate reads the node that wrote it.
 	encoded, err := MutationRecord{
-		// NEVER [RecordVersion]: see [baseRecordVersion].
+		// NO VERSION: the encoder stamps the base one, and refuses a
+		// generation carrying a versioned field
+		// ([RecordEnvelope.readByEveryBuild]).
 		RecordEnvelope: RecordEnvelope{
-			V: baseRecordVersion, OpID: opID, Subject: subject, Op: OpGeneration,
+			OpID: opID, Subject: subject, Op: OpGeneration,
 			CreatedAt: f.At.UTC(), Gen: f.Generation, Writer: f.Writer,
 			Scope: scope,
 		},

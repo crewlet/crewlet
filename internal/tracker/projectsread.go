@@ -517,19 +517,15 @@ func readProjectRows(ctx context.Context, tx *sql.Tx, q ProjectQuery,
 	// to which archival set they asked FOR.
 	narrowing := []string{}
 	var args []any
-	// EITHER SPELLING OF THE UNIT, through the chart — see [unitSpellings].
-	// A project row is chart-owned and rewritten by the next epoch apply,
-	// so it holds the current key within a beat of one being added; the
-	// set is what keeps the filter answering in the beat before that, and
-	// what lets a caller filter by the name a screen showed them.
+	// THE UNIT'S KEY, through the chart — see [unitKeys] — so a caller
+	// filters by the name a screen showed them.
 	//
-	// IN THE NARROWING, so the CENSUS is cut by the same spellings as the
-	// rows: the two numbers beside a directory are the same question asked
-	// of both archival sets, and a census narrowed by one spelling beside
-	// rows narrowed by two would count what it did not list.
-	if spellings := unitSpellings(q.Units, []string{q.Unit}); len(spellings) > 0 {
-		narrowing = append(narrowing, "p.unit IN ("+placeholders(len(spellings))+")")
-		args = append(args, anyOf(spellings)...)
+	// IN THE NARROWING, so the CENSUS is cut by the same unit as the rows:
+	// the two numbers beside a directory are the same question asked of
+	// both archival sets.
+	if units := unitKeys(q.Units, []string{q.Unit}); len(units) > 0 {
+		narrowing = append(narrowing, "p.unit IN ("+placeholders(len(units))+")")
+		args = append(args, anyOf(units)...)
 	}
 	if term := strings.TrimSpace(q.Q); term != "" {
 		// THE KEY, THE NAME AND THE PURPOSE, because a filter box is

@@ -49,38 +49,30 @@ func unitTask(t *testing.T, r *roundTrip, id, unit string) {
 	r.drain()
 }
 
-// A UNIT FILTER FINDS THE WORK FILED UNDER EITHER SPELLING.
-//
-// `filed_unit` is a record of what was true and nothing rewrites it, so the
-// day a founder gives a team an id the company holds both spellings of that
-// team across its own history: everything filed before it under the name, and
-// everything filed after it under the id. A filter comparing against the one
-// string somebody typed answered with half the team's work and said nothing —
-// which looks exactly like a team that has done half as much.
-func TestAUnitFilterFindsBothSpellings(t *testing.T) {
+// A UNIT FILTER NAMES THE TEAM BY ITS ID OR ITS NAME, in any case, and finds
+// the work filed under its key — which is what every write stores. A filter
+// comparing against the one string somebody typed would miss the team a
+// screen had just shown them by name.
+func TestAUnitFilterResolvesEitherSpellingToTheKey(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	unitTask(t, r, "old", "Platform") // filed before the id existed
-	unitTask(t, r, "new", "plat")     // filed after it
+	unitTask(t, r, "new", "plat")
 	unitTask(t, r, "other", "Product")
 
 	for _, ref := range []string{"plat", "Platform", "PLATFORM", "platform"} {
-		got := ids(r.askWith(nimbus, map[string]any{"unit": ref}))
-		if len(got) != 2 {
-			t.Errorf("unit=%s answers %v, want both the row filed under the "+
-				"name and the row filed under the id", ref, got)
+		if got := ids(r.askWith(nimbus, map[string]any{"unit": ref})); len(got) != 1 ||
+			got[0] != "new" {
+			t.Errorf("unit=%s answers %v, want the row filed under the key", ref, got)
 		}
 	}
-	// THE ROUTING HALF TAKES THE SAME SET, because it holds the same two
-	// spellings for the same reason — a re-route stores the key of
-	// whatever the writer named.
+	// THE ROUTING HALF RESOLVES THE SAME WAY — a re-route stores the key
+	// of whatever the writer named.
 	for _, ref := range []string{"plat", "Platform"} {
-		if got := ids(r.askWith(nimbus, map[string]any{"routing_unit": ref})); len(got) != 2 {
-			t.Errorf("routing_unit=%s answers %v, want both rows", ref, got)
+		if got := ids(r.askWith(nimbus, map[string]any{"routing_unit": ref})); len(got) != 1 {
+			t.Errorf("routing_unit=%s answers %v, want the one row", ref, got)
 		}
 	}
-	// AND THE FILTER STILL NARROWS: the set is one team's spellings, not
-	// every team's.
+	// AND THE FILTER STILL NARROWS: one team's key, not every team's.
 	if got := ids(r.askWith(nimbus, map[string]any{"unit": "Product"})); len(got) != 1 ||
 		got[0] != "other" {
 		t.Errorf("unit=Product answers %v, want only the row filed into it", got)
@@ -137,59 +129,12 @@ func TestAUnitColumnIsHeadedWithTheTeamsName(t *testing.T) {
 	}
 }
 
-// A TEAM IS ONE COLUMN, whichever spelling each of its rows was filed under.
-//
-// A unit answers to two spellings and which one a row holds is decided by when
-// it was written, so a board grouped on the COLUMN drew one team as two
-// columns — both headed with its name, its counts split down the middle —
-// from the moment a founder added an id. That is the same defect the `unit=`
-// filter was fixed for, on the surface a lead actually reads.
-func TestAUnitColumnIsOneColumnPerTeam(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	unitTask(t, r, "old", "Platform") // filed before the id existed
-	unitTask(t, r, "new", "plat")     // filed after it
-	unitTask(t, r, "other", "Product")
-	unitTask(t, r, "gone", "dissolved")
-
-	for _, axis := range []string{"unit", "routing_unit"} {
-		answer := r.askWith(nimbus, map[string]any{
-			"container": "project:ENG", "group_by": axis,
-		})
-		// THE KEY IS THE TEAM'S, and both rows are under it.
-		plat := groupOf(t, answer, "plat")
-		if plat.Count != 2 || len(plat.Rows) != 2 {
-			t.Errorf("group_by=%s draws the team's column with %d counted and "+
-				"%d rows, want both the row filed under its name and the row "+
-				"filed under its id", axis, plat.Count, len(plat.Rows))
-		}
-		if plat.Label != "Platform" {
-			t.Errorf("group_by=%s heads the column %q, want Platform", axis, plat.Label)
-		}
-		// AND THE NAME IS NOT A COLUMN OF ITS OWN any more.
-		for _, group := range answer.Groups {
-			if group.Key == "Platform" {
-				t.Errorf("group_by=%s still draws a second column under the "+
-					"team's name", axis)
-			}
-		}
-		// A TEAM THE CHART HAS LOST KEEPS ITS OWN COLUMN, under the
-		// literal its rows hold: folding it into anything would invent a
-		// home for work whose team is gone.
-		if gone := groupOf(t, answer, "dissolved"); gone.Count != 1 || gone.Label != "" {
-			t.Errorf("group_by=%s draws the dissolved team as %+v, want its "+
-				"own column under the stored key", axis, gone)
-		}
-	}
-}
-
 // AND A NARROWING TO THAT COLUMN TAKES EITHER SPELLING, because a caller
 // writes the one it has: a board's own column hands back the key, and a person
 // or a model types the name.
 func TestANarrowingToAUnitColumnTakesEitherSpelling(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	unitTask(t, r, "old", "Platform")
 	unitTask(t, r, "new", "plat")
 	unitTask(t, r, "other", "Product")
 
@@ -198,8 +143,8 @@ func TestANarrowingToAUnitColumnTakesEitherSpelling(t *testing.T) {
 			"container": "project:ENG", "group_by": "unit", "group": ref,
 		})
 		got := groupOf(t, answer, "plat")
-		if got.Count != 2 {
-			t.Errorf("group=%s narrows to %d, want the team's two rows", ref, got.Count)
+		if got.Count != 1 {
+			t.Errorf("group=%s narrows to %d, want the team's row", ref, got.Count)
 		}
 		if len(answer.Groups) != 1 {
 			t.Errorf("group=%s draws %d columns, want the one narrowed to",
@@ -221,8 +166,8 @@ func TestANarrowingToAUnitColumnTakesEitherSpelling(t *testing.T) {
 			}
 		}
 	}
-	if counted != 2 {
-		t.Errorf("subgroup=Platform counts %d, want the team's two rows", counted)
+	if counted != 1 {
+		t.Errorf("subgroup=Platform counts %d, want the team's row", counted)
 	}
 }
 
@@ -315,8 +260,8 @@ func TestAProjectsUnitKeyRendersAsItsName(t *testing.T) {
 func TestATasksDetailResolvesBothUnitsAgainstTheChart(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	unitTask(t, r, "old", "Platform") // filed before the id existed
-	unitTask(t, r, "new", "plat")     // filed after it
+	unitTask(t, r, "old", "Platform") // a stored name resolves too
+	unitTask(t, r, "new", "plat")
 	unitTask(t, r, "gone", "dissolved")
 	unitTask(t, r, "none", "")
 
@@ -392,10 +337,10 @@ func TestATasksDetailResolvesBothUnitsAgainstTheChart(t *testing.T) {
 func TestAUnitsViewStripIsOneStripUnderEitherSpelling(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	// SAVED UNDER THE NAME, which is what a strip written before the team
-	// had an id holds — and what nothing may rewrite.
+	// SAVED UNDER THE KEY, which is what a save stores
+	// (tracker.CanonicalContainer).
 	view := aView("v-unit", func(v *tracker.View) {
-		v.Container = tracker.Container{Kind: tracker.ContainerUnit, ID: "Platform"}
+		v.Container = tracker.Container{Kind: tracker.ContainerUnit, ID: "plat"}
 	})
 	if _, err := save(t, r.writer, "op-v-unit", view); err != nil {
 		t.Fatalf("save a unit view: %v", err)
@@ -413,7 +358,7 @@ func TestAUnitsViewStripIsOneStripUnderEitherSpelling(t *testing.T) {
 		}
 		if !slices.Contains(stripKeys(listing), "v-unit") {
 			t.Errorf("the strip of %q carries %v, want the view saved under "+
-				"the team's other spelling", ref, stripKeys(listing))
+				"the team's key", ref, stripKeys(listing))
 		}
 	}
 	// AND ANOTHER TEAM'S STRIP IS STILL ANOTHER STRIP.

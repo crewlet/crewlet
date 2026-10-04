@@ -62,33 +62,7 @@ writes FAIL OPEN: `ON CONFLICT DO NOTHING` simply stops firing. A retry would
 write a second episode, re-count an interaction, post a second comment and
 file a second tracker operation, and nothing would report it.
 
-## What a rolling upgrade sees
-
-Two builds on one stream disagree about `turn_id` for the length of a rollout,
-and the consequence is bounded duplication rather than corruption.
-
-A NEW node reading an OLD node's `turn_completed` is covered: the payload
-carries no `work_key` and its `turn_id` IS one, so `learning.Turn.WorkKey`
-falls back to it and the episode and the interaction count still collapse.
-
-An OLD node reading a NEW node's event is not, and cannot be: it reads
-`turn_id` as the work key, and that is now a per-run value, so two attempts at
-one trigger write two episodes and count two interactions. The window is the
-rollout, the effect is a duplicate row the recall and the synthesis then weight
-twice, and nothing reports it. It is the same bounded duplication
-`internal/learning` already promises in place of exactly-once, which is why
-this is stated rather than engineered around: the alternative is a second
-identity on the wire for old readers to mistake in some other way.
-
-Two pieces of STATE outlive the rollout rather than crossing it, and each
-reads its own era from the SHAPE of the value rather than from a flag.
-
-A `sandbox` pending row is written once and re-entered minutes or days later,
-possibly by another node: a run parked before the split has no `work_key`
-field and its `TurnID` IS one, and nothing rewrites a parked row. So every
-reader of a row goes through `PendingRun.UnitOfWork`, never the raw field —
-the resume, the board, and each of the three announcements a detached run's
-identity travels on (its completion, its question, its failure).
+## The event store's history
 
 The event store's `work_key` COLUMN is backfilled from `turn_id` by
 `schema/0029`; the `tags` blob beside it is not, because that blob records

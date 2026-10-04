@@ -190,7 +190,7 @@ func TestTheStragglerRepairLeavesARootWhoseMoveHoldsItsClaim(t *testing.T) {
 // re-homes a task under a key and a rank its TARGET's counter mints
 // ([tracker.KeyMint]); the duplicate repair re-mints the losers of one shared
 // rank with [tracker.MoveKeys], between that rank and the next. A task write
-// otherwise KEEPS ITS PLACE ([tracker.MutationRecord.KeepsPlace]) — the rank
+// otherwise KEEPS ITS PLACE — the rank
 // its row holds — so a carry that did not state the target's mint would bring
 // the straggler's ENG rank onto the OPS board, a key OPS's own lattice may
 // already hold, and hand the duplicate repair a collision of the carry's own

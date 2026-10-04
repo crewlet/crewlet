@@ -179,10 +179,6 @@ func TestTheActiveBackfillEqualsTheMaintainedCount(t *testing.T) {
 				key, got, want)
 		}
 	}
-	if tracker.DerivationVersion < 3 {
-		t.Error("the applier derives active_count and its derivation version " +
-			"does not say so — an upgraded node would never fill the column")
-	}
 }
 
 // A TARGET DATE IS THE LEAD'S OR A PERSON'S, AND NOBODY ELSE'S.

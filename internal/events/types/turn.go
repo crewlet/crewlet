@@ -252,21 +252,10 @@ func (e PromptSize) AgentID() string { return e.Agent }
 // a bare "prompt ~N tokens" is what made this meter read as authoritative for
 // as long as it was blind to the array.
 //
-// ONLY WHEN THE ROW CARRIES IT. ToolBytes and ToolCount are newer than this
-// event type, so a `prompt.size` published by a peer that predates them — an
-// ordinary state during a rolling upgrade — carries neither key and decodes
-// to zero. Rendered unconditionally that row reads "(0 tool definitions, 0
-// chars)" for a phase that certainly had some, which is a claim about that
-// build's prompt rather than an absence of data.
-//
-// WHICH ABSENCE IS THE SAFE HALF: a zero cannot be told from an unset key
-// here, so the two cases that produce one share an answer, and the honest
-// direction is to say nothing. A phase that genuinely offered no tools then
-// loses a clause reporting nothing, and an older peer's row reads exactly as
-// it did on the build that wrote it. The reverse — asserting a zero — is the
-// only one of the two that can be false, and every phase this row is
-// published for carries at least its own submission tool, so the tool-less
-// case is hypothetical while the older peer is not.
+// ONLY WHEN THE ROW CARRIES IT: every phase this row is published for offers
+// at least its own submission tool, so a zero is a row that measured nothing
+// rather than a phase with no tools, and "(0 tool definitions, 0 chars)"
+// would be a claim the row cannot make.
 func (e PromptSize) SummaryFor(actor string) string {
 	line := fmt.Sprintf("prompt ~%d tokens", e.ApproximateTokens)
 	if e.ToolCount > 0 || e.ToolBytes > 0 {

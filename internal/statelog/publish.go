@@ -728,9 +728,8 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 				"domain", p.domain.Name(), "subject", req.Subject.String(),
 				"op_id", req.OpID, "minted_at", mintedAt(req.OpID),
 				"detail", "this operation was minted before this node's "+
-					"operation ledger may have lost rows — to the ledger's "+
-					"retention sweep, or to a snapshot adopted from a donor "+
-					"that scrubbed its ledger — and it holds no row saying "+
+					"operation ledger may have lost rows to its retention "+
+					"sweep, and it holds no row saying "+
 					"whether the operation already applied, so it is "+
 					"answered unknown rather than decided a second time; "+
 					"a node whose ledger lost nothing that far back can "+
@@ -800,9 +799,8 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 // cross-project move re-run finds its root already in the target and refuses
 // it as somebody else's, a create finds its guarding row and calls the object
 // taken, an update conditioned on a version finds it moved by its own first
-// copy. On a node whose ledger may have lost the operation's row — its sweep,
-// or an adoption from a donor that scrubbed its ledger — the refusal was
-// returned before the ledger was ever asked, so a retry was told "no" where
+// copy. On a node whose ledger may have lost the operation's row to its
+// sweep, the refusal was returned before the ledger was ever asked, so a retry was told "no" where
 // the only true answer is that this node cannot say. A domain whose decision
 // only PROBES the ledger (it refuses whenever it runs, because running means
 // the ledger held no row) is the whole of this case: without the question,
@@ -1581,9 +1579,8 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 
 	// THE LEDGER'S SILENCE MEANS SOMETHING ONLY WHERE IT CAN VOUCH, and
 	// that is asked before either reading of it below — the mine arm's
-	// included, because a sweep, or an adoption from a donor that
-	// scrubbed its ledger, is exactly what loses the row of a record this
-	// node was acknowledged for.
+	// included, because a sweep is exactly what loses the row of a record
+	// this node was acknowledged for.
 	vouched, err := p.vouches(ctx, req)
 	if err != nil {
 		return Result{}, err
@@ -1657,21 +1654,12 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 // `unknown`, a seat carrying an operation id across a long pause — was decided
 // again and published a second copy.
 //
-// An ADOPTION FROM A DONOR THAT SCRUBBED ITS LEDGER — a build from before the
-// ledger travelled — installs a file whose ledger holds none of the donor's
-// rows, so the adopter writes the join's own start into that file before it
-// installs it (see [Adopter.Join]): an operation minted after the start was
-// published after every artefact the join could install, and its every copy
-// is one this node's own applier writes a row for.
-//
-// AN ADOPTION FROM ANY OTHER DONOR LOSES NOTHING. Its ledger travels with its
+// AN ADOPTION LOSES NOTHING. The donor's ledger travels with its
 // rows ([Domain.OpsTable]), so the adopter holds a row for every operation the
 // donor applied and inherits the donor's own watermark besides — and a turn
 // woken by a trigger from before the join, which derives its operation ids
 // from that trigger's instant, has its FIRST attempts decided and published
-// like anyone's. With the ledger scrubbed, those first attempts were answered
-// `unknown` and never published: the recovering node refusing its own
-// backlog.
+// like anyone's.
 //
 // That is why this runs BEFORE A DECISION IS PUBLISHED and not only in the
 // resolution of an ambiguous one. A retry — a turn re-run after a crash, a

@@ -111,11 +111,11 @@ func TestARecordCarryingANewFieldIsStampedAtItsVersion(t *testing.T) {
 }
 
 // A VERSION THE CALLER SET BELOW WHAT THE RECORD CARRIES IS REFUSED, and a
-// RECORD EVERY BUILD MUST READ MAY CARRY NO VERSIONED FIELD AT ALL — a gate is
-// pinned at [GateRecordVersion], and the barrier and a reanchor's generation at
-// [baseRecordVersion], so every build there will ever be can read them. Refused
-// whatever version it was stamped at, since a version high enough to hold the
-// field is one an older node defers or retains.
+// RECORD EVERY BUILD MUST READ MAY CARRY NO VERSIONED FIELD AT ALL — a gate,
+// the barrier and a reanchor's generation stay at [baseRecordVersion], so every
+// build there will ever be can read them. Refused whatever version it was
+// stamped at, since a version high enough to hold the field is one an older
+// node defers or retains.
 func TestAStampBelowWhatTheRecordCarriesIsRefused(t *testing.T) {
 	t.Parallel()
 	carrying := map[string]any{"comment": map[string]any{"novel": "yes"}}
@@ -127,7 +127,7 @@ func TestAStampBelowWhatTheRecordCarriesIsRefused(t *testing.T) {
 	fields := statelog.RecordFields{{Name: "Everywhere.Novel", Since: 2,
 		Path: []string{"mutation", "comment", "novel"}}}
 	for name, record := range map[string]MutationRecord{
-		"a purge":            stampRecord(t, OpPurge, GateRecordVersion, carrying),
+		"a purge":            stampRecord(t, OpPurge, 0, carrying),
 		"a purge stamped 2":  stampRecord(t, OpPurge, 2, carrying),
 		"the barrier":        stampRecord(t, OpBarrier, baseRecordVersion, carrying),
 		"a generation":       stampRecord(t, OpGeneration, 0, carrying),
@@ -138,18 +138,19 @@ func TestAStampBelowWhatTheRecordCarriesIsRefused(t *testing.T) {
 			t.Errorf("%s carrying a versioned field encoded: %v", name, err)
 		}
 	}
-	// AND THE SAME RECORDS CARRYING NOTHING NEWER ENCODE AT THEIR PIN.
+	// AND THE SAME RECORDS CARRYING NOTHING NEWER ENCODE AT THE BASE.
 	plain := map[string]any{"comment": map[string]any{"body": "hi"}}
 	for name, record := range map[string]MutationRecord{
-		"the barrier":  stampRecord(t, OpBarrier, baseRecordVersion, plain),
-		"a generation": stampRecord(t, OpGeneration, baseRecordVersion, plain),
+		"a purge":      stampRecord(t, OpPurge, 0, plain),
+		"the barrier":  stampRecord(t, OpBarrier, 0, plain),
+		"a generation": stampRecord(t, OpGeneration, 0, plain),
 	} {
 		body, err := record.encodeWith(fields)
 		if err != nil {
 			t.Fatalf("%s carrying no versioned field: %v", name, err)
 		}
 		if got := stampedVersion(t, body); got != baseRecordVersion {
-			t.Errorf("%s was stamped %d, want its pin %d", name, got, baseRecordVersion)
+			t.Errorf("%s was stamped %d, want the base %d", name, got, baseRecordVersion)
 		}
 	}
 

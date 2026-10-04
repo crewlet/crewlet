@@ -53,7 +53,6 @@ const (
 	RefusalSteerUnsupported   = mcp.RefusalSteerUnsupported
 	RefusalBudgetExhausted    = mcp.RefusalBudgetExhausted
 	RefusalUnavailable        = mcp.RefusalUnavailable
-	RefusalPeerUpgrading      = mcp.RefusalPeerUpgrading
 	RefusalInternalError      = mcp.RefusalInternalError
 )
 

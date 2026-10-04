@@ -38,7 +38,6 @@ func TestAPublishedStatusRoundTrips(t *testing.T) {
 	want := coord.NodeStatus{
 		InFlight: 3, Draining: true, Posture: "shed", StartedAt: started,
 		GrantCeilingHash: "2f1a8c0d3b4e5f60",
-		Features:         []coord.Feature{coord.FeatureMCPStatus, "a_feature_from_a_newer_build"},
 		MCP: []coord.MCPServerStatus{
 			{Server: "github", Shared: true, Started: 1, Tools: 12},
 			{Server: "jira", Started: 2, Failed: 1, Tools: 9,
@@ -51,22 +50,6 @@ func TestAPublishedStatusRoundTrips(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
-	}
-}
-
-// AN OLDER PEER'S STATUS HONOURS NOTHING. A build that predates the feature
-// list publishes a status without one, and it must read as a node that can
-// carry none of the gated gestures — not as a node that did not report,
-// which a gate would answer "try again" for as long as it ran.
-func TestAnOlderPeersStatusDecodesWithNoFeatures(t *testing.T) {
-	t.Parallel()
-	older := map[string]any{"in_flight": 2, "draining": false, "posture": "serve"}
-	got, ok := coord.StatusFromMeta(map[string]any{coord.StatusKey: older})
-	if !ok {
-		t.Fatal("an older peer's status read as absent")
-	}
-	if len(got.Features) != 0 || len(got.MCP) != 0 {
-		t.Errorf("an older status decoded features %v and mcp %v, want neither", got.Features, got.MCP)
 	}
 }
 
@@ -97,8 +80,7 @@ func TestAStatusSurvivesTheJSONRoundTripTheLeaseStoreDoes(t *testing.T) {
 	t.Parallel()
 	want := coord.NodeStatus{
 		InFlight: 7, Posture: "serve",
-		Features: []coord.Feature{coord.FeatureMCPStatus},
-		MCP:      []coord.MCPServerStatus{{Server: "github", Shared: true, Started: 1, Tools: 4}},
+		MCP: []coord.MCPServerStatus{{Server: "github", Shared: true, Started: 1, Tools: 4}},
 	}
 	raw, err := json.Marshal(map[string]any{coord.StatusKey: want.Meta()})
 	if err != nil {

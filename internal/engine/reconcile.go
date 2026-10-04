@@ -709,30 +709,25 @@ func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation)
 }
 
 // openRefusal is why a revision the fleet is on did not open here, and what
-// fixes it — which depends on WHERE the bytes came from, so the error the
-// secrets package answers names no remedy of its own.
+// fixes it.
 //
-// A body that arrived through the coordination store unsealed was either
-// forged by something that reaches the broker, or published by a node holding
-// a revision an older build stored in the clear; the remedy is on THAT node,
-// where `crewlet config seal` seals its active revision and activates it again.
-// This node's own copy stored unsealed is the same command run here. A body
+// A body stored or published UNSEALED is refused whatever its origin: the seal
+// is what says a node of this fleet wrote it, so a plaintext one could have
+// been authored by anything that reaches the store or the broker. A body
 // sealed under a key this keyring does not hold is a keyring that is missing a
 // key the fleet seals under.
 func openRefusal(revisionID string, local bool, err error) error {
 	switch {
 	case errors.Is(err, secrets.ErrUnsealedWithKey) && local:
 		return fmt.Errorf("engine: this node's own copy of revision %s is stored "+
-			"without a seal, which a build older than the mandatory keyring "+
-			"wrote, so it is not applied; run `crewlet config seal` on this node, "+
-			"which seals its active revision and activates it for the fleet: %w",
+			"without a seal, so it is not applied; import the document again "+
+			"(`crewlet config import` or PUT /config), which stores it sealed: %w",
 			revisionID, err)
 	case errors.Is(err, secrets.ErrUnsealedWithKey):
 		return fmt.Errorf("engine: the fleet's revision %s arrived through the "+
 			"coordination store without a seal, so it is neither applied nor "+
-			"kept: either something that reaches the broker forged it, or a node "+
-			"published a revision an older build stored unsealed — that node has "+
-			"to run `crewlet config seal`, which seals it and activates it again: %w",
+			"kept: every node of this fleet seals what it publishes, so this body "+
+			"could have been forged by anything that reaches the broker: %w",
 			revisionID, err)
 	default:
 		return fmt.Errorf("engine: revision %s does not open under this node's "+

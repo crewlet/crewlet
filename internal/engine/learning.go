@@ -264,16 +264,13 @@ func (e *Engine) attachReflection(ctx context.Context, c *Company) error {
 
 // ---- the fleet singletons --------------------------------------------- //
 
-// skillCuratorDutyName is the singleton EVERY background pass claims.
+// learningDutyName is the singleton EVERY background learning pass claims.
 //
-// One name for three loops, deliberately: BackgroundOptions takes a single
-// ClaimDuty, so the skill-ageing pass, the episode compaction and the skill
-// clustering all run on the same node — which is also what learningDutyTTL is
-// sized against. The name is the skill curator's for history rather than
-// accuracy: renaming it would change the coordination key, and during a
-// rolling upgrade a node on each name would both believe they held "the"
-// duty.
-const skillCuratorDutyName = "skill-curator"
+// One name for every loop, deliberately: BackgroundOptions takes a single
+// ClaimDuty, so the skill ageing, the episode compaction, the skill clustering
+// and the cross-agent promotion all run on the same node — which is also what
+// learningDutyTTL is sized against.
+const learningDutyName = "learning"
 
 // lifecycleOptions projects the operator's episode-lifecycle config onto the
 // worker's own options.
@@ -349,7 +346,7 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 		// learning.Seats).
 		Seats:     e.seatRoles,
 		Publish:   e.publishLearning,
-		ClaimDuty: e.workerDuty(skillCuratorDutyName, learningDutyTTL),
+		ClaimDuty: e.workerDuty(learningDutyName, learningDutyTTL),
 	})
 	// Detached, for the same reason the node's loops are: a loop bound to
 	// a signal context stops at SIGTERM, which would make its lifetime
