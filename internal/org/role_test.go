@@ -193,9 +193,9 @@ func TestHumanSeatKeepsItsDescriptiveFields(t *testing.T) {
 // A person who works through the dashboard — bound to the seat in the identity
 // directory, and never on the company's chat — has no account to write into a
 // contact block, so a rule refusing the seat refused the person. Whether
-// anybody can be MESSAGED there is a different question, and it is the chart
-// check's (`seat_unreachable`), which names the seat without refusing the
-// company that holds it.
+// anybody can be MESSAGED there is a different question, and it is the
+// company's warnings' (an `advisory` at the seat's `contact`), which name the
+// seat without refusing the company that holds it.
 func TestAHumanSeatNeedsNoContactIdentity(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
