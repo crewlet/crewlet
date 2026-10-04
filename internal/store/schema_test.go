@@ -236,7 +236,7 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 // read as the driver reports it, for the shapes the directory runs — its
 // uniqueness check and the sign-in's sighting.
 //
-// The listing of every binding is the other direction: `WHERE seat_id != ''`
+// The listing of every binding is the other direction: a non-empty `seat_id`
 // IS the seat's partial index's predicate, so it walks that index — the bound
 // people, in seat order — where without it the read is every person plus a
 // sort, on every alarm heartbeat and every party-registry rebuild.
