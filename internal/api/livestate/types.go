@@ -242,9 +242,8 @@ type LiveCall struct {
 //
 // The fleet's SHARED counters as the gate enforces them: every node's spend in
 // the window on the company's clock, against the ceiling in force — the
-// company's from its settings, a seat's from the chart's runtime half — with
-// the gate's own refusal stamp and the engine's judgement of the
-// window ([types.BudgetState]). It is never to be compared with a spend rollup
+// company's from its own block, a seat's from the seat's — with the gate's own
+// refusal stamp and the engine's judgement of the window ([types.BudgetState]). It is never to be compared with a spend rollup
 // beside it on the same screen, which covers a window of time a reader chose
 // rather than the calendar window a ceiling is written for.
 type BudgetMeter struct {

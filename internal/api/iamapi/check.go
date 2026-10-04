@@ -165,10 +165,10 @@ func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 		"position":                  position,
 		"people_with_people_manage": manage,
 		// SAID RATHER THAN SILENT: "no dangling binding" and "this
-		// node's chart could not say" are different answers, and a
+		// node's org could not say" are different answers, and a
 		// report that folded the second into the first would print
-		// "nothing to report" during exactly the chart stall that
-		// hides a residue.
+		// "nothing to report" during exactly the outage that hides a
+		// residue.
 		"bindings_unchecked": unchecked,
 	})
 }

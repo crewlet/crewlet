@@ -69,7 +69,7 @@ func (s Sources) ConfiguredSchedules() []schedule.Row {
 	// epoch, rather than one re-derived from the document per read: both
 	// come from ONE read of the epoch, so they never describe two revisions.
 	if roster == nil {
-		// A node with no chart view has no seats to describe. Empty is
+		// A node running no company has no seats to describe. Empty is
 		// the honest answer and the screen says so.
 		return []schedule.Row{}
 	}

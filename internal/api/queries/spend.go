@@ -260,10 +260,10 @@ func (s Sources) tokenSeries(ctx context.Context, p Params) (any, error) {
 	}), nil
 }
 
-// Seats is this node's chart as the spend rollups name seats: every agent seat
-// by its agent id, with its handle, its name and the unit it sits in directly.
-// Empty when there is no chart view, which names and links nothing rather than
-// guessing.
+// Seats is the running organisation as the spend rollups name seats: every
+// agent seat by its agent id, with its handle, its name and the unit it sits
+// in directly. Empty when this node runs no company, which names and links
+// nothing rather than guessing.
 //
 // KEYED BY AGENT ID, the one identifier a spend record and a usage row carry
 // that neither a rename nor a namesake can move. It was keyed by role name,
@@ -280,9 +280,8 @@ func (s Sources) Seats() tokens.Seats {
 	if organization == nil {
 		return out
 	}
-	// EVERY SEAT THE COMPANY RUNS, from the chart's own rows: a walk of
-	// the document's top-level list missed every seat inside a unit, and a
-	// stored revision carries no seats at all.
+	// EVERY SEAT THE COMPANY RUNS: a walk of the document's top-level
+	// list missed every seat inside a unit.
 	for role := range organization.AllRoles() {
 		id, ok := organization.AgentIDFor(role)
 		if !ok {

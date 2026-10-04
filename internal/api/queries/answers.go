@@ -81,17 +81,17 @@ type Sources struct {
 	Usage usage.Estate
 
 	// Company reads the CURRENT company, for the questions answered from
-	// the company rather than from a store: the SETTINGS a revision stores
-	// and the ORG this node derives from the chart's own log.
+	// the company rather than from a store: the document this node applied
+	// and the ORG it built from it.
 	//
-	// A function, not a value: a company is republished by an activation
-	// AND by a chart write, and an answer bound to the one this process
-	// booted on would describe a company that is no longer running.
+	// A function, not a value: a company is republished by every
+	// activation, and an answer bound to the one this process booted on
+	// would describe a company that is no longer running.
 	//
-	// ONE FUNCTION RETURNING BOTH HALVES, never two accessors. They move on
-	// different rhythms, so two reads can straddle a publish — and a screen
-	// that took the integrations from one and the roster from the next
-	// would describe a company that never existed.
+	// ONE FUNCTION RETURNING BOTH, never two accessors: two reads can
+	// straddle a publish — and a screen that took the integrations from
+	// one and the roster from the next would describe a company that never
+	// existed.
 	Company func() (*config.Company, *org.Organization)
 
 	// Chart answers the lead relations the personal questions are scoped

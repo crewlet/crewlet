@@ -462,7 +462,7 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request,
 // node holding a record it cannot decode answers the same however often it is
 // asked. A refusal that derived a hint says that; anything else is
 // [authz.RetryUndecidedSeconds], the scale of this node applying one more batch
-// or its chart view catching up.
+// or one more activation.
 func unavailableFor(w http.ResponseWriter, cause error, detail string) {
 	httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
 		httpjson.RetrySeconds(statelog.RetryAfter(cause,

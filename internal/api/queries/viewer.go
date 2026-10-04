@@ -97,7 +97,7 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 			// THE TABLE COULD NOT DECIDE, which is not "may do nothing":
 			// answered as an empty list, a screen would lock every
 			// control a person holds the authority for while this node
-			// is behind its chart.
+			// cannot read the organisation it decides on.
 			return nil, fmt.Errorf("%w: this node cannot yet say what this "+
 				"credential may do: %w", ErrUnavailable, err)
 		}
