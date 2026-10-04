@@ -846,11 +846,11 @@ function seatFieldPaths(
     ["backstory"],
     ["responsibilities"],
     ["manages"],
-    PROJECT,
-    SPACE,
     ...(human
       ? [["contact"] as Segment[], ["availability"] as Segment[]]
       : [
+          PROJECT,
+          SPACE,
           ["behavioral_guidelines"] as Segment[],
           ["llm"] as Segment[],
           // The block, for a problem about its shape, and each window, so a
@@ -1076,15 +1076,20 @@ function SeatEditor({
           />
         </>
       )}
-      <Owns
-        who="seat"
-        project={form.project}
-        space={form.space}
-        onProject={(project) => set({ project })}
-        onSpace={(space) => set({ space })}
-        errorFor={errorFor}
-        disabled={disabled}
-      />
+      {/* AN AGENT SEAT'S ONLY: the engine refuses a human seat a project or
+          a space (`org.Role.humanForbidden`), since nothing files work for a
+          person by them. */}
+      {!human && (
+        <Owns
+          who="seat"
+          project={form.project}
+          space={form.space}
+          onProject={(project) => set({ project })}
+          onSpace={(space) => set({ space })}
+          errorFor={errorFor}
+          disabled={disabled}
+        />
+      )}
       {!human && <DocumentFacts data={data} handle={handle} />}
     </EditorShell>
   );

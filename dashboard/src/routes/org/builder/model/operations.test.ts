@@ -820,9 +820,9 @@ describe("changing kind", () => {
       behavioral_guidelines: ["Be kind"],
       integrations: {
         github: { tier: "developer" },
-        jira: { project: "ENG" },
         slack: { channel: "C1" },
       },
+      project: "ENG",
       goal: "Build",
     };
     const { op, draft, report } = run(fixture(base), {
@@ -835,7 +835,7 @@ describe("changing kind", () => {
       "llm",
       "token_budget",
       "integrations.slack",
-      "integrations.jira",
+      "project",
       "mcp_env",
       "behavioral_guidelines",
       "integrations.github",
@@ -967,7 +967,7 @@ describe("evaluating", () => {
     const trackerMoved = run(draft, {
       type: "updateSeat",
       target: "seat:sre",
-      set: [{ path: ["integrations", "jira", "project"], value: "SUP" }],
+      set: [{ path: ["project"], value: "SUP" }],
     }).draft;
     expect(shapes(trackerMoved, toHuman)).toContainEqual(["fields the new kind removes", "fields"]);
 

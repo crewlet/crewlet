@@ -751,6 +751,21 @@ describe("integrations", () => {
     expect(field("Access level")).toBeDefined();
   });
 
+  // A PERSON OWNS NO PROJECT OR SPACE: the engine refuses a human seat either
+  // field, so its editor offers neither.
+  test("a human seat's editor offers no tracker project or knowledge space", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.roles![1] = {
+      name: "Dev",
+      handle: "dev",
+      kind: "human",
+      contact: { github_login: "dev" },
+    };
+    edit(keyedState(doc), "seat:dev");
+    expect(screen.queryByLabelText(labelled("Tracker project"))).toBeNull();
+    expect(screen.queryByLabelText(labelled("Knowledge space"))).toBeNull();
+  });
+
   test("with the tools connected, each field is there and says what it changes", () => {
     edit(keyedState(connected()), "seat:dev");
     // A tool's section is a part of Integrations, and is heard as one.

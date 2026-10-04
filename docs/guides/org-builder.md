@@ -417,7 +417,7 @@ half, which `crewlet config import` writes from a company file.
 | Token ceilings: daily, weekly, monthly | Agent seats; runtime half. One box per calendar window on the company's clock, each optional: an empty box is no ceiling on that window, and a 0 is refused rather than read as unlimited. A turn runs only while every capped window has room, and the company's own `token_budget` applies on top; a seat ceiling the company's makes unable to refuse anything is reported as a warning on the write's answer. |
 | Schedules: enabled | Agent seats; runtime half. |
 | Integrations | Agent seats; see below. |
-| Owns: project, knowledge space | Where unrouted work for the seat goes and where it files its own. Not a permission. Changing either takes `config:write`. |
+| Owns: project, knowledge space | Agent seats. Where unrouted work for the seat goes and where it files its own. Not a permission. Changing either takes `config:write`. |
 
 Shown with the reason they are not changed here: the models of the other
 phases (`llm_review` and the other `llm_*` fields), sandbox (enabled, where it
