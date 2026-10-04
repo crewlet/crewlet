@@ -64,8 +64,8 @@ type turnTelemetry struct {
 	// what matches a person's answer back to a detached run — while
 	// partKey is the inbox PARTITION the trigger arrived in, carried only
 	// so a detached coding run's row can also state the batch it was
-	// launched from, which is all a peer predating the identity can match
-	// on.
+	// launched from, which is what tells two runs parked on one direct
+	// message apart ([sandbox.ConversationRef.Best]).
 	convKey string
 	partKey string
 	// transport is the chat surface the trigger arrived on — see
@@ -253,8 +253,7 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			//
 			// The partition rides along so the row can state the batch
 			// the run was launched from: it tells two runs parked on
-			// one direct message apart, and it is all a peer predating
-			// the conversation field has to match on.
+			// one direct message apart.
 			ConversationKey: t.convKey,
 			PartitionKey:    t.partKey,
 			// AND THE SURFACE, so a task this turn files says where it

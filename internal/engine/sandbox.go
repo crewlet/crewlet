@@ -570,10 +570,6 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// a remote parent from the ids on the run's own row, and opens a new
 	// span beneath it. That is the honest shape: two spans in one trace,
 	// with the wait between them visible as the gap it actually is.
-	//
-	// A run written by a build before those ids were stored carries none,
-	// and WithRemote turns that into a fresh root rather than refusing to
-	// resume — a rolling upgrade guarantees some of those exist.
 	ctx = tracing.WithRemote(ctx, events.TraceContext{
 		TraceID: in.Run.TraceID, SpanID: in.Run.SpanID,
 	})
