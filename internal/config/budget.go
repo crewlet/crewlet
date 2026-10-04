@@ -86,23 +86,6 @@ func (b TokenBudget) Ceilings() org.TokenCeilings {
 	return out
 }
 
-// Clone is a copy that shares no pointer with b.
-//
-// THE POINTERS ARE THE VALUE here, not an implementation detail: they are what
-// tell an absent window from a 0. A copy that kept them would leave two
-// documents holding one ceiling — the settings half an import stores and the
-// file it was divided from — so an edit of either moved the other's.
-func (b TokenBudget) Clone() TokenBudget {
-	own := func(ceiling *int) *int {
-		if ceiling == nil {
-			return nil
-		}
-		v := *ceiling
-		return &v
-	}
-	return TokenBudget{Day: own(b.Day), Week: own(b.Week), Month: own(b.Month)}
-}
-
 // tokenBudgetFields decodes the mapping without re-entering TokenBudget's own
 // unmarshalers; see [phaseLLMFields] for why a distinct type is the way.
 type tokenBudgetFields TokenBudget
