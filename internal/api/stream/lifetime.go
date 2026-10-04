@@ -372,14 +372,24 @@ func keepDecided(ctx context.Context, conn *websocket.Conn, client *Client,
 	}
 	// THE IDENTITY OF THE SEAT the principal acts as, as the published
 	// company names it — what a published company is decided by.
+	//
+	// LEARNED AGAIN ONLY WHEN A DECISION MOVED THE SEAT: a seat that stayed
+	// the same cannot have a new identity, and re-learned after every
+	// decision it was read from whatever company was published as the
+	// decision ended — one that had just dropped the seat left this socket
+	// knowing no identity for it, and the publish that followed closed it
+	// [CloseUndecided] rather than `seat_unavailable`.
 	origin := identify(seatOf, cred.who.current().Seat)
 	decide := func() bool {
+		seat := cred.who.current().Seat
 		r, refusal := cred.decide(ctx)
 		if !decideOnce(ctx, conn, client, cred.who, r, refusal, now, resync,
 			rewatch) {
 			return false
 		}
-		origin = identify(seatOf, cred.who.current().Seat)
+		if moved := cred.who.current().Seat; moved != seat {
+			origin = identify(seatOf, moved)
+		}
 		return true
 	}
 	for {

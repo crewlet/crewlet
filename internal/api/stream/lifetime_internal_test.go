@@ -600,9 +600,10 @@ func TestAPublishedCompanyDecidesEachSocketInMemory(t *testing.T) {
 			book.set(c.after)
 			svc.CompanyPublished()
 			if c.code == 0 {
-				// TWICE BEFORE THE PUBLISH — as the socket started
-				// listening and after its first decision — and once for it.
-				waitUntil(t, func() bool { return book.asked() >= 3 },
+				// ONCE BEFORE THE PUBLISH, as the socket started
+				// listening — its decision kept the seat — and once for
+				// it.
+				waitUntil(t, func() bool { return book.asked() >= 2 },
 					"the published company was never asked about the seat")
 				s.open(t)
 			} else if got := s.closedWith(t); got != c.code {
@@ -611,6 +612,67 @@ func TestAPublishedCompanyDecidesEachSocketInMemory(t *testing.T) {
 			if got := s.decisions.Load(); got != 1 {
 				t.Fatalf("a published company read the socket's credential (%d "+
 					"decisions, want the one at its registration)", got)
+			}
+		})
+	}
+}
+
+// A DECISION LEARNS THE SEAT'S IDENTITY AGAIN ONLY WHEN IT MOVED THE SEAT.
+//
+// The published-company decision finds the seat by the identity the company
+// gave it when this socket saw it there. A decision by the guard that leaves
+// the principal on the same seat cannot have given that seat a new identity,
+// so it reads nothing: learned again after every decision, it was read from
+// whatever company was published as the decision ended, and a company that had
+// just dropped the seat left the socket knowing no identity for it — the
+// publish that followed closed it 1013 for the handshake to resolve rather
+// than 4403 `seat_unavailable`. A decision that moves the principal to another
+// seat does learn that seat's identity, or the removal of the seat it now acts
+// as would read as a rename.
+//
+// Mutation: learn the identity after every decision, and the dropped seat
+// closes 1013; never learn it again, and the moved seat's removal closes 1013.
+func TestADecisionLearnsTheSeatAgainOnlyWhenItMovedIt(t *testing.T) {
+	t.Parallel()
+	ana := person("ana")
+	bo := ana
+	bo.Seat = "bo"
+	anaSeat := SeatState{Origin: "ana", Handle: "ana", Human: true}
+	boSeat := SeatState{Origin: "bo", Handle: "bo", Human: true}
+	for _, c := range []struct {
+		name string
+		// resolved is whom the decision at registration resolves.
+		resolved iam.Principal
+		// during is what the company holds once that decision is taken,
+		// and after what it holds at the publish.
+		during, after map[string]SeatState
+		// asks is how often the company has been asked by the time the
+		// decision has done with it.
+		asks int
+	}{
+		{"the same seat, dropped as it was decided", ana,
+			map[string]SeatState{}, map[string]SeatState{}, 1},
+		{"moved to another seat, then removed", bo,
+			map[string]SeatState{"ana": anaSeat, "bo": boSeat},
+			map[string]SeatState{"ana": anaSeat}, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			book := &seatBook{seats: map[string]SeatState{"ana": anaSeat, "bo": boSeat}}
+			svc := newServiceOver(t, authz.NoChart{}, book.of)
+			s := serve(t, svc, socketCase{principal: ana, opened: sessionOf(ana),
+				decide: func(r *http.Request) (*http.Request, *auth.Refusal) {
+					book.set(c.during)
+					return resolvedAs(c.resolved)(r)
+				}})
+			s.settled(t, 1)
+			waitUntil(t, func() bool { return book.asked() >= c.asks },
+				"the decision never learned the identity of the seat it moved "+
+					"the socket to")
+			book.set(c.after)
+			svc.CompanyPublished()
+			if got := s.closedWith(t); got != CloseUnauthorized {
+				t.Fatalf("the socket closed %d, want %d", got, CloseUnauthorized)
 			}
 		})
 	}
