@@ -1583,10 +1583,11 @@ build cannot represent that the write does not name.
   the write left out was removed on purpose and stays removed. A caller of the
   older build cannot name an unknown key at all (the strict reader refuses it),
   so no write through it can mean to remove one.
-- **A list member is matched by identity, not by position**: an MCP server or
-  a sandbox setup step by its name within its own list, so one that moved
-  keeps its settings. A name held twice in the stored document, or empty,
-  matches nothing, so no member's setting reaches another. A member of a list
+- **A list member is matched by identity, not by position**: a seat by its
+  handle and a unit by its key anywhere in the document, so a seat moved to
+  another unit keeps its settings; an MCP server or a sandbox setup step by its
+  name within its own list. An identity held twice in the stored document, or
+  empty, matches nothing, so no member's setting reaches another. A member of a list
   with no identity keeps nothing the write replaced.
 - **A `PATCH` replaces only what it names.** Everything it does not name is
   stored exactly as it was, so a list the patch leaves alone keeps every

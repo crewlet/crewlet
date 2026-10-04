@@ -395,12 +395,12 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		p.add(path, ErrUnknownValue,
 			"still holds the redaction marker %q: a masked credential could "+
 				"not be matched to the value it hid. A seat is matched by its "+
-				"handle, and a unit, an MCP server and a sandbox setup step by "+
-				"its name, so this happens when the member is new or was "+
-				"renamed, when the stored revision gives that handle or name "+
-				"to more than one member or the member has none, or when a "+
-				"list of bare credentials changed length. Write the real value "+
-				"or a ${VAR} reference here",
+				"handle, a unit by its key, and an MCP server and a sandbox "+
+				"setup step by its name, so this happens when the member is "+
+				"new or was renamed, when the stored revision gives that "+
+				"identity to more than one member or the member has none, or "+
+				"when a list of bare credentials changed length. Write the real "+
+				"value or a ${VAR} reference here",
 			Redacted)
 	}
 
