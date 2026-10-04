@@ -88,10 +88,9 @@
 // ([iam.PersonPresentGrants]), and internal/api/auth's refuses a token every
 // sensitive row about its own owner.
 //
-// A ROW MAY ASK FOR TWO GRANTS AT ONCE ([rule.also]), and two do: ending every
-// session in the company is the deployment's to run and the directory's to
-// decide, and taking an object out of the org chart is the company's shape to
-// change and the deployment's to make irreversible, so each takes both.
+// A ROW MAY ASK FOR TWO GRANTS AT ONCE ([rule.also]): ending every session in
+// the company is the deployment's to run and the directory's to decide, so it
+// takes both.
 // No TOOL asks for a proof (a walk holds that too): a seat has no keyboard, and
 // the operator's MCP surface is not a step-up surface.
 //
@@ -105,11 +104,9 @@
 // agent on the engine host itself, and a seat's worker grants decide which of
 // its tools a worker runs with. So holding it IS running code on every engine
 // host, and whatever a process there can read — the keyring included — is
-// reachable through it. No row in this table narrows that: the chart's runtime
-// half, a structural write and the settings document all ask for the same
-// grant, and the one split this package has (a removal also asking
-// `fleet:operate`) is about an irreversible gesture, not about bounding it.
-// The grant is conferred like host access.
+// reachable through it. No row in this table narrows that: a seat, a unit and
+// every setting are one document written under that one grant, a removal
+// included. The grant is conferred like host access.
 package authz
 
 import (
