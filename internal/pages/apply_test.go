@@ -318,7 +318,7 @@ func TestAnEvictedNodesRecordsApplyNowhere(t *testing.T) {
 	h := newHarness(t, nil)
 	evict := record(pages.EvictionSubject("node-b"), pages.OpEviction, "op-evict",
 		pages.Eviction{
-			V: pages.GateRecordVersion, NodeID: "node-b", EvictedBy: "ops",
+			V: pages.DocumentVersion, NodeID: "node-b", EvictedBy: "ops",
 			EvictedAt: brokerAt,
 		}, pages.ScopeSet{Subject: true})
 	if _, _, err := h.apply(evict); err != nil {
@@ -339,7 +339,7 @@ func TestAnEvictedNodesRecordsApplyNowhere(t *testing.T) {
 	// eviction's whole history survives a replay.
 	readmit := record(pages.EvictionSubject("node-b"), pages.OpEviction,
 		"op-readmit", pages.Eviction{
-			V: pages.GateRecordVersion, NodeID: "node-b", EvictedBy: "ops",
+			V: pages.DocumentVersion, NodeID: "node-b", EvictedBy: "ops",
 			EvictedAt: brokerAt, Readmitted: true,
 		}, pages.ScopeSet{Subject: true})
 	if _, _, err := h.apply(readmit); err != nil {

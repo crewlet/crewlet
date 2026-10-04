@@ -92,7 +92,7 @@ func (s *Store) gateNode(ctx context.Context, actor Actor, opID, nodeID string,
 		},
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return s.decide(stamp, actor, subject, OpEviction, scope, opID, Eviction{
-				V: GateRecordVersion, NodeID: nodeID,
+				V: DocumentVersion, NodeID: nodeID,
 				EvictedBy: actor.Name(), EvictedAt: at, Readmitted: readmit,
 			}, nil, at)
 		},

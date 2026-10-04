@@ -365,18 +365,7 @@ Two properties differ from the vendor path and both are visible:
   alone, exactly as the tracker's projects do (see
   [the work tracker](../guides/work-tracker.md#projects-and-keys)). A node with
   no activation instant — one booting on a revision it has never seen
-  activated — stamps nothing. A container's settings are the one record this
-  domain writes at record version **3** (version 2 is retired and not reused),
-  a later activation that only **re-stamps** unchanged settings included — and
-  every activation re-stamps every container the org chart names. So during a
-  rolling upgrade from a build that cannot read version 3, a node still on
-  that build holds back every chart-named container rather than applying it
-  without its stamp, and with it the page writes in that container, until it
-  is upgraded — and then applies it stamp and all. A re-stamp is not exempt:
-  applied without its stamp it would leave that node's row the one unstamped
-  copy in the fleet after its upgrade, open to the next stale activation it
-  applied, which would walk the container's settings back on every node.
-  Every other record is written at version 1.
+  activated — stamps nothing.
 
   A page merely **names** its container, so a page can exist in a container
   with no document — it is reachable by address and by search, and it is

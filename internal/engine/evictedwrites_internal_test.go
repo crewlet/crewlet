@@ -231,7 +231,7 @@ func trackerEviction(t *testing.T, node string) []byte {
 func pagesEviction(t *testing.T, node string) []byte {
 	t.Helper()
 	body, err := json.Marshal(pages.Eviction{
-		V: pages.GateRecordVersion, NodeID: node, EvictedBy: "operator",
+		V: pages.DocumentVersion, NodeID: node, EvictedBy: "operator",
 		EvictedAt: time.Now().UTC(),
 	})
 	if err != nil {
@@ -239,7 +239,7 @@ func pagesEviction(t *testing.T, node string) []byte {
 	}
 	payload, err := pages.Encode(pages.MutationRecord{
 		RecordEnvelope: pages.RecordEnvelope{
-			V: pages.GateRecordVersion, OpID: "op-evict-" + node,
+			V: pages.RecordVersion, OpID: "op-evict-" + node,
 			Subject: pages.EvictionSubject(node), Op: pages.OpEviction,
 			Writer: "node-peer", Scope: pages.ScopeSet{Subject: true},
 		},

@@ -598,22 +598,10 @@ for ever: a version whose field is gone is **retired** and stays empty rather
 than being given to the next field. The conformance suite every domain passes
 holds each table to the records its encoder actually writes.
 
-In the **tracker**, the table is empty: version 1 is everything it writes, so
-every tracker record is stamped 1. The first release that adds a field to one
-gives it version 2, and from then on an older node holds back exactly the
-records carrying it.
-
-In the **knowledge base**, one kind of record does: a container's settings, at
-version 3, because they carry the activation instant of the revision that
-derived them — a later activation that only **re-stamps** unchanged settings
-included. A re-stamp is not exempt, because applied without its stamp it would
-leave that node's row the one unstamped copy in the fleet after its upgrade,
-open to the next stale revision it applied. So while an older node is still
-running, it holds back every container a newer node stamped — every space the
-org chart names, at the first revision a newer node applies — together with the
-page writes in it, until it is upgraded. Version 2 is retired and not reused:
-two builds once read it as two different fields. That is one more reason to
-finish a rolling upgrade inside the deferral grace.
+In the **tracker** and the **knowledge base**, the table is empty: version 1 is
+everything they write, so every record is stamped 1. The first release that
+adds a field to one gives it version 2, and from then on an older node holds
+back exactly the records carrying it.
 
 In the **identity estate**, version 2 is the retention sweep that collects what
 was spent as well as what lapsed, version 3 a record naming the credential its

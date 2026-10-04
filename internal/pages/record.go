@@ -19,92 +19,35 @@ import (
 // reduced coverage rather than an outage. What a writer stamps is the LOWEST
 // version that reads the record, computed by [Encode] from
 // [versionedFields]; internal/tracker's RecordVersion states why, and
-// the rule is one rule across both strict domains.
+// the rule is one rule across every strict domain.
 //
 // It moves ONLY with the table, and exactly to the table's highest version:
 // statelogtest's declaration case refuses a build that reads a version no
 // field introduced, because such a build would accept a newer peer's record
 // at that version and drop the field it was minted for.
 //
-// # What each version added
-//
-//   - 1: every shape this domain has.
-//   - 2: RETIRED, and not reused. A version is a statement about which
-//     fields a record may carry, and once two builds have read one number as
-//     two different fields the number means nothing either can trust: 2 once
-//     named a container's activation stamp, a later build stamped containers
-//     with a log position at 3 instead, and the stamp is the activation's
-//     again at 3.
-//   - 3: a container's settings carry the activation they were derived
-//     from ([ContainerPayload.ChartEpoch]).
-const RecordVersion = 3
+// Version 1 is every shape this domain has: no build that wrote anything else
+// was ever released.
+const RecordVersion = 1
 
-// baseRecordVersion is version 1, the base format: what every build there has
-// ever been reads, and what a record carrying no versioned field is stamped at.
-//
-// THE BARRIER AND A REANCHOR'S GENERATION ARE PINNED AT IT FOR EVER, as every
-// gate is ([GateRecordVersion]) — never at [RecordVersion], and never left to a
-// table that could one day raise them — because of what an older node does
-// with a record it cannot read: it retains it. A retained barrier is one more
-// deferral row on that node for every linearizable read anybody makes, and a
-// node holding a deferral declines to snapshot until it upgrades; a retained
-// generation is a transition that node never makes. Neither has anything a
-// later version could add to it, and [Encode] refuses either one carrying a
-// versioned field ([RecordEnvelope.readByEveryBuild]).
+// baseRecordVersion is version 1, the base format: what every build there will
+// ever be reads, and what a record carrying no versioned field is stamped at.
+// A gate, the read index's barrier and a reanchor's generation stay at it
+// ([RecordEnvelope.readByEveryBuild]).
 const baseRecordVersion = 1
 
 // versionedFields is every field a pages record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
 //
-// Adding a field to a record, a payload or a document is adding a row here,
-// moving [RecordVersion] to its version, and giving the domain's statelogtest
-// candidate a record that carries it — on the tracker's terms, which are the
-// framework's ([statelog.VersionedField]). A field no tag has shipped is still
-// a field two builds of one rolling upgrade disagree about, so "nothing has
-// been released" does not exempt a new field from its row.
-//
-// VERSION 2 HAS NO ROW: it is retired (see [RecordVersion]), and a row naming
-// a field this build does not have would stamp nothing and certify nothing.
-var versionedFields = statelog.RecordFields{
-	// A CONTAINER'S CHART STAMP, at version 3: the instant the fleet
-	// activated the revision its settings were derived from. A build that
-	// cannot read it decodes a container's settings around it and applies
-	// the rest: its row then says nothing about which revision wrote it, so
-	// on that node the stamp guard ([Store.EnsureContainer]) has nothing to
-	// refuse an older revision with — the walk-back the stamp exists to
-	// stop, open on the very node that could not read it — and its
-	// document differs from every other node's.
-	//
-	// EVERY RECORD THAT CARRIES ONE, A RE-STAMP INCLUDED. A later
-	// activation over the settings a row already holds carries nothing new
-	// but the stamp, and writing it at a version an older build applies
-	// whole — so as not to hold back the page writes in that space — leaves
-	// the row unstamped on that node while every peer holds the stamp: the
-	// first stale revision that node applies before re-stamping then walks
-	// the settings back for the whole fleet, because appliers apply what a
-	// writer decided. Retained, it is applied with its stamp the moment the
-	// node reads version 3. The price is the one every row here states: a
-	// node that cannot read it holds back that container, and the page
-	// writes nested in it, until it is upgraded.
-	//
-	// Scoped to the patch op, which is the one a container's settings ride;
-	// no page patch carries `chart_epoch`.
-	{Name: "ContainerPayload.ChartEpoch", Since: 3, Op: string(OpPatch),
-		Path: []string{"mutation", "chart_epoch"}},
-}
+// EMPTY, because the base format is everything this build writes. Adding a
+// field to a record, a payload or a document after a release is adding a row
+// here, moving [RecordVersion] to its version, and giving the domain's
+// statelogtest candidate a record that carries it — on the tracker's terms,
+// which are the framework's ([statelog.VersionedField]).
+var versionedFields = statelog.RecordFields{}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
-
-// GateRecordVersion is the version every gate-installing record carries, FOR
-// EVER.
-//
-// An eviction whose version this build could not read would be deferred, and a
-// deferred gate leaves this node's own gate table empty while it goes on
-// applying every record the evicted node appends — with no inverse that
-// repairs it. So the two gate kinds are pinned at 1 and never evolve: a field
-// they need that they cannot have is a field that belongs somewhere else.
-const GateRecordVersion = 1
 
 // OpKind is what a record does.
 type OpKind string
@@ -243,8 +186,8 @@ func (e RecordEnvelope) InstallsGate() bool {
 // a gate ([RecordEnvelope.InstallsGate]), the read index's barrier, and a
 // reanchor's generation.
 //
-// Each is pinned at [baseRecordVersion] for its own reason, and all three
-// reasons are what an older node does with a record it cannot read. A gate it
+// Each stays at [baseRecordVersion] for its own reason, and all three reasons
+// are what an older node does with a record it cannot read. A gate it
 // deferred would leave its gate table empty while it went on applying every
 // record the gate was meant to drop, with no inverse that repairs it; a
 // barrier it retained is one more deferral row for every linearizable read;
@@ -428,9 +371,8 @@ func Decode(payload []byte) (MutationRecord, error) {
 //
 // A ZERO VERSION IS "STAMP IT", on the tracker's rule: every writer leaves V
 // unset and this stamps [versionedFields]' minimum over the bytes it is about
-// to publish. A set version is kept — a relay keeps its writer's, a barrier
-// and a generation their pinned [baseRecordVersion] — and refused when it is
-// below what the record carries. A record every build must read
+// to publish. A set version is kept — a relay keeps its writer's — and refused
+// when it is below what the record carries. A record every build must read
 // ([RecordEnvelope.readByEveryBuild]) is refused whenever it carries a
 // versioned field at all, stamped or set.
 func Encode(rec MutationRecord) ([]byte, error) { return encodeWith(rec, versionedFields) }

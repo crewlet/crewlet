@@ -179,11 +179,7 @@ type ContainerPayload struct {
 	// ChartEpoch is the activation these settings were derived from
 	// ([configplane.ActivationStamp]), which the next EnsureContainer
 	// compares against so a node applying an older configuration late
-	// cannot walk a newer one back. Record version 3 onwards — the row in
-	// [versionedFields], which is why a record carrying it, a re-stamp of
-	// unchanged settings included, is held back by a build that cannot read
-	// it rather than applied without it. A record carrying none applies as
-	// epoch 0 — older than every activation this build stamps.
+	// cannot walk a newer one back.
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 }
 
@@ -200,7 +196,9 @@ type StatusPayload struct {
 
 // Eviction is a node's eviction from this log, or its readmission.
 //
-// PINNED AT [GateRecordVersion] FOR EVER. See the constant.
+// A GATE, so its record stays at the base version for every build there will
+// ever be ([RecordEnvelope.readByEveryBuild]): its shape may only ever grow by
+// addition.
 type Eviction struct {
 	V      int    `json:"v"`
 	NodeID string `json:"node_id"`
@@ -320,10 +318,9 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	}
 	return Encode(MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			// PINNED, never [RecordVersion] and never left to the
-			// table: see [baseRecordVersion]. The encoder refuses a
-			// barrier carrying a versioned field.
-			V:       baseRecordVersion,
+			// NO VERSION: the encoder stamps the base one, and refuses
+			// a barrier carrying a versioned field
+			// ([RecordEnvelope.readByEveryBuild]).
 			Subject: BarrierSubject(),
 			Op:      OpBarrier,
 			Scope:   ScopeSet{Subject: true},

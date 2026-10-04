@@ -76,59 +76,8 @@ func TestAPagesRecordIsStampedWithTheLowestVersionThatReadsIt(t *testing.T) {
 	}
 }
 
-// THE PRODUCTION TABLE STAMPS A CONTAINER'S SETTINGS AT THE VERSION THAT ADDED
-// THEIR CHART STAMP — a re-stamp of unchanged settings included, since the
-// bytes are the same — and leaves every record that carries no stamp at 1.
-//
-// Version 2 is retired (see [RecordVersion]), so nothing this build writes is
-// stamped there: a container's settings go from 1 straight to 3.
-func TestTheContainerChartEpochIsStampedAtVersionThree(t *testing.T) {
-	t.Parallel()
-	container := func(mutation string) MutationRecord {
-		rec := stampRecord(0, OpPatch, mutation)
-		rec.Subject = ContainerSubject("ENG")
-		rec.Scope = ScopeSet{Subject: true}
-		return rec
-	}
-	for name, tc := range map[string]struct {
-		rec  MutationRecord
-		want int
-	}{
-		"settings carrying their chart stamp": {
-			container(`{"v":1,"key":"ENG","name":"Engineering","chart_epoch":1767603600000}`), 3},
-		"settings an older build wrote, with none": {
-			container(`{"v":1,"key":"ENG","name":"Engineering"}`), 1},
-		"a page patch": {stampRecord(0, OpPatch, `{"body":"x"}`), 1},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			body, err := Encode(tc.rec)
-			if err != nil {
-				t.Fatalf("encode: %v", err)
-			}
-			if got := stampOf(t, body); got != tc.want {
-				t.Fatalf("stamped %d, want %d", got, tc.want)
-			}
-		})
-	}
-	// A SETTINGS RECORD SET BELOW ITS POSITION'S VERSION IS REFUSED —
-	// which is the re-stamp an older node would have applied without the
-	// stamp, leaving its row open to a stale chart after its upgrade. The
-	// retired version is below it too, so a record set there is refused
-	// the same way.
-	for _, v := range []int{1, 2} {
-		below := container(`{"v":1,"key":"ENG","name":"Engineering","chart_epoch":1767603600000}`)
-		below.V = v
-		if _, err := Encode(below); err == nil ||
-			!strings.Contains(err.Error(), "ContainerPayload.ChartEpoch (version 3)") {
-			t.Fatalf("a container record set at version %d carrying its chart "+
-				"position encoded: %v", v, err)
-		}
-	}
-}
-
 // A RECORD EVERY BUILD MUST READ NEVER CARRIES A VERSIONED FIELD — a gate, the
-// read index's barrier and a reanchor's generation, stamped or pinned.
+// read index's barrier and a reanchor's generation, stamped or set.
 //
 // Each is what an older node cannot afford to hold back: a deferred gate
 // licenses every record it was meant to drop, a retained barrier is a deferral
@@ -146,9 +95,9 @@ func TestARecordEveryBuildReadsRefusesAVersionedField(t *testing.T) {
 		"a purge": {RecordEnvelope: RecordEnvelope{
 			Subject: PageSubject("stamp"), Op: OpPurge}},
 		"a barrier": {RecordEnvelope: RecordEnvelope{
-			V: baseRecordVersion, Subject: BarrierSubject(), Op: OpBarrier}},
+			Subject: BarrierSubject(), Op: OpBarrier}},
 		"a generation": {RecordEnvelope: RecordEnvelope{
-			V: baseRecordVersion, Subject: GenerationSubject(2), Op: OpGeneration}},
+			Subject: GenerationSubject(2), Op: OpGeneration}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
