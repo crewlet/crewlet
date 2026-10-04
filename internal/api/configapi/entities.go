@@ -513,6 +513,9 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 // the splice is the only place it can learn that a provider fine on its own
 // leaves the company invalid, or that a ceiling it raised now sits above the
 // company's own (a warning, which only a check can show before the save).
+// One answer differs from the write's: a seat or unit sent back unchanged is
+// checked for its lead, where the write is refused as a re-publish
+// (admission.go).
 func (s *Service) putEntity(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -584,6 +587,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		if d.principal, ok = principalOf(w, r); !ok {
 			return
 		}
+		d.addressedCheck = dryRun && inOrgChart(kind)
 		prepared, err := s.prepare(r.Context(), d)
 		if err != nil {
 			s.refuseEntity(w, kind, id, err)

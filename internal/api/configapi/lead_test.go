@@ -584,6 +584,51 @@ func TestAWriteThatChangesNothingIsTheCompanyGrants(t *testing.T) {
 	}
 }
 
+// A LEAD'S CHECK OF AN UNCHANGED SEAT OR UNIT IS ANSWERED.
+//
+// The write is refused only because storing it re-publishes the company. A
+// dry run stores nothing, and it is how a lead reads what the engine derives
+// of their unit as it stands, and the warnings a ceiling they raise is
+// compared against — so the lead's own seat and unit, sent back as read with
+// `dry_run=true`, answer 200 valid with the derivation, and the revision does
+// not move. The control is the same lead's check of the whole document, which
+// no address decided and which stays refused, so `{}` hands nobody the
+// company's hierarchy and warnings.
+//
+// Mutation: drop the exemption and both entity checks are refused 403
+// unchanged; take it for every dry run and the whole-document check answers.
+func TestALeadsCheckOfAnUnchangedSeatOrUnitIsAnswered(t *testing.T) {
+	t.Parallel()
+	s := leadSurface(t)
+	before := activeRevision(t, s)
+	for _, at := range [][2]string{
+		{configapi.EntityRoles, "sre"},
+		{configapi.EntityUnits, "platform"},
+	} {
+		res := putEntityAs(t, s, platformLead(), at[0], at[1], func(map[string]any) {},
+			"?dry_run=true")
+		if res.Code != http.StatusOK {
+			t.Fatalf("a lead's check of %s/%s unchanged = %d: %s", at[0], at[1],
+				res.Code, res.Body.String())
+		}
+		body := decode(t, res)
+		derived, _ := body["derived"].(map[string]any)
+		if body["valid"] != true || len(derived) == 0 {
+			t.Errorf("a lead's check of %s/%s unchanged answered %v, want valid "+
+				"with the derivation", at[0], at[1], body)
+		}
+	}
+	if parts := refusedParts(t, doAs(t, s, platformLead(), http.MethodPatch,
+		"/config?dry_run=true", `{"vision": null}`, nil)); !slices.Equal(parts,
+		[]string{"document////unchanged/no_grant"}) {
+		t.Errorf("a lead's check of the whole document unchanged refused %v, "+
+			"want the unchanged document named", parts)
+	}
+	if after := activeRevision(t, s); after != before {
+		t.Errorf("a check moved the active revision to %s", after)
+	}
+}
+
 // THE COMPANY'S GRANT IS THE ADMIN PATH: whoever holds config:write changes
 // anything, a root seat and a setting included, leading nothing at all.
 func TestConfigWriteIsTheAdminPath(t *testing.T) {

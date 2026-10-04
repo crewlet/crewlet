@@ -39,6 +39,15 @@ import (
 // part of it was refused, anybody bound to a seat could force that fleet-wide
 // rebuild at will with `{"vision": null}`.
 //
+// ITS CHECK IS A LEAD'S, at the address of a seat or unit [Service.mayReach]
+// admitted them to: a dry run stores and re-activates nothing, which is the
+// whole of why the write is refused, and it is the one way a lead reads what
+// the engine derives of their unit as it stands, and the warnings the company
+// already carries that a change of theirs is compared against. Only there: a
+// check of the whole document is decided at no address, and answered would
+// hand the company's hierarchy and every warning to anybody bound to a seat
+// who sent `{}`.
+//
 // FROM THE TWO DOCUMENTS, NEVER THE RUNNING COMPANY, so a node behind on its
 // applies decides a write exactly as a current one does.
 //
@@ -130,7 +139,11 @@ func principalOf(w http.ResponseWriter, r *http.Request) (*iam.Principal, bool) 
 }
 
 // admit refuses next when p may not turn prior into it — see the file's header.
-func admit(ctx context.Context, p iam.Principal, prior, next *config.Company) error {
+// addressedCheck is a dry run of one seat or unit whose address the caller was
+// admitted to, which is answered when it changes nothing.
+func admit(ctx context.Context, p iam.Principal, prior, next *config.Company,
+	addressedCheck bool) error {
+
 	now := time.Now()
 	company := authz.Decide(ctx, p, authz.ActionConfigWrite,
 		authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, now)
@@ -139,6 +152,9 @@ func admit(ctx context.Context, p iam.Principal, prior, next *config.Company) er
 	}
 	diff := config.DiffOrg(prior, next)
 	if len(diff.Changes) == 0 && len(diff.Settings) == 0 {
+		if addressedCheck {
+			return nil
+		}
 		return &AdmissionError{Refused: []RefusedChange{{Kind: "document",
 			Why: "unchanged", Reason: company.Reason}}}
 	}
