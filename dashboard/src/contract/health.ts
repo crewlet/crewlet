@@ -27,28 +27,6 @@ interface HealthAlarms {
 }
 
 /**
- * The continuous report over the chart this node holds and the settings
- * epoch it applied, as COUNTS: `api.Consistency`. The findings themselves are
- * `/chart/check`, behind its own grant.
- */
-interface HealthConsistency {
-  /**
-   * False when this node could not evaluate — it holds no chart view, or has
-   * applied no settings epoch. ABSENT EVIDENCE IS NOT A CLEAN BILL: read this
-   * before `findings`.
-   */
-  evaluated: boolean;
-  findings: number;
-  /** The highest severity among the findings; absent when there are none. */
-  worst?: string;
-  /** How many findings of each kind; absent when there are none. */
-  counts?: Record<string, number>;
-  /** How many human seats the identity directory could not be asked about;
-   *  absent at zero. */
-  unchecked?: number;
-}
-
-/**
  * What a node says about itself: the `health` push, which is `api.Health` in
  * Go, WHOLE — in the snapshot and on every five-second tick. There is no query
  * for it any more; read it with `useEngineHealth()`.
@@ -125,11 +103,6 @@ export interface EngineHealth {
    * long it has been stranded in seconds — present only while one is.
    */
   unproven_seconds?: Record<string, number>;
-  /**
-   * The continuous report's counts. It does not move `status`: a company
-   * referencing a provider somebody deleted has a problem, not a node.
-   */
-  consistency?: HealthConsistency;
   /**
    * Whether the company has its FIRST PERSON: `ready`, `unclaimed`, or
    * `unknown` where this node cannot read its identity estate — never folded
