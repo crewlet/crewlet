@@ -50,12 +50,12 @@ const (
 // alphanumerics and hyphens, starting with an alphanumeric, at most
 // [iam.MaxLogin] bytes.
 //
-// IT IS [iam.ValidSeatHandle], and deliberately not a regex of its own. The
-// shape used to be defined here, and the org chart's write path — which
-// imports the identity leaf and cannot import this package — validated a
-// handle by a looser rule of its own, so a seat called `jane.doe` reached the
-// chart. One definition in the leaf every one of them imports is what makes a
-// document, the party registry and the chart refuse exactly the same names.
+// IT IS [iam.ValidSeatHandle], and deliberately not a regex of its own: the
+// identity leaf is what keeps a seat handle, a person's login and a machine's
+// handle from ever colliding, and a second definition here would be a second
+// rule that could let `jane.doe` through as a seat. One definition in the leaf
+// every one of them imports is what makes a document and the party registry
+// refuse exactly the same names.
 // Slugify output always conforms but for its length, which [Role.Validate]
 // checks.
 func ValidHandle(s string) bool { return iam.ValidSeatHandle(s) }
@@ -167,12 +167,11 @@ type Identity struct {
 // Clone returns a copy the caller may normalise without touching the original,
 // or nil for nil.
 //
-// A seat is BUILT on every read of the org — from an authored file by the
-// config layer, and from the chart rows this node has applied by [FromRows],
-// whose rows a reader may hold across many builds — and
-// [Organization.Normalize] then rewrites the contact in place. Shared, that
-// rewrote the source's own contact, from several goroutines at once: a data
-// race, and a document or a cached row silently changed by being read.
+// A seat is BUILT from an authored document by the config layer, whose
+// document a reader may hold across many builds, and [Organization.Normalize]
+// then rewrites the contact in place. Shared, that rewrote the source's own
+// contact, from several goroutines at once: a data race, and a document
+// silently changed by being read.
 func (c *HumanContact) Clone() *HumanContact {
 	if c == nil {
 		return nil
@@ -337,8 +336,8 @@ func (c *HumanContact) ResolvedIdentities(lookup EnvLookup) []Identity {
 // sends is the MCP server's call on this same token, which is also why
 // nothing here names a channel.
 type SlackIdentity struct {
-	BotToken      string `secret:"true" yaml:"bot_token,omitempty" json:"bot_token,omitempty"`
-	SigningSecret string `secret:"true" yaml:"signing_secret,omitempty" json:"signing_secret,omitempty"`
+	BotToken      string `yaml:"bot_token,omitempty" json:"bot_token,omitempty"`
+	SigningSecret string `yaml:"signing_secret,omitempty" json:"signing_secret,omitempty"`
 }
 
 // IsZero reports an unconfigured Slack identity.
@@ -377,16 +376,16 @@ type GitHubApp struct {
 	// acts by a person and the second can be a day after the first.
 	InstallationID int64 `yaml:"installation_id,omitempty" json:"installation_id,omitempty"`
 
-	// PrivateKey and WebhookSecret are `${VAR}` POINTERS at the sealed
-	// store, never values. GitHub returns each once and reissues neither.
+	// PrivateKey and WebhookSecret are `${VAR}` POINTERS at the company's
+	// secret store, never values. GitHub returns each once and reissues neither.
 	//
 	// THE WEBHOOK SECRET IS THE APP'S OWN, which is why it is here rather
 	// than read off `integrations.github`: that one belongs to a different
 	// app, or to no app at all in a company that only ever created
 	// per-agent ones, and verifying against it refused every delivery from
 	// every agent while GitHub's own hook page showed the app healthy.
-	PrivateKey    string `secret:"true" yaml:"private_key,omitempty" json:"private_key,omitempty"`
-	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty"`
+	PrivateKey    string `yaml:"private_key,omitempty" json:"private_key,omitempty"`
+	WebhookSecret string `yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty"`
 }
 
 // Held reports a seat whose app exists and is installed, which is the only
@@ -400,7 +399,7 @@ func (g *GitHubApp) Held() bool {
 // everything on this backend: the inbound websocket, the outbound REST
 // calls, and — named again under mcp_env.mattermost — the MCP tool server.
 type MattermostIdentity struct {
-	BotToken string `secret:"true" yaml:"bot_token,omitempty" json:"bot_token,omitempty"`
+	BotToken string `yaml:"bot_token,omitempty" json:"bot_token,omitempty"`
 	// Username defaults to the seat handle when empty.
 	Username string `yaml:"username,omitempty" json:"username,omitempty"`
 	// Channel is a channel this seat's bot is added to at provisioning,
@@ -441,12 +440,11 @@ type SandboxSetupStep struct {
 
 	// Files are written into the box before Commands run.
 	//
-	// CONTENT, not a setting (`secret:"content"`): a body is sealed whole by
-	// the chart and read whole at launch, because a `${…}` inside a script
-	// or an .npmrc is that file's own syntax and nothing on the way to the
-	// box ever expands it — cut around it like a header, a body reached the
-	// box as a string of the chart's own references.
-	Files map[string]string `secret:"content" yaml:"files,omitempty" json:"files,omitempty"`
+	// CONTENT, not a setting: a body is read whole at launch
+	// ([secrets.ReadContent]), because a `${…}` inside a script or an
+	// .npmrc is that file's own syntax and nothing on the way to the box
+	// ever expands it.
+	Files map[string]string `yaml:"files,omitempty" json:"files,omitempty"`
 
 	// Commands run in order after the files land. A non-zero exit fails
 	// the whole acquisition — the coding agent's brief promises this
@@ -454,7 +452,7 @@ type SandboxSetupStep struct {
 	Commands []string `yaml:"commands,omitempty" json:"commands,omitempty"`
 
 	// Env is merged into the coding agent's run environment.
-	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty"`
+	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 
 	// Brief is the paragraph handed to the coding agent: what this step
 	// made TRUE about its box.
@@ -468,13 +466,6 @@ type SandboxSetupStep struct {
 	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty"`
 }
 
-// IdentityKey is the step's name, which is what the credentials in its files
-// and its env are found by ([secrets.Identified]): a step's are sealed under a
-// name derived from WHICH step holds them and restored from the same one, so
-// reordering two steps never hands one step's registry token to the other.
-// The authored step answers the same way, for the same reason.
-func (s SandboxSetupStep) IdentityKey() string { return s.Name }
-
 // DefaultSetupTimeoutSeconds gives a provisioning command room for a
 // dependency install or a cold image pull, which is what these steps
 // actually do.
@@ -485,7 +476,7 @@ const DefaultSetupTimeoutSeconds = 300.0
 //
 // ONE HOME FOR THE RULE, here rather than on either step type, because BOTH
 // kinds of setup step answer it — the provider-wide ones a `providers.sandbox`
-// block declares and the per-seat ones that ride the chart — and the
+// block declares and the per-seat ones a seat's own sandbox block does — and the
 // validator that refuses a negative value quotes the same number. Written
 // once per type it is three copies of "unset means five minutes", which is
 // exactly the shape that drifts.
@@ -533,11 +524,10 @@ type RoleSandbox struct {
 	// they contribute and the paragraph the coding agent is told about
 	// what they made true.
 	//
-	// HERE FOR THE REASON MaxTurns IS: the engine read it off the company
-	// document, which carries no seats, so a seat's own provisioning
-	// stopped running the moment the chart became a log — and a box that
-	// silently skipped its setup is one whose coding agent was promised an
-	// environment it does not have.
+	// HERE FOR THE REASON MaxTurns IS: read off the document beside the
+	// running seat, a seat's own provisioning is one walk away from being
+	// skipped — and a box that silently skipped its setup is one whose
+	// coding agent was promised an environment it does not have.
 	Setup []SandboxSetupStep `yaml:"setup,omitempty" json:"setup,omitempty"`
 
 	// MaxTurns caps the agentic ROUNDS one of this seat's coding runs may
@@ -561,7 +551,7 @@ type RoleSandbox struct {
 	// private-registry token, a test DATABASE_URL): the engine names no
 	// tool-specific variable of its own, and only LLM credentials derive
 	// automatically.
-	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty"`
+	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 }
 
 // Role is a SEAT in the org chart, held by an AI agent or a human.
@@ -589,8 +579,8 @@ type Role struct {
 	// seat, and OPTIONAL on a human one: a person reached only through the
 	// dashboard is bound to the seat in the identity directory and has no
 	// chat account to name here. A human seat with none is a legitimate
-	// seat nobody can @-mention, which the chart check reports
-	// (`seat_unreachable`) rather than validation refusing it.
+	// seat nobody can @-mention, which the company's warnings report rather
+	// than validation refusing it.
 	Contact *HumanContact `yaml:"contact,omitempty" json:"contact,omitempty"`
 
 	// Availability is a free-text note for a human seat, rendered into
@@ -605,8 +595,8 @@ type Role struct {
 
 	// OriginHandle is the handle this seat was CREATED under, and
 	// FormerHandles are the handles it has answered to since, newest first.
-	// Both come from the seat's chart row; a seat built from a document has
-	// neither, because a document has no rename history.
+	// A seat built from a document has neither, because a document has no
+	// rename history.
 	//
 	// THEY ARE TWO DIFFERENT JOBS, which is why one list does not serve for
 	// both. FormerHandles is what keeps a REFERENCE somebody wrote — a
@@ -616,17 +606,14 @@ type Role struct {
 	// IDENTITY: [Role.Origin] is what the agent id is derived from, and an
 	// identity that a cap could drop would be no identity at all.
 	//
-	// Not part of the wire form on either side: a document neither carries
-	// nor may author them, and the runtime blob a chart row holds must not
-	// either, because the row itself is where they live.
+	// Not part of the wire form: a document neither carries nor may author
+	// them.
 	OriginHandle  string   `yaml:"-" json:"-"`
 	FormerHandles []string `yaml:"-" json:"-"`
 
-	// Email is the seat's address AS WRITTEN: a literal in an authored file,
-	// and a whole `${VAR}` reference in every view derived from the org
-	// chart's rows, because the chart seals a literal address into the
-	// company's secret store and its row carries the reference. Anything
-	// that MATCHES on it reads [Role.ResolvedEmail].
+	// Email is the seat's address AS WRITTEN in the company document: a
+	// literal, or a `${VAR}` reference to one. Anything that MATCHES on it
+	// reads [Role.ResolvedEmail].
 	Email string `yaml:"email,omitempty" json:"email,omitempty"`
 
 	// UnitRef is a SOFT reference, by unit KEY ([Unit.Key]), to the unit
@@ -703,7 +690,7 @@ type Role struct {
 	// or sensitive seat without disabling the subsystem.
 	LearningEnabled Toggle `yaml:"learning_enabled,omitempty" json:"learning_enabled,omitzero"`
 
-	MCPEnv MCPEnv `secret:"true" yaml:"mcp_env,omitempty" json:"mcp_env,omitempty"`
+	MCPEnv MCPEnv `yaml:"mcp_env,omitempty" json:"mcp_env,omitempty"`
 
 	// Sandbox is the code-runtime gate; nil means this seat has none.
 	Sandbox *RoleSandbox `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
@@ -769,9 +756,9 @@ func (r *Role) IsHuman() bool { return r.Kind == KindHuman }
 // agents. Every reader here already knows that — [Role.IsHuman] is the whole
 // of it — so the zero value never had to be resolved.
 //
-// A STORED ROW IS DIFFERENT, and that is what this is for. A seat's kind is a
-// column the chart validates as a closed set, so a row carrying "" would be a
-// value nothing recognises rather than a default nobody wrote: the difference
+// A STORED ROW IS DIFFERENT, and that is what this is for. A seat's kind
+// stored in a row is a closed set, so a row carrying "" would be a value
+// nothing recognises rather than a default nobody wrote: the difference
 // between "agent, unstated" and "unknown" is invisible in a file and load
 // bearing in a table. Whatever writes a row resolves it here rather than
 // deciding for itself.
@@ -827,9 +814,9 @@ func (r *Role) Origin() string {
 // the seat has none or its reference does not resolve. A nil lookup reads the
 // process environment, as [HumanContact.ResolvedIdentities] does.
 //
-// A REFERENCE IS THE ORDINARY CASE rather than the exotic one: a view derived
-// from the chart's rows holds one for every seat that has an address. Used as
-// written, it is a string no vendor payload can ever carry, which is the
+// A REFERENCE IS AN ORDINARY CASE rather than an exotic one: a company that
+// keeps its people's addresses out of its document writes one for every seat
+// that has an address. Used as written, it is a string no vendor payload can ever carry, which is the
 // failure [HumanContact.ResolvedIdentities] names for a contact id — a seat
 // whose address never matches, read as a colleague the vendor does not know.
 //
@@ -929,16 +916,16 @@ func (r *Role) Validate() error {
 	case name != "" && r.Handle() == "":
 		// A name of nothing but punctuation slugifies to nothing, and a
 		// seat with no handle derives no agent id and owns no inbox — it
-		// would sit in the chart looking fine and never receive anything.
+		// would sit in the org looking fine and never receive anything.
 		// Reported at the name, which is what yields nothing.
 		add([]any{"name"}, fmt.Errorf(
 			"role %q: %w: the name yields no handle, so set one explicitly",
 			name, ErrInvalidHandle))
 	case name != "" && r.DeclaredHandle == "" && !ValidHandle(r.Handle()):
 		// A HANDLE DERIVED FROM A LONG NAME is the one way a slug fails the
-		// grammar: it is past the width every handle shares. Reported here
-		// rather than at the chart, which refuses the same seat later — at
-		// an import, naming a handle nobody typed.
+		// grammar: it is past the width every handle shares. Reported at the
+		// name, which is what the author typed, rather than at a handle
+		// nobody did.
 		add([]any{"name"}, fmt.Errorf(
 			"role %q: %w: the name yields the handle %q, which is %d bytes "+
 				"and the limit is %d — set a shorter handle explicitly",

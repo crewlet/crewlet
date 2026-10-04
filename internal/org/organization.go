@@ -920,15 +920,12 @@ func (o *Organization) Validate() error {
 // [Organization.Validate]. It assumes [Organization.Normalize] has run, so a
 // root seat moved into its unit is counted once, where it now sits.
 //
-// NO NAME IS HELD UNIQUE, a seat's or a unit's, and that is the org chart's
-// own rule rather than a leniency here. A name is prose: nothing references a
-// seat or a unit by it — a `lead:`, a `manages:` entry and a `unit:` name a
-// handle or a key — and the chart could not refuse a duplicate if it wanted
-// to, because a name is CONTENT, arbitrated on its own object's subject, so
-// two leads naming two teams alike never contend. A document rule the chart
-// cannot hold made a chart exported from a running company one its own import
-// could refuse. What reads a name — a colleague lookup, a roster — answers a
-// shared one with an honest list naming each seat's handle.
+// NO NAME IS HELD UNIQUE, a seat's or a unit's, and that is a rule rather
+// than a leniency. A name is prose: nothing references a seat or a unit by it
+// — a `lead:`, a `manages:` entry and a `unit:` name a handle or a key — so
+// two teams named alike are two teams, and what reads a name — a colleague
+// lookup, a roster — answers a shared one with an honest list naming each
+// seat's handle.
 func (o *Organization) ValidateAdmission() error {
 	return errors.Join(o.validateUnitKeys(), o.validateUnitRefs())
 }
@@ -1009,8 +1006,8 @@ func (o *Organization) validateHandles() error {
 // # A NAME IS NOT A KEY
 //
 // Only [Unit.Key] is compared. Two units NAMED alike on distinct ids are two
-// addresses, which is the chart's own rule — a name is prose, and see
-// [Organization.ValidateAdmission] for why no name is held unique — and an id
+// addresses — a name is prose, and see [Organization.ValidateAdmission] for
+// why no name is held unique — and an id
 // that happens to spell another unit's name collides with nothing, since
 // nothing resolves a unit that declares an id by its name.
 //

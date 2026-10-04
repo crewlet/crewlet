@@ -11,8 +11,8 @@
 // That is ADR-0013, superseded by ADR-0026, and the paragraphs below are why
 // rather than a restatement. An agent seat's runtime id is a UUIDv5 over (org
 // name, ORIGIN handle), so every node computes the same id for the same seat
-// with no database and no running instance beyond the chart row it is already
-// holding. That is what lets a node route an event to a seat it is not itself
+// with no database and no running instance beyond the company document it is
+// already holding. That is what lets a node route an event to a seat it is not itself
 // running — which matters because each engine event topic has one fleet-wide
 // consumer group, so the node that wins a delivery is rarely the node running
 // the recipient. A pool miss means "not on this node", never "does not exist".
