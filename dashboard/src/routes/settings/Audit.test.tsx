@@ -618,8 +618,8 @@ function identityEntry(over: Record<string, unknown> = {}) {
   return {
     id: "ih-1",
     class: "change",
-    object_kind: "login",
-    object_id: "sam.okafor",
+    object_kind: "person",
+    object_id: "0198f0a0-0000-7000-8000-0000000000e5",
     person: "0198f0a0-0000-7000-8000-0000000000e5",
     op: "invite",
     actor: "jane",

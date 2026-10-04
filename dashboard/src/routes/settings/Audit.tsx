@@ -210,7 +210,7 @@ export interface IdentityAuditEntry {
   id: string;
   /** `change` or `session`. */
   class: string;
-  /** What the entry is about: `person`, `login`, `email`, `seat`, `session`, … */
+  /** What the entry is about: `person`, `email` (an invitation's address), `session`, … */
   object_kind: string;
   object_id?: string;
   /** The person it concerns, by id. */
@@ -332,19 +332,16 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
 }
 
 /**
- * WHAT AN IDENTITY ENTRY WAS ABOUT. A login and a seat are names a person
- * reads; a person, a session and an address are an id, a lineage and a blind,
- * so they are named by their kind with the id shortened — the email above all,
- * whose id is a keyed blind that says nothing and must never be read as the
- * address. Every one is the People & access screen's to show.
+ * WHAT AN IDENTITY ENTRY WAS ABOUT. A person, a session and an address are an
+ * id, a lineage and a blind, so they are named by their kind with the id
+ * shortened — except the email, whose id is a keyed blind that says nothing
+ * and must never be read as the address. Every one is the People & access
+ * screen's to show.
  */
 function identitySubject(entry: IdentityAuditEntry): Pick<AuditEntry, "subject" | "path"> {
   const id = entry.object_id ?? "";
   const path = ["settings", "people"];
   switch (entry.object_kind) {
-    case "login":
-    case "seat":
-      return { subject: id, path };
     case "email":
       return { subject: "an address", path };
     default:
