@@ -255,21 +255,24 @@ func (s *Service) opIDFor(w http.ResponseWriter, r *http.Request, name string,
 	return operation{key: key, id: statelog.StepOpID(key, name, digest)}, true
 }
 
-// createKey is the operation key a CREATE answers with, and the SEED it is
-// published under and the id it creates is derived from — the caller's key
-// where they sent one, and a fresh one minted where they did not, either way
-// scoped by the caller ([opkey.Key]) — answering false once it has written the
-// refusal.
+// createKey is the operation key a CREATE answers with, and the SEED the id it
+// creates is derived from — the caller's key where they sent one, and a fresh
+// one minted where they did not, either way scoped by the caller
+// ([opkey.Key]) — answering false once it has written the refusal. What the
+// create is PUBLISHED under is the create's own: an invitation's issue is
+// published under the seed and compares its terms with whatever that seed
+// issued ([iamdomain.Writer.Invite]); a person's is published under a step of
+// the key bound to the request ([Service.PostPeople]).
 //
 // # The id of what a create creates is derived from it
 //
 // A create is retried under the key its unknown answer handed back, and the
 // person or the invitation it names is derived from the seed
 // ([iamdomain.CreatedPersonID], [iamdomain.Blinder.InvitationID]) so the retry
-// names the same one. Each used to be minted per request, so the retry named a
-// second object, which the address its first attempt claimed refused as
-// somebody else's: the documented retry of an unknown answered 409 against its
-// own first attempt, and what that attempt created could not be recovered.
+// names the same one. Each used to be minted per request, so the retry — or
+// the ledger's answer to it — named a second object nobody created: the
+// documented retry of an unknown could not recover what its first attempt
+// made.
 //
 // # Two values, because the key is scoped and the seed is a uuid7
 //
@@ -320,10 +323,9 @@ func (s *Service) unavailable(w http.ResponseWriter, r *http.Request,
 	httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
 }
 
-// sequence folds the answers of a gesture that is several records — a create
-// and its seat binding, an edit's claims, stage and document, a reset and its
-// revocation — into the one the caller is given, under the gesture's own op
-// id.
+// sequence folds the answers of a gesture that is several records — an edit's
+// identity record, stage and document, a reset and its revocation — into the
+// one the caller is given, under the gesture's own op id.
 //
 // THE WEAKEST OUTCOME WINS, because the promise is about the whole: `200`
 // says the caller's next read HERE sees what they asked for, which is false
@@ -393,10 +395,10 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 // # Six answers
 //
 // THREE ARE FAILURES, each a different thing to do next. What is particular
-// here is [iamdomain.ErrRefused]
-// and [iamdomain.ErrClaimed]: the first is authority (403, and it will never
-// land however often it is retried) and the second is a lost race on an
-// address, a login or a seat (409, naming who holds it). An estate that could
+// here is [iamdomain.ErrRefused] and [iamdomain.ErrTaken]: the first is
+// authority (403, and it will never land however often it is retried) and the
+// second is an address, a login or a seat somebody else holds (409, naming
+// who holds it). An estate that could
 // not decide is 503 WITH the operation id and the Retry-After the refusal's
 // own rule gives ([auth.RetryIdentity]): it used to be a bare 503, which a
 // client cannot tell from a node that is gone for good — and then a 503
@@ -424,21 +426,21 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 // whose steps derives an id the first attempt never used — so the steps that
 // had landed were made again, as operations the ledger had never seen. The id
 // a refusal names goes to the log, where the trail finds it under the key it
-// begins with. A create and a mint are published under their key itself, so
-// for them the two are one.
+// begins with. A mint is published under its key itself, so for it the two are
+// one.
 func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 	result statelog.Result, err error, success int, extra map[string]any) {
 
 	var (
-		claimed *iamdomain.ErrClaimed
+		taken   *iamdomain.ErrTaken
 		refused *statelog.Unavailable
 	)
 	// A REFUSAL CARRIES WHAT THE CALLER PASSED TOO — the id it was about,
-	// and, for a sequence refused partway, the steps that landed before it
-	// and a hint at finishing the rest — but never over what the refusal
-	// itself says. It used to carry none of it, so a create whose seat bind
-	// was refused answered the bind's 409 alone and never said the person
-	// had been created.
+	// and, for an edit refused partway, the steps that landed before it and
+	// a hint at finishing the rest — but never over what the refusal itself
+	// says. It used to carry none of it, so an edit refused at its last
+	// record answered that record's refusal alone and never said what had
+	// already changed.
 	refuse := func(status int, code httpjson.Code, fields httpjson.Detail) {
 		for k, v := range extra {
 			if _, taken := fields[k]; !taken {
@@ -459,7 +461,7 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		refuse(http.StatusConflict, httpjson.CodeBadParams,
 			httpjson.Detail{"detail": err.Error(), "op_id": opID})
 		return
-	case errors.As(err, &claimed):
+	case errors.As(err, &taken):
 		refuse(http.StatusConflict, httpjson.CodeBadParams,
 			httpjson.Detail{"detail": err.Error()})
 		return

@@ -47,6 +47,13 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, at applyContext)
 		// the log over a long sentence.
 		summary = summary[:MaxReason]
 	}
+	// THE OBJECT IS WHAT THE RECORD WAS ABOUT: its subject, or — for a
+	// directory record, whose subject names nobody — the person or the
+	// address it concerned ([applyContext.aboutKind]).
+	objectKind, objectID := string(at.record.Subject.Kind), at.record.Subject.ID
+	if at.aboutKind != "" {
+		objectKind, objectID = at.aboutKind, at.aboutID
+	}
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO iam_history
 			(id, class, object_kind, object_id, person_id, op, actor,
@@ -54,8 +61,8 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, at applyContext)
 			 bucket, version, document)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO NOTHING`,
-		historyID(at), string(class), string(at.record.Subject.Kind),
-		at.record.Subject.ID, at.record.Person, string(at.record.Op),
+		historyID(at), string(class), objectKind, objectID,
+		at.record.Person, string(at.record.Op),
 		at.record.Actor, string(at.record.ActorKind), at.record.OperatorID,
 		at.record.Reason, summary, at.unix(), at.unix(), at.bucket(),
 		at.packed, document)

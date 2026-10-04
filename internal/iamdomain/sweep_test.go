@@ -544,12 +544,14 @@ func TestAVersionTwoSweepCollectsWhatWasSpent(t *testing.T) {
 				t.Errorf("%s holds %v, want %v", table, got, want)
 			}
 		}
-		// SCOPED, NOT VERSIONED: the person subject's own expectation is
-		// its last record, which a sweep on the bucket's subject is not.
-		stamped := rig.column(`SELECT scoped_through FROM iam_people WHERE id = ?`,
+		// THE ROW'S VERSION MOVES WITH THE DOCUMENT, so a person record
+		// redelivered from before the sweep cannot write back what it
+		// collected — the expectation a writer arbitrates on is the
+		// subject's anchor, never this column.
+		stamped := rig.column(`SELECT version FROM iam_people WHERE id = ?`,
 			person)
 		if len(stamped) != 1 || stamped[0] != strconv.FormatUint(at, 10) {
-			t.Errorf("the person's scoped_through is %v, want the sweep's position %d",
+			t.Errorf("the person's version is %v, want the sweep's position %d",
 				stamped, at)
 		}
 

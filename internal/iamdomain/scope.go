@@ -21,13 +21,12 @@ import (
 // # FLAT AND BUCKETED, and neither half is an optimisation
 //
 // A scope here is a set of BUCKETS: `i/b/07`, two levels below the domain
-// letter, whatever the record is about. There is no per-person path and no
-// per-claim path, and the two reasons are different.
+// letter, whatever the record is about. There is no per-person path, and the
+// reasons are two.
 //
-// BUCKETED, because A CLAIM'S SUBJECT DOES NOT NAME ITS PERSON. An address
-// claim arbitrates on a keyed blind, a login claim on a login, a seat claim on
-// a seat id, a session on a lineage — and the PERSON each of them is about is
-// inside a payload the deferring node, by construction, could not decode. A
+// BUCKETED, because A DIRECTORY RECORD'S SUBJECT NAMES NOBODY, and a
+// session's names a lineage — and the PERSON each of them is about is inside
+// a payload the deferring node, by construction, could not decode. A
 // per-person path would therefore be computable by every node except the one
 // that needs it. A bucket is on the ENVELOPE, in the clear, stated by the
 // writer, so the node that cannot read the record still files it where a read
@@ -72,10 +71,8 @@ const (
 // it is THIS DOMAIN'S OWN division — unrelated to the corpus shards
 // [search.ShardOf] computes, which partition documents rather than people and
 // must never be assumed to line up. What a bucket buys here is three things a
-// per-person scope path cannot: a scope term a deferring node can compute, a sweep
-// that is sixty-four bounded transactions rather than one unbounded one, and a
-// duplicate-claim scan whose cost is measurable per bucket rather than per
-// company.
+// per-person scope path cannot: a scope term a deferring node can compute, and a
+// sweep that is sixty-four bounded transactions rather than one unbounded one.
 //
 // It is not routed on. Every node holds every bucket and reads every bucket.
 const Buckets = 64

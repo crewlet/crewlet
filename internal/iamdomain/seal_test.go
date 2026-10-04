@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -344,21 +345,12 @@ func joinWithSeed(t *testing.T, rig *writeRig, address, name string) owned {
 	if _, err := redeemAs(t, rig, issued, address, issued.Secret, ""); err != nil {
 		t.Fatalf("redeem %s's invitation: %v", address, err)
 	}
-	person, err := iamdomain.InvitedPersonID(issued.ID)
-	if err != nil {
-		t.Fatalf("derive the invited person: %v", err)
-	}
-	// AND SPENT, as the sign-in surface spends it once the redemption lands.
-	if err := rig.during(func() error {
-		_, err := nodeWriter(rig).SpendInvitation(t.Context(), iamdomain.InvitationSpend{
-			ID: issued.ID, Blind: blindOf(t, address), Person: person,
-			OpID: "op-spend-" + person, Reason: "redeemed",
-		})
-		return err
-	}); err != nil {
-		t.Fatalf("spend %s's invitation: %v", address, err)
-	}
 	rig.drain()
+	persons := rig.column(`SELECT person_id FROM iam_invites WHERE id = ?`, issued.ID)
+	if len(persons) != 1 || persons[0] == "" {
+		t.Fatalf("the redemption spent %s's invitation for %v", address, persons)
+	}
+	person := persons[0]
 	// A CREDENTIAL ID IS THE ROW'S KEY ACROSS EVERYBODY, as the sign-in
 	// surface's uuids are, so each person's is their own.
 	credential := "app-" + person
@@ -473,28 +465,40 @@ func TestARemovalLeavesNoValueOfTheirsThatOpens(t *testing.T) {
 	}
 }
 
-// AND A REMOVAL REACHES THE ADDRESS THEY WERE INVITED AT, ONCE IT IS NOT THEIRS.
+// AND A REMOVAL REACHES THE TRAIL OF AN INVITATION THE SWEEP HAS COLLECTED.
 //
-// An invitation and the trail row its record wrote are about an ADDRESS, and
-// name nobody — so the erasure finds them by address. It used to look only at
-// the address the removal released, so somebody whose address changed after
-// they redeemed their invitation left the trail row of that invitation holding
-// the old address, sealed and opening under the keyring every node holds. The
-// addresses a removal erases are every one the person was invited at as well
-// ([iamdomain] erasedBlinds), and its record declares all of their buckets.
+// An invitation's issue names nobody, so its trail row — which carries the
+// issuing record, the address sealed inside it — is filed under the ADDRESS it
+// was sent to, and a removal erases it by that address. Filed under the
+// invitation's own id, it would be found only through the invitation's row,
+// which the retention sweep collects a week after the redemption while the
+// trail row is kept for the change horizon: a removal after that left the
+// address sealed in the trail, opening under the keyring every node holds.
 //
-// Mutation: erase only the released address and the invitation's trail row
-// still opens.
-func TestARemovalErasesTheAddressTheyWereInvitedAt(t *testing.T) {
+// Mutation: file an issue's trail row under its invitation, and erase through
+// the invitations that remain, and the trail row still opens here.
+func TestARemovalErasesTheTrailOfAnInvitationTheSweepCollected(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	sarah := joinWithSeed(t, rig, "sarah.chen@example.com", "Sarah Chen")
-	// HER ADDRESS MOVES: a claim of the new one takes the column off the old.
-	if err := rig.claim(iamdomain.KindEmail, blindOf(t, "s.okoro@example.com"),
-		sarah.person, "op-new-address"); err != nil {
-		t.Fatalf("claim the new address: %v", err)
+	const address = "sarah.chen@example.com"
+	sarah := joinWithSeed(t, rig, address, "Sarah Chen")
+	// THE SWEEP COLLECTS HER SPENT INVITATION, through the applier, and
+	// keeps every trail row — its change horizon is zero here. Its instant
+	// is past the broker's clock, which stamped the redemption.
+	sweep := sweepRecord(t, iamdomain.Sweep{V: iamdomain.DocumentVersion,
+		Bucket:  iamdomain.BucketOf(blindOf(t, address)),
+		Expired: time.Now().Add(24 * time.Hour)})
+	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := rig.applier.Apply(t.Context(), tx, sweep,
+			statelog.ApplyOptions{Now: brokerAt, StoredAt: brokerAt})
+		return err
+	}); err != nil {
+		t.Fatalf("apply the sweep: %v", err)
 	}
-	rig.drain()
+	if got := rig.column(`SELECT id FROM iam_invites`); len(got) != 0 {
+		t.Fatalf("the sweep left invitations %v, so this case cannot see a "+
+			"trail row outliving its invitation", got)
+	}
 	if before := openable(t, rig.db, rig.sealer, sarah); before["iam_history"] == 0 {
 		t.Fatalf("before the removal the trail holds nothing of Sarah's that "+
 			"opens (%v), so this case cannot see the invitation's row", before)
@@ -509,8 +513,8 @@ func TestARemovalErasesTheAddressTheyWereInvitedAt(t *testing.T) {
 	}
 	rig.drain()
 	if after := openable(t, rig.db, rig.sealer, sarah); len(after) > 0 {
-		t.Errorf("after removing somebody whose address changed, these tables "+
-			"still hold values of theirs that open: %v", after)
+		t.Errorf("after removing somebody whose invitation was swept, these "+
+			"tables still hold values of theirs that open: %v", after)
 	}
 }
 

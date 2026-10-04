@@ -17,10 +17,12 @@ import (
 // decides whether an unknown version stops the applier or is filed for later.
 //
 // THE FRAMEWORK'S FOURTH DOMAIN, and its third strictly-ordered one. What it
-// adds over the three before it is a domain whose ARBITRATION IS THE
-// CONSTRAINT: there is no unique index anywhere in this estate and there
-// cannot be one, so two people taking one address are kept apart by the
-// subject they contend on and by nothing else. `subject.go` argues it.
+// adds over the three before it is a domain whose UNIQUENESS IS DECIDED ON ONE
+// SUBJECT: there is no unique index anywhere in this estate and there cannot
+// be one, so two people taking one address are kept apart by the directory's
+// one subject — every write that sets an address, a login or a seat decides
+// from the whole directory and contends there — and by nothing else.
+// `subject.go` argues it.
 type Domain struct{}
 
 // Name is the register key, the manifest key and the operator's own column.
@@ -103,8 +105,10 @@ const IamLogMaxBytes = 512 << 20
 //
 // A HUNDRED AND TWENTY-EIGHT KIBIBYTES, from the one record here that grows:
 // a person's document, which every credential change and every edit
-// republishes whole. Everything else — a claim, a session's opening and
-// closing, an invitation, a sweep, a gate — is a few hundred bytes. The
+// republishes whole — and an enrolment, which carries that document beside the
+// three short values it holds. Everything else — an identity change, a
+// session's opening and closing, an invitation, a sweep, a gate — is a few
+// hundred bytes. The
 // document is bounded by the caps it is held to ([MaxName], [MaxAddress],
 // [MaxHeldCredentials], [MaxTokenLabel]), and at every one of them, with every
 // token carrying every grant and a label JSON escapes six-fold, it is under
@@ -140,7 +144,7 @@ func (Domain) Stream() statelog.StreamSpec {
 		MaxRecordBytes: IamMaxRecordBytes,
 		Duplicates:     IamLogDuplicates,
 		Replay:         statelog.ReplayStrict,
-		// NINE OF THE TEN KINDS. A barrier shares one subject across the
+		// SEVEN OF THE EIGHT KINDS. A barrier shares one subject across the
 		// whole domain, so an expectation there would serialise every
 		// linearizable read behind every other one and write an anchor
 		// row per read into the transaction holding this store's only
@@ -190,8 +194,9 @@ func (Domain) Envelope(payload []byte) (statelog.Envelope, error) {
 // cannot decode the payload.
 //
 // ON THE OP AND NOT ON A KIND, and a removal is why. A removal rides the
-// ORDINARY PERSON SUBJECT, so a reader that keyed on the kind would defer it —
-// and a deferred removal here is not a stale row, it is a person the company
+// DIRECTORY subject beside every enrolment and identity change, so a reader
+// that keyed on the kind would defer it — and a deferred removal here is not a
+// stale row, it is a person the company
 // off-boarded still signing in on one node, with no later record that ever
 // corrects it because nothing names a removed person again. An eviction does
 // have a kind of its own and is answered through the same op, so the two gates

@@ -91,14 +91,15 @@ func TestEveryFormOfOneAddressBlindsTheSame(t *testing.T) {
 		t.Fatalf("blind: %v", err)
 	}
 	if other == want {
-		t.Fatal("two different addresses blind to one value — every person " +
-			"would claim the same subject and exactly one of them would exist")
+		t.Fatal("two different addresses blind to one value — the directory " +
+			"would refuse every person after the first as holding somebody " +
+			"else's address")
 	}
 }
 
-// A BLIND IS SAFE TO PUT IN A BROKER SUBJECT, which is the only reason the
-// whole mechanism exists.
-func TestABlindIsASubjectTokenABrokerAccepts(t *testing.T) {
+// A BLIND CARRIES NOTHING OF THE ADDRESS, which is the only reason the whole
+// mechanism exists.
+func TestABlindCarriesNothingOfTheAddress(t *testing.T) {
 	t.Parallel()
 	b, err := iamdomain.NewBlinder(testBlindKey)
 	if err != nil {
@@ -108,35 +109,26 @@ func TestABlindIsASubjectTokenABrokerAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("blind: %v", err)
 	}
-	if strings.ContainsAny(blind, ". \t\n*>/+=") {
-		t.Errorf("%q carries a character a subject path, a scope path or a "+
-			"broker filter reads as structure", blind)
+	if strings.ContainsAny(blind, ". \t\n*>/+=%_") {
+		t.Errorf("%q carries a character a path, a pattern or a filter reads "+
+			"as structure", blind)
 	}
 	// AND IT CARRIES NOTHING OF THE ADDRESS. The whole point: this value
-	// is in every delivery, every consumer's filter and every operator's
-	// stream listing, in the clear.
+	// is in every directory record on the log, in every node's rows and in
+	// every trail row an invitation writes, in the clear.
 	for _, fragment := range []string{"sarah", "chen", "example", "@"} {
 		if strings.Contains(blind, fragment) {
 			t.Errorf("the blind %q contains %q of the address it is for", blind, fragment)
 		}
 	}
-	// AND THE SUBJECT IT FORMS IS ONE THE LOG'S OWN GRAMMAR ROUND-TRIPS.
-	subject := iamdomain.EmailSubject(blind)
-	if err := subject.Validate(); err != nil {
-		t.Errorf("a blind does not form a valid subject: %v", err)
-	}
-	back, ok := iamdomain.ParseSubject(subject.Wire())
-	if !ok || back != subject {
-		t.Errorf("%q does not parse back as the claim it addresses", subject.Wire())
-	}
 }
 
 // AN ADDRESS'S BLIND IS THE SAME ON EVERY BUILD.
 //
-// The blind is the subject an address claim arbitrates on and the column a
+// The blind is the value the directory compares an address by and the column a
 // sign-in resolves through, so a build that derived it differently would
 // re-key every address in the company at once: a sign-in would resolve nobody,
-// and a second person could claim each address on the new subject. The value
+// and a second person could take each address under its new blind. The value
 // is pinned rather than recomputed so the derivation's SHAPE is held — the
 // domain, the address class inside the MAC and the separators — and not only
 // its determinism.

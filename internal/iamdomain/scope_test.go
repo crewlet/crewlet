@@ -40,13 +40,9 @@ func TestOnlyAGateOrAReanchorEverProducesTheRootScope(t *testing.T) {
 		subject iamdomain.Subject
 		scope   iamdomain.ScopeSet
 	}{
+		iamdomain.KindDirectory: {iamdomain.DirectorySubject(),
+			iamdomain.PeopleScope("p1")},
 		iamdomain.KindPerson: {iamdomain.PersonSubject("p1"),
-			iamdomain.PeopleScope("p1")},
-		iamdomain.KindEmail: {iamdomain.EmailSubject("blind1"),
-			iamdomain.PeopleScope("p1")},
-		iamdomain.KindLogin: {iamdomain.LoginSubject("jane.doe"),
-			iamdomain.PeopleScope("p1")},
-		iamdomain.KindSeat: {iamdomain.SeatSubject("seat1"),
 			iamdomain.PeopleScope("p1")},
 		iamdomain.KindSession: {iamdomain.SessionSubject("lin1"),
 			iamdomain.PeopleScope("p1")},

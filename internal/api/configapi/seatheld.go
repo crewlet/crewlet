@@ -29,9 +29,8 @@ import (
 // # Any stage short of removal
 //
 // A suspended person still holds their seat — suspending somebody is not
-// giving their seat away — and so do an invited one and a reservation an
-// enrolment in flight has made. A removal deletes the person's row, so a seat
-// whose holder was removed is free.
+// giving their seat away — and so does an invited one. A removal deletes the
+// person's row, so a seat whose holder was removed is free.
 //
 // # Advisory, and what it cannot see
 //
@@ -52,10 +51,9 @@ import (
 type SeatHolder struct {
 	// Person is their id, which a route that unbinds or removes them takes.
 	Person string `json:"person"`
-	// Login is the name they sign in with; empty for a reservation an
-	// enrolment has not finished.
+	// Login is the name they sign in with.
 	Login string `json:"login,omitempty"`
-	// Stage is how far through enrolment they are; empty for a reservation.
+	// Stage is how far through enrolment they are.
 	Stage iam.Stage `json:"stage,omitempty"`
 }
 

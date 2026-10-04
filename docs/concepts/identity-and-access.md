@@ -81,10 +81,9 @@ as a login, and an audit feed filtered on a name matches everything that name
 did and nothing else. A login without a dot, or a machine handle without a
 colon, is refused when it is written rather than discovered later.
 
-**All three stop at 64 characters.** A login is the subject its claim
-arbitrates on (`iam.login.<login>`), which the broker indexes for the life of
-the deployment, and it sits in the same author column a seat handle does, so it
-takes the handle's bound. A Tier A token id therefore stops at 58, since it
+**All three stop at 64 characters.** A login sits in the same author column a
+seat handle does, beside every change an operator reads, so it takes the
+handle's bound. A Tier A token id therefore stops at 58, since it
 acts under `token:<id>`; and an address whose proposed login would run past the
 bound proposes none, leaving the person to type one rather than handing them a
 name cut at an arbitrary letter.
@@ -271,37 +270,29 @@ the grants land from:
 
 | Enrolment | Its authority | What the record refuses |
 |---|---|---|
-| Created by an administrator (`POST /iam/people`) | The administrator's own grants | Any grant they do not hold, before the first claim is taken |
+| Created by an administrator (`POST /iam/people`) | The administrator's own grants | Any grant they do not hold, before anything is published |
 | Redeeming an invitation — the company's first person's included | The invitation, as its issuer wrote it, and the secret its link carries | A secret that is not the link's, a grant the invitation did not carry, an address it was not issued to, a seat other than the one it binds — or that one, once it is removed, an agent's or bound to somebody else — and a link already spent or aged out |
 
-An enrolment is a sequence — the seat when it binds one, the address, then the
-login, then the person — and the authority in that table is checked **twice**:
-once before the first claim, as a read, and again in the person record's own
-snapshot, which is the one that counts. The early check is what keeps a refusal
-the estate could already establish from leaving anything behind: met only at
-the last step, a link that had aged out would be refused *after* the address
-and login were claimed, and the reservation that attempt left would hold the
-person's own address against the next invitation to it. What can still land
-between the two checks is a race — somebody else enrolling, a link withdrawn a
-moment ago — and its residue is the ordinary orphaned reservation the claim
-report names.
+An enrolment is **one record** on the directory — the person, their address,
+their login, the seat when it binds one and, for a redemption, the spent link
+— and the authority in that table is checked in that record's own snapshot,
+against every row: so a refusal leaves nothing behind, and a half-finished
+enrolment is not a state the estate can be in.
 
-**Every enrolment's person is derived, and none of them rewrites somebody who
-exists.** A redemption's person comes from its invitation, and an
-administrator's create from the operation's key — the one an `unknown` answer
-hands back to retry under — so the retry of either names the person its first
-attempt claimed for, and finishes it. The person record is arbitrated rather
-than a create, because the claims before it leave a reservation a create would
-refuse, so it reads the person in its own snapshot and so does every claim of
-the sequence: one who is already enrolled is refused in the terms of the
-authority the enrolment named — a link already used, a key that already names
-somebody else — unless it is the administrator's very create being retried. A
-key reused for another address, or a second redemption of a link, therefore
-never hands an existing person a second address or rewrites their credentials.
+**An administrator's create is derived, and never rewrites somebody who
+exists.** Its person comes from the operation's key — the one an `unknown`
+answer hands back to retry under — so the retry names the person its first
+attempt created and is answered from the ledger. The key sent with another
+body is another operation, which meets the person the first created and is
+refused as a reused key, so it never hands an existing person a second address
+or rewrites their credentials. A redemption's person is minted per attempt:
+what keeps a link single-use is the link, which the record that creates the
+person spends, and a second redemption is refused in its own snapshot as a link
+already used.
 
 Whether **anybody exists yet** is one predicate — a person or a machine that is
-enrolled and not removed; a reservation is nobody, and a suspended person is
-somebody — and it is asked in two places, both about the first person: `GET
+enrolled and not removed; a suspended person is somebody — and it is asked in
+two places, both about the first person: `GET
 /health`'s `identity`, and the line a node logs at boot while the answer is no.
 
 **`POST /iam/invalidate-all` takes both `fleet:operate` and `people:manage`.**
@@ -513,15 +504,11 @@ link then binds the person it creates to that seat — onboarding somebody into
 their seat with one link rather than an invitation and a bind afterwards. A seat
 the running company does not hold, an agent's seat and a seat somebody is
 already bound to are refused when the invitation is issued, naming the seat. The invitation
-records the seat's handle. The redemption claims the seat **first**, before the
-address and the login: a seat is the one thing a configuration change can move in the
-week a link is open, and a refusal at the first claim leaves nothing behind, where one
-after the address would hold that address against the next invitation to the
-same person. A seat that was removed, made an agent's or bound to a colleague
-since the issue is refused as the link's own refusal — `410`, ask whoever sent
-it for a new one — before anything is written; the rare redemption that races a
-colleague's bind to the seat is `409`, saying the seat is taken and naming
-nobody.
+records the seat's handle, and the redemption binds it in the same record that
+creates the person: a seat that was removed or made an agent's since the issue
+is refused as the link's own refusal — `410`, ask whoever sent it for a new one
+— and one bound to a colleague since is `409`, saying the seat is taken and
+naming nobody. Either way nothing is written.
 
 What the form needs includes **a login to propose**. Every person enrols with
 one, and somebody following a link has typed nothing yet, so the GET answers
@@ -530,16 +517,12 @@ whatever login the person settled on — the proposal or their own — and an
 absent one is refused `400`, as a login somebody else holds is refused `409`
 without saying who.
 
-**A redemption can be retried until it lands.** It is a sequence — the seat
-claim where there is one, the address claim, the login claim, the person — so
-one refused halfway leaves the address claimed. The person it creates is therefore **derived from the invitation**
-(a uuid7 at the invitation's own instant) rather than minted per request:
-every attempt names the same person, a claim the first attempt took is one the
-retry already holds, and somebody told their login was taken simply chooses
-another. What keeps the link single-use is the link, not the id — a redeemed or
-expired invitation is refused before anything is written, and so is one whose
-address somebody is already enrolled under (if that is the person this link
-created and its spend never landed, the spend is published then).
+**A redemption can be retried until it lands.** It is one record, so an attempt
+the directory refuses — a login somebody already holds — writes nothing, and
+the person simply chooses another. What keeps the link single-use is the link:
+a redeemed or expired invitation is refused before anything is written, the
+record that creates the person spends it, and one whose address somebody is
+already enrolled under is refused in that record's own snapshot.
 
 Absent, redeemed, expired and a secret that is not the link's are **one
 refusal**, because the remedy is the same and telling them apart would say
@@ -593,9 +576,10 @@ What that means in practice:
   dangling-binding check, contact routing. The check against the running
   company is **advisory**: a revision applied elsewhere first is one this node
   has not seen.
-- **The bind arbitrates.** `iam.seat.<handle>` is a claim, create-only at an
-  expectation of zero, so two people cannot be bound to one seat: they contend
-  at the broker and exactly one wins.
+- **The bind arbitrates.** Every binding is decided on the directory's one
+  subject, against every row in one snapshot, so two people cannot be bound to
+  one seat: two binds contend at the broker, and the second is decided again
+  and refused naming the first.
 - **The seat's removal does not.** A configuration write that removes a human
   seat, or makes it an agent's, reads the directory first and is refused
   `409 seat_held` naming whoever holds it — at any stage short of their
@@ -652,7 +636,7 @@ working as itself, unbound, while its operator believes it acts as a seat:
 nothing dangles, so `GET /iam/check` has nothing to name, and no directory
 read can reach a node's configuration. **`GET /iam/node-tokens`** answers it
 per node: each of the answering node's labels — never a value — joined to the
-row holding its login (none, a reservation, or a row with its stage), and for a
+row holding its login (none, or a row with its stage), and for a
 held row whether it binds the token to a seat and which. It is decided like
 every other directory listing, on `people:manage` or `audit:read`, and it is
 what Settings › People & access reads.
@@ -2073,39 +2057,44 @@ on every node at once* — so a rare, cosmetic anomaly becomes a fleet-wide
 stalled log, and in this domain a stalled log is every login in the company.
 
 So nothing here is unique, and the uniqueness an identity estate obviously
-needs is enforced somewhere else entirely: **at the broker, by the subject a
-claim arbitrates on.**
+needs is enforced somewhere else entirely: **at the broker, by the one subject
+every such decision arbitrates on.**
 
-| What is claimed | Subject | How it is taken |
+| What is decided | Subject | How it is taken |
 |---|---|---|
-| An email address | `crewlet.iam.log.email.<blind>` | create-only, expectation zero |
-| A login | `crewlet.iam.log.login.<login>` | create-only, expectation zero |
-| A seat binding | `crewlet.iam.log.seat.<seat handle>` | create-only, expectation zero |
+| Every address, login and seat binding — an enrolment, an invitation's issue, a login or seat change, a removal | `crewlet.iam.log.directory` | conditional on the subject's last record |
+| A person's own content — name, grants, credentials, stage | `crewlet.iam.log.person.<id>` | conditional on the subject's last record |
 | A session | `crewlet.iam.log.session.<lineage>` | create-only, expectation zero |
-| A person's own content | `crewlet.iam.log.person.<id>` | conditional on the row's version |
 | Ending every session at once | `crewlet.iam.log.invalidation` | one object for the whole company |
 
-Two administrators enrolling one address publish to the same subject at the
-same expectation, the broker accepts exactly one, and the loser is told which
-person holds it. Two administrators enrolling *different* addresses never
-contend at all.
+Every write that sets or frees an address, a login or a seat is **one record
+on the directory**, and its decide reads every row in one snapshot: a value
+somebody else holds is refused naming who holds it — an address an open
+invitation holds, naming the invitation — and the broker accepts the record
+only if no other directory record landed since that snapshot. Two
+administrators enrolling one address contend; the broker accepts exactly one,
+and the other is decided again and told who holds it. The directory serialises
+only the writes that change who is called what — everything else about a
+person is on their own subject — and those are an administrator's gestures and
+redemptions, never a request path.
 
-Because a record has exactly one subject, **an enrolment is a sequence**: take
-the address, take the login, then write the person. A sequence that stops
-halfway leaves a claimed address with no person — a *reservation*, a legal,
-named state rather than a person holding an address somebody else also holds.
-Nothing collects it on a clock, because its claims still hold their subjects on
-the log and a deleted row would leave an address arbitrated to nobody the
-directory can name. `crewlet iam check` reports one older than an hour as
-`claim_orphaned`, and removing its id releases what it holds.
+**The directory owns a row's existence and its three unique columns; the
+person's own subject owns the rest.** An enrolment creates the row whole and a
+removal deletes it, so a record on a person's own subject never creates
+anybody, and the two subjects meet on one row and never on one column.
 
-That half-finished row is a **reservation**: it holds the address, login or
-seat its claims took, and it has no kind, no stage and no
-credential, so it may do nothing. Every reader reports it as one rather than as
-a person — `GET /iam/people` lists it with `"reserved": true`, a sign-in or a
-Tier A token binding through its login finds nobody who can act, a session naming it finds no person, and
-`/health` does not count it as somebody enrolled. It is never a reason for a
-503.
+**A node holding an identity record it cannot decode refuses directory
+writes.** A login, an address or a seat is decided against every row, and the
+record that node cannot read may be the one that took the value — so the write
+is refused `deferred` (`503`) and another node decides it, until this one is
+upgraded or restarted with the key. A removal is exempt: it frees values
+rather than taking one.
+
+**Two rows holding one value are an answer nobody can give.** Ordinary traffic
+never produces one. A node that retained the record moving somebody off a login
+and applied a later one giving it to somebody else holds both until it
+reprocesses the first, and a restore can bring one back. A sign-in or a lookup
+that meets two rows answers `503` — ask another node — rather than picking one.
 
 > **If you are reading the schema and reaching for a unique index as a
 > backstop: don't.** A duplicate cannot arise from ordinary traffic, and it
@@ -2116,8 +2105,8 @@ Tier A token binding through its login finds nobody who can act, a session namin
 > and a `claim_duplicated` finding in `crewlet iam check` naming everybody who
 > holds it. A unique index would convert an anomaly an operator can repair
 > into an outage nobody can: a violation inside an apply would stop that
-> node's log for good. The engine never picks who keeps a duplicated claim;
-> you do, and you release it from the others.
+> node's log for good. The engine never picks who keeps a duplicated value;
+> you do, and you change it on the others.
 
 ### What is in the clear, and what is not
 
@@ -2183,7 +2172,7 @@ can name — and **the first node that needs one mints it**, under a fleet-wide
 hold, so two nodes booting together cannot each mint their own and go on
 deriving blinds the other cannot match. It is never minted over a key that was
 deleted: every blind in the estate was derived under the old one, so a new key
-would orphan every address in the directory and let each be claimed a second
+would orphan every address in the directory and let each be enrolled a second
 time. A node that finds the key missing while the estate holds any blinded
 value refuses every address write by name instead, until the key comes back
 with the coordination store it lived in, from the backup that holds it.
@@ -2193,7 +2182,7 @@ Rotating it is a migration, not a setting.
 
 | Table | What it holds |
 |---|---|
-| `iam_people` | One person or machine, and the three claims denormalised onto their row so a duplicate can be *reported* |
+| `iam_people` | One person or machine, with the login, address blind and seat the directory decided for them |
 | `iam_credentials` | The **verifier** for each way somebody proves themselves — a password digest, a machine token's hash, the recovery codes' digests, and an app code's sealed seed. Never a secret that could be presented to anything |
 | `iam_invites` | An address spoken for by somebody who has no person yet, and the grants redeeming it confers |
 | `iam_sessions` | One row per session **lineage**. A re-issue is not a row — the deadline it moves is inside the cookie's own signature — so this grows with sign-ins, not with requests |
@@ -2326,19 +2315,21 @@ both in the same transaction:
   ids, the logins, the actors, the operations and the instants stay.
 
 An invitation and its trail row name nobody — they are about an **address** —
-so the removal finds them by every address that was theirs: the one it
-releases, and the one any invitation they redeemed was sent to, which is not
-the same address once another has been claimed for them since.
+so the removal finds them by the address it releases, which is the only one a
+person ever holds: a redemption binds the address its invitation was sent to,
+and no record moves an address after the enrolment. An issue's trail row is
+filed under that address, so it is found even once the sweep has collected the
+invitation itself.
 
 After the removal applies, **no row on any node holds a value of theirs that
 opens** under any keyring, and every snapshot a node donates from then on is a
 copy of those rows. Every node erases the same bytes, so the fleet's
 byte-for-byte identity claim holds across it — including a node that held back
-an invitation to one of those addresses (one signed under a keyring key it was
-not restarted with, or a newer build's): an invitation is filed under its
-address's bucket rather than a person's, so the removal's record names those
-buckets as well as the person's, and that node applies the invitation first
-and erases it, exactly as its peers did.
+an invitation to that address (one signed under a keyring key it was not
+restarted with, or a newer build's): an invitation is filed under its address's
+bucket rather than a person's, so the removal's record names that bucket as
+well as the person's, and that node applies the invitation first and erases it,
+exactly as its peers did.
 
 **What a removal cannot reach, and when each copy goes.** Everything below is
 sealed under the fleet keyring, so it is readable only by whoever holds the

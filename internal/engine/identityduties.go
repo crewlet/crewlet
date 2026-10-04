@@ -276,7 +276,7 @@ func claimsPass(ctx context.Context, reader *iamdomain.Reader) {
 func duplicateAttrs(dup iamdomain.DuplicateClaim, at string) []any {
 	attrs := []any{"claim", string(dup.Kind), "people", dup.People, "at", at}
 	switch dup.Kind {
-	case iamdomain.KindLogin, iamdomain.KindSeat:
+	case iamdomain.UniqueLogin, iamdomain.UniqueSeat:
 		attrs = append(attrs, "token", dup.Token)
 	}
 	return append(attrs, "detail", "more than one person holds this claim, "+

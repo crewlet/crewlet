@@ -20,10 +20,8 @@ import (
 // An email address is the thing a person signs in with, so something has to
 // resolve one to a person on every sign-in. The obvious column holds the
 // address in the clear, and then the address is in every node's database, in
-// every snapshot a node donates, in every backup, and — worst — in the
-// SUBJECT the claim on it arbitrates on, which is a broker path carried in
-// cleartext in every delivery, every consumer's filter and every operator's
-// stream listing.
+// every snapshot a node donates, in every backup, and in every record a
+// directory decision publishes onto the log.
 //
 // # A keyed hash, and why keyed rather than plain
 //
@@ -39,13 +37,13 @@ import (
 //
 // # ONE KEY FOR THE COMPANY, and it can never be per node
 //
-// The blind is the ARBITRATION SUBJECT of the claim on an address. Two nodes
-// that computed different blinds for one address would publish to two
-// subjects, neither would contend with the other, and BOTH claims would land —
-// which is the duplicate identity the whole subject grammar exists to prevent,
-// arriving through the one door that grammar cannot watch. So the key is a
-// fleet secret, read through the company's sealed store, and a node that
-// cannot read it refuses rather than guessing.
+// The blind is the value a DIRECTORY DECIDE COMPARES an address by. Two nodes
+// that computed different blinds for one address would each find the other's
+// person absent, and BOTH enrolments would land — which is the duplicate
+// identity the directory exists to refuse, arriving through the one door its
+// decide cannot watch. So the key is a fleet secret, read through the
+// company's sealed store, and a node that cannot read it refuses rather than
+// guessing.
 //
 // # It is NOT a password hash and must never be used as one
 //
@@ -60,8 +58,8 @@ import (
 //
 // ONE NAME, and it carries no version: rotating this key is not a rotation in
 // the ordinary sense — every blind in the estate is derived from it, so a new
-// key means re-deriving every claim subject, which is a re-publication of the
-// whole directory rather than a re-encryption of it. That is an operation
+// key means re-deriving every blind the directory holds, which is a
+// re-publication of the whole directory rather than a re-encryption of it. That is an operation
 // somebody plans, not a sweep that runs, so there is no second name for a
 // previous key to live under and no arm here that tries both.
 //
@@ -69,7 +67,7 @@ import (
 // ([secrets.Reserved]). It used to be an environment-variable name, which
 // made it an operator secret: listable,
 // revealable — and a PUT of a different value orphaned every address in the
-// directory and let each be claimed again, while `${…}` in an `mcp_env` handed
+// directory and let each be enrolled again, while `${…}` in an `mcp_env` handed
 // the key that makes every address enumerable to a child process. No operator
 // surface addresses it now, and a lost key comes back with the coordination
 // store it lived in.
@@ -108,8 +106,8 @@ type Blinder struct{ key []byte }
 func NewBlinder(key []byte) (*Blinder, error) {
 	if len(key) == 0 {
 		return nil, fmt.Errorf("%w: the company's %s is unset, so this node "+
-			"cannot resolve an address to a person and cannot form the subject "+
-			"a claim on one arbitrates against", ErrNoBlindKey, BlindKeyName)
+			"cannot resolve an address to a person and cannot form the blind "+
+			"the directory compares one by", ErrNoBlindKey, BlindKeyName)
 	}
 	if len(key) < MinBlindKeyBytes {
 		return nil, fmt.Errorf("%w: the company's %s is %d bytes and the floor "+
@@ -165,9 +163,9 @@ const MinBlindKeyBytes = 32
 func (b *Blinder) Email(address string) (string, error) {
 	folded := iam.NormalizeEmail(address)
 	if folded == "" {
-		return "", fmt.Errorf("iamdomain: an empty address has no blind — a " +
-			"claim on one would arbitrate on a subject every addressless person " +
-			"in the company shares")
+		return "", fmt.Errorf("iamdomain: an empty address has no blind — " +
+			"one would be a value every addressless person in the company " +
+			"shares")
 	}
 	return b.derive("email", folded)
 }
@@ -181,16 +179,15 @@ func (b *Blinder) Email(address string) (string, error) {
 //
 // The id opens nothing on its own — the link's SECRET does, and the estate
 // keeps only its verifier ([Blinder.InvitationSecret]) — but the id is what the
-// secret is derived from and what a redemption's person is derived from
-// ([InvitedPersonID]), so its entropy is still not the caller's to choose: a
+// secret is derived from, so its entropy is still not the caller's to choose: a
 // key somebody typed, derived under a plain hash, would let anybody who saw the
-// key compute the invitation it names and the person it creates. Under the
+// key compute the invitation it names and the link that opens it. Under the
 // company's key it is unguessable without that key whatever the operation key
 // was — and in a MAC domain of its own ([invitationIDDomain]), so no blind of
 // any address is ever an invitation id.
 //
-// A UUID7 AT THE KEY'S INSTANT, which is what [InvitedPersonID] derives the
-// person the invitation creates at: the key must be a uuid7 ([operationKey]).
+// A UUID7 AT THE KEY'S INSTANT, which is the instant a redemption's operation
+// id carries: the key must be a uuid7 ([operationKey]).
 func (b *Blinder) InvitationID(key string) (string, error) {
 	if b == nil || len(b.key) == 0 {
 		return "", ErrNoBlindKey
@@ -270,14 +267,14 @@ func InvitationVerifier(secret string) string {
 // value can never collide with a blind of another even where the two values
 // are equal. An address is the only class this build derives, and the class
 // stays in the input because every blind an estate already holds was derived
-// with it: dropping it would re-key every address claim in the company. A
+// with it: dropping it would re-key every address in the company. A
 // separator between the class and the value is what stops `("emai", "lx@y")`
 // and `("email", "x@y")` producing one blind.
 //
-// HEX rather than base64, because the result is a SUBJECT TOKEN on a broker
-// path: base64's `+` and `/` are not path-safe, base64url's `-` and `_` are
-// but buy nothing here, and hex is the encoding an operator reading a stream
-// listing can compare by eye without wondering about padding.
+// HEX rather than base64, because the result is read as well as compared: it
+// is an invitation's trail object and a value an operator reading a record
+// compares by eye, and hex carries no padding and nothing a path, a LIKE or a
+// subject reads as structure.
 func (b *Blinder) derive(class, value string) (string, error) {
 	if b == nil || len(b.key) == 0 {
 		return "", ErrNoBlindKey

@@ -1,0 +1,23 @@
+-- `iam_people.scoped_through` goes: the directory is one subject.
+--
+-- 0034 shipped the column for the CLAIM SUBJECTS. An address, a login and a
+-- seat each arbitrated on a subject of their own, and a claim's apply wrote its
+-- column on a row the person's own subject owned — so it stamped this column
+-- instead of `version`, and a sweep's rewrite of a person's credentials did the
+-- same, and every reader compared MAX of the two.
+--
+-- Every write that sets or frees a login, an address or a seat is now ONE
+-- record on the directory subject, the directory creates and removes the row,
+-- and a person's own subject owns everything else on it. Every record about one
+-- person is applied in log order — a record this node retains holds back every
+-- later one its scope meets — so `version` alone is the one monotone guard a
+-- row needs, and the directory's records and the sweep stamp it.
+--
+-- NO INDEX NAMES IT (0034's indexes are over the bucket, the stage, the seat
+-- id, the address blind and the login), so the column goes on its own.
+--
+-- DROPPED IN THE CHANGE THAT STOPS THE APPLIER NAMING IT: each node migrates
+-- its own estate when the build that carries this file opens it, and that
+-- build's applier names the column nowhere — an insert naming a column that is
+-- gone would fail the apply on every node at once.
+ALTER TABLE iam_people DROP COLUMN scoped_through;

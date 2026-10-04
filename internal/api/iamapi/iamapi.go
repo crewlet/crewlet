@@ -67,10 +67,8 @@ type Directory interface {
 	History(ctx context.Context, q iamdomain.HistoryQuery) (iamdomain.HistoryPage, error)
 	PositionAt(ctx context.Context, at time.Time) (uint64, error)
 
-	// PersonByLogin names who holds a login on this node, which an edit
-	// asks BEFORE its first record: a rename refused by somebody else
-	// holding the name, met only at its own record, was met after an
-	// earlier step landed.
+	// PersonByLogin names who holds a login on this node, which the node
+	// tokens listing asks of every `token:<id>` login.
 	PersonByLogin(ctx context.Context, login string) (iamdomain.Sighting, error)
 
 	// Claims is the claim duty's own reading, which the report shows on
@@ -101,24 +99,16 @@ type Writer interface {
 		opID, reason string) (statelog.Result, error)
 	SetCredentials(ctx context.Context, in iamdomain.CredentialSet) (statelog.Result, error)
 	MintToken(ctx context.Context, in iamdomain.TokenMint) (iamdomain.TokenMinted, error)
-	Claim(ctx context.Context, kind iamdomain.ObjectKind, token, personID,
-		opID string) (statelog.Result, error)
-	Release(ctx context.Context, kind iamdomain.ObjectKind, token, holder,
-		opID, reason string) (statelog.Result, error)
 
-	// Rename and Rebind MOVE a person's login or seat, claiming the new
-	// one before releasing the old — so a refusal changes nothing. A
-	// release followed by a claim, which is what this surface used to
-	// publish, left somebody whose new login was refused with none at all.
-	Rename(ctx context.Context, personID, from, to, opID, reason string) (
-		statelog.Result, error)
-	Rebind(ctx context.Context, personID, from, to, opID, reason string) (
-		statelog.Result, error)
+	// SetIdentity changes a person's login, their seat binding, or both,
+	// in ONE record — so a refusal changes nothing, and the value given
+	// up is freed by the record that takes the new one.
+	SetIdentity(ctx context.Context, in iamdomain.IdentityEdit) (statelog.Result, error)
 	Invite(ctx context.Context, in iamdomain.InviteMint) (iamdomain.InviteIssued, error)
 
 	// MayConfer is the record's own conferral rule, asked BEFORE the first
-	// record of an edit that moves a claim ahead of its grants — so a grant
-	// the caller may not confer is refused with nothing moved.
+	// record of an edit that moves a login or a seat ahead of its grants —
+	// so a grant the caller may not confer is refused with nothing moved.
 	MayConfer(before, after []iam.Grant) error
 
 	Revoke(ctx context.Context, personID, opID, reason string) (statelog.Result, error)

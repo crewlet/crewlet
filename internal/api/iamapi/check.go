@@ -237,9 +237,9 @@ func (s *Service) claimFindings(r *http.Request) ([]Finding, error) {
 				"it from the others",
 		}
 		switch dup.Kind {
-		case iamdomain.KindLogin:
+		case iamdomain.UniqueLogin:
 			f.Login = dup.Token
-		case iamdomain.KindSeat:
+		case iamdomain.UniqueSeat:
 			f.Seat = dup.Token
 		}
 		out = append(out, f)

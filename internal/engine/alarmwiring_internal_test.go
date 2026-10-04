@@ -48,7 +48,10 @@ func TestTheDanglingBindingAlarmFiresOnARunningNode(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
-	if _, err := writer.Claim(ctx, iamdomain.KindSeat, "ceo", bot, "op-bind-bot"); err != nil {
+	ceo := "ceo"
+	if _, err := writer.SetIdentity(ctx, iamdomain.IdentityEdit{
+		PersonID: bot, Seat: &ceo, OpID: "op-bind-bot", Reason: "a pipeline",
+	}); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 	awaitBinding(t, e, bot)

@@ -201,14 +201,14 @@ func TestAWriteDurableButNotAppliedHereIsAccepted(t *testing.T) {
 
 // A STEP NOBODY CAN CONFIRM ENDS THE SEQUENCE THERE.
 //
-// An edit is several records, and each is built on the one before: a seat
-// binding whose outcome is unknown may or may not be on the log, so the stage
-// and the document after it must not be published over a guess. Mutation:
-// carry on past an unknown step and the update is asked for.
+// An edit is several records, and each is built on the one before: an
+// identity change whose outcome is unknown may or may not be on the log, so
+// the stage and the document after it must not be published over a guess.
+// Mutation: carry on past an unknown step and the update is asked for.
 func TestAnEditStopsAtAStepNobodyCanConfirm(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
-	r.writer.outcomes = map[string]statelog.Outcome{"claim:seat": statelog.OutcomeUnknown}
+	r.writer.outcomes = map[string]statelog.Outcome{"identity": statelog.OutcomeUnknown}
 	stage := iam.StageSuspended
 	got := r.as(administrator(), http.MethodPatch, "/iam/people/"+bob.String(),
 		map[string]any{"seat": "platform", "stage": stage,

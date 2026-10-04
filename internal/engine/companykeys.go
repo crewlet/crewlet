@@ -18,8 +18,8 @@ import (
 // every node then reads.
 //
 // One exists: the identity estate's blind-index key. It is the key a BLIND is
-// derived under, and a blind is compared across nodes — a claim arbitrates on
-// it — so every node has to hold the SAME key. A node computing under one it
+// derived under, and a blind is compared across nodes — the directory's decide
+// compares an address by it — so every node has to hold the SAME key. A node computing under one it
 // minted and did not keep is computing values nobody else can match, and
 // nothing reports it, because a blind is opaque by construction.
 //
@@ -257,8 +257,9 @@ func (s personBlindSource) Blinder(ctx context.Context) (*iamdomain.Blinder, err
 // company: no blind can be derived without a key, so one stored anywhere means
 // a key existed. Minting a new one then would orphan every address in the
 // directory — each sign-in by address matches nobody — and, worse, let a second
-// person claim each of them, since a claim arbitrates on the blind and a new
-// key is a new subject. So the remedy is the operator's: restore the key.
+// person take each of them, since the directory compares an address by its
+// blind and a new key derives a different one. So the remedy is the
+// operator's: restore the key.
 //
 // "NO BLIND HERE" IS AN ABSENCE, and the rows asked prove it only when their
 // own snapshot has APPLIED everything the log held when the question was asked
@@ -322,7 +323,7 @@ func judgeBlindKeyMint(ctx context.Context, logEnd func(context.Context) (uint64
 		return fmt.Errorf("%w: %s is missing from the company's secret store "+
 			"while the identity estate holds values derived under it, so it "+
 			"was deleted rather than never minted — a new key would orphan "+
-			"every address in the directory and let each be claimed again. "+
+			"every address in the directory and let each be taken again. "+
 			"It is the engine's own key, which no operator command writes: "+
 			"restore the coordination store's secrets from the backup that "+
 			"holds it (docs/guides/backup.md, Restoring); the engine will not "+

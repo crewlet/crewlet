@@ -166,7 +166,7 @@ func TestAnUnvouchedUnknownSendsTheAdministratorElsewhere(t *testing.T) {
 	}{
 		{"a create", "enrol",
 			map[string]any{"login": "dana.sre", "email": "dana@example.com"}, true},
-		{"a create's seat binding", "claim:seat",
+		{"a create naming a seat", "enrol",
 			map[string]any{"login": "dana.sre", "email": "dana@example.com",
 				"seat": "sre"}, true},
 		{"a lost acknowledgement (the control)", "enrol",
@@ -216,7 +216,7 @@ func TestAWriteNamingARemovedPersonIsNotFound(t *testing.T) {
 			map[string]any{"grants": []string{"state:read"}}},
 		{"ending their sessions", "revoke", http.MethodDelete,
 			"/iam/people/" + bob.String() + "/sessions", nil},
-		{"a seat binding", "claim:seat", http.MethodPatch,
+		{"a seat binding", "identity", http.MethodPatch,
 			"/iam/people/" + bob.String(), map[string]any{"seat": "sre"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -322,15 +322,15 @@ func TestAStepsRefusalIsAnsweredUnderItsGesture(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	key := statelog.NewOpID(time.Now(), "")
-	r.writer.refusals = map[string]error{"claim:seat": &statelog.Unavailable{
-		Reason: statelog.ReasonEvicted, OpID: statelog.StepOpID(key, "bind"),
+	r.writer.refusals = map[string]error{"identity": &statelog.Unavailable{
+		Reason: statelog.ReasonEvicted, OpID: statelog.StepOpID(key, "identity"),
 		Detail: "this node has been removed from the fleet"}}
 	got := r.asWith(everything(), http.MethodPatch, "/iam/people/"+bob.String(),
 		map[string]any{"seat": "sre"}, http.Header{opkey.Header: {key}})
 	if got.status != http.StatusServiceUnavailable {
 		t.Fatalf("answered %d %v, want the refusal's 503", got.status, got.body)
 	}
-	if !slices.Contains(r.writer.calls, "claim:seat") {
+	if !slices.Contains(r.writer.calls, "identity") {
 		t.Fatalf("the bind was never asked for (%v); this case tests nothing",
 			r.writer.calls)
 	}
@@ -338,12 +338,12 @@ func TestAStepsRefusalIsAnsweredUnderItsGesture(t *testing.T) {
 	// published as a step of, and what a retry sends back — never the
 	// refused step's own id.
 	answered, _ := got.body["op_id"].(string)
-	claimed := r.writer.ops["claim:seat"]
+	claimed := r.writer.ops["identity"]
 	if answered == "" || len(claimed) == 0 || !strings.HasPrefix(claimed[0], answered+".") {
 		t.Errorf("answered op_id %q, want the gesture every step (%v) is a step of "+
 			"— the one a retry sends back", answered, claimed)
 	}
-	if answered == statelog.StepOpID(key, "bind") {
+	if answered == statelog.StepOpID(key, "identity") {
 		t.Errorf("answered the refused step's own id %q", answered)
 	}
 }

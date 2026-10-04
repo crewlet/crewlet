@@ -199,9 +199,11 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 // sweep that deleted only rows would be undone by the next such write, which
 // republishes the document's copy. So each owner's document is rewritten
 // without the collected credentials, in the same transaction, and stamped with
-// this record's position in `scoped_through` rather than `version` — a sweep
-// arbitrates on its bucket's subject, not the person's, and the person
-// subject's own expectation must stay the last record on it.
+// this record's position as its `version` — never below what the row holds,
+// since every record about the person is applied in log order and the version
+// is the one guard a later content record compares against. A person's broker
+// expectation is the framework's anchor for their own subject, which a sweep
+// on its bucket's subject never moves.
 //
 // # One ordered pick, spent person by person
 //
@@ -320,7 +322,7 @@ func collectOwned(ctx context.Context, tx *sql.Tx, at applyContext,
 		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE iam_people
-			   SET document = ?, scoped_through = MAX(scoped_through, ?)
+			   SET document = ?, version = MAX(version, ?)
 			 WHERE id = ?`, rewritten, at.packed, person); err != nil {
 			return 0, fmt.Errorf("iamdomain: rewrite person %s without their "+
 				"swept credentials: %w", person, err)

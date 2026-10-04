@@ -2,7 +2,6 @@ package iamdomain_test
 
 import (
 	"errors"
-	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -53,16 +52,21 @@ func personAwayFrom(token string) string {
 	}
 }
 
-// A RELEASE IS FILED UNDER ITS HOLDER'S BUCKET.
+// AN IDENTITY CHANGE IS FILED UNDER ITS PERSON'S BUCKET — AND EVERY LEAVER'S
+// WHOSE TOMBSTONE ITS BIND STAMPS.
 //
 // The scope is where a node that cannot decode a record files the deferral,
-// and a read about a person looks in THAT PERSON'S bucket. A release used to
-// state the bucket of the TOKEN — a hash of a seat handle, a login or a blind
-// that no read consults — so a node deferring an unbinding went on serving the
-// holder as bound to the seat and never said it was behind about them. And the
-// record named nobody, so the trail row for "Sarah was unbound" was on nobody's
-// history.
-func TestAReleaseIsFiledUnderItsHoldersBucket(t *testing.T) {
+// and a read about a person looks in THAT PERSON'S bucket. A directory record's
+// subject names nobody, so an unbinding that stated the bucket of the seat's
+// handle — a hash no read consults — would leave a node deferring it serving
+// the holder as bound to the seat, never saying it was behind about them; and
+// a record naming nobody would put "Sarah was unbound" on nobody's history. A
+// bind of a seat somebody was removed from also stamps that leaver's tombstone,
+// which is filed under the leaver, so their bucket is declared too.
+//
+// Mutation: drop the leavers from SetIdentity's scope, and the rig's apply
+// refuses the bind for writing outside what it declared.
+func TestAnIdentityChangeIsFiledUnderItsPersonAndEveryLeaver(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	const seat = "platform-lead"
@@ -76,41 +80,60 @@ func TestAReleaseIsFiledUnderItsHoldersBucket(t *testing.T) {
 	}
 	rig.drain()
 	rig.seatOnly(seat)
-	if err := rig.claim(iamdomain.KindSeat, seat, holder, "op-bind"); err != nil {
+	if err := rig.bind(seat, holder, "op-bind"); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
-
-	// A RELEASE NAMING SOMEBODY ELSE is refused naming who holds it, so a
-	// record can never be filed under a bucket the claim is not in.
-	someoneElse := uuid.New().String()
-	_, err := rig.writer.Release(rig.t.Context(), iamdomain.KindSeat, seat,
-		someoneElse, "op-wrong", "moved teams")
-	var claimed *iamdomain.ErrClaimed
-	if !errors.As(err, &claimed) || claimed.Holder != holder {
-		t.Fatalf("a release naming the wrong holder answered %v, want a "+
-			"refusal naming %s", err, holder)
-	}
-
 	if err := rig.draining(func() error {
-		_, err := rig.writer.Release(rig.t.Context(), iamdomain.KindSeat, seat,
-			holder, "op-unbind", "moved teams")
+		unbound := ""
+		_, err := rig.writer.SetIdentity(rig.t.Context(), iamdomain.IdentityEdit{
+			PersonID: holder, Seat: &unbound, OpID: "op-unbind",
+			Reason: "moved teams"})
 		return err
 	}); err != nil {
-		t.Fatalf("release: %v", err)
+		t.Fatalf("unbind: %v", err)
 	}
 	scope, person := rig.lastRecord()
 	if !slices.Contains(scope.Paths, iamdomain.BucketOf(holder).Path()) {
-		t.Errorf("the release declares %v, which does not cover the holder's "+
+		t.Errorf("the unbind declares %v, which does not cover the holder's "+
 			"bucket %s — a node that cannot decode it files the deferral where "+
 			"no read about them looks", scope.Paths, iamdomain.BucketOf(holder).Path())
 	}
 	if slices.Contains(scope.Paths, iamdomain.BucketOf(seat).Path()) {
-		t.Errorf("the release still declares the seat handle's bucket %s",
+		t.Errorf("the unbind declares the seat handle's bucket %s",
 			iamdomain.BucketOf(seat).Path())
 	}
 	if person != holder {
-		t.Errorf("the release names person %q, want the holder %s — its trail "+
+		t.Errorf("the unbind names person %q, want the holder %s — its trail "+
 			"row lands on nobody's history", person, holder)
+	}
+
+	// A LEAVER'S TOMBSTONE, stamped by the next bind of their seat.
+	if err := rig.bind(seat, holder, "op-rebind"); err != nil {
+		t.Fatalf("bind again: %v", err)
+	}
+	if err := rig.draining(func() error {
+		_, err := rig.writer.Remove(rig.t.Context(), holder, "op-remove", "left")
+		return err
+	}); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	successor := personAwayFrom(holder)
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: successor, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "Dana Sre", Email: "dana@example.com", Login: "dana.sre",
+		OpID: "op-successor",
+	}); err != nil {
+		t.Fatalf("enrol the successor: %v", err)
+	}
+	if err := rig.bind(seat, successor, "op-successor-bind"); err != nil {
+		t.Fatalf("bind the successor: %v", err)
+	}
+	scope, _ = rig.lastRecord()
+	for _, who := range []string{successor, holder} {
+		if !slices.Contains(scope.Paths, iamdomain.BucketOf(who).Path()) {
+			t.Errorf("the successor's bind declares %v, without %s's bucket %s",
+				scope.Paths, who, iamdomain.BucketOf(who).Path())
+		}
 	}
 }
 
@@ -192,60 +215,45 @@ func (r *writeRig) scopeOf(op iamdomain.OpKind) statelog.ScopeSet {
 	return statelog.ScopeSet{}
 }
 
-// A SPEND AND A REMOVAL ARE FILED UNDER EVERY BUCKET THEIR APPLY WRITES.
+// A REDEMPTION AND A REMOVAL ARE FILED UNDER EVERY BUCKET THEIR APPLY WRITES.
 //
 // An invitation — and the trail row its record writes — is filed under its
-// ADDRESS's bucket, since it has no person until it is redeemed. Spending it
-// marks that row, and removing the person who redeemed it erases it; both
-// records declared the person's bucket alone. So a node holding back the
-// invitation's own record — one signed under a keyring key it was not
-// restarted with, or a newer build's — applied the spend or the removal ahead
-// of it, found no row to mark or to erase, and wrote the invitation back
-// unspent, or with the removed person's address sealed in it, when it
-// reprocessed the invitation: a copy of the estate differing from every
-// peer's, and the removed person's address surviving on one node. Each record
-// now declares both buckets, which is what makes that node wait for the
-// invitation first. (The rig's apply asks every record it applies whether
-// what it wrote is inside what it declared; this is the case that names the
-// two records it caught.)
-func TestASpendAndARemovalAreFiledUnderTheAddressTheyWrite(t *testing.T) {
+// ADDRESS's bucket, since it has no person until it is redeemed. Redeeming it
+// marks that row spent, and removing the person who redeemed it erases it; so
+// each record declares the person's bucket AND the address's. Declaring the
+// person's alone, a node holding back the invitation's own record — one signed
+// under a keyring key it was not restarted with, or a newer build's — applied
+// the redemption or the removal ahead of it, found no row to mark or to erase,
+// and wrote the invitation back unspent, or with the removed person's address
+// sealed in it, when it reprocessed the invitation. (The rig's apply asks
+// every record it applies whether what it wrote is inside what it declared;
+// this is the case that names the two records it caught.)
+//
+// Mutation: drop the address's bucket from Enrol's scope for a redemption, and
+// the redemption's scope fails here.
+func TestARedemptionAndARemovalAreFiledUnderTheAddressTheyWrite(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	blinder, err := iamdomain.NewBlinder(testBlindKey)
+	const address = "sarah@example.com"
+	issued, err := inviteFor(t, rig, address, "")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("invite: %v", err)
 	}
-	// AN ADDRESS FILED APART FROM ITS REDEEMER, so a scope of either bucket
+	blind := blindOf(t, address)
+	// A PERSON FILED APART FROM THEIR ADDRESS, so a scope of either bucket
 	// cannot pass for the other by coincidence.
-	var issued iamdomain.InviteIssued
-	var person, blind, address string
-	for i := 0; ; i++ {
-		address = fmt.Sprintf("sarah.%d@example.com", i)
-		if blind, err = blinder.Email(address); err != nil {
-			t.Fatal(err)
-		}
-		if issued, err = inviteFor(t, rig, address, ""); err != nil {
-			t.Fatalf("invite %s: %v", address, err)
-		}
-		if person, err = iamdomain.InvitedPersonID(issued.ID); err != nil {
-			t.Fatal(err)
-		}
-		if iamdomain.BucketOf(person) != iamdomain.BucketOf(blind) {
-			break
-		}
-	}
-	if _, err := redeemAs(t, rig, issued, address, issued.Secret, ""); err != nil {
-		t.Fatalf("redeem: %v", err)
-	}
-	// AND SPENT, as the sign-in surface spends it once the redemption lands.
-	if err := rig.during(func() error {
-		_, err := nodeWriter(rig).SpendInvitation(t.Context(), iamdomain.InvitationSpend{
-			ID: issued.ID, Blind: blind, Person: person,
-			OpID: "op-spend", Reason: "redeemed",
+	person := personAwayFrom(blind)
+	if err := rig.draining(func() error {
+		_, err := nodeWriter(rig).Enrol(t.Context(), iamdomain.Enrolment{
+			PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+			Name: "Sarah", Email: address, Login: iam.LoginFromAddress(address),
+			Grants:     []iam.Grant{iam.GrantStateRead},
+			Invitation: issued.ID, InvitationSecret: issued.Secret,
+			OpID: "invite:" + issued.ID, Reason: "redeemed an invitation",
 		})
 		return err
 	}); err != nil {
-		t.Fatalf("spend: %v", err)
+		t.Fatalf("redeem: %v", err)
 	}
 	both := []string{iamdomain.BucketOf(person).Path(), iamdomain.BucketOf(blind).Path()}
 	covers := func(scope statelog.ScopeSet) bool {
@@ -256,9 +264,9 @@ func TestASpendAndARemovalAreFiledUnderTheAddressTheyWrite(t *testing.T) {
 		}
 		return true
 	}
-	if scope := rig.scopeOf(iamdomain.OpRedeem); !covers(scope) {
-		t.Errorf("the spend declares %v, want the person's and the address's "+
-			"buckets, %v", scope.Paths, both)
+	if scope := rig.scopeOf(iamdomain.OpEnrol); !covers(scope) {
+		t.Errorf("the redemption declares %v, want the person's and the "+
+			"address's buckets, %v", scope.Paths, both)
 	}
 	if err := rig.during(func() error {
 		_, err := rig.writer.Remove(t.Context(), person, "op-remove", "left")

@@ -93,10 +93,10 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 			Epoch: 1, AbsoluteExpiresAt: at.Add(time.Hour), EnrolmentOnly: true}
 	case "Invitation.Verifier", "Invitation.Seat":
 		blind := "suite-blind"
-		rec.Subject, rec.Op = iamdomain.EmailSubject(blind), iamdomain.OpInvite
+		rec.Subject, rec.Op = iamdomain.DirectorySubject(), iamdomain.OpInvite
 		rec.Scope = iamdomain.BucketScope(iamdomain.BucketOf(blind))
 		invitation := iamdomain.Invitation{V: iamdomain.DocumentVersion, ID: "suite-invite",
-			Sealed: "sealed:address", ExpiresAt: at.Add(time.Hour)}
+			EmailBlind: blind, Sealed: "sealed:address", ExpiresAt: at.Add(time.Hour)}
 		if field.Name == "Invitation.Verifier" {
 			invitation.Verifier = iamdomain.InvitationVerifier("suite-secret")
 		} else {
@@ -168,9 +168,14 @@ func TestTheIdentityGateReaderKeepsTheSharedRule(t *testing.T) {
 			// A PERSON, which is what a removal takes out of the estate for
 			// ever: its tombstone is this log's deletion marker.
 			Kind: string(iamdomain.KindPerson),
+			// AN ENROLMENT, on the directory: the record that brings a
+			// person into the estate names them in its payload alone.
 			Create: func(id, writer, opID string) ([]byte, error) {
-				return gateSuiteRecord(iamdomain.PersonSubject(id), iamdomain.OpEnrol,
-					id, writer, opID, iamdomain.PeopleScope(id), gateSuitePerson(nil))
+				return gateSuiteRecord(iamdomain.DirectorySubject(), iamdomain.OpEnrol,
+					id, writer, opID, iamdomain.PeopleScope(id), iamdomain.Enrolled{
+						V: iamdomain.DocumentVersion, Person: gateSuitePerson(nil),
+						Holds: iamdomain.Identifiers{Login: id + ".suite"},
+					})
 			},
 			Write: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(iamdomain.PersonSubject(id), iamdomain.OpUpdate,
@@ -181,7 +186,7 @@ func TestTheIdentityGateReaderKeepsTheSharedRule(t *testing.T) {
 			// and the one that writes the tombstone every later record
 			// about the person is dropped by.
 			Purge: func(id, writer, opID string) ([]byte, error) {
-				return gateSuiteRecord(iamdomain.PersonSubject(id), iamdomain.OpRemove,
+				return gateSuiteRecord(iamdomain.DirectorySubject(), iamdomain.OpRemove,
 					id, writer, opID, iamdomain.PeopleScope(id),
 					iamdomain.Removal{V: iamdomain.GateRecordVersion})
 			},
@@ -196,14 +201,15 @@ func TestTheIdentityGateReaderKeepsTheSharedRule(t *testing.T) {
 					iamdomain.Eviction{V: iamdomain.GateRecordVersion, Readmit: true,
 						By: "suite"})
 			},
-			// A LOGIN CLAIM: it arbitrates on the login, and the person it
-			// binds is in its payload — the record whose removal gate only
-			// the body can name.
+			// AN IDENTITY CHANGE: it arbitrates on the directory, and the
+			// person it moves is in its payload — the record whose removal
+			// gate only the body can name.
 			About: func(id, writer, opID string) (statelog.Subject, []byte, error) {
-				subject := iamdomain.LoginSubject("claim." + id)
-				body, err := gateSuiteRecord(subject, iamdomain.OpClaim, id, writer,
+				subject := iamdomain.DirectorySubject()
+				body, err := gateSuiteRecord(subject, iamdomain.OpIdentity, id, writer,
 					opID, iamdomain.PeopleScope(id),
-					iamdomain.Claim{V: iamdomain.DocumentVersion, Person: id})
+					iamdomain.IdentityChange{V: iamdomain.DocumentVersion,
+						Login: "moved." + id})
 				return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
 					body, err
 			},
@@ -266,6 +272,10 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 		Actor:     "suite",
 		ActorKind: iam.KindMachine,
 	}
+	// A SINGLETON KIND NAMES NO OBJECT, whatever id the suite hands it.
+	if !rec.Subject.Kind.Identified() {
+		rec.Subject.ID = ""
+	}
 	op, person, payload, scope := suitePayload(iamdomain.ObjectKind(kind), id)
 	rec.Op = op
 	rec.Person = person
@@ -280,41 +290,45 @@ func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 	return iamdomain.Encode(rec)
 }
 
-// suitePerson is the one person every suite record is about, so the first
-// three kinds are a real sequence rather than three unrelated records.
+// suitePerson is the person a session, a status change and a sweep are
+// about.
 const suitePerson = "018f3a9c-0000-7000-8000-00000000f00d"
 
 // suitePayload is one valid (op, person, payload, scope) per kind.
 //
-// # Why the person, the address and the login are the first three kinds
+// # Why the directory and the person are the first two kinds
 //
 // The suite publishes the FIRST THREE kinds a candidate declares, twice each,
-// in order. So the declaration order decides what gets certified — and this
-// domain's three are chosen to be a real sequence: a person is minted, their
-// address is claimed for them, and their login is claimed for them. A claim
-// naming a person nobody minted is a record whose apply has nothing to attach
-// to, so any other order would certify a failure rather than a domain.
+// in order, each pair about the ids it hands over. So the declaration order
+// decides what gets certified — and this domain's first two are a real
+// sequence: the directory enrols a person under the id, and the person's own
+// subject then changes their document. A person record about somebody nobody
+// enrolled writes no row, so the other order would certify a no-op rather
+// than a domain.
 func suitePayload(kind iamdomain.ObjectKind, id string) (
 	iamdomain.OpKind, string, any, iamdomain.ScopeSet) {
 
 	person := iamdomain.PeopleScope(suitePerson)
 	switch kind {
+	case iamdomain.KindDirectory:
+		return iamdomain.OpEnrol, id, iamdomain.Enrolled{
+			V: iamdomain.DocumentVersion,
+			Person: iamdomain.Person{
+				V: iamdomain.DocumentVersion, Kind: iam.KindPerson,
+				Stage:      iam.StageActive,
+				NameSealed: "sealed:name", EmailSealed: "sealed:email",
+				Grants: []iam.Grant{iam.GrantPeopleManage},
+			},
+			Holds: iamdomain.Identifiers{EmailBlind: "blind-" + id,
+				Login: id + ".suite"},
+		}, iamdomain.PeopleScope(id)
 	case iamdomain.KindPerson:
-		return iamdomain.OpEnrol, id, iamdomain.Person{
+		return iamdomain.OpUpdate, id, iamdomain.Person{
 			V: iamdomain.DocumentVersion, Kind: iam.KindPerson,
 			Stage:      iam.StageActive,
-			NameSealed: "sealed:name", EmailSealed: "sealed:email",
-			Grants: []iam.Grant{iam.GrantPeopleManage},
+			NameSealed: "sealed:renamed", EmailSealed: "sealed:email",
+			Grants: []iam.Grant{iam.GrantStateRead},
 		}, iamdomain.PeopleScope(id)
-	case iamdomain.KindEmail:
-		return iamdomain.OpClaim, suitePerson, iamdomain.Claim{
-			V: iamdomain.DocumentVersion, Person: suitePerson,
-			Sealed: "sealed:address",
-		}, person
-	case iamdomain.KindLogin, iamdomain.KindSeat:
-		return iamdomain.OpClaim, suitePerson, iamdomain.Claim{
-			V: iamdomain.DocumentVersion, Person: suitePerson,
-		}, person
 	case iamdomain.KindSession:
 		return iamdomain.OpOpen, suitePerson, iamdomain.Session{
 			V: iamdomain.DocumentVersion, Person: suitePerson, Epoch: 1,

@@ -233,13 +233,16 @@ func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 				iamdomain.ErrInvalid),
 			http.StatusBadRequest, "the cap is 256"},
 		{"a login somebody holds",
-			&iamdomain.ErrClaimed{Kind: iamdomain.KindLogin, Token: "dana.sre",
-				Holder: holder},
+			&iamdomain.ErrTaken{Field: iamdomain.UniqueLogin, Value: "dana.sre",
+				Person: holder},
 			http.StatusConflict, "login is already taken"},
-		{"an address somebody holds",
-			&iamdomain.ErrClaimed{Kind: iamdomain.KindEmail, Token: "email:x",
-				Holder: holder},
-			http.StatusConflict, "address already belongs"},
+		// AN ADDRESS SOMEBODY IS ENROLLED UNDER is a link already used:
+		// the person it was for exists — one refusal for every way a link
+		// stops working.
+		{"an address somebody is enrolled under",
+			&iamdomain.ErrTaken{Field: iamdomain.UniqueEmail, Value: "email:x",
+				Person: holder},
+			http.StatusGone, ""},
 		// A LINK THE RECORD REFUSES — spent or aged out between the
 		// lookup and the enrolment — answers what the lookup would have:
 		// one refusal for every way a link stops working.
@@ -283,14 +286,13 @@ func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 	}
 }
 
-// recordingWriter records every enrolment and invitation spend, answering each
+// recordingWriter records every enrolment and session start, answering each
 // enrolment with the next error in refusals (nil once they run out).
 type recordingWriter struct {
 	stubWriter
 	mu       sync.Mutex
 	refusals []error
 	enrolled []iamdomain.Enrolment
-	spent    []iamdomain.InvitationSpend
 	starts   []iamdomain.SessionStart
 
 	// unresolved makes every enrolment past the refusals answer `unknown`
@@ -313,15 +315,6 @@ func (w *recordingWriter) Enrol(_ context.Context, in iamdomain.Enrolment) (
 	err := w.refusals[0]
 	w.refusals = w.refusals[1:]
 	return statelog.Result{}, err
-}
-
-func (w *recordingWriter) SpendInvitation(_ context.Context,
-	in iamdomain.InvitationSpend) (statelog.Result, error) {
-
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.spent = append(w.spent, in)
-	return applied(statelog.Position{}), nil
 }
 
 func (w *recordingWriter) OpenSession(ctx context.Context,
@@ -352,18 +345,16 @@ func redeem(t *testing.T, mux *http.ServeMux, login string) int {
 
 // A REDEMPTION TOLD ITS LOGIN IS TAKEN CAN TRY ANOTHER.
 //
-// The person a redemption creates used to be minted per request, and the
-// enrolment claims the ADDRESS before the login — so an attempt refused on a
-// taken login left the address claimed for an id no later attempt named, and
-// the retry with another login was refused as "that address belongs to
-// somebody" by its own first attempt, for ever. The person is DERIVED from the
-// invitation now, so every attempt names one person and the retry finishes the
-// sequence the first one started.
+// A redemption is one record, decided whole, so an attempt the directory
+// refused for a login somebody holds published nothing — and the retry with
+// another login, under the same operation the invitation derives, is
+// refused by nothing its first attempt left behind. It used to be a sequence
+// whose first step claimed the address, and a retry was refused by that claim.
 func TestARedemptionToldItsLoginIsTakenCanTryAnother(t *testing.T) {
 	t.Parallel()
-	writer := &recordingWriter{refusals: []error{&iamdomain.ErrClaimed{
-		Kind: iamdomain.KindLogin, Token: "dana.sre",
-		Holder: "018f3a9c-0000-7000-8000-0000000000a1"}}}
+	writer := &recordingWriter{refusals: []error{&iamdomain.ErrTaken{
+		Field: iamdomain.UniqueLogin, Value: "dana.sre",
+		Person: "018f3a9c-0000-7000-8000-0000000000a1"}}}
 	mux := http.NewServeMux()
 	buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 		o.Directory = liveInvitation{}
@@ -376,95 +367,17 @@ func TestARedemptionToldItsLoginIsTakenCanTryAnother(t *testing.T) {
 	if got := redeem(t, mux, "dana.ops"); got != http.StatusOK {
 		t.Fatalf("the retry with another login answered %d, want 200", got)
 	}
-	want, err := iamdomain.InvitedPersonID(invitationID)
-	if err != nil {
-		t.Fatalf("derive: %v", err)
-	}
 	if len(writer.enrolled) != 2 {
 		t.Fatalf("enrolments %d, want 2", len(writer.enrolled))
 	}
 	for i, in := range writer.enrolled {
-		if in.PersonID != want {
-			t.Errorf("attempt %d enrolled person %s, want %s — every attempt "+
-				"at one redemption must name the person its first attempt "+
-				"claimed the address for", i+1, in.PersonID, want)
-		}
-		if in.OpID != writer.enrolled[0].OpID {
-			t.Errorf("attempt %d ran under op %q, want the first's %q", i+1,
-				in.OpID, writer.enrolled[0].OpID)
+		if in.OpID != writer.enrolled[0].OpID || in.Invitation != invitationID {
+			t.Errorf("attempt %d ran under op %q for invitation %q, want the "+
+				"first's %q for %q", i+1, in.OpID, in.Invitation,
+				writer.enrolled[0].OpID, invitationID)
 		}
 	}
 	if got := writer.enrolled[1].Login; got != "dana.ops" {
 		t.Errorf("the retry enrolled login %q, want the one it chose", got)
-	}
-	if len(writer.spent) != 1 || writer.spent[0].Person != want {
-		t.Errorf("the spend named %+v, want one naming %s", writer.spent, want)
-	}
-}
-
-// enrolledAddress is a directory whose invitation's address is held by one
-// sighting.
-type enrolledAddress struct {
-	liveInvitation
-	holder iamdomain.Sighting
-}
-
-func (d enrolledAddress) PersonByEmailBlind(context.Context, string) (
-	iamdomain.Sighting, error) {
-
-	return d.holder, nil
-}
-
-// A LINK WHOSE ADDRESS IS ENROLLED IS SPENT, EVEN WHEN ITS SPEND NEVER LANDED.
-//
-// With the person derived from the invitation, a re-redemption of a link whose
-// enrolment landed and whose spend did not would re-enrol the same person —
-// resetting their password with nothing but the link. So an address somebody
-// is ENROLLED under answers 410 before anything is written, and when it is
-// this link's own person the spend it missed is published then. A RESERVATION
-// is not somebody: it is this redemption's own stopped attempt, which the
-// retry finishes.
-func TestALinkWhoseAddressIsEnrolledIsSpent(t *testing.T) {
-	t.Parallel()
-	person, err := iamdomain.InvitedPersonID(invitationID)
-	if err != nil {
-		t.Fatalf("derive: %v", err)
-	}
-	for _, tc := range []struct {
-		name   string
-		holder iamdomain.Sighting
-		status int
-		enrols int
-		spends int
-	}{
-		{"this link's person, enrolled", iamdomain.Sighting{ID: person,
-			Kind: "person", Stage: "active", Login: "dana.sre"},
-			http.StatusGone, 0, 1},
-		{"somebody else, enrolled", iamdomain.Sighting{
-			ID: "018f3a9c-0000-7000-8000-0000000000b2", Kind: "person",
-			Stage: "active", Login: "eli.sre"},
-			http.StatusGone, 0, 0},
-		{"this link's own stopped attempt", iamdomain.Sighting{ID: person,
-			Login: "dana.sre", Reserved: true},
-			http.StatusOK, 1, 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			writer := &recordingWriter{}
-			mux := http.NewServeMux()
-			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
-				o.Directory = enrolledAddress{holder: tc.holder}
-				o.Writer = writer
-			}).Routes(mux)
-			if got := redeem(t, mux, "dana.sre"); got != tc.status {
-				t.Errorf("answered %d, want %d", got, tc.status)
-			}
-			if len(writer.enrolled) != tc.enrols {
-				t.Errorf("enrolled %d times, want %d", len(writer.enrolled), tc.enrols)
-			}
-			if len(writer.spent) != tc.spends {
-				t.Errorf("spent %d times, want %d", len(writer.spent), tc.spends)
-			}
-		})
 	}
 }

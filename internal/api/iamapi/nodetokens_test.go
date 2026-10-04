@@ -21,11 +21,10 @@ import (
 // directory row — leaves a token acting as itself while its operator believes
 // it acts as a seat, and nothing else can say so: the labels are a node's
 // configuration and no directory read reaches them. Each answer is one the
-// dashboard renders differently — no row, a reservation an enrolment stopped
-// at, a row naming no seat, a seat the chart still holds, one it does not — so
-// each is asserted. Mutation: join on the bare label instead of `token:<id>`
-// and every row reads `none`; read a reservation as no row and `half` reads
-// `none`; drop the bindings seam and the dangling row reads `bound`.
+// dashboard renders differently — no row, a row naming no seat, a seat the
+// chart still holds, one it does not — so each is asserted. Mutation: join on
+// the bare label instead of `token:<id>` and every row reads `none`; drop the
+// bindings seam and the dangling row reads `bound`.
 func TestNodeTokensJoinEachLabelToItsRow(t *testing.T) {
 	t.Parallel()
 	ops := uuid.MustParse("018f3a9c-0000-7000-8000-0000000000d4")
@@ -33,7 +32,7 @@ func TestNodeTokensJoinEachLabelToItsRow(t *testing.T) {
 	stale := uuid.MustParse("018f3a9c-0000-7000-8000-0000000000f6")
 	r := newRig(t, func(o *iamapi.Options) {
 		// UNSORTED, as a Tier A file lists them: the answer is sorted.
-		o.TokenIDs = func() []string { return []string{"stale", "ops", "half", "ci", "deploy"} }
+		o.TokenIDs = func() []string { return []string{"stale", "ops", "ci", "deploy"} }
 		o.Bindings = func(_ context.Context, row iamdomain.PersonRow) (bool, string, error) {
 			if row.Seat == "gone" {
 				return true, "the seat gone is not in the org chart", nil
@@ -49,10 +48,6 @@ func TestNodeTokensJoinEachLabelToItsRow(t *testing.T) {
 		row.ID, row.Kind, row.Stage = id.String(), iam.KindMachine, iam.StageActive
 		r.directory.people[id.String()] = row
 	}
-	// AN ENROLMENT THAT STOPPED AFTER CLAIMING THE LOGIN: a reservation,
-	// held by nobody yet, which is neither "no row" nor a row to bind.
-	r.directory.reserved = map[string]bool{"token:half": true}
-
 	got := r.as(administrator(), http.MethodGet, "/iam/node-tokens", nil)
 	if got.status != http.StatusOK {
 		t.Fatalf("GET /iam/node-tokens = %d %v", got.status, got.body)
@@ -69,7 +64,6 @@ func TestNodeTokensJoinEachLabelToItsRow(t *testing.T) {
 	want := []row{
 		{"ci", "token:ci", "none", "", "", "unbound"},
 		{"deploy", "token:deploy", "held", deploy.String(), "", "unbound"},
-		{"half", "token:half", "reserved", "", "", "unbound"},
 		{"ops", "token:ops", "held", ops.String(), "cto", "bound"},
 		{"stale", "token:stale", "held", stale.String(), "gone", "dangling"},
 	}

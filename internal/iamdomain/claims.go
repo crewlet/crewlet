@@ -53,8 +53,8 @@ const OrphanGrace = time.Hour
 
 // DuplicateClaim is one token held by more than one person.
 type DuplicateClaim struct {
-	// Kind is which claim: [KindEmail], [KindLogin] or [KindSeat].
-	Kind ObjectKind
+	// Kind is which value: [UniqueEmail], [UniqueLogin] or [UniqueSeat].
+	Kind Unique
 
 	// Token is the claimed value: the login or the seat handle in the
 	// clear, and for an address the keyed BLIND — the value itself is
@@ -72,7 +72,7 @@ type OrphanedClaim struct {
 	Person string
 
 	// Holds names the claims it is keeping out of circulation.
-	Holds []ObjectKind
+	Holds []Unique
 
 	// Login and Seat are in the clear when held; an address is not.
 	Login string
@@ -96,12 +96,12 @@ type ClaimReport struct {
 // claimColumns are the three claims and the column each lives in, in the order
 // the report renders them.
 var claimColumns = []struct {
-	kind   ObjectKind
+	kind   Unique
 	column string
 }{
-	{KindEmail, "email_blind"},
-	{KindLogin, "login"},
-	{KindSeat, "seat_id"},
+	{UniqueEmail, "email_blind"},
+	{UniqueLogin, "login"},
+	{UniqueSeat, "seat_id"},
 }
 
 // Claims reads both states off this node's rows, in ONE snapshot.
@@ -137,7 +137,7 @@ func (r *Reader) Claims(ctx context.Context, now time.Time) (ClaimReport, error)
 // only rows that hold a token — an unclaimed column is the empty string on
 // most rows, and an index over thousands of identical empty keys would be a
 // scan wearing an index's name.
-func duplicatesOf(ctx context.Context, tx *sql.Tx, kind ObjectKind,
+func duplicatesOf(ctx context.Context, tx *sql.Tx, kind Unique,
 	column string) ([]DuplicateClaim, error) {
 
 	// THE COLUMN IS ONE OF THREE CONSTANTS above, never a caller's string,
@@ -218,13 +218,13 @@ func orphansBefore(ctx context.Context, tx *sql.Tx, cutoff time.Time) (
 			return nil, fmt.Errorf("iamdomain: scan a reservation: %w", err)
 		}
 		if blind != "" {
-			o.Holds = append(o.Holds, KindEmail)
+			o.Holds = append(o.Holds, UniqueEmail)
 		}
 		if o.Login != "" {
-			o.Holds = append(o.Holds, KindLogin)
+			o.Holds = append(o.Holds, UniqueLogin)
 		}
 		if o.Seat != "" {
-			o.Holds = append(o.Holds, KindSeat)
+			o.Holds = append(o.Holds, UniqueSeat)
 		}
 		// A RESERVATION HOLDING NOTHING is a row every claim was released
 		// from — by the removal that repaired it, or a move — and there

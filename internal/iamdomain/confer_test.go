@@ -101,6 +101,7 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 	// THE LINK'S SECRET, per invitation: a redemption presents it beside
 	// the id, and these cases are about what the invitation confers.
 	secrets := map[string]string{}
+	var redeemAs func(person, invitation, address string, grants []iam.Grant) error
 	issue := func(address string) string {
 		t.Helper()
 		var id string
@@ -120,7 +121,10 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 		return id
 	}
 	redeem := func(invitation, address string, grants []iam.Grant) error {
-		person := uuid.Must(uuid.NewV7()).String()
+		return redeemAs(uuid.Must(uuid.NewV7()).String(), invitation, address,
+			grants)
+	}
+	redeemAs = func(person, invitation, address string, grants []iam.Grant) error {
 		return rig.draining(func() error {
 			_, err := nodeWriter(rig).Enrol(rig.t.Context(), iamdomain.Enrolment{
 				PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
@@ -162,36 +166,30 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 				refused.name, err)
 		}
 	}
-	// REFUSED BEFORE THE FIRST CLAIM: the invitation is read before the
-	// address and the login are taken, so a redemption it does not cover
-	// leaves no reservation holding the joiner's address against the
-	// corrected retry. Sarah is the only row.
+	// A REFUSAL PUBLISHES NOTHING: the invitation is read in the record's
+	// own snapshot, so a redemption it does not cover leaves nothing
+	// holding the joiner's address against the corrected retry. Sarah is
+	// the only row.
 	if rows := rig.column(`SELECT id FROM iam_people`); len(rows) != 1 {
 		t.Errorf("refused redemptions left rows behind: %v", rows)
 	}
 
 	// A SPENT LINK IS NOBODY'S AUTHORITY, however many times it is shown —
-	// including once the address it enrolled is free again. The spend binds
-	// the address to whoever redeemed it, so the address claim refuses a
-	// second redemption while they hold it; what is left to refuse is the
-	// link outliving them, which is what releasing their address stands in
-	// for here.
+	// including once the address it enrolled is free again. The person it
+	// created holds the address, so the directory refuses a second
+	// redemption while they are there; what is left to refuse is the link
+	// outliving them, which removing them stands in for here.
 	spent := issue("spent@example.com")
-	blind := blindOf(t, "spent@example.com")
 	redeemer := uuid.Must(uuid.NewV7()).String()
+	if err := redeemAs(redeemer, spent, "spent@example.com", offered); err != nil {
+		t.Fatalf("the first redemption: %v", err)
+	}
 	if err := rig.draining(func() error {
-		if _, err := rig.writer.SpendInvitation(rig.t.Context(),
-			iamdomain.InvitationSpend{
-				ID: spent, Blind: blind, Person: redeemer,
-				OpID: "op-spend", Reason: "redeemed",
-			}); err != nil {
-			return err
-		}
-		_, err := rig.writer.Release(rig.t.Context(), iamdomain.KindEmail,
-			blind, redeemer, "op-release", "the redeemer left")
+		_, err := rig.writer.Remove(rig.t.Context(), redeemer, "op-remove",
+			"the redeemer left")
 		return err
 	}); err != nil {
-		t.Fatalf("spend and release: %v", err)
+		t.Fatalf("remove the redeemer: %v", err)
 	}
 	rig.drain()
 	if err := redeem(spent, "spent@example.com",
@@ -243,10 +241,7 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 			"empty estate: %v", err)
 	}
 	rig.drain()
-	person, err := iamdomain.InvitedPersonID(issued.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	person := uuid.Must(uuid.NewV7()).String()
 	if err := rig.draining(func() error {
 		_, err := nodeWriter(rig).Enrol(rig.t.Context(), iamdomain.Enrolment{
 			PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
@@ -296,8 +291,8 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 // a uuid7, as every one the surfaces mint is.
 func operationKey() string { return uuid.Must(uuid.NewV7()).String() }
 
-// blindOf is the keyed blind this rig's writer derives an address's subject
-// from, which is what an invitation's spend arbitrates on.
+// blindOf is the keyed blind this rig's writer derives for an address, which is
+// what the directory compares it by.
 func blindOf(t *testing.T, address string) string {
 	t.Helper()
 	blinder, err := iamdomain.NewBlinder(testBlindKey)

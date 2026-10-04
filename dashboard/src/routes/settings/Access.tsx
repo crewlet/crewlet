@@ -95,8 +95,6 @@ export interface DirectoryRow {
   email?: string;
   /** Ciphertext this node's keyring cannot open — a STATE, never an empty name. */
   sealed?: boolean;
-  /** An enrolment whose claims landed and whose content record has not. */
-  reserved?: boolean;
   /** The seat the row is bound to, by its handle. */
   seat?: string;
   grants?: string[] | null;
@@ -151,7 +149,7 @@ export interface NodeToken {
   id: string;
   /** `token:<id>`, the login the token acts under. */
   login: string;
-  /** `none`, `reserved` or `held`. */
+  /** `none` or `held`. */
   row: string;
   person?: string;
   stage?: string;
@@ -234,11 +232,6 @@ export const TOKEN_ROW_WORDS: Record<string, Words> = {
     label: "No row",
     tone: "neutral",
     hint: "Nobody in the directory holds this login, so the token acts as itself and is bound to no seat. Bind it with crewlet iam if it should act as one.",
-  },
-  reserved: {
-    label: "Reservation",
-    tone: "warning",
-    hint: "An enrolment claimed this login and stopped before its record landed. Remove the reservation's id to release it.",
   },
   held: { label: "Row", tone: "success", hint: "A directory row holds this login." },
 };
@@ -507,18 +500,7 @@ export function PeopleAndAccess() {
                   header: "Stage",
                   shrink: true,
                   sortValue: (p) => p.stage,
-                  cell: (p) =>
-                    p.reserved ? (
-                      <Tag
-                        size="sm"
-                        variant="warning"
-                        title="An enrolment's claims landed and its record has not: this row holds an address, a login or a seat and is nobody yet."
-                      >
-                        Reservation
-                      </Tag>
-                    ) : (
-                      <WordTag words={STAGE_WORDS[p.stage]} fallback={p.stage} />
-                    ),
+                  cell: (p) => <WordTag words={STAGE_WORDS[p.stage]} fallback={p.stage} />,
                 },
                 {
                   key: "seat",

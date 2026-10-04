@@ -45,13 +45,13 @@ func TestADuplicatedAddressIsNeverLoggedByItsBlind(t *testing.T) {
 	people := []string{"018f3a9c-0000-7000-8000-0000000000a1",
 		"018f3a9c-0000-7000-8000-0000000000b2"}
 	for _, tc := range []struct {
-		kind      iamdomain.ObjectKind
+		kind      iamdomain.Unique
 		wantToken bool
 	}{
-		{iamdomain.KindEmail, false},
-		{iamdomain.KindLogin, true},
-		{iamdomain.KindSeat, true},
-		{iamdomain.ObjectKind("a-kind-added-later"), false},
+		{iamdomain.UniqueEmail, false},
+		{iamdomain.UniqueLogin, true},
+		{iamdomain.UniqueSeat, true},
+		{iamdomain.Unique("a-kind-added-later"), false},
 	} {
 		attrs := duplicateAttrs(iamdomain.DuplicateClaim{
 			Kind: tc.kind, Token: blind, People: people}, "1.42")

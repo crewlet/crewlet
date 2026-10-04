@@ -27,17 +27,13 @@ func NewRows(db *store.DB) (statelog.Rows, error) {
 // tombstone forbids this subject for ever, and whether a row already guards it.
 //
 // ONE KIND HAS THEM, and that is the whole shape of this domain rather than an
-// omission. A PERSON is the only object here that can be removed; every other
-// kind is an ADDRESS — an email blind, a login, a seat binding, a session
-// lineage — and an address is not removed, it is RELEASED, which leaves it
-// claimable again by design. A claim's own subject keeps its arbitration
-// anchor either way, so the next claim on it is an ordinary conditional write
-// rather than a create at zero.
-//
-// THE CLAIM SUBJECTS ANSWER FALSE FOR THE GUARD TOO, and that is deliberate:
-// their whole mechanism is the create-at-zero the broker arbitrates, so a row
-// guard here would be a second opinion about a claim the broker has already
-// decided.
+// omission. A PERSON is the only object here that can be removed — by a record
+// on the directory, which writes the tombstone this guard reads. The directory
+// itself is one object that is never removed, and a session's lineage is
+// opened once and ended rather than removed, so neither has a tombstone, and
+// neither is guarded by a row: the directory publishes at its anchor, and a
+// session's open is the create-at-zero the broker arbitrates, where a row
+// guard would be a second opinion about a lineage the broker already decided.
 func iamGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 	deleted, guard bool, err error) {
 
@@ -92,13 +88,13 @@ func ReadScopeForBucket(b Bucket) statelog.ScopeSet {
 // already has, and ClearForZero pays a coordination round trip because being
 // wrong there is a LOST UPDATE rather than a duplicate.
 //
-// AND HERE THE LOST UPDATE IS A DUPLICATE IDENTITY. Every claim in this domain
-// publishes at an expectation of ZERO — that is what makes the subject the
-// uniqueness check — so ClearForZero is not an occasional path taken by one
-// operation, it is on the hot path of every enrolment, every address change
-// and every sign-in. A node below the trim floor cannot tell an address nobody
-// has claimed from one whose claim has been trimmed beneath it, and guessing
-// makes two people hold one address with nothing left able to notice.
+// AND HERE IT IS ON THE HOT PATH. Every session's opening publishes at an
+// expectation of ZERO — that is what makes a lineage open exactly once — so
+// ClearForZero is not an occasional path taken by one operation, it is on
+// every sign-in. A node below the trim floor cannot tell a lineage nobody
+// opened from one whose record has been trimmed beneath it, and guessing would
+// open one session twice; the same holds for the first record on any subject,
+// the directory's own included.
 type Fence struct {
 	db     *store.DB
 	nodeID string
@@ -292,8 +288,8 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 // subject or — where the subject does not name one — from the record's own
 // body, which is exactly how [Applier.gatedPerson] reads it.
 //
-// ONLY THE PERSON'S OWN SUBJECT NAMES ONE. A claim arbitrates on an address, a
-// login, a seat id or a session lineage, and which person each belongs to is
+// ONLY THE PERSON'S OWN SUBJECT NAMES ONE. A directory record's subject names
+// nobody and a session's names a lineage, and which person each belongs to is
 // in the record's PAYLOAD. The publisher hands the body of the record it
 // appended ([statelog.Gates.GatedAt]), so a removal landing between a write's
 // decide and its apply is named here as the gate that dropped it — without it,
@@ -301,7 +297,7 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 // violation.
 //
 // WITH NO BODY — a record the publisher merely found above its anchor, whose
-// it is being the open question — a claim is answered "not gated", and the
+// it is being the open question — such a record is answered "not gated", and the
 // re-decide that answer leads to meets the tombstone in its own snapshot
 // ([Writer.request] refuses a write about a removed person before it
 // publishes). A body that does not decode is not gated either, which is the

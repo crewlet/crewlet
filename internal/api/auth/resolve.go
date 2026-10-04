@@ -136,10 +136,9 @@ func (g *Guard) principalFor(ctx context.Context, entry config.APIToken,
 	// such split — a write from a bound credential lands under the seat.
 	//
 	// KEYED ON THE LOGIN, never the bare token id: the login is what the
-	// directory claims arbitrate on (`iam.login.<login>`), and only a
-	// MACHINE may hold `token:<id>`, which internal/iam's per-kind grammar
-	// holds — so the row a token binds through is never one a person
-	// chose.
+	// directory keeps to one holder, and only a MACHINE may hold
+	// `token:<id>`, which internal/iam's per-kind grammar holds — so the
+	// row a token binds through is never one a person chose.
 	if g.bindings.Directory == nil {
 		return p, iam.Resolved, nil
 	}

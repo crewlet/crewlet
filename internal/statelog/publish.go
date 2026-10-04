@@ -245,9 +245,9 @@ type Gates interface {
 	// the record at p was merely FOUND above an anchor and whose it is is the
 	// open question. It is there for the one reader whose gate is keyed on
 	// what the PAYLOAD names rather than on the subject: the identity
-	// estate's claims, sessions and spends arbitrate on an address, a login
-	// or a lineage, and the person a removal gates them by is inside the
-	// record, exactly where the applier's own gate reads it. Without it a
+	// estate's directory records and sessions, which name their person in
+	// the payload — the directory's subject names nobody and a session's a
+	// lineage — exactly where the applier's own gate reads it. Without it a
 	// removal landing between a write's decide and its apply dropped the
 	// record on every node and this reader could not say so — the publisher
 	// read its own acknowledged append as a ledger contract violation. With

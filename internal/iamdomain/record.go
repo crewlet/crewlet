@@ -211,55 +211,38 @@ const GateRecordVersion = 1
 type OpKind string
 
 const (
-	// OpInvite is a claim on an ADDRESS by somebody who has no person yet.
-	// Its subject is [KindEmail], create-only at an expectation of zero.
+	// OpInvite is an address spoken for by somebody who has no person yet,
+	// on [KindDirectory], so it contends with every enrolment and every
+	// other invitation: the decide refuses an address a person holds or
+	// another open invitation holds.
 	//
-	// ITS OWN OP rather than a shape of [OpClaim], because an invitation
-	// is the one claim that names nobody: it holds an address open for a
-	// person who does not exist, and what an operator reads in the log is
-	// the difference between "this address was invited" and "this address
-	// belongs to somebody".
+	// ITS OWN OP rather than a shape of [OpEnrol], because an invitation
+	// names nobody: it holds an address open for a person who does not
+	// exist, and what an operator reads in the log is the difference
+	// between "this address was invited" and "this address belongs to
+	// somebody".
 	OpInvite OpKind = "invite"
 
-	// OpClaim binds one address, login or seat to one person. Its subject
-	// is [KindEmail], [KindLogin] or [KindSeat], create-only at an
-	// expectation of zero.
+	// OpEnrol creates a person WHOLE — their row, their first credentials,
+	// their login, their address and their seat — and, for a redemption,
+	// spends the invitation, in ONE record on [KindDirectory].
 	//
-	// THE CREATE-ONLY EXPECTATION IS THE UNIQUENESS CHECK. There is no
-	// unique index anywhere in this estate and there cannot be one, so two
-	// administrators claiming one address contend at the broker and exactly
-	// one wins. The loser is told which person holds it.
-	OpClaim OpKind = "claim"
-
-	// OpRedeem is an invitation being used, on [KindEmail].
-	//
-	// ITS OWN OP RATHER THAN A CLAIM, because the two halves it performs —
-	// marking the invitation spent and binding the address to the person
-	// it created — arbitrate on the same subject and must land together.
-	// Split into a claim plus an update, one could land without the other
-	// and nothing would be able to tell which: an invitation redeemed with
-	// the address unclaimed, or an address claimed by a person nobody
-	// invited.
-	OpRedeem OpKind = "redeem"
-
-	// OpRelease gives a claim back: an address changed, a login retired, a
-	// person unbound from a seat. Its subject is the claim's own.
-	//
-	// IT IS NOT A DELETE OF THE CLAIM'S SUBJECT. A released address's
-	// subject keeps its arbitration anchor, so a later claim on it is an
-	// ordinary conditional write rather than a create at zero — which is
-	// what stops a released address being racily re-taken by two people
-	// who each read it as free.
-	OpRelease OpKind = "release"
-
-	// OpEnrol writes the person row itself. Its subject is [KindPerson].
-	//
-	// It is the LAST step of an enrolment and not the first: the claims are
-	// what can be refused, so they are taken first, and a sequence that
-	// stops before this one leaves a claimed address with no person — a
-	// legal named state the duplicate-and-orphan duty reports, rather than
-	// a person with an address somebody else also holds.
+	// ONE RECORD, because every half of it is a value the directory's
+	// decide judges in one snapshot: the address, the login and the seat
+	// nobody else holds, and the invitation not spent. Split, a half that
+	// landed without the rest was a reservation every reader had to step
+	// around and a sequence nothing could finish.
 	OpEnrol OpKind = "enrol"
+
+	// OpIdentity sets an enrolled person's LOGIN and SEAT binding, as
+	// post-state, on [KindDirectory].
+	//
+	// BOTH ARE ALWAYS STATED, the unchanged one as the snapshot held it,
+	// so a rename, a bind, an unbind and a move between seats are one
+	// record each and the value the person gives up is freed by the same
+	// record that takes the new one — there is no release step left to
+	// not land.
+	OpIdentity OpKind = "identity"
 
 	// OpUpdate is a person's own content, as FULL POST-STATE: their name,
 	// their contacts, their grants, their credential set.
@@ -294,8 +277,8 @@ const (
 	OpRevoke OpKind = "revoke"
 
 	// OpRemove is a person the company no longer has, and it INSTALLS A
-	// GATE by its op rather than by its kind: its subject is the ordinary
-	// person subject.
+	// GATE by its op rather than by its kind: it rides the DIRECTORY
+	// subject, because it frees a login, an address and a seat.
 	//
 	// The gate exists because a removal is the one operation here with no
 	// inverse a later record supplies. Every other record is a full
@@ -370,11 +353,11 @@ const (
 	OpGeneration OpKind = "generation"
 )
 
-// OpKinds are the sixteen, in the order they are documented.
+// OpKinds are the fourteen, in the order they are documented.
 var OpKinds = []OpKind{
-	OpInvite, OpClaim, OpRedeem, OpRelease, OpEnrol, OpUpdate, OpStatus,
-	OpRevoke, OpRemove, OpOpen, OpClose, OpInvalidate, OpSweep, OpBarrier,
-	OpEviction, OpGeneration,
+	OpInvite, OpEnrol, OpIdentity, OpUpdate, OpStatus, OpRevoke, OpRemove,
+	OpOpen, OpClose, OpInvalidate, OpSweep, OpBarrier, OpEviction,
+	OpGeneration,
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -394,7 +377,7 @@ func (o OpKind) Valid() bool { return slices.Contains(OpKinds, o) }
 // it is also readable by every OPERATOR SURFACE that renders a record this
 // build could not decode: a deferral row, a stalled-log report, a broker
 // listing. So none of them carries a name, an address or a login — the subject
-// is a blind or an opaque id, and the scope is a bucket number. A person's own
+// is an opaque id or names nobody, and the scope is a bucket number. A person's own
 // values live in the payload, sealed under the fleet keyring, which the
 // envelope pass never opens.
 type RecordEnvelope struct {
@@ -414,7 +397,7 @@ type RecordEnvelope struct {
 	// thing a read barrier must never be.
 	OpID string `json:"op_id,omitempty"`
 
-	// Subject is the claim this record arbitrates on.
+	// Subject is the object this record arbitrates on.
 	Subject Subject `json:"subject"`
 
 	// Op is what the record does.
@@ -461,10 +444,10 @@ type RecordEnvelope struct {
 // that cannot decode the payload: it is what turns an unknown version into a
 // STOP rather than a deferral.
 //
-// ON THE OP AND NOT ON A KIND, because a removal rides the ORDINARY PERSON
-// SUBJECT, so a reader that keyed on the kind would defer it — and a deferred
-// removal here is a person the company off-boarded still signing in on one
-// node. An eviction has a kind of its own and could have
+// ON THE OP AND NOT ON A KIND, because a removal rides the DIRECTORY subject
+// beside every enrolment and identity change, so a reader that keyed on the
+// kind would defer it — and a deferred removal here is a person the company
+// off-boarded still signing in on one node. An eviction has a kind of its own and could have
 // been read either way; it is read here so the question is asked once, in one
 // place, for both — and so does an invalidation.
 func (e RecordEnvelope) InstallsGate() bool {
@@ -499,14 +482,16 @@ type MutationRecord struct {
 	// CLEAR, and it is here rather than in the envelope on purpose.
 	//
 	// The applier needs it to attach rows the subject does not name: a
-	// claim arbitrates on a blind, a login or a seat id, and the person is
-	// what its row is keyed on. The ENVELOPE does not carry it because
+	// directory record's subject names nobody and a session's names a
+	// lineage, and the person is what their rows are keyed on. The
+	// ENVELOPE does not carry it because
 	// every envelope field is rendered by an operator surface for a record
 	// nobody could decode, and a person's id in a stalled-log report is a
 	// durable, replicated statement that this person exists.
 	//
-	// Empty on a barrier, a sweep, an eviction, a generation and an
-	// invitation — the five records that are about nobody.
+	// Empty on a barrier, a sweep, an eviction, a generation, an
+	// invalidation and an invitation's issue — the records that are about
+	// nobody; for a directory record about somebody it is that person.
 	Person string `json:"person,omitempty"`
 
 	// Actor and ActorKind are who did this.
@@ -567,7 +552,7 @@ type MutationRecord struct {
 // the format.
 //
 // A NOTIFY BLOCK. An identity change wakes nobody: a person being suspended, a
-// session ending or an address being claimed is not work for an agent, and the
+// session ending or a login being changed is not work for an agent, and the
 // contact updates that DO follow a status change are derived by a duty from
 // the rows rather than routed from the record. A field with no producer is a
 // value every reader is entitled to misread, so there is none.

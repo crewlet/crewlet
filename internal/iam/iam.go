@@ -47,9 +47,8 @@
 // of that shape to the identity directory rather than to the seat. One
 // definition, here, is what every path that creates a seat asks.
 //
-// AND BOTH ARE BOUNDED AT [MaxLogin], a seat handle's own width: a login is a
-// subject token the broker indexes for the life of the deployment and the
-// name in an author column beside a seat handle. The bound is IN the grammar,
+// AND BOTH ARE BOUNDED AT [MaxLogin], a seat handle's own width: a login is
+// the name in an author column beside a seat handle. The bound is IN the grammar,
 // so every surface that enrols, renames or composes a login is held to it by
 // asking the one question it already asks.
 //
@@ -160,9 +159,6 @@ var handlePattern = regexp.MustCompile(`^` + segment + `(?::` + segment + `)+$`)
 // SIXTY-FOUR, the one width a seat handle ([ValidSeatHandle]), a person's
 // login and a machine's handle share, for the reasons that bound all three:
 //
-//   - a login is a SUBJECT TOKEN: `iam.login.<login>` is the claim it
-//     arbitrates on, so the broker keeps it in a per-subject index for the
-//     life of the deployment, and a Tier A token's `token:<id>` is one too;
 //   - it lands in the same author column a seat handle does — the tracker's,
 //     the knowledge base's and the identity trail's — so the three names
 //     share one width wherever a screen renders who did something;
@@ -196,9 +192,8 @@ var seatHandlePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // copy that disagreed by one character would accept a seat at one of them and
 // refuse it at the next.
 //
-// BOUNDED AT [MaxLogin], a handle's own width: a handle is a subject token on
-// the identity log's seat claim and sits in the same author column a login
-// does, so the three share one width.
+// BOUNDED AT [MaxLogin], a handle's own width: a handle sits in the same
+// author column a login does, so the three share one width.
 func ValidSeatHandle(s string) bool {
 	return len(s) <= MaxLogin && seatHandlePattern.MatchString(s)
 }

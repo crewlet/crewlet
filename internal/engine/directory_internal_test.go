@@ -485,23 +485,22 @@ func newDirectoryRig(t *testing.T) *directoryRig {
 	return &directoryRig{engine: e, company: company, db: db, applier: applier}
 }
 
-// bindFounder enrols the founder, active, and binds them to their seat — the
-// state every case starts from — answering their person id.
+// bindFounder enrols the founder, active and bound to their seat, in the one
+// directory record that does both — the state every case starts from —
+// answering their person id.
 func (r *directoryRig) bindFounder(t *testing.T) string {
 	t.Helper()
 	id := uuid.NewString()
-	claim, err := iamdomain.EncodeClaim(iamdomain.Claim{
-		V: iamdomain.DocumentVersion, Person: id})
+	enrolled, err := iamdomain.EncodeEnrolled(iamdomain.Enrolled{
+		V: iamdomain.DocumentVersion,
+		Person: iamdomain.Person{V: iamdomain.DocumentVersion,
+			Kind: iam.KindPerson, Stage: iam.StageActive},
+		Holds: iamdomain.Identifiers{SeatID: founderSeat},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.apply(t, iamdomain.SeatSubject(founderSeat), iamdomain.OpClaim, id, claim)
-	person, err := iamdomain.EncodePerson(iamdomain.Person{
-		V: iamdomain.DocumentVersion, Kind: iam.KindPerson, Stage: iam.StageActive})
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.apply(t, iamdomain.PersonSubject(id), iamdomain.OpEnrol, id, person)
+	r.apply(t, iamdomain.DirectorySubject(), iamdomain.OpEnrol, id, enrolled)
 	return id
 }
 

@@ -133,33 +133,6 @@ func heldLogin(ctx context.Context, tx *sql.Tx, id string) (string, error) {
 	return login, nil
 }
 
-// movedHolders records every person whose row holds token in column — read
-// BEFORE a statement takes it off them, so a release names whom it released
-// rather than nobody. except is a person the record itself names, left out.
-//
-// THE COLUMN IS ONE OF THE CLAIM COLUMNS [Applier.writeToken] chose by kind,
-// never a caller's string.
-func (a *Applier) movedHolders(ctx context.Context, tx *sql.Tx, column, token,
-	except string, at applyContext) error {
-
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, login FROM iam_people
-		WHERE `+column+` = ? AND id <> ? AND scoped_through < ?`,
-		token, except, at.packed)
-	if err != nil {
-		return fmt.Errorf("iamdomain: read who holds %s: %w", token, err)
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var id, login string
-		if err := rows.Scan(&id, &login); err != nil {
-			return fmt.Errorf("iamdomain: read who holds %s: %w", token, err)
-		}
-		a.moved.person(id, login)
-	}
-	return rows.Err()
-}
-
 // THE APPLIER HEARS WHAT A BATCH RETAINED: see [Applier.Retained].
 var _ statelog.RetentionHook = (*Applier)(nil)
 
@@ -261,11 +234,10 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (
 // gatedPerson is the person a record is ABOUT, for the removal gate.
 //
 // IT DECODES THE PAYLOAD, which no sibling's gate does, and the reason is this
-// domain's own shape: a record about a person routinely arbitrates on an
-// ADDRESS, a login, a seat id or a session lineage, so a gate that read only
-// the subject would drop the records on the person's own subject and let every
-// claim record through — writing a removed person's address back onto a row
-// nothing will ever correct.
+// domain's own shape: a record about a person routinely arbitrates on the
+// DIRECTORY or a session lineage, so a gate that read only the subject would
+// drop the records on the person's own subject and let every directory record
+// through — writing a removed person back onto a row nothing will ever correct.
 //
 // A RECORD IT CANNOT DECODE IS NOT GATED, and that is safe rather than a hole:
 // such a record is DEFERRED rather than applied, and the deferral is
@@ -312,12 +284,10 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		// history row either, which is why it is absent from the class
 		// table rather than classified.
 		return 0, nil
+	case KindDirectory:
+		rows, err = a.applyDirectory(ctx, tx, &at)
 	case KindPerson:
 		rows, err = a.applyPerson(ctx, tx, at)
-	case KindEmail:
-		rows, err = a.applyEmail(ctx, tx, at)
-	case KindLogin, KindSeat:
-		rows, err = a.applyToken(ctx, tx, at, ObjectKind(rec.Subject.Kind))
 	case KindSession:
 		rows, err = a.applySession(ctx, tx, at)
 	case KindInvalidation:
@@ -362,6 +332,17 @@ type applyContext struct {
 	record   MutationRecord
 	position statelog.Position
 
+	// aboutKind and aboutID are the object the trail row is filed under,
+	// where the record's own subject names nobody — a directory record's
+	// person, or the address an invitation was issued to — and empty
+	// otherwise, which files it under its subject. Set by
+	// [Applier.applyDirectory] from the payload it decodes.
+	aboutKind, aboutID string
+
+	// blind is the address an invitation was issued to, which buckets a
+	// record about nobody. Set the same way.
+	blind string
+
 	// packed is the composed (generation << 40) | sequence this record
 	// sits at, which is every row's `version` and the whole of what a
 	// monotone guard compares.
@@ -384,14 +365,16 @@ func (a applyContext) unix() int64 { return a.brokerAt.UnixMilli() }
 // under and may legitimately be wider than one person, while a row belongs to
 // exactly one bucket.
 //
-// A RECORD ABOUT NOBODY takes its SUBJECT's, which is the one row such a record
-// writes through here — its trail row: an invitation's lands beside the
-// invitation itself, in its address's bucket, which is the one its scope
-// names; an invalidation, with no id, in the bucket of its kind.
+// A RECORD ABOUT NOBODY takes its ADDRESS's where it has one — an invitation's
+// issue, whose trail row lands beside the invitation itself, in the bucket its
+// scope names — and otherwise its SUBJECT's: an invalidation, with no id, in
+// the bucket of its kind.
 func (a applyContext) bucket() int64 {
 	switch {
 	case a.record.Person != "":
 		return int64(BucketOf(a.record.Person))
+	case a.blind != "":
+		return int64(BucketOf(a.blind))
 	case a.record.Subject.ID != "":
 		return int64(BucketOf(a.record.Subject.ID))
 	}

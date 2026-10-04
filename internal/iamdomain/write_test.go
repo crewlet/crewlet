@@ -26,14 +26,16 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE WHOLE WRITE PATH: a claim reaches the broker, the applier and the rows.
+// THE WHOLE WRITE PATH: a directory record reaches the broker, the applier and
+// the rows.
 //
 // Everything below it has its own tests over fakes, and every one of them can
 // be individually right while the composition is wrong. But in THIS domain the
 // harness earns its cost for a sharper reason than the others: uniqueness here
-// is not an index, it is the broker refusing a second publish on one subject —
-// so "two people cannot hold one address" is a claim about a broker, and
-// nothing but a broker can settle it.
+// is not an index, it is two writes on the directory subject contending at the
+// broker and the loser deciding again from rows that hold the winner — so "two
+// people cannot hold one address" is a claim about a broker, and nothing but a
+// broker can settle it.
 
 var brokerAt = time.Unix(1_700_000_000, 0).UTC()
 
@@ -541,11 +543,24 @@ func (r *writeRig) enrol(in iamdomain.Enrolment) error {
 	})
 }
 
-// claim takes one claim through the whole path and applies the result.
-func (r *writeRig) claim(kind iamdomain.ObjectKind, token, person, opID string) error {
+// bind binds one person to a seat through the whole path and applies the
+// result.
+func (r *writeRig) bind(seat, person, opID string) error {
 	r.t.Helper()
 	return r.draining(func() error {
-		_, err := r.writer.Claim(r.t.Context(), kind, token, person, opID)
+		_, err := r.writer.SetIdentity(r.t.Context(), iamdomain.IdentityEdit{
+			PersonID: person, Seat: &seat, OpID: opID, Reason: "a bind"})
+		return err
+	})
+}
+
+// rename moves one person to another login through the whole path and applies
+// the result.
+func (r *writeRig) rename(person, login, opID string) error {
+	r.t.Helper()
+	return r.draining(func() error {
+		_, err := r.writer.SetIdentity(r.t.Context(), iamdomain.IdentityEdit{
+			PersonID: person, Login: &login, OpID: opID, Reason: "a rename"})
 		return err
 	})
 }
@@ -553,10 +568,9 @@ func (r *writeRig) claim(kind iamdomain.ObjectKind, token, person, opID string) 
 // draining runs one gesture with this rig's consumer alongside it.
 func (r *writeRig) draining(gesture func() error) error {
 	r.t.Helper()
-	// THE CONSUMER RUNS ALONGSIDE, because an enrolment is a SEQUENCE:
-	// each step waits for this node's applier to reach the step before it,
-	// so a rig that drained only afterwards would deadlock on the second
-	// claim.
+	// THE CONSUMER RUNS ALONGSIDE, because every write waits for this
+	// node's applier to reach its own record, so a rig that drained only
+	// afterwards would deadlock on the write.
 	return r.during(gesture)
 }
 
@@ -746,8 +760,11 @@ func testVerifier(t *testing.T) *statelog.Verifier {
 // can. There is no unique index on `iam_people.email_blind` and there cannot
 // be one — a constraint violation inside an apply transaction stalls every
 // node's log at once — so what keeps two people off one address is that both
-// claims publish to the SAME SUBJECT at an expectation of zero, and the broker
-// accepts exactly one.
+// enrolments publish on the DIRECTORY subject at the anchor their snapshot
+// read: the broker accepts one, and the other decides again from rows that
+// hold the winner and is refused naming them.
+//
+// Mutation: drop the address check from Enrol's decide, and both land.
 func TestTwoEnrolmentsOnOneAddressYieldOneWinner(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -790,8 +807,9 @@ func TestTwoEnrolmentsOnOneAddressYieldOneWinner(t *testing.T) {
 			"estate has no index to refuse and no way to notice",
 			winners, losers)
 	}
-	if refusal == nil {
-		t.Fatal("the loser was refused with no error")
+	var taken *iamdomain.ErrTaken
+	if !errors.As(refusal, &taken) || taken.Field != iamdomain.UniqueEmail {
+		t.Fatalf("the loser was refused with %v, want the address taken", refusal)
 	}
 
 	// AND THE ROWS AGREE. Exactly one person holds the address, whatever
@@ -803,14 +821,12 @@ func TestTwoEnrolmentsOnOneAddressYieldOneWinner(t *testing.T) {
 	}
 }
 
-// AND THE REFUSAL NAMES THE HOLDER WHERE IT CAN.
+// AND TAKING A HELD ADDRESS NAMES WHO HOLDS IT.
 //
 // "That address is taken" is a support ticket; "that address belongs to person
-// X" is an answer. The naming is ADVISORY — the row it reads can be written
-// between the decide and the append, which is precisely the race the
-// create-at-zero settles — so the case asserts the SECOND claim, where the
-// first has already landed and the read is not racing anybody.
-func TestASecondClaimOnAHeldAddressNamesWhoHoldsIt(t *testing.T) {
+// X" is an answer — and it is the directory's own decide that refuses, in the
+// snapshot the broker arbitrates, so the person it names is the holder.
+func TestTakingAHeldAddressNamesWhoHoldsIt(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	const first = "018f3a9c-0000-7000-8000-00000000000a"
@@ -832,15 +848,15 @@ func TestASecondClaimOnAHeldAddressNamesWhoHoldsIt(t *testing.T) {
 	if err == nil {
 		t.Fatal("a second enrolment on a held address landed — and it reached " +
 			"it by a DIFFERENT SPELLING, so the fold that makes one address " +
-			"one claim is not being applied")
+			"one blind is not being applied")
 	}
-	var claimed *iamdomain.ErrClaimed
-	if !errors.As(err, &claimed) {
+	var taken *iamdomain.ErrTaken
+	if !errors.As(err, &taken) || taken.Field != iamdomain.UniqueEmail {
 		t.Fatalf("the refusal is %v, which does not name the holder", err)
 	}
-	if claimed.Holder != first {
+	if taken.Person != first {
 		t.Errorf("the refusal names %q as the holder, want %q",
-			claimed.Holder, first)
+			taken.Person, first)
 	}
 }
 
@@ -862,8 +878,8 @@ func TestAnEnrolmentWritesOnePersonWhoseValuesAreSealed(t *testing.T) {
 		t.Fatalf("the estate holds %v, want exactly %q", got, id)
 	}
 	// THE CLEARTEXT IS NOWHERE. Not in the sealed columns, not in the
-	// document, and — the one that matters most — not in the claim's own
-	// subject, which is a broker path in every delivery.
+	// document, and — the one that matters most — not in any subject, which
+	// is a broker path in every delivery.
 	for _, column := range []string{"name_sealed", "email_sealed", "document"} {
 		for _, value := range rig.column(
 			`SELECT CAST(` + column + ` AS TEXT) FROM iam_people`) {
@@ -1315,12 +1331,14 @@ func TestACallerCannotConferAGrantTheyDoNotHold(t *testing.T) {
 	}
 }
 
-// AN INVITATION ARBITRATES ON THE ADDRESS, so two administrators inviting one
+// AN INVITATION IS A DIRECTORY RECORD, so two administrators inviting one
 // person produce ONE invitation and one refusal naming what is already there.
 //
 // The obvious subject — the invitation's own fresh id — would make both
 // succeed, and the company would hold two links either of which creates the
 // same person.
+//
+// Mutation: drop the open-invitation check from Invite's decide, and both land.
 func TestTwoInvitationsToOneAddressYieldOneWinner(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -1342,10 +1360,10 @@ func TestTwoInvitationsToOneAddressYieldOneWinner(t *testing.T) {
 		t.Fatal("a second invitation to the same address was accepted, so " +
 			"the company holds two links that each create one person")
 	}
-	var claimed *iamdomain.ErrClaimed
-	if !errors.As(err, &claimed) {
-		t.Errorf("the refusal is %v, want one naming what already holds the "+
-			"address", err)
+	var taken *iamdomain.ErrTaken
+	if !errors.As(err, &taken) || taken.Invitation == "" {
+		t.Errorf("the refusal is %v, want one naming the invitation that "+
+			"already holds the address", err)
 	}
 	if got := rig.column(`SELECT id FROM iam_invites`); len(got) != 1 {
 		t.Errorf("iam_invites holds %v, want exactly one row", got)
@@ -1426,16 +1444,12 @@ func TestAMachineEnrolsWithNoAddressAndAPersonMayNot(t *testing.T) {
 	}
 }
 
-// AN ENROLMENT OUT OF BOUNDS IS REFUSED BEFORE IT CLAIMS ANYTHING.
+// AN ENROLMENT OUT OF BOUNDS PUBLISHES NOTHING.
 //
-// An enrolment is a sequence, and the person record is its LAST append — so a
-// bound first checked there is met after the address and the login are
-// already claimed. A reason one byte past the cap used to be refused exactly
-// there: the enrolment failed, its reservation held both names, and the
-// corrected retry was refused as "claimed" by the half its own first attempt
-// had left behind. The refusal is asserted on the SENTINEL, which a surface
-// answers 400, and on the ESTATE, which must be untouched.
-func TestAnEnrolmentOutOfBoundsClaimsNothing(t *testing.T) {
+// The refusal is asserted on the SENTINEL, which a surface answers 400, and on
+// the ESTATE, which must be untouched — so the corrected retry takes the
+// address and the login with nothing of the refused one in its way.
+func TestAnEnrolmentOutOfBoundsPublishesNothing(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	for i, tc := range []struct {
@@ -1464,8 +1478,8 @@ func TestAnEnrolmentOutOfBoundsClaimsNothing(t *testing.T) {
 	}
 	rig.drain()
 	if got := rig.column(`SELECT id FROM iam_people`); len(got) != 0 {
-		t.Errorf("a refused enrolment left rows %v holding its claims — the "+
-			"corrected retry is refused as claimed by its own first attempt", got)
+		t.Errorf("a refused enrolment left rows %v — the corrected retry would "+
+			"be refused by its own first attempt", got)
 	}
 
 	// THE CONTROL: the same enrolment inside its bounds lands, and takes

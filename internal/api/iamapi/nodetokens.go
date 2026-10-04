@@ -45,8 +45,8 @@ type NodeToken struct {
 	Login string `json:"login"`
 
 	// Row is what the directory holds under the login: `none` when nobody
-	// does — the token acts as itself, bound to no seat — `reserved` for an
-	// enrolment that stopped after claiming it, `held` for a row.
+	// does — the token acts as itself, bound to no seat — and `held` for a
+	// row.
 	Row TokenRow `json:"row"`
 
 	// Person, Stage and Seat are the row's, where there is one: the seat
@@ -66,11 +66,10 @@ type NodeToken struct {
 // TokenRow is what the directory holds under a Tier A token's login.
 type TokenRow string
 
-// The three answers a login has.
+// The two answers a login has.
 const (
-	TokenRowNone     TokenRow = "none"
-	TokenRowReserved TokenRow = "reserved"
-	TokenRowHeld     TokenRow = "held"
+	TokenRowNone TokenRow = "none"
+	TokenRowHeld TokenRow = "held"
 )
 
 // TokenBinding is whether a token's row names a seat the chart still holds.
@@ -96,8 +95,6 @@ func (s *Service) GetNodeTokens(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		switch {
-		case held.Reserved:
-			token.Row = TokenRowReserved
 		case held.ID == "":
 			token.Row = TokenRowNone
 		default:

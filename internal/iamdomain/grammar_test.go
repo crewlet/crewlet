@@ -141,12 +141,12 @@ func TestEveryPersonEnrolsWithALogin(t *testing.T) {
 
 // AND AT A RENAME, where the holder's kind is read INSIDE THE SNAPSHOT.
 //
-// A rename is a login claim on its own subject — `PATCH /iam/people/{id}`
-// releases the old one and claims the new — and it passed through no grammar
-// at all, so a person refused `token:ops` at enrolment could rename into it a
-// minute later. The kind is read in the decide's own transaction rather than
-// taken from a caller, because a caller stating it would be stating what it
-// read somewhere else.
+// A rename is an identity record on the directory — `PATCH /iam/people/{id}`
+// publishes it — and it once passed through no grammar at all, so a person
+// refused `token:ops` at enrolment could rename into it a minute later. The
+// kind is read in the decide's own transaction rather than taken from a
+// caller, because a caller stating it would be stating what it read somewhere
+// else.
 func TestARenameHoldsALoginToItsHoldersKind(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -167,22 +167,18 @@ func TestARenameHoldsALoginToItsHoldersKind(t *testing.T) {
 	}
 	rig.drain()
 
-	if err := rig.claim(iamdomain.KindLogin, "token:ops", person,
-		"op-rename-person"); !errors.Is(err, iamdomain.ErrInvalidLogin) {
+	if err := rig.rename(person, "token:ops", "op-rename-person"); !errors.Is(err, iamdomain.ErrInvalidLogin) {
 		t.Errorf("a person renamed into token:ops was refused with %v, want %v "+
 			"— they would make the ops credential act as their seat", err,
 			iamdomain.ErrInvalidLogin)
 	}
-	if err := rig.claim(iamdomain.KindLogin, "dana.sre", machine,
-		"op-rename-machine"); !errors.Is(err, iamdomain.ErrInvalidLogin) {
+	if err := rig.rename(machine, "dana.sre", "op-rename-machine"); !errors.Is(err, iamdomain.ErrInvalidLogin) {
 		t.Errorf("a machine renamed into dana.sre was refused with %v, want %v",
 			err, iamdomain.ErrInvalidLogin)
 	}
 	// SOMEBODY THIS NODE DOES NOT HOLD has no kind to judge a login
 	// against, and is refused rather than guessed about.
-	if err := rig.claim(iamdomain.KindLogin, "nobody.here",
-		"018f3a9c-0000-7000-8000-0000000004ff",
-		"op-rename-nobody"); !errors.Is(err, iamdomain.ErrNotFound) {
+	if err := rig.rename("018f3a9c-0000-7000-8000-0000000004ff", "nobody.here", "op-rename-nobody"); !errors.Is(err, iamdomain.ErrNotFound) {
 		t.Errorf("a rename of somebody this node does not hold was refused "+
 			"with %v, want %v", err, iamdomain.ErrNotFound)
 	}
@@ -194,8 +190,7 @@ func TestARenameHoldsALoginToItsHoldersKind(t *testing.T) {
 	}
 
 	// THE CONTROL: a rename within the kind's own grammar lands.
-	if err := rig.claim(iamdomain.KindLogin, "sarah.c.chen", person,
-		"op-rename-ok"); err != nil {
+	if err := rig.rename(person, "sarah.c.chen", "op-rename-ok"); err != nil {
 		t.Fatalf("a person could not rename to sarah.c.chen: %v", err)
 	}
 	rig.drain()

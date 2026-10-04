@@ -108,24 +108,24 @@ func TestAGetOnAnInviteRendersAndNeverSpends(t *testing.T) {
 				"running company calls it", view.Seat)
 		}
 	}
-	if len(writer.enrolled) != 0 || len(writer.spent) != 0 || len(writer.opened()) != 0 {
-		t.Fatalf("rendering the invitation wrote %d enrolments, %d spends and "+
-			"%d sessions — a GET spent it", len(writer.enrolled),
-			len(writer.spent), len(writer.opened()))
+	if len(writer.enrolled) != 0 || len(writer.opened()) != 0 {
+		t.Fatalf("rendering the invitation wrote %d enrolments and %d "+
+			"sessions — a GET spent it", len(writer.enrolled),
+			len(writer.opened()))
 	}
 
-	// THE CONTROL: the POST is the person, and it spends — binding the
-	// seat the invitation names and presenting the link's secret to the
-	// record.
+	// THE CONTROL: the POST is the person, and its record spends the link
+	// — binding the seat the invitation names and presenting the link's
+	// secret to the record.
 	redeemed := postJSON(t, mux, "/auth/invite/"+invitationID, map[string]string{
 		"secret": invitationSecret, "login": "dana.sre", "name": "Dana",
 		"password": "a-perfectly-fine-passphrase"})
 	if redeemed.Code != http.StatusOK {
 		t.Fatalf("the redemption answered %d (%s)", redeemed.Code, redeemed.Body)
 	}
-	if len(writer.enrolled) != 1 || len(writer.spent) != 1 {
-		t.Fatalf("the redemption wrote %d enrolments and %d spends, want one "+
-			"of each", len(writer.enrolled), len(writer.spent))
+	if len(writer.enrolled) != 1 || writer.enrolled[0].Invitation != invitationID {
+		t.Fatalf("the redemption wrote %+v, want one enrolment naming the "+
+			"invitation it spends", writer.enrolled)
 	}
 	enrolled := writer.enrolled[0]
 	if enrolled.Seat != "eng-lead" || enrolled.InvitationSecret != invitationSecret {
@@ -229,10 +229,10 @@ func TestALinksSecretIsWhatOpensIt(t *testing.T) {
 // A REDEMPTION THE SEAT'S NEW HOLDER REFUSES SAYS SO, and names nobody.
 //
 // A seat bound to a colleague between the issue and the redemption is refused
-// by the record's own claim when the two race; the person holding the link can
-// do nothing about it but ask for a new one, and the holder is none of their
-// business. Mutation: drop the seat arm and the refusal says the ADDRESS is
-// taken, which sends them looking for an account they do not have.
+// by the redemption's own record; the person holding the link can do nothing
+// about it but ask for a new one, and the holder is none of their business.
+// Mutation: drop the seat arm and the refusal says the LOGIN is taken, which
+// sends them choosing names that will never help.
 func TestARedemptionWhoseSeatWasTakenSaysSo(t *testing.T) {
 	t.Parallel()
 	const holder = "018f3a9c-0000-7000-8000-0000000000a2"
@@ -240,8 +240,8 @@ func TestARedemptionWhoseSeatWasTakenSaysSo(t *testing.T) {
 	buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 		o.Directory = seatedInvitation{}
 		o.Sealer = stubSealer{address: "dana@example.com"}
-		o.Writer = refusingWriter{err: &iamdomain.ErrClaimed{
-			Kind: iamdomain.KindSeat, Token: "eng-lead", Holder: holder}}
+		o.Writer = refusingWriter{err: &iamdomain.ErrTaken{
+			Field: iamdomain.UniqueSeat, Value: "eng-lead", Person: holder}}
 	}).Routes(mux)
 	rec := postJSON(t, mux, "/auth/invite/"+invitationID, map[string]string{
 		"secret": invitationSecret, "login": "dana.sre", "name": "Dana",

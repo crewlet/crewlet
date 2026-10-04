@@ -24,40 +24,64 @@ import (
 // every one is a decision about state another writer is changing at the same
 // time.
 
-// ErrClaimed reports an address, a login or a seat somebody else holds.
+// Unique is one of the three values the directory keeps to one holder: a
+// person's address, their login and the seat they are bound to.
+//
+// ITS OWN NAMED TYPE, and not seal.go's [Field], which names a SEALED value: an
+// address is both, and a refusal saying which value somebody else holds is
+// about the uniqueness, never the sealing.
+type Unique string
+
+// The three unique values.
+const (
+	UniqueEmail Unique = "email"
+	UniqueLogin Unique = "login"
+	UniqueSeat  Unique = "seat"
+)
+
+// ErrTaken reports an address, a login or a seat somebody else holds.
 //
 // IT NAMES THE HOLDER, which is the whole difference between a refusal
 // somebody can act on and one they can only retry: "that address is taken" is
-// a support ticket, "that address belongs to person X" is an answer.
-type ErrClaimed struct {
-	Kind   ObjectKind
-	Token  string
-	Holder string
+// a support ticket, "that address belongs to person X" is an answer. A
+// surface decides what of it to show — an administrator is told who, and
+// somebody holding an invitation link is told only that it is taken.
+type ErrTaken struct {
+	// Field is which value is taken.
+	Field Unique
+
+	// Value is the login or the seat in the clear, or an address's BLIND —
+	// never the address, which this package never holds in the clear.
+	Value string
+
+	// Person is who holds it, or empty where an open invitation does.
+	Person string
+
+	// Invitation is the open invitation holding an address, or empty.
+	Invitation string
 }
 
-func (e *ErrClaimed) Error() string {
-	return fmt.Sprintf("iamdomain: the %s claim on %s is held by person %s",
-		e.Kind, e.Token, e.Holder)
+func (e *ErrTaken) Error() string {
+	if e.Invitation != "" {
+		return fmt.Sprintf("iamdomain: the %s %s is held by open invitation %s",
+			e.Field, e.Value, e.Invitation)
+	}
+	return fmt.Sprintf("iamdomain: the %s %s is held by person %s", e.Field,
+		e.Value, e.Person)
 }
 
-// Enrol creates a person and takes the claims that make them findable.
+// Enrol creates a person WHOLE — their row, their first credentials, their
+// login, their address and their seat — in ONE record on the directory, and,
+// for a redemption, spends the invitation in the same record.
 //
-// A SEQUENCE, and it has to be: each claim arbitrates on its own subject and a
-// record has exactly one subject, so there is no single append that can take
-// an address and a login together. The order is deliberate — the CLAIMS FIRST,
-// because they are what can be refused, and the person last.
+// # One record, decided in one snapshot
 //
-// A SEQUENCE THAT STOPS HALFWAY leaves a claimed address with no person. That
-// is a LEGAL NAMED STATE rather than corruption: the claim report names it
-// once it is [OrphanGrace] old ([Reader.Claims]), and removing the
-// reservation's id releases what it holds — and the alternative, writing the
-// person first, would leave a person nobody can find, holding an address
-// somebody else may then take.
-//
-// THE SWEEP DOES NOT COLLECT IT, deliberately: a reservation is holding a
-// claim whose subject still carries an anchor, and deleting the row on a
-// clock would leave that address arbitrated to nobody the directory can name.
-// Releasing is a decision, and a removal is the record that makes it.
+// The record's decide reads the whole directory and refuses an address, a
+// login or a seat somebody else holds ([ErrTaken], naming them) — so a refusal
+// publishes nothing at all. There is no half-finished enrolment for a retry to
+// meet: a redeemer told their login was taken chooses another and redeems
+// again, and an administrator whose create was refused for its seat has
+// created nobody.
 //
 // # What it may confer, and on whose authority
 //
@@ -70,10 +94,10 @@ func (e *ErrClaimed) Error() string {
 // ONE ENROLMENT IS NOT THE WRITER'S TO AUTHORISE, and it names what is: a
 // REDEMPTION ([Enrolment.Invitation]) confers what the INVITATION's author
 // conferred when they issued it, and was held to their grants then
-// ([Writer.Invite]). The person record's decide reads the invitation in its
-// own snapshot and refuses anything it does not cover — more grants, a
-// different address, a link already spent or aged out — so the node
-// that processes a redemption decides nothing a second time.
+// ([Writer.Invite]). The record's decide reads the invitation in its own
+// snapshot and refuses anything it does not cover — more grants, a different
+// address, another seat, a link already spent or aged out — so the node that
+// processes a redemption decides nothing a second time.
 //
 // The node's own writer holds fleet:operate and people:manage and nothing
 // else, so on its own authority it may confer those two; everything a
@@ -85,25 +109,13 @@ func (e *ErrClaimed) Error() string {
 // administrator's is, so the first person is invited, and bounded, the way
 // everybody after them is.
 //
-// # A seat is claimed first
+// # A seat is the running company's
 //
-// An enrolment that binds a seat ([Enrolment.Seat]) claims it BEFORE the
-// address and the login. It is the one claim nothing about the enrolment
-// can vouch for — the seat is the chart's, and a colleague's bind to it is
-// ordered against nothing on this log — and claimed first, a refusal leaves
-// nothing behind at all: no reservation holding the address the enrolment
-// would have claimed next. Claimed after the address, a seat
-// somebody bound in the meantime would leave the invited address held by a
-// person who could never finish, and the next invitation to that address
-// would be refused as "claimed" by the first.
-//
-// THE BASIS IS CHECKED BEFORE THE FIRST CLAIM TOO, exactly as the writer's
-// own grants are: the claims go first because they are what can be refused,
-// and a refusal the estate could already establish — a link somebody spent —
-// met only at the person record leaves a reservation holding the caller's own
-// address and login behind it. The person record's snapshot stays the
-// AUTHORITY; what survives the early check is only a race lost between the
-// two, which is the legal residue above.
+// An enrolment that binds a seat ([Enrolment.Seat]) has it checked against
+// the organisation this node runs before anything is published — advisory,
+// see [Writer.seatOf] — and held free in the record's own snapshot. An
+// administrator's create may bind any seat the company holds; a redemption
+// binds only the human seat its invitation names.
 func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, error) {
 	if err := w.mayAdminister(OpEnrol); err != nil {
 		return statelog.Result{}, err
@@ -112,180 +124,136 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		return statelog.Result{}, err
 	}
 	if in.Invitation == "" {
-		// THE WRITER'S OWN AUTHORITY, checked BEFORE the first claim:
-		// it reads nothing, so there is no reason to leave a claimed
-		// address behind a refusal that was knowable up front.
+		// THE WRITER'S OWN AUTHORITY: it reads nothing, so it is asked
+		// before anything else is.
 		if err := w.MayConfer(nil, in.Grants); err != nil {
 			return statelog.Result{}, err
 		}
 	}
 	if w.sealer == nil || (in.Email != "" && w.blinds == nil) {
 		return statelog.Result{}, fmt.Errorf("iamdomain: this node cannot "+
-			"enrol anybody: it has %s. An enrolment has to derive the subject "+
-			"the address claim arbitrates on and seal the values that belong "+
-			"to the person, and a node that guessed at either would put two "+
-			"people on one address", w.missingKeys())
+			"enrol anybody: it has %s. An enrolment has to derive the blind "+
+			"the directory compares an address by and seal the values that "+
+			"belong to the person, and a node that guessed at either would put "+
+			"two people on one address", w.missingKeys())
 	}
-	// THE BLINDER BEFORE ANYTHING IS WRITTEN: one that cannot be
-	// established refuses the enrolment with nothing claimed.
 	var blind string
 	if in.Email != "" {
 		blinder, err := w.blinds.Blinder(ctx)
 		if err != nil {
 			return statelog.Result{}, fmt.Errorf("iamdomain: this node "+
-				"cannot derive the subject an address claim arbitrates on: %w",
-				err)
+				"cannot derive the blind an address is compared by: %w", err)
 		}
 		if blind, err = blinder.Email(in.Email); err != nil {
 			return statelog.Result{}, err
 		}
 	}
-	// ONE MARK FOR THE WHOLE GESTURE: each step decides from a state holding
-	// the one before it, whether this writer is shared or a sequence.
-	at := w.gesture()
-
-	// THE BASIS IS CHECKED BEFORE ANYTHING ELSE IS WRITTEN, and again, as
-	// the authority, in the person record's own snapshot below. The claims
-	// run first because they are what can be refused — but the basis can be
-	// refused too, and a refusal met only at the person record is met after
-	// the address and the login are already claimed, leaving a reservation
-	// that holds them against the redeemer's own next attempt. BEFORE THE
-	// FIRST CLAIM, too, for the blinder's reason.
-	basis := w.basisOf(ctx, in, blind)
-	if basis != nil {
-		// A REDEMPTION'S IS A READ: it decides nothing the record does
-		// not decide again, and makes a refusal the snapshot can already
-		// establish cost nothing but the read.
-		if err := w.db.Replicated().Read(ctx, basis); err != nil {
-			return statelog.Result{}, err
-		}
+	seat, err := w.enrolledSeat(ctx, in)
+	if err != nil {
+		return statelog.Result{}, err
 	}
-	// AN INVITATION'S SEAT IS A HUMAN SEAT OF THE RUNNING COMPANY, asked
-	// before the first claim as the issue asked it: a revision may have
-	// removed the seat, or made it an agent's, since the link was sent.
-	// [Enrolment.Seat] is held equal to the invitation's own in the person
-	// record's snapshot, so asking it of the enrolment asks it of the link.
-	if in.Invitation != "" && in.Seat != "" {
-		if _, err := w.humanSeat(ctx, in.Seat); err != nil {
-			if errors.Is(err, statelog.ErrUnavailable) {
-				return statelog.Result{}, err
-			}
-			return statelog.Result{}, fmt.Errorf("%w: invitation %s binds a "+
-				"seat it can no longer bind (%w)", ErrRefused, in.Invitation, err)
-		}
-	}
-
-	// THE SEAT FIRST — see "A seat is claimed first" above. Its op id is a
-	// STEP of the gesture's ([statelog.StepOpID]), so a retry of the gesture
-	// collapses into the first attempt's claim, and carries the gesture's
-	// mint instant, which is what the ledger vouches for a retry by.
+	// SEALED ONCE, before the decide, which may run more than once: sealed
+	// inside it, every run would draw a fresh nonce for the same value.
 	//
-	// A STEP THAT COLLAPSES IS ANSWERED BY THE LEDGER BEFORE ITS DECIDE RUNS
-	// ([statelog.Result.Collapsed]), so nothing after it may build on what a
-	// decide computes — and nothing here does: every step reads what it needs
-	// in its own snapshot, and hands the next only the position it landed at,
-	// which a collapsed answer carries as the earlier copy's.
-	if in.Seat != "" {
-		seated, seatErr := w.claim(ctx, at, KindSeat, in.Seat, in.PersonID,
-			Claim{}, statelog.StepOpID(in.OpID, "seat"), &in)
-		if seatErr != nil {
-			return statelog.Result{}, seatErr
-		}
-		if seated.Outcome == statelog.OutcomeUnknown {
-			return unresolved(in.OpID), nil
-		}
-	}
-
+	// AN ADDRESS IS OPTIONAL AND A SEALED NAME IS NOT. A machine identity
+	// has no mailbox, so there is nothing to blind and nothing to seal —
+	// but its NAME is still sealed like anybody else's, because `Release
+	// pipeline, raised by Dana` names a person too, and a removal erases it
+	// as surely.
 	sealedName, err := w.sealer.Seal(in.PersonID, FieldName, in.Name)
 	if err != nil {
 		return statelog.Result{}, err
 	}
-	// AN ADDRESS IS OPTIONAL AND A SEALED NAME IS NOT. A machine identity
-	// has no mailbox, so there is nothing to blind, nothing to seal and no
-	// address claim to take — but its NAME is still sealed like anybody
-	// else's, because `Release pipeline, raised by Dana` names a person
-	// too, and a removal erases it as surely.
 	var sealedEmail string
 	if in.Email != "" {
 		if sealedEmail, err = w.sealer.Seal(in.PersonID, FieldEmail,
 			in.Email); err != nil {
 			return statelog.Result{}, err
 		}
-		// THE ADDRESS FIRST. It is the claim most likely to be
-		// contested — two administrators adding one new joiner — so it
-		// is the one that should fail before anything else has
-		// happened.
-		address, claimErr := w.claim(ctx, at, KindEmail, blind, in.PersonID,
-			Claim{Sealed: sealedEmail}, statelog.StepOpID(in.OpID, "email"), &in)
-		if claimErr != nil {
-			return statelog.Result{}, claimErr
-		}
-		if address.Outcome == statelog.OutcomeUnknown {
-			return unresolved(in.OpID), nil
-		}
 	}
-	// THE LOGIN IS IN ITS OP ID, unlike the address's. A retry of one
-	// enrolment names the same address — it is the invitation's, or the
-	// administrator's typing — but may name a DIFFERENT login: a redeemer
-	// told theirs was taken chooses another. Under one op id the broker
-	// would acknowledge the second claim as the first inside its duplicate
-	// window, and the person would be written holding the login they gave
-	// up rather than the one they chose.
-	claimed, err := w.claim(ctx, at, KindLogin, in.Login, in.PersonID, Claim{},
-		statelog.StepOpID(in.OpID, "login", in.Login), &in)
+	mutation, err := EncodeEnrolled(Enrolled{
+		V: DocumentVersion,
+		Person: Person{
+			V: DocumentVersion, Kind: in.Kind, Stage: in.Stage,
+			NameSealed: sealedName, EmailSealed: sealedEmail,
+			Credentials: in.Credentials, Grants: in.Grants,
+		},
+		Holds:      Identifiers{EmailBlind: blind, Login: in.Login, SeatID: seat},
+		Invitation: in.Invitation,
+	})
 	if err != nil {
 		return statelog.Result{}, err
 	}
-	if claimed.Outcome == statelog.OutcomeUnknown {
-		return unresolved(in.OpID), nil
-	}
-	person := Person{
-		V: DocumentVersion, Kind: in.Kind, Stage: in.Stage,
-		NameSealed: sealedName, EmailSealed: sealedEmail,
-		Credentials: in.Credentials, Grants: in.Grants,
-	}
-	mutation, err := EncodePerson(person)
-	if err != nil {
-		return statelog.Result{}, err
-	}
-	rec, err := w.record(PersonSubject(in.PersonID), OpEnrol, in.PersonID,
-		PeopleScope(in.PersonID), mutation, in.Reason)
-	if err != nil {
-		return statelog.Result{}, err
-	}
-	// THE BASIS IS READ AGAIN IN THE PERSON RECORD'S OWN SNAPSHOT, the one
-	// the grants actually land from, and THIS is the authority — the read
-	// above was earlier, and a check against it alone would pair an
-	// invitation somebody spent a moment ago with a person it then creates.
-	// Nil for the writer's own authority, which was checked above.
-	decide := func(tx *sql.Tx) error {
-		if refused := w.createsNobodyTwice(ctx, tx, in); refused != nil {
-			return refused
+	// THE SCOPE: the new person's bucket, every leaver whose tombstone the
+	// seat's bind stamps, and — for a redemption — the address's bucket the
+	// invitation row it spends is filed under.
+	scopeOf := func(ctx context.Context, tx *sql.Tx) (_ ScopeSet, err error) {
+		buckets := []Bucket{BucketOf(in.PersonID)}
+		var leavers []string
+		if seat != "" {
+			if leavers, err = leaversOf(ctx, tx, seat); err != nil {
+				return ScopeSet{}, err
+			}
 		}
-		if basis != nil {
-			return basis(tx)
+		for _, leaver := range leavers {
+			buckets = append(buckets, BucketOf(leaver))
 		}
-		return nil
+		if in.Invitation != "" {
+			buckets = append(buckets, BucketOf(blind))
+		}
+		return BucketScope(buckets...), nil
 	}
-	// ARBITRATED, NOT A CREATE, and the claims are why: they run first and
-	// their apply leaves a RESERVATION row for this person, so a create
-	// pattern would find a guarding row and refuse the enrolment that put
-	// it there. What makes a retry of the whole gesture land once is the
-	// operation ledger, which is the mechanism for that anyway — the
-	// guarding row never was.
-	result, err := w.publishAt(ctx, at,
-		w.request(ctx, &rec, in.OpID, statelog.PatternArbitrated, decide))
+	decide := func(tx *sql.Tx) (_ []byte, err error) {
+		if err = wholeDirectory(ctx, tx); err != nil {
+			return nil, err
+		}
+		if in.Invitation != "" {
+			// THE INVITATION, READ WHERE THE GRANTS LAND FROM: the one
+			// read of it that decides anything.
+			err = w.redeemable(ctx, tx, in, blind, seat)
+		} else {
+			err = w.createsNobodyTwice(ctx, tx, in)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if blind != "" {
+			if err = taken(ctx, tx, UniqueEmail, blind, in.PersonID); err != nil {
+				return nil, err
+			}
+			// AN OPEN INVITATION HOLDS ITS ADDRESS against a create, naming
+			// the invitation: two people would otherwise be on their way to
+			// one address. A redemption IS that invitation, and
+			// [Writer.redeemable] held it to it.
+			if in.Invitation == "" {
+				if err = heldByInvitation(ctx, tx, blind, w.Now()); err != nil {
+					return nil, err
+				}
+			}
+		}
+		if err = taken(ctx, tx, UniqueLogin, in.Login, in.PersonID); err != nil {
+			return nil, err
+		}
+		if seat != "" {
+			if err = taken(ctx, tx, UniqueSeat, seat, in.PersonID); err != nil {
+				return nil, err
+			}
+		}
+		return mutation, nil
+	}
+	result, err := w.publishDirectory(ctx, OpEnrol, in.PersonID, in.OpID,
+		in.Reason, scopeOf, decide)
 	if err == nil && result.Collapsed && in.Invitation != "" {
 		// A REDEMPTION THAT LANDED AS A COPY THIS CALL CANNOT PROVE IS ITS
-		// OWN IS A LINK ALREADY USED, as [Writer.createsNobodyTwice] says of
-		// one its decide finds: the framework answers a retry from the ledger
-		// before that decide runs, so the refusal is made here instead.
-		// Answered as landed, the redemption goes on to open a session — for
-		// whoever holds the link and the first password, past any second
-		// factor enrolled since. It is refused even where the copy happens
-		// to be this call's own ambiguous append, since nothing can tell the
-		// two apart — and there the refusal's own words are true: the person
-		// the link created is enrolled, and signs in with that password.
+		// OWN IS A LINK ALREADY USED: the framework answers a retry from the
+		// ledger before the decide runs, so the refusal the decide would
+		// make of a spent link is made here instead. Answered as landed, the
+		// redemption goes on to open a session — for whoever holds the link
+		// and the first password, past any second factor enrolled since. It
+		// is refused even where the copy happens to be this call's own
+		// ambiguous append, since nothing can tell the two apart — and there
+		// the refusal's own words are true: the person the link created is
+		// enrolled, and signs in with that password.
 		return statelog.Result{}, in.alreadyEnrolled()
 	}
 	// AN ENROLMENT THAT CONFERS ANYTHING IS A GRANT CHANGE — from nothing
@@ -301,23 +269,39 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	return result, err
 }
 
-// createsNobodyTwice refuses a person record for somebody who already exists,
-// read inside the record's own snapshot.
+// enrolledSeat is the seat an enrolment binds, as the organisation this node
+// runs names it, or "" for none — asked before anything is published, and
+// ADVISORY ([Writer.seatOf]).
+//
+// A REDEMPTION's must still be a HUMAN seat: a revision may have removed it,
+// or made it an agent's, since the link was sent — and that refusal is the
+// link's, under [ErrRefused], since its remedy is a new invitation. An
+// administrator's create may bind any seat the company holds.
+func (w *Writer) enrolledSeat(ctx context.Context, in Enrolment) (string, error) {
+	if in.Seat == "" {
+		return "", nil
+	}
+	if in.Invitation == "" {
+		seat, err := w.seatOf(ctx, in.Seat)
+		return seat.Handle, err
+	}
+	seat, err := w.humanSeat(ctx, in.Seat)
+	if err != nil && !errors.Is(err, statelog.ErrUnavailable) {
+		return "", fmt.Errorf("%w: invitation %s binds a seat it can no longer "+
+			"bind (%w)", ErrRefused, in.Invitation, err)
+	}
+	return seat, err
+}
+
+// createsNobodyTwice refuses an administrator's create of a person who
+// already exists, read inside the record's own snapshot.
 //
 // # An enrolment creates; it never rewrites
 //
-// The record is arbitrated rather than a create — the claims before it leave a
-// reservation, which a create would find and refuse — so nothing at the broker
-// stops a person record landing over somebody who is already enrolled. Every
-// enrolment's person is derived, so the one that reaches an existing person is
-// a second request under one derivation, and landing it would rewrite their
-// grants, their name and their credentials with another request's:
-//
-//   - A REDEMPTION is refused outright, as a link already used: the
-//     person it created signs in from here on, and a retry answered with a
-//     session would let whoever holds the link and the first password sign in
-//     past a second factor enrolled since, and after a password change.
-//   - AN ADMINISTRATOR'S CREATE is [ErrOperationReused].
+// The create's person is DERIVED from its operation key ([CreatedPersonID]),
+// so the one that reaches an existing person is a second request under one
+// key, and landing it would rewrite their grants, their name and their
+// credentials with another request's: it is [ErrOperationReused].
 //
 // # The retry of the create that made them never gets here
 //
@@ -325,13 +309,13 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 // decide ([statelog.Snap.Held]), collapsed into the first copy — so a decide
 // that runs has, by construction, an operation id this node's ledger does not
 // hold, and a person already enrolled under it is somebody ANOTHER operation
-// made. This used to read the ledger for its own id to let that retry through;
-// under the framework's answer that read could only ever say "not held", and
-// was a second, dead copy of a question the framework now owns. Where the
-// ledger has LOST the row — its sweep, an adoption — the framework turns this
-// refusal of an operation minted before the loss into `unknown`
-// ([statelog.Result.Unvouched]) rather than a refusal of the caller's own
-// first attempt.
+// made. Where the ledger has LOST the row — its sweep, an adoption — the
+// framework turns this refusal of an operation minted before the loss into
+// `unknown` ([statelog.Result.Unvouched]) rather than a refusal of the
+// caller's own first attempt.
+//
+// A REDEMPTION NEEDS NO SUCH GUARD: its person is minted afresh per attempt,
+// and what keeps a link single-use is the link ([Writer.redeemable]).
 func (w *Writer) createsNobodyTwice(ctx context.Context, tx *sql.Tx,
 	in Enrolment) error {
 
@@ -342,25 +326,8 @@ func (w *Writer) createsNobodyTwice(ctx context.Context, tx *sql.Tx,
 	return in.alreadyEnrolled()
 }
 
-// notYetEnrolled refuses an enrolment's claim on a person who already exists:
-// a claim they do not hold yet is not the retry of the enrolment that created
-// them, which names what they hold, so it is a second request under the one
-// derivation and would hand an existing person a second address or login.
-func (in *Enrolment) notYetEnrolled(ctx context.Context, tx *sql.Tx,
-	kind ObjectKind) error {
-
-	enrolled, err := isEnrolled(ctx, tx, in.PersonID)
-	if err != nil || !enrolled {
-		return err
-	}
-	return fmt.Errorf("%w (an enrolment does not give an existing person a "+
-		"new %s)", in.alreadyEnrolled(), kind)
-}
-
-// alreadyEnrolled is the refusal an enrolment meets when the person it would
-// create already exists, in the terms of the authority it named — ONE answer
-// whichever step of the sequence meets it, so a surface maps one sentinel per
-// basis rather than learning which step fired.
+// alreadyEnrolled is the refusal an enrolment meets when what it would create
+// already exists, in the terms of the authority it named.
 //
 //   - A REDEMPTION's link has been used: the person it created is enrolled.
 //   - AN ADMINISTRATOR'S key already names somebody, and a new person is a new
@@ -375,56 +342,36 @@ func (in *Enrolment) alreadyEnrolled() error {
 		"new key", ErrOperationReused, in.PersonID, in.OpID)
 }
 
-// isEnrolled reports whether a person row exists and is not a reservation,
-// read inside a decide's snapshot.
+// isEnrolled reports whether a person row exists, read inside a decide's
+// snapshot.
 func isEnrolled(ctx context.Context, tx *sql.Tx, personID string) (bool, error) {
-	var kind string
-	err := tx.QueryRowContext(ctx,
-		`SELECT kind FROM iam_people WHERE id = ?`, personID).Scan(&kind)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return false, nil
-	case err != nil:
+	var enrolled bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM iam_people WHERE id = ?)`, personID).
+		Scan(&enrolled); err != nil {
 		return false, fmt.Errorf("iamdomain: read whether %s is enrolled: %w",
 			personID, err)
 	}
-	return !reservation(kind), nil
-}
-
-// basisOf is the check an enrolment's named authority is held to, or nil for
-// an enrolment on the writer's own grants.
-//
-// ONE FUNCTION FOR BOTH READS [Writer.Enrol] makes of an invitation — the
-// advisory one before the first claim and the authoritative one in the person
-// record's snapshot — so the two cannot drift into asking different questions.
-func (w *Writer) basisOf(ctx context.Context, in Enrolment, blind string) func(*sql.Tx) error {
-	if in.Invitation == "" {
-		return nil
-	}
-	return func(tx *sql.Tx) error {
-		return w.redeemable(ctx, tx, in, blind)
-	}
+	return enrolled, nil
 }
 
 // Enrolment is what creating a person needs.
 type Enrolment struct {
 	// PersonID is minted by the CALLER, not here, and it is a uuid7.
 	//
-	// BY THE CALLER because an enrolment is a sequence of appends and
-	// every one of them has to name the same person: an id minted inside
-	// the first would not be available to form the second's payload, and
-	// an id minted per append would enrol three people. A redemption
-	// DERIVES it from the invitation rather than minting it
-	// ([InvitedPersonID]), so a retry names the person its first attempt
-	// already claimed for.
+	// BY THE CALLER because an administrator's create DERIVES it from its
+	// operation key ([CreatedPersonID]): a create whose outcome nobody could
+	// establish is retried under that key, and the answer — the person it
+	// created — has to name the same person whether the retry is answered
+	// from the ledger or decided again. A redemption mints a fresh one per
+	// attempt, since an attempt that did not land published nothing.
 	PersonID string
 
 	Kind  iam.Kind
 	Stage iam.Stage
 
 	// Name and Email are CLEARTEXT here and nowhere after: they are
-	// sealed before the first record is formed, and no payload this
-	// gesture publishes carries either.
+	// sealed before the record is formed, and no payload carries either.
 	Name  string
 	Email string
 
@@ -454,39 +401,28 @@ type Enrolment struct {
 	InvitationSecret string
 
 	// Seat is a seat this enrolment BINDS the person it creates to, by any
-	// address the chart answers to it by, or empty. It is CLAIMED FIRST,
-	// before the key and before the address — see [Writer.Enrol]. A
-	// redemption names the seat its invitation binds, by the identity the
-	// invitation recorded, and the person record refuses one that names
-	// any other ([Writer.redeemable]).
+	// address the chart answers to it by, or empty. A redemption names the
+	// seat its invitation binds, and the record refuses one that names any
+	// other ([Writer.redeemable]).
 	Seat string
 
-	// OpID is the operation id for the whole gesture. Each append is a STEP
-	// of it ([statelog.StepOpID]), so a retry of the sequence dedupes step by
-	// step rather than all-or-nothing, and every step carries the gesture's
-	// mint instant.
+	// OpID is the record's operation id.
 	//
 	// IN THE STATE LOG'S GRAMMAR ([statelog.NewOpID], [statelog.DeriveOpID])
 	// — an administrator's create key, a bare uuid7, already is — because
-	// that instant is what the ledger vouches for a retry by: a gesture id
-	// outside it is read as minted at the epoch, and once this node's ledger
-	// has lost a row of the kind a step arbitrates on, every step under it is
-	// answered `unknown` without being published.
+	// the instant it carries is what the ledger vouches for a retry by: an
+	// id outside it is read as minted at the epoch, and once this node's
+	// ledger has lost a row of the kind it arbitrates on, every retry under
+	// it is answered `unknown` without being published.
 	OpID   string
 	Reason string
 }
 
-// validate refuses an enrolment that could not land, BEFORE the first claim.
+// validate refuses an enrolment that could not land, before anything is
+// sealed, blinded or read.
 //
-// EVERY BOUND THE SEQUENCE WILL MEET IS CHECKED HERE, and that is the point of
-// the method rather than a tidiness: an enrolment is a sequence of appends, and
-// a bound first met at the person record — the last of them — is met after the
-// address and the login are already claimed. The refusal then leaves a
-// reservation holding both, and the caller's corrected retry is refused as
-// "claimed" by the half its own first attempt left behind. [Writer.record]
-// still checks the reason on every record, which is the backstop for the
-// gestures that are one append; this is the check that runs while nothing has
-// been published.
+// [Writer.record] still checks the reason on every record; this is the check
+// that names the field an enrolment is refused for.
 func (in Enrolment) validate() error {
 	switch {
 	case in.Invitation != "" && in.Email == "":
@@ -505,12 +441,10 @@ func (in Enrolment) validate() error {
 			"secret only beside the invitation it redeems")
 	case in.PersonID == "":
 		return errors.New("iamdomain: an enrolment needs the person id it is " +
-			"creating: every append in the sequence names it, so one minted " +
-			"per append would enrol three people")
+			"creating")
 	case in.OpID == "":
-		return errors.New("iamdomain: an enrolment needs an operation id — it " +
-			"is a sequence of appends, and without a stable id a retry cannot " +
-			"tell which of them already landed")
+		return errors.New("iamdomain: an enrolment needs an operation id — " +
+			"without a stable one a retry cannot tell whether it already landed")
 	case in.Kind != iam.KindPerson && in.Kind != iam.KindMachine:
 		// THE DIRECTORY HOLDS PEOPLE AND MACHINES, and nothing else
 		// enrols. A seat is the chart's and the engine is the node, so
@@ -565,35 +499,32 @@ func (in Enrolment) validate() error {
 			"they make is recorded under while they hold no seat, and without "+
 			"one they would be recorded as nobody", ErrInvalidLogin)
 	}
-	return LoginFits(in.Kind, in.Login)
+	return loginFits(in.Kind, in.Login)
 }
 
 // redeemable refuses an enrolment its invitation does not cover, read inside
-// the person record's own snapshot.
+// the record's own snapshot.
 //
 // EVERY CLAUSE IS A WAY THE REDEMPTION COULD OTHERWISE ASK FOR MORE THAN WAS
-// OFFERED: a grant the invitation did not carry, an address it was
-// not issued to (holding somebody's link is not holding their address), and a
-// link that is spent or aged out. A link redeemed by THIS person already is
-// not spent against them, so a retry of a redemption whose spend landed still
-// lands as the same person.
+// OFFERED: a grant the invitation did not carry, an address it was not issued
+// to (holding somebody's link is not holding their address), a seat it did not
+// bind, and a link that is spent or aged out.
 //
 // THE WRITER'S CLOCK decides the expiry, as [openInvitationFor]'s does: the
 // surface already refused an aged-out link against the same clock, and what
 // this buys is that the check and the grants it bounds are one snapshot.
 func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx, in Enrolment,
-	blind string) error {
+	blind, seat string) error {
 
 	var (
 		held           string
 		expires, spent int64
-		redeemedBy     string
 		document       []byte
 	)
 	err := tx.QueryRowContext(ctx, `
-		SELECT email_blind, expires_at, redeemed_at, person_id, document
+		SELECT email_blind, expires_at, redeemed_at, document
 		  FROM iam_invites WHERE id = ?`, in.Invitation).
-		Scan(&held, &expires, &spent, &redeemedBy, &document)
+		Scan(&held, &expires, &spent, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("%w: invitation %s is not held on this node, so "+
@@ -618,7 +549,7 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx, in Enrolment,
 		return fmt.Errorf("%w: invitation %s was issued to another address — "+
 			"holding somebody's link is not holding their address",
 			ErrRefused, in.Invitation)
-	case spent != 0 && redeemedBy != in.PersonID:
+	case spent != 0:
 		return fmt.Errorf("%w: invitation %s has already been used",
 			ErrRefused, in.Invitation)
 	case expires != 0 && !w.Now().Before(time.UnixMilli(expires)):
@@ -637,56 +568,24 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx, in Enrolment,
 	// did not carry would be a redemption asking for more than was
 	// offered, and one it carried and the enrolment dropped would spend
 	// the link without the binding its issuer decided on.
-	if in.Seat != invitation.Seat {
+	if seat != invitation.Seat {
 		return fmt.Errorf("%w: invitation %s binds seat %q, and the "+
 			"enrolment names %q — a redemption binds what was offered and "+
-			"nothing else", ErrRefused, in.Invitation, invitation.Seat, in.Seat)
-	}
-	if invitation.Seat != "" {
-		if err := redeemableSeat(ctx, tx, in, invitation.Seat); err != nil {
-			return err
-		}
+			"nothing else", ErrRefused, in.Invitation, invitation.Seat, seat)
 	}
 	return nil
 }
 
-// redeemableSeat holds the seat an invitation binds to what [invitableSeat]
-// held it to when the invitation was issued, read again in the redemption's
-// own snapshot — a human seat this node's chart holds, bound to nobody but
-// the person this very redemption creates.
-//
-// EVERY REFUSAL IS THE LINK'S, under [ErrRefused]: the chart moved since the
-// issue — the seat removed, made an agent's, bound to a colleague — and the
-// remedy is the one every way a link stops working has, a new invitation from
-// whoever sent it, which the redeemer cannot be asked to diagnose. Only a chart
-// this node cannot read stays the unknown arm, since a retry can clear it.
-func redeemableSeat(ctx context.Context, tx *sql.Tx, in Enrolment,
-	seat string) error {
-
-	err := invitableSeat(ctx, tx, seat, in.PersonID)
-	if err == nil || errors.Is(err, statelog.ErrUnavailable) ||
-		errors.Is(err, statelog.ErrConflict) {
-		return err
-	}
-	return fmt.Errorf("%w: invitation %s binds a seat it can no longer bind "+
-		"(%w)", ErrRefused, in.Invitation, err)
-}
-
-// LoginFits refuses a login that is not in its holder's kind's grammar.
+// loginFits refuses a login that is not in its holder's kind's grammar.
 //
 // THE GRAMMAR IS THE HOLDER'S, never "either one": [iam.ValidLoginFor] argues
 // the case, and it is the Tier A token namespace. A person who could take
 // `token:ops` would make the deployment's `ops` credential act as their seat,
 // because the directory row under a token's login is what binds it.
 //
-// Checked on the value AS TYPED rather than the folded subject id, so
-// `Sarah.Chen` is refused naming itself instead of being quietly lowered into
-// a login its holder never wrote.
-//
-// EXPORTED for the surface that has to ask it BEFORE a sequence's first record:
-// `PATCH /iam/people/{id}` moves a seat before a login, and a grammar met only
-// at the login's own record was met after the seat had already moved.
-func LoginFits(kind iam.Kind, login string) error {
+// Checked on the value AS TYPED, so `Sarah.Chen` is refused naming itself
+// instead of being quietly lowered into a login its holder never wrote.
+func loginFits(kind iam.Kind, login string) error {
 	if iam.ValidLoginFor(kind, login) {
 		return nil
 	}
@@ -732,392 +631,133 @@ var ErrNotEnrollable = errors.New("iamdomain: the directory enrols people and ma
 // both.
 var ErrNotFindable = errors.New("iamdomain: nothing could find this identity")
 
-// Claim takes one address, login or seat binding for a person.
+// SetIdentity changes an enrolled person's LOGIN, their SEAT binding, or both,
+// in ONE record on the directory.
 //
-// CREATE-ONLY AT AN EXPECTATION OF ZERO, which IS the uniqueness check: there
-// is no unique index in this estate and there cannot be one, so two writers
-// claiming one token contend at the broker and exactly one wins.
+// # Post-state, so the old value is freed by the record that takes the new
 //
-// A SEAT IS CHECKED AGAINST THE ORGANISATION THIS NODE RUNS before it is
-// claimed: see [Writer.seatOf].
-func (w *Writer) Claim(ctx context.Context, kind ObjectKind, token, personID,
-	opID string) (statelog.Result, error) {
-
-	if err := w.mayAdminister(OpClaim); err != nil {
-		return statelog.Result{}, err
-	}
-	// THE HOLDER'S KIND IS READ INSIDE THE SNAPSHOT, never taken from the
-	// caller: a login's grammar is the kind of whoever holds it, and a
-	// caller stating that kind would be stating what it read in another
-	// transaction — which is the one input this check cannot trust.
-	return w.claim(ctx, w.gesture(), kind, token, personID, Claim{}, opID, nil)
-}
-
-// claim is the shared body, so an enrolment's own claims and an operator's
-// take exactly the same path — a second implementation is where one of them
-// comes to publish at a different pattern.
+// The record states the login and the seat the person holds from now on —
+// the one the caller left alone as the snapshot holds it — so a rename, a
+// bind, an unbind and a move between seats are each one record, and the value
+// given up is free the moment the record lands. A move used to be two records,
+// the new value claimed and the old released, and a release that did not land
+// was a gap in a trail no caller could close.
 //
-// enrolling is the ENROLMENT a claim is one step of, and nil everywhere else.
-// It exists because the enrolment's claims run before the person's own record
-// — they are what can be refused — so the row whose kind a login's grammar is
-// judged against does not exist yet; the enrolment validated the kind itself,
-// and it is the one caller that knows it without reading. Every other claim
-// reads its holder's kind inside the snapshot. It is also what a claim on
-// somebody who already exists is refused IN THE TERMS OF: see
-// [Enrolment.alreadyEnrolled].
+// # Decided in the record's own snapshot
 //
-// payload carries what a claim states beside its token — an address's sealed
-// form — and nothing else: the person is the decide's.
-func (w *Writer) claim(ctx context.Context, at *statelog.Position,
-	kind ObjectKind, token, personID string, payload Claim, opID string,
-	enrolling *Enrolment) (statelog.Result, error) {
-
-	if token == "" || personID == "" || opID == "" {
-		return statelog.Result{}, fmt.Errorf("iamdomain: a %s claim needs a "+
-			"token, a person and an operation id, and has (%q, %q, %q)",
-			kind, token, personID, opID)
-	}
-	// A SEAT IS CHECKED BEFORE THE SNAPSHOT, against the organisation this
-	// node runs, which is in memory rather than in the replicated estate.
-	if kind == KindSeat {
-		seat, err := w.seatOf(ctx, token)
-		if err != nil {
-			return statelog.Result{}, err
-		}
-		token = seat.Handle
-	}
-	subject, err := claimSubject(kind, token)
-	if err != nil {
-		return statelog.Result{}, err
-	}
-	// A SEAT'S BIND ALSO WRITES IN ITS LEAVERS' BUCKETS: it stamps the
-	// tombstone of every removal that released the seat ([reboundRemovals]),
-	// and a tombstone is filed under the person who left. So their buckets
-	// are in the scope, read here and confirmed in the decide, for
-	// [Writer.Remove]'s reason.
-	var leavers []string
-	if kind == KindSeat {
-		if err = w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-			leavers, err = leaversOf(ctx, tx, token)
-			return err
-		}); err != nil {
-			return statelog.Result{}, err
-		}
-	}
-	scope := PeopleScope(append([]string{personID}, leavers...)...)
-	rec, err := w.record(subject, OpClaim, personID, scope, nil, "")
-	if err != nil {
-		return statelog.Result{}, err
-	}
-	// THE SNAPSHOT READ IS WHAT NAMES THE HOLDER. The broker would refuse
-	// the second claim anyway, but its refusal says "somebody was here
-	// first" and nothing more — and "that address belongs to person X" is
-	// the difference between an answer and a support ticket.
-	//
-	// IT IS ADVISORY AND SAYS SO: the row it reads can be written between
-	// this decide and the append, which is precisely the race the
-	// create-at-zero exists to settle. What it buys is a better refusal in
-	// the common case, never correctness.
-	decide := func(tx *sql.Tx) error {
-		if kind == KindLogin {
-			// A LOGIN IS JUDGED AGAINST ITS HOLDER'S KIND, read HERE,
-			// in the snapshot the claim is decided in: a rename that
-			// took a person's kind from a caller, or from a read in
-			// another transaction, would let a row whose kind changed
-			// between the two take a name its kind may not hold — and
-			// a person holding `token:<id>` is the deployment's Tier A
-			// credential acting as their seat.
-			var holderKind iam.Kind
-			if enrolling != nil {
-				holderKind = enrolling.Kind
-			}
-			if holderKind == "" {
-				var err error
-				if holderKind, err = enrolledKindOf(ctx, tx, personID); err != nil {
-					return err
-				}
-			}
-			if err := LoginFits(holderKind, token); err != nil {
-				return err
-			}
-		}
-		if kind == KindSeat {
-			now, err := leaversOf(ctx, tx, token)
-			if err != nil {
-				return err
-			}
-			if !scope.Covers(PeopleScope(append([]string{personID}, now...)...)) {
-				return fmt.Errorf("%w: iamdomain: somebody who held seat %q was "+
-					"removed between reading whose removals this bind ends and "+
-					"deciding it — bind again", statelog.ErrConflict, token)
-			}
-		}
-		holder, held, err := holderOf(ctx, tx, kind, token)
-		if err != nil {
-			return err
-		}
-		if held && holder != personID {
-			return &ErrClaimed{Kind: kind, Token: token, Holder: holder}
-		}
-		if enrolling != nil && !held {
-			// AN ENROLMENT NEVER GIVES AN ENROLLED PERSON A NEW CLAIM.
-			// Its person is derived — from an invitation, a code or an
-			// administrator's operation key — so an enrolment reaching
-			// somebody who already exists is a second request under
-			// one derivation: a key reused for another address, or a
-			// redemption after the one that created them. A retry of
-			// the enrolment that DID create them names the tokens they
-			// already hold, which the arm above lets through; anything
-			// else would hand an existing person a second address or
-			// login under an operation that was never about them.
-			if err = enrolling.notYetEnrolled(ctx, tx, kind); err != nil {
-				return err
-			}
-		}
-		mutation, err := EncodeClaim(Claim{V: DocumentVersion,
-			Person: personID, Sealed: payload.Sealed})
-		if err != nil {
-			return err
-		}
-		rec.Mutation = mutation
-		return nil
-	}
-	return w.publishAt(ctx, at,
-		w.request(ctx, &rec, opID, statelog.PatternCreate, decide))
-}
-
-// Release gives a claim back.
+// A login outside its holder's kind's grammar ([loginFits]) — the kind READ
+// HERE, never taken from the caller — a login somebody else holds and a seat
+// somebody else is bound to are refused, naming who holds it ([ErrTaken]), and
+// a refusal publishes nothing: nothing has moved. A change that changes
+// nothing is applied with no record.
 //
-// IT IS NOT A DELETE OF THE SUBJECT. The subject keeps its arbitration anchor,
-// so a later claim on it is an ordinary conditional write rather than a create
-// at zero — which is what stops a released address being racily re-taken by
-// two writers who each read it as free.
-//
-// # The caller names the HOLDER, and the decide confirms it
-//
-// The record's scope is where a node that cannot decode it files the
-// deferral, and a read about a person looks in THAT PERSON'S bucket — so a
-// release has to state the holder's. It used to state the bucket of the TOKEN,
-// a hash of a login, a blind or a seat handle that no read ever consults: a
-// node deferring an unbinding went on serving the holder's row as if it still
-// held the seat, and never said it was behind about them. The scope is fixed
-// before the snapshot runs, so the holder cannot be discovered inside it; the
-// caller states who it is releasing FROM — every caller has just read the
-// person — and the decide refuses when the snapshot disagrees, naming who does
-// hold it. The record names the holder too, so the trail row lands on their
-// history rather than on nobody's.
-//
-// # A login is never released on its own
-//
-// Every principal holds one — it is the name an unbound person's changes are
-// recorded under — so a bare release of a login would leave an enrolled
-// person the rest of the engine cannot name, and a machine enrolled under
-// `token:<id>` silently unbound from its Tier A token. A login is RENAMED
-// instead ([Writer.Rename]), and the release that gesture ends with is its
-// own; a removal gives every claim back in its own record.
-func (w *Writer) Release(ctx context.Context, kind ObjectKind, token, holder,
-	opID, reason string) (statelog.Result, error) {
-
-	if kind == KindLogin {
-		return statelog.Result{}, fmt.Errorf("%w: a login is never released "+
-			"on its own — every principal holds one, and it is the name their "+
-			"changes are recorded under. Rename it instead", ErrInvalidLogin)
-	}
-	return w.release(ctx, w.gesture(), kind, token, holder, opID, reason, false)
-}
-
-// release is [Writer.Release]'s body, shared with the second half of a
-// replacement.
-//
-// replaced is true only for [Writer.replace], whose claim on the new token has
-// ALREADY moved the column off the old one — so the snapshot this decide
-// reads holds nobody on the old token, and that is the expected state rather
-// than a refusal. What is still refused is somebody else holding it: between
-// the claim and this release another writer may have taken the freed token,
-// and a release publishes a clear of whoever holds the column.
-func (w *Writer) release(ctx context.Context, at *statelog.Position,
-	kind ObjectKind, token, holder, opID, reason string, replaced bool) (
+// A SEAT IS CHECKED AGAINST THE ORGANISATION THIS NODE RUNS before anything is
+// published: see [Writer.seatOf].
+func (w *Writer) SetIdentity(ctx context.Context, in IdentityEdit) (
 	statelog.Result, error) {
 
-	if err := w.mayAdminister(OpRelease); err != nil {
-		return statelog.Result{}, err
-	}
-	if token == "" || holder == "" || opID == "" {
-		return statelog.Result{}, fmt.Errorf("iamdomain: releasing a %s claim "+
-			"needs the token, the person it is released from and an operation "+
-			"id, and has (%q, %q, %q)", kind, token, holder, opID)
-	}
-	subject, err := claimSubject(kind, token)
-	if err != nil {
-		return statelog.Result{}, err
-	}
-	mutation, err := EncodeClaim(Claim{V: DocumentVersion})
-	if err != nil {
-		return statelog.Result{}, err
-	}
-	rec, err := w.record(subject, OpRelease, holder, PeopleScope(holder),
-		mutation, reason)
-	if err != nil {
-		return statelog.Result{}, err
-	}
-	decide := func(tx *sql.Tx) error {
-		who, held, err := holderOf(ctx, tx, kind, token)
-		if err != nil {
-			return err
-		}
-		switch {
-		case !held && replaced:
-			// THE REPLACEMENT'S OWN CLAIM MOVED IT, which is the state
-			// this release exists to record: the record closes the old
-			// subject on the trail, and its apply clears nothing.
-			return nil
-		case !held:
-			return fmt.Errorf("iamdomain: nobody holds the %s claim on %s, so "+
-				"there is nothing to release", kind, token)
-		case who != holder:
-			// ANOTHER PERSON HOLDS IT, and a release filed under the
-			// named holder's bucket would take it from them while
-			// every node that deferred it looked in the wrong place.
-			return &ErrClaimed{Kind: kind, Token: token, Holder: who}
-		}
-		return nil
-	}
-	return w.publishAt(ctx, at,
-		w.request(ctx, &rec, opID, statelog.PatternArbitrated, decide))
-}
-
-// Rename moves a person from one login to another: the NEW ONE IS CLAIMED
-// FIRST, and the old one released after.
-//
-// # The order is the whole gesture
-//
-// A rename is two records on two subjects, so it is a sequence, and the order
-// decides what a refusal leaves behind. It used to release first: a new login
-// refused by its holder's grammar (`ops.bot` for a machine, `Jane.Doe` for
-// anybody) or held by somebody else then left the row with NO LOGIN — a person
-// recorded as nobody, and a machine under `token:<id>` silently unbound from
-// its Tier A token. Claimed first, a refusal changes nothing: the claim's
-// decide reads the holder's kind and the token's holder inside its own
-// snapshot and publishes nothing when either refuses.
-//
-// The claim's apply is what moves the column — the token goes on the person's
-// row and comes off every other — so by the time the release runs the old
-// login is already free; the release records that on the old subject, so its
-// trail ends in the release rather than in a claim naming somebody who no
-// longer holds it. A release refused because another writer took the freed
-// login in between is not a failure of the rename, and is not reported as
-// one: the name is no longer this person's either way. Nor is a release that
-// did not land at all — see [Writer.replace] for why the move is its claim.
-func (w *Writer) Rename(ctx context.Context, personID, from, to, opID,
-	reason string) (statelog.Result, error) {
-
-	return w.replace(ctx, KindLogin, personID, from, to, opID, reason)
-}
-
-// Rebind moves a person from one seat to another, the new one first, for
-// [Writer.Rename]'s reason: a bind the chart refuses — a seat this node's chart
-// does not hold, a seat somebody else is bound to — used to leave the person
-// bound to nothing, having released the seat they were in.
-//
-// Unbinding is [Writer.Release]; this is only ever a move.
-func (w *Writer) Rebind(ctx context.Context, personID, from, to, opID,
-	reason string) (statelog.Result, error) {
-
-	return w.replace(ctx, KindSeat, personID, from, to, opID, reason)
-}
-
-// replace is the shared body of [Writer.Rename] and [Writer.Rebind].
-//
-// # The claim IS the move, and the release is its trail
-//
-// Once the claim has landed the move has happened: its apply put the new token
-// on the person and took the old one off them, on every node, so the old token
-// is free and every later claim on it decides from rows that say so. The
-// release after it builds nothing — it closes the OLD subject's trail, so that
-// trail ends in the release rather than in a claim naming somebody who no
-// longer holds it. So a release that does not land is the trail's gap and
-// never the gesture's outcome: the gesture answers the claim's result, and the
-// gap is logged (`iam_move_release_unrecorded`) naming the op id it was
-// published under. It used to fail the whole move with an error advising a
-// retry under the same op id, which nothing could act on — a caller re-reads
-// the person before it moves them, found them already moved and published
-// nothing. The CLAIM is still a step nothing may be built on unconfirmed: one whose outcome
-// nobody can establish ends the gesture as unknown before any release is
-// published, which would leave the person holding neither token.
-func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
-	to, opID, reason string) (statelog.Result, error) {
-
-	if err := w.mayAdminister(OpClaim); err != nil {
+	if err := w.mayAdminister(OpIdentity); err != nil {
 		return statelog.Result{}, err
 	}
 	switch {
-	case personID == "" || opID == "":
-		return statelog.Result{}, fmt.Errorf("iamdomain: moving a %s claim "+
-			"needs the person and an operation id, and has (%q, %q)", kind,
-			personID, opID)
-	case to == "":
-		return statelog.Result{}, fmt.Errorf("%w: moving a %s claim needs "+
-			"the %s to move to — a move to nothing is a release, and a login "+
-			"is never released", ErrInvalid, kind, kind)
-	case kind == KindSeat:
-		seat, err := w.seatOf(ctx, to)
-		if err != nil {
-			return statelog.Result{}, err
+	case in.PersonID == "" || in.OpID == "":
+		return statelog.Result{}, errors.New("iamdomain: an identity change " +
+			"needs the person and an operation id")
+	case in.Login != nil && *in.Login == "":
+		// A LOGIN IS NEVER CLEARED, only changed: every principal holds
+		// one — it is the name an unbound person's changes are recorded
+		// under — so a person with none would be recorded as nobody, and
+		// a machine enrolled under `token:<id>` silently unbound from its
+		// Tier A token.
+		return statelog.Result{}, fmt.Errorf("%w: a login is never cleared, "+
+			"only changed — every principal holds one, and it is the name "+
+			"their changes are recorded under", ErrInvalidLogin)
+	}
+	// THE SEAT IS ASKED OF THE RUNNING ORGANISATION BEFORE THE SNAPSHOT,
+	// which is in memory rather than in the replicated estate, and recorded
+	// by the handle it answers to.
+	var seat *string
+	if in.Seat != nil {
+		handle := ""
+		if *in.Seat != "" {
+			found, err := w.seatOf(ctx, *in.Seat)
+			if err != nil {
+				return statelog.Result{}, err
+			}
+			handle = found.Handle
 		}
-		if seat.Handle == from {
+		seat = &handle
+	}
+	// THE SCOPE: the person's bucket, and the leavers of a seat the record
+	// binds — a bind stamps the tombstone of every removal that released
+	// the seat ([reboundRemovals]), and a tombstone is filed under the
+	// person who left.
+	scopeOf := func(ctx context.Context, tx *sql.Tx) (ScopeSet, error) {
+		people := []string{in.PersonID}
+		if seat != nil && *seat != "" {
+			leavers, err := leaversOf(ctx, tx, *seat)
+			if err != nil {
+				return ScopeSet{}, err
+			}
+			people = append(people, leavers...)
+		}
+		return PeopleScope(people...), nil
+	}
+	decide := func(tx *sql.Tx) ([]byte, error) {
+		if err := wholeDirectory(ctx, tx); err != nil {
+			return nil, err
+		}
+		kind, held, err := identityOf(ctx, tx, in.PersonID)
+		if err != nil {
+			return nil, err
+		}
+		next := IdentityChange{V: DocumentVersion, Login: held.Login,
+			SeatID: held.SeatID}
+		if in.Login != nil {
+			next.Login = *in.Login
+		}
+		if seat != nil {
+			next.SeatID = *seat
+		}
+		if next.Login == held.Login && next.SeatID == held.SeatID {
 			// NOTHING TO MOVE, and it is the answer rather than a
-			// refusal: the edit asked for the seat they hold, by a name
-			// it answers to. Applied with no record, as the framework
-			// answers a decision that has nothing to write.
-			return statelog.Result{Outcome: statelog.OutcomeApplied,
-				OpID: opID}, nil
+			// refusal: the edit asked for what the person already holds,
+			// by a name it answers to.
+			return nil, errNothingToPublish
 		}
-	}
-	if to == from {
-		return statelog.Result{}, fmt.Errorf("%w: %s already holds the %s "+
-			"%q, so there is nothing to move", ErrInvalid, personID, kind, to)
-	}
-	// ONE MARK FOR THE MOVE, so the release decides from a state holding
-	// the claim that freed its token.
-	mark := w.gesture()
-	claimed, err := w.claim(ctx, mark, kind, to, personID, Claim{},
-		statelog.StepOpID(opID, string(kind)), nil)
-	switch {
-	case err != nil:
-		return statelog.Result{}, err
-	case claimed.Outcome == statelog.OutcomeUnknown:
-		// THE MOVE ITSELF IS UNRESOLVED, so nothing may be built on it:
-		// releasing the old token behind a claim that may not have landed
-		// would leave the person holding neither.
-		return unresolved(opID), nil
-	case from == "":
-		claimed.OpID = opID
-		return claimed, nil
-	}
-	releaseID := statelog.StepOpID(opID, "release", string(kind))
-	released, err := w.release(ctx, mark, kind, from, personID, releaseID,
-		reason, true)
-	var taken *ErrClaimed
-	switch {
-	case err == nil && released.Outcome != statelog.OutcomeUnknown:
-		released.OpID = opID
-		return released, nil
-	case errors.As(err, &taken):
-		// TAKEN BETWEEN THE TWO — see [Writer.Rename]. The move landed,
-		// and the next holder's claim closes the old subject's trail.
-	default:
-		// THE MOVE LANDED WITH ITS CLAIM, and only the old subject's
-		// trail is short a record — see this function's doc.
-		attrs := []any{"kind", string(kind), "person", personID,
-			"released", from, "op_id", releaseID,
-			"outcome", string(released.Outcome)}
-		if err != nil {
-			attrs = append(attrs, "error", err.Error())
+		if next.Login != held.Login {
+			if err := loginFits(kind, next.Login); err != nil {
+				return nil, err
+			}
+			if err := taken(ctx, tx, UniqueLogin, next.Login, in.PersonID); err != nil {
+				return nil, err
+			}
 		}
-		writeLog.WarnContext(ctx, "iam_move_release_unrecorded", attrs...)
+		if next.SeatID != held.SeatID && next.SeatID != "" {
+			if err := taken(ctx, tx, UniqueSeat, next.SeatID, in.PersonID); err != nil {
+				return nil, err
+			}
+		}
+		return EncodeIdentity(next)
 	}
-	claimed.OpID = opID
-	return claimed, nil
+	return w.publishDirectory(ctx, OpIdentity, in.PersonID, in.OpID, in.Reason,
+		scopeOf, decide)
+}
+
+// IdentityEdit is what changing somebody's login or seat needs.
+type IdentityEdit struct {
+	PersonID string
+
+	// Login is the new login, or nil to leave it. "" is refused: a login
+	// is never cleared, only changed.
+	Login *string
+
+	// Seat is the seat to bind them to, by any address the chart answers
+	// to it by, "" to unbind them, or nil to leave the binding as it is.
+	Seat *string
+
+	OpID   string
+	Reason string
 }
 
 // Revoke bumps a person's revocation epoch, ending every session they hold.
@@ -1265,12 +905,19 @@ func (w *Writer) SetStage(ctx context.Context, personID string, stage iam.Stage,
 	return result, err
 }
 
-// Remove is the one operation here with no inverse.
+// Remove is the one operation here with no inverse, and it rides the
+// DIRECTORY subject: it frees a login, an address and a seat.
 //
-// IT READS THE CLAIMS INSIDE THE SNAPSHOT, because the record has to carry
-// them: the tombstone outlives the person's row, and an operator asking "who
-// held this address" after the fact has only that row to read. It carries the
-// BLINDS rather than the addresses, for the reason the row's own comment gives.
+// IT READS WHAT IT RELEASES INSIDE THE SNAPSHOT, because the record has to
+// carry it: the tombstone outlives the person's row, and an operator asking
+// "who held this address" after the fact has only that row to read. It carries
+// the BLINDS rather than the addresses, for the reason the row's own comment
+// gives.
+//
+// IT TAKES NOTHING, so it does not ask [wholeDirectory]: a record this node
+// retained about the same person is refused by the framework's own probe over
+// the removal's buckets, and a removal of somebody already removed is refused
+// before it is published ([removedPersonIn]).
 func (w *Writer) Remove(ctx context.Context, personID, opID, reason string) (
 	statelog.Result, error) {
 
@@ -1281,118 +928,54 @@ func (w *Writer) Remove(ctx context.Context, personID, opID, reason string) (
 		return statelog.Result{}, errors.New("iamdomain: a removal needs a " +
 			"person and an operation id")
 	}
-	// THE SCOPE IS READ BEFORE THE SNAPSHOT AND CONFIRMED INSIDE IT, for
-	// [Writer.seatIdentity]'s reason: a record's scope is stated before the
-	// framework takes the snapshot its decide runs in, and a removal's apply
-	// erases rows filed under the buckets of the person's ADDRESSES as well
-	// as their own ([erasedBlinds]). A round whose snapshot names an address
-	// the scope does not cover publishes nothing and is read again.
-	for attempt := 1; ; attempt++ {
-		result, err := w.remove(ctx, personID, opID, reason)
-		if !errors.Is(err, errRemovalScopeMoved) || attempt == removalScopeAttempts {
-			return result, err
+	// THE SCOPE: the person's bucket and their address's, whose rows their
+	// erasure clears ([eraseSealed]) — an invitation and the trail row its
+	// issue wrote are filed under the address, not under a person.
+	scopeOf := func(ctx context.Context, tx *sql.Tx) (ScopeSet, error) {
+		held, err := heldIdentifiers(ctx, tx, personID)
+		if err != nil {
+			return ScopeSet{}, err
 		}
+		buckets := []Bucket{BucketOf(personID)}
+		if held.EmailBlind != "" {
+			buckets = append(buckets, BucketOf(held.EmailBlind))
+		}
+		return BucketScope(buckets...), nil
 	}
+	decide := func(tx *sql.Tx) ([]byte, error) {
+		// NO ROW IS NOT A REASON TO PUBLISH NOTHING. A person this snapshot
+		// does not hold is removed carrying an EMPTY released set
+		// ([heldIdentifiers]), which is the truth — a snapshot decided at
+		// the directory's anchor holds every enrolment there is, so there
+		// is nothing to give back — and the tombstone still holds the id
+		// against every later record that names it.
+		held, err := heldIdentifiers(ctx, tx, personID)
+		if err != nil {
+			return nil, err
+		}
+		return EncodeRemoval(Removal{V: GateRecordVersion, Released: held})
+	}
+	return w.publishDirectory(ctx, OpRemove, personID, opID, reason, scopeOf,
+		decide)
 }
 
-// errRemovalScopeMoved is a removal whose snapshot named an address its scope,
-// read a moment before, did not cover. [Writer.Remove] reads it again.
-var errRemovalScopeMoved = fmt.Errorf("iamdomain: the addresses a removal "+
-	"erases moved between reading its scope and deciding it: %w",
-	statelog.ErrConflict)
+// heldIdentifiers reads the unique values a person holds in one snapshot —
+// nothing, for a person this snapshot does not hold.
+func heldIdentifiers(ctx context.Context, tx *sql.Tx, personID string) (
+	Identifiers, error) {
 
-// removalScopeAttempts bounds how often a removal re-reads a scope its
-// snapshot overtook.
-//
-// THREE, for the reason every bounded re-read here gives: what moves the set
-// is an invitation redeemed or an address claimed for the person between two
-// reads a few milliseconds apart, each of which lands once, and a set still
-// moving after two re-reads is being rewritten in a loop — worth the conflict
-// it answers rather than a removal that spins on it.
-const removalScopeAttempts = 3
-
-// removalClaims reads the claims a person holds in one snapshot — nothing, for
-// a person this snapshot does not hold.
-func removalClaims(ctx context.Context, tx *sql.Tx, personID string) (Claims, error) {
-	var claims Claims
+	var held Identifiers
 	err := tx.QueryRowContext(ctx, `
 		SELECT email_blind, login, seat_id FROM iam_people WHERE id = ?`,
-		personID).Scan(&claims.EmailBlind, &claims.Login, &claims.SeatID)
+		personID).Scan(&held.EmailBlind, &held.Login, &held.SeatID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Claims{}, nil
+		return Identifiers{}, nil
 	}
 	if err != nil {
-		return Claims{}, fmt.Errorf("iamdomain: read person %s's claims: %w",
-			personID, err)
+		return Identifiers{}, fmt.Errorf("iamdomain: read what person %s "+
+			"holds: %w", personID, err)
 	}
-	return claims, nil
-}
-
-// removalScope is every bucket a removal of personID writes: theirs, and each
-// address's their erasure clears ([erasedBlinds]).
-func removalScope(personID string, blinds []string) ScopeSet {
-	buckets := []Bucket{BucketOf(personID)}
-	for _, blind := range blinds {
-		buckets = append(buckets, BucketOf(blind))
-	}
-	return BucketScope(buckets...)
-}
-
-// remove is one attempt of [Writer.Remove], at the scope this node's rows give
-// now.
-func (w *Writer) remove(ctx context.Context, personID, opID, reason string) (
-	statelog.Result, error) {
-
-	var blinds []string
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		claims, err := removalClaims(ctx, tx, personID)
-		if err != nil {
-			return err
-		}
-		blinds, err = erasedBlinds(ctx, tx, personID, claims.EmailBlind)
-		return err
-	}); err != nil {
-		return statelog.Result{}, err
-	}
-	scope := removalScope(personID, blinds)
-	rec, err := w.record(PersonSubject(personID), OpRemove, personID, scope,
-		nil, reason)
-	if err != nil {
-		return statelog.Result{}, err
-	}
-	decide := func(tx *sql.Tx) (err error) {
-		claims, err := removalClaims(ctx, tx, personID)
-		if err != nil {
-			return err
-		}
-		now, err := erasedBlinds(ctx, tx, personID, claims.EmailBlind)
-		if err != nil {
-			return err
-		}
-		if !scope.Covers(removalScope(personID, now)) {
-			return errRemovalScopeMoved
-		}
-		// NO ROW IS NOT A REASON TO PUBLISH NOTHING, and it used to be
-		// one. A person can be missing from THIS node's rows for two
-		// opposite reasons — they were already removed, or this node has
-		// not applied their enrolment yet — and a decide that quietly
-		// published nothing turned the second into a removal that
-		// silently did not happen. So a person this snapshot does not hold
-		// is removed carrying an EMPTY released set ([removalClaims]),
-		// which is the truth: this snapshot knows of no claims to give
-		// back.
-		//
-		// The cost when they really were already removed is one record
-		// every node's own gate drops, which is what the removal gate is
-		// for — and a removal is the rarest write in this domain.
-		rec.Mutation, err = EncodeRemoval(Removal{
-			V: GateRecordVersion, Released: claims,
-		})
-		return err
-	}
-	result, err := w.publish(ctx,
-		w.request(ctx, &rec, opID, statelog.PatternArbitrated, decide))
-	return result, err
+	return held, nil
 }
 
 // OpenSession records one session beginning, and answers the two counters the
@@ -1573,8 +1156,8 @@ type SessionStart struct {
 //
 // # The caller names the session's PERSON
 //
-// For [Writer.Release]'s reason: validation asks whether a deferral covers the
-// PERSON's bucket, so a close has to be filed there. It used to be filed under
+// Validation asks whether a deferral covers the PERSON's bucket, so a close has
+// to be filed there. It used to be filed under
 // the bucket of the lineage — a hash no read consults — so a node that could
 // not decode a sign-out went on serving the session it ended, reporting
 // itself current. Both callers know the person: a sign-out reads it off a
@@ -1632,71 +1215,62 @@ func (w *Writer) missingKeys() string {
 	}
 }
 
-// claimSubject is the subject one claim kind arbitrates on.
-func claimSubject(kind ObjectKind, token string) (Subject, error) {
-	switch kind {
-	case KindEmail:
-		return EmailSubject(token), nil
-	case KindLogin:
-		return LoginSubject(token), nil
-	case KindSeat:
-		return SeatSubject(token), nil
-	}
-	return Subject{}, fmt.Errorf("iamdomain: %s is not a claim kind — an "+
-		"address, a login and a seat binding are the three things two people "+
-		"can race for", kind)
-}
-
-// holderOf is who currently holds a claim, read INSIDE a decide's snapshot.
-func holderOf(ctx context.Context, tx *sql.Tx, kind ObjectKind, token string) (
-	string, bool, error) {
+// taken refuses a value somebody other than except holds, read INSIDE a
+// directory decide's snapshot, naming who holds it.
+//
+// THE COLUMN IS CHOSEN HERE, by a switch over the three values, never from a
+// caller's string: a column name built at a call site is a string this package
+// would be interpolating into SQL from somewhere it cannot see.
+func taken(ctx context.Context, tx *sql.Tx, field Unique, value,
+	except string) error {
 
 	var column string
-	switch kind {
-	case KindEmail:
+	switch field {
+	case UniqueEmail:
 		column = "email_blind"
-	case KindLogin:
+	case UniqueLogin:
 		column = "login"
-	case KindSeat:
+	case UniqueSeat:
 		column = "seat_id"
 	default:
-		return "", false, fmt.Errorf("iamdomain: %s is not a claim kind", kind)
+		return fmt.Errorf("iamdomain: %q is not a value the directory keeps "+
+			"to one holder", field)
 	}
 	var holder string
 	err := tx.QueryRowContext(ctx,
-		`SELECT id FROM iam_people WHERE `+column+` = ?`, token).Scan(&holder)
+		`SELECT id FROM iam_people WHERE `+column+` = ? AND id <> ? LIMIT 1`,
+		value, except).Scan(&holder)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return "", false, nil
+		return nil
 	case err != nil:
-		return "", false, fmt.Errorf("iamdomain: read the %s claim on %s: %w",
-			kind, token, err)
+		return fmt.Errorf("iamdomain: read who holds the %s %s: %w", field,
+			value, err)
 	}
-	return holder, true, nil
+	return &ErrTaken{Field: field, Value: value, Person: holder}
 }
 
-// enrolledKindOf is the kind of an ENROLLED person, read inside a decide's
-// snapshot, or a refusal naming why there is none.
-//
-// A RESERVATION IS NOT ENROLLED. An enrolment's claims land before its content
-// record, and their apply leaves a row with no kind — so a row with an empty
-// kind is somebody whose enrolment has not finished on this node, and a login
-// judged against it would be judged against nothing. Refused rather than
-// guessed, and under [ErrNotFound], because what the caller has to do is the
-// same either way: name somebody this node holds.
-func enrolledKindOf(ctx context.Context, tx *sql.Tx, personID string) (iam.Kind, error) {
-	var kind string
-	err := tx.QueryRowContext(ctx,
-		`SELECT kind FROM iam_people WHERE id = ?`, personID).Scan(&kind)
+// identityOf is an enrolled person's kind and the unique values they hold,
+// read inside a decide's snapshot, or [ErrNotFound].
+func identityOf(ctx context.Context, tx *sql.Tx, personID string) (
+	iam.Kind, Identifiers, error) {
+
+	var (
+		kind string
+		held Identifiers
+	)
+	err := tx.QueryRowContext(ctx, `
+		SELECT kind, email_blind, login, seat_id FROM iam_people WHERE id = ?`,
+		personID).Scan(&kind, &held.EmailBlind, &held.Login, &held.SeatID)
 	switch {
-	case errors.Is(err, sql.ErrNoRows), err == nil && reservation(kind):
-		return "", fmt.Errorf("%w: this node holds no enrolled person %s, so it "+
-			"cannot say which grammar their login must follow — a person's is "+
-			"dotted and a machine's is coloned", ErrNotFound, personID)
+	case errors.Is(err, sql.ErrNoRows):
+		return "", Identifiers{}, fmt.Errorf("%w: this node holds no person "+
+			"%s", ErrNotFound, personID)
 	case err != nil:
-		return "", fmt.Errorf("iamdomain: read person %s's kind: %w", personID, err)
+		return "", Identifiers{}, fmt.Errorf("iamdomain: read person %s: %w",
+			personID, err)
 	}
-	return iam.Kind(kind), nil
+	return iam.Kind(kind), held, nil
 }
 
 // seatOf is the ADVISORY read of the organisation this node runs, and its doc
@@ -1776,19 +1350,14 @@ func heldPerson(ctx context.Context, tx *sql.Tx, personID, forming string) (
 	Person, error) {
 
 	var (
-		document    []byte
-		kind, stage string
+		document []byte
+		stage    string
 	)
 	err := tx.QueryRowContext(ctx,
-		`SELECT document, kind, stage FROM iam_people WHERE id = ?`, personID).
-		Scan(&document, &kind, &stage)
+		`SELECT document, stage FROM iam_people WHERE id = ?`, personID).
+		Scan(&document, &stage)
 	switch {
-	case errors.Is(err, sql.ErrNoRows), err == nil && reservation(kind):
-		// A RESERVATION HAS NO DOCUMENT TO FORM THE NEXT ONE FROM, and
-		// it is refused as the absence it is rather than as a document
-		// that failed to open: the enrolment it belongs to has not
-		// finished, and what the caller has to do is the same either
-		// way — name somebody this node holds.
+	case errors.Is(err, sql.ErrNoRows):
 		return Person{}, fmt.Errorf("%w: person %q is not enrolled on this "+
 			"node, so %s cannot be formed here", ErrNotFound, personID, forming)
 	case err != nil:
@@ -2235,18 +1804,14 @@ func loginOf(ctx context.Context, tx *sql.Tx, personID string) (string, error) {
 
 // Invite mints an invitation to an address nobody in this company holds.
 //
-// # It arbitrates on the ADDRESS, not on the invitation's own id
+// # It is a directory record
 //
-// An invitation's id is a fresh uuid nobody else would name, so a subject
-// keyed on it would never contend with anything — and two administrators
-// inviting one address would both succeed, producing two links for one
-// person, either of which creates them. The address is the thing two writers
-// must not both win, so it is the subject: a create at an expectation of
-// zero, on the SAME subject an enrolment's email claim takes, so an
-// invitation and a hire for one address contend as well.
-//
-// The loser reads a newer row and answers 409 naming what is already there,
-// which is [ErrClaimed]'s whole job.
+// An invitation is an address spoken for by somebody who has no person yet, so
+// it is decided where every other address is: on the directory subject, whose
+// decide refuses an address a person holds or another open invitation holds
+// ([ErrTaken]). Two administrators inviting one address, and an invitation
+// racing a hire of the same address, contend at the broker and the loser
+// decides again from rows that hold the winner.
 //
 // # The link is not here, and neither is its secret
 //
@@ -2260,10 +1825,9 @@ func loginOf(ctx context.Context, tx *sql.Tx, personID string) (string, error) {
 //
 // An invitation may name a seat ([InviteMint.Seat]) — a HUMAN seat the chart
 // holds and nobody is bound to — and redeeming it then binds the person it
-// creates to that seat, as one more claim of the redemption's own sequence.
-// The seat is judged here against this node's chart and directory, which is
-// advisory for the reason every cross-log read in this domain is: the claim at
-// the redemption is what arbitrates.
+// creates to that seat, in the redemption's own record. The chart is read
+// before anything is published, advisorily, and the directory in the record's
+// own snapshot; the redemption's record asks the directory again.
 //
 // # Its id is its OPERATION's, derived under the company's key
 //
@@ -2271,8 +1835,8 @@ func loginOf(ctx context.Context, tx *sql.Tx, personID string) (string, error) {
 // caller mints, so a retry of an issue whose outcome nobody could establish —
 // the one retry the answer tells a caller to make — names the invitation its
 // first attempt issued. The id used to be minted per request: the retry named a
-// SECOND invitation, which the address refused as spoken for by the first, so
-// the retry answered 409 against its own first attempt and the link to the one
+// SECOND invitation, which the address refused as held by the first, so the
+// retry answered 409 against its own first attempt and the link to the one
 // that may have landed was never shown to anybody. A retry that finds its own
 // invitation publishes nothing and answers it; a key that already issued an
 // invitation for another address or on other terms, or one no longer open, is
@@ -2296,8 +1860,8 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 			"operation key — its id is derived from it")
 	case in.Email == "":
 		return InviteIssued{}, errors.New("iamdomain: an invitation needs " +
-			"the address it is for — it arbitrates on that address, so one " +
-			"with none would contend with nothing and two would both win")
+			"the address it is for — it is what the directory holds the " +
+			"invitation against every person and every open invitation by")
 	case len(in.Email) > MaxAddress:
 		return InviteIssued{}, fmt.Errorf("%w: the address is %d bytes and the "+
 			"cap is %d, the longest RFC 5321 permits", ErrInvalid,
@@ -2314,7 +1878,7 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	blinder, err := w.blinds.Blinder(ctx)
 	if err != nil {
 		return InviteIssued{}, fmt.Errorf("iamdomain: this node cannot "+
-			"derive the subject an invitation's address arbitrates on: %w", err)
+			"derive the blind an invitation's address is compared by: %w", err)
 	}
 	blind, err := blinder.Email(in.Email)
 	if err != nil {
@@ -2358,7 +1922,7 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	// that says so: an older node defers it and answers the link 410,
 	// rather than redeeming it on its id.
 	mutation, err := EncodeInvitation(Invitation{
-		V: DocumentVersion, ID: id, Sealed: sealed,
+		V: DocumentVersion, ID: id, EmailBlind: blind, Sealed: sealed,
 		InvitedBy: w.Actor, Grants: in.Grants,
 		Verifier: InvitationVerifier(secret), Seat: seat,
 		ExpiresAt: in.ExpiresAt,
@@ -2366,59 +1930,43 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	if err != nil {
 		return InviteIssued{}, err
 	}
-	subject := EmailSubject(blind)
 	// THE BUCKET IS THE ADDRESS'S OWN, matching the apply: an invitation
 	// has no person until it is redeemed, and a bucket derived from an
 	// empty id would put every outstanding invitation in one sweep.
-	rec, err := w.record(subject, OpInvite, "",
-		BucketScope(BucketOf(blind)), mutation, in.Reason)
-	if err != nil {
-		return InviteIssued{}, err
+	scopeOf := func(context.Context, *sql.Tx) (ScopeSet, error) {
+		return BucketScope(BucketOf(blind)), nil
 	}
-	// THE ROW READ IS WHAT REFUSES THE SEQUENTIAL CASE, and the broker's
-	// create-at-zero is what settles the concurrent one. Both are needed
-	// and neither substitutes for the other: two administrators inviting
-	// at the same instant contend at the broker because neither subject
-	// has an anchor yet, and the second one an hour later publishes above
-	// the anchor the first left — so without this read it would land.
+	// THIS OPERATION'S OWN INVITATION FIRST, because a retry finds the one
+	// its first attempt issued on this very address — outstanding, holding
+	// it — and must be answered with it rather than refused by it.
 	//
-	// IT READS BOTH TABLES, because an address can be spoken for by a
-	// PERSON or by an invitation nobody has redeemed. Reading only the
-	// people, as a claim's own decide does, missed every outstanding
-	// invitation and produced a second link for the same address.
-	//
-	// AND THIS OPERATION'S OWN INVITATION FIRST, because a retry finds the
-	// one its first attempt issued on this very address — outstanding,
-	// spoken for — and must be answered with it rather than refused by it.
+	// THEN BOTH TABLES, because an address can be held by a PERSON or by an
+	// invitation nobody has redeemed: reading only the people missed every
+	// outstanding invitation and produced a second link for one address.
 	expires := in.ExpiresAt
-	decide := func(tx *sql.Tx) (err error) {
+	decide := func(tx *sql.Tx) (_ []byte, err error) {
 		expires = in.ExpiresAt
 		if err = w.issuedBefore(ctx, tx, id, blind, seat, in, &expires); err != nil {
-			return err
+			return nil, err
+		}
+		if err = wholeDirectory(ctx, tx); err != nil {
+			return nil, err
 		}
 		if seat != "" {
-			if err = invitableSeat(ctx, tx, seat, ""); err != nil {
-				return err
+			if err = taken(ctx, tx, UniqueSeat, seat, ""); err != nil {
+				return nil, err
 			}
 		}
-		holder, held, err := holderOf(ctx, tx, KindEmail, blind)
-		if err != nil {
-			return err
+		if err = taken(ctx, tx, UniqueEmail, blind, ""); err != nil {
+			return nil, err
 		}
-		if held {
-			return &ErrClaimed{Kind: KindEmail, Token: blind, Holder: holder}
+		if err = heldByInvitation(ctx, tx, blind, w.Now()); err != nil {
+			return nil, err
 		}
-		outstanding, found, err := openInvitationFor(ctx, tx, blind, w.Now())
-		if err != nil {
-			return err
-		}
-		if found {
-			return &ErrClaimed{Kind: KindEmail, Token: blind, Holder: outstanding}
-		}
-		return nil
+		return mutation, nil
 	}
-	result, err := w.publish(ctx,
-		w.request(ctx, &rec, in.OpID, statelog.PatternCreate, decide))
+	result, err := w.publishDirectory(ctx, OpInvite, "", in.OpID, in.Reason,
+		scopeOf, decide)
 	if err == nil && result.Collapsed {
 		// ANSWERED FROM THE LEDGER, so the decide above never compared this
 		// call's terms with the invitation the key issued, nor read the
@@ -2478,32 +2026,10 @@ func (w *Writer) issuedAs(ctx context.Context, id, blind, seat string,
 		"terms — retry the same key: %w", in.OpID, id, statelog.ErrUnavailable)
 }
 
-// invitableSeat refuses a seat an invitation may not bind because somebody is
-// already bound to it — anybody but redeemer, which is empty at the issue and
-// the person a redemption creates when [redeemableSeat] asks again, whose own
-// stopped attempt may already hold it. Read inside the snapshot the issue or
-// the redemption is decided in; that the seat is a human seat of the running
-// company was asked before it ([Writer.humanSeat]).
-//
-// ADVISORY, and says so: a bind landing after this read is settled by the
-// redemption's own claim. What it buys is that a seat a colleague already
-// holds is refused while the administrator is still looking at the form,
-// rather than found by the person the link was sent to.
-func invitableSeat(ctx context.Context, tx *sql.Tx, seat, redeemer string) error {
-	holder, held, err := holderOf(ctx, tx, KindSeat, seat)
-	if err != nil {
-		return err
-	}
-	if held && holder != redeemer {
-		return &ErrClaimed{Kind: KindSeat, Token: seat, Holder: holder}
-	}
-	return nil
-}
-
 // ErrOperationReused reports an operation key that already names something
 // other than what this call asks for: an invitation issued for another address
-// or on other terms, one no longer open, or an enrolment of a person who
-// already exists holding other claims.
+// or on other terms, one no longer open, or a create of a person who already
+// exists.
 //
 // A REFUSAL AND NOT A DEDUPE. The key is what a retry is recognised by, and a
 // retry is the SAME request: answered with the first attempt's object, a second
@@ -2594,15 +2120,31 @@ type InviteIssued struct {
 	ExpiresAt time.Time
 }
 
+// heldByInvitation refuses an address an open invitation holds, naming the
+// invitation — read inside a directory decide's snapshot.
+func heldByInvitation(ctx context.Context, tx *sql.Tx, blind string,
+	now time.Time) error {
+
+	open, found, err := openInvitationFor(ctx, tx, blind, now)
+	if err != nil {
+		return err
+	}
+	if found {
+		return &ErrTaken{Field: UniqueEmail, Value: blind, Invitation: open}
+	}
+	return nil
+}
+
 // openInvitationFor is the invitation on an address that has not been
 // redeemed and has not aged out, read INSIDE a decide's snapshot.
 //
 // THE WRITER'S CLOCK DECIDES THE EXPIRY HERE, which is the one place in this
 // domain that is acceptable: every instant an applier stores is the BROKER's,
-// and this read is advisory — what it buys is a better refusal, never the
-// arbitration. A writer whose clock is minutes out re-issues an invitation
-// somebody could still have used, or refuses one that had just aged out, and
-// both are ordinary administrative outcomes rather than a correctness loss.
+// and what the clock decides is only whether an invitation still holds its
+// address. A writer whose clock is minutes out issues an invitation beside one
+// somebody could still have used, or refuses one beside a link that had just
+// aged out — ordinary administrative outcomes, and never two people on one
+// address, since a redemption's own decide refuses an address a person holds.
 func openInvitationFor(ctx context.Context, tx *sql.Tx, blind string,
 	now time.Time) (string, bool, error) {
 
@@ -2769,11 +2311,11 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 // newer peer wrote that this build cannot name answers false, and a denylist
 // would have admitted it.
 //
-// EXPORTED for [LoginFits]'s reason: an edit that moves a seat or a login
-// before it changes grants asks this before its first record, so a grant the
-// caller may not confer is refused with nothing moved. The record's own decide
-// asks again in the snapshot the grants land from, and that answer is the
-// authority — the early one is read from rows that may be a moment old.
+// EXPORTED for the surface that asks it before an edit's first record: an edit
+// that moves a seat or a login before it changes grants asks it first, so a
+// grant the caller may not confer is refused with nothing moved. The record's
+// own decide asks again in the snapshot the grants land from, and that answer
+// is the authority — the early one is read from rows that may be a moment old.
 func (w *Writer) MayConfer(before, after []iam.Grant) error {
 	for _, g := range after {
 		if slices.Contains(before, g) || w.Can(g) {
@@ -2816,68 +2358,6 @@ type PersonUpdate struct {
 	// [CredentialSet.Apply]'s reason.
 	Apply func(Person) (Person, error)
 
-	OpID   string
-	Reason string
-}
-
-// SpendInvitation records an invitation being used, naming the person it
-// created.
-//
-// A SECOND RECORD ON THE INVITATION'S OWN SUBJECT, because the enrolment
-// beside it arbitrates on the person it creates rather than on the address the
-// link was issued to — so it is the spend that marks the link used, where the
-// next redemption's decide reads it.
-//
-// NO GRANT. The invitation IS the authority — what redeeming it confers was
-// decided by whoever issued it, once, rather than again by whoever happens to
-// process the redemption.
-func (w *Writer) SpendInvitation(ctx context.Context, in InvitationSpend) (
-	statelog.Result, error) {
-
-	if in.ID == "" || in.Blind == "" || in.Person == "" || in.OpID == "" {
-		return statelog.Result{}, errors.New("iamdomain: spending an " +
-			"invitation needs its id, the address blind it arbitrates on, " +
-			"the person it created and an operation id")
-	}
-	mutation, err := EncodeInvitation(Invitation{
-		V: DocumentVersion, ID: in.ID, Person: in.Person,
-	})
-	if err != nil {
-		return statelog.Result{}, err
-	}
-	// THE ADDRESS BLIND IS THE SUBJECT, not the invitation's own id, and
-	// the reason is what an invitation IS: a claim on an address by
-	// somebody who has no person yet. It arbitrates where the address
-	// does, which is what makes an invite and an enrolment for one
-	// address contend — and what makes two nodes redeeming one link
-	// contend with each other.
-	// THE SCOPE IS BOTH BUCKETS, because the apply writes in both: the
-	// invitation row it marks spent is filed under its ADDRESS's bucket, and
-	// the claim it takes and the trail row it writes under the person's. A
-	// scope of the person's alone let a node that had deferred the
-	// invitation's own record apply the spend first — marking nothing — and
-	// then write the invitation back unredeemed when it reprocessed it.
-	rec, err := w.record(EmailSubject(in.Blind), OpRedeem, in.Person,
-		BucketScope(BucketOf(in.Person), BucketOf(in.Blind)), mutation, in.Reason)
-	if err != nil {
-		return statelog.Result{}, err
-	}
-	result, err := w.publish(ctx,
-		w.request(ctx, &rec, in.OpID, statelog.PatternArbitrated, nil))
-	return result, err
-}
-
-// InvitationSpend is what redeeming an invitation needs.
-type InvitationSpend struct {
-	// ID is the invitation's own id, which the record's payload carries
-	// so the applier knows which row it is filling in.
-	ID string
-
-	// Blind is the keyed address blind this record ARBITRATES on. See
-	// [Writer.SpendInvitation] for why the two are different values.
-	Blind string
-
-	Person string
 	OpID   string
 	Reason string
 }

@@ -206,9 +206,10 @@ type Writer interface {
 	// they hold.
 	Revoke(ctx context.Context, personID, opID, reason string) (statelog.Result, error)
 
-	// Enrol creates a person. Reached by redeeming an invitation, and by
-	// nothing else here: the first person is invited like everybody
-	// after them, by an administrator or a Tier A token through /iam.
+	// Enrol creates a person — and, for a redemption, spends the link in
+	// the same record. Reached by redeeming an invitation, and by nothing
+	// else here: the first person is invited like everybody after them,
+	// by an administrator or a Tier A token through /iam.
 	Enrol(ctx context.Context, in iamdomain.Enrolment) (statelog.Result, error)
 
 	// SetCredentials replaces a person's credential set, forming the new
@@ -216,11 +217,6 @@ type Writer interface {
 	// a two-request enrolment from pairing an old decision with a new
 	// expectation.
 	SetCredentials(ctx context.Context, in iamdomain.CredentialSet) (statelog.Result, error)
-
-	// SpendInvitation records a link being used, naming the person it
-	// created. It arbitrates on the ADDRESS BLIND, which is what makes
-	// two nodes redeeming one link contend.
-	SpendInvitation(ctx context.Context, in iamdomain.InvitationSpend) (statelog.Result, error)
 }
 
 // landed reports whether a write's record is durable: applied here, or

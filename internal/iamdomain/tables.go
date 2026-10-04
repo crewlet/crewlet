@@ -28,16 +28,13 @@ import "slices"
 // hold which keys. A replay on a node whose ring no longer holds the key a
 // value was sealed under still rebuilds the row; it just cannot read it.
 var ReproducibleTables = []string{
-	// The person, and the three claims denormalised onto their row.
+	// The person, with their login, address blind and seat on their row.
 	//
-	// THE CLAIMS ARE COLUMNS AND NOT A CLAIMS TABLE, which is the one
-	// place this domain looks like it is missing a normalisation and is
-	// not. A claim's uniqueness is enforced by its SUBJECT at the broker,
-	// so a table would add no constraint; what the columns buy is the
-	// DUPLICATE-CLAIM SCAN — three partial indexes over them are how a
-	// duty reports two people holding one address, which is a state only a
-	// restore or a reanchor can produce and which nothing else in this
-	// estate could ever notice.
+	// COLUMNS AND NOT A TABLE OF THEIR OWN, which is the one place this
+	// domain looks like it is missing a normalisation and is not. The
+	// unique values live on the row; the directory subject is what keeps
+	// them unique — every write that sets one decides from the whole
+	// directory — so a table would add no constraint, only a join.
 	"iam_people",
 
 	// What a person proves themselves with: a password verifier, a second

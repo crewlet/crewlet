@@ -77,18 +77,6 @@ type PersonRow struct {
 
 	// Version is the iam position that last wrote this row.
 	Version uint64
-
-	// Reserved reports a RESERVATION: an enrolment whose claims landed and
-	// whose content record has not — see [Sighting.Reserved]. It carries
-	// the claimed columns and nothing a person is: no kind, no stage, no
-	// grants, and nothing sealed that the content record would have
-	// placed.
-	//
-	// LISTED RATHER THAN HIDDEN, because it holds an address, a login or
-	// a seat nobody else can take, and an administrator whose enrolment
-	// was refused as "claimed" has to be able to find what claimed it.
-	// Decoded as a person, it failed the whole directory page instead.
-	Reserved bool
 }
 
 // PeopleQuery is one page of the directory.
@@ -159,7 +147,7 @@ func (r *Reader) People(ctx context.Context, q PeopleQuery) (PeoplePage, error) 
 	query.WriteString(`
 		SELECT p.id, p.kind, p.stage, p.login, p.name_sealed, p.email_sealed,
 		       p.seat_id, p.document,
-		       p.created_at, p.updated_at, MAX(p.version, p.scoped_through),
+		       p.created_at, p.updated_at, p.version,
 		       COALESCE(e.epoch, 0)
 		FROM iam_people p
 		LEFT JOIN iam_revocation_epochs e ON e.person_id = p.id
@@ -215,7 +203,7 @@ func (r *Reader) Person(ctx context.Context, id string) (PersonRow, error) {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT p.id, p.kind, p.stage, p.login, p.name_sealed, p.email_sealed,
 			       p.seat_id, p.document,
-			       p.created_at, p.updated_at, MAX(p.version, p.scoped_through),
+			       p.created_at, p.updated_at, p.version,
 			       COALESCE(e.epoch, 0)
 			FROM iam_people p
 			LEFT JOIN iam_revocation_epochs e ON e.person_id = p.id
@@ -263,16 +251,12 @@ func scanPerson(rows *sql.Rows) (PersonRow, error) {
 	out.Kind = iam.Kind(kind)
 	out.Stage = iam.Stage(stage)
 	out.Epoch = uint64(epoch)
-	if reservation(kind) {
-		out.Reserved = true
-	} else {
-		person, err := DecodePerson(document)
-		if err != nil {
-			return PersonRow{}, fmt.Errorf("iamdomain: open person %q: %w",
-				out.ID, err)
-		}
-		out.Grants = person.Grants
+	person, err := DecodePerson(document)
+	if err != nil {
+		return PersonRow{}, fmt.Errorf("iamdomain: open person %q: %w",
+			out.ID, err)
 	}
+	out.Grants = person.Grants
 	out.CreatedAt = fromMillis(created)
 	out.UpdatedAt = fromMillis(updated)
 	out.Version = uint64(version)
@@ -639,8 +623,7 @@ type SeatBinding struct {
 	// Seat is the seat's handle, which is immutable (ADR-0013).
 	Seat string
 
-	// Stage is the bound person's stage, from the column; empty for a
-	// reservation.
+	// Stage is the bound person's stage, from the column.
 	Stage iam.Stage
 }
 
@@ -652,11 +635,11 @@ func (p PersonRow) Binding() SeatBinding {
 }
 
 // HoldersOf is who this node's directory binds to each of seats, read in ONE
-// snapshot: every person with a row, at whatever stage — a reservation, an
-// invited or suspended person, an active one — because a removal deletes the
-// row and every other stage is somebody the seat still names. A seat nobody
-// holds is absent from the answer, and a seat two people hold (a duplicate a
-// restore left behind) names both.
+// snapshot: every person with a row, at whatever stage — an invited or
+// suspended person, an active one — because a removal deletes the row and
+// every other stage is somebody the seat still names. A seat nobody holds is
+// absent from the answer, and a seat two rows hold — which only a record this
+// node retained, or a restore, leaves behind — names both.
 //
 // It is the company write's question — may this seat leave the company? — so
 // it answers about the seats asked and no others. Three-valued like everything
@@ -692,8 +675,7 @@ func (r *Reader) HoldersOf(ctx context.Context, seats []string) (
 // The dangling-binding alarm asks about bindings on every heartbeat, and a
 // directory page reads every person — bound or not — and decodes each row's
 // document to answer it. This reads the binding columns of the bound rows and
-// nothing else, over the partial index the duplicate-seat report already
-// ships (`iam_people_seat_claim_idx`), so its cost is the number of people
+// nothing else, over the seat index, so its cost is the number of people
 // bound to a seat rather than the size of the company.
 //
 // Three-valued like everything here: an error is the unknown arm, and an

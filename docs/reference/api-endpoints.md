@@ -231,7 +231,7 @@ node means nothing was done.
 | `POST` | `/auth/login` | **Sign in.** Login or address, password, and a second factor where one is held. **Unguarded**, and throttled on the login **as typed** from the caller's source: a failure costs the next attempt a wait, never a lockout — see [below](#a-failure-costs-a-wait-never-a-lockout). Every failure answers one code after the same argon2id derivation — see [below](#every-failed-sign-in-is-one-refusal). A node that cannot read the identity estate or record the session answers `503` — and **every `503` under `/auth` carries a `Retry-After`**, so a client can tell "ask again in a moment" from a node that is gone. A write whose outcome nobody can establish — the second factor's spend, the session's own start — is that `503` with the `op_id`, and **never a session**: a code whose spend may not have landed is a code that still works. A success answers `{person, login, seat?, expires_at, position, status}`, and `status` is `signed_in` — or, where `api.auth.local.totp` is `required` and the person holds no second factor, `second_factor_enrolment_required`: the session it opened may only enrol one (see [A required second factor is enrolled before anything else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else)). `POST /auth/invite/{id}` and a password `POST /auth/step-up` answer the same shape, restricted on the same rule |
 | `GET` | `/auth/config` | What a sign-in page needs to know before anybody has signed in: which backend, and `min_password_length` — the deployment's own `api.auth.local.min_password_length`, never below the engine's twelve, which is exactly the floor every redemption enforces. **Unguarded**, and it carries **no user list and no count of people** |
 | `GET` | `/auth/invite/{id}` | **Renders an invitation and never spends it** — a link is followed by mail clients prefetching, scanners and preview cards, and one spent by a GET is an account created for somebody who never saw it. **Unguarded**: holding the link is the credential — the **secret** it carries after the id, presented in the `X-Crewlet-Invite-Secret` header and never in the URL. The link a person follows is the dashboard's screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`, whose fragment no browser sends to a server; the screen calls this route with the two halves apart. Answers the address it is for, who sent it, the password floor, the `seat` it binds (`{handle, name}` as the chart calls it now — absent for an invitation that binds none), and a `login` **proposed** from the address in the person grammar (`jane.doe@example.com` → `jane.doe`, `jane@example.com` → `jane.example`) for the form to pre-fill. Absent, redeemed, expired and a missing or wrong secret are one `410` — the same bytes, so a guessed secret against a leaked id does not say the id exists — and an id nobody issued or a secret that is not the link's is a **failed attempt**, counted on the audit trail's per-minute failure row (`iam_login_failures`) under the source it came from: walking ids or secrets is guessing at a link, and that source's count climbing is what shows it. It meets no [curve](#a-failure-costs-a-wait-never-a-lockout) — the secret is 256 bits nobody walks, and a curve keyed on the address a link came from is one a stranger there holds shut for everybody else. A link that **proved itself** and is spent — redeemed, expired, its address enrolled — is the same `410` and is not counted: that is the link's holder, or a mail scanner re-reading it, and a guesser who does not hold the link can never reach the difference |
-| `POST` | `/auth/invite/{id}` | Redeems it, conferring exactly the grants and seat whoever issued it decided — the enrolment names the invitation as its authority and presents the link's secret, and the record refuses anything the invitation does not cover, so a link spent or aged out between the form and the post is `410 invite_spent`. **Unguarded**. `{secret, login, name, password}`: `secret` is the half of the link after the id, checked exactly as the view checks it; the login is **required** — every person enrols with one, the name their changes are recorded under while they hold no seat. An absent login, or one outside a person's grammar (dotted, `jane.doe`), is `400` naming the rule and a login or address somebody already holds is `409` — without saying who, because a link is evidence of who the caller is and of nothing about anybody else. An invitation that binds a seat claims it **first** and binds the person to it: a seat removed, made an agent's or bound to somebody else since the issue is `410` before anything is written, and one a colleague's bind races is `409` saying the seat is taken, naming nobody. Only a record that could not land is `503`. **Retry until it lands**: the person a redemption creates is derived from the invitation, so every attempt names one person and a redeemer told their login is taken posts another. A link whose address somebody is already enrolled under is `410`, like a redeemed one. The company's **first person** redeems exactly this way: a Tier A token issues their invitation — see [How the first person exists](../concepts/identity-and-access.md#how-the-first-person-exists) |
+| `POST` | `/auth/invite/{id}` | Redeems it, conferring exactly the grants and seat whoever issued it decided — the enrolment names the invitation as its authority and presents the link's secret, and the record refuses anything the invitation does not cover, so a link spent or aged out between the form and the post is `410 invite_spent`. **Unguarded**. `{secret, login, name, password}`: `secret` is the half of the link after the id, checked exactly as the view checks it; the login is **required** — every person enrols with one, the name their changes are recorded under while they hold no seat. An absent login, or one outside a person's grammar (dotted, `jane.doe`), is `400` naming the rule and a login somebody already holds is `409` — without saying who, because a link is evidence of who the caller is and of nothing about anybody else. The redemption is **one record** — the person, their address, their login, the seat the invitation binds and the spent link — so every refusal writes nothing: a seat removed or made an agent's since the issue is `410`, and one bound to somebody else since is `409` saying the seat is taken, naming nobody. Only a record that could not land is `503`. **Retry until it lands**: a redeemer told their login is taken posts another. A link whose address somebody is already enrolled under is `410`, like a redeemed one. The company's **first person** redeems exactly this way: a Tier A token issues their invitation — see [How the first person exists](../concepts/identity-and-access.md#how-the-first-person-exists) |
 | `GET` | `/auth/session` | **Who you are**: your id, login, seat, kind, stage and grants, and `reauth_at`, the instant your proof of identity stops counting for a [step-up](#some-gestures-ask-how-recently-you-proved-who-you-are) gesture — with `step_up_due` saying whether the next one will ask you to confirm it — and `status`: `signed_in`, or `second_factor_enrolment_required` for a session that may only enrol a second factor, which is one of the routes such a session reaches |
 | `POST` | `/auth/token` | Exchanges a **Tier A bearer** — presented as `Authorization: Bearer`, never a cookie — for a one-hour session cookie. The session **is the token**: it names the token's login, and every request re-composes it from the entry this node holds now — the entry's grants cut to the ceiling, the seat the identity directory binds the token to, stepped up by construction as the bearer is. Removing or renaming the entry ends it on the next request. It answers to the token's **id**, not its value: a new value put under the same id leaves the sessions the old value opened working until their hour ends, so to cut a leaked value's sessions off at once, rotate by giving the token a **new id** — see [Identity and access](../concepts/identity-and-access.md#the-three-credential-shapes-meet-at-one-frame). `POST /auth/logout` from it closes it as it closes a person's, and `POST /auth/logout/all` from it and `crewlet iam invalidate-all` end it too. A refused bearer here is answered exactly as on every guarded route: `401`, counted on the audit trail's per-minute failure row, and never slowed or refused on its address — see [A bearer is its own protection](#a-bearer-is-its-own-protection) |
 | `POST` | `/auth/step-up` | Confirm who you are on a session that is already valid. The only route here that is **both guarded and throttled**: the caller is known, and unbounded retries against a known person is a password oracle with the enumeration already done. It answers a **fresh session cookie** and **ends the session it replaces** first — a close that does not land is `503` with a `Retry-After` and opens nothing, and a presented session that is no longer live is `401`. The replacement confirms the sign-in rather than repeating it, so it keeps the replaced session's absolute deadline |
@@ -745,11 +745,11 @@ makes. A write whose snapshot kept moving under it until the framework
 gave up is `409 stale`, as on `/work`: nothing about the request
 was wrong, and the same request read again lands.
 
-**A gesture that is several records answers its weakest.** A create with a
-seat, an edit that moves a login and a stage, and a reset followed by its
-revocation are each a sequence, and a step answered `unknown` ends the
-sequence there — nothing after it is published over a guess — while a step
-still `pending` here makes the whole answer `202`.
+**A gesture that is several records answers its weakest.** An edit that moves a
+login and a stage, and a reset followed by its revocation, are each a sequence,
+and a step answered `unknown` ends the sequence there — nothing after it is
+published over a guess — while a step still `pending` here makes the whole
+answer `202`. A create is one record, its seat included.
 
 A request **without** an `Idempotency-Key` is a new operation every time, with
 an op id of its own. Two different edits of one person, a second "end every
@@ -762,10 +762,9 @@ when you mean a retry, and only then.
 creates, and `POST /iam/invitations` the invitation it issues, from the
 operation's key — the `Idempotency-Key` when one is sent, otherwise one minted
 for the request and answered as `op_id`. So the retry an `unknown` asks for
-names what its first attempt may have created: a person whose address and login
-that attempt already claimed is finished rather than refused `409` by its own
-first half, and an invitation that landed is answered with its own link and the
-deadline it was issued with. The invitation's id and the secret its link carries
+names what its first attempt may have created: a person that attempt created is
+answered from the ledger as applied, and an invitation that landed is answered
+with its own link and the deadline it was issued with. The invitation's id and the secret its link carries
 are both derived under the company's own key — the id from the operation key and
 the secret from the id — so the retry hands back the very link the first
 attempt issued, and an operation key is never a way to compute one. A create's key is therefore a **uuid7**, as every `op_id` is,
@@ -774,7 +773,8 @@ another address, another login, other grants — is `409 bad_params` carrying th
 `op_id`, and so is the key of an invitation since redeemed or aged out: a retry
 is the same request, and a new person or a new link is a new key.
 
-A lost race on an address, a login or a seat is `409` **naming who holds it**.
+An address, a login or a seat somebody else holds is `409` **naming who holds
+it**; an address an open invitation holds names the invitation.
 An authority refusal is `403` and will never land however often it is retried.
 A login that is absent or outside its holder's kind is `400` — `POST
 /iam/people` requires one for a person as for a machine, because it is the
@@ -785,9 +785,8 @@ alike — and so is a `kind` other
 than `person` or `machine`, since a seat belongs to the company document and
 the engine is the node. A value outside a bound is `400` too: a `reason` longer than 256
 bytes (it is rendered into the authentication trail beside the op, so it
-names which cause fired rather than narrating). An enrolment checks every one of these
-**before its first claim**, so a refused create leaves nothing holding the
-address or the login and the corrected retry lands.
+names which cause fired rather than narrating). An enrolment is one record, so a
+refused create leaves nothing behind and the corrected retry lands.
 
 #### `POST /iam/credentials` mints a machine token
 
@@ -826,42 +825,34 @@ where the node knows it is no good and `503 identity_unavailable` where the node
 cannot tell, including a node that has not yet applied the mint. See [Machine
 tokens](../concepts/identity-and-access.md#machine-tokens-a-persons-own-and-a-service-accounts).
 
-#### An edit moves a login or a seat, the new one first
+#### An edit moves a login and a seat in one record, and that record goes first
 
-The claim **is** the move — once it lands the person holds the new one and not
-the old — so the release after it only closes the old one's trail, and one that
-does not land is logged (`iam_move_release_unrecorded`) rather than failing an
-edit that already happened.
-`PATCH /iam/people/{id}` is a sequence of records — a seat and a login each
-arbitrate on their own subject, and the person's stage and document on the
-person's — so it is ordered by what a refusal leaves behind, and **everything
-the node can judge is refused before the first record**, so a body's later
-fields cannot be refused after its earlier ones have landed:
-- what the surface judges alone — a `login` of `""` (a login is never cleared,
-  only changed), a `stage` this build cannot name, a `reason` past 256
-  bytes;
-- what the node's rows already say a later record would refuse — a `login` its
-  holder's kind's grammar refuses (`400`), a `login` somebody else holds
-  (`409`, naming the holder), and `grants` the caller may not confer (`403`).
-The seat moves **first**, so a seat the running company does not hold, or one
-somebody else is bound to, is refused before anything has landed. A new `login` or
-`seat` is **moved**: the new one is claimed first and the old one released
-after, so either refusal leaves the person exactly as they were. `seat: ""`
-unbinds.
-What only a record can decide — a login somebody took a moment ago, a seat
-removed from the company since the read — is refused by that record, and the
-steps before it have landed. So a refusal met after the first record carries
-`landed`, the fields whose change was made (`seat`, `login`, `stage`), and a
-`hint`; an `unknown` met partway carries `landed` too. A
-`POST /iam/people` whose seat bind is refused answers the bind's refusal with
-`landed: ["person"]` and the person's `id`: the person exists, unbound, and
-`PATCH` binds them.
+A person's login and seat are the **directory's**, decided in one record
+against every other row; their stage and their document (name, grants) are
+their own subject's. So `PATCH /iam/people/{id}` is up to three records, and
+the login-and-seat record goes **first**: it is the one a value somebody else
+holds can refuse — a `login` somebody holds or a `seat` somebody is bound to is
+`409` naming them, a `login` its holder's kind's grammar refuses is `400` — and
+refused first, it is refused with nothing landed. The record states the login
+and the seat the person holds from now on, so the old ones are free the moment
+it lands; `seat: ""` unbinds.
+
+**Everything the surface can judge alone is refused before the first record**:
+a `login` of `""` (a login is never cleared, only changed), a `stage` this
+build cannot name, a `reason` past 256 bytes, and `grants` the caller may not
+confer (`403`). What only a later record can decide — a grant the caller's own
+row stopped letting them confer a moment ago — is refused by that record, and
+the steps before it have landed. So a refusal met after the first record
+carries `landed`, the fields whose change was made (`identity`, `stage`), and a
+`hint`; an `unknown` met partway carries `landed` too.
 
 A `seat` is named by its **handle**, which is immutable, and the binding
-records it; naming the seat a person already holds is a no-op (`200`, no
-record). A seat the running company does not hold is `400` (a value that was
-typed), and on a node that runs no company yet, which cannot resolve one, it
-is `503` with a `Retry-After`.
+records it; naming the login and the seat a person already holds is a no-op
+(`200`, no record). A seat the running company does not hold is `400` (a value
+that was typed), and on a node that runs no company yet, which cannot resolve
+one, it is `503` with a `Retry-After`. A node holding an identity record it
+cannot decode refuses a login or a seat change `503` with no `Retry-After`: the
+record may hold the value, so another node decides it.
 
 #### Values that are shown once
 

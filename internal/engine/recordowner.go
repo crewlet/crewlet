@@ -106,7 +106,7 @@ func holderRecordOf(ctx context.Context, dir bindingDirectory, chart session.Cha
 	// answer writes a record under a name nothing of theirs reads. An
 	// absent row is vouched for over the ROOT, which every deferral covers:
 	// nothing can say which bucket a record this node could not decode is
-	// about, and it may be the enrolment that claimed this login.
+	// about, and it may be the enrolment that took this login.
 	switch {
 	case vouch.Lag > statelog.StallGrace:
 		return "", fmt.Errorf("engine: this node's identity applier is %s "+
@@ -116,10 +116,8 @@ func holderRecordOf(ctx context.Context, dir bindingDirectory, chart session.Cha
 		return "", fmt.Errorf("engine: this node holds an identity record it "+
 			"cannot decode that may be about %s, so it cannot say whose "+
 			"record that is", login)
-	case seen.ID == "" || seen.Reserved:
-		// NOBODY, or the reservation an unfinished enrolment leaves: the
-		// login is held and nobody holds it yet, so nothing is kept under
-		// it either.
+	case seen.ID == "":
+		// NOBODY holds the login, so nothing is kept under it either.
 		return "", fmt.Errorf("%w: %s", iam.ErrNoHolder, login)
 	}
 	return recordThrough(ctx, chart, login, session.PersonRow{

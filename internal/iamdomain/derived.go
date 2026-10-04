@@ -9,62 +9,28 @@ import (
 	"github.com/google/uuid"
 )
 
-// THE PERSON AN ENROLMENT THAT MAY BE RETRIED CREATES.
+// THE PERSON AN ADMINISTRATOR'S CREATE CREATES, derived from its key.
 //
-// An enrolment is a sequence — the address claim, the login claim, the person —
-// and every append names the person id the caller minted. Where the caller is
-// a person holding a one-time credential (an invitation link), a FRESH id per
-// attempt makes the sequence impossible to finish once
-// it has stopped: the first attempt's address claim holds the address for the
-// id it named, and every later attempt names another id, so the retry that
-// would have finished the enrolment is refused as "that address belongs to
-// somebody" — by its own first attempt. A redeemer told their chosen login was
-// taken could never try another.
+// A create whose outcome nobody could establish is retried under the key its
+// answer handed back, and the framework answers that retry from its ledger
+// without running the decide again — so the answer, which names the person
+// created, can only name the same one if the person is a function of the key.
+// Minted per request, the retry's answer named a second person nobody created.
 //
-// So those enrolments name a person DERIVED from the credential: every attempt
-// of one redemption names one person, a claim its first attempt took is one
-// the retry already holds, and the sequence finishes wherever it stopped. What
-// keeps a derived person single-use is the credential rather than the id — a
-// spent invitation is refused before any record is formed.
+// A REDEMPTION NEEDS NO DERIVATION. It is one record under an operation derived
+// from its invitation, so a retry of one that landed is answered from the
+// ledger and refused as a link already used, and one that did not land
+// published nothing — a fresh person per attempt is correct, and a redeemer
+// told their login was taken simply chooses another.
 //
 // A UUID7, because every person id is one: the directory pages in id order and
-// that order is creation order. Its instant is the credential's own — the
-// invitation's id is a uuid7 minted when it was issued — and its random bits
-// are a
-// digest of the credential's identity under a label of their own, so two
-// derivations can never meet and no derivation can meet a minted id except by
-// the collision a uuid7's 74 random bits already rule out.
-
-// InvitedPersonID is the person redeeming this invitation creates.
-//
-// THE INVITATION'S ID MUST BE A UUID7, which is what this build mints for
-// every invitation; its instant is the derived person's, so somebody invited
-// in March sorts before somebody invited in May whenever each redeemed.
-func InvitedPersonID(invitationID string) (string, error) {
-	id, err := uuid.Parse(invitationID)
-	if err != nil || id.Version() != 7 {
-		return "", fmt.Errorf("iamdomain: invitation %q is not a uuid7, so the "+
-			"person it creates has no instant to be derived at — every "+
-			"invitation this build issues is one", invitationID)
-	}
-	return derivedID("invitation", invitationID, instantOf(id)).String(), nil
-}
+// that order is creation order. Its instant is the key's own, and its random
+// bits are a digest of the key under a label of its own, so a derivation can
+// never meet a minted id except by the collision a uuid7's 74 random bits
+// already rule out.
 
 // CreatedPersonID is the person an administrator's create names, derived from
 // the OPERATION KEY the create is published under.
-//
-// # Why a create is derived too
-//
-// `POST /iam/people` is the same sequence a redemption is — the address, the
-// login, the person — and a create whose outcome nobody could establish is
-// retried under the same key, which the answer hands back for exactly that. A
-// person minted per request made that retry name a SECOND person: its address
-// claim found the address held by the first attempt's person and refused the
-// retry as a conflict with somebody else, so the documented retry of an unknown
-// answered 409 against its own first attempt, and the person it may have
-// created could not be recovered. Derived from the key, every attempt of one
-// operation names one person, and a claim its first attempt took is one the
-// retry already holds.
 //
 // THE KEY MUST BE A UUID7, and its instant is the person's, for the reason
 // every person id is one: the directory pages in id order and that order is

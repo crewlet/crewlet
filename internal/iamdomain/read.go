@@ -213,10 +213,9 @@ type Vouch struct {
 //
 // An ABSENT row is vouched for over the ROOT — every deferral covers it —
 // because nothing can say which bucket a record this node could not decode is
-// about, and it may be the enrolment that claims this login. A reservation is
-// vouched for over its person's bucket, which its row names. THREE-VALUED on
-// the deferral: the index is a read, and one that failed says nothing either
-// way.
+// about, and it may be the enrolment or the rename that took this login.
+// THREE-VALUED on the deferral: the index is a read, and one that failed says
+// nothing either way.
 func (r *Reader) PersonByLoginVouched(ctx context.Context, login string) (
 	Sighting, Vouch, error) {
 
@@ -268,17 +267,6 @@ func deferredFor(ctx context.Context, tx *sql.Tx, person string) (bool, error) {
 	return hit, nil
 }
 
-// reservation reports whether a row's kind column marks it as a RESERVATION:
-// the half of an enrolment its claims write before the content record fills
-// it in, with no kind, no stage and an empty document.
-//
-// THE KIND AND NOT THE DOCUMENT, because the kind is the column the content
-// record's apply sets and nothing else ever clears: an empty document could
-// also be a row some later build writes differently, and a reader deciding
-// from it would call a newer peer's person a reservation. A row whose kind is
-// set and whose document will not decode is still the unknown arm.
-func reservation(kind string) bool { return kind == "" }
-
 // readSessionRow fills one session's facts.
 func readSessionRow(ctx context.Context, tx *sql.Tx, lineage string,
 	out *session.LineageRow) error {
@@ -327,27 +315,18 @@ func readPersonRow(ctx context.Context, tx *sql.Tx, person string,
 		return nil
 	}
 	var (
-		kind, stage, login, seat string
-		document                 []byte
+		stage, login, seat string
+		document           []byte
 	)
 	err := tx.QueryRowContext(ctx, `
-		SELECT kind, stage, login, seat_id, document
+		SELECT stage, login, seat_id, document
 		  FROM iam_people WHERE id = ?`, person).
-		Scan(&kind, &stage, &login, &seat, &document)
+		Scan(&stage, &login, &seat, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
 	case err != nil:
 		return fmt.Errorf("iamdomain: read the person row: %w", err)
-	case reservation(kind):
-		// A RESERVATION IS NOT THE PERSON, and it is reported as ABSENT
-		// rather than as a person who may not act. The two answers are
-		// opposite here: a node that has applied an enrolment's claims
-		// and not yet its content record holds exactly this row, and
-		// the bearer's start position is what turns "absent" into the
-		// right one of gone and behind — while "found, at no stage"
-		// would refuse with 401 on the one node that is merely behind.
-		return nil
 	}
 	doc, err := DecodePerson(document)
 	if err != nil {
@@ -542,19 +521,6 @@ type Sighting struct {
 	Credentials []Credential
 	Grants      []iam.Grant
 	Seat        string
-
-	// Reserved reports a RESERVATION: the row an enrolment's claims leave
-	// before its content record fills it in — see [reservation]. It holds
-	// the token that was looked up and nothing else: no kind, no stage and
-	// no credential, so it may do nothing at all, and every caller that
-	// asks what somebody may do reads it as nobody who can.
-	//
-	// AN ANSWER AND NOT AN ERROR. The row's document is empty by design,
-	// and decoding it used to fail as though a newer peer had written it:
-	// a Tier A token whose machine enrolment stopped after its login claim
-	// answered 503 on every guarded route until a sweep collected the
-	// row, for a binding that had never existed.
-	Reserved bool
 }
 
 // PersonByLogin resolves a login to the person who holds it.
@@ -607,33 +573,53 @@ func (r *Reader) sighting(ctx context.Context, column, token string) (Sighting, 
 // THE COLUMN IS A LITERAL chosen by this package, never a caller's string:
 // every call site passes a constant, and the alternative is a surface one
 // parameter away from selecting on something a request named.
+//
+// # Two rows holding one value are the unknown arm
+//
+// The directory decides every login and address on one subject, so ordinary
+// traffic never puts one on two rows. A node that RETAINED a directory record
+// — the one that moved somebody off a login — and then applied a later one
+// that gave the freed login to somebody else holds both rows until the first
+// is reprocessed. That node cannot say which of the two is the holder, so it
+// answers neither: an error, which every caller serves as "ask another node",
+// and never an arbitrary pick, which would sign somebody in as somebody else.
+// A restore that copies duplicate rows back lands here the same way.
 func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 	out *Sighting) error {
 
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, stage, login, seat_id, document
+		  FROM iam_people WHERE `+column+` = ? LIMIT 2`, token)
+	if err != nil {
+		return fmt.Errorf("iamdomain: resolve a person: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
 	var (
-		kind, stage, login, seat string
-		document                 []byte
+		found                  int
+		id, stage, login, seat string
+		document               []byte
 	)
-	err := tx.QueryRowContext(ctx, `
-		SELECT id, kind, stage, login, seat_id, document
-		  FROM iam_people WHERE `+column+` = ?`, token).
-		Scan(&out.ID, &kind, &stage, &login, &seat, &document)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
+	for rows.Next() {
+		found++
+		if found > 1 {
+			return fmt.Errorf("%w: this node holds two rows for one %s, "+
+				"which only a record it retained leaves behind — another "+
+				"node can answer", statelog.ErrUnavailable, column)
+		}
+		if err = rows.Scan(&id, &stage, &login, &seat, &document); err != nil {
+			return fmt.Errorf("iamdomain: resolve a person: %w", err)
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return fmt.Errorf("iamdomain: resolve a person: %w", err)
+	}
+	if found == 0 {
 		// NOBODY, and the zero value is the answer. See the doc on
 		// [Reader.PersonByLogin] for why this is not a sentinel.
 		*out = Sighting{}
 		return nil
-	case err != nil:
-		return fmt.Errorf("iamdomain: resolve a person: %w", err)
-	case reservation(kind):
-		// THE TOKEN IS HELD AND NOBODY HOLDS IT YET. The id and the
-		// claimed columns are the row's; everything a caller would
-		// decide with is absent, which is what makes a reservation act
-		// as nobody without every caller having to know the shape.
-		*out = Sighting{ID: out.ID, Login: login, Seat: seat, Reserved: true}
-		return nil
 	}
+	out.ID = id
 	doc, err := DecodePerson(document)
 	if err != nil {
 		return fmt.Errorf("iamdomain: open person %q: %w", out.ID, err)
@@ -660,9 +646,8 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 // unauthenticated route — the answer is one bit, and a roster is what it must
 // never become.
 //
-// A RESERVATION IS NOBODY — a claim whose content record has not landed has no
-// kind and may do nothing — and a REMOVED person is nobody, their row a
-// tombstone. A SUSPENDED one is somebody: the company has started.
+// A REMOVED person is nobody, their row a tombstone. A SUSPENDED one is
+// somebody: the company has started.
 //
 // # "Nobody" is an absence, and it is proved against the log's end
 //
@@ -688,7 +673,7 @@ func (r *Reader) AnyPerson(ctx context.Context, end uint64) (bool, error) {
 	var held bool
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(ctx, `
-			SELECT EXISTS(SELECT 1 FROM iam_people WHERE kind <> '')`).
+			SELECT EXISTS(SELECT 1 FROM iam_people)`).
 			Scan(&held); err != nil {
 			return fmt.Errorf("iamdomain: read whether anybody is enrolled: %w", err)
 		}
@@ -775,8 +760,9 @@ func CoversLog(prefix statelog.Prefix, end uint64) error {
 // WHAT IT IS FOR is the one decision a missing key forces: mint one, or refuse.
 // On an estate that never held a blind a fresh key is simply the first one; on
 // one that did, the old key was DELETED, and a new one would orphan every
-// address the estate holds and let a second person claim each of them, since
-// the claim arbitrates on the blind and the new blind is a new subject.
+// address the estate holds and let a second person take each of them, since
+// the directory compares an address by its blind and the new key derives a
+// different one.
 //
 // THREE-VALUED, and "none" is an ABSENCE that has to be proved: end is the
 // identity log's last sequence read BEFORE this call, and a snapshot that has
@@ -1084,15 +1070,14 @@ type SeatHolder struct {
 	Person string
 
 	// Stage is the bound person's stage, from the COLUMN — the one every
-	// predicate here reads. Empty for a RESERVATION, the half of an
-	// enrolment a claim writes before the content record fills it in, and
-	// empty on a removal, which has no row left to have a stage.
+	// predicate here reads. Empty on a removal, which has no row left to
+	// have a stage.
 	Stage iam.Stage
 
 	// Removed marks a seat whose holder was REMOVED while holding it, and
 	// that nobody has been bound to since that removal.
 	//
-	// A removal releases every claim the person held, the seat among them,
+	// A removal releases everything the person held, the seat among them,
 	// so the row that bound them is gone and the seat reads as held by
 	// nobody — the same as a seat nobody ever held, which routes as the
 	// chart declares. Answered that way, removing somebody would route
@@ -1124,9 +1109,9 @@ type SeatHolder struct {
 //
 // # What it costs
 //
-// The current bindings are an index range over the partial seat-claim index;
-// the removals are one row per person the company has ever removed, because a
-// tombstone is permanent and records its seat inside the claims it released.
+// The current bindings are an index range over the seat index; the removals
+// are one row per person the company has ever removed, because a tombstone is
+// permanent and records its seat inside the identifiers it released.
 // Both are read whole, because the one caller rebuilds a registry whole — see
 // [Applier]'s directory listener for why that is not a diff.
 func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
@@ -1160,8 +1145,8 @@ func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
 		// A REMOVAL'S SEAT, UNTIL IT IS BOUND AGAIN. `seat_rebound_by` is
 		// what hands the seat on for good — the first bind after the
 		// removal stamps it, so a later unbind does not bring the leaver
-		// back — and the NOT EXISTS keeps the current holder's standing
-		// the seat's word over a duplicate a restore left behind.
+		// back — and the NOT EXISTS keeps a current holder's standing the
+		// seat's word over a tombstone no bind has stamped yet.
 		removed, err := tx.QueryContext(ctx, `
 			SELECT json_extract(r.claims_json, '$.seat_id') AS seat, r.person_id
 			  FROM iam_removed r
