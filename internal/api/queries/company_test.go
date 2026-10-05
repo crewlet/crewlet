@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -1596,6 +1598,56 @@ func TestIntegrationsCountsWhatBecameOfTheDeliveries(t *testing.T) {
 	if got := byKind["gitlab"]["inbound"]; got != float64(2) {
 		t.Errorf("gitlab inbound = %v, want 2", got)
 	}
+}
+
+// AND THEY ARE COUNTED AT ONE INSTANT. The deliveries and what became of them
+// are two fleet listings, and each read the fleet's clock for itself, so the
+// outcomes were floored a whole scatter later than the deliveries beside them:
+// a delivery and its outcome at the edge of the history were one counted and
+// one not, in one row. The fleet's clock here steps two seconds on every
+// reading, and both rows sit a second above the horizon under the first.
+//
+// Mutation: drop `At` from the outcome listing in countOutcomes and the
+// skipped delivery is counted as arriving and not as skipped.
+func TestIntegrationOutcomesAreCountedAtTheDeliveriesInstant(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	first := time.Now().UTC().Add(-time.Hour)
+	var readings atomic.Int64
+	fleet := eventfan.Solo("node-a", log)
+	fleet.Clock = func() time.Time {
+		return first.Add(time.Duration(readings.Add(1)-1) * 2 * time.Second)
+	}
+	edge := first.Add(-store.EventHistory).Add(time.Second)
+	for _, r := range []store.EventRecord{
+		{ID: "w0", Type: "webhook:push", Source: "gitlab", Category: "webhook", Summary: "push"},
+		{ID: "s0", Type: "notification_skipped", Source: "engine", Category: "notification",
+			Summary: "skipped", Tags: map[string]string{"notification_source": "gitlab"}},
+	} {
+		r.Time = edge
+		if err := log.Append(t.Context(), r); err != nil {
+			t.Fatalf("append %s: %v", r.ID, err)
+		}
+	}
+
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg }, Events: fleet,
+	}, "integrations", nil))
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		if entry["key"] != "gitlab" {
+			continue
+		}
+		if entry["inbound"] != float64(1) || entry["skipped"] != float64(1) {
+			t.Errorf("gitlab inbound %v, skipped %v — want the delivery and its outcome "+
+				"both counted, at the one instant the row was read at", entry["inbound"], entry["skipped"])
+		}
+		return
+	}
+	t.Fatalf("no gitlab row in %v", rows)
 }
 
 // NULL, NOT ZERO, when nothing was counted. An answer with no event log to

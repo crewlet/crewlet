@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -922,6 +923,58 @@ func TestAnOldTurnStillNamesItsAttempts(t *testing.T) {
 		t.Fatalf("%d attempts for a turn ten days old, want both runs — the "+
 			"detail read reaches thirty days back and the attempts read must "+
 			"reach as far: %v", len(attempts), attempts)
+	}
+}
+
+// AND THE TWO HALVES ARE READ AT ONE INSTANT.
+//
+// The turn's rows and its attempts are two fleet reads, and each read the
+// fleet's clock for itself: the attempts a whole scatter later than the rows —
+// up to the fleet's read budget when a node is slow — so their history horizon
+// sat that much higher. A turn whose rows lay between the two horizons was
+// shown on the page and then missing from its own attempts. The fleet's clock
+// here steps two seconds on every reading, and the turn's one row sits a
+// second above the horizon under the first: inside the detail read, under the
+// horizon of any later one.
+//
+// Mutation: drop `At` from the attempts query in [queries.Sources] (insight.go)
+// and the turn reports no attempt at all, not even itself.
+func TestATurnAndItsAttemptsAreReadAtOneInstant(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	first := time.Now().UTC().Add(-time.Hour)
+	var readings atomic.Int64
+	fleet := eventfan.Solo("node-a", log)
+	fleet.Clock = func() time.Time {
+		return first.Add(time.Duration(readings.Add(1)-1) * 2 * time.Second)
+	}
+	// To the microsecond, which is what the log stores.
+	at := first.Add(-store.EventHistory).Add(time.Second).Truncate(time.Microsecond)
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: "a", Type: "agent_phase_completed", Time: at,
+		Category: "lifecycle", Actor: "CEO",
+		Tags:    map[string]string{"turn_id": "run-1", "work_key": "wk-1", "agent_role": "CEO"},
+		Payload: []byte(`{"turn_id":"run-1","work_key":"wk-1","phase":"execute"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := asMap(t, answer(t, queries.Sources{Events: fleet}, "turn",
+		map[string]any{"turn_id": "run-1"}))
+
+	if n := len(rows(t, got["events"])); n != 1 {
+		t.Fatalf("%d events, want the turn's one row — it is inside the horizon the "+
+			"page was read at", n)
+	}
+	attempts := rows(t, got["attempts"])
+	if len(attempts) != 1 || attempts[0]["turn_id"] != "run-1" {
+		t.Fatalf("attempts = %v, want the turn being read — its attempts were asked at a "+
+			"later instant than its rows", attempts)
+	}
+	if started := attempts[0]["started_at"]; started != at.Format(time.RFC3339Nano) {
+		t.Errorf("the attempt starts at %v, want %s — the row the page shows", started,
+			at.Format(time.RFC3339Nano))
 	}
 }
 

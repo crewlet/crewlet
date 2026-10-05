@@ -98,6 +98,11 @@ type Listing struct {
 	// list it is "a node's page filled", which its answer never reads as a
 	// cursor — see listPartOf.
 	More bool
+
+	// At is the instant the page was asked at, which every node floored it
+	// at — for [TurnDetail.At]'s reason: a caller composing one answer from
+	// this page and a second read asks the second at the same instant.
+	At time.Time
 }
 
 // Trace is every row of one trace the fleet holds, up to the cap.
@@ -122,6 +127,15 @@ type TurnDetail struct {
 	// coding run was out. A stored row carries no node of its own, so this
 	// is the only place the answer can say it.
 	Nodes []string
+
+	// At is the instant the turn was asked at, which every node floored
+	// its part at. Returned so a caller composing ONE answer from this
+	// read and another — the turn page's other attempts — asks the second
+	// at the same instant ([store.TurnQuery.At]): read at a later one, a
+	// row between the two horizons is in this turn and missing from the
+	// second read, which then lists the turn shown as starting later, or
+	// not at all.
+	At time.Time
 }
 
 // TurnPage is a page of turns from the fleet.
@@ -373,7 +387,7 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 		}
 	}
 	f.report(QuestionEvents, coverage, started)
-	return Listing{Rows: rows, More: more}, coverage, nil
+	return Listing{Rows: rows, More: more, At: q.At}, coverage, nil
 }
 
 // Histogram answers the log's time axis over the fleet.
@@ -461,7 +475,7 @@ func (f *Fleet) Turn(ctx context.Context, id string) (TurnDetail, Coverage, erro
 	g = heldTo(g, at)
 	rows, total, traces := MergeTurn(g.parts())
 	f.report(QuestionTurn, g.coverage, started)
-	return TurnDetail{Rows: rows, Total: total, Traces: traces, Nodes: turnNodes(f.Self, g)},
+	return TurnDetail{Rows: rows, Total: total, Traces: traces, Nodes: turnNodes(f.Self, g), At: at},
 		g.coverage, nil
 }
 
@@ -497,7 +511,7 @@ func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *s
 	}
 	rows, more := MergeListing(heldTo(g, at).parts(), limit)
 	f.report(QuestionPhases, g.coverage, started)
-	return Listing{Rows: rows, More: more}, g.coverage, nil
+	return Listing{Rows: rows, More: more, At: at}, g.coverage, nil
 }
 
 // SeatPhases answers one seat's phase records, newest first, payload included.
@@ -525,7 +539,7 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID, role string, before *st
 	}
 	rows, more := MergeListing(heldTo(g, at).parts(), store.AgentPhaseLimit)
 	f.report(QuestionSeatPhases, g.coverage, started)
-	return Listing{Rows: rows, More: more}, g.coverage, nil
+	return Listing{Rows: rows, More: more, At: at}, g.coverage, nil
 }
 
 // Turns answers a page of turns, one row per turn however many nodes it ran

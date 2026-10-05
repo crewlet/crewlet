@@ -89,7 +89,7 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 	// DEGRADES rather than failing the answer: the rows are what the caller
 	// came for, and a follow-up that could not be read costs the attempt
 	// count rather than the screen.
-	key, siblings := s.attemptsOf(ctx, id, records)
+	key, siblings := s.attemptsOf(ctx, id, records, detail.At)
 	return map[string]any{
 		"turn_id": id,
 		// The unit of work this run was an attempt at, and every run of it
@@ -138,10 +138,19 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 // for nothing, while the rows above came from [store.EventLog.Turn], which
 // floors at [store.EventHistory]. Left implicit, opening a turn between eight
 // and thirty days old found its work key and then reported no attempt at all,
-// including the one being read. MaxTurnDays is that same horizon, so the two
-// halves of this answer describe one window.
+// including the one being read. MaxTurnDays is that same horizon.
+//
+// AND THE INSTANT IS THE DETAIL READ'S: `at` is the one the turn was asked at
+// ([eventfan.TurnDetail.At]), and the listing is pinned to it. Asked at a
+// fresh reading of the clock — a whole fleet scatter later, up to its read
+// budget when a node is slow — the listing's horizon sat above the detail's,
+// so a turn whose first rows lay between the two was shown whole and then
+// listed as starting later with part of its tokens, or, when all of it lay
+// there, not listed at all: the same "no attempt, not even this one" the
+// window above was widened to end. One window AND one instant, so the two
+// halves of this answer describe the same rows.
 func (s Sources) attemptsOf(ctx context.Context, id string,
-	records []store.EventRecord,
+	records []store.EventRecord, at time.Time,
 ) (string, []store.Turn) {
 	key := ""
 	for _, rec := range records {
@@ -165,6 +174,7 @@ func (s Sources) attemptsOf(ctx context.Context, id string,
 		WorkKey:   key,
 		SinceDays: store.MaxTurnDays,
 		Limit:     store.MaxTurnPage,
+		At:        at,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "turn_attempts_unavailable", "turn", id,

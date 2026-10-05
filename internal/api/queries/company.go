@@ -569,7 +569,7 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 			out.since = row.Time
 		}
 	}
-	s.countOutcomes(ctx, &out)
+	s.countOutcomes(ctx, &out, listing.At)
 	return out
 }
 
@@ -580,9 +580,13 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 // categories and no single listing holds both. Its failure leaves the
 // outcome counts absent rather than zero — see [traffic] — because a zero
 // that means "unreadable" is the number an operator would act on.
-func (s Sources) countOutcomes(ctx context.Context, out *traffic) {
+//
+// ASKED AT THE DELIVERIES' OWN INSTANT, `at` ([eventfan.Listing.At]), so the
+// two listings beside each other in one row are floored at one horizon
+// rather than at two readings of the fleet's clock a scatter apart.
+func (s Sources) countOutcomes(ctx context.Context, out *traffic, at time.Time) {
 	listing, coverage, err := s.Events.List(ctx, store.ListQuery{
-		Category: "notification", Limit: MaxEventPage,
+		Category: "notification", Limit: MaxEventPage, At: at,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "integration_outcomes_unreadable", "error", err)
