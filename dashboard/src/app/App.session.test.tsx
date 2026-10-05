@@ -144,7 +144,7 @@ describe("a sign-in answered with a session that may only enrol", () => {
             status,
             headers: { "Content-Type": "application/json" },
           });
-        if (method === "GET" && url.pathname === "/auth/config") return json({ backend: "local" });
+        if (method === "GET" && url.pathname === "/health") return json({ identity: "ready" });
         if (method === "POST" && url.pathname === "/auth/login") {
           return json({
             person: "p-1",

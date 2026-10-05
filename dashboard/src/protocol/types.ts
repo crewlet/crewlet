@@ -4258,15 +4258,6 @@ export interface SignedIn {
   status: SessionStatus;
 }
 
-/** What a sign-in page may know before anybody has signed in. */
-export interface AuthConfig {
-  /**
-   * How this deployment signs people in. `local` is passwords; `none` is a
-   * deployment with no people, whose only credential is a Tier A token.
-   */
-  backend: string;
-}
-
 /** What an invitation's screen renders from, before anything is spent. */
 export interface InvitationView {
   /** The address it is for, opened for this one answer. */

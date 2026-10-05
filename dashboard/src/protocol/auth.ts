@@ -13,9 +13,9 @@
  * dropped. There is nothing for this page to store, so it stores nothing.
  */
 
+import type { EngineHealth } from "../contract/health.ts";
 import { rest } from "./rest.ts";
 import type {
-  AuthConfig,
   InvitationView,
   PasswordSet,
   RecoveryCodes,
@@ -41,8 +41,14 @@ const INVITE_SECRET_HEADER = "X-Crewlet-Invite-Secret";
 const RESET_SECRET_HEADER = "X-Crewlet-Reset-Secret";
 
 export const auth = {
-  /** What a sign-in page may know before anybody has signed in. */
-  config: async (): Promise<AuthConfig> => (await rest.get("/auth/config")) as AuthConfig,
+  /**
+   * Whether the company has its first person — `/health`'s `identity`:
+   * `ready`, `unclaimed`, `unknown`, or absent. `/health` is unguarded and is
+   * the one answer an install with nobody in it can reach, which is why the
+   * sign-in page asks it rather than `/iam`.
+   */
+  firstPerson: async (): Promise<EngineHealth["identity"]> =>
+    ((await rest.get("/health")) as EngineHealth | null)?.identity,
 
   /**
    * Sign in with a login or an address and a password — and, once the engine

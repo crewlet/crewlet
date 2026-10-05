@@ -1687,20 +1687,6 @@ function newGateOpID(verb, node, now = Date.now(), random = (bytes) => crypto.ge
 //#endregion
 //#region src/protocol/auth.ts
 /**
-* The sign-in surface, `/auth`, as the functions the screens call.
-*
-* ONE MODULE over `rest.ts`, for the reason `rest.ts` gives about itself: a
-* screen that composed its own path, header and body for each of these would
-* be a second place for the invitation's secret to end up in a URL, and that
-* is the one mistake this surface exists to make impossible.
-*
-* WHAT NONE OF THESE DOES is keep a credential. Every answer that signs a
-* person in sets a cookie the browser holds and no script can read, and the
-* body carries no bearer at all; the one credential a function here is
-* handed — a Tier A token being exchanged — is sent once, in the header, and
-* dropped. There is nothing for this page to store, so it stores nothing.
-*/
-/**
 * The header an invitation's secret travels in to the view.
 *
 * A HEADER, because the view is a GET and a GET has no body — and never the
@@ -1713,8 +1699,13 @@ var INVITE_SECRET_HEADER = "X-Crewlet-Invite-Secret";
 *  [INVITE_SECRET_HEADER]'s reason. */
 var RESET_SECRET_HEADER = "X-Crewlet-Reset-Secret";
 var auth = {
-	/** What a sign-in page may know before anybody has signed in. */
-	config: async () => await rest.get("/auth/config"),
+	/**
+	* Whether the company has its first person — `/health`'s `identity`:
+	* `ready`, `unclaimed`, `unknown`, or absent. `/health` is unguarded and is
+	* the one answer an install with nobody in it can reach, which is why the
+	* sign-in page asks it rather than `/iam`.
+	*/
+	firstPerson: async () => (await rest.get("/health"))?.identity,
 	/**
 	* Sign in with a login or an address and a password — and, once the engine
 	* has answered `second_factor_required`, the code.

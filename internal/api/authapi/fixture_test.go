@@ -33,6 +33,11 @@ func bootstrapFor(t *testing.T) config.Bootstrap {
 	b.API.Auth.Tokens = []config.APIToken{
 		{ID: "ops", Token: "a-token-long-enough-for-the-floor", Grants: iam.AllGrants},
 	}
+	// A SECOND FACTOR OFFERED, NOT REQUIRED: unset is required, which
+	// would make every password sign-in here an enrolment-only session.
+	// The cases about a required factor state it (`requiring`); every
+	// other case signs in on a password and is about something else.
+	b.API.Auth.TOTP = iam.SecondFactorOptional
 	return b
 }
 

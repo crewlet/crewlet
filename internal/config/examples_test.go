@@ -361,7 +361,6 @@ api:
   port: 8000
   external_url: "https://crewlet.example.com"
   auth:
-    backend: none
     max_grants: [state:read, config:read, config:write, secrets:read,
                  secrets:write, work:write, knowledge:write, audit:read,
                  fleet:operate, sandbox:run]

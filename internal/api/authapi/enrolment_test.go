@@ -14,16 +14,15 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
-// requiring is a Tier A whose password backend states `totp`.
+// requiring is a Tier A stating `totp`.
 func requiring(o *authapi.Options, factor iam.SecondFactor) {
-	o.Bootstrap.API.Auth.Local = &config.APILocal{TOTP: factor}
+	o.Bootstrap.API.Auth.TOTP = factor
 }
 
 // passwordOnly strips a rig's person down to the password: freshly invited,
@@ -134,7 +133,7 @@ func statusOf(rec *httptest.ResponseRecorder) any {
 
 // A REQUIRED SECOND FACTOR IS ENROLLED BEFORE ANYTHING ELSE.
 //
-// `api.auth.local.totp: required` promised that nobody acts on a password
+// `api.auth.totp: required` promised that nobody acts on a password
 // alone, and nothing read it: a person holding only a password signed in and
 // reached every route. Now their sign-in succeeds into a session that says so
 // (`status: second_factor_enrolment_required`), which the guard refuses /iam

@@ -40,8 +40,7 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 	// and only there, which is the rule it is exercising.
 	port := freePort(t)
 	boot := bootstrapFor(t, port)
-	boot.API.Auth.Backend = config.AuthBackendLocal
-	boot.API.Auth.Local = &config.APILocal{TOTP: iam.SecondFactorOptional}
+	boot.API.Auth.TOTP = iam.SecondFactorOptional
 	e := startFreshNode(t, boot)
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 	client := httpxtest.Pool(t)

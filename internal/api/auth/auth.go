@@ -236,7 +236,7 @@ func IsRead(method string) bool {
 // WHAT READS THIS IS NARROWER THAN IT WAS. It used to decide whether an open
 // read posture on this bind deserved a warning; that posture is gone. What is
 // left is the development principal, which is refused outright off loopback —
-// and note that `api.auth.local`'s own insecure rule deliberately judges the
+// and note that `api.auth.accept_insecure`'s own rule deliberately judges the
 // EXTERNAL URL instead, because a hardened node binds loopback behind its
 // proxy and a bind check would permit the insecure posture in exactly the
 // deployment that must refuse it.

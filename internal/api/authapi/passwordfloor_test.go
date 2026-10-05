@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -17,17 +16,15 @@ import (
 // engine's floor of twelve, under a deployment's floor of twenty.
 const fifteen = "fifteen-letters"
 
-// withFloor is a Tier A declaring the password backend with the given
+// withFloor is a Tier A stating the given
 // `min_password_length` — zero being the engine's own floor.
 func withFloor(o *authapi.Options, floor int) {
-	o.Bootstrap.API.Auth.Local = &config.APILocal{
-		TOTP: iam.SecondFactorOptional, MinPasswordLength: floor,
-	}
+	o.Bootstrap.API.Auth.MinPasswordLength = floor
 }
 
 // THE DEPLOYMENT'S PASSWORD FLOOR IS THE ONE ENFORCED, AND THE ONE REPORTED.
 //
-// `api.auth.local.min_password_length` was validated, documented and enforced
+// `api.auth.min_password_length` was validated, documented and enforced
 // by nothing: every route that sets a password checked the engine's twelve, and
 // both answers that tell a form what to refuse — `/auth/config` and the
 // invitation's view — said twelve whatever the file said. So a company that
@@ -134,4 +131,51 @@ func reportedFloor(t *testing.T, mux *http.ServeMux, path string) int {
 		t.Fatalf("decode %s: %v", path, err)
 	}
 	return body.Floor
+}
+
+// AN UNSET SECOND FACTOR IS REPORTED AS REQUIRED, because it is: a sign-in
+// form reads `/auth/config` before anybody signs in, and a posture read that
+// said nothing for the unset value — as it did while a deployment could switch
+// password sign-in off — would draw a form that never mentions the factor the
+// sign-in is about to ask for. And the posture read names no "backend": password
+// sign-in is always served.
+//
+// Mutation: report `api.auth.totp` as written rather than with its default and
+// the unset case reads "".
+func TestThePostureReadReportsTheSecondFactorWithItsDefault(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		state iam.SecondFactor
+		want  iam.SecondFactor
+	}{
+		{"unset is required", "", iam.SecondFactorRequired},
+		{"required as written", iam.SecondFactorRequired, iam.SecondFactorRequired},
+		{"optional as written (the control)", iam.SecondFactorOptional,
+			iam.SecondFactorOptional},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mux := http.NewServeMux()
+			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
+				requiring(o, tc.state)
+			}).Routes(mux)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/config", nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET /auth/config answered %d", rec.Code)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if got := body["second_factor"]; got != string(tc.want) {
+				t.Errorf("second_factor = %v, want %q", got, tc.want)
+			}
+			if _, named := body["backend"]; named {
+				t.Errorf("the posture read still names a backend: %s",
+					rec.Body.String())
+			}
+		})
+	}
 }

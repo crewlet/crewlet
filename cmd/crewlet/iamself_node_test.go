@@ -38,11 +38,10 @@ func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 	t.Parallel()
 	port := freePort(t)
 	boot := bootstrapFor(t, port)
-	boot.API.Auth.Backend = config.AuthBackendLocal
 	// OPTIONAL on a loopback address, which is the posture a laptop runs and
 	// the one `crewlet validate` admits without an acknowledgement; the
 	// second factor has cases of its own.
-	boot.API.Auth.Local = &config.APILocal{TOTP: iam.SecondFactorOptional}
+	boot.API.Auth.TOTP = iam.SecondFactorOptional
 	company, err := config.ParseCompany([]byte(companyYAML))
 	if err != nil {
 		t.Fatalf("parse: %v", err)

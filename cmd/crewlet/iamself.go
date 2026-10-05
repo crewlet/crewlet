@@ -48,13 +48,6 @@ import (
 // the cookie was issued to. This client IS the party the cookie was issued
 // to, so it states the deployment's own origin — `api.external_url`'s. A
 // bearer request states none, which the same check admits.
-//
-// # What it cannot do
-//
-// A deployment whose `api.auth.backend` is `none` signs no person in, so it
-// serves no password route and there is nobody whose own token this could be.
-// A machine credential there is a Tier A token, or a service account's token
-// an administrator mints with -person, and this command says so.
 
 // selfMint is one person minting their own token.
 type selfMint struct {
@@ -163,11 +156,6 @@ func (m selfMint) signIn(ctx context.Context) (*http.Cookie, bool, error) {
 		return nil, false, errors.New("the node refused the sign-in: check the " +
 			"login, the password and any second-factor code — it answers " +
 			"the same way whichever was wrong")
-	case resp.StatusCode == http.StatusNotFound:
-		return nil, false, errors.New("this deployment signs no people in " +
-			"(api.auth.backend: none), so there is no person to mint a token " +
-			"for: use a Tier A token, or have an administrator mint a service " +
-			"account's with `crewlet iam token -person`")
 	default:
 		return nil, false, selfRefusal(resp.StatusCode, answer, raw)
 	}

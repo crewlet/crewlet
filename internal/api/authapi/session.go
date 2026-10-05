@@ -9,7 +9,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -40,23 +39,21 @@ func (s *Service) directoryFor() session.Directory { return s.sessions }
 //
 // # What is in it, and what is deliberately not
 //
-// Enough to render the right form and nothing that says who works here. A
-// backend name, the password floor so a form can refuse a short password
-// before a round trip, and whether a second factor is required.
+// Enough to render the right form and nothing that says who works here: the
+// password floor so a form can refuse a short password before a round trip,
+// and whether a second factor is required.
 //
 // THERE IS NO USER LIST, no count of people, and no hint of whether any
 // particular login exists. This route is unguarded, so everything on it is
 // public — and the one question an attacker most wants answered here is who
 // they could be.
 type configResponse struct {
-	// Backend is how this deployment signs people in: local or none.
-	Backend config.AuthBackend `json:"backend"`
-
 	// MinPasswordLength is the floor a form enforces before it posts.
-	MinPasswordLength int `json:"min_password_length,omitempty"`
+	MinPasswordLength int `json:"min_password_length"`
 
-	// SecondFactor reports whether this deployment requires one.
-	SecondFactor string `json:"second_factor,omitempty"`
+	// SecondFactor is `required` or `optional`: whether a person signing
+	// in with a password must hold a second factor.
+	SecondFactor iam.SecondFactor `json:"second_factor"`
 }
 
 // Config answers what a client needs before anybody has signed in.
@@ -65,12 +62,10 @@ type configResponse struct {
 // sign-in page to be. See [configResponse] for what that costs and what it is
 // therefore not allowed to carry.
 func (s *Service) Config(w http.ResponseWriter, r *http.Request) {
-	out := configResponse{Backend: s.backend()}
-	if s.backend() == config.AuthBackendLocal {
-		out.MinPasswordLength = s.passwordFloor()
-		out.SecondFactor = string(s.boot.API.Auth.Local.TOTP)
-	}
-	httpjson.Write(w, http.StatusOK, out)
+	httpjson.Write(w, http.StatusOK, configResponse{
+		MinPasswordLength: s.passwordFloor(),
+		SecondFactor:      s.boot.API.Auth.SecondFactor(),
+	})
 }
 
 // sessionResponse is who the caller is.

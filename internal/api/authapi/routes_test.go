@@ -10,7 +10,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -219,7 +218,6 @@ func TestAnOversizedSignInIsAnsweredRatherThanDropped(t *testing.T) {
 	// A PASSWORD DEPLOYMENT, or the sign-in route answers that it serves
 	// none before it reads a byte.
 	b := bootstrapFor(t)
-	b.API.Auth.Backend = config.AuthBackendLocal
 	mux := http.NewServeMux()
 	build(t, b).Routes(mux)
 	for _, path := range []string{auth.PathAuthLogin, auth.AuthInvitePrefix + invitationID} {

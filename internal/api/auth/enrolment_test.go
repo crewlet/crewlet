@@ -14,7 +14,7 @@ import (
 // A SESSION THAT MAY ONLY ENROL A SECOND FACTOR REACHES THE ROUTES THAT LET ITS
 // PERSON IN OR OUT, AND NOTHING ELSE.
 //
-// `api.auth.local.totp: required` was validated, documented and enforced by
+// `api.auth.totp: required` was validated, documented and enforced by
 // nothing, so a password alone reached every surface on a deployment that
 // required a second factor. A sign-in that proves only a password there now
 // opens a session marked enrolment-only, and the guard answers every guarded

@@ -89,10 +89,12 @@ api:
                     # its host is the origin every write is checked against.
                     # Behind a proxy, the public address.
   auth:
-    backend: none   # nobody signs in on a laptop — the token below is the
-                    #   only credential. `local` adds passwords and a second
-                    #   factor, and the token below invites the first person
-                    #   with `crewlet iam invite` (step 4).
+    totp: optional  # people sign in with a login and a password; unset, a
+                    #   second factor (an authenticator app) is REQUIRED too.
+                    #   `optional` is fine here because the browser reaches
+                    #   this on loopback; leave the line out anywhere else.
+                    #   Nobody holds a password yet: the token below invites
+                    #   the first person (step 5).
     max_grants:     # THE CEILING on what this deployment will ever let a
                     #   directory record confer. Required once a port is set.
       [state:read, audit:read, config:read, secrets:read, work:write,
@@ -422,8 +424,8 @@ to go.
 
 Open the dashboard at <http://localhost:8000/>. **Opening it means signing
 in**: every route needs a credential, reads included, so the first thing it
-shows is its sign-in screen. On this laptop nobody has a password
-(`backend: none`), so the screen offers the API token alone — paste
+shows is its sign-in screen. Nobody has been invited yet, so nobody holds a
+password: the screen says so and opens its API token form — paste
 `$CREWLET_API_TOKEN_FOUNDER` and it is exchanged for a one-hour session. The
 browser keeps the session's cookie and never the token: it is sent once, in a
 header, and the page holds it nowhere afterwards. When the hour is up the
@@ -507,12 +509,11 @@ refuse you says why on its row instead.
 
 ### When people sign in rather than share a token
 
-`backend: none` is right for a laptop and wrong the moment more than one person
-uses this. Set `api.auth.backend: local` — passwords, a second factor and
-recovery codes held by this engine — with a `local:` block stating `totp:
-required` or `optional` (validation asks for `required` on any deployment a
-browser reaches off loopback), and people sign in on the dashboard's own
-sign-in screen instead of sharing the deployment's token.
+People always sign in with a login and a password — there is no setting that
+turns it on — and the deployment's token is for the first sign-in, pipelines
+and break-glass. `api.auth.totp` says whether a second factor is asked for too:
+unset it is `required`, and validation accepts `optional` only on a deployment a
+browser reaches on loopback, or with `accept_insecure: true` said out loud.
 
 **The first person is invited with the token you already have.** `crewlet iam
 invite` issues an invitation through the running node, authenticating with
@@ -542,7 +543,7 @@ unbind` on that row first: a seat has one holder, and now it is you.
 invitation is for, who sent it and the seat it binds, and asks for a login — it
 proposes one from your address, dotted like `jane.doe`, the name your changes
 are recorded under — your name, and a password of at least twelve characters
-(`api.auth.local.min_password_length` raises that). Redeeming it signs you in.
+(`api.auth.min_password_length` raises that). Redeeming it signs you in.
 The secret after the `.` never leaves the page in a URL: the link carries it in
 the fragment, which no browser sends to a server, and the screen sends it in a
 header and a body instead. Opening the link spends nothing, and a spent or

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -366,7 +365,6 @@ func newSignInRigWith(t *testing.T, replace func(*authapi.Options)) *signInRig {
 	}}
 	audit := &recordingAudit{}
 	b := bootstrapFor(t)
-	b.API.Auth.Backend = config.AuthBackendLocal
 	svc := buildWith(t, b, func(o *authapi.Options) {
 		o.Directory, o.Writer, o.Hasher, o.Audit = e, e, hasher, audit
 		if replace != nil {

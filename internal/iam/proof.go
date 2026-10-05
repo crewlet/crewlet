@@ -10,7 +10,7 @@ import "slices"
 // checked, and it is the natural home for both of these until you notice who
 // reads them: internal/config, which has to be able to say "this deployment
 // requires a second factor" and "a password here is at least twelve
-// characters" in order to validate `api.auth.local`. This package's whole
+// characters" in order to validate `api.auth`. This package's whole
 // premise is that naming an identity concept must not pull in a password
 // hasher — so the two numbers config reads live in the leaf, and credential
 // imports them rather than declaring a second copy nothing compares.
@@ -23,11 +23,13 @@ import "slices"
 // SecondFactor is whether a company REQUIRES a second factor or merely offers
 // one.
 //
-// A NAMED STRING WHOSE ZERO VALUE IS INVALID, like every closed set in this
-// tree, and here the zero value is the one that would be dangerous: a bool
+// A NAMED STRING WHOSE ZERO VALUE MEANS REQUIRED, and never a bool: a bool
 // would default to false, which reads as "optional", so a company that
-// declared nothing would silently be the company with no second factor. An
-// invalid zero means the configuration is REFUSED and somebody decides.
+// declared nothing would silently be the company with no second factor. The
+// zero is the secure value instead — [SecondFactor.Requires] answers true for
+// it — so `optional` is always somebody's explicit choice. [SecondFactor.Valid]
+// is about the two values a file may write; internal/config accepts the zero
+// beside them as the unset setting.
 type SecondFactor string
 
 const (
@@ -66,7 +68,7 @@ func (s SecondFactor) Valid() bool { return slices.Contains(SecondFactors, s) }
 func (s SecondFactor) Requires() bool { return s != SecondFactorOptional }
 
 // MinPasswordChars is the shortest password this engine accepts, and the floor
-// under `api.auth.local.min_password_length`.
+// under `api.auth.min_password_length`.
 //
 // TWELVE, AND NO COMPOSITION RULES — no required digit, no required symbol, no
 // forbidden repeat. That is the current guidance and it is guidance because

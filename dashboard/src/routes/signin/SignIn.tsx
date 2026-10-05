@@ -13,14 +13,27 @@
  * `429 throttled`, whose `Retry-After` is the wait before the next attempt is
  * even looked at, shown as a number and held on the button.
  *
+ * # The password form is always here; the token is the way in before anybody
+ *
+ * Password sign-in is always served — there is no deployment setting that
+ * switches it off — so the form is never withheld. The deployment's own
+ * credential — a Tier A token from `crewlet.yaml` — waits behind "Use an API
+ * token instead": it is the way in before anybody has been invited, and on
+ * the day sign-in itself is broken. On a deployment whose `/health` says
+ * `identity: unclaimed` — nobody has been invited yet — it is the ONLY way in,
+ * so the token form is open from the start and the page says how to begin:
+ * sign in with the token, then invite yourself from Settings › People &
+ * access. `unknown` (a node that cannot read its identity estate) and a
+ * `/health` that did not answer are not "unclaimed": they keep the ordinary
+ * page, because telling somebody to invite a founder into a company that has
+ * one is the wrong instruction to guess.
+ *
  * # The token is sent once and kept nowhere
  *
- * The deployment's own credential — a Tier A token from `crewlet.yaml` — is
- * the way in before anybody has been invited, and on the day sign-in itself
- * is broken. It is exchanged for a one-hour session (`POST /auth/token`) and
- * the field is emptied: the cookie that comes back is the credential, and a
- * page that also kept the token would hand the one value that outlives every
- * session to any script that ran in it.
+ * It is exchanged for a one-hour session (`POST /auth/token`) and the field is
+ * emptied: the cookie that comes back is the credential, and a page that also
+ * kept the token would hand the one value that outlives every session to any
+ * script that ran in it.
  *
  * # Already signed in is said, not assumed
  *
@@ -39,24 +52,19 @@ import { useSignedIn, type SignedInAs } from "~/lib/session.ts";
 import { auth, RestError, type SessionAnswer } from "~/protocol/index.ts";
 import { SignInPage } from "./SignInPage.tsx";
 
-/** What the posture read found: a backend, or nothing that could be read. */
-type Backend = { kind: "read"; name: string } | { kind: "unread" };
-
 export function SignIn() {
   const next = useRoute().query.get("next");
   const signedIn = useSignedIn();
 
-  const [backend, setBackend] = useState<Backend | null>(null);
+  const [unclaimed, setUnclaimed] = useState(false);
   const [current, setCurrent] = useState<SessionAnswer | null>(null);
 
   useEffect(() => {
     let live = true;
-    auth.config().then(
-      (config) => live && setBackend({ kind: "read", name: config.backend }),
-      // UNREAD IS NOT "NONE". A node that could not answer the posture read
-      // still takes a password, and the form is what a person can act on;
-      // the engine refuses whatever it will not accept.
-      () => live && setBackend({ kind: "unread" }),
+    auth.firstPerson().then(
+      (identity) => live && setUnclaimed(identity === "unclaimed"),
+      // AN UNREAD ANSWER IS NOT "UNCLAIMED" — see the package doc.
+      () => {},
     );
     auth.session().then(
       (session) => live && setCurrent(session),
@@ -68,17 +76,13 @@ export function SignIn() {
     };
   }, []);
 
-  // A DEPLOYMENT WITH NO PEOPLE signs nobody in with a password, so the
-  // form it would refuse is not offered — only the token.
-  const passwords = backend === null || backend.kind === "unread" || backend.name === "local";
-
   return (
     <SignInPage
       title="Sign in to Crewlet"
       lede={
-        passwords
-          ? "Use the login or email address your invitation was for."
-          : "This deployment signs nobody in with a password. Use one of its API tokens."
+        unclaimed
+          ? "Nobody has been invited to this deployment yet."
+          : "Use the login or email address your invitation was for."
       }
     >
       {current && (
@@ -94,8 +98,17 @@ export function SignIn() {
           Signing in below replaces that session in this browser.
         </Callout>
       )}
-      {passwords && <PasswordForm onSignedIn={(answer) => signedIn(answer, next)} />}
-      <TokenForm open={!passwords} onSignedIn={(answer) => signedIn(answer, next)} />
+      {unclaimed && (
+        <Callout variant="neutral" title="Getting started">
+          Sign in with one of this deployment&rsquo;s API tokens — the founder token its{" "}
+          <code className="inline">crewlet.yaml</code> declares under{" "}
+          <code className="inline">api.auth.tokens</code> — then open Settings › People &amp; access
+          and invite yourself. The invitation&rsquo;s link is where you choose your login and
+          password.
+        </Callout>
+      )}
+      <PasswordForm focus={!unclaimed} onSignedIn={(answer) => signedIn(answer, next)} />
+      <TokenForm open={unclaimed} onSignedIn={(answer) => signedIn(answer, next)} />
     </SignInPage>
   );
 }
@@ -111,7 +124,14 @@ function useWait(): [boolean, (seconds: number) => void] {
   return [until !== 0, (seconds) => setUntil(Date.now() + seconds * 1000)];
 }
 
-function PasswordForm({ onSignedIn }: { onSignedIn: (answer: SignedInAs) => void }) {
+function PasswordForm({
+  focus,
+  onSignedIn,
+}: {
+  /** Whether the login field takes the focus: not where the token is the way in. */
+  focus: boolean;
+  onSignedIn: (answer: SignedInAs) => void;
+}) {
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -176,7 +196,7 @@ function PasswordForm({ onSignedIn }: { onSignedIn: (answer: SignedInAs) => void
             aria-describedby={field.describedBy}
             name="username"
             autoComplete="username"
-            autoFocus
+            autoFocus={focus}
             width="full"
             spellCheck={false}
             value={login}
@@ -234,7 +254,7 @@ function TokenForm({
   open,
   onSignedIn,
 }: {
-  /** Open from the start where the token is the only way in. */
+  /** Open from the start where the token is the only way in: nobody invited yet. */
   open: boolean;
   onSignedIn: (answer: SignedInAs) => void;
 }) {
@@ -276,6 +296,7 @@ function TokenForm({
             aria-describedby={field.describedBy}
             type="password"
             autoComplete="off"
+            autoFocus={open}
             width="full"
             spellCheck={false}
             value={typed}

@@ -732,12 +732,19 @@ pulled a tag. That is also why it is a flag: a field is the thing that gets
 copied into an image. It grants `api.auth.max_grants` and no more, where
 `disabled` granted everything regardless.
 
-`api.auth.oidc` is retired too, and `backend: oidc` with it: the engine no
-longer signs anybody in through an identity provider. A person signs in with a
-password and a second factor the engine holds (`backend: local`), or the
-deployment has no people and its Tier A tokens are the only credentials
-(`backend: none`). The block is refused by name, so a file that still carries
-it is told what happened rather than asked to check its spelling.
+`api.auth.oidc` is retired too: the engine no longer signs anybody in through
+an identity provider. A person signs in with a login, a password and — unless
+`api.auth.totp` says `optional` — a second factor the engine holds. The block is
+refused by name, so a file that still carries it is told what happened rather
+than asked to check its spelling.
+
+There is no switch for password sign-in, either: it is always served. A
+deployment nobody has been invited to already signs nobody in, because nobody
+holds a password to present, so a setting that turned the routes off would
+change nothing a stranger could reach. What a deployment does state is what a
+password sign-in asks for — `api.auth.totp` (unset is `required`, the secure
+value, so `optional` is always somebody's explicit choice),
+`api.auth.accept_insecure` and `api.auth.min_password_length`.
 
 ### What is served without a credential
 
@@ -818,7 +825,7 @@ bind time:
 |---------|----------------------------|
 | `api.external_url` | The session cookie's `Secure` flag and `__Host-` prefix follow its scheme, its host is the origin every write is checked against, and it is what every webhook URL is built on. The engine sits behind a TLS-terminating proxy and can read none of that off the request |
 | `api.auth.max_grants` | The ceiling on what a directory record may confer. One granting everything is a ceiling that does nothing; one granting a subset silently locks out whatever it left out |
-| `api.auth.tokens` | A fresh deployment's identity estate is empty, so a Tier A token is what creates the first person — and on a running one it is the way back in when an administrator has locked themselves out. Required on **every** backend, `none` included |
+| `api.auth.tokens` | A fresh deployment's identity estate is empty, so a Tier A token is what creates the first person — and on a running one it is the way back in when an administrator has locked themselves out |
 
 ### What `crewlet validate` warns about
 
@@ -828,8 +835,8 @@ as written with its consequence somewhere else:
 
 | Warning | Why it is not a refusal |
 |---------|-------------------------|
-| `api.auth.local.accept_insecure` is set | It is what makes an otherwise-refused posture legal. The acknowledgement is a decision made once that everybody after inherits, so `crewlet validate` says it every time and the engine logs it on every start |
-| `api.external_url` is `http://` off loopback | The session cookie cannot carry `Secure` and no `__Host-` prefix protects it, so every credential travels in the clear — but a tunnel, a staging box and an internal network genuinely look like this. The one posture it *would* be a refusal for, a password backend with an optional second factor, already is one |
+| `api.auth.accept_insecure` is set | It is what makes an otherwise-refused posture legal. The acknowledgement is a decision made once that everybody after inherits, so `crewlet validate` says it every time and the engine logs it on every start |
+| `api.external_url` is `http://` off loopback | The session cookie cannot carry `Secure` and no `__Host-` prefix protects it, so every credential travels in the clear — but a tunnel, a staging box and an internal network genuinely look like this. The one posture it *would* be a refusal for, an optional second factor, already is one |
 | `api.external_url` is `https://` and `api.trusted_proxies` is empty | The engine never terminates TLS itself, so something in front of it does — and unless it is named, every caller's source is its address. The sign-in throttle then keys every caller's attempts at one login together, so a stranger guessing at somebody's login slows that person's own sign-in, and every audit row names the proxy. Not a refusal because one front end is right with the list empty: a balancer that passes each client's own address through as the peer rather than in a header |
 
 `api.trusted_proxies` is a **CIDR list, never a bool**, because the question a

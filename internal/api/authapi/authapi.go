@@ -55,7 +55,7 @@
 //
 // # A required second factor is enrolled before anything else
 //
-// `api.auth.local.totp: required` says nobody acts on a password alone, and a
+// `api.auth.totp: required` says nobody acts on a password alone, and a
 // person who holds no second factor has nothing else to present. So a sign-in
 // this surface verified that proved a password and no second factor opens a
 // session marked ENROLMENT-ONLY on its own start record, and answers
@@ -418,7 +418,7 @@ type Audit interface {
 // Options is what the surface is built from.
 type Options struct {
 	// Bootstrap is Tier A. REQUIRED: the cookie's name and Secure flag,
-	// the session deadlines, the backend and the grant ceiling all come
+	// the session deadlines, the password rules and the grant ceiling all come
 	// from it, and a surface that guessed any of them would mint cookies
 	// the next node rejects.
 	Bootstrap *config.Bootstrap
@@ -438,9 +438,8 @@ type Options struct {
 	// internal/iam/session rather than here.
 	Signer *session.Signer
 
-	// Hasher verifies passwords. REQUIRED on the `local` backend and
-	// unused on `none`, but taken unconditionally: a nil here would
-	// make the local backend's refusal a panic on the first sign-in
+	// Hasher verifies passwords. REQUIRED: password sign-in is always
+	// served, and a nil here would be a panic on the first sign-in
 	// rather than a refusal at boot.
 	Hasher *credential.Hasher
 

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
@@ -155,7 +154,6 @@ func TestOneGenericRefusalForEveryLoginArm(t *testing.T) {
 	}
 	audit := &recordingAudit{}
 	b := bootstrapFor(t)
-	b.API.Auth.Backend = config.AuthBackendLocal
 	mux := http.NewServeMux()
 	buildWith(t, b, func(o *authapi.Options) {
 		o.Throttle = credential.NewThrottle(credential.ThrottleDeps{

@@ -696,7 +696,7 @@ enumerates it, and they push people to write the result down. Length is the
 only property that buys entropy from a human at no cost to them.
 
 Twelve is the engine's floor and a deployment may raise it with
-`api.auth.local.min_password_length`; nothing lowers it. The raised floor is
+`api.auth.min_password_length`; nothing lowers it. The raised floor is
 the one every password is held to — every redemption's and every change of a
 password — and the one `GET /auth/config` and an invitation's view
 report, so a form refuses exactly what the route would. It used to be validated
@@ -845,7 +845,8 @@ the first spend set is the one that works. Issuing is an `iam_password_reset_iss
 
 ### A required second factor is enrolled before anything else
 
-`api.auth.local.totp: required` means **nobody acts on a password alone**. A
+`api.auth.totp: required` — the default, when the line is absent — means
+**nobody acts on a password alone**. A
 person who holds a second factor is asked for it at every password sign-in and
 step-up, as they always were. A person who holds **none** — freshly invited,
 the company's first person among them, somebody an administrator reset — has
@@ -1157,8 +1158,7 @@ second-factor code the same way or the line after it, and never either as a
 flag, because a recovery code on a command line stays good in the shell's
 history — and signs out after,
 so the session it opened does not outlive the command. It reads no
-`CREWLET_API_TOKEN`. A deployment on `backend: none` signs no people in, so
-there is no person there to mint for; its machines are service accounts. The
+`CREWLET_API_TOKEN`. The
 decision is made in the owner's own snapshot, on the
 **id** of the party minting rather than its login, because a login is a name a
 rename moves between people — and that party is the one the identity writer was
@@ -1358,7 +1358,7 @@ access log. Its sign-in surface is three screens outside the frame:
 
 | Screen | What it does |
 |---|---|
-| `#/login?next=` | A login or address and a password, then the six-digit code or a recovery code when the engine answers `second_factor_required`. Where `/auth/config` names no local sign-in it offers only **an API token**, which it sends once, as a header, to `POST /auth/token` and keeps nowhere — the answer is a one-hour session like any other. `next` is honoured only as a route of this dashboard, so a link cannot use the sign-in to send somebody elsewhere |
+| `#/login?next=` | A login or address and a password, then the six-digit code or a recovery code when the engine answers `second_factor_required`. Behind **Use an API token instead** — open from the start where `/health` says `identity: unclaimed`, with a line saying to invite yourself from Settings › People & access — it takes **an API token**, which it sends once, as a header, to `POST /auth/token` and keeps nowhere; the answer is a one-hour session like any other. `next` is honoured only as a route of this dashboard, so a link cannot use the sign-in to send somebody elsewhere |
 | `#/invite/<id>.<secret>` | [The invitation link](#everybody-arrives-by-invitation). It renders the invitation with the secret in the `X-Crewlet-Invite-Secret` header, spends nothing by being opened, and redeems it with the login, name and password the person chose — which signs them in |
 | `#/enrol?next=` | Where a session that may only [enrol a second factor](#a-required-second-factor-is-enrolled-before-anything-else) goes first: the seed from `POST /auth/totp` (the key and its `otpauth://` address), the first code, and the recovery codes shown once |
 
@@ -2548,8 +2548,10 @@ today is smaller, and lives in two places:
 
 - **Tier A, `api.auth`** — `tokens`, the deployment's own credentials,
   each carrying an id recorded as the author of anything written with it and
-  the `grants` it may use; `max_grants`, the ceiling above; `backend`, how people sign in; and the
-  `session`, `audit` and `local` blocks under it. `allow_anonymous_read`,
+  the `grants` it may use; `max_grants`, the ceiling above; what a password
+  sign-in asks for — `totp` (unset is `required`), `accept_insecure` and
+  `min_password_length`; and the `session` and `audit` blocks under it.
+  Password sign-in is always served; there is no setting that turns it off. `allow_anonymous_read`,
   `disabled` and `oidc` are all retired and refused by name — see
   [Configuration § Auth](configuration.md#auth) for what replaced each.
 - **The identity directory** — who is a *person*, who is a machine, and which

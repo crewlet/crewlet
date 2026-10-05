@@ -233,7 +233,7 @@ type Session struct {
 	// EnrolmentOnly marks a session that may do nothing but ENROL A SECOND
 	// FACTOR: opened by a password alone — a sign-in, a step-up or an
 	// invitation's redemption — for a person who holds
-	// none, on a deployment whose `api.auth.local.totp` requires one.
+	// none, on a deployment whose `api.auth.totp` requires one.
 	//
 	// ON THE SESSION, decided ONCE by the sign-in that opened it, rather
 	// than re-derived per request from the person's credentials and the

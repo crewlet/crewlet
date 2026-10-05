@@ -101,7 +101,8 @@ function engine(routes: Record<string, Answer | Answer[]>): Sent[] {
 }
 
 const NOBODY: Answer = { status: 401, body: { error: "invalid_token" } };
-const LOCAL: Answer = { status: 200, body: { backend: "local" } };
+/** A deployment somebody has been invited to: the ordinary sign-in page. */
+const CLAIMED: Answer = { status: 200, body: { status: "ok", identity: "ready" } };
 const SIGNED_IN: Answer = {
   status: 200,
   body: {
@@ -198,7 +199,7 @@ afterEach(() => {
 describe("signing in with a password", () => {
   test("it lands where the reader was, replacing the sign-in, on a re-dialled socket", async () => {
     const sent = engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": SIGNED_IN,
     });
@@ -222,7 +223,7 @@ describe("signing in with a password", () => {
 
   test("a refusal is the engine's own sentence, and the form is kept", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": {
         status: 401,
@@ -246,7 +247,7 @@ describe("signing in with a password", () => {
 
   test("the code is asked for only when the engine asks, and sent with the resubmission", async () => {
     const sent = engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": [{ status: 401, body: { error: "second_factor_required" } }, SIGNED_IN],
     });
@@ -279,7 +280,7 @@ describe("signing in with a password", () => {
 
   test("a throttled attempt says how long, and the button waits it out", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": {
         status: 429,
@@ -301,7 +302,7 @@ describe("signing in with a password", () => {
 
   test("a session that may only enrol goes on to the enrolment, carrying next", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": {
         status: 200,
@@ -339,7 +340,7 @@ describe("signing in with a password", () => {
 describe("signing in with the deployment's token", () => {
   test("the token is sent once, in the header, and kept nowhere", async () => {
     const sent = engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/token": {
         ...SIGNED_IN,
@@ -368,23 +369,52 @@ describe("signing in with the deployment's token", () => {
     expect(sent.some((s) => s.path.includes("the-break-glass"))).toBe(false);
   });
 
-  test("a deployment with no people offers the token and no password form", async () => {
+  // NOBODY INVITED YET: the token is the only way in, so its form is open from
+  // the start and the page says how to begin — while the password form stays,
+  // because password sign-in is always served. The control is a deployment
+  // somebody has been invited to, where the token waits behind the disclosure.
+  test("an unclaimed deployment opens the token form and says how to begin", async () => {
     engine({
-      "GET /auth/config": { status: 200, body: { backend: "none" } },
+      "GET /health": { status: 200, body: { status: "ok", identity: "unclaimed" } },
       "GET /auth/session": NOBODY,
     });
     mount();
     await answered();
-    screen.getByText(/signs nobody in with a password/i);
-    expect(screen.queryByLabelText(/^password$/i)).toBeNull();
+    screen.getByText(/nobody has been invited to this deployment yet/i);
+    screen.getByText(/invite yourself/i);
+    // OPEN, not behind the disclosure a claimed deployment keeps it under.
+    expect(screen.queryByText("Use an API token instead")).toBeNull();
     expect(screen.getByLabelText("API token")).toBeDefined();
+    expect(screen.getByLabelText(/^password$/i)).toBeDefined();
+  });
+
+  test("a claimed deployment keeps the token behind the disclosure (the control)", async () => {
+    engine({ "GET /health": CLAIMED, "GET /auth/session": NOBODY });
+    mount();
+    await answered();
+    expect(screen.queryByText(/invite yourself/i)).toBeNull();
+    expect(screen.getByLabelText(/^password$/i)).toBeDefined();
+    screen.getByText("Use an API token instead");
+  });
+
+  // "UNKNOWN" IS NOT "UNCLAIMED": a node that cannot read its identity estate
+  // must not tell anybody to invite a founder into a company that has one.
+  test("a node that cannot say whether anybody was invited draws the ordinary page", async () => {
+    engine({
+      "GET /health": { status: 200, body: { status: "degraded", identity: "unknown" } },
+      "GET /auth/session": NOBODY,
+    });
+    mount();
+    await answered();
+    expect(screen.queryByText(/invite yourself/i)).toBeNull();
+    screen.getByText(/use the login or email address/i);
   });
 });
 
 describe("a browser that is already signed in", () => {
   test("is told whose session it holds, and may carry on as them", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": {
         status: 200,
         body: { person: "p-1", login: "jane.doe", kind: "person", status: "signed_in" },
@@ -416,7 +446,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
 
   test("hands the tab over: its storage emptied, the new reader recorded, reloaded where it was going", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": SIGNED_IN,
     });
@@ -439,7 +469,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
 
   test("a session that may only enrol is handed over into the enrolment", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": {
         status: 200,
@@ -460,7 +490,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
   // where they were — the builder keeps their draft for exactly this.
   test("the same person signing in again keeps the tab and what it holds", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": SIGNED_IN,
     });
@@ -485,7 +515,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
   // other reader's recents and stars go, and this person's own stay.
   test("every other reader's recents and stars leave the browser, and the person's own stay", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": SIGNED_IN,
     });
@@ -513,7 +543,7 @@ describe("a sign-in in a tab somebody else was reading", () => {
   // A TAB NOBODY WAS READING has nothing of anybody's in it to hand over.
   test("a first sign-in in a fresh tab records its reader and carries on", async () => {
     engine({
-      "GET /auth/config": LOCAL,
+      "GET /health": CLAIMED,
       "GET /auth/session": NOBODY,
       "POST /auth/login": SIGNED_IN,
     });

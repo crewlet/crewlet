@@ -1127,7 +1127,7 @@ type SessionStart struct {
 
 	// EnrolmentOnly opens a session that may do nothing but enrol a second
 	// factor — see [Session.EnrolmentOnly]. The SIGN-IN decides it, from
-	// what it proved and the deployment's own `api.auth.local.totp`.
+	// what it proved and the deployment's own `api.auth.totp`.
 	EnrolmentOnly bool
 
 	// NoWait asks for the answer the broker's acknowledgement already

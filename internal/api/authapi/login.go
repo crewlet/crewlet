@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/credential"
@@ -121,20 +120,6 @@ const (
 // See the package doc for why both halves are needed.
 func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	source := s.sourceOf(r)
-	if s.backend() != config.AuthBackendLocal {
-		// A DEPLOYMENT WHOSE PEOPLE DO NOT SIGN IN SERVES NO PASSWORD
-		// ROUTE, and it says so rather than refusing as though the
-		// credentials were wrong: this is a fact about the deployment
-		// that every caller may know, and answering `sign_in_refused`
-		// would send somebody to reset a password this company does not
-		// have.
-		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownQuery,
-			map[string]string{
-				"detail": "this deployment does not sign in with passwords",
-				"hint":   "see GET /auth/config for how it does",
-			})
-		return
-	}
 
 	body, err := httpjson.ReadBody(w, r, maxLoginBody)
 	if err != nil {
@@ -903,7 +888,7 @@ type signIn struct {
 //
 // # A sign-in that proved a password and nothing else, where one is required
 //
-// `api.auth.local.totp: required` says nobody signs in on a password alone. So
+// `api.auth.totp: required` says nobody signs in on a password alone. So
 // a sign-in THIS SURFACE verified — the password route, a password step-up, an
 // invitation's redemption — that proved no second factor opens
 // a restricted session. Proving none means holding none: the password route
@@ -930,15 +915,13 @@ func (s *Service) enrolmentOnly(how signIn) bool {
 }
 
 // secondFactorRequired reports whether this deployment requires a second factor
-// of somebody who signs in with a password: the `api.auth.local` block's own
-// `totp`, and nothing where there is no such block.
+// of somebody who signs in with a password: `api.auth.totp`, whose unset value
+// is required.
 //
-// THE BLOCK IS WHAT STATES what a password sign-in needs, and
-// [iam.SecondFactor.Requires] reads a value this build does not know as
-// required, which is the safe direction for "must you prove more".
+// [iam.SecondFactor.Requires] reads the zero and a value this build does not
+// know as required, which is the safe direction for "must you prove more".
 func (s *Service) secondFactorRequired() bool {
-	local := s.boot.API.Auth.Local
-	return local != nil && local.TOTP.Requires()
+	return s.boot.API.Auth.TOTP.Requires()
 }
 
 // proofOf is the instant a sign-in proved who somebody is: the replaced
@@ -1146,20 +1129,15 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 	}, true
 }
 
-// backend is how this deployment signs people in.
-func (s *Service) backend() config.AuthBackend {
-	return s.boot.API.Auth.Resolved()
-}
-
 // passwordFloor is the shortest password this deployment accepts: its own
-// `api.auth.local.min_password_length`, or the engine's twelve.
+// `api.auth.min_password_length`, or the engine's twelve.
 //
 // ONE READING FOR EVERY SITE THAT SETS OR DESCRIBES A PASSWORD — the two
 // enrolments that choose one and the two answers that tell a form what to
 // refuse before it posts — so a form can never be told one number while the
 // route enforces another. That was the shape before this: every site said
 // twelve, and none read the setting.
-func (s *Service) passwordFloor() int { return s.boot.API.Auth.Local.Passwords() }
+func (s *Service) passwordFloor() int { return s.boot.API.Auth.Passwords() }
 
 // sourceOf is the source the throttle keys on, beside what was typed.
 //

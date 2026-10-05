@@ -1793,9 +1793,15 @@ factor. The screen prints the engine's own sentence for a refusal and nothing it
 composed itself: a failed sign-in is one refusal on purpose, and a
 distinguishing message would be a roster. `second_factor_required` asks for the
 six-digit code or a recovery code and resubmits the same details with it; a
-`429` says how many seconds its `Retry-After` names; a deployment whose
-`/auth/config` names no local sign-in offers the API token alone. Somebody
-already signed in is told who, and offered to continue as them.
+`429` says how many seconds its `Retry-After` names. The password form is
+always there — password sign-in is always served — and the deployment's API
+token waits behind **Use an API token instead**. Where `/health` says
+`identity: unclaimed`, nobody has been invited yet and the token is the only
+way in, so its form is open from the start and the page says how to begin: sign
+in with the token, then invite yourself from Settings › People & access;
+`unknown` keeps the ordinary page, because a node that cannot read its identity
+estate is not one with nobody in it. Somebody already signed in is told who, and
+offered to continue as them.
 
 **An invitation is read, never spent, by opening it.** The link carries the
 whole credential in the fragment, which no browser sends to a server, and the

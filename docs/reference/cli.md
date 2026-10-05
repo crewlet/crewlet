@@ -174,7 +174,7 @@ that field never had:
 - **`api.host` must bind a loopback address** (`127.0.0.1`, `::1`,
   `localhost`). That is the only check that physically stops another machine
   reaching this. It judges the *bind* rather than `api.external_url`,
-  deliberately and unlike `api.auth.local`'s `accept_insecure` rule: that one
+  deliberately and unlike `api.auth.accept_insecure`'s rule: that one
   is about whether a session cookie crosses plaintext through a proxy, where
   the external address is the truth, and this is about who can open a socket
   to the process, where the bind is. The check runs **after** `-api-host` is

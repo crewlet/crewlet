@@ -181,12 +181,23 @@ api:
   # trusted_proxies: ["10.0.0.0/8"]
 
   auth:
-    # How PEOPLE sign in: local (passwords and a second factor held here)
-    # or none.  Left unset it derives from whether the `local` block is
-    # present, and without it it is `none` — this example's posture: the
-    # token below is the only credential, which is what a walkthrough on
-    # one machine wants.
-    backend: none
+    # PEOPLE sign in with a login and a password, always — there is no
+    # switch for it.  Nobody holds one until they are invited: the founder
+    # token below invites the first person (Settings › People & access in
+    # the dashboard, or `crewlet iam invite`), and stays the break-glass
+    # credential after that.
+    #
+    # Whether a person must also hold a second factor (an authenticator
+    # app).  Unset is `required`.  `optional` is this walkthrough's posture
+    # — the dashboard is reached on loopback, where no password crosses a
+    # network — and validation refuses it on an address a browser reaches
+    # over the network unless `accept_insecure: true` says so out loud.  A
+    # deployment reached off loopback leaves this line out.
+    totp: optional
+
+    # The shortest password anybody may choose.  Unset is the engine's own
+    # floor of 12, which nothing lowers.
+    # min_password_length: 16
 
     # THE CEILING: the most authority this deployment will ever let a
     # directory record confer.
