@@ -59,6 +59,10 @@ var kindBriefs = map[Kind]string{
 		"next task. If it is JSON, answer with JSON of the same shape: every key kept, long " +
 		"string values shortened, no array element dropped without saying how many. If it is " +
 		"prose, keep every finding, value and conclusion.",
+	KindOutcome: "The text is what an AI agent's turn of work CONCLUDED — its final answer, or " +
+		"the reviewer's account of what landed — and the rewrite is the one line a task's " +
+		"card shows for that turn. Say what the turn did and delivered, and where, with " +
+		"its identifiers; leave out how it got there.",
 	KindReport: "The text is the report a coding agent wrote about a coding task it finished. " +
 		"Keep what it changed and where, what it delivered (branches, pull requests, " +
 		"commits), what it tested and how, what failed, and what it says is left to do.",

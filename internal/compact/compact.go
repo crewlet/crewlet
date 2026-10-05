@@ -198,13 +198,16 @@ const (
 	// KindAnswer is what a delegated worker returned for its task: its
 	// structured submission as JSON, or its prose.
 	KindAnswer Kind = "answer"
+	// KindOutcome is what a turn concluded — its final answer, or the
+	// reviewer's account of what landed — condensed for a one-glance card.
+	KindOutcome Kind = "outcome"
 	// KindReport is a coding agent's report on the run it finished.
 	KindReport Kind = "report"
 )
 
 // Kinds is every kind this build has instructions for.
 var Kinds = []Kind{KindConversation, KindThread, KindArgument, KindToolError,
-	KindProduced, KindSource, KindTask, KindAnswer, KindReport}
+	KindProduced, KindSource, KindTask, KindAnswer, KindOutcome, KindReport}
 
 // Valid reports whether this build knows the kind.
 func (k Kind) Valid() bool {

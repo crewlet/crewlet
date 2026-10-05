@@ -328,8 +328,11 @@ counted none — more of a turn charged elsewhere — carries no number.
 carries the turn's own account of what it did (the reviewer's summary of what
 landed, or the executor's artifact), the notes of the newest review that sent
 the work back for another pass, and each tool its executor called with how
-many times — each account cut to 600 bytes and at most sixteen tools, bounds
-the writer refuses to exceed rather than cutting for you — and, for a segment
+many times — each account at most 600 bytes and at most sixteen tools, bounds
+the writer refuses to exceed. An account longer than that is **condensed** for
+the card by the seat's auxiliary model and marked `(condensed)`, never cut; where
+no rewrite can be had the card says how long the account is and to open the
+turn for it — and, for a segment
 that failed because one of its phases did, which phase that was. They are record
 version 10: a node on an older build holds such a record back until it is
 upgraded rather than applying it without them. The arguments and results of

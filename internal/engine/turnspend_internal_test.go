@@ -13,7 +13,11 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -270,8 +274,9 @@ func TestAnUnwritableChargeIsLoggedNotRaised(t *testing.T) {
 //
 // The task page's turn card is read off the tracker's own row, which outlives
 // the event history and answers on any node — so the summary, the send-back's
-// request and the tools have to ride the record, each cut to the bound the
-// writer holds it to (an overlong one is refused, not cut, over there).
+// request and the tools have to ride the record. The text rides WHOLE until
+// the write, where [turnCard] fits it (an overlong one is refused, not cut,
+// by the writer).
 func TestATurnRecordSaysWhatTheSegmentDid(t *testing.T) {
 	t.Parallel()
 	ended := time.Unix(1_700_000_060, 0).UTC()
@@ -289,9 +294,9 @@ func TestATurnRecordSaysWhatTheSegmentDid(t *testing.T) {
 	if got.Summary != "added the retry" {
 		t.Errorf("summary = %q, want the reviewer's account of what landed", got.Summary)
 	}
-	if len(got.Review) > tracker.MaxTurnSummary || !strings.HasPrefix(got.Review, "add a test") {
-		t.Errorf("review = %d bytes %q, want the send-back's notes cut to %d",
-			len(got.Review), got.Review, tracker.MaxTurnSummary)
+	if got.Review != spend.Review {
+		t.Errorf("review = %d bytes, want the send-back's notes whole until the write",
+			len(got.Review))
 	}
 	want := []tracker.TurnTool{
 		{Name: "create_branch", Calls: 1}, {Name: "run_sandbox", Calls: 3},
@@ -324,5 +329,45 @@ func TestAFailedSegmentNamesThePhaseThatBroke(t *testing.T) {
 		nil, ended).record
 	if done.FailedIn != "" {
 		t.Errorf("a segment that ended %q names a failed phase %q", done.Outcome, done.FailedIn)
+	}
+}
+
+type cardModels struct {
+	answer string
+	err    error
+}
+
+func (m cardModels) Head(*org.Role, phase.Phase) (chain.Member, error) {
+	if m.err != nil {
+		return chain.Member{}, m.err
+	}
+	return chain.Member{Key: "aux", Provider: cardProvider(m)}, nil
+}
+
+type cardProvider cardModels
+
+func (cardProvider) Model() string { return "aux" }
+func (p cardProvider) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	return &llm.Completion{Content: p.answer}, nil
+}
+
+// A TURN'S CARD IS WHOLE, REWRITTEN OR POINTED AWAY — NEVER CUT. The card is
+// the one line a person reads for a turn, and a summary cut at its cap read as
+// the turn's whole account.
+func TestATurnCardIsWholeRewrittenOrPointedAway(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "Writer"}
+	if got := turnCard(t.Context(), compact.Bound{}, "fixed it"); got != "fixed it" {
+		t.Errorf("a short account was altered: %q", got)
+	}
+	long := strings.Repeat("The turn investigated the flaky test and ", 40) + "opened !42."
+	fit := compact.New(cardModels{answer: "Fixed the flaky test; opened !42."}, compact.NewCache()).For(seat)
+	if got := turnCard(t.Context(), fit, long); got != condensedCard+"Fixed the flaky test; opened !42." {
+		t.Errorf("a long account was not rewritten and marked: %q", got)
+	}
+	got := turnCard(t.Context(), compact.Bound{}, long)
+	if len(got) > tracker.MaxTurnSummary || strings.Contains(got, "investigated") ||
+		!strings.Contains(got, "open the turn") {
+		t.Errorf("an account with no rewrite was %q, want a pointer to the turn and no fragment", got)
 	}
 }

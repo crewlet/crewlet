@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -10,8 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -117,12 +118,14 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 	charge.record = tracker.TurnRecord{
 		Task: item.ID, Seat: t.handle, TurnID: t.runID, Trigger: t.trigger.Type,
 		Outcome: segmentOutcome(res, err), Phases: spend.Phases, Spend: total,
-		// WHAT THE SEGMENT DID, cut to the record's own bound here — the
-		// writer refuses an overlong one rather than cut it, since every
-		// node would store it. The same summary the turn's completion
-		// event carries, so the task's card and the trace agree.
-		Summary: textcut.Within(planSummary(res), tracker.MaxTurnSummary),
-		Review:  textcut.Within(spend.Review, tracker.MaxTurnSummary),
+		// WHAT THE SEGMENT DID, WHOLE until the write: the writer refuses
+		// a text past [tracker.MaxTurnSummary] rather than cut it, since
+		// every node stores it, and [Engine.recordTurnSpend] fits it to
+		// the card there — rewritten, never cut. The same summary the
+		// turn's completion event carries, so the task's card and the
+		// trace agree.
+		Summary: planSummary(res),
+		Review:  spend.Review,
 		Tools:   tracker.CountTurnTools(workTools(spend.AllTools)),
 	}
 	// WHICH PHASE BROKE, only where the segment is recorded as failed: a
@@ -207,10 +210,35 @@ func (e *Engine) recordTurnSpend(ctx context.Context, charge segmentCharge) {
 		// there is nowhere to charge.
 		return
 	}
+	fit := e.seatCompactor(e.Company(), charge.record.Seat)
+	charge.record.Summary = turnCard(ctx, fit, charge.record.Summary)
+	charge.record.Review = turnCard(ctx, fit, charge.record.Review)
 	e.chargeSegment(ctx, halves.as(builtin.Actor{
 		Handle: charge.record.Seat, Kind: tracker.AuthorAgent,
 		TurnID: charge.record.TurnID,
 	}), charge)
+}
+
+// condensedCard is the marker a rewritten card line carries, so nobody reads
+// a model's condensation as the turn's own words.
+const condensedCard = "(condensed) "
+
+// turnCard is a turn's summary or review as its task's card carries it:
+// whole within [tracker.MaxTurnSummary], rewritten to fit by the seat's
+// auxiliary model past it, and — where no rewrite can be had — a line saying
+// how long the account is and where it is read whole. Never a cut: the card
+// is the one line a person reads for a turn, and a cut one reads as the turn's
+// whole account.
+func turnCard(ctx context.Context, fit compact.Bound, text string) string {
+	if len(text) <= tracker.MaxTurnSummary {
+		return text
+	}
+	res, err := fit.Fit(ctx, compact.KindOutcome, text, tracker.MaxTurnSummary-len(condensedCard))
+	if err == nil {
+		return condensedCard + res.Text
+	}
+	return fmt.Sprintf("(this turn's account is %d bytes and could not be condensed "+
+		"for its card — open the turn to read it whole)", len(text))
 }
 
 // chargeSegment is [Engine.recordTurnSpend] over the write it needs.
