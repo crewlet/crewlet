@@ -1582,6 +1582,51 @@ func TestNotificationOutcomesAreSummedAcrossNodes(t *testing.T) {
 	})
 }
 
+// THE ASKER'S INSTANT IS READ AT THE STORE'S RESOLUTION, so the history floor is
+// one edge on both sides of an answer.
+//
+// Every statement floors at the ENCODED instant, the microsecond, while the
+// asker holds what comes back to its horizon itself. Read off a clock to the
+// nanosecond, the two disagreed about a row at the floor's own microsecond:
+// inside the history to the count of notification outcomes, under it to the
+// listing — the two reads one integrations row is made of, at one instant. A
+// clock half a microsecond past a tick puts the floor there.
+//
+// Mutation: drop the truncation from the fleet's instant, and the listing loses
+// the row the count keeps, alone and fanned alike.
+func TestTheAskersInstantIsReadAtTheStoresResolution(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a := newNode(t, broker, "node-a")
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond).Add(500 * time.Nanosecond)
+	edge := at.Add(-store.EventHistory).Truncate(time.Microsecond)
+	outcomeOn(t, a, "at-floor", "notification_skipped", "gitlab", edge)
+
+	for name, fan := range map[string]*eventfan.Fleet{
+		"solo":   eventfan.Solo("node-a", a.log),
+		"fanned": fanFrom(a, "node-a"),
+	} {
+		fan.Clock = func() time.Time { return at }
+		listing, _, err := fan.List(t.Context(), store.ListQuery{Category: "notification"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if listing.At.Nanosecond()%int(time.Microsecond) != 0 {
+			t.Errorf("%s: the listing was asked at %s, finer than the store holds", name,
+				listing.At.Format(time.RFC3339Nano))
+		}
+		counted, _, err := fan.NotificationOutcomes(t.Context(), store.OutcomeQuery{At: listing.At})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(listing.Rows) != 1 || counted.Skipped["gitlab"] != 1 {
+			t.Errorf("%s: the listing holds %v and the count %d — want the row at the floor's "+
+				"microsecond in both, one instant being one floor", name, idsOf(listing.Rows),
+				counted.Skipped["gitlab"])
+		}
+	}
+}
+
 // missing reports whether a node is named as not answering, for a reason
 // mentioning want.
 func missing(c eventfan.Coverage, node, want string) bool {

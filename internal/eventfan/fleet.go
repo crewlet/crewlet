@@ -64,7 +64,8 @@ type Fleet struct {
 
 	// Clock is the ASKER'S clock: every question is asked at one instant
 	// read from it, which this node's own read and every peer's floor the
-	// history at — see [store.EventLog]. Nil is the wall clock.
+	// history at — see [store.EventLog]. Nil is the wall clock. Read to the
+	// microsecond, whatever it carries finer ([instant]).
 	//
 	// A dependency rather than a call to time.Now buried in each question,
 	// because the instant is what the answer is about: a question asked of
@@ -76,10 +77,30 @@ type Fleet struct {
 // now is the instant a question is asked at, read ONCE per question.
 func (f *Fleet) now() time.Time {
 	if f.Clock != nil {
-		return f.Clock().UTC()
+		return instant(f.Clock())
 	}
-	return time.Now().UTC()
+	return instant(time.Now())
 }
+
+// askedAt is the instant a question is asked at: the one its caller pinned —
+// another answer's own, so the two halves of one screen share it — or [now].
+func (f *Fleet) askedAt(pinned time.Time) time.Time {
+	if pinned.IsZero() {
+		return f.now()
+	}
+	return instant(pinned)
+}
+
+// instant is t at the STORE'S RESOLUTION, the microsecond ([store.EncodeTime]).
+//
+// Finer than that, one instant is two edges. Every statement floors at the
+// ENCODED instant, which drops the nanoseconds, while every comparison the
+// asker makes itself — the horizon it holds what comes back to ([heldTo]), the
+// window a caller names beside an answer — reads them. So a row at the floor's
+// own microsecond was inside the history to the store and under it to the
+// asker: counted by one question of an answer and missing from the listing
+// beside it. Read at the microsecond, the floor is one value on both sides.
+func instant(t time.Time) time.Time { return t.UTC().Truncate(time.Microsecond) }
 
 // Solo is a fleet of this node alone: its own store, nobody to ask.
 //
@@ -355,9 +376,7 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 		q.Limit = store.DefaultListLimit
 	}
 	// ONE INSTANT for the page and the siblings, on every node.
-	if q.At.IsZero() {
-		q.At = f.now()
-	}
+	q.At = f.askedAt(q.At)
 	g, err := gather(ctx, f, QuestionEvents, listParamsOf(q), nil,
 		func(ctx context.Context) (listPart, error) { return listPartOf(ctx, f.Local, q) })
 	if err != nil {
@@ -404,9 +423,7 @@ func (f *Fleet) List(ctx context.Context, q store.ListQuery) (Listing, Coverage,
 // cut at the instant every node was asked at.
 func (f *Fleet) Histogram(ctx context.Context, q store.HistogramQuery) (store.EventHistogram, Coverage, error) {
 	started := time.Now()
-	if q.At.IsZero() {
-		q.At = f.now()
-	}
+	q.At = f.askedAt(q.At)
 	g, err := gather(ctx, f, QuestionSeries, seriesParamsOf(q), nil,
 		func(ctx context.Context) (store.EventHistogram, error) { return f.Local.Histogram(ctx, q) })
 	if err != nil {
@@ -585,9 +602,7 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 	// travels with it, so every node floors the window and its shares at the
 	// asker's history horizon rather than at its own — see
 	// [store.TurnQuery.At].
-	if q.At.IsZero() {
-		q.At = f.now()
-	}
+	q.At = f.askedAt(q.At)
 	q.Since, q.Until = q.Window(q.At)
 	q.SinceDays = 0
 	first, err := gather(ctx, f, QuestionTurns, turnsParamsOf(q), nil,
@@ -722,9 +737,7 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 // cut against, which every node floors it at — see [store.PhaseTokenQuery.At].
 func (f *Fleet) PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tokens.Record, Coverage, error) {
 	started := time.Now()
-	if q.At.IsZero() {
-		q.At = f.now()
-	}
+	q.At = f.askedAt(q.At)
 	q.Since, q.Until = q.Window(q.At)
 	q.SinceDays = 0
 	g, err := gather(ctx, f, QuestionPhaseTokens, phaseTokenParamsOf(q), nil,
@@ -754,9 +767,7 @@ func (f *Fleet) PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tok
 // an older build refuses it and is named in the coverage instead.
 func (f *Fleet) NotificationOutcomes(ctx context.Context, q store.OutcomeQuery) (store.NotificationOutcomes, Coverage, error) {
 	started := time.Now()
-	if q.At.IsZero() {
-		q.At = f.now()
-	}
+	q.At = f.askedAt(q.At)
 	g, err := gather(ctx, f, QuestionNotificationOutcomes, outcomeParamsOf(q), nil,
 		func(ctx context.Context) (store.NotificationOutcomes, error) {
 			return f.Local.NotificationOutcomes(ctx, q)

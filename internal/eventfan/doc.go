@@ -65,7 +65,9 @@
 // Exact for disjoint stores, and only if every store answers the same
 // question — and every one of these is floored at the thirty-day history
 // horizon, which is a function of WHEN it is asked. So the asker reads its
-// [Fleet.Clock] once per question and sends the instant with it, and every
+// [Fleet.Clock] once per question — to the microsecond, the store's own
+// resolution, or the floor a statement applies and the horizon the asker holds
+// rows to are two edges a tick apart — and sends the instant with it, and every
 // node floors at that instant rather than at its own clock; and one node's
 // part of an answer is read at that one instant throughout (see parts.go), so
 // a count is never floored a moment later than the rows it counts. Floored at

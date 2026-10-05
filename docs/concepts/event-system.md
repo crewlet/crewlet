@@ -573,7 +573,11 @@ sequenceDiagram
   answer is read at that instant throughout, so a turn's count is never
   floored a moment later than the rows it counts. Floored at each node's own
   clock, a fleet's answer would be a union of horizons, and a node answering
-  late would drop what it held at the edge.
+  late would drop what it held at the edge. The instant is read to the
+  **microsecond**, the store's own resolution: finer, the store's floor and
+  the horizon the asker holds rows to (below) round apart, and a row at the
+  floor's own microsecond is counted by one read of an answer and missing
+  from the listing beside it.
 - **The asker holds every row to its own horizon.** Because it owns the
   instant, the asker cuts every row a node returns at that instant minus 30
   days before it merges anything — one event, the events page and its trace
