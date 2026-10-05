@@ -424,8 +424,23 @@ func (s *suite) runBatch(t *testing.T) {
 	t.Run("live_options_mutation_takes_effect_next_cycle", func(t *testing.T) {
 		t.Parallel()
 		// A hot config reload changes linger and batch size with no
-		// re-subscription: the consume loop re-reads the options every
-		// cycle.
+		// re-subscription: the consume loop re-reads the options for every
+		// batch.
+		//
+		// THE NEXT BATCH, ON A SUBSCRIPTION THAT WAS IDLE WHEN THE RELOAD
+		// LANDED — the ordinary case, and the one that was wrong. A pull
+		// backend's idle cycle waits in a fetch for its first event, and
+		// JetStream read the options BEFORE that wait, so a reload made
+		// during it opened the next batch's window at the old length. See
+		// queue.BatchOptions.
+		//
+		// WHY THE GAP, and why that case could not see it: published back
+		// to back, the two events land in the one tail fetch a pull drain
+		// runs at any window, zero included, so the old length collected
+		// both and this passed with the reload ignored. The gap puts the
+		// third event past what a zero window collects — the same
+		// construction as linger_coalesces_same_key_events_into_one_batch,
+		// with the window at racingWindow for the reason given there.
 		q := s.start(ctx, t)
 		batches := newBatchJournal()
 		opts := queue.NewBatchOptions(0, 20)
@@ -434,8 +449,9 @@ func (s *suite) runBatch(t *testing.T) {
 		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
 		batches.awaitSizes(t, "the un-lingered first event", 1)
 
-		opts.Set(lingerFor.Seconds(), 20)
+		opts.Set(racingWindow.Seconds(), 20)
 		publish(ctx, t, q, "t", newConvEvent("b", "c1"))
+		time.Sleep(quietFor)
 		publish(ctx, t, q, "t", newConvEvent("c", "c1"))
 		batches.awaitSizes(t, "the next cycle to honour the new linger", 1, 2)
 	})

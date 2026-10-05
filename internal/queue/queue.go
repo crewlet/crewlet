@@ -587,11 +587,15 @@ type EventQueue interface {
 
 // BatchOptions carries the live-mutable knobs for batched delivery.
 //
-// The consume loop re-reads these at the start of every collection cycle, so
-// a hot config reload takes effect on the next batch with no
-// re-subscription. Mutable and read concurrently is a data race unless it is
-// guarded, so it is: this is safe to write from another goroutine while a loop
-// is reading it.
+// The consume loop re-reads these for every batch, at the moment the batch's
+// FIRST event is in hand — which is also the moment its linger window opens —
+// so a hot config reload takes effect on the next batch with no
+// re-subscription. Not when a cycle starts: a cycle on an idle subscription
+// starts by waiting for that first event, and options read before the wait
+// applied a reload that landed during it to the batch after the next one.
+//
+// Mutable and read concurrently is a data race unless it is guarded, so it
+// is: this is safe to write from another goroutine while a loop is reading it.
 type BatchOptions struct {
 	mu            sync.RWMutex
 	lingerSeconds float64
