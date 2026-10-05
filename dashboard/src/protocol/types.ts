@@ -3654,12 +3654,16 @@ export interface Frame {
 }
 
 /** The named answers the socket's request/response channel serves. */
-/** One field's before and after, AS TEXT — every renderer of a delta wants
+/** One field's move, AS TEXT — every renderer of a delta wants
  *  "todo → in_progress", and the typed value is on the row for anything that
- *  needs it. */
+ *  needs it. A SET (watchers, an edge kind, tags) carries what it gained and
+ *  lost instead, each sorted and each member whole, with `from` and `to`
+ *  empty (`tracker.Delta`). */
 export interface WorkDelta {
   from: string;
   to: string;
+  added?: string[];
+  removed?: string[];
 }
 
 /** One commit, as the activity feed renders it.

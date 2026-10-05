@@ -1025,7 +1025,10 @@ has ever made, and it has no cheaper mode to fall back to.
 **Every change carries its own before and after.** A row says what KIND of
 change it was (`status`, `view_saved`, `project_updated`, …) and, in `fields`,
 which values moved and from what to what — `{"status": {"from": "todo", "to":
-"in_progress"}}`. That holds for every kind, not only the ones about a task: a
+"in_progress"}}` — and, for a **set** (the watchers, a kind of link, the tags,
+a catalogue's declarations), which members joined and which left:
+`{"watchers": {"from": "", "to": "", "added": ["ada"], "removed": ["bo"]}}`,
+each list sorted and every member whole. That holds for every kind, not only the ones about a task: a
 project reconciled from the org chart names the purpose or the unit that moved,
 a saved view names the query parameters that changed, a re-ordered priority
 list carries the order before and after, and a dependency names the item it
@@ -1040,25 +1043,30 @@ commit may move several of these, and the row names each one it moved:
 |---|---|
 | `title` `status` `assignee` `priority` `project` `type` `tags` | the columns a board is read by |
 | `due` `due_all_day` `start` `estimate` `points` | the schedule and the sizing. The flag is recorded beside the instant because an all-day date is stored as the company's own midnight, so making a midnight due date all-day moves the flag and leaves the instant where it was |
-| `reporter` `watchers` `muted` `collaborators` | who filed it, who follows it, who opted out of hearing, who is doing it with you |
+| `reporter` `watchers` `muted` `collaborators` | who filed it, who follows it, who opted out of hearing, who is doing it with you — the last three as the handles that joined and left |
 | `parent` `routing_unit` `archived` `removed_with` | where it sits, whose lead hears about it, whether it is filed away, and — when a removal cascaded — the item it went with |
-| `waiting_on` `linked` `duplicates` `page` `blocking` | the four kinds of link it authors, and the mirror a blocker carries |
+| `waiting_on` `linked` `duplicates` `page` `blocking` | the four kinds of link it authors, and the mirror a blocker carries — each as the items that joined and left it |
 | `checklists` | one entry per named list, as `Setup: 3 of 5 done`, plus `(1 promoted)` where an item became a sub-item. A list that arrived is on the `to` side alone and one that was deleted on the `from` side alone |
-| `fields` | the custom values that moved, by **slug**, as `severity=high` — a choice by its option's slug, a multi-valued field's members joined with `/`, and a count of any whose field this project no longer declares |
+| `fields` | the custom values that moved, by **slug**, as `severity=high` — a choice by its option's slug, a multi-valued field's members joined with `/`, a value past 150 bytes as its size (`severity=4096 bytes`), and a count of any whose field this project no longer declares |
 | `body` | that the description changed and how big it now is (`980 bytes → 1204 bytes`, or `— → 1204 bytes` written and `980 bytes → —` cleared) — never the prose |
 
 Three things the values are deliberately not. They are the **stored** form — a
 status slug, a whole timestamp, an item's id — rather than what a screen shows,
 because the same row is written identically by every node in a fleet and a
 rendering would depend on the reader's time zone and on the company's current
-vocabulary; the dashboard resolves them. A collection is **bounded**: a row
-is a line in a log rather than a copy of the object, so a long list is cut at a
-whole member and ends with a count of what it left out (`+12 more`), and a
-list whose members a person does not read — an inbox, say — is recorded as its
-size. And the two largest things a task holds are **marked rather than
-carried**: a description can be 32 KiB and a checklist tree 256 items, so the
-row says that they moved and by how much, and the change record it stores
-beside them holds the rest.
+vocabulary; the dashboard resolves them. Nothing is **cut**: a row is a line in
+a log rather than a copy of the object, so a set records only what joined and
+left it — small even when the set is not, where carrying both sides once cut
+the member a commit added off the end of each — an ordered list (a priority
+queue, the checklists) is carried whole because its order is the change, a list
+whose members a person does not read — an inbox, say — is recorded as its size,
+and free text past 600 bytes (a project's purpose, say) is described by its
+size rather than quoted in part. And the two largest things a task holds are
+**marked rather than carried**: a description can be 32 KiB and a checklist
+tree 256 items, so the row says that they moved and by how much, and the change
+record it stores beside them holds the rest. A row records **every** field a
+change moved; only a notification card stops at 32, and says how many more
+there were.
 
 **A notification card carries all of that but the custom fields.** The card is
 built at the write, from the item as it stood and as it will stand; naming a
@@ -1069,8 +1077,10 @@ added, a checklist ticked off, a description rewritten — reads the same on
 both.
 
 **And the woken seat reads them.** A change wake's prompt carries a **What
-changed** block: one `field: from → to` line per delta, in the engine's own
-field names, with an em dash for a side that was empty, and the change's own
+changed** block: one `field: from → to` line per delta — `field: added …;
+removed …` for a set — in the engine's own field names, with an em dash for a
+side that was empty, a closing line counting any fields the card had no room
+for, and the change's own
 excerpt under it where there is one. Without it a wake named the kind and
 nothing else — "The status changed by ana." — and the seat had to read the
 task to learn what the status now was, which still left the value it moved
@@ -1091,7 +1101,7 @@ the items its deltas point at — every link a task authors except `page`, which
 names a knowledge-base page rather than an item, plus the `blocking` mirror, a
 person's priority queue, and the `parent` and `removed_with` scalars — resolved
 when the question is asked rather than when the change was made. That is what
-lets a screen draw "Waiting on: — → ENG-2", or "Parent: — → ENG-2", from a row
+lets a screen draw "Waiting on: added ENG-2", or "Parent: — → ENG-2", from a row
 that stored a uuid. An item this node has not applied is simply missing from
 the map, and a reader falls back to the id.
 

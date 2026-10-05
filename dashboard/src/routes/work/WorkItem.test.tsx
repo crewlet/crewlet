@@ -795,14 +795,26 @@ test("a change reads as a sentence, a checklist move included", () => {
       chrome,
     ).what,
   ).toBe("cleared the due date");
-  // A relation says which task joined it, by its key.
+  // A relation says which task joined it and which left, by its key — what
+  // the engine records for a set is exactly those moves.
   expect(
     changeSentence(
-      record({ kind: "relations", fields: { blocking: { from: "", to: "t-4" } } }),
+      record({
+        kind: "relations",
+        fields: { blocking: { from: "", to: "", added: ["t-4"], removed: ["t-5"] } },
+      }),
       task(),
-      { taskKey: (id: string) => (id === "t-4" ? "ENG-4" : "") },
+      { taskKey: (id: string) => (id === "t-4" ? "ENG-4" : id === "t-5" ? "ENG-5" : "") },
     ).what,
-  ).toBe("made it block ENG-4");
+  ).toBe("made it block ENG-4 and stopped it blocking ENG-5");
+  // And any other set as members added to or removed from it.
+  expect(
+    changeSentence(
+      record({ kind: "watchers", fields: { watchers: { from: "", to: "", added: ["ada"] } } }),
+      task(),
+      chrome,
+    ).what,
+  ).toBe("added ada to the watchers");
 });
 
 // WHO A CHANGE REACHED IS A QUIET DISCLOSURE AT THE END OF ITS LINE: a button

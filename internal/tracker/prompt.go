@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -611,11 +612,17 @@ func promptChanged(b *strings.Builder, n notify.Inbound) {
 // change — and a prompt is kept in the event store exactly as the model saw
 // it, so the difference is permanent and unexplainable.
 //
-// BOUNDED BY CONSTRUCTION: [MaxDeltas] caps the entries at the write and
-// [MaxDeltaValue] caps each side, so the block cannot outgrow its prompt and
-// nothing here needs a cut of its own.
-func changedText(fields map[string]Delta) string {
-	if len(fields) == 0 {
+// BOUNDED BY CONSTRUCTION: [MaxDeltas] caps the entries at the write, a value
+// side is whole only up to [MaxDeltaValue] and described by its size past it,
+// and a set's entry names only what joined and what left — so the block cannot
+// outgrow its prompt and nothing here needs a cut of its own. Fields the card
+// had no room for are counted on a line of their own.
+//
+// A SET IS ITS MOVES — "watchers: added ada, bob; removed carol" — because
+// that is what the commit changed, and a model handed both whole sides has to
+// diff them itself to find it.
+func changedText(fields map[string]Delta, omitted int) string {
+	if len(fields) == 0 && omitted == 0 {
 		return ""
 	}
 	names := make([]string, 0, len(fields))
@@ -626,11 +633,25 @@ func changedText(fields map[string]Delta) string {
 	var b strings.Builder
 	for _, name := range names {
 		delta := fields[name]
+		if len(delta.Added) > 0 || len(delta.Removed) > 0 {
+			var moves []string
+			if len(delta.Added) > 0 {
+				moves = append(moves, "added "+strings.Join(delta.Added, ", "))
+			}
+			if len(delta.Removed) > 0 {
+				moves = append(moves, "removed "+strings.Join(delta.Removed, ", "))
+			}
+			b.WriteString("- " + name + ": " + strings.Join(moves, "; ") + "\n")
+			continue
+		}
 		// AN EMPTY SIDE IS AN EM DASH, which is what every other surface
 		// draws for one: "assignee:  → ada" reads as a rendering fault
 		// where "assignee: — → ada" reads as an assignment.
 		b.WriteString("- " + name + ": " + orDash(delta.From) + " → " +
 			orDash(delta.To) + "\n")
+	}
+	if omitted > 0 {
+		fmt.Fprintf(&b, "- and %d more field(s) this card had no room for\n", omitted)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

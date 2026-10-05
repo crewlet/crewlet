@@ -30,7 +30,8 @@ const (
 	MetaLate       = "late"
 
 	// MetaDeltas is WHAT MOVED, already rendered — one `field: from → to`
-	// line per delta the record carries, written by [changedText].
+	// line per value delta and one `field: added …; removed …` line per set
+	// the record carries, written by [changedText].
 	//
 	// RENDERED AT THE PARSE rather than carried typed, because the spine's
 	// envelope is a string map and this is the only side of the boundary
@@ -233,7 +234,7 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	// and had to spend a tool round to learn what it changed TO — and the
 	// side it moved FROM is not on the task at all, so that round could
 	// never recover it.
-	if text := changedText(record.Notify.Fields); text != "" {
+	if text := changedText(record.Notify.Fields, record.Notify.FieldsOmitted); text != "" {
 		metadata[MetaDeltas] = text
 	}
 	if record.Notify.CommentID != "" {

@@ -149,12 +149,14 @@ func (w Wake) Notify(leads Leads) *Notify {
 	if !w.Kind.Valid() {
 		return nil
 	}
+	fields, omitted := cardFields(w.deltas())
 	notify := &Notify{
-		Kind:     w.Kind,
-		Mentions: w.Mentions,
-		Fields:   w.deltas(),
-		Excerpt:  w.excerpt(),
-		Snapshot: w.snapshot(leads),
+		Kind:          w.Kind,
+		Mentions:      w.Mentions,
+		Fields:        fields,
+		FieldsOmitted: omitted,
+		Excerpt:       w.excerpt(),
+		Snapshot:      w.snapshot(leads),
 	}
 	if w.Comment != nil {
 		notify.CommentID = w.Comment.ID
@@ -195,7 +197,11 @@ func (n *Notify) filedTo(was, now Task) {
 			fields[field] = delta
 		}
 	}
-	n.Fields = fields.done()
+	// TRIMMED FOR THE CARD again, with what it left off added to what
+	// the first trim already had: a field this settlement moved may be one
+	// the card had no room for.
+	shown, omitted := cardFields(fields.done())
+	n.Fields, n.FieldsOmitted = shown, n.FieldsOmitted+omitted
 }
 
 // keyed names, on a create's wake, the key the write minted.
@@ -443,9 +449,9 @@ func capParties(in []TaskParty, cap int) []TaskParty {
 // a person and a model, and all three want "todo → in_progress". The typed
 // value is on the row for anything that needs it.
 //
-// CAPPED AT THE DISPLAY LIMIT and no lower: the cap governs what a card SHOWS
-// and never what the mutation carries, and a writer that hit it should be
-// trimming what it shows rather than what it recorded.
+// EVERY FIELD THAT MOVED: the card trims to the display limit where it is
+// built ([cardFields]) and says by how many, and the mutation is never what
+// the limit governs.
 // THE WRITER HOLDS NO CATALOGUE, which is why the argument is nil here and
 // why a custom-field move is HISTORY-ONLY. See [TaskDeltas].
 func (w Wake) deltas() map[string]Delta { return TaskDeltas(w.Before, w.After, nil) }
@@ -492,14 +498,12 @@ func TaskDeltas(before, after Task, declared map[string]FieldDef) map[string]Del
 	add("priority", string(before.Priority), string(after.Priority))
 	add("project", before.Project, after.Project)
 	add("type", before.Type, after.Type)
-	// THE TAGS IN THE ORDER THEY ARE STORED, and BOUNDED — [listText]
-	// rather than a bare join. A task may carry [MaxTagsPerTask] tags
-	// whose slugs run to 64 characters each, which is 2.6 KiB on each side
-	// of one delta in a table nothing ever sweeps; the join had no bound
-	// at all. Not [sortedText], unlike an edge set: these are in the order
-	// a writer stated them, and re-ordering them here would rewrite every
-	// row this column has ever held.
-	add("tags", listText(before.Tags), listText(after.Tags))
+	// THE TAGS AS A SET — what this commit added and removed, whole slugs
+	// ([deltaSet.set]). Both sides used to be carried, joined and cut to
+	// six hundred bytes, so on a task carrying many tags the one a commit
+	// added was off the end of both. A re-ordering records nothing: the
+	// order a writer stated them in is not something anybody changed.
+	moved.set("tags", before.Tags, after.Tags)
 	// THE SCHEDULE MOVES TOO, and until a tool could set any of these
 	// nothing here could observe it: a due date, an estimate and a size
 	// had no producer in the tree, so their absence from this list was
@@ -559,9 +563,11 @@ func TaskDeltas(before, after Task, declared map[string]FieldDef) map[string]Del
 	// ONE FIELD PER KIND, derived from [RelationKinds] rather than listed,
 	// so a fifth kind of edge is recorded with no second edit — the reason
 	// that slice exists.
+	//
+	// EACH KIND IS A SET, recorded as what joined and what left it.
 	for _, kind := range RelationKinds {
-		add(string(kind), relationText(before.Relations, kind),
-			relationText(after.Relations, kind))
+		moved.set(string(kind), relationMembers(before.Relations, kind),
+			relationMembers(after.Relations, kind))
 	}
 	// AND THE MIRROR, under the word this package already uses for it:
 	// `blocking` is what [DependencyChange] calls the other direction and
@@ -569,7 +575,7 @@ func TaskDeltas(before, after Task, declared map[string]FieldDef) map[string]Del
 	// rather than a fifth relation kind because it is not an authored edge
 	// — it is the copy the blocker carries so a close can name who it
 	// unblocks.
-	add("blocking", sortedText(before.Dependents), sortedText(after.Dependents))
+	moved.set("blocking", before.Dependents, after.Dependents)
 	// AND THE REST OF WHAT A WRITER CAN MOVE, which recorded nothing at
 	// all. Every field below had a producer and no comparison, so the
 	// commit that changed it wrote a history row and a card carrying its
@@ -589,10 +595,10 @@ func TaskDeltas(before, after Task, declared map[string]FieldDef) map[string]Del
 	// above gives: an absence nothing can produce is an absence nobody
 	// notices.
 	//
-	// THE THREE PEOPLE SETS ARE SETS, so they take [sortedText] like the
-	// edges and unlike `tags`: nothing orders them, [settleWatch] rebuilds
-	// the watcher list by removing a handle and appending it, and a caller
-	// may state a whole set it read in any order — so a delta over document
+	// THE THREE PEOPLE SETS ARE SETS, so they record what joined and what
+	// left, like the edges: nothing orders them, [settleWatch] rebuilds the
+	// watcher list by removing a handle and appending it, and a caller may
+	// state a whole set it read in any order — so a delta over document
 	// order would record a change on every re-statement that moved nobody.
 	//
 	// AND `muted` IS ITS OWN FIELD RATHER THAN SUBTRACTED FROM `watchers`.
@@ -601,22 +607,19 @@ func TaskDeltas(before, after Task, declared map[string]FieldDef) map[string]Del
 	// "was never watching" and "chose to stop" the same row — which is the
 	// distinction those two fields exist to keep.
 	add("reporter", before.Reporter, after.Reporter)
-	add("watchers", sortedText(before.Watchers), sortedText(after.Watchers))
-	add("muted", sortedText(before.Muted), sortedText(after.Muted))
-	add("collaborators",
-		sortedText(before.Collaborators), sortedText(after.Collaborators))
+	moved.set("watchers", before.Watchers, after.Watchers)
+	moved.set("muted", before.Muted, after.Muted)
+	moved.set("collaborators", before.Collaborators, after.Collaborators)
 	// THE PARENT BY ITS ID, for the reason every relation is by one: a key
 	// is a fact about another task's row and this row is repaired by
 	// nothing. The activity read resolves it against the rows this node
 	// holds at the instant it answers — see `deltas.go`'s head.
-	add("parent", scalarText(parentText(before.Parent)),
-		scalarText(parentText(after.Parent)))
+	add("parent", parentText(before.Parent), parentText(after.Parent))
 	// THE ROUTING UNIT AND NOT THE FILED ONE. [Task.FiledUnit] is
 	// immutable, so the only commit that could ever move it is the create,
 	// where it says exactly what `routing_unit` already says — one more key
 	// on every new task's row, carrying nothing a reader did not have.
-	add("routing_unit",
-		scalarText(before.RoutingUnit), scalarText(after.RoutingUnit))
+	add("routing_unit", before.RoutingUnit, after.RoutingUnit)
 	// BOTH STATES PRESENT, which is [boolText]'s rule: "archived: — → true"
 	// would read as a field that had no value before, and every task has
 	// always had this one.
@@ -632,8 +635,7 @@ func TaskDeltas(before, after Task, declared map[string]FieldDef) map[string]Del
 	// somebody removed on purpose are the same three words — "removed by
 	// ada" — meaning two different things, with nothing on either row to
 	// tell them apart.
-	add("removed_with", scalarText(removedWithText(before.Removed)),
-		scalarText(removedWithText(after.Removed)))
+	add("removed_with", removedWithText(before.Removed), removedWithText(after.Removed))
 	add("checklists", checklistText(before.Checklists), checklistText(after.Checklists))
 	if before.Body != after.Body {
 		// A MARKER AND NEVER THE PROSE. A body is [MaxBody] — 32 KiB —
@@ -647,10 +649,9 @@ func TaskDeltas(before, after Task, declared map[string]FieldDef) map[string]Del
 		moved.mark("body", bodyText(before.Body), bodyText(after.Body))
 	}
 	if from, to, changed := fieldsText(before.Fields, after.Fields, declared); changed {
-		// THE CUSTOM VALUES, BY SLUG. [deltaSet.mark] for the second of
-		// that method's two reasons: each value is cut to
-		// [MaxDeltaElement], so two long values differing past the cut
-		// render the same although the field moved.
+		// THE CUSTOM VALUES, BY SLUG. [deltaSet.mark] because a value
+		// past [MaxDeltaElement] is carried as its size, so two long
+		// values of one size render alike although the field moved.
 		moved.mark("fields", from, to)
 	}
 	return moved.done()
@@ -721,7 +722,8 @@ func bodyText(body string) string {
 // IN DOCUMENT ORDER, unlike the people sets above and like a person's
 // `priorities`: a checklist collection renders in the order it is stored, so
 // that order is something somebody arranged rather than an artefact of how a
-// set was assembled.
+// set was assembled. WHOLE, both sides: a task holds at most [MaxChecklists]
+// lists, each named in at most [MaxChecklistName] bytes.
 func checklistText(lists []Checklist) string {
 	if len(lists) == 0 {
 		return ""
@@ -821,8 +823,8 @@ func fieldsText(before, after map[string]json.RawMessage,
 		}
 		named = append(named, move{
 			slug: field.Slug,
-			from: fieldValueText(field, before[id]),
-			to:   fieldValueText(field, after[id]),
+			from: proseText(fieldValueText(field, before[id]), MaxDeltaElement),
+			to:   proseText(fieldValueText(field, after[id]), MaxDeltaElement),
 		})
 	}
 	// ORDERED BY SLUG, because a map has no order and two nodes must write
@@ -861,11 +863,10 @@ func fieldsText(before, after map[string]json.RawMessage,
 // while the other task is another ROW, which `deltas.go`'s head forbids
 // quoting by key.
 //
-// EACH MEMBER OF A MULTI-VALUED FIELD IS BOUNDED AS IT IS BUILT. A field may
-// carry [MaxFieldValueSeq] members of up to [MaxTextareaBytes] each, and the
-// join would otherwise assemble megabytes to be cut to [MaxDeltaElement] by
-// the caller. "/" separates them because ", " already separates one field from
-// the next.
+// A MULTI-VALUED FIELD'S MEMBERS ARE JOINED WHOLE with "/", because ", "
+// already separates one field from the next; the caller describes a value past
+// [MaxDeltaElement] by its size ([proseText]) rather than cutting it, and a
+// whole value is bounded where it is written ([MaxFieldValueBytes]).
 func fieldValueText(field FieldDef, raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
@@ -874,8 +875,7 @@ func fieldValueText(field FieldDef, raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &members); err == nil {
 		out := make([]string, 0, len(members))
 		for _, member := range members {
-			out = append(out, textcut.Within(
-				fieldValueText(field, member), MaxDeltaElement))
+			out = append(out, fieldValueText(field, member))
 		}
 		return strings.Join(out, "/")
 	}
@@ -897,20 +897,21 @@ func fieldValueText(field FieldDef, raw json.RawMessage) string {
 	return text
 }
 
-// relationText is one kind's counterparties, as the text a delta carries.
+// relationMembers is one kind's counterparties, as the members of the set a
+// delta records.
 //
 // BY KIND rather than the whole set in one field, because the kinds are
 // unrelated facts: `waiting_on` is a dependency somebody has to clear and
-// `page` is a link to a wiki page, and folding them into one string would make
+// `page` is a link to a wiki page, and folding them into one set would make
 // adding a link read as a change to what the task is waiting for.
-func relationText(relations []Relation, kind RelationKind) string {
+func relationMembers(relations []Relation, kind RelationKind) []string {
 	others := make([]string, 0, len(relations))
 	for _, relation := range relations {
 		if relation.Kind == kind {
 			others = append(others, relation.Other)
 		}
 	}
-	return sortedText(others)
+	return others
 }
 
 // excerpt is what a card shows, cut rune-safely to the display limit.
