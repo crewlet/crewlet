@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -201,5 +202,61 @@ func TestAWeakPasswordFromAResetLinkIsRefused(t *testing.T) {
 	}
 	if ok := viewReset(t, h, id, secret).Code; ok != http.StatusOK {
 		t.Errorf("the link no longer opens after a refused spend: %d", ok)
+	}
+}
+
+// A RESET LINK SPENT TWICE SETS ONE PASSWORD AND ANSWERS ONE SUCCESS.
+//
+// Two spends of one link with different passwords reach a node that has not
+// applied the first — two tabs, or a retry after a lost answer with the
+// password typed again — so both open the link there. The first sets its
+// password; the second is the 410 every spent link answers, never a
+// `password_set` for a password nothing set, which would send the person to
+// sign in with one that does not work. The CONTROL is the first spend's 200.
+// Mutation: publish every spend of a link under one operation derived from
+// it, and the ledger answers the second spend 200.
+func TestASecondSpendOfAResetLinkIsNeverAnsweredAsSettingItsPassword(t *testing.T) {
+	t.Parallel()
+	r, h := passwordRig(t)
+	id, secret := withResetLink(t, r.estate, nil)
+	r.estate.mu.Lock()
+	r.estate.behindResets = slices.Clone(r.estate.person.Credentials)
+	r.estate.mu.Unlock()
+
+	first, _ := spendReset(t, h, id, secret, newPassword)
+	if first.Code != http.StatusOK {
+		t.Fatalf("the first spend answered %d: %s", first.Code, first.Body)
+	}
+	second, _ := spendReset(t, h, id, secret, "yet-another-long-passphrase")
+	if second.Code != http.StatusGone ||
+		codeOf(t, second) != string(httpjson.CodeResetSpent) {
+		t.Errorf("the second spend answered %d: %s — its password was never set",
+			second.Code, second.Body)
+	}
+	if got := emitted[types.IAMPasswordReset](r.audit); len(got) != 1 {
+		t.Errorf("announced %d resets, want the one that set a password", len(got))
+	}
+}
+
+// A SPEND THE FRAMEWORK COLLAPSED IS STILL THIS REQUEST'S, AND IS ANNOUNCED.
+//
+// Each spend is its own operation, so a copy the ledger names under it — an
+// append whose acknowledgement was lost, resolved from the ledger — is the
+// spend this request made: 200, and one `iam_password_reset`. The CONTROL is
+// the answer itself. Mutation: skip the announcement for a collapsed result
+// and the spend that set the password leaves no row on the trail.
+func TestACollapsedSpendOfAResetLinkIsAnnounced(t *testing.T) {
+	t.Parallel()
+	r, h := passwordRig(t)
+	id, secret := withResetLink(t, r.estate, nil)
+	r.estate.collapsed = map[string]bool{"SetPassword": true}
+
+	spent, _ := spendReset(t, h, id, secret, newPassword)
+	if spent.Code != http.StatusOK {
+		t.Fatalf("the spend answered %d: %s", spent.Code, spent.Body)
+	}
+	if got := emitted[types.IAMPasswordReset](r.audit); len(got) != 1 ||
+		got[0].Credential != id {
+		t.Errorf("announced %+v, want the one reset this request made", got)
 	}
 }

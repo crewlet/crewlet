@@ -66,19 +66,6 @@ type resetSpend struct {
 // errResetSpent is a link its spend's own snapshot found no longer opens.
 var errResetSpent = errors.New("authapi: this reset link no longer opens")
 
-// resetNamespace keeps [resetOpID]'s ids apart from every other derivation.
-// FIXED for the life of the format, for [redemptionNamespace]'s reason.
-const resetNamespace = "crewlet.authapi.password-reset"
-
-// resetOpID is the operation a link's spend is published under: DERIVED from
-// the link's credential, at its instant, so a retry of a spend whose answer
-// was lost is answered from the ledger rather than refused as a link already
-// used — [redemptionOpID]'s shape and reason.
-func resetOpID(credential string) string {
-	at, _ := statelog.OpMintedAt(credential)
-	return statelog.DeriveOpID(at, "password-reset", resetNamespace, credential)
-}
-
 // ViewReset is `GET /auth/reset/{id}`: whose password a link sets, without
 // spending it. UNGUARDED, and on no curve — see the file's own doc.
 func (s *Service) ViewReset(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +110,16 @@ func (s *Service) SpendReset(w http.ResponseWriter, r *http.Request) {
 	if !hashed {
 		return
 	}
-	opID := resetOpID(held.ID)
+	// A FRESH OPERATION PER SPEND, as a password change's is. Derived from
+	// the link, every spend of it was one operation, and the ledger answers
+	// an operation it holds before any decide runs: a second spend with
+	// another password, on a node that had not applied the first, lost its
+	// race to the first and was then answered `password_set` from the
+	// ledger with its own password never set. Fresh, it decides again,
+	// finds the link spent in its snapshot, and is the 410 every spent link
+	// answers — which is also what a retry of a spend whose answer was lost
+	// meets, while the password the first attempt set works.
+	opID := statelog.NewOpID(s.now(), "password-reset")
 	set, err := s.writer.SetPassword(r.Context(), iamdomain.PasswordSet{
 		PersonID: held.PersonID, Verifier: verifier,
 		// THE LINK AGAIN, IN THE RECORD'S OWN SNAPSHOT: one spent by
@@ -153,14 +149,12 @@ func (s *Service) SpendReset(w http.ResponseWriter, r *http.Request) {
 		unresolved(w, r, "api_reset_unresolved", set)
 		return
 	}
-	if !set.Collapsed {
-		// ANNOUNCED BY THE CALL THAT MADE IT: a retry answered from the
-		// ledger is the same spend, already said.
-		s.audit.Emit(r.Context(), types.IAMPasswordReset{
-			Person: held.PersonID, Login: held.Login, Credential: held.ID,
-			Remote: s.sourceOf(r),
-		})
-	}
+	// ANNOUNCED WHETHER OR NOT THE FRAMEWORK COLLAPSED IT: the operation is
+	// this request's alone, so a copy the ledger names is this spend.
+	s.audit.Emit(r.Context(), types.IAMPasswordReset{
+		Person: held.PersonID, Login: held.Login, Credential: held.ID,
+		Remote: s.sourceOf(r),
+	})
 	log.InfoContext(r.Context(), "api_password_reset", "person", held.PersonID,
 		"credential", held.ID, "position", set.Position.String())
 	httpjson.Write(w, http.StatusOK, map[string]string{

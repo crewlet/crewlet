@@ -830,9 +830,10 @@ link spent with every other the person held, and their revocation epoch moved
 own does, judged by the link again in the record's own snapshot, so one spent
 from another tab in between opens nothing. The answer is the login and nothing
 else: the person signs in next, where a second factor they hold still applies,
-which a session handed out by the link would skip. A spend whose answer was lost
-is retried under the same operation, derived from the link, and answered from
-the ledger. Issuing is an `iam_password_reset_issued` event and spending an
+which a session handed out by the link would skip. Each spend is its own
+operation, so a second one — another tab, or a retry of a spend whose answer
+was lost — finds the link spent and is the same `410 reset_spent`; the password
+the first spend set is the one that works. Issuing is an `iam_password_reset_issued` event and spending an
 `iam_password_reset` one; neither carries the link.
 
 ### A required second factor is enrolled before anything else

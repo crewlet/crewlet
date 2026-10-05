@@ -119,6 +119,15 @@ type estate struct {
 	// the writes that land durable and not yet applied here.
 	passwordSets []iamdomain.PasswordSet
 	pending      map[string]bool
+
+	// passwordOps are the operations a SetPassword landed under, which the
+	// framework's ledger answers a later call under the same id from
+	// before its decide runs — applied, collapsed, its Check never asked.
+	passwordOps map[string]bool
+
+	// behindResets, when a case sets it, is the credential set a node
+	// that has not applied this estate's writes reads a reset link from.
+	behindResets []iamdomain.Credential
 }
 
 // outcome is what one of this estate's writes answers: applied at a position,
@@ -251,6 +260,13 @@ func (e *estate) SetPassword(_ context.Context, in iamdomain.PasswordSet) (
 	if err := e.refuse["SetPassword"]; err != nil {
 		return statelog.Result{}, err
 	}
+	if e.passwordOps[in.OpID] {
+		// THE LEDGER ANSWERS FIRST, as the framework's does: an operation
+		// that already landed is this call's retry, whatever it presents.
+		result := applied(statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: 12})
+		result.OpID, result.Collapsed = in.OpID, true
+		return result, nil
+	}
 	if in.Check != nil {
 		if err := in.Check(iamdomain.Person{Kind: e.person.Kind,
 			Stage: e.person.Stage, Credentials: slices.Clone(e.person.Credentials)}); err != nil {
@@ -277,6 +293,10 @@ func (e *estate) SetPassword(_ context.Context, in iamdomain.PasswordSet) (
 	e.person.Credentials = append(kept, iamdomain.Credential{
 		ID: "pw-new", Method: iamdomain.MethodPassword, Verifier: in.Verifier})
 	e.counters.Epoch++
+	if e.passwordOps == nil {
+		e.passwordOps = map[string]bool{}
+	}
+	e.passwordOps[in.OpID] = true
 	return result, nil
 }
 
@@ -285,8 +305,12 @@ func (e *estate) SetPassword(_ context.Context, in iamdomain.PasswordSet) (
 func (e *estate) ResetByID(_ context.Context, id string) (iamdomain.ResetRow, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	held := e.person.Credentials
+	if e.behindResets != nil {
+		held = e.behindResets
+	}
 	row := iamdomain.ResetOf(iamdomain.Person{Kind: e.person.Kind,
-		Stage: e.person.Stage, Credentials: e.person.Credentials}, id)
+		Stage: e.person.Stage, Credentials: held}, id)
 	if row.ID != "" {
 		row.PersonID, row.Login = e.person.ID, e.person.Login
 	}
