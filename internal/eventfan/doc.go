@@ -5,9 +5,12 @@
 //
 // Every event is written ONCE, to the event store of the node that published
 // it: the publish listener is inline on the publishing node and there is no
-// consumer group behind it, so no two nodes ever write one row (see
-// internal/observe). That is what makes the audit log cheap and exact — and it
-// is also why a read of it answered for ONE node. A three-node fleet's turn
+// consumer group behind it, so no two nodes ever write one row of their own
+// (see internal/observe). A node without `data` keeps no store, and hands its
+// events to ONE data node in custody batches instead — one, once the fleet has
+// settled which, and for the moments before that possibly two (below). That is
+// what makes the audit log cheap and exact — and it is also why a read of it
+// answered for ONE node. A three-node fleet's turn
 // list was a third of the company's turns on whichever node the dashboard
 // reached; a turn resumed on another node after a restart showed half its
 // phases; a trace whose inbound webhook landed on node B and whose agent work
@@ -35,9 +38,20 @@
 //
 // # The merges are exact, and each says why
 //
-// Each node's store is disjoint from every other's, so the merges are pure
-// functions over values ([MergeListing], [MergeSeries], [MergeTurnPartials],
-// [MergeOutcomes], [FirstFound]) and each one is exact for a reason it states:
+// The merges are pure functions over values ([MergeListing], [MergeSeries],
+// [MergeTurnPartials], [MergeOutcomes], [FirstFound]), and they rest on each
+// node's store being disjoint from every other's — which every row of a node's
+// own is, and a stateless node's row is once its custody batch is settled. A
+// batch whose claim failed is written by a second keeper before the first has
+// learned it is not its own, so until the first settles it — a pass a minute,
+// and for as long as that node cannot reach coordination — two logs hold the
+// same rows. A merge that unions rows by identity holds such a row once (a
+// listing, a trace's or a turn's rows, the spend records by event id), and the
+// outcome counts name such rows rather than count them and count each once
+// ([MergeOutcomes]); the axis's bars, a trace's or a turn's total and a page of
+// turns' folded sums add each node's part, and count such a row once per node
+// holding it until its batch is settled. Each merge is otherwise exact for a
+// reason it states:
 // a keyset page is merged k-way on (time, id) and cut at the newest position
 // any FULL page stopped at, a histogram's bars are summed over one pinned
 // window that every build cuts alike — the partial bar a window the history
@@ -58,7 +72,8 @@
 // answer did exactly that with what became of its deliveries, until the
 // outcome counts became a question of their own ([Fleet.NotificationOutcomes]):
 // every node counts `[since, at)` from its own store, grouped in SQL, and the
-// asker sums.
+// asker sums — each node the rows it keeps, and the asker each row a custody
+// batch still in flight puts on two nodes once.
 //
 // # Every question is asked at one instant
 //

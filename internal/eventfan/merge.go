@@ -214,7 +214,9 @@ func MergeRelated(direct, siblings []store.EventRecord, limit int, more bool) []
 //
 // Summable because the window is PINNED — every node was handed the asker's
 // clock, so every node snapped the same edges and produced the same bars —
-// and because no event is in two stores. Every build cuts that window alike
+// and because no event is in two stores, but for a stateless node's custody
+// batch in the moments before it is settled, which a bar counts once per node
+// holding it (see the package doc). Every build cuts that window alike
 // ([store.HistogramQuery.Window]), a window the history clips included: down
 // to the bucket the floor falls in, partial first bar and all, which the asker
 // drops only after this sum ([store.EventHistogram.InsideHistory]) — so a node
@@ -263,28 +265,94 @@ func aligned(a, b store.EventHistogram) bool {
 	return true
 }
 
+// OutcomePart is one node's share of the outcome count: its answer to the
+// count, and — when the asker asked — which of the rows any node named
+// unsettled it keeps.
+type OutcomePart struct {
+	Node string
+
+	// Counted is the node's answer to `notification_outcomes`: the rows it
+	// keeps, counted, and the rows it holds unsettled, named.
+	Counted store.NotificationOutcomes
+
+	// Kept is the node's answer to `kept_outcomes` — nil when it was not
+	// asked or did not answer.
+	Kept []store.OutcomeRow
+}
+
 // MergeOutcomes sums several nodes' notification outcome counts into the
-// fleet's.
+// fleet's, counting every row once.
 //
-// EXACT AS A SUM, for two reasons that are both needed. An outcome event is
-// written ONCE, inline, to the store of the node that decided it — no two
-// nodes hold one row — so no outcome is counted twice. And every node counted
-// the SAME window: the asker sent both its edges, the bottom one and its own
-// instant, which is also where every node floored the history, so no node's
-// count reaches a second further than another's. A sum over disjoint stores of
-// one window is the count of that window, which is what neither a page of the
-// newest events nor a per-node clock could give.
+// EXACT, for three reasons that are all needed. Every node counted the SAME
+// window: the asker sent both its edges, the bottom one and its own instant,
+// which is also where every node floored the history, so no node's count
+// reaches a second further than another's. A row a node COUNTED is one it
+// keeps, and no two nodes keep one row: its own rows are written once, inline,
+// by the node that published them, and a stateless node's rows by the one data
+// node the fleet's custody claim chose (internal/observe). And a row a node
+// holds WITHOUT knowing it keeps it — a custody batch it has written and not
+// settled, which a second keeper may hold too — is NAMED rather than counted,
+// and counted here once: unless a node that keeps it, and did not name it,
+// counted it already. That node is the batch's keeper, which settled first;
+// a node that named the row and keeps it by the second question settled
+// between the two, and counted it in neither, so the row is still counted
+// here.
+//
+// What that leaves is a batch written and settled by its keeper BETWEEN the
+// two questions while another node held it unsettled: the keeper counted it in
+// neither answer, and keeps it by the second — so it is in no count. That is a
+// redelivery landing inside one read, and the next read counts it.
 //
 // The maps are never nil, so an answer that counted nothing still marshals as
-// two empty objects.
-func MergeOutcomes(parts []store.NotificationOutcomes) store.NotificationOutcomes {
+// two empty objects; Unsettled is empty, every row of it having been counted.
+func MergeOutcomes(parts []OutcomePart) store.NotificationOutcomes {
 	out := store.NotificationOutcomes{Skipped: map[string]int{}, Coalesced: map[string]int{}}
+	named := map[store.OutcomeKey]store.OutcomeRow{}
+	var order []store.OutcomeKey
+	namedBy := map[store.OutcomeKey]map[string]bool{}
 	for _, p := range parts {
-		for app, n := range p.Skipped {
+		for app, n := range p.Counted.Skipped {
 			out.Skipped[app] += n
 		}
-		for app, n := range p.Coalesced {
+		for app, n := range p.Counted.Coalesced {
 			out.Coalesced[app] += n
+		}
+		for _, r := range p.Counted.Unsettled {
+			k := r.Key()
+			if _, seen := named[k]; !seen {
+				named[k], namedBy[k] = r, map[string]bool{}
+				order = append(order, k)
+			}
+			namedBy[k][p.Node] = true
+		}
+	}
+	counted := map[store.OutcomeKey]bool{}
+	for _, p := range parts {
+		for _, r := range p.Kept {
+			if by, isNamed := namedBy[r.Key()]; isNamed && !by[p.Node] {
+				counted[r.Key()] = true
+			}
+		}
+	}
+	for _, k := range order {
+		if !counted[k] {
+			out.Add(named[k])
+		}
+	}
+	return out
+}
+
+// unsettledOf is every row any part named unsettled, once each, by identity
+// alone — what the second question asks every node about.
+func unsettledOf(parts []store.NotificationOutcomes) []store.OutcomeRow {
+	var out []store.OutcomeRow
+	seen := map[store.OutcomeKey]bool{}
+	for _, p := range parts {
+		for _, r := range p.Unsettled {
+			if !seen[r.Key()] {
+				seen[r.Key()] = true
+				out = append(out, store.OutcomeRow{Time: r.Time, ID: r.ID})
+			}
 		}
 	}
 	return out
@@ -329,8 +397,9 @@ func FirstFound(parts []eventPart) (store.EventRecord, bool) {
 // the transport ([fit]), or a capped read the asker's horizon cut rows off the
 // front of ([heldTo]) — whose unsent rows sit inside the cap's cut, where the
 // obvious merge filled the gap with other nodes' newer rows. The total is a
-// sum because no event is in two stores, and it is never cut, so the answer
-// still says what it does not show.
+// sum because no event is in two stores — but for a custody batch in the
+// moments before it is settled (see the package doc) — and it is never cut, so
+// the answer still says what it does not show.
 func MergeTrace(parts []tracePart) (rows []store.EventRecord, total int) {
 	groups := make([][]store.EventRecord, 0, len(parts))
 	var known opening

@@ -227,6 +227,55 @@ func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
 	}
 }
 
+// THE CUSTODY READS SEEK THE LOG BY IDENTITY, driven from the few rows they
+// name rather than from the log.
+//
+// The outcome count names the window's rows of a custody batch in flight, and
+// a node says which of some named rows it keeps; each is a handful of rows
+// against a log of a month, so each must start from what it names — the
+// unsettled batches, or the names it was handed — and seek the log for every
+// one. Started from the log, either would read every outcome the window holds,
+// or every row the log holds, and probe the names for each. Read back for the
+// EXACT statements both run.
+//
+// Mutation: join the log first in either statement, and its plan starts from
+// the log — a seek of the window's outcomes by type, or a scan of every row.
+func TestTheCustodyReadsSeekTheLogByIdentity(t *testing.T) {
+	t.Parallel()
+	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	at := now()
+	unsettled, unsettledArgs := OutcomeQuery{Since: at.Add(-time.Hour), At: at}.unsettledSQL(at)
+	kept, keptArgs, err := keptSQL([]OutcomeRow{{Time: at, ID: "ev-1"}, {Time: at, ID: "ev-2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []struct {
+		name, query, first string
+		args               []any
+	}{
+		{"the unsettled outcomes", unsettled, "SCAN custody_unsettled", unsettledArgs},
+		{"the kept outcomes", kept, "SCAN json_each", keptArgs},
+	} {
+		plan := planOf(t, db, r.query, r.args)
+		steps := strings.Split(plan, "\n")
+		if !strings.HasPrefix(steps[0], r.first) {
+			t.Errorf("%s: the plan is %q — it does not start from what it names", r.name, plan)
+		}
+		for _, step := range steps {
+			if strings.HasPrefix(step, "SCAN e") || strings.HasPrefix(step, "SCAN crewlet_events") {
+				t.Errorf("%s: the plan is %q — it scans the log", r.name, plan)
+			}
+		}
+		if !strings.Contains(plan, "SEARCH e ") {
+			t.Errorf("%s: the plan is %q — it never seeks the log", r.name, plan)
+		}
+	}
+}
+
 // A LOOKUP BY ID SEEKS THE ID INDEX, and only the id index.
 //
 // A link carries an id and no time, so [EventLog.ByID] has the id index to

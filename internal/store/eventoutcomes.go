@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -20,6 +22,19 @@ import (
 // of time with nothing to say so. Counted here, over the window the caller
 // names, the outcomes are bounded by exactly the edges the deliveries beside
 // them are.
+//
+// # A row a node holds is not always a row it keeps
+//
+// Every row of this node's own is written once, here, by the node that
+// published it — but a node without `data` hands its events to the data nodes
+// in batches (internal/observe's custody), and a batch whose claim failed is
+// written by a second keeper before the first has learned it is not its own to
+// keep. Until that first node settles the batch, two logs hold the same row,
+// and a fleet summing two counts counts it twice. So a count here is of the
+// rows this node KEEPS, and the rows of a batch it has written and not settled
+// ([EventLog.WriteCustody]) are named instead, by identity, for the asker to
+// count once across the fleet ([NotificationOutcomes.Unsettled],
+// [EventLog.KeptOutcomes]).
 
 // OutcomeQuery is the window a count of notification outcomes covers: the
 // half-open interval `[Since, At)`.
@@ -70,6 +85,36 @@ func (q OutcomeQuery) window(at time.Time) (since, until time.Time) {
 type NotificationOutcomes struct {
 	Skipped   map[string]int `json:"skipped"`
 	Coalesced map[string]int `json:"coalesced"`
+
+	// Unsettled is the window's outcome rows this node holds WITHOUT KNOWING
+	// IT KEEPS THEM — rows of a custody batch it wrote and has not settled —
+	// which the two maps leave out. Another data node may hold the same row,
+	// kept or not yet settled either, so they are named by identity rather
+	// than counted, and whoever sums the fleet counts each one once. Empty on
+	// a node with no batch in flight, which is nearly always, and on an
+	// answer that already counted them (a fleet's merge).
+	Unsettled []OutcomeRow `json:"unsettled,omitempty"`
+}
+
+// OutcomeRow is one outcome row by its identity in the event log — `(Time, ID)`,
+// the table's primary key, to the store's microsecond — and what it counts as:
+// its type and the third-party app it names, trimmed.
+type OutcomeRow struct {
+	Time time.Time `json:"time"`
+	ID   string    `json:"id"`
+	Type string    `json:"type,omitempty"`
+	App  string    `json:"app,omitempty"`
+}
+
+// Key is the row's identity, comparable: the stored instant and the id.
+func (r OutcomeRow) Key() OutcomeKey { return OutcomeKey{At: EncodeTime(r.Time), ID: r.ID} }
+
+// OutcomeKey is an [OutcomeRow]'s identity as the event log stores it.
+// Microseconds rather than the time.Time, because a time.Time carries a
+// location and a monotonic reading and is not a safe map key.
+type OutcomeKey struct {
+	At int64
+	ID string
 }
 
 // The event types an outcome count reads, each counted into its own map.
@@ -83,7 +128,8 @@ var (
 )
 
 // NotificationOutcomes counts the outcomes in the query's window per
-// third-party app.
+// third-party app — the rows this node KEEPS — and names the window's rows it
+// holds unsettled beside the counts (see the file doc).
 //
 // THE APP IS THE `notification_source` TAG, not the event's source: the source
 // of an engine-published event names the engine, and what a count has to line
@@ -93,35 +139,196 @@ var (
 // concerned. The tag is TRIMMED here rather than in SQL, by the one rule every
 // reader of it applies ([strings.TrimSpace]; SQL's TRIM strips spaces alone),
 // and tags that trim to one app are counted as that app.
+//
+// ONE SNAPSHOT for the count and the unsettled rows, because the second is
+// taken off the first: read apart, a batch settled between the two would be
+// counted as kept and named as unsettled, or neither.
 func (l *EventLog) NotificationOutcomes(ctx context.Context, q OutcomeQuery) (NotificationOutcomes, error) {
-	out := NotificationOutcomes{Skipped: map[string]int{}, Coalesced: map[string]int{}}
-	query, args := q.countSQL(askedAt(q.At))
-	rows, err := l.db.sql.QueryContext(ctx, query, args...)
-	if err != nil {
+	at := askedAt(q.At)
+	var out NotificationOutcomes
+	if err := l.db.Read(ctx, func(tx *sql.Tx) error {
+		out = NotificationOutcomes{Skipped: map[string]int{}, Coalesced: map[string]int{}}
+		query, args := q.countSQL(at)
+		if err := scanOutcomes(ctx, tx, query, args, func(kind, app string, count int) {
+			out.add(kind, app, count)
+		}); err != nil {
+			return err
+		}
+		query, args = q.unsettledSQL(at)
+		rows, err := tx.QueryContext(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		seen := map[OutcomeKey]bool{}
+		for rows.Next() {
+			var stamp int64
+			var r OutcomeRow
+			var tag string
+			if err := rows.Scan(&stamp, &r.ID, &r.Type, &tag); err != nil {
+				return err
+			}
+			r.Time, r.App = DecodeTime(stamp), strings.TrimSpace(tag)
+			// ONCE PER ROW, though two batches on this node could name it:
+			// the count beside it holds the row once.
+			if r.App == "" || seen[r.Key()] {
+				continue
+			}
+			seen[r.Key()] = true
+			out.add(r.Type, r.App, -1)
+			out.Unsettled = append(out.Unsettled, r)
+		}
+		return rows.Err()
+	}); err != nil {
 		return NotificationOutcomes{}, fmt.Errorf("store: count notification outcomes: %w", err)
+	}
+	return out, nil
+}
+
+// Add counts one row under its type and app — what a fleet's merge does with a
+// row some node named rather than counted. A row of another type counts
+// nowhere.
+func (o *NotificationOutcomes) Add(r OutcomeRow) { o.add(r.Type, r.App, 1) }
+
+// add counts n of an outcome type under an app, dropping a key its last row
+// was taken back from: an app with nothing kept is absent, like one with
+// nothing at all.
+func (o *NotificationOutcomes) add(kind, app string, n int) {
+	var counts map[string]int
+	switch kind {
+	case skippedType:
+		counts = o.Skipped
+	case coalescedType:
+		counts = o.Coalesced
+	default:
+		return
+	}
+	if counts[app] += n; counts[app] == 0 {
+		delete(counts, app)
+	}
+}
+
+// scanOutcomes runs a statement answering (type, raw app tag, count) rows and
+// hands each with its app trimmed, skipping a row that names no app.
+func scanOutcomes(ctx context.Context, tx *sql.Tx, query string, args []any,
+	each func(kind, app string, count int),
+) error {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var kind, tag string
 		var count int
 		if err := rows.Scan(&kind, &tag, &count); err != nil {
-			return NotificationOutcomes{}, fmt.Errorf("store: count notification outcomes: %w", err)
+			return err
 		}
-		app := strings.TrimSpace(tag)
-		if app == "" {
-			continue
-		}
-		switch kind {
-		case skippedType:
-			out.Skipped[app] += count
-		case coalescedType:
-			out.Coalesced[app] += count
+		if app := strings.TrimSpace(tag); app != "" {
+			each(kind, app, count)
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return NotificationOutcomes{}, fmt.Errorf("store: count notification outcomes: %w", err)
+	return rows.Err()
+}
+
+// KeptOutcomes answers which of some outcome rows, named by identity, this
+// node KEEPS: holds in its log, and not as a row of a custody batch it has
+// written and not settled.
+//
+// The other half of [NotificationOutcomes.Unsettled]. A row one node names
+// unsettled may be kept by another — the batch's keeper, which settled first —
+// and that node's count already holds it, while one no node keeps is in no
+// count at all. So whoever sums the fleet asks every node this about the rows
+// named unsettled, and counts a row once unless a node that keeps it counted it
+// already. ONE SNAPSHOT for the rows held and the batches unsettled, for
+// NotificationOutcomes' reason. The answer is never nil.
+func (l *EventLog) KeptOutcomes(ctx context.Context, named []OutcomeRow) ([]OutcomeRow, error) {
+	out := []OutcomeRow{}
+	if len(named) == 0 {
+		return out, nil
+	}
+	query, args, err := keptSQL(named)
+	if err != nil {
+		return nil, fmt.Errorf("store: read the kept outcomes: %w", err)
+	}
+	if err := l.db.Read(ctx, func(tx *sql.Tx) error {
+		out = out[:0]
+		unsettled, err := unsettledKeys(ctx, tx)
+		if err != nil {
+			return err
+		}
+		rows, err := tx.QueryContext(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var stamp int64
+			var r OutcomeRow
+			if err := rows.Scan(&stamp, &r.ID); err != nil {
+				return err
+			}
+			r.Time = DecodeTime(stamp)
+			if !unsettled[r.Key()] {
+				out = append(out, r)
+			}
+		}
+		return rows.Err()
+	}); err != nil {
+		return nil, fmt.Errorf("store: read the kept outcomes: %w", err)
 	}
 	return out, nil
+}
+
+// unsettledKeys is the identity of every row of every custody batch this node
+// has written and not settled — what the table holds only while a batch is in
+// flight, so a read of all of it is a read of a few moments' batches.
+func unsettledKeys(ctx context.Context, tx *sql.Tx) (map[OutcomeKey]bool, error) {
+	rows, err := tx.QueryContext(ctx, unsettledKeysSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[OutcomeKey]bool{}
+	for rows.Next() {
+		var k OutcomeKey
+		if err := rows.Scan(&k.At, &k.ID); err != nil {
+			return nil, err
+		}
+		out[k] = true
+	}
+	return out, rows.Err()
+}
+
+// unsettledKeysSQL reads every unsettled batch's rows as the table stores them,
+// `{"t": event_time, "id": event_id}` ([EventLog.WriteCustody]).
+const unsettledKeysSQL = `SELECT json_extract(j.value, '$.t'), json_extract(j.value, '$.id')
+	  FROM custody_unsettled AS c, json_each(c.events) AS j`
+
+// keptSQL is the statement [EventLog.KeptOutcomes] runs and its arguments: the
+// named rows this log holds, by its primary key, the names bound as ONE JSON
+// array so the statement's variables do not grow with them. A function of its
+// own so its plan can be read back (TestTheCustodyReadsSeekTheLogByIdentity).
+func keptSQL(named []OutcomeRow) (string, []any, error) {
+	type identity struct {
+		T  int64  `json:"t"`
+		ID string `json:"id"`
+	}
+	ids := make([]identity, 0, len(named))
+	for _, r := range named {
+		ids = append(ids, identity{T: EncodeTime(r.Time), ID: r.ID})
+	}
+	raw, err := json.Marshal(ids)
+	if err != nil {
+		return "", nil, err
+	}
+	// DRIVEN FROM THE NAMES, each a seek of the key: CROSS JOIN fixes the
+	// order, so the planner cannot start from the log and probe the names
+	// for every row it holds.
+	return `SELECT e.event_time, e.event_id
+	  FROM json_each(?) AS j CROSS JOIN crewlet_events AS e
+	 WHERE e.event_time = json_extract(j.value, '$.t')
+	   AND e.event_id = json_extract(j.value, '$.id')`, []any{string(raw)}, nil
 }
 
 // countSQL is the statement [EventLog.NotificationOutcomes] runs and its
@@ -154,6 +361,11 @@ func (l *EventLog) NotificationOutcomes(ctx context.Context, q OutcomeQuery) (No
 // THE ROWS ARE SELECTED IN A DERIVED TABLE and grouped outside it, for the
 // reason [EventLog] gives: grouped over the table itself, the floor is a range
 // of the primary key the planner reaches for instead.
+//
+// EVERY ROW OF THE WINDOW, unsettled ones included: those are named by
+// [OutcomeQuery.unsettledSQL] in the same snapshot and taken back out, which
+// costs a read of the few rows in flight rather than a probe of the custody
+// table for every outcome the window holds.
 func (q OutcomeQuery) countSQL(at time.Time) (string, []any) {
 	since, until := q.window(at)
 	arms := make([]string, 0, len(outcomeTypes))
@@ -166,4 +378,27 @@ func (q OutcomeQuery) countSQL(at time.Time) (string, []any) {
 	}
 	return "SELECT event_type, app, COUNT(*) FROM (" + strings.Join(arms, " UNION ALL ") +
 		") GROUP BY event_type, app", args
+}
+
+// unsettledSQL is the window's outcome rows that belong to a custody batch this
+// node has written and not settled — what [EventLog.NotificationOutcomes] names
+// instead of counting — and its arguments; `at` as for [OutcomeQuery.countSQL].
+//
+// DRIVEN FROM THE CUSTODY TABLE, which holds only the batches in flight: each
+// row it names is a seek of the log, and CROSS JOIN fixes that order, so the
+// planner cannot walk the window's outcomes and probe the batches for each.
+func (q OutcomeQuery) unsettledSQL(at time.Time) (string, []any) {
+	since, until := q.window(at)
+	args := make([]any, 0, len(outcomeTypes)+2)
+	for _, kind := range outcomeTypes {
+		args = append(args, kind)
+	}
+	args = append(args, EncodeTime(since), EncodeTime(until))
+	return `SELECT e.event_time, e.event_id, e.event_type,
+	       COALESCE(json_extract(e.tags, '$.notification_source'), '')
+	  FROM custody_unsettled AS c CROSS JOIN json_each(c.events) AS j CROSS JOIN crewlet_events AS e
+	 WHERE e.event_id = json_extract(j.value, '$.id')
+	   AND e.event_time = json_extract(j.value, '$.t')
+	   AND e.event_type IN (?` + strings.Repeat(", ?", len(outcomeTypes)-1) + `)
+	   AND e.event_time >= ? AND e.event_time < ?`, args
 }

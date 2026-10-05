@@ -3,6 +3,7 @@ package eventfan
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -487,5 +488,63 @@ func TestAMergedTurnsOpeningStopsWhereANodesUnsentRowsBegin(t *testing.T) {
 				t.Errorf("total = %d, want %d — the gap still reported", total, c.total)
 			}
 		})
+	}
+}
+
+// EVERY OUTCOME ROW IS COUNTED ONCE, whichever data nodes hold it.
+//
+// A node counts the rows it keeps and names the rows of a custody batch it has
+// written and not settled; the same batch can sit on a second data node, kept
+// or not yet settled either. So the merge sums the counts and adds every named
+// row once — unless a node that keeps it and did not name it counted it
+// already, which is the batch's keeper having settled first. A node that named
+// a row and keeps it by the second question settled between the two, and
+// counted it in neither, so the row is still added. And a row is its instant
+// and its id together: the same id at another instant is another row.
+//
+// Mutation: add every named row whatever the second question answered, and the
+// row its keeper counted is counted twice; add each once per node naming it,
+// and the row two nodes hold unsettled is; skip a row any node keeps, and the
+// row settled between the two questions is in no count; key the rows by id
+// alone, and the two instants of one id are one row.
+func TestEveryOutcomeRowIsCountedOnce(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	skip := func(id string, at time.Time) store.OutcomeRow {
+		return store.OutcomeRow{Time: at, ID: id, Type: "notification_skipped", App: "gitlab"}
+	}
+	merge := func(id string, at time.Time) store.OutcomeRow {
+		return store.OutcomeRow{Time: at, ID: id, Type: "notifications_coalesced", App: "slack"}
+	}
+	counted := func(skipped, coalesced map[string]int, unsettled ...store.OutcomeRow) store.NotificationOutcomes {
+		return store.NotificationOutcomes{Skipped: skipped, Coalesced: coalesced, Unsettled: unsettled}
+	}
+	key := func(r store.OutcomeRow) store.OutcomeRow { return store.OutcomeRow{Time: r.Time, ID: r.ID} }
+	twice, keptAtB, settledBetween := skip("twice", at), skip("kept-at-b", at), merge("settled-between", at)
+	sameID, laterSameID := skip("same-id", at), skip("same-id", at.Add(time.Microsecond))
+
+	got := MergeOutcomes([]OutcomePart{
+		{Node: "node-a", Counted: counted(map[string]int{"gitlab": 2}, map[string]int{},
+			twice, keptAtB, settledBetween, sameID),
+			Kept: []store.OutcomeRow{key(settledBetween)}},
+		{Node: "node-b", Counted: counted(map[string]int{"gitlab": 1}, map[string]int{"slack": 1},
+			twice, laterSameID),
+			Kept: []store.OutcomeRow{key(keptAtB)}},
+		{Node: "node-c", Counted: counted(map[string]int{}, map[string]int{"slack": 2})},
+	})
+	// gitlab: a's 2 and b's 1 counted (b's being kept-at-b), plus twice once,
+	// and same-id at both its instants; slack: b's 1 and c's 2, plus the row
+	// settled between the questions.
+	if want := map[string]int{"gitlab": 6}; !maps.Equal(got.Skipped, want) {
+		t.Errorf("skipped = %v, want %v", got.Skipped, want)
+	}
+	if want := map[string]int{"slack": 4}; !maps.Equal(got.Coalesced, want) {
+		t.Errorf("coalesced = %v, want %v", got.Coalesced, want)
+	}
+	if len(got.Unsettled) != 0 {
+		t.Errorf("the merge still names %v, want every row counted", got.Unsettled)
+	}
+	if none := MergeOutcomes(nil); none.Skipped == nil || none.Coalesced == nil {
+		t.Errorf("an empty merge is %+v, want two empty maps", none)
 	}
 }

@@ -4571,7 +4571,9 @@ rather than from the inbound rows, and they are bounded by the same event-log
 window `traffic_since` names: every node counts its own outcome events from
 `traffic_since` up to the instant the inbound rows were read — the same
 instant every node floors the 30-day history at — and the node you asked sums
-them. They are counted, not paged, so every outcome in the window is in the
+them, counting once a row two data nodes hold while a stateless node's custody
+batch is still being settled
+([Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history)). They are counted, not paged, so every outcome in the window is in the
 count however many more of them there are than deliveries, and one before
 `traffic_since` or written after the answer was read is not. A row counts
 under the third-party app its `notification_source` tag names; one written

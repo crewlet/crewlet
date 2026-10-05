@@ -933,6 +933,15 @@ That last step is what keeps every figure derived from a node's own log
 honest: the `usage` domain sums each node's day, so a batch two data nodes
 kept would bill a stateless node's spend twice.
 
+Until the node that lost the claim has settled its copy — at once when its
+claim is answered, and otherwise at its next pass, a minute later or as soon
+as it can reach the coordination store again — both logs hold the batch's
+rows. The fleet's history reads hold such a row once wherever they list rows,
+and the integrations' drop and merge counts count it once; the event axis's
+bars, a trace's or a turn's total and a page of turns' summed tokens count it
+once per node holding it for that while
+([Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history)).
+
 #### What gets stored, and under which category
 
 `category` is the one column with a closed vocabulary, and it is what the

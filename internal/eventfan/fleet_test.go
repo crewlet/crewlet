@@ -1645,3 +1645,67 @@ func idsOf(rows []store.EventRecord) []string {
 	}
 	return out
 }
+
+// A CUSTODY ROW TWO DATA NODES HOLD IS COUNTED ONCE, at every step of its
+// settling.
+//
+// A node without `data` hands its events to the data nodes in custody batches,
+// and a batch whose claim failed is written by a second keeper before the first
+// has learned it is not its own: until the first settles it, both logs hold the
+// same rows. Summed as two counts, one dropped notification was two. So each
+// node counts what it keeps and names what it holds unsettled, and the asker
+// asks every node which of the named rows it keeps — while both copies are
+// unsettled, once the keeper has settled and the other has not, and once both
+// have — and counts each row once, asked from either node.
+//
+// Mutation: sum each node's count with the rows it names, or skip the second
+// question, and the batch's drop is counted twice in one of the three states.
+func TestACustodyRowTwoDataNodesHoldIsCountedOnce(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a, b := newNode(t, broker, "node-a"), newNode(t, broker, "node-b")
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	outcomeOn(t, a, "a-own", "notification_skipped", "gitlab", at.Add(-time.Minute))
+	outcomeOn(t, b, "b-own", "notification_skipped", "gitlab", at.Add(-time.Minute))
+	batch := store.CustodyBatch{ID: "batch-1", Origin: "seats-1", Records: []store.EventRecord{
+		{ID: "x-skip", Type: "notification_skipped", Source: "engine", Category: "notification",
+			Time: at.Add(-2 * time.Minute), Summary: "skipped", Payload: json.RawMessage(`{}`),
+			Tags: map[string]string{"notification_source": "gitlab"}},
+		{ID: "x-merge", Type: "notifications_coalesced", Source: "engine", Category: "notification",
+			Time: at.Add(-2 * time.Minute), Summary: "coalesced", Payload: json.RawMessage(`{}`),
+			Tags: map[string]string{"notification_source": "slack"}},
+	}}
+	for _, n := range []node{a, b} {
+		if err := n.log.WriteCustody(t.Context(), batch, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(state string) {
+		t.Helper()
+		for _, self := range []node{a, b} {
+			fan := fanFrom(self, "node-a", "node-b")
+			fan.Clock = func() time.Time { return at }
+			got, coverage, err := fan.NotificationOutcomes(t.Context(), store.OutcomeQuery{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !coverage.Complete {
+				t.Fatalf("%s, asked from %s: coverage %+v", state, self.id, coverage)
+			}
+			if got.Skipped["gitlab"] != 3 || got.Coalesced["slack"] != 1 || len(got.Unsettled) != 0 {
+				t.Errorf("%s, asked from %s: skipped %v, coalesced %v, unsettled %v — want each "+
+					"node's own drop and the batch's drop and merge once", state, self.id,
+					got.Skipped, got.Coalesced, got.Unsettled)
+			}
+		}
+	}
+	check("both copies unsettled")
+	if err := b.log.SettleCustody(t.Context(), batch.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	check("node-b kept it, node-a not yet settled")
+	if err := a.log.SettleCustody(t.Context(), batch.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	check("node-b kept it, node-a let it go")
+}

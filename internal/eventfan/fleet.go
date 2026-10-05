@@ -765,19 +765,56 @@ func (f *Fleet) PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tok
 // a count carries no instants, and no build that answers this question ignores
 // `at` — the question arrived in the version that sent it (see [Protocol]), and
 // an older build refuses it and is named in the coverage instead.
+//
+// TWO SCATTERS WHEN A ROW IS IN FLIGHT, and one otherwise. Each node counts
+// the rows it KEEPS and names the ones it holds of a custody batch it has not
+// settled ([store.NotificationOutcomes.Unsettled]) — a row a second data node
+// may hold too, kept or not. When any node named one, every node is asked which
+// of them it keeps (`kept_outcomes`), and [MergeOutcomes] counts each once.
+// Nothing is named on a fleet with no stateless node, nor between batches on
+// one that has them, which is nearly always, so the second question is the
+// exception; and a node alone needs none, since a row only it holds is
+// counted once by naming it.
 func (f *Fleet) NotificationOutcomes(ctx context.Context, q store.OutcomeQuery) (store.NotificationOutcomes, Coverage, error) {
 	started := time.Now()
 	q.At = f.askedAt(q.At)
-	g, err := gather(ctx, f, QuestionNotificationOutcomes, outcomeParamsOf(q), nil,
+	first, err := gather(ctx, f, QuestionNotificationOutcomes, outcomeParamsOf(q), nil,
 		func(ctx context.Context) (store.NotificationOutcomes, error) {
 			return f.Local.NotificationOutcomes(ctx, q)
 		})
 	if err != nil {
 		return store.NotificationOutcomes{}, Coverage{}, err
 	}
-	merged := MergeOutcomes(g.parts())
-	f.report(QuestionNotificationOutcomes, g.coverage, started)
-	return merged, g.coverage, nil
+	parts := []OutcomePart{{Node: f.Self, Counted: first.mine}}
+	for _, p := range first.peers {
+		parts = append(parts, OutcomePart{Node: p.node, Counted: p.part})
+	}
+	coverage := first.coverage
+	if named := unsettledOf(first.parts()); len(named) > 0 && first.fanned {
+		second, err := gather(ctx, f, QuestionKeptOutcomes, keptParams{Rows: named}, nil,
+			func(ctx context.Context) (keptPart, error) {
+				rows, err := f.Local.KeptOutcomes(ctx, named)
+				return keptPart{Rows: rows}, err
+			})
+		if err != nil {
+			return store.NotificationOutcomes{}, Coverage{}, err
+		}
+		parts[0].Kept = second.mine.Rows
+		for _, p := range second.peers {
+			i := slices.IndexFunc(parts, func(o OutcomePart) bool { return o.Node == p.node })
+			if i < 0 {
+				// ANSWERED ONLY THE SECOND: it counted nothing the merge
+				// holds, and the coverage names it for the first.
+				parts = append(parts, OutcomePart{Node: p.node})
+				i = len(parts) - 1
+			}
+			parts[i].Kept = p.part.Rows
+		}
+		coverage = coverage.And(second.coverage)
+	}
+	merged := MergeOutcomes(parts)
+	f.report(QuestionNotificationOutcomes, coverage, started)
+	return merged, coverage, nil
 }
 
 // ErrRankedCursor refuses a cursor on a page ranked by tokens: a ranking has no

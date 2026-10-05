@@ -54,12 +54,15 @@ import (
 //   - v5: the `notification_outcomes` question — what became of the
 //     notifications each third-party app delivered, counted over a window
 //     the asker names — which the integrations answer used to take from the
-//     newest page of notification events, whose span was its own. A NEW
-//     QUESTION rather than a new field: a build before it does not know it,
-//     so asked in v5 it refuses by version and is named in the coverage,
-//     exactly as it names any question it cannot answer. Its parameters
+//     newest page of notification events, whose span was its own; and its
+//     second, `kept_outcomes`: which of the rows a node named rather than
+//     counted — a custody batch it has written and not settled — each node
+//     keeps, so a row two data nodes hold is counted once. NEW QUESTIONS
+//     rather than new fields: a build before them does not know them, so
+//     asked in v5 it refuses by version and is named in the coverage,
+//     exactly as it names any question it cannot answer. Their parameters
 //     carry the asker's instant from the start, so every build that answers
-//     it floors the window there and nothing it counts needs holding (see
+//     them floors the window there and nothing they count needs holding (see
 //     [Fleet.NotificationOutcomes]).
 //
 // ONE ADDITION MOVES NO VERSION: the asker's instant, `at`, on every
@@ -121,7 +124,7 @@ const Protocol = 5
 // carries: no earlier build can answer it at all.
 func versionOf(q Question, params any) int {
 	switch q {
-	case QuestionNotificationOutcomes:
+	case QuestionNotificationOutcomes, QuestionKeptOutcomes:
 		return 5
 	case QuestionSeries:
 		if p, ok := params.(seriesParams); ok {
@@ -191,16 +194,23 @@ const (
 	// QuestionNotificationOutcomes is how many notifications each
 	// third-party app had dropped and merged over a window, the integrations
 	// answer's outcome counts: an outcome event is written to the store of
-	// the node that decided it, so one node's count is its share of the
-	// fleet's. v5 — see [Protocol].
+	// the node that decided it, or of the data node keeping its custody
+	// batch, so one node's count of the rows it keeps is its share of the
+	// fleet's — beside the rows it holds unsettled, named. v5 — see
+	// [Protocol].
 	QuestionNotificationOutcomes Question = "notification_outcomes"
+	// QuestionKeptOutcomes is the outcome count's second question: which of
+	// the rows some node named rather than counted — a custody batch it has
+	// written and not settled — each node KEEPS, so the asker counts each
+	// such row once whichever data nodes hold it (see [MergeOutcomes]). v5.
+	QuestionKeptOutcomes Question = "kept_outcomes"
 )
 
 // Questions is the closed set.
 var Questions = []Question{
 	QuestionEvents, QuestionEvent, QuestionSeries, QuestionTrace, QuestionTurn,
 	QuestionTurns, QuestionPhases, QuestionSeatPhases, QuestionTraceRows,
-	QuestionPhaseTokens, QuestionNotificationOutcomes,
+	QuestionPhaseTokens, QuestionNotificationOutcomes, QuestionKeptOutcomes,
 }
 
 // Valid reports whether q is a question this build answers.
@@ -463,6 +473,17 @@ func (p outcomeParams) query() store.OutcomeQuery {
 	return store.OutcomeQuery{Since: p.Since, At: p.At}
 }
 
+// keptParams names the rows `kept_outcomes` asks about, by the event log's
+// identity alone: their instant and their id.
+type keptParams struct {
+	Rows []store.OutcomeRow `json:"rows"`
+}
+
+// keptPart is one node's answer to `kept_outcomes`: the named rows it keeps.
+type keptPart struct {
+	Rows []store.OutcomeRow `json:"rows"`
+}
+
 // ---- serving --------------------------------------------------------- //
 
 // Serve makes this node an answerer for the fleet's history questions, from
@@ -593,6 +614,16 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 			return nil, err
 		}
 		return log.NotificationOutcomes(ctx, p.query())
+	case QuestionKeptOutcomes:
+		var p keptParams
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		rows, err := log.KeptOutcomes(ctx, p.Rows)
+		if err != nil {
+			return nil, err
+		}
+		return keptPart{Rows: rows}, nil
 	case QuestionTraceRows:
 		var p traceRowsParams
 		if err := decode(&p); err != nil {

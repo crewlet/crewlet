@@ -605,6 +605,20 @@ sequenceDiagram
   The outcome counts are counts as well and carry no strip at all: every
   build that answers `notification_outcomes` reads the instant, because the
   question arrived with it.
+- **A stateless node's row can sit on two data nodes for a moment.** A node
+  without `data` hands its events to one data node in
+  [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data) batches, and a batch whose claim failed is
+  written by a second keeper before the first has learned it is not its own —
+  so until the first settles it (a pass a minute, and longer while that node
+  cannot reach the coordination store) both stores hold the same rows. A merge
+  of rows holds such a row once, by its `(timestamp, id)`. The outcome counts
+  count it once too: each node counts the rows it **keeps** and names, by
+  identity, the rows of a batch it has written and not settled, and when any
+  node names one the asker asks every node which of those it keeps
+  (`kept_outcomes`) and adds each named row once — unless a node that keeps it,
+  the batch's keeper, counted it already. The axis's bars, a trace's or a
+  turn's total and a page of turns' summed tokens add every node's part, and
+  count such a row once per node holding it until its batch is settled.
 - **The merges are exact.** A page is merged on `(timestamp, id)` and stops
   at the newest point any node's page stopped at, so paging with the cursor
   visits every row once; a histogram's window is cut at the asker's instant
@@ -615,7 +629,7 @@ sequenceDiagram
   the axis shown begins at the first whole bucket inside the history; the outcome
   counts are summed over a window whose both edges the asker names — a
   count over a named window, never one taken from a page of the newest
-  events, whose span is its own; and a list of
+  events, whose span is its own — with every row counted once (above); and a list of
   turns is two scatters — every node's page, then every node's share of
   exactly the turns listed — so a turn resumed on another node after a
   restart is one row folded from both halves, not two half-turns.

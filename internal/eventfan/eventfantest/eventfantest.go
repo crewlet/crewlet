@@ -194,6 +194,37 @@ func Run(t *testing.T, factory Factory) {
 		}
 	})
 
+	t.Run("a_custody_row_two_nodes_hold_is_counted_once", func(t *testing.T) {
+		t.Parallel()
+		nodes := fleet(t, factory)
+		at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+		// ONE STATELESS NODE'S DROP, written by two keepers: node 1 settled
+		// first and keeps it; node 2 has not heard yet. The asker holds none
+		// of it, so both the count and the second question cross the broker.
+		batch := store.CustodyBatch{ID: "batch-1", Origin: "seats-1", Records: []store.EventRecord{{
+			ID: "x-skip", Type: "notification_skipped", Category: "notification",
+			Time: at.Add(-time.Minute), Payload: json.RawMessage(`{}`),
+			Tags: map[string]string{"notification_source": "gitlab"},
+		}}}
+		for _, n := range nodes[1:] {
+			if err := n.log.WriteCustody(t.Context(), batch, at); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := nodes[1].log.SettleCustody(t.Context(), batch.ID, true); err != nil {
+			t.Fatal(err)
+		}
+		got, coverage, err := asker(nodes).NotificationOutcomes(t.Context(),
+			store.OutcomeQuery{Since: at.Add(-time.Hour), At: at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		complete(t, coverage)
+		if got.Skipped["gitlab"] != 1 {
+			t.Fatalf("the fleet counted %+v, want the one drop two keepers hold counted once", got)
+		}
+	})
+
 	t.Run("a_node_that_stops_answering_is_named", func(t *testing.T) {
 		t.Parallel()
 		nodes := fleet(t, factory)
