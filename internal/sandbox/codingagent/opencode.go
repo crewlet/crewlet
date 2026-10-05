@@ -3,6 +3,7 @@ package codingagent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -380,21 +381,28 @@ func firstString(values ...any) string {
 	return ""
 }
 
-// firstLine is one transcript line's echoed command or path, bounded.
+// firstLine is one transcript line's echoed command or path, bounded — a
+// PREVIEW, for a person scanning what the run did, and marked as one.
 //
-// The bound is real — a heredoc echoed whole would blow up the phase event —
-// and the cut is marked. Two defects it used to carry: `line[:limit-1] + "…"`
-// emits limit+2 BYTES (limit-1 of content plus a three-byte ellipsis), so the
-// constant bounded nothing it named; and the byte slice split whatever
-// multi-byte character straddled the cut, which reaches the event store as
-// invalid UTF-8.
+// The bound is real — a heredoc echoed whole would make one entry of a
+// line-structured log read as many — and every cut says so: the line itself
+// with an ellipsis, and the lines after it with a count. Only the first was
+// ever marked, so a heredoc read as the one command on its first line. Two
+// older defects: `line[:limit-1] + "…"` emitted limit+2 BYTES (limit-1 of
+// content plus a three-byte ellipsis), so the constant bounded nothing it
+// named; and the byte slice split whatever multi-byte character straddled the
+// cut, which reaches the event store as invalid UTF-8.
 func firstLine(s string, limit int) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	if limit <= 0 || len(line) <= limit {
-		return line
+	line, rest, more := strings.Cut(strings.TrimSpace(s), "\n")
+	suffix := ""
+	if more {
+		suffix = fmt.Sprintf(" (+%d more line(s))", strings.Count(rest, "\n")+1)
+	}
+	if limit <= 0 || len(line)+len(suffix) <= limit {
+		return line + suffix
 	}
 	// [textcut.Within] rather than Ellipsis: that one does not count its
 	// marker against max, and this limit bounds what reaches the phase
-	// event, marker included.
-	return textcut.Within(line, limit)
+	// event, markers included.
+	return textcut.Within(line, max(limit-len(suffix), 0)) + suffix
 }

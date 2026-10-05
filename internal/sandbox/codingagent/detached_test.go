@@ -421,7 +421,7 @@ func TestTheTranscriptIsCutAtABoundaryInBytes(t *testing.T) {
 	b := box(t, runner)
 	p := paths(b)
 	b.Put(p.Findings(), "Outcome: succeeded")
-	b.Put(p.Err(), strings.Repeat("日", codingagent.MaxTranscriptBytes)+"\nTHE CONCLUSION")
+	b.Put(p.Err(), strings.Repeat("日", sandbox.MaxRunTextBytes)+"\nTHE CONCLUSION")
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
 	if err != nil {
@@ -431,8 +431,8 @@ func TestTheTranscriptIsCutAtABoundaryInBytes(t *testing.T) {
 	if !marked {
 		t.Fatal("the cap was silent")
 	}
-	if len(kept) > codingagent.MaxTranscriptBytes {
-		t.Fatalf("the transcript kept %d bytes, past the %d-byte bound", len(kept), codingagent.MaxTranscriptBytes)
+	if len(kept) > sandbox.MaxRunTextBytes {
+		t.Fatalf("the transcript kept %d bytes, past the %d-byte bound", len(kept), sandbox.MaxRunTextBytes)
 	}
 	if !utf8.ValidString(kept) || strings.HasPrefix(kept, string(utf8.RuneError)) {
 		t.Fatal("the transcript was cut through a rune")
@@ -443,54 +443,95 @@ func TestTheTranscriptIsCutAtABoundaryInBytes(t *testing.T) {
 	}
 }
 
-// A crash explains itself at the bottom, so the failure text a run that
-// produced nothing reports is its stderr's END, bounded like the transcript
-// and marked where it was cut.
-func TestACrashDetailKeepsItsEndAndSaysItCut(t *testing.T) {
+// A crash explains itself at the bottom, so the failure a run that produced
+// nothing reports is its WHOLE stderr behind its exit status: the runner
+// bounds nothing a model reads, and the coordinator condenses a failure past
+// the record's bound keeping its cause.
+func TestACrashDetailIsCarriedWholeBehindItsStatus(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
-	b.Put(p.Err(), strings.Repeat("noise\n", codingagent.MaxTranscriptBytes)+"FATAL: migrations/0007.sql is missing")
+	stderr := strings.Repeat("noise\n", sandbox.MaxRunTextBytes) + "FATAL: migrations/0007.sql is missing"
+	b.Put(p.Err(), stderr)
 	b.Put(p.ExitCode(), "1")
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if !strings.HasSuffix(res.Error, "FATAL: migrations/0007.sql is missing") {
-		t.Error("the line naming the failure was cut away")
-	}
-	if !strings.HasPrefix(res.Error, "…") {
-		t.Error("the cut is silent")
-	}
-	if len(res.Error) > codingagent.MaxTranscriptBytes+len("…") {
-		t.Errorf("the failure text is %d bytes, past its bound", len(res.Error))
+	// The CLI produced no output, so its own "no output" is the middle part.
+	want := "the coding agent exited with status 1:\nthe coding agent produced no output:\n" + stderr
+	if res.Error != want {
+		t.Errorf("the failure is %d bytes opening %.80q, want the status, the CLI's error and "+
+			"the whole stderr (%d bytes)", len(res.Error), res.Error, len(want))
 	}
 }
 
-// THE REPORT IS BOUNDED TOO, and keeps its HEAD. It is the response on the
-// run's own phase record, the agent writes it and nothing else limits it —
-// and a record over the queue's ceiling is refused whole. Unlike a log, a
-// report is read from the top, where its summary is.
-func TestTheReportIsBoundedAndKeepsItsHead(t *testing.T) {
+// THE CLI'S OWN ERROR SURVIVES A STDERR. It used to be replaced by the stderr
+// whenever the stderr held anything, so a run that hit its turn cap and
+// printed one deprecation warning reported the warning as why it failed.
+func TestTheCLIsErrorIsNotReplacedByItsStderr(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
-	b.Put(p.Findings(), "Outcome: succeeded\n"+strings.Repeat("detail\n", codingagent.MaxTranscriptBytes))
+	b.Put(p.Result(), `{"type":"result","subtype":"error_max_turns","is_error":true,"error":"reached the turn limit"}`)
+	b.Put(p.Err(), "warning: a deprecated flag")
 	b.Put(p.ExitCode(), "0")
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if !strings.HasPrefix(res.Text, "Outcome: succeeded") {
-		t.Error("the report's opening line was cut away")
+	if res.Error != "reached the turn limit:\nwarning: a deprecated flag" {
+		t.Errorf("failure = %q, want the CLI's error and then the stderr", res.Error)
 	}
-	if len(res.Text) > codingagent.MaxTranscriptBytes+len("…") || !strings.HasSuffix(res.Text, "…") {
-		t.Errorf("the report is %d bytes and unmarked, not bounded", len(res.Text))
+}
+
+// THE REPORT LEAVES THE RUNNER WHOLE. It is what the resumed executor reads,
+// and a cut keeping its head reads as the whole report; the coordinator holds
+// it to the record's bound by condensing it.
+func TestTheReportLeavesTheRunnerWhole(t *testing.T) {
+	runner := codingagent.NewClaudeCode()
+	b := box(t, runner)
+	p := paths(b)
+	report := "Outcome: succeeded\n" + strings.Repeat("detail\n", sandbox.MaxRunTextBytes)
+	b.Put(p.Findings(), report)
+	b.Put(p.ExitCode(), "0")
+
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if res.Text != strings.TrimSpace(report) {
+		t.Errorf("the report is %d bytes, want the whole %d", len(res.Text), len(strings.TrimSpace(report)))
 	}
 	if !res.Success {
-		t.Error("a bounded report stopped reading as a success")
+		t.Error("a long report stopped reading as a success")
+	}
+}
+
+// REDACTED WHOLE, THEN CUT. The transcript keeps its last 256 KiB, and a
+// secret straddling where that cut lands used to survive as its own tail — a
+// fragment the pattern no longer recognises, published on the phase record.
+func TestASecretAcrossTheTranscriptCutIsRedactedFirst(t *testing.T) {
+	runner := codingagent.NewClaudeCode()
+	b := box(t, runner)
+	p := paths(b)
+	secret := "sk-ant-" + strings.Repeat("Q7", 20)
+	// The cut keeps the last MaxRunTextBytes bytes, so it lands twenty bytes
+	// before the line break: inside the secret.
+	b.Put(p.Err(), "start\n"+secret+"\n"+strings.Repeat("y", sandbox.MaxRunTextBytes-21))
+	b.Put(p.Findings(), "Outcome: succeeded")
+
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !strings.HasPrefix(res.Transcript, "…") {
+		t.Fatal("the transcript was not cut, so the case tests nothing")
+	}
+	if strings.Contains(res.Transcript, secret[len(secret)-20:]) {
+		t.Error("the secret's tail survived the cut unredacted")
 	}
 }
 

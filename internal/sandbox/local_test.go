@@ -5,6 +5,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
@@ -1134,11 +1136,39 @@ func TestControlOutputIsBoundedRatherThanTheEnginesMemory(t *testing.T) {
 	for range 8 {
 		c.Write(make([]byte, captureLimit/4))
 	}
-	if len(c.String()) > captureLimit+64 {
+	if len(c.String()) > captureLimit+128 {
 		t.Fatalf("captured %d bytes, want it bounded near %d", len(c.String()), captureLimit)
 	}
-	if !strings.Contains(c.String(), "truncated") {
-		t.Fatal("truncation was silent")
+	if !strings.Contains(c.String(), "more bytes of output not kept") {
+		t.Fatal("the bound was silent")
+	}
+}
+
+// ONE WRITE CROSSING THE LIMIT IS MARKED TOO, and what is kept ends on a
+// whole line. Only a write that found the buffer already full used to set the
+// marker, so a command printing its output at once was clipped silently —
+// mid-line, and mid-character.
+func TestASingleWritePastTheLimitIsMarkedOnALine(t *testing.T) {
+	line := strings.Repeat("日", 20) + "\n" // 61 bytes: the limit lands inside a rune
+	var c capture
+	c.Write([]byte(strings.Repeat(line, captureLimit/len(line)+10)))
+	got := c.String()
+	kept, note, ok := strings.Cut(got, "\n(")
+	if !ok || !strings.Contains(note, "more bytes of output not kept") {
+		t.Fatalf("a single overflowing write was clipped silently: …%q", got[max(0, len(got)-120):])
+	}
+	if !strings.HasSuffix(kept, strings.TrimSuffix(line, "\n")) || !utf8.ValidString(kept) {
+		t.Error("what was kept does not end on a whole line")
+	}
+	total := len(line) * (captureLimit/len(line) + 10)
+	if want := fmt.Sprintf("(%d more bytes", total-len(kept)-1); !strings.HasPrefix("("+note, want) {
+		t.Errorf("the note %q does not count what was left out (want %s)", note, want)
+	}
+
+	var short capture
+	short.Write([]byte("an error\n"))
+	if short.String() != "an error\n" {
+		t.Errorf("output within the limit changed: %q", short.String())
 	}
 }
 

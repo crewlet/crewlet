@@ -151,11 +151,8 @@ func TestUnparseableOutputIsAFailedResultNotAnError(t *testing.T) {
 	if res.Success {
 		t.Fatal("a crash read as success")
 	}
-	if !strings.Contains(res.Text, "Segmentation fault") {
-		t.Fatalf("the raw output was lost: %+v", res)
-	}
-	if res.Error == "" {
-		t.Fatal("the failure says nothing")
+	if !strings.Contains(res.Error, "Segmentation fault") {
+		t.Fatalf("the raw output was lost from the failure: %+v", res)
 	}
 }
 

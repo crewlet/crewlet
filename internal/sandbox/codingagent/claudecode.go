@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // ClaudeCodeName is this runner's config name.
@@ -126,16 +125,16 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 	}
 	obj, ok := decodeObject(text)
 	if !ok {
-		// TAILED, not head-cut. Unparseable output is the case where the
-		// text IS the result — there is no structured field to fall back
-		// to — and the useful part of it (the actual error, after the
-		// banner and the warnings) is at the END, which is exactly what a
-		// 2000-byte head cut discarded. Bounded because this is the CLI's
-		// whole stdout and nothing upstream limits it; marked, so a reader
-		// can tell a cut from a short run.
+		// THE OUTPUT IS THE FAILURE'S DETAIL, WHOLE. Unparseable output is
+		// the case where the text IS the account — there is no structured
+		// field to fall back to — and the useful part of it (the actual
+		// error, after the banner and the warnings) is at the END, which a
+		// head cut discarded and a tail cut kept only by luck of size. It
+		// is carried as the Error rather than as a report, because it is
+		// not one: the coordinator condenses a failure past the record's
+		// bound keeping its cause, where a report keeps its findings.
 		return sandbox.Result{
-			Text:  textcut.Tail(text, MaxTranscriptBytes),
-			Error: "the coding agent's output could not be parsed",
+			Error: "the coding agent's output could not be parsed:\n" + text,
 		}
 	}
 

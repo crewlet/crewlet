@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -1418,6 +1419,9 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		// Who a parked question is put to, resolved against the live
 		// chart at the park — see audience.go.
 		Audience: audienceResolver{engine: e},
+		// A report or failure past what the run's record carries is
+		// condensed by the seat's auxiliary model rather than cut.
+		Condense: runCondenser{engine: e},
 		// The per-run tool bridge dies with the run — see
 		// [sandbox.CoordinatorOptions.Ended]. Idempotent, and reached
 		// from every settle path, so a run that failed before it ever
@@ -1436,6 +1440,33 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		return nil, err
 	}
 	return &sandboxRuntime{pending: pending, coordinator: coordinator}, nil
+}
+
+// runCondenser is the coordinator's [sandbox.Condenser]: the seat's own
+// compactor, on the epoch CURRENT at the collection — the coordinator outlives
+// every revision, and a run collected after an apply is condensed by the model
+// the seat is configured with now.
+//
+// The label goes in front and is counted against the budget, because the
+// budget is the record's and the label rides it.
+type runCondenser struct{ engine *Engine }
+
+func (r runCondenser) Condense(ctx context.Context, handle string, part sandbox.RunPart,
+	text string, budget int) (string, error) {
+	company := r.engine.Company()
+	if company == nil {
+		return "", compact.ErrUnavailable
+	}
+	kind := compact.KindReport
+	if part == sandbox.PartFailure {
+		kind = compact.KindToolError
+	}
+	note := compact.Result{Compacted: true, From: len(text)}.Note()
+	res, err := r.engine.seatCompactor(company, handle).Fit(ctx, kind, text, budget-len(note)-1)
+	if err != nil {
+		return "", err
+	}
+	return note + "\n" + res.Text, nil
 }
 
 // startSandboxWaiter starts the completion poll, once the node exists and a

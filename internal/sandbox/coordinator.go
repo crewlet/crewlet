@@ -246,6 +246,12 @@ type CoordinatorOptions struct {
 	// its holds by.
 	Stopped func(ctx context.Context, handle, turnID string)
 
+	// Condense rewrites a collected run's report or failure detail that is
+	// past [MaxRunTextBytes] — see [Condenser]. Nil condenses nothing, and
+	// such a piece keeps its whole lines up to the bound and says how many
+	// it left out.
+	Condense Condenser
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -288,6 +294,7 @@ type Coordinator struct {
 	account Accountant
 	// audience is [CoordinatorOptions.Audience].
 	audience AudienceResolver
+	condense Condenser
 	ended    func(runID string)
 	stopped  func(ctx context.Context, handle, turnID string)
 	now      func() time.Time
@@ -377,6 +384,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
 		resume: opts.Resume, account: opts.Account, audience: opts.Audience,
+		condense: opts.Condense,
 		ended:    opts.Ended,
 		stopped:  opts.Stopped,
 		now:      opts.Now,
@@ -665,6 +673,9 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 			"detail", "the coding run reported a negative token count or cost; it "+
 				"is read as nothing spent rather than subtracted from the seat's budget")
 	}
+	// HELD TO THE RECORD'S BOUND here, where every collected result enters,
+	// so the phase record, the park and the resumed executor carry one text.
+	result = c.fitResult(ctx, run, result)
 	if err := box.Pause(ctx); err != nil {
 		log.WarnContext(ctx, "sandbox_pause_failed", "turn_id", run.TurnID, "error", err.Error())
 	} else if err := c.pending.MarkBoxPaused(ctx, run.TurnID, c.now()); err != nil {

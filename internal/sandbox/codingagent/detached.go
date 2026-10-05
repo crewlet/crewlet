@@ -16,32 +16,6 @@ import (
 
 var log = logging.Get("sandbox.coding_agent")
 
-// MaxTranscriptBytes bounds each piece of a coding run's own account of itself
-// that the engine carries: the activity transcript, the crash detail, and the
-// report the agent wrote.
-//
-// BYTES, because what it bounds is an EVENT. Every one of these rides the
-// run's `agent_phase_completed{phase: sandbox}` record (and the report rides
-// the resumed executor's too), and an event over the queue's 8 MiB
-// [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes] is refused — so
-// an unbounded transcript does not arrive long, it does not arrive at all.
-// 256 KiB of text is at most 1.5 MiB once JSON has escaped it (a control
-// byte becomes six), and three of them are still well inside the ceiling. It
-// was 100 000 RUNES, which is anything from 100 KB to 400 KB on the wire
-// depending on the script the output was written in: a bound on the wrong
-// unit for the only limit that matters.
-//
-// The TAIL of the transcript and of the crash detail is kept: the most recent
-// activity plus the conclusion is what a reader wants, and the head — the
-// clone, the dependency install — is the least interesting thing to drop. The
-// REPORT keeps its head instead, because it is a document written to be read
-// from the top, and its summary is where it starts.
-//
-// ONE BOUND, NOT ONE PER CALLER: every one of them is the same run's account
-// of itself, and a per-field cap would let the transcript and the error text
-// disagree about how much of one run survives.
-const MaxTranscriptBytes = 256 << 10
-
 // prPattern matches a pull-request URL, on either of the two hosts this engine
 // integrates with. It is a FALLBACK: a runner whose output names its delivered
 // refs explicitly is preferred, and this scrapes the findings for one when the
@@ -255,6 +229,15 @@ func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.R
 }
 
 // Collect reads the finished job's result out of the box.
+//
+// EVERYTHING IS READ WHOLE AND REDACTED WHOLE, before anything is bounded:
+// every file here came out of a box whose environment holds the seat's
+// credentials, and a secret straddling a cut survives as a fragment the
+// pattern no longer recognises. The report and the failure detail leave here
+// WHOLE — the coordinator holds them to the record's bound, condensing rather
+// than cutting ([sandbox.MaxRunTextBytes]) — and only the transcript, read by
+// a person watching what the run did, is bounded here, to its last
+// [sandbox.MaxRunTextBytes].
 func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (sandbox.Result, error) {
 	paths := PathsFor(box)
 	stdout, err := readText(ctx, box, paths.Result())
@@ -266,17 +249,14 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// The transcript is the observability surface for an agent that emits no
 	// telemetry of its own. The parser may have built one from streamed
 	// events; otherwise the raw stderr is it. Read once, reused below for
-	// the crash detail.
+	// the failure detail.
 	stderr, err := readText(ctx, box, paths.Err())
 	if err != nil {
 		return sandbox.Result{}, err
 	}
 	stderr = strings.TrimSpace(stderr)
-	switch {
-	case result.Transcript != "":
-		result.Transcript = textcut.Tail(result.Transcript, MaxTranscriptBytes)
-	case stderr != "":
-		result.Transcript = textcut.Tail(stderr, MaxTranscriptBytes)
+	if result.Transcript == "" {
+		result.Transcript = stderr
 	}
 
 	code, err := readText(ctx, box, paths.ExitCode())
@@ -298,11 +278,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	findings = strings.TrimSpace(findings)
 	switch {
 	case findings != "":
-		// BOUNDED, like everything else read out of the box: the agent
-		// writes this file and nothing limits it, and it is the response on
-		// the run's own phase record. See [MaxTranscriptBytes] for why the
-		// head is the half kept.
-		result.Text = textcut.Ellipsis(findings, MaxTranscriptBytes)
+		result.Text = findings
 		if len(result.DeliveredRefs) == 0 {
 			result.DeliveredRefs = prPattern.FindAllString(findings, -1)
 		}
@@ -312,36 +288,32 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		}
 	case !result.Success && strings.TrimSpace(result.Text) == "":
 		// No report AND nothing parsed: the job produced nothing. Surface
-		// the stderr and the exit code so the completion reports a real
-		// failure rather than a silent stall.
-		detail := stderr
+		// the exit status, the CLI's own error and the stderr — ALL THREE,
+		// in that order — so the completion reports a real failure rather
+		// than a silent stall. The CLI's error used to be REPLACED by the
+		// stderr whenever the stderr held anything at all, so a run that
+		// hit its turn cap and printed one warning reported the warning.
+		var detail []string
 		if crashed {
-			crash := "the coding agent exited with status " + code
-			if detail != "" {
-				detail = crash + ": " + detail
-			} else {
-				detail = crash
-			}
+			detail = append(detail, "the coding agent exited with status "+code)
 		}
-		if detail != "" {
-			// TAILED, exactly like the transcript above, and for the same
-			// reason: paths.Err() is a file the coding agent wrote and
-			// nothing bounds it, so a run that looped printing errors
-			// produces one the event store cannot carry. It used to be cut
-			// to 500 bytes from the HEAD with no marker, which was wrong
-			// in all three ways — too small to hold the line naming the
-			// failing file, taken from the end that says least about a
-			// crash, and silent about having cut at all.
-			result.Error = textcut.Tail(detail, MaxTranscriptBytes)
+		if parsed := strings.TrimSpace(result.Error); parsed != "" {
+			detail = append(detail, parsed)
+		}
+		if stderr != "" {
+			detail = append(detail, stderr)
+		}
+		if len(detail) > 0 {
+			result.Error = strings.Join(detail, ":\n")
 		}
 	}
 
-	// Redacted HERE, at the boundary: everything above came out of a box
-	// whose environment holds the seat's credentials, and everything below
-	// reaches a model, an event store and a screen.
 	result.Text = redact.Secrets(result.Text)
 	result.Error = redact.Secrets(result.Error)
-	result.Transcript = redact.Secrets(result.Transcript)
+	// TAILED, AFTER the redaction: the transcript is read by a person
+	// asking what the run did last, and its head — the clone, the
+	// dependency install — is the least interesting thing to drop.
+	result.Transcript = textcut.Tail(redact.Secrets(result.Transcript), sandbox.MaxRunTextBytes)
 
 	return r.overlayAsk(ctx, box, result)
 }

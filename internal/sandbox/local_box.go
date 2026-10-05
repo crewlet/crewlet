@@ -1,7 +1,9 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
@@ -34,25 +37,55 @@ const captureLimit = 256 << 10
 
 // capture is a bounded io.Writer. Once full it keeps the HEAD, because a
 // command's first output is its error message and its last is progress noise.
+//
+// What it drops is COUNTED and said, in whole lines. It used to mark only a
+// write that found the buffer already full, so one write crossing the limit —
+// the whole output of a command that printed it at once — was clipped with no
+// marker at all; and the clip landed wherever the byte count did, mid-line and
+// mid-character, which a JSON encoder turns into U+FFFD.
 type capture struct {
-	buf      []byte
-	overflow bool
+	buf     []byte
+	dropped int
 }
 
 func (c *capture) Write(p []byte) (int, error) {
-	if room := captureLimit - len(c.buf); room > 0 {
-		c.buf = append(c.buf, p[:min(room, len(p))]...)
-	} else {
-		c.overflow = true
-	}
+	take := min(max(captureLimit-len(c.buf), 0), len(p))
+	c.buf = append(c.buf, p[:take]...)
+	c.dropped += len(p) - take
 	return len(p), nil
 }
 
 func (c *capture) String() string {
-	if c.overflow {
-		return string(c.buf) + "\n… output truncated"
+	if c.dropped == 0 {
+		return string(c.buf)
 	}
-	return string(c.buf)
+	kept, dropped := c.buf, c.dropped
+	// Back to the end of the last whole line, so the note follows a line
+	// rather than half of one; a buffer with no line break at all keeps
+	// itself, held to a whole character.
+	if end := bytes.LastIndexByte(kept, '\n'); end >= 0 {
+		dropped += len(kept) - end - 1
+		kept = kept[:end+1]
+	} else {
+		whole := wholeRunes(kept)
+		dropped += len(kept) - len(whole)
+		kept = whole
+	}
+	return fmt.Sprintf("%s\n(%d more bytes of output not kept: past the %d KiB a control "+
+		"command's output may hold)", strings.TrimRight(string(kept), "\n"), dropped, captureLimit>>10)
+}
+
+// wholeRunes is b without a character the limit split at its end.
+func wholeRunes(b []byte) []byte {
+	for i := len(b) - 1; i >= 0 && len(b)-i <= utf8.UTFMax; i-- {
+		if utf8.RuneStart(b[i]) {
+			if !utf8.FullRune(b[i:]) {
+				return b[:i]
+			}
+			return b
+		}
+	}
+	return b
 }
 
 // flattenEnv renders an env map as os/exec's KEY=value slice.
@@ -317,14 +350,7 @@ func (b *directBox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	content, err := os.ReadFile(target)
-	if err != nil {
-		//nolint:nilerr // Empty-on-missing IS the contract here: the
-		// detached runner polls for marker and result files that do not
-		// exist until the job finishes, and a poll is not an error.
-		return nil, nil
-	}
-	return content, nil
+	return readHostFile(target, path)
 }
 
 // SetTimeout refreshes the box's keepalive stamp.
@@ -588,9 +614,30 @@ func (b *containerBox) ReadFile(ctx context.Context, path string) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	content, err := os.ReadFile(target)
+	return readHostFile(target, path)
+}
+
+// readHostFile is a local box's ReadFile once the path is resolved: empty for
+// a file that is not there, and REFUSED past [MaxFileBytes] for the reason
+// [readCapped] gives — which a plain os.ReadFile skipped, so a job that looped
+// printing errors into its stderr file put all of it in the engine's memory on
+// the host it shares, where a remote box's identical file was refused.
+func readHostFile(target, path string) ([]byte, error) {
+	f, err := os.Open(target)
 	if err != nil {
-		//nolint:nilerr // Empty-on-missing IS the contract; see directBox.ReadFile.
+		//nolint:nilerr // Empty-on-missing IS the contract here: the
+		// detached runner polls for marker and result files that do not
+		// exist until the job finishes, and a poll is not an error.
+		return nil, nil
+	}
+	defer func() { _ = f.Close() }()
+	content, err := readCapped(f, path)
+	if errors.Is(err, ErrFileTooLarge) {
+		return nil, err
+	}
+	if err != nil {
+		//nolint:nilerr // A file that vanished or turned unreadable
+		// mid-read is a poll that found nothing yet, as above.
 		return nil, nil
 	}
 	return content, nil

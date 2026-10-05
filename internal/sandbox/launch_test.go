@@ -151,22 +151,23 @@ func TestTheStartedEventNamesTheJobItAnnounces(t *testing.T) {
 	}
 }
 
-// The full brief lives on the row; the wire carries a label for one panel row.
-func TestTheStartedEventCarriesALabelNotTheWholeBrief(t *testing.T) {
+// The full brief lives on the row; the wire carries its first line as the
+// run's label — WHOLE, because a row too narrow for it is the renderer's to
+// elide, and a label cut to a width put half a sentence on the run's page as
+// its title.
+func TestTheStartedEventCarriesTheBriefsFirstLineWhole(t *testing.T) {
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
-	req.Brief = strings.Repeat("a very long brief. ", 40)
+	first := strings.TrimSpace(strings.Repeat("a very long brief. ", 40))
+	req.Brief = first + "\nThe goal it serves: the release.\n"
 	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	rig.queue.mu.Lock()
 	defer rig.queue.mu.Unlock()
 	payload := rig.queue.published[0].event.Data.(*types.SandboxRunStarted)
-	if len(payload.Task) > briefSummaryLimit+4 {
-		t.Fatalf("the started event carries %d characters of brief", len(payload.Task))
-	}
-	if !strings.HasSuffix(payload.Task, "…") {
-		t.Fatalf("a truncated label does not say it was cut: %q", payload.Task)
+	if payload.Task != first {
+		t.Fatalf("the started event's label is %q, want the brief's first line whole", payload.Task)
 	}
 }
 

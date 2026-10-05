@@ -11,7 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // TurnRef identifies the turn a detached run belongs to.
@@ -351,27 +350,21 @@ func abandon(ctx context.Context, m *Manager, store PendingStore, req LaunchRequ
 	}
 }
 
-// briefSummaryLimit bounds the one-line task summary on the started event.
+// Summarise is a brief's first line, WHOLE: the label a running-runs panel
+// draws for a run. Exported because the live projection labels a run it
+// learned of from the durable record — a process that came up mid-run never
+// saw the announcement that carried the label — with the same rule, rather
+// than a second one.
 //
-// The panel it feeds shows one row per running box, so this is a label rather
-// than a description; the full brief lives on the pending row and is never on
-// the wire. Sized to a readable row on a narrow column.
-const briefSummaryLimit = 120
-
-// Summarise is a brief's first line, cut to [briefSummaryLimit]: the label a
-// running-runs panel draws for a run. Exported because the live projection
-// labels a run it learned of from the durable record — a process that came up
-// mid-run never saw the announcement that carried the label — with the same
-// cut, rather than a second one.
+// The first line because the brief opens with the concrete task the executor
+// asked for (see [buildBrief]) and the rest is the goal and the box. Never cut
+// to a width: it used to be held to 120 bytes and marked, which put a
+// sentence's first half on the run's page as its title — and a row too narrow
+// for a label is the renderer's to elide, which the dashboard's rows already
+// do, with the whole line still there to read.
 func Summarise(brief string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(brief), "\n")
-	if len(line) <= briefSummaryLimit {
-		return line
-	}
-	// Trimmed after the cut, not before: the cut routinely lands mid-word
-	// and leaves the trailing space of the previous one, which would put
-	// the marker a space away from the text it marks.
-	return strings.TrimSpace(textcut.Bytes(line, briefSummaryLimit)) + "…"
+	return strings.TrimSpace(line)
 }
 
 // buildBrief assembles what the coding agent is actually told.

@@ -55,9 +55,9 @@ import (
 // person has the run open, and every answer crosses the broker whole. 8 KiB is
 // a hundred-odd lines of a transcript — the current step and the few before it
 // — at a size a poll can repeat indefinitely without being noticed; the WHOLE
-// transcript is on the run's phase record the moment it is collected
-// ([github.com/crewlet/crewlet/internal/sandbox/codingagent.MaxTranscriptBytes],
-// 256 KiB), so nothing is lost by the live view being a window.
+// transcript is on the run's phase record the moment it is collected (its
+// last [MaxRunTextBytes], 256 KiB), so nothing is lost by the live view being
+// a window.
 const MaxLiveOutputBytes = 8 << 10
 
 // TailReadBudget is how long a tail request waits for the owning node to
