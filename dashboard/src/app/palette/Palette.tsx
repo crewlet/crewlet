@@ -178,6 +178,20 @@ export function CommandPalette({
   const tools = useTools();
   const index = useMemo(() => indexOrg(org), [org]);
 
+  // THE RUNNING SET IS READ ONCE, AS THE PALETTE OPENS — which turns Running
+  // now offers and in what order. The kit's listbox holds the highlight by
+  // INDEX, so a group that gained or lost a row on an agents push (twice a
+  // tool-loop round) moved every row under it, and Enter committed a row
+  // nobody highlighted. Opening is this surface's re-sort boundary: it is
+  // mounted only while open (`app/Shell.tsx`), so a fresh ⌘K reads afresh.
+  // Later pushes reach only each row's words.
+  const [running] = useState(() =>
+    workingLongestFirst(agents).flatMap((row) => {
+      const turnId = turnIdOf(row);
+      return turnId ? [{ id: row.id, turnId }] : [];
+    }),
+  );
+
   const [scope, setScope] = useState<ScopeId>("all");
   const [query, setQuery] = useState("");
   const [pick, setPick] = useState<Pick | null>(null);
@@ -500,39 +514,45 @@ export function CommandPalette({
     }));
 
   /**
-   * THE TURNS RUNNING NOW, leading an empty palette: one row per seat the
-   * engine says is working, oldest first as every list of them is, each going
-   * to the turn's watch link — its Transcript, the phase it is on open. The
-   * reader who opens ⌘K with nothing typed while a company is working is
-   * likeliest to want what it is doing; a seat whose turn has no id yet is
+   * THE TURNS RUNNING AS THE PALETTE OPENED, under Recent in an empty
+   * palette: one row per seat the engine said was working, oldest first as
+   * every list of them is, each going to the turn's watch link — its
+   * Transcript, the phase it is on open. A seat whose turn had no id yet is
    * left out rather than offered as a way to nowhere.
+   *
+   * UNDER RECENT, NOT ABOVE IT: "⌘K, Enter" is the reader's way back to where
+   * they just were, and a group above Recent would make that habit open a
+   * running turn instead whenever the company happens to be working.
+   *
+   * A TURN THAT ENDS WHILE THE PALETTE IS OPEN KEEPS ITS ROW (see `running`
+   * above), still opening that turn, and says it finished — the row a reader
+   * is reaching for must not leave under the pointer.
    */
   const runningRows = (): CommandPaletteItem[] =>
-    workingLongestFirst(agents).flatMap((row) => {
-      const turnId = turnIdOf(row);
-      if (!turnId) return [];
-      const seat = index.byHandle.get(row.handle ?? "") ?? null;
-      const name = seat?.name ?? row.role;
+    running.map(({ id, turnId }) => {
+      const row = agents.find((a) => a.id === id) ?? null;
+      const seat = index.byHandle.get(row?.handle ?? "") ?? null;
+      const name = seat?.name ?? row?.role ?? id;
       const watch = watchLink(turnId);
-      return [
-        {
-          id: `running-${row.id}`,
-          icon: (
-            <SeatAvatar
-              name={name}
-              kind="agent"
-              size="xs"
-              ring={ringOf(activityOf(row))}
-              decorative
-            />
-          ),
-          label: name,
-          // WHAT IT IS DOING AND ON WHAT, in the words every running-turn row
-          // says ("Executing ENG-412", "3 workers on ENG-405").
-          hint: stateLine(row, { now: Date.now(), seat }),
-          onSelect: () => nav.to(watch.path, watch.query),
-        },
-      ];
+      return {
+        id: `running-${id}`,
+        icon: (
+          <SeatAvatar
+            name={name}
+            kind="agent"
+            size="xs"
+            ring={ringOf(activityOf(row))}
+            decorative
+          />
+        ),
+        label: name,
+        // WHAT IT IS DOING AND ON WHAT, in the words every running-turn row
+        // says ("Executing ENG-412", "3 workers on ENG-405") — while the seat
+        // is still on the turn the row was read for.
+        hint:
+          row && turnIdOf(row) === turnId ? stateLine(row, { now: Date.now(), seat }) : "Finished",
+        onSelect: () => nav.to(watch.path, watch.query),
+      };
     });
 
   const taskRows = (cap: number): CommandPaletteItem[] => {
@@ -764,8 +784,8 @@ export function CommandPalette({
     groups.push(...pickerGroups().filter((g) => g.items.length));
   } else if (scope === "all") {
     if (!term) {
-      push("running", "Running now", runningRows());
       push("recent", "Recent", asItems(recentHits(recents, nav)));
+      push("running", "Running now", runningRows());
       push("go", "Go to", asItems(destinationHits("", nav, Infinity)));
     } else {
       push("ids", "Open by id", asItems(idHits(term, nav)));

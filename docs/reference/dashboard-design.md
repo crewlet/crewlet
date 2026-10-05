@@ -2557,7 +2557,7 @@ fit that shape, so each is a tab under the field:
 
 | Scope | Searches | Sigil |
 |---|---|---|
-| **All** | screens, a pasted event / trace / turn id, three tasks and three pages (two of each under an answer), agents, people and teams, tools, the three actions, and the answer's remaining sources; when nothing is typed, **Running now** — a row per working seat, oldest first, its badge, its name and what it is doing ("Executing ENG-412"), each going to the turn's watch link — then recents | |
+| **All** | screens, a pasted event / trace / turn id, three tasks and three pages (two of each under an answer), agents, people and teams, tools, the three actions, and the answer's remaining sources; when nothing is typed, recents, then **Running now** — a row per seat working as the palette opened, oldest first, its badge, its name and what it is doing ("Executing ENG-412"), each going to the turn's watch link | |
 | **Tasks** | `work_search`, hybrid, eight hits, and a row to the full search screen | `#` |
 | **Pages** | `knowledge`, the company's one knowledge backend | |
 | **Agents** | the org chart — the engine's own name tiers first (`colleague`), each seat's ring from the agents push, then people and teams | `@` |
@@ -2668,6 +2668,18 @@ that way, and at its cap of eight the bottom row — the place nobody has opened
 in longest — leaves. The sidebar keeps no recents: a place a reader keeps on
 purpose is a star. A route no workspace owns is not remembered, and a stored
 row whose route this build no longer has is dropped when the list is read.
+
+**Running now sits under the recents, and holds still while the palette is
+open.** Under them because "⌘K, Enter" is a reader's way back to where they
+just were, and a group of running turns above Recent would have turned that
+habit into "open whichever turn has run longest" whenever the company is
+working. Still because the kit holds the highlighted option by its INDEX, so a
+group that gained or lost a row on an agents push — twice a tool-loop round —
+moved every row beneath it, and Enter opened a row nobody had highlighted. The
+set of turns and their order are read once, as the palette opens (the same
+re-sort boundary the recents keep), and later pushes reach only a row's words:
+a turn that ends while the palette is open keeps its row, still opens that
+turn, and says **Finished**; a turn that starts is offered by the next ⌘K.
 
 **And a name is never replaced by an identifier.** Every screen publishes its
 object's name a render after the route, so the first write of every navigation
