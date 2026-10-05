@@ -696,6 +696,35 @@ func TestReasoningChangesTheTokenCapAndDropsTemperature(t *testing.T) {
 	}
 }
 
+// A CALL'S CAP SIZES ITS ANSWER, and a reasoning model spends its reasoning
+// from max_completion_tokens too — so a classifier's 400 is spent reasoning
+// and the call comes back empty. On a reasoning call it is not sent; the
+// entry's own cap still is.
+func TestAReasoningCallIsNotGivenTheCallersAnswerCap(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		entry int
+		want  any // nil: absent
+	}{
+		{"no entry cap", 0, nil},
+		{"an entry cap", 9000, float64(9000)},
+	} {
+		api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
+		p := newProvider(t, url, func(c *Config) {
+			c.Reasoning, c.ReasoningEffort, c.MaxTokens = true, "high", tc.entry
+		})
+		req := userTurn("hi")
+		req.MaxTokens = 400
+		if _, err := p.Complete(context.Background(), req); err != nil {
+			t.Fatalf("%s: Complete: %v", tc.name, err)
+		}
+		if got := api.seen()[0].body["max_completion_tokens"]; got != tc.want {
+			t.Errorf("%s: max_completion_tokens = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // A CALL'S EFFORT IS A CEILING ON THE ENTRY'S, never a level of its own: the
 // lower of the two is sent, an entry with no level sends none whatever the
 // call asks (the endpoint's default may be below `low`), and an entry that is

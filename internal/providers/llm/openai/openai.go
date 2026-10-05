@@ -372,8 +372,14 @@ func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) 
 		// The reasoning models reject max_tokens outright and reject any
 		// temperature but their own default. Sending max_tokens here too
 		// 400s every o-series call the moment a caller sets a cap.
-		if maxTokens > 0 {
-			params.MaxCompletionTokens = param.NewOpt(maxTokens)
+		//
+		// And the CALLER'S cap is not sent at all: it sizes an answer
+		// (llm.Request.MaxTokens), and max_completion_tokens bounds the
+		// reasoning as well, so a cap sized for a one-line answer is spent
+		// reasoning and the call comes back empty. Only the entry's own
+		// cap applies here; the call's effort is what keeps it short.
+		if p.maxTokens > 0 {
+			params.MaxCompletionTokens = param.NewOpt(p.maxTokens)
 		}
 	} else {
 		// TemperatureOr, not a zero test: an explicit 0.0 is a real request
