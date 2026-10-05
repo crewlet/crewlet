@@ -34,6 +34,14 @@
 //   - It required a nak to replay from the head. JetStream returns redelivered
 //     messages behind never-delivered ones, so only the twin does this. Now
 //     HeadReplayOnNak.
+//   - It required a FAILED delivery and a newer event of its conversation to
+//     reach one handler call. The contract orders a partition, never the
+//     calls a conversation is spread across, and a failure waits out its
+//     redelivery backoff while the newer event is dispatched without it. Two
+//     cases met the requirement only because the JetStream harness cut that
+//     backoff to half their window, and a loaded runner lost the race. They
+//     hand back by deferral now, which no backend spaces — see
+//     handBackLinger.
 //   - It required a stopped queue to restart. The contract does not say, and two
 //     backends answered differently. Now Restartable.
 //   - It required a publish to `crewlet.events` — a subject the grammar cannot
@@ -555,23 +563,36 @@ const (
 	// observable should find another way to observe it.
 	lingerFor = 50 * time.Millisecond
 
-	// mixedCountLinger is the window the mixed-delivery-count case needs,
-	// and it is longer than lingerFor for one specific reason.
+	// handBackLinger is the window a case opens when the drain it waits for
+	// has to carry a HANDED-BACK message beside fresh ones — the two cases
+	// that build a partition out of a redelivery and never-delivered mail
+	// (a_redelivered_event_rejoins_its_conversation_in_timestamp_order and
+	// a_partition_at_mixed_counts_tells_each_message_its_own_headroom).
 	//
-	// That case has to put a REDELIVERED message and a NEVER-DELIVERED one
-	// in the same drain, which is the only way to build a partition whose
-	// messages sit at different delivery counts. The redelivered half comes
-	// back on the backend's own nak spacing (25ms seed doubling to a 50ms
-	// ceiling in the JetStream harness), so the window a fresh publish
-	// opens has to outlast that spacing — and lingerFor is the SAME ORDER
-	// as it, which makes whether the two meet a coin toss rather than a
-	// property.
+	// WHAT IT BOUNDS IS A BROKER TAKING A RETURN IT HAS ALREADY BEEN SENT,
+	// and nothing else. Both cases hand their message back by DEFERRAL,
+	// which every backend returns at once, and let the attachment fetch
+	// again only once the deferral has been applied, with the fresh mail
+	// already in the mailbox. On the in-memory twin the return has landed
+	// by then, synchronously. On JetStream it is a message nothing
+	// acknowledges, taken by a broker goroutine separate from the one that
+	// serves fetches — so the fetch the window opens on can be served
+	// first, and the return then has to land inside the window. That is
+	// one internal hop, cheaper than the publish round trip racingWindow
+	// is sized against (200-330ms worst measured under a parallel -race
+	// suite), and this sits above that measurement rather than at it.
 	//
-	// 400ms is about eight times the harness's ceiling, so the meeting is
-	// determined by the backend's ordering rather than by the scheduler,
-	// and the case still costs well under settleFor. It is nowhere near
-	// queue.MaxLingerSeconds, so no backend has to refuse it.
-	mixedCountLinger = 400 * time.Millisecond
+	// IT USED TO BOUND A REDELIVERY SPACING, as mixedCountLinger, and that
+	// was the defect rather than the margin. Both cases handed their
+	// message back as a FAILURE, which returns on the backend's backoff
+	// (25ms doubling to 50ms in the JetStream harness, a second doubling
+	// to thirty in production), so "the two meet in one drain" was a race
+	// between a broker timer and a constant — one the shipped spacing
+	// never wins, and one the contract never promised anybody would: see
+	// queue.OrderForDispatch.
+	//
+	// Nowhere near queue.MaxLingerSeconds, so no backend has to refuse it.
+	handBackLinger = 400 * time.Millisecond
 
 	// racingWindow is the linger a case gets when its SETUP has to complete
 	// while the window is still open — the pause and stop cases, where the
