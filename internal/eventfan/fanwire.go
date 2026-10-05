@@ -109,7 +109,14 @@ import (
 // edges every build honours: the axis's bars and totals lie inside the window
 // every build cuts from `at` alike, whose first bar — the one the floor cuts,
 // which is where an older build behind the asker's clock counts its strip — the
-// asker drops after summing ([store.EventHistogram.InsideHistory]); the spend
+// asker drops after summing ([store.EventHistogram.InsideHistory]). The other
+// direction is a strip HELD BACK rather than added: an older build floors at
+// its own clock when it reads, so one ahead of the asker's, or answering late,
+// floors above the horizon, and its rows between the two are in no bar — the
+// first whole bar shown included, whenever that strip reaches past its start —
+// while the coverage reads complete, since nothing in its answer says which
+// clock floored it. The strip is its lead plus its latency, and no asker can
+// re-cut what a count already left out; the spend
 // window and a page of turns name both edges as the asker's instants, and a
 // turn's merged start is held to its window here.
 //

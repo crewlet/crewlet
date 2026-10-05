@@ -220,7 +220,10 @@ func MergeRelated(direct, siblings []store.EventRecord, limit int, more bool) []
 // ([store.HistogramQuery.Window]), a window the history clips included: down
 // to the bucket the floor falls in, partial first bar and all, which the asker
 // drops only after this sum ([store.EventHistogram.InsideHistory]) — so a node
-// on an earlier build is summed rather than named. A part whose window differs
+// on an earlier build is summed rather than named, though such a node floors
+// what it counts at its own clock, and one running ahead of the asker's leaves
+// its rows between the two horizons out of every bar (see [Protocol]). A part
+// whose window differs
 // anyway (a peer on a build that ignores the pinned clock) cannot be summed bar
 // for bar without adding one node's minute to another's next one; it is left
 // out and its index reported, so the caller names that node rather than

@@ -603,7 +603,13 @@ sequenceDiagram
   attempts from. The axis's bars cannot: every
   build cuts them from the asker's instant alike, and the one bar an older
   node behind the asker's clock counts its strip in — the first, which the
-  horizon cuts — is dropped after the sum (below). The spend window and a page
+  horizon cuts — is dropped after the sum (below). An older node AHEAD of the
+  asker's clock, or one that answers late, is the other direction: it floors
+  above the horizon, so the rows it holds between the two are in no answer
+  rather than in a wider one — on the axis, missing from the first whole bar
+  shown and from the total whenever that strip reaches past the bar's start,
+  with the coverage still complete. The strip is that node's clock lead plus
+  its latency and ends when it is upgraded. The spend window and a page
   of turns are bounded by edges the asker names.
   The outcome counts are counts as well and carry no strip at all: every
   build that answers `notification_outcomes` reads the instant, because the
@@ -629,7 +635,9 @@ sequenceDiagram
   the horizon falls in, its first bar counting only what lies above the
   horizon — so every node, whatever its build, cuts the same bars before they
   are summed, and only then does the asker drop that partial first bar, so
-  the axis shown begins at the first whole bucket inside the history; the outcome
+  the axis shown begins at the first whole bucket inside the history — every
+  bar of it exact for nodes that floor at the asker's instant, and short only
+  by the strip above (an older node ahead of the asker's clock); the outcome
   counts are summed over a window whose both edges the asker names — a
   count over a named window, never one taken from a page of the newest
   events, whose span is its own — with every row counted once (above); and a list of

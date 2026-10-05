@@ -56,7 +56,9 @@
 // any FULL page stopped at, a histogram's bars are summed over one pinned
 // window that every build cuts alike — the partial bar a window the history
 // clips begins with is dropped only after the sum, so a node on an earlier
-// build is summed rather than named — a turn's aggregate is re-folded from
+// build is summed rather than named (short by the rows between the asker's
+// horizon and its own when its clock runs ahead — see [Protocol]) — a turn's
+// aggregate is re-folded from
 // each node's partial with the SQL's own aggregates, the integrations' outcome
 // counts are summed over a window whose both edges the asker named, and a
 // list of turns is TWO

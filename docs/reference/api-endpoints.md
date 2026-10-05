@@ -1749,7 +1749,11 @@ answers carries one shape:
   axis's bars cannot: every build cuts them
   from the serving node's instant alike, and the first bar, the one the
   horizon cuts and the one such a node counts its strip in, is dropped after
-  the sum. The spend window and a page of turns are bounded by edges the
+  the sum. The other direction is not a strip such a node adds but one it
+  holds back: one whose clock runs ahead, or that answers late, floors above
+  the horizon, and its rows between the two are in no answer — on the axis,
+  missing from the first whole bar when the strip reaches past its start
+  (see [the time axis](#the-event-logs-time-axis)). The spend window and a page of turns are bounded by edges the
   serving node names, which every build honours. The outcome counts on
   `integrations` are a count too, and carry no such strip: every build that
   answers that question reads the instant, since it arrived with it.
@@ -1876,12 +1880,26 @@ first bar counting only what lies above the horizon — and floors what it
 counts at the serving node's horizon rather than its own. The serving node
 sums every node's bars and only then drops that partial bar, so no bar in the
 answer starts below the horizon (see `since` above), every bar lies wholly
-inside the history, and a row any node holds inside a bar — the first one
-included — is counted in it however long that node took to answer. A node on
-an earlier build is therefore summed on the default window like any other,
-rather than named; it floors what it counts at its own clock (see
-[coverage](#reading-the-fleets-history-coverage)), and the strip by which
-that clock runs behind falls in the bar that is dropped.
+inside the history, and a row any node on this build or a later one holds
+inside a bar — the first one included — is counted in it however long that
+node took to answer.
+
+A node on an earlier build is summed on the default window like any other,
+rather than named, but it floors what it counts at **its own clock, read when
+it answers** (see [coverage](#reading-the-fleets-history-coverage)), so its
+floor sits off the serving node's horizon by its clock's skew plus the time
+its answer took. Below the horizon — a clock behind, answering promptly — the
+strip it counts lies in the partial bar that is dropped, and nothing shown
+changes. Above it — a clock ahead, or an answer that came late — the rows it
+holds between the horizon and its own floor are counted nowhere: they fall in
+the dropped bar while that strip ends before the first whole bucket begins,
+and otherwise the part past that start is missing from the bars it falls in —
+the first, or more when the strip is wider than a bucket — and from `total`
+and `failed`, while `coverage` still reads complete, since nothing in that
+node's answer says which clock floored it. The strip is that node's lead plus
+its latency: milliseconds on a fleet whose clocks agree, so it reaches a shown
+bar only when the horizon lies that close under a bucket boundary — most
+often with `minute` buckets — and it ends when the node is upgraded.
 
 Each bar is `{at, count, failed}`. `failed` is how many of the bar's rows
 reported a failure — by the rule a turn's own `failed` mark uses: the event

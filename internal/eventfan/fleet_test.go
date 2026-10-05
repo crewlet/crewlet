@@ -1240,6 +1240,57 @@ func TestAnEarlierBuildsAxisIsSummedAndShownFromItsFirstWholeBar(t *testing.T) {
 	}
 }
 
+// AN EARLIER BUILD AHEAD OF THE ASKER'S CLOCK LEAVES ITS STRIP OUT OF THE BARS,
+// and only its strip.
+//
+// That build cuts the asker's window but floors what it counts at its own
+// clock, read when it answers — so a clock running ahead, or an answer that
+// came late, puts its floor ABOVE the asker's horizon, and what it holds
+// between the two is in no bar. When the horizon lies just under a bucket
+// boundary, that strip reaches past the start of the first whole bucket, which
+// the asker shows: the row there is missing from the first bar and from the
+// total, the row past the strip is counted, and the coverage still reads
+// complete, because nothing in the answer says which clock floored it. The
+// peer here runs 25 ms ahead with the horizon 10 ms under the hour.
+//
+// Mutation: drop a bar more after the sum to cover such a peer's strip, and
+// the axis no longer starts at the first whole bucket; refuse or name an
+// earlier build's part, and the coverage reads incomplete.
+func TestAnEarlierBuildAheadOfTheAskerLeavesItsStripOutOfTheBars(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a := newNode(t, broker, "node-a")
+	at := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour - 10*time.Millisecond)
+	floor := at.Add(-store.EventHistory)
+	first := store.BucketHour.HistoryStart(at)
+	if got := first.Sub(floor); got != 10*time.Millisecond {
+		t.Fatalf("the first whole hour starts %s above the horizon, want 10ms", got)
+	}
+	appendTo(t, a, store.EventRecord{ID: "a-strip", Type: "x", Category: "task", Time: first.Add(5 * time.Millisecond)})
+	servesTheAxisAsTheEarlierBuild(t, broker, "node-old", at.Add(25*time.Millisecond), []store.EventRecord{
+		{ID: "p-strip", Category: "task", Time: first.Add(5 * time.Millisecond)},
+		{ID: "p-past", Category: "task", Time: first.Add(20 * time.Millisecond)},
+	})
+	fan := fanFrom(a, "node-a", "node-old")
+	fan.Clock = func() time.Time { return at }
+
+	got, coverage, err := fan.Histogram(t.Context(), store.HistogramQuery{Bucket: store.BucketHour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !coverage.Complete {
+		t.Fatalf("coverage %+v — the earlier build's part was not summed", coverage)
+	}
+	if got.Since != first.Format(time.RFC3339) {
+		t.Fatalf("since = %s, want the first whole hour inside the history, %s", got.Since, first)
+	}
+	if bar := got.Bars[0]; bar.Count != 2 || got.Total != 2 {
+		t.Errorf("the first bar counts %d of a total %d, want 2 of 2 — this node's row and the "+
+			"peer's past its own floor, never the peer's row between the two horizons",
+			bar.Count, got.Total)
+	}
+}
+
 // THIS BUILD'S AXIS IS SUMMED BY AN EARLIER BUILD'S ASKER, the other direction.
 //
 // A node on the build before this one asks in its own version, with the
