@@ -13,9 +13,18 @@
   background: var(--color-surface-subtle);
   overflow: hidden;
 }
+/* A RUNNING TURN IS A STATE, so it is drawn in the working hue — info, the
+   ring a working seat's avatar wears — and never the accent, which says what
+   to DO. It was two rules: this inset rail, and a second further down that
+   drew an accent ring and, being later, silently replaced the rail's
+   box-shadow, so the rail never showed and the one colour on the card meant
+   "act here" rather than "running". One rule, both marks: the rail says which
+   card, the soft ring makes it readable at a glance. */
 .turn-card.live {
   border-color: var(--color-feedback-info-soft);
-  box-shadow: inset 2px 0 0 var(--color-feedback-info);
+  box-shadow:
+    inset 2px 0 0 var(--color-feedback-info),
+    0 0 0 3px color-mix(in srgb, var(--color-feedback-info) 7%, transparent);
 }
 .turn-card.failed {
   box-shadow: inset 2px 0 0 var(--color-feedback-danger);
@@ -3687,13 +3696,11 @@ textarea.kpage-editor-body {
 
 /* A phase whose text is arriving right now. The ring is what the seat page
    needed: a running turn that looks different from a finished one at a
-   glance, rather than only by reading its badge. */
+   glance, rather than only by reading its badge. In the WORKING hue, like the
+   running turn card's (see `.turn-card.live`): streaming is a state. */
 .phase-card.streaming {
-  border-color: color-mix(in srgb, var(--color-brand-accent) 45%, var(--color-border-hover));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand-accent) 9%, transparent);
-}
-.turn-card.live {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand-accent) 7%, transparent);
+  border-color: color-mix(in srgb, var(--color-feedback-info) 45%, var(--color-border-hover));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-feedback-info) 9%, transparent);
 }
 
 /* Text that is being written. The transition is on COLOR only — never on

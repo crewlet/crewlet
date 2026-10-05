@@ -3456,8 +3456,11 @@ of which is what makes them worth having at all:
   them.
 
 The seat screen makes the same split, where it answers a second question:
-which of these turns is happening right now, readable at a glance from the
-accent ring rather than only by finding a badge.
+which of these turns is happening right now, readable at a glance from its
+ring rather than only by finding a badge. The ring is the WORKING hue — info,
+the ring a working seat's avatar wears — because running is a state; it was
+the accent once, which says what to do, and a second rule drawing it silently
+replaced the info rail the card was meant to carry.
 
 ## Live › Now running and the turn list
 
