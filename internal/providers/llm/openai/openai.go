@@ -30,10 +30,12 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -301,17 +303,25 @@ func (p *Provider) streamOnce(
 ) (*sdk.ChatCompletion, string, error) {
 	ctx, watch := httpapi.WatchIdle(ctx, p.timeout)
 	defer watch.Stop()
+	var done doneWatch
 	stream := p.client.Chat.Completions.NewStreaming(ctx, params, opt,
-		option.WithRequestTimeout(0), option.WithMiddleware(watch.Middleware))
+		option.WithRequestTimeout(0), option.WithMiddleware(watch.Middleware),
+		option.WithMiddleware(done.Middleware))
 	defer func() { _ = stream.Close() }()
 
 	var acc sdk.ChatCompletionAccumulator
 	var reasoning strings.Builder
 	events := 0
+	finished := false
 	for stream.Next() {
 		events++
 		chunk := stream.Current()
 		acc.AddChunk(chunk)
+		for _, choice := range chunk.Choices {
+			if choice.FinishReason != "" {
+				finished = true
+			}
+		}
 		if len(chunk.Choices) == 0 {
 			// A usage-only or keep-alive chunk. Accumulated, not shown.
 			continue
@@ -335,6 +345,20 @@ func (p *Provider) streamOnce(
 		// a phase over a capability.
 		return nil, "", errNoStream
 	}
+	if !finished && !done.seen.Load() {
+		// A BODY THAT ENDED CLEANLY IS NOT A FINISHED ANSWER. The SDK's
+		// decoder reports an orderly EOF — a gateway or proxy closing the
+		// response mid-answer — as no error at all, and the stop-reason
+		// mapping reads an absent finish_reason as an ordinary end, so a
+		// round cut after its first deltas was taken as the whole answer.
+		// What says the model finished is the stream's own terminal
+		// evidence: a finish_reason on some choice, or the `[DONE]`
+		// sentinel (a host that names no reason still ends its stream).
+		// Neither means the call failed, and it is retried like the
+		// server failure it is. The ""-is-an-end reading stays for unary
+		// responses, which arrive whole or not at all.
+		return nil, "", errStreamCut
+	}
 	out := acc.ChatCompletion
 	return &out, reasoning.String(), nil
 }
@@ -342,6 +366,65 @@ func (p *Provider) streamOnce(
 // errNoStream reports an endpoint that accepted a streaming request and
 // answered without streaming.
 var errNoStream = errors.New("endpoint did not stream")
+
+// errStreamCut reports a stream whose body ended before its terminal event:
+// no choice carried a finish_reason and no `[DONE]` arrived.
+var errStreamCut = errors.New("stream ended before its terminal event (no finish_reason and no [DONE])")
+
+// doneWatch notes whether a streamed body carried the `[DONE]` sentinel.
+//
+// The SDK consumes the sentinel and reports it exactly as it reports a body
+// that simply stopped — Next is false and Err is nil either way — so it is
+// read off the bytes on their way in, through the same middleware hook the
+// idle watchdog uses.
+type doneWatch struct{ seen atomic.Bool }
+
+// Middleware wraps the response body in a [doneBody].
+func (d *doneWatch) Middleware(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+	resp, err := next(req)
+	if err == nil && resp != nil && resp.Body != nil {
+		resp.Body = &doneBody{ReadCloser: resp.Body, watch: d, tail: []byte("\n")}
+	}
+	return resp, err
+}
+
+// doneBody scans an SSE body for a `data: [DONE]` line.
+//
+// Matched at the START OF A LINE — a newline before `data:` — and never as a
+// bare `[DONE]`, which a model may write inside its own content; a JSON
+// payload cannot carry a raw newline, so a line start is the event's own
+// field. A read may split the marker, so the last bytes of each read are kept
+// and prefixed to the next.
+type doneBody struct {
+	io.ReadCloser
+	watch *doneWatch
+	tail  []byte
+}
+
+// doneMarkers are the two spellings SSE allows: a space after the colon is
+// optional, and the SDK accepts both.
+var doneMarkers = [][]byte{[]byte("\ndata: [DONE]"), []byte("\ndata:[DONE]")}
+
+// doneKeep is how many trailing bytes a read carries into the next: one fewer
+// than the longest marker, so a marker split anywhere is still seen whole.
+const doneKeep = len("\ndata: [DONE]") - 1
+
+func (b *doneBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 && !b.watch.seen.Load() {
+		b.tail = append(b.tail, p[:n]...)
+		for _, marker := range doneMarkers {
+			if bytes.Contains(b.tail, marker) {
+				b.watch.seen.Store(true)
+				break
+			}
+		}
+		if len(b.tail) > doneKeep {
+			b.tail = append(b.tail[:0], b.tail[len(b.tail)-doneKeep:]...)
+		}
+	}
+	return n, err
+}
 
 // classify turns an SDK failure into the contract's error.
 func (p *Provider) classify(err error) *llm.Error {
@@ -352,6 +435,11 @@ func (p *Provider) classify(err error) *llm.Error {
 			header = apiErr.Response.Header
 		}
 		return httpapi.FromStatus(err, p.name, p.model, apiErr.StatusCode, header)
+	}
+	if errors.Is(err, errStreamCut) {
+		// The response opened with 200 and stopped short: the server's
+		// failure, retried and handed down the chain like one.
+		return &llm.Error{Kind: llm.KindServer, Provider: p.name, Model: p.model, Err: err}
 	}
 	var streamErr *ssestream.StreamError
 	if errors.As(err, &streamErr) {

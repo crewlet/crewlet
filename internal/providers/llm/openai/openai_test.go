@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	sdk "github.com/openai/openai-go/v3"
@@ -1360,6 +1361,91 @@ func TestAStreamIsBoundedBySilenceNotLength(t *testing.T) {
 			t.Fatalf("gave up after %v, want about the %v bound", elapsed, timeout)
 		}
 	})
+}
+
+// A STREAM THAT STOPS SHORT IS NOT AN ANSWER. A gateway closing the body in an
+// orderly way after some deltas is a clean EOF to the SDK — no error — and an
+// absent finish_reason maps to an ordinary end, so the cut round used to be
+// read as the whole answer. Only the stream's own terminal evidence (a
+// finish_reason, or `[DONE]`) says the model finished; without either the call
+// fails as the server failure it is. A `[DONE]` the model WROTE inside its
+// content is not the sentinel, and a sentinel split across two writes still is.
+func TestAStreamThatEndsBeforeItsTerminalEventFails(t *testing.T) {
+	t.Parallel()
+	chunk := func(content string) string {
+		return `data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"gpt-test",` +
+			`"choices":[{"index":0,"delta":{"content":` + strconv.Quote(content) + `}}]}` + "\n\n"
+	}
+	for _, tc := range []struct {
+		name   string
+		writes []string
+		ok     bool
+	}{
+		{"cut after its deltas", []string{chunk("Hel"), chunk("lo")}, false},
+		{"cut after content naming the sentinel", []string{chunk("data: [DONE]"), chunk("more")}, false},
+		{"a finish_reason and no [DONE]", []string{chunk("Hel"),
+			`data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"gpt-test",` +
+				`"choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":"stop"}]}` + "\n\n"}, true},
+		{"a [DONE] split across two writes", []string{chunk("Hel"), chunk("lo"), "data: [DO", "NE]\n\n"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				for _, part := range tc.writes {
+					_, _ = io.WriteString(w, part)
+					if f, ok := w.(http.Flusher); ok {
+						f.Flush()
+					}
+				}
+			})
+			p := newProvider(t, url, nil)
+			out, err := p.Complete(t.Context(), llm.Request{
+				Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+				OnDelta:  func(llm.Delta) {},
+			})
+			if tc.ok {
+				if err != nil || out == nil || out.Content != "Hello" {
+					t.Fatalf("Complete = %+v, %v; want the finished answer", out, err)
+				}
+				return
+			}
+			if out != nil {
+				t.Fatalf("a stream cut before its terminal event answered %q", out.Content)
+			}
+			if llm.KindOf(err) != llm.KindServer {
+				t.Fatalf("err = %v (kind %s), want a server failure the chain retries",
+					err, llm.KindOf(err))
+			}
+		})
+	}
+}
+
+// THE SENTINEL IS SEEN WHEREVER A READ SPLITS IT — one byte at a time is the
+// worst split there is — and only at the start of a line.
+func TestTheDoneSentinelIsSeenAcrossReads(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, body string
+		want       bool
+	}{
+		{"spaced", "data: {}\n\ndata: [DONE]\n\n", true},
+		{"unspaced", "data: {}\n\ndata:[DONE]\n\n", true},
+		{"first line", "data: [DONE]\n\n", true},
+		{"inside content", `data: {"content":"data: [DONE]"}` + "\n\n", false},
+		{"absent", "data: {}\n\n", false},
+	} {
+		var watch doneWatch
+		body := &doneBody{ReadCloser: io.NopCloser(iotest.OneByteReader(strings.NewReader(tc.body))),
+			watch: &watch, tail: []byte("\n")}
+		if _, err := io.ReadAll(body); err != nil {
+			t.Fatalf("%s: ReadAll: %v", tc.name, err)
+		}
+		if got := watch.seen.Load(); got != tc.want {
+			t.Errorf("%s: seen = %v, want %v", tc.name, got, tc.want)
+		}
+	}
 }
 
 // AN ERROR INSIDE A STREAM IS THE SERVER'S. The response opened with 200, so
