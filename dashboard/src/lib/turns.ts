@@ -12,7 +12,7 @@
 
 import { pathOf } from "~/app/frame/objects.ts";
 import { href } from "~/app/router.tsx";
-import { doingWords, workingLongestFirst } from "./seats.ts";
+import { doingWords, RUNNING_ROWS, workingLongestFirst } from "./seats.ts";
 import type { AgentRow, TurnRow, WorkItemRef } from "~/protocol/index.ts";
 
 /**
@@ -120,6 +120,34 @@ export function watchLink(turnId: string): { path: string[]; query: Record<strin
 export function watchHref(turnId: string): string {
   const { path, query } = watchLink(turnId);
   return href(path, query);
+}
+
+/**
+ * The SHORT list of running turns — Home's Live now card and the sidebar's
+ * Running group — and how many working seats it leaves to Live › Now running.
+ *
+ * ONE DERIVATION FOR BOTH, because each spelled its own and they named
+ * different seats: the sidebar dropped a working seat whose turn has no id
+ * before it took [RUNNING_ROWS], Home took the first four as they came, and a
+ * seat working only through a coding run no turn record names yet led Home's
+ * card while the sidebar beside it listed the four after it.
+ *
+ * THE FILTER COMES BEFORE THE CAP. Every row in either list is a way into its
+ * turn, and a seat whose turn has published no id yet has nowhere to go — a
+ * link to `#/live/turns/` with no id is a link to nothing — so it is not a
+ * row, and it does not take one of the four places either. It is still
+ * COUNTED: `working` is every working seat, for a list's figure, and `more`
+ * is what the short list leaves out, id-less seats included, which Live ›
+ * Now running lists one row each.
+ */
+export function runningShortList(agents: readonly AgentRow[]): {
+  working: AgentRow[];
+  shown: AgentRow[];
+  more: number;
+} {
+  const working = workingLongestFirst(agents);
+  const shown = working.filter((row) => turnIdOf(row) !== "").slice(0, RUNNING_ROWS);
+  return { working, shown, more: working.length - shown.length };
 }
 
 /**

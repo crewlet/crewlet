@@ -407,6 +407,78 @@ describe("the sidebar's figures", () => {
     expect(screen.getByRole("link", { name: /^Live/ }).textContent).toContain("6");
   });
 
+  // HOME'S LIVE NOW AND THE RUNNING GROUP NAME THE SAME SEATS IN THE SAME
+  // ORDER, on one screen, over one roster. They were two selections under one
+  // cap: the seat with no turn id sorted FIRST (its start read as 0) and Home
+  // drew it while the sidebar skipped it, so the two lists differed by two
+  // seats beside each other.
+  test("Home's Live now names the seats the Running group names, in its order", async () => {
+    location.hash = "#/home";
+    const { store, socket } = answering({
+      work_workload: { rows: [] },
+      sandbox_runs: { runs: [] },
+      work_projects: { projects: [], complete: true },
+    });
+    mountShell(store, socket, <Home key="home" />);
+    act(() =>
+      store.applyAgents([
+        workingSeat("A", "t-a", 1),
+        { role: "Fresh", handle: "fresh", activity: "working", turn: null, live_call: null },
+        workingSeat("B", "t-b", 2),
+        workingSeat("C", "t-c", 3),
+        workingSeat("D", "t-d", 4),
+        workingSeat("E", "t-e", 5),
+      ] as never),
+    );
+    await settle();
+    const turnOf = (hash: string) => /#\/live\/turns\/([^?]+)/.exec(hash)?.[1] ?? "";
+    const sidebar = runningRows()
+      .map((r) => turnOf(r.href))
+      .filter(Boolean);
+    const home = [...document.querySelectorAll(".live-list .live-row")].map((row) =>
+      turnOf(row.getAttribute("href") ?? ""),
+    );
+    expect(sidebar).toEqual(["t-a", "t-b", "t-c", "t-d"]);
+    expect(home).toEqual(sidebar);
+    // AND UNDER THE CAP, where the id-less seat is not crowded out by four
+    // others: it is counted on both and drawn on neither. (A push carries the
+    // rows that changed, so the three that stopped are pushed idle.)
+    act(() =>
+      store.applyAgents(
+        ["C", "D", "E"].map((role) => ({
+          role,
+          handle: role.toLowerCase(),
+          activity: "idle",
+          turn: null,
+          live_call: null,
+        })) as never,
+      ),
+    );
+    const homeRows = () =>
+      [...document.querySelectorAll(".live-list .live-row")].map((row) =>
+        turnOf(row.getAttribute("href") ?? ""),
+      );
+    expect(runningRows().map((r) => turnOf(r.href))).toEqual(["t-a", "t-b", ""]);
+    expect(homeRows()).toEqual(["t-a", "t-b"]);
+  });
+
+  // "MORE" THAN NOTHING READS AS ROWS THAT FAILED TO DRAW: with no working
+  // seat's turn named yet, the group's one row says how many run, plainly.
+  test("with no running turn named yet, the one row says how many run, not how many more", async () => {
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    act(() =>
+      store.applyAgents([
+        { role: "P", handle: "p", activity: "working", turn: null, live_call: null },
+        { role: "Q", handle: "q", activity: "working", turn: null, live_call: null },
+      ] as never),
+    );
+    const rows = runningRows();
+    expect(rows.map((r) => r.href)).toEqual(["#/live"]);
+    expect(rows[0]!.text).toContain("2 running");
+    expect(rows[0]!.text).not.toContain("more");
+  });
+
   // THE ONE ROW THE READER IS WATCHING is the current one, as every sidebar row
   // is the screen the reader is on.
   test("the running turn the reader is watching is the current row", async () => {

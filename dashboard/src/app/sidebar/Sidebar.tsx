@@ -57,15 +57,8 @@ import { glyphFor } from "~/ui/glyph.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
-import {
-  RUNNING_ROWS,
-  activityOf,
-  indexOrg,
-  ringOf,
-  turnItemKey,
-  workingLongestFirst,
-} from "~/lib/seats.ts";
-import { turnIdOf, watchLink } from "~/lib/turns.ts";
+import { activityOf, indexOrg, ringOf, turnItemKey } from "~/lib/seats.ts";
+import { runningShortList, turnIdOf, watchLink } from "~/lib/turns.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 import { pageCount, unfinished, viewRun } from "~/lib/work.ts";
@@ -113,8 +106,10 @@ export function Sidebar({
 
   // THE ENGINE'S WORD for working, off the agents push — never a projection's
   // own reading of a seat's call state — in the order every list of running
-  // turns draws, read once for the Live row's figure and the Running group.
-  const working = useMemo(() => workingLongestFirst(agents), [agents]);
+  // turns draws, read once for the Live row's figure and the Running group —
+  // the short list Home's Live now draws too (`runningShortList`).
+  const running = useMemo(() => runningShortList(agents), [agents]);
+  const working = running.working;
 
   // THE FIGURE THE QUEUE TAB CARRIES on the reader's own day, read once by
   // the frame for both: see `lib/useQueueCount.ts`.
@@ -287,7 +282,7 @@ export function Sidebar({
         </RailBoundary>
         {/* LAST, so a turn starting or ending moves nothing above it. */}
         <RailBoundary label="Running" resetKey={at}>
-          <RunningSection path={route.path} working={working} names={names} />
+          <RunningSection path={route.path} running={running} names={names} />
         </RailBoundary>
       </SidebarNav>
     </AppShell.Rail>
@@ -476,16 +471,18 @@ function StarredSection({ path }: { path: string[] }) {
  * The turns running now, one row per seat the engine says is WORKING: the
  * seat's badge with its ring, its name, the key of the item the turn is
  * charged to, and a link that WATCHES the turn — its Transcript, with the
- * phase it is on open.
+ * phase it is on open, or a parked turn's coding run live above its phases.
  *
- * THE SAME SET AS THE FIGURE ON LIVE, in the same order every list of running
- * turns draws (`workingLongestFirst`): oldest first, so a turn that starts is
- * appended and never shuffles the row a reader is reaching for. A seat that
- * NEEDS a person is not here — it is running nothing, and what it waits on is
- * the Inbox's and Now running's "Waiting on a person" — and a working seat
- * whose turn has published no id yet is skipped rather than linked to
- * nothing, and counted in the "more" row, which is Now running, where it is
- * listed. Capped at `RUNNING_ROWS`, Home's own number.
+ * THE SAME SET AS THE FIGURE ON LIVE, and THE SAME ROWS AS HOME'S LIVE NOW:
+ * both are `runningShortList`, in the order every list of running turns draws
+ * (`workingLongestFirst`) — oldest first, so a turn that starts is appended
+ * and never shuffles the row a reader is reaching for. A seat that NEEDS a
+ * person is not here — it is running nothing, and what it waits on is the
+ * Inbox's and Now running's "Waiting on a person" — and a working seat whose
+ * turn has published no id yet is skipped rather than linked to nothing, and
+ * counted in the last row, which is Now running, where it is listed. That row
+ * says "N more running" under rows and "N running" when it stands alone,
+ * because "more" than nothing reads as rows that failed to draw.
  *
  * NOTHING HERE TICKS. No elapsed clock and no per-row pulse: the chrome is
  * read on every screen, and a column of moving marks beside a reader's work
@@ -494,16 +491,15 @@ function StarredSection({ path }: { path: string[] }) {
  */
 function RunningSection({
   path,
-  working,
+  running,
   names,
 }: {
   path: string[];
-  working: readonly AgentRow[];
+  running: ReturnType<typeof runningShortList>;
   names: (row: AgentRow) => string;
 }) {
-  const shown = working.filter((row) => turnIdOf(row) !== "").slice(0, RUNNING_ROWS);
+  const { working, shown, more } = running;
   if (working.length === 0) return null;
-  const more = working.length - shown.length;
   return (
     <SidebarNav.Group label="Running">
       {shown.map((row) => {
@@ -533,7 +529,7 @@ function RunningSection({
       {more > 0 && (
         <NavRow
           key="more"
-          label={`${more} more running`}
+          label={shown.length ? `${more} more running` : `${more} running`}
           glyph={<ActivityGlyph size="sm" />}
           path={["live"]}
           current={false}

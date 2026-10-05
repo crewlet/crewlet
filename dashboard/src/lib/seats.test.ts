@@ -44,6 +44,7 @@ import {
   unitSettings,
   unitTally,
   UNIT_TOTAL_HINT,
+  workingLongestFirst,
 } from "./seats.ts";
 import type {
   AgentRow,
@@ -945,4 +946,31 @@ test("a turn's item key is its call's, then its turn's, else none", () => {
   expect(turnItemKey(row("", "ENG-1"))).toBe("ENG-1");
   expect(turnItemKey(row("", ""))).toBe("");
   expect(turnItemKey(undefined)).toBe("");
+});
+
+// LONGEST-RUNNING FIRST, AND A SEAT WITH NO READABLE START LAST. The engine
+// calls a seat working while its coding run is out even when no turn record
+// names it, and the record that arrives on resume is stamped with the resume
+// instant — the newest — so last is where it lands. Read as 0, it led every
+// list of running turns and then jumped to the bottom.
+test("working seats run oldest first, and one with no readable start sorts after every timed one", () => {
+  const seat = (id: string, startedAt: string | null, activity = "working") =>
+    ({
+      id,
+      role: id,
+      activity,
+      turn:
+        startedAt === null ? null : { turn_id: `t-${id}`, stage: "phase", started_at: startedAt },
+      live_call: null,
+    }) as unknown as AgentRow;
+  const order = workingLongestFirst([
+    seat("none", null),
+    seat("late", "2026-09-21T10:09:00Z"),
+    seat("garbled", "not a time"),
+    seat("idle", "2026-09-21T09:00:00Z", "idle"),
+    seat("early", "2026-09-21T10:01:00Z"),
+  ]).map((r) => r.id);
+  // THE TWO UNKNOWNS TIE, so they keep the push's order rather than whatever
+  // a NaN comparison happens to leave.
+  expect(order).toEqual(["early", "late", "none", "garbled"]);
 });

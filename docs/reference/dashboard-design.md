@@ -555,17 +555,23 @@ in the grammar's tree mode, where an open epic's finished subtasks rode along),
 **Starred** (drawn only when there is one), and **Running** — one row per seat
 the engine says is working, drawn while one is: the seat's badge with its
 state ring, its name, the key of the item its turn is charged to as the lead,
-and a link that WATCHES the turn (its Transcript, the phase it is on open; see
+and a link that WATCHES the turn (its Transcript, the phase it is on open, or
+a parked turn's coding run live above its phases; see
 [the turn trace](#the-turn-trace-four-tabs-one-clock)). It is the way to a
 running turn from every screen, where it was the Agents row, the chart, a
 card, the profile and a tab. It is the same set as the figure on Live and in
 the order every list of running turns draws — the turn that has run longest
-first — so a turn that starts is APPENDED and the rows a reader is reaching
-for never reorder, and it is LAST so nothing above it moves when a turn starts
-or ends. Four rows — Home's Live now holds four too, so the two name the same
-seats — then one **N more running** row to Live › Now running, which also
-counts a working seat whose turn has published no id yet rather than linking
-it to nothing. A seat that needs a person is not listed: it is running
+first, and a seat with no readable start last, since the record the engine
+creates for it when its parked turn resumes carries the newest start there
+is — so a turn that starts is APPENDED and the rows a reader is reaching for
+never reorder, and it is LAST so nothing above it moves when a turn starts or
+ends. Four rows with a turn id, then one row to Live › Now running for the
+rest — **N more running**, or **N running** when no row stands above it. A
+working seat whose turn has published no id yet is counted there rather than
+linked to nothing, and takes none of the four places. Home's Live now draws
+the SAME four rows in the same order, because both are one selection
+(`runningShortList` in `lib/turns.ts`) rather than two lists under one cap,
+which had named different seats side by side. A seat that needs a person is not listed: it is running
 nothing, and what it waits on is the Inbox's and Now running's *Waiting on a
 person*. Nothing in it ticks — no elapsed clock and no pulse per row — because
 the chrome is on every screen; the Live row's one dot says something runs, and
@@ -1804,11 +1810,13 @@ company did.** Top to bottom:
   control is drawn for every reader and disabled with its reason where this
   browser cannot act. **Open inbox** and **Review** both land on
   `#/inbox?reason=decisions`, which draws every one of them.
-- **Live now**: every seat the engine says is working — what it is on (the
-  item the turn is charged to, never a work key), how long, where it is in
-  context → execute → review ("Execute · round 7 of 25"), and the last call it
-  made — each a way into its turn. Four, longest-running first, the four the
-  sidebar's Running group names, and **Open live view** for the rest.
+- **Live now**: how many seats the engine says are working, and for the
+  longest-running four whose turn has an id — the very rows the sidebar's
+  Running group names, in its order — what each is on (the item the turn is
+  charged to, never a work key), how long, where it is in context → execute →
+  review ("Execute · round 7 of 25"), and the last call it made, each a way
+  into its turn. **Open live view** for the rest, including a working seat
+  whose turn has no id yet: it is counted here and listed there.
 - **Tasks completed** per company day over the last fourteen (today in the
   accent), **Tokens by team** over the window (tokens, never money), and
   **Projects**: each project's done, active and to-do work as one bar, its

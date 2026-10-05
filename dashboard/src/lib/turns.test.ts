@@ -9,6 +9,7 @@ import { expect, test } from "vitest";
 import { buildHash } from "~/app/router.tsx";
 import {
   runningNow,
+  runningShortList,
   runningTarget,
   turnIdOf,
   watchHref,
@@ -120,4 +121,32 @@ test("the running target is the one turn's watch link, else Now running", () => 
   expect(runningTarget([])).toEqual(live);
   expect(runningTarget([working(), working({ id: "b" })])).toEqual(live);
   expect(runningTarget([working({ turn: null, live_call: null })])).toEqual(live);
+});
+
+// THE SHORT LIST — Home's Live now and the sidebar's Running group — FILTERS
+// BEFORE IT CAPS: a seat whose turn has no id is never one of the rows, takes
+// none of the four places, and is still counted.
+test("the short list of running turns skips a seat with no turn id, then takes four", () => {
+  const at = (id: string, turn: string, minute: number) =>
+    seat({
+      id,
+      activity: "working",
+      turn: {
+        turn_id: turn,
+        stage: "phase",
+        started_at: `2026-09-21T10:0${minute}:00Z`,
+      } as AgentRow["turn"],
+      live_call: null,
+    });
+  const fresh = seat({ id: "fresh", activity: "working", turn: null, live_call: null });
+  const roster = [at("e", "t-e", 5), fresh, at("a", "t-a", 1), at("c", "t-c", 3)];
+  roster.push(at("b", "t-b", 2), at("d", "t-d", 4), seat({ id: "idle", activity: "idle" }));
+  const { working, shown, more } = runningShortList(roster);
+  expect(working.map((r) => r.id)).toEqual(["a", "b", "c", "d", "e", "fresh"]);
+  expect(shown.map((r) => r.id)).toEqual(["a", "b", "c", "d"]);
+  expect(more).toBe(2);
+  // UNDER THE CAP the id-less seat is still not a row, and still counted.
+  const few = runningShortList([fresh, at("a", "t-a", 1)]);
+  expect(few.shown.map((r) => r.id)).toEqual(["a"]);
+  expect(few.more).toBe(1);
 });

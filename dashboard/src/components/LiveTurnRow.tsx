@@ -28,10 +28,12 @@
 import { StatusDot, Stepper, Tag } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href } from "~/app/router.tsx";
+import { pathOf } from "~/app/frame/objects.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { fmtElapsed } from "~/lib/format.ts";
 import { useMediaQuery } from "~/lib/media.ts";
-import { staleness, stateLine, type OrgIndex, type Seat } from "~/lib/seats.ts";
+import { staleness, stateLine, turnItemKey, type OrgIndex, type Seat } from "~/lib/seats.ts";
+import { turnIdOf } from "~/lib/turns.ts";
 import { lastCallLine, turnSteps } from "~/lib/turnsteps.ts";
 import type { AgentRow } from "~/protocol/index.ts";
 
@@ -67,8 +69,7 @@ export function quietMark(
  */
 export function liveDoing(row: AgentRow, now: number, seat: Seat | null): string {
   const verb = stateLine(row, { now, seat });
-  const keyed = row.live_call?.work_item?.key || row.turn?.work_item?.key;
-  if (keyed) return verb;
+  if (turnItemKey(row)) return verb;
   const summary = row.live_call?.trigger?.["summary"];
   return typeof summary === "string" && summary.trim() ? `${verb} · ${summary.trim()}` : verb;
 }
@@ -82,7 +83,10 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
   // phase has run — so the clock starts when the turn does, not at its first
   // model call, and a turn still gathering its context is already timed.
   const started = Date.parse(row.turn?.started_at ?? call?.started_at ?? "");
-  const turnId = row.turn?.turn_id ?? call?.turn_id ?? "";
+  // THE ONE READING of which turn a seat is on (`turnIdOf`): a turn record
+  // whose id is still "" falls through to the call's, where `??` stopped at
+  // the empty string and drew a seat the sidebar linked as an unlinked row.
+  const turnId = turnIdOf(row);
   // THE ONE DERIVATION every running-turn row shares — see lib/turnsteps.ts.
   // ON A PHONE THE ROUND LEAVES THE STEP and leads the call line, as the seat
   // profile's Current turn does: "Execute · round 1 of 24" left a 358px row no
@@ -120,7 +124,7 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
   return (
     <li>
       {turnId ? (
-        <a className="live-row" href={href(["live", "turns", turnId])}>
+        <a className="live-row" href={href(pathOf({ kind: "turn", id: turnId }))}>
           {body}
         </a>
       ) : (

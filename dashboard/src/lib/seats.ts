@@ -1104,14 +1104,28 @@ export function activityOf(row: AgentRow | null | undefined): SeatState {
  * first — the order every list of running turns draws (Home's Live now, Live ›
  * Now running), because the longest-running turn is the one a reader is most
  * likely looking for, and two lists of one set in two orders read as two sets.
+ *
+ * A SEAT WITH NO READABLE START SORTS LAST. The engine calls a seat working
+ * while a coding run of its is out even when its projection holds no turn
+ * record for it — a parked turn it never saw start — and when that turn
+ * resumes, the record it creates is stamped with the RESUME instant, the
+ * newest start there is. So last is where the row will land anyway, and a
+ * row that arrives last never moves: read as 0 it led every list and then
+ * jumped to the bottom, which is the reshuffle "a turn that starts is
+ * appended" promises a reader never sees. The compare is explicit three-way
+ * because two unknowns are a tie (stable, so they keep the push's order),
+ * where `Infinity - Infinity` is NaN and leaves the order to the engine.
  */
 export function workingLongestFirst(agents: readonly AgentRow[]): AgentRow[] {
+  const started = (a: AgentRow) => {
+    const at = Date.parse(a.turn?.started_at ?? "");
+    return Number.isFinite(at) ? at : Infinity;
+  };
   return agents
     .filter((a) => activityOf(a) === "working")
-    .sort(
-      (a, b) =>
-        (Date.parse(a.turn?.started_at ?? "") || 0) - (Date.parse(b.turn?.started_at ?? "") || 0),
-    );
+    .map((row) => ({ row, at: started(row) }))
+    .sort((a, b) => (a.at === b.at ? 0 : a.at < b.at ? -1 : 1))
+    .map(({ row }) => row);
 }
 
 /**
@@ -1121,7 +1135,9 @@ export function workingLongestFirst(agents: readonly AgentRow[]): AgentRow[] {
  *
  * ONE NUMBER FOR BOTH, because they are one list in one order
  * ([workingLongestFirst]) and two caps would name two different sets of seats
- * on the same screen. Four is what Home's card holds level with the figures
+ * on the same screen — and one SELECTION for both, `lib/turns.ts`'
+ * `runningShortList`, since one cap applied after two different filters
+ * named two sets just the same. Four is what Home's card holds level with the figures
  * beside it, and four sidebar rows are about the height of the Pinned group a
  * reader keeps there — a fifth working seat is the point where a shortcut
  * becomes a second copy of Now running, so it is a "more" row instead.
