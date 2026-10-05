@@ -25,8 +25,13 @@
 // naming the field rather than silently cut to fit, and text that genuinely
 // has to fit a budget a model reads is REWRITTEN to fit by
 // [github.com/crewlet/crewlet/internal/compact] — never cut by this package.
-// What is left here is the cases where no reader acts on the text as content:
-// a diagnostic, a transport ceiling, an identifier with a length limit.
+// What is left here is the cases where no reader takes the text for the whole
+// of something: a diagnostic or a process's tail past a transport ceiling, a
+// marked preview of what the reader can open (a search snippet, an inbox
+// excerpt), and an identifier with a length limit — which keeps a digest of
+// the whole beside the cut, so two that shorten alike still differ. Every one
+// of them is marked, or is an identifier, and a cut that is neither is the bug
+// this package was written to remove.
 package textcut
 
 import "unicode/utf8"
