@@ -129,7 +129,8 @@ export interface IntegrationRow {
    * They are read together with `inbound` and are misleading apart: "128
    * arrived" alone cannot tell a working integration from one whose every
    * delivery reaches nobody, and a seat draining a thread's backlog as one
-   * turn looks like a seat that ignored twelve messages.
+   * turn looks like a seat that ignored twelve messages. All three are
+   * counted over the one window `traffic_since` names.
    */
   skipped?: number | null;
   coalesced?: number | null;
@@ -202,8 +203,11 @@ export interface IntegrationsAnswer {
   /** One roll-up per tool in `INTEGRATION_TOOLS`, whether configured or not. */
   tools?: IntegrationTool[];
   traffic_known: boolean;
-  /** The oldest delivery counted, or null when nothing was: the page is
-   *  capped rather than time-bounded, so there is no fixed window to name. */
+  /** Where the ONE window every count covers starts — `inbound`, `skipped`,
+   *  `coalesced` and `last_at` alike — which ends when the answer was read:
+   *  the oldest delivery when the delivery page held every one, or just after
+   *  the oldest a full page reached. Null when no delivery was counted (no
+   *  window, and every count is 0) or no event log could be read. */
   traffic_since: string | null;
   /** Which nodes the traffic counts were read from — a delivery is stored on
    *  whichever node received it — or null when no store could be read. */

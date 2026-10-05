@@ -495,10 +495,12 @@ export function integrationFacts(
       note: covered,
     },
     {
-      // NO NOTE ON THE OTHER TWO, although the same window covers them: a
-      // fact line whose every value carries the same footnote is one nobody
-      // reads, which is what `Fact.note` says about itself. The three counts
-      // are read together and the first one states what they all cover.
+      // NO NOTE ON THE OTHER TWO, although the same window covers them — the
+      // engine counts the drops and merges over exactly the window
+      // `traffic_since` names, never over a page of its own: a fact line
+      // whose every value carries the same footnote is one nobody reads,
+      // which is what `Fact.note` says about itself. The three counts are
+      // read together and the first one states what they all cover.
       label: "Dropped",
       value: (
         <NumberCell
