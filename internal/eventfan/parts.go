@@ -244,6 +244,11 @@ func (p turnPart) keep(n int) any {
 // for the reason [tracePart.within] gives. The traces the node names are kept
 // while any of its rows is: a trace's first instant says nothing about its
 // last, so one that began under the horizon may still have rows above it.
+//
+// THE ROWS IT KEPT ARE COUNTED ONCE EACH. A turn of 501 to 519 rows sends an
+// opening and an ending that OVERLAP ([store.EventLog.TurnClosing] says so),
+// so the two lengths added count the shared rows twice — a turn held whole
+// reported as cut, with a gap in its middle that nothing is missing from.
 func (p turnPart) within(floor time.Time) turnPart {
 	head := slices.DeleteFunc(slices.Clone(p.Head), below(floor))
 	closing := slices.DeleteFunc(slices.Clone(p.Closing), below(floor))
@@ -256,7 +261,7 @@ func (p turnPart) within(floor time.Time) turnPart {
 	case droppedClosing > 0:
 		out.Total = len(closing)
 	default:
-		out.Total = max(p.Total-droppedHead, len(head)+len(closing))
+		out.Total = max(p.Total-droppedHead, len(union(head, closing)))
 	}
 	if len(head) == 0 && len(closing) == 0 {
 		out.Traces = []store.TurnTrace{}

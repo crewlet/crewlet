@@ -309,3 +309,40 @@ func TestMergeSpendStopsWhereAFullPartStopped(t *testing.T) {
 		t.Errorf("a merge cut at one kept %d", n)
 	}
 }
+
+// A TURN PART HELD TO THE HORIZON COUNTS EVERY ROW IT KEPT ONCE.
+//
+// A node holding 501 to 519 rows of a turn sends its oldest 500 and its newest
+// 20, and the two OVERLAP. A peer on an earlier build, whose clock runs behind
+// the asker's, sends rows from the strip under the asker's horizon too: here
+// 510 rows, the oldest four under it. Held to the horizon, the part keeps 506
+// distinct rows — and the count is exact, since the opening's last row is above
+// the horizon. Counted as the two lengths added, it was 516, so the merged turn
+// said it held ten rows more than it showed: a gap in the middle of a turn it
+// holds whole.
+//
+// Mutation: count `len(head)+len(closing)` in [turnPart.within] and the held
+// count is 516 for 506 rows.
+func TestATurnPartHeldToTheHorizonCountsEachRowOnce(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	var all []store.EventRecord
+	for i := range 510 {
+		all = append(all, store.EventRecord{ID: fmt.Sprintf("r%04d", i),
+			Time: base.Add(time.Duration(i) * time.Second)})
+	}
+	floor := base.Add(4 * time.Second) // r0000 … r0003 lie under it
+	part := turnPart{Head: all[:store.MaxTurnEvents], Closing: all[len(all)-TurnClosingEvents:],
+		Total: len(all), Traces: []store.TurnTrace{}}
+
+	held := part.within(floor)
+	if want := len(all) - 4; held.Total != want || len(union(held.Head, held.Closing)) != want {
+		t.Fatalf("held to the horizon the part counts %d over %d distinct rows, want %d of each",
+			held.Total, len(union(held.Head, held.Closing)), want)
+	}
+	rows, total, _ := MergeTurn([]turnPart{held})
+	if total != len(rows) || rows[0].ID != "r0004" || rows[len(rows)-1].ID != "r0509" {
+		t.Errorf("the merged turn shows %d rows (%s … %s) of %d — a turn held whole reported "+
+			"as cut", len(rows), rows[0].ID, rows[len(rows)-1].ID, total)
+	}
+}
