@@ -1737,10 +1737,15 @@ answers carries one shape:
   earlier build reads no instant and answers as of its own clock. What such
   a node sends only as a count — the axis's `by_category`, the turns a page's
   second pass folds — can still carry the strip by which its clock runs
-  behind the serving node's. Such a turn is listed from the horizon, its
-  start held there and its counts keeping the strip, rather than dropped as
-  one that began before a window starting at the horizon — so `turn`'s
-  `attempts`, asked from exactly there, still name the turn being shown. The
+  behind the serving node's. A page of `turns` whose window reaches the
+  30-day horizon is asked for as the whole history, never as the serving
+  node's horizon, so such a node lists its turns from its own horizon — a
+  turn only it holds included — and the serving node holds what comes back
+  to its own: a turn with no event inside the history is not listed, and one
+  with events on both sides is listed with `started_at` held at the horizon
+  and its counts keeping the strip, rather than dropped as one that began
+  before a window starting at the horizon — so `turn`'s `attempts`, asked
+  from exactly there, name the turn being shown whichever nodes hold it. The
   axis's bars cannot: every build cuts them
   from the serving node's instant alike, and the first bar, the one the
   horizon cuts and the one such a node counts its strip in, is dropped after
@@ -1755,7 +1760,26 @@ restart is one row folded from both halves. The window is pinned to the asker's 
 first — and the instant travels with the question, so every node floors the
 window and its share of each turn at the asker's 30-day horizon rather than at
 its own — and the merged turn is held to it whole: a node's half of a resumed
-turn can start inside the window while the turn began before it elsewhere. Its `next` is the fleet's cursor:
+turn can start inside the window while the turn began before it elsewhere.
+
+A turn is **paged where a node lists it**: at the earliest start at which any
+node's own page lists it, which each node says of its share in the second
+pass. That is not always its `started_at`, which is where the turn began: a
+turn resumed across nodes is selected by each node on its own half, so under
+a filter the whole turn passes, the half where it began may not — the clean
+half of a turn that failed later, under `failed=true`; the half that names no
+item of one charged to an item only by its later records, under
+`work_item=` — and a turn held at the horizon began where no page reaches.
+Paged at its `started_at`, such a turn could fall below where a page was cut
+and behind the cursor that page returned, and so on no page of the walk.
+Walking `next` lists every turn exactly once; the rows are newest first by
+that position, so a row whose `started_at` is earlier than where it is listed
+can sit above rows that began after it. A node on an earlier build says
+nothing of which turns it lists, and its half is read as listing a turn when
+it starts inside the window and matches `failed` and `model` — it carries no
+work item, so under `work_item=` a turn whose earliest half is on such a node
+and names no item can be missing from a walk until that node is upgraded.
+`next` is the fleet's cursor:
 it can be present on an empty page, where a node's page stopped before any
 turn above it could be shown. With `sort=-tokens` the page ranks each node's
 top turns by their MERGED totals and carries no cursor (`before=` is refused

@@ -65,11 +65,16 @@ import (
 //     them floors the window there and nothing they count needs holding (see
 //     [Fleet.NotificationOutcomes]).
 //
-// ONE ADDITION MOVES NO VERSION: the asker's instant, `at`, on every
-// question's parameters — the instant the question is asked at, which every
-// node on this build floors the history at (see [store.EventLog]). A build
-// that does not read it answers as of its own clock instead, and the builds
-// before it did NOT all floor alike:
+// TWO ADDITIONS MOVE NO VERSION. The first is the second scatter of `turns`
+// saying which of the named turns the node's page lists (`listed`, `judged`),
+// beside its shares: a build before it never sends them, and the asker reads
+// that as "this node did not say" and judges its shares by what they carry
+// ([Fleet.Turns]) — never as "lists none of them" — while a build before it
+// asking this one ignores them. The second is the asker's instant, `at`, on
+// every question's parameters — the instant the question is asked at, which
+// every node on this build floors the history at (see [store.EventLog]). A
+// build that does not read it answers as of its own clock instead, and the
+// builds before it did NOT all floor alike:
 //
 //   - every question but `event` was floored at that build's own clock, so
 //     its answer differs from the asker's by the rows between two clocks'
@@ -90,9 +95,14 @@ import (
 // aggregated at the older build's own horizon: the axis's `by_category`, the
 // turns a share folds (a page of turns' second scatter is floored at the
 // history, not at the window), and a trace's or a turn's total beyond what it
-// corrects by the rows it dropped. Those can carry the strip and nothing wider:
-// a turn whose share reaches into it is held to start at the horizon rather
-// than dropped as one that began before the window ([Fleet.Turns]). The cut
+// corrects by the rows it dropped. Those can carry the strip and nothing wider.
+// A page of turns whose window reaches the history is asked for AS the
+// history, in days, so such a build lists from its own horizon — a turn only
+// it holds included, which it would judge, handed the asker's horizon while
+// its clock ran behind, as one that began before the window — and the asker
+// drops a turn with nothing above its horizon and holds the start of one whose
+// share reaches into the strip at the horizon, paging it where a node lists it
+// ([Fleet.Turns]). The cut
 // leaves a capped trace or turn holding rows it did not send, after its last
 // one, and the merge places nothing past that row ([MergeTrace], [MergeTurn]) —
 // a view cut short and saying so, never one with a hole. The rest is bounded by

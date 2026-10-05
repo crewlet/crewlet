@@ -699,3 +699,64 @@ func TestATurnShareIsNotCutByTheWindow(t *testing.T) {
 		t.Fatalf("the share is %+v, want the whole turn from its first phase", parts)
 	}
 }
+
+// A LOG SAYS WHICH NAMED TURNS ITS PAGE LISTS, by the page's own window and
+// turn-level filters and by neither its cursor nor its size.
+//
+// A fleet asks it beside a turn's shares: a turn resumed across nodes is
+// selected by each node on its own half, so the node that holds the half where
+// the turn began may not list it at all — a clean half of a turn that failed
+// later — and the fleet pages a turn by the start a node's page DOES reach.
+// The answer is the page's statement with the names added: a turn that began
+// before the window is not listed, one the filters reject is not, and a cursor
+// below every turn or a page of one changes nothing.
+//
+// Mutation: answer the share's turns rather than the page's, and the turn that
+// began before the window and the ones the filters reject are listed; apply
+// the cursor or the page size, and the named turns past them are not.
+func TestALogSaysWhichNamedTurnsItsPageLists(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	since := time.Now().UTC().Add(-time.Hour)
+	withModel := func(model string) func(*store.EventRecord, int) {
+		return func(rec *store.EventRecord, _ int) {
+			payload, _ := json.Marshal(map[string]any{"turn_id": rec.Tags["turn_id"], "model": model})
+			rec.Payload = payload
+		}
+	}
+	seedTurn(t, log, "t-clean", since.Add(time.Minute), "PM", withModel("m-cheap"))
+	seedTurn(t, log, "t-failed", since.Add(2*time.Minute), "PM", func(rec *store.EventRecord, i int) {
+		withModel("m-dear")(rec, i)
+		if i == 0 {
+			rec.Tags["failed"] = "true"
+		}
+	})
+	seedTurn(t, log, "t-early", since.Add(-2*time.Second), "PM", withModel("m-cheap"))
+	named := []string{"t-clean", "t-failed", "t-early", "t-absent"}
+
+	yes := true
+	for name, c := range map[string]struct {
+		q    store.TurnQuery
+		want []string
+	}{
+		"the window":          {store.TurnQuery{Since: since}, []string{"t-clean", "t-failed"}},
+		"the failures":        {store.TurnQuery{Since: since, Failed: &yes}, []string{"t-failed"}},
+		"one model":           {store.TurnQuery{Since: since, Model: "m-cheap"}, []string{"t-clean"}},
+		"a cursor below them": {store.TurnQuery{Since: since, Before: since}, []string{"t-clean", "t-failed"}},
+		"a page of one":       {store.TurnQuery{Since: since, Limit: 1}, []string{"t-clean", "t-failed"}},
+		"an edge above one":   {store.TurnQuery{Since: since, Until: since.Add(90 * time.Second)}, []string{"t-clean"}},
+	} {
+		c.q.IDs = named
+		got, err := log.ListedTurns(t.Context(), c.q)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		slices.Sort(got)
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s: the page lists %v of the named turns, want %v", name, got, c.want)
+		}
+	}
+	if none, err := log.ListedTurns(t.Context(), store.TurnQuery{Since: since}); err != nil || none == nil || len(none) != 0 {
+		t.Errorf("naming nothing answered %v (%v), want an empty list", none, err)
+	}
+}

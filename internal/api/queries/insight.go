@@ -182,9 +182,15 @@ func (s Sources) attemptsOf(ctx context.Context, id string,
 		return key, []store.Turn{}
 	}
 	rows := page.Turns
-	// OLDEST FIRST, which the listing is not: "attempt 2 of 3" has to count
-	// from the one that ran first, whatever order the list was built in.
-	slices.Reverse(rows)
+	// OLDEST FIRST BY START, which the listing is not: "attempt 2 of 3" has to
+	// count from the one that ran first, whatever order the list was built in.
+	// Not the listing reversed — a fleet's list is ordered by where each turn
+	// is LISTED ([eventfan.Fleet.Turns]), which is not where it began for a
+	// turn whose earliest half no node lists, so reversed it could count a
+	// later attempt first.
+	slices.SortStableFunc(rows, func(a, b store.Turn) int {
+		return cmp.Or(a.StartedAt.Compare(b.StartedAt), cmp.Compare(a.TurnID, b.TurnID))
+	})
 	return key, rows
 }
 

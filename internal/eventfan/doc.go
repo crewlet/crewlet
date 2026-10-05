@@ -62,7 +62,8 @@
 // list of turns is TWO
 // scatters — the candidates, then every node's share of exactly those turns,
 // because the node a turn was selected on is not always the only node that
-// holds it.
+// holds it — paged where a node's page lists each turn, since a cursor can
+// resume only from there ([Fleet.Turns]).
 //
 // # A count is asked over a window, never taken from a page
 //

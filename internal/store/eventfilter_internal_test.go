@@ -73,7 +73,7 @@ func TestEveryTurnFilterSeeksItsIndex(t *testing.T) {
 		{"work_key", TurnQuery{WorkKey: "wk-1"}, "crewlet_events_work_key_idx"},
 		{"work_item", TurnQuery{WorkItem: "native:t-1"}, "crewlet_events_work_item_idx"},
 	} {
-		query, args := c.q.partialsSQL(now(), false, DefaultTurnPage+1)
+		query, args := c.q.partialsSQL(now(), readPage, DefaultTurnPage+1)
 		plan := planOf(t, db, query, args)
 		if !strings.Contains(plan, c.index) {
 			t.Errorf("%s: the turn list's plan is %q — it does not seek %s", c.name, plan, c.index)
@@ -139,17 +139,21 @@ func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
 	reads = append(reads, read{"a turn's traces", q, a, "crewlet_events_turn_idx", false})
 	q, a = OutcomeQuery{Since: at.Add(-time.Hour), At: at}.countSQL(at)
 	reads = append(reads, read{"the notification outcomes", q, a, "crewlet_events_type_time_idx", true})
+	failed := true
 	for _, c := range []struct {
 		name  string
 		q     TurnQuery
+		kind  turnRead
 		index string
 	}{
-		{"the turn list", TurnQuery{}, ""},
-		{"the turn list by seat", TurnQuery{AgentID: "id-1"}, "crewlet_events_agent_id_time_idx"},
-		{"the turn list by unit of work", TurnQuery{WorkKey: "wk-1"}, "crewlet_events_work_key_idx"},
-		{"a share of named turns", TurnQuery{IDs: []string{"tn-1", "tn-2"}}, "crewlet_events_turn_idx"},
+		{"the turn list", TurnQuery{}, readPage, ""},
+		{"the turn list by seat", TurnQuery{AgentID: "id-1"}, readPage, "crewlet_events_agent_id_time_idx"},
+		{"the turn list by unit of work", TurnQuery{WorkKey: "wk-1"}, readPage, "crewlet_events_work_key_idx"},
+		{"a share of named turns", TurnQuery{IDs: []string{"tn-1", "tn-2"}}, readShare, "crewlet_events_turn_idx"},
+		{"the named turns a page lists", TurnQuery{IDs: []string{"tn-1", "tn-2"}, Failed: &failed},
+			readListed, "crewlet_events_turn_idx"},
 	} {
-		q, a := c.q.partialsSQL(at, len(c.q.IDs) > 0, DefaultTurnPage+1)
+		q, a := c.q.partialsSQL(at, c.kind, DefaultTurnPage+1)
 		reads = append(reads, read{c.name, q, a, c.index, false})
 	}
 	type filter struct {

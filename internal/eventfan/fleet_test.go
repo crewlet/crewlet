@@ -1,6 +1,7 @@
 package eventfan_test
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -183,19 +184,31 @@ func TestAPageOfTurnsIsHeldToItsWindowAcrossNodes(t *testing.T) {
 	}
 }
 
-// servesTurnSharesBehindTheAsker stands a peer that answers a page of turns as
-// a node on a build that ignores the asker's instant does, with its clock
-// running behind the asker's: its own page lists nothing — every turn it
-// holds starts under the window — and its share of a turn the asker names is
-// floored at ITS horizon, so it reaches into the strip under the asker's.
-func servesTurnSharesBehindTheAsker(t *testing.T, b *memory.Broker, node string, shares ...store.TurnPartial) {
+// servesTurnsAsTheEarlierBuild stands a peer that answers a page of turns as a
+// node on the build before this one does, over the shares it holds — its own
+// view of each turn, every row at or above ITS horizon. That build ignores the
+// asker's instant and reads its own clock instead:
+//
+//   - its page is the window from `since` when the asker sent one, and from
+//     `since_days` back from its clock otherwise, floored at its own horizon,
+//     and it lists a turn only when the turn's share starts at or above that
+//     floor — a row between its horizon and the floor makes the turn one that
+//     began before the window — and below `until` and the cursor, and passes
+//     `failed`, newest first, saying it is full when a turn lies past the
+//     page;
+//   - its share of named turns is every one of them, floored at its horizon,
+//     and it says nothing of which it lists.
+func servesTurnsAsTheEarlierBuild(t *testing.T, b *memory.Broker, node string, clock time.Time,
+	shares ...store.TurnPartial,
+) {
 	t.Helper()
 	q := client(t, b)
 	stop, err := q.Serve(t.Context(), eventfan.Subject, func(_ context.Context, raw []byte) ([]byte, error) {
 		var req struct {
-			Version  int      `json:"version"`
-			Question string   `json:"question"`
-			TurnIDs  []string `json:"turn_ids"`
+			Version  int             `json:"version"`
+			Question string          `json:"question"`
+			Params   json.RawMessage `json:"params"`
+			TurnIDs  []string        `json:"turn_ids"`
 		}
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, err
@@ -204,13 +217,49 @@ func servesTurnSharesBehindTheAsker(t *testing.T, b *memory.Broker, node string,
 			return json.Marshal(map[string]any{"version": 4, "node": node,
 				"error": "this peer answers a page of turns up to v4 alone"})
 		}
+		var p struct {
+			SinceDays int       `json:"since_days"`
+			Since     time.Time `json:"since"`
+			Until     time.Time `json:"until"`
+			Before    time.Time `json:"before"`
+			Failed    *bool     `json:"failed"`
+			Limit     int       `json:"limit"`
+		}
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return nil, err
+		}
 		turns := []store.TurnPartial{}
-		for _, s := range shares {
-			if slices.Contains(req.TurnIDs, s.TurnID) {
+		full := false
+		if len(req.TurnIDs) > 0 {
+			for _, s := range shares {
+				if slices.Contains(req.TurnIDs, s.TurnID) {
+					turns = append(turns, s)
+				}
+			}
+		} else {
+			horizon := clock.Add(-store.EventHistory)
+			floor := p.Since
+			if floor.IsZero() {
+				floor = clock.Add(-time.Duration(cmp.Or(p.SinceDays, 7)) * 24 * time.Hour)
+			}
+			if floor.Before(horizon) {
+				floor = horizon
+			}
+			for _, s := range shares {
+				if s.StartedAt.Before(floor) ||
+					(!p.Until.IsZero() && !s.StartedAt.Before(p.Until)) ||
+					(!p.Before.IsZero() && !s.StartedAt.Before(p.Before)) ||
+					(p.Failed != nil && s.Failed != *p.Failed) {
+					continue
+				}
 				turns = append(turns, s)
 			}
+			slices.SortFunc(turns, func(a, b store.TurnPartial) int { return b.StartedAt.Compare(a.StartedAt) })
+			if limit := cmp.Or(p.Limit, store.DefaultTurnPage); len(turns) > limit {
+				turns, full = turns[:limit], true
+			}
 		}
-		body, err := json.Marshal(map[string]any{"turns": turns, "full": false})
+		body, err := json.Marshal(map[string]any{"turns": turns, "full": full})
 		if err != nil {
 			return nil, err
 		}
@@ -248,7 +297,7 @@ func TestATurnAnEarlierBuildReadsPastTheHorizonStaysOnThePage(t *testing.T) {
 	phaseOn(t, a, "a-edge", "t-edge", horizon.Add(time.Minute), 30, "m")
 	completionOn(t, a, "a-edge-done", "t-edge", horizon.Add(2*time.Minute))
 	phaseOn(t, a, "a-late", "t-late", at.Add(-time.Hour), 30, "m")
-	servesTurnSharesBehindTheAsker(t, broker, "node-old",
+	servesTurnsAsTheEarlierBuild(t, broker, "node-old", at.Add(-time.Second),
 		store.TurnPartial{TurnID: "t-edge", AgentRole: "Lead", StartedAt: strip, EndedAt: strip,
 			Phases: 1, TotalTokens: 5, InputTokens: 5},
 		store.TurnPartial{TurnID: "t-late", AgentRole: "Lead", StartedAt: strip, EndedAt: strip,
@@ -1708,4 +1757,311 @@ func TestACustodyRowTwoDataNodesHoldIsCountedOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("node-b kept it, node-a let it go")
+}
+
+// turnOn writes one node's half of a turn, failed or not — see [halfOn].
+func turnOn(t *testing.T, n node, turn string, at time.Time, failed bool) {
+	t.Helper()
+	tags := map[string]string{}
+	if failed {
+		tags["failed"] = "true"
+	}
+	halfOn(t, n, turn, at, tags)
+}
+
+// walkTurns walks every page a query of turns answers, by the page's own
+// cursors, and says how often each turn was on a page and how it last read.
+func walkTurns(t *testing.T, fan *eventfan.Fleet, q store.TurnQuery) (map[string]int, map[string]store.Turn) {
+	t.Helper()
+	seen, rows := map[string]int{}, map[string]store.Turn{}
+	for range 100 {
+		page, coverage, err := fan.Turns(t.Context(), q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !coverage.Complete {
+			t.Fatalf("coverage %+v", coverage)
+		}
+		for _, turn := range page.Turns {
+			seen[turn.TurnID]++
+			rows[turn.TurnID] = turn
+		}
+		if page.Next == nil {
+			return seen, rows
+		}
+		q.Before = *page.Next
+	}
+	t.Fatal("the walk never ended")
+	return nil, nil
+}
+
+// onceEach reports what is wrong with a walk that should have listed each of
+// want exactly once and nothing else.
+func onceEach(seen map[string]int, want []string) []string {
+	var wrong []string
+	for _, id := range want {
+		if seen[id] != 1 {
+			wrong = append(wrong, fmt.Sprintf("%s listed %d times", id, seen[id]))
+		}
+	}
+	for id := range seen {
+		if !slices.Contains(want, id) {
+			wrong = append(wrong, id+" listed and not held")
+		}
+	}
+	slices.Sort(wrong)
+	return wrong
+}
+
+// A TURN HELD AT THE HORIZON IS ON EXACTLY ONE PAGE OF THE WALK.
+//
+// A turn that began on a node of an earlier build, in the strip under the
+// asker's horizon its clock still reads as history, and resumed on this build
+// half an hour ago is shown from the horizon — and was PAGED by that start,
+// which no node's page reaches: this build's node lists it at its own half,
+// half an hour ago. So wherever the page was cut before the end of the walk —
+// by a node whose page filled, or by the page's size over two nodes that
+// filled neither — the turn sorted last, was cut, and the cursor moved past the
+// half that listed it: on no page at all. It is paged where a node lists it
+// now, which is the earlier build's own start for it when that build lists it
+// (asked for the whole history, it does), and this build's half when it does
+// not — a page of failures where only that half failed.
+//
+// Mutation: page a turn by the start shown for it — and, for the unfiltered
+// walks, ask the window as the asker's horizon, so the earlier build lists
+// none of it — and the turn at the edge is on no page.
+func TestAHeldTurnIsOnExactlyOnePageOfTheWalk(t *testing.T) {
+	t.Parallel()
+	for _, shape := range []struct {
+		name           string
+		nodes, perNode int
+	}{
+		{"a full node's page", 1, 120},
+		{"two unfilled pages past the size", 2, 30},
+	} {
+		for _, failures := range []bool{false, true} {
+			name := shape.name + ", every turn"
+			var q store.TurnQuery
+			if failures {
+				name = shape.name + ", the failures"
+				q.Failed = &failures
+			}
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				broker := memory.NewBroker()
+				at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+				horizon := at.Add(-store.EventHistory)
+				roster := []string{"node-old"}
+				var nodes []node
+				for i := range shape.nodes {
+					n := newNode(t, broker, fmt.Sprintf("node-%c", 'a'+i))
+					nodes, roster = append(nodes, n), append(roster, n.id)
+				}
+				want := []string{"t-edge"}
+				for i := range shape.perNode {
+					for j, n := range nodes {
+						turn := fmt.Sprintf("t-%s-%03d", n.id, i)
+						turnOn(t, n, turn, at.Add(-time.Hour-time.Duration(i*len(nodes)+j)*time.Hour), failures)
+						want = append(want, turn)
+					}
+				}
+				turnOn(t, nodes[0], "t-edge", at.Add(-30*time.Minute), failures)
+				servesTurnsAsTheEarlierBuild(t, broker, "node-old", at.Add(-time.Second),
+					store.TurnPartial{TurnID: "t-edge", AgentRole: "Lead",
+						StartedAt: horizon.Add(-500 * time.Millisecond), EndedAt: horizon.Add(-400 * time.Millisecond),
+						Phases: 1, TotalTokens: 5, InputTokens: 5})
+				fan := fanFrom(nodes[0], roster...)
+				fan.Clock = func() time.Time { return at }
+
+				q.SinceDays = store.MaxTurnDays
+				seen, rows := walkTurns(t, fan, q)
+				if wrong := onceEach(seen, want); len(wrong) > 0 {
+					t.Fatalf("the walk over every page: %v", wrong)
+				}
+				if edge := rows["t-edge"]; !edge.StartedAt.Equal(horizon) || edge.TotalTokens != 35 ||
+					edge.Failed != failures {
+					t.Errorf("the turn at the edge starts %s with %d tokens, failed %v — want it held "+
+						"to the horizon %s with both halves' 35, failed %v", edge.StartedAt,
+						edge.TotalTokens, edge.Failed, horizon, failures)
+				}
+			})
+		}
+	}
+}
+
+// A TURN ONLY AN EARLIER BUILD HOLDS IS LISTED, and one wholly under the
+// asker's horizon is not.
+//
+// A node on the build before this one ignores the asker's instant. Asked for a
+// window starting at the asker's horizon while its clock ran behind, it judged
+// a turn with a row in the strip between the two horizons as one that began
+// before the window and left it off its page — and a turn only it held was
+// therefore on no page at all, the turn page's own attempts included, though
+// its later rows are well inside the asker's history. A window reaching the
+// history is asked for as the history now, so that build lists from its own
+// horizon, and the asker holds what it lists to its own: the turn is shown
+// from the horizon, and a turn whose every row lies in the strip is not shown
+// at all, since none of it is history this asker serves.
+//
+// Mutation: ask a window reaching the history as the asker's horizon, and the
+// turn only the earlier build holds is missing; keep a turn with nothing
+// inside the asker's history, and the one in the strip is listed.
+func TestATurnOnlyAnEarlierBuildHoldsIsListed(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a := newNode(t, broker, "node-a")
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	horizon := at.Add(-store.EventHistory)
+	turnOn(t, a, "t-here", at.Add(-time.Hour), false)
+	servesTurnsAsTheEarlierBuild(t, broker, "node-old", at.Add(-2*time.Second),
+		store.TurnPartial{TurnID: "t-old", AgentRole: "Lead", StartedAt: horizon.Add(-time.Second),
+			EndedAt: horizon.Add(3 * time.Minute), Phases: 2, TotalTokens: 9, InputTokens: 9},
+		store.TurnPartial{TurnID: "t-strip", AgentRole: "Lead", StartedAt: horizon.Add(-1500 * time.Millisecond),
+			EndedAt: horizon.Add(-time.Second / 2), Phases: 1, TotalTokens: 4, InputTokens: 4})
+	fan := fanFrom(a, "node-a", "node-old")
+	fan.Clock = func() time.Time { return at }
+
+	seen, rows := walkTurns(t, fan, store.TurnQuery{SinceDays: store.MaxTurnDays})
+	if wrong := onceEach(seen, []string{"t-here", "t-old"}); len(wrong) > 0 {
+		t.Fatalf("the whole history: %v", wrong)
+	}
+	if old := rows["t-old"]; !old.StartedAt.Equal(horizon) || old.TotalTokens != 9 {
+		t.Errorf("the earlier build's turn starts %s with %d tokens, want it held to the horizon "+
+			"%s with its 9", old.StartedAt, old.TotalTokens, horizon)
+	}
+}
+
+// A TURN IS PAGED WHERE IT IS LISTED, though it began earlier on a node that
+// does not list it.
+//
+// A page narrowed by a turn-level filter is selected by each node on its own
+// half of a turn, and the turn resumed here after a move passes the filter
+// only in its second half — failed only there, or charged to the item only by
+// the records written there. The node holding the first half, where the turn
+// began, lists none of it, and the node holding the second lists it at that
+// half's start. Paged by where it began, it sorted below the newest point that
+// full node's page stopped at and was cut, and the cursor moved on past the
+// half that listed it, page after page, until no page held it. It is paged at
+// the start its listing reaches, which each node says of its own share, and
+// shown from where it began.
+//
+// Mutation: page a turn by its merged start, and the turn is on no page of
+// either walk; ignore what a node says it lists and judge its share by what
+// the share carries, and the half naming no item reads as listing the turn.
+func TestATurnIsPagedWhereItIsListed(t *testing.T) {
+	t.Parallel()
+	failed := true
+	for name, c := range map[string]struct {
+		q              store.TurnQuery
+		early, matches map[string]string
+	}{
+		"the failures": {store.TurnQuery{Failed: &failed}, map[string]string{},
+			map[string]string{"failed": "true"}},
+		"one work item": {store.TurnQuery{WorkItem: "native:t-1"}, map[string]string{},
+			map[string]string{"work_item": "native:t-1"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			broker := memory.NewBroker()
+			a, b := newNode(t, broker, "node-a"), newNode(t, broker, "node-b")
+			at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+			began, resumed := at.Add(-20*24*time.Hour), at.Add(-50*time.Hour)
+			halfOn(t, a, "t-resumed", began, c.early)
+			halfOn(t, b, "t-resumed", resumed, c.matches)
+			want := []string{"t-resumed"}
+			for i := range 49 {
+				turn := fmt.Sprintf("t-newer-%02d", i)
+				halfOn(t, b, turn, resumed.Add(time.Duration(i+1)*time.Hour), c.matches)
+				want = append(want, turn)
+			}
+			for i := range 60 {
+				turn := fmt.Sprintf("t-older-%02d", i)
+				halfOn(t, b, turn, resumed.Add(-time.Duration(i+1)*time.Hour), c.matches)
+				want = append(want, turn)
+			}
+			fan := fanFrom(a, "node-a", "node-b")
+			fan.Clock = func() time.Time { return at }
+
+			q := c.q
+			q.SinceDays = store.MaxTurnDays
+			seen, rows := walkTurns(t, fan, q)
+			if wrong := onceEach(seen, want); len(wrong) > 0 {
+				t.Fatalf("the walk over every page: %v", wrong)
+			}
+			if got := rows["t-resumed"]; !got.StartedAt.Equal(began) {
+				t.Errorf("the resumed turn starts %s, want it shown from where it began, %s",
+					got.StartedAt, began)
+			}
+		})
+	}
+}
+
+// halfOn writes one node's half of a turn: a phase carrying some tags, and the
+// completion a minute later.
+func halfOn(t *testing.T, n node, turn string, at time.Time, tags map[string]string) {
+	t.Helper()
+	all := map[string]string{"turn_id": turn, "agent_role": "Lead"}
+	for k, v := range tags {
+		all[k] = v
+	}
+	appendTo(t, n, store.EventRecord{
+		ID: turn + "-" + n.id + "-phase", Type: "agent_phase_completed", Category: "task", Time: at,
+		Tags:  all,
+		Spend: &store.Spend{Phase: "execute", Model: "m", TurnID: turn, TotalTokens: 30, InputTokens: 30},
+	})
+	completionOn(t, n, turn+"-"+n.id+"-done", turn, at.Add(time.Minute))
+}
+
+// THIS BUILD'S SHARE OF A TURN IS READ BY AN EARLIER BUILD'S ASKER, the other
+// direction.
+//
+// The second scatter's answer carries which of the named turns this node's
+// page lists, beside its shares — fields the build before this one does not
+// know. That build asks in its own version, with its own instants and no `at`,
+// and reads the answer into a part of just the shares and `full`, so what it
+// is sent must decode into exactly that, in the version it asked: the shares
+// whole, whatever else rides beside them.
+//
+// Mutation: answer the second scatter in this build's own version, or drop the
+// shares a page does not list, and the earlier asker loses this node's half.
+func TestThisBuildsTurnSharesAreReadByAnEarlierBuildsAsker(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	b := newNode(t, broker, "node-b")
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	turnOn(t, b, "t-clean-here", at.Add(-time.Hour), false)
+
+	// THE REQUEST AS THAT BUILD SENDS IT: v3, a page of failures over the
+	// last day as two instants, and the turns its first scatter found.
+	params, err := json.Marshal(map[string]any{"since": at.Add(-24 * time.Hour), "failed": true, "limit": 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := json.Marshal(map[string]any{"version": 3, "asker": "node-old", "question": "turns",
+		"params": json.RawMessage(params), "turn_ids": []string{"t-clean-here"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replies, err := client(t, broker).Ask(t.Context(), eventfan.Subject, req, 1)
+	if err != nil || len(replies) != 1 {
+		t.Fatalf("asked node-b: %d replies, %v", len(replies), err)
+	}
+	var reply struct {
+		Version int    `json:"version"`
+		Error   string `json:"error"`
+		Answer  struct {
+			Turns []store.TurnPartial `json:"turns"`
+			Full  bool                `json:"full"`
+		} `json:"answer"`
+	}
+	if err := json.Unmarshal(replies[0], &reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.Error != "" || reply.Version != 3 {
+		t.Fatalf("node-b answered v%d with %q, want v3", reply.Version, reply.Error)
+	}
+	if len(reply.Answer.Turns) != 1 || reply.Answer.Turns[0].TurnID != "t-clean-here" || reply.Answer.Full {
+		t.Errorf("node-b's share is %+v, want its half of the named turn — a share is not cut "+
+			"by the page's filters, which its own page does not pass", reply.Answer)
+	}
 }

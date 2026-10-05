@@ -374,16 +374,28 @@ func turnPartOf(ctx context.Context, log *store.EventLog, id string, at time.Tim
 }
 
 // turnsPart is one node's page of turn partials — or, on the second scatter,
-// its share of exactly the turns named.
+// its share of exactly the turns named, and which of them its page lists.
 type turnsPart struct {
 	Turns []store.TurnPartial `json:"turns"`
 	Full  bool                `json:"full"`
+
+	// Listed is, on the second scatter, which of the named turns this node's
+	// PAGE selects — its share starts in the window and passes the page's
+	// turn-level filters ([store.EventLog.ListedTurns]) — so the asker can
+	// page each turn by a start some node's listing reaches ([Fleet.Turns]).
+	// Judged says the node answered it, which a build before the field never
+	// does: absent, the asker judges that node's shares by the window alone.
+	// UNVERSIONED, for that reason — see [Protocol].
+	Listed []string `json:"listed,omitempty"`
+	Judged bool     `json:"judged,omitempty"`
 }
 
 func (p turnsPart) rows() int { return len(p.Turns) }
 
+// keep cuts the turns and keeps the judgement: which named turns the page
+// lists is the same answer whichever shares fit the transport.
 func (p turnsPart) keep(n int) any {
-	return turnsPart{Turns: p.Turns[:n], Full: true}
+	return turnsPart{Turns: p.Turns[:n], Full: true, Listed: p.Listed, Judged: p.Judged}
 }
 
 func turnsPartOf(ctx context.Context, log *store.EventLog, q store.TurnQuery) (turnsPart, error) {
@@ -395,7 +407,14 @@ func turnsPartOf(ctx context.Context, log *store.EventLog, q store.TurnQuery) (t
 	if err != nil {
 		return turnsPart{}, err
 	}
-	return turnsPart{Turns: parts, Full: more}, nil
+	part := turnsPart{Turns: parts, Full: more}
+	if len(q.IDs) > 0 {
+		if part.Listed, err = log.ListedTurns(ctx, q); err != nil {
+			return turnsPart{}, err
+		}
+		part.Judged = true
+	}
+	return part, nil
 }
 
 // turnPage is the page [store.EventLog.TurnPartials] actually cuts.

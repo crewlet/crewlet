@@ -287,7 +287,8 @@ type TurnQuery struct {
 	Sort TurnSort
 
 	// IDs, when set, asks for this log's SHARE of exactly these turns
-	// rather than for a page — see [EventLog.TurnPartials]. Capped by the
+	// rather than for a page — see [EventLog.TurnPartials] — and, of
+	// [EventLog.ListedTurns], which of them the page selects. Capped by the
 	// caller at [MaxTurnPage] per share: it is the ids of pages somebody
 	// else already cut.
 	IDs []string
@@ -585,6 +586,9 @@ func laterOf(a, b *time.Time) *time.Time {
 //
 // more reports that this log holds turns past the page — see [pastPage]. A
 // share is never a page and is never more: it answers every turn it names.
+//
+// THE SHARE SAYS NOTHING ABOUT WHETHER THIS LOG LISTS THE TURN, which is the
+// question [EventLog.ListedTurns] answers beside it.
 func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) (partials []TurnPartial, more bool, err error) {
 	limit := q.Limit
 	switch {
@@ -596,19 +600,59 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) (partials []Tu
 	if !q.Sort.Valid() {
 		return nil, false, fmt.Errorf("%w: sort %q is not one of %v", ErrTurnSort, q.Sort, TurnSorts)
 	}
-	shares := len(q.IDs) > 0
+	read := readPage
 	// ONE ROW PAST THE PAGE, so the page can say whether it is the last.
 	probe := limit + 1
-	if shares {
+	if len(q.IDs) > 0 {
 		// EVERY TURN NAMED, whatever the page size: the caller chose the
 		// turns and is asking for all of them.
-		limit, probe = len(q.IDs), len(q.IDs)
+		read, limit, probe = readShare, len(q.IDs), len(q.IDs)
 	}
+	out, err := l.turnPartials(ctx, q, read, probe)
+	if err != nil {
+		return nil, false, err
+	}
+	out, more = pastPage(out, limit)
+	return out, more, nil
+}
 
-	query, args := q.partialsSQL(q.at(), shares, probe)
+// ListedTurns answers which of [TurnQuery.IDs] this log's PAGE selects: its
+// share of the turn starts inside the window and passes every turn-level
+// filter — a model, a work item, a failure — read as the page reads them, with
+// no cursor and no page size. Nil IDs ask about nothing, and the answer is
+// never nil.
+//
+// A fleet asks it beside a turn's shares, because the node a turn is LISTED by
+// is the one place its listing can resume from. A turn resumed across nodes is
+// selected by each node on its own half, so one half can fail a filter the
+// whole passes — the clean half of a turn that failed later, the half that
+// names no item of a turn that found its item at the end — and a cursor at that
+// half's start is a position no node's page reaches. Answered by the page's own
+// statement, so a filter added to the page is a filter this answers by.
+func (l *EventLog) ListedTurns(ctx context.Context, q TurnQuery) ([]string, error) {
+	out := []string{}
+	if len(q.IDs) == 0 {
+		return out, nil
+	}
+	if !q.Sort.Valid() {
+		return nil, fmt.Errorf("%w: sort %q is not one of %v", ErrTurnSort, q.Sort, TurnSorts)
+	}
+	listed, err := l.turnPartials(ctx, q, readListed, len(q.IDs))
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range listed {
+		out = append(out, p.TurnID)
+	}
+	return out, nil
+}
+
+// turnPartials runs one of the turn reads and folds what it answers.
+func (l *EventLog) turnPartials(ctx context.Context, q TurnQuery, read turnRead, probe int) ([]TurnPartial, error) {
+	query, args := q.partialsSQL(q.at(), read, probe)
 	rows, err := l.db.sql.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, false, fmt.Errorf("store: list turns: %w", err)
+		return nil, fmt.Errorf("store: list turns: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -632,7 +676,7 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) (partials []Tu
 			&cacheR, &cacheW, &models,
 			&ended1, &parked1, &duration, &summary, &item, &trigger); err != nil {
 
-			return nil, false, fmt.Errorf("store: scan a turn: %w", err)
+			return nil, fmt.Errorf("store: scan a turn: %w", err)
 		}
 		p.WorkKey = workKey.String
 		p.AgentID, p.AgentRole = agentID.String, role.String
@@ -652,11 +696,25 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) (partials []Tu
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, fmt.Errorf("store: list turns: %w", err)
+		return nil, fmt.Errorf("store: list turns: %w", err)
 	}
-	out, more = pastPage(out, limit)
-	return out, more, nil
+	return out, nil
 }
+
+// turnRead is which of the three questions a turn read asks.
+type turnRead int
+
+const (
+	// readPage is a page: the window, the turn-level filters and the
+	// cursor, cut at a page size.
+	readPage turnRead = iota
+	// readShare is this log's share of named turns: no window but the
+	// history, and no turn-level filter.
+	readShare
+	// readListed is which named turns the page selects: the page's window
+	// and turn-level filters, with no cursor and no page size.
+	readListed
+)
 
 // turnColumns is every column [TurnQuery.partialsSQL] folds a turn from — what
 // its derived table selects, so each aggregate, the HAVING and the ORDER BY
@@ -665,8 +723,9 @@ const turnColumns = `turn_id, work_key, agent_id, agent_role, event_time, event_
 	iteration, tags, payload, input_tokens, output_tokens, total_tokens,
 	cache_read_tokens, cache_write_tokens, model`
 
-// partialsSQL is the statement [EventLog.TurnPartials] runs and its arguments,
-// asked at `at`, for a page (`probe` turns, one past it) or a share — a
+// partialsSQL is the statement [EventLog.TurnPartials] and
+// [EventLog.ListedTurns] run and its arguments, asked at `at`, for a page
+// (`probe` turns, one past it), a share or the named turns a page selects — a
 // function of its own so its plan can be read back for exactly the statement
 // that runs (TestEveryGroupedReadSeeksItsFiltersIndex,
 // TestEveryTurnFilterSeeksItsIndex).
@@ -675,7 +734,8 @@ const turnColumns = `turn_id, work_key, agent_id, agent_role, event_time, event_
 // [EventLog]. Grouped over the table itself, the turn list narrowed to a unit
 // of work — the turn page's attempts, on every node — intersected
 // schema/0029's index with every row id of the thirty-day floor's range.
-func (q TurnQuery) partialsSQL(at time.Time, shares bool, probe int) (string, []any) {
+func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int) (string, []any) {
+	shares := read == readShare
 	// A SHARE IS NOT A WINDOW: the turns were selected where they were
 	// listed, and applying the window again here would drop the half of a
 	// resumed turn that ran before it — which is the half that says when the
@@ -686,7 +746,7 @@ func (q TurnQuery) partialsSQL(at time.Time, shares bool, probe int) (string, []
 		floor, until = history, time.Time{}
 	}
 
-	where, args := q.turnWhere(floor, shares)
+	where, args := q.turnWhere(floor, read)
 
 	having := []string{}
 	if !shares {
@@ -710,7 +770,7 @@ func (q TurnQuery) partialsSQL(at time.Time, shares bool, probe int) (string, []
 			args = append(args, EncodeTime(until))
 		}
 	}
-	if !q.Before.IsZero() && !shares && q.Sort != TurnSortTokens {
+	if !q.Before.IsZero() && read == readPage && q.Sort != TurnSortTokens {
 		having = append(having, "MIN(event_time) < ?")
 		args = append(args, EncodeTime(q.Before))
 	}
@@ -794,11 +854,14 @@ var ErrTurnSort = errors.New("store: unknown turn sort")
 
 // turnWhere is the row-level WHERE of [EventLog.TurnPartials] and its
 // arguments — a function of its own so the plan every filter gets can be read
-// back for the terms that run (see TestEveryTurnFilterSeeksItsIndex).
-func (q TurnQuery) turnWhere(floor time.Time, shares bool) ([]string, []any) {
+// back for the terms that run (see TestEveryTurnFilterSeeksItsIndex). Named
+// turns are read for a share and for which of them a page selects; the
+// turn-level narrowing applies to a page and to the second, never to a share.
+func (q TurnQuery) turnWhere(floor time.Time, read turnRead) ([]string, []any) {
+	shares := read == readShare
 	where := []string{"turn_id != ''", "event_time >= ?"}
 	args := []any{EncodeTime(floor)}
-	if shares {
+	if read != readPage {
 		where = append(where, "turn_id IN (?"+strings.Repeat(",?", len(q.IDs)-1)+")")
 		for _, id := range q.IDs {
 			args = append(args, id)

@@ -844,6 +844,52 @@ func TestATurnNamesEveryAttemptAtItsTrigger(t *testing.T) {
 	}
 }
 
+// turnsListedOutOfStart is the fleet's history with its pages of turns in an
+// order other than by start, as a fleet's are when a turn's earliest half is on
+// a node that does not list it: ordered where each turn is listed.
+type turnsListedOutOfStart struct{ *eventfan.Fleet }
+
+func (f turnsListedOutOfStart) Turns(ctx context.Context, q store.TurnQuery) (
+	eventfan.TurnPage, eventfan.Coverage, error,
+) {
+	page, coverage, err := f.Fleet.Turns(ctx, q)
+	slices.SortFunc(page.Turns, func(a, b store.Turn) int { return a.StartedAt.Compare(b.StartedAt) })
+	return page, coverage, err
+}
+
+// AND THE ATTEMPTS ARE COUNTED BY START, whatever order the list is in.
+//
+// A fleet pages its turns by where each is LISTED, which is not where it began
+// for a turn whose earliest half no node lists — so a turn's attempts read off
+// a list reversed could count a later attempt first. The list here comes back
+// oldest first, the reverse of the order the attempts were read as.
+//
+// Mutation: read the attempts as the list reversed, and run-2 is attempt 1.
+func TestATurnsAttemptsAreCountedByTheirStart(t *testing.T) {
+	t.Parallel()
+	log := openStore(t).Events()
+	base := time.Now().UTC().Add(-time.Hour)
+	for i, run := range []string{"run-1", "run-2", "run-3"} {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: run, Type: "agent_phase_completed", Time: base.Add(time.Duration(i) * time.Minute),
+			Category: "lifecycle", Actor: "CEO",
+			Tags:    map[string]string{"turn_id": run, "work_key": "wk-1", "agent_role": "CEO"},
+			Payload: []byte(`{"turn_id":"` + run + `","work_key":"wk-1","phase":"execute"}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := asMap(t, answer(t, queries.Sources{Events: turnsListedOutOfStart{fleetOf(log)}}, "turn",
+		map[string]any{"turn_id": "run-2"}))
+	var order []any
+	for _, attempt := range rows(t, got["attempts"]) {
+		order = append(order, attempt["turn_id"])
+	}
+	if !slices.Equal(order, []any{"run-1", "run-2", "run-3"}) {
+		t.Errorf("attempts = %v, want run-1, run-2, run-3 — oldest first by start", order)
+	}
+}
+
 // AND A TURN WITH NO WORK KEY SAYS SO rather than claiming every other
 // unkeyed turn as an attempt at itself.
 func TestATurnWithNoWorkKeyClaimsNoAttempts(t *testing.T) {

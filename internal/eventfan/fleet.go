@@ -583,6 +583,18 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID, role string, before *st
 // nodes whose every half fell below every node's cut. That is stated rather
 // than hidden: the coverage is honest about nodes, and a ranking has no cursor
 // to be honest about.
+//
+// A TURN IS PAGED BY WHERE IT IS LISTED, which is not always where it began.
+// The cursor is a position on each node's own page, so a turn can be resumed
+// from only at a start some node's page reaches — the earliest start among the
+// nodes that LIST it, which every node says of its own share on the second
+// scatter ([store.EventLog.ListedTurns]). The fold of every share says where
+// the turn began, and that is the start shown; the two differ for a turn whose
+// earliest half its own node does not list — the clean half of a turn that
+// failed later, under a page of failures, or a half under the asker's horizon
+// (below). Paged by the start shown, such a turn sat below a position no page
+// reached: a full node's page or the page's size cut it, and the cursor moved
+// on past the half that did list it, so no page of the walk held it.
 func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverage, error) {
 	started := time.Now()
 	if !q.Sort.Valid() {
@@ -605,12 +617,29 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 	q.At = f.askedAt(q.At)
 	q.Since, q.Until = q.Window(q.At)
 	q.SinceDays = 0
-	first, err := gather(ctx, f, QuestionTurns, turnsParamsOf(q), nil,
+	history := q.At.Add(-store.EventHistory)
+	// A WINDOW REACHING THE HISTORY IS ASKED FOR AS THE HISTORY, in whole
+	// days, rather than as the asker's horizon. A node on this build reads
+	// the two alike — it floors both at the instant it was handed — but a
+	// build that ignores the instant reads days back from its OWN clock and
+	// an instant as the instant, so handed the asker's horizon while its clock
+	// ran behind, it judged every turn with a row in the strip between the two
+	// horizons as one that began before the window and listed none of them: a
+	// turn only it held was on no page, the turn page's own attempts included.
+	// Asked for its history, it lists them from its own horizon, and the
+	// asker holds them to its own below. It also asks a window with no upper
+	// edge in v1, which every build answers.
+	reachesHistory := q.Since.Equal(history)
+	wire := turnsParamsOf(q)
+	if reachesHistory {
+		wire.Since, wire.SinceDays = time.Time{}, store.MaxTurnDays
+	}
+	first, err := gather(ctx, f, QuestionTurns, wire, nil,
 		func(ctx context.Context) (turnsPart, error) { return turnsPartOf(ctx, f.Local, q) })
 	if err != nil {
 		return TurnPage{}, Coverage{}, err
 	}
-	var partials []store.TurnPartial
+	var turns []pagedTurn
 	coverage := first.coverage
 	more := false
 	var horizon *time.Time
@@ -627,18 +656,29 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 		}
 	}
 	if !first.fanned {
-		// THIS NODE IS THE FLEET: its page is whole as it stands.
-		partials = first.mine.Turns
+		// THIS NODE IS THE FLEET: its page is whole as it stands, and every
+		// turn on it is listed where it began.
+		for _, p := range first.mine.Turns {
+			turns = append(turns, pagedTurn{TurnPartial: p, listedAt: p.StartedAt})
+		}
 	} else {
 		lists := make([][]store.TurnPartial, 0, 1+len(first.peers))
+		listed := listings{}
 		for _, part := range first.parts() {
 			lists = append(lists, part.Turns)
+			// A TURN ON A NODE'S PAGE IS LISTED THERE, whatever its share
+			// says below — the evidence a share read a moment later cannot
+			// take back.
+			for _, p := range part.Turns {
+				listed.at(p.TurnID, p.StartedAt)
+			}
 		}
+		var partials []store.TurnPartial
 		ids := idsOf(lists...)
 		if len(ids) > 0 {
 			share := q
 			share.IDs = ids
-			second, err := gather(ctx, f, QuestionTurns, turnsParamsOf(q), ids,
+			second, err := gather(ctx, f, QuestionTurns, wire, ids,
 				func(ctx context.Context) (turnsPart, error) {
 					return turnsPartOf(ctx, f.Local, share)
 				})
@@ -648,74 +688,88 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 			shares := make([][]store.TurnPartial, 0, 1+len(second.peers))
 			for _, part := range second.parts() {
 				shares = append(shares, part.Turns)
+				lister := listerOf(part, q, reachesHistory)
+				for _, p := range part.Turns {
+					if lister(p) {
+						listed.at(p.TurnID, p.StartedAt)
+					}
+				}
 			}
 			partials = MergeTurnPartials(shares...)
 			coverage = coverage.And(second.coverage)
 		}
-		// NO TURN STARTS BELOW THE ASKER'S HORIZON. A share is floored at
-		// the history rather than at the window, and a node on a build that
-		// ignores the asker's instant floors it at its OWN clock — so one
-		// running behind the asker folds rows from the strip under the
-		// asker's horizon into a turn, and the merged start lands below it.
-		// Held against the window as it stands, that start read as a turn
-		// that began before the window, and the turn left the page whole —
-		// the turn page's own attempts among them, which are asked from the
-		// horizon, so the turn being shown was missing from its own list.
-		// What lies under the horizon is not history this asker serves, so
-		// the start is held to the horizon and the counts keep the strip; a
-		// window starting above the horizon still drops the turn, which did
-		// begin before it.
-		history := q.At.Add(-store.EventHistory).UTC()
-		for i := range partials {
-			if partials[i].StartedAt.Before(history) {
-				partials[i].StartedAt = history
+		for _, p := range partials {
+			// NO TURN WITH NOTHING INSIDE THE ASKER'S HISTORY. Only a node
+			// on a build that ignores the instant answers one, from the
+			// strip between its horizon and the asker's when its clock runs
+			// behind — and what lies under the horizon is not history this
+			// asker serves.
+			if p.EndedAt.Before(history) {
+				continue
 			}
+			// NO TURN STARTS BELOW THE ASKER'S HORIZON. A share is floored
+			// at the history rather than at the window, and that same node
+			// floors it at its own clock — so it folds rows from the strip
+			// into a turn, and the merged start lands below the horizon.
+			// Held against the window as it stands, that start read as a
+			// turn that began before the window, and the turn left the page
+			// whole — the turn page's own attempts among them, which are
+			// asked from the horizon. So the start shown is held to the
+			// horizon and the counts keep the strip, and the turn is paged
+			// where it is listed; a window starting above the horizon still
+			// drops it, since it did begin before that window.
+			if p.StartedAt.Before(history) {
+				p.StartedAt = history
+			}
+			turns = append(turns, pagedTurn{TurnPartial: p, listedAt: listed[p.TurnID]})
 		}
-		// THE TURN-LEVEL FILTERS AGAIN, over the WHOLE turn: a node lists
-		// a turn as clean when its own half is, and the other half may
-		// have failed.
-		partials = slices.DeleteFunc(partials, func(p store.TurnPartial) bool {
-			if q.Failed != nil && p.Failed != *q.Failed {
+		// THE TURN-LEVEL FILTERS AGAIN, over the WHOLE turn: a node lists a
+		// turn as clean when its own half is, and the other half may have
+		// failed. The cursor is on where the turn is listed, which is what
+		// the cursor that led here was taken from.
+		turns = slices.DeleteFunc(turns, func(t pagedTurn) bool {
+			if q.Failed != nil && t.Failed != *q.Failed {
 				return true
 			}
-			if p.StartedAt.Before(q.Since) {
+			if t.StartedAt.Before(q.Since) {
 				return true
 			}
-			return !byTokens && !q.Before.IsZero() && !p.StartedAt.Before(q.Before)
+			return !byTokens && !q.Before.IsZero() && !t.listedAt.Before(q.Before)
 		})
 		if byTokens {
-			slices.SortStableFunc(partials, func(a, b store.TurnPartial) int {
+			slices.SortStableFunc(turns, func(a, b pagedTurn) int {
 				return cmp.Or(cmp.Compare(b.TotalTokens, a.TotalTokens),
 					b.StartedAt.Compare(a.StartedAt), cmp.Compare(b.TurnID, a.TurnID))
 			})
 		} else {
-			slices.SortStableFunc(partials, func(a, b store.TurnPartial) int {
-				return cmp.Or(b.StartedAt.Compare(a.StartedAt), cmp.Compare(b.TurnID, a.TurnID))
+			slices.SortStableFunc(turns, func(a, b pagedTurn) int {
+				return cmp.Or(b.listedAt.Compare(a.listedAt), cmp.Compare(b.TurnID, a.TurnID))
 			})
 			if horizon != nil {
-				partials = slices.DeleteFunc(partials, func(p store.TurnPartial) bool {
-					return p.StartedAt.Before(*horizon)
+				turns = slices.DeleteFunc(turns, func(t pagedTurn) bool {
+					return t.listedAt.Before(*horizon)
 				})
 			}
 		}
 	}
-	if len(partials) > q.Limit {
-		partials, more = partials[:q.Limit], true
+	if len(turns) > q.Limit {
+		turns, more = turns[:q.Limit], true
 	}
-	page := TurnPage{Turns: make([]store.Turn, 0, len(partials))}
-	for _, p := range partials {
-		page.Turns = append(page.Turns, p.Turn())
+	page := TurnPage{Turns: make([]store.Turn, 0, len(turns))}
+	for _, t := range turns {
+		page.Turns = append(page.Turns, t.Turn())
 	}
 	// A CURSOR ONLY WHERE THERE IS MORE. Every non-empty page used to carry
 	// one, so the last page of a seat's forty-seven turns offered "older"
 	// and a reader who asked got an empty page — and a client counting what
 	// it had loaded could only ever write it as a floor ("47+"), because the
 	// answer never said the walk had ended, which is what a nil `Next` is
-	// documented to say.
+	// documented to say. It is where the page's last turn is LISTED, never
+	// the start shown for it, which may be a position no node's page reaches.
 	if !byTokens && more {
 		switch {
-		case len(page.Turns) > 0:
-			at := page.Turns[len(page.Turns)-1].StartedAt
+		case len(turns) > 0:
+			at := turns[len(turns)-1].listedAt
 			page.Next = &at
 		case horizon != nil:
 			// NOTHING BETWEEN THE CURSOR AND THE HORIZON, and more past
@@ -725,6 +779,54 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 	}
 	f.report(QuestionTurns, coverage, started)
 	return page, coverage, nil
+}
+
+// pagedTurn is a folded turn and where a page lists it.
+type pagedTurn struct {
+	store.TurnPartial
+
+	// listedAt is the earliest start at which a node's page lists the turn:
+	// what it is ordered and cut by, and what a cursor after it is.
+	listedAt time.Time
+}
+
+// listings is the earliest start at which any node lists each turn.
+type listings map[string]time.Time
+
+func (l listings) at(id string, start time.Time) {
+	if seen, ok := l[id]; !ok || start.Before(seen) {
+		l[id] = start
+	}
+}
+
+// listerOf reports, for one node's answer to the second scatter, whether its
+// share of a turn is one its page lists.
+//
+// THE NODE'S OWN JUDGEMENT where it gave one ([turnsPart.Judged]). A build
+// before the field gives none, and its share is judged here by what it
+// carries: a start inside the window — or, asked for the whole history, any
+// start, since that build floored both its page and its share at its own
+// horizon — and its own failure and models, which are its page's rows when the
+// start is inside the window. What a share does not carry is whether its rows
+// name the work item a page is narrowed to, so such a half is read as listing
+// the turn whatever it names.
+func listerOf(part turnsPart, q store.TurnQuery, reachesHistory bool) func(store.TurnPartial) bool {
+	if part.Judged {
+		return func(p store.TurnPartial) bool { return slices.Contains(part.Listed, p.TurnID) }
+	}
+	return func(p store.TurnPartial) bool {
+		switch {
+		case !reachesHistory && p.StartedAt.Before(q.Since):
+			return false
+		case !q.Until.IsZero() && !p.StartedAt.Before(q.Until):
+			return false
+		case q.Failed != nil && p.Failed != *q.Failed:
+			return false
+		case q.Model != "" && !slices.Contains(p.Models, q.Model):
+			return false
+		}
+		return true
+	}
 }
 
 // PhaseTokens answers the per-phase spend records of a window from every node,

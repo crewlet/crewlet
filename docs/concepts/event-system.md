@@ -593,11 +593,14 @@ sequenceDiagram
   arrives only as a count aggregated at an older node's own clock cannot be
   cut: the axis's
   `by_category` and the turns a page's second scatter folds can carry that
-  node's strip of clock skew, and nothing wider. A turn whose share reaches
-  into the strip is listed from the horizon — its start held there, its
-  counts keeping the strip — rather than dropped as a turn that began before
-  a window starting at the horizon, which is where the turn page asks for a
-  turn's attempts from. The axis's bars cannot: every
+  node's strip of clock skew, and nothing wider. A page of turns whose window
+  reaches the horizon is asked for as the whole history, so such a node lists
+  its turns from its own horizon — a turn only it holds included — and the
+  asker drops a turn with nothing above its horizon and lists one whose share
+  reaches into the strip from the horizon — its start held there, its counts
+  keeping the strip — rather than as a turn that began before a window
+  starting at the horizon, which is where the turn page asks for a turn's
+  attempts from. The axis's bars cannot: every
   build cuts them from the asker's instant alike, and the one bar an older
   node behind the asker's clock counts its strip in — the first, which the
   horizon cuts — is dropped after the sum (below). The spend window and a page
@@ -632,7 +635,11 @@ sequenceDiagram
   events, whose span is its own — with every row counted once (above); and a list of
   turns is two scatters — every node's page, then every node's share of
   exactly the turns listed — so a turn resumed on another node after a
-  restart is one row folded from both halves, not two half-turns.
+  restart is one row folded from both halves, not two half-turns. A turn is
+  paged where a node's page lists it — the earliest such start, which every
+  node says of its own share — rather than where it began, which for a turn
+  whose earliest half fails the page's filter, or lies under the horizon, is
+  a position no page reaches; so a walk of the pages lists every turn once.
 - **A departed node's detail is gone.** Nothing replicates it: a node that has
   left the fleet cannot be asked, and its turns, phases and events leave with
   it. The **aggregates** do not — spend, turn counts and page reads are the

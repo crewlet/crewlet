@@ -239,6 +239,38 @@ func TestAnOversizedReplyIsCutAndKeepsTheTurnsEnding(t *testing.T) {
 	}
 }
 
+// A SHARE CUT TO FIT THE TRANSPORT STILL SAYS WHICH TURNS ITS PAGE LISTS.
+//
+// The second scatter's reply carries a node's shares and which of the named
+// turns its page lists; the shares are what a cut gives up, and the listing is
+// the same answer whichever of them fit. Dropped with them, a node that said
+// nothing would be judged by what its shares carry, as a build that cannot
+// say — and a half naming no item would read as listing the turn.
+//
+// Mutation: rebuild a cut part from its turns alone, and the listing is gone.
+func TestACutShareStillSaysWhatItsPageLists(t *testing.T) {
+	t.Parallel()
+	var turns []store.TurnPartial
+	for i := range 100 {
+		turns = append(turns, store.TurnPartial{TurnID: fmt.Sprintf("t-%03d", i),
+			Summary: strings.Repeat("x", 1000)})
+	}
+	const limit = 40 << 10
+	body, err := fit("node-b", turnsPart{Turns: turns, Listed: []string{"t-007"}, Judged: true}, limit, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, part, why := decodeReply[turnsPart](body, 1)
+	if why != "" || len(part.Turns) >= 100 || !part.Full {
+		t.Fatalf("the reply holds %d shares, full %v (%q) — want it cut and saying so",
+			len(part.Turns), part.Full, why)
+	}
+	if !part.Judged || !slices.Equal(part.Listed, []string{"t-007"}) {
+		t.Errorf("the cut reply says judged %v, listed %v — want the node's judgement kept",
+			part.Judged, part.Listed)
+	}
+}
+
 // TWO SCATTERS' COVERAGE: a node missing from either is missing.
 func TestCoverageOfTwoScattersNamesANodeMissingFromEither(t *testing.T) {
 	t.Parallel()
