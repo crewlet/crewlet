@@ -3324,9 +3324,22 @@ rules fix it, and each one names a specific mechanism:
    under a title nobody wrote. Only the builder knows where its parts begin and
    end, so the engine sends a section map with each prompt (`system_sections`
    and `user_sections` on the settled record, `prompt_messages[].sections`
-   live — a key, a title and a byte count per part), and the top level of the
+   live — a key, a title, a byte count and whether the part opens with its own
+   heading, per part), and the top level of the
    outline IS that map, sliced by UTF-8 byte offsets; a heading inside a span
-   still structures it, nested under it, but cannot leave it. A record without
+   still structures it, nested under it, but cannot leave it. That includes a
+   heading a HEADLESS part opens with: a worker's persona, a task the
+   executor wrote or a trigger's text is the builder's part with no heading
+   of its own (`headed` false), and when the markdown it quotes begins with
+   "## Goal", that heading nests under the builder's "Task" like any other
+   quoted one. It was taken for the span's own heading, so its title gave way
+   to the builder's and "Goal" was drawn nowhere in the reading view while
+   the Source view still had it. A map from an engine that predates `headed`
+   is read by the contract instead — a headed part's title IS its heading's
+   text, so a first heading carrying the part's own title is its own and any
+   other is quoted. Spans are decoded without stripping a leading byte order
+   mark, so a part that opens with a pasted document's U+FEFF is still a
+   slice of the prompt. A record without
    a map — an older engine's, a resumed phase's — is outlined by its headings
    as before, and so is one whose map does not tile its prompt (the bytes do
    not add up, a boundary falls inside a character, a span is empty, a key

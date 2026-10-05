@@ -50,6 +50,13 @@ export interface OutlineSection {
    * gave, which has no heading and no builder to name it.
    */
   title: string;
+  /**
+   * The section opens with its own heading line, so `title` is words of the
+   * source — what a find counts, and therefore what the reader marks in the
+   * title. False for a title the builder or this reader supplied (a `Lead`'s
+   * "Task", an untitled lead run), which no find can match in the source.
+   */
+  headed: boolean;
   /** The exact source this section spans: its heading line, its body, the separator after it. */
   source: string;
   /** `source`'s length in UTF-8 bytes. A half's sections sum to the half. */
@@ -73,27 +80,43 @@ export interface OutlineHalf {
 
 const encoder = new TextEncoder();
 // FATAL, so a slice that is not whole UTF-8 throws rather than decoding into
-// replacement characters a reader would take for the prompt's own.
-const decoder = new TextDecoder("utf-8", { fatal: true });
+// replacement characters a reader would take for the prompt's own. And
+// IGNORE-BOM, which reads backwards: it means "do not strip a leading U+FEFF",
+// and the default strips one from every slice that opens with it — so a span
+// carrying a pasted document's BOM decoded one character short of the prompt
+// it is a slice of, while its byte count still held it.
+const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 /**
  * A section map off the wire, or null when there is none to read.
  *
  * ALL OR NOTHING: an entry without a string key and title and an integer byte
  * count makes the whole map unreadable, since one dropped entry would shift
- * every boundary after it.
+ * every boundary after it — and so does a `headed` that is present and not a
+ * boolean, since what it says decides where a span's own text begins.
  */
 export function decodeSections(raw: unknown): PromptSection[] | null {
   if (!Array.isArray(raw) || raw.length === 0) return null;
   const out: PromptSection[] = [];
   for (const entry of raw as unknown[]) {
     if (entry === null || typeof entry !== "object") return null;
-    const { key, title, bytes } = entry as Record<string, unknown>;
+    const { key, title, bytes, headed } = entry as Record<string, unknown>;
     if (typeof key !== "string" || typeof title !== "string") return null;
     if (typeof bytes !== "number" || !Number.isInteger(bytes)) return null;
-    out.push({ key, title, bytes });
+    if (headed !== undefined && typeof headed !== "boolean") return null;
+    out.push(headed === undefined ? { key, title, bytes } : { key, title, bytes, headed });
   }
   return out;
+}
+
+/**
+ * A section map's VALUE as one comparable string — what a memo keys on. Every
+ * record is rebuilt from the wire on each push (a streaming phase's five
+ * frames a second among them), so the map is a new array every time while
+ * what it says is not.
+ */
+export function sectionsKey(map: readonly PromptSection[] | null | undefined): string {
+  return map ? JSON.stringify(map.map((s) => [s.key, s.title, s.bytes, s.headed ?? null])) : "";
 }
 
 /** One span of a half: what the builder or the headings say it is, and its source. */
@@ -102,6 +125,8 @@ interface Span {
   title: string;
   source: string;
   bytes: number;
+  /** Whether the span opens with its own heading line; absent when nothing said. */
+  headed?: boolean;
 }
 
 /**
@@ -131,7 +156,13 @@ export function tileByMap(text: string, map: readonly PromptSection[]): Span[] |
     } catch {
       return null;
     }
-    out.push({ key: s.key, title: s.title || s.key, source, bytes: s.bytes });
+    out.push({
+      key: s.key,
+      title: s.title || s.key,
+      source,
+      bytes: s.bytes,
+      ...(s.headed === undefined ? {} : { headed: s.headed }),
+    });
     at += s.bytes;
   }
   return out;
@@ -163,40 +194,60 @@ export function tileByHeadings(text: string): Span[] {
   const first = cuts[0]?.at ?? text.length;
   const lead = text.slice(0, first);
   const blankLead = lead.trim() === "" && cuts.length > 0;
-  if (lead !== "" && !blankLead) out.push(span("h0", "", lead));
+  if (lead !== "" && !blankLead) out.push(span("h0", "", lead, false));
   cuts.forEach((cut, i) => {
     const from = i === 0 && blankLead ? 0 : cut.at;
     const to = cuts[i + 1]?.at ?? text.length;
-    out.push(span(`h${i + 1}`, cut.title, text.slice(from, to)));
+    out.push(span(`h${i + 1}`, cut.title, text.slice(from, to), true));
   });
   return out;
 }
 
-function span(key: string, title: string, source: string): Span {
-  return { key, title, source, bytes: encoder.encode(source).length };
+function span(key: string, title: string, source: string, headed: boolean): Span {
+  return { key, title, source, bytes: encoder.encode(source).length, headed };
 }
 
 /**
  * One span as a section to read: its own heading taken off (the reader draws
  * the title itself), the text before the first heading inside it, and every
  * heading inside it nested on its level.
+ *
+ * WHICH SECTION IS THE SPAN'S OWN is what the map's `headed` says. A headed
+ * span opens with its heading line, so its first section is that heading and
+ * the reader's title stands in for it. A HEADLESS span — a builder's `Lead`:
+ * a worker's persona, a task the executor wrote, a trigger's text — has no
+ * heading of its own, and when the text it quotes begins with "## Goal" that
+ * first section is SOMEBODY ELSE'S. Taken as the span's own, its title was
+ * dropped for the builder's ("Task") and "Goal" appeared nowhere in the
+ * reading view, while the Source view still had it. So it nests under the
+ * span like every other quoted heading.
+ *
+ * A MAP THAT DOES NOT SAY (an engine that predates `headed`) is read by the
+ * contract instead: a headed span's title IS its heading text, so a first
+ * heading carrying the span's own title is its own, and any other is quoted.
+ * Not "the first line is a heading", which is exactly the reading that lost
+ * the words — and where a quoted heading happens to carry the builder's title,
+ * taking it as the span's own draws those very words, so nothing is lost.
  */
 function section(half: Half, s: Span): OutlineSection {
-  // The span's FIRST section is its own: the heading that opens a headed
-  // span (the reader draws its title itself, so only its text is the body),
-  // or the run a headless one opens with — a lead run, a builder's untitled
-  // part. Every section after it is a heading inside the span.
   const inner = splitSections(s.source);
-  const own = inner[0];
+  const first = inner[0];
+  const opensWithOwnHeading =
+    s.headed ?? (first !== undefined && first.level > 0 && first.title === s.title);
+  // The span's own section: its heading when it opens with one, or the run a
+  // headless span opens with before any heading. A headless span opening
+  // straight into a quoted heading has none.
+  const own = first && (first.level === 0 || opensWithOwnHeading) ? first : undefined;
   return {
     id: `${half}:${s.key}`,
     half,
     key: s.key,
     title: s.title,
+    headed: own !== undefined && own.level > 0,
     source: s.source,
     bytes: s.bytes,
     body: own?.body ?? "",
-    children: nestSections(inner.slice(1)),
+    children: nestSections(own ? inner.slice(1) : inner),
   };
 }
 

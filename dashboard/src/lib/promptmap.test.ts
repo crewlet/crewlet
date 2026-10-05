@@ -6,6 +6,7 @@ import {
   findPattern,
   neighbours,
   outlineHalf,
+  sectionsKey,
   sectionsOf,
   share,
   stepToMatch,
@@ -48,6 +49,50 @@ describe("a section map off the wire", () => {
     expect(decodeSections("nope")).toBeNull();
     expect(decodeSections([])).toBeNull();
     expect(decodeSections(undefined)).toBeNull();
+  });
+
+  test("carries `headed` when it is a boolean, and leaves it absent when it is", () => {
+    expect(
+      decodeSections([
+        { key: "a", title: "A", bytes: 3, headed: true },
+        { key: "b", title: "B", bytes: 1, headed: false },
+        { key: "c", title: "C", bytes: 1 },
+      ]),
+    ).toEqual([
+      { key: "a", title: "A", bytes: 3, headed: true },
+      { key: "b", title: "B", bytes: 1, headed: false },
+      { key: "c", title: "C", bytes: 1 },
+    ]);
+  });
+
+  test("is refused whole when `headed` is anything but a boolean", () => {
+    for (const headed of ["true", 1, null, {}]) {
+      expect(
+        decodeSections([{ key: "a", title: "A", bytes: 3, headed }]),
+        String(headed),
+      ).toBeNull();
+    }
+  });
+});
+
+describe("a map's value", () => {
+  test("is equal for equal maps however often they are decoded", () => {
+    const wire = [{ key: "a", title: "A", bytes: 3, headed: true }];
+    expect(sectionsKey(decodeSections(wire))).toBe(sectionsKey(decodeSections(wire)));
+    expect(sectionsKey(null)).toBe("");
+  });
+
+  test("moves with every field a reader draws", () => {
+    const base = { key: "a", title: "A", bytes: 3 };
+    const key = sectionsKey([base]);
+    for (const changed of [
+      { ...base, key: "b" },
+      { ...base, title: "B" },
+      { ...base, bytes: 4 },
+      { ...base, headed: false },
+    ]) {
+      expect(sectionsKey([changed]), JSON.stringify(changed)).not.toBe(key);
+    }
   });
 });
 
@@ -92,6 +137,29 @@ describe("a map that tiles its prompt", () => {
     expect(identity.children).toEqual([]);
   });
 
+  test("marks which sections open with their own heading line", () => {
+    const half = outlineHalf("system", TEXT, MAP);
+    expect(half.sections.map((s) => s.headed)).toEqual([false, true, true]);
+  });
+
+  test("keeps a span's slice whole when it opens with a byte order mark", () => {
+    // A pasted document can carry U+FEFF; the decoder's default strips it
+    // from every slice that opens with one, while the byte count keeps it.
+    const a = "## A\nalpha\n\n";
+    const b = "﻿bom section";
+    const half = outlineHalf(
+      "user",
+      a + b,
+      mapOf([
+        ["a", "A", a],
+        ["b", "Pasted", b],
+      ]),
+    );
+    expect(half.from).toBe("map");
+    expect(half.sections.map((s) => s.source).join("")).toBe(a + b);
+    expect(half.sections[1]!.source).toBe(b);
+  });
+
   test("cuts multi-byte text on character boundaries", () => {
     const a = "## Café ☕\nrésumé — 日本語\n\n";
     const b = "## Next\n😀 done";
@@ -121,6 +189,54 @@ describe("a map that tiles its prompt", () => {
     );
     expect(half.sections.map((s) => s.source)).toEqual([a, b]);
     expect(half.sections[0]!.body).toBe("first");
+  });
+});
+
+/**
+ * A builder's HEADLESS part quoting somebody else's markdown — a worker's
+ * persona, a task the executor wrote, a trigger's text — which so often opens
+ * with "## Goal" or "# Task". Taken as the span's own heading, those words
+ * appeared nowhere in the reading view.
+ */
+describe("a headless span that opens with a quoted heading", () => {
+  const TASK = "## Goal\nDo X\n\n## Steps\n1. a\n";
+  const RULES = "## Worker rules\nstay a leaf";
+  const TEXT = TASK + "\n" + RULES;
+  const map = (headed: [boolean | undefined, boolean | undefined]) =>
+    mapOf([
+      ["task", "Task", TASK + "\n"],
+      ["worker_rules", "Worker rules", RULES],
+    ]).map((s, i) => (headed[i] === undefined ? s : { ...s, headed: headed[i] }));
+
+  test.each([
+    ["the map says it is headless", [false, true] as [boolean, boolean]],
+    // An engine that predates `headed`: the first heading's title is not the
+    // span's, so it is quoted rather than the span's own.
+    ["the map does not say", [undefined, undefined] as [undefined, undefined]],
+  ])("nests the quoted heading under the builder's title when %s", (_why, headed) => {
+    const [task, rules] = outlineHalf("system", TEXT, map(headed)).sections;
+    expect(task).toMatchObject({ title: "Task", body: "", headed: false });
+    expect(task!.children.map((c) => c.title)).toEqual(["Goal", "Steps"]);
+    expect(task!.children[0]!.body).toBe("Do X");
+    // THE CONTROL: a headed span still takes its own heading as its body's.
+    expect(rules).toMatchObject({ title: "Worker rules", body: "stay a leaf", headed: true });
+    expect(rules!.children).toEqual([]);
+  });
+
+  test("keeps the lead a headless span opens with as its body", () => {
+    const text = "Context first.\n\n## Goal\nDo X";
+    const [task] = outlineHalf("user", text, mapOf([["task", "Task", text]])).sections;
+    expect(task).toMatchObject({ body: "Context first.", headed: false });
+    expect(task!.children.map((c) => c.title)).toEqual(["Goal"]);
+  });
+
+  test("trusts a map that says a span is headed", () => {
+    // The builder's own heading, whatever its title: what `headed` is for.
+    const text = "## Your turn\nask";
+    const [turn] = outlineHalf("user", text, [
+      { key: "turn", title: "Turn", bytes: bytes(text), headed: true },
+    ]).sections;
+    expect(turn).toMatchObject({ title: "Turn", body: "ask", headed: true, children: [] });
   });
 });
 

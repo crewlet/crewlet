@@ -219,6 +219,14 @@ export interface PromptSection {
   key: string;
   title: string;
   bytes: number;
+  /**
+   * The span begins with its own heading line, whose text is `title` — what
+   * the builder's `Heading` writes. False or absent for a part that opens
+   * with no heading of its own (a `Lead`: a persona, a task, a trigger's
+   * text), whose first line may still be a heading somebody else wrote and
+   * the span QUOTES. Absent from an engine that predates it.
+   */
+  headed?: boolean;
 }
 
 /** One message of the prompt a phase was given. */
