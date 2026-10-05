@@ -8,7 +8,7 @@
 // the status only where it names none ([kindOf] says why); which credential to
 // use next is the pool's, and which model to try next is the chain's.
 //
-// Three details here are the ones worth checking against the vendor rather
+// Four details here are the ones worth checking against the vendor rather
 // than against intuition:
 //
 //   - THE REQUEST SHAPE IS THE MODEL'S, read from [claudemodel] once at
@@ -19,6 +19,16 @@
 //     samples and the call is not thinking; max_tokens is the model's own
 //     ceiling. No knob is sent that the model in front of it would answer
 //     with a 400, because a 400 is fatal and the chain does not retry it.
+//   - AN ASSISTANT TURN GOES BACK AS IT CAME. Every response's content blocks
+//     are kept verbatim ([llm.Message.Raw]) and replayed unchanged on every
+//     later call, to whichever Claude model is serving it: Opus 5.5, Sonnet
+//     5.5 and Fable 5.1 bind each thinking block to the conversation before
+//     it, and a turn rebuilt from the neutral view — reordered, its texts
+//     joined, its call's input re-encoded — is an edit they refuse. Which
+//     model may read which block is the vendor's call, made by dropping what
+//     it cannot read; this backend never strips a Claude turn's thinking
+//     itself. Only a turn some other backend wrote is rebuilt, without
+//     thinking ([formatMessages]).
 //   - MAX RETRIES IS ZERO. The SDK retries twice by default, and its retry
 //     predicate (internal/requestconfig: shouldRetry) fires on exactly what
 //     the layers above need to see first — 408, 409, 429, every 5xx and every
@@ -36,6 +46,7 @@ package anthropic
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -596,10 +607,24 @@ func splitSystem(messages []llm.Message) (string, []llm.Message) {
 	return strings.Join(system, "\n"), rest
 }
 
+// formatMessages renders the conversation. An assistant turn this backend
+// wrote is REPLAYED from its own blocks ([replay]); every other turn is built
+// from the neutral view.
 func formatMessages(messages []llm.Message) ([]sdk.MessageParam, error) {
 	out := make([]sdk.MessageParam, 0, len(messages))
-	for _, m := range messages {
+	for i, m := range messages {
 		switch {
+		case m.Role == llm.RoleAssistant && m.Origin.Provider == providerName && len(m.Raw) > 0:
+			blocks, err := replay(m.Raw)
+			if err != nil {
+				return nil, fmt.Errorf("anthropic: message %d: %w", i, err)
+			}
+			if len(blocks) == 0 {
+				// Nothing but whitespace text: see [replay].
+				continue
+			}
+			out = append(out, sdk.NewAssistantMessage(blocks...))
+
 		case m.Role == llm.RoleTool:
 			content := m.Content
 			if strings.TrimSpace(content) == "" {
@@ -616,20 +641,21 @@ func formatMessages(messages []llm.Message) ([]sdk.MessageParam, error) {
 			// tool that ran and returned the same words.
 			out = appendUser(out, sdk.NewToolResultBlock(m.ToolCallID, content, m.Failed))
 
-		case len(m.ToolCalls) > 0 || len(m.ThinkingBlocks) > 0:
-			blocks := make([]sdk.ContentBlockParamUnion, 0,
-				len(m.ThinkingBlocks)+len(m.ToolCalls)+1)
-			// Thinking blocks go back FIRST and verbatim, signature
-			// included: Anthropic validates them against the turn they
-			// belong to and rejects a conversation that reordered or
-			// paraphrased them.
-			for _, tb := range m.ThinkingBlocks {
-				if tb.Type == "redacted_thinking" {
-					blocks = append(blocks, sdk.NewRedactedThinkingBlock(tb.Data))
-					continue
-				}
-				blocks = append(blocks, sdk.NewThinkingBlock(tb.Signature, tb.Thinking))
-			}
+		case len(m.ToolCalls) > 0:
+			// A turn another backend wrote — or one parked by a build that
+			// kept no blocks — rebuilt from the neutral view, WITHOUT ITS
+			// THINKING. Another vendor's reasoning has no Anthropic
+			// signature to carry, and a block rebuilt here is not the
+			// block that was signed: the order and the text around it are
+			// this function's rather than the model's, which is the edit
+			// that invalidates it. Leaving it out is never a 400. A turn
+			// another vendor wrote never had a block to lose — a turn with
+			// no thinking is what every non-Claude turn looks like, and the
+			// vendor accepts one anywhere — and the turns a pre-Raw build
+			// parked all precede every turn a resumed loop writes, so the
+			// blocks they lose are a run dropped from the FRONT, the one
+			// removal the vendor's history check accepts.
+			blocks := make([]sdk.ContentBlockParamUnion, 0, len(m.ToolCalls)+1)
 			if strings.TrimSpace(m.Content) != "" {
 				blocks = append(blocks, sdk.NewTextBlock(m.Content))
 			}
@@ -679,6 +705,40 @@ func formatMessages(messages []llm.Message) ([]sdk.MessageParam, error) {
 		return nil, ErrPrefill
 	}
 	return out, nil
+}
+
+// replay is an assistant turn this backend wrote, as the blocks it was written
+// in: each one the API's own JSON, sent back as it arrived — never decoded into
+// the SDK's param types and re-encoded, which would drop any field this SDK
+// version does not model and any block type newer than it, and an edit is an
+// edit whether or not it was meant.
+//
+// One kind of block is left out: a TEXT block holding nothing but whitespace.
+// The API refuses one on input, though a model writes them (a newline between
+// its thinking and a tool call), and the vendor's history check ignores them by
+// rule, so leaving one out changes nothing it compares. A turn that held only
+// such blocks comes back empty, and the caller drops it as it drops any turn
+// with nothing in it.
+//
+// A block that is not JSON at all is refused, naming its place: it can only be
+// a parked conversation corrupted in storage, and sent as it is the SDK would
+// fail to encode the request with an error naming nothing.
+func replay(raw []json.RawMessage) ([]sdk.ContentBlockParamUnion, error) {
+	blocks := make([]sdk.ContentBlockParamUnion, 0, len(raw))
+	for i, block := range raw {
+		var head struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(block, &head); err != nil {
+			return nil, fmt.Errorf("replayed content block %d is not a JSON object: %w", i, err)
+		}
+		if head.Type == "text" && strings.TrimSpace(head.Text) == "" {
+			continue
+		}
+		blocks = append(blocks, param.Override[sdk.ContentBlockParamUnion](block))
+	}
+	return blocks, nil
 }
 
 // ErrPrefill is a request whose conversation ends on the assistant's turn.
@@ -798,10 +858,16 @@ func (p *Provider) completion(msg *sdk.Message) *llm.Completion {
 	// alias resolving to a dated snapshot would otherwise re-key the
 	// per-model breakdown the day the alias moves, splitting one model's
 	// spend across two names that nothing in the config mentions.
-	out := &llm.Completion{Model: p.model}
+	out := &llm.Completion{Model: p.model, Provider: providerName}
 
 	var content, reasoning strings.Builder
 	for _, block := range msg.Content {
+		// EVERY block, verbatim and in order, whatever its type — the copy
+		// the next call replays ([llm.Message.Raw]). RawJSON is the bytes
+		// the API sent; on a streamed response the SDK's accumulator
+		// rewrites each block's raw JSON from its deltas when the block
+		// stops, so it is the finished block either way.
+		out.Raw = append(out.Raw, json.RawMessage(block.RawJSON()))
 		switch block.Type {
 		case "thinking":
 			reasoning.WriteString(block.Thinking)

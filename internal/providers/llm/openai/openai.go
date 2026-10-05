@@ -53,6 +53,10 @@ import (
 
 var log = logging.Get("llm.openai")
 
+// wireName is this backend's type: the default label for its errors, and what
+// a completion records as its [llm.Origin.Provider] whatever the label.
+const wireName = "openai"
+
 // Defaults. The timeout matches the config layer's defaultLLMTimeoutSeconds,
 // which is what the engine passes; this one serves a Config built without it.
 //
@@ -155,7 +159,7 @@ func New(cfg Config) (*Provider, error) {
 	}
 	name := cfg.Name
 	if strings.TrimSpace(name) == "" {
-		name = "openai"
+		name = wireName
 	}
 
 	// NOTHING FROM THE PROCESS ENVIRONMENT, first — see
@@ -576,7 +580,12 @@ func (p *Provider) completion(resp *sdk.ChatCompletion) (*llm.Completion, error)
 		// The CONFIGURED model id, not the one the response echoes: an
 		// alias resolving to a dated snapshot would re-key the per-model
 		// breakdown the day the alias moves.
-		Model:            p.model,
+		Model: p.model,
+		// The wire format, never p.name: an openai-compatible entry
+		// relabels its errors with its key, and a key may be any word —
+		// `anthropic` included — while a turn's origin has to say which
+		// backend's shape it is in. See [llm.Origin].
+		Provider:         wireName,
 		Content:          choice.Message.Content,
 		ReasoningContent: reasoningText(choice.Message.RawJSON()),
 	}

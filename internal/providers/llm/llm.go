@@ -16,6 +16,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -36,11 +37,15 @@ const (
 
 // Message is one turn of a conversation.
 //
-// ReasoningContent and ThinkingBlocks are separate because they are different
-// things: the first is prose a model emitted as its reasoning, the second is
-// the provider's own structured blocks, which must be handed BACK verbatim on
-// the next call or the provider rejects the conversation. Flattening them
-// loses the round trip.
+// An assistant turn carries TWO accounts of what the model wrote, for two
+// different readers. The NEUTRAL view — Content, ReasoningContent,
+// ThinkingBlocks, ToolCalls — is what the engine reads: the tool loop runs the
+// calls, the record shows the prose, and a backend from another vendor
+// rebuilds the turn in its own shape from it. Raw is what the VENDOR reads:
+// the response's own content blocks, exactly as they arrived, handed back to a
+// backend of the same wire format on the next call (see [Message.Raw] for why
+// a rebuild from the neutral view is not good enough).
+//
 // The JSON tags are a WIRE FORMAT, and they are the field names on purpose.
 // A suspended agent turn serializes its whole conversation into a durable row
 // that another BUILD reads back days later
@@ -58,6 +63,34 @@ type Message struct {
 	ToolCallID       string          `json:"ToolCallID,omitempty"`
 	Name             string          `json:"Name,omitempty"`
 
+	// Origin is which backend wrote this turn, and on which model — set on
+	// an assistant turn from the [Completion] it records, zero on every
+	// other. It is what tells a backend whether Raw is in its own format.
+	Origin Origin `json:"Origin,omitzero"`
+
+	// Raw is the vendor's own content blocks for this assistant turn, in
+	// the order the model wrote them, each exactly as the response carried
+	// it — set by a backend whose wire format has such blocks (Anthropic's
+	// Messages API), and replayed by that backend VERBATIM on every later
+	// call of the conversation.
+	//
+	// THE NEUTRAL VIEW CANNOT BE REPLAYED, because it is lossy in exactly
+	// the places a vendor checks. Rebuilt from it, a turn written as
+	// [thinking, text, thinking, tool_use] comes back as [thinking,
+	// thinking, text, tool_use] with the two texts joined, a tool call's
+	// input is re-encoded from a decoded map, and a block type the engine
+	// does not model is dropped. Claude Opus 5.5, Sonnet 5.5 and Fable 5.1
+	// bind every thinking block to the conversation before it, byte for
+	// byte; an earlier turn that comes back different invalidates every
+	// block after it, and on an account the vendor enforces that is a 400
+	// the fallback chain does not retry.
+	//
+	// THE NEUTRAL VIEW STAYS BESIDE IT, because it is what the engine and
+	// every other backend read. The two are written together, from one
+	// response, by the backend that decoded it, and nothing edits either
+	// afterwards — the conversation is append-only.
+	Raw []json.RawMessage `json:"Raw,omitempty"`
+
 	// Failed marks a tool message whose call FAILED — the tool refused,
 	// errored, or never ran because its arguments did not parse. The
 	// Content still says why; this is the vendor's structured flag beside
@@ -67,7 +100,36 @@ type Message struct {
 	Failed bool `json:"Failed,omitempty"`
 }
 
-// ThinkingBlock is a provider's structured reasoning block, carried opaquely.
+// Origin is the backend and the model that wrote an assistant turn.
+//
+// Provider is the backend's TYPE, which is the name of the wire format [Raw]
+// is in — `anthropic`, `openai`, `cli-agent` — and never an entry key or a
+// label: an `openai-compatible` entry is still the `openai` wire format, and
+// [Error.Provider], which such an entry relabels with its key, is where a
+// label goes. Model is the configured model id, as [Completion.Model].
+//
+// A backend replays Raw when Provider is its own type, WHATEVER THE MODEL. A
+// turn one Claude model wrote is handed back unchanged to another — a chain's
+// fallback member, a resumed run on a config that moved — because the vendor
+// decides which model reads which thinking block and drops the ones the model
+// in front of it cannot, unbilled and without failing the call; a client that
+// stripped them itself would remove blocks from the middle of the
+// conversation's sequence, which is the one edit that fails every block after
+// it when the conversation returns to the model that wrote them. Model is the
+// record of which one did.
+//
+// [Raw]: Message.Raw
+type Origin struct {
+	Provider string `json:"Provider,omitempty"`
+	Model    string `json:"Model,omitempty"`
+}
+
+// ThinkingBlock is a provider's structured reasoning block, in the neutral
+// view. A backend that replays thinking does so from [Message.Raw], which
+// holds the same block in its own place among the turn's others; this copy is
+// what the engine measures, and what a build that predates Raw replays from a
+// conversation a newer one parked (a rolling upgrade resumes runs across the
+// two), which is why its fields — Signature included — stay.
 type ThinkingBlock struct {
 	Type      string `json:"Type,omitempty"`
 	Thinking  string `json:"Thinking,omitempty"`
@@ -227,10 +289,20 @@ type Completion struct {
 	// which is the more specific of the two.
 	ProviderKey string
 
+	// Provider is the backend that wrote this answer, by its TYPE — the
+	// wire format [Completion.Raw] is in. See [Origin.Provider]. Every
+	// backend in this tree fills it in.
+	Provider string
+
 	Content          string
 	ReasoningContent string
 	ThinkingBlocks   []ThinkingBlock
 	ToolCalls        []ToolCall
+
+	// Raw is the response's own content blocks, verbatim and in order, for
+	// a backend whose wire format has them — see [Message.Raw]. Nil from a
+	// backend that has none to keep.
+	Raw []json.RawMessage
 
 	// StopReason is why the model stopped writing this response — see
 	// [StopReason]. Never [StopRefusal] on a Completion a backend returns
@@ -245,6 +317,25 @@ type Completion struct {
 
 // TotalTokens is the figure a budget is charged.
 func (c Completion) TotalTokens() int { return c.InputTokens + c.OutputTokens }
+
+// Message is the assistant turn this answer adds to its conversation: the
+// neutral view, the vendor's own blocks and where both came from.
+//
+// ONE PLACE builds it, so a field added to the answer cannot reach the turn's
+// record and miss the conversation — which is how a response's blocks would
+// stop being replayed with no error anywhere, only a vendor quietly
+// discarding the reasoning they carried.
+func (c Completion) Message() Message {
+	return Message{
+		Role:             RoleAssistant,
+		Content:          c.Content,
+		ReasoningContent: c.ReasoningContent,
+		ThinkingBlocks:   c.ThinkingBlocks,
+		ToolCalls:        c.ToolCalls,
+		Origin:           Origin{Provider: c.Provider, Model: c.Model},
+		Raw:              c.Raw,
+	}
+}
 
 // Request is one call's inputs. A struct rather than a parameter list because
 // it grows, and every provider feature added over time would otherwise become

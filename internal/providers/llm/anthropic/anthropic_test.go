@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -52,6 +53,10 @@ type attempt struct {
 	authorization string
 	path          string
 	body          map[string]any
+	// raw is the body as it arrived, for the assertions that are about
+	// BYTES — a replayed turn is held to what the API sent, and a decoded
+	// map would hide every difference a vendor's history check can see.
+	raw []byte
 }
 
 // fakeAPI is an Anthropic endpoint that records what reached it. Everything
@@ -74,6 +79,7 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		authorization: r.Header.Get("Authorization"),
 		path:          r.URL.Path,
 		body:          body,
+		raw:           raw,
 	})
 	n := len(f.attempts)
 	f.mu.Unlock()
@@ -781,6 +787,13 @@ func TestToolsAreOfferedWithNoToolChoice(t *testing.T) {
 	}
 }
 
+// A TURN THIS BACKEND DID NOT WRITE IS REBUILT FROM THE NEUTRAL VIEW, and
+// rebuilt WITHOUT ITS THINKING. Here it is another backend's turn carrying
+// signed blocks: another vendor's reasoning has no Anthropic signature, and a
+// block rebuilt from the neutral view is not the block that was signed — its
+// order and the text around it are the rebuild's — so sending it is the edit
+// the vendor's history check rejects. A turn with no thinking is what any
+// non-Claude turn looks like, and is always accepted.
 func TestConversationTranslation(t *testing.T) {
 	t.Parallel()
 	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
@@ -792,6 +805,7 @@ func TestConversationTranslation(t *testing.T) {
 			Content:        "working",
 			ThinkingBlocks: []llm.ThinkingBlock{{Type: "thinking", Thinking: "hmm", Signature: "sig"}},
 			ToolCalls:      []llm.ToolCall{{ID: "call_1", Name: "run", Arguments: map[string]any{"a": 1}}},
+			Origin:         llm.Origin{Provider: "openai", Model: "gpt-test"},
 		},
 		{Role: llm.RoleTool, ToolCallID: "call_1", Name: "run", Content: "done"},
 	}})
@@ -808,19 +822,13 @@ func TestConversationTranslation(t *testing.T) {
 		t.Fatalf("role = %v", assistant["role"])
 	}
 	blocks := assistant["content"].([]any)
-	if len(blocks) != 3 {
-		t.Fatalf("assistant blocks = %v, want thinking, text, tool_use", blocks)
+	if len(blocks) != 2 {
+		t.Fatalf("assistant blocks = %v, want text then tool_use and no thinking", blocks)
 	}
-	// Thinking goes back FIRST and verbatim, signature included:
-	// Anthropic validates it against the turn it belongs to.
-	thinking := blocks[0].(map[string]any)
-	if thinking["type"] != "thinking" || thinking["thinking"] != "hmm" || thinking["signature"] != "sig" {
-		t.Fatalf("thinking block = %v", thinking)
+	if blocks[0].(map[string]any)["text"] != "working" {
+		t.Fatalf("text block = %v", blocks[0])
 	}
-	if blocks[1].(map[string]any)["text"] != "working" {
-		t.Fatalf("text block = %v", blocks[1])
-	}
-	use := blocks[2].(map[string]any)
+	use := blocks[1].(map[string]any)
 	if use["type"] != "tool_use" || use["id"] != "call_1" || use["name"] != "run" {
 		t.Fatalf("tool_use block = %v", use)
 	}
@@ -839,28 +847,342 @@ func TestConversationTranslation(t *testing.T) {
 	}
 }
 
-func TestRedactedThinkingIsHandedBackOpaquely(t *testing.T) {
+// --- replay ------------------------------------------------------------
+
+// sentBlocks is the content of message i of a request body, one block per
+// element, as the bytes that crossed the wire.
+func sentBlocks(t *testing.T, raw []byte, i int) []json.RawMessage {
+	t.Helper()
+	var body struct {
+		Messages []struct {
+			Role    string            `json:"role"`
+			Content []json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("request body: %v", err)
+	}
+	if i >= len(body.Messages) {
+		t.Fatalf("the request carries %d messages, want message %d", len(body.Messages), i)
+	}
+	if body.Messages[i].Role != "assistant" {
+		t.Fatalf("message %d is %q, want the assistant turn", i, body.Messages[i].Role)
+	}
+	return body.Messages[i].Content
+}
+
+// encoded is a block in the one form every request body puts it in: the SDK
+// encodes a body with Go's JSON encoder, which drops the whitespace BETWEEN
+// tokens and writes <, > and & inside a string as \u escapes. Neither changes
+// a token — the same keys in the same order, every number in the digits it was
+// written in, every string the same string — and what the vendor compares is
+// the tokens, so this is the strongest equality a request can be held to and
+// still be sent through the SDK.
+func encoded(t *testing.T, block []byte) string {
+	t.Helper()
+	var compact, escaped bytes.Buffer
+	if err := json.Compact(&compact, block); err != nil {
+		t.Fatalf("block %s is not JSON: %v", block, err)
+	}
+	json.HTMLEscape(&escaped, compact.Bytes())
+	return escaped.String()
+}
+
+// replayedAsWritten fails unless the assistant turn at message i of a request
+// is exactly the blocks the model wrote, in the order it wrote them.
+func replayedAsWritten(t *testing.T, raw []byte, i int, written []string) {
+	t.Helper()
+	sent := sentBlocks(t, raw, i)
+	if len(sent) != len(written) {
+		t.Fatalf("replayed %d blocks, want the %d the model wrote:\n%s", len(sent), len(written), raw)
+	}
+	for j := range written {
+		if got, want := encoded(t, sent[j]), encoded(t, []byte(written[j])); got != want {
+			t.Errorf("block %d replayed as\n  %s\nwant it as the model wrote it\n  %s", j, got, want)
+		}
+	}
+}
+
+// interleaved is a turn the neutral view cannot rebuild: two thinking blocks
+// with text between them, then a call. Every block is written the way a
+// re-encoder would NOT write it — keys out of the SDK's order, a field this
+// engine does not model (`citations`, `caller`), a number past 2^53, a 1.0, and
+// markup a string escaper touches — so a replay that went through a decode and
+// an encode anywhere fails on at least one of them.
+var interleaved = []string{
+	`{"signature":"sig-A","type":"thinking","thinking":"Weighing <it> & the rest.\n  Indented."}`,
+	`{"type":"text","text":"  First, <this>.  ","citations":null}`,
+	`{"type":"thinking","thinking":"Now the call.","signature":"sig-B"}`,
+	`{"type":"tool_use","id":"toolu_1","name":"lookup",` +
+		`"input":{"z":1.0,"id":12345678901234567890,"q":"a<b>"},"caller":{"type":"direct"}}`,
+}
+
+func messageOf(blocks []string, stop string) string {
+	return `{"id":"msg_1","type":"message","role":"assistant","model":"claude-test",` +
+		`"content":[` + strings.Join(blocks, ",") + `],"stop_reason":"` + stop + `",` +
+		`"usage":{"input_tokens":10,"output_tokens":5}}`
+}
+
+// AN ASSISTANT TURN IS REPLAYED AS THE MODEL WROTE IT. Opus 5.5, Sonnet 5.5
+// and Fable 5.1 bind each thinking block to everything before it, byte for
+// byte, and an earlier turn that comes back different invalidates every block
+// after it — a 400 the chain does not retry, on an account the vendor
+// enforces. The rebuild this replaced put both thinking blocks first, joined
+// the texts, re-encoded the call's input from a decoded map and dropped every
+// field it did not model.
+func TestAnAssistantTurnIsReplayedAsTheModelWroteIt(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, n int) {
+		if n == 1 {
+			writeJSON(w, 200, messageOf(interleaved, "tool_use"))
+			return
+		}
+		writeJSON(w, 200, okMessage("done"))
+	})
+	p := newProvider(t, url, nil)
+	out, err := p.Complete(context.Background(), userTurn("look it up"))
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	// The neutral view is still the engine's to read.
+	if len(out.ToolCalls) != 1 || len(out.ThinkingBlocks) != 2 || out.Content != "  First, <this>.  " {
+		t.Fatalf("neutral view = %+v", out)
+	}
+	turn := out.Message()
+	if turn.Origin != (llm.Origin{Provider: "anthropic", Model: "claude-test"}) {
+		t.Fatalf("origin = %+v, want this backend and its model", turn.Origin)
+	}
+
+	if _, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "look it up"},
+		turn,
+		{Role: llm.RoleTool, ToolCallID: "toolu_1", Name: "lookup", Content: "found"},
+	}}); err != nil {
+		t.Fatalf("second Complete: %v", err)
+	}
+	replayedAsWritten(t, api.seen()[1].raw, 1, interleaved)
+}
+
+// A STREAMED TURN IS REPLAYED AS THE MODEL WROTE IT TOO. A streamed block
+// arrives as a start and a run of deltas, and the copy kept for the replay is
+// the FINISHED block: the thinking with its streamed signature, the call with
+// the input exactly as its fragments spelled it.
+func TestAStreamedTurnIsReplayedAsTheModelWroteIt(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, n int) {
+		if n > 1 {
+			writeJSON(w, 200, okMessage("done"))
+			return
+		}
+		writeStream(w, streamOf(
+			streamStart(),
+			sseEvent{"content_block_start", `{"type":"content_block_start","index":0,` +
+				`"content_block":{"type":"thinking","thinking":"","signature":""}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+				`"delta":{"type":"thinking_delta","thinking":"Weighing it."}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+				`"delta":{"type":"signature_delta","signature":"sig-1"}}`},
+			sseEvent{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+			textBlock(1, "Hel", "lo"),
+			sseEvent{"content_block_start", `{"type":"content_block_start","index":2,` +
+				`"content_block":{"type":"thinking","thinking":"","signature":""}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":2,` +
+				`"delta":{"type":"thinking_delta","thinking":"Then the call."}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":2,` +
+				`"delta":{"type":"signature_delta","signature":"sig-2"}}`},
+			sseEvent{"content_block_stop", `{"type":"content_block_stop","index":2}`},
+			sseEvent{"content_block_start", `{"type":"content_block_start","index":3,` +
+				`"content_block":{"type":"tool_use","id":"tu_1","name":"lookup","input":{}}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":3,` +
+				`"delta":{"type":"input_json_delta","partial_json":"{\"id\": 1234567890"}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":3,` +
+				`"delta":{"type":"input_json_delta","partial_json":"123456789, \"q\":\"x\"}"}}`},
+			sseEvent{"content_block_stop", `{"type":"content_block_stop","index":3}`},
+			streamEnd("tool_use"),
+		)...)
+	})
+	p := newProvider(t, url, nil)
+	var got []llm.Delta
+	out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if _, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "hi"},
+		out.Message(),
+		{Role: llm.RoleTool, ToolCallID: "tu_1", Content: "found"},
+	}}); err != nil {
+		t.Fatalf("second Complete: %v", err)
+	}
+	replayedAsWritten(t, api.seen()[1].raw, 1, []string{
+		`{"type":"thinking","thinking":"Weighing it.","signature":"sig-1"}`,
+		`{"type":"text","text":"Hello"}`,
+		`{"type":"thinking","thinking":"Then the call.","signature":"sig-2"}`,
+		`{"type":"tool_use","id":"tu_1","name":"lookup","input":{"id": 1234567890123456789, "q":"x"}}`,
+	})
+}
+
+// ANOTHER CLAUDE MODEL'S TURN IS REPLAYED WHOLE, thinking included. A chain's
+// fallback member, or a parked run resumed after the entry's model changed,
+// hands this model turns another one wrote; the vendor decides which model
+// reads which block and drops the ones it cannot, unbilled and without failing
+// the call. Stripping them here would remove blocks from the MIDDLE of the
+// conversation's sequence — the one removal that fails every block after it
+// once the conversation is back on the model that wrote them.
+func TestAnotherClaudeModelsTurnIsReplayedWithItsThinking(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+	p := newProvider(t, url, func(c *Config) { c.Model = "claude-sonnet-5-5" })
+	raw := make([]json.RawMessage, len(interleaved))
+	for i, b := range interleaved {
+		raw[i] = json.RawMessage(b)
+	}
+	if _, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "look it up"},
+		{
+			Role: llm.RoleAssistant, Content: "  First, <this>.  ",
+			ToolCalls: []llm.ToolCall{{ID: "toolu_1", Name: "lookup"}},
+			Origin:    llm.Origin{Provider: "anthropic", Model: "claude-opus-5-5"},
+			Raw:       raw,
+		},
+		{Role: llm.RoleTool, ToolCallID: "toolu_1", Content: "found"},
+	}}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	replayedAsWritten(t, api.seen()[0].raw, 1, interleaved)
+}
+
+// RAW IS REPLAYED ONLY BY THE BACKEND WHOSE FORMAT IT IS. A turn some other
+// backend recorded blocks for, or one with blocks and no origin at all, is
+// rebuilt from the neutral view — never sent as Anthropic content it is not.
+func TestOnlyThisBackendsBlocksAreReplayed(t *testing.T) {
+	t.Parallel()
+	for name, origin := range map[string]llm.Origin{
+		"another backend": {Provider: "openai", Model: "gpt-test"},
+		"no origin":       {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+			p := newProvider(t, url, nil)
+			if _, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+				{Role: llm.RoleUser, Content: "hi"},
+				{
+					Role: llm.RoleAssistant, Content: "working",
+					ToolCalls: []llm.ToolCall{{ID: "c", Name: "t"}},
+					Origin:    origin,
+					Raw:       []json.RawMessage{json.RawMessage(`{"type":"foreign","x":1}`)},
+				},
+				{Role: llm.RoleTool, ToolCallID: "c", Content: "done"},
+			}}); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			var types []string
+			for _, b := range sentBlocks(t, api.seen()[0].raw, 1) {
+				var head struct{ Type string }
+				_ = json.Unmarshal(b, &head)
+				types = append(types, head.Type)
+			}
+			if !slices.Equal(types, []string{"text", "tool_use"}) {
+				t.Fatalf("assistant blocks = %v, want the neutral rebuild", types)
+			}
+		})
+	}
+}
+
+// Redacted thinking and a block type this engine has never heard of are both
+// replayed exactly as they came: neither has anything the neutral view could
+// rebuild them from, and leaving either out is an edit.
+func TestOpaqueBlocksAreHandedBackAsTheyCame(t *testing.T) {
+	t.Parallel()
+	written := []string{
+		`{"type":"redacted_thinking","data":"opaque"}`,
+		`{"type":"from_a_later_api","anything":{"at":["all"]}}`,
+		`{"type":"tool_use","id":"c","name":"t","input":{}}`,
+	}
+	api, url := serve(t, func(w http.ResponseWriter, n int) {
+		if n == 1 {
+			writeJSON(w, 200, messageOf(written, "tool_use"))
+			return
+		}
+		writeJSON(w, 200, okMessage("ok"))
+	})
+	p := newProvider(t, url, nil)
+	out, err := p.Complete(context.Background(), userTurn("hi"))
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if _, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "hi"},
+		out.Message(),
+		{Role: llm.RoleTool, ToolCallID: "c", Content: "done"},
+	}}); err != nil {
+		t.Fatalf("second Complete: %v", err)
+	}
+	replayedAsWritten(t, api.seen()[1].raw, 1, written)
+}
+
+// A TEXT BLOCK OF NOTHING BUT WHITESPACE IS LEFT OUT of a replayed turn. A
+// model writes one — a newline between its thinking and its call — and the
+// API refuses one on input; the vendor's history check ignores them by rule,
+// so leaving one out is not an edit. A turn that held nothing else is dropped
+// whole, as any turn with nothing in it is.
+func TestWhitespaceTextIsLeftOutOfAReplayedTurn(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
+	p := newProvider(t, url, nil)
+	blocks := func(b ...string) []json.RawMessage {
+		out := make([]json.RawMessage, len(b))
+		for i := range b {
+			out[i] = json.RawMessage(b[i])
+		}
+		return out
+	}
+	thinking := `{"type":"thinking","thinking":"t","signature":"s"}`
+	call := `{"type":"tool_use","id":"c","name":"t","input":{}}`
+	origin := llm.Origin{Provider: "anthropic", Model: "claude-test"}
+	if _, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "hi"},
+		{Role: llm.RoleAssistant, Origin: origin, Raw: blocks(`{"type":"text","text":" \n\t"}`)},
+		{Role: llm.RoleUser, Content: "go on"},
+		{
+			Role: llm.RoleAssistant, Origin: origin, ToolCalls: []llm.ToolCall{{ID: "c", Name: "t"}},
+			Raw: blocks(thinking, `{"type":"text","text":"\n\n"}`, call),
+		},
+		{Role: llm.RoleTool, ToolCallID: "c", Content: "done"},
+	}}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	raw := api.seen()[0].raw
+	if n := len(api.seen()[0].body["messages"].([]any)); n != 3 {
+		t.Fatalf("sent %d messages, want the whitespace-only turn dropped and the two user turns joined: %s", n, raw)
+	}
+	replayedAsWritten(t, raw, 1, []string{thinking, call})
+}
+
+// A replayed block that is not JSON is a parked conversation corrupted in
+// storage. Refused naming the message, before the network, rather than left
+// to fail inside the SDK's encoder with an error naming nothing.
+func TestACorruptReplayedBlockIsRefusedBeforeTheCall(t *testing.T) {
 	t.Parallel()
 	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
 	p := newProvider(t, url, nil)
 	_, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
 		{Role: llm.RoleUser, Content: "hi"},
 		{
-			Role:           llm.RoleAssistant,
-			ThinkingBlocks: []llm.ThinkingBlock{{Type: "redacted_thinking", Data: "opaque"}},
-			ToolCalls:      []llm.ToolCall{{ID: "c", Name: "t"}},
+			Role: llm.RoleAssistant, Origin: llm.Origin{Provider: "anthropic"},
+			Raw: []json.RawMessage{json.RawMessage(`{"type":"thinking"`)},
 		},
-		// Answered, as every call is before the next round: a
-		// conversation ending on the assistant's turn is a prefill.
-		{Role: llm.RoleTool, ToolCallID: "c", Content: "done"},
+		{Role: llm.RoleUser, Content: "go on"},
 	}})
-	if err != nil {
-		t.Fatalf("Complete: %v", err)
+	if got := llm.KindOf(err); got != llm.KindFatal {
+		t.Fatalf("classified %s (%v), want fatal", got, err)
 	}
-	messages := api.seen()[0].body["messages"].([]any)
-	block := messages[1].(map[string]any)["content"].([]any)[0].(map[string]any)
-	if block["type"] != "redacted_thinking" || block["data"] != "opaque" {
-		t.Fatalf("redacted block = %v", block)
+	if !strings.Contains(err.Error(), "message 1") {
+		t.Fatalf("error %v does not name the message", err)
+	}
+	if api.count() != 0 {
+		t.Fatal("an unsendable request still reached the network")
 	}
 }
 

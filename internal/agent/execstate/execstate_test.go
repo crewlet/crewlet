@@ -1,6 +1,7 @@
 package execstate_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -159,6 +160,79 @@ func TestNumbersAndSignaturesSurviveASuspensionExactly(t *testing.T) {
 	if string(again) != string(blob) {
 		t.Errorf("a decoded state re-encodes differently:\n first %s\nsecond %s", blob, again)
 	}
+}
+
+// THE VENDOR'S OWN BLOCKS COME BACK FROM A SUSPENSION AS THEY WENT IN, with
+// the origin that says whose they are. A resumed executor replays them to the
+// provider, and a model that preserves its thinking binds every block to the
+// conversation before it — so a parked turn that came back with a block
+// missing, reordered or re-spelled would be an edited conversation the vendor
+// refuses on the first round after the resume.
+//
+// Held to the TOKENS: the row's encoder drops the whitespace between them and
+// escapes <, > and & inside strings, exactly as the request encoder does on
+// the way out, and neither changes a key, its order, a number's digits or a
+// string. The tags are held too — they are a wire format another build reads.
+func TestTheVendorsBlocksSurviveASuspension(t *testing.T) {
+	t.Parallel()
+	written := []string{
+		`{"signature":"EqQBCgIYAhIM+/=","type":"thinking","thinking":"find <it> & fix it"}`,
+		`{"type":"text","text":"  Starting.  ","citations":null}`,
+		`{"type":"tool_use","id":"call-1","name":"run_sandbox","input":{"brief": "fix it", "row": 1234567890123456789, "z": 1.0}}`,
+	}
+	state := suspended()
+	state.Messages[2].Origin = llm.Origin{Provider: "anthropic", Model: "claude-opus-5-5"}
+	for _, b := range written {
+		state.Messages[2].Raw = append(state.Messages[2].Raw, json.RawMessage(b))
+	}
+
+	blob, err := execstate.Encode(state)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	for _, tag := range []string{`"Origin":{"Provider":"anthropic","Model":"claude-opus-5-5"}`, `"Raw":[`} {
+		if !strings.Contains(string(blob), tag) {
+			t.Errorf("the row does not carry %s — a renamed tag is a turn an older build cannot read:\n%s", tag, blob)
+		}
+	}
+	// A turn with no origin writes none: every message but the assistant's
+	// is one, and an empty object on each is bytes for nothing.
+	if strings.Count(string(blob), `"Origin"`) != 1 {
+		t.Errorf("the row carries an origin on a message that has none:\n%s", blob)
+	}
+
+	got, ok, err := execstate.Decode(blob)
+	if err != nil || !ok {
+		t.Fatalf("Decode = %v, %v", ok, err)
+	}
+	turn := got.Messages[2]
+	if turn.Origin != state.Messages[2].Origin {
+		t.Errorf("origin = %+v, want %+v", turn.Origin, state.Messages[2].Origin)
+	}
+	if len(turn.Raw) != len(written) {
+		t.Fatalf("raw = %d blocks, want the %d written", len(turn.Raw), len(written))
+	}
+	for i := range written {
+		if got, want := tokens(t, turn.Raw[i]), tokens(t, []byte(written[i])); got != want {
+			t.Errorf("block %d came back as\n  %s\nwant\n  %s", i, got, want)
+		}
+	}
+	if again, err := execstate.Encode(got); err != nil || string(again) != string(blob) {
+		t.Errorf("a decoded state re-encodes differently (%v):\n first %s\nsecond %s", err, blob, again)
+	}
+}
+
+// tokens is a JSON value with the whitespace between its tokens dropped and
+// <, > and & escaped — the form both the row's encoder and the request's give
+// it, which changes no token.
+func tokens(t *testing.T, raw []byte) string {
+	t.Helper()
+	var compact, escaped bytes.Buffer
+	if err := json.Compact(&compact, raw); err != nil {
+		t.Fatalf("%s is not JSON: %v", raw, err)
+	}
+	json.HTMLEscape(&escaped, compact.Bytes())
+	return escaped.String()
 }
 
 // A V1 row's numbers are read the same exact way, since it is read for ever.

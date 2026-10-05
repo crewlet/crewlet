@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -125,5 +126,92 @@ func TestRefusedCarriesTheRefusalAndItsCompletion(t *testing.T) {
 	if msg := err.Error(); !strings.Contains(msg, "declined") || !strings.Contains(msg, "cyber") ||
 		!strings.Contains(msg, "not this") {
 		t.Errorf("Error() = %q, want the decline, its category and its explanation", msg)
+	}
+}
+
+// fill sets every exported field reachable from v to a non-zero value derived
+// from seed, so a field that is not copied cannot pass as an equal zero.
+func fill(v reflect.Value, seed string) {
+	switch v.Kind() {
+	case reflect.String:
+		v.SetString(seed)
+	case reflect.Int, reflect.Int64:
+		v.SetInt(int64(len(seed)))
+	case reflect.Bool:
+		v.SetBool(true)
+	case reflect.Slice:
+		s := reflect.MakeSlice(v.Type(), 1, 1)
+		fill(s.Index(0), seed)
+		v.Set(s)
+	case reflect.Uint8:
+		v.SetUint(uint64(seed[0]))
+	case reflect.Map:
+		m := reflect.MakeMap(v.Type())
+		val := reflect.New(v.Type().Elem()).Elem()
+		fill(val, seed)
+		m.SetMapIndex(reflect.ValueOf(seed), val)
+		v.Set(m)
+	case reflect.Interface:
+		v.Set(reflect.ValueOf(seed))
+	case reflect.Struct:
+		for i := range v.NumField() {
+			if v.Type().Field(i).IsExported() {
+				fill(v.Field(i), seed+"."+v.Type().Field(i).Name)
+			}
+		}
+	}
+}
+
+// A COMPLETION'S TURN CARRIES EVERYTHING THE TWO SHARE. The assistant turn a
+// conversation grows by is built in one place, and this holds that place to
+// the two types: every field of the answer that the turn also has is copied,
+// and a field added to EITHER type fails here until it is decided — copied,
+// or named below as belonging to one side only. The vendor's own blocks were
+// the field this exists for: dropped between the answer and the turn, they
+// reach no later call, and nothing anywhere reports that the reasoning they
+// carried is gone.
+func TestACompletionsTurnCarriesEverythingItShares(t *testing.T) {
+	t.Parallel()
+	var c llm.Completion
+	fill(reflect.ValueOf(&c).Elem(), "c")
+	m := c.Message()
+
+	if m.Role != llm.RoleAssistant {
+		t.Errorf("role = %q, want assistant", m.Role)
+	}
+	if m.Origin != (llm.Origin{Provider: c.Provider, Model: c.Model}) {
+		t.Errorf("origin = %+v, want the backend and the model that answered", m.Origin)
+	}
+
+	// The turn's own fields: a role, where it came from, and the three
+	// that describe a tool RESULT rather than an answer.
+	turnOnly := map[string]bool{"Role": true, "Origin": true, "ToolCallID": true, "Name": true, "Failed": true}
+	// The answer's own: who served it and what it cost and why it stopped
+	// — the round's record, not the conversation's. Model and Provider
+	// reach the turn as its Origin.
+	answerOnly := map[string]bool{
+		"Model": true, "ProviderKey": true, "Provider": true, "StopReason": true,
+		"InputTokens": true, "OutputTokens": true, "CacheRead": true, "CacheWrite": true,
+	}
+	cv, mv := reflect.ValueOf(c), reflect.ValueOf(m)
+	for i := range mv.NumField() {
+		name := mv.Type().Field(i).Name
+		if turnOnly[name] {
+			continue
+		}
+		field := cv.FieldByName(name)
+		if !field.IsValid() {
+			t.Errorf("Message.%s has no counterpart on Completion: copy it in Completion.Message or name it turn-only here", name)
+			continue
+		}
+		if !reflect.DeepEqual(field.Interface(), mv.Field(i).Interface()) {
+			t.Errorf("Message.%s = %v, want the completion's %v", name, mv.Field(i), field)
+		}
+	}
+	for i := range cv.NumField() {
+		name := cv.Type().Field(i).Name
+		if !answerOnly[name] && !mv.FieldByName(name).IsValid() {
+			t.Errorf("Completion.%s reaches no turn: give Message the field or name it answer-only here", name)
+		}
 	}
 }

@@ -285,6 +285,10 @@ func TestAnEnvelopeReplyBecomesToolCalls(t *testing.T) {
 	if comp.StopReason != llm.StopToolUse {
 		t.Errorf("StopReason = %q, want tool_use", comp.StopReason)
 	}
+	// Recorded so no other backend mistakes this turn for one of its own.
+	if comp.Provider != "cli-agent" {
+		t.Errorf("Provider = %q, want cli-agent", comp.Provider)
+	}
 	if comp.Content != "reading" {
 		t.Errorf("Content = %q", comp.Content)
 	}

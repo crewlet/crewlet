@@ -662,8 +662,9 @@ func measurePrompt(system, user string, seed []llm.Message, defs []llm.ToolDef) 
 // THE THINKING TERM IS COUNTED ONCE PER MESSAGE, and that is the whole of the
 // arithmetic here. [llm.Message] carries a model's reasoning in two shapes and
 // a backend sets either or both: the Anthropic backend fills ThinkingBlocks —
-// which it hands straight back into the next call's content blocks and is
-// billed for — and ALSO renders that same thinking text into ReasoningContent
+// the neutral copy of the blocks it hands straight back into the next call
+// (verbatim, from llm.Message.Raw) and is billed for — and ALSO renders that
+// same thinking text into ReasoningContent
 // as prose, while the OpenAI backend fills ReasoningContent alone and the
 // cli-agent text backend writes exactly that prose into the prompt it builds.
 // So summing both would double the largest term a parked Anthropic turn

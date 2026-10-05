@@ -967,10 +967,17 @@ func TestToolCallsAreTranslated(t *testing.T) {
 			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
 		}`)
 	})
-	p := newProvider(t, url, nil)
+	// An openai-compatible entry labels itself with its KEY, and a key may
+	// be any word. What the turn records is the wire format, whatever the
+	// label — a turn recorded as `anthropic` would have its blocks handed
+	// to a backend whose format they are not.
+	p := newProvider(t, url, func(c *Config) { c.Name = "anthropic" })
 	out, err := p.Complete(context.Background(), userTurn("hi"))
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
+	}
+	if out.Provider != "openai" {
+		t.Fatalf("Provider = %q, want the wire format openai whatever the entry's label", out.Provider)
 	}
 	if len(out.ToolCalls) != 4 {
 		t.Fatalf("ToolCalls = %+v", out.ToolCalls)

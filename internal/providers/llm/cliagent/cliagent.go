@@ -49,7 +49,8 @@ import (
 
 var log = logging.Get("llm.cliagent")
 
-// providerName is what a classified failure calls this backend.
+// providerName is what a classified failure calls this backend, and what a
+// completion records as its [llm.Origin.Provider].
 const providerName = "cli-agent"
 
 // Config is one cli-agent provider entry, fully resolved.
@@ -519,6 +520,7 @@ func (p *Provider) completion(
 	env := ParseEnvelope(out.text)
 	comp := &llm.Completion{
 		Model:      p.model,
+		Provider:   providerName,
 		Content:    env.Message,
 		StopReason: llm.StopEnd,
 	}

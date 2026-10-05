@@ -62,6 +62,16 @@ type State struct {
 
 	// Messages is the conversation as it stood, ending with the assistant
 	// turn whose run_sandbox tool call is still unanswered.
+	//
+	// An assistant turn carries the vendor's own content blocks and the
+	// backend that wrote them ([llm.Message.Raw], [llm.Message.Origin]),
+	// which the resumed loop replays unchanged: a model that preserves its
+	// thinking refuses a conversation whose earlier turns come back
+	// different. Additive within v2: a row written before they existed
+	// decodes to none, and the backend rebuilds those turns from the
+	// neutral view without their thinking — the blocks such a row lacks all
+	// sit before any the resumed rounds write, and dropping a run from the
+	// front is the one removal the vendor accepts.
 	Messages []llm.Message `json:"messages"`
 
 	// PendingCallID and PendingCallName identify the dangling call the

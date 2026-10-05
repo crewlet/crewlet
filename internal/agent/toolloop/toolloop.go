@@ -1243,13 +1243,11 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			return nil, err
 		}
 
-		msgs = append(msgs, llm.Message{
-			Role:             llm.RoleAssistant,
-			Content:          completion.Content,
-			ReasoningContent: completion.ReasoningContent,
-			ThinkingBlocks:   completion.ThinkingBlocks,
-			ToolCalls:        completion.ToolCalls,
-		})
+		// The turn as the backend recorded it — the vendor's own blocks
+		// included, which the next call hands back unchanged
+		// ([llm.Message.Raw]). Built by the completion, never field by field
+		// here, so nothing it carries can miss the conversation.
+		msgs = append(msgs, completion.Message())
 		// Recorded HERE, beside the message it describes, because this is
 		// the last frame that knows which round the turn belongs to. The
 		// round is `roundsUsed` — ONE-BASED, matching [Execution.Round] — so a

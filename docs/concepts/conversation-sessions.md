@@ -20,8 +20,11 @@ and it deliberately follows the same doctrine one scope wider.
 
 **Not a transcript replay.** The engine can already round-trip a whole LLM
 conversation — the detached run's `execute_state` persists the full message
-list, signed thinking blocks included, and splices it back into a running
-loop. That is right for a turn *parked* on a question whose dangling tool call
+list, each assistant turn kept as the vendor's own content blocks (signed
+thinking included, in the order the model wrote them) beside the backend and
+model that wrote it, and splices it back into a running loop, which replays
+those turns [exactly as they were written](turn-engine.md#the-conversation-only-grows).
+That is right for a turn *parked* on a question whose dangling tool call
 is waiting for one answer. It is wrong here: a conversation's next turn
 arrives against a thread that has **moved**, and replaying raw prior context
 invites acting on state that is no longer true.
