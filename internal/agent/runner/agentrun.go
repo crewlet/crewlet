@@ -103,7 +103,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
-			func() []ledger.Call { return calls(surface) },
+			func() []ledger.Call { return turn.Record(history, calls(surface)) },
 			func() turn.Surface { return describe(surface) }))
 
 	built, err := r.surfaceWith(ctx, phase.Execute, round, snapshot, submit,
@@ -184,15 +184,18 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // A run that stopped without saying what it did is rescued as incomplete and
 // judged on its record, rather than having a delivery inferred from the prose
 // the CLI happened to end with.
-func (r *Runner) resumeAgentRun(ctx context.Context, state execstate.State,
-	answer string, bridged []ledger.Call,
+//
+// `history` is the turn's closed rounds, which its submission's citations read
+// beside the run's own calls — see [turn.Record].
+func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
+	state execstate.State, answer string, bridged []ledger.Call,
 ) (turn.Work, turn.Surface, error) {
 	snapshot := r.cfg.Registry.Snapshot()
 
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
-			func() []ledger.Call { return bridged },
+			func() []ledger.Call { return turn.Record(history, bridged) },
 			func() turn.Surface { return describe(surface) }))
 
 	built, err := r.surfaceWith(ctx, phase.Execute, state.Round, snapshot, submit,

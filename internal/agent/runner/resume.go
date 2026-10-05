@@ -85,7 +85,7 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 		// one is collected as one however the company's providers have
 		// been applied in the days it was parked — see
 		// [execstate.State.AgentRun].
-		return r.resumeAgentRun(ctx, state, answer, r.cfg.Resume.Bridged)
+		return r.resumeAgentRun(ctx, history, state, answer, r.cfg.Resume.Bridged)
 	}
 
 	snapshot := r.cfg.Registry.Snapshot()
@@ -94,11 +94,12 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	// ENDS, and the re-entered conversation has not ended yet. Its checks
 	// read the resumed surface's own record, which resumedCalls widens to
 	// the whole phase — so a delivery made before the suspend is citable
-	// after it, and is never demanded twice.
+	// after it, and is never demanded twice — and Record widens to the
+	// whole turn, for the same reason one round further back.
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
-			func() []ledger.Call { return resumedCalls(surface, state) },
+			func() []ledger.Call { return turn.Record(history, resumedCalls(surface, state)) },
 			func() turn.Surface { return describe(surface) }))
 
 	built, err := r.surfaceWith(ctx, phase.Execute, state.Round, snapshot, submit,

@@ -277,6 +277,90 @@ func Answered(calls []ledger.Call, s Surface, reply Reply) bool {
 	return DeliveredTo(calls, s, reply)
 }
 
+// Record is what every delivery check reads: every call this turn's
+// CLOSED rounds made, then the current round's.
+//
+// THE OBLIGATION IS THE TURN'S, NOT THE ROUND'S. Somebody waiting is answered
+// once; a round the reviewer sends back for something else does not un-answer
+// them. And the prior-work ledger tells every later round exactly that — an
+// earlier round's successful write ALREADY RAN, "do NOT issue it again" — so a
+// check reading the round alone demanded the one thing the round was forbidden
+// to do. That shipped: a seat answered a founder's comment with a comment of
+// its own, was sent back by its reviewer to re-read the item first, and then
+// had eleven submissions citing that comment refused as "nothing delivered";
+// its reviewer's `done` was overturned for the same reason, and the round
+// after that posted the same acknowledgement in a chat channel instead. Three
+// rounds, a stray post, and a turn recorded as failed for having answered in
+// its first.
+//
+// The runner's check of a submission's citations, [Check] and [OverrideDone]
+// all read this, and must: what one of them refuses another must not accept,
+// or a model is told one thing at submission and judged by another.
+// [Result.Delivered] deliberately does NOT — see its own doc.
+func Record(earlier []ledger.Iteration, current []ledger.Call) []ledger.Call {
+	n := len(current)
+	for _, it := range earlier {
+		n += len(it.Calls)
+	}
+	out := make([]ledger.Call, 0, n)
+	for _, it := range earlier {
+		out = append(out, it.Calls...)
+	}
+	return append(out, current...)
+}
+
+// Remedy is the sentence a delivery refusal ends with: how to deliver where
+// the waiting party actually is.
+//
+// IT NAMES THE TOOLS, because the sentence it replaced named a MECHANISM —
+// "`list_mcp_server_tools` and `activate_tool` will find it" — and the
+// mechanism is right for only one kind of surface. A vendor's tools sit behind
+// discovery; the engine's own tracker and knowledge base are answered by
+// first-party tools the executor already holds, which no discovery call
+// lists. A seat woken by a work-item comment was sent to discovery, found the
+// one MCP server it held, and posted its answer in the team's chat channel: a
+// surface that could never satisfy the check, so the turn ended on the
+// iteration cap with a stray message left behind it.
+//
+// Where the asker's surface cannot be named — no surface, or one this seat
+// holds no tool for, which are [DeliveredTo]'s two fallbacks — any delivery
+// counts, and the general instruction is the honest one.
+func Remedy(s Surface, reply Reply) string {
+	on := reply.Surface
+	if on == "" || !s.Reaches(on) {
+		return "Call the tool that delivers on the surface the request came from — " +
+			"`list_mcp_server_tools` and `activate_tool` will find one you do not " +
+			"have yet."
+	}
+	var held []string
+	discoverable := false
+	for name, surface := range s.Deliveries {
+		switch {
+		case surface != on:
+		case slices.Contains(s.Discoverable, name):
+			discoverable = true
+		default:
+			held = append(held, name)
+		}
+	}
+	slices.Sort(held)
+	// THE SERVER IS THE SURFACE: an MCP tool reaches the surface named after
+	// its own server, so `on` is also the server to look in.
+	const discover = "`list_mcp_server_tools` lists and `activate_tool` promotes"
+	switch {
+	case len(held) > 0 && discoverable:
+		return "Deliver on `" + on + "` with one of the tools already on your tool " +
+			"list — no discovery needed: " + strings.Join(held, ", ") + " — or with " +
+			"one from the `" + on + "` MCP server, which " + discover + "."
+	case len(held) > 0:
+		return "Deliver on `" + on + "` with one of the tools already on your tool " +
+			"list — no discovery needed: " + strings.Join(held, ", ") + "."
+	default:
+		return "Deliver on `" + on + "` with a tool from the `" + on + "` MCP " +
+			"server, which " + discover + "."
+	}
+}
+
 // DeliverersFor names the tools on this surface that reach the waiting party,
 // so a refusal can say which ones would actually have counted.
 //
@@ -300,11 +384,12 @@ func DeliverersFor(s Surface, reply Reply) []string {
 // take back.
 //
 // A DIFFERENT QUESTION FROM [Delivered], and the two must not be merged.
-// Delivered asks whether an answer reached the person who is waiting, so it is
-// MCP-only on purpose: a first-party builtin "never counts however much it
-// writes". This asks whether anything irreversible happened at all, so a
-// builtin that wakes a colleague or starts a billed box counts exactly as much
-// as a Jira comment does.
+// Delivered asks whether an answer could have reached somebody, so it counts
+// only the tools that can carry one: an MCP write, or a first-party tool the
+// engine registered as reaching a surface — a work-item comment does, a diary
+// write never does however much it writes. This asks whether anything
+// irreversible happened at all, so a builtin that wakes a colleague or starts
+// a billed box counts exactly as much as a Jira comment does.
 //
 // PROOF, NOT SUSPICION, and that asymmetry is the whole design. Its caller
 // spends a trigger on a true answer — a redelivery that would have re-run this
@@ -346,7 +431,14 @@ type Verdict struct {
 // call at all. What it cannot do is judge whether the work was any GOOD —
 // that is the reviewer's, and everything this returns without a correction
 // goes there.
-func Check(w Work, reply Reply, s Surface) Verdict {
+//
+// THE RECORD IS THE TURN'S — earlier holds the rounds already closed — and not
+// this round's alone; see [Record]. A round that only re-read the item after
+// an earlier one answered has delivered exactly what the turn owed, and whether
+// it ALSO owed a further delivery (a correction the first answer needs) is a
+// judgement about content, which is the reviewer's.
+func Check(w Work, earlier []ledger.Iteration, reply Reply, s Surface) Verdict {
+	record := Record(earlier, w.Calls)
 	// TWO PREDICATES, TWO QUESTIONS, and they are deliberately not one
 	// variable. `acted` asks whether anything at all reached outside the
 	// engine, which is what makes ending a turn as "nobody was asking"
@@ -355,8 +447,8 @@ func Check(w Work, reply Reply, s Surface) Verdict {
 	// and fail the second — it files a ticket while a founder waits in chat
 	// — and collapsing them lets that turn pass one check under the other's
 	// name.
-	acted := Delivered(w.Calls, s)
-	delivered := DeliveredTo(w.Calls, s, reply)
+	acted := Delivered(record, s)
+	delivered := DeliveredTo(record, s, reply)
 
 	// A rescue never takes any fast path. The engine wrote the outcome,
 	// so there is nothing here anybody committed to.
@@ -404,17 +496,15 @@ func Check(w Work, reply Reply, s Surface) Verdict {
 		// argues with the correction instead of acting on it.
 		if on := reply.Surface; on != "" && s.Reaches(on) && acted {
 			return Verdict{Correction: "You reported the work as delivered, and you " +
-				"did act — but nothing was delivered on " + on + ", which is where " +
+				"did act — but nothing was delivered on `" + on + "`, which is where " +
 				"this was asked. Filing the work somewhere else does not tell the " +
-				"person waiting. Call the tool that delivers on " + on + " — " +
-				"discovering it with `list_mcp_server_tools` and `activate_tool` if " +
-				"you do not have it yet — or report honestly what is blocking you."}
+				"person waiting. " + Remedy(s, reply) + " If you cannot, report " +
+				"honestly what is blocking you."}
 		}
 		return Verdict{Correction: "You reported the work as delivered, but no tool " +
 			"that acts outside the engine was called in this turn: writing about an " +
-			"action does not perform it. Call the tool that actually delivers — " +
-			"discovering it with `list_mcp_server_tools` and `activate_tool` if you " +
-			"do not have it yet — or report honestly what is blocking you."}
+			"action does not perform it. " + Remedy(s, reply) + " If you cannot, " +
+			"report honestly what is blocking you."}
 	}
 	return Verdict{}
 }
@@ -431,24 +521,40 @@ func Check(w Work, reply Reply, s Surface) Verdict {
 // It fires only when somebody is waiting for a TOOL to have delivered.
 // Nobody waiting means a research turn that legitimately ends in prose;
 // waiting on the engine means the artifact reaches them either way.
-func OverrideDone(w Work, reply Reply, s Surface) (override bool, correction string) {
-	if reply.Kind != ReplyTool || DeliveredTo(w.Calls, s, reply) {
+//
+// Judged on the TURN's record — earlier is the rounds already closed — for
+// the reason [Check] is: an answer the first round gave is still an answer
+// when the reviewer approves the third.
+func OverrideDone(w Work, earlier []ledger.Iteration, reply Reply, s Surface,
+) (override bool, correction string) {
+	record := Record(earlier, w.Calls)
+	if reply.Kind != ReplyTool || DeliveredTo(record, s, reply) {
 		return false, ""
 	}
-	if on := reply.Surface; on != "" && s.Reaches(on) {
+	on := reply.Surface
+	named := on != "" && s.Reaches(on)
+	switch {
+	case named && Delivered(record, s):
 		// NAMED, because this is the case the flat check used to pass. The
 		// turn DID reach somebody — just not the person waiting — so a
 		// correction saying "no tool was called" would read as false to a
 		// model looking at its own successful write, and it would submit
 		// the same citation again.
 		return true, "This turn reached somebody, but not the person waiting for it: " +
-			"nothing was delivered on " + on + ", which is where this was asked. " +
-			"Call the tool that delivers there — `list_mcp_server_tools` and " +
-			"`activate_tool` will find it — before reporting the work delivered."
+			"nothing was delivered on `" + on + "`, which is where this was asked. " +
+			Remedy(s, reply)
+	case named:
+		// AND ONLY THEN. Saying "this turn reached somebody" to a turn that
+		// reached nobody is the same false statement pointed the other way,
+		// and a model told it has written somewhere goes looking for where.
+		return true, "Nothing in this turn reached the person waiting for it: " +
+			"nothing was delivered on `" + on + "`, which is where this was asked. " +
+			Remedy(s, reply)
+	default:
+		return true, "This turn produced an answer as text, but no tool that acts " +
+			"outside the engine was called: the requester will never see it. " +
+			Remedy(s, reply)
 	}
-	return true, "This turn produced an answer as text, but no tool that acts outside " +
-		"the engine was called: the requester will never see it. Call the tool that " +
-		"delivers on the surface the request came from."
 }
 
 // AppendCorrection joins the reviewer's own notes to an engine correction.

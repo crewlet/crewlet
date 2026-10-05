@@ -1918,9 +1918,17 @@ func TestADependentIsSkippedWhenItsInputDidNotSucceed(t *testing.T) {
 	if results[2].Status != subagent.StatusOK {
 		t.Errorf("an unrelated task was skipped too: %+v", results[2])
 	}
-	// The skipped task never reached a model: two of the three did.
-	if p.count() != 2 {
-		t.Errorf("%d model calls, want 2 — a skipped task must cost nothing", p.count())
+	// The skipped task never reached a model. Asserted on what was ASKED
+	// rather than on a count of calls: how many rounds the gather task took
+	// to give up is the tool loop's business — it is reminded once that
+	// prose is not a submission — and a count would make this a test of
+	// that rather than of the skip.
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, req := range p.seen {
+		if strings.Contains(userText(req), "reconcile") {
+			t.Error("the skipped task reached a model — a skipped task must cost nothing")
+		}
 	}
 }
 
@@ -1981,8 +1989,10 @@ func TestAWorkerThatNeverSubmittedIsNotGivenAnAnswer(t *testing.T) {
 		t.Errorf("an answer was synthesised: %+v", res.Output)
 	}
 	// The prose is still handed back: rounds the parent paid for are worth
-	// reading even when the last step was skipped.
-	if res.Text != "here is my thinking, at length" {
+	// reading even when the last step was skipped. Contained rather than
+	// equal, because the loop reminds the worker once that prose is not a
+	// submission and its answer to that is part of the same transcript.
+	if !strings.Contains(res.Text, "here is my thinking, at length") {
 		t.Errorf("the worker's prose was discarded: %q", res.Text)
 	}
 }
