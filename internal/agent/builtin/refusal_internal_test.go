@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -242,6 +244,25 @@ func TestAnAnswerTheReaderRefusesCarriesItsClass(t *testing.T) {
 	}
 	if _, ok := answerRefusal(errors.New("tracker: read the ask c1: disk I/O")); ok {
 		t.Error("a read failure was classed as the reader's refusal of an answer")
+	}
+}
+
+// A NOTE LIST CUT TO A LIMIT SAYS HOW MANY IT LEFT OFF. The filter picks up to
+// eight; the default shows every one of them, and a smaller limit is a
+// narrowing the answer admits to rather than a list that reads as complete.
+func TestRefreshMemorySaysWhatALimitLeftOff(t *testing.T) {
+	t.Parallel()
+	entries := make([]learning.DiaryEntry, noteLimit)
+	for i := range entries {
+		entries[i] = learning.DiaryEntry{Kind: "long", Content: "note " + strconv.Itoa(i)}
+	}
+	all := renderHintedNotes(entries, "deploys", noteLimit)
+	if strings.Count(all.Output, "- [long]") != noteLimit || strings.Contains(all.Output, "more that bear") {
+		t.Fatalf("the default did not show every pick:\n%s", all.Output)
+	}
+	some := renderHintedNotes(entries, "deploys", 3)
+	if strings.Count(some.Output, "- [long]") != 3 || !strings.Contains(some.Output, "+5 more that bear on this") {
+		t.Fatalf("a narrowed list did not say what it left off:\n%s", some.Output)
 	}
 }
 

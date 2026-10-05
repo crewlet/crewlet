@@ -68,11 +68,15 @@ type (
 // noteLimit caps what refresh_memory puts in front of a model when the model
 // names no limit.
 //
-// A note goes into a prompt, and a dozen half-relevant ones crowd out the task
-// they were fetched for. Five is what a model reads; more is what it skims.
-// Distinct from an episode's limit — that one is the company's
-// learning.episodic.retrieval_limit, and a diary is not an episode history.
-const noteLimit = 5
+// EIGHT, the most the relevance filter itself may pick (the turn-start memory
+// block's own maximum), so a default call shows every note the filter judged
+// relevant. It was five, and the three picks past it were dropped without a
+// word — a model asked for its notes on a topic was told the first five and
+// left to believe that was all of them. A smaller `limit` still narrows, and
+// then the answer SAYS how many more there are. Distinct from an episode's
+// limit — that one is the company's learning.episodic.retrieval_limit, and a
+// diary is not an episode history.
+const noteLimit = 8
 
 // maxEpisodeLimit bounds what a model may ask for. A tool that honoured
 // "limit: 500" would let one call spend a phase's whole context on history.
@@ -482,13 +486,20 @@ func renderHintedNotes(entries []learning.DiaryEntry, hint string, limit int) to
 		return tools.Result{Output: fmt.Sprintf(
 			"Nothing in your notes bears on %s.", clip(hint))}
 	}
+	more := 0
 	if len(entries) > limit {
-		entries = entries[:limit]
+		entries, more = entries[:limit], len(entries)-limit
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Your notes that bear on %s:\n\n", clip(hint))
 	for _, e := range entries {
 		fmt.Fprintf(&b, "- [%s] %s\n", e.Kind, e.Content)
+	}
+	if more > 0 {
+		// SAID, never silent: a list cut to a limit reads as the whole
+		// list, and a seat that believes it has every note will act
+		// without the one that was left off.
+		fmt.Fprintf(&b, "- (+%d more that bear on this — ask again with a larger `limit`)\n", more)
 	}
 	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}
 }

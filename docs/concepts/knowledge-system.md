@@ -678,7 +678,9 @@ sequenceDiagram
     A->>C: any company window with no room?
     C-->>A: refuse budget_exhausted (nothing spent)
     A->>S: hybrid: 5 pages + 3 work items
-    S-->>A: sources (bodies read whole, 4 KiB each)
+    S-->>A: sources (bodies read whole)
+    A->>M: any source past 4 KiB, condensed for the question
+    M-->>A: rewrite (marked), or the source is dropped
     A->>M: numbered sources + the question
     M-->>A: answer citing [n]
     A->>C: record the tokens it spent (company only)

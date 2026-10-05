@@ -2718,14 +2718,18 @@ which node runs the turn is not known until one answers.
 `answer_knowledge` answers a person's question — the dashboard's ⌘K answer —
 from what the company has written down: it searches the knowledge base
 (`hybrid`, auto-drafts hidden) for five pages and the work tracker for three
-items, reads each whole where this node holds it (the first 4 KiB of a native
-page's body or an item's description; an external wiki's search snippet), and
-asks one model to answer from those sources alone, citing each claim as `[n]`.
+items, reads each WHOLE where this node holds it (a native page's body, an
+item's description; an external wiki's search snippet, said to be one),
+condenses any source past 4 KiB for the question with the same auxiliary
+model — never cut — and asks one model to answer from those sources alone,
+citing each claim as `[n]`. A source that cannot be condensed is dropped from
+the answer and from its `sources` alike, so nothing is cited that the model
+was not shown.
 See [Knowledge System § Answering a question](../concepts/knowledge-system.md#answering-a-question).
 
 | Argument | |
 |---|---|
-| `q` | The question, in plain words; at most 400 bytes. |
+| `q` | The question, in plain words; at most 400 bytes — a longer one is refused, never cut. |
 
 It answers:
 

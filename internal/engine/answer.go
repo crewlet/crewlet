@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -126,3 +127,8 @@ func (e *Engine) KnowledgeCorpus() (string, bool) {
 	}
 	return strings.Join(parts, ","), true
 }
+
+// Rewrites is the cache every compaction this node makes is kept in, for the
+// surfaces outside a turn that condense text the same way — a person's
+// question answered from pages too long to read whole.
+func (e *Engine) Rewrites() *compact.Cache { return e.rewrites }

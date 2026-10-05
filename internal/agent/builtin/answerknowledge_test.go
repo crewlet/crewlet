@@ -75,6 +75,9 @@ type answerModel struct {
 	asked   []llm.Request
 	role    *org.Role
 	phase   phase.Phase
+	// failRewrite fails the condensing calls only — the ones made with the
+	// compactor's instructions — and answers the question as usual.
+	failRewrite bool
 }
 
 func (m *answerModel) Model() string { return "aux-small" }
@@ -84,6 +87,9 @@ func (m *answerModel) Complete(_ context.Context, req llm.Request) (*llm.Complet
 	m.asked = append(m.asked, req)
 	if m.err != nil {
 		return nil, m.err
+	}
+	if m.failRewrite && strings.HasPrefix(req.Messages[0].Content, "You rewrite text") {
+		return nil, errors.New("503 from the rewrite")
 	}
 	return &llm.Completion{Model: "aux-small", Content: m.content,
 		InputTokens: m.in, OutputTokens: m.out}, nil
@@ -295,7 +301,8 @@ func TestTheAnswerNamesItsSources(t *testing.T) {
 	}
 	user := rig.model.asked[0].Messages[1].Content
 	for i, needle := range []string{"[1] page: Deploy runbook\nRun `make deploy` from main.",
-		"[2] page: Rollback\nRevert the tag.", "[3] work item: ENG-7 Automate the deploy\nscript it"} {
+		"[2] page: Rollback\nRevert the tag.",
+		"[3] work item: ENG-7 Automate the deploy\n" + builtin.SnippetOnly + "script it"} {
 		if !strings.Contains(user, needle) {
 			t.Errorf("source [%d] reached the model as something other than %q:\n%s", i+1, needle, user)
 		}
@@ -459,5 +466,77 @@ func TestAnswerKnowledgeIsOmittedWithNoBudget(t *testing.T) {
 		if tool.Name() == builtin.AnswerKnowledgeTool {
 			t.Fatal("answer_knowledge was served with no budget behind it")
 		}
+	}
+}
+
+// A PAGE LONGER THAN AN ANSWER CAN READ IS CONDENSED FOR THE QUESTION, NOT
+// CUT. It used to be cut to its first four kilobytes, unmarked — so the step
+// the question was about, past the cut, never reached the model, and the
+// answer said the runbook did not have it.
+func TestALongSourceIsCondensedForTheQuestion(t *testing.T) {
+	t.Parallel()
+	rig := newAnswerRig()
+	long := strings.Repeat("Preamble about the deploy pipeline. ", 300) + "STEP FOUR: rotate the signing key."
+	rig.pages.bodies["p-1"] = long
+	res, _, _ := ask(t, rig.tool(t), "How do we rotate the signing key?")
+	if res.Failed {
+		t.Fatalf("refused: %s", res.Output)
+	}
+	if len(rig.model.asked) != 2 {
+		t.Fatalf("%d model calls, want the rewrite and the answer", len(rig.model.asked))
+	}
+	rewrite, answer := rig.model.asked[0], rig.model.asked[1]
+	if !strings.Contains(rewrite.Messages[1].Content, "STEP FOUR: rotate the signing key.") {
+		t.Fatal("the rewrite was not shown the end of the page")
+	}
+	if !strings.Contains(rewrite.Messages[0].Content, "How do we rotate the signing key?") {
+		t.Fatal("the rewrite was not told the question it serves")
+	}
+	if !strings.Contains(answer.Messages[1].Content, "condensed by a model") {
+		t.Fatalf("the answer was not told its source is a rewrite:\n%s", answer.Messages[1].Content)
+	}
+	if strings.Contains(answer.Messages[1].Content, long[:1000]) {
+		t.Fatal("the answering model was handed the raw page as well")
+	}
+	if len(rig.budget.charged) != 2 {
+		t.Fatalf("charged %v — the rewrite is spend the company's counter must hear", rig.budget.charged)
+	}
+}
+
+// A SOURCE THAT CANNOT BE CONDENSED IS DROPPED — from what the model reads AND
+// from the sources it cites — never handed over cut.
+func TestASourceThatCannotBeCondensedIsNotCited(t *testing.T) {
+	t.Parallel()
+	rig := newAnswerRig()
+	rig.model.failRewrite = true
+	rig.pages.bodies["p-1"] = strings.Repeat("x", builtin.AnswerSourceBytes*3)
+	res, answer, _ := ask(t, rig.tool(t), "How do we deploy?")
+	if res.Failed {
+		t.Fatalf("refused: %s", res.Output)
+	}
+	for _, src := range answer.Sources {
+		if src.Ref == "p-1" {
+			t.Fatal("an answer cited a source its model was never shown")
+		}
+	}
+	if strings.Contains(rig.model.asked[len(rig.model.asked)-1].Messages[1].Content, "xxxx") {
+		t.Fatal("a source that could not be condensed reached the model anyway")
+	}
+}
+
+// A QUESTION PAST ITS LIMIT IS REFUSED, NOT CUT — an answer to the first four
+// hundred bytes of a question answers a different question.
+func TestALongQuestionIsRefusedNotCut(t *testing.T) {
+	t.Parallel()
+	rig := newAnswerRig()
+	res, err := rig.tool(t).Call(t.Context(), map[string]any{"q": strings.Repeat("why ", 200)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Failed || !strings.Contains(res.Output, "takes at most") {
+		t.Fatalf("a long question was not refused naming the limit: %s", res.Output)
+	}
+	if rig.model.calls != 0 || len(rig.search.asked) != 0 {
+		t.Fatal("a refused question still searched or spent")
 	}
 }

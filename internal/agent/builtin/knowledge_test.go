@@ -163,19 +163,28 @@ func TestSearchKnowledgeWithNoTurnRefusesRatherThanPanicking(t *testing.T) {
 	}
 }
 
-// A pathological query would reach a backend's own query language. Four
-// hundred characters is a long sentence and several keywords; a whole thread
-// pasted in is prose no ranker can use.
-func TestALongQueryIsBounded(t *testing.T) {
+// A QUERY PAST ITS LIMIT IS REFUSED, NOT CUT. A search on the first four
+// hundred bytes of a pasted thread is a different search, and the old cut was
+// echoed back as though it were the query the model wrote.
+func TestALongQueryIsRefusedNotCut(t *testing.T) {
 	t.Parallel()
 	backend := &stubSearcher{can: true, hits: []knowledge.Hit{{Title: "x"}}}
 	tool := &searchKnowledge{search: backend}
-	if _, err := tool.CallForTurn(context.Background(), searchTurn(),
-		map[string]any{"query": strings.Repeat("z", 5000)}); err != nil {
+	res, err := tool.CallForTurn(context.Background(), searchTurn(),
+		map[string]any{"query": strings.Repeat("z", 5000)})
+	if err != nil {
 		t.Fatalf("CallForTurn: %v", err)
 	}
-	if got := len(backend.queries[0].Text); got != searchQueryMax {
-		t.Errorf("the query reached the backend at %d characters, want %d", got, searchQueryMax)
+	if !res.Failed || !strings.Contains(res.Output, "takes at most 400") {
+		t.Fatalf("a 5000-byte query was not refused naming the limit: %+v", res)
+	}
+	if len(backend.queries) != 0 {
+		t.Fatal("a refused query still reached the backend")
+	}
+	// AT the limit is a query, not a refusal.
+	if res, _ := tool.CallForTurn(context.Background(), searchTurn(),
+		map[string]any{"query": strings.Repeat("z", searchQueryMax)}); res.Failed {
+		t.Fatalf("a query at the limit was refused: %q", res.Output)
 	}
 }
 
