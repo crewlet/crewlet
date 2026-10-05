@@ -590,6 +590,8 @@ describe("a turn watched to its end", () => {
       phase,
       iteration: phase === "onboarding" ? 0 : 1,
       role: "CEO",
+      // THE SEAT'S OWN ID, which a streamed phase is matched to its seat on.
+      agent_id: "a-ceo",
       model: "claude-sonnet-5",
       total_tokens: 100,
     },
@@ -619,6 +621,7 @@ describe("a turn watched to its end", () => {
     store.applyAgents([
       {
         role: "CEO",
+        agent_id: "a-ceo",
         activity: "working",
         live_call: {
           turn_id: "t1",
@@ -664,6 +667,7 @@ describe("a turn watched to its end", () => {
     store.applyAgents([
       {
         role: "CEO",
+        agent_id: "a-ceo",
         activity: "working",
         live_call: {
           turn_id: "t1",

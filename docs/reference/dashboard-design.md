@@ -2303,7 +2303,10 @@ days the event store keeps, a page of fifty at a time with "Load older turns"
 following the engine's cursor, and a count of what is loaded — "50+" while an
 older page exists), with **Running now** leading the tab so a turn in flight is
 on screen as it opens, and the settled transcripts after the list under their
-own heading, **Transcripts · newest first**. A row for a turn still running says what the seat is doing
+own heading, **Transcripts · newest first**. A phase that finishes while the
+tab is open reaches its transcripts off the push, matched on the seat's own id
+as Live's recent phases are — never on its role name, which two unit seats
+stamped from one template share. A row for a turn still running says what the seat is doing
 and what it is on, from the push ("running — executing · round 2 of 24",
 ENG-32), and draws its iterations and tokens as not settled rather than as
 zeros — `#/live/turns` does the same. On a phone a row's summary takes two

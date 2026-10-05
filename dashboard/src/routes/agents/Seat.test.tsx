@@ -1353,6 +1353,39 @@ test("the turns tab leads with the running turn and titles the transcripts", asy
   expect(heads).not.toContain("");
 });
 
+// A PHASE STREAMED AFTER THE TAB OPENED IS THIS SEAT'S BY ITS ID, never by its
+// role name: two unit seats stamped from one template share "SWE", and matched
+// on that, a sibling's finished turn landed among this seat's transcripts.
+test("the turns tab takes a streamed phase by the seat's id, not a sibling's by its role", async () => {
+  const { store } = mount("#/agents/seats/swe?tab=turns", {
+    agents: [{ ...WORKING, activity: "idle", turn: null, live_call: null }],
+  });
+  await settle();
+  const streamed = (id: string, turn: string, agentId: string) => ({
+    id,
+    type: "agent_phase_completed",
+    source: "engine",
+    actor: "SWE",
+    summary: "",
+    category: "lifecycle",
+    trace_id: "",
+    span_id: "",
+    parent_span_id: "",
+    topic: "",
+    failed: false,
+    timestamp: "2026-09-21T09:50:00Z",
+    payload: { turn_id: turn, phase: "execute", iteration: 1, role: "SWE", agent_id: agentId },
+  });
+  act(() => {
+    store.applyEvent(streamed("ev-mine", "t-mine", "a-swe") as never);
+    store.applyEvent(streamed("ev-sibling", "t-sibling", "a-sibling") as never);
+  });
+  const transcripts = screen
+    .getByRole("heading", { name: "Transcripts · newest first" })
+    .closest("section") as HTMLElement;
+  expect(transcripts.querySelectorAll(".turn-card")).toHaveLength(1);
+});
+
 // THE HEADER COUNTS WHAT IS LOADED, never the history: `.length` of the first
 // page read "50" under "the newest 50 this seat took" whether the seat had
 // fifty-one turns or four hundred, and nothing reached the fifty-first.

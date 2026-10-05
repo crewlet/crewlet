@@ -94,10 +94,15 @@ export function Turns({
   // be on.
   const running = useMemo(() => (agent ? [agent] : []), [agent]);
   const { connected } = useConnection();
-  // The ROLE NAME, which is what a phase record carries. Empty for a seat
-  // that resolves to nothing, and the stream filter below reads it as "match
-  // no phase" rather than "match every phase that named no role".
-  const role = agent?.role ?? seat.name;
+  // THE SEAT'S OWN ID — the one every node derives for its handle, which a
+  // durable phase record carries as `agent_id` and the agents push names on
+  // this seat's row — and what a streamed phase is matched on, as Live's
+  // recent phases match it. It was the ROLE NAME, which two unit seats
+  // stamped from one template share and a rename changes, so a sibling's
+  // phases streamed into this seat's transcripts. Empty while the push has
+  // named no id, and the filter below reads that as "match no phase" rather
+  // than "match every phase that named no id".
+  const agentId = agent?.agent_id ?? "";
   const { socket } = useClient();
   // EVERY DAY THE STORE KEEPS: named, because the read's default is a week,
   // and a seat's record is the whole of what can still be read.
@@ -133,11 +138,11 @@ export function Turns({
     // The query is answered ONCE, at mount. Every phase that finishes after
     // it — every phase of the turn a reader opened this tab to watch —
     // reaches the tab only here.
-    const streamed = streamedPhases(phaseEvents, (r) => role !== "" && r.role === role);
+    const streamed = streamedPhases(phaseEvents, (r) => agentId !== "" && r.agentId === agentId);
     const live = agent?.live_call ? [fromLiveCall(agent.live_call, agent.role, agent.turn)] : [];
     // Streamed FIRST so the query's own copy of the same phase wins the key.
     return mergePhases([...streamed, ...stored], live);
-  }, [history.data, phaseEvents, agent, role]);
+  }, [history.data, phaseEvents, agent, agentId]);
   const turns = useMemo(() => groupTurns(phases), [phases]);
   // WHICH OF THESE ARE THE SAME WORK: a turn id names one run, so a trigger
   // that failed without acting and came back is several cards.
