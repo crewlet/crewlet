@@ -165,8 +165,7 @@ func Catalogue() []Instrument {
 				"undid it) — both answered by a NEW operation under a fresh " +
 				"id, never by a retry. A record that landed and a gate dropped " +
 				"is counted under the gate that dropped it — `evicted`, " +
-				"`deleted`, `retired` (a kind this build no longer applies), " +
-				"`abandoned` (written in a generation a reanchor abandoned) or " +
+				"`deleted`, `abandoned` (written in a generation a reanchor abandoned) or " +
 				"`overtaken` (written after a restored reanchor, below its " +
 				"generation) — and is never re-decided, because republishing " +
 				"makes another record nothing applies. Beside the refusals: " +
