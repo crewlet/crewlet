@@ -8,7 +8,7 @@
 // the status only where it names none ([kindOf] says why); which credential to
 // use next is the pool's, and which model to try next is the chain's.
 //
-// Five details here are the ones worth checking against the vendor rather
+// Six details here are the ones worth checking against the vendor rather
 // than against intuition:
 //
 //   - THE REQUEST SHAPE IS THE MODEL'S, read from [claudemodel] once at
@@ -37,6 +37,16 @@
 //     set is replayed WITHOUT its thinking: a run shed from the front, which
 //     is the one removal the check accepts, and what remains was written
 //     under exactly this request's tools (binding.go has the proof).
+//   - EVERY CALL STREAMS, whether or not anybody is watching it. max_tokens
+//     is the model's ceiling (128K on the current models), and the vendor
+//     requires a stream for a response that large: a unary call is bounded
+//     only IN TOTAL, so a worker or a judge that thinks at the entry's effort
+//     for longer than the timeout dies half-way and the chain pays for the
+//     whole call again on its next member. A streamed one is bounded by its
+//     SILENCE ([Provider.streamOnce]), and a stream that ends without its
+//     `message_stop` is a failure rather than a short answer. The unary route
+//     is only the fallback for an endpoint that answered a stream without
+//     streaming.
 //   - MAX RETRIES IS ZERO. The SDK retries twice by default, and its retry
 //     predicate (internal/requestconfig: shouldRetry) fires on exactly what
 //     the layers above need to see first — 408, 409, 429, every 5xx and every
@@ -125,12 +135,13 @@ type Config struct {
 
 	// Timeout bounds one HTTP attempt. Zero takes DefaultTimeout.
 	//
-	// What it bounds depends on how the call is made. A unary call is
-	// bounded IN TOTAL, request to last byte. A streamed call is bounded by
-	// its SILENCE — the longest gap with nothing arriving, the wait for the
-	// first byte included — and never by its length, because a round that
-	// thinks at a high effort writes for many minutes and every one of them
-	// is the model working (see [httpapi.IdleWatchdog]).
+	// Every call streams, and a streamed call is bounded by its SILENCE —
+	// the longest gap with nothing arriving, the wait for the first byte
+	// included — and never by its length, because a round that thinks at a
+	// high effort writes for many minutes and every one of them is the model
+	// working (see [httpapi.IdleWatchdog]). Only on an endpoint that does not
+	// stream, where the call falls back to the unary route, is it a bound IN
+	// TOTAL, request to last byte.
 	Timeout time.Duration
 
 	// Cooldowns is the credential bench policy. Zero fields take defaults.
@@ -184,7 +195,8 @@ type Provider struct {
 	effort llm.Effort
 	// budget is the thinking allowance on a budget-era model, 0 for none.
 	budget int64
-	// timeout is a unary call's total bound and a streamed call's idle one.
+	// timeout is a streamed call's idle bound, and the total one of a unary
+	// call on an endpoint that does not stream.
 	timeout time.Duration
 
 	// noStream latches once this endpoint has answered a streaming request
@@ -243,12 +255,10 @@ func New(cfg Config) (*Provider, error) {
 		// dutifully rotated keys nothing was using.
 		option.WithoutEnvironmentDefaults(),
 		option.WithBaseURL(baseURL),
-		// A unary call's total bound. A streamed attempt replaces it with
-		// none and bounds its silence instead (see [Provider.streamOnce]).
-		// Explicit, too, because the SDK otherwise REFUSES a unary call
-		// whose max_tokens it estimates at over ten minutes — every unary
-		// call here sends the model's own cap, 128K on the current models.
-		option.WithRequestTimeout(timeout),
+		// NO CLIENT-WIDE REQUEST TIMEOUT: every call streams and is bounded
+		// by its silence ([Provider.streamOnce]); a total bound here would
+		// cut a long round off half-way. The unary fallback sets its own
+		// ([Provider.unary]).
 		// See the package doc. Not negotiable.
 		option.WithMaxRetries(0),
 	}
@@ -293,6 +303,10 @@ func (p *Provider) Model() string { return p.model }
 func (p *Provider) Pool() *credential.Pool { return p.pool }
 
 // Complete calls the Messages API once per live credential until one answers.
+//
+// It STREAMS whether or not the request asked to watch the answer arrive
+// ([llm.Request.OnDelta]): with no listener the fragments go nowhere, and the
+// call is still bounded by its silence rather than its length.
 func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	params, bound, err := p.params(req)
 	if err != nil {
@@ -304,14 +318,14 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// Per-call local, never a provider field: ONE Provider serves every
 	// concurrent caller.
 	attempt := 0
-	streaming := req.Streaming() && !p.noStream.Load()
+	streaming := !p.noStream.Load()
 	msg, err := credential.Rotate(ctx, p.pool,
 		credential.Identity{Provider: providerName, Model: p.model},
 		p.classify,
 		func(key string) (*sdk.Message, error) {
 			opt := option.WithAPIKey(key)
 			if !streaming {
-				return p.client.Messages.New(ctx, params, opt)
+				return p.unary(ctx, params, opt)
 			}
 			// A ROTATION IS A RESTART: the previous key may have died
 			// after streaming half an answer, and appending this attempt
@@ -334,8 +348,9 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 				log.WarnContext(ctx, "provider_does_not_stream",
 					"provider", providerName, "model", p.model,
 					"hint", "the endpoint answered a streaming request without streaming; "+
-						"live phase text will appear per round instead of as it is written")
-				return p.client.Messages.New(ctx, params, opt)
+						"live phase text will appear per round instead of as it is written, and "+
+						"every call is bounded by the timeout in total rather than by its silence")
+				return p.unary(ctx, params, opt)
 			}
 			return msg, sErr
 		})
@@ -353,14 +368,36 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 // answered without streaming.
 var errNoStream = errors.New("endpoint did not stream")
 
+// errCutShort reports a stream that ended cleanly before its `message_stop`.
+// [Provider.classify] reads it as the server's failure.
+var errCutShort = errors.New(
+	"the response stream ended before message_stop, so the answer is incomplete")
+
+// unary is one attempt on the unary route, which only an endpoint that does
+// not stream is sent. Its bound is IN TOTAL — nothing arrives until the answer
+// is whole, so there is no silence to measure — and it is explicit, because
+// the SDK otherwise REFUSES a unary call whose max_tokens it estimates at over
+// ten minutes, and every call here sends the model's own cap.
+func (p *Provider) unary(
+	ctx context.Context, params sdk.MessageNewParams, opt option.RequestOption,
+) (*sdk.Message, error) {
+	return p.client.Messages.New(ctx, params, opt, option.WithRequestTimeout(p.timeout))
+}
+
 // streamOnce runs one streamed attempt, forwarding fragments as they land.
 //
-// BOUNDED BY SILENCE, NOT LENGTH: the client's per-attempt timeout is lifted
-// for this request and an [httpapi.IdleWatchdog] of the same duration ends the
-// attempt only when nothing has arrived for that long. The per-attempt
-// deadline would otherwise cover the whole streamed body, and a round that
-// thinks for longer than it — a Fable round, anything at xhigh — would die
-// half-way through every time it did its best work.
+// BOUNDED BY SILENCE, NOT LENGTH: there is no per-attempt deadline, and an
+// [httpapi.IdleWatchdog] of the entry's timeout ends the attempt only when
+// nothing has arrived for that long. A deadline would cover the whole streamed
+// body, and a round that thinks for longer than it — a Fable round, anything
+// at xhigh — would die half-way through every time it did its best work.
+//
+// FINISHED ONLY AT `message_stop`. A gateway or a proxy that closes the
+// response in an orderly way mid-answer ends the SDK's stream with no error,
+// and what accumulated reads as a round with no stop reason — which
+// [stopReason] would take for an ordinary end, handing the loop half an
+// answer as the model's last word. So a stream that never sent its terminal
+// event is [errCutShort], the server's failure, and the chain tries again.
 //
 // The SDK accumulates into exactly the [sdk.Message] the unary path returns —
 // signatures on thinking blocks included, which must survive verbatim or the
@@ -373,16 +410,19 @@ func (p *Provider) streamOnce(
 	ctx, watch := httpapi.WatchIdle(ctx, p.timeout)
 	defer watch.Stop()
 	stream := p.client.Messages.NewStreaming(ctx, params, opt,
-		option.WithRequestTimeout(0), option.WithMiddleware(watch.Middleware))
+		option.WithMiddleware(watch.Middleware))
 	defer func() { _ = stream.Close() }()
 
 	var msg sdk.Message
-	events := 0
+	events, stopped := 0, false
 	for stream.Next() {
 		events++
 		event := stream.Current()
 		if err := msg.Accumulate(event); err != nil {
 			return nil, err
+		}
+		if event.Type == "message_stop" {
+			stopped = true
 		}
 		switch d := event.Delta; d.Type {
 		case "text_delta":
@@ -407,12 +447,21 @@ func (p *Provider) streamOnce(
 		// than fail a phase over a capability.
 		return nil, errNoStream
 	}
+	if !stopped {
+		return nil, errCutShort
+	}
 	return &msg, nil
 }
 
 // classify turns an SDK failure into the contract's error. The errors.As on
 // the SDK's own type is the only part a backend can own; see httpapi.
 func (p *Provider) classify(err error) *llm.Error {
+	if errors.Is(err, errCutShort) {
+		// The API accepted the request and began answering, so the one
+		// thing a cut can never be is a request it refused: the chain may
+		// try again, and no key is benched for it.
+		return &llm.Error{Kind: llm.KindServer, Provider: providerName, Model: p.model, Err: err}
+	}
 	var apiErr *sdk.Error
 	if errors.As(err, &apiErr) {
 		var header http.Header
@@ -524,8 +573,8 @@ func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, string, error)
 	switch {
 	case p.profile.Thinking == claudemodel.ThinkingAdaptive:
 		// Explicit, on every call: omitting it means "think" on some of
-		// these models and "do not" on others (Opus 4.6–4.8, Sonnet 4.6 and
-		// 5). SUMMARIZED, because the default display on every current
+		// these models and "do not" on others (Opus 4.6–4.8 and Sonnet
+		// 4.6). SUMMARIZED, because the default display on every current
 		// model is `omitted` — an empty thinking text, so the round's
 		// reasoning, the live thinking stream and the dashboard's thinking
 		// disclosure would all be blank. A summary is billed the same.
@@ -582,13 +631,9 @@ func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, string, error)
 		// static prefix and nothing after it, so every round of a tool loop
 		// re-billed the whole history it had grown so far at the full input
 		// price — and by round twenty that history, not the prefix, is most
-		// of what a round sends. The top-level marker is the API's automatic
-		// breakpoint: it lands on the last cacheable block and moves forward
-		// with the conversation, so round N writes what round N+1 reads.
-		//
-		// Three breakpoints in all, inside the API's cap of four, and all on
-		// the default 5-minute TTL — an automatic entry may not outlive a
-		// marker ahead of it.
+		// of what a round sends. So the last block of the conversation
+		// carries a breakpoint too ([markTail]), which moves forward with
+		// it: round N writes what round N+1 reads.
 		//
 		// ONLY WITH TOOLS, because only then is there a next round: a call
 		// that offers tools is a tool loop's, and its answer comes back as
@@ -596,7 +641,7 @@ func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, string, error)
 		// knowledge or learning pass — is asked once, and caching its tail
 		// would pay the write premium on every one of them for a read that
 		// never comes.
-		params.CacheControl = cacheBreakpoint()
+		markTail(messages)
 	}
 	return params, writes, nil
 }
@@ -619,14 +664,45 @@ func fit(effort llm.Effort, accepted []claudemodel.Effort) llm.Effort {
 
 // cacheBreakpoint is one prompt-cache breakpoint, on the default 5-minute TTL.
 //
-// Three are set: on the system block and the last tool, which cache the
-// (tools + system) prefix — the large static part of every executor and
-// reviewer round, re-billed in full on every round without them — and the
-// request's top-level automatic one, which caches a tool loop's conversation
-// (see [Provider.params]). Anthropic silently ignores a breakpoint on a prefix
-// below the cacheable minimum, so setting one is always safe.
+// Three are set, inside the API's cap of four and all on the one TTL (a
+// longer one may not follow a shorter): on the system block and the last
+// tool, which cache the (tools + system) prefix — the large static part of
+// every executor and reviewer round, re-billed in full on every round without
+// them — and, on a call that offers tools, on the conversation's last block
+// ([markTail]). Anthropic silently ignores a breakpoint on a prefix below the
+// cacheable minimum, so setting one is always safe.
 func cacheBreakpoint() sdk.CacheControlEphemeralParam {
 	return sdk.NewCacheControlEphemeralParam()
+}
+
+// markTail sets a cache breakpoint on the last block of the final message that
+// can carry one, so a tool loop's conversation is cached up to where it ends.
+//
+// EXPLICIT, ON THE BLOCK, and never the request's top-level `cache_control`
+// (the API's "automatic" breakpoint, which lands on the same block): the
+// legacy Bedrock integration (Opus 4.6 and earlier) answers the top-level
+// field with a 400, and this backend reaches Bedrock through any gateway that
+// forwards the body — a Bedrock spelling of the model is one it reads. A 400
+// is fatal and the chain does not retry it, so the one marker every platform
+// accepts is the one written.
+//
+// The final message is always the user's — a prefill is refused before this
+// runs ([ErrPrefill]) — and is built here from text and tool results, both of
+// which take a marker. The walk backwards is for a block that does not (one
+// that cannot carry `cache_control` has no slot to set), and the automatic
+// form does the same walk; a message with no such block is left unmarked
+// rather than marked somewhere earlier, where the cache would stop short.
+func markTail(messages []sdk.MessageParam) {
+	if len(messages) == 0 {
+		return
+	}
+	tail := messages[len(messages)-1].Content
+	for i := len(tail) - 1; i >= 0; i-- {
+		if marker := tail[i].GetCacheControl(); marker != nil {
+			*marker = cacheBreakpoint()
+			return
+		}
+	}
 }
 
 func systemBlocks(system string) []sdk.TextBlockParam {

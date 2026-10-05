@@ -84,7 +84,109 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	n := len(f.attempts)
 	f.mu.Unlock()
 
-	f.handle(w, n)
+	if body["stream"] != true {
+		f.handle(w, n)
+		return
+	}
+	// Every call streams, so a case that wrote its answer as one JSON
+	// message is answered in the form that was asked for (see [asStream]).
+	sw := &streamingWriter{ResponseWriter: w}
+	f.handle(sw, n)
+	sw.finish()
+}
+
+// unaryHeader marks a response a case wants sent exactly as written to a
+// streaming request: an endpoint that does not stream. Never sent on.
+const unaryHeader = "X-Fake-Unary"
+
+// writeUnary answers as an endpoint that serves only the unary route does,
+// whatever the request asked for.
+func writeUnary(w http.ResponseWriter, status int, body string) {
+	w.Header().Set(unaryHeader, "1")
+	writeJSON(w, status, body)
+}
+
+// streamingWriter turns a successful JSON message a case wrote into the
+// Messages stream a streaming request is answered with. Anything else — an
+// error status, a stream the case wrote itself, a [writeUnary] answer — goes
+// through untouched and as it is written, so a case that times its events
+// still times them.
+type streamingWriter struct {
+	http.ResponseWriter
+	buffer *bytes.Buffer // non-nil once the response is a message to convert
+}
+
+func (s *streamingWriter) WriteHeader(status int) {
+	h := s.Header()
+	if status == http.StatusOK && h.Get(unaryHeader) == "" &&
+		strings.HasPrefix(h.Get("Content-Type"), "application/json") {
+		s.buffer = &bytes.Buffer{}
+		return
+	}
+	h.Del(unaryHeader)
+	s.ResponseWriter.WriteHeader(status)
+}
+
+func (s *streamingWriter) Write(b []byte) (int, error) {
+	if s.buffer != nil {
+		return s.buffer.Write(b)
+	}
+	return s.ResponseWriter.Write(b)
+}
+
+func (s *streamingWriter) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok && s.buffer == nil {
+		f.Flush()
+	}
+}
+
+func (s *streamingWriter) finish() {
+	if s.buffer == nil {
+		return
+	}
+	writeStream(s.ResponseWriter, asStream(s.buffer.Bytes())...)
+}
+
+// asStream is a whole Messages response as the events a stream of it is made
+// of. Each block arrives WHOLE in its start event rather than spelled out in
+// deltas, which the SDK's accumulator reads the same way, so the block a
+// case wrote is the block the provider keeps, byte for byte; the delta
+// spelling is the streaming cases' own business (writeStream).
+func asStream(message []byte) []sseEvent {
+	// One line per event: an SSE data field ends at a newline.
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, message); err != nil {
+		panic(fmt.Sprintf("asStream: %v in %s", err, message))
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(compact.Bytes(), &m); err != nil {
+		panic(fmt.Sprintf("asStream: %v in %s", err, message))
+	}
+	var blocks []json.RawMessage
+	_ = json.Unmarshal(m["content"], &blocks)
+	orNull := func(raw json.RawMessage) string {
+		if len(raw) == 0 {
+			return "null"
+		}
+		return string(raw)
+	}
+	stop, details, usage := orNull(m["stop_reason"]), orNull(m["stop_details"]), orNull(m["usage"])
+	m["content"], m["stop_reason"] = json.RawMessage(`[]`), json.RawMessage(`null`)
+	delete(m, "stop_details")
+	start, _ := json.Marshal(map[string]any{"type": "message_start", "message": m})
+
+	out := []sseEvent{{"message_start", string(start)}}
+	for i, block := range blocks {
+		out = append(out,
+			sseEvent{"content_block_start", fmt.Sprintf(
+				`{"type":"content_block_start","index":%d,"content_block":%s}`, i, block)},
+			sseEvent{"content_block_stop", fmt.Sprintf(`{"type":"content_block_stop","index":%d}`, i)})
+	}
+	return append(out,
+		sseEvent{"message_delta", fmt.Sprintf(
+			`{"type":"message_delta","delta":{"stop_reason":%s,"stop_details":%s},"usage":%s}`,
+			stop, details, usage)},
+		sseEvent{"message_stop", `{"type":"message_stop"}`})
 }
 
 func (f *fakeAPI) seen() []attempt {
@@ -712,48 +814,82 @@ func countBreakpoints(v any) int {
 }
 
 // A TOOL LOOP'S CONVERSATION IS CACHED, NOT ONLY ITS PREFIX. The system and
-// tool breakpoints cache the static prefix and nothing after it, so without
-// the request's own automatic breakpoint every round re-billed the whole
-// history at the full input price. It is set only where a next round exists
-// — a call offering tools — because a one-shot call's tail is written at a
-// premium and never read. Three breakpoints, inside the API's cap of four,
-// all on the default TTL: an automatic entry may not outlive a marker ahead
-// of it, and the API refuses the request when it does.
+// tool breakpoints cache the static prefix and nothing after it, so without a
+// breakpoint at the conversation's end every round re-billed the whole history
+// at the full input price. It is set only where a next round exists — a call
+// offering tools — because a one-shot call's tail is written at a premium and
+// never read. Three breakpoints, inside the API's cap of four, all on the
+// default TTL, since a longer one may not follow a shorter.
+//
+// AND IT IS EXPLICIT, on the last block of the final message — never the
+// request's top-level `cache_control`, the API's "automatic" form, which the
+// legacy Bedrock integration (Opus 4.6 and earlier) answers with a 400 that no
+// fallback retries. A Bedrock spelling of such a model is one this backend
+// reads, behind any gateway that forwards the body, so the one form every
+// platform accepts is the one sent, on every model.
 func TestAToolLoopCachesItsConversation(t *testing.T) {
 	t.Parallel()
+	results := []llm.Message{
+		{Role: llm.RoleSystem, Content: "frame"},
+		{Role: llm.RoleUser, Content: "do it"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "c1", Name: "a"}, {ID: "c2", Name: "b"}}},
+		{Role: llm.RoleTool, ToolCallID: "c1", Name: "a", Content: "first"},
+		{Role: llm.RoleTool, ToolCallID: "c2", Name: "b", Content: "second"},
+	}
+	// A person's note to a running turn joins the results' user turn after
+	// them (appendUser), so it is the conversation's last block.
+	steered := append(slices.Clone(results), llm.Message{Role: llm.RoleUser, Content: "and hurry"})
+	tools := []llm.ToolDef{{Name: "a"}, {Name: "b"}}
 	for _, tc := range []struct {
-		name  string
-		tools []llm.ToolDef
-		want  int // breakpoints in the body
+		name     string
+		model    string
+		tools    []llm.ToolDef
+		messages []llm.Message
+		want     int    // breakpoints in the body
+		tail     string // the type of the final message's last block, "" for no marker
 	}{
-		{"a tool loop's round", []llm.ToolDef{{Name: "a"}, {Name: "b"}}, 3},
-		{"a one-shot call", nil, 1},
+		{"a tool loop's round", "claude-test", tools, results, 3, "tool_result"},
+		{"a round a note was steered into", "claude-test", tools, steered, 3, "text"},
+		{"a legacy Bedrock model", "us.anthropic.claude-opus-4-6-v1", tools, results, 3, "tool_result"},
+		{"a one-shot call", "claude-test", nil, results, 1, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
-			p := newProvider(t, url, nil)
-			_, err := p.Complete(context.Background(), llm.Request{Tools: tc.tools, Messages: []llm.Message{
-				{Role: llm.RoleSystem, Content: "frame"},
-				{Role: llm.RoleUser, Content: "do it"},
-				{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "c1", Name: "a"}}},
-				{Role: llm.RoleTool, ToolCallID: "c1", Name: "a", Content: "done"},
-			}})
-			if err != nil {
+			p := newProvider(t, url, func(c *Config) { c.Model = tc.model })
+			if _, err := p.Complete(context.Background(), llm.Request{Tools: tc.tools, Messages: tc.messages}); err != nil {
 				t.Fatalf("Complete: %v", err)
 			}
 			body := api.seen()[0].body
-			top, present := body["cache_control"]
-			if want := len(tc.tools) > 0; present != want {
-				t.Fatalf("top-level cache_control present = %v, want %v", present, want)
+			if top, present := body["cache_control"]; present {
+				t.Fatalf("top-level cache_control = %v, want none: legacy Bedrock refuses it", top)
 			}
-			if present {
-				marker := top.(map[string]any)
-				if marker["type"] != "ephemeral" {
-					t.Fatalf("top-level cache_control = %v, want the automatic ephemeral breakpoint", marker)
+			messages := body["messages"].([]any)
+			final := messages[len(messages)-1].(map[string]any)
+			blocks := final["content"].([]any)
+			for i, b := range blocks {
+				block := b.(map[string]any)
+				marker, marked := block["cache_control"]
+				last := i == len(blocks)-1
+				switch {
+				case last && tc.tail != "":
+					if block["type"] != tc.tail || !marked {
+						t.Fatalf("final block = %v, want a %s carrying the breakpoint", block, tc.tail)
+					}
+					m := marker.(map[string]any)
+					if m["type"] != "ephemeral" {
+						t.Fatalf("tail breakpoint = %v, want ephemeral", m)
+					}
+					if ttl, set := m["ttl"]; set {
+						t.Fatalf("tail ttl = %v, want the default the other markers carry", ttl)
+					}
+				case marked:
+					t.Fatalf("block %d of the final message carries a breakpoint: %v", i, block)
 				}
-				if ttl, set := marker["ttl"]; set {
-					t.Fatalf("top-level ttl = %v, want the default the other markers carry", ttl)
+			}
+			for i, m := range messages[:len(messages)-1] {
+				if n := countBreakpoints(m); n != 0 {
+					t.Fatalf("message %d carries %d breakpoints, want them all on the final one", i, n)
 				}
 			}
 			if got := countBreakpoints(body); got != tc.want || got > 4 {
@@ -1290,6 +1426,7 @@ var shapeModels = []shapeFacts{
 	{"fable 5.1", "claude-fable-5-1", "", true, everyLevel, false, 128000},
 	{"mythos 5.1", "claude-mythos-5-1", "", true, everyLevel, false, 128000},
 	{"fable 5", "claude-fable-5", "", true, everyLevel, false, 128000},
+	{"mythos 5", "claude-mythos-5", "", true, everyLevel, false, 128000},
 	{"opus 5.5", "claude-opus-5-5", "", true, everyLevel, false, 128000},
 	{"opus 5", "claude-opus-5", "", true, everyLevel, false, 128000},
 	{"opus 4.8", "claude-opus-4-8", "", true, everyLevel, false, 128000},
@@ -1368,7 +1505,8 @@ func shapeOf(t *testing.T, body map[string]any) wireShape {
 //   - a temperature is sent only when the model samples, the call is not
 //     thinking and the caller named one;
 //   - max_tokens is the model's ceiling, and a caller's own cap only on a
-//     call that is not thinking;
+//     call that is not thinking and only below the ceiling — a cap above it
+//     is a 400 the chain does not retry, so it is lowered to the ceiling;
 //   - tool_choice is never sent.
 func TestRequestShapeForEveryModel(t *testing.T) {
 	t.Parallel()
@@ -1392,6 +1530,10 @@ func TestRequestShapeForEveryModel(t *testing.T) {
 				r.Temperature, r.MaxTokens = llm.Temp(0), 400
 				return r
 			}},
+		// Above every model's ceiling: the cap the caller named is one
+		// the model answers with a 400.
+		{name: "caller cap above the ceiling",
+			request: func(r llm.Request) llm.Request { r.MaxTokens = 1 << 20; return r }},
 	}
 	for _, m := range shapeModels {
 		for _, sc := range scenarios {
@@ -1452,7 +1594,7 @@ func TestRequestShapeForEveryModel(t *testing.T) {
 				if req.Temperature != nil && m.sampling && !thinking {
 					want.Temperature = req.Temperature
 				}
-				if req.MaxTokens > 0 && !thinking {
+				if req.MaxTokens > 0 && !thinking && float64(req.MaxTokens) < m.maxOutput {
 					want.MaxTokens = float64(req.MaxTokens)
 				}
 
@@ -2123,7 +2265,7 @@ func TestAStreamedCallForwardsFragmentsAndStillAnswers(t *testing.T) {
 // and failing a phase over that would regress every such deployment.
 func TestAnEndpointThatCannotStreamStillAnswers(t *testing.T) {
 	t.Parallel()
-	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("Hello")) })
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeUnary(w, 200, okMessage("Hello")) })
 	p := newProvider(t, url, nil)
 	var got []llm.Delta
 	req := streamingTurn("hi", &got)
@@ -2329,6 +2471,76 @@ func TestASilentStreamIsATimeout(t *testing.T) {
 			for _, s := range p.Pool().Stats() {
 				if s.Cooling != 0 {
 					t.Fatal("a silent stream benched the credential")
+				}
+			}
+		})
+	}
+}
+
+// A CALL NOBODY IS WATCHING STILL STREAMS. Every call sends the model's own
+// output cap, and a unary call is bounded only in total: a worker or a judge
+// that thinks past the timeout used to die half-way and be paid for again on
+// the chain's next member. Streamed with nowhere to send the fragments, it is
+// bounded by its silence like any round — so this one, several times the
+// timeout long and never silent for as long as it, answers.
+func TestACallNobodyWatchesStillStreams(t *testing.T) {
+	t.Parallel()
+	const timeout = 200 * time.Millisecond
+	api, url := serve(t, func(w http.ResponseWriter, _ int) {
+		writeSlowStream(w, timeout/4, streamOf(
+			streamStart(), textBlock(0, "a", "b", "c", "d", "e", "f"), streamEnd("end_turn"))...)
+	})
+	p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
+	start := time.Now()
+	out, err := p.Complete(context.Background(), userTurn("hi"))
+	if err != nil {
+		t.Fatalf("Complete after %v: %v", time.Since(start), err)
+	}
+	if elapsed := time.Since(start); elapsed < 2*timeout {
+		t.Fatalf("the round took %v; it must outlast the %v timeout to prove anything", elapsed, timeout)
+	}
+	if out.Content != "abcdef" {
+		t.Fatalf("content = %q, want the whole round", out.Content)
+	}
+	if seen := api.seen(); len(seen) != 1 || seen[0].body["stream"] != true {
+		t.Fatalf("%d requests, stream = %v; want one request asking for a stream", len(seen), seen[0].body["stream"])
+	}
+}
+
+// A STREAM THAT ENDS BEFORE message_stop IS A FAILURE, NOT AN ANSWER. A
+// gateway or a proxy that closes the response in an orderly way mid-answer
+// ends the SDK's stream with no error at all, and what accumulated has no stop
+// reason — which reads as an ordinary end, handing the loop half an answer as
+// the model's last word. It is the server's failure instead: the chain may try
+// again, and no key is benched for it.
+func TestAStreamCutBeforeItsEndIsAServerFailure(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		events []sseEvent
+	}{
+		{"after a delta", streamOf(streamStart(),
+			sseEvent{"content_block_start", `{"type":"content_block_start","index":0,` +
+				`"content_block":{"type":"text","text":""}}`},
+			sseEvent{"content_block_delta", `{"type":"content_block_delta","index":0,` +
+				`"delta":{"type":"text_delta","text":"half an ans"}}`})},
+		{"after the stop reason", streamOf(streamStart(), textBlock(0, "nearly"), streamEnd("end_turn")[0])},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, url := serve(t, func(w http.ResponseWriter, _ int) { writeStream(w, tc.events...) })
+			p := newProvider(t, url, nil)
+			var got []llm.Delta
+			out, err := p.Complete(context.Background(), streamingTurn("hi", &got))
+			if out != nil {
+				t.Fatalf("a stream cut short answered %q (stop %q)", out.Content, out.StopReason)
+			}
+			if !errors.Is(err, errCutShort) || llm.KindOf(err) != llm.KindServer {
+				t.Fatalf("err = %v (kind %s), want the cut classified as the server's", err, llm.KindOf(err))
+			}
+			for _, s := range p.Pool().Stats() {
+				if s.Cooling != 0 {
+					t.Fatal("a stream cut short benched the credential")
 				}
 			}
 		})

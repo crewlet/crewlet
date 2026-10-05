@@ -1470,7 +1470,11 @@ itself — a Crewlet whose table matches the API. One where the table is merely
 more cautious than the model is a note. A gateway that does not serve
 `/v1/models` (a 404, 405 or 501, or a 200 that is not a model record) is
 reported as *not served* and is not a problem; any other failure of that read
-is. Then, unless you pass `-no-smoke`, it sends **one real round** in the shape
+is. That read is made on one key and benches nothing, whatever it is answered:
+`/v1/models` is not the route a phase calls, and a gateway that refuses a key
+there (or rate-limits that route alone) while its messages route takes it
+would otherwise leave the round below with every key cooling. Then, unless you
+pass `-no-smoke`, it sends **one real round** in the shape
 a phase sends — a tool offered, no tool choice forced, the instruction naming
 it, the entry's own thinking, streamed, at effort `low` — and certifies that a
 call to that tool came back. The Models API read bills nothing, so it runs

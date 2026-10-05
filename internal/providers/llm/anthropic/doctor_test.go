@@ -362,6 +362,51 @@ func TestAModelsAPIFailureIsAProblem(t *testing.T) {
 	}
 }
 
+// A MODELS API REFUSAL BENCHES NO KEY. The read is not the route a phase
+// calls: a gateway key restricted by route is refused on /v1/models while
+// /v1/messages takes it, and a rate limit can be the Models API's alone.
+// Benched for either, a single-key entry's only key is cooling when the round
+// runs, and the round reports "all credentials cooling" for a model it never
+// asked. So the refusal is the Models API's line and its problem, and the
+// round runs on the key as it was, and answers.
+func TestAModelsAPIRefusalBenchesNoKey(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		kind   string
+		status int
+	}{
+		{"authentication_error", http.StatusUnauthorized},
+		{"permission_error", http.StatusForbidden},
+		{"rate_limit_error", http.StatusTooManyRequests},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			t.Parallel()
+			api, url := serveDoctor(t, func(w http.ResponseWriter, _ string) {
+				writeJSON(w, tc.status, apiError(tc.kind))
+			}, callsTheTool(smokeTool))
+			p := doctorProvider(t, url, "claude-opus-5-5", nil)
+			d := p.Diagnose(context.Background(), DiagnoseOptions{Key: "claude", Smoke: true})
+			if !strings.HasPrefix(d.ModelsAPI, "failed") {
+				t.Fatalf("models api = %q, want the refusal reported", d.ModelsAPI)
+			}
+			if !strings.HasPrefix(d.Smoke, "ok") {
+				t.Fatalf("smoke = %q, want the round answered on the key the Models API refused", d.Smoke)
+			}
+			if len(d.Problems) != 1 || !strings.Contains(d.Problems[0], "Models API read") {
+				t.Fatalf("problems = %v, want only the Models API's", d.Problems)
+			}
+			if got := len(api.requests(http.MethodPost)); got != 1 {
+				t.Fatalf("%d rounds reached the endpoint, want one", got)
+			}
+			for _, s := range p.Pool().Stats() {
+				if s.Cooling != 0 || s.InFlight != 0 {
+					t.Fatalf("pool = %+v, want the key back and unbenched", s)
+				}
+			}
+		})
+	}
+}
+
 // decodeRecord is a Models API record as the SDK reads it.
 func decodeRecord(t *testing.T, body string) *sdk.ModelInfo {
 	t.Helper()
@@ -546,6 +591,7 @@ func TestTheRequestLineFollowsTheProfile(t *testing.T) {
 		{"claude-haiku-4-5", 2048, "thinking budget 2048, no effort (the model takes none), max_tokens 64000"},
 		{"claude-opus-4-6", 0, "thinking adaptive (summarized), effort high, max_tokens 128000"},
 		{"claude-mythos-5-1", 0, "thinking adaptive (summarized), effort high, max_tokens 128000, never a temperature"},
+		{"claude-mythos-5", 0, "thinking adaptive (summarized), effort high, max_tokens 128000, never a temperature"},
 		{"claude-sonnet-5-5", 0, "thinking adaptive (summarized), effort high, max_tokens 128000, never a temperature, " +
 			"reasoning before a tool change shed"},
 	} {

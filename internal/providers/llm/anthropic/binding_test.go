@@ -86,6 +86,7 @@ func (v *vendor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
 	var body struct {
 		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
 		System []struct {
 			Text string `json:"text"`
 		} `json:"system"`
@@ -162,6 +163,10 @@ func (v *vendor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		out = append(out, block)
 	}
 	v.requests = append(v.requests, req)
+	if body.Stream {
+		writeStream(w, asStream([]byte(messageOf(out, stop)))...)
+		return
+	}
 	writeJSON(w, http.StatusOK, messageOf(out, stop))
 }
 
@@ -456,10 +461,24 @@ func TestTheBindingIsTheSystemPromptAndTheSetOfTools(t *testing.T) {
 			t.Errorf("%s: the binding did not move, so reasoning the vendor refuses would be replayed", name)
 		}
 	}
-	// The parts are length-prefixed: a system prompt cannot pass for the
-	// start of a definition.
-	if boundTo(t, "", nil) == boundTo(t, "x", nil) {
-		t.Error("an empty system prompt binds like a non-empty one")
+	// THE PARTS ARE LENGTH-PREFIXED, so a system prompt cannot pass for the
+	// start of a definition: hashed bare, a request with system S and one
+	// tool D is the same bytes as one whose system prompt is S followed by
+	// D's canonical form and which offers no tools at all — and the
+	// reasoning one wrote would be replayed into the other.
+	lookup := base[0]
+	raw, err := json.Marshal(formatTools([]llm.ToolDef{lookup})[0])
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	def, err := canonical(raw)
+	if err != nil {
+		t.Fatalf("canonical: %v", err)
+	}
+	for _, system := range []string{"", "frame"} {
+		if boundTo(t, system, []llm.ToolDef{lookup}) == boundTo(t, system+string(def), nil) {
+			t.Errorf("system %q with a tool binds like a system prompt that spells the tool out", system)
+		}
 	}
 }
 

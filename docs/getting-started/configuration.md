@@ -347,7 +347,8 @@ providers:
                                         #   points the vendor's own wire format at a gateway or
                                         #   proxy instead of the vendor host
       timeout_seconds: 600              # optional — bounds one HTTP attempt (default: 600). A unary call IN TOTAL;
-                                        #   a streamed call (an executor's rounds) by its SILENCE — the longest
+                                        #   a streamed call (every anthropic call, and an executor's rounds
+                                        #   elsewhere) by its SILENCE — the longest
                                         #   wait with nothing arriving, first byte included — never its length,
                                         #   so a round thinking for many minutes is not cut off half-way
                                         #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)
@@ -513,7 +514,7 @@ front of it would refuse:
 
 | Models | Thinking | `reasoning_effort` | `reasoning_budget_tokens` | Output cap |
 |---|---|---|---|---|
-| `claude-fable-5-1`, `claude-mythos-5-1`, `claude-fable-5`, `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-sonnet-5-5`, `claude-sonnet-5` | adaptive, every call | low · medium · high · xhigh · max | refused | 128K |
+| `claude-fable-5-1`, `claude-mythos-5-1`, `claude-fable-5`, `claude-mythos-5`, `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-sonnet-5-5`, `claude-sonnet-5` | adaptive, every call | low · medium · high · xhigh · max | refused | 128K |
 | `claude-opus-4-6`, `claude-sonnet-4-6` | adaptive, every call | low · medium · high · max | refused | 128K |
 | `claude-opus-4-5` | only with a budget | low · medium · high | 1024 to below the cap | 64K |
 | `claude-sonnet-4-5`, `claude-haiku-4-5` and older | only with a budget | refused | 1024 to below the cap | 64K (older: 32K–64K) |

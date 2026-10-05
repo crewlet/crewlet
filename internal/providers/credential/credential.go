@@ -415,9 +415,9 @@ func (p *Pool) Refresh(ctx context.Context) (int, error) {
 	return applied, nil
 }
 
-// Lease is one credential checked out of the pool. Exactly one of Succeed or
-// Fail returns it; a second call is a no-op, so a deferred release beside an
-// explicit one cannot double-count in-flight.
+// Lease is one credential checked out of the pool. Exactly one of Succeed,
+// Fail or Release returns it; a second call is a no-op, so a deferred release
+// beside an explicit one cannot double-count in-flight.
 type Lease struct {
 	pool     *Pool
 	e        *entry
@@ -468,6 +468,24 @@ func (l *Lease) Succeed() {
 	l.released = true
 	l.e.inFlight--
 	l.e.authFailures = 0
+}
+
+// Release returns the lease having learned NOTHING about the key: no bench,
+// and no reset of the auth backoff either. It is for a call whose answer is a
+// fact about something other than the credential — `crewlet llm doctor`'s
+// Models API read, where a gateway may refuse a key on that one route while
+// its messages route takes it, or rate-limit the route alone — so that neither
+// a refusal nor a success there moves what the pool believes about the key
+// every real call depends on. Succeed and Fail are the verdicts; this is the
+// abstention.
+func (l *Lease) Release() {
+	l.pool.mu.Lock()
+	defer l.pool.mu.Unlock()
+	if l.released {
+		return
+	}
+	l.released = true
+	l.e.inFlight--
 }
 
 // Fail returns the lease and benches the key when kind says the key itself is

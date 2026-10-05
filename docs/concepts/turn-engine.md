@@ -1123,12 +1123,14 @@ the rate at which appearing text stops reading as live and well inside what
 the socket hub can carry. The fragment rides `partial_round` on
 `agent_turn_progress` — live-only, so nothing persists a half-written
 sentence — and is cleared the instant the round commits, because from then on
-its narration is authoritative. Streaming is opt-in per CALL, not a property
-of a backend: only the tool loop sets `OnDelta`, because every other provider
-call in the engine (reflection, summaries, the extension judge) wants an
-answer rather than a running commentary. An endpoint that accepts a streaming
-request and answers without streaming is negotiated down to the unary call,
-once per process.
+its narration is authoritative. Watching is opt-in per CALL: only the tool
+loop sets `OnDelta`, because every other provider call in the engine
+(reflection, summaries, the extension judge) wants an answer rather than a
+running commentary. The Anthropic backend streams those too, with nobody
+listening, because what a stream buys there is the bound — its silence rather
+than its length — and every call carries the model's whole output cap. An
+endpoint that accepts a streaming request and answers without streaming is
+negotiated down to the unary call, once per process.
 
 **`response` is a join, so the split travels beside it.** That string is
 the rounds' assistant turns joined with a blank line — every round's but a

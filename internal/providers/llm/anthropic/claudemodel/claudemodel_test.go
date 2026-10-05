@@ -12,8 +12,9 @@ import (
 // the reference goes red here rather than as a 400 in somebody's company.
 //
 // bound is whether the model runs the conversation check on replayed
-// thinking: the vendor names Fable 5.1, Opus 5.5 and Sonnet 5.5, and says in
-// as many words that Mythos 5.1 does not. A row that says false for a model
+// thinking: the vendor names Fable 5.1, Opus 5.5 and Sonnet 5.5, says in as
+// many words that Mythos 5.1 does not, and dates the check to Fable 5.1, after
+// Fable 5 and Mythos 5. A row that says false for a model
 // that runs it replays reasoning a tool change invalidated — a 400 on an
 // enforced account — and one that says true for a model that does not sheds
 // reasoning that was still valid.
@@ -27,6 +28,7 @@ var facts = []struct {
 	{"claude-fable-5-1", claudemodel.ThinkingAdaptive, all, false, true},
 	{"claude-mythos-5-1", claudemodel.ThinkingAdaptive, all, false, false},
 	{"claude-fable-5", claudemodel.ThinkingAdaptive, all, false, false},
+	{"claude-mythos-5", claudemodel.ThinkingAdaptive, all, false, false},
 	{"claude-opus-5-5", claudemodel.ThinkingAdaptive, all, false, true},
 	{"claude-opus-5", claudemodel.ThinkingAdaptive, all, false, false},
 	{"claude-opus-4-8", claudemodel.ThinkingAdaptive, all, false, false},
@@ -68,13 +70,14 @@ func TestEveryReferenceIDResolvesToWhatTheReferenceSays(t *testing.T) {
 	}
 }
 
-// The output caps the reference states: 128K for Fable and for Opus and Sonnet
-// from 4.6 on, 64K for Haiku 4.5. Every other row's cap is marked unverified
+// The output caps the reference states: 128K for Fable, for Mythos and for Opus
+// and Sonnet from 4.6 on, 64K for Haiku 4.5. Every other row's cap is marked unverified
 // at its declaration, and the doctor checks it against the Models API.
 func TestTheStatedOutputCapsAreTheReferences(t *testing.T) {
 	t.Parallel()
 	for id, want := range map[string]int{
 		"claude-fable-5-1": 128000, "claude-fable-5": 128000,
+		"claude-mythos-5-1": 128000, "claude-mythos-5": 128000,
 		"claude-opus-5-5": 128000, "claude-opus-5": 128000, "claude-opus-4-8": 128000,
 		"claude-opus-4-7": 128000, "claude-opus-4-6": 128000,
 		"claude-sonnet-5-5": 128000, "claude-sonnet-5": 128000, "claude-sonnet-4-6": 128000,

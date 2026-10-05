@@ -69,9 +69,9 @@ const (
 	// ThinkingAdaptive is `{type: "adaptive", display: "summarized"}`: the
 	// model decides how much to think, and the depth is steered by effort.
 	// On every model in this mode, a request with no thinking field either
-	// thinks anyway (Fable, Mythos, Opus 5.5, Opus 5, Sonnet 5.5) or does
-	// not think at all (Opus 4.6–4.8, Sonnet 4.6, Sonnet 5) — which is why
-	// the mode is sent explicitly rather than left to the default.
+	// thinks anyway (Fable, Mythos, Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5)
+	// or does not think at all (Opus 4.6–4.8, Sonnet 4.6) — which is why the
+	// mode is sent explicitly rather than left to the default.
 	ThinkingAdaptive Thinking = "adaptive"
 
 	// ThinkingBudget is `{type: "enabled", budget_tokens: N}`, or no
@@ -176,8 +176,9 @@ var Modern = Profile{
 }
 
 // The rows. The MaxOutput values marked UNVERIFIED are not in the API
-// reference this table was built from (the reference states 128K for Fable and
-// for Opus and Sonnet from 4.6 on, and 64K for Haiku 4.5, and nothing else);
+// reference this table was built from (the reference states 128K for Fable,
+// for Mythos and for Opus and Sonnet from 4.6 on, and 64K for Haiku 4.5, and
+// nothing else);
 // they are the vendor's published figures as last known, and `crewlet llm
 // doctor` compares an entry's row against the Models API's own max_tokens.
 var rows = []struct {
@@ -187,10 +188,12 @@ var rows = []struct {
 	// The current generation: adaptive thinking, every effort level, no
 	// sampling parameter — and on the three that run the conversation
 	// check, thinking bound to the request that produced it. Mythos 5.1 is
-	// the one model of their generation the vendor says does not run it.
+	// the one model of their generation the vendor says does not run it;
+	// Fable 5 and Mythos 5 predate the check, which Fable 5.1 added.
 	{[]string{"claude-fable-5-1"}, prefixBound()},
-	{[]string{"claude-mythos-5-1"}, current()}, // MaxOutput UNVERIFIED; sampling refusal inferred from its generation.
+	{[]string{"claude-mythos-5-1"}, current()},
 	{[]string{"claude-fable-5"}, current()},
+	{[]string{"claude-mythos-5"}, current()},
 	{[]string{"claude-opus-5-5"}, prefixBound()},
 	{[]string{"claude-opus-5"}, current()},
 	{[]string{"claude-opus-4-8"}, current()},
@@ -224,8 +227,8 @@ var rows = []struct {
 }
 
 // current is a current-generation row. Every one of them writes up to 128K
-// tokens — the reference states it for Fable and for Opus and Sonnet from 4.6
-// on — so the cap is the generation's rather than a per-row argument.
+// tokens — the reference states it for Fable, for Mythos and for Opus and
+// Sonnet from 4.6 on — so the cap is the generation's rather than a per-row argument.
 func current() Profile {
 	return Profile{Thinking: ThinkingAdaptive, Efforts: Efforts, MaxOutput: 128000}
 }

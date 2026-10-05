@@ -45,6 +45,8 @@ import (
 // /v1/models at all, and that is "not served" rather than a failure: the
 // entry's requests do not depend on it, and the round is what says whether
 // the model answers. It also runs under -no-smoke, because it bills nothing.
+// And it benches nothing: whatever it is answered, the round that follows
+// runs on the keys as they were (see [Provider.modelInfo]).
 
 // modelsTimeout bounds the Models API read.
 //
@@ -168,19 +170,33 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 	return d
 }
 
-// modelInfo reads the model's record, through the pool like any call: a key
-// the endpoint refuses is benched and the next one is tried.
+// modelInfo reads the model's record on ONE live key, and returns that key to
+// the pool WITHOUT A VERDICT ([credential.Lease.Release]).
+//
+// Never through [credential.Rotate], which benches a key the endpoint refuses:
+// /v1/models is not the route a phase calls, and a refusal there says nothing
+// certain about the key. A gateway key restricted by route is refused on it
+// while /v1/messages takes it, and a rate limit can be the Models API's alone —
+// and benched for either, the one key a single-key entry has is cooling when
+// the round runs next, which then reports "all credentials cooling" for a
+// model it never asked. So an auth or rate-limit answer here is a line about
+// THIS endpoint and nothing more; the round is what tests the key.
 func (p *Provider) modelInfo(ctx context.Context, id string) (*sdk.ModelInfo, error) {
-	return credential.Rotate(ctx, p.pool,
-		credential.Identity{Provider: providerName, Model: p.model},
-		p.classify,
-		func(key string) (*sdk.ModelInfo, error) {
-			// Escaped, because an id the table does not know is whatever
-			// the entry wrote — a gateway alias may carry anything — and
-			// the SDK puts it into the path as given.
-			return p.client.Models.Get(ctx, url.PathEscape(id), sdk.ModelGetParams{},
-				option.WithAPIKey(key), option.WithRequestTimeout(modelsTimeout))
-		})
+	lease, ok := p.pool.Acquire()
+	if !ok {
+		return nil, &llm.Error{Kind: llm.KindRateLimit, Provider: providerName, Model: p.model,
+			Err: fmt.Errorf("every one of the %d credentials is cooling: %w", p.pool.Size(), credential.ErrExhausted)}
+	}
+	defer lease.Release()
+	// Escaped, because an id the table does not know is whatever the entry
+	// wrote — a gateway alias may carry anything — and the SDK puts it into
+	// the path as given.
+	info, err := p.client.Models.Get(ctx, url.PathEscape(id), sdk.ModelGetParams{},
+		option.WithAPIKey(lease.Key()), option.WithRequestTimeout(modelsTimeout))
+	if err != nil {
+		return nil, p.classify(err)
+	}
+	return info, nil
 }
 
 // notServed reports a Models API read the endpoint answered with "no such
@@ -433,11 +449,10 @@ func (p *Provider) smokeTest(ctx context.Context) string {
 }
 
 // smokeRequest is the round [Provider.smokeTest] sends: what a phase sends,
-// with the effort lowered to the least a one-call answer needs.
-//
-// STREAMED, because the phases that finish by a call are, and the streamed
-// path is the one with its own failure modes — the idle bound, an endpoint
-// that answers it unary.
+// with the effort lowered to the least a one-call answer needs. It is streamed
+// as every call on this backend is, so it meets that path's own failure
+// modes — the idle bound, an endpoint that answers it unary; the listener is
+// there because a phase's executor has one, and costs nothing.
 func smokeRequest() llm.Request {
 	return llm.Request{
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: smokePrompt}},

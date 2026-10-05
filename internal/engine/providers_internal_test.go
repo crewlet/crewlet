@@ -105,10 +105,19 @@ func TestBuildProviderResolvesAnthropicBaseURLAndConventionalKey(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		gotKey = r.Header.Get("X-Api-Key")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant",
-			"model":"claude-test","content":[{"type":"text","text":"ok"}],
-			"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+		// The backend streams every call, so the gateway answers as the
+		// vendor does: an SSE stream that ends at message_stop.
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, event := range []string{
+			`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"ok"}}`,
+			`{"type":"content_block_stop","index":0}`,
+			`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+			`{"type":"message_stop"}`,
+		} {
+			kind := strings.SplitN(strings.TrimPrefix(event, `{"type":"`), `"`, 2)[0]
+			_, _ = io.WriteString(w, "event: "+kind+"\ndata: "+event+"\n\n")
+		}
 	}))
 	defer srv.Close()
 
