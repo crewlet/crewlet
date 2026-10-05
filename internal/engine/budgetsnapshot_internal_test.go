@@ -36,8 +36,10 @@ func scopeOf(t *testing.T, c *Company, seat *org.Role) string {
 	return coord.AgentScope(id.String())
 }
 
-// snapshotWindows is the instant every frame here is read at.
-var snapshotWindows = coord.WindowsAt(time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC), time.UTC)
+// snapshotWindows is the windows every frame here is read in: those of
+// budgetNow, the instant every case here that charges through an engine pins
+// its clock to.
+var snapshotWindows = coord.WindowsAt(budgetNow, time.UTC)
 
 // row is one scope's counter at snapshotWindows: spend per period, and the
 // periods refusing since the given instant.

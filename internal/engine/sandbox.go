@@ -1543,7 +1543,9 @@ func (e *Engine) sandboxAccountant() sandbox.Accountant {
 			}
 			return basisOf(c, c.Org.AgentSeatByID(id))
 		},
-		now: time.Now,
+		// THE ENGINE'S INSTANT, the one its gate charges a round at, so a
+		// collected run is counted in the window a seat's next round is.
+		now: e.now,
 	}
 }
 

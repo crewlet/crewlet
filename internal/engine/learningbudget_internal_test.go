@@ -123,7 +123,7 @@ func TestAnUncappedSeatsAuxiliarySpendIsCounted(t *testing.T) {
 	fleet := coordmem.NewFleet()
 	free := &org.Role{Name: "Free"}
 	c := meteredCompany(config.TokenBudget{}, free)
-	e := &Engine{backends: &Backends{Fleet: fleet}}
+	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(budgetNow)}
 	models := meteredModels{
 		inner:  staticModels{provider: &answeringProvider{in: 30, out: 12}},
 		charge: func(seat *org.Role) spendRecorder { return e.spendFor(c, seatHandle(seat)) },
@@ -135,12 +135,10 @@ func TestAnUncappedSeatsAuxiliarySpendIsCounted(t *testing.T) {
 	if _, err := member.Provider.Complete(ctx, llm.Request{}); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	windows := coord.WindowsAt(time.Now(), time.UTC)
+	windows := coord.WindowsAt(budgetNow, time.UTC)
 	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, free)} {
-		u, err := fleet.Used(ctx, scope, windows)
-		if err != nil || u.In(period.Day).Used != 42 {
-			t.Errorf("%s's day = (%+v, %v), want the 42 tokens the completion spent",
-				scope, u.In(period.Day), err)
+		if day := spentIn(t, fleet, scope, windows, period.Day); day != 42 {
+			t.Errorf("%s spent %d today, want the 42 tokens the completion spent", scope, day)
 		}
 	}
 }
@@ -158,8 +156,12 @@ func TestAnAuxiliaryCompletionPastTheCeilingIsRecordedAndClosesTheGate(t *testin
 	fleet := coordmem.NewFleet()
 	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
 	c := meteredCompany(config.TokenBudget{}, lead)
-	e := &Engine{backends: &Backends{Fleet: fleet}}
-	windows := coord.WindowsAt(time.Now(), time.UTC)
+	// ONE INSTANT for the 90 spent before, both gates and the completion's
+	// record: four clock reads, and a midnight between any two of them on
+	// the wall clock either put the record in a fresh day or opened the
+	// last gate onto one.
+	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(budgetNow)}
+	windows := coord.WindowsAt(budgetNow, time.UTC)
 	if _, err := fleet.PostCharge(ctx, scopeOf(t, c, lead), 90, windows); err != nil {
 		t.Fatalf("PostCharge: %v", err)
 	}
@@ -180,10 +182,9 @@ func TestAnAuxiliaryCompletionPastTheCeilingIsRecordedAndClosesTheGate(t *testin
 		t.Fatalf("Complete: %v", err)
 	}
 	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, lead)} {
-		u, err := fleet.Used(ctx, scope, windows)
-		if err != nil || u.In(period.Day).Used != 132 {
-			t.Errorf("%s's day = (%+v, %v), want 132: the 42 the completion spent "+
-				"past a ceiling of 100 is still spent", scope, u.In(period.Day), err)
+		if day := spentIn(t, fleet, scope, windows, period.Day); day != 132 {
+			t.Errorf("%s spent %d today, want 132: the 42 the completion spent "+
+				"past a ceiling of 100 is still spent", scope, day)
 		}
 	}
 	if ok, err := gate(ctx, lead); err != nil || ok {
@@ -263,13 +264,15 @@ func TestTheLearningGateDeclinesASeatWithNoRoomLeft(t *testing.T) {
 	fleet := coordmem.NewFleet()
 	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
 	c := meteredCompany(config.TokenBudget{}, lead)
-	e := &Engine{backends: &Backends{Fleet: fleet}}
+	// The gate reads its windows at the engine's instant, and the day it is
+	// asked about is filled at the same one.
+	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(budgetNow)}
 	gate := e.learningBudget(c)
 
 	if ok, err := gate(ctx, lead); err != nil || !ok {
 		t.Fatalf("gate with the whole day left = (%v, %v), want (true, nil)", ok, err)
 	}
-	windows := coord.WindowsAt(time.Now(), time.UTC)
+	windows := coord.WindowsAt(budgetNow, time.UTC)
 	if _, err := fleet.PostCharge(ctx, scopeOf(t, c, lead), 100, windows); err != nil {
 		t.Fatalf("PostCharge: %v", err)
 	}
@@ -278,10 +281,8 @@ func TestTheLearningGateDeclinesASeatWithNoRoomLeft(t *testing.T) {
 			"starts now spends past the ceiling", ok, err)
 	}
 	// And asking moved nothing.
-	u, err := fleet.Used(ctx, scopeOf(t, c, lead), windows)
-	if err != nil || u.In(period.Day).Used != 100 {
-		t.Fatalf("the seat's day = (%+v, %v) after two questions, want the 100 spent",
-			u.In(period.Day), err)
+	if day := spentIn(t, fleet, scopeOf(t, c, lead), windows, period.Day); day != 100 {
+		t.Fatalf("the seat spent %d today after two questions, want the 100 spent", day)
 	}
 	// A seat nothing caps is never declined.
 	free := &org.Role{Name: "Free"}
@@ -390,7 +391,7 @@ func TestThePrefetchsAuxiliaryCompletionsAreCharged(t *testing.T) {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	c.Models = models
-	e := &Engine{backends: &Backends{Fleet: fleet}}
+	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(budgetNow)}
 
 	src := e.prefetchSources(c)
 	src.Knowledge = searchableKnowledge{}
@@ -401,12 +402,11 @@ func TestThePrefetchsAuxiliaryCompletionsAreCharged(t *testing.T) {
 		t.Fatalf("the auxiliary model was called %d times, want the one knowledge "+
 			"query — the case exercises nothing otherwise", provider.calls)
 	}
-	windows := coord.WindowsAt(time.Now(), time.UTC)
+	windows := coord.WindowsAt(budgetNow, time.UTC)
 	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, seat)} {
-		u, err := fleet.Used(ctx, scope, windows)
-		if err != nil || u.In(period.Day).Used != 325 {
-			t.Errorf("%s's day = (%+v, %v), want the 325 tokens the prefetch's "+
-				"knowledge query spent", scope, u.In(period.Day), err)
+		if day := spentIn(t, fleet, scope, windows, period.Day); day != 325 {
+			t.Errorf("%s spent %d today, want the 325 tokens the prefetch's "+
+				"knowledge query spent", scope, day)
 		}
 	}
 }

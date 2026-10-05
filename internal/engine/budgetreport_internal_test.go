@@ -13,7 +13,8 @@ import (
 
 // meteringReporter is a meter loop over a company capped at 1 000 tokens a
 // day that has spent 250 today, with the given lease store — everything a
-// frame reads, and nothing a publish adds.
+// frame reads, and nothing a publish adds — on an engine whose clock reads
+// now, the instant the 250 were charged at.
 func meteringReporter(t *testing.T, leases coord.Backend, now time.Time) *budgetReporter {
 	t.Helper()
 	fleet := coordmem.NewFleet()
@@ -21,7 +22,7 @@ func meteringReporter(t *testing.T, leases coord.Backend, now time.Time) *budget
 	if _, err := fleet.PostCharge(t.Context(), coord.AgentScope("x"), 250, windows); err != nil {
 		t.Fatalf("PostCharge: %v", err)
 	}
-	e := &Engine{backends: &Backends{Coord: leases, Fleet: fleet}}
+	e := &Engine{backends: &Backends{Coord: leases, Fleet: fleet}, clock: fixedClock(now)}
 	e.epoch.current.Store(meteredCompany(config.TokenBudget{Day: ceiling(1000)}))
 	return &budgetReporter{engine: e}
 }
@@ -58,7 +59,7 @@ func TestTheMeterWaitsForTheLastLifetimeCounterNode(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("claim this node's presence: %v", err)
 	}
-	if frame, sent := r.frame(ctx, now); sent {
+	if frame, sent := r.frame(ctx); sent {
 		t.Fatalf("the meter would publish %+v from the windowed counters while a node "+
 			"of the lifetime counters' build is live and charging the other one", frame)
 	}
@@ -66,7 +67,7 @@ func TestTheMeterWaitsForTheLastLifetimeCounterNode(t *testing.T) {
 	if released, err := leases.Release(ctx, coord.NodeResource("older"), "older:1", older.Epoch); err != nil || !released {
 		t.Fatalf("release the older node = (%v, %v)", released, err)
 	}
-	frame, sent := r.frame(ctx, now)
+	frame, sent := r.frame(ctx)
 	if !sent {
 		t.Fatal("the meter still publishes nothing after the last older node has gone")
 	}
@@ -77,7 +78,7 @@ func TestTheMeterWaitsForTheLastLifetimeCounterNode(t *testing.T) {
 	// only by a downgrade, which needs the whole fleet stopped, so the
 	// meter stops paying a lease listing per frame for it.
 	r.engine.backends.Coord = unreadableFloor{leases}
-	if _, sent := r.frame(ctx, now); !sent {
+	if _, sent := r.frame(ctx); !sent {
 		t.Fatal("the meter asked the lease store again after it had seen the fleet current")
 	}
 }
@@ -89,7 +90,7 @@ func TestAnUnreadableFloorPublishesNoFrame(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
 	r := meteringReporter(t, unreadableFloor{coordmem.New()}, now)
-	if frame, sent := r.frame(t.Context(), now); sent {
+	if frame, sent := r.frame(t.Context()); sent {
 		t.Fatalf("the meter published %+v on a protocol floor nobody could read", frame)
 	}
 }
@@ -115,7 +116,7 @@ func TestAnUncappedCompanyPublishesItsNoCeilingWithoutAReading(t *testing.T) {
 	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
 	r := meteringReporter(t, unreadableFloor{coordmem.New()}, now)
 	r.engine.epoch.current.Store(meteredCompany(config.TokenBudget{}))
-	frame, sent := r.frame(t.Context(), now)
+	frame, sent := r.frame(t.Context())
 	if !sent {
 		t.Fatal("an uncapped company published nothing, which a reader cannot tell from no report")
 	}

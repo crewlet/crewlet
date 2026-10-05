@@ -5,8 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 )
 
@@ -151,5 +153,30 @@ func TestACollectedRunIsCountedInTheCompanysCollectionDay(t *testing.T) {
 	}
 	if day := u.In(period.Day); day.Window.Label != "2026-09-22" || day.Used != 70 {
 		t.Fatalf("the collection day reads %+v, want 70 on the Los Angeles 22nd", day)
+	}
+}
+
+// THE ENGINE'S ACCOUNTANT COUNTS A RUN ON THE ENGINE'S CLOCK, the one its gate
+// charges a seat's rounds on — so a run collected now lands in the window the
+// seat's next round is judged in, rather than in one a clock of its own cut.
+func TestTheEnginesAccountantCountsOnTheEnginesClock(t *testing.T) {
+	t.Parallel()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead"}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(collectedAt)}
+	e.epoch.current.Store(c)
+	id, ok := c.Org.AgentIDFor(lead)
+	if !ok {
+		t.Fatal("the Lead has no agent id")
+	}
+	if _, err := e.sandboxAccountant().Charge(t.Context(), id.String(), "lead", 70); err != nil {
+		t.Fatalf("Charge: %v", err)
+	}
+	windows := coord.WindowsAt(collectedAt, time.UTC)
+	for _, scope := range []string{coord.OrgScope, scopeOf(t, c, lead)} {
+		if day := spentIn(t, fleet, scope, windows, period.Day); day != 70 {
+			t.Errorf("%s spent %d on the collection day, want the run's 70", scope, day)
+		}
 	}
 }

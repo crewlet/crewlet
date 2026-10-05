@@ -12,11 +12,13 @@ import (
 )
 
 // answerEngine is an engine holding one epoch and an in-memory fleet, which is
-// all a person's answer budget reads.
+// all a person's answer budget reads, on a clock pinned to budgetNow: the
+// answer cuts its windows at the engine's instant, and the case cuts the ones
+// it reads back in at the same one.
 func answerEngine(t *testing.T, c *Company) (*Engine, *coordmem.Fleet) {
 	t.Helper()
 	fleet := coordmem.NewFleet()
-	e := &Engine{backends: &Backends{Fleet: fleet}}
+	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(budgetNow)}
 	e.epoch.current.Store(c)
 	return e, fleet
 }
@@ -38,7 +40,7 @@ func TestAnAnswerIsChargedToTheOrgWindow(t *testing.T) {
 	if err := budget.Charge(ctx, 420); err != nil {
 		t.Fatalf("Charge: %v", err)
 	}
-	windows := coord.WindowsAt(time.Now(), time.UTC)
+	windows := coord.WindowsAt(budgetNow, time.UTC)
 	rows, err := fleet.Usage(ctx, windows)
 	if err != nil {
 		t.Fatalf("Usage: %v", err)
@@ -46,9 +48,11 @@ func TestAnAnswerIsChargedToTheOrgWindow(t *testing.T) {
 	if len(rows) != 1 || rows[0].Scope != coord.OrgScope {
 		t.Fatalf("counters = %+v, want the company's alone", rows)
 	}
-	for _, p := range period.Periods {
-		if got := rows[0].In(p).Used; got != 420 {
-			t.Errorf("the company's %s holds %d, want the answer's 420", p, got)
+	for i, p := range period.Periods {
+		// THE WINDOW AS WELL AS THE FIGURE: see spentIn.
+		if got := rows[0].In(p); got.Used != 420 || got.Window.Label != windows[i].Label {
+			t.Errorf("the company's %s holds %d in %q, want the answer's 420 in %q",
+				p, got.Used, got.Window.Label, windows[i].Label)
 		}
 	}
 }
@@ -64,7 +68,7 @@ func TestAnAnswerIsRefusedOnlyByASpentCompanyWindow(t *testing.T) {
 	c := meteredCompany(config.TokenBudget{Day: ceiling(100), Month: ceiling(100)}, lead)
 	e, fleet := answerEngine(t, c)
 	budget := AnswerBudget(e)
-	windows := coord.WindowsAt(time.Now(), time.UTC)
+	windows := coord.WindowsAt(budgetNow, time.UTC)
 
 	// The seat is out; the company is not.
 	if _, err := fleet.PostCharge(ctx, scopeOf(t, c, lead), 20, windows); err != nil {

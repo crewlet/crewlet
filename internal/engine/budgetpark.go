@@ -87,9 +87,12 @@ type budgetParks struct {
 	// armed after [Engine.stopBudgetParks] would fire into a closed queue.
 	stopped bool
 
-	// now and after are the clock and the alarm, injectable for tests; nil
-	// is the wall clock and time.AfterFunc.
-	now   func() time.Time
+	// after is the alarm, injectable for tests; nil is time.AfterFunc.
+	//
+	// THE ALARM AND NOT THE CLOCK. What it waits for is measured against
+	// the engine's clock ([Engine.now]), the one the meter that decided the
+	// park cut its windows on: a park with a clock of its own could arm its
+	// alarm for the end of a window the meter beside it was not in.
 	after func(d time.Duration, f func()) alarm
 }
 
@@ -99,13 +102,6 @@ type budgetParking struct {
 	basis    budgetBasis
 	resetsAt time.Time
 	alarm    alarm
-}
-
-func (p *budgetParks) clock() time.Time {
-	if p.now != nil {
-		return p.now()
-	}
-	return time.Now()
 }
 
 func (p *budgetParks) arm(d time.Duration, f func()) alarm {
@@ -130,7 +126,6 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 		// No counter, or nothing to refuse with.
 		return "", false, nil
 	}
-	m.now = e.budgetParks.clock
 	r, refusing, err := m.refusing(ctx)
 	if err != nil {
 		log.WarnContext(ctx, "budget_park_unknown", "seat", handle, "error", err,
@@ -201,12 +196,12 @@ func (e *Engine) recordBudgetParkLocked(ctx context.Context, handle string, basi
 	if p.stopped {
 		return
 	}
-	// Never a negative wait: a window cut on this clock contains the moment
-	// it was cut at, so its end is ahead of it, but the alarm is measured on
-	// the monotonic clock and a wall clock stepped forward between the two
-	// reads must not arm an alarm that has already passed as though it had
-	// not.
-	wait := max(resetsAt.Sub(p.clock()), 0)
+	// Never a negative wait: a window cut on the engine's clock contains the
+	// moment it was cut at, so its end is ahead of it, but the alarm is
+	// measured on the monotonic clock and a wall clock stepped forward
+	// between the two reads must not arm an alarm that has already passed as
+	// though it had not.
+	wait := max(resetsAt.Sub(e.now()), 0)
 	released := context.WithoutCancel(ctx)
 	parking.alarm = p.arm(wait, func() {
 		e.releaseBudgetParking(released, handle, parking, "the window turned over")

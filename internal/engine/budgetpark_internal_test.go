@@ -127,7 +127,9 @@ func newParkRig(t *testing.T, dayCeiling string) *parkRig {
 	r := &parkRig{q: q, fleet: coordmem.NewFleet(), alarms: &fakeAlarms{}, now: parkedAt}
 	r.e = &Engine{backends: &Backends{Queue: q, Fleet: r.fleet}}
 	r.e.epoch.current.Store(companyFor(t, strings.Replace(leadDoc, "%d", dayCeiling, 1)))
-	r.e.budgetParks.now = r.clock
+	// THE ENGINE'S CLOCK, which the park's question, its alarm and the
+	// meter the question is asked through all read.
+	r.e.clock = r.clock
 	r.e.budgetParks.after = r.alarms.after
 
 	d := &Dispatcher{

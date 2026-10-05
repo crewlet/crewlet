@@ -137,6 +137,12 @@ type Engine struct {
 	// the window turns over. See budgetpark.go.
 	budgetParks budgetParks
 
+	// clock is the instant every token-budget window this engine cuts is
+	// read at, and nil is the wall clock — which is what every engine [New]
+	// builds runs on. See [Engine.now] for why there is one and why it is
+	// not an [Options] field.
+	clock func() time.Time
+
 	// pauses is this node's watched copy of every seat a person paused,
 	// and the inbox holds it took because of them. See seatpause.go.
 	pauses seatPauses

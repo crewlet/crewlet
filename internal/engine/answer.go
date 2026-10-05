@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -50,7 +49,7 @@ func AnswerBudget(e *Engine) builtin.AnswerBudget {
 	if e == nil || e.backends == nil || e.backends.Fleet == nil {
 		return nil
 	}
-	return answerBudget{engine: e, budgets: e.backends.Fleet, now: time.Now}
+	return answerBudget{engine: e, budgets: e.backends.Fleet}
 }
 
 // orgCounter is the slice of the fleet's counters an answer uses: the
@@ -63,10 +62,12 @@ type orgCounter interface {
 	PostChargeOrg(ctx context.Context, tokens int, windows coord.Windows) (coord.Usage, error)
 }
 
+// answerBudget cuts the company's windows at the engine's instant
+// ([Engine.now]) — the gate's, so an answer is judged and counted in the window
+// a seat's next round is charged in, never on a clock of its own.
 type answerBudget struct {
 	engine  *Engine
 	budgets orgCounter
-	now     func() time.Time
 }
 
 // basis is the company's ceilings and clock off the current epoch.
@@ -77,7 +78,7 @@ func (b answerBudget) basis() budgetBasis { return basisOf(b.engine.Company(), n
 // whose gate refused a charge and has admitted none since, or one with no
 // room for a single token.
 func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool, error) {
-	m := &meter{budgets: b.budgets, basis: b.basis(), now: b.now}
+	m := &meter{budgets: b.budgets, basis: b.basis(), now: b.engine.now}
 	r, found, err := m.refusing(ctx)
 	if err != nil || !found {
 		return builtin.BudgetRefusal{}, false, err
@@ -90,7 +91,7 @@ func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool
 
 // Charge records an answer's tokens in the company's current windows.
 func (b answerBudget) Charge(ctx context.Context, tokens int) error {
-	windows := coord.WindowsAt(b.now(), b.basis().zone)
+	windows := coord.WindowsAt(b.engine.now(), b.basis().zone)
 	if _, err := b.budgets.PostChargeOrg(ctx, tokens, windows); err != nil {
 		return fmt.Errorf("engine: charge an answer to the company: %w", err)
 	}

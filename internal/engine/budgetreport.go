@@ -120,7 +120,7 @@ func (r *budgetReporter) run(ctx context.Context) {
 
 // publish puts this tick's frame on the stream, when there is one.
 func (r *budgetReporter) publish(ctx context.Context) {
-	report, ok := r.frame(ctx, time.Now())
+	report, ok := r.frame(ctx)
 	if !ok {
 		return
 	}
@@ -139,8 +139,11 @@ func (r *budgetReporter) publish(ctx context.Context) {
 	}
 }
 
-// frame is the snapshot this node would publish at now, and false for every
+// frame is the snapshot this node would publish now, and false for every
 // reason it publishes nothing.
+//
+// CUT AT THE ENGINE'S INSTANT ([Engine.now]), the one its gate charges a round
+// at, so the window a screen draws is the window the gate is counting in.
 //
 // THE WHOLE DECISION, split from the publish so it is testable without a
 // broker or a node: whether this node's reading of the counters is the fleet's
@@ -161,13 +164,13 @@ func (r *budgetReporter) publish(ctx context.Context) {
 // "no ceiling" from "no report yet" — and the dashboard, holding an empty
 // meter for both, told an operator whose company WAS capped that it was not
 // for the first interval after every start.
-func (r *budgetReporter) frame(ctx context.Context, now time.Time) (types.BudgetMeters, bool) {
+func (r *budgetReporter) frame(ctx context.Context) (types.BudgetMeters, bool) {
 	e := r.engine
 	company := e.Company()
 	if company == nil || company.Org == nil {
 		return types.BudgetMeters{}, false
 	}
-	windows := coord.WindowsAt(now, company.Config.Location())
+	windows := coord.WindowsAt(e.now(), company.Config.Location())
 	if uncapped := budgetSnapshot(company, windows, nil); !uncapped.Metered() {
 		return uncapped, true
 	}
