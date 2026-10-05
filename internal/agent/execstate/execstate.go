@@ -30,6 +30,7 @@
 package execstate
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -319,7 +320,14 @@ func (s State) dangling() []string {
 // A refusal here is better than a row that cannot be resumed: the suspending
 // turn still holds the box and can fail loudly, where a resume finding a
 // corrupt row has already lost the conversation.
-func Encode(s State) (map[string]any, error) {
+//
+// The result is the row's bytes and nothing else. It used to be decoded back
+// into a map[string]any for the row to hold, and that decode read every number
+// in the conversation as a float64 — so a nineteen-digit id a model passed as
+// a tool argument came back from a suspension rounded to the nearest
+// representable double, and the resumed loop replayed (and could act on) an
+// argument the model never wrote. Bytes have no such step to get wrong.
+func Encode(s State) (json.RawMessage, error) {
 	s.Version = Version
 	if err := s.Validate(); err != nil {
 		return nil, err
@@ -328,37 +336,41 @@ func Encode(s State) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("execstate: encode: %w", err)
 	}
-	var out map[string]any
-	if err := json.Unmarshal(blob, &out); err != nil {
-		return nil, fmt.Errorf("execstate: encode: %w", err)
-	}
-	return out, nil
+	return blob, nil
 }
 
 // Decode reads a state back out of a pending-run row.
 //
-// An empty blob is (State{}, false, nil): a run with no suspended conversation
-// is an ordinary condition — a crash between launching the job and persisting
-// the suspend — and the caller settles it rather than treating it as a broken
-// store.
-func Decode(blob map[string]any) (State, bool, error) {
+// An empty blob — no bytes, a JSON null or an object with no keys — is
+// (State{}, false, nil): a run with no suspended conversation is an ordinary
+// condition — a crash between launching the job and persisting the suspend —
+// and the caller settles it rather than treating it as a broken store.
+func Decode(blob json.RawMessage) (State, bool, error) {
 	if len(blob) == 0 {
 		return State{}, false, nil
-	}
-	raw, err := json.Marshal(blob)
-	if err != nil {
-		return State{}, false, fmt.Errorf("execstate: decode: %w", err)
 	}
 	// The version FIRST, off the raw blob, because which shape to decode
 	// into is exactly what it answers. Decoding into the current State and
 	// checking afterwards would silently zero every field an older format
 	// spells differently, and the check would then pass on a v1 blob that
 	// happened to carry a `version` this build writes.
-	version, _ := blob["version"].(float64)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(blob, &fields); err != nil {
+		return State{}, false, fmt.Errorf("execstate: decode: %w", err)
+	}
+	if len(fields) == 0 {
+		return State{}, false, nil
+	}
+	var version float64
+	if raw, ok := fields["version"]; ok {
+		// A version that is not a number leaves zero, which no build has
+		// ever written and which therefore takes the refusal below.
+		_ = json.Unmarshal(raw, &version)
+	}
 	switch int(version) {
 	case Version:
 		var s State
-		if err := json.Unmarshal(raw, &s); err != nil {
+		if err := unmarshalExact(blob, &s); err != nil {
 			return State{}, false, fmt.Errorf("execstate: decode: %w", err)
 		}
 		if err := s.Validate(); err != nil {
@@ -366,7 +378,7 @@ func Decode(blob map[string]any) (State, bool, error) {
 		}
 		return s, true, nil
 	case versionV1:
-		s, err := upgradeV1(raw)
+		s, err := upgradeV1(blob)
 		if err != nil {
 			return State{}, false, err
 		}
@@ -383,6 +395,18 @@ func Decode(blob map[string]any) (State, bool, error) {
 		return State{}, false, fmt.Errorf("%w: %d (this build reads %d and %d)",
 			ErrUnknownVersion, int(version), versionV1, Version)
 	}
+}
+
+// unmarshalExact decodes with every number kept as the digits it was written
+// in. The conversation's tool arguments are map[string]any, and a plain
+// Unmarshal reads a number there as a float64 — exact only to 2^53, so an id
+// with more digits than that changes value across the suspension. The
+// provider that decoded the call kept it as a json.Number, and this is the
+// same choice on the way back in.
+func unmarshalExact(raw []byte, into any) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	return dec.Decode(into)
 }
 
 // Answer appends the tool result that answers the pending call, returning the

@@ -127,7 +127,7 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		"func TestAnOwedWakeIsItsOwnPartitionOfTheTask(t *testing.T)",
 		"jetstreamtest.PartitionDB(t, i)",
 		"Prompt.PartitionKey",
-		"ExecuteState map[string]any",
+		"ExecuteState json.RawMessage",
 		"CREWLET_LOG_LEVEL",
 		"crewlet.log",
 		// The fleet's BROKER membership is live: an operator reads and

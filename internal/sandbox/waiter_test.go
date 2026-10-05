@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -181,11 +182,9 @@ var rigItem = types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-
 // which is what opens the run to the completion poll.
 func (r *waiterRig) suspend(turnID string) {
 	r.t.Helper()
-	suspended, err := r.pending.MarkSuspended(r.t.Context(), turnID, Suspension{State: map[string]any{
-		"version":              float64(1),
-		"pending_tool_call_id": "call-1",
-		"pending_tool_name":    "run_sandbox",
-	}, Iteration: rigIteration})
+	suspended, err := r.pending.MarkSuspended(r.t.Context(), turnID, Suspension{State: json.RawMessage(
+		`{"version":1,"pending_tool_call_id":"call-1","pending_tool_name":"run_sandbox"}`),
+		Iteration: rigIteration})
 	if err != nil {
 		r.t.Fatalf("MarkSuspended: %v", err)
 	}

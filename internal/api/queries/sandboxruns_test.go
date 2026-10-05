@@ -2,6 +2,7 @@ package queries_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -121,9 +122,8 @@ func TestTheSuspendedConversationIsNotShipped(t *testing.T) {
 	// The write that carries the conversation is also the one that moves
 	// the run to running, so this leaves the row exactly as a suspended
 	// turn leaves it.
-	suspended, err := store.MarkSuspended(t.Context(), "t1", sandbox.Suspension{State: map[string]any{
-		"messages": []any{map[string]any{"content": "a very long system prompt"}},
-	}})
+	suspended, err := store.MarkSuspended(t.Context(), "t1", sandbox.Suspension{State: json.RawMessage(
+		`{"messages":[{"content":"a very long system prompt"}]}`)})
 	if err != nil || !suspended {
 		t.Fatalf("MarkSuspended: suspended=%v err=%v", suspended, err)
 	}

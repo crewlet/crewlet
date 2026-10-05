@@ -175,15 +175,18 @@ func mustLaunched(t *testing.T, s sandbox.PendingStore, r sandbox.PendingRun) {
 	}
 }
 
-// suspension is a stand-in for the serialized Execute conversation.
+// suspendedState is a stand-in for the serialized Execute conversation. The
+// nineteen-digit argument is the value a lossy store gets wrong: it is past
+// 2^53, so any decode of it into a float64 on the way through comes back as a
+// different number.
+const suspendedState = `{"messages":[{"Role":"assistant","ToolCalls":[{"ID":"call_1",` +
+	`"Name":"run_sandbox","Arguments":{"row":1234567890123456789}}]}],` +
+	`"pending_tool_call_id":"call_1","pending_tool_name":"run_sandbox",` +
+	`"active_tool_names":["run_sandbox","activate_tool"],"iteration":2}`
+
+// suspension is the write that parks [suspendedState].
 func suspension() sandbox.Suspension {
-	return sandbox.Suspension{State: map[string]any{
-		"messages":             []any{map[string]any{"role": "assistant", "content": "working"}},
-		"pending_tool_call_id": "call_1",
-		"pending_tool_name":    "run_sandbox",
-		"active_tool_names":    []any{"run_sandbox", "activate_tool"},
-		"iteration":            float64(2),
-	}, Iteration: 2}
+	return sandbox.Suspension{State: json.RawMessage(suspendedState), Iteration: 2}
 }
 
 func mustGet(t *testing.T, s sandbox.PendingStore, turnID string) sandbox.PendingRun {
@@ -1128,15 +1131,14 @@ func testExecuteStateRoundTrips(t *testing.T, s sandbox.PendingStore) {
 	// THE SUSPENDED CONVERSATION. Everything the tool loop needs to re-enter
 	// where it stopped; a lossy round trip here resumes into a conversation
 	// that is not the one that was suspended.
+	//
+	// BYTE FOR BYTE: the store carries the conversation and never reads it,
+	// so anything it gives back other than what it was given — a number
+	// re-read as a float64, a key re-sorted — is the store editing a turn.
 	mustLaunched(t, s, run("t1"))
 	got := mustGet(t, s, "t1")
-	if got.ExecuteState["pending_tool_call_id"] != "call_1" ||
-		got.ExecuteState["pending_tool_name"] != "run_sandbox" {
-		t.Errorf("execute state = %+v", got.ExecuteState)
-	}
-	msgs, ok := got.ExecuteState["messages"].([]any)
-	if !ok || len(msgs) != 1 {
-		t.Errorf("the suspended conversation did not survive: %+v", got.ExecuteState["messages"])
+	if string(got.ExecuteState) != suspendedState {
+		t.Errorf("execute state = %s\nwant exactly %s", got.ExecuteState, suspendedState)
 	}
 }
 

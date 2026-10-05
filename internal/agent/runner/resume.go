@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -306,10 +307,12 @@ func priorRounds(state execstate.State) toolloop.Result {
 	return out
 }
 
-// intField reads a number that has been through JSON, where every one of them
-// is a float64 — and out of a Go map that never was, where it is still an int.
-// Both shapes reach here: a state serialized to the pending-run row and back,
-// and one handed straight over in the process that wrote it.
+// intField reads a number that has been through JSON, where the state's
+// reader keeps every one of them as the json.Number it was written as — and
+// out of a Go map that never was, where it is still an int. Both shapes reach
+// here: a state serialized to the pending-run row and back, and one handed
+// straight over in the process that wrote it. A float64 is accepted too,
+// because that is what any other plain JSON decode of the same row produces.
 func intField(v any) (int, bool) {
 	switch n := v.(type) {
 	case int:
@@ -318,6 +321,9 @@ func intField(v any) (int, bool) {
 		return int(n), true
 	case float64:
 		return int(n), true
+	case json.Number:
+		i, err := n.Int64()
+		return int(i), err == nil
 	}
 	return 0, false
 }

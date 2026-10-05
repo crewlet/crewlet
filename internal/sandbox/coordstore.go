@@ -1,11 +1,11 @@
 package sandbox
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -382,7 +382,7 @@ func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, suspensio
 		if run.Status != StatusLaunching {
 			return false
 		}
-		run.ExecuteState = maps.Clone(suspension.State)
+		run.ExecuteState = bytes.Clone(suspension.State)
 		run.Status = StatusRunning
 		// Keyed on the job like the rest of its record — see ReleaseClaim.
 		if run.Launch.ID != run.LaunchID {
@@ -616,6 +616,13 @@ func decodeRun(record coord.Record) (PendingRun, error) {
 			run.Extra = map[string]json.RawMessage{}
 		}
 		run.Extra[key] = value
+	}
+	// A null state is NO state. The struct writes one for a run that has
+	// none, as every build before this one did, and a raw field reads the
+	// null back as four bytes — which every `len(...) == 0` asking "is a
+	// conversation parked here?" would answer wrongly.
+	if bytes.Equal(bytes.TrimSpace(run.ExecuteState), []byte("null")) {
+		run.ExecuteState = nil
 	}
 	// The KEY is the identity, not the field: a record whose body somehow
 	// disagrees with the key it is stored under would hand a caller a run

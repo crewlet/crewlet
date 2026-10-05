@@ -69,7 +69,7 @@ func newTailRig(t *testing.T) *tailRig {
 	if err := rig.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
 		t.Fatalf("begin launch: %v", err)
 	}
-	if ok, err := rig.pending.MarkSuspended(ctx, "t1", Suspension{State: map[string]any{"x": 1}}); err != nil || !ok {
+	if ok, err := rig.pending.MarkSuspended(ctx, "t1", Suspension{State: json.RawMessage(`{"x":1}`)}); err != nil || !ok {
 		t.Fatalf("mark suspended: %v %v", ok, err)
 	}
 	if ok, err := rig.pending.ClaimOwnership(ctx, "t1", boxOwner, 1); err != nil || !ok {

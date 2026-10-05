@@ -1,7 +1,6 @@
 package execstate
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -64,7 +63,7 @@ type stateFields State
 // upgradeV1 reads a v1 blob as the current state.
 func upgradeV1(raw []byte) (State, error) {
 	var v1 stateV1
-	if err := json.Unmarshal(raw, &v1); err != nil {
+	if err := unmarshalExact(raw, &v1); err != nil {
 		return State{}, fmt.Errorf("execstate: decode v1: %w", err)
 	}
 	out := State(v1.stateFields)

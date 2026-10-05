@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1578,9 +1579,8 @@ func TestASettleLeavesTheNextJobItsOwnTail(t *testing.T) {
 		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
-		if suspended, err := rig.pending.MarkSuspended(ctx, r.TurnID, Suspension{State: map[string]any{
-			"pending_tool_name": "run_sandbox",
-		}}); err != nil || !suspended {
+		if suspended, err := rig.pending.MarkSuspended(ctx, r.TurnID, Suspension{State: json.RawMessage(
+			`{"pending_tool_name":"run_sandbox"}`)}); err != nil || !suspended {
 			t.Errorf("the relaunch's suspension: suspended=%v err=%v", suspended, err)
 		}
 		rig.runner.Finish(Result{NeedsInput: true, Question: "which file?", AskTo: "requester"})

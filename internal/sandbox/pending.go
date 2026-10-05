@@ -535,7 +535,16 @@ type PendingRun struct {
 	// WITHOUT one can now only mean the row was written by a build that
 	// predates the launching state, which the coordinator fails rather
 	// than resuming into nothing.
-	ExecuteState map[string]any `json:"execute_state"`
+	//
+	// RAW BYTES, because this package carries the conversation and never
+	// reads it. Held as a decoded map it was decoded twice on every
+	// suspension — once for the row and once more off the coordination
+	// record — and each decode read every number as a float64, so an id
+	// longer than 2^53 a model had passed as a tool argument came back from
+	// the row as a different id. Bytes are carried, not decoded, and a JSON
+	// null (what a launching run, and every older build, writes) is read
+	// back as none at all — see decodeRun.
+	ExecuteState json.RawMessage `json:"execute_state"`
 
 	// BridgeCalls is what a run made through the MCP bridge, in order.
 	//
@@ -1106,7 +1115,7 @@ func (f Fence) Fenced() bool { return f.Epoch > 0 }
 // does not own. The run's phase record is keyed on it (see [LaunchRecord]).
 type Suspension struct {
 	// State is the serialized loop, [PendingRun.ExecuteState].
-	State map[string]any
+	State json.RawMessage
 
 	// Iteration is the turn iteration the executor suspended in, which is
 	// the iteration the run's own phase record is filed under.

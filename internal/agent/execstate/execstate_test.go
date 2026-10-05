@@ -3,6 +3,8 @@ package execstate_test
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
@@ -91,6 +93,87 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 	}
 }
 
+// withVersion rewrites the version an encoded blob claims, the one field a
+// test of the version guard has to forge.
+func withVersion(t *testing.T, blob json.RawMessage, version int) json.RawMessage {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(blob, &fields); err != nil {
+		t.Fatalf("the blob is not JSON: %v", err)
+	}
+	fields["version"] = json.RawMessage(strconv.Itoa(version))
+	out, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	return out
+}
+
+// A NUMBER COMES BACK AS THE DIGITS IT WENT IN AS. A model passes ids as
+// tool arguments — a Slack timestamp, a database key, a nineteen-digit
+// snowflake — and the resumed loop replays that call to the provider and
+// reads it back into its own ledger. Read as a float64 the snowflake below
+// becomes ...800, which is an argument the model never wrote, a replayed turn
+// the provider sees edited, and an id that names something else. The
+// signature rides along because it is the other value that must come back
+// byte for byte: a provider refuses a thinking block whose signature moved.
+func TestNumbersAndSignaturesSurviveASuspensionExactly(t *testing.T) {
+	t.Parallel()
+	const snowflake = "1234567890123456789"
+	state := suspended()
+	state.Messages[2].ThinkingBlocks = []llm.ThinkingBlock{{
+		Type: "thinking", Thinking: "find the row <first> & then fix it", Signature: "EqQBCgIYAhIM+/=",
+	}}
+	state.Messages[2].ToolCalls[0].Arguments = map[string]any{
+		"brief": "fix it",
+		"row":   json.Number(snowflake),
+		"ratio": json.Number("0.1000000000000000055511151231257827"),
+	}
+
+	blob, err := execstate.Encode(state)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	got, ok, err := execstate.Decode(blob)
+	if err != nil || !ok {
+		t.Fatalf("Decode = %v, %v", ok, err)
+	}
+	args := got.Messages[2].ToolCalls[0].Arguments
+	if row, _ := args["row"].(json.Number); row.String() != snowflake {
+		t.Errorf("row = %v (%T), want the exact %s", args["row"], args["row"], snowflake)
+	}
+	if ratio, _ := args["ratio"].(json.Number); ratio.String() != "0.1000000000000000055511151231257827" {
+		t.Errorf("ratio = %v (%T), want its digits unchanged", args["ratio"], args["ratio"])
+	}
+	if blocks := got.Messages[2].ThinkingBlocks; len(blocks) != 1 || blocks[0] != state.Messages[2].ThinkingBlocks[0] {
+		t.Errorf("thinking blocks = %+v, want them unchanged", blocks)
+	}
+
+	// And a second suspension of the resumed conversation writes the same
+	// bytes: what a resume reads is exactly what the next suspend writes,
+	// with no drift a chain of suspensions could compound.
+	again, err := execstate.Encode(got)
+	if err != nil {
+		t.Fatalf("re-Encode: %v", err)
+	}
+	if string(again) != string(blob) {
+		t.Errorf("a decoded state re-encodes differently:\n first %s\nsecond %s", blob, again)
+	}
+}
+
+// A V1 row's numbers are read the same exact way, since it is read for ever.
+func TestAV1RowKeepsItsNumbersExact(t *testing.T) {
+	t.Parallel()
+	blob := strings.Replace(v1Blob, `{"brief": "fix it"}`, `{"brief": "fix it", "row": 1234567890123456789}`, 1)
+	got, ok, err := execstate.Decode(json.RawMessage(blob))
+	if err != nil || !ok {
+		t.Fatalf("Decode of a v1 row = %v, %v", ok, err)
+	}
+	if row := got.Messages[2].ToolCalls[0].Arguments["row"]; row != json.Number("1234567890123456789") {
+		t.Errorf("row = %v (%T), want the exact digits", row, row)
+	}
+}
+
 // A rolling upgrade means the node that resumes is routinely not the build
 // that suspended. A half-understood conversation must not be acted on.
 func TestAnUnknownVersionIsRefusedLoudlyRatherThanReadBestEffort(t *testing.T) {
@@ -98,7 +181,7 @@ func TestAnUnknownVersionIsRefusedLoudlyRatherThanReadBestEffort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	blob["version"] = float64(execstate.Version + 7)
+	blob = withVersion(t, blob, execstate.Version+7)
 
 	got, ok, err := execstate.Decode(blob)
 	if !errors.Is(err, execstate.ErrUnknownVersion) {
@@ -118,8 +201,14 @@ func TestEncodeStampsTheCurrentVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	if blob["version"] != float64(execstate.Version) {
-		t.Fatalf("version = %v, want %d", blob["version"], execstate.Version)
+	var stamped struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(blob, &stamped); err != nil {
+		t.Fatalf("the blob is not JSON: %v", err)
+	}
+	if stamped.Version != execstate.Version {
+		t.Fatalf("version = %d, want %d", stamped.Version, execstate.Version)
 	}
 }
 
@@ -171,8 +260,12 @@ func TestAnEmptyBlobIsNotAnError(t *testing.T) {
 	if err != nil || ok {
 		t.Fatalf("Decode(nil) = %+v, %v, %v; want a clean miss", got, ok, err)
 	}
-	if got, ok, err := execstate.Decode(map[string]any{}); err != nil || ok {
-		t.Fatalf("Decode({}) = %+v, %v, %v; want a clean miss", got, ok, err)
+	// A row written with no state at all carries a JSON null, and every
+	// build before this one wrote exactly that for a launching run.
+	for _, empty := range []string{"null", "{}", " { } "} {
+		if got, ok, err := execstate.Decode(json.RawMessage(empty)); err != nil || ok {
+			t.Fatalf("Decode(%s) = %+v, %v, %v; want a clean miss", empty, got, ok, err)
+		}
 	}
 }
 
@@ -253,11 +346,7 @@ const v1Blob = `{
 
 func TestAV1RowStillResumes(t *testing.T) {
 	t.Parallel()
-	var blob map[string]any
-	if err := json.Unmarshal([]byte(v1Blob), &blob); err != nil {
-		t.Fatalf("the fixture is not JSON: %v", err)
-	}
-	got, ok, err := execstate.Decode(blob)
+	got, ok, err := execstate.Decode(json.RawMessage(v1Blob))
 	if err != nil || !ok {
 		t.Fatalf("Decode of a v1 row = %v, %v", ok, err)
 	}
@@ -303,7 +392,7 @@ func TestAVersionThisBuildDoesNotKnowIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	blob["version"] = float64(execstate.Version + 1)
+	blob = withVersion(t, blob, execstate.Version+1)
 	got, ok, err := execstate.Decode(blob)
 	if !errors.Is(err, execstate.ErrUnknownVersion) {
 		t.Fatalf("Decode = %+v, %v, %v; want ErrUnknownVersion", got, ok, err)
