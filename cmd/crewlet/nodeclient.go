@@ -9,12 +9,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Talking to a running node.
@@ -207,7 +205,7 @@ func (c *nodeClient) send(ctx context.Context, method, path string, payload []by
 	}
 	if resp.StatusCode != http.StatusOK {
 		if engineCode(body) == "" {
-			return notTheNode(path, resp.StatusCode, body)
+			return notTheNode(path, resp.StatusCode, resp.Header.Get("Content-Type"), body)
 		}
 		return nodeError(resp.StatusCode, body, c.token != "")
 	}
@@ -255,11 +253,8 @@ func engineCode(body []byte) string {
 // whatever happens to the connection. Read as a refusal, the eviction printed
 // no -op-id, so the only way on was a second gesture over every log the first
 // one reached.
-func notTheNode(path string, status int, body []byte) error {
-	said := textcut.Ellipsis(strings.TrimSpace(string(body)), maxRefusalTextBytes)
-	if said == "" {
-		said = "(an empty body)"
-	}
+func notTheNode(path string, status int, contentType string, body []byte) error {
+	said := foreignAnswer(contentType, body)
 	return noAnswer{fmt.Errorf("the answer to %s came back %d with no error code "+
 		"the engine writes, so it is not the node's own: something in front of it "+
 		"answered — a proxy or gateway, most often its read timeout — and the node "+

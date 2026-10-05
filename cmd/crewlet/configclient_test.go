@@ -138,21 +138,40 @@ func TestAnImportThatLostARaceSaysWhatWorksAgainstARunningNode(t *testing.T) {
 	}
 }
 
-// AN ANSWER THAT IS NOT THE ENGINE'S JSON IS QUOTED, AND ONLY SO MUCH OF IT.
-// The client reads a company-sized answer now, and a proxy's page of that size
-// pasted whole into an error is a terminal full of markup.
-func TestARefusalQuotesAnAnswerThatIsNotJSONBoundedly(t *testing.T) {
+// AN ANSWER THAT IS NOT THE ENGINE'S JSON IS READ FOR WHAT IT SAID. The client
+// reads a company-sized answer now, and a proxy's page of that size pasted into
+// an error is a terminal full of markup around the one sentence it held: its
+// title. A page with nothing readable says how large it was instead.
+func TestARefusalQuotesWhatAnAnswerThatIsNotJSONSaid(t *testing.T) {
 	t.Parallel()
-	page := "<html>" + strings.Repeat("a gateway error page ", 10_000) + "</html>"
+	page := "<html><head><title>502 Bad Gateway</title></head>" +
+		strings.Repeat("<div>a gateway error page</div>", 10_000) + "</html>"
 	client := answering(t, http.StatusBadGateway, []byte(page))
 	_, _, err := client.Import(t.Context(), []byte("name: Acme\n"), "import")
 	if err == nil {
 		t.Fatal("a gateway error was reported as a write")
 	}
-	if !strings.Contains(err.Error(), "<html>a gateway error page") {
-		t.Errorf("the refusal %q does not quote the answer", err)
+	if !strings.Contains(err.Error(), "502 Bad Gateway") || strings.Contains(err.Error(), "<div>") {
+		t.Errorf("the refusal %.300q does not say what the page said", err)
 	}
-	if len(err.Error()) > maxRefusalTextBytes+512 {
-		t.Errorf("the refusal is %d bytes long, want the answer quoted to %d", len(err.Error()), maxRefusalTextBytes)
+
+	untitled := "<html>" + strings.Repeat("<div>layout</div>", 1000) + "</html>"
+	client = answering(t, http.StatusBadGateway, []byte(untitled))
+	_, _, err = client.Import(t.Context(), []byte("name: Acme\n"), "import")
+	if err == nil || !strings.Contains(err.Error(), "bytes of") || strings.Contains(err.Error(), "<div>") {
+		t.Errorf("an untitled page = %v, want its size and none of its markup", err)
+	}
+}
+
+// AN ANSWER PAST THE CAP IS REFUSED, NOT CLIPPED. A clipped one reached the
+// decoder and read as something this build cannot parse, on a write whose
+// status said it had landed.
+func TestAnAnswerPastTheCapIsRefusedNamingWhatLanded(t *testing.T) {
+	t.Parallel()
+	client := answering(t, http.StatusOK, []byte(strings.Repeat(" ", maxConfigResponseBytes+1)))
+	_, _, err := client.Import(t.Context(), []byte("name: Acme\n"), "import")
+	if err == nil || !strings.Contains(err.Error(), "exceeded") ||
+		!strings.Contains(err.Error(), "says the revision was stored") {
+		t.Errorf("an over-long answer = %v, want it refused, saying the write landed", err)
 	}
 }
