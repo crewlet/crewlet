@@ -1753,8 +1753,9 @@ answers carries one shape:
   holds back: one whose clock runs ahead, or that answers late, floors above
   the horizon, and its rows between the two are in no answer — on the axis,
   missing from the first whole bar when the strip reaches past its start
-  (see [the time axis](#the-event-logs-time-axis)). The spend window and a page of turns are bounded by edges the
-  serving node names, which every build honours. The outcome counts on
+  (see [the time axis](#the-event-logs-time-axis)). The spend window and a
+  page of turns are bounded by edges the serving node names, which every
+  build honours. The outcome counts on
   `integrations` are a count too, and carry no such strip: every build that
   answers that question reads the instant, since it arrived with it.
 
@@ -1776,9 +1777,11 @@ item of one charged to an item only by its later records, under
 `work_item=` — and a turn held at the horizon began where no page reaches.
 Paged at its `started_at`, such a turn could fall below where a page was cut
 and behind the cursor that page returned, and so on no page of the walk.
-Walking `next` lists every turn exactly once; the rows are newest first by
-that position, so a row whose `started_at` is earlier than where it is listed
-can sit above rows that began after it. A node on an earlier build says
+Walking `next` lists every turn exactly once — but for a turn listed at the
+very microsecond the page's last turn is, past the page's size, which a cursor
+that is an instant alone cannot tell from the turn before it; the rows are
+newest first by that position, so a row whose `started_at` is earlier than
+where it is listed can sit above rows that began after it. A node on an earlier build says
 nothing of which turns it lists, and its half is read as listing a turn when
 it starts inside the window and matches `failed` and `model` — it carries no
 work item, so under `work_item=` a turn whose earliest half is on such a node
