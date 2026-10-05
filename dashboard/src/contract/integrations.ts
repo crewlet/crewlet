@@ -119,7 +119,8 @@ export interface ReconcileStatus {
 export interface IntegrationRow {
   key: string;
   configured: boolean;
-  /** Deliveries the edge accepted. */
+  /** Deliveries the edge accepted. Null for a surface read over a websocket
+   *  (Mattermost), whose posts leave no delivery row to count. */
   inbound?: number | null;
   /**
    * The two OUTCOME counts, three-valued: a number, or null when this process

@@ -1602,6 +1602,42 @@ func TestIntegrationsCountsWhatBecameOfTheDeliveries(t *testing.T) {
 	}
 }
 
+// A SURFACE READ OVER A SOCKET HAS NO DELIVERY COUNT, rather than a count of
+// zero.
+//
+// `inbound` counts the rows the webhook edge writes as it accepts a delivery,
+// and a Mattermost post is read off the websocket and woken onto a seat's
+// inbox with no such row. Counted anyway, every Mattermost row read 0 however
+// busy its channels were, and a card drew "nothing delivered" over a surface
+// delivering all day. Null is the answer for a measurement nobody made — while
+// what became of its posts is counted, since those are the engine's own
+// events whichever way a post arrived.
+//
+// Mutation: count Mattermost's delivery rows like any webhook surface's, and
+// its `inbound` is a 0 nothing measured.
+func TestASurfaceReadOverASocketHasNoDeliveryCount(t *testing.T) {
+	t.Parallel()
+	log := openStore(t).Events()
+	at := time.Now().UTC().Add(-time.Hour)
+	appendOutcome(t, log, "drop", "notification_skipped", "mattermost", at)
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg }, Events: fleetOf(log),
+	}, "integrations", nil))
+	mattermost := surfacesOf(t, body)["mattermost"]
+	if got, present := mattermost["inbound"]; !present || got != nil {
+		t.Errorf("mattermost inbound = %v (present %v), want null — no delivery row exists "+
+			"for a post read off a websocket", got, present)
+	}
+	if mattermost["inbound_kind"] != "websocket" || mattermost["skipped"] != float64(1) {
+		t.Errorf("mattermost inbound_kind %v, skipped %v — want the websocket named and its "+
+			"drop counted", mattermost["inbound_kind"], mattermost["skipped"])
+	}
+	if got := surfacesOf(t, body)["gitlab"]["inbound"]; got != float64(0) {
+		t.Errorf("gitlab inbound = %v, want a measured 0 — a webhook surface's rows are counted", got)
+	}
+}
+
 // AND THEY ARE COUNTED AT ONE INSTANT. The deliveries and what became of them
 // are two fleet reads, and each read the fleet's clock for itself, so the
 // outcomes were floored a whole scatter later than the deliveries beside them:
@@ -1793,11 +1829,9 @@ func TestNoDeliveryCountsTheOutcomesOfTheWholeHistory(t *testing.T) {
 	}
 	rows := surfacesOf(t, body)
 	mattermost := rows["mattermost"]
-	if mattermost["inbound"] != float64(0) || mattermost["skipped"] != float64(2) ||
-		mattermost["coalesced"] != float64(1) {
-		t.Errorf("mattermost inbound %v, skipped %v, coalesced %v — want no delivery, and the "+
-			"month's two drops and its merge beside it, never the drop under the floor",
-			mattermost["inbound"], mattermost["skipped"], mattermost["coalesced"])
+	if mattermost["skipped"] != float64(2) || mattermost["coalesced"] != float64(1) {
+		t.Errorf("mattermost skipped %v, coalesced %v — want the month's two drops and its "+
+			"merge, never the drop under the floor", mattermost["skipped"], mattermost["coalesced"])
 	}
 	if got := rows["gitlab"]["skipped"]; got != float64(0) {
 		t.Errorf("gitlab skipped = %v, want 0 — a measured zero over the month", got)

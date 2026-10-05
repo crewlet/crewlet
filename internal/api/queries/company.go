@@ -180,7 +180,7 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 			"key":        kind,
 			"configured": true,
 			"enabled":    enabled,
-			"inbound":    seen.count[kind],
+			"inbound":    inboundOf(seen, kind),
 			// THREE-VALUED like the secret fields, and for the same
 			// reason: null means this node could not read the outcome
 			// events, and reporting that as 0 would say every delivery
@@ -200,7 +200,7 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		row["inbound_kind"], row["inbound_path"] = nil, nil
 		if integration.Kind(kind).Ingests() {
 			row["inbound_kind"] = map[bool]string{
-				true: "websocket", false: "webhook"}[kind == "mattermost"]
+				true: "websocket", false: "webhook"}[readOverASocket(kind)]
 			row["inbound_path"] = inboundPath(kind)
 		}
 		// Rendered as a relative time, so an absent one has to be absent
@@ -880,6 +880,28 @@ func (s Sources) memoryOverview(ctx context.Context, _ Params) (any, error) {
 	slices.Sort(handles)
 	handles = slices.Compact(handles)
 	return s.Memory.Overview(ctx, handles)
+}
+
+// readOverASocket reports whether a surface's arrivals come over a websocket the
+// engine holds open — Mattermost's, one per seat — rather than to a route.
+func readOverASocket(kind string) bool { return kind == "mattermost" }
+
+// inboundOf renders a surface's delivery count, or null where there is no
+// delivery row to count.
+//
+// NULL FOR A SURFACE READ OVER A SOCKET, because the count is of the rows the
+// webhook edge writes as it accepts a delivery, and a post read off the
+// websocket is woken straight onto a seat's inbox with no such row — the wake
+// is deliberately not stored, since for every other surface the row already
+// is (internal/events). So Mattermost's count was 0 on every company however
+// busy its channels, and the card drew "nothing delivered" over a surface
+// delivering all day: a measurement nobody made, which is what null is for
+// here as it is for the outcome counts beside it.
+func inboundOf(seen traffic, kind string) any {
+	if readOverASocket(kind) {
+		return nil
+	}
+	return seen.count[kind]
 }
 
 // countOrNil renders an outcome count, or null when nothing was counted.
