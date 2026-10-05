@@ -697,7 +697,9 @@ sequenceDiagram
 - **Charged to the company.** It runs on the asker's own seat's auxiliary model
   and is judged against the company's day, week and month — a person has no seat
   budget. A company window with no room refuses it before the call; after the
-  call, exactly what the reply spent is recorded on the company's counter.
+  call, exactly what the reply spent is recorded on the company's counter — a
+  reply the model **refused** included, since its prompt was billed even though
+  the answer is refused rather than shown.
 - **Cached at a corpus position.** Each node keeps 256 answers, keyed on the
   question (case and spacing folded) and where its tracker, pages and vector
   logs are applied through. Any write that could change an answer moves the

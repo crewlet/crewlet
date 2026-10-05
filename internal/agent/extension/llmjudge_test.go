@@ -230,6 +230,28 @@ func TestAFailedModelCallIsAnError(t *testing.T) {
 	}
 }
 
+// A REFUSED JUDGEMENT IS STILL A BILLED ONE. A refusal returns no completion
+// and an error carrying the response the vendor charged for; the rescue it
+// becomes must carry that spend, or the phase that asked is charged nothing
+// for a call that cost a whole prompt.
+func TestARefusedJudgementCarriesItsSpend(t *testing.T) {
+	t.Parallel()
+	refusal := llm.Refused("anthropic", "cheap-model", &llm.Refusal{Category: "cyber",
+		Completion: &llm.Completion{Model: "cheap-model", InputTokens: 900, OutputTokens: 4,
+			CacheRead: 600, StopReason: llm.StopRefusal}})
+	j := extension.NewLLMJudge(&answering{err: refusal}, "cheap")
+	granted, d := extension.Consider(t.Context(), j, extension.Policy{
+		Enabled: true, RoundStep: 4, Ceiling: 40,
+	}, judgeReq())
+	if granted != 0 || d.Extend || !d.Asked {
+		t.Fatalf("granted %d, decision %+v; want an asked rescue", granted, d)
+	}
+	if d.Tokens() != 904 || d.CacheRead != 600 || d.Model != "cheap-model" || d.ProviderKey != "cheap" {
+		t.Errorf("the refused judgement's spend is %d tokens (cache %d) on %q under %q, "+
+			"want 904 (600) on cheap-model under cheap", d.Tokens(), d.CacheRead, d.Model, d.ProviderKey)
+	}
+}
+
 // A PROVIDER ANSWERING (nil, nil) IS A CONTRACT VIOLATION, and it is checked
 // rather than dereferenced: the panic would surface as a failed turn on the
 // phase this was trying to be generous to.

@@ -65,6 +65,7 @@
 package toolloop
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -1206,10 +1207,11 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			// prompt was read — so it is recorded and charged like any
 			// round, or every refusal would be the one call the budget
 			// never saw and the phase record would end a round early.
-			var refusal *llm.Refusal
-			if errors.As(err, &refusal) && refusal.Completion != nil {
-				account(refusal.Completion, took, llm.StopRefusal)
-				if chargeErr := charge(ctx, cfg.Budget, refusal.Completion.TotalTokens()); chargeErr != nil {
+			if billed := llm.Billed(completion, err); billed != nil {
+				// The response's own stop reason, which on a refusal is
+				// [llm.StopRefusal]; a refusal that named none is still one.
+				account(billed, took, cmp.Or(billed.StopReason, llm.StopRefusal))
+				if chargeErr := charge(ctx, cfg.Budget, billed.TotalTokens()); chargeErr != nil {
 					// BOTH facts, the refusal first: it is why the phase
 					// ended, and a reader classifying the error finds it
 					// before the budget, while the charge's own outcome

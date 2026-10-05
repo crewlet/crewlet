@@ -226,6 +226,29 @@ func TestAFailedCompletionChargesNothing(t *testing.T) {
 	}
 }
 
+// A REFUSED PASS IS CHARGED. A refusal comes back as an error with no
+// completion, so nobody can act on its text — but the prompt was read and
+// billed, and the response the vendor charged for travels inside the error. A
+// meter that charged only a non-nil completion counted every refused
+// reflection, compaction and prefetch pass as free, and a company whose
+// transcripts the model kept declining spent tokens the gate never saw.
+func TestARefusedAuxiliaryPassIsCharged(t *testing.T) {
+	t.Parallel()
+	meter := &countingMeter{}
+	refusal := llm.Refused("anthropic", "test-model", &llm.Refusal{Category: "cyber",
+		Completion: &llm.Completion{Model: "test-model", InputTokens: 900, OutputTokens: 12,
+			StopReason: llm.StopRefusal}})
+	member := meteredHead(t, &answeringProvider{err: refusal}, meter)
+
+	got, err := member.Provider.Complete(t.Context(), llm.Request{})
+	if llm.KindOf(err) != llm.KindRefusal || got != nil {
+		t.Fatalf("Complete = %+v, %v; want the provider's refusal returned as it came", got, err)
+	}
+	if meter.spent != 912 {
+		t.Errorf("charged %d tokens, want the refused response's 912", meter.spent)
+	}
+}
+
 // THE PRE-FLIGHT GATE DECLINES A SEAT WITH NO ROOM LEFT, AND ASKS WITHOUT
 // SPENDING.
 //

@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -126,6 +127,31 @@ func TestRefusedCarriesTheRefusalAndItsCompletion(t *testing.T) {
 	if msg := err.Error(); !strings.Contains(msg, "declined") || !strings.Contains(msg, "cyber") ||
 		!strings.Contains(msg, "not this") {
 		t.Errorf("Error() = %q, want the decline, its category and its explanation", msg)
+	}
+}
+
+// WHAT A METER CHARGES: the answer, or the refused response under the error —
+// wrapped as a caller would wrap it — and nothing for a failure that billed
+// nothing.
+func TestBilledIsTheAnswerOrTheRefusedResponse(t *testing.T) {
+	answer := &llm.Completion{Model: "m", InputTokens: 3}
+	refused := &llm.Completion{Model: "m", InputTokens: 7, StopReason: llm.StopRefusal}
+	refusal := fmt.Errorf("judge: %w", llm.Refused("anthropic", "m", &llm.Refusal{Completion: refused}))
+	for _, tc := range []struct {
+		name       string
+		completion *llm.Completion
+		err        error
+		want       *llm.Completion
+	}{
+		{"an answer", answer, nil, answer},
+		{"a refusal, wrapped", nil, refusal, refused},
+		{"a refusal that carried no response", nil, llm.Refused("anthropic", "m", &llm.Refusal{}), nil},
+		{"a failure that billed nothing", nil, &llm.Error{Kind: llm.KindServer}, nil},
+		{"nothing at all", nil, nil, nil},
+	} {
+		if got := llm.Billed(tc.completion, tc.err); got != tc.want {
+			t.Errorf("%s: Billed = %+v, want %+v", tc.name, got, tc.want)
+		}
 	}
 }
 

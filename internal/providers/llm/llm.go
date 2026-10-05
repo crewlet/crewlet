@@ -241,7 +241,7 @@ func (r StopReason) Valid() bool { return slices.Contains(stopReasons, r) }
 // BILLED: the prompt was read and the vendor charges for it, so the frame that
 // meters spend has to see its usage even though nobody may act on its content.
 // Without it every refused round would be the one call the budget never
-// counted.
+// counted — and [Billed] is how every such frame reads it.
 type Refusal struct {
 	// Category is the vendor's policy category (Anthropic's
 	// `stop_details.category`: cyber, bio, …), and empty when the vendor
@@ -273,6 +273,29 @@ func (r *Refusal) Error() string {
 // every backend says it in one shape.
 func Refused(provider, model string, refusal *Refusal) *Error {
 	return &Error{Kind: KindRefusal, Provider: provider, Model: model, Err: refusal}
+}
+
+// Billed is the completion a call's spend is metered from: the answer when
+// there is one, otherwise the refused response a [Refusal] in err carries,
+// and nil when the call billed nothing a caller can see.
+//
+// EVERY FRAME THAT METERS SPEND READS THROUGH THIS, never a bare
+// `completion != nil`. A refusal is returned as an error with a nil
+// completion — so nobody can act on its text — but its prompt was read and
+// billed, and a meter that charges only a non-nil completion counts every
+// refused call as free: the budget gate keeps reading room for a company
+// whose passes the model keeps declining. One helper rather than an
+// errors.As at each site, because a site that forgot the unwrap compiled,
+// passed its own tests and charged nothing.
+func Billed(completion *Completion, err error) *Completion {
+	if completion != nil {
+		return completion
+	}
+	var refusal *Refusal
+	if errors.As(err, &refusal) {
+		return refusal.Completion
+	}
+	return nil
 }
 
 // Completion is one model response.

@@ -375,16 +375,17 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Effort:      answerEffort,
 		MaxTokens:   AnswerMaxTokens,
 	})
-	if completion != nil {
+	if billed := llm.Billed(completion, err); billed != nil {
 		// CHARGED WHATEVER BECOMES OF THE ANSWER: the tokens are spent at
 		// the vendor the moment it replies, and on a context that
 		// outlives the caller's, because a person closing the palette
 		// between the reply and the write is spend the counter would
-		// otherwise never hear about.
-		if spent := completion.TotalTokens(); spent > 0 {
+		// otherwise never hear about. A REFUSED answer included: it comes
+		// back as an error with no completion, and its prompt was billed.
+		if spent := billed.TotalTokens(); spent > 0 {
 			if chargeErr := t.deps.Budget.Charge(context.WithoutCancel(ctx), spent); chargeErr != nil {
 				log.WarnContext(ctx, "knowledge_answer_spend_uncounted", "seat", actor.Seat,
-					"tokens", spent, "model", completion.Model, "error", chargeErr.Error(),
+					"tokens", spent, "model", billed.Model, "error", chargeErr.Error(),
 					"detail", "the company's counter now understates its spend")
 			}
 		}

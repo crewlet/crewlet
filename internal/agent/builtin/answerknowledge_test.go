@@ -442,6 +442,25 @@ func TestAnEmptyReplyIsChargedAndRefused(t *testing.T) {
 	}
 }
 
+// A REFUSED ANSWER IS CHARGED AND REFUSED. A refusal returns no completion —
+// its text is not an answer — but the response the vendor billed travels in
+// the error, and an answer that charged only a non-nil completion let every
+// refused question spend against a counter that never moved.
+func TestARefusedAnswerIsCharged(t *testing.T) {
+	t.Parallel()
+	rig := newAnswerRig()
+	rig.model.err = llm.Refused("anthropic", "aux-small", &llm.Refusal{Category: "bio",
+		Completion: &llm.Completion{Model: "aux-small", InputTokens: 640, OutputTokens: 9,
+			StopReason: llm.StopRefusal}})
+	res, _, _ := ask(t, rig.tool(t), "How do we deploy?")
+	if !res.Failed || res.Refusal != tools.RefusalUnavailable {
+		t.Fatalf("a refused answer was answered: %+v", res)
+	}
+	if len(rig.budget.charged) != 1 || rig.budget.charged[0] != 649 {
+		t.Errorf("charged %v, want the 649 the refused response was billed", rig.budget.charged)
+	}
+}
+
 // NO QUESTION, NO CALL.
 func TestAnAnswerNeedsAQuestion(t *testing.T) {
 	t.Parallel()

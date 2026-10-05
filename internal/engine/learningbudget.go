@@ -99,10 +99,16 @@ func (p meteredProvider) Model() string { return p.inner.Model() }
 
 func (p meteredProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	completion, err := p.inner.Complete(ctx, req)
-	if completion == nil {
+	// What was BILLED, which is not only an answer: a refused pass returns
+	// no completion and a refusal error carrying the response the vendor
+	// charged for. Recorded all the same, or every refusal would be a pass
+	// the pre-flight gate never heard about. The caller still gets exactly
+	// what the provider returned.
+	billed := llm.Billed(completion, err)
+	if billed == nil {
 		return completion, err
 	}
-	if tokens := completion.TotalTokens(); tokens > 0 {
+	if tokens := billed.TotalTokens(); tokens > 0 {
 		// context.WithoutCancel: the tokens are already spent at the
 		// vendor. A record skipped because the caller's deadline expired
 		// between the answer and the write is money the counter never
@@ -113,7 +119,7 @@ func (p meteredProvider) Complete(ctx context.Context, req llm.Request) (*llm.Co
 			// coordination blip into a reflection outage, and the
 			// pre-flight gate is what actually stops the spending.
 			log.WarnContext(ctx, "auxiliary_spend_uncounted", "error", spendErr,
-				"tokens", tokens, "model", completion.Model,
+				"tokens", tokens, "model", billed.Model,
 				"detail", "the fleet counter now understates this company's spend")
 		}
 	}
