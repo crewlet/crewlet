@@ -6,7 +6,7 @@
 // and a different prompt: the executor, the reviewer, the extension judge, a
 // worker.
 //
-// Four things here are load-bearing and each replaced an incident:
+// Six things here are load-bearing and each replaced an incident:
 //
 //   - THE BUDGET CHECK AND THE INCREMENT ARE ONE OPERATION, and the refusal
 //     names its own scope. Re-reading the caps afterwards to work out which
