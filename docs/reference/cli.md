@@ -444,7 +444,7 @@ variable at all.
 | `-stage S` | every stage | `invited`, `enrolling`, `active`, `suspended` or `retired` |
 | `-since POSITION` / `-at TIME` | — | Where the trail starts. `-since` is a log position; `-at` is an RFC 3339 instant the route resolves to one |
 | `-limit N` | 50 (100 for the trail) | How many rows |
-| `-after ID` / `-before POSITION` | the first page | Where the next page starts: `-after` on `people`, `-before` on `audit` — each listing ends with the command for its next page |
+| `-after ID` / `-before POSITION` | the first page | Where the next page starts: `-after` on `people`, `-before` on `audit` — each listing ends with the command for its next page, which repeats every filter the page was asked with |
 | `-seat SEAT` | — | On `invite` only: the chart seat redeeming the link binds the person to. Refused on every other command rather than ignored — somebody who already exists is bound with `bind` |
 | `-idempotency-key OP` | a new operation | Retry a write whose outcome was unknown **as the same operation** — the op id its refusal named. Refused on a read and on `token` (a mint's retry would hand back a record whose value was shown to nobody, so an unknown mint is minted again) |
 

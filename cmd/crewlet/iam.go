@@ -8,8 +8,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -249,7 +251,8 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if *limit > 0 {
 			query.Set("limit", strconv.Itoa(*limit))
 		}
-		return out.people(client.get(ctx, "/iam/people", query))
+		answer, err := client.get(ctx, "/iam/people", query)
+		return out.people(query, answer, err)
 	case "show":
 		return out.one(client.get(ctx, "/iam/people/"+subject, nil))
 	case "invite":
@@ -329,7 +332,8 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if *limit > 0 {
 			query.Set("limit", strconv.Itoa(*limit))
 		}
-		return out.audit(client.get(ctx, "/iam/audit", query))
+		answer, err := client.get(ctx, "/iam/audit", query)
+		return out.audit(query, answer, err)
 	}
 	fmt.Fprintf(stdout, iamUsage, defaultBootstrapPath)
 	return fmt.Errorf("unknown subcommand %q", sub)
@@ -677,7 +681,7 @@ func (p *iamPrinter) dump(answer map[string]any) error {
 	return nil
 }
 
-func (p *iamPrinter) people(answer map[string]any, err error) error {
+func (p *iamPrinter) people(asked url.Values, answer map[string]any, err error) error {
 	if err != nil {
 		return err
 	}
@@ -698,10 +702,57 @@ func (p *iamPrinter) people(answer map[string]any, err error) error {
 		return err
 	}
 	if next := str(answer["next"]); next != "" {
-		fmt.Fprintf(p.w, "\nmore: crewlet iam people -after %s\n", next)
+		p.more("people", asked, "after", next)
 	}
 	fmt.Fprintf(p.w, "as of %s\n", str(answer["position"]))
 	return nil
+}
+
+// more prints a listing's last line: the command that answers its next page —
+// this one AS IT WAS ASKED, every filter it narrowed on included, with its
+// cursor moved to where the page ended.
+//
+// THE FILTERS RIDE ALONG because the cursor alone is a different listing: a
+// line naming only `-after <id>` paged through the WHOLE directory from that
+// row, so following `iam people -stage invited` printed everybody after it as
+// though they matched. Every query parameter a listing sends is named after
+// the flag that set it, which is what lets the line be composed from the query
+// rather than from a second list of flags; the bool flags are [iamBoolParams].
+func (p *iamPrinter) more(sub string, asked url.Values, cursor, next string) {
+	again := url.Values{}
+	for name, values := range asked {
+		again[name] = slices.Clone(values)
+	}
+	again.Set(cursor, next)
+	line := "crewlet iam " + sub
+	for _, name := range slices.Sorted(maps.Keys(again)) {
+		if iamBoolParams[name] {
+			line += " -" + name
+			continue
+		}
+		line += " -" + name + " " + shellWord(again.Get(name))
+	}
+	fmt.Fprintf(p.w, "\nmore: %s\n", line)
+}
+
+// iamBoolParams are the query parameters a bool flag sets, which a next-page
+// line names bare: `-all true` would be read as `-all` and a stray argument.
+var iamBoolParams = map[string]bool{"all": true}
+
+// shellWord quotes a value for a line an operator pastes into a shell, and
+// leaves one with nothing a shell would read specially as it is.
+func shellWord(value string) string {
+	special := func(r rune) bool {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return false
+		}
+		return !strings.ContainsRune("-_.:@+/=,%", r)
+	}
+	if value != "" && strings.IndexFunc(value, special) < 0 {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 // personName is what to show where a name would go.
@@ -828,7 +879,7 @@ func findingWho(row map[string]any) string {
 	return str(row["person"])
 }
 
-func (p *iamPrinter) audit(answer map[string]any, err error) error {
+func (p *iamPrinter) audit(asked url.Values, answer map[string]any, err error) error {
 	if err != nil {
 		return err
 	}
@@ -852,7 +903,7 @@ func (p *iamPrinter) audit(answer map[string]any, err error) error {
 		return err
 	}
 	if next := str(answer["next"]); next != "" && next != "0" {
-		fmt.Fprintf(p.w, "\nmore: crewlet iam audit -before %s\n", next)
+		p.more("audit", asked, "before", next)
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -267,7 +268,7 @@ func TestTheTrailPrintsATokensGestureAsOne(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	p := &iamPrinter{w: &out}
-	if err := p.audit(map[string]any{"events": []any{
+	if err := p.audit(nil, map[string]any{"events": []any{
 		map[string]any{"position": float64(2), "op": "status",
 			"actor": "ana.admin", "operator_id": "pat:0192f00d-0000-7000-8000-00000000000a"},
 		map[string]any{"position": float64(1), "op": "status", "actor": "ana.admin"},
@@ -556,36 +557,46 @@ func TestAnIamInviteBindsTheSeatTheOperatorNamed(t *testing.T) {
 	}
 }
 
-// A LISTING'S "MORE" LINE IS A COMMAND THAT RUNS.
+// A LISTING'S "MORE" LINE IS A COMMAND THAT RUNS, AND ASKS FOR THE SAME LISTING.
 //
-// `iam people` and `iam audit` end a page by printing the command for the next
-// one — `-after <id>` and `-before <position>` — and neither flag was defined,
-// so following the line answered "flag provided but not defined". The node here
-// answers a page with a cursor; the printed line is run as written, and the
-// node must see the cursor it named. Mutation: drop either flag and its row
-// fails to parse.
+// Every listing ends a page by printing the command for the next one. Two
+// things have to hold of it. The cursor flag it names has to exist: neither
+// `-after` nor `-before` was defined once, so following the line answered "flag
+// provided but not defined". And it has to repeat the filters the page was
+// asked with: a line naming the cursor alone paged through the WHOLE listing
+// from that row, printing rows the operator had filtered out as though they
+// matched. The node here answers a page with a cursor; the printed line is run
+// as written, and the node must be asked exactly what it was asked the first
+// time with the cursor moved. Mutation: drop either cursor flag and its row
+// fails to parse; compose the line from the cursor alone and every row fails
+// on its filters.
 func TestAListingsMoreLineIsACommandThatRuns(t *testing.T) {
 	for _, tc := range []struct {
-		command, answer, param, cursor string
+		args           []string
+		answer, cursor string
+		next           string
 	}{
-		{"people", `{"people":[],"next":"0192f00d-0000-7000-8000-0000000000aa",` +
-			`"position":"CREWLET_IAM_LOG@0:9"}`, "after",
+		{[]string{"people", "-q", "jane", "-stage", "active", "-limit", "5"},
+			`{"people":[],"next":"0192f00d-0000-7000-8000-0000000000aa",` +
+				`"position":"CREWLET_IAM_LOG@0:9"}`, "after",
 			"0192f00d-0000-7000-8000-0000000000aa"},
-		{"audit", `{"events":[],"next":"4096"}`, "before", "4096"},
+		{[]string{"audit", "-person", "0192f00d-0000-7000-8000-0000000000bb",
+			"-event", "enrol", "-at", "2026-06-01T00:00:00Z", "-since", "12"},
+			`{"events":[],"next":"4096"}`, "before", "4096"},
 	} {
-		var asked []string
+		var asked []url.Values
 		node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			asked = append(asked, r.URL.Query().Get(tc.param))
+			asked = append(asked, r.URL.Query())
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(tc.answer))
 		}))
 		t.Setenv(apiTokenEnv, "a-tier-a-token")
 		cfg := bootstrapWithKeyring(t, "k1")
 		var out, errs bytes.Buffer
-		if err := run([]string{"iam", tc.command, "-config", cfg, "-api",
-			node.URL}, &out, &errs); err != nil {
+		if err := run(append(append([]string{"iam"}, tc.args...), "-config", cfg,
+			"-api", node.URL), &out, &errs); err != nil {
 			node.Close()
-			t.Fatalf("iam %s: %v", tc.command, err)
+			t.Fatalf("iam %v: %v", tc.args, err)
 		}
 		var more string
 		for _, line := range strings.Split(out.String(), "\n") {
@@ -595,7 +606,7 @@ func TestAListingsMoreLineIsACommandThatRuns(t *testing.T) {
 		}
 		if more == "" {
 			node.Close()
-			t.Fatalf("iam %s printed no next page:\n%s", tc.command, out.String())
+			t.Fatalf("iam %v printed no next page:\n%s", tc.args, out.String())
 		}
 		args := append(strings.Fields(more), "-config", cfg, "-api", node.URL)
 		err := run(args, &out, &errs)
@@ -604,9 +615,37 @@ func TestAListingsMoreLineIsACommandThatRuns(t *testing.T) {
 			t.Errorf("the printed line %q does not run: %v", more, err)
 			continue
 		}
-		if len(asked) != 2 || asked[1] != tc.cursor {
-			t.Errorf("following %q asked the node for %s=%v, want %s", more,
-				tc.param, asked, tc.cursor)
+		if len(asked) != 2 {
+			t.Fatalf("following %q asked the node %d times", more, len(asked))
+		}
+		want := url.Values{}
+		for name, values := range asked[0] {
+			want[name] = values
+		}
+		want.Set(tc.cursor, tc.next)
+		if got := asked[1].Encode(); got != want.Encode() {
+			t.Errorf("following %q asked the node for\n  %s\nwant the first "+
+				"page's own listing from the cursor:\n  %s", more, got,
+				want.Encode())
+		}
+	}
+}
+
+// A NEXT-PAGE LINE SURVIVES BEING PASTED INTO A SHELL. A value with nothing a
+// shell reads specially is printed as it is; anything else is single-quoted,
+// a quote inside it included. Mutation: print every value bare and the
+// spaced and quoted rows fail.
+func TestANextPageLineQuotesWhatAShellWouldSplit(t *testing.T) {
+	for value, want := range map[string]string{
+		"jane.doe":             "jane.doe",
+		"2026-06-01T00:00:00Z": "2026-06-01T00:00:00Z",
+		"ci:release":           "ci:release",
+		"two words":            "'two words'",
+		"it's":                 `'it'\''s'`,
+		"":                     "''",
+	} {
+		if got := shellWord(value); got != want {
+			t.Errorf("shellWord(%q) = %s, want %s", value, got, want)
 		}
 	}
 }
