@@ -134,3 +134,49 @@ func TestAResetLinkIsRefusedWhereNoPasswordShouldBeSet(t *testing.T) {
 		})
 	}
 }
+
+// A RESET LINK IS ISSUED ONLY FOR SOMEBODY WHOSE EVERY GRANT THE ISSUER HOLDS.
+//
+// The issuer is shown the link and can spend it themselves, so issuing one is
+// handing them the person's grants: an administrator holding people:manage and
+// state:read is refused (403, nothing landed, nothing announced) for somebody
+// holding secrets:read. The CONTROL is the same administrator issuing a link
+// for somebody holding only state:read. Mutation: drop the conferral check and
+// the first case is issued a link.
+func TestAResetLinkIsRefusedForSomebodyHoldingAGrantTheIssuerLacks(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		grants []iam.Grant
+		status int
+	}{
+		{"a person holding only the issuer's grants (the control)",
+			[]iam.Grant{iam.GrantStateRead}, http.StatusCreated},
+		{"a person holding secrets:read",
+			[]iam.Grant{iam.GrantStateRead, iam.GrantSecretRead},
+			http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.document = &iamdomain.Person{V: iamdomain.DocumentVersion,
+				Kind: iam.KindPerson, Stage: iam.StageActive, Grants: tc.grants}
+			got := r.as(administrator(), http.MethodPost,
+				"/iam/people/"+bob.String()+"/password-reset", nil)
+			if got.status != tc.status {
+				t.Fatalf("answered %d, want %d (body %v)", got.status, tc.status,
+					got.body)
+			}
+			if tc.status != http.StatusForbidden {
+				return
+			}
+			if _, shown := got.body["url"]; shown {
+				t.Errorf("a refused issue showed a link: %v", got.body)
+			}
+			if len(r.writer.document.Credentials) != 0 || len(r.audit.all()) != 0 {
+				t.Errorf("a refused issue left %v and announced %v",
+					r.writer.document.Credentials, r.audit.all())
+			}
+		})
+	}
+}

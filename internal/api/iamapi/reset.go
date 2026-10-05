@@ -56,6 +56,18 @@ func (e errNotResettable) Error() string {
 // again, and the link that may have landed is one nobody holds, which expires.
 // Issuing again revokes it anyway.
 //
+// # Only for somebody whose every grant the issuer holds
+//
+// The administrator who issues the link is shown it, and nothing stops them
+// spending it themselves and signing in as the person — clearing a second
+// factor first is a gesture of the same grant. So a link is held to
+// [iamdomain.Writer.MayConfer], judged in the record's own snapshot as though
+// the person's grants were being conferred from nothing: a target holding a
+// grant the issuer lacks is `403`, for the reason a machine token is minted
+// only for a service account and an invitation carries only what its issuer
+// holds — `people:manage` must never be a way to act with a grant one does not
+// have.
+//
 // # It signs nobody in
 //
 // Spending it sets the password and ends every session the person held; they
@@ -97,7 +109,8 @@ func (s *Service) PostPasswordReset(w http.ResponseWriter, r *http.Request) {
 	issued, err := writer.UpdatePerson(r.Context(), iamdomain.PersonUpdate{
 		PersonID: person,
 		// IN THE SNAPSHOT THE LINK LANDS ON: a machine has no password, a
-		// stage a reset does not reach is refused naming it, and every
+		// stage a reset does not reach is refused naming it, somebody
+		// holding a grant the issuer does not is refused, and every
 		// outstanding link the person holds is revoked by this record.
 		Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
 			switch {
@@ -105,6 +118,13 @@ func (s *Service) PostPasswordReset(w http.ResponseWriter, r *http.Request) {
 				return p, errNoPassword
 			case !slices.Contains(iamdomain.ResetStages, p.Stage):
 				return p, errNotResettable{stage: p.Stage}
+			}
+			// THE ISSUER SEES THE LINK, so issuing it is handing them
+			// the person's grants: the link is the conferral rule's
+			// to judge, as if every grant the person holds were being
+			// given to them from nothing.
+			if refused := writer.MayConfer(nil, p.Grants); refused != nil {
+				return p, refused
 			}
 			held := slices.Clone(p.Credentials)
 			for i, c := range held {

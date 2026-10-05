@@ -688,7 +688,7 @@ list and nothing ever will be.
 | `GET /iam/people/{id}/sessions` | the person themselves, `people:manage` or `audit:read` |
 | `DELETE /iam/people/{id}/sessions` | the person themselves or `people:manage` |
 | `POST /iam/people/{id}/mfa/reset` | `people:manage` |
-| `POST /iam/people/{id}/password-reset` | `people:manage` |
+| `POST /iam/people/{id}/password-reset` | `people:manage`, for somebody holding no grant the caller does not |
 | `GET /iam/credentials[?person=]` | the person themselves, `people:manage` or `audit:read` |
 | `POST /iam/credentials[?person=]` | the person themselves, from their own session; `people:manage` for a **service account** only; never a request presenting a machine token |
 | `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; revoking a password, a second factor or the recovery codes needs a person present, so a machine token revokes machine tokens only — `403 token_refused` with nothing written, on a node that had listed the credential before the write and on one that had not alike |
@@ -953,7 +953,11 @@ credentials (`GET /iam/credentials?person=`), revoked like any of them, and
 issuing another revokes the one before it — a person holds at most one. A
 machine is `409` (it has no password; mint it a token), and so is a person
 `suspended` or `retired`, naming the `stage`, because a link would hand back an
-account somebody stopped: reactivate them first.
+account somebody stopped: reactivate them first. A person holding a grant the
+caller does not is `403 unauthorized`, judged in the record's own snapshot:
+whoever issues the link is shown it and could spend it themselves, so a link is
+held to the rule an invitation and an edit are — nobody hands out a grant they
+do not hold.
 
 **Shown once, and no key is read.** Like a token's mint, a replay of the issue
 could not hand back a secret its first attempt never showed, so the route

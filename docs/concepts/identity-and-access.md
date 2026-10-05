@@ -803,7 +803,14 @@ sends it: what the estate keeps is a `reset` credential on the person — the
 SHA-256 of the secret, listed among their credentials and revoked like any of
 them — and issuing another revokes the one before, so a person holds at most
 one. A machine has no password and is refused, and so is somebody suspended or
-retired, because a link would hand back an account somebody stopped.
+retired, because a link would hand back an account somebody stopped. And it is
+issued **only for somebody whose every grant the administrator holds** — `403`
+otherwise, judged in the record's own snapshot: whoever issues the link is shown
+it and could spend it themselves, so a link for somebody holding `secrets:read`
+or `config:write` would let a `people:manage` holder without either act with
+it. It is the rule an invitation and an edit are held to — nobody hands out
+what they do not hold — and the reason a machine token is minted only for a
+service account.
 
 **It is good for one day.** It travels out of band — by chat or mail, where a
 link sits unread and gets forwarded — to somebody locked out *today*, so it
