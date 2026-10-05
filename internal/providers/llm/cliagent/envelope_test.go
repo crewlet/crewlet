@@ -306,4 +306,54 @@ func TestAnArgumentListWithATailIsRefused(t *testing.T) {
 	if got := env.ToolCalls[0].Arguments; len(got) != 0 {
 		t.Errorf("Arguments = %v, want none — the text had a tail", got)
 	}
+	if env.ToolCalls[0].ArgumentsError == "" {
+		t.Error("the refused arguments carry no reason, so the call would run with none")
+	}
+}
+
+// ARGUMENTS THAT DO NOT READ ARE A REASON, NOT AN EMPTY MAP.
+//
+// The call is kept — it is what the model asked for — but an empty map
+// standing in for arguments it wrote and nobody could read is a search over
+// everything or a post with no body. The reason travels instead, and the tool
+// loop answers the call with it rather than running it.
+func TestUnreadableArgumentsKeepTheCallAndSayWhy(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, reply, want string }{
+		{"truncated JSON string", `{"tool_calls":[{"name":"search","arguments":"{\"query\": \"x"}]}`, "JSON object"},
+		{"a number", `{"tool_calls":[{"name":"search","arguments":42}]}`, "number"},
+		{"a list", `{"tool_calls":[{"name":"search","arguments":["x"]}]}`, "list"},
+		{"a boolean", `{"tool_calls":[{"name":"search","args":true}]}`, "boolean"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := ParseEnvelope(tc.reply)
+			if len(env.ToolCalls) != 1 {
+				t.Fatalf("got %d calls, want the one the model asked for", len(env.ToolCalls))
+			}
+			call := env.ToolCalls[0]
+			if !strings.Contains(call.ArgumentsError, tc.want) {
+				t.Errorf("ArgumentsError = %q, want it to name a %s", call.ArgumentsError, tc.want)
+			}
+			if len(call.Arguments) != 0 {
+				t.Errorf("Arguments = %v, want none", call.Arguments)
+			}
+		})
+	}
+	// And a synonym that DOES read wins over one that does not, so a reply
+	// carrying both is the call it reads as, with no error.
+	env := ParseEnvelope(`{"tool_calls":[{"name":"search","arguments":42,"input":{"query":"x"}}]}`)
+	if len(env.ToolCalls) != 1 || env.ToolCalls[0].ArgumentsError != "" ||
+		env.ToolCalls[0].Arguments["query"] != "x" {
+		t.Errorf("calls = %+v, want the readable synonym's arguments and no error", env.ToolCalls)
+	}
+	// Absent, null and empty arguments are NO arguments, not unreadable ones.
+	for _, reply := range []string{
+		`{"tool_calls":[{"name":"a"}]}`,
+		`{"tool_calls":[{"name":"a","arguments":null}]}`,
+		`{"tool_calls":[{"name":"a","arguments":""}]}`,
+	} {
+		if got := ParseEnvelope(reply).ToolCalls[0].ArgumentsError; got != "" {
+			t.Errorf("%s: ArgumentsError = %q, want none", reply, got)
+		}
+	}
 }

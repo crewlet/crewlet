@@ -294,6 +294,29 @@ func TestAnEnvelopeReplyBecomesToolCalls(t *testing.T) {
 	}
 }
 
+// A CALL WHOSE ARGUMENTS DID NOT READ REACHES THE LOOP MARKED, not as a call
+// with no arguments: the tool loop answers a marked call with the reason and
+// runs an unmarked one, so the mark is the whole difference between a failed
+// result the model can fix and a search over everything.
+func TestACallWithUnreadableArgumentsIsMarkedForTheLoop(t *testing.T) {
+	reply := "```json\n{\"message\":\"searching\",\"tool_calls\":" +
+		"[{\"name\":\"search\",\"arguments\":\"{\\\"query\\\": \\\"x\"}]}\n```"
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": reply}, nil)
+	comp, err := ask(t, p, llm.Request{
+		Tools: []llm.ToolDef{{Name: "search", Description: "search"}},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if len(comp.ToolCalls) != 1 || comp.ToolCalls[0].Name != "search" {
+		t.Fatalf("tool calls = %+v, want the one search call", comp.ToolCalls)
+	}
+	if comp.ToolCalls[0].ArgumentsError == "" {
+		t.Errorf("the call reached the loop unmarked with arguments %v, so it would run with none",
+			comp.ToolCalls[0].Arguments)
+	}
+}
+
 // A spent subscription arrives as prose on a SUCCESSFUL exit. Classifying it
 // RATE_LIMIT is what carries the role onto its metered fallback for the rest
 // of the window and back again afterwards, with no operator intervention.

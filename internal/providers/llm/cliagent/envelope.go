@@ -25,6 +25,13 @@ type Envelope struct {
 type EnvelopeCall struct {
 	Name      string
 	Arguments map[string]any
+	// ArgumentsError is why the arguments the model wrote could not be read
+	// — a string holding no single JSON object, a number, a list — and
+	// empty when they could, or when it wrote none. Arguments is then
+	// EMPTY, and the call is KEPT rather than dropped: it is what the model
+	// asked for, and [llm.ToolCall.ArgumentsError] is how the tool loop
+	// answers it with this reason instead of running it with nothing.
+	ArgumentsError string
 }
 
 // messageKeys are the synonyms accepted for the prose field.
@@ -269,16 +276,30 @@ func readCall(raw any) (EnvelopeCall, bool) {
 		// reject it one layer later with a worse message.
 		return EnvelopeCall{}, false
 	}
+	// The first synonym that READS wins. When one is present and none
+	// reads, the call is still the model's — but it must not run on an
+	// empty map standing in for arguments it never wrote, which would be a
+	// search over everything or a post with no body. So the first
+	// unreadable synonym's reason is kept and the tool loop answers the call
+	// with it, a failed result the model can read and correct.
+	var unreadable error
 	for _, key := range argumentKeys {
 		v, ok := obj[key]
 		if !ok {
 			continue
 		}
-		args, ok := readArguments(v)
-		if ok {
+		args, err := readArguments(v)
+		if err == nil {
 			call.Arguments = args
+			unreadable = nil
 			break
 		}
+		if unreadable == nil {
+			unreadable = fmt.Errorf("%q %w", key, err)
+		}
+	}
+	if unreadable != nil {
+		call.ArgumentsError = unreadable.Error()
 	}
 	if call.Arguments == nil {
 		call.Arguments = map[string]any{}
@@ -287,29 +308,36 @@ func readCall(raw any) (EnvelopeCall, bool) {
 }
 
 // readArguments reads one call's arguments, accepting both an object and a
-// JSON string holding one.
+// JSON string holding one, and says what it found when it is neither.
 //
 // The string form is not a model quirk to tolerate grudgingly: it is what the
 // OpenAI tool-call wire format uses, so a model that has seen that format
 // reproduces it faithfully. Rejecting it would fail the calls from the models
 // that had learned the convention best.
-func readArguments(v any) (map[string]any, bool) {
+func readArguments(v any) (map[string]any, error) {
 	switch typed := v.(type) {
 	case map[string]any:
-		return typed, true
+		return typed, nil
 	case string:
 		trimmed := strings.TrimSpace(typed)
 		if trimmed == "" {
-			return map[string]any{}, true
+			return map[string]any{}, nil
 		}
 		if args, ok := decodeEnvelopeObject(trimmed); ok {
-			return args, true
+			return args, nil
 		}
-		return nil, false
+		return nil, errors.New("is a string that does not hold exactly one complete JSON object")
 	case nil:
-		return map[string]any{}, true
+		return map[string]any{}, nil
+	case json.Number:
+		// Numbers decode through json.Number (see decodeEnvelopeObject).
+		return nil, errors.New("is a number, not a JSON object")
+	case []any:
+		return nil, errors.New("is a list, not a JSON object")
+	case bool:
+		return nil, errors.New("is a boolean, not a JSON object")
 	default:
-		return nil, false
+		return nil, fmt.Errorf("is a %T, not a JSON object", typed)
 	}
 }
 

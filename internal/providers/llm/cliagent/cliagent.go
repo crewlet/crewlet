@@ -535,6 +535,10 @@ func (p *Provider) completion(
 			ID:        fmt.Sprintf("cli_%d", i),
 			Name:      call.Name,
 			Arguments: call.Arguments,
+			// Arguments the envelope could not read: the tool loop
+			// answers the call with this instead of running it on an
+			// empty map, as it does for every other backend.
+			ArgumentsError: call.ArgumentsError,
 		})
 	}
 	if len(comp.ToolCalls) > 0 {
