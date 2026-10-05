@@ -2410,9 +2410,36 @@ in-app `#/` link does neither, because it *is* this application. A task
 list's checkboxes are disabled — this surface performs no writes, and a box a
 reader could tick would report a change that never reached the page.
 
-`.prose` on its own stays a `pre-wrap` block, which is right for a model's own
-speech: its line breaks are load-bearing there and it is not markdown. A
-document carries `.prose.md` beside it.
+**A model's words are markdown too**, and this page used to say they were
+not. A round's speech and thinking and a coding run's report were a `pre-wrap`
+block on the rule that a model's line breaks are load-bearing and it does not
+write markdown — and a round that wrote a fenced JSON block printed three
+backticks, a language tag and a wall of braces. The line breaks *are*
+load-bearing, which is why a model's words are rendered with two options a
+document does not take (`MODEL_WORDS` in `lib/markdown.ts`):
+
+- **Every newline is a line break** (`breaks: "hard"`). A document's single
+  newline is a soft wrap somebody typed to keep a source line short, and
+  CommonMark reads it as a space; a model writes one fact per line and means
+  each one, so read softly its list of facts became one run-on line.
+- **A heading is a styled line, not a heading** (`headings: "text"`, the
+  `.md-heading` block). A transcript item is not a section of the page — the
+  reason a tool row's disclosure renders no heading either — and a model's
+  `## Summary` put an `h2` into the turn page's outline between the page's own
+  sections. It keeps a heading's weight and air at the body's size, since a
+  transcript item has no outline of its own to rank.
+
+Everything else is the document renderer's, unchanged: raw HTML is text, the
+link allowlist holds, and a fence is a block holding the exact bytes — a round
+still streaming can end inside one, and what has arrived is shown as code. An
+attempt a provider abandoned mid-answer stays plain dimmed text: it is evidence
+of a failure, cut wherever the provider died, and never becomes the round's
+answer, whereas streaming text is about to become it and is rendered so the
+block does not reshape at the moment it commits.
+
+`.prose` on its own stays a `pre-wrap` block, for text whose every space and
+break is the record — a coding run's activity log. Rendered markdown carries
+`.prose.md`.
 
 **A fenced block wraps rather than scrolling**, and it took a wrong class name
 to notice it did neither. The renderer emitted `class="code plain"` on every
@@ -3017,8 +3044,12 @@ rules fix it, and each one names a specific mechanism:
    turn back" claimed a judgement nobody made.
 3. **The model's words are prose; JSON is monospace, and INDENTED.**
    Reasoning and speech get a proportional face, real leading and a bounded
-   measure. Monospace stays where it carries meaning — tool arguments and tool
-   results.
+   measure, and are rendered as the markdown they are, read by a model's
+   habits — every newline a break, every heading a styled line rather than a
+   heading of the page (see
+   [Markdown is rendered, not printed](#markdown-is-rendered-not-printed)).
+   Monospace stays where it carries meaning — tool arguments and tool
+   results, and a fence the model wrote in its own words.
 
    Those arrive as the engine encoded them, which is the whole call on ONE
    line however many arguments it had, with the one a reader came for — the

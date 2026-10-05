@@ -557,16 +557,60 @@ export const UnbrokenCode = 32;
 const INLINE =
   /(`+)([\s\S]*?)\1|!\[([^\]]*)\]\(((?:[^()\s]|\([^()\s]*\))*)(?:\s+"[^"]*")?\)|\[([^\]]*)\]\(((?:[^()\s]|\([^()\s]*\))*)(?:\s+"[^"]*")?\)|<((?:https?:|mailto:)[^>\s]+)>|(\*\*|__)([\s\S]+?)\8|(\*|_)([^\s][\s\S]*?)\10|(~~)([\s\S]+?)\12/;
 
+/**
+ * How a renderer reads what a document's author did not mark up.
+ *
+ * TWO READERS WRITE MARKDOWN WITH DIFFERENT HABITS, and the defaults are the
+ * document's. A page, a description or a comment is a DOCUMENT: a newline
+ * inside a paragraph is a soft wrap somebody typed to keep a source line
+ * short, and a heading opens a section of it. A MODEL'S WORDS — a round's
+ * speech and thinking, a coding run's report, a prompt the engine built for a
+ * model — are neither. A model writes one fact per line and means each line,
+ * and a "## Summary" in the middle of a transcript is emphasis inside one item
+ * of the page, not a section of it.
+ */
+export interface RenderOptions {
+  /**
+   * `soft` (the default): a newline inside a paragraph is a space, and only
+   * two trailing spaces or a backslash break the line — CommonMark's rule.
+   * `hard`: every newline is a line break, which is what a model's single
+   * newlines are; read as soft, a list of facts collapsed into a run-on line.
+   */
+  breaks?: "soft" | "hard";
+  /**
+   * `sections` (the default): a heading line is an `h2`–`h6`. `text`: a
+   * heading line is a styled block that is NOT a heading element
+   * (`.md-heading`), for content that is a transcript item rather than a
+   * section of the page — the same reason a tool row's disclosure takes
+   * `headingLevel="none"`. A model's "## Summary" put an `h2` into the turn
+   * page's outline, between the page's own sections.
+   */
+  headings?: "sections" | "text";
+  /**
+   * Give each top-level heading the id [outline] points at, for a page with
+   * an "On this page" list. Nothing to address under `headings: "text"`.
+   */
+  anchors?: boolean;
+}
+
+/** What the inline walk needs of [RenderOptions]. */
+type InlineOptions = Pick<RenderOptions, "breaks">;
+
 /** Render one run of inline markdown to React nodes. */
-export function renderInline(text: string, keyPrefix = "i"): ReactNode[] {
+export function renderInline(
+  text: string,
+  keyPrefix = "i",
+  options: InlineOptions = {},
+): ReactNode[] {
   const out: ReactNode[] = [];
   let rest = text;
   let n = 0;
+  const hard = options.breaks === "hard";
 
   while (rest.length > 0) {
     const m = INLINE.exec(rest);
     if (!m || m.index === undefined) break;
-    if (m.index > 0) out.push(hardBreaks(rest.slice(0, m.index), `${keyPrefix}-t${n++}`));
+    if (m.index > 0) out.push(breakLines(rest.slice(0, m.index), `${keyPrefix}-t${n++}`, hard));
     const key = `${keyPrefix}-${n++}`;
 
     if (m[1] !== undefined) {
@@ -598,21 +642,23 @@ export function renderInline(text: string, keyPrefix = "i"): ReactNode[] {
       const href = safeHref(m[6] ?? "");
       const label = m[5] ?? "";
       out.push(
-        href ? anchor(key, href, renderInline(label, key)) : createElement("span", { key }, label),
+        href
+          ? anchor(key, href, renderInline(label, key, options))
+          : createElement("span", { key }, label),
       );
     } else if (m[7] !== undefined) {
       const href = safeHref(m[7]);
       out.push(href ? anchor(key, href, [m[7]]) : createElement("span", { key }, m[7]));
     } else if (m[9] !== undefined) {
-      out.push(createElement("strong", { key }, renderInline(m[9], key)));
+      out.push(createElement("strong", { key }, renderInline(m[9], key, options)));
     } else if (m[11] !== undefined) {
-      out.push(createElement("em", { key }, renderInline(m[11], key)));
+      out.push(createElement("em", { key }, renderInline(m[11], key, options)));
     } else if (m[13] !== undefined) {
-      out.push(createElement("del", { key }, renderInline(m[13], key)));
+      out.push(createElement("del", { key }, renderInline(m[13], key, options)));
     }
     rest = rest.slice(m.index + m[0].length);
   }
-  if (rest.length > 0) out.push(hardBreaks(rest, `${keyPrefix}-t${n}`));
+  if (rest.length > 0) out.push(breakLines(rest, `${keyPrefix}-t${n}`, hard));
   return out;
 }
 
@@ -639,10 +685,12 @@ function anchor(key: string, href: string, children: ReactNode[]): ReactNode {
  *
  * Every other newline inside a paragraph is a SOFT break and renders as a
  * space, which is the one rule that makes a hand-wrapped paragraph read as a
- * paragraph rather than as a column of short lines.
+ * paragraph rather than as a column of short lines — unless the reader asked
+ * for `breaks: "hard"`, where every newline is a break and the two markers
+ * that ask for one are consumed with it rather than left as stray characters.
  */
-function hardBreaks(text: string, key: string): ReactNode {
-  const parts = text.split(/(?:  +|\\)\n/);
+function breakLines(text: string, key: string, hard: boolean): ReactNode {
+  const parts = text.split(hard ? /(?:  +|\\)?\n/ : /(?:  +|\\)\n/);
   if (parts.length === 1) return createElement("span", { key }, soften(text));
   const nodes: ReactNode[] = [];
   parts.forEach((part, i) => {
@@ -658,19 +706,35 @@ function soften(text: string): string {
 
 // --- block rendering -------------------------------------------------------
 
-function renderBlock(block: Block, key: string, anchor?: string): ReactNode {
+function renderBlock(
+  block: Block,
+  key: string,
+  options: RenderOptions,
+  anchor?: string,
+): ReactNode {
   switch (block.kind) {
     case "heading":
+      // NOT A SECTION when the reader said so: a transcript item's heading is
+      // emphasis inside the item, and an `h2` there joins the PAGE's outline.
+      // A `p` rather than a `div`, because it is a line of text and a reader
+      // that lists paragraphs should find it.
+      if (options.headings === "text") {
+        return createElement(
+          "p",
+          { key, className: "md-heading" },
+          renderInline(block.text, key, options),
+        );
+      }
       // CLAMPED TO h2–h6. A page's own title is the h1 on the screen around
       // it, and a body emitting a second h1 makes two documents claim the
       // same level to a screen reader.
       return createElement(
         `h${Math.min(6, block.level + 1)}`,
         anchor ? { key, id: anchor } : { key },
-        renderInline(block.text, key),
+        renderInline(block.text, key, options),
       );
     case "paragraph":
-      return createElement("p", { key }, renderInline(block.text, key));
+      return createElement("p", { key }, renderInline(block.text, key, options));
     case "code":
       // `md-code`, in the same family as `md-table`, `md-tasks` and
       // `md-task-body`. It was `code plain`, which is two names this
@@ -693,7 +757,7 @@ function renderBlock(block: Block, key: string, anchor?: string): ReactNode {
       return createElement(
         "blockquote",
         { key },
-        block.blocks.map((b, i) => renderBlock(b, `${key}-${i}`)),
+        block.blocks.map((b, i) => renderBlock(b, `${key}-${i}`, options)),
       );
     case "rule":
       return createElement("hr", { key });
@@ -730,11 +794,11 @@ function renderBlock(block: Block, key: string, anchor?: string): ReactNode {
             // rendered to the RIGHT of the line it belongs under rather than
             // beneath it.
             item.checked === null
-              ? item.blocks.map((b, j) => renderBlock(b, `${key}-${i}-${j}`))
+              ? item.blocks.map((b, j) => renderBlock(b, `${key}-${i}-${j}`, options))
               : createElement(
                   "div",
                   { key: `${key}-${i}-body`, className: "md-task-body" },
-                  item.blocks.map((b, j) => renderBlock(b, `${key}-${i}-${j}`)),
+                  item.blocks.map((b, j) => renderBlock(b, `${key}-${i}-${j}`, options)),
                 ),
           ),
         ),
@@ -756,7 +820,7 @@ function renderBlock(block: Block, key: string, anchor?: string): ReactNode {
                 createElement(
                   "th",
                   { key: i, style: { textAlign: block.align[i] ?? "left" } },
-                  renderInline(cell, `${key}-h${i}`),
+                  renderInline(cell, `${key}-h${i}`, options),
                 ),
               ),
             ),
@@ -772,7 +836,7 @@ function renderBlock(block: Block, key: string, anchor?: string): ReactNode {
                   createElement(
                     "td",
                     { key: c, style: { textAlign: block.align[c] ?? "left" } },
-                    renderInline(cell, `${key}-${r}-${c}`),
+                    renderInline(cell, `${key}-${r}-${c}`, options),
                   ),
                 ),
               ),
@@ -788,16 +852,28 @@ function renderBlock(block: Block, key: string, anchor?: string): ReactNode {
  *
  * Returns React nodes, never a string and never HTML: there is no
  * `dangerouslySetInnerHTML` on this path, so no input can introduce an
- * element this file did not construct.
+ * element this file did not construct — whichever [RenderOptions] are set,
+ * since they choose between elements this file builds and nothing else.
  */
-export function renderMarkdown(source: string, options?: { anchors?: boolean }): ReactNode[] {
+export function renderMarkdown(source: string, options: RenderOptions = {}): ReactNode[] {
   const blocks = parseBlocks(source ?? "");
-  if (!options?.anchors) return blocks.map((block, i) => renderBlock(block, `b${i}`));
+  if (!options.anchors || options.headings === "text") {
+    return blocks.map((block, i) => renderBlock(block, `b${i}`, options));
+  }
   // THE SAME WALK [outline] TAKES, so a heading's id and the entry pointing at
   // it are one computation and cannot disagree.
   const ids = anchorIds(blocks);
-  return blocks.map((block, i) => renderBlock(block, `b${i}`, ids.get(i)));
+  return blocks.map((block, i) => renderBlock(block, `b${i}`, options, ids.get(i)));
 }
+
+/**
+ * How a MODEL'S WORDS are rendered: a round's speech and thinking, a coding
+ * run's report. Every newline is the line break the model meant, and a heading
+ * is emphasis inside one transcript item rather than a section of the page —
+ * see [RenderOptions]. One constant, so the transcript's every block of a
+ * model's prose reads by one rule.
+ */
+export const MODEL_WORDS: RenderOptions = { breaks: "hard", headings: "text" };
 
 /** One heading of a document, as an "On this page" entry points at it. */
 export interface Heading {

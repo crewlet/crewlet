@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import {
+  MODEL_WORDS,
+  type RenderOptions,
   nestSections,
   outline,
   parseBlocks,
@@ -513,5 +515,74 @@ describe("inline code", () => {
     expect(short?.classList.contains("is-whole")).toBe(true);
     expect(long?.classList.contains("is-whole")).toBe(false);
     expect("nimbus jobs wait --node <n>".length).toBeLessThanOrEqual(UnbrokenCode);
+  });
+});
+
+/**
+ * A MODEL'S WORDS ARE MARKDOWN, READ BY A MODEL'S HABITS.
+ *
+ * A round's speech showed a fenced ```json block as literal backticks — a model
+ * writes markdown as readily as a person does. But it does not hand-wrap
+ * paragraphs and it does not section a transcript: its single newlines are the
+ * lines it meant, and its "## Summary" is emphasis inside one item of a page
+ * whose outline belongs to the page.
+ */
+describe("a model's words", () => {
+  function words(source: string, options: RenderOptions = MODEL_WORDS): HTMLElement {
+    const { container } = render(<div className="prose md">{renderMarkdown(source, options)}</div>);
+    return container.firstElementChild as HTMLElement;
+  }
+
+  it("keep every newline as the line break the model meant", () => {
+    const el = words("Name: Engineer\nTeam: Platform\nReports to: Lead");
+    expect(el.querySelectorAll("p")).toHaveLength(1);
+    expect(el.querySelectorAll("br")).toHaveLength(2);
+    // THE CONTROL: a document reads the same newlines as soft wraps.
+    const doc = draw("Name: Engineer\nTeam: Platform\nReports to: Lead");
+    expect(doc.querySelectorAll("br")).toHaveLength(0);
+  });
+
+  it("consume a break marker with its newline rather than printing it", () => {
+    const el = words("one\\\ntwo  \nthree");
+    expect(el.textContent).toBe("onetwothree");
+    expect(el.querySelectorAll("br")).toHaveLength(2);
+  });
+
+  it("break lines inside a list item and a quote too", () => {
+    const el = words("- first\n  second\n\n> said\n> twice");
+    expect(el.querySelector("li")?.querySelectorAll("br")).toHaveLength(1);
+    expect(el.querySelector("blockquote")?.querySelectorAll("br")).toHaveLength(1);
+  });
+
+  it("draw a heading line as a styled line of text, never a heading of the page", () => {
+    const el = words("## Summary\nPosted it.\n\n> ### Inside a quote");
+    expect(el.querySelectorAll("h1, h2, h3, h4, h5, h6")).toHaveLength(0);
+    const heads = [...el.querySelectorAll(".md-heading")].map((h) => h.textContent);
+    expect(heads).toEqual(["Summary", "Inside a quote"]);
+    // Its inline markup still renders.
+    expect(words("## The `submit_work` call").querySelector(".md-heading code")).not.toBeNull();
+    // THE CONTROL: a document's heading is still a heading.
+    expect(draw("## Summary").querySelector("h3")).not.toBeNull();
+  });
+
+  it("keep a fence byte for byte, closed or still streaming", () => {
+    const closed = words('```json\n{"outcome": "delivered"}\n```');
+    expect(closed.querySelector("pre.md-code")?.textContent).toBe('{"outcome": "delivered"}');
+    // A round still being written can end inside a fence; what has arrived is
+    // shown as code rather than as the rest of the document.
+    const open = words('Here:\n```json\n{"outcome": "deli');
+    expect(open.querySelector("pre.md-code")?.textContent).toBe('{"outcome": "deli');
+  });
+
+  it("render raw HTML as its text and refuse a link outside the allowlist", () => {
+    const el = words('<img src=x onerror="alert(1)">\n[go](javascript:alert(1))');
+    expect(el.querySelector("img")).toBeNull();
+    expect(el.querySelector("a")).toBeNull();
+    expect(el.textContent).toContain("<img src=x");
+  });
+
+  it("give a heading no anchor when there is no heading to anchor", () => {
+    const el = words("## Summary", { ...MODEL_WORDS, anchors: true });
+    expect(el.querySelector("[id]")).toBeNull();
   });
 });

@@ -3468,11 +3468,16 @@ textarea.kpage-editor-body {
 
 /* Text that is being written. The transition is on COLOR only — never on
    height: animating the height of a growing block makes every append a
-   reflow the reader can feel, which is the opposite of the point. */
+   reflow the reader can feel, which is the opposite of the point.
+
+   THE CARET ENDS THE LAST BLOCK, not the container. A model's words are
+   rendered markdown (`Words` in PhaseCard.tsx), so the container holds
+   blocks, and a caret after the container would sit alone on a line below
+   the text it is writing. */
 .prose.stream {
   transition: color var(--motion-duration-slow) var(--motion-easing-default);
 }
-.prose.stream::after {
+.prose.md.stream > :last-child::after {
   content: "";
   display: inline-block;
   width: 2px;
@@ -3505,7 +3510,7 @@ textarea.kpage-editor-body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .prose.stream::after {
+  .prose.md.stream > :last-child::after {
     animation: none;
   }
 }
@@ -6714,12 +6719,12 @@ a.work-cal-chip {
   }
 }
 
-/* RENDERED MARKDOWN. `.prose` on its own is a plain `pre-wrap` block, which is
-   right for a model's speech — its own line breaks are load-bearing there and
-   it is not markdown. A page body and a work item's description ARE markdown
-   by contract, so they carry `.md` beside it: the whitespace rule goes back to
-   normal (the renderer decides what a break is) and the block elements it
-   emits get the spacing a document needs. */
+/* RENDERED MARKDOWN. `.prose` on its own is a plain `pre-wrap` block, for text
+   whose every space and break is the record — a coding run's activity log. A
+   page body, a work item's description and a model's own words ARE markdown,
+   so they carry `.md` beside it: the whitespace rule goes back to normal (the
+   renderer decides what a break is — every newline, for a model's words) and
+   the block elements it emits get the spacing a document needs. */
 .prose.md {
   white-space: normal;
   overflow-wrap: break-word;
@@ -6857,6 +6862,26 @@ a.work-cal-chip {
 .prose.md img {
   max-width: 100%;
   border-radius: var(--radius-sm);
+}
+
+/* A HEADING THAT IS NOT A SECTION (`headings: "text"` in lib/markdown.ts): a
+   model's "## Summary" inside its own words. Set like a heading — the weight,
+   the tight leading, the primary ink, more air above than a paragraph — at the
+   body's size, because a transcript item has no outline of its own to rank,
+   and a size per level would be ranking one. */
+.prose.md .md-heading {
+  font-weight: 600;
+  line-height: var(--font-line-height-tight);
+  color: var(--color-text-primary);
+}
+.prose.md > * + .md-heading {
+  margin-top: var(--spacing-4);
+}
+/* Inside dimmed words — a round's thinking — it keeps the dimming: emphasis
+   within a block the reader can skip by its shape, never a line louder than
+   the block it is in. */
+.prose.md.muted .md-heading {
+  color: var(--color-text-secondary);
 }
 
 /* A TABLE SCROLLS RATHER THAN OVERFLOWING ITS PANEL. A page's own table is

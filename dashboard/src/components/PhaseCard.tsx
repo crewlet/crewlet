@@ -32,9 +32,13 @@
  *     round had neither. The rail is a bracket around each round now and the
  *     round's content shares one left edge; see `.round` in screens.css.
  *
- *  4. **The model's words are set as prose, not as code.** Its reasoning and
- *     its speech are natural language and get a proportional face, a real
- *     line height and a bounded measure. Monospace stays where it means
+ *  4. **The model's words are set as prose, not as code — and as the markdown
+ *     they are.** Its reasoning, its speech and a coding run's report get a
+ *     proportional face, a real line height and a bounded measure, and are
+ *     rendered as markdown read by a model's habits (`Words`): its fenced
+ *     JSON is a code block rather than three backticks and a wall of braces,
+ *     its single newlines are line breaks, and its headings are styled lines
+ *     rather than headings of the page. Monospace stays where it means
  *     something: tool arguments and tool results, which are JSON.
  *  5. **The header says the same things in the same places, always** — phase,
  *     model, rounds, tokens, decision — so a live phase and a finished one are
@@ -84,6 +88,7 @@ import {
   type Round,
 } from "~/lib/phases.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
+import { MODEL_WORDS, renderMarkdown } from "~/lib/markdown.ts";
 import { staleness } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
@@ -358,6 +363,27 @@ function DeclinedNote({ fate, rescued }: { fate: Declined; rescued: boolean }) {
   );
 }
 
+/**
+ * A model's words — its speech, its thinking, a coding run's report — as the
+ * markdown it wrote.
+ *
+ * MARKDOWN, because that is what models write: the design doc said a model's
+ * speech "is not markdown" and a round's fenced ```json block was printed as
+ * three backticks, a language tag and a wall of braces. Read by a MODEL'S
+ * habits rather than a document's (`MODEL_WORDS`): every newline is the line
+ * break it meant, and a "## Summary" is a styled line rather than an `h2` in
+ * the turn page's outline — a transcript item is not a section of the page,
+ * the rule a tool row's `headingLevel="none"` keeps one level up. `.prose`'s
+ * measure and leading stay; `.md` hands line breaking to the renderer.
+ *
+ * Memoised on the text, because a live phase re-renders on every streamed
+ * frame and an open round's words are re-parsed only when they changed.
+ */
+function Words({ text, muted, streaming }: { text: string; muted?: boolean; streaming?: boolean }) {
+  const nodes = useMemo(() => renderMarkdown(text, MODEL_WORDS), [text]);
+  return <div className={cx("prose md", muted && "muted", streaming && "stream")}>{nodes}</div>;
+}
+
 /** One round: thinking, speech, then the calls that round asked for. */
 function RoundBlock({
   round,
@@ -395,7 +421,15 @@ function RoundBlock({
             erased: a reader has already seen this text, and making it vanish
             reads as a glitch — while "this model wrote four hundred
             characters and then died" is exactly what an operator debugging a
-            flaky provider needs. */}
+            flaky provider needs.
+
+            PLAIN TEXT, unlike every other block of a model's words here: it
+            is EVIDENCE of a failure, cut wherever the provider died, and it
+            never becomes the round's answer. Rendered, a cut mid-construct
+            would be formatted into something the model never finished; the
+            streaming text below is rendered because it IS about to become
+            the committed answer, and rendering it now keeps the block from
+            reshaping at the moment it commits. */}
         {round.abandoned.map((a, i) => (
           <div key={i} className="abandoned">
             <div className="t-caption">
@@ -414,7 +448,7 @@ function RoundBlock({
             // so the block does not shift sideways when the round commits.
             <div className="col gap-1 round-thinking">
               <div className="t-label">Thinking</div>
-              <p className="prose muted stream">{thinking}</p>
+              <Words text={thinking} muted streaming />
             </div>
           ) : (
             // `aside` IS our `tone="reasoning"`, and uilet describes it in our
@@ -431,10 +465,10 @@ function RoundBlock({
               headingLevel="none"
               lazy
             >
-              <p className="prose muted">{thinking}</p>
+              <Words text={thinking} muted />
             </Disclosure>
           ))}
-        {said && <p className={cx("prose", round.streaming && "stream")}>{said}</p>}
+        {said && <Words text={said} streaming={round.streaming} />}
         {declined && <DeclinedNote fate={declined} rescued={rescued} />}
         {round.tools.length > 0 && (
           <div className="round-tools">
@@ -799,7 +833,7 @@ export function PhaseCard({
                 Report
                 <span className="muted"> · what the coding run wrote back</span>
               </div>
-              <p className="prose">{record.response.trim()}</p>
+              <Words text={record.response.trim()} />
             </section>
           )}
           {codingRun && record.transcript && (
@@ -824,7 +858,7 @@ export function PhaseCard({
                   headingLevel="none"
                   lazy
                 >
-                  <p className="prose muted">{legacy.thinking}</p>
+                  <Words text={legacy.thinking} muted />
                 </Disclosure>
               )}
               {legacy.answer.trim() && (
@@ -833,7 +867,7 @@ export function PhaseCard({
                     Transcript
                     <span className="muted"> · recorded before rounds were kept apart</span>
                   </div>
-                  <p className="prose">{legacy.answer.trim()}</p>
+                  <Words text={legacy.answer.trim()} />
                 </section>
               )}
             </>

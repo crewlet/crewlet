@@ -646,6 +646,74 @@ describe("a round that answered in prose", () => {
 });
 
 /**
+ * A MODEL'S WORDS ARE THE MARKDOWN IT WROTE — its speech, its thinking, a
+ * coding run's report — read by a model's habits rather than a document's.
+ */
+describe("a model's words", () => {
+  const SAID = [
+    "## Summary",
+    "Name: the fix",
+    "Status: posted",
+    "",
+    "```json",
+    '{"outcome": "delivered"}',
+    "```",
+  ].join("\n");
+
+  test("a round's speech renders its fence as code and its lines as lines", () => {
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          roundsUsed: 1,
+          narration: [{ round: 1, reasoning: "", content: SAID, declined: false }],
+        })}
+        defaultOpen
+      />,
+    );
+    const round = container.querySelector(".round")!;
+    // The fence is a block of code holding the exact bytes, not three
+    // backticks and a language tag in a paragraph.
+    expect(round.querySelector("pre.md-code")?.textContent).toBe('{"outcome": "delivered"}');
+    expect(round.textContent).not.toContain("```");
+    // Each single newline the model wrote is a line of its own.
+    expect(round.querySelectorAll("br").length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("its headings are styled lines, never headings of the turn page", () => {
+    // A transcript item is not a section of the page — the rule a tool row's
+    // disclosure keeps by rendering no heading either.
+    const { container } = render(
+      <PhaseCard
+        record={phase({
+          roundsUsed: 1,
+          narration: [{ round: 1, reasoning: "## Weighing it", content: SAID, declined: false }],
+        })}
+        defaultOpen
+      />,
+    );
+    const ledger = container.querySelector(".round-ledger")!;
+    expect(ledger.querySelectorAll("h1, h2, h3, h4, h5, h6")).toHaveLength(0);
+    expect(ledger.querySelector(".md-heading")?.textContent).toBe("Summary");
+  });
+
+  test("a coding run's report renders the same way", () => {
+    render(
+      <PhaseCard
+        record={phase({
+          key: "turn-1|sandbox|1|job-1",
+          phase: "sandbox",
+          backend: "sandbox",
+          launchId: "job-1",
+          response: "Opened **the pull request**.",
+        })}
+        defaultOpen
+      />,
+    );
+    expect(screen.getByText("the pull request").closest("strong")).not.toBeNull();
+  });
+});
+
+/**
  * A RUNNING PHASE'S TRANSCRIPT FOLLOWS ITS NEWEST ROUND — and keeps following
  * through everything that changes the box rather than what is in it.
  *
